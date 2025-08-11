@@ -1,0 +1,30 @@
+{
+  "name": "lean-ui",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "rsbuild dev",
+    "build": "rsbuild build",
+    "preview": "rsbuild preview",
+    "server": "tsx server/index.ts",
+    "start": "npm run server & npm run dev"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^1.0.14",
+    "@rsbuild/plugin-react": "^1.0.10",
+    "@rsbuild/plugin-type-check": "^1.0.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.15",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.0.0"
+  }
+}
