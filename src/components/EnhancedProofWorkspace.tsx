@@ -12,7 +12,7 @@ import {
   ENHANCED_FOCUS_RULES
 } from '../types/enhanced-focus';
 import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
-import { KaTeXRenderer } from './KaTeXRenderer';
+import { MathJaxExpressionRenderer } from './MathJaxExpressionRenderer';
 import { ExpressionEditor } from './ExpressionRenderer';
 
 interface EnhancedProofStep {
@@ -247,9 +247,9 @@ function EnhancedProofHistory({ steps, currentStepId, onStepClick }: EnhancedPro
             {astToString(step.expression)}
           </div>
           
-          {step.focusPath.length > 0 && (
+          {step.focusPath.length > 0 && getNodeAtPath(step.expression, step.focusPath) && (
             <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px' }}>
-              Focus: {getNodeAtPath(step.expression, step.focusPath).raw}
+              Focus: {getNodeAtPath(step.expression, step.focusPath)?.raw}
             </div>
           )}
           
@@ -279,7 +279,13 @@ export function EnhancedProofWorkspace() {
 
   const focusedNode = getNodeAtPath(currentExpression, focusPath);
 
+
   const addStep = useCallback((rule: EnhancedFocusRule, params?: any) => {
+    if (!focusedNode) {
+      alert('No focused node to apply rule to');
+      return;
+    }
+
     try {
       const result = rule.applyToFocus(focusedNode, currentExpression, params);
       const newExpression = setNodeAtPath(currentExpression, focusPath, result.newNode);
@@ -346,9 +352,9 @@ export function EnhancedProofWorkspace() {
     setNewExpressionText(astToString(currentExpression));
   };
 
-  const applicableRules = ENHANCED_FOCUS_RULES.filter(rule => 
+  const applicableRules = focusedNode ? ENHANCED_FOCUS_RULES.filter(rule =>
     rule.isApplicableToFocus(focusedNode, currentExpression, context)
-  );
+  ) : [];
 
   // Group rules by category
   const rulesByCategory = applicableRules.reduce((acc, rule) => {
@@ -421,7 +427,7 @@ export function EnhancedProofWorkspace() {
               focusPath={focusPath}
               onFocusChange={setFocusPath}
             />
-            <KaTeXRenderer
+            <MathJaxExpressionRenderer
               expression={currentExpression}
               focusPath={focusPath}
               onFocusChange={setFocusPath}

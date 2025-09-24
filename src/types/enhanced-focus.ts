@@ -45,15 +45,19 @@ export interface EnhancedFocusRule {
 }
 
 // Helper functions (keeping existing ones)
-export function getNodeAtPath(root: ExpressionNode, path: FocusPath): ExpressionNode {
-  let current = root;
-  for (const index of path) {
-    if (index >= current.children.length) {
-      throw new Error(`Invalid path: index ${index} out of bounds`);
+export function getNodeAtPath(root: ExpressionNode, path: FocusPath): ExpressionNode | null {
+  try {
+    let current = root;
+    for (const index of path) {
+      if (index >= current.children.length) {
+        return null;
+      }
+      current = current.children[index];
     }
-    current = current.children[index];
+    return current;
+  } catch {
+    return null;
   }
-  return current;
 }
 
 export function setNodeAtPath(root: ExpressionNode, path: FocusPath, newNode: ExpressionNode): ExpressionNode {
@@ -274,7 +278,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Symmetry',
     description: 'If a = b, then b = a',
     category: 'equality',
-    isApplicableToFocus: (node) => node.type === 'equality' && node.operator === '=',
+    isApplicableToFocus: (node) => node && node.type === 'equality' && node.operator === '=',
     applyToFocus: (node) => ({
       newNode: {
         ...node,
@@ -308,7 +312,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Addition Commutativity',
     description: 'a + b = b + a',
     category: 'arithmetic',
-    isApplicableToFocus: (node) => node.type === 'binop' && node.operator === '+',
+    isApplicableToFocus: (node) => node && node.type === 'binop' && node.operator === '+',
     applyToFocus: (node) => ({
       newNode: {
         ...node,
@@ -324,7 +328,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Multiplication Commutativity',
     description: 'a * b = b * a',
     category: 'arithmetic',
-    isApplicableToFocus: (node) => node.type === 'binop' && node.operator === '*',
+    isApplicableToFocus: (node) => node && node.type === 'binop' && node.operator === '*',
     applyToFocus: (node) => ({
       newNode: {
         ...node,
@@ -342,8 +346,9 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: '(a + b) + c = a + (b + c)',
     category: 'arithmetic',
     isApplicableToFocus: (node) => {
-      return node.type === 'binop' && node.operator === '+' && 
-             node.children[0].type === 'binop' && node.children[0].operator === '+';
+      if (!node || !node.children) return false;
+      return node.type === 'binop' && node.operator === '+' &&
+             node.children[0]?.type === 'binop' && node.children[0].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0].children[0];
@@ -375,8 +380,9 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: 'a + (b + c) = (a + b) + c',
     category: 'arithmetic',
     isApplicableToFocus: (node) => {
-      return node.type === 'binop' && node.operator === '+' && 
-             node.children[1].type === 'binop' && node.children[1].operator === '+';
+      if (!node || !node.children) return false;
+      return node.type === 'binop' && node.operator === '+' &&
+             node.children[1]?.type === 'binop' && node.children[1].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0];
@@ -409,8 +415,9 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: 'a * (b + c) = a * b + a * c',
     category: 'algebraic',
     isApplicableToFocus: (node) => {
+      if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             node.children[1].type === 'binop' && node.children[1].operator === '+';
+             node.children[1]?.type === 'binop' && node.children[1].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0];
@@ -451,8 +458,9 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: '(a + b) * c = a * c + b * c',
     category: 'algebraic',
     isApplicableToFocus: (node) => {
+      if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             node.children[0].type === 'binop' && node.children[0].operator === '+';
+             node.children[0]?.type === 'binop' && node.children[0].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0].children[0];
@@ -495,7 +503,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     category: 'substitution',
     requiresParams: true,
     paramTemplate: { value: 'Value to add' },
-    isApplicableToFocus: (node) => node.type === 'equality' && node.operator === '=',
+    isApplicableToFocus: (node) => node && node.type === 'equality' && node.operator === '=',
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
@@ -534,7 +542,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     category: 'substitution',
     requiresParams: true,
     paramTemplate: { value: 'Value to subtract' },
-    isApplicableToFocus: (node) => node.type === 'equality' && node.operator === '=',
+    isApplicableToFocus: (node) => node && node.type === 'equality' && node.operator === '=',
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
@@ -573,7 +581,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     category: 'substitution',
     requiresParams: true,
     paramTemplate: { value: 'Value to multiply by' },
-    isApplicableToFocus: (node) => node.type === 'equality' && node.operator === '=',
+    isApplicableToFocus: (node) => node && node.type === 'equality' && node.operator === '=',
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
@@ -613,7 +621,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     category: 'introduction',
     requiresParams: true,
     paramTemplate: { value: 'Value to divide by' },
-    isApplicableToFocus: (node) => node.type === 'equality' && node.operator === '=',
+    isApplicableToFocus: (node) => node && node.type === 'equality' && node.operator === '=',
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
@@ -660,9 +668,10 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: 'a + 0 = a',
     category: 'arithmetic',
     isApplicableToFocus: (node) => {
+      if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '+' &&
-             ((node.children[1].type === 'literal' && node.children[1].value === 0) ||
-              (node.children[0].type === 'literal' && node.children[0].value === 0));
+             ((node.children[1]?.type === 'literal' && node.children[1].value === 0) ||
+              (node.children[0]?.type === 'literal' && node.children[0].value === 0));
     },
     applyToFocus: (node) => {
       const nonZeroChild = node.children[0].type === 'literal' && node.children[0].value === 0 
@@ -684,9 +693,10 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: 'a * 1 = a',
     category: 'arithmetic',
     isApplicableToFocus: (node) => {
+      if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             ((node.children[1].type === 'literal' && node.children[1].value === 1) ||
-              (node.children[0].type === 'literal' && node.children[0].value === 1));
+             ((node.children[1]?.type === 'literal' && node.children[1].value === 1) ||
+              (node.children[0]?.type === 'literal' && node.children[0].value === 1));
     },
     applyToFocus: (node) => {
       const nonOneChild = node.children[0].type === 'literal' && node.children[0].value === 1 
@@ -708,9 +718,10 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     description: 'a * 0 = 0',
     category: 'arithmetic',
     isApplicableToFocus: (node) => {
+      if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             (node.children[0].type === 'literal' && node.children[0].value === 0) ||
-             (node.children[1].type === 'literal' && node.children[1].value === 0);
+             (node.children[0]?.type === 'literal' && node.children[0].value === 0) ||
+             (node.children[1]?.type === 'literal' && node.children[1].value === 0);
     },
     applyToFocus: () => ({
       newNode: {
