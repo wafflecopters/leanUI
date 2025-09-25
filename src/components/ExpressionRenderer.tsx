@@ -83,6 +83,7 @@ export function ExpressionEditor({ value, onChange, onSubmit, placeholder = "Ent
         onChange={(e) => onChange(e.target.value)}
         onKeyPress={handleKeyPress}
         placeholder={placeholder}
+        autoFocus
         style={{
           width: '100%',
           padding: '12px 16px',

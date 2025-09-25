@@ -119,11 +119,20 @@ export const SYNTAX_RULES: SyntaxRule[] = [
       if (node.children.length === 3) {
         const f = childRenderer(node.children[1], [1]);
         const x = childRenderer(node.children[2], [2]);
+
+        // If f is a simple variable, use df/dx notation
+        if (node.children[1]?.type === 'variable') {
+          return `\\frac{d${f}}{d${x}}`;
+        }
+        // Otherwise use d/dx (expression) notation for complex expressions
         return `\\frac{d}{d${x}}\\left(${f}\\right)`;
       }
 
       // Fallback for simple case deriv f (derivative of f with respect to implicit variable)
       const f = childRenderer(node.children[1], [1]);
+      if (node.children[1]?.type === 'variable') {
+        return `\\frac{d${f}}{dx}`;
+      }
       return `\\frac{d}{dx}\\left(${f}\\right)`;
     }
   },

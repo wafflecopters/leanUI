@@ -320,6 +320,18 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
     };
   }
 
+  // Handle function application (space-separated tokens)
+  const tokens = tokenize(expr);
+  if (tokens.length > 1) {
+    const children = tokens.map(token => parseExpressionToAST(token));
+    return {
+      id,
+      type: 'application',
+      children,
+      raw: expr
+    };
+  }
+
   // Default case
   return {
     id,
@@ -328,6 +340,38 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
     children: [],
     raw: expr
   };
+}
+
+// Tokenize expression by splitting on spaces, respecting parentheses
+function tokenize(expr: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let parenCount = 0;
+
+  for (let i = 0; i < expr.length; i++) {
+    const char = expr[i];
+
+    if (char === '(') {
+      parenCount++;
+      current += char;
+    } else if (char === ')') {
+      parenCount--;
+      current += char;
+    } else if (char === ' ' && parenCount === 0) {
+      if (current.trim()) {
+        tokens.push(current.trim());
+        current = '';
+      }
+    } else {
+      current += char;
+    }
+  }
+
+  if (current.trim()) {
+    tokens.push(current.trim());
+  }
+
+  return tokens;
 }
 
 // Helper function to find operator outside parentheses
