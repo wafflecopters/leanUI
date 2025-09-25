@@ -189,26 +189,26 @@ export function setNodeAtPath(root: ExpressionNode, path: FocusPath, newNode: Ex
   if (path.length === 0) {
     return newNode;
   }
-  
+
   const newRoot = { ...root, children: [...root.children] };
   let current = newRoot;
-  
+
   for (let i = 0; i < path.length - 1; i++) {
     const index = path[i];
     current.children[index] = { ...current.children[index], children: [...current.children[index].children] };
     current = current.children[index];
   }
-  
+
   const lastIndex = path[path.length - 1];
   current.children[lastIndex] = newNode;
-  
+
   return newRoot;
 }
 
 export function parseExpressionToAST(expr: string): ExpressionNode {
   const id = crypto.randomUUID();
   expr = expr.trim();
-  
+
   // Handle equality and inequality
   for (const op of ['=', '≠', '<', '>', '≤', '≥']) {
     const index = expr.lastIndexOf(op);
@@ -224,7 +224,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   // Handle binary operations with proper precedence (lowest to highest)
   // Addition and subtraction (lowest precedence)
   for (const op of ['+', '-']) {
@@ -241,7 +241,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   // Multiplication and division (higher precedence)
   for (const op of ['*', '/']) {
     const index = findLastOperatorOutsideParens(expr, op);
@@ -257,7 +257,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   // Exponentiation (highest precedence, right-associative)
   for (const op of ['^']) {
     const index = findFirstOperatorOutsideParens(expr, op); // Right-associative
@@ -273,7 +273,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   // Handle parentheses
   if (expr.startsWith('(') && expr.endsWith(')') && isMatchingParens(expr)) {
     const inner = parseExpressionToAST(expr.substring(1, expr.length - 1));
@@ -283,7 +283,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       raw: expr
     };
   }
-  
+
   // Handle fractions in the form \frac{a}{b}
   const fracMatch = expr.match(/^\\frac\{([^}]+)\}\{([^}]+)\}$/);
   if (fracMatch) {
@@ -297,7 +297,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       raw: expr
     };
   }
-  
+
   // Handle numbers
   if (/^-?\d+(\.\d+)?$/.test(expr)) {
     return {
@@ -308,7 +308,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       raw: expr
     };
   }
-  
+
   // Handle variables
   if (/^[a-zA-Z][a-zA-Z0-9_]*$/.test(expr)) {
     return {
@@ -319,7 +319,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       raw: expr
     };
   }
-  
+
   // Default case
   return {
     id,
@@ -451,7 +451,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
       }
     })
   },
-  
+
   {
     id: 'reflexivity',
     name: 'Reflexivity',
@@ -511,13 +511,13 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '+' &&
-             node.children[0]?.type === 'binop' && node.children[0].operator === '+';
+        node.children[0]?.type === 'binop' && node.children[0].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0].children[0];
       const b = node.children[0].children[1];
       const c = node.children[1];
-      
+
       const newRight: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -525,7 +525,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [b, c],
         raw: `${astToString(b)} + ${astToString(c)}`
       };
-      
+
       return {
         newNode: {
           ...node,
@@ -545,13 +545,13 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '+' &&
-             node.children[1]?.type === 'binop' && node.children[1].operator === '+';
+        node.children[1]?.type === 'binop' && node.children[1].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0];
       const b = node.children[1].children[0];
       const c = node.children[1].children[1];
-      
+
       const newLeft: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -559,7 +559,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [a, b],
         raw: `${astToString(a)} + ${astToString(b)}`
       };
-      
+
       return {
         newNode: {
           ...node,
@@ -580,7 +580,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             node.children[1]?.type === 'binop' && node.children[1].operator === '+';
+        node.children[1]?.type === 'binop' && node.children[1].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0];
@@ -623,7 +623,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             node.children[0]?.type === 'binop' && node.children[0].operator === '+';
+        node.children[0]?.type === 'binop' && node.children[0].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0].children[0];
@@ -675,11 +675,11 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
 
       // Both terms must be multiplications
       if (left.type !== 'binop' || left.operator !== '*' ||
-          right.type !== 'binop' || right.operator !== '*') return false;
+        right.type !== 'binop' || right.operator !== '*') return false;
 
       // Check if they have the same first factor (a)
       if (!left.children || !right.children ||
-          left.children.length !== 2 || right.children.length !== 2) return false;
+        left.children.length !== 2 || right.children.length !== 2) return false;
 
       const leftFactor = astToString(left.children[0]);
       const rightFactor = astToString(right.children[0]);
@@ -776,7 +776,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
-      
+
       const newLeft: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -784,7 +784,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[0], parseExpressionToAST(value)],
         raw: `${astToString(node.children[0])} + ${value}`
       };
-      
+
       const newRight: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -792,7 +792,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[1], parseExpressionToAST(value)],
         raw: `${astToString(node.children[1])} + ${value}`
       };
-      
+
       return {
         newNode: {
           ...node,
@@ -815,7 +815,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
-      
+
       const newLeft: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -823,7 +823,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[0], parseExpressionToAST(value)],
         raw: `${astToString(node.children[0])} - ${value}`
       };
-      
+
       const newRight: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -831,7 +831,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[1], parseExpressionToAST(value)],
         raw: `${astToString(node.children[1])} - ${value}`
       };
-      
+
       return {
         newNode: {
           ...node,
@@ -854,7 +854,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
-      
+
       const newLeft: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -862,7 +862,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[0], parseExpressionToAST(value)],
         raw: `${astToString(node.children[0])} * ${value}`
       };
-      
+
       const newRight: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -870,7 +870,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[1], parseExpressionToAST(value)],
         raw: `${astToString(node.children[1])} * ${value}`
       };
-      
+
       return {
         newNode: {
           ...node,
@@ -894,7 +894,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     applyToFocus: (node, _, params) => {
       const { value } = params || {};
       if (!value) throw new Error('Value parameter required');
-      
+
       const newLeft: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -902,7 +902,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[0], parseExpressionToAST(value)],
         raw: `${astToString(node.children[0])} / ${value}`
       };
-      
+
       const newRight: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -910,7 +910,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         children: [node.children[1], parseExpressionToAST(value)],
         raw: `${astToString(node.children[1])} / ${value}`
       };
-      
+
       const newAssumption: Assumption = {
         id: crypto.randomUUID(),
         name: `h_${value}_neq_zero`,
@@ -918,7 +918,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         description: `${value} is not equal to zero`,
         introducedBy: 'divide_both_sides'
       };
-      
+
       return {
         newNode: {
           ...node,
@@ -940,14 +940,14 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '+' &&
-             ((node.children[1]?.type === 'literal' && node.children[1].value === 0) ||
-              (node.children[0]?.type === 'literal' && node.children[0].value === 0));
+        ((node.children[1]?.type === 'literal' && node.children[1].value === 0) ||
+          (node.children[0]?.type === 'literal' && node.children[0].value === 0));
     },
     applyToFocus: (node) => {
-      const nonZeroChild = node.children[0].type === 'literal' && node.children[0].value === 0 
-        ? node.children[1] 
+      const nonZeroChild = node.children[0].type === 'literal' && node.children[0].value === 0
+        ? node.children[1]
         : node.children[0];
-      
+
       return {
         newNode: {
           ...nonZeroChild,
@@ -965,14 +965,14 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             ((node.children[1]?.type === 'literal' && node.children[1].value === 1) ||
-              (node.children[0]?.type === 'literal' && node.children[0].value === 1));
+        ((node.children[1]?.type === 'literal' && node.children[1].value === 1) ||
+          (node.children[0]?.type === 'literal' && node.children[0].value === 1));
     },
     applyToFocus: (node) => {
-      const nonOneChild = node.children[0].type === 'literal' && node.children[0].value === 1 
-        ? node.children[1] 
+      const nonOneChild = node.children[0].type === 'literal' && node.children[0].value === 1
+        ? node.children[1]
         : node.children[0];
-      
+
       return {
         newNode: {
           ...nonOneChild,
@@ -990,8 +990,8 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
-             (node.children[0]?.type === 'literal' && node.children[0].value === 0) ||
-             (node.children[1]?.type === 'literal' && node.children[1].value === 0);
+        (node.children[0]?.type === 'literal' && node.children[0].value === 0) ||
+        (node.children[1]?.type === 'literal' && node.children[1].value === 0);
     },
     applyToFocus: () => ({
       newNode: {

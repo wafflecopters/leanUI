@@ -8,8 +8,8 @@ declare global {
   }
 }
 
-interface MathJaxExpressionRendererProps {
-  expression: ExpressionNode;
+interface MathJaxExpressionRendererProps<T> {
+  expression: T;
   focusPath?: FocusPath;
   onFocusChange?: (newPath: FocusPath) => void;
   isActive?: boolean;
@@ -128,7 +128,11 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
   return `\\cssId{expr-${pathId}}{${node.raw}}`;
 }
 
-export function MathJaxExpressionRenderer({ expression, focusPath = [], onFocusChange, readonly = true }: MathJaxExpressionRendererProps) {
+export function MathJaxExpressionRenderer(props: MathJaxExpressionRendererProps<ExpressionNode>) {
+  return <MathJaxExpressionRendererRaw {...props} expression={astToCleanLaTeX(props.expression)} raw={props.expression.raw} />;
+}
+
+export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFocusChange, readonly = true, raw }: MathJaxExpressionRendererProps<string> & { raw?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [mathJaxReady, setMathJaxReady] = useState(false);
 
@@ -180,7 +184,7 @@ export function MathJaxExpressionRenderer({ expression, focusPath = [], onFocusC
   useEffect(() => {
     if (!mathJaxReady || !containerRef.current) return;
 
-    const latex = astToCleanLaTeX(expression);
+    const latex = expression;
 
     try {
       containerRef.current.innerHTML = `$$${latex}$$`;
@@ -223,7 +227,7 @@ export function MathJaxExpressionRenderer({ expression, focusPath = [], onFocusC
       performTypesetting();
     } catch (error) {
       console.error('MathJax rendering error:', error);
-      containerRef.current.innerHTML = `<span style="color: red;">LaTeX Error: ${expression.raw}</span>`;
+      containerRef.current.innerHTML = `<span style="color: red;">LaTeX Error: ${raw ?? expression}</span>`;
     }
   }, [mathJaxReady, expression, readonly]);
 
@@ -344,13 +348,13 @@ export function MathJaxExpressionRenderer({ expression, focusPath = [], onFocusC
 
   if (!mathJaxReady) {
     return (
-      <div style={{ flex: 1, textAlign: 'center', color: '#666', fontSize: '18px', }}>
+      <div style={{ textAlign: 'center', color: '#666', fontSize: '18px', }}>
         Loading MathJax...
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', padding: 0, margin: 0, flex: 1, textAlign: 'center', fontSize: '18px' }} />
+    <div ref={containerRef} style={{ width: 'max-content', position: 'relative', fontSize: '18px' }} />
   );
 }

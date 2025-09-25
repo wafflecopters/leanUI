@@ -13,10 +13,12 @@ import {
   StructuredProof,
   createTransformationEquationElement,
   createCommentElement,
-  CommentElement
+  CommentElement,
+  EquationElement,
+  ProofElement
 } from '../types/enhanced-focus';
 import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
-import { MathJaxExpressionRenderer } from './MathJaxExpressionRenderer';
+import { MathJaxExpressionRenderer, MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { ExpressionEditor } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 
@@ -318,7 +320,6 @@ export function EnhancedProofWorkspace() {
   // Suppress unused import warnings (these are used in commented sections)
   console.debug('Unused imports for cleanup later:', { EnhancedProofHistory, generateEnhancedLeanProof, steps });
 
-
   const addStep = useCallback((rule: any, params?: any) => {
     if (!focusedNode) {
       alert('No focused node to apply rule to');
@@ -453,6 +454,16 @@ export function EnhancedProofWorkspace() {
     return acc;
   }, {} as Record<string, EnhancedFocusRule[]>);
 
+  const currentEquationElement = <MathJaxExpressionRenderer
+    expression={currentExpression}
+    focusPath={focusPath}
+    onFocusChange={setFocusPath}
+    isActive={true}
+    readonly={false}
+  />
+
+  const currentEquationIsChained = elementIsChained(structuredProof.elements[structuredProof.elements.length - 1], currentExpression);
+
   return (
     <div style={{
       padding: '20px',
@@ -571,100 +582,56 @@ export function EnhancedProofWorkspace() {
               </h4>
 
               {/* All previous proof steps */}
-              {structuredProof.elements.map((element, index) => {
-                if (element.type === 'equation') {
-                  const eq = element as any;
-                  const sides = eq.leftSide && eq.rightSide ? { left: eq.leftSide, right: eq.rightSide } : null;
+              <table>
+                <tbody>
+                  {structuredProof.elements.map((element, index) => {
+                    if (element.type === 'equation') {
+                      const eq = element as EquationElement;
+                      const isChained = elementIsChained(structuredProof.elements[index - 1], eq.leftSide);
 
-                  return (
-                    <div key={element.id} style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      padding: 0,
-                      margin: 0,
-                      borderBottom: index === structuredProof.elements.length - 1 ? 'none' : '1px solid #f0f0f0',
-                    }}>
-                      <div style={{
-                        textAlign: 'right',
-                      }}>
-                        {/* Only show left side on the first equation */}
-                        {index === 0 && (
-                          <div style={{
-                            fontSize: '16px',
-                            color: '#2c3e50',
-                            fontFamily: 'KaTeX_Main, "Times New Roman", serif'
-                          }}>
-                            {sides ? (
+                      return (
+                        <tr key={element.id}>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-end' }}>
+                              {isChained ? null : <MathJaxExpressionRenderer
+                                expression={eq.leftSide}
+                              />}
+                            </div>
+                          </td>
+                          <td><MathJaxExpressionRendererRaw expression={'='} /></td>
+                          <td>
+                            <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start' }}>
                               <MathJaxExpressionRenderer
-                                expression={sides.left}
+                                expression={eq.rightSide}
                               />
-                            ) : (
-                              <MathJaxExpressionRenderer
-                                expression={element.content as any}
-                              />
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      <div style={{
-                        fontSize: '18px',
-                        fontWeight: 'bold',
-                        color: '#007acc',
-                        minWidth: '12px',
-                        textAlign: 'center',
-                        margin: 0,
-                        padding: 0,
-                      }}>
-                        =
-                      </div>
-
-                      <div style={{
-                        flex: 1,
-                        padding: 0,
-                        margin: 0,
-                        textAlign: 'left',  // Ensure left alignment
-                      }}>
-                        <div style={{
-                          fontSize: '16px',
-                          color: '#2c3e50',
-                          fontFamily: 'KaTeX_Main, "Times New Roman", serif',
-                          textAlign: 'left',  // Ensure left alignment for MathJax content
-                        }}>
-                          {sides ? (
-                            <MathJaxExpressionRenderer
-                              expression={sides.right}
-                            />
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {(element as any).justification && (
-                        <div style={{
-                          fontSize: '13px',
-                          color: '#7f8c8d',
-                          fontStyle: 'italic',
-                          marginTop: '6px'
-                        }}>
-                          ({(element as any).justification})
-                        </div>
-                      )}
-                    </div>
-                  );
-                } else if (element.type === 'comment') {
-                  return <ProofComment element={element as CommentElement} />;
-                }
-                return null;
-              })}
-
-              {/* Current active equation with focus */}
-              <MathJaxExpressionRenderer
-                expression={currentExpression}
-                focusPath={focusPath}
-                onFocusChange={setFocusPath}
-                isActive={true}
-                readonly={false}
-              />
+                            </div>
+                          </td>
+                          {eq.justification && (
+                            <td>
+                              <div style={{
+                                fontSize: '13px',
+                                color: '#7f8c8d',
+                                fontStyle: 'italic',
+                                marginTop: '6px'
+                              }}>
+                                ({eq.justification})
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      )
+                    } else if (element.type === 'comment') {
+                      return <ProofComment element={element as CommentElement} />;
+                    }
+                    return null;
+                  })}
+                  <tr>
+                    <td>{currentEquationIsChained ? null : currentEquationElement}</td>
+                    <td>{currentEquationIsChained ? <MathJaxExpressionRendererRaw expression={'='} /> : null}</td>
+                    <td>{currentEquationIsChained ? currentEquationElement : null}</td>
+                  </tr>
+                </tbody>
+              </table>
               <FocusBreadcrumbs
                 expression={currentExpression}
                 focusPath={focusPath}
@@ -691,6 +658,15 @@ export function EnhancedProofWorkspace() {
       />
     </div>
   );
+}
+
+function elementIsChained(previousElement: ProofElement, currentElement: ExpressionNode) {
+  if (previousElement?.type !== 'equation') {
+    return false;
+  }
+
+  const previousEquation = previousElement as EquationElement;
+  return previousEquation.rightSide === currentElement;
 }
 
 function AssumptionsPanel({ assumptions }: { assumptions: Assumption[] }) {
