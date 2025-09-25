@@ -1,0 +1,25 @@
+{
+  "name": "leanui-server",
+  "version": "1.0.0",
+  "description": "Server-side Lean integration for LeanUI",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "body-parser": "^1.20.2",
+    "child_process": "^1.0.2",
+    "fs-extra": "^11.1.1",
+    "path": "^0.12.7",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": ["lean4", "theorem-prover", "mathematics"],
+  "author": "",
+  "license": "MIT"
+}

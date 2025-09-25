@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { ExpressionNode, FocusPath } from '../types/enhanced-focus';
+import { findSyntaxRule } from '../config/syntax-mapping';
 
 declare global {
   interface Window {
@@ -12,6 +13,7 @@ interface MathJaxExpressionRendererProps {
   focusPath: FocusPath;
   onFocusChange: (newPath: FocusPath) => void;
   isActive?: boolean;
+  readonly?: boolean;
 }
 
 
@@ -34,6 +36,18 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
     return needsParens ? `(${childLatex})` : childLatex;
   };
 
+  // Child renderer function for syntax rules
+  const childRenderer = (child: ExpressionNode, childPath: number[]): string => {
+    return astToCleanLaTeX(child, [...path, ...childPath]);
+  };
+
+  // Check for syntax mapping rules first
+  const syntaxRule = findSyntaxRule(node);
+  if (syntaxRule) {
+    const latex = syntaxRule.toLatex(node, childRenderer, path);
+    return `\\cssId{expr-${pathId}}{${latex}}`;
+  }
+
   switch (node.type) {
     case 'equality':
     case 'inequality':
@@ -49,11 +63,11 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
 
         const opSymbol = {
           '=': '=',
-          '≠': '\\neq',
+          '≠': '\\\\neq',
           '<': '<',
           '>': '>',
-          '≤': '\\leq',
-          '≥': '\\geq'
+          '≤': '\\\\leq',
+          '≥': '\\\\geq'
         }[node.operator] || node.operator;
 
         return `\\cssId{expr-${pathId}}{${leftWrapped} ${opSymbol} ${rightWrapped}}`;
@@ -114,9 +128,12 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
   return `\\cssId{expr-${pathId}}{${node.raw}}`;
 }
 
-export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange, isActive = false }: MathJaxExpressionRendererProps) {
+export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange, isActive = false, readonly = false }: MathJaxExpressionRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [mathJaxReady, setMathJaxReady] = useState(false);
+
+  // Debug: suppress TypeScript warning
+  console.debug('MathJax readonly mode:', readonly);
 
   useEffect(() => {
     const loadMathJax = () => {
@@ -190,8 +207,8 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
               });
             }
 
-            // Create overlay elements for interaction
-            if (containerRef.current) {
+            // Create overlay elements for interaction (only if not readonly)
+            if (containerRef.current && !readonly) {
               createHoverOverlays();
               applyFocusHighlighting();
             }
@@ -208,7 +225,7 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
       console.error('MathJax rendering error:', error);
       containerRef.current.innerHTML = `<span style="color: red;">LaTeX Error: ${expression.raw}</span>`;
     }
-  }, [mathJaxReady, expression]);
+  }, [mathJaxReady, expression, readonly]);
 
   // Helper function to get node at path
   const getCurrentNode = (root: ExpressionNode, path: FocusPath): ExpressionNode | null => {
@@ -226,14 +243,13 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
 
   // Apply blue highlighting to the currently focused element
   const applyFocusHighlighting = () => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || readonly) return;
 
     // Remove any existing focus styling
     const allElements = containerRef.current.querySelectorAll('[id^="expr-"]');
     allElements.forEach((element) => {
       (element as HTMLElement).classList.remove('focus-highlighted');
       (element as HTMLElement).style.backgroundColor = '';
-      (element as HTMLElement).style.boxShadow = '';
       (element as HTMLElement).style.outline = '';
       (element as HTMLElement).style.outlineOffset = '';
       (element as HTMLElement).style.margin = '';
@@ -267,14 +283,14 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
 
   // Re-apply focus highlighting when focusPath changes
   useEffect(() => {
-    if (mathJaxReady && containerRef.current) {
+    if (mathJaxReady && containerRef.current && !readonly) {
       applyFocusHighlighting();
     }
-  }, [focusPath, mathJaxReady]);
+  }, [focusPath, mathJaxReady, readonly]);
 
   // Create invisible overlay elements for interaction
   const createHoverOverlays = () => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || readonly) return;
 
     // Remove any existing overlays
     const existingOverlays = containerRef.current.querySelectorAll('.hover-overlay');
@@ -341,17 +357,14 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
   };
 
   const containerStyle = {
-    padding: '20px 24px',
-    margin: '8px 0',
     borderRadius: '8px',
-    border: '3px solid',
+    border: readonly ? 'none' : '3px solid',
     borderColor: isActive ? '#007acc' : '#e0e0e0',
-    backgroundColor: isActive ? '#f8fcff' : '#fafafa',
-    minHeight: '80px',
+    backgroundColor: readonly ? 'transparent' : (isActive ? '#f8fcff' : '#fafafa'),
     display: 'flex',
     alignItems: 'center',
     position: 'relative' as const,
-    fontSize: '18px'
+    fontSize: '18px',
   };
 
   const focusedNode = getCurrentNode(expression, focusPath);
@@ -369,7 +382,7 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
   return (
     <div style={containerStyle}>
       <div style={{ flex: 1, textAlign: 'center', position: 'relative' }}>
-        <div ref={containerRef} style={{ position: 'relative' }} />
+        <div ref={containerRef} style={{ position: 'relative', padding: 0, margin: 0 }} />
       </div>
 
       {focusPath.length > 0 && focusedNode && (
@@ -389,47 +402,49 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
         </div>
       )}
 
-      <div style={{
-        marginLeft: '20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '6px'
-      }}>
-        <button
-          onClick={() => onFocusChange([])}
-          disabled={focusPath.length === 0}
-          style={{
-            padding: '6px 12px',
-            backgroundColor: focusPath.length === 0 ? '#ccc' : '#6c757d',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: focusPath.length === 0 ? 'not-allowed' : 'pointer',
-            fontSize: '12px',
-            fontFamily: 'system-ui, sans-serif'
-          }}
-        >
-          Root
-        </button>
-
-        {focusPath.length > 0 && (
+      {!readonly && (
+        <div style={{
+          marginLeft: '20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '6px'
+        }}>
           <button
-            onClick={() => onFocusChange(focusPath.slice(0, -1))}
+            onClick={() => onFocusChange([])}
+            disabled={focusPath.length === 0}
             style={{
               padding: '6px 12px',
-              backgroundColor: '#6c757d',
+              backgroundColor: focusPath.length === 0 ? '#ccc' : '#6c757d',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer',
+              cursor: focusPath.length === 0 ? 'not-allowed' : 'pointer',
               fontSize: '12px',
               fontFamily: 'system-ui, sans-serif'
             }}
           >
-            Up
+            Root
           </button>
-        )}
-      </div>
+
+          {focusPath.length > 0 && (
+            <button
+              onClick={() => onFocusChange(focusPath.slice(0, -1))}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontFamily: 'system-ui, sans-serif'
+              }}
+            >
+              Up
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

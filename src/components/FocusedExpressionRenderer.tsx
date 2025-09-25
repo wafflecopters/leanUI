@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/focus';
+import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
+import { ASTModal } from './ASTModal';
 
 interface FocusedExpressionRendererProps {
   expression: ExpressionNode;
@@ -162,7 +163,7 @@ export function FocusedExpressionRenderer({
         {renderNode(expression, [])}
       </div>
       
-      {focusPath.length > 0 && (
+      {focusPath.length > 0 && focusedNode && (
         <div style={{
           position: 'absolute',
           top: '-12px',
@@ -233,54 +234,88 @@ interface FocusBreadcrumbsProps {
 }
 
 export function FocusBreadcrumbs({ expression, focusPath, onFocusChange }: FocusBreadcrumbsProps) {
+  const [showASTModal, setShowASTModal] = useState(false);
+
   const breadcrumbs = [];
   let currentPath: FocusPath = [];
-  
+
   // Add root
   breadcrumbs.push({
     label: 'Root',
     path: [],
     node: expression
   });
-  
+
   // Add each step in the path
   for (let i = 0; i < focusPath.length; i++) {
     currentPath = [...currentPath, focusPath[i]];
     const node = getNodeAtPath(expression, currentPath);
-    breadcrumbs.push({
-      label: node.raw,
-      path: [...currentPath],
-      node
-    });
+    if (node) {
+      breadcrumbs.push({
+        label: node.raw,
+        path: [...currentPath],
+        node
+      });
+    }
   }
-  
+
   return (
-    <div style={{ 
-      padding: '8px 0',
-      fontFamily: 'monospace',
-      fontSize: '14px',
-      color: '#666'
-    }}>
-      <strong>Focus Path: </strong>
-      {breadcrumbs.map((crumb, index) => (
-        <span key={index}>
-          <button
-            onClick={() => onFocusChange(crumb.path)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: arraysEqual(crumb.path, focusPath) ? '#007acc' : '#666',
-              textDecoration: 'underline',
-              cursor: 'pointer',
-              fontFamily: 'monospace',
-              fontSize: '14px'
-            }}
-          >
-            {crumb.label}
-          </button>
-          {index < breadcrumbs.length - 1 && ' > '}
-        </span>
-      ))}
-    </div>
+    <>
+      <div style={{
+        padding: '8px 0',
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: '#666',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '12px'
+      }}>
+        <div>
+          <strong>Focus Path: </strong>
+          {breadcrumbs.map((crumb, index) => (
+            <span key={index}>
+              <button
+                onClick={() => onFocusChange(crumb.path)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: arraysEqual(crumb.path, focusPath) ? '#007acc' : '#666',
+                  textDecoration: 'underline',
+                  cursor: 'pointer',
+                  fontFamily: 'monospace',
+                  fontSize: '14px'
+                }}
+              >
+                {crumb.label}
+              </button>
+              {index < breadcrumbs.length - 1 && ' > '}
+            </span>
+          ))}
+        </div>
+
+        <button
+          onClick={() => setShowASTModal(true)}
+          style={{
+            padding: '4px 12px',
+            backgroundColor: '#007acc',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 'bold',
+            fontFamily: 'system-ui, sans-serif'
+          }}
+        >
+          AST
+        </button>
+      </div>
+
+      <ASTModal
+        expression={expression}
+        isOpen={showASTModal}
+        onClose={() => setShowASTModal(false)}
+      />
+    </>
   );
 }
