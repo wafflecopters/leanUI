@@ -589,6 +589,10 @@ export function EnhancedProofWorkspace() {
                       const eq = element as EquationElement;
                       const isChained = elementIsChained(structuredProof.elements[index - 1], eq.leftSide);
 
+                      const right = index === structuredProof.elements.length - 1 && eq.rightSide.id === currentExpression.id ? currentEquationElement : <MathJaxExpressionRenderer
+                        expression={eq.rightSide}
+                      />
+
                       return (
                         <tr key={element.id}>
                           <td>
@@ -601,9 +605,7 @@ export function EnhancedProofWorkspace() {
                           <td><MathJaxExpressionRendererRaw expression={'='} /></td>
                           <td>
                             <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start' }}>
-                              <MathJaxExpressionRenderer
-                                expression={eq.rightSide}
-                              />
+                              {right}
                             </div>
                           </td>
                           {eq.justification && (
@@ -627,8 +629,6 @@ export function EnhancedProofWorkspace() {
                   })}
                   <tr>
                     <td>{currentEquationIsChained ? null : currentEquationElement}</td>
-                    <td>{currentEquationIsChained ? <MathJaxExpressionRendererRaw expression={'='} /> : null}</td>
-                    <td>{currentEquationIsChained ? currentEquationElement : null}</td>
                   </tr>
                 </tbody>
               </table>
