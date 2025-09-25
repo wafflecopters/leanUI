@@ -67,6 +67,22 @@ interface ExpressionEditorProps {
   placeholder?: string;
 }
 
+export type WorkspaceExample = {
+  contents: string,
+  assumptions: string[],
+}
+
+const ExampleExpressions: WorkspaceExample[] = [
+  {
+    contents: 'deriv (c * (f x)) x',
+    assumptions: ['c: ℝ', 'f: ℝ → ℝ'],
+  },
+  {
+    contents: 'x+2*y',
+    assumptions: ['x: ℝ', 'y: ℝ'],
+  },
+]
+
 export function ExpressionEditor({ value, onChange, onSubmit, placeholder = "Enter expression..." }: ExpressionEditorProps) {
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -110,6 +126,12 @@ export function ExpressionEditor({ value, onChange, onSubmit, placeholder = "Ent
       >
         Set Expression
       </button>
+      <select value={'Example'} onChange={(e) => onChange(e.target.value)}>
+        <option value={'Example'}>Example</option>
+        {ExampleExpressions.map((expr) => (
+          <option value={expr.contents}>{expr.contents}</option>
+        ))}
+      </select>
     </div>
   );
 }

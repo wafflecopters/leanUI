@@ -229,7 +229,6 @@ function EnhancedProofHistory({ steps, currentStepId, onStepClick }: EnhancedPro
   );
 }
 
-// Helper function to create the proper expression for d/dx (c * f(x))
 function createDerivativeExpression(): ExpressionNode {
   return {
     id: crypto.randomUUID(),
@@ -238,55 +237,55 @@ function createDerivativeExpression(): ExpressionNode {
       {
         id: crypto.randomUUID(),
         type: 'variable',
-        value: 'deriv',
+        value: 'sum',
         children: [],
-        raw: 'deriv'
-      },
-      {
-        id: crypto.randomUUID(),
-        type: 'binop',
-        operator: '*',
-        children: [
-          {
-            id: crypto.randomUUID(),
-            type: 'variable',
-            value: 'c',
-            children: [],
-            raw: 'c'
-          },
-          {
-            id: crypto.randomUUID(),
-            type: 'application',
-            children: [
-              {
-                id: crypto.randomUUID(),
-                type: 'variable',
-                value: 'f',
-                children: [],
-                raw: 'f'
-              },
-              {
-                id: crypto.randomUUID(),
-                type: 'variable',
-                value: 'x',
-                children: [],
-                raw: 'x'
-              }
-            ],
-            raw: 'f x'
-          }
-        ],
-        raw: 'c * f x'
+        raw: 'sum'
       },
       {
         id: crypto.randomUUID(),
         type: 'variable',
-        value: 'x',
+        value: 'i',
         children: [],
-        raw: 'x'
+        raw: 'i'
+      },
+      {
+        id: crypto.randomUUID(),
+        type: 'literal',
+        value: 0,
+        children: [],
+        raw: '0'
+      },
+      {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '+',
+        children: [
+          {
+            id: crypto.randomUUID(),
+            type: 'variable',
+            value: 'k',
+            children: [],
+            raw: 'k'
+          },
+          {
+            id: crypto.randomUUID(),
+            type: 'literal',
+            value: 1,
+            children: [],
+            raw: '1'
+          }
+        ],
+        raw: 'k + 1'
+      },
+      {
+        id: crypto.randomUUID(),
+        type: 'variable',
+        value: 'i',
+        children: [],
+        raw: 'i'
       }
     ],
-    raw: 'deriv (c * f x) x'
+    raw: 'sum i 0 (k + 1) i'
   };
 }
 
@@ -296,11 +295,15 @@ export function EnhancedProofWorkspace() {
   );
   const [focusPath, setFocusPath] = useState<FocusPath>([]);
   const [context, setContext] = useState<ProofContext>({
-    assumptions: [],
+    assumptions: [{
+      id: crypto.randomUUID(),
+      name: 'h_sum_formula',
+      expression: 'sum i 0 k i = k * (k + 1) / 2',
+      description: 'Sum formula: ∑_{i=0}^{k} i = k(k+1)/2'
+    }],
     variables: new Map([
-      ['f', 'ℝ → ℝ'],
-      ['c', 'ℝ'],
-      ['x', 'ℝ']
+      ['i', 'ℕ'],
+      ['k', 'ℕ']
     ])
   });
   const [steps, setSteps] = useState<EnhancedProofStep[]>([]);

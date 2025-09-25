@@ -27,13 +27,21 @@ function needsParensForMultiplication(node: ExpressionNode): boolean {
   return node.type === 'binop' && (node.operator === '+' || node.operator === '-');
 }
 
+// Helper function to check if a node is a "big" operator (sum, integral, limit, etc.)
+function isBigOperator(node: ExpressionNode): boolean {
+  if (node.type !== 'application' || !node.children || node.children.length < 1) return false;
+  const firstChild = node.children[0];
+  if (firstChild?.type !== 'variable') return false;
+  return ['sum', 'integral', 'limit', '∫', 'prod'].includes(firstChild.value as string);
+}
+
 // Convert AST to clean LaTeX with unique IDs and proper parentheses
 function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
   const pathId = path.join('-') || 'root';
 
   // Helper function to wrap in parentheses if needed
   const maybeWrap = (childLatex: string, needsParens: boolean): string => {
-    return needsParens ? `(${childLatex})` : childLatex;
+    return needsParens ? `\\left(${childLatex}\\right)` : childLatex;
   };
 
   // Child renderer function for syntax rules
@@ -82,6 +90,9 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
         const leftLatex = astToCleanLaTeX(leftChild, [...path, 0]);
         const rightLatex = astToCleanLaTeX(rightChild, [...path, 1]);
 
+        // Check if we need to wrap left side due to big operator
+        const needsBigOpParens = isBigOperator(leftChild) && !isBigOperator(rightChild);
+
         switch (node.operator) {
           case '/':
             // Fractions don't need parentheses since they're visually grouped
@@ -91,14 +102,16 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
             const baseWrapped = maybeWrap(leftLatex, needsParensForExponentBase(leftChild));
             return `\\cssId{expr-${pathId}}{{${baseWrapped}}^{${rightLatex}}}`;
           case '*':
-            const leftMulWrapped = maybeWrap(leftLatex, needsParensForMultiplication(leftChild));
+            const leftMulWrapped = maybeWrap(leftLatex, needsParensForMultiplication(leftChild) || needsBigOpParens);
             const rightMulWrapped = maybeWrap(rightLatex, needsParensForMultiplication(rightChild));
             return `\\cssId{expr-${pathId}}{${leftMulWrapped} \\cdot ${rightMulWrapped}}`;
           case '+':
-            return `\\cssId{expr-${pathId}}{${leftLatex} + ${rightLatex}}`;
+            const leftAddWrapped = maybeWrap(leftLatex, needsBigOpParens);
+            return `\\cssId{expr-${pathId}}{${leftAddWrapped} + ${rightLatex}}`;
           case '-':
+            const leftSubWrapped = maybeWrap(leftLatex, needsBigOpParens);
             const rightSubWrapped = maybeWrap(rightLatex, needsParensForMultiplication(rightChild));
-            return `\\cssId{expr-${pathId}}{${leftLatex} - ${rightSubWrapped}}`;
+            return `\\cssId{expr-${pathId}}{${leftSubWrapped} - ${rightSubWrapped}}`;
           default:
             return `\\cssId{expr-${pathId}}{${leftLatex} ${node.operator} ${rightLatex}}`;
         }

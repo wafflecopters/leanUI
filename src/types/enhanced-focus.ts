@@ -496,23 +496,6 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     })
   },
 
-  {
-    id: 'reflexivity',
-    name: 'Reflexivity',
-    description: 'a = a is always true',
-    category: 'equality',
-    isApplicableToFocus: () => true, // Can always be applied
-    applyToFocus: (node) => ({
-      newNode: {
-        id: crypto.randomUUID(),
-        type: 'equality',
-        operator: '=',
-        children: [node, node],
-        raw: `${astToString(node)} = ${astToString(node)}`
-      }
-    })
-  },
-
   // Arithmetic commutativity
   {
     id: 'add_comm',
@@ -1328,6 +1311,116 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
             approach
           ],
           raw: `limit (${astToString(newLimitFunc)}) ${astToString(variable)} ${astToString(approach)}`
+        }
+      };
+    }
+  },
+
+  {
+    id: 'sum_singleton',
+    name: 'Singleton Summation',
+    description: '∑_{i=a}^{a} f(i) = f(a)',
+    category: 'algebraic',
+    bidirectional: false,
+    isApplicableToFocus: (node) => {
+      if (!node || node.type !== 'application' || !node.children || node.children.length < 5) return false;
+
+      if (node.children[0]?.type !== 'variable' || node.children[0]?.value !== 'sum') return false;
+
+      const lowerBound = node.children[2];
+      const upperBound = node.children[3];
+
+      return astToString(lowerBound) === astToString(upperBound);
+    },
+    applyToFocus: (node) => {
+      const variable = node.children[1];
+      const bound = node.children[2];
+      const expression = node.children[4];
+
+      const substituted = substituteVariableInExpression(
+        expression,
+        astToString(variable),
+        bound
+      );
+
+      return {
+        newNode: substituted
+      };
+    }
+  },
+
+  {
+    id: 'sum_split',
+    name: 'Split Summation',
+    description: '∑_{i=a}^{b+c} f(i) = ∑_{i=a}^{b} f(i) + ∑_{i=b+1}^{b+c} f(i)',
+    category: 'algebraic',
+    bidirectional: false,
+    isApplicableToFocus: (node) => {
+      if (!node || node.type !== 'application' || !node.children || node.children.length < 5) return false;
+
+      if (node.children[0]?.type !== 'variable' || node.children[0]?.value !== 'sum') return false;
+
+      const upperBound = node.children[3];
+      return upperBound.type === 'binop' && upperBound.operator === '+';
+    },
+    applyToFocus: (node) => {
+      const variable = node.children[1];
+      const lowerBound = node.children[2];
+      const upperBound = node.children[3];
+      const expression = node.children[4];
+
+      const b = upperBound.children[0];
+
+      const bPlusOne: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '+',
+        children: [
+          b,
+          {
+            id: crypto.randomUUID(),
+            type: 'literal',
+            value: 1,
+            children: [],
+            raw: '1'
+          }
+        ],
+        raw: `${astToString(b)} + 1`
+      };
+
+      const firstSum: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'application',
+        children: [
+          { id: crypto.randomUUID(), type: 'variable', value: 'sum', children: [], raw: 'sum' },
+          variable,
+          lowerBound,
+          b,
+          expression
+        ],
+        raw: `sum ${astToString(variable)} ${astToString(lowerBound)} ${astToString(b)} ${astToString(expression)}`
+      };
+
+      const secondSum: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'application',
+        children: [
+          { id: crypto.randomUUID(), type: 'variable', value: 'sum', children: [], raw: 'sum' },
+          variable,
+          bPlusOne,
+          upperBound,
+          expression
+        ],
+        raw: `sum ${astToString(variable)} ${astToString(bPlusOne)} ${astToString(upperBound)} ${astToString(expression)}`
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '+',
+          children: [firstSum, secondSum],
+          raw: `${astToString(firstSum)} + ${astToString(secondSum)}`
         }
       };
     }
