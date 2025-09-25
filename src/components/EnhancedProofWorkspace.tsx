@@ -12,7 +12,8 @@ import {
   ENHANCED_FOCUS_RULES,
   StructuredProof,
   createTransformationEquationElement,
-  createCommentElement
+  createCommentElement,
+  CommentElement
 } from '../types/enhanced-focus';
 import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
 import { MathJaxExpressionRenderer } from './MathJaxExpressionRenderer';
@@ -549,31 +550,7 @@ export function EnhancedProofWorkspace() {
             boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
             minHeight: '600px'
           }}>
-            {/* Assumptions Section */}
-            {context.assumptions.length > 0 && (
-              <div style={{
-                marginBottom: '24px',
-                padding: '16px',
-                backgroundColor: '#f8f9fa',
-                borderRadius: '8px',
-                border: '1px solid #e9ecef'
-              }}>
-                <h4 style={{ margin: '0 0 12px 0', color: '#495057', fontSize: '16px' }}>
-                  📋 Given:
-                </h4>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  {context.assumptions.map((assumption, index) => (
-                    <div key={assumption.id} style={{
-                      fontSize: '15px',
-                      color: '#495057',
-                      paddingLeft: '16px'
-                    }}>
-                      <strong>({index + 1})</strong> {assumption.description}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <AssumptionsPanel assumptions={context.assumptions} />
 
             {/* Mathematical Derivation */}
             <div style={{
@@ -620,18 +597,10 @@ export function EnhancedProofWorkspace() {
                             {sides ? (
                               <MathJaxExpressionRenderer
                                 expression={sides.left}
-                                focusPath={[]}
-                                onFocusChange={() => { }}
-                                isActive={false}
-                                readonly={true}
                               />
                             ) : (
                               <MathJaxExpressionRenderer
                                 expression={element.content as any}
-                                focusPath={[]}
-                                onFocusChange={() => { }}
-                                isActive={false}
-                                readonly={true}
                               />
                             )}
                           </div>
@@ -665,10 +634,6 @@ export function EnhancedProofWorkspace() {
                           {sides ? (
                             <MathJaxExpressionRenderer
                               expression={sides.right}
-                              focusPath={[]}
-                              onFocusChange={() => { }}
-                              isActive={false}
-                              readonly={true}
                             />
                           ) : null}
                         </div>
@@ -687,101 +652,34 @@ export function EnhancedProofWorkspace() {
                     </div>
                   );
                 } else if (element.type === 'comment') {
-                  const comment = element as any;
-                  return (
-                    <div key={element.id} style={{
-                      margin: '16px 0',
-                      padding: '12px 16px',
-                      backgroundColor: '#e8f4f8',
-                      borderLeft: '4px solid #17a2b8',
-                      borderRadius: '0 6px 6px 0',
-                      color: '#0c5460',
-                      fontSize: '14px',
-                      fontStyle: 'italic'
-                    }}>
-                      {comment.content}
-                    </div>
-                  );
+                  return <ProofComment element={element as CommentElement} />;
                 }
                 return null;
               })}
 
               {/* Current active equation with focus */}
-              <div style={{
-                marginTop: '20px',
-                padding: '16px',
-                backgroundColor: 'white',
-                border: '2px solid #007acc',
-                borderRadius: '8px',
-                boxShadow: '0 2px 8px rgba(0, 123, 204, 0.15)'
-              }}>
-                <div style={{ marginBottom: '12px' }}>
-                  <FocusBreadcrumbs
-                    expression={currentExpression}
-                    focusPath={focusPath}
-                    onFocusChange={setFocusPath}
-                  />
-                </div>
-                <MathJaxExpressionRenderer
-                  expression={currentExpression}
-                  focusPath={focusPath}
-                  onFocusChange={setFocusPath}
-                  isActive={true}
-                />
-              </div>
+              <MathJaxExpressionRenderer
+                expression={currentExpression}
+                focusPath={focusPath}
+                onFocusChange={setFocusPath}
+                isActive={true}
+                readonly={false}
+              />
+              <FocusBreadcrumbs
+                expression={currentExpression}
+                focusPath={focusPath}
+                onFocusChange={setFocusPath}
+              />
             </div>
           </div>
 
-          {/* Rules Panel */}
-          <div style={{
-            backgroundColor: '#f8f9fa',
-            border: '1px solid #e9ecef',
-            borderRadius: '8px',
-            padding: '20px',
-            maxHeight: '600px',
-            overflowY: 'auto'
-          }}>
-            <h3 style={{ marginTop: 0, color: '#495057' }}>Available Rules</h3>
-            {Object.keys(rulesByCategory).length > 0 ? (
-              Object.entries(rulesByCategory).map(([category, rules]) => (
-                <div key={category} style={{ marginBottom: '20px' }}>
-                  <h4 style={{
-                    margin: '0 0 12px 0',
-                    fontSize: '14px',
-                    textTransform: 'capitalize',
-                    color: '#666',
-                    borderBottom: '1px solid #dee2e6',
-                    paddingBottom: '4px'
-                  }}>
-                    {category} Rules ({rules.length})
-                  </h4>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {rules.map(rule => (
-                      <EnhancedRuleApplication
-                        key={rule.id}
-                        rule={rule}
-                        focusedNode={focusedNode}
-                        rootExpression={currentExpression}
-                        context={context}
-                        onApply={addStep}
-                      />
-                    ))}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div style={{
-                padding: '16px',
-                backgroundColor: '#fff3cd',
-                borderRadius: '6px',
-                color: '#856404',
-                fontStyle: 'italic',
-                textAlign: 'center'
-              }}>
-                Click on part of the expression to see available rules
-              </div>
-            )}
-          </div>
+          <RulesPanel
+            rulesByCategory={rulesByCategory}
+            focusedNode={focusedNode}
+            currentExpression={currentExpression}
+            context={context}
+            addStep={addStep}
+          />
         </div>
       )}
 
@@ -793,6 +691,120 @@ export function EnhancedProofWorkspace() {
       />
     </div>
   );
+}
+
+function AssumptionsPanel({ assumptions }: { assumptions: Assumption[] }) {
+  if (assumptions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div style={{
+      marginBottom: '24px',
+      padding: '16px',
+      backgroundColor: '#f8f9fa',
+      borderRadius: '8px',
+      border: '1px solid #e9ecef'
+    }}>
+      <h4 style={{ margin: '0 0 12px 0', color: '#495057', fontSize: '16px' }}>
+        📋 Given:
+      </h4>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {assumptions.map((assumption, index) => (
+          <div key={assumption.id} style={{
+            fontSize: '15px',
+            color: '#495057',
+            paddingLeft: '16px'
+          }}>
+            <strong>({index + 1})</strong> {assumption.description}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ProofComment({ element }: { element: CommentElement }) {
+  return (
+    <div key={element.id} style={{
+      margin: '16px 0',
+      padding: '12px 16px',
+      backgroundColor: '#e8f4f8',
+      borderLeft: '4px solid #17a2b8',
+      borderRadius: '0 6px 6px 0',
+      color: '#0c5460',
+      fontSize: '14px',
+      fontStyle: 'italic'
+    }}>
+      {element.content}
+    </div>
+  );
+}
+
+function RulesPanel({
+  rulesByCategory,
+  focusedNode,
+  currentExpression,
+  context,
+  addStep
+}: {
+  rulesByCategory: Record<string, EnhancedFocusRule[]>;
+  focusedNode: ExpressionNode | null;
+  currentExpression: ExpressionNode;
+  context: ProofContext;
+  addStep: (rule: EnhancedFocusRule, params?: any) => void;
+}) {
+  return (
+    <div style={{
+      backgroundColor: '#f8f9fa',
+      border: '1px solid #e9ecef',
+      borderRadius: '8px',
+      padding: '20px',
+      maxHeight: '600px',
+      overflowY: 'auto'
+    }}>
+      <h3 style={{ marginTop: 0, color: '#495057' }}>Available Rules</h3>
+      {Object.keys(rulesByCategory).length > 0 ? (
+        Object.entries(rulesByCategory).map(([category, rules]) => (
+          <div key={category} style={{ marginBottom: '20px' }}>
+            <h4 style={{
+              margin: '0 0 12px 0',
+              fontSize: '14px',
+              textTransform: 'capitalize',
+              color: '#666',
+              borderBottom: '1px solid #dee2e6',
+              paddingBottom: '4px'
+            }}>
+              {category} Rules ({rules.length})
+            </h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {rules.map(rule => (
+                <EnhancedRuleApplication
+                  key={rule.id}
+                  rule={rule}
+                  focusedNode={focusedNode}
+                  rootExpression={currentExpression}
+                  context={context}
+                  onApply={addStep}
+                />
+              ))}
+            </div>
+          </div>
+        ))
+      ) : (
+        <div style={{
+          padding: '16px',
+          backgroundColor: '#fff3cd',
+          borderRadius: '6px',
+          color: '#856404',
+          fontStyle: 'italic',
+          textAlign: 'center'
+        }}>
+          Click on part of the expression to see available rules
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Helper function to generate comprehensive Lean proof terms

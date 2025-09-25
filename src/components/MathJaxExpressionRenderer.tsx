@@ -10,8 +10,8 @@ declare global {
 
 interface MathJaxExpressionRendererProps {
   expression: ExpressionNode;
-  focusPath: FocusPath;
-  onFocusChange: (newPath: FocusPath) => void;
+  focusPath?: FocusPath;
+  onFocusChange?: (newPath: FocusPath) => void;
   isActive?: boolean;
   readonly?: boolean;
 }
@@ -128,7 +128,7 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
   return `\\cssId{expr-${pathId}}{${node.raw}}`;
 }
 
-export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange, isActive = false, readonly = false }: MathJaxExpressionRendererProps) {
+export function MathJaxExpressionRenderer({ expression, focusPath = [], onFocusChange, readonly = true }: MathJaxExpressionRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [mathJaxReady, setMathJaxReady] = useState(false);
 
@@ -226,20 +226,6 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
       containerRef.current.innerHTML = `<span style="color: red;">LaTeX Error: ${expression.raw}</span>`;
     }
   }, [mathJaxReady, expression, readonly]);
-
-  // Helper function to get node at path
-  const getCurrentNode = (root: ExpressionNode, path: FocusPath): ExpressionNode | null => {
-    try {
-      let current = root;
-      for (const index of path) {
-        if (index >= current.children.length) return null;
-        current = current.children[index];
-      }
-      return current;
-    } catch {
-      return null;
-    }
-  };
 
   // Apply blue highlighting to the currently focused element
   const applyFocusHighlighting = () => {
@@ -344,7 +330,7 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
 
       const handleClick = () => {
         // Change focus to the clicked element's path
-        onFocusChange(path);
+        onFocusChange?.(path);
       };
 
       overlay.addEventListener('mouseenter', handleMouseEnter);
@@ -356,95 +342,15 @@ export function MathJaxExpressionRenderer({ expression, focusPath, onFocusChange
     });
   };
 
-  const containerStyle = {
-    borderRadius: '8px',
-    border: readonly ? 'none' : '3px solid',
-    borderColor: isActive ? '#007acc' : '#e0e0e0',
-    backgroundColor: readonly ? 'transparent' : (isActive ? '#f8fcff' : '#fafafa'),
-    display: 'flex',
-    alignItems: 'center',
-    position: 'relative' as const,
-    fontSize: '18px',
-  };
-
-  const focusedNode = getCurrentNode(expression, focusPath);
-
   if (!mathJaxReady) {
     return (
-      <div style={containerStyle}>
-        <div style={{ flex: 1, textAlign: 'center', color: '#666' }}>
-          Loading MathJax...
-        </div>
+      <div style={{ flex: 1, textAlign: 'center', color: '#666', fontSize: '18px', }}>
+        Loading MathJax...
       </div>
     );
   }
 
   return (
-    <div style={containerStyle}>
-      <div style={{ flex: 1, textAlign: 'center', position: 'relative' }}>
-        <div ref={containerRef} style={{ position: 'relative', padding: 0, margin: 0 }} />
-      </div>
-
-      {focusPath.length > 0 && focusedNode && (
-        <div style={{
-          position: 'absolute',
-          top: '-12px',
-          right: '12px',
-          backgroundColor: '#007acc',
-          color: 'white',
-          padding: '4px 12px',
-          borderRadius: '12px',
-          fontSize: '12px',
-          fontWeight: 'bold',
-          fontFamily: 'system-ui, sans-serif'
-        }}>
-          Focus: {focusedNode.raw}
-        </div>
-      )}
-
-      {!readonly && (
-        <div style={{
-          marginLeft: '20px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '6px'
-        }}>
-          <button
-            onClick={() => onFocusChange([])}
-            disabled={focusPath.length === 0}
-            style={{
-              padding: '6px 12px',
-              backgroundColor: focusPath.length === 0 ? '#ccc' : '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: focusPath.length === 0 ? 'not-allowed' : 'pointer',
-              fontSize: '12px',
-              fontFamily: 'system-ui, sans-serif'
-            }}
-          >
-            Root
-          </button>
-
-          {focusPath.length > 0 && (
-            <button
-              onClick={() => onFocusChange(focusPath.slice(0, -1))}
-              style={{
-                padding: '6px 12px',
-                backgroundColor: '#6c757d',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontFamily: 'system-ui, sans-serif'
-              }}
-            >
-              Up
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+    <div ref={containerRef} style={{ position: 'relative', padding: 0, margin: 0, flex: 1, textAlign: 'center', fontSize: '18px' }} />
   );
 }
