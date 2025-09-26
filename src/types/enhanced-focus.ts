@@ -138,6 +138,7 @@ export function createCommentElement(
 export interface EnhancedFocusRule {
   id: string;
   name: string;
+  displayName?: string;  // Optional display name for UI
   description: string;
   category: 'equality' | 'arithmetic' | 'algebraic' | 'substitution' | 'introduction';
 
@@ -477,6 +478,302 @@ export function substituteVariableInExpression(
   };
 }
 
+// Pattern-based rule creation system for easier rule definition
+type PatternElement = string | number | PatternNode;
+type PatternNode = [string, ...PatternElement[]]; // [operator, ...operands]
+
+interface PatternRuleConfig {
+  id: string;
+  name: string;
+  description: string;
+  category?: 'equality' | 'arithmetic' | 'algebraic' | 'substitution' | 'introduction';
+  from: PatternElement;
+  to: PatternElement;
+  bidirectional?: boolean;
+  reverseName?: string;
+  reverseDescription?: string;
+  // Optional: specify which variables should match (for complex patterns)
+  variableConstraints?: { [varName: string]: (node: ExpressionNode) => boolean };
+}
+
+// Helper to check if a string is a pattern variable (starts with lowercase letter)
+function isPatternVariable(s: any): boolean {
+  return typeof s === 'string' && /^[a-z]/.test(s);
+}
+
+// Helper to match a pattern against an AST node
+function matchPattern(pattern: PatternElement, node: ExpressionNode, bindings: Map<string, ExpressionNode>): boolean {
+  // Handle literals (numbers)
+  if (typeof pattern === 'number') {
+    return node.type === 'literal' && node.value === pattern;
+  }
+
+  // Handle pattern variables (single lowercase letters or words)
+  if (isPatternVariable(pattern)) {
+    const varName = pattern as string;
+
+    // Check if we've already bound this variable
+    if (bindings.has(varName)) {
+      // Must match the existing binding
+      const existing = bindings.get(varName)!;
+      return astToString(existing) === astToString(node);
+    } else {
+      // Bind this variable to the node
+      bindings.set(varName, node);
+      return true;
+    }
+  }
+
+  // Handle specific constants/operators (uppercase or special chars)
+  if (typeof pattern === 'string') {
+    return node.type === 'variable' && node.value === pattern;
+  }
+
+  // Handle pattern nodes [operator, ...operands]
+  if (Array.isArray(pattern)) {
+    const [operator, ...operands] = pattern;
+
+    // Check operator match
+    if (node.type === 'binop' && node.operator === operator) {
+      if (operands.length !== 2 || !node.children || node.children.length !== 2) {
+        return false;
+      }
+
+      return matchPattern(operands[0], node.children[0], bindings) &&
+             matchPattern(operands[1], node.children[1], bindings);
+    }
+
+    // Check for unary operations
+    if (node.type === 'unop' && node.operator === operator) {
+      if (operands.length !== 1 || !node.children || node.children.length !== 1) {
+        return false;
+      }
+      return matchPattern(operands[0], node.children[0], bindings);
+    }
+
+    // Check for function applications (like 'sum')
+    if (operator === 'sum' && node.type === 'application') {
+      if (node.children && node.children[0]?.type === 'variable' && node.children[0]?.value === 'sum') {
+        // For sum, we expect: ['sum', variable, lower, upper, expression]
+        if (operands.length !== 4 || node.children.length !== 5) {
+          return false;
+        }
+
+        return matchPattern(operands[0], node.children[1], bindings) &&
+               matchPattern(operands[1], node.children[2], bindings) &&
+               matchPattern(operands[2], node.children[3], bindings) &&
+               matchPattern(operands[3], node.children[4], bindings);
+      }
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
+// Helper to build AST from pattern using bindings
+function buildFromPattern(pattern: PatternElement, bindings: Map<string, ExpressionNode>): ExpressionNode {
+  // Handle literals
+  if (typeof pattern === 'number') {
+    return {
+      id: crypto.randomUUID(),
+      type: 'literal',
+      value: pattern,
+      children: [],
+      raw: String(pattern)
+    };
+  }
+
+  // Handle pattern variables
+  if (isPatternVariable(pattern)) {
+    const varName = pattern as string;
+    if (bindings.has(varName)) {
+      const node = bindings.get(varName)!;
+      return { ...node, id: crypto.randomUUID() };
+    }
+    // If not bound, treat as a variable
+    return {
+      id: crypto.randomUUID(),
+      type: 'variable',
+      value: varName,
+      children: [],
+      raw: varName
+    };
+  }
+
+  // Handle specific constants
+  if (typeof pattern === 'string') {
+    return {
+      id: crypto.randomUUID(),
+      type: 'variable',
+      value: pattern,
+      children: [],
+      raw: pattern
+    };
+  }
+
+  // Handle pattern nodes
+  if (Array.isArray(pattern)) {
+    const [operator, ...operands] = pattern;
+
+    // Handle binary operations
+    if (['+', '-', '*', '/', '^'].includes(operator)) {
+      if (operands.length !== 2) {
+        throw new Error(`Binary operator ${operator} requires exactly 2 operands`);
+      }
+
+      const left = buildFromPattern(operands[0], bindings);
+      const right = buildFromPattern(operands[1], bindings);
+
+      return {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator,
+        children: [left, right],
+        raw: `${astToString(left)} ${operator} ${astToString(right)}`
+      };
+    }
+
+    // Handle unary operations
+    if (operator === '-' && operands.length === 1) {
+      const operand = buildFromPattern(operands[0], bindings);
+      return {
+        id: crypto.randomUUID(),
+        type: 'unop',
+        operator: '-',
+        children: [operand],
+        raw: `-${astToString(operand)}`
+      };
+    }
+
+    // Handle sum
+    if (operator === 'sum' && operands.length === 4) {
+      const variable = buildFromPattern(operands[0], bindings);
+      const lower = buildFromPattern(operands[1], bindings);
+      const upper = buildFromPattern(operands[2], bindings);
+      const expression = buildFromPattern(operands[3], bindings);
+
+      return {
+        id: crypto.randomUUID(),
+        type: 'application',
+        children: [
+          { id: crypto.randomUUID(), type: 'variable', value: 'sum', children: [], raw: 'sum' },
+          variable,
+          lower,
+          upper,
+          expression
+        ],
+        raw: `sum ${astToString(variable)} ${astToString(lower)} ${astToString(upper)} ${astToString(expression)}`
+      };
+    }
+  }
+
+  throw new Error(`Unknown pattern type: ${JSON.stringify(pattern)}`);
+}
+
+// Create a rule from pattern configuration
+export function createPatternRule(config: PatternRuleConfig): EnhancedFocusRule {
+  const rule: EnhancedFocusRule = {
+    id: config.id,
+    name: config.name,
+    displayName: config.name,
+    description: config.description,
+    category: config.category || 'algebraic',
+    bidirectional: config.bidirectional || false,
+
+    isApplicableToFocus: (node) => {
+      if (!node) return false;
+      const bindings = new Map<string, ExpressionNode>();
+      return matchPattern(config.from, node, bindings);
+    },
+
+    applyToFocus: (node) => {
+      const bindings = new Map<string, ExpressionNode>();
+
+      if (!matchPattern(config.from, node, bindings)) {
+        throw new Error('Pattern does not match');
+      }
+
+      const newNode = buildFromPattern(config.to, bindings);
+      return { newNode };
+    }
+  };
+
+  // Add reverse rule if bidirectional
+  if (config.bidirectional) {
+    rule.reverseName = config.reverseName || `Reverse ${config.name}`;
+    rule.reverseDescription = config.reverseDescription || `Reverse: ${config.description}`;
+
+    rule.isApplicableReverse = (node) => {
+      if (!node) return false;
+      const bindings = new Map<string, ExpressionNode>();
+      return matchPattern(config.to, node, bindings);
+    };
+
+    rule.applyReverse = (node, _rootExpression, params) => {
+      const bindings = new Map<string, ExpressionNode>();
+
+      // For reverse, we need to handle cases where 'to' pattern has fewer variables
+      // For example: a -> a*1, we need to introduce the '1'
+      if (!matchPattern(config.to, node, bindings)) {
+        throw new Error('Reverse pattern does not match');
+      }
+
+      // If 'from' pattern has variables not in 'to', we need params
+      const fromVars = extractPatternVariables(config.from);
+      const toVars = extractPatternVariables(config.to);
+      const missingVars = fromVars.filter(v => !toVars.includes(v));
+
+      // Add parameter values to bindings
+      for (const varName of missingVars) {
+        if (params && params[varName]) {
+          const paramNode = parseExpressionToAST(params[varName]);
+          bindings.set(varName, paramNode);
+        }
+      }
+
+      const newNode = buildFromPattern(config.from, bindings);
+      return { newNode };
+    };
+
+    // Check if reverse needs parameters
+    const fromVars = extractPatternVariables(config.from);
+    const toVars = extractPatternVariables(config.to);
+    const missingVars = fromVars.filter(v => !toVars.includes(v));
+
+    if (missingVars.length > 0) {
+      rule.requiresParams = true;
+      rule.paramTemplate = {};
+      for (const varName of missingVars) {
+        rule.paramTemplate[varName] = `Enter value for ${varName}`;
+      }
+    }
+  }
+
+  return rule;
+}
+
+// Helper to extract all pattern variables from a pattern
+function extractPatternVariables(pattern: PatternElement): string[] {
+  const vars: string[] = [];
+
+  function extract(p: PatternElement) {
+    if (isPatternVariable(p)) {
+      const varName = p as string;
+      if (!vars.includes(varName)) {
+        vars.push(varName);
+      }
+    } else if (Array.isArray(p)) {
+      const [_operator, ...operands] = p;
+      operands.forEach(extract);
+    }
+  }
+
+  extract(pattern);
+  return vars;
+}
+
 // Comprehensive real number rules
 export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   // Equality rules (work at top level)
@@ -516,7 +813,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'mul_comm',
     name: 'Multiplication Commutativity',
-    description: 'a * b = b * a',
+    description: 'a \\cdot b = b \\cdot a',
     category: 'arithmetic',
     isApplicableToFocus: (node) => node && node.type === 'binop' && node.operator === '*',
     applyToFocus: (node) => ({
@@ -602,11 +899,11 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'distribute_mul_left',
     name: 'Left Distributivity',
-    description: 'a * (b + c) = a * b + a * c',
+    description: 'a \\cdot (b + c) = a \\cdot b + a \\cdot c',
     category: 'algebraic',
     bidirectional: true,
     reverseName: 'Factor Left',
-    reverseDescription: 'a * b + a * c = a * (b + c)',
+    reverseDescription: 'a \\cdot b + a \\cdot c = a \\cdot (b + c)',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
@@ -694,11 +991,11 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'distribute_mul_right',
     name: 'Right Distributivity',
-    description: '(a + b) * c = a * c + b * c',
+    description: '(a + b) \\cdot c = \\, a \\cdot c + b \\cdot c',
     category: 'algebraic',
     bidirectional: true,
     reverseName: 'Factor Right',
-    reverseDescription: 'a * c + b * c = (a + b) * c',
+    reverseDescription: 'a \\cdot c + b \\cdot c = (a + b) \\cdot c',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
@@ -787,7 +1084,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'factor_common_mul',
     name: 'Factor Common Multiplier',
-    description: 'a * x - a * y = a * (x - y)',
+    description: 'a \\cdot x - a \\cdot y = a \\cdot (x - y)',
     category: 'algebraic',
     isApplicableToFocus: (node) => {
       if (!node || !node.children || node.children.length !== 2) return false;
@@ -844,8 +1141,11 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'factor_from_fraction',
     name: 'Factor from Fraction Numerator',
-    description: '(a * b) / c = a * (b / c)',
+    description: '(a \\cdot b) / c = a \\cdot (b / c)',
     category: 'algebraic',
+    bidirectional: true,
+    reverseName: 'Combine into Fraction',
+    reverseDescription: 'a \\cdot (b / c) = (a \\cdot b) / c',
     isApplicableToFocus: (node) => {
       if (!node || !node.children || node.children.length !== 2) return false;
 
@@ -859,6 +1159,19 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
 
       // Must have exactly two factors in the numerator
       return numerator.children && numerator.children.length === 2;
+    },
+    isApplicableReverse: (node) => {
+      if (!node || !node.children || node.children.length !== 2) return false;
+
+      // Check if this is a multiplication: a * (b/c)
+      if (node.type !== 'binop' || node.operator !== '*') return false;
+
+      const rightChild = node.children[1];
+
+      // Right child must be a division
+      if (rightChild.type !== 'binop' || rightChild.operator !== '/') return false;
+
+      return rightChild.children && rightChild.children.length === 2;
     },
     applyToFocus: (node) => {
       const numerator = node.children[0];   // a * b
@@ -884,6 +1197,142 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
           operator: '*',
           children: [factorA, newFraction],
           raw: `${astToString(factorA)} * (${astToString(newFraction)})`
+        }
+      };
+    },
+    applyReverse: (node) => {
+      const factorA = node.children[0];     // a
+      const fraction = node.children[1];    // b/c
+
+      const factorB = fraction.children[0]; // b
+      const denominator = fraction.children[1]; // c
+
+      // Create a * b
+      const newNumerator: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '*',
+        children: [factorA, factorB],
+        raw: `${astToString(factorA)} * ${astToString(factorB)}`
+      };
+
+      // Create (a * b) / c
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '/',
+          children: [newNumerator, denominator],
+          raw: `(${astToString(newNumerator)}) / ${astToString(denominator)}`
+        }
+      };
+    }
+  },
+
+  {
+    id: 'combine_fractions',
+    name: 'Combine Fractions',
+    description: '\\frac{a}{c} + \\frac{b}{c} = \\frac{a + b}{c}',
+    category: 'algebraic',
+    bidirectional: true,
+    reverseName: 'Split Fraction',
+    reverseDescription: '\\frac{a + b}{c} = \\frac{a}{c} + \\frac{b}{c}',
+    isApplicableToFocus: (node) => {
+      if (!node || !node.children || node.children.length !== 2) return false;
+
+      // Check if this is an addition: frac1 + frac2
+      if (node.type !== 'binop' || node.operator !== '+') return false;
+
+      const left = node.children[0];
+      const right = node.children[1];
+
+      // Both terms must be fractions
+      if (left.type !== 'binop' || left.operator !== '/' ||
+        right.type !== 'binop' || right.operator !== '/') return false;
+
+      // Check if they have the same denominator
+      if (!left.children || !right.children ||
+        left.children.length !== 2 || right.children.length !== 2) return false;
+
+      const leftDenom = astToString(left.children[1]);
+      const rightDenom = astToString(right.children[1]);
+
+      return leftDenom === rightDenom;
+    },
+    isApplicableReverse: (node) => {
+      if (!node || !node.children || node.children.length !== 2) return false;
+
+      // Check if this is a fraction: (a+b)/c
+      if (node.type !== 'binop' || node.operator !== '/') return false;
+
+      const numerator = node.children[0];
+
+      // Numerator must be an addition
+      if (numerator.type !== 'binop' || numerator.operator !== '+') return false;
+
+      return numerator.children && numerator.children.length === 2;
+    },
+    applyToFocus: (node) => {
+      const left = node.children[0];  // a/c
+      const right = node.children[1]; // b/c
+
+      const a = left.children[0];
+      const b = right.children[0];
+      const c = left.children[1]; // Same as right.children[1]
+
+      // Create a + b
+      const newNumerator: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '+',
+        children: [a, b],
+        raw: `${astToString(a)} + ${astToString(b)}`
+      };
+
+      // Create (a + b) / c
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '/',
+          children: [newNumerator, c],
+          raw: `(${astToString(newNumerator)}) / ${astToString(c)}`
+        }
+      };
+    },
+    applyReverse: (node) => {
+      const numerator = node.children[0]; // a + b
+      const denominator = node.children[1]; // c
+
+      const a = numerator.children[0];
+      const b = numerator.children[1];
+
+      // Create a/c
+      const leftFraction: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '/',
+        children: [a, { ...denominator, id: crypto.randomUUID() }],
+        raw: `${astToString(a)} / ${astToString(denominator)}`
+      };
+
+      // Create b/c
+      const rightFraction: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '/',
+        children: [b, { ...denominator, id: crypto.randomUUID() }],
+        raw: `${astToString(b)} / ${astToString(denominator)}`
+      };
+
+      // Create a/c + b/c
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '+',
+          children: [leftFraction, rightFraction],
+          raw: `${astToString(leftFraction)} + ${astToString(rightFraction)}`
         }
       };
     }
@@ -971,7 +1420,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'multiply_both_sides',
     name: 'Multiply Both Sides',
-    description: 'If a = b, then a * c = b * c',
+    description: 'If a = b, then a \\cdot c = b \\cdot c',
     category: 'substitution',
     requiresParams: true,
     paramTemplate: { value: 'Value to multiply by' },
@@ -1011,7 +1460,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'divide_both_sides',
     name: 'Divide Both Sides',
-    description: 'If a = b and c ≠ 0, then a/c = b/c',
+    description: 'If a = b and c \\neq 0, then a/c = b/c',
     category: 'introduction',
     requiresParams: true,
     paramTemplate: { value: 'Value to divide by' },
@@ -1111,11 +1560,11 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'mul_one',
     name: 'Multiplication Identity',
-    description: 'a * 1 = a',
+    description: 'a \\cdot 1 = a',
     category: 'arithmetic',
     bidirectional: true,
     reverseName: 'Multiply by One',
-    reverseDescription: 'a = a * 1',
+    reverseDescription: 'a = a \\cdot 1',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
@@ -1162,7 +1611,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'mul_zero',
     name: 'Multiplication by Zero',
-    description: 'a * 0 = 0',
+    description: 'a \\cdot 0 = 0',
     category: 'arithmetic',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
@@ -1179,6 +1628,81 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         raw: '0'
       }
     })
+  },
+
+  {
+    id: 'div_self',
+    name: 'Division by Self',
+    description: 'x/x = 1 (\\text{where} x \\neq 0)',
+    category: 'arithmetic',
+    bidirectional: true,
+    reverseName: 'Expand One as Fraction',
+    reverseDescription: '1 = \\frac{x}{x}\\, \\text{ (specify $x$)}',
+    requiresParams: false,  // Forward doesn't need params
+    isApplicableToFocus: (node) => {
+      if (!node || node.type !== 'binop' || node.operator !== '/') return false;
+      if (!node.children || node.children.length !== 2) return false;
+
+      const numerator = astToString(node.children[0]);
+      const denominator = astToString(node.children[1]);
+
+      return numerator === denominator;
+    },
+    isApplicableReverse: (node) => {
+      return node?.type === 'literal' && node.value === 1;
+    },
+    applyToFocus: (node) => {
+      const divisor = astToString(node.children[0]);
+
+      const newAssumption: Assumption = {
+        id: crypto.randomUUID(),
+        name: `h_${divisor}_neq_zero`,
+        expression: `${divisor} ≠ 0`,
+        description: `${divisor} is not equal to zero`,
+        introducedBy: 'div_self'
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'literal',
+          value: 1,
+          children: [],
+          raw: '1'
+        },
+        newAssumptions: [newAssumption]
+      };
+    },
+    applyReverse: (_node, _rootExpression, params) => {
+      const { expression } = params || {};
+      if (!expression) throw new Error('Expression parameter required (what should x be in x/x?)');
+
+      let xNode: ExpressionNode;
+      try {
+        xNode = parseExpressionToAST(expression);
+      } catch (error) {
+        throw new Error(`Invalid expression: ${expression}`);
+      }
+
+      const newAssumption: Assumption = {
+        id: crypto.randomUUID(),
+        name: `h_${expression}_neq_zero`,
+        expression: `${expression} ≠ 0`,
+        description: `${expression} is not equal to zero`,
+        introducedBy: 'div_self_reverse'
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '/',
+          children: [xNode, { ...xNode, id: crypto.randomUUID() }],
+          raw: `${astToString(xNode)} / ${astToString(xNode)}`
+        },
+        newAssumptions: [newAssumption]
+      };
+    }
   },
 
   // Derivative limit definition rule (using Lean's hasDerivAt_iff_tendsto_slope)
@@ -1367,11 +1891,11 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'limit_const_factor',
     name: 'Limit Constant Factoring',
-    description: 'lim_{a→b} n*g(a) = n * lim_{a→b} g(a)',
+    description: 'lim_{a→b} n\\cdotg(a) = n \\cdot lim_{a→b} g(a)',
     category: 'algebraic',
     bidirectional: true,
     reverseName: 'Factor into Limit',
-    reverseDescription: 'n * lim_{a→b} g(a) = lim_{a→b} n*g(a)',
+    reverseDescription: 'n \\cdot lim_{a→b} g(a) = lim_{a→b} n\\cdot g(a)',
 
     isApplicableToFocus: (node) => {
       // Check if this is a limit expression: limit (n * g(a)) a b
@@ -1469,7 +1993,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'subst_from_assumption',
     name: 'Substitute from Assumption',
-    description: 'Replace using equality from assumptions',
+    description: '\\text{Replace using equality from assumptions}',
     category: 'substitution',
     bidirectional: false,
     isApplicableToFocus: (node, _rootExpression, context) => {
@@ -1536,7 +2060,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'sum_singleton',
     name: 'Singleton Summation',
-    description: '∑_{i=a}^{a} f(i) = f(a)',
+    description: '\\sum_{i=a}^{a} f(i) = f(a)',
     category: 'algebraic',
     bidirectional: false,
     isApplicableToFocus: (node) => {
@@ -1569,7 +2093,7 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
   {
     id: 'sum_split',
     name: 'Split Summation',
-    description: '∑_{i=a}^{b+c} f(i) = ∑_{i=a}^{b} f(i) + ∑_{i=b+1}^{b+c} f(i)',
+    description: '\\sum_{i=a}^{b+c} f(i) = \\sum_{i=a}^{b} f(i) + \\sum_{i=b+1}^{b+c} f(i)',
     category: 'algebraic',
     bidirectional: false,
     isApplicableToFocus: (node) => {
@@ -1638,6 +2162,234 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
           operator: '+',
           children: [firstSum, secondSum],
           raw: `${astToString(firstSum)} + ${astToString(secondSum)}`
+        }
+      };
+    }
+  },
+
+  // Pattern-based rules for identity and algebraic simplifications
+  createPatternRule({
+    id: 'add_zero_left',
+    name: 'Add Zero (Left)',
+    description: '0 + a = a',
+    from: ['+', 0, 'a'],
+    to: 'a',
+    bidirectional: true,
+    reverseName: 'Introduce Zero (Left)',
+    reverseDescription: 'a = 0 + a'
+  }),
+
+  createPatternRule({
+    id: 'add_zero_right',
+    name: 'Add Zero (Right)',
+    description: 'a + 0 = a',
+    from: ['+', 'a', 0],
+    to: 'a',
+    bidirectional: true,
+    reverseName: 'Introduce Zero (Right)',
+    reverseDescription: 'a = a + 0'
+  }),
+
+  createPatternRule({
+    id: 'mul_one_left',
+    name: 'Multiply by One (Left)',
+    description: '1 \\cdot a = a',
+    from: ['*', 1, 'a'],
+    to: 'a',
+    bidirectional: true,
+    reverseName: 'Introduce One (Left)',
+    reverseDescription: 'a = 1 \\cdot a'
+  }),
+
+  createPatternRule({
+    id: 'mul_one_right',
+    name: 'Multiply by One (Right)',
+    description: 'a \\cdot 1 = a',
+    from: ['*', 'a', 1],
+    to: 'a',
+    bidirectional: true,
+    reverseName: 'Introduce One (Right)',
+    reverseDescription: 'a = a \\cdot 1'
+  }),
+
+  createPatternRule({
+    id: 'exponent_one',
+    name: 'Exponent of One',
+    description: 'a^1 = a',
+    from: ['^', 'a', 1],
+    to: 'a',
+    bidirectional: true,
+    reverseName: 'Introduce Exponent One',
+    reverseDescription: 'a = a^1'
+  }),
+
+  // Exponent product rule: a^b * a^c = a^(b+c)
+  {
+    id: 'exponent_product',
+    name: 'Exponent Product Rule',
+    description: 'a^b \\cdot a^c = a^{b+c}',
+    displayName: 'Exponent Product Rule',
+    category: 'algebraic',
+    bidirectional: true,
+    reverseName: 'Split Exponent',
+    reverseDescription: 'a^{b+c} = a^b \\cdot a^c',
+
+    isApplicableToFocus: (node) => {
+      if (!node || node.type !== 'binop' || node.operator !== '*') return false;
+      if (!node.children || node.children.length !== 2) return false;
+
+      const left = node.children[0];
+      const right = node.children[1];
+
+      // Both must be exponentiation with the same base
+      if (left.type !== 'binop' || left.operator !== '^') return false;
+      if (right.type !== 'binop' || right.operator !== '^') return false;
+      if (!left.children || !right.children || left.children.length !== 2 || right.children.length !== 2) return false;
+
+      // Check if bases are the same
+      const leftBase = astToString(left.children[0]);
+      const rightBase = astToString(right.children[0]);
+
+      return leftBase === rightBase;
+    },
+
+    applyToFocus: (node) => {
+      const left = node.children[0];  // a^b
+      const right = node.children[1]; // a^c
+
+      const base = left.children[0];  // a
+      const leftExp = left.children[1]; // b
+      const rightExp = right.children[1]; // c
+
+      // Create b + c
+      const newExponent: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '+',
+        children: [leftExp, rightExp],
+        raw: `${astToString(leftExp)} + ${astToString(rightExp)}`
+      };
+
+      // Create a^(b+c)
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '^',
+          children: [base, newExponent],
+          raw: `${astToString(base)} ^ (${astToString(newExponent)})`
+        }
+      };
+    },
+
+    isApplicableReverse: (node) => {
+      if (!node || node.type !== 'binop' || node.operator !== '^') return false;
+      if (!node.children || node.children.length !== 2) return false;
+
+      const exponent = node.children[1];
+
+      // Exponent must be an addition
+      return exponent.type === 'binop' && exponent.operator === '+' &&
+             exponent.children && exponent.children.length === 2;
+    },
+
+    applyReverse: (node) => {
+      const base = node.children[0];     // a
+      const exponent = node.children[1]; // b+c
+
+      const leftExp = exponent.children[0]; // b
+      const rightExp = exponent.children[1]; // c
+
+      // Create a^b
+      const leftPower: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '^',
+        children: [{ ...base, id: crypto.randomUUID() }, leftExp],
+        raw: `${astToString(base)} ^ ${astToString(leftExp)}`
+      };
+
+      // Create a^c
+      const rightPower: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '^',
+        children: [{ ...base, id: crypto.randomUUID() }, rightExp],
+        raw: `${astToString(base)} ^ ${astToString(rightExp)}`
+      };
+
+      // Create a^b * a^c
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '*',
+          children: [leftPower, rightPower],
+          raw: `${astToString(leftPower)} * ${astToString(rightPower)}`
+        }
+      };
+    }
+  },
+
+  // Constant simplification rule for arithmetic operations
+  {
+    id: 'constant_simplification',
+    name: 'Simplify Constants',
+    description: 'Evaluate arithmetic operations on constants',
+    displayName: 'Simplify Constants',
+    category: 'algebraic',
+
+    isApplicableToFocus: (node) => {
+      if (!node || node.type !== 'binop') return false;
+      if (!node.children || node.children.length !== 2) return false;
+
+      // Check if both operands are literals (constants)
+      const left = node.children[0];
+      const right = node.children[1];
+
+      if (left.type !== 'literal' || right.type !== 'literal') return false;
+      if (typeof left.value !== 'number' || typeof right.value !== 'number') return false;
+
+      // Support +, -, *, / for now
+      return ['+', '-', '*', '/'].includes(node.operator!);
+    },
+
+    applyToFocus: (node) => {
+      const left = node.children[0];
+      const right = node.children[1];
+
+      const leftVal = left.value as number;
+      const rightVal = right.value as number;
+
+      let result: number;
+
+      switch (node.operator) {
+        case '+':
+          result = leftVal + rightVal;
+          break;
+        case '-':
+          result = leftVal - rightVal;
+          break;
+        case '*':
+          result = leftVal * rightVal;
+          break;
+        case '/':
+          if (rightVal === 0) {
+            throw new Error('Division by zero');
+          }
+          result = leftVal / rightVal;
+          break;
+        default:
+          throw new Error(`Unsupported operation: ${node.operator}`);
+      }
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'literal',
+          value: result,
+          children: [],
+          raw: String(result)
         }
       };
     }

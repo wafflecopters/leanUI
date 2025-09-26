@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   ExpressionNode,
   FocusPath,
@@ -19,7 +19,7 @@ import {
 } from '../types/enhanced-focus';
 import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
 import { MathJaxExpressionRenderer, MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
-import { ExpressionEditor } from './ExpressionRenderer';
+import { ExpressionEditor, ExpressionInput } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 
 interface EnhancedProofStep {
@@ -87,7 +87,23 @@ function EnhancedRuleApplication({ rule, focusedNode, onApply }: EnhancedRuleApp
       borderRadius: '6px',
       backgroundColor: '#f9f9f9'
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-start', alignItems: 'flex-start', marginBottom: '8px', gap: '12px' }}>
+        <button
+          onClick={handleApply}
+          style={{
+            padding: '6px 14px',
+            backgroundColor: categoryColors[rule.category],
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '13px',
+            fontWeight: 'bold',
+            flexShrink: 0
+          }}
+        >
+          {showParams ? 'Confirm' : 'Apply'}
+        </button>
         <div style={{ flex: 1 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
             <strong style={{ color: categoryColors[rule.category] }}>{(rule as any).displayName}</strong>
@@ -103,34 +119,19 @@ function EnhancedRuleApplication({ rule, focusedNode, onApply }: EnhancedRuleApp
               {rule.category}
             </span>
           </div>
-          <div style={{ fontSize: '13px', color: '#666', marginBottom: '4px' }}>
-            <MathJaxExpressionRendererRaw
-              expression={(rule as any).displayDescription}
-              readonly={true}
-              inline={false}
-            />
-          </div>
-          <div style={{ fontSize: '12px', color: '#888', fontFamily: 'monospace' }}>
-            On: <span style={{ backgroundColor: '#e6f3ff', padding: '1px 4px', borderRadius: '2px' }}>
-              {focusedNode.raw}
-            </span>
-          </div>
         </div>
-        <button
-          onClick={handleApply}
-          style={{
-            padding: '6px 14px',
-            backgroundColor: categoryColors[rule.category],
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            fontWeight: 'bold'
-          }}
-        >
-          {showParams ? 'Apply' : 'Apply'}
-        </button>
+      </div>
+      <div style={{ fontSize: '13px', color: '#666', marginBottom: '4px' }}>
+        <MathJaxExpressionRendererRaw
+          expression={(rule as any).displayDescription}
+          readonly={true}
+          inline={false}
+        />
+      </div>
+      <div style={{ fontSize: '12px', color: '#888', fontFamily: 'monospace' }}>
+        On: <span style={{ backgroundColor: '#e6f3ff', padding: '1px 4px', borderRadius: '2px' }}>
+          {focusedNode.raw}
+        </span>
       </div>
 
       {showParams && rule.requiresParams && rule.paramTemplate && (
@@ -140,20 +141,44 @@ function EnhancedRuleApplication({ rule, focusedNode, onApply }: EnhancedRuleApp
               <label style={{ fontSize: '12px', color: '#666', display: 'block', marginBottom: '2px' }}>
                 {description}:
               </label>
-              <input
-                type="text"
-                placeholder={`Enter ${paramName}...`}
-                value={params[paramName] || ''}
-                onChange={(e) => handleParamChange(paramName, e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '4px 8px',
-                  fontFamily: 'monospace',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '12px'
-                }}
-              />
+              {paramName === 'expression' ? (
+                <>
+                  <ExpressionInput
+                    value={params[paramName] || ''}
+                    onChange={(value) => handleParamChange(paramName, value)}
+                    placeholder={`Enter ${paramName}...`}
+                    autoFocus={true}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter' && params[paramName]?.trim()) {
+                        handleApply();
+                      }
+                    }}
+                  />
+                  <div style={{ fontSize: '10px', color: '#999', marginTop: '2px' }}>
+                    Press Enter or click Confirm to apply
+                  </div>
+                </>
+              ) : (
+                <input
+                  type="text"
+                  placeholder={`Enter ${paramName}...`}
+                  value={params[paramName] || ''}
+                  onChange={(e) => handleParamChange(paramName, e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && params[paramName]?.trim()) {
+                      handleApply();
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '4px 8px',
+                    fontFamily: 'monospace',
+                    border: '1px solid #ccc',
+                    borderRadius: '4px',
+                    fontSize: '12px'
+                  }}
+                />
+              )}
             </div>
           ))}
         </div>
@@ -322,7 +347,16 @@ export function EnhancedProofWorkspace() {
     }
   });
 
+  const proofScrollRef = useRef<HTMLDivElement>(null);
+
   const focusedNode = getNodeAtPath(currentExpression, focusPath);
+
+  // Auto-scroll to bottom when proof steps are added
+  useEffect(() => {
+    if (proofScrollRef.current) {
+      proofScrollRef.current.scrollTop = proofScrollRef.current.scrollHeight;
+    }
+  }, [structuredProof.elements.length]);
 
   // Suppress unused import warnings (these are used in commented sections)
   console.debug('Unused imports for cleanup later:', { EnhancedProofHistory, generateEnhancedLeanProof, steps });
@@ -401,6 +435,24 @@ export function EnhancedProofWorkspace() {
     }));
   }, []);
 
+  const deleteProofElement = useCallback((index: number) => {
+    if (index === 0) return; // Don't delete the first element
+
+    setStructuredProof(prev => ({
+      ...prev,
+      elements: prev.elements.filter((_, i) => i !== index)
+    }));
+
+    // If we're deleting the last element, update the current expression
+    if (index === structuredProof.elements.length - 1) {
+      const previousElement = structuredProof.elements[index - 1];
+      if (previousElement.type === 'equation') {
+        const eq = previousElement as EquationElement;
+        setCurrentExpression(eq.rightSide);
+      }
+    }
+  }, [structuredProof.elements]);
+
 
   const handleNewExpression = () => {
     if (!newExpressionText.trim()) return;
@@ -441,11 +493,16 @@ export function EnhancedProofWorkspace() {
     // Check reverse direction for bidirectional rules
     if (rule.bidirectional && rule.isApplicableReverse && rule.applyReverse) {
       if (rule.isApplicableReverse(focusedNode, currentExpression, context)) {
+        // For div_self rule in reverse, we need params
+        const needsReverseParams = rule.id === 'div_self';
+
         rules.push({
           ...rule,
           isReverse: true,
           displayName: rule.reverseName || `${rule.name} (Reverse)`,
           displayDescription: rule.reverseDescription || `Reverse of: ${rule.description}`,
+          requiresParams: needsReverseParams,
+          paramTemplate: needsReverseParams ? { expression: 'Expression for x in x/x' } : rule.paramTemplate,
           applyRule: (node: any, expression: any, params: any, ctx: any) => rule.applyReverse!(node, expression, params, ctx)
         });
       }
@@ -576,7 +633,10 @@ export function EnhancedProofWorkspace() {
               border: '2px solid #e1e8ed',
               borderRadius: '8px',
               padding: '20px',
-              minHeight: '400px'
+              minHeight: '400px',
+              maxHeight: '600px',
+              display: 'flex',
+              flexDirection: 'column'
             }}>
               <h4 style={{
                 margin: '0 0 20px 0',
@@ -589,7 +649,8 @@ export function EnhancedProofWorkspace() {
               </h4>
 
               {/* All previous proof steps */}
-              <table>
+              <div ref={proofScrollRef} style={{ overflowY: 'auto', flex: 1 }}>
+              <table style={{ width: '100%' }}>
                 <tbody>
                   {structuredProof.elements.map((element, index) => {
                     if (element.type === 'equation') {
@@ -615,18 +676,36 @@ export function EnhancedProofWorkspace() {
                               {right}
                             </div>
                           </td>
-                          {eq.justification && (
-                            <td>
-                              <div style={{
-                                fontSize: '13px',
-                                color: '#7f8c8d',
-                                fontStyle: 'italic',
-                                marginTop: '6px'
-                              }}>
-                                ({eq.justification})
-                              </div>
-                            </td>
-                          )}
+                          <td>
+                            <div style={{
+                              fontSize: '13px',
+                              color: '#7f8c8d',
+                              fontStyle: 'italic',
+                              marginTop: '6px'
+                            }}>
+                              {eq.justification && `(${eq.justification})`}
+                            </div>
+                          </td>
+                          <td style={{ width: '30px', textAlign: 'right' }}>
+                            {index === structuredProof.elements.length - 1 && (
+                              <button
+                                onClick={() => deleteProofElement(index)}
+                                style={{
+                                  padding: '2px 6px',
+                                  backgroundColor: '#dc3545',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: '3px',
+                                  cursor: 'pointer',
+                                  fontSize: '12px',
+                                  fontWeight: 'bold'
+                                }}
+                                title="Undo this step"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       )
                     } else if (element.type === 'comment') {
@@ -639,6 +718,7 @@ export function EnhancedProofWorkspace() {
                   </tr>
                 </tbody>
               </table>
+              </div>
               <FocusBreadcrumbs
                 expression={currentExpression}
                 focusPath={focusPath}

@@ -60,6 +60,69 @@ export function ExpressionRenderer({ expression, isActive = false, onClick }: Ex
   );
 }
 
+// Shared expression input component that can be used in various contexts
+export interface ExpressionInputProps {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  onKeyPress?: (e: React.KeyboardEvent) => void;
+  style?: React.CSSProperties;
+  showExamples?: boolean;
+}
+
+export function ExpressionInput({
+  value,
+  onChange,
+  placeholder = "Enter expression...",
+  autoFocus = false,
+  onKeyPress,
+  style,
+  showExamples = false
+}: ExpressionInputProps) {
+  return (
+    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', ...style }}>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyPress={onKeyPress}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        style={{
+          flex: 1,
+          padding: '8px 12px',
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          border: '1px solid #ccc',
+          borderRadius: '4px',
+          outline: 'none'
+        }}
+      />
+      {showExamples && (
+        <select
+          value={'Example'}
+          onChange={(e) => {
+            if (e.target.value !== 'Example') {
+              onChange(e.target.value);
+            }
+          }}
+          style={{
+            padding: '8px',
+            borderRadius: '4px',
+            border: '1px solid #ccc'
+          }}
+        >
+          <option value={'Example'}>Examples</option>
+          {ExampleExpressions.map((expr, i) => (
+            <option key={i} value={expr.contents}>{expr.contents}</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
 interface ExpressionEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -81,6 +144,10 @@ const ExampleExpressions: WorkspaceExample[] = [
     contents: 'x+2*y',
     assumptions: ['x: ℝ', 'y: ℝ'],
   },
+  {
+    contents: 'sum i 0 k i',
+    assumptions: ['i: ℕ', 'k: ℕ'],
+  },
 ]
 
 export function ExpressionEditor({ value, onChange, onSubmit, placeholder = "Enter expression..." }: ExpressionEditorProps) {
@@ -93,22 +160,14 @@ export function ExpressionEditor({ value, onChange, onSubmit, placeholder = "Ent
 
   return (
     <div style={{ margin: '8px 0' }}>
-      <input
-        type="text"
+      <ExpressionInput
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyPress={handleKeyPress}
+        onChange={onChange}
         placeholder={placeholder}
-        autoFocus
-        style={{
-          width: '100%',
-          padding: '12px 16px',
-          fontFamily: 'monospace',
-          fontSize: '16px',
-          border: '2px solid #007acc',
-          borderRadius: '6px',
-          outline: 'none'
-        }}
+        autoFocus={true}
+        onKeyPress={handleKeyPress}
+        showExamples={true}
+        style={{ width: '100%' }}
       />
       <button
         onClick={onSubmit}
@@ -126,12 +185,6 @@ export function ExpressionEditor({ value, onChange, onSubmit, placeholder = "Ent
       >
         Set Expression
       </button>
-      <select value={'Example'} onChange={(e) => onChange(e.target.value)}>
-        <option value={'Example'}>Example</option>
-        {ExampleExpressions.map((expr) => (
-          <option value={expr.contents}>{expr.contents}</option>
-        ))}
-      </select>
     </div>
   );
 }
