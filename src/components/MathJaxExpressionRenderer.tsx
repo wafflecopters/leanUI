@@ -14,6 +14,7 @@ interface MathJaxExpressionRendererProps<T> {
   onFocusChange?: (newPath: FocusPath) => void;
   isActive?: boolean;
   readonly?: boolean;
+  inline?: boolean;
 }
 
 
@@ -145,7 +146,7 @@ export function MathJaxExpressionRenderer(props: MathJaxExpressionRendererProps<
   return <MathJaxExpressionRendererRaw {...props} expression={astToCleanLaTeX(props.expression)} raw={props.expression.raw} />;
 }
 
-export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFocusChange, readonly = true, raw }: MathJaxExpressionRendererProps<string> & { raw?: string }) {
+export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFocusChange, readonly = true, inline = false, raw }: MathJaxExpressionRendererProps<string> & { raw?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [mathJaxReady, setMathJaxReady] = useState(false);
 
@@ -200,7 +201,8 @@ export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFoc
     const latex = expression;
 
     try {
-      containerRef.current.innerHTML = `$$${latex}$$`;
+      const delim = inline ? '$' : '$$';
+      containerRef.current.innerHTML = `${delim}${latex}${delim}`;
 
       const performTypesetting = () => {
         if (window.MathJax && window.MathJax.typesetPromise) {

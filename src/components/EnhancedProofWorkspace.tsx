@@ -104,7 +104,11 @@ function EnhancedRuleApplication({ rule, focusedNode, onApply }: EnhancedRuleApp
             </span>
           </div>
           <div style={{ fontSize: '13px', color: '#666', marginBottom: '4px' }}>
-            {(rule as any).displayDescription}
+            <MathJaxExpressionRendererRaw
+              expression={(rule as any).displayDescription}
+              readonly={true}
+              inline={false}
+            />
           </div>
           <div style={{ fontSize: '12px', color: '#888', fontFamily: 'monospace' }}>
             On: <span style={{ backgroundColor: '#e6f3ff', padding: '1px 4px', borderRadius: '2px' }}>
@@ -298,7 +302,7 @@ export function EnhancedProofWorkspace() {
     assumptions: [{
       id: crypto.randomUUID(),
       name: 'h_sum_formula',
-      expression: 'sum i 0 k i = k * (k + 1) / 2',
+      expression: 'sum i 0 k i = (k * (k + 1)) / 2',
       description: 'Sum formula: ∑_{i=0}^{k} i = k(k+1)/2'
     }],
     variables: new Map([
@@ -330,7 +334,7 @@ export function EnhancedProofWorkspace() {
     }
 
     try {
-      const result = rule.applyRule(focusedNode, currentExpression, params);
+      const result = rule.applyRule(focusedNode, currentExpression, params, context);
       const newExpression = setNodeAtPath(currentExpression, focusPath, result.newNode);
 
       // Update the raw string of the new expression
@@ -430,7 +434,7 @@ export function EnhancedProofWorkspace() {
         isReverse: false,
         displayName: rule.name,
         displayDescription: rule.description,
-        applyRule: (node: any, expression: any, params: any) => rule.applyToFocus(node, expression, params)
+        applyRule: (node: any, expression: any, params: any, ctx: any) => rule.applyToFocus(node, expression, params, ctx)
       });
     }
 
@@ -442,7 +446,7 @@ export function EnhancedProofWorkspace() {
           isReverse: true,
           displayName: rule.reverseName || `${rule.name} (Reverse)`,
           displayDescription: rule.reverseDescription || `Reverse of: ${rule.description}`,
-          applyRule: (node: any, expression: any, params: any) => rule.applyReverse!(node, expression, params)
+          applyRule: (node: any, expression: any, params: any, ctx: any) => rule.applyReverse!(node, expression, params, ctx)
         });
       }
     }
@@ -689,15 +693,34 @@ function AssumptionsPanel({ assumptions }: { assumptions: Assumption[] }) {
         📋 Given:
       </h4>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {assumptions.map((assumption, index) => (
-          <div key={assumption.id} style={{
-            fontSize: '15px',
-            color: '#495057',
-            paddingLeft: '16px'
-          }}>
-            <strong>({index + 1})</strong> {assumption.description}
-          </div>
-        ))}
+        {assumptions.map((assumption, index) => {
+          let renderedAssumption;
+          try {
+            const parsedExpr = parseExpressionToAST(assumption.expression);
+            renderedAssumption = (
+              <MathJaxExpressionRenderer
+                expression={parsedExpr}
+                readonly={true}
+              />
+            );
+          } catch {
+            renderedAssumption = <span>{assumption.description}</span>;
+          }
+
+          return (
+            <div key={assumption.id} style={{
+              fontSize: '15px',
+              color: '#495057',
+              paddingLeft: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}>
+              <strong>({index + 1})</strong>
+              {renderedAssumption}
+            </div>
+          );
+        })}
       </div>
     </div>
   )

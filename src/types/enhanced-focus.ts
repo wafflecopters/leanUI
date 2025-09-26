@@ -145,7 +145,7 @@ export interface EnhancedFocusRule {
   isApplicableToFocus: (focusedNode: ExpressionNode, rootExpression: ExpressionNode, context: ProofContext) => boolean;
 
   // Apply rule and return new node + any new assumptions
-  applyToFocus: (focusedNode: ExpressionNode, rootExpression: ExpressionNode, params?: any) => {
+  applyToFocus: (focusedNode: ExpressionNode, rootExpression: ExpressionNode, params?: any, context?: ProofContext) => {
     newNode: ExpressionNode;
     newAssumptions?: Assumption[];
   };
@@ -163,7 +163,7 @@ export interface EnhancedFocusRule {
   isApplicableReverse?: (focusedNode: ExpressionNode, rootExpression: ExpressionNode, context: ProofContext) => boolean;
 
   // Apply reverse rule (only needed if bidirectional)
-  applyReverse?: (focusedNode: ExpressionNode, rootExpression: ExpressionNode, params?: any) => {
+  applyReverse?: (focusedNode: ExpressionNode, rootExpression: ExpressionNode, params?: any, context?: ProofContext) => {
     newNode: ExpressionNode;
     newAssumptions?: Assumption[];
   };
@@ -604,10 +604,33 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Left Distributivity',
     description: 'a * (b + c) = a * b + a * c',
     category: 'algebraic',
+    bidirectional: true,
+    reverseName: 'Factor Left',
+    reverseDescription: 'a * b + a * c = a * (b + c)',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
         node.children[1]?.type === 'binop' && node.children[1].operator === '+';
+    },
+    isApplicableReverse: (node) => {
+      if (!node || !node.children || node.children.length !== 2) return false;
+      if (node.type !== 'binop' || node.operator !== '+') return false;
+
+      const left = node.children[0];
+      const right = node.children[1];
+
+      // Both terms must be multiplications
+      if (left.type !== 'binop' || left.operator !== '*' ||
+        right.type !== 'binop' || right.operator !== '*') return false;
+
+      // Check if they have the same first factor
+      if (!left.children || !right.children ||
+        left.children.length !== 2 || right.children.length !== 2) return false;
+
+      const leftFactor = astToString(left.children[0]);
+      const rightFactor = astToString(right.children[0]);
+
+      return leftFactor === rightFactor;
     },
     applyToFocus: (node) => {
       const a = node.children[0];
@@ -639,6 +662,32 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
           raw: `${astToString(left)} + ${astToString(right)}`
         }
       };
+    },
+    applyReverse: (node) => {
+      const left = node.children[0];
+      const right = node.children[1];
+
+      const commonFactor = left.children[0];
+      const b = left.children[1];
+      const c = right.children[1];
+
+      const sum: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '+',
+        children: [b, c],
+        raw: `${astToString(b)} + ${astToString(c)}`
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '*',
+          children: [commonFactor, sum],
+          raw: `${astToString(commonFactor)} * (${astToString(sum)})`
+        }
+      };
     }
   },
 
@@ -647,10 +696,33 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Right Distributivity',
     description: '(a + b) * c = a * c + b * c',
     category: 'algebraic',
+    bidirectional: true,
+    reverseName: 'Factor Right',
+    reverseDescription: 'a * c + b * c = (a + b) * c',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
         node.children[0]?.type === 'binop' && node.children[0].operator === '+';
+    },
+    isApplicableReverse: (node) => {
+      if (!node || !node.children || node.children.length !== 2) return false;
+      if (node.type !== 'binop' || node.operator !== '+') return false;
+
+      const left = node.children[0];
+      const right = node.children[1];
+
+      // Both terms must be multiplications
+      if (left.type !== 'binop' || left.operator !== '*' ||
+        right.type !== 'binop' || right.operator !== '*') return false;
+
+      // Check if they have the same second factor
+      if (!left.children || !right.children ||
+        left.children.length !== 2 || right.children.length !== 2) return false;
+
+      const leftFactor = astToString(left.children[1]);
+      const rightFactor = astToString(right.children[1]);
+
+      return leftFactor === rightFactor;
     },
     applyToFocus: (node) => {
       const a = node.children[0].children[0];
@@ -680,6 +752,32 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
           operator: '+',
           children: [left, right],
           raw: `${astToString(left)} + ${astToString(right)}`
+        }
+      };
+    },
+    applyReverse: (node) => {
+      const left = node.children[0];
+      const right = node.children[1];
+
+      const a = left.children[0];
+      const b = right.children[0];
+      const commonFactor = left.children[1];
+
+      const sum: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'binop',
+        operator: '+',
+        children: [a, b],
+        raw: `${astToString(a)} + ${astToString(b)}`
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '*',
+          children: [sum, commonFactor],
+          raw: `(${astToString(sum)}) * ${astToString(commonFactor)}`
         }
       };
     }
@@ -964,11 +1062,18 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Addition Identity',
     description: 'a + 0 = a',
     category: 'arithmetic',
+    bidirectional: true,
+    reverseName: 'Add Zero',
+    reverseDescription: 'a = a + 0',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '+' &&
         ((node.children[1]?.type === 'literal' && node.children[1].value === 0) ||
           (node.children[0]?.type === 'literal' && node.children[0].value === 0));
+    },
+    isApplicableReverse: (node) => {
+      // Can apply to any expression to add zero
+      return node !== null;
     },
     applyToFocus: (node) => {
       const nonZeroChild = node.children[0].type === 'literal' && node.children[0].value === 0
@@ -981,6 +1086,25 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
           id: crypto.randomUUID()
         }
       };
+    },
+    applyReverse: (node) => {
+      const zero: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'literal',
+        value: 0,
+        children: [],
+        raw: '0'
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '+',
+          children: [node, zero],
+          raw: `${astToString(node)} + 0`
+        }
+      };
     }
   },
 
@@ -989,11 +1113,18 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
     name: 'Multiplication Identity',
     description: 'a * 1 = a',
     category: 'arithmetic',
+    bidirectional: true,
+    reverseName: 'Multiply by One',
+    reverseDescription: 'a = a * 1',
     isApplicableToFocus: (node) => {
       if (!node || !node.children) return false;
       return node.type === 'binop' && node.operator === '*' &&
         ((node.children[1]?.type === 'literal' && node.children[1].value === 1) ||
           (node.children[0]?.type === 'literal' && node.children[0].value === 1));
+    },
+    isApplicableReverse: (node) => {
+      // Can apply to any expression to multiply by one
+      return node !== null;
     },
     applyToFocus: (node) => {
       const nonOneChild = node.children[0].type === 'literal' && node.children[0].value === 1
@@ -1004,6 +1135,25 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
         newNode: {
           ...nonOneChild,
           id: crypto.randomUUID()
+        }
+      };
+    },
+    applyReverse: (node) => {
+      const one: ExpressionNode = {
+        id: crypto.randomUUID(),
+        type: 'literal',
+        value: 1,
+        children: [],
+        raw: '1'
+      };
+
+      return {
+        newNode: {
+          id: crypto.randomUUID(),
+          type: 'binop',
+          operator: '*',
+          children: [node, one],
+          raw: `${astToString(node)} * 1`
         }
       };
     }
@@ -1313,6 +1463,73 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
           raw: `limit (${astToString(newLimitFunc)}) ${astToString(variable)} ${astToString(approach)}`
         }
       };
+    }
+  },
+
+  {
+    id: 'subst_from_assumption',
+    name: 'Substitute from Assumption',
+    description: 'Replace using equality from assumptions',
+    category: 'substitution',
+    bidirectional: false,
+    isApplicableToFocus: (node, _rootExpression, context) => {
+      if (!node) return false;
+
+      const nodeStr = astToString(node);
+
+      return context.assumptions.some(assumption => {
+        try {
+          const assumptionExpr = parseExpressionToAST(assumption.expression);
+          if (assumptionExpr.type !== 'equality' || assumptionExpr.operator !== '=') return false;
+
+          const leftStr = astToString(assumptionExpr.children[0]);
+          const rightStr = astToString(assumptionExpr.children[1]);
+
+          return nodeStr === leftStr || nodeStr === rightStr;
+        } catch {
+          return false;
+        }
+      });
+    },
+    applyToFocus: (node, _rootExpression, _params, context?: ProofContext) => {
+      if (!context) throw new Error('Context required for substitution');
+
+      const nodeStr = astToString(node);
+
+      // Find the first matching assumption
+      for (const assumption of context.assumptions) {
+        try {
+          const assumptionExpr = parseExpressionToAST(assumption.expression);
+          if (assumptionExpr.type !== 'equality' || assumptionExpr.operator !== '=') continue;
+
+          const leftNode = assumptionExpr.children[0];
+          const rightNode = assumptionExpr.children[1];
+          const leftStr = astToString(leftNode);
+          const rightStr = astToString(rightNode);
+
+          if (nodeStr === leftStr) {
+            // Replace with right side
+            return {
+              newNode: {
+                ...rightNode,
+                id: crypto.randomUUID()
+              }
+            };
+          } else if (nodeStr === rightStr) {
+            // Replace with left side
+            return {
+              newNode: {
+                ...leftNode,
+                id: crypto.randomUUID()
+              }
+            };
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      throw new Error('No matching assumption found');
     }
   },
 
