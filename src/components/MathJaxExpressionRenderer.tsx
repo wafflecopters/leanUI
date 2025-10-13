@@ -1,12 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { ExpressionNode, FocusPath } from '../types/enhanced-focus';
 import { findSyntaxRule } from '../config/syntax-mapping';
-
-declare global {
-  interface Window {
-    MathJax: any;
-  }
-}
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 interface MathJaxExpressionRendererProps<T> {
   expression: T;
@@ -54,7 +50,7 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
   const syntaxRule = findSyntaxRule(node);
   if (syntaxRule) {
     const latex = syntaxRule.toLatex(node, childRenderer, path);
-    return `\\cssId{expr-${pathId}}{${latex}}`;
+    return `\\htmlId{expr-${pathId}}{${latex}}`;
   }
 
   switch (node.type) {
@@ -79,7 +75,7 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
           '≥': '\\\\geq'
         }[node.operator] || node.operator;
 
-        return `\\cssId{expr-${pathId}}{${leftWrapped} ${opSymbol} ${rightWrapped}}`;
+        return `\\htmlId{expr-${pathId}}{${leftWrapped} ${opSymbol} ${rightWrapped}}`;
       }
       break;
 
@@ -97,24 +93,24 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
         switch (node.operator) {
           case '/':
             // Fractions don't need parentheses since they're visually grouped
-            return `\\cssId{expr-${pathId}}{\\frac{${leftLatex}}{${rightLatex}}}`;
+            return `\\htmlId{expr-${pathId}}{\\frac{${leftLatex}}{${rightLatex}}}`;
           case '^':
             // For exponentiation, wrap base if it's a binop (like y+1)
             const baseWrapped = maybeWrap(leftLatex, needsParensForExponentBase(leftChild));
-            return `\\cssId{expr-${pathId}}{{${baseWrapped}}^{${rightLatex}}}`;
+            return `\\htmlId{expr-${pathId}}{{${baseWrapped}}^{${rightLatex}}}`;
           case '*':
             const leftMulWrapped = maybeWrap(leftLatex, needsParensForMultiplication(leftChild) || needsBigOpParens);
             const rightMulWrapped = maybeWrap(rightLatex, needsParensForMultiplication(rightChild));
-            return `\\cssId{expr-${pathId}}{${leftMulWrapped} \\cdot ${rightMulWrapped}}`;
+            return `\\htmlId{expr-${pathId}}{${leftMulWrapped} \\cdot ${rightMulWrapped}}`;
           case '+':
             const leftAddWrapped = maybeWrap(leftLatex, needsBigOpParens);
-            return `\\cssId{expr-${pathId}}{${leftAddWrapped} + ${rightLatex}}`;
+            return `\\htmlId{expr-${pathId}}{${leftAddWrapped} + ${rightLatex}}`;
           case '-':
             const leftSubWrapped = maybeWrap(leftLatex, needsBigOpParens);
             const rightSubWrapped = maybeWrap(rightLatex, needsParensForMultiplication(rightChild));
-            return `\\cssId{expr-${pathId}}{${leftSubWrapped} - ${rightSubWrapped}}`;
+            return `\\htmlId{expr-${pathId}}{${leftSubWrapped} - ${rightSubWrapped}}`;
           default:
-            return `\\cssId{expr-${pathId}}{${leftLatex} ${node.operator} ${rightLatex}}`;
+            return `\\htmlId{expr-${pathId}}{${leftLatex} ${node.operator} ${rightLatex}}`;
         }
       }
       break;
@@ -124,22 +120,22 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
         const childNode = node.children[0];
         const operandLatex = astToCleanLaTeX(childNode, [...path, 0]);
         const operandWrapped = maybeWrap(operandLatex, needsParensForExponentBase(childNode));
-        return `\\cssId{expr-${pathId}}{${node.operator}${operandWrapped}}`;
+        return `\\htmlId{expr-${pathId}}{${node.operator}${operandWrapped}}`;
       }
       break;
 
     case 'literal':
-      return `\\cssId{expr-${pathId}}{${String(node.value)}}`;
+      return `\\htmlId{expr-${pathId}}{${String(node.value)}}`;
 
     case 'variable':
-      return `\\cssId{expr-${pathId}}{${String(node.value)}}`;
+      return `\\htmlId{expr-${pathId}}{${String(node.value)}}`;
 
     case 'application':
       const parts = node.children.map((child, index) => astToCleanLaTeX(child, [...path, index]));
-      return `\\cssId{expr-${pathId}}{${parts.join(' ')}}`;
+      return `\\htmlId{expr-${pathId}}{${parts.join(' ')}}`;
   }
 
-  return `\\cssId{expr-${pathId}}{${node.raw}}`;
+  return `\\htmlId{expr-${pathId}}{${node.raw}}`;
 }
 
 export function MathJaxExpressionRenderer(props: MathJaxExpressionRendererProps<ExpressionNode>) {
@@ -148,103 +144,55 @@ export function MathJaxExpressionRenderer(props: MathJaxExpressionRendererProps<
 
 export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFocusChange, readonly = true, inline = false, raw }: MathJaxExpressionRendererProps<string> & { raw?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [mathJaxReady, setMathJaxReady] = useState(false);
 
   // Debug: suppress TypeScript warning
   console.debug('MathJax readonly mode:', readonly);
 
+  // Render KaTeX
   useEffect(() => {
-    const loadMathJax = () => {
-      if (!window.MathJax) {
-        // Configure MathJax before loading
-        window.MathJax = {
-          tex: {
-            inlineMath: [['$', '$']],
-            displayMath: [['$$', '$$']],
-          },
-          chtml: {
-            fontURL: 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2'
-          },
-          startup: {
-            ready: () => {
-              window.MathJax.startup.defaultReady();
-              // Wait for typesetPromise to be available
-              const checkReady = () => {
-                if (window.MathJax.typesetPromise) {
-                  setMathJaxReady(true);
-                } else {
-                  setTimeout(checkReady, 50);
-                }
-              };
-              checkReady();
-            }
-          }
-        };
-
-        // Load MathJax from CDN
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js';
-        script.async = true;
-        document.head.appendChild(script);
-      } else {
-        setMathJaxReady(true);
-      }
-    };
-
-    loadMathJax();
-  }, []);
-
-  // Render MathJax when ready
-  useEffect(() => {
-    if (!mathJaxReady || !containerRef.current) return;
+    if (!containerRef.current) return;
 
     const latex = expression;
 
     try {
-      const delim = inline ? '$' : '$$';
-      containerRef.current.innerHTML = `${delim}${latex}${delim}`;
+      katex.render(latex, containerRef.current, {
+        displayMode: !inline,
+        throwOnError: false,
+        trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
+        strict: false
+      });
 
-      const performTypesetting = () => {
-        if (window.MathJax && window.MathJax.typesetPromise) {
-          window.MathJax.typesetPromise([containerRef.current]).then(() => {
-            // Disable MathJax interactions
-            const mathJaxContainer = containerRef.current?.querySelector('.MathJax');
+      // Disable KaTeX interactions
+      const katexContainer = containerRef.current?.querySelector('.katex');
 
-            if (mathJaxContainer) {
-              // Disable all pointer events on MathJax
-              (mathJaxContainer as HTMLElement).style.pointerEvents = 'none';
-              (mathJaxContainer as HTMLElement).style.userSelect = 'none';
+      if (katexContainer) {
+        // Disable all pointer events on KaTeX
+        (katexContainer as HTMLElement).style.pointerEvents = 'none';
+        (katexContainer as HTMLElement).style.userSelect = 'none';
 
-              // Prevent all MathJax events
-              ['contextmenu', 'click', 'mousedown', 'mouseup'].forEach(eventType => {
-                (mathJaxContainer as HTMLElement).addEventListener(eventType, (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  e.stopImmediatePropagation();
-                  return false;
-                }, true);
-              });
-            }
+        // Prevent all KaTeX events
+        ['contextmenu', 'click', 'mousedown', 'mouseup'].forEach(eventType => {
+          (katexContainer as HTMLElement).addEventListener(eventType, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            return false;
+          }, true);
+        });
+      }
 
-            // Create overlay elements for interaction (only if not readonly)
-            if (containerRef.current && !readonly) {
-              createHoverOverlays();
-              applyFocusHighlighting();
-            }
-          }).catch((err: any) => {
-            console.error('MathJax rendering error:', err);
-          });
-        } else {
-          setTimeout(performTypesetting, 100);
-        }
-      };
-
-      performTypesetting();
+      // Create overlay elements for interaction (only if not readonly)
+      if (containerRef.current && !readonly) {
+        createHoverOverlays();
+        applyFocusHighlighting();
+      }
     } catch (error) {
-      console.error('MathJax rendering error:', error);
-      containerRef.current.innerHTML = `<span style="color: red;">LaTeX Error: ${raw ?? expression}</span>`;
+      console.error('KaTeX rendering error:', error);
+      if (containerRef.current) {
+        containerRef.current.innerHTML = `<span style="color: red;">LaTeX Error: ${raw ?? expression}</span>`;
+      }
     }
-  }, [mathJaxReady, expression, readonly]);
+  }, [expression, readonly, inline, raw]);
 
   // Apply blue highlighting to the currently focused element
   const applyFocusHighlighting = () => {
@@ -288,10 +236,10 @@ export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFoc
 
   // Re-apply focus highlighting when focusPath changes
   useEffect(() => {
-    if (mathJaxReady && containerRef.current && !readonly) {
+    if (containerRef.current && !readonly) {
       applyFocusHighlighting();
     }
-  }, [focusPath, mathJaxReady, readonly]);
+  }, [focusPath, readonly]);
 
   // Create invisible overlay elements for interaction
   const createHoverOverlays = () => {
@@ -360,14 +308,6 @@ export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFoc
       containerRef.current!.appendChild(overlay);
     });
   };
-
-  if (!mathJaxReady) {
-    return (
-      <div style={{ textAlign: 'center', color: '#666', fontSize: '18px', }}>
-        Loading MathJax...
-      </div>
-    );
-  }
 
   return (
     <div ref={containerRef} style={{ width: 'max-content', position: 'relative', fontSize: '18px' }} />
