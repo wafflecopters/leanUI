@@ -51,7 +51,7 @@ export const PROOF_RULES: ProofRule[] = [
   {
     id: 'symmetry',
     name: 'Symmetry',
-    description: 'If a = b, then b = a',
+    description: 'If a = b, \\text{then} b = a',
     type: 'symmetry',
     isApplicable: (expr) => expr.type === 'equality',
     apply: (expr) => ({
@@ -70,7 +70,7 @@ export const PROOF_RULES: ProofRule[] = [
   {
     id: 'add_both_sides',
     name: 'Add to Both Sides',
-    description: 'If a = b, then a + c = b + c',
+    description: 'If a = b, \\text{then} a + c = b + c',
     type: 'congruence',
     isApplicable: (expr) => expr.type === 'equality',
     apply: (expr, params) => {
@@ -95,7 +95,7 @@ export const PROOF_RULES: ProofRule[] = [
   {
     id: 'subtract_both_sides',
     name: 'Subtract from Both Sides',
-    description: 'If a = b, then a - c = b - c',
+    description: 'If a = b, \\text{then} a - c = b - c',
     type: 'congruence',
     isApplicable: (expr) => expr.type === 'equality',
     apply: (expr, params) => {
@@ -120,7 +120,7 @@ export const PROOF_RULES: ProofRule[] = [
   {
     id: 'multiply_both_sides',
     name: 'Multiply Both Sides',
-    description: 'If a = b, then a * c = b * c',
+    description: 'If a = b, \\text{then} a * c = b * c',
     type: 'congruence',
     isApplicable: (expr) => expr.type === 'equality',
     apply: (expr, params) => {
@@ -145,14 +145,14 @@ export const PROOF_RULES: ProofRule[] = [
   {
     id: 'transitivity',
     name: 'Transitivity',
-    description: 'If a = b and b = c, then a = c',
+    description: 'If a = b and b = c, \\text{then} a = c',
     type: 'transitivity',
     isApplicable: (expr, context) => {
       if (expr.type !== 'equality') return false;
       // Check if there's another equality with matching terms
-      return context?.steps.some(step => 
+      return context?.steps.some(step =>
         step.expression.type === 'equality' && (
-          step.expression.left === expr.right || 
+          step.expression.left === expr.right ||
           step.expression.right === expr.left
         )
       ) || false;
@@ -162,7 +162,7 @@ export const PROOF_RULES: ProofRule[] = [
       // Determine the transitive result
       let newLeft = expr.left;
       let newRight = otherExpression.right;
-      
+
       if (expr.right === otherExpression.left) {
         newRight = otherExpression.right;
       } else if (expr.right === otherExpression.right) {
@@ -174,7 +174,7 @@ export const PROOF_RULES: ProofRule[] = [
         newLeft = expr.right;
         newRight = otherExpression.left;
       }
-      
+
       return {
         id: crypto.randomUUID(),
         expression: {
@@ -195,7 +195,7 @@ export const PROOF_RULES: ProofRule[] = [
 // Helper function to parse simple expressions
 export function parseExpression(raw: string): Expression {
   const id = crypto.randomUUID();
-  
+
   // Handle equality
   if (raw.includes('=')) {
     const [left, right] = raw.split('=').map(s => s.trim());
@@ -208,7 +208,7 @@ export function parseExpression(raw: string): Expression {
       raw
     };
   }
-  
+
   // Handle other operators
   for (const op of ['<', '>', '≤', '≥']) {
     if (raw.includes(op)) {
@@ -223,7 +223,7 @@ export function parseExpression(raw: string): Expression {
       };
     }
   }
-  
+
   // Default to proposition
   return {
     id,

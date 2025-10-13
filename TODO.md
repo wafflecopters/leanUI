@@ -4,6 +4,10 @@
 
 ### Immediate Tasks
 - [x] Fix TypeScript compilation errors (completed)
+- [x] Implement induction proof workflow with child statement generation (completed)
+  - [x] Create base case and inductive case as child let statements
+  - [x] Add inductive hypothesis to inductive case
+  - [x] Display local hypotheses in UI
 - [ ] Replace custom parseExpressionToAST with proper Lean term parsing
 - [ ] Implement `d/dx (c f(x))` as proper Lean term with assumption `f: R->R`
 - [ ] Add AST debug panel near the focus window
@@ -85,3 +89,45 @@
 - Real-time Lean type checking
 - Side-by-side formal and informal proofs
 - Mathematical expression manipulation with proof state tracking
+
+---
+
+## Recent Implementations
+
+### Induction Proof Workflow (Completed 2025-10)
+
+**Feature**: Complete induction proof workflow with child statement generation
+
+**Implementation Details**:
+1. **Starting an Induction Proof**:
+   - User creates a let statement marked as a claim with proof method "induction on ℕ"
+   - User clicks "Start Proof" button
+   - System prompts for induction variable (auto-detected from common patterns: n, k, m, i)
+   - System prompts for base case value (default: 1)
+
+2. **Child Statement Generation**:
+   - System creates two child let statements as siblings (not nested):
+     - **Base Case** (`claim_base`): P(base_value)
+     - **Inductive Case** (`claim_inductive`): P(k+1)
+   - Both are marked as claims with proof method "equality"
+   - Original claim status updated to "in-progress"
+
+3. **Inductive Hypothesis**:
+   - Created as P(k) where k is the inductive variable
+   - Stored in `inductiveCaseLet.localHypotheses`
+   - Displayed in UI within the inductive case let binding
+   - Automatically added to proof context when starting proof of inductive case
+
+4. **Proof Flow**:
+   - User proves base case independently (click "Start Proof" on base case)
+   - User proves inductive case independently (click "Start Proof" on inductive case)
+   - Inductive hypothesis available as assumption during inductive case proof
+   - When both cases complete, original claim marked as "completed"
+
+**Files Modified**:
+- `src/types/enhanced-focus.ts`: Added `localHypotheses` to `LetElement`
+- `src/components/EnhancedProofWorkspace.tsx`: Implemented child statement creation logic
+- `src/components/LetManager.tsx`: Added UI for displaying local hypotheses
+- `src/test-induction.ts`: Updated test documentation
+
+**Test File**: `src/test-induction.ts` demonstrates the complete workflow
