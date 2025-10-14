@@ -71,12 +71,14 @@ test('Create variables with De Bruijn indices', () => {
 test('Create Pi types (dependent function types)', () => {
   // ℕ → ℕ (non-dependent function type)
   const nat = TT_CONSTANTS.Nat;
-  const natToNat = mkPi(nat, nat);
+  const natToNat = mkPi(nat, nat, 'x');
 
   assertTermEqual(natToNat, {
-    tag: 'Pi',
+    tag: 'Binder',
+    name: 'x',
+    binderKind: { tag: 'BPi' },
     domain: nat,
-    codomain: nat
+    body: nat
   });
 });
 
@@ -84,10 +86,12 @@ test('Create Lambda terms', () => {
   // λ (x : ℕ), x
   // Identity function on naturals
   const nat = TT_CONSTANTS.Nat;
-  const identity = mkLambda(nat, mkVar(0));
+  const identity = mkLambda(nat, mkVar(0), 'x');
 
   assertTermEqual(identity, {
-    tag: 'Lambda',
+    tag: 'Binder',
+    name: 'x',
+    binderKind: { tag: 'BLam' },
     domain: nat,
     body: { tag: 'Var', index: 0 }
   });

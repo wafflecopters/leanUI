@@ -12,10 +12,13 @@ import { InstantiationDialog } from './InstantiationDialog';
 interface LetManagerProps {
   letBindings: LetElement[];
   hypotheses: Assumption[];
+  goal: string | null;
   onAddLet: (letElement: LetElement) => void;
   onDeleteLet: (id: string) => void;
   onAddHypothesis: (hypothesis: Assumption) => void;
   onDeleteHypothesis: (id: string) => void;
+  onUpdateHypothesis: (id: string, updatedHypothesis: Assumption) => void;
+  onSetGoal: (goal: string) => void;
   onInstantiate?: (letId: string, substitutions: Map<string, ExpressionNode>) => void;
   onStartProof?: (letId: string) => void;
 }
@@ -23,15 +26,22 @@ interface LetManagerProps {
 export function LetManager({
   letBindings,
   hypotheses,
+  goal,
   onAddLet,
   onDeleteLet,
   onAddHypothesis,
   onDeleteHypothesis,
+  onUpdateHypothesis,
+  onSetGoal,
   onInstantiate,
   onStartProof
 }: LetManagerProps) {
   const [showAddLet, setShowAddLet] = useState(false);
   const [showAddHypothesis, setShowAddHypothesis] = useState(false);
+  const [showEditGoal, setShowEditGoal] = useState(false);
+  const [goalInput, setGoalInput] = useState(goal || '');
+  const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null);
+  const [editingHypothesisValue, setEditingHypothesisValue] = useState('');
   const [letName, setLetName] = useState('');
   const [letExpression, setLetExpression] = useState('');
   const [letType, setLetType] = useState<string>('');
@@ -89,9 +99,18 @@ export function LetManager({
   const extractUnboundVariables = (expr: ExpressionNode, boundVars: Set<string> = new Set()): Set<string> => {
     const unboundVars = new Set<string>();
 
+    // Reserved keywords in type theory that should not be treated as variables
+    const reservedKeywords = new Set(['Type', 'Prop', 'Sort']);
+
     const traverse = (node: ExpressionNode) => {
       if (node.type === 'variable' && typeof node.value === 'string') {
         const varName = node.value;
+
+        // Skip reserved keywords
+        if (reservedKeywords.has(varName)) {
+          return;
+        }
+
         // Check if it's not already bound (by let-bindings or hypotheses)
         const isAlreadyBound =
           boundVars.has(varName) ||
@@ -148,13 +167,16 @@ export function LetManager({
       .replace(/\\exists/g, '∃');
   };
 
-  const handleAddHypothesis = () => {
+  const handleAddHypothesis = (expandedExpression?: string) => {
     if (!hypothesisName || !hypothesisExpression) return;
+
+    // Use the provided expanded expression, or the current one
+    const finalExpression = expandedExpression || hypothesisExpression;
 
     try {
       // Try to parse the expression to find unbound variables
       // This handles cases like "x > 0" where we need to create a hypothesis for x
-      const expr = parseExpressionToAST(hypothesisExpression);
+      const expr = parseExpressionToAST(finalExpression);
       const unboundVars = extractUnboundVariables(expr);
 
       // Filter out the hypothesis name itself from unbound vars
@@ -179,8 +201,8 @@ export function LetManager({
     const hypothesis: Assumption = {
       id: crypto.randomUUID(),
       name: hypothesisName,
-      expression: hypothesisExpression,
-      description: hypothesisDescription || hypothesisExpression,
+      expression: `${hypothesisName} : ${finalExpression}`,
+      description: hypothesisDescription || `${hypothesisName} : ${finalExpression}`,
       introducedBy: 'user'
     };
 
@@ -241,6 +263,7 @@ export function LetManager({
               placeholder="Name (e.g., h1)"
               value={hypothesisName}
               onChange={(e) => setHypothesisName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddHypothesis()}
               style={{
                 width: '100%',
                 padding: '6px',
@@ -255,6 +278,14 @@ export function LetManager({
               value={hypothesisExpression}
               onChange={(e) => setHypothesisExpression(e.target.value)}
               onBlur={(e) => setHypothesisExpression(expandTypeShortcuts(e.target.value))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  // Expand shortcuts and pass directly to handler
+                  const expanded = expandTypeShortcuts(hypothesisExpression);
+                  setHypothesisExpression(expanded);
+                  handleAddHypothesis(expanded);
+                }
+              }}
               style={{
                 width: '100%',
                 padding: '6px',
@@ -268,6 +299,7 @@ export function LetManager({
               placeholder="Description (optional)"
               value={hypothesisDescription}
               onChange={(e) => setHypothesisDescription(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddHypothesis()}
               style={{
                 width: '100%',
                 padding: '6px',
@@ -291,7 +323,7 @@ export function LetManager({
                 Cancel
               </button>
               <button
-                onClick={handleAddHypothesis}
+                onClick={() => handleAddHypothesis()}
                 style={{
                   padding: '6px 12px',
                   backgroundColor: '#28a745',
@@ -330,32 +362,108 @@ export function LetManager({
                   {isAutoGenerated && hasUnknownType && (
                     <span style={{ fontSize: '18px' }} title="Auto-generated - needs type">⚠️</span>
                   )}
-                  <input
-                    type="text"
-                    value={hypothesis.expression}
-                    onChange={(e) => {
-                      const updatedHypothesis = { ...hypothesis, expression: e.target.value };
-                      onDeleteHypothesis(hypothesis.id);
-                      onAddHypothesis(updatedHypothesis);
-                    }}
-                    onBlur={(e) => {
-                      const expanded = expandTypeShortcuts(e.target.value);
-                      if (expanded !== e.target.value) {
-                        const updatedHypothesis = { ...hypothesis, expression: expanded };
-                        onDeleteHypothesis(hypothesis.id);
-                        onAddHypothesis(updatedHypothesis);
-                      }
-                    }}
-                    style={{
-                      flex: 1,
-                      fontFamily: 'monospace',
-                      padding: '4px 8px',
-                      border: '1px solid #dee2e6',
-                      borderRadius: '4px',
-                      backgroundColor: isAutoGenerated && hasUnknownType ? '#fff3cd' : '#fff'
-                    }}
-                  />
-                  {hypothesis.description && hypothesis.description !== hypothesis.expression && (
+                  {editingHypothesisId === hypothesis.id ? (
+                    // Edit mode
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="text"
+                        value={editingHypothesisValue}
+                        onChange={(e) => setEditingHypothesisValue(e.target.value)}
+                        onBlur={(e) => {
+                          const expanded = expandTypeShortcuts(e.target.value);
+                          setEditingHypothesisValue(expanded);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            // Expand shortcuts before saving
+                            const expanded = expandTypeShortcuts(editingHypothesisValue);
+                            const updatedHypothesis = {
+                              ...hypothesis,
+                              expression: expanded,
+                              // Clear auto-generated description if type is no longer unknown
+                              description: expanded.includes(' : ?') ? hypothesis.description : ''
+                            };
+                            onUpdateHypothesis(hypothesis.id, updatedHypothesis);
+                            setEditingHypothesisId(null);
+                          } else if (e.key === 'Escape') {
+                            setEditingHypothesisId(null);
+                          }
+                        }}
+                        autoFocus
+                        style={{
+                          flex: 1,
+                          fontFamily: 'monospace',
+                          padding: '4px 8px',
+                          border: '1px solid #007bff',
+                          borderRadius: '4px',
+                          backgroundColor: '#fff'
+                        }}
+                      />
+                      <button
+                        onClick={() => {
+                          // Expand shortcuts before saving
+                          const expanded = expandTypeShortcuts(editingHypothesisValue);
+                          const updatedHypothesis = {
+                            ...hypothesis,
+                            expression: expanded,
+                            // Clear auto-generated description if type is no longer unknown
+                            description: expanded.includes(' : ?') ? hypothesis.description : ''
+                          };
+                          onUpdateHypothesis(hypothesis.id, updatedHypothesis);
+                          setEditingHypothesisId(null);
+                        }}
+                        style={{
+                          padding: '2px 8px',
+                          backgroundColor: '#28a745',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '12px'
+                        }}
+                      >
+                        ✓
+                      </button>
+                    </div>
+                  ) : (
+                    // Display mode
+                    <div
+                      style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+                      onClick={() => {
+                        setEditingHypothesisId(hypothesis.id);
+                        setEditingHypothesisValue(hypothesis.expression);
+                      }}
+                      title="Click to edit"
+                    >
+                      {(() => {
+                        // Parse hypothesis expression: "name : Type" or just "Type"
+                        const match = hypothesis.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
+
+                        if (match) {
+                          const [, name, typeStr] = match;
+                          return (
+                            <>
+                              <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{name}</span>
+                              <span>:</span>
+                              {(() => {
+                                try {
+                                  const typeExpr = parseExpressionToAST(typeStr.trim());
+                                  return <MathJaxExpressionRenderer expression={typeExpr} readonly={true} inline={true} />;
+                                } catch (error) {
+                                  // If parsing fails, show as plain text
+                                  return <span style={{ fontFamily: 'monospace' }}>{typeStr}</span>;
+                                }
+                              })()}
+                            </>
+                          );
+                        } else {
+                          // No colon found, just show the whole thing as text
+                          return <span style={{ fontFamily: 'monospace' }}>{hypothesis.expression}</span>;
+                        }
+                      })()}
+                    </div>
+                  )}
+                  {hypothesis.description && hypothesis.description !== hypothesis.expression && !editingHypothesisId && (
                     <span style={{ color: '#6c757d', fontSize: '12px', fontStyle: 'italic' }}>
                       ({hypothesis.description})
                     </span>
@@ -379,6 +487,132 @@ export function LetManager({
             );
           })}
         </div>
+      </div>
+
+      {/* Goal Section */}
+      <div style={{ marginBottom: '20px' }}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '12px'
+        }}>
+          <h4 style={{ margin: 0, color: '#666' }}>Goal</h4>
+          <button
+            onClick={() => {
+              setGoalInput(goal || '');
+              setShowEditGoal(!showEditGoal);
+            }}
+            style={{
+              padding: '4px 12px',
+              backgroundColor: '#ffc107',
+              color: '#000',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold'
+            }}
+          >
+            {goal ? 'Edit Goal' : 'Set Goal'}
+          </button>
+        </div>
+
+        {showEditGoal && (
+          <div style={{
+            padding: '12px',
+            backgroundColor: '#fff',
+            border: '1px solid #dee2e6',
+            borderRadius: '4px',
+            marginBottom: '12px'
+          }}>
+            <input
+              type="text"
+              placeholder="Goal type (e.g., x + y = y + x, \forall n, P(n))"
+              value={goalInput}
+              onChange={(e) => setGoalInput(e.target.value)}
+              onBlur={(e) => setGoalInput(expandTypeShortcuts(e.target.value))}
+              style={{
+                width: '100%',
+                padding: '6px',
+                marginBottom: '8px',
+                border: '1px solid #ced4da',
+                borderRadius: '4px'
+              }}
+            />
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setShowEditGoal(false)}
+                style={{
+                  padding: '6px 12px',
+                  backgroundColor: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (goalInput.trim()) {
+                    onSetGoal(goalInput.trim());
+                    setShowEditGoal(false);
+                  }
+                }}
+                style={{
+                  padding: '6px 12px',
+                  backgroundColor: '#28a745',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Set
+              </button>
+            </div>
+          </div>
+        )}
+
+        {goal && !showEditGoal && (
+          <div style={{
+            padding: '12px',
+            backgroundColor: '#fff9e6',
+            border: '2px solid #ffc107',
+            borderRadius: '6px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div style={{ flex: 1, fontSize: '16px', color: '#856404' }}>
+              {(() => {
+                try {
+                  const goalExpr = parseExpressionToAST(goal);
+                  return <MathJaxExpressionRenderer expression={goalExpr} readonly={true} />;
+                } catch (error) {
+                  // If parsing fails, show as plain text
+                  return <span style={{ fontFamily: 'monospace' }}>{goal}</span>;
+                }
+              })()}
+            </div>
+          </div>
+        )}
+
+        {!goal && !showEditGoal && (
+          <div style={{
+            padding: '12px',
+            backgroundColor: '#f8f9fa',
+            border: '1px dashed #ced4da',
+            borderRadius: '6px',
+            textAlign: 'center',
+            color: '#6c757d',
+            fontStyle: 'italic'
+          }}>
+            No goal set yet. Click "Set Goal" to define what you want to prove.
+          </div>
+        )}
       </div>
 
       {/* Let-bindings Section */}

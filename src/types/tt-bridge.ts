@@ -18,6 +18,7 @@ import {
   mkVar,
   mkApp,
   mkProp,
+  mkLet,
   TT_CONSTANTS,
   prettyPrint,
 } from './tt-core';
@@ -341,12 +342,12 @@ export function buildFullProofTerm(proofs: LetProofTerm[]): TTerm | null {
 
   for (let i = proofs.length - 1; i >= 0; i--) {
     const proof = proofs[i];
-    body = {
-      tag: 'Let',
-      defType: proof.propType,
-      defVal: proof.proofTerm,
-      body: i === 0 ? { tag: 'Var', index: 0 } : body // Last one refers to itself
-    };
+    body = mkLet(
+      `proof${i}`,
+      proof.propType,
+      proof.proofTerm,
+      i === 0 ? { tag: 'Var', index: 0 } : body // Last one refers to itself
+    );
   }
 
   return body;

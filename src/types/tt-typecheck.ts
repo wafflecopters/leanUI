@@ -73,16 +73,21 @@ export function whnf(term: TTerm, ctx: TContext = []): TTerm {
   switch (term.tag) {
     case 'App': {
       const fn = whnf(term.fn, ctx);
-      if (fn.tag === 'Lambda') {
+      if (fn.tag === 'Binder' && fn.binderKind.tag === 'BLam') {
         // Beta reduction: (λx. t) s  -->  t[x := s]
         return whnf(subst(0, term.arg, fn.body), ctx);
       }
       return { tag: 'App', fn, arg: term.arg };
     }
 
-    case 'Let':
+    case 'Binder': {
       // Let expansion: let x := v in t  -->  t[x := v]
-      return whnf(subst(0, term.defVal, term.body), ctx);
+      if (term.binderKind.tag === 'BLet') {
+        return whnf(subst(0, term.binderKind.defVal, term.body), ctx);
+      }
+      // Pi and Lambda are already in normal form
+      return term;
+    }
 
     default:
       return term;
@@ -110,15 +115,29 @@ export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
     case 'Const':
       return n2.tag === 'Const' && n1.name === n2.name;
 
-    case 'Pi':
-      return n2.tag === 'Pi' &&
-        convertible(n1.domain, n2.domain, ctx) &&
-        convertible(n1.codomain, n2.codomain, extendContext(ctx, 'x', n1.domain));
+    case 'Binder':
+      // Both must be binders of the same kind
+      if (n2.tag !== 'Binder' || n1.binderKind.tag !== n2.binderKind.tag) {
+        return false;
+      }
 
-    case 'Lambda':
-      return n2.tag === 'Lambda' &&
-        convertible(n1.domain, n2.domain, ctx) &&
-        convertible(n1.body, n2.body, extendContext(ctx, 'x', n1.domain));
+      // Check domains are convertible
+      if (!convertible(n1.domain, n2.domain, ctx)) {
+        return false;
+      }
+
+      // Check bodies in extended context
+      const extCtx = extendContext(ctx, n1.name, n1.domain);
+      if (!convertible(n1.body, n2.body, extCtx)) {
+        return false;
+      }
+
+      // For BLet, also check definition values
+      if (n1.binderKind.tag === 'BLet' && n2.binderKind.tag === 'BLet') {
+        return convertible(n1.binderKind.defVal, n2.binderKind.defVal, ctx);
+      }
+
+      return true;
 
     case 'App':
       return n2.tag === 'App' &&
@@ -132,10 +151,6 @@ export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
     case 'Annot':
       // Compare the underlying terms
       return convertible(n1.term, n2, ctx);
-
-    case 'Let':
-      // Should have been normalized away
-      throw new Error('Let should be normalized in WHNF');
   }
 }
 
@@ -172,62 +187,91 @@ export function inferType(term: TTerm, ctx: TContext = []): TTerm {
       return term.type;
     }
 
-    case 'Pi': {
-      // Check that domain is a type
-      const domainType = inferType(term.domain, ctx);
-      if (domainType.tag !== 'Sort') {
-        throw new TypeCheckError(
-          `Pi domain must be a type, got: ${prettyPrint(domainType)}`,
-          term,
-          ctx
-        );
+    case 'Binder': {
+      switch (term.binderKind.tag) {
+        case 'BPi': {
+          // Check that domain is a type
+          const domainType = inferType(term.domain, ctx);
+          if (domainType.tag !== 'Sort') {
+            throw new TypeCheckError(
+              `Pi domain must be a type, got: ${prettyPrint(domainType)}`,
+              term,
+              ctx
+            );
+          }
+
+          // Check that body is a type (in extended context)
+          const extCtx = extendContext(ctx, term.name, term.domain);
+          const bodyType = inferType(term.body, extCtx);
+          if (bodyType.tag !== 'Sort') {
+            throw new TypeCheckError(
+              `Pi codomain must be a type, got: ${prettyPrint(bodyType)}`,
+              term,
+              ctx
+            );
+          }
+
+          // The type of a Pi is the max of its universe levels
+          const level = Math.max(domainType.level, bodyType.level);
+          return { tag: 'Sort', level };
+        }
+
+        case 'BLam': {
+          // For lambda, we need to synthesize the type of the body
+          // λ(x : A). t  has type  Π(x : A). T  where t : T
+
+          // Check domain is a type
+          const domainType = inferType(term.domain, ctx);
+          if (domainType.tag !== 'Sort') {
+            throw new TypeCheckError(
+              `Lambda domain must be a type, got: ${prettyPrint(domainType)}`,
+              term,
+              ctx
+            );
+          }
+
+          // Synthesize type of body
+          const extCtx = extendContext(ctx, term.name, term.domain);
+          const bodyType = inferType(term.body, extCtx);
+
+          // Result type: Π(x : domain). bodyType
+          return {
+            tag: 'Binder',
+            name: term.name,
+            binderKind: { tag: 'BPi' },
+            domain: term.domain,
+            body: bodyType
+          };
+        }
+
+        case 'BLet': {
+          // Check definition type
+          const defTypeType = inferType(term.domain, ctx);
+          if (defTypeType.tag !== 'Sort') {
+            throw new TypeCheckError(
+              `Let definition type must be a type, got: ${prettyPrint(defTypeType)}`,
+              term,
+              ctx
+            );
+          }
+
+          // Check definition value
+          checkType(term.binderKind.defVal, term.domain, ctx);
+
+          // Synthesize type of body in extended context
+          const extCtx = extendContext(ctx, term.name, term.domain);
+          return inferType(term.body, extCtx);
+        }
       }
-
-      // Check that codomain is a type (in extended context)
-      const extCtx = extendContext(ctx, 'x', term.domain);
-      const codomainType = inferType(term.codomain, extCtx);
-      if (codomainType.tag !== 'Sort') {
-        throw new TypeCheckError(
-          `Pi codomain must be a type, got: ${prettyPrint(codomainType)}`,
-          term,
-          ctx
-        );
-      }
-
-      // The type of a Pi is the max of its universe levels
-      const level = Math.max(domainType.level, codomainType.level);
-      return { tag: 'Sort', level };
-    }
-
-    case 'Lambda': {
-      // For lambda, we need to synthesize the type of the body
-      // λ(x : A). t  has type  Π(x : A). T  where t : T
-
-      // Check domain is a type
-      const domainType = inferType(term.domain, ctx);
-      if (domainType.tag !== 'Sort') {
-        throw new TypeCheckError(
-          `Lambda domain must be a type, got: ${prettyPrint(domainType)}`,
-          term,
-          ctx
-        );
-      }
-
-      // Synthesize type of body
-      const extCtx = extendContext(ctx, 'x', term.domain);
-      const bodyType = inferType(term.body, extCtx);
-
-      // Result type: Π(x : domain). bodyType
-      return { tag: 'Pi', domain: term.domain, codomain: bodyType };
     }
 
     case 'App': {
       // Infer type of function
       const fnType = whnf(inferType(term.fn, ctx), ctx);
 
-      if (fnType.tag !== 'Pi') {
+      if (fnType.tag !== 'Binder' || fnType.binderKind.tag !== 'BPi') {
         throw new TypeCheckError(
-          `Application requires function type, got: ${prettyPrint(fnType)}`,
+          `Application requires Pi type, got: ${prettyPrint(fnType)}`,
           term,
           ctx
         );
@@ -236,27 +280,8 @@ export function inferType(term: TTerm, ctx: TContext = []): TTerm {
       // Check that argument has the domain type
       checkType(term.arg, fnType.domain, ctx);
 
-      // Result type: codomain[x := arg]
-      return subst(0, term.arg, fnType.codomain);
-    }
-
-    case 'Let': {
-      // Check definition type
-      const defTypeType = inferType(term.defType, ctx);
-      if (defTypeType.tag !== 'Sort') {
-        throw new TypeCheckError(
-          `Let definition type must be a type, got: ${prettyPrint(defTypeType)}`,
-          term,
-          ctx
-        );
-      }
-
-      // Check definition value
-      checkType(term.defVal, term.defType, ctx);
-
-      // Synthesize type of body in extended context
-      const extCtx = extendContext(ctx, 'let', term.defType);
-      return inferType(term.body, extCtx);
+      // Result type: body[x := arg]
+      return subst(0, term.arg, fnType.body);
     }
 
     case 'Hole': {
@@ -283,7 +308,8 @@ export function inferType(term: TTerm, ctx: TContext = []): TTerm {
  */
 export function checkType(term: TTerm, expectedType: TTerm, ctx: TContext = []): void {
   // Special case: Lambda can be checked against Pi type
-  if (term.tag === 'Lambda' && expectedType.tag === 'Pi') {
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
+      expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
     // Check that domains match
     if (!convertible(term.domain, expectedType.domain, ctx)) {
       throw new TypeCheckError(
@@ -293,9 +319,9 @@ export function checkType(term: TTerm, expectedType: TTerm, ctx: TContext = []):
       );
     }
 
-    // Check body against codomain
-    const extCtx = extendContext(ctx, 'x', term.domain);
-    checkType(term.body, expectedType.codomain, extCtx);
+    // Check body against Pi's body
+    const extCtx = extendContext(ctx, term.name, term.domain);
+    checkType(term.body, expectedType.body, extCtx);
     return;
   }
 
@@ -328,25 +354,17 @@ export function extractHoles(term: TTerm): { id: string; type: TTerm; context: T
         holes.push({ id: t.id, type: t.type, context: t.context });
         break;
 
-      case 'Pi':
-        traverse(t.domain);
-        traverse(t.codomain);
-        break;
-
-      case 'Lambda':
+      case 'Binder':
         traverse(t.domain);
         traverse(t.body);
+        if (t.binderKind.tag === 'BLet') {
+          traverse(t.binderKind.defVal);
+        }
         break;
 
       case 'App':
         traverse(t.fn);
         traverse(t.arg);
-        break;
-
-      case 'Let':
-        traverse(t.defType);
-        traverse(t.defVal);
-        traverse(t.body);
         break;
 
       case 'Annot':
@@ -387,33 +405,32 @@ export function fillHole(term: TTerm, holeId: string, proofTerm: TTerm): TTerm {
     case 'Const':
       return term;
 
-    case 'Pi':
-      return {
-        tag: 'Pi',
-        domain: fillHole(term.domain, holeId, proofTerm),
-        codomain: fillHole(term.codomain, holeId, proofTerm)
-      };
+    case 'Binder': {
+      const newDomain = fillHole(term.domain, holeId, proofTerm);
+      const newBody = fillHole(term.body, holeId, proofTerm);
 
-    case 'Lambda':
+      let newBinderKind: import('./tt-core').BinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = fillHole(term.binderKind.defVal, holeId, proofTerm);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
       return {
-        tag: 'Lambda',
-        domain: fillHole(term.domain, holeId, proofTerm),
-        body: fillHole(term.body, holeId, proofTerm)
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
       };
+    }
 
     case 'App':
       return {
         tag: 'App',
         fn: fillHole(term.fn, holeId, proofTerm),
         arg: fillHole(term.arg, holeId, proofTerm)
-      };
-
-    case 'Let':
-      return {
-        tag: 'Let',
-        defType: fillHole(term.defType, holeId, proofTerm),
-        defVal: fillHole(term.defVal, holeId, proofTerm),
-        body: fillHole(term.body, holeId, proofTerm)
       };
 
     case 'Annot':

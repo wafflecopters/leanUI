@@ -18,7 +18,8 @@ import {
   InductionProofElement,
   substituteVariableInExpression,
   LetElement,
-  createLetElement
+  createLetElement,
+  parseExpressionToAST
 } from '../types/enhanced-focus';
 import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
 import { MathJaxExpressionRenderer, MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
@@ -26,7 +27,7 @@ import { ExpressionInput } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm } from '../types/tt-core';
+import { TTerm, createRootProofTerm, mkProp } from '../types/tt-core';
 import {
   LetProofTerm,
   createEqualityProofTerm,
@@ -251,11 +252,53 @@ export function EnhancedProofWorkspace() {
   // State for let-bindings
   const [letBindings, setLetBindings] = useState<LetElement[]>([]);
 
+  // State for goal
+  const [goal, setGoal] = useState<string | null>(null);
+
+  // Root TT term - the unified proof term model
+  const [rootTerm, setRootTerm] = useState<TTerm>(() => {
+    // Initialize with empty hypotheses and a Prop goal
+    return createRootProofTerm([], mkProp(), 'proof', []);
+  });
+
+  // Update rootTerm whenever hypotheses or goal change
+  useEffect(() => {
+    // Convert UI hypotheses to TT term format
+    const ttHypotheses: Array<[string, TTerm]> = context.assumptions.map(h => {
+      // Parse the hypothesis expression to extract type
+      // Format is either "name : Type" or just "Type"
+      const match = h.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
+      let typeTerm: TTerm;
+
+      if (match) {
+        const typeStr = match[2].trim();
+        // For now, treat type as a constant (in real system, would parse properly)
+        if (typeStr === '?') {
+          typeTerm = mkProp();
+        } else {
+          typeTerm = { tag: 'Const', name: typeStr, type: mkProp() };
+        }
+      } else {
+        // No type specified, use Prop
+        typeTerm = mkProp();
+      }
+
+      return [h.name, typeTerm];
+    });
+
+    // Convert goal string to TT term
+    const goalTerm = goal ? { tag: 'Const', name: goal, type: mkProp() } as TTerm : mkProp();
+
+    // Create updated root term
+    const newRootTerm = createRootProofTerm(ttHypotheses, goalTerm, 'proof', []);
+    setRootTerm(newRootTerm);
+  }, [context.assumptions, goal]);
+
   // TT proof terms: Map from let-binding ID to its proof term
   const [letProofTerms, setLetProofTerms] = useState<Map<string, LetProofTerm>>(new Map());
 
   // Combined TT proof term for display (built from all let-bindings)
-  const [ttProofTerm, setTtProofTerm] = useState<TTerm | null>(null);
+  const [_ttProofTerm, setTtProofTerm] = useState<TTerm | null>(null);
 
   const proofScrollRef = useRef<HTMLDivElement>(null);
 
@@ -333,6 +376,73 @@ export function EnhancedProofWorkspace() {
       }
     }));
   }, []);
+
+  const handleUpdateHypothesis = useCallback((id: string, updatedHypothesis: Assumption) => {
+    setContext(prev => ({
+      ...prev,
+      assumptions: prev.assumptions.map(a => a.id === id ? updatedHypothesis : a)
+    }));
+
+    setStructuredProof(prev => ({
+      ...prev,
+      metadata: {
+        ...prev.metadata,
+        assumptions: prev.metadata.assumptions.map(a => a.id === id ? updatedHypothesis : a)
+      }
+    }));
+  }, []);
+
+  const handleSetGoal = useCallback((goalStr: string) => {
+    setGoal(goalStr);
+
+    // Parse goal to find unbound variables and create hypotheses
+    try {
+      const goalExpr = parseExpressionToAST(goalStr);
+      const unboundVars = new Set<string>();
+
+      // Reserved keywords in type theory that should not be treated as variables
+      const reservedKeywords = new Set(['Type', 'Prop', 'Sort']);
+
+      const extractVars = (node: ExpressionNode) => {
+        if (node.type === 'variable' && typeof node.value === 'string') {
+          const varName = node.value;
+
+          // Skip reserved keywords
+          if (reservedKeywords.has(varName)) {
+            return;
+          }
+
+          // Check if it's not already a hypothesis or let-binding
+          const isAlreadyBound =
+            context.assumptions.some(h => h.name === varName) ||
+            letBindings.some(l => l.name === varName);
+
+          if (!isAlreadyBound) {
+            unboundVars.add(varName);
+          }
+        }
+        node.children?.forEach(extractVars);
+      };
+
+      extractVars(goalExpr);
+
+      // Create hypotheses for each unbound variable
+      unboundVars.forEach(varName => {
+        const hypothesis: Assumption = {
+          id: crypto.randomUUID(),
+          name: varName,
+          expression: `${varName} : ?`,
+          description: `Auto-generated from goal: ${varName} is unbound`,
+          introducedBy: 'auto'
+        };
+        handleAddHypothesis(hypothesis);
+      });
+    } catch (error) {
+      console.warn('Could not parse goal for unbound variable extraction:', error);
+    }
+
+    // TODO: When we have a root TT term, update it using setGoalInRoot()
+  }, [context.assumptions, letBindings, handleAddHypothesis]);
 
   const handleInstantiate = useCallback((letId: string, substitutions: Map<string, ExpressionNode>) => {
     // Find the let binding to instantiate
@@ -887,10 +997,13 @@ export function EnhancedProofWorkspace() {
               }
               return true;
             })}
+            goal={goal}
             onAddLet={handleAddLet}
             onDeleteLet={handleDeleteLet}
             onAddHypothesis={handleAddHypothesis}
             onDeleteHypothesis={handleDeleteHypothesis}
+            onUpdateHypothesis={handleUpdateHypothesis}
+            onSetGoal={handleSetGoal}
             onInstantiate={handleInstantiate}
             onStartProof={handleStartProof}
           />
@@ -1381,11 +1494,7 @@ export function EnhancedProofWorkspace() {
           </div>
         )}
         <TTViewer
-          proofTerm={
-            activeProofContext
-              ? letProofTerms.get(activeProofContext)?.proofTerm || null
-              : ttProofTerm
-          }
+          proofTerm={rootTerm}
           context={[]}
         />
       </div>

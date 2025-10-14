@@ -15,7 +15,7 @@ export function ASTDebugPanel({ expression, isVisible, onToggle }: ASTDebugPanel
 
   // Check server health on mount
   useEffect(() => {
-    checkServerHealth();
+    // checkServerHealth();
   }, []);
 
   const checkServerHealth = async () => {
@@ -181,7 +181,7 @@ export function ASTDebugPanel({ expression, isVisible, onToggle }: ASTDebugPanel
           color: serverAvailable ? '#155724' : '#721c24'
         }}>
           {serverAvailable === null ? 'Checking...' :
-           serverAvailable ? 'Connected' : 'Disconnected'}
+            serverAvailable ? 'Connected' : 'Disconnected'}
         </span>
         {serverAvailable === false && (
           <button

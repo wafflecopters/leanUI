@@ -114,12 +114,13 @@ test('Infer type of Pi (ℕ → ℕ)', () => {
 
 test('Infer type of Lambda (λx:ℕ. x)', () => {
   const nat = TT_CONSTANTS.Nat;
-  const identity = mkLambda(nat, mkVar(0));
+  const identity = mkLambda(nat, mkVar(0), 'x');
 
   const type = inferType(identity);
 
-  // Should be ℕ → ℕ
-  if (type.tag !== 'Pi' || !convertible(type.domain, nat) || !convertible(type.codomain, nat)) {
+  // Should be ℕ → ℕ (a Binder with BPi)
+  if (type.tag !== 'Binder' || type.binderKind.tag !== 'BPi' ||
+      !convertible(type.domain, nat) || !convertible(type.body, nat)) {
     throw new Error(`Expected ℕ → ℕ, got ${prettyPrint(type)}`);
   }
 

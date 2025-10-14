@@ -26,20 +26,37 @@
 // ============================================================================
 
 /**
+ * Binder kinds: distinguish between different ways to bind variables
+ */
+export type BinderKind =
+  | { tag: 'BPi' }                    // Π-binder (dependent function type)
+  | { tag: 'BLam' }                   // λ-binder (function abstraction)
+  | { tag: 'BLet'; defVal: TTerm }    // let-binder (local definition with value)
+
+/**
  * The core term language using De Bruijn indices.
  *
  * De Bruijn indices: A variable is represented by a number indicating how many
  * binders we need to traverse to find its binding. For example:
  *   λx. λy. x + y  becomes  λ. λ. 1 + 0
  *   (x is 1 level up, y is 0 levels up)
+ *
+ * UNIFIED BINDER DESIGN:
+ * All binders (Π, λ, let) are represented with a single 'Binder' tag.
+ * This allows us to:
+ * - Store human-readable names for better pretty-printing
+ * - Treat hypotheses as Pi-binders naturally: (a: R) -> (b: R) -> Goal
+ * - Handle all binding constructs uniformly
+ *
+ * Example: A proof with hypotheses (a: R), (b: R) and goal K becomes:
+ *   Binder("a", BPi, R, Binder("b", BPi, R, K))
+ * Which reads as: (a: R) → (b: R) → K
  */
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: number }                         // Type_i, Prop = Type_0
-  | { tag: 'Pi'; domain: TTerm; codomain: TTerm }          // Dependent function type (Π x : A, B x)
-  | { tag: 'Lambda'; domain: TTerm; body: TTerm }          // Function abstraction (λ x : A, t)
+  | { tag: 'Binder'; name: string; binderKind: BinderKind; domain: TTerm; body: TTerm }  // Unified binder
   | { tag: 'App'; fn: TTerm; arg: TTerm }                  // Function application (f a)
-  | { tag: 'Let'; defType: TTerm; defVal: TTerm; body: TTerm }  // Let binding
   | { tag: 'Const'; name: string; type: TTerm }            // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
@@ -85,7 +102,7 @@ export const TT_CONSTANTS = {
   Succ: (() => {
     // Succ : ℕ → ℕ
     const nat = { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as TTerm;
-    return { tag: 'Const', name: 'succ', type: { tag: 'Pi', domain: nat, codomain: nat } } as TTerm;
+    return { tag: 'Const', name: 'succ', type: mkPi(nat, nat, 'n') } as TTerm;
   })(),
 
   // Real numbers (placeholder - would need proper construction)
@@ -96,20 +113,12 @@ export const TT_CONSTANTS = {
   Eq: (() => {
     const sort0 = { tag: 'Sort', level: 0 } as TTerm;
     const A = { tag: 'Var', index: 0 } as TTerm;
-    // A → A → Prop
-    const type = {
-      tag: 'Pi',
-      domain: sort0,
-      codomain: {
-        tag: 'Pi',
-        domain: A,
-        codomain: {
-          tag: 'Pi',
-          domain: A,
-          codomain: sort0
-        }
-      }
-    } as TTerm;
+    // Build: Π (A : Type), A → A → Prop
+    const type = mkPi(
+      sort0,
+      mkPi(A, mkPi(A, sort0, 'y'), 'x'),
+      'A'
+    );
     return { tag: 'Const', name: 'eq', type } as TTerm;
   })(),
 };
@@ -131,28 +140,25 @@ export function createNatElimType(): TTerm {
   // Simplified nat_elim for testing:
   // Π (P : Prop), P → (P → P) → ℕ → P
 
-  // Build type: Π (P : Prop), P → (P → P) → ℕ → P
-  return {
-    tag: 'Pi',
-    domain: prop,                                    // P : Prop
-    codomain: {
-      tag: 'Pi',
-      domain: { tag: 'Var', index: 0 },             // P (base case)
-      codomain: {
-        tag: 'Pi',
-        domain: {                                    // P → P (step)
-          tag: 'Pi',
-          domain: { tag: 'Var', index: 1 },
-          codomain: { tag: 'Var', index: 2 }
-        },
-        codomain: {
-          tag: 'Pi',
-          domain: nat,                               // ℕ (value)
-          codomain: { tag: 'Var', index: 3 }        // P (result)
-        }
-      }
-    }
-  };
+  const P = { tag: 'Var', index: 0 } as TTerm;
+
+  // Build type step by step using mkPi:
+  // Start from innermost: P (result)
+  // Then: ℕ → P
+  const natToP = mkPi(nat, { tag: 'Var', index: 3 }, 'n');
+
+  // Then: (P → P) → (ℕ → P)
+  const stepThenNat = mkPi(
+    mkPi({ tag: 'Var', index: 1 }, { tag: 'Var', index: 2 }, 'ih'),
+    natToP,
+    'step'
+  );
+
+  // Then: P → ((P → P) → (ℕ → P))
+  const baseToRest = mkPi(P, stepThenNat, 'base');
+
+  // Finally: Π (P : Prop), ...
+  return mkPi(prop, baseToRest, 'P');
 }
 
 export const NAT_ELIM: TTerm = {
@@ -174,16 +180,44 @@ export function mkVar(index: number): TTerm {
 
 /**
  * Create a Pi type (dependent function type)
+ * If no name is provided, generates a default name
  */
-export function mkPi(domain: TTerm, codomain: TTerm): TTerm {
-  return { tag: 'Pi', domain, codomain };
+export function mkPi(domain: TTerm, codomain: TTerm, name: string = 'x'): TTerm {
+  return {
+    tag: 'Binder',
+    name,
+    binderKind: { tag: 'BPi' },
+    domain,
+    body: codomain
+  };
 }
 
 /**
  * Create a Lambda (function abstraction)
+ * If no name is provided, generates a default name
  */
-export function mkLambda(domain: TTerm, body: TTerm): TTerm {
-  return { tag: 'Lambda', domain, body };
+export function mkLambda(domain: TTerm, body: TTerm, name: string = 'x'): TTerm {
+  return {
+    tag: 'Binder',
+    name,
+    binderKind: { tag: 'BLam' },
+    domain,
+    body
+  };
+}
+
+/**
+ * Create a Let binding
+ * Requires name for the bound variable and the value being bound
+ */
+export function mkLet(name: string, defType: TTerm, defVal: TTerm, body: TTerm): TTerm {
+  return {
+    tag: 'Binder',
+    name,
+    binderKind: { tag: 'BLet', defVal },
+    domain: defType,
+    body
+  };
 }
 
 /**
@@ -250,34 +284,34 @@ function substHelper(targetIndex: number, replacement: TTerm, term: TTerm, depth
     case 'Const':
       return term;
 
-    case 'Pi':
-      return {
-        tag: 'Pi',
-        domain: substHelper(targetIndex, replacement, term.domain, depth),
-        // Going under a binder, so increment depth
-        codomain: substHelper(targetIndex, replacement, term.codomain, depth + 1)
-      };
+    case 'Binder': {
+      // Handle all binder types uniformly
+      const newDomain = substHelper(targetIndex, replacement, term.domain, depth);
+      const newBody = substHelper(targetIndex, replacement, term.body, depth + 1);
 
-    case 'Lambda':
+      // For BLet, also substitute in the definition value
+      let newBinderKind: BinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = substHelper(targetIndex, replacement, term.binderKind.defVal, depth);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
       return {
-        tag: 'Lambda',
-        domain: substHelper(targetIndex, replacement, term.domain, depth),
-        body: substHelper(targetIndex, replacement, term.body, depth + 1)
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
       };
+    }
 
     case 'App':
       return {
         tag: 'App',
         fn: substHelper(targetIndex, replacement, term.fn, depth),
         arg: substHelper(targetIndex, replacement, term.arg, depth)
-      };
-
-    case 'Let':
-      return {
-        tag: 'Let',
-        defType: substHelper(targetIndex, replacement, term.defType, depth),
-        defVal: substHelper(targetIndex, replacement, term.defVal, depth),
-        body: substHelper(targetIndex, replacement, term.body, depth + 1)
       };
 
     case 'Hole':
@@ -316,33 +350,34 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
     case 'Const':
       return term;
 
-    case 'Pi':
-      return {
-        tag: 'Pi',
-        domain: shift(amount, term.domain, cutoff),
-        codomain: shift(amount, term.codomain, cutoff + 1)
-      };
+    case 'Binder': {
+      // Handle all binder types uniformly
+      const newDomain = shift(amount, term.domain, cutoff);
+      const newBody = shift(amount, term.body, cutoff + 1);
 
-    case 'Lambda':
+      // For BLet, also shift the definition value
+      let newBinderKind: BinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = shift(amount, term.binderKind.defVal, cutoff);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
       return {
-        tag: 'Lambda',
-        domain: shift(amount, term.domain, cutoff),
-        body: shift(amount, term.body, cutoff + 1)
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
       };
+    }
 
     case 'App':
       return {
         tag: 'App',
         fn: shift(amount, term.fn, cutoff),
         arg: shift(amount, term.arg, cutoff)
-      };
-
-    case 'Let':
-      return {
-        tag: 'Let',
-        defType: shift(amount, term.defType, cutoff),
-        defVal: shift(amount, term.defVal, cutoff),
-        body: shift(amount, term.body, cutoff + 1)
       };
 
     case 'Hole':
@@ -368,7 +403,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 
 /**
  * Convert a term with De Bruijn indices to a human-readable string
- * Uses a context to map indices back to names
+ * Now uses the names stored in binders for better readability
  */
 export function prettyPrint(term: TTerm, context: string[] = []): string {
   switch (term.tag) {
@@ -385,37 +420,29 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
     case 'Const':
       return term.name;
 
-    case 'Pi': {
-      const varName = `x${context.length}`;
+    case 'Binder': {
       const domain = prettyPrint(term.domain, context);
-      const codomain = prettyPrint(term.codomain, [varName, ...context]);
+      const newContext = [term.name, ...context];
+      const body = prettyPrint(term.body, newContext);
 
-      // Check if it's a non-dependent function (A → B)
-      if (!occursIn(0, term.codomain)) {
-        return `(${domain} → ${codomain})`;
+      switch (term.binderKind.tag) {
+        case 'BPi':
+          // Always show binder name for clarity: (a : R) → B
+          return `((${term.name} : ${domain}) → ${body})`;
+
+        case 'BLam':
+          return `(λ (${term.name} : ${domain}), ${body})`;
+
+        case 'BLet':
+          const defVal = prettyPrint(term.binderKind.defVal, context);
+          return `(let ${term.name} : ${domain} := ${defVal} in ${body})`;
       }
-      return `(Π (${varName} : ${domain}), ${codomain})`;
-    }
-
-    case 'Lambda': {
-      const varName = `x${context.length}`;
-      const domain = prettyPrint(term.domain, context);
-      const body = prettyPrint(term.body, [varName, ...context]);
-      return `(λ (${varName} : ${domain}), ${body})`;
     }
 
     case 'App': {
       const fn = prettyPrint(term.fn, context);
       const arg = prettyPrint(term.arg, context);
       return `(${fn} ${arg})`;
-    }
-
-    case 'Let': {
-      const varName = `let${context.length}`;
-      const defType = prettyPrint(term.defType, context);
-      const defVal = prettyPrint(term.defVal, context);
-      const body = prettyPrint(term.body, [varName, ...context]);
-      return `(let ${varName} : ${defType} := ${defVal} in ${body})`;
     }
 
     case 'Hole':
@@ -426,24 +453,337 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
   }
 }
 
+// ============================================================================
+// Helper: Convert Hypotheses to Pi Binders
+// ============================================================================
+
+/**
+ * Convert a list of hypotheses (assumptions) into a nested Pi type.
+ *
+ * This is the key helper for making hypotheses part of the AST!
+ *
+ * Given hypotheses [(a: R), (b: R)] and goal K, produces:
+ *   (a: R) → (b: R) → K
+ *
+ * Which is represented as:
+ *   Binder("a", BPi, R, Binder("b", BPi, R, K))
+ *
+ * @param hypotheses - List of (name, type) pairs
+ * @param goal - The goal/conclusion type
+ * @returns A nested Pi type representing the theorem to prove
+ *
+ * Example:
+ *   hypothesesToPi([["a", Real], ["b", Real]], goal)
+ *   // Returns: (a: ℝ) → (b: ℝ) → goal
+ */
+export function hypothesesToPi(hypotheses: Array<[string, TTerm]>, goal: TTerm): TTerm {
+  // Build from right to left (innermost first)
+  let result = goal;
+  for (let i = hypotheses.length - 1; i >= 0; i--) {
+    const [name, type] = hypotheses[i];
+    result = mkPi(type, result, name);
+  }
+  return result;
+}
+
+/**
+ * Convert a list of hypotheses into nested Lambda abstractions.
+ *
+ * This is used to construct proof terms that take hypotheses as arguments.
+ *
+ * Given hypotheses [(a: R), (b: R)] and body term t, produces:
+ *   λ(a: R). λ(b: R). t
+ *
+ * @param hypotheses - List of (name, type) pairs
+ * @param body - The proof term body
+ * @returns A nested Lambda term
+ */
+export function hypothesesToLambda(hypotheses: Array<[string, TTerm]>, body: TTerm): TTerm {
+  let result = body;
+  for (let i = hypotheses.length - 1; i >= 0; i--) {
+    const [name, type] = hypotheses[i];
+    result = mkLambda(type, result, name);
+  }
+  return result;
+}
+
+/**
+ * Create the root proof term structure.
+ *
+ * This creates a single unified term that represents the entire proof workspace:
+ *
+ *   let _root : (a: R) → (b: R) → P = ?PROOF
+ *
+ * Where:
+ * - The type is a Pi-type formed from hypotheses ending with the goal type P
+ * - The value is a proof hole (which will contain nested lets)
+ *
+ * @param hypotheses - List of (name, type) pairs for assumptions
+ * @param goal - The goal type we're trying to prove (e.g., an equality)
+ * @param proofHoleId - ID for the proof term hole (default: "proof")
+ * @param context - Type context for the holes
+ * @returns The root let-binding term
+ *
+ * Example:
+ *   createRootProofTerm([["a", Real], ["b", Real]], someEquality)
+ *   // Returns:
+ *   //   let _root : (a: ℝ) → (b: ℝ) → (x = y)
+ *   //            = ?proof
+ */
+export function createRootProofTerm(
+  hypotheses: Array<[string, TTerm]>,
+  goal: TTerm,
+  proofHoleId: string = 'proof',
+  context: TContext = []
+): TTerm {
+  // Build the theorem type: (a: R) → (b: R) → goal
+  const theoremType = hypothesesToPi(hypotheses, goal);
+
+  // Create the proof hole (how we prove it)
+  // The proof hole's type is the full theorem type
+  const proofHole = mkHole(proofHoleId, theoremType, context);
+
+  // Create the root let-binding
+  return mkLet('_root', theoremType, proofHole, mkVar(0));
+}
+
+/**
+ * Add a let-binding into the proof term (inside the root's value).
+ *
+ * This takes an existing proof term and wraps the innermost hole with a new let-binding.
+ *
+ * @param rootTerm - The root proof term
+ * @param letName - Name for the new let-binding
+ * @param letType - Type of the bound value
+ * @param letValue - Value being bound
+ * @returns Updated root term with the new let-binding
+ */
+export function addLetToProof(
+  rootTerm: TTerm,
+  letName: string,
+  letType: TTerm,
+  letValue: TTerm
+): TTerm {
+  // This will need to navigate to the proof hole and wrap it
+  // For now, let's create a helper that replaces a hole with a let+hole
+  return fillHoleWithLet(rootTerm, 'proof', letName, letType, letValue);
+}
+
+/**
+ * Helper: Replace a hole with a let-binding that contains a new hole
+ */
+function fillHoleWithLet(
+  term: TTerm,
+  holeId: string,
+  letName: string,
+  letType: TTerm,
+  letValue: TTerm
+): TTerm {
+  switch (term.tag) {
+    case 'Hole':
+      if (term.id === holeId) {
+        // Replace this hole with: let letName = letValue in ?newHole
+        const newHole = mkHole(holeId, term.type, term.context);
+        return mkLet(letName, letType, letValue, newHole);
+      }
+      return term;
+
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Binder': {
+      const newDomain = fillHoleWithLet(term.domain, holeId, letName, letType, letValue);
+      const newBody = fillHoleWithLet(term.body, holeId, letName, letType, letValue);
+
+      let newBinderKind: BinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = fillHoleWithLet(term.binderKind.defVal, holeId, letName, letType, letValue);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: fillHoleWithLet(term.fn, holeId, letName, letType, letValue),
+        arg: fillHoleWithLet(term.arg, holeId, letName, letType, letValue)
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: fillHoleWithLet(term.term, holeId, letName, letType, letValue),
+        type: fillHoleWithLet(term.type, holeId, letName, letType, letValue)
+      };
+  }
+}
+
+/**
+ * Extract hypotheses from the root proof term.
+ *
+ * Extracts the list of (name, type) pairs from the Pi-type in the root let's type.
+ *
+ * @param rootTerm - The root proof term
+ * @returns List of hypotheses as (name, type) pairs
+ */
+export function extractHypothesesFromRoot(rootTerm: TTerm): Array<[string, TTerm]> {
+  // Root should be: let _root : (a: R) → (b: R) → ?goal = ...
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+    throw new Error('Expected root to be a let-binding');
+  }
+
+  // Extract from the type (which is the theorem type)
+  return extractHypothesesFromPi(rootTerm.domain);
+}
+
+/**
+ * Helper: Extract hypotheses from a Pi-type chain
+ */
+function extractHypothesesFromPi(term: TTerm): Array<[string, TTerm]> {
+  const hypotheses: Array<[string, TTerm]> = [];
+
+  let current = term;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    hypotheses.push([current.name, current.domain]);
+    current = current.body;
+  }
+
+  return hypotheses;
+}
+
+/**
+ * Add a hypothesis to the root proof term.
+ *
+ * Updates the root's type to include the new hypothesis in the Pi-type chain.
+ *
+ * @param rootTerm - The root proof term
+ * @param hypName - Name of the new hypothesis
+ * @param hypType - Type of the new hypothesis
+ * @returns Updated root term
+ */
+export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: TTerm): TTerm {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+    throw new Error('Expected root to be a let-binding');
+  }
+
+  // Extract current hypotheses
+  const hypotheses = extractHypothesesFromRoot(rootTerm);
+
+  // Add new hypothesis
+  hypotheses.push([hypName, hypType]);
+
+  // Get the goal (last thing in the Pi chain)
+  const goal = getGoalFromPi(rootTerm.domain);
+
+  // Rebuild the theorem type
+  const newTheoremType = hypothesesToPi(hypotheses, goal);
+
+  // Create updated root
+  return {
+    tag: 'Binder',
+    name: rootTerm.name,
+    binderKind: { tag: 'BLet', defVal: rootTerm.binderKind.defVal },
+    domain: newTheoremType,
+    body: rootTerm.body
+  };
+}
+
+/**
+ * Get the goal from the root proof term.
+ *
+ * Extracts the goal type (the conclusion) from the end of the Pi-type chain.
+ *
+ * @param rootTerm - The root proof term
+ * @returns The goal type
+ */
+export function getGoalFromRoot(rootTerm: TTerm): TTerm {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+    throw new Error('Expected root to be a let-binding');
+  }
+
+  return getGoalFromPi(rootTerm.domain);
+}
+
+/**
+ * Set the goal in the root proof term.
+ *
+ * Updates the goal type (conclusion) at the end of the Pi-type chain.
+ *
+ * @param rootTerm - The root proof term
+ * @param newGoal - The new goal type
+ * @returns Updated root term
+ */
+export function setGoalInRoot(rootTerm: TTerm, newGoal: TTerm): TTerm {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+    throw new Error('Expected root to be a let-binding');
+  }
+
+  // Extract current hypotheses
+  const hypotheses = extractHypothesesFromRoot(rootTerm);
+
+  // Rebuild the theorem type with new goal
+  const newTheoremType = hypothesesToPi(hypotheses, newGoal);
+
+  // Create updated root
+  return {
+    tag: 'Binder',
+    name: rootTerm.name,
+    binderKind: { tag: 'BLet', defVal: rootTerm.binderKind.defVal },
+    domain: newTheoremType,
+    body: rootTerm.body
+  };
+}
+
+/**
+ * Helper: Get the goal from the end of a Pi-type chain
+ */
+function getGoalFromPi(term: TTerm): TTerm {
+  let current = term;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    current = current.body;
+  }
+  return current;
+}
+
+// ============================================================================
+// Helper: Check Variable Occurrence
+// ============================================================================
+
 /**
  * Check if variable with De Bruijn index occurs in term
  */
-function occursIn(index: number, term: TTerm): boolean {
+export function occursIn(index: number, term: TTerm): boolean {
   switch (term.tag) {
     case 'Var':
       return term.index === index;
     case 'Sort':
     case 'Const':
       return false;
-    case 'Pi':
-      return occursIn(index, term.domain) || occursIn(index + 1, term.codomain);
-    case 'Lambda':
-      return occursIn(index, term.domain) || occursIn(index + 1, term.body);
+    case 'Binder': {
+      // Check in domain and body (going under binder for body)
+      const inDomain = occursIn(index, term.domain);
+      const inBody = occursIn(index + 1, term.body);
+
+      // For BLet, also check in the definition value
+      if (term.binderKind.tag === 'BLet') {
+        return inDomain || occursIn(index, term.binderKind.defVal) || inBody;
+      }
+      return inDomain || inBody;
+    }
     case 'App':
       return occursIn(index, term.fn) || occursIn(index, term.arg);
-    case 'Let':
-      return occursIn(index, term.defType) || occursIn(index, term.defVal) || occursIn(index + 1, term.body);
     case 'Hole':
       return occursIn(index, term.type);
     case 'Annot':
