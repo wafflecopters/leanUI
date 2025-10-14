@@ -93,18 +93,37 @@ export interface InductionProofElement extends ProofElement {
   };
 }
 
+/**
+ * Term editor modes for let-bindings.
+ * Each mode determines how the term's value is edited and constructed.
+ */
+export type TermEditorMode =
+  | { tag: 'value' }  // Hand-written term (text input)
+  | { tag: 'equality-left'; startExpr: ExpressionNode }   // Equality chain starting from left side of goal
+  | { tag: 'equality-right'; startExpr: ExpressionNode }  // Equality chain starting from right side of goal
+  | { tag: 'cases'; eliminator: 'nat' | 'bool' };         // Case split (nat_elim or bool_elim)
+
 export interface LetElement extends ProofElement {
   type: 'let';
-  name: string;                   // Variable name for the let-binding
-  value: ExpressionNode;          // The expression being bound
-  typeAnnotation?: string;        // Optional type annotation
+  name: string;                   // Variable name (auto-generated if not provided: _val0, _val1, etc.)
+  value: ExpressionNode;          // The term (can be a complex proof term)
+  typeAnnotation?: string;        // Optional type annotation (inferred if omitted)
   derivedFrom?: string[];         // IDs of other let-bindings this depends on
-  isClaim?: boolean;              // Whether this is a claim to be proved
-  proofMethod?: ProofMethod;      // How to prove this claim (if it's a claim)
-  proofStatus?: 'pending' | 'in-progress' | 'completed';  // Status of the proof
-  goal?: ExpressionNode;          // For equality claims: the RHS we're trying to reach
-  proofElements?: ProofElement[]; // Nested proof steps for this claim
-  localHypotheses?: Assumption[]; // Hypotheses specific to this let statement (e.g., inductive hypothesis)
+
+  // Term editor configuration
+  editorMode: TermEditorMode;     // How to edit this term
+  editorExpanded?: boolean;       // Is the term editor UI currently visible?
+
+  // For equality chaining mode
+  equalityChain?: ProofElement[]; // The chain of proof steps (for equality modes)
+
+  // Legacy fields (will be removed as refactor progresses)
+  isClaim?: boolean;              // DEPRECATED: Use editorMode instead
+  proofMethod?: ProofMethod;      // DEPRECATED
+  proofStatus?: 'pending' | 'in-progress' | 'completed';  // DEPRECATED
+  goal?: ExpressionNode;          // DEPRECATED
+  proofElements?: ProofElement[]; // DEPRECATED: Use equalityChain instead
+  localHypotheses?: Assumption[]; // DEPRECATED
 }
 
 
@@ -215,14 +234,24 @@ export function createInductionProofElement(
   };
 }
 
+/**
+ * Create a let-binding element.
+ *
+ * For new code, use the editorMode-based approach.
+ * For legacy code, uses isClaim/proofMethod (deprecated).
+ */
 export function createLetElement(
   name: string,
   value: ExpressionNode,
   typeAnnotation?: string,
   derivedFrom?: string[],
   isClaim?: boolean,
-  proofMethod?: ProofMethod
+  proofMethod?: ProofMethod,
+  editorMode?: TermEditorMode
 ): LetElement {
+  // Determine editor mode
+  const mode: TermEditorMode = editorMode || { tag: 'value' };
+
   return {
     id: crypto.randomUUID(),
     type: 'let',
@@ -231,6 +260,10 @@ export function createLetElement(
     value,
     typeAnnotation,
     derivedFrom,
+    editorMode: mode,
+    editorExpanded: false,
+
+    // Legacy fields (for backward compatibility)
     isClaim,
     proofMethod,
     proofStatus: isClaim ? 'pending' : undefined,
@@ -1057,6 +1090,54 @@ function extractPatternVariables(pattern: PatternElement): string[] {
 function extractUnboundVariables(pattern: PatternElement, bindings: Map<string, ExpressionNode>): string[] {
   const allVars = extractPatternVariables(pattern);
   return allVars.filter(v => !bindings.has(v));
+}
+
+// ============================================================================
+// Utility Functions for Let-Binding Creation
+// ============================================================================
+
+/**
+ * Generate an auto-name for a let-binding.
+ * Returns the lowest available _val{i} name that's not already in use.
+ *
+ * @param existingNames - Array of names already in use
+ * @returns A name like "_val0", "_val1", etc.
+ */
+export function generateLetName(existingNames: string[]): string {
+  const nameSet = new Set(existingNames);
+  let i = 0;
+  while (nameSet.has(`_val${i}`)) {
+    i++;
+  }
+  return `_val${i}`;
+}
+
+/**
+ * Parse a goal expression to check if it's an equality of the form "A = B".
+ * Returns the left and right sides if it is, null otherwise.
+ *
+ * @param goal - The goal expression to parse
+ * @returns { left, right } or null if not an equality
+ */
+export function parseGoalEquality(goal: string | null): { left: ExpressionNode; right: ExpressionNode } | null {
+  if (!goal) return null;
+
+  try {
+    const goalExpr = parseExpressionToAST(goal);
+
+    // Check if the goal is an equality
+    if (goalExpr.type === 'equality' && goalExpr.children && goalExpr.children.length === 2) {
+      return {
+        left: goalExpr.children[0],
+        right: goalExpr.children[1]
+      };
+    }
+
+    return null;
+  } catch (error) {
+    // If parsing fails, not a valid equality
+    return null;
+  }
 }
 
 // Import rules from separate file

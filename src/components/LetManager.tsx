@@ -4,10 +4,12 @@ import {
   Assumption,
   LetElement,
   createLetElement,
-  parseExpressionToAST
+  parseExpressionToAST,
+  generateLetName,
+  parseGoalEquality,
+  TermEditorMode
 } from '../types/enhanced-focus';
 import { MathJaxExpressionRenderer } from './MathJaxExpressionRenderer';
-import { InstantiationDialog } from './InstantiationDialog';
 
 interface LetManagerProps {
   letBindings: LetElement[];
@@ -19,8 +21,8 @@ interface LetManagerProps {
   onDeleteHypothesis: (id: string) => void;
   onUpdateHypothesis: (id: string, updatedHypothesis: Assumption) => void;
   onSetGoal: (goal: string) => void;
-  onInstantiate?: (letId: string, substitutions: Map<string, ExpressionNode>) => void;
-  onStartProof?: (letId: string) => void;
+  onActivateLetEditor?: (letId: string) => void;
+  activeLetId?: string | null;
 }
 
 export function LetManager({
@@ -33,8 +35,8 @@ export function LetManager({
   onDeleteHypothesis,
   onUpdateHypothesis,
   onSetGoal,
-  onInstantiate,
-  onStartProof
+  onActivateLetEditor,
+  activeLetId
 }: LetManagerProps) {
   const [showAddLet, setShowAddLet] = useState(false);
   const [showAddHypothesis, setShowAddHypothesis] = useState(false);
@@ -45,53 +47,122 @@ export function LetManager({
   const [letName, setLetName] = useState('');
   const [letExpression, setLetExpression] = useState('');
   const [letType, setLetType] = useState<string>('');
-  const [letIsClaim, setLetIsClaim] = useState(false);
-  const [letProofMethod, setLetProofMethod] = useState<'equality' | 'induction'>('equality');
   const [hypothesisName, setHypothesisName] = useState('');
   const [hypothesisExpression, setHypothesisExpression] = useState('');
   const [hypothesisDescription, setHypothesisDescription] = useState('');
-  const [instantiatingLet, setInstantiatingLet] = useState<LetElement | null>(null);
 
-  const handleAddLet = () => {
-    if (!letName || !letExpression) return;
-
+  const handleAddLetWithMode = (mode: TermEditorMode) => {
     try {
-      const expr = parseExpressionToAST(letExpression);
+      // Generate name if empty
+      const existingNames = letBindings.map(lb => lb.name);
+      const finalName = letName.trim() || generateLetName(existingNames);
 
-      // Extract unbound variables and create hypotheses for them
-      const unboundVars = extractUnboundVariables(expr);
+      let expr: ExpressionNode;
+      let typeAnnotation: string | undefined;
+      let equalityChain: any[] | undefined;
 
-      // Create hypotheses for each unbound variable
-      unboundVars.forEach(varName => {
-        const hypothesis: Assumption = {
-          id: crypto.randomUUID(),
-          name: varName,
-          expression: `${varName} : ?`, // Type unknown, marked with ?
-          description: `Auto-generated: ${varName} is unbound`,
-          introducedBy: 'auto'
-        };
-        onAddHypothesis(hypothesis);
-      });
+      switch (mode.tag) {
+        case 'equality-left':
+          // Start from left side of goal equality
+          expr = {
+            id: crypto.randomUUID(),
+            type: 'application',
+            raw: `refl ${mode.startExpr.raw}`,
+            children: [
+              { id: crypto.randomUUID(), type: 'variable', value: 'refl', raw: 'refl', children: [] },
+              mode.startExpr
+            ]
+          };
+          equalityChain = [{
+            type: 'equation',
+            expression: mode.startExpr
+          }];
+          // Type is inferred from goal
+          typeAnnotation = undefined;
+          break;
+
+        case 'equality-right':
+          // Start from right side of goal equality
+          expr = {
+            id: crypto.randomUUID(),
+            type: 'application',
+            raw: `refl ${mode.startExpr.raw}`,
+            children: [
+              { id: crypto.randomUUID(), type: 'variable', value: 'refl', raw: 'refl', children: [] },
+              mode.startExpr
+            ]
+          };
+          equalityChain = [{
+            type: 'equation',
+            expression: mode.startExpr
+          }];
+          // Type is inferred from goal
+          typeAnnotation = undefined;
+          break;
+
+        case 'cases':
+          // Stub for case-splitting (future implementation)
+          expr = {
+            id: crypto.randomUUID(),
+            type: 'variable',
+            value: '?',
+            raw: '?',
+            children: []
+          };
+          typeAnnotation = letType || undefined;
+          break;
+
+        case 'value':
+          // Hand-written term
+          if (!letExpression) {
+            alert('Please enter an expression for value mode');
+            return;
+          }
+          expr = parseExpressionToAST(letExpression);
+          typeAnnotation = letType || undefined;
+          break;
+      }
+
+      // Extract unbound variables and create hypotheses for them (only for value mode)
+      if (mode.tag === 'value') {
+        const unboundVars = extractUnboundVariables(expr);
+        unboundVars.forEach(varName => {
+          const hypothesis: Assumption = {
+            id: crypto.randomUUID(),
+            name: varName,
+            expression: `${varName} : ?`,
+            description: `Auto-generated: ${varName} is unbound`,
+            introducedBy: 'auto'
+          };
+          onAddHypothesis(hypothesis);
+        });
+      }
 
       const letElement = createLetElement(
-        letName,
+        finalName,
         expr,
-        letType || undefined,
+        typeAnnotation,
         undefined, // derivedFrom
-        letIsClaim,
-        letIsClaim ? letProofMethod : undefined
+        false, // isClaim - no longer used
+        undefined, // proofMethod - no longer used
+        mode
       );
+
+      // Add equality chain if present
+      if (equalityChain) {
+        letElement.equalityChain = equalityChain;
+        letElement.editorExpanded = true; // Open editor by default
+      }
+
       onAddLet(letElement);
 
       // Reset form
       setLetName('');
       setLetExpression('');
       setLetType('');
-      setLetIsClaim(false);
-      setLetProofMethod('equality');
       setShowAddLet(false);
     } catch (error) {
-      alert(`Error parsing expression: ${error}`);
+      alert(`Error creating let-binding: ${error}`);
     }
   };
 
@@ -648,79 +719,192 @@ export function LetManager({
             borderRadius: '4px',
             marginBottom: '12px'
           }}>
+            {/* Optional name input */}
             <input
               type="text"
-              placeholder="Variable name (e.g., eq1, x)"
+              placeholder="Name (optional, auto-generates _val0, _val1, ...)"
               value={letName}
               onChange={(e) => setLetName(e.target.value)}
               style={{
                 width: '100%',
                 padding: '6px',
-                marginBottom: '8px',
+                marginBottom: '12px',
                 border: '1px solid #ced4da',
-                borderRadius: '4px'
-              }}
-            />
-            <input
-              type="text"
-              placeholder="Expression (e.g., a + b = c, x \in \R)"
-              value={letExpression}
-              onChange={(e) => setLetExpression(e.target.value)}
-              onBlur={(e) => setLetExpression(expandTypeShortcuts(e.target.value))}
-              style={{
-                width: '100%',
-                padding: '6px',
-                marginBottom: '8px',
-                border: '1px solid #ced4da',
-                borderRadius: '4px'
-              }}
-            />
-            <input
-              type="text"
-              placeholder="Type annotation (optional, e.g., \R, \N, Prop)"
-              value={letType}
-              onChange={(e) => setLetType(e.target.value)}
-              onBlur={(e) => setLetType(expandTypeShortcuts(e.target.value))}
-              style={{
-                width: '100%',
-                padding: '6px',
-                marginBottom: '8px',
-                border: '1px solid #ced4da',
-                borderRadius: '4px'
+                borderRadius: '4px',
+                fontSize: '14px'
               }}
             />
 
-            <div style={{ marginBottom: '8px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  type="checkbox"
-                  checked={letIsClaim}
-                  onChange={(e) => setLetIsClaim(e.target.checked)}
-                />
-                <span style={{ fontSize: '14px' }}>This is a claim to be proved</span>
-              </label>
+            {/* Mode selection buttons */}
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{
+                fontSize: '13px',
+                fontWeight: 'bold',
+                color: '#495057',
+                marginBottom: '6px'
+              }}>
+                Choose term editor mode:
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {(() => {
+                  const goalEquality = parseGoalEquality(goal);
+
+                  return (
+                    <>
+                      {/* Show equality buttons only if goal is A = B */}
+                      {goalEquality && (
+                        <>
+                          <button
+                            onClick={() => handleAddLetWithMode({
+                              tag: 'equality-left',
+                              startExpr: goalEquality.left
+                            })}
+                            style={{
+                              padding: '8px 12px',
+                              backgroundColor: '#17a2b8',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontSize: '13px',
+                              fontWeight: 'bold'
+                            }}
+                            title="Start equality chain from left side of goal"
+                          >
+                            goal left = ?
+                          </button>
+                          <button
+                            onClick={() => handleAddLetWithMode({
+                              tag: 'equality-right',
+                              startExpr: goalEquality.right
+                            })}
+                            style={{
+                              padding: '8px 12px',
+                              backgroundColor: '#17a2b8',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontSize: '13px',
+                              fontWeight: 'bold'
+                            }}
+                            title="Start equality chain from right side of goal"
+                          >
+                            goal right = ?
+                          </button>
+                        </>
+                      )}
+
+                      {/* Cases button - always available */}
+                      <button
+                        onClick={() => handleAddLetWithMode({
+                          tag: 'cases',
+                          eliminator: 'nat'
+                        })}
+                        style={{
+                          padding: '8px 12px',
+                          backgroundColor: '#6610f2',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          fontWeight: 'bold'
+                        }}
+                        title="Case split (nat/bool eliminator)"
+                      >
+                        cases
+                      </button>
+
+                      {/* Value button - always available, opens input */}
+                      <button
+                        onClick={() => {
+                          // For value mode, we need to show expression input
+                          // For now, just show alert asking user to use the input below
+                          if (!letExpression) {
+                            alert('Please enter an expression first, then click "value"');
+                            return;
+                          }
+                          handleAddLetWithMode({ tag: 'value' });
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          backgroundColor: '#28a745',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          fontWeight: 'bold'
+                        }}
+                        title="Hand-written term"
+                      >
+                        value
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
             </div>
 
-            {letIsClaim && (
-              <select
-                value={letProofMethod}
-                onChange={(e) => setLetProofMethod(e.target.value as 'equality' | 'induction')}
+            {/* Expression input - only shown for value mode */}
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{
+                fontSize: '13px',
+                color: '#6c757d',
+                marginBottom: '4px'
+              }}>
+                For "value" mode, enter expression:
+              </div>
+              <input
+                type="text"
+                placeholder="Expression (e.g., a + b, 5, (foo bar))"
+                value={letExpression}
+                onChange={(e) => setLetExpression(e.target.value)}
+                onBlur={(e) => setLetExpression(expandTypeShortcuts(e.target.value))}
                 style={{
                   width: '100%',
                   padding: '6px',
-                  marginBottom: '8px',
                   border: '1px solid #ced4da',
                   borderRadius: '4px',
                   fontSize: '14px'
                 }}
-              >
-                <option value="equality">Equality Chaining (Direct Proof)</option>
-                <option value="induction">Proof by Induction on ℕ</option>
-              </select>
-            )}
+              />
+            </div>
+
+            {/* Optional type annotation */}
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{
+                fontSize: '13px',
+                color: '#6c757d',
+                marginBottom: '4px'
+              }}>
+                Type annotation (optional, usually inferred):
+              </div>
+              <input
+                type="text"
+                placeholder="e.g., \R, \N, Prop"
+                value={letType}
+                onChange={(e) => setLetType(e.target.value)}
+                onBlur={(e) => setLetType(expandTypeShortcuts(e.target.value))}
+                style={{
+                  width: '100%',
+                  padding: '6px',
+                  border: '1px solid #ced4da',
+                  borderRadius: '4px',
+                  fontSize: '14px'
+                }}
+              />
+            </div>
+
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
               <button
-                onClick={() => setShowAddLet(false)}
+                onClick={() => {
+                  setShowAddLet(false);
+                  setLetName('');
+                  setLetExpression('');
+                  setLetType('');
+                }}
                 style={{
                   padding: '6px 12px',
                   backgroundColor: '#6c757d',
@@ -731,19 +915,6 @@ export function LetManager({
                 }}
               >
                 Cancel
-              </button>
-              <button
-                onClick={handleAddLet}
-                style={{
-                  padding: '6px 12px',
-                  backgroundColor: '#28a745',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                Add
               </button>
             </div>
           </div>
@@ -801,6 +972,137 @@ export function LetManager({
                     readonly={true}
                   />
                 </div>
+
+                {/* Inline Term Editor based on editorMode */}
+                {letBinding.editorMode && letBinding.editorExpanded && (
+                  <div style={{
+                    marginTop: '12px',
+                    paddingLeft: '20px',
+                    padding: '12px',
+                    backgroundColor: activeLetId === letBinding.id ? '#e6f7ff' : '#f8f9fa',
+                    border: `2px solid ${activeLetId === letBinding.id ? '#1890ff' : '#17a2b8'}`,
+                    borderRadius: '6px'
+                  }}>
+                    {(letBinding.editorMode.tag === 'equality-left' || letBinding.editorMode.tag === 'equality-right') && (
+                      <div>
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: '12px'
+                        }}>
+                          <div style={{
+                            fontSize: '13px',
+                            fontWeight: 'bold',
+                            color: '#17a2b8'
+                          }}>
+                            Equality Chain (starting from {letBinding.editorMode.tag === 'equality-left' ? 'left' : 'right'})
+                          </div>
+                          {onActivateLetEditor && (
+                            <button
+                              onClick={() => onActivateLetEditor(letBinding.id)}
+                              style={{
+                                padding: '4px 12px',
+                                backgroundColor: activeLetId === letBinding.id ? '#52c41a' : '#1890ff',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontSize: '12px',
+                                fontWeight: 'bold'
+                              }}
+                            >
+                              {activeLetId === letBinding.id ? '✓ Active' : 'Edit in Workspace →'}
+                            </button>
+                          )}
+                        </div>
+                        {letBinding.proofElements && letBinding.proofElements.length > 0 ? (
+                          <div>
+                            {letBinding.proofElements.map((element: any, idx: number) => (
+                              <div key={idx} style={{
+                                padding: '8px',
+                                backgroundColor: '#fff',
+                                border: '1px solid #dee2e6',
+                                borderRadius: '4px',
+                                marginBottom: '8px'
+                              }}>
+                                {element.type === 'equation' && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <MathJaxExpressionRenderer
+                                      expression={element.leftSide || element.expression}
+                                      readonly={true}
+                                    />
+                                    <span style={{ color: '#666' }}>=</span>
+                                    {element.rightSide && (
+                                      <MathJaxExpressionRenderer
+                                        expression={element.rightSide}
+                                        readonly={true}
+                                      />
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{
+                            padding: '16px',
+                            backgroundColor: '#fff',
+                            border: '1px dashed #dee2e6',
+                            borderRadius: '4px',
+                            textAlign: 'center',
+                            color: '#6c757d',
+                            fontSize: '12px',
+                            fontStyle: 'italic'
+                          }}>
+                            {activeLetId === letBinding.id
+                              ? 'Use the Proof Workspace below to build your proof...'
+                              : 'Click "Edit in Workspace →" to start building the proof'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {letBinding.editorMode.tag === 'cases' && (
+                      <div>
+                        <div style={{
+                          fontSize: '13px',
+                          fontWeight: 'bold',
+                          color: '#6610f2',
+                          marginBottom: '8px'
+                        }}>
+                          Case Analysis
+                        </div>
+                        <div style={{
+                          fontSize: '12px',
+                          color: '#6c757d',
+                          fontStyle: 'italic'
+                        }}>
+                          Case splitting UI coming soon...
+                        </div>
+                      </div>
+                    )}
+                    {letBinding.editorMode.tag === 'value' && (
+                      <div>
+                        <div style={{
+                          fontSize: '13px',
+                          fontWeight: 'bold',
+                          color: '#28a745',
+                          marginBottom: '8px'
+                        }}>
+                          Value Editor
+                        </div>
+                        <div style={{
+                          fontSize: '12px',
+                          color: '#6c757d',
+                          fontStyle: 'italic'
+                        }}>
+                          Hand-written term (view only for now)
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {letBinding.isClaim && letBinding.proofMethod && (
                   <div style={{
                     marginTop: '4px',
@@ -838,39 +1140,6 @@ export function LetManager({
                 )}
               </div>
               <div style={{ display: 'flex', gap: '4px' }}>
-                {letBinding.isClaim && letBinding.proofStatus === 'pending' && onStartProof && (
-                  <button
-                    onClick={() => onStartProof(letBinding.id)}
-                    style={{
-                      padding: '2px 8px',
-                      backgroundColor: '#9c27b0',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      fontWeight: 'bold'
-                    }}
-                  >
-                    Start Proof
-                  </button>
-                )}
-                {onInstantiate && !letBinding.isClaim && (
-                  <button
-                    onClick={() => setInstantiatingLet(letBinding)}
-                    style={{
-                      padding: '2px 8px',
-                      backgroundColor: '#17a2b8',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '12px'
-                    }}
-                  >
-                    Instantiate
-                  </button>
-                )}
                 <button
                   onClick={() => onDeleteLet(letBinding.id)}
                   style={{
@@ -890,14 +1159,6 @@ export function LetManager({
           ))}
         </div>
       </div>
-
-      {instantiatingLet && onInstantiate && (
-        <InstantiationDialog
-          letBinding={instantiatingLet}
-          onInstantiate={onInstantiate}
-          onClose={() => setInstantiatingLet(null)}
-        />
-      )}
     </div>
   );
 }

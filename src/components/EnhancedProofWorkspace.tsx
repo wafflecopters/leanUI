@@ -444,28 +444,23 @@ export function EnhancedProofWorkspace() {
     // TODO: When we have a root TT term, update it using setGoalInRoot()
   }, [context.assumptions, letBindings, handleAddHypothesis]);
 
-  const handleInstantiate = useCallback((letId: string, substitutions: Map<string, ExpressionNode>) => {
-    // Find the let binding to instantiate
+  // Handler to activate a let-binding for editing in the proof workspace
+  const handleActivateLetEditor = useCallback((letId: string) => {
     const letBinding = letBindings.find(l => l.id === letId);
     if (!letBinding) return;
 
-    // Substitute variables in the expression
-    let instantiatedValue = letBinding.value;
-    for (const [varName, replacement] of substitutions) {
-      instantiatedValue = substituteVariableInExpression(instantiatedValue, varName, replacement);
+    // Set this as the active proof context
+    setActiveProofContext(letId);
+
+    // For equality modes, initialize with the starting expression
+    if (letBinding.editorMode?.tag === 'equality-left' || letBinding.editorMode?.tag === 'equality-right') {
+      const startExpr = (letBinding.editorMode as any).startExpr;
+      if (startExpr) {
+        setCurrentExpression(startExpr);
+        setFocusPath([]);
+      }
     }
-
-    // Create a new let-binding for the instantiated expression
-    const newLetElement = createLetElement(
-      `${letBinding.name}_inst`,
-      instantiatedValue,
-      letBinding.typeAnnotation
-    );
-    newLetElement.derivedFrom = [letId];
-
-    // Add the new instantiated let-binding
-    handleAddLet(newLetElement);
-  }, [letBindings, handleAddLet]);
+  }, [letBindings]);
 
   // Keyboard navigation handler
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -523,175 +518,6 @@ export function EnhancedProofWorkspace() {
       }
     }
   }, [focusPath, currentExpression]);
-
-  const handleStartProof = useCallback((letId: string) => {
-    // Find the claim to prove
-    const claim = letBindings.find(l => l.id === letId);
-    if (!claim || !claim.isClaim) return;
-
-    // Start the proof based on the method
-    if (claim.proofMethod === 'induction') {
-      // For induction, we need to determine the induction variable
-      // For now, we'll detect common patterns or ask the user
-      // Let's look for summation patterns or variables in the expression
-
-      // Simple heuristic: look for variables in the expression
-      const variables = new Set<string>();
-      const extractVars = (node: ExpressionNode) => {
-        if (node.type === 'variable' && typeof node.value === 'string') {
-          variables.add(node.value);
-        }
-        node.children?.forEach(extractVars);
-      };
-      extractVars(claim.value);
-
-      // Common induction variables
-      const inductionVarCandidates = ['n', 'k', 'm', 'i'];
-      let inductionVar = inductionVarCandidates.find(v => variables.has(v)) || 'n';
-
-      // Ask user to confirm/specify the induction variable
-      const userVar = prompt(`Induction variable (detected: ${Array.from(variables).join(', ')}):`, inductionVar);
-      if (!userVar) return; // User cancelled
-      inductionVar = userVar;
-
-      // Ask for base case value
-      const baseValue = prompt('Base case value (e.g., 0, 1):', '1');
-      if (baseValue === null) return; // User cancelled
-
-      // Create base case: P(base)
-      const baseValueNode: ExpressionNode = {
-        id: crypto.randomUUID(),
-        type: 'literal',
-        value: parseInt(baseValue) || baseValue,
-        children: [],
-        raw: baseValue
-      };
-
-      const baseCaseExpr = substituteVariableInExpression(claim.value, inductionVar, baseValueNode);
-      const baseCaseLet = createLetElement(
-        `${claim.name}_base`,
-        baseCaseExpr,
-        claim.typeAnnotation,
-        [letId],
-        true,  // It's a claim to prove
-        'equality'  // Will prove by equality chaining
-      );
-      baseCaseLet.proofStatus = 'pending';
-
-      // Create inductive case: P(k) → P(k+1)
-      // Use 'k' for the inductive variable name (the actual variable we're proving for)
-      const kVar: ExpressionNode = {
-        id: crypto.randomUUID(),
-        type: 'variable',
-        value: 'k',
-        children: [],
-        raw: 'k'
-      };
-
-      // Create k+1 expression
-      const kPlusOne: ExpressionNode = {
-        id: crypto.randomUUID(),
-        type: 'binop',
-        operator: '+',
-        value: '+',
-        children: [
-          { id: crypto.randomUUID(), type: 'variable', value: 'k', children: [], raw: 'k' },
-          { id: crypto.randomUUID(), type: 'literal', value: 1, children: [], raw: '1' }
-        ],
-        raw: 'k + 1'
-      };
-
-      // Substitute k+1 into the claim to get P(k+1)
-      const inductiveCaseExpr = substituteVariableInExpression(claim.value, inductionVar, kPlusOne);
-      const inductiveCaseLet = createLetElement(
-        `${claim.name}_inductive`,
-        inductiveCaseExpr,
-        claim.typeAnnotation,
-        [letId],
-        true,  // It's a claim to prove
-        'equality'  // Will prove by equality chaining
-      );
-      inductiveCaseLet.proofStatus = 'pending';
-
-      // Add inductive hypothesis P(k) to the inductive case
-      const inductiveHypothesisExpr = substituteVariableInExpression(claim.value, inductionVar, kVar);
-      const inductiveHypothesis: Assumption = {
-        id: crypto.randomUUID(),
-        name: 'IH',
-        expression: astToString(inductiveHypothesisExpr),
-        description: `Inductive hypothesis: ${claim.name}(k)`,
-        introducedBy: 'induction'
-      };
-
-      // Attach the inductive hypothesis to the inductive case let
-      inductiveCaseLet.localHypotheses = [inductiveHypothesis];
-
-      // Add the base case and inductive case as child let statements
-      setLetBindings(prev => {
-        // Find the index of the original claim
-        const claimIndex = prev.findIndex(l => l.id === letId);
-        if (claimIndex === -1) return prev;
-
-        // Update the claim status
-        const updatedClaim = { ...prev[claimIndex], proofStatus: 'in-progress' as const };
-
-        // Insert the two cases right after the claim
-        return [
-          ...prev.slice(0, claimIndex + 1).map(l => l.id === letId ? updatedClaim : l),
-          baseCaseLet,
-          inductiveCaseLet,
-          ...prev.slice(claimIndex + 1)
-        ];
-      });
-
-      // Note: We don't set activeProofContext here - the user will click "Start Proof" on each case
-    } else if (claim.proofMethod === 'equality') {
-      // For equality claims, parse the expression as "left = right"
-      // We'll prove it by starting with "left" and chaining to reach "right" (the goal)
-      if (claim.value.type === 'equality' && claim.value.children.length === 2) {
-        const leftSide = claim.value.children[0];
-        const rightSide = claim.value.children[1];
-
-        // CREATE TT PROOF TERM for this claim
-        const proofTerm = createEqualityProofTerm(claim, rightSide);
-        console.log('Created TT proof term for claim:', claim.name, proofTerm);
-
-        // Store the TT proof term
-        setLetProofTerms(prev => {
-          const newMap = new Map(prev).set(letId, proofTerm);
-          console.log('Updated letProofTerms map, size:', newMap.size);
-          return newMap;
-        });
-
-        // Update the claim with goal and initial proof elements
-        setLetBindings(prev => prev.map(l =>
-          l.id === letId ? {
-            ...l,
-            proofStatus: 'in-progress',
-            goal: rightSide,
-            proofElements: []
-          } : l
-        ));
-
-        // Add local hypotheses to the proof context if this claim has any
-        if (claim.localHypotheses && claim.localHypotheses.length > 0) {
-          setContext(prev => ({
-            ...prev,
-            assumptions: [...prev.assumptions, ...claim.localHypotheses!]
-          }));
-        }
-
-        // Set current expression to just the left side (we'll build up the chain)
-        setCurrentExpression(leftSide);
-        setFocusPath([]);
-
-        // Set this claim as the active proof context
-        setActiveProofContext(letId);
-      } else {
-        alert('Equality proof requires an equality expression (left = right)');
-      }
-    }
-  }, [letBindings]);
 
   const addStep = useCallback((rule: any, params?: any) => {
     if (!focusedNode || !currentExpression) {
@@ -1004,8 +830,8 @@ export function EnhancedProofWorkspace() {
             onDeleteHypothesis={handleDeleteHypothesis}
             onUpdateHypothesis={handleUpdateHypothesis}
             onSetGoal={handleSetGoal}
-            onInstantiate={handleInstantiate}
-            onStartProof={handleStartProof}
+            onActivateLetEditor={handleActivateLetEditor}
+            activeLetId={activeProofContext}
           />
 
           {/* Mathematical Derivation */}
