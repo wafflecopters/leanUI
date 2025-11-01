@@ -2,7 +2,7 @@
 
 export interface ExpressionNode {
   id: string;
-  type: 'equality' | 'inequality' | 'binop' | 'unop' | 'literal' | 'variable' | 'application';
+  type: 'equality' | 'inequality' | 'binop' | 'unop' | 'literal' | 'variable' | 'application' | 'hole';
   value?: string | number;
   operator?: string;
   children: ExpressionNode[];
@@ -116,6 +116,9 @@ export interface LetElement extends ProofElement {
 
   // For equality chaining mode
   equalityChain?: ProofElement[]; // The chain of proof steps (for equality modes)
+
+  // NEW: TT-level equality proof state
+  equalityProofState?: import('./tt-bridge').EqualityProofState;
 
   // Legacy fields (will be removed as refactor progresses)
   isClaim?: boolean;              // DEPRECATED: Use editorMode instead
@@ -417,7 +420,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
     const restExpr = expr.substring(1).trim();
     // If the rest doesn't start with a binary operator, it's unary negation
     if (!restExpr.startsWith('+') && !restExpr.startsWith('-') &&
-        !restExpr.startsWith('*') && !restExpr.startsWith('/')) {
+      !restExpr.startsWith('*') && !restExpr.startsWith('/')) {
       const operand = parseExpressionToAST(restExpr);
       return {
         id,

@@ -12,11 +12,19 @@
  * separate from the UI representation.
  */
 
-import { TTerm, TContext, mapTTerm } from '../types/tt-core';
+import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrint } from '../types/tt-core';
+
+// Helper to convert TTerm to plain text string
+function ttermToString(term: TTerm): string {
+  return prettyPrint(term);
+}
 
 export interface TTViewerProps {
-  /** The current proof term */
-  proofTerm: TTerm | null;
+  /** The current proof term (OLD - will be deprecated) */
+  proofTerm?: TTerm | null;
+
+  /** The term definition (NEW) */
+  termDefinition?: TermDefinition | null;
 
   /** Context for the proof (variable names and types) */
   context?: TContext;
@@ -25,7 +33,158 @@ export interface TTViewerProps {
   showRawAST?: boolean;
 }
 
-export function TTViewer({ proofTerm, context = [] }: TTViewerProps) {
+export function TTViewer({ proofTerm, termDefinition, context = [] }: TTViewerProps) {
+  // NEW: Prefer termDefinition if provided
+  if (termDefinition) {
+    return (
+      <div style={{
+        padding: '20px',
+        backgroundColor: '#fafafa',
+        border: '2px solid #007acc',
+        borderRadius: '8px',
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        maxHeight: '600px',
+        overflow: 'auto'
+      }}>
+        {/* Header */}
+        <div style={{
+          fontWeight: 'bold',
+          fontSize: '16px',
+          color: '#007acc',
+          marginBottom: '16px',
+          borderBottom: '2px solid #007acc',
+          paddingBottom: '8px'
+        }}>
+          TT Term Definition
+        </div>
+
+        {/* Type Declaration */}
+        <div style={{
+          padding: '12px',
+          backgroundColor: '#e6f3ff',
+          borderLeft: '4px solid #007acc',
+          borderRadius: '4px',
+          marginBottom: '12px',
+          position: 'relative'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontWeight: 'bold', color: '#007acc' }}>
+              Declaration:
+            </div>
+            <button
+              onClick={() => {
+                const text = `${termDefinition.name} : ${ttermToString(termDefinition.type)}`;
+                navigator.clipboard.writeText(text);
+              }}
+              style={{
+                padding: '4px 8px',
+                backgroundColor: '#007acc',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: 'bold'
+              }}
+              title="Copy to clipboard"
+            >
+              📋 Copy
+            </button>
+          </div>
+          <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
+            {termDefinition.name} : <PrintedTerm term={termDefinition.type} context={context} />
+          </div>
+        </div>
+
+        {/* Value Definition */}
+        <div style={{
+          padding: '12px',
+          backgroundColor: '#f5e3f3',
+          borderLeft: '4px solid #8e24aa',
+          borderRadius: '4px',
+          marginBottom: '12px',
+          position: 'relative'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontWeight: 'bold', color: '#8e24aa' }}>
+              Definition:
+            </div>
+            <button
+              onClick={() => {
+                const text = `${termDefinition.name} = ${ttermToString(termDefinition.value)}`;
+                navigator.clipboard.writeText(text);
+              }}
+              style={{
+                padding: '4px 8px',
+                backgroundColor: '#8e24aa',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: 'bold'
+              }}
+              title="Copy to clipboard"
+            >
+              📋 Copy
+            </button>
+          </div>
+          <div style={{ fontFamily: 'monospace', fontSize: '13px' }}>
+            {termDefinition.name} = <PrintedTerm term={termDefinition.value} context={context} />
+          </div>
+        </div>
+
+        {/* Full AST */}
+        <div style={{
+          padding: '12px',
+          backgroundColor: '#e8f5e9',
+          borderLeft: '4px solid #4caf50',
+          borderRadius: '4px',
+          position: 'relative'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontWeight: 'bold', color: '#2e7d32' }}>
+              Full AST:
+            </div>
+            <button
+              onClick={() => {
+                const text = JSON.stringify(termDefinition, null, 2);
+                navigator.clipboard.writeText(text);
+              }}
+              style={{
+                padding: '4px 8px',
+                backgroundColor: '#4caf50',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: 'bold'
+              }}
+              title="Copy to clipboard"
+            >
+              📋 Copy
+            </button>
+          </div>
+          <pre style={{
+            margin: 0,
+            fontFamily: 'monospace',
+            fontSize: '11px',
+            color: '#1b5e20',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            overflow: 'auto',
+            maxHeight: '500px'
+          }}>
+            {JSON.stringify(termDefinition, null, 2)}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
+  // OLD: Fall back to proofTerm
   if (!proofTerm) {
     return (
       <div style={{
@@ -121,7 +280,14 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
         (<PrintedTerm term={term.fn} context={context} /><div style={{ width: '4px' }}></div><PrintedTerm term={term.arg} context={context} />)
       </div>,
       Const: (term) => <span>{term.name}</span>,
-      Hole: (term) => <div>HOLE-{term.id}</div>,
+      Hole: (term) => <span style={{
+        backgroundColor: '#ffeb3b',
+        color: '#000',
+        padding: '2px 6px',
+        borderRadius: '4px',
+        fontWeight: 'bold',
+        border: '2px solid #ffc107'
+      }}>?{term.id}</span>,
       Annot: (term) => <div>ANNOT</div>
     })}
     </div>

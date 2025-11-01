@@ -236,6 +236,13 @@ export function mkApp(fn: TTerm, arg: TTerm): TTerm {
 }
 
 /**
+ * Create a constant with a given name and type
+ */
+export function mkConst(name: string, type: TTerm): TTerm {
+  return { tag: 'Const', name, type };
+}
+
+/**
  * Create a hole (metavariable to be filled)
  */
 export function mkHole(id: string, type: TTerm, context: TContext = []): TTerm {
@@ -579,9 +586,146 @@ export function hypothesesToLambda(hypotheses: Array<[string, TTerm]>, body: TTe
   return result;
 }
 
+// ============================================================================
+// Equality Type Constructors
+// ============================================================================
+
+/**
+ * Construct an equality type: a = b
+ * 
+ * In type theory, equality is represented as a type constructor:
+ *   Eq : ∀ (α : Type) (a b : α), Prop
+ * 
+ * For now, we simplify and just use a constant "Eq" applied to two terms.
+ * 
+ * @param a - Left side of equality
+ * @param b - Right side of equality
+ * @returns Term representing the type (a = b)
+ */
+export function mkEq(a: TTerm, b: TTerm): TTerm {
+  // Eq a b : Prop
+  return mkApp(mkApp(mkConst('Eq', mkProp()), a), b);
+}
+
+/**
+ * Construct a reflexivity proof: refl a : a = a
+ * 
+ * Reflexivity states that everything is equal to itself.
+ * 
+ * @param a - The term
+ * @returns Proof term for (a = a)
+ */
+export function mkRefl(a: TTerm): TTerm {
+  // refl : ∀ {α : Type} (a : α), a = a
+  return mkApp(mkConst('refl', mkProp()), a);
+}
+
+/**
+ * Construct a symmetry proof: sym h : b = a (given h : a = b)
+ * 
+ * Symmetry states that if a = b, then b = a.
+ * 
+ * @param proof - Proof of (a = b)
+ * @returns Proof term for (b = a)
+ */
+export function mkSym(proof: TTerm): TTerm {
+  // sym : ∀ {α : Type} {a b : α}, (a = b) → (b = a)
+  return mkApp(mkConst('sym', mkProp()), proof);
+}
+
+/**
+ * Construct a transitivity proof: trans h1 h2 : a = c (given h1 : a = b, h2 : b = c)
+ * 
+ * Transitivity states that if a = b and b = c, then a = c.
+ * 
+ * @param proof1 - Proof of (a = b)
+ * @param proof2 - Proof of (b = c)
+ * @returns Proof term for (a = c)
+ */
+export function mkTrans(proof1: TTerm, proof2: TTerm): TTerm {
+  // trans : ∀ {α : Type} {a b c : α}, (a = b) → (b = c) → (a = c)
+  return mkApp(mkApp(mkConst('trans', mkProp()), proof1), proof2);
+}
+
+/**
+ * Construct a congruence proof: cong f h : f a = f b (given h : a = b)
+ * 
+ * Congruence states that if a = b, then applying any function f gives f a = f b.
+ * 
+ * @param f - The function to apply
+ * @param proof - Proof of (a = b)
+ * @returns Proof term for (f a = f b)
+ */
+export function mkCong(f: TTerm, proof: TTerm): TTerm {
+  // cong : ∀ {α β : Type} (f : α → β) {a b : α}, (a = b) → (f a = f b)
+  return mkApp(mkApp(mkConst('cong', mkProp()), f), proof);
+}
+
+// ============================================================================
+// Term Definitions
+// ============================================================================
+
+/**
+ * A term definition separates the declaration from the definition.
+ * This is the natural way to represent top-level theorems/constants:
+ * 
+ * Declaration: _root : (a: R) → (b: R) → P
+ * Definition:  _root = ?proof
+ * 
+ * This matches how Lean works and avoids the awkward wrapper:
+ *   let _root : ... := ?proof in _root
+ */
+export interface TermDefinition {
+  name: string;      // Name of the term (e.g., "_root", "my_theorem")
+  type: TTerm;       // The type (e.g., the proposition we're proving)
+  value: TTerm;      // The definition (starts as a hole, gets filled in)
+}
+
+/**
+ * Create a term definition for a proof.
+ * 
+ * This creates:
+ *   name : (a: R) → (b: R) → goal
+ *   name = ?proofHoleId
+ * 
+ * @param name - Name for the term definition (e.g., "_root", "commutativity")
+ * @param hypotheses - List of (name, type) pairs for assumptions
+ * @param goal - The goal type we're trying to prove
+ * @param proofHoleId - ID for the initial proof hole
+ * @param context - Type context for the hole
+ * @returns A term definition with type and initial hole
+ * 
+ * Example:
+ *   createRootTermDefinition("comm", [["a", Real], ["b", Real]], equalityGoal)
+ *   // Returns:
+ *   //   { name: "comm",
+ *   //     type: (a: ℝ) → (b: ℝ) → (a + b = b + a),
+ *   //     value: ?proof }
+ */
+export function createRootTermDefinition(
+  name: string,
+  hypotheses: Array<[string, TTerm]>,
+  goal: TTerm,
+  proofHoleId: string = 'proof',
+  context: TContext = []
+): TermDefinition {
+  // Build the theorem type: (a: R) → (b: R) → goal
+  const theoremType = hypothesesToPi(hypotheses, goal);
+
+  // Create the initial proof hole
+  const proofHole = mkHole(proofHoleId, theoremType, context);
+
+  return {
+    name,
+    type: theoremType,
+    value: proofHole
+  };
+}
+
 /**
  * Create the root proof term structure.
  *
+ * @deprecated Use createRootTermDefinition instead.
  * This creates a single unified term that represents the entire proof workspace:
  *
  *   let _root : (a: R) → (b: R) → P = ?PROOF

@@ -9,18 +9,18 @@ interface FocusedExpressionRendererProps {
   isActive?: boolean;
 }
 
-export function FocusedExpressionRenderer({ 
-  expression, 
-  focusPath, 
-  onFocusChange, 
-  isActive = false 
+export function FocusedExpressionRenderer({
+  expression,
+  focusPath,
+  onFocusChange,
+  isActive = false
 }: FocusedExpressionRendererProps) {
   const [hoveredPath, setHoveredPath] = useState<FocusPath | null>(null);
-  
+
   const getStyleForPath = (path: FocusPath) => {
     const isFocused = arraysEqual(path, focusPath);
     const isHovered = hoveredPath && arraysEqual(path, hoveredPath);
-    
+
     return {
       cursor: 'pointer',
       borderRadius: '3px',
@@ -39,16 +39,16 @@ export function FocusedExpressionRenderer({
 
   const renderNode = (node: ExpressionNode, currentPath: FocusPath): JSX.Element => {
     const nodeStyle = getStyleForPath(currentPath);
-    
+
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation();
       handleNodeClick(currentPath);
     };
-    
+
     const handleMouseEnter = () => {
       setHoveredPath(currentPath);
     };
-    
+
     const handleMouseLeave = () => {
       setHoveredPath(null);
     };
@@ -66,10 +66,10 @@ export function FocusedExpressionRenderer({
               onMouseLeave={handleMouseLeave}
             >
               {renderNode(node.children[0], [...currentPath, 0])}
-              <span style={{ 
-                color: arraysEqual(currentPath, focusPath) ? 'white' : '#d73a49', 
-                fontWeight: 'bold', 
-                margin: '0 4px' 
+              <span style={{
+                color: arraysEqual(currentPath, focusPath) ? 'white' : '#d73a49',
+                fontWeight: 'bold',
+                margin: '0 4px'
               }}>
                 {node.operator}
               </span>
@@ -78,7 +78,7 @@ export function FocusedExpressionRenderer({
           );
         }
         break;
-        
+
       case 'unop':
         if (node.children.length === 1) {
           return (
@@ -96,7 +96,7 @@ export function FocusedExpressionRenderer({
           );
         }
         break;
-        
+
       case 'literal':
       case 'variable':
         return (
@@ -109,7 +109,7 @@ export function FocusedExpressionRenderer({
             {String(node.value)}
           </span>
         );
-        
+
       case 'application':
         return (
           <span
@@ -126,8 +126,31 @@ export function FocusedExpressionRenderer({
             ))}
           </span>
         );
+
+      case 'hole':
+        // Render as a bright yellow badge containing the expression we're working on
+        return (
+          <span
+            style={{
+              ...nodeStyle,
+              backgroundColor: arraysEqual(currentPath, focusPath) ? '#ffc107' : '#ffeb3b',
+              color: '#000',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              fontWeight: 'bold',
+              border: '2px solid #ffc107'
+            }}
+            onClick={handleClick}
+            onMouseEnter={handleMouseEnter}
+            onMouseLeave={handleMouseLeave}
+          >
+            HOLE(
+            {node.children.length > 0 && renderNode(node.children[0], [...currentPath, 0])}
+            )
+          </span>
+        );
     }
-    
+
     return (
       <span
         style={nodeStyle}
@@ -162,7 +185,7 @@ export function FocusedExpressionRenderer({
       <div style={{ flex: 1 }}>
         {renderNode(expression, [])}
       </div>
-      
+
       {focusPath.length > 0 && focusedNode && (
         <div style={{
           position: 'absolute',
@@ -178,8 +201,8 @@ export function FocusedExpressionRenderer({
           Focus: {focusedNode.raw}
         </div>
       )}
-      
-      <div style={{ 
+
+      <div style={{
         marginLeft: '16px',
         display: 'flex',
         flexDirection: 'column',
@@ -200,7 +223,7 @@ export function FocusedExpressionRenderer({
         >
           Root
         </button>
-        
+
         {focusPath.length > 0 && (
           <button
             onClick={() => onFocusChange(focusPath.slice(0, -1))}

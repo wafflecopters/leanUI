@@ -19,10 +19,13 @@ import {
   mkApp,
   mkProp,
   mkLet,
+  mkEq,
+  mkTrans,
   TT_CONSTANTS,
   prettyPrint,
 } from './tt-core';
 import { ExpressionNode, LetElement } from './enhanced-focus';
+import { fillHole } from './tt-typecheck';
 
 // ============================================================================
 // UI → TT Conversion
@@ -143,6 +146,20 @@ export function expressionNodeToTTerm(
       };
 
       return mkApp(mkApp(ineqOp, ineqLeft), ineqRight);
+
+    case 'hole':
+      // A hole in the UI AST represents a proof hole
+      // Convert to a TT Hole term
+      // The hole's value field contains the hole identifier
+      // The hole's children[0] contains the expression we're working on (for display)
+      const holeId = String(expr.value || 'unknown_hole');
+
+      // For now, we'll create a hole with Prop type
+      // In the future, we might want to infer the type from the expression inside
+      return mkHole(holeId, mkProp(), Array.from(context.entries()).map(([name]) => ({
+        name,
+        type: TT_CONSTANTS.Real  // Simplified - should track actual types
+      })));
 
     default:
       throw new Error(`Unsupported expression type: ${expr.type}`);
@@ -351,4 +368,205 @@ export function buildFullProofTerm(proofs: LetProofTerm[]): TTerm | null {
   }
 
   return body;
+}
+
+// ============================================================================
+// Equality Proof Construction
+// ============================================================================
+
+/**
+ * State for tracking an equality proof as it's being constructed.
+ * 
+ * This tracks a proof of (startExpr = targetExpr) as the user applies
+ * transformation steps.
+ */
+export interface EqualityProofState {
+  /** The starting expression (where we begin the chain) */
+  startExpr: TTerm;
+
+  /** The target expression (where we want to end up) */
+  targetExpr: TTerm;
+
+  /** Current position in the equality chain */
+  currentExpr: TTerm;
+
+  /** The proof term being built (may contain holes) */
+  proofTerm: TTerm;
+
+  /** ID of the current hole to fill (empty if proof complete) */
+  currentHoleId: string;
+
+  /** Whether the proof is complete (no holes remaining) */
+  isComplete: boolean;
+}
+
+/**
+ * Start an equality proof.
+ * 
+ * Creates initial state for proving startExpr = targetExpr.
+ * For "left" direction, we start at startExpr and work toward targetExpr.
+ * For "right" direction, we start at targetExpr and work toward startExpr,
+ * then use symmetry.
+ * 
+ * @param startExpr - Starting expression
+ * @param targetExpr - Target expression to reach
+ * @param direction - Which side to start from
+ * @returns Initial equality proof state
+ */
+export function startEqualityProof(
+  startExpr: TTerm,
+  targetExpr: TTerm,
+  direction: 'left' | 'right'
+): EqualityProofState {
+  if (direction === 'left') {
+    // Prove: startExpr = targetExpr
+    // Start with a hole for the entire proof
+    const holeId = 'eq_proof_init';
+    const proofTerm = mkHole(holeId, mkEq(startExpr, targetExpr), []);
+
+    return {
+      startExpr,
+      targetExpr,
+      currentExpr: startExpr,
+      proofTerm,
+      currentHoleId: holeId,
+      isComplete: false
+    };
+  } else {
+    // Prove: targetExpr = startExpr (then we'll use sym to get startExpr = targetExpr)
+    // For "right" mode, we actually want to build the proof in reverse
+    const holeId = 'eq_proof_init';
+    const proofTerm = mkHole(holeId, mkEq(targetExpr, startExpr), []);
+
+    return {
+      startExpr: targetExpr,
+      targetExpr: startExpr,
+      currentExpr: targetExpr,
+      proofTerm,
+      currentHoleId: holeId,
+      isComplete: false
+    };
+  }
+}
+
+/**
+ * Apply a transformation step to an equality proof.
+ * 
+ * Given a proof state and a transformation that proves currentExpr = newExpr,
+ * extend the proof using transitivity.
+ * 
+ * @param state - Current proof state
+ * @param ruleName - Name of the rule being applied
+ * @param newExpr - The expression after transformation
+ * @returns Updated proof state
+ */
+export function applyEqualityStep(
+  state: EqualityProofState,
+  ruleName: string,
+  newExpr: TTerm
+): EqualityProofState {
+  // The rule proves: state.currentExpr = newExpr
+  // For now, represent the rule as a constant
+  // 
+  // TODO: Build actual proof term from rule application
+  // TODO: Detect when rule is applied to subexpression and use cong
+  //       For example, if currentExpr = (a + b) and user transforms a → 1*a
+  //       then newExpr = (1*a + b), we should build:
+  //       cong (λx => x + b) (introduce_one_mul a)
+  //       instead of just (introduce_one_mul)
+  const ruleProof: TTerm = {
+    tag: 'Const',
+    name: ruleName,
+    type: mkEq(state.currentExpr, newExpr)
+  };
+
+  // Check if we've reached the target
+  if (termsEqual(newExpr, state.targetExpr)) {
+    // Final step! Fill the hole with just the rule proof
+    const finalProof = fillHole(
+      state.proofTerm,
+      state.currentHoleId,
+      ruleProof
+    );
+
+    return {
+      ...state,
+      currentExpr: newExpr,
+      proofTerm: finalProof,
+      currentHoleId: '',
+      isComplete: true
+    };
+  }
+
+  // Not at target yet, use transitivity
+  // trans : (current = new) → (new = target) → (current = target)
+  const newHoleId = `eq_step_${crypto.randomUUID()}`;
+  const restProof = mkHole(newHoleId, mkEq(newExpr, state.targetExpr), []);
+
+  // Build: trans ruleProof restProof
+  const transProof = mkTrans(ruleProof, restProof);
+
+  // Fill the current hole with this transitivity proof
+  const newProofTerm = fillHole(
+    state.proofTerm,
+    state.currentHoleId,
+    transProof
+  );
+
+  return {
+    ...state,
+    currentExpr: newExpr,
+    proofTerm: newProofTerm,
+    currentHoleId: newHoleId,
+    isComplete: false
+  };
+}
+
+/**
+ * Check if two terms are structurally equal.
+ * 
+ * This is a simple structural equality check.
+ * In a real system, we'd use alpha-equivalence and normalization.
+ * 
+ * @param a - First term
+ * @param b - Second term
+ * @returns True if terms are equal
+ */
+function termsEqual(a: TTerm, b: TTerm): boolean {
+  if (a.tag !== b.tag) return false;
+
+  switch (a.tag) {
+    case 'Var':
+      return b.tag === 'Var' && a.index === b.index;
+
+    case 'Const':
+      return b.tag === 'Const' && a.name === b.name;
+
+    case 'Sort':
+      return b.tag === 'Sort' && a.level === b.level;
+
+    case 'Hole':
+      return b.tag === 'Hole' && a.id === b.id;
+
+    case 'App':
+      return b.tag === 'App' &&
+        termsEqual(a.fn, b.fn) &&
+        termsEqual(a.arg, b.arg);
+
+    case 'Binder':
+      if (b.tag !== 'Binder') return false;
+      if (a.name !== b.name) return false;
+      if (a.binderKind.tag !== b.binderKind.tag) return false;
+      if (!termsEqual(a.domain, b.domain)) return false;
+      if (!termsEqual(a.body, b.body)) return false;
+      if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {
+        return termsEqual(a.binderKind.defVal, b.binderKind.defVal);
+      }
+      return true;
+
+    case 'Annot':
+      return b.tag === 'Annot' &&
+        termsEqual(a.term, b.term) &&
+        termsEqual(a.type, b.type);
+  }
 }

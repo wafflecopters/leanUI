@@ -26,13 +26,16 @@ import { ExpressionInput } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm, createRootProofTerm, mkProp } from '../types/tt-core';
+import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkEq } from '../types/tt-core';
 import {
   LetProofTerm,
   buildFullProofTerm,
   applyProofStep,
-  expressionNodeToTTerm
+  expressionNodeToTTerm,
+  startEqualityProof,
+  applyEqualityStep
 } from '../types/tt-bridge';
+import { extractHoles, findHole, fillHoleWith, fillHole } from '../types/tt-typecheck';
 
 interface EnhancedProofStep {
   id: string;
@@ -254,13 +257,35 @@ export function EnhancedProofWorkspace() {
   // State for goal
   const [goal, setGoal] = useState<ExpressionNode | null>(null);
 
+  // ============================================================================
+  // NEW ARCHITECTURE: Term Definition + Focused Hole
+  // ============================================================================
+
+  // Root term definition - replaces the awkward let-wrapper
+  const [rootDefinition, setRootDefinition] = useState<TermDefinition>(() =>
+    createRootTermDefinition('_root', [], mkProp(), 'proof', [])
+  );
+
+  // Which hole are we currently working on?
+  const [focusedHole, setFocusedHole] = useState<string | null>('proof');
+
+  // Get all available holes (for debugging/future use)
+  // const availableHoles = extractHoles(rootDefinition.value);
+
+  // Get the currently focused hole (if it exists)
+  const currentHole = focusedHole ? findHole(rootDefinition.value, focusedHole) : null;
+
+  // ============================================================================
+  // OLD ARCHITECTURE (will be removed in Phase 9)
+  // ============================================================================
+
   // Root TT term - the unified proof term model
   const [rootTerm, setRootTerm] = useState<TTerm>(() => {
     // Initialize with empty hypotheses and a Prop goal
     return createRootProofTerm([], mkProp(), 'proof', []);
   });
 
-  // Update rootTerm whenever hypotheses or goal change
+  // Update rootTerm and rootDefinition whenever hypotheses or goal change
   useEffect(() => {
     // Convert UI hypotheses to TT term format
     const ttHypotheses: Array<[string, TTerm]> = context.assumptions.map(h => {
@@ -288,9 +313,14 @@ export function EnhancedProofWorkspace() {
     // Convert goal ExpressionNode to TT term properly
     const goalTerm = goal ? expressionNodeToTTerm(goal) : mkProp();
 
-    // Create updated root term
+    // OLD: Create updated root term (let-wrapper)
     const newRootTerm = createRootProofTerm(ttHypotheses, goalTerm, 'proof', []);
     setRootTerm(newRootTerm);
+
+    // NEW: Create updated term definition
+    const newDefinition = createRootTermDefinition('_root', ttHypotheses, goalTerm, 'proof', []);
+    setRootDefinition(newDefinition);
+    setFocusedHole('proof'); // Reset focus to initial hole
   }, [context.assumptions, goal]);
 
   // TT proof terms: Map from let-binding ID to its proof term
@@ -325,16 +355,154 @@ export function EnhancedProofWorkspace() {
   // Debug info for development
   console.debug('Proof workspace state:', { steps: steps.length, elements: structuredProof.elements.length });
 
+  // Helper: Update a let-binding's value in the root definition
+  const updateLetValueInRootDefinition = useCallback((term: TTerm, letName: string, newValue: TTerm): TTerm => {
+    // Recursively find and update the let-binding
+    function updateInTerm(t: TTerm): TTerm {
+      if (t.tag === 'Binder' && t.binderKind.tag === 'BLet' && t.name === letName) {
+        // Found it! Update the defVal
+        return {
+          ...t,
+          binderKind: { tag: 'BLet', defVal: newValue }
+        };
+      }
+
+      if (t.tag === 'Binder') {
+        // Recurse into body
+        return {
+          ...t,
+          body: updateInTerm(t.body)
+        };
+      }
+
+      // Not a binder, return unchanged
+      return t;
+    }
+
+    return updateInTerm(term);
+  }, []);
+
   // Handlers for let-bindings and hypotheses
   const handleAddLet = useCallback((letElement: LetElement) => {
-    setLetBindings(prev => [...prev, letElement]);
+    console.log('[ADD-LET] Starting, focusedHole:', focusedHole, 'editorMode:', letElement.editorMode.tag);
 
-    // Also add to structured proof
+    // ====================================================================
+    // Step 1: Initialize equality proof state if this is an equality proof
+    // ====================================================================
+    const isEqualityProof = letElement.editorMode.tag === 'equality-left' || letElement.editorMode.tag === 'equality-right';
+
+    if (isEqualityProof && goal) {
+      try {
+        // Parse goal as equality A = B
+        const goalStr = astToString(goal);
+        const eqMatch = goalStr.match(/^(.+?)\s*=\s*(.+)$/);
+
+        if (eqMatch) {
+          const leftStr = eqMatch[1].trim();
+          const rightStr = eqMatch[2].trim();
+
+          // Convert to TT terms
+          const leftTT = expressionNodeToTTerm(parseExpressionToAST(leftStr));
+          const rightTT = expressionNodeToTTerm(parseExpressionToAST(rightStr));
+
+          // Initialize equality proof state
+          const direction = letElement.editorMode.tag === 'equality-left' ? 'left' : 'right';
+          const eqState = startEqualityProof(leftTT, rightTT, direction);
+
+          // Attach to let element
+          letElement.equalityProofState = eqState;
+
+          console.log('[ADD-LET] Created equality proof state:', {
+            start: direction === 'left' ? leftStr : rightStr,
+            target: direction === 'left' ? rightStr : leftStr,
+            holeId: eqState.currentHoleId,
+            direction
+          });
+        }
+      } catch (error) {
+        console.error('[ADD-LET] Failed to initialize equality proof state:', error);
+      }
+    }
+
+    // ====================================================================
+    // Step 2: Determine TT type and value for the let-binding
+    // ====================================================================
+    let letValueTT: TTerm;
+    let letTypeTT: TTerm;
+
+    if (letElement.equalityProofState) {
+      // Equality proof: use the proof term (a Hole) as value
+      letValueTT = letElement.equalityProofState.proofTerm;
+      letTypeTT = mkEq(
+        letElement.equalityProofState.startExpr,
+        letElement.equalityProofState.targetExpr
+      );
+      console.log('[ADD-LET] Using equality proof term:', {
+        proofTerm: letElement.equalityProofState.proofTerm,
+        type: letTypeTT
+      });
+    } else {
+      // Regular let: convert expression to TT
+      letValueTT = expressionNodeToTTerm(letElement.value);
+      letTypeTT = letElement.typeAnnotation
+        ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkProp() }
+        : mkProp();
+      console.log('[ADD-LET] Using regular value');
+    }
+
+    // ====================================================================
+    // Step 3: Add to UI state
+    // ====================================================================
+    setLetBindings(prev => [...prev, letElement]);
     setStructuredProof(prev => ({
       ...prev,
       elements: [...prev.elements, letElement]
     }));
-  }, []);
+
+    // ====================================================================
+    // Step 4: Nest the let-binding inside the focused hole
+    // ====================================================================
+    if (!focusedHole) {
+      console.warn('[ADD-LET] No focused hole! Cannot add let to TT term.');
+      return;
+    }
+
+    const newValue = fillHoleWith(
+      rootDefinition.value,
+      focusedHole,
+      (holeType, holeContext) => {
+        // Create a new hole after this let-binding
+        const newHoleId = `after-${letElement.name}`;
+        const newHole = {
+          tag: 'Hole' as const,
+          id: newHoleId,
+          type: holeType,
+          context: [...holeContext, { name: letElement.name, type: letTypeTT }]
+        };
+
+        // Create the let-binding that wraps the new hole
+        return {
+          tag: 'Binder' as const,
+          name: letElement.name,
+          binderKind: { tag: 'BLet' as const, defVal: letValueTT },
+          domain: letTypeTT,
+          body: newHole
+        };
+      }
+    );
+
+    setRootDefinition({ ...rootDefinition, value: newValue });
+
+    // ====================================================================
+    // Step 5: Update focus to the correct hole
+    // ====================================================================
+    const newFocus = letElement.equalityProofState
+      ? letElement.equalityProofState.currentHoleId  // Focus on proof hole INSIDE let's value
+      : `after-${letElement.name}`;                   // Focus on hole AFTER let
+
+    console.log('[ADD-LET] Setting focus to:', newFocus);
+    setFocusedHole(newFocus);
+  }, [focusedHole, rootDefinition, goal]);
 
   const handleDeleteLet = useCallback((id: string) => {
     setLetBindings(prev => prev.filter(l => l.id !== id));
@@ -555,9 +723,93 @@ export function EnhancedProofWorkspace() {
         rule.id
       );
 
-      // Add transformation to proof elements
+      // ====================================================================
+      // NEW: Apply rule to focused hole using equality proof system
+      // ====================================================================
+      if (focusedHole && currentHole && currentHole.tag === 'Hole') {
+        console.log('[RULE-APPLY] FocusedHole:', focusedHole, 'Rule:', rule.displayName);
+
+        // Find the let-binding we're currently working on
+        const activeLet = letBindings.find(l =>
+          l.editorExpanded &&
+          (l.editorMode.tag === 'equality-left' || l.editorMode.tag === 'equality-right')
+        );
+
+        console.log('[RULE-APPLY] Active let:', activeLet?.name, 'Has eqState:', !!activeLet?.equalityProofState);
+
+        if (activeLet?.equalityProofState) {
+          // We're in an equality proof! Apply the equality step
+          console.log('[RULE-APPLY] Applying equality step to hole:', activeLet.equalityProofState.currentHoleId);
+
+          // Convert new expression to TT term
+          const newExprTT = expressionNodeToTTerm(newExpression);
+
+          // Apply the equality step
+          const newState = applyEqualityStep(
+            activeLet.equalityProofState,
+            rule.displayName,
+            newExprTT
+          );
+
+          console.log('[RULE-APPLY] New equality state:', {
+            currentExpr: newState.currentExpr,
+            newHoleId: newState.currentHoleId,
+            isComplete: newState.isComplete
+          });
+
+          // Update the let-binding with new state
+          setLetBindings(prev => prev.map(l =>
+            l.id === activeLet.id
+              ? { ...l, equalityProofState: newState }
+              : l
+          ));
+
+          // Update the root definition
+          // Find the let-binding in the term and update its value
+          const letName = activeLet.name;
+          const newValue = updateLetValueInRootDefinition(
+            rootDefinition.value,
+            letName,
+            newState.proofTerm
+          );
+
+          setRootDefinition({ ...rootDefinition, value: newValue });
+
+          // Update focus to the new hole (or clear if complete)
+          if (newState.isComplete) {
+            console.log('[RULE-APPLY] Equality proof complete!');
+            setFocusedHole(null);
+          } else {
+            console.log('[RULE-APPLY] Updating focus to new hole:', newState.currentHoleId);
+            setFocusedHole(newState.currentHoleId);
+          }
+        } else {
+          // Not an equality proof, use placeholder
+          console.log('[RULE-APPLY] Non-equality rule application, filling hole:', focusedHole);
+
+          const proofTerm = {
+            tag: 'Const' as const,
+            name: `${rule.displayName}_applied`,
+            type: currentHole.type
+          };
+
+          const newValue = fillHoleWith(
+            rootDefinition.value,
+            focusedHole,
+            () => proofTerm
+          );
+
+          setRootDefinition({ ...rootDefinition, value: newValue });
+          setFocusedHole(null);
+        }
+      }
+
+      // ====================================================================
+      // OLD: Add transformation to proof elements (only if new system not active)
+      // ====================================================================
       // If we're in an active proof context (proving a let-claim), add to that claim's proof
-      if (activeProofContext) {
+      // BUT: Only use old system if we're not using the new focused-hole system
+      if (activeProofContext && !focusedHole) {
         setLetBindings(prev => prev.map(l => {
           if (l.id === activeProofContext && l.proofElements) {
             return {
@@ -572,22 +824,22 @@ export function EnhancedProofWorkspace() {
         setLetProofTerms(prev => {
           const currentProof = prev.get(activeProofContext);
           if (currentProof) {
-            console.log('Applying proof step:', rule.displayName, 'to proof term');
+            console.log('[OLD ARCH] Applying proof step:', rule.displayName, 'to proof term');
             const updatedProof = applyProofStep(
               currentProof,
               currentExpression,
               newExpression,
               { name: rule.displayName, id: rule.id, params }
             );
-            console.log('Updated proof term:', updatedProof);
+            console.log('[OLD ARCH] Updated proof term:', updatedProof);
             const newMap = new Map(prev);
             newMap.set(activeProofContext, updatedProof);
             return newMap;
           }
-          console.warn('No current proof found for context:', activeProofContext);
+          // Silently ignore - new system is handling this
           return prev;
         });
-      } else {
+      } else if (!focusedHole) {
         // Otherwise add to global structured proof
         setStructuredProof(prev => ({
           ...prev,
@@ -836,452 +1088,6 @@ export function EnhancedProofWorkspace() {
             focusPath={focusPath}
             onFocusChange={setFocusPath}
           />
-
-          {/* Mathematical Derivation */}
-          <div
-            tabIndex={0}
-            onKeyDown={handleKeyDown}
-            style={{
-              backgroundColor: '#fafbfc',
-              border: '2px solid #e1e8ed',
-              borderRadius: '8px',
-              padding: '20px',
-              minHeight: '400px',
-              maxHeight: '600px',
-              display: 'flex',
-              flexDirection: 'column',
-              outline: 'none'
-            }}
-          >
-            <h4 style={{
-              margin: '0 0 20px 0',
-              color: '#495057',
-              fontSize: '16px',
-              borderBottom: '1px solid #dee2e6',
-              paddingBottom: '8px'
-            }}>
-              🔢 Proof:
-            </h4>
-
-
-            {/* Goal display when proving a claim */}
-            {activeProofContext && (() => {
-              const activeClaim = letBindings.find(l => l.id === activeProofContext);
-              if (activeClaim?.goal) {
-                return (
-                  <div style={{
-                    marginBottom: '16px',
-                    padding: '12px 16px',
-                    backgroundColor: '#fff3cd',
-                    border: '2px solid #ffc107',
-                    borderRadius: '6px'
-                  }}>
-                    <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#856404', marginBottom: '4px' }}>
-                      Goal:
-                    </div>
-                    <div style={{ fontSize: '18px', color: '#856404' }}>
-                      <MathJaxExpressionRenderer expression={activeClaim.goal} />
-                    </div>
-                  </div>
-                );
-              }
-              return null;
-            })()}
-
-            {/* All previous proof steps */}
-            <div ref={proofScrollRef} style={{ overflowY: 'auto', flex: 1 }}>
-              {(() => {
-                // Get proof elements based on active context
-                const proofElements = activeProofContext
-                  ? (letBindings.find(l => l.id === activeProofContext)?.proofElements || [])
-                  : structuredProof.elements;
-
-                return proofElements.length === 0 && !currentExpression ? (
-                  <div style={{
-                    textAlign: 'center',
-                    color: '#6c757d',
-                    padding: '60px 20px',
-                    fontSize: '16px'
-                  }}>
-                    <div style={{ fontSize: '48px', marginBottom: '20px' }}>📝</div>
-                    <div>No proof started yet.</div>
-                    <div style={{ marginTop: '8px' }}>Create a claim in the Context Manager above to start proving!</div>
-                  </div>
-                ) : (
-                  <table style={{ width: '100%' }}>
-                    <tbody>
-                      {proofElements.map((element, index) => {
-                        if (element.type === 'equation') {
-                          const eq = element as EquationElement;
-                          const isChained = elementIsChained(proofElements[index - 1], eq.leftSide);
-
-                          const right = (index === proofElements.length - 1 && currentExpression && eq.rightSide.id === currentExpression.id) ? currentEquationElement : (
-                            <MathJaxExpressionRenderer
-                              expression={eq.rightSide}
-                            />
-                          )
-
-                          return (
-                            <tr key={element.id}>
-                              <td>
-                                <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-end' }}>
-                                  {isChained ? null : (
-                                    <MathJaxExpressionRenderer
-                                      expression={eq.leftSide}
-                                    />
-                                  )}
-                                </div>
-                              </td>
-                              <td><MathJaxExpressionRendererRaw expression={'='} /></td>
-                              <td>
-                                <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'flex-start' }}>
-                                  {right}
-                                </div>
-                              </td>
-                              <td>
-                                <div style={{
-                                  fontSize: '13px',
-                                  color: '#7f8c8d',
-                                  fontStyle: 'italic',
-                                  marginTop: '6px'
-                                }}>
-                                  {eq.justification && `(${eq.justification})`}
-                                </div>
-                              </td>
-                              <td style={{ width: '30px', textAlign: 'right' }}>
-                                {index === proofElements.length - 1 && (
-                                  <button
-                                    onClick={() => deleteProofElement(index)}
-                                    style={{
-                                      padding: '2px 6px',
-                                      backgroundColor: '#dc3545',
-                                      color: 'white',
-                                      border: 'none',
-                                      borderRadius: '3px',
-                                      cursor: 'pointer',
-                                      fontSize: '12px',
-                                      fontWeight: 'bold'
-                                    }}
-                                    title="Undo this step"
-                                  >
-                                    ✕
-                                  </button>
-                                )}
-                              </td>
-                            </tr>
-                          )
-                        } else if (element.type === 'comment') {
-                          return <ProofComment key={element.id} element={element as CommentElement} />;
-                        } else if (element.type === 'let') {
-                          const letElem = element as LetElement;
-                          return (
-                            <tr key={element.id}>
-                              <td colSpan={5} style={{ padding: '12px' }}>
-                                <div style={{
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '8px',
-                                  backgroundColor: '#f0f8ff',
-                                  padding: '8px 12px',
-                                  borderRadius: '6px',
-                                  border: '1px solid #b3d9ff'
-                                }}>
-                                  <span style={{ fontWeight: 'bold', color: '#0066cc' }}>
-                                    let {letElem.name}
-                                  </span>
-                                  {letElem.typeAnnotation && (
-                                    <span style={{ color: '#666' }}>
-                                      : {letElem.typeAnnotation}
-                                    </span>
-                                  )}
-                                  <span>=</span>
-                                  <MathJaxExpressionRenderer
-                                    expression={letElem.value}
-                                    readonly={true}
-                                  />
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        } else if (element.type === 'induction') {
-                          const induction = element as InductionProofElement;
-                          return (
-                            <tr key={element.id}>
-                              <td colSpan={5}>
-                                <div style={{
-                                  margin: '16px 0',
-                                  padding: '16px',
-                                  backgroundColor: '#e8f5e9',
-                                  borderRadius: '8px',
-                                  border: '2px solid #4caf50'
-                                }}>
-                                  <div style={{ marginBottom: '16px' }}>
-                                    <strong style={{ color: '#2e7d32', fontSize: '16px' }}>
-                                      🔄 Proof by Induction on {induction.inductionVariable}
-                                    </strong>
-                                    <div style={{ marginTop: '8px' }}>
-                                      <strong>Statement P({induction.inductionVariable}):</strong>
-                                      <MathJaxExpressionRenderer expression={induction.statement} />
-                                    </div>
-                                  </div>
-
-                                  {/* Base Case */}
-                                  <div style={{
-                                    marginTop: '12px',
-                                    padding: '12px',
-                                    backgroundColor: 'white',
-                                    borderRadius: '4px',
-                                    border: '1px solid #81c784'
-                                  }}>
-                                    <strong style={{ color: '#388e3c' }}>Base Case (n = 1):</strong>
-                                    {!induction.baseCase ? (
-                                      <div style={{ marginTop: '8px' }}>
-                                        <button
-                                          onClick={() => {
-                                            // Initialize base case by substituting n=1
-                                            const baseCaseStatement = substituteVariableInExpression(
-                                              induction.statement,
-                                              induction.inductionVariable,
-                                              { id: crypto.randomUUID(), type: 'literal', value: 1, children: [], raw: '1' }
-                                            );
-
-                                            // Update the induction element with base case
-                                            const updatedElements = [...structuredProof.elements];
-                                            const inductionIndex = updatedElements.findIndex(el => el.id === induction.id);
-                                            if (inductionIndex !== -1) {
-                                              (updatedElements[inductionIndex] as InductionProofElement).baseCase = {
-                                                value: 1,
-                                                proof: [],
-                                                status: 'proving'
-                                              };
-                                              setStructuredProof(prev => ({ ...prev, elements: updatedElements }));
-
-                                              // Set up expression for base case
-                                              setCurrentExpression(baseCaseStatement);
-                                              setFocusPath([]);
-                                              setActiveProofContext(`${induction.id}-base`);
-
-                                              console.log('Setting up base case:', astToString(baseCaseStatement));
-                                            }
-                                          }}
-                                          style={{
-                                            padding: '6px 12px',
-                                            backgroundColor: '#4caf50',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '4px',
-                                            cursor: 'pointer'
-                                          }}
-                                        >
-                                          Start Base Case
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div style={{ marginTop: '8px', fontSize: '14px' }}>
-                                        <div style={{
-                                          padding: '8px',
-                                          backgroundColor: activeProofContext === `${induction.id}-base` ? '#e8f5e9' : 'white',
-                                          borderRadius: '4px',
-                                          border: activeProofContext === `${induction.id}-base` ? '2px solid #4caf50' : '1px solid #ddd'
-                                        }}>
-                                          <strong>Status:</strong> {induction.baseCase.status}
-                                          {activeProofContext !== `${induction.id}-base` && induction.baseCase.status === 'proving' && (
-                                            <button
-                                              onClick={() => {
-                                                // Resume working on base case
-                                                setActiveProofContext(`${induction.id}-base`);
-
-                                                const baseCaseStatement = substituteVariableInExpression(
-                                                  induction.statement,
-                                                  induction.inductionVariable,
-                                                  { id: crypto.randomUUID(), type: 'literal', value: 1, children: [], raw: '1' }
-                                                );
-
-                                                // Resume expression for base case
-                                                console.log('Resume base case:', astToString(baseCaseStatement));
-
-                                                setCurrentExpression(baseCaseStatement);
-                                                setFocusPath([]);
-                                              }}
-                                              style={{
-                                                marginTop: '8px',
-                                                padding: '4px 8px',
-                                                backgroundColor: '#2196F3',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '4px',
-                                                cursor: 'pointer',
-                                                fontSize: '12px'
-                                              }}
-                                            >
-                                              Resume Base Case
-                                            </button>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* Inductive Step */}
-                                  <div style={{
-                                    marginTop: '12px',
-                                    padding: '12px',
-                                    backgroundColor: 'white',
-                                    borderRadius: '4px',
-                                    border: '1px solid #81c784'
-                                  }}>
-                                    <strong style={{ color: '#388e3c' }}>
-                                      Inductive Step (P(n) → P(n+1)):
-                                    </strong>
-                                    {!induction.inductiveStep ? (
-                                      <div style={{ marginTop: '8px' }}>
-                                        <button
-                                          onClick={() => {
-                                            // Initialize inductive step
-                                            const nPlusOne: ExpressionNode = {
-                                              id: crypto.randomUUID(),
-                                              type: 'binop',
-                                              operator: '+',
-                                              children: [
-                                                { id: crypto.randomUUID(), type: 'variable', value: induction.inductionVariable, children: [], raw: induction.inductionVariable },
-                                                { id: crypto.randomUUID(), type: 'literal', value: 1, children: [], raw: '1' }
-                                              ],
-                                              raw: `${induction.inductionVariable} + 1`
-                                            };
-
-                                            const inductiveGoal = substituteVariableInExpression(
-                                              induction.statement,
-                                              induction.inductionVariable,
-                                              nPlusOne
-                                            );
-
-                                            // Update the induction element with inductive step
-                                            const updatedElements = [...structuredProof.elements];
-                                            const inductionIndex = updatedElements.findIndex(el => el.id === induction.id);
-                                            if (inductionIndex !== -1) {
-                                              (updatedElements[inductionIndex] as InductionProofElement).inductiveStep = {
-                                                assumption: induction.statement,
-                                                goal: inductiveGoal,
-                                                proof: [],
-                                                status: 'proving'
-                                              };
-                                              setStructuredProof(prev => ({ ...prev, elements: updatedElements }));
-
-                                              // Add the inductive hypothesis as an assumption
-                                              // Keep the original raw expression for correct display
-                                              const ihExpression = induction.statement.raw || astToString(induction.statement);
-                                              setContext(prev => ({
-                                                ...prev,
-                                                assumptions: [...prev.assumptions, {
-                                                  id: crypto.randomUUID(),
-                                                  name: 'IH',
-                                                  expression: ihExpression,
-                                                  description: 'Inductive Hypothesis: P(n)',
-                                                  introducedBy: 'induction'
-                                                }]
-                                              }));
-
-                                              // Set up expression for inductive step
-                                              setCurrentExpression(inductiveGoal);
-                                              setFocusPath([]);
-                                              setActiveProofContext(`${induction.id}-inductive`);
-                                              console.log('Setting up inductive step:', astToString(inductiveGoal));
-                                            }
-                                          }}
-                                          style={{
-                                            padding: '6px 12px',
-                                            backgroundColor: '#4caf50',
-                                            color: 'white',
-                                            border: 'none',
-                                            borderRadius: '4px',
-                                            cursor: 'pointer'
-                                          }}
-                                        >
-                                          Start Inductive Step
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div style={{ marginTop: '8px', fontSize: '14px' }}>
-                                        <div style={{
-                                          padding: '8px',
-                                          backgroundColor: activeProofContext === `${induction.id}-inductive` ? '#e8f5e9' : 'white',
-                                          borderRadius: '4px',
-                                          border: activeProofContext === `${induction.id}-inductive` ? '2px solid #4caf50' : '1px solid #ddd'
-                                        }}>
-                                          <div><strong>Assumption (IH):</strong> <MathJaxExpressionRenderer expression={induction.inductiveStep.assumption} inline={true} /></div>
-                                          <div style={{ marginTop: '8px' }}><strong>Status:</strong> {induction.inductiveStep.status}</div>
-                                          {activeProofContext !== `${induction.id}-inductive` && induction.inductiveStep.status === 'proving' && (
-                                            <button
-                                              onClick={() => {
-                                                // Resume working on inductive step
-                                                setActiveProofContext(`${induction.id}-inductive`);
-
-                                                const nPlusOne: ExpressionNode = {
-                                                  id: crypto.randomUUID(),
-                                                  type: 'binop',
-                                                  operator: '+',
-                                                  children: [
-                                                    { id: crypto.randomUUID(), type: 'variable', value: induction.inductionVariable, children: [], raw: induction.inductionVariable },
-                                                    { id: crypto.randomUUID(), type: 'literal', value: 1, children: [], raw: '1' }
-                                                  ],
-                                                  raw: `${induction.inductionVariable} + 1`
-                                                };
-
-                                                const inductiveGoal = substituteVariableInExpression(
-                                                  induction.statement,
-                                                  induction.inductionVariable,
-                                                  nPlusOne
-                                                );
-
-                                                // Resume expression for inductive step
-                                                setCurrentExpression(inductiveGoal);
-                                                setFocusPath([]);
-                                                setActiveProofContext(`${induction.id}-inductive`);
-                                                console.log('Resume inductive step:', astToString(inductiveGoal));
-                                              }}
-                                              style={{
-                                                marginTop: '8px',
-                                                padding: '4px 8px',
-                                                backgroundColor: '#2196F3',
-                                                color: 'white',
-                                                border: 'none',
-                                                borderRadius: '4px',
-                                                cursor: 'pointer',
-                                                fontSize: '12px'
-                                              }}
-                                            >
-                                              Resume Inductive Step
-                                            </button>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        }
-                        return null;
-                      })}
-                      {currentExpression && proofElements.length === 0 && (
-                        <tr>
-                          <td colSpan={5}>{currentEquationIsChained ? null : currentEquationElement}</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                );
-              })()}
-            </div>
-            {currentExpression && (
-              <FocusBreadcrumbs
-                expression={currentExpression}
-                focusPath={focusPath}
-                onFocusChange={setFocusPath}
-              />
-            )}
-          </div>
         </div>
 
         {currentExpression && (
@@ -1304,6 +1110,7 @@ export function EnhancedProofWorkspace() {
         />
       )}
 
+
       {/* TT Proof Term Viewer */}
       <div style={{ marginTop: '24px' }}>
         {/* Debug info */}
@@ -1324,6 +1131,7 @@ export function EnhancedProofWorkspace() {
         )}
         <TTViewer
           proofTerm={rootTerm}
+          termDefinition={rootDefinition}
           context={[]}
         />
       </div>

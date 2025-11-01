@@ -2,7 +2,7 @@
 
 export interface ExpressionNode {
   id: string;
-  type: 'equality' | 'inequality' | 'binop' | 'unop' | 'literal' | 'variable' | 'application';
+  type: 'equality' | 'inequality' | 'binop' | 'unop' | 'literal' | 'variable' | 'application' | 'hole';
   value?: string | number;
   operator?: string;
   children: ExpressionNode[];
@@ -53,33 +53,33 @@ export function setNodeAtPath(root: ExpressionNode, path: FocusPath, newNode: Ex
   if (path.length === 0) {
     return newNode;
   }
-  
+
   const newRoot = { ...root, children: [...root.children] };
   let current = newRoot;
-  
+
   for (let i = 0; i < path.length - 1; i++) {
     const index = path[i];
     current.children[index] = { ...current.children[index], children: [...current.children[index].children] };
     current = current.children[index];
   }
-  
+
   const lastIndex = path[path.length - 1];
   current.children[lastIndex] = newNode;
-  
+
   return newRoot;
 }
 
 export function getAllSubexpressionPaths(root: ExpressionNode): Array<{ path: FocusPath; node: ExpressionNode }> {
   const result: Array<{ path: FocusPath; node: ExpressionNode }> = [];
-  
+
   function traverse(node: ExpressionNode, path: FocusPath) {
     result.push({ path: [...path], node });
-    
+
     node.children.forEach((child, index) => {
       traverse(child, [...path, index]);
     });
   }
-  
+
   traverse(root, []);
   return result;
 }
@@ -88,7 +88,7 @@ export function getAllSubexpressionPaths(root: ExpressionNode): Array<{ path: Fo
 export function parseExpressionToAST(expr: string): ExpressionNode {
   const id = crypto.randomUUID();
   expr = expr.trim();
-  
+
   // Handle equality and inequality
   for (const op of ['=', '≠', '<', '>', '≤', '≥']) {
     const index = expr.lastIndexOf(op);
@@ -104,7 +104,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   // Handle binary operations (right-associative parsing)
   for (const op of ['+', '-']) {
     const index = expr.lastIndexOf(op);
@@ -120,7 +120,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   for (const op of ['*', '/']) {
     const index = expr.lastIndexOf(op);
     if (index > 0) {
@@ -135,12 +135,12 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       };
     }
   }
-  
+
   // Handle parentheses
   if (expr.startsWith('(') && expr.endsWith(')')) {
     return parseExpressionToAST(expr.substring(1, expr.length - 1));
   }
-  
+
   // Handle numbers
   if (/^-?\d+(\.\d+)?$/.test(expr)) {
     return {
@@ -151,7 +151,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       raw: expr
     };
   }
-  
+
   // Handle variables
   if (/^[a-zA-Z][a-zA-Z0-9_]*$/.test(expr)) {
     return {
@@ -162,7 +162,7 @@ export function parseExpressionToAST(expr: string): ExpressionNode {
       raw: expr
     };
   }
-  
+
   // Default case
   return {
     id,
@@ -212,12 +212,12 @@ function shouldAddParens(parent: ExpressionNode, child: ExpressionNode): boolean
     '+': 2, '-': 2,
     '*': 3, '/': 3
   };
-  
+
   if (!parent.operator || !child.operator) return false;
-  
+
   const parentPrec = precedence[parent.operator as keyof typeof precedence] || 0;
   const childPrec = precedence[child.operator as keyof typeof precedence] || 0;
-  
+
   return childPrec < parentPrec;
 }
 
@@ -237,7 +237,7 @@ export const FOCUS_RULES: FocusRule[] = [
   },
   {
     id: 'mul_comm',
-    name: 'Multiplication Commutativity', 
+    name: 'Multiplication Commutativity',
     description: 'Change a * b to b * a',
     isApplicableToFocus: (node) => node.type === 'binop' && node.operator === '*',
     applyToFocus: (node) => ({
@@ -252,14 +252,14 @@ export const FOCUS_RULES: FocusRule[] = [
     name: 'Addition Associativity (Left)',
     description: 'Change (a + b) + c to a + (b + c)',
     isApplicableToFocus: (node) => {
-      return node.type === 'binop' && node.operator === '+' && 
-             node.children[0].type === 'binop' && node.children[0].operator === '+';
+      return node.type === 'binop' && node.operator === '+' &&
+        node.children[0].type === 'binop' && node.children[0].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0].children[0];
       const b = node.children[0].children[1];
       const c = node.children[1];
-      
+
       const newRight: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -267,7 +267,7 @@ export const FOCUS_RULES: FocusRule[] = [
         children: [b, c],
         raw: `${astToString(b)} + ${astToString(c)}`
       };
-      
+
       return {
         ...node,
         id: crypto.randomUUID(),
@@ -282,13 +282,13 @@ export const FOCUS_RULES: FocusRule[] = [
     description: 'Change a * (b + c) to a * b + a * c',
     isApplicableToFocus: (node) => {
       return node.type === 'binop' && node.operator === '*' &&
-             node.children[1].type === 'binop' && node.children[1].operator === '+';
+        node.children[1].type === 'binop' && node.children[1].operator === '+';
     },
     applyToFocus: (node) => {
       const a = node.children[0];
       const b = node.children[1].children[0];
       const c = node.children[1].children[1];
-      
+
       const left: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -296,7 +296,7 @@ export const FOCUS_RULES: FocusRule[] = [
         children: [a, b],
         raw: `${astToString(a)} * ${astToString(b)}`
       };
-      
+
       const right: ExpressionNode = {
         id: crypto.randomUUID(),
         type: 'binop',
@@ -304,7 +304,7 @@ export const FOCUS_RULES: FocusRule[] = [
         children: [a, c],
         raw: `${astToString(a)} * ${astToString(c)}`
       };
-      
+
       return {
         id: crypto.randomUUID(),
         type: 'binop',
