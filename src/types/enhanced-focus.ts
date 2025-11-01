@@ -1113,31 +1113,24 @@ export function generateLetName(existingNames: string[]): string {
 }
 
 /**
- * Parse a goal expression to check if it's an equality of the form "A = B".
+ * Check if a goal expression is an equality of the form "A = B".
  * Returns the left and right sides if it is, null otherwise.
  *
- * @param goal - The goal expression to parse
+ * @param goal - The goal expression (already parsed as AST)
  * @returns { left, right } or null if not an equality
  */
-export function parseGoalEquality(goal: string | null): { left: ExpressionNode; right: ExpressionNode } | null {
+export function parseGoalEquality(goal: ExpressionNode | null): { left: ExpressionNode; right: ExpressionNode } | null {
   if (!goal) return null;
 
-  try {
-    const goalExpr = parseExpressionToAST(goal);
-
-    // Check if the goal is an equality
-    if (goalExpr.type === 'equality' && goalExpr.children && goalExpr.children.length === 2) {
-      return {
-        left: goalExpr.children[0],
-        right: goalExpr.children[1]
-      };
-    }
-
-    return null;
-  } catch (error) {
-    // If parsing fails, not a valid equality
-    return null;
+  // Check if the goal is an equality
+  if (goal.type === 'equality' && goal.children && goal.children.length === 2) {
+    return {
+      left: goal.children[0],
+      right: goal.children[1]
+    };
   }
+
+  return null;
 }
 
 // Import rules from separate file

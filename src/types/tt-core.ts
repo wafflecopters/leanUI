@@ -61,6 +61,14 @@ export type TTerm =
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
 
+export function mapTTerm<R>(
+  term: TTerm,
+  matchers: { [K in TTerm['tag']]: (term: Extract<TTerm, { tag: K }>) => R }
+): R {
+  const matcher = matchers[term.tag] as (term: TTerm) => R;
+  return matcher(term);
+}
+
 /**
  * Named variable in context (for debugging/pretty-printing only)
  * Internally we use De Bruijn indices.
@@ -400,6 +408,70 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 // ============================================================================
 // Pretty Printing (De Bruijn to Named Variables)
 // ============================================================================
+
+/**
+ * Terse pretty-printing for TT terms - compact S-expression style
+ * Example: (eq (plus a a) (mul 2 a)) instead of ((a : ℝ) → ...)
+ */
+export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
+  switch (term.tag) {
+    case 'Var':
+      if (term.index < context.length) {
+        return context[context.length - 1 - term.index];
+      }
+      return `_${term.index}`;
+
+    case 'Sort':
+      return term.level === 0 ? 'Prop' : `Type`;
+
+    case 'Const':
+      // Try to extract just the meaningful name from verbose strings
+      return term.name;
+
+    case 'Binder': {
+      const newContext = [term.name, ...context];
+      const body = prettyPrintTerse(term.body, newContext);
+      const domain = prettyPrintTerse(term.domain, context);
+
+      switch (term.binderKind.tag) {
+        case 'BPi':
+          // Check if non-dependent (function type)
+          if (!occursIn(0, term.body)) {
+            return `(${domain} → ${body})`;
+          }
+          return `(Π ${term.name} : ${domain}, ${body})`;
+
+        case 'BLam':
+          return `(λ ${term.name}, ${body})`;
+
+        case 'BLet':
+          const defVal = prettyPrintTerse(term.binderKind.defVal, context);
+          return `(let ${term.name} = ${defVal} in ${body})`;
+      }
+    }
+
+    case 'App': {
+      const fn = prettyPrintTerse(term.fn, context);
+      const arg = prettyPrintTerse(term.arg, context);
+
+      // Get function name for cleaner output
+      const fnName = term.fn.tag === 'Const' ? term.fn.name : fn;
+
+      // Special handling for known operators
+      if (fnName === 'eq' || fnName === 'plus' || fnName === 'mul' || fnName === 'minus') {
+        return `(${fnName} ${fn === fnName ? '' : fn} ${arg})`.replace(/\s+/g, ' ').trim();
+      }
+
+      return `(${fn} ${arg})`;
+    }
+
+    case 'Hole':
+      return '?';
+
+    case 'Annot':
+      return prettyPrintTerse(term.term, context);
+  }
+}
 
 /**
  * Convert a term with De Bruijn indices to a human-readable string

@@ -7,14 +7,15 @@ import {
   parseExpressionToAST,
   generateLetName,
   parseGoalEquality,
-  TermEditorMode
+  TermEditorMode,
+  astToString
 } from '../types/enhanced-focus';
 import { MathJaxExpressionRenderer } from './MathJaxExpressionRenderer';
 
 interface LetManagerProps {
   letBindings: LetElement[];
   hypotheses: Assumption[];
-  goal: string | null;
+  goal: ExpressionNode | null;
   onAddLet: (letElement: LetElement) => void;
   onDeleteLet: (id: string) => void;
   onAddHypothesis: (hypothesis: Assumption) => void;
@@ -23,6 +24,10 @@ interface LetManagerProps {
   onSetGoal: (goal: string) => void;
   onActivateLetEditor?: (letId: string) => void;
   activeLetId?: string | null;
+  // Proof workspace state for the active let
+  currentExpression?: ExpressionNode | null;
+  focusPath?: number[];
+  onFocusChange?: (path: number[]) => void;
 }
 
 export function LetManager({
@@ -36,12 +41,15 @@ export function LetManager({
   onUpdateHypothesis,
   onSetGoal,
   onActivateLetEditor,
-  activeLetId
+  activeLetId,
+  currentExpression,
+  focusPath = [],
+  onFocusChange
 }: LetManagerProps) {
   const [showAddLet, setShowAddLet] = useState(false);
   const [showAddHypothesis, setShowAddHypothesis] = useState(false);
   const [showEditGoal, setShowEditGoal] = useState(false);
-  const [goalInput, setGoalInput] = useState(goal || '');
+  const [goalInput, setGoalInput] = useState(goal ? astToString(goal) : '');
   const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null);
   const [editingHypothesisValue, setEditingHypothesisValue] = useState('');
   const [letName, setLetName] = useState('');
@@ -571,7 +579,7 @@ export function LetManager({
           <h4 style={{ margin: 0, color: '#666' }}>Goal</h4>
           <button
             onClick={() => {
-              setGoalInput(goal || '');
+              setGoalInput(goal ? astToString(goal) : '');
               setShowEditGoal(!showEditGoal);
             }}
             style={{
@@ -658,15 +666,7 @@ export function LetManager({
             alignItems: 'center'
           }}>
             <div style={{ flex: 1, fontSize: '16px', color: '#856404' }}>
-              {(() => {
-                try {
-                  const goalExpr = parseExpressionToAST(goal);
-                  return <MathJaxExpressionRenderer expression={goalExpr} readonly={true} />;
-                } catch (error) {
-                  // If parsing fails, show as plain text
-                  return <span style={{ fontFamily: 'monospace' }}>{goal}</span>;
-                }
-              })()}
+              <MathJaxExpressionRenderer expression={goal} readonly={true} />
             </div>
           </div>
         )}
@@ -986,64 +986,77 @@ export function LetManager({
                     {(letBinding.editorMode.tag === 'equality-left' || letBinding.editorMode.tag === 'equality-right') && (
                       <div>
                         <div style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
+                          fontSize: '13px',
+                          fontWeight: 'bold',
+                          color: '#17a2b8',
                           marginBottom: '12px'
                         }}>
-                          <div style={{
-                            fontSize: '13px',
-                            fontWeight: 'bold',
-                            color: '#17a2b8'
-                          }}>
-                            Equality Chain (starting from {letBinding.editorMode.tag === 'equality-left' ? 'left' : 'right'})
-                          </div>
-                          {onActivateLetEditor && (
-                            <button
-                              onClick={() => onActivateLetEditor(letBinding.id)}
-                              style={{
-                                padding: '4px 12px',
-                                backgroundColor: activeLetId === letBinding.id ? '#52c41a' : '#1890ff',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontSize: '12px',
-                                fontWeight: 'bold'
-                              }}
-                            >
-                              {activeLetId === letBinding.id ? '✓ Active' : 'Edit in Workspace →'}
-                            </button>
-                          )}
+                          Proof (starting from {letBinding.editorMode.tag === 'equality-left' ? 'left' : 'right'})
                         </div>
-                        {letBinding.proofElements && letBinding.proofElements.length > 0 ? (
-                          <div>
-                            {letBinding.proofElements.map((element: any, idx: number) => (
-                              <div key={idx} style={{
-                                padding: '8px',
-                                backgroundColor: '#fff',
-                                border: '1px solid #dee2e6',
-                                borderRadius: '4px',
-                                marginBottom: '8px'
-                              }}>
-                                {element.type === 'equation' && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+                        {/* Inline proof workspace for this let-binding */}
+                        {activeLetId === letBinding.id ? (
+                          <table style={{ width: '100%', marginBottom: '8px' }}>
+                            <tbody>
+                              {/* Render completed proof steps */}
+                              {letBinding.proofElements && letBinding.proofElements.map((element: any, idx: number) => {
+                                if (element.type === 'equation') {
+                                  const isLastStep = idx === letBinding.proofElements!.length - 1;
+                                  const showLeftSide = idx === 0; // Only show left side on first equation
+
+                                  return (
+                                    <tr key={element.id || idx}>
+                                      <td style={{ textAlign: 'right', paddingRight: '12px', verticalAlign: 'top' }}>
+                                        {showLeftSide && (
+                                          <MathJaxExpressionRenderer
+                                            expression={element.leftSide}
+                                            readonly={true}
+                                          />
+                                        )}
+                                      </td>
+                                      <td style={{ paddingRight: '8px', verticalAlign: 'top' }}>=</td>
+                                      <td style={{ verticalAlign: 'top' }}>
+                                        {/* If this is the last step and we're editing, show interactive version */}
+                                        {isLastStep && currentExpression && element.rightSide?.id === currentExpression.id ? (
+                                          <MathJaxExpressionRenderer
+                                            expression={currentExpression}
+                                            focusPath={focusPath}
+                                            onFocusChange={onFocusChange}
+                                            isActive={true}
+                                            readonly={false}
+                                          />
+                                        ) : (
+                                          <MathJaxExpressionRenderer
+                                            expression={element.rightSide}
+                                            readonly={true}
+                                          />
+                                        )}
+                                      </td>
+                                      <td style={{ paddingLeft: '12px', fontSize: '13px', color: '#7f8c8d', fontStyle: 'italic' }}>
+                                        {element.justification && `(${element.justification})`}
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+                                return null;
+                              })}
+
+                              {/* Current expression being edited (if no steps yet or new step) */}
+                              {currentExpression && (!letBinding.proofElements || letBinding.proofElements.length === 0) && (
+                                <tr>
+                                  <td colSpan={4}>
                                     <MathJaxExpressionRenderer
-                                      expression={element.leftSide || element.expression}
-                                      readonly={true}
+                                      expression={currentExpression}
+                                      focusPath={focusPath}
+                                      onFocusChange={onFocusChange}
+                                      isActive={true}
+                                      readonly={false}
                                     />
-                                    <span style={{ color: '#666' }}>=</span>
-                                    {element.rightSide && (
-                                      <MathJaxExpressionRenderer
-                                        expression={element.rightSide}
-                                        readonly={true}
-                                      />
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
                         ) : (
                           <div style={{
                             padding: '16px',
@@ -1053,11 +1066,12 @@ export function LetManager({
                             textAlign: 'center',
                             color: '#6c757d',
                             fontSize: '12px',
-                            fontStyle: 'italic'
-                          }}>
-                            {activeLetId === letBinding.id
-                              ? 'Use the Proof Workspace below to build your proof...'
-                              : 'Click "Edit in Workspace →" to start building the proof'}
+                            fontStyle: 'italic',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => onActivateLetEditor && onActivateLetEditor(letBinding.id)}
+                          >
+                            Click here to start editing this proof...
                           </div>
                         )}
                       </div>

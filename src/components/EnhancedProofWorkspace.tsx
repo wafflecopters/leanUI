@@ -18,7 +18,6 @@ import {
   InductionProofElement,
   substituteVariableInExpression,
   LetElement,
-  createLetElement,
   parseExpressionToAST
 } from '../types/enhanced-focus';
 import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
@@ -30,9 +29,9 @@ import { TTViewer } from './TTViewer';
 import { TTerm, createRootProofTerm, mkProp } from '../types/tt-core';
 import {
   LetProofTerm,
-  createEqualityProofTerm,
   buildFullProofTerm,
-  applyProofStep
+  applyProofStep,
+  expressionNodeToTTerm
 } from '../types/tt-bridge';
 
 interface EnhancedProofStep {
@@ -253,7 +252,7 @@ export function EnhancedProofWorkspace() {
   const [letBindings, setLetBindings] = useState<LetElement[]>([]);
 
   // State for goal
-  const [goal, setGoal] = useState<string | null>(null);
+  const [goal, setGoal] = useState<ExpressionNode | null>(null);
 
   // Root TT term - the unified proof term model
   const [rootTerm, setRootTerm] = useState<TTerm>(() => {
@@ -286,8 +285,8 @@ export function EnhancedProofWorkspace() {
       return [h.name, typeTerm];
     });
 
-    // Convert goal string to TT term
-    const goalTerm = goal ? { tag: 'Const', name: goal, type: mkProp() } as TTerm : mkProp();
+    // Convert goal ExpressionNode to TT term properly
+    const goalTerm = goal ? expressionNodeToTTerm(goal) : mkProp();
 
     // Create updated root term
     const newRootTerm = createRootProofTerm(ttHypotheses, goalTerm, 'proof', []);
@@ -393,11 +392,10 @@ export function EnhancedProofWorkspace() {
   }, []);
 
   const handleSetGoal = useCallback((goalStr: string) => {
-    setGoal(goalStr);
-
-    // Parse goal to find unbound variables and create hypotheses
+    // Parse goal to AST immediately
     try {
       const goalExpr = parseExpressionToAST(goalStr);
+      setGoal(goalExpr);
       const unboundVars = new Set<string>();
 
       // Reserved keywords in type theory that should not be treated as variables
@@ -438,7 +436,9 @@ export function EnhancedProofWorkspace() {
         handleAddHypothesis(hypothesis);
       });
     } catch (error) {
-      console.warn('Could not parse goal for unbound variable extraction:', error);
+      console.warn('Could not parse goal:', error);
+      // On error, set goal to null
+      setGoal(null);
     }
 
     // TODO: When we have a root TT term, update it using setGoalInRoot()
@@ -832,6 +832,9 @@ export function EnhancedProofWorkspace() {
             onSetGoal={handleSetGoal}
             onActivateLetEditor={handleActivateLetEditor}
             activeLetId={activeProofContext}
+            currentExpression={currentExpression}
+            focusPath={focusPath}
+            onFocusChange={setFocusPath}
           />
 
           {/* Mathematical Derivation */}
@@ -1388,43 +1391,43 @@ function RulesPanel({
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {Object.keys(rulesByCategory).length > 0 ? (
           Object.entries(rulesByCategory).map(([category, rules]) => (
-          <div key={category} style={{ marginBottom: '20px' }}>
-            <h4 style={{
-              margin: '0 0 12px 0',
-              fontSize: '14px',
-              textTransform: 'capitalize',
-              color: '#666',
-              borderBottom: '1px solid #dee2e6',
-              paddingBottom: '4px'
-            }}>
-              {category} Rules ({rules.length})
-            </h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {rules.map(rule => (
-                <EnhancedRuleApplication
-                  key={`${rule.id}${rule.isReverse ? '-reverse' : ''}`}
-                  rule={rule}
-                  focusedNode={focusedNode}
-                  rootExpression={currentExpression}
-                  context={context}
-                  onApply={addStep}
-                />
-              ))}
+            <div key={category} style={{ marginBottom: '20px' }}>
+              <h4 style={{
+                margin: '0 0 12px 0',
+                fontSize: '14px',
+                textTransform: 'capitalize',
+                color: '#666',
+                borderBottom: '1px solid #dee2e6',
+                paddingBottom: '4px'
+              }}>
+                {category} Rules ({rules.length})
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {rules.map(rule => (
+                  <EnhancedRuleApplication
+                    key={`${rule.id}${rule.isReverse ? '-reverse' : ''}`}
+                    rule={rule}
+                    focusedNode={focusedNode}
+                    rootExpression={currentExpression}
+                    context={context}
+                    onApply={addStep}
+                  />
+                ))}
+              </div>
             </div>
+          ))
+        ) : (
+          <div style={{
+            padding: '16px',
+            backgroundColor: '#fff3cd',
+            borderRadius: '6px',
+            color: '#856404',
+            fontStyle: 'italic',
+            textAlign: 'center'
+          }}>
+            Click on part of the expression to see available rules
           </div>
-        ))
-      ) : (
-        <div style={{
-          padding: '16px',
-          backgroundColor: '#fff3cd',
-          borderRadius: '6px',
-          color: '#856404',
-          fontStyle: 'italic',
-          textAlign: 'center'
-        }}>
-          Click on part of the expression to see available rules
-        </div>
-      )}
+        )}
       </div>
     </div>
   );
