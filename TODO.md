@@ -1,133 +1,172 @@
-# LeanUI Development TODO
+# TODO
 
-## Current Priority: Architectural Shift to Proper Lean Integration
+## ✅ Recently Completed
 
-### Immediate Tasks
-- [x] Fix TypeScript compilation errors (completed)
-- [x] Implement induction proof workflow with child statement generation (completed)
-  - [x] Create base case and inductive case as child let statements
-  - [x] Add inductive hypothesis to inductive case
-  - [x] Display local hypotheses in UI
-- [ ] Replace custom parseExpressionToAST with proper Lean term parsing
-- [ ] Implement `d/dx (c f(x))` as proper Lean term with assumption `f: R->R`
-- [ ] Add AST debug panel near the focus window
-- [ ] Research Lean 4 integration options for web applications
+### Type Hole System
+- [x] Add `typeHoleId` to `Assumption` interface
+- [x] Create type holes when parsing goals with unbound variables
+- [x] Update TT term construction to use type holes instead of assuming `Prop`
+- [x] Add `typeContext` parameter to `expressionNodeToTTerm`
+- [x] Pass type context through all recursive calls
+- [x] Update call sites to build and pass type context
+- [x] Write comprehensive tests for type hole system
+- [x] Document type hole design in TYPE-HOLES-DESIGN.md
 
-### Core Architecture Changes Needed
+### Code Cleanup
+- [x] Delete fix documentation (.md files documenting individual fixes)
+- [x] Keep only architecture/design documentation
+- [x] Create ARCHITECTURE-OVERVIEW.md for high-level system understanding
 
-#### 1. Lean Integration Research
-- [ ] Investigate Lean 4 web integration options
-  - [ ] Lean 4 WASM compilation
-  - [ ] Lean Language Server Protocol (LSP) integration
-  - [ ] Online Lean compiler APIs
-- [ ] Determine best approach for parsing Lean syntax in browser
+### Bug Fixes
+- [x] Add `mkConst` helper function to tt-core.ts
+- [x] Add `mkSort` helper (already existed as `mkType`)
+- [x] Remove global hole selection UI
+- [x] Add 'hole' type to ExpressionNode
+- [x] Support 'hole' type in expressionNodeToTTerm conversion
+- [x] Support 'hole' type in FocusedExpressionRenderer
 
-#### 2. Expression System Overhaul
-- [ ] Current: `parseExpressionToAST('deriv (lambda x, integral a x f)')`
-- [ ] Target: Proper Lean term parsing of `d/dx (c * f(x))`
-- [ ] Replace custom AST with Lean's native AST representation
-- [ ] Update syntax mapping to work with Lean AST
+## 🚧 In Progress
 
-#### 3. Mathematical Context Updates
-- [ ] Update example to: assumption `f: ℝ → ℝ` and term `d/dx (c * f(x))`
-- [ ] Ensure proper Lean syntax for types (`ℝ → ℝ` vs `R->R`)
-- [ ] Implement Lean type checking integration
+### Hole Instantiation Engine
+**Status**: Design complete, implementation pending
 
-#### 4. UI Enhancements
-- [ ] Add AST debug panel component
-- [ ] Position debug panel near focus window
-- [ ] Display raw Lean AST structure
-- [ ] Show type information from Lean type checker
+When a user instantiates a type hole (e.g., `?type_a := ℝ`), the system should:
+1. Find all occurrences of the hole throughout the term
+2. Replace each occurrence with the instantiated value
+3. Simplify/normalize as needed
+4. Update UI to reflect changes
 
-#### 5. Proof System Foundation
-- [ ] Set up goal: prove `d/dx (c * f(x)) = c * df/dx`
-- [ ] Design architecture for dual proof representation:
-  - [ ] Type-checked Lean proof
-  - [ ] Human-readable proof (possibly via annotated Lean comments)
-- [ ] Enable "mess around" functionality for mathematical exploration
+**Files to implement**:
+- `tt-typecheck.ts`: Add `instantiateHole(term, holeId, value)` function
+- `EnhancedProofWorkspace.tsx`: Add UI for hole instantiation
+- `tt-core.ts`: May need normalization/simplification functions
 
-### Files to Modify
+**Tests needed**:
+- Instantiate type hole in Pi type
+- Propagation to all term occurrences
+- Nested hole instantiation
 
-#### Core Components
-- `src/components/EnhancedProofWorkspace.tsx` - Update to use Lean terms
-- `src/components/MathJaxExpressionRenderer.tsx` - Integrate with Lean AST
-- `src/config/syntax-mapping.ts` - Adapt to Lean AST structure
-- `src/types/enhanced-focus.ts` - Add Lean-specific types
+## 📋 Backlog
 
-#### New Components Needed
-- `src/components/ASTDebugPanel.tsx` - Show Lean AST structure
-- `src/services/lean-integration.ts` - Handle Lean parsing/type checking
-- `src/types/lean-types.ts` - TypeScript types for Lean structures
+### High Priority
 
-### Research Findings (Updated)
+#### Better Equality Type Inference
+Currently `mkEq` hardcodes `TT_CONSTANTS.Real` as the type parameter. Should infer from arguments.
 
-#### Lean 4 Web Integration Status (2025)
-- **WASM Status**: Lean 4 doesn't yet have client-side WASM support like Lean 3 did
-- **Current Best Practice**: Server-side Lean execution with web frontend via LSP/HTTP APIs
-- **Reference Implementation**: lean4web uses TypeScript client/server architecture
-- **Active Web Interface**: live.lean-lang.org uses React frontend with remote server
-- **LSP Integration**: Lean 4 has built-in LSP server support for modern editor integration
+```typescript
+// Current:
+return mkApp(mkApp(mkApp(eqConst, TT_CONSTANTS.Real), eqLeft), eqRight);
 
-#### Recommended Implementation Strategy
-1. **Phase 1**: Create mock Lean service for immediate development
-   - Proper Lean syntax parsing for `d/dx (c * f(x))` with `f: ℝ → ℝ`
-   - Basic type checking simulation
-   - AST debug panel integration
-2. **Phase 2**: Integrate with server-side Lean execution
-   - Follow lean4web architecture patterns
-   - Implement LSP or HTTP API communication
-   - Add real type checking and proof validation
+// Should be:
+const inferredType = getTypeOf(eqLeft);  // Could be a type hole!
+return mkApp(mkApp(mkApp(eqConst, inferredType), eqLeft), eqRight);
+```
 
-### Research Notes
-- Current system uses custom parsing: not leveraging Lean's parsing
-- lean4web shows TypeScript/React stack works well for Lean integration
-- Server-side execution provides security and performance benefits
-- Must maintain MathJax rendering for beautiful mathematical display
+#### Proof Completion UI
+Each let-binding's proof editor should show when the proof is complete (no holes remain).
 
-### Long-term Vision
-- Interactive theorem proving workspace
-- Real-time Lean type checking
-- Side-by-side formal and informal proofs
-- Mathematical expression manipulation with proof state tracking
+- Show "✓ Proof complete" indicator
+- Disable rule application when complete
+- Show remaining holes count
+
+#### Rule Suggestion System
+Based on current goal/hole type, suggest applicable rules.
+
+- Pattern match against goal structure
+- Filter rules by applicability
+- Show in dropdown/sidebar
+
+### Medium Priority
+
+#### Term Simplification
+After proof steps, simplify terms (e.g., `1 * x → x`).
+
+- Implement basic rewrite rules
+- Apply automatically or on demand
+- Show before/after
+
+#### Export to Lean 4
+Convert TT terms to Lean 4 syntax for verification.
+
+- Map TT terms to Lean syntax
+- Handle De Bruijn → named variables
+- Include imports and context
+
+#### Proof Search
+Automatically find proof for simple goals.
+
+- Implement basic tactics (reflexivity, symmetry, etc.)
+- Try rule combinations
+- Show proof trace
+
+### Low Priority
+
+#### Better Error Messages
+When type checking fails, show helpful messages.
+
+- Point to specific subterm
+- Suggest fixes
+- Show expected vs actual types
+
+#### Undo/Redo
+Track proof state history.
+
+- Save snapshots after each step
+- Navigate backward/forward
+- Show history timeline
+
+#### Proof Serialization
+Save/load proofs.
+
+- JSON format for proof state
+- Include metadata (author, date, etc.)
+- Import/export
+
+## 🔬 Research / Exploration
+
+### Tactic System
+High-level proof construction (like Lean's `ring`, `linarith`).
+
+- Define tactic language
+- Implement basic tactics
+- Extensible architecture
+
+### Visual Proof Editor
+Graphical proof tree manipulation.
+
+- Node-based interface
+- Drag-and-drop rules
+- Automatic layout
+
+### Collaborative Proving
+Multiple users working on same proof.
+
+- Real-time synchronization
+- Conflict resolution
+- Change attribution
+
+## 📝 Documentation Needs
+
+- User guide / tutorial
+- API documentation for types
+- Contributing guide
+- Example proofs
+
+## 🐛 Known Issues
+
+1. **Equality type parameter**: Hardcoded to `Real`, should infer
+2. **No hole instantiation UI**: Can't actually instantiate type holes yet
+3. **Focus path edge cases**: Some expression structures may not navigate correctly
+4. **Memory**: Large proof terms could cause performance issues
+
+## 🎯 Next Steps (Immediate)
+
+1. Test the type hole system in the UI (manual testing)
+2. Implement `instantiateHole` function
+3. Add UI for type hole instantiation
+4. Fix equality type inference to use inferred types
+5. Add proof completion indicators
 
 ---
 
-## Recent Implementations
-
-### Induction Proof Workflow (Completed 2025-10)
-
-**Feature**: Complete induction proof workflow with child statement generation
-
-**Implementation Details**:
-1. **Starting an Induction Proof**:
-   - User creates a let statement marked as a claim with proof method "induction on ℕ"
-   - User clicks "Start Proof" button
-   - System prompts for induction variable (auto-detected from common patterns: n, k, m, i)
-   - System prompts for base case value (default: 1)
-
-2. **Child Statement Generation**:
-   - System creates two child let statements as siblings (not nested):
-     - **Base Case** (`claim_base`): P(base_value)
-     - **Inductive Case** (`claim_inductive`): P(k+1)
-   - Both are marked as claims with proof method "equality"
-   - Original claim status updated to "in-progress"
-
-3. **Inductive Hypothesis**:
-   - Created as P(k) where k is the inductive variable
-   - Stored in `inductiveCaseLet.localHypotheses`
-   - Displayed in UI within the inductive case let binding
-   - Automatically added to proof context when starting proof of inductive case
-
-4. **Proof Flow**:
-   - User proves base case independently (click "Start Proof" on base case)
-   - User proves inductive case independently (click "Start Proof" on inductive case)
-   - Inductive hypothesis available as assumption during inductive case proof
-   - When both cases complete, original claim marked as "completed"
-
-**Files Modified**:
-- `src/types/enhanced-focus.ts`: Added `localHypotheses` to `LetElement`
-- `src/components/EnhancedProofWorkspace.tsx`: Implemented child statement creation logic
-- `src/components/LetManager.tsx`: Added UI for displaying local hypotheses
-- `src/test-induction.ts`: Updated test documentation
-
-**Test File**: `src/test-induction.ts` demonstrates the complete workflow
+**Last Updated**: 2025-11-02

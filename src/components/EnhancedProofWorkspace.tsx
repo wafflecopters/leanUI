@@ -12,21 +12,15 @@ import {
   StructuredProof,
   createTransformationEquationElement,
   createCommentElement,
-  CommentElement,
-  EquationElement,
-  ProofElement,
-  InductionProofElement,
-  substituteVariableInExpression,
   LetElement,
   parseExpressionToAST
 } from '../types/enhanced-focus';
-import { FocusBreadcrumbs } from './FocusedExpressionRenderer';
-import { MathJaxExpressionRenderer, MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
+import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { ExpressionInput } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkEq } from '../types/tt-core';
+import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkEq, mkType, mkHole, isNameUsed } from '../types/tt-core';
 import {
   LetProofTerm,
   buildFullProofTerm,
@@ -35,7 +29,7 @@ import {
   startEqualityProof,
   applyEqualityStep
 } from '../types/tt-bridge';
-import { extractHoles, findHole, fillHoleWith, fillHole } from '../types/tt-typecheck';
+import { findHole, fillHoleWith } from '../types/tt-typecheck';
 
 interface EnhancedProofStep {
   id: string;
@@ -296,10 +290,17 @@ export function EnhancedProofWorkspace() {
 
       if (match) {
         const typeStr = match[2].trim();
-        // For now, treat type as a constant (in real system, would parse properly)
-        if (typeStr === '?') {
+        // Check if this is a type hole reference (e.g., "?type_a")
+        if (typeStr.startsWith('?')) {
+          // Create a type hole: the hole's type is Type_1
+          const typeHoleId = typeStr.substring(1); // Remove the '?'
+          typeTerm = mkHole(typeHoleId, mkType(1), []);
+        } else if (typeStr === 'Type') {
+          typeTerm = mkType(1);
+        } else if (typeStr === 'Prop') {
           typeTerm = mkProp();
         } else {
+          // Named type (e.g., "ℝ")
           typeTerm = { tag: 'Const', name: typeStr, type: mkProp() };
         }
       } else {
@@ -310,8 +311,14 @@ export function EnhancedProofWorkspace() {
       return [h.name, typeTerm];
     });
 
-    // Convert goal ExpressionNode to TT term properly
-    const goalTerm = goal ? expressionNodeToTTerm(goal) : mkProp();
+    // Build type context from hypotheses
+    const typeContext = new Map<string, TTerm>();
+    ttHypotheses.forEach(([name, type]) => {
+      typeContext.set(name, type);
+    });
+
+    // Convert goal ExpressionNode to TT term properly, passing type context
+    const goalTerm = goal ? expressionNodeToTTerm(goal, new Map(), typeContext) : mkProp();
 
     // OLD: Create updated root term (let-wrapper)
     const newRootTerm = createRootProofTerm(ttHypotheses, goalTerm, 'proof', []);
@@ -505,6 +512,50 @@ export function EnhancedProofWorkspace() {
   }, [focusedHole, rootDefinition, goal]);
 
   const handleDeleteLet = useCallback((id: string) => {
+    // Find the let-binding to delete
+    const letBinding = letBindings.find(l => l.id === id);
+    if (!letBinding) return;
+
+    const varName = letBinding.name;
+
+    // Check if this let-binding is used in the goal
+    if (goal) {
+      const typeContext = new Map<string, TTerm>();
+      // Build type context (simplified - we'd need full context for complete check)
+      const goalTerm = expressionNodeToTTerm(goal, new Map(), typeContext);
+      if (isNameUsed(varName, goalTerm)) {
+        alert(`Cannot delete let-binding "${varName}": it is used in the goal expression`);
+        return;
+      }
+    }
+
+    // Check if used in other let-bindings
+    for (const otherLet of letBindings) {
+      if (otherLet.id === id) continue; // Skip self
+
+      // Check the name itself - if another let has the same name, it depends on this one
+      if (otherLet.name === varName) continue; // Same name is OK (shadowing)
+
+      // Check if the value expression uses this name
+      // For now, do a simple string check on the raw expression
+      if (otherLet.value.raw.includes(varName)) {
+        alert(`Cannot delete let-binding "${varName}": it is used in "${otherLet.name}"`);
+        return;
+      }
+    }
+
+    // Check if used in root definition
+    if (isNameUsed(varName, rootDefinition.type)) {
+      alert(`Cannot delete let-binding "${varName}": it is used in the theorem type`);
+      return;
+    }
+
+    if (isNameUsed(varName, rootDefinition.value)) {
+      alert(`Cannot delete let-binding "${varName}": it is used in the proof term`);
+      return;
+    }
+
+    // Safe to delete
     setLetBindings(prev => prev.filter(l => l.id !== id));
 
     // Also remove from structured proof
@@ -512,7 +563,7 @@ export function EnhancedProofWorkspace() {
       ...prev,
       elements: prev.elements.filter(e => e.id !== id)
     }));
-  }, []);
+  }, [letBindings, goal, rootDefinition]);
 
   const handleAddHypothesis = useCallback((hypothesis: Assumption) => {
     setContext(prev => ({
@@ -530,6 +581,48 @@ export function EnhancedProofWorkspace() {
   }, []);
 
   const handleDeleteHypothesis = useCallback((id: string) => {
+    // Find the hypothesis to delete
+    const hypothesis = context.assumptions.find(h => h.id === id);
+    if (!hypothesis) return;
+
+    const varName = hypothesis.name;
+
+    // Build type context for checking
+    const typeContext = new Map<string, TTerm>();
+    context.assumptions.forEach(h => {
+      if (h.id === id) return; // Skip the one we're deleting
+      const match = h.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
+      if (match) {
+        const name = match[1].trim();
+        const typeStr = match[2].trim();
+        if (typeStr.startsWith('?')) {
+          const typeHoleId = typeStr.substring(1);
+          typeContext.set(name, mkHole(typeHoleId, mkType(1), []));
+        }
+      }
+    });
+
+    // Check if variable is used in the goal
+    if (goal) {
+      const goalTerm = expressionNodeToTTerm(goal, new Map(), typeContext);
+      if (isNameUsed(varName, goalTerm)) {
+        alert(`Cannot delete hypothesis "${varName}": it is used in the goal expression`);
+        return;
+      }
+    }
+
+    // Check if used in root definition
+    if (isNameUsed(varName, rootDefinition.type)) {
+      alert(`Cannot delete hypothesis "${varName}": it is used in the theorem type`);
+      return;
+    }
+
+    if (isNameUsed(varName, rootDefinition.value)) {
+      alert(`Cannot delete hypothesis "${varName}": it is used in the proof term`);
+      return;
+    }
+
+    // Safe to delete
     setContext(prev => ({
       ...prev,
       assumptions: prev.assumptions.filter(a => a.id !== id)
@@ -542,7 +635,7 @@ export function EnhancedProofWorkspace() {
         assumptions: prev.metadata.assumptions.filter(a => a.id !== id)
       }
     }));
-  }, []);
+  }, [context, goal, rootDefinition]);
 
   const handleUpdateHypothesis = useCallback((id: string, updatedHypothesis: Assumption) => {
     setContext(prev => ({
@@ -594,12 +687,14 @@ export function EnhancedProofWorkspace() {
 
       // Create hypotheses for each unbound variable
       unboundVars.forEach(varName => {
+        const typeHoleId = `type_${varName}`;
         const hypothesis: Assumption = {
           id: crypto.randomUUID(),
           name: varName,
-          expression: `${varName} : ?`,
-          description: `Auto-generated from goal: ${varName} is unbound`,
-          introducedBy: 'auto'
+          expression: `${varName} : ?${typeHoleId}`,
+          description: `Auto-generated from goal: ${varName} has unknown type ?${typeHoleId}`,
+          introducedBy: 'auto',
+          typeHoleId: typeHoleId  // Track the type hole ID
         };
         handleAddHypothesis(hypothesis);
       });
@@ -630,62 +725,8 @@ export function EnhancedProofWorkspace() {
     }
   }, [letBindings]);
 
-  // Keyboard navigation handler
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!currentExpression) return;
-
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      // Move focus up to parent node (remove last element from focus path)
-      if (focusPath.length > 0) {
-        const newFocusPath = focusPath.slice(0, -1);
-        setFocusPath(newFocusPath);
-        console.log('Moved focus up to parent, new path:', newFocusPath);
-      } else {
-        console.log('Already at root, cannot move up');
-      }
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      // Move focus down to first child
-      const focusedNode = getNodeAtPath(currentExpression, focusPath);
-      if (focusedNode && focusedNode.children && focusedNode.children.length > 0) {
-        const newFocusPath = [...focusPath, 0];
-        setFocusPath(newFocusPath);
-        console.log('Moved focus down to first child, new path:', newFocusPath);
-      } else {
-        console.log('No children to move into');
-      }
-    } else if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      // Move to previous sibling (decrement last index in path)
-      if (focusPath.length > 0) {
-        const lastIndex = focusPath[focusPath.length - 1];
-        if (lastIndex > 0) {
-          const newFocusPath = [...focusPath.slice(0, -1), lastIndex - 1];
-          setFocusPath(newFocusPath);
-          console.log('Moved focus to previous sibling, new path:', newFocusPath);
-        } else {
-          console.log('Already at first sibling (index 0)');
-        }
-      }
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      // Move to next sibling (increment last index in path)
-      if (focusPath.length > 0) {
-        const parentPath = focusPath.slice(0, -1);
-        const parentNode = parentPath.length > 0 ? getNodeAtPath(currentExpression, parentPath) : currentExpression;
-        const lastIndex = focusPath[focusPath.length - 1];
-
-        if (parentNode && parentNode.children && lastIndex < parentNode.children.length - 1) {
-          const newFocusPath = [...focusPath.slice(0, -1), lastIndex + 1];
-          setFocusPath(newFocusPath);
-          console.log('Moved focus to next sibling, new path:', newFocusPath);
-        } else {
-          console.log('Already at last sibling');
-        }
-      }
-    }
-  }, [focusPath, currentExpression]);
+  // Keyboard navigation handler (unused - reserved for future keyboard shortcuts)
+  // const handleKeyDown = useCallback((e: React.KeyboardEvent) => { ... }, []);
 
   const addStep = useCallback((rule: any, params?: any) => {
     if (!focusedNode || !currentExpression) {
@@ -883,51 +924,8 @@ export function EnhancedProofWorkspace() {
   }, []);
 
 
-  const deleteProofElement = useCallback((index: number) => {
-    if (index === 0) return; // Don't delete the first element
-
-    // Check if we're in an active proof context
-    if (activeProofContext) {
-      // Delete from the let-binding's proof elements
-      setLetBindings(prev => prev.map(l => {
-        if (l.id === activeProofContext && l.proofElements) {
-          const newProofElements = l.proofElements.filter((_, i) => i !== index);
-
-          // Update current expression to the previous step's right side
-          if (index === l.proofElements.length - 1 && newProofElements.length > 0) {
-            const previousElement = newProofElements[newProofElements.length - 1];
-            if (previousElement.type === 'equation') {
-              const eq = previousElement as EquationElement;
-              setCurrentExpression(eq.rightSide);
-            }
-          } else if (newProofElements.length === 0 && l.goal) {
-            // If we deleted all steps, go back to the starting expression (left side of equality)
-            if (l.value.type === 'equality' && l.value.children.length === 2) {
-              setCurrentExpression(l.value.children[0]);
-            }
-          }
-
-          return { ...l, proofElements: newProofElements };
-        }
-        return l;
-      }));
-    } else {
-      // Delete from global structured proof
-      setStructuredProof(prev => ({
-        ...prev,
-        elements: prev.elements.filter((_, i) => i !== index)
-      }));
-
-      // If we're deleting the last element, update the current expression
-      if (index === structuredProof.elements.length - 1) {
-        const previousElement = structuredProof.elements[index - 1];
-        if (previousElement.type === 'equation') {
-          const eq = previousElement as EquationElement;
-          setCurrentExpression(eq.rightSide);
-        }
-      }
-    }
-  }, [structuredProof.elements, activeProofContext, letBindings]);
+  // Unused - kept for potential future undo/redo functionality
+  // const deleteProofElement = useCallback((index: number) => { ... }, []);
 
   // Get applicable rules, including both forward and reverse directions for bidirectional rules
   const applicableRules: ExtendedRule[] = (focusedNode && currentExpression) ? ENHANCED_FOCUS_RULES.flatMap(rule => {
@@ -992,18 +990,14 @@ export function EnhancedProofWorkspace() {
   }, {} as Record<string, ExtendedRule[]>);
 
   // Create expression element for current expression
-  const currentEquationElement = currentExpression ? (
-    <MathJaxExpressionRenderer
-      expression={currentExpression}
-      focusPath={focusPath}
-      onFocusChange={setFocusPath}
-      isActive={true}
-      readonly={false}
-    />
-  ) : null
+  // Unused - equation element rendering (reserved for future UI improvements)
+  // const currentEquationElement = currentExpression ? (
+  //   <MathJaxExpressionRenderer ... />
+  // ) : null
 
-  const currentEquationIsChained = currentExpression && structuredProof.elements.length > 0 ?
-    elementIsChained(structuredProof.elements[structuredProof.elements.length - 1], currentExpression) : false;
+  // Unused - chaining detection (reserved for future proof display)
+  // const currentEquationIsChained = currentExpression && structuredProof.elements.length > 0 ?
+  //   elementIsChained(structuredProof.elements[structuredProof.elements.length - 1], currentExpression) : false;
 
   return (
     <div style={{
@@ -1139,36 +1133,12 @@ export function EnhancedProofWorkspace() {
   );
 }
 
-function elementIsChained(previousElement: ProofElement, currentElement: ExpressionNode) {
-  if (previousElement?.type !== 'equation') {
-    return false;
-  }
-
-  const previousEquation = previousElement as EquationElement;
-  return previousEquation.rightSide === currentElement;
-}
+// Unused - element chaining detection (reserved for future proof display improvements)
+// function elementIsChained(previousElement: ProofElement, currentElement: ExpressionNode) { ... }
 
 
-function ProofComment({ element }: { element: CommentElement }) {
-  return (
-    <tr key={element.id}>
-      <td colSpan={5}>
-        <div style={{
-          margin: '16px 0',
-          padding: '12px 16px',
-          backgroundColor: '#e8f4f8',
-          borderLeft: '4px solid #17a2b8',
-          borderRadius: '0 6px 6px 0',
-          color: '#0c5460',
-          fontSize: '14px',
-          fontStyle: 'italic'
-        }}>
-          {element.content}
-        </div>
-      </td>
-    </tr>
-  );
-}
+// Unused - proof comment rendering (reserved for future proof annotation features)
+// function ProofComment({ element }: { element: CommentElement }) { ... }
 
 function RulesPanel({
   rulesByCategory,

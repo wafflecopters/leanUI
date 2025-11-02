@@ -264,6 +264,66 @@ export function mkType(level: number): TTerm {
 }
 
 // ============================================================================
+// Usage Checking (for safe deletion)
+// ============================================================================
+
+/**
+ * Check if a constant/variable name is referenced in a term
+ * 
+ * This traverses the entire term tree looking for:
+ * - Const nodes with matching name
+ * - Binders that bind the name (shadows it, so stops searching in body)
+ * 
+ * Important: This checks for FREE occurrences of the name. If a binder
+ * shadows the name, we don't search in its body.
+ * 
+ * @param name - Variable/constant name to search for
+ * @param term - Term to search in
+ * @returns true if name is referenced (not shadowed)
+ */
+export function isNameUsed(name: string, term: TTerm): boolean {
+  switch (term.tag) {
+    case 'Var':
+      // De Bruijn index - can't directly check by name
+      return false;
+
+    case 'Const':
+      // Direct name match
+      return term.name === name;
+
+    case 'Sort':
+      // No names to check
+      return false;
+
+    case 'Hole':
+      // Holes don't contain the name itself, but check their type
+      return isNameUsed(name, term.type);
+
+    case 'Binder':
+      // Check domain
+      if (isNameUsed(name, term.domain)) return true;
+
+      // Check let-binding value if present
+      if (term.binderKind.tag === 'BLet') {
+        if (isNameUsed(name, term.binderKind.defVal)) return true;
+      }
+
+      // Check body - BUT if this binder binds our name, it shadows it
+      if (term.name === name) {
+        // Name is shadowed in the body, don't search there
+        return false;
+      }
+      return isNameUsed(name, term.body);
+
+    case 'App':
+      return isNameUsed(name, term.fn) || isNameUsed(name, term.arg);
+
+    case 'Annot':
+      return isNameUsed(name, term.term) || isNameUsed(name, term.type);
+  }
+}
+
+// ============================================================================
 // Substitution (for De Bruijn indices)
 // ============================================================================
 

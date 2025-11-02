@@ -18,6 +18,7 @@ export interface Assumption {
   expression: string; // e.g., "p ≠ 3"
   description: string; // e.g., "p is not equal to 3"
   introducedBy?: string; // Rule ID that introduced this assumption
+  typeHoleId?: string; // NEW: ID of the type hole for this variable (e.g., "type_a")
 }
 
 export interface ProofContext {

@@ -44,7 +44,8 @@ import { fillHole } from './tt-typecheck';
  */
 export function expressionNodeToTTerm(
   expr: ExpressionNode,
-  context: Map<string, number> = new Map()
+  context: Map<string, number> = new Map(),
+  typeContext: Map<string, TTerm> = new Map()  // NEW: maps variable names to their types
 ): TTerm {
   switch (expr.type) {
     case 'variable':
@@ -53,11 +54,12 @@ export function expressionNodeToTTerm(
         return mkVar(context.get(varName)!);
       }
       // Not in context - treat as a constant (like 'a', 'b', etc.)
-      // For now, we'll create a const with Real type
+      // Get type from type context (may be a type hole!)
+      const varType = typeContext.get(varName) || TT_CONSTANTS.Real;
       return {
         tag: 'Const',
         name: varName,
-        type: TT_CONSTANTS.Real
+        type: varType  // Use actual type (could be a hole!)
       };
 
     case 'literal':
@@ -73,8 +75,8 @@ export function expressionNodeToTTerm(
       if (expr.children.length !== 2) {
         throw new Error(`Binary operator ${expr.operator} requires exactly 2 children`);
       }
-      const left = expressionNodeToTTerm(expr.children[0], context);
-      const right = expressionNodeToTTerm(expr.children[1], context);
+      const left = expressionNodeToTTerm(expr.children[0], context, typeContext);
+      const right = expressionNodeToTTerm(expr.children[1], context, typeContext);
 
       // Create function application: (op left right)
       // For example, a + b becomes (+ a b)
@@ -91,19 +93,39 @@ export function expressionNodeToTTerm(
       if (expr.children.length !== 2) {
         throw new Error('Equality requires exactly 2 children');
       }
-      const eqLeft = expressionNodeToTTerm(expr.children[0], context);
-      const eqRight = expressionNodeToTTerm(expr.children[1], context);
+      const eqLeft = expressionNodeToTTerm(expr.children[0], context, typeContext);
+      const eqRight = expressionNodeToTTerm(expr.children[1], context, typeContext);
 
       // eq : Π (A : Type), A → A → Prop
-      // We need: (((eq Real) left) right)
+      // Infer the type by finding a variable in the expression and getting its type from typeContext
+      const inferredType = (() => {
+        // Helper: extract first variable name from ExpressionNode
+        const extractFirstVar = (node: ExpressionNode): string | null => {
+          if (node.type === 'variable' && typeof node.value === 'string') {
+            return node.value;
+          }
+          for (const child of node.children) {
+            const varName = extractFirstVar(child);
+            if (varName) return varName;
+          }
+          return null;
+        };
+
+        const varName = extractFirstVar(expr.children[0]);
+        if (varName && typeContext.has(varName)) {
+          return typeContext.get(varName)!;
+        }
+        return TT_CONSTANTS.Real; // Fallback
+      })();
+
       const eqConst = TT_CONSTANTS.Eq;
-      return mkApp(mkApp(mkApp(eqConst, TT_CONSTANTS.Real), eqLeft), eqRight);
+      return mkApp(mkApp(mkApp(eqConst, inferredType), eqLeft), eqRight);
 
     case 'unop':
       if (expr.children.length !== 1) {
         throw new Error(`Unary operator ${expr.operator} requires exactly 1 child`);
       }
-      const operand = expressionNodeToTTerm(expr.children[0], context);
+      const operand = expressionNodeToTTerm(expr.children[0], context, typeContext);
       const unOpConst: TTerm = {
         tag: 'Const',
         name: expr.operator!,
@@ -119,8 +141,8 @@ export function expressionNodeToTTerm(
       }
 
       // Convert function and all arguments to TT terms
-      const func = expressionNodeToTTerm(expr.children[0], context);
-      const args = expr.children.slice(1).map(arg => expressionNodeToTTerm(arg, context));
+      const func = expressionNodeToTTerm(expr.children[0], context, typeContext);
+      const args = expr.children.slice(1).map(arg => expressionNodeToTTerm(arg, context, typeContext));
 
       // Build nested applications: (((f a) b) c)
       let result = func;
@@ -135,8 +157,8 @@ export function expressionNodeToTTerm(
       if (expr.children.length !== 2) {
         throw new Error('Inequality requires exactly 2 children');
       }
-      const ineqLeft = expressionNodeToTTerm(expr.children[0], context);
-      const ineqRight = expressionNodeToTTerm(expr.children[1], context);
+      const ineqLeft = expressionNodeToTTerm(expr.children[0], context, typeContext);
+      const ineqRight = expressionNodeToTTerm(expr.children[1], context, typeContext);
 
       // Create a constant for the inequality operator
       const ineqOp: TTerm = {
