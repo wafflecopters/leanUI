@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   ExpressionNode,
   Assumption,
@@ -53,12 +53,26 @@ export function LetManager({
   const [goalInput, setGoalInput] = useState(goal ? astToString(goal) : '');
   const [editingHypothesisId, setEditingHypothesisId] = useState<string | null>(null);
   const [editingHypothesisValue, setEditingHypothesisValue] = useState('');
+  const [editingHypothesisFocusField, setEditingHypothesisFocusField] = useState<'name' | 'type'>('type');
+  const hypothesisNameInputRef = useRef<HTMLInputElement>(null);
+  const hypothesisTypeInputRef = useRef<HTMLInputElement>(null);
   const [letName, setLetName] = useState('');
   const [letExpression, setLetExpression] = useState('');
   const [letType, setLetType] = useState<string>('');
   const [hypothesisName, setHypothesisName] = useState('');
   const [hypothesisExpression, setHypothesisExpression] = useState('');
   const [hypothesisDescription, setHypothesisDescription] = useState('');
+
+  // Focus the appropriate field when entering edit mode
+  useEffect(() => {
+    if (editingHypothesisId) {
+      if (editingHypothesisFocusField === 'name') {
+        hypothesisNameInputRef.current?.focus();
+      } else {
+        hypothesisTypeInputRef.current?.focus();
+      }
+    }
+  }, [editingHypothesisId, editingHypothesisFocusField]);
 
   const handleAddLetWithMode = (mode: TermEditorMode) => {
     try {
@@ -441,33 +455,80 @@ export function LetManager({
                     <span style={{ fontSize: '18px' }} title="Auto-generated - needs type">⚠️</span>
                   )}
                   {editingHypothesisId === hypothesis.id ? (
-                    // Edit mode
+                    // Edit mode - separate name and type fields
                     <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {/* Name field */}
                       <input
+                        ref={hypothesisNameInputRef}
                         type="text"
-                        value={editingHypothesisValue}
-                        onChange={(e) => setEditingHypothesisValue(e.target.value)}
-                        onBlur={(e) => {
-                          const expanded = expandTypeShortcuts(e.target.value);
-                          setEditingHypothesisValue(expanded);
+                        value={(() => {
+                          // Extract name from "name : type" format
+                          const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                          return match ? match[1] : '';
+                        })()}
+                        onChange={(e) => {
+                          // Update name while preserving type
+                          const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                          const type = match ? match[2] : '';
+                          setEditingHypothesisValue(`${e.target.value} : ${type}`);
+                        }}
+                        placeholder="name"
+                        style={{
+                          width: '80px',
+                          fontFamily: 'monospace',
+                          padding: '4px 8px',
+                          border: '1px solid #007bff',
+                          borderRadius: '4px',
+                          backgroundColor: '#fff',
+                          fontWeight: 'bold'
+                        }}
+                      />
+                      <span style={{ color: '#666' }}>:</span>
+                      {/* Type field */}
+                      <input
+                        ref={hypothesisTypeInputRef}
+                        type="text"
+                        value={(() => {
+                          // Extract type from "name : type" format
+                          const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                          return match ? match[2] : '';
+                        })()}
+                        onChange={(e) => {
+                          // Update type while preserving name
+                          const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                          const name = match ? match[1] : '';
+                          setEditingHypothesisValue(`${name} : ${e.target.value}`);
+                        }}
+                        onBlur={() => {
+                          const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                          if (match) {
+                            const name = match[1];
+                            const expanded = expandTypeShortcuts(match[2]);
+                            setEditingHypothesisValue(`${name} : ${expanded}`);
+                          }
                         }}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
                             // Expand shortcuts before saving
-                            const expanded = expandTypeShortcuts(editingHypothesisValue);
-                            const updatedHypothesis = {
-                              ...hypothesis,
-                              expression: expanded,
-                              // Clear auto-generated description if type is no longer unknown
-                              description: expanded.includes(' : ?') ? hypothesis.description : ''
-                            };
-                            onUpdateHypothesis(hypothesis.id, updatedHypothesis);
-                            setEditingHypothesisId(null);
+                            const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                            if (match) {
+                              const name = match[1];
+                              const expanded = expandTypeShortcuts(match[2]);
+                              const updatedHypothesis = {
+                                ...hypothesis,
+                                name: name,
+                                expression: `${name} : ${expanded}`,
+                                // Clear auto-generated description if type is no longer unknown
+                                description: expanded.includes('?') ? hypothesis.description : ''
+                              };
+                              onUpdateHypothesis(hypothesis.id, updatedHypothesis);
+                              setEditingHypothesisId(null);
+                            }
                           } else if (e.key === 'Escape') {
                             setEditingHypothesisId(null);
                           }
                         }}
-                        autoFocus
+                        placeholder="type"
                         style={{
                           flex: 1,
                           fontFamily: 'monospace',
@@ -480,15 +541,20 @@ export function LetManager({
                       <button
                         onClick={() => {
                           // Expand shortcuts before saving
-                          const expanded = expandTypeShortcuts(editingHypothesisValue);
-                          const updatedHypothesis = {
-                            ...hypothesis,
-                            expression: expanded,
-                            // Clear auto-generated description if type is no longer unknown
-                            description: expanded.includes(' : ?') ? hypothesis.description : ''
-                          };
-                          onUpdateHypothesis(hypothesis.id, updatedHypothesis);
-                          setEditingHypothesisId(null);
+                          const match = editingHypothesisValue.match(/^\s*(\w+)\s*:\s*(.+)$/);
+                          if (match) {
+                            const name = match[1];
+                            const expanded = expandTypeShortcuts(match[2]);
+                            const updatedHypothesis = {
+                              ...hypothesis,
+                              name: name,
+                              expression: `${name} : ${expanded}`,
+                              // Clear auto-generated description if type is no longer unknown
+                              description: expanded.includes('?') ? hypothesis.description : ''
+                            };
+                            onUpdateHypothesis(hypothesis.id, updatedHypothesis);
+                            setEditingHypothesisId(null);
+                          }
                         }}
                         style={{
                           padding: '2px 8px',
@@ -506,11 +572,7 @@ export function LetManager({
                   ) : (
                     // Display mode
                     <div
-                      style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
-                      onClick={() => {
-                        setEditingHypothesisId(hypothesis.id);
-                        setEditingHypothesisValue(hypothesis.expression);
-                      }}
+                      style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}
                       title="Click to edit"
                     >
                       {(() => {
@@ -521,22 +583,49 @@ export function LetManager({
                           const [, name, typeStr] = match;
                           return (
                             <>
-                              <span style={{ fontFamily: 'monospace', fontWeight: 'bold' }}>{name}</span>
+                              <span
+                                style={{ fontFamily: 'monospace', fontWeight: 'bold', cursor: 'pointer' }}
+                                onClick={() => {
+                                  setEditingHypothesisFocusField('name');
+                                  setEditingHypothesisId(hypothesis.id);
+                                  setEditingHypothesisValue(hypothesis.expression);
+                                }}
+                              >
+                                {name}
+                              </span>
                               <span>:</span>
-                              {(() => {
-                                try {
-                                  const typeExpr = parseExpressionToAST(typeStr.trim());
-                                  return <MathJaxExpressionRenderer expression={typeExpr} readonly={true} inline={true} />;
-                                } catch (error) {
-                                  // If parsing fails, show as plain text
-                                  return <span style={{ fontFamily: 'monospace' }}>{typeStr}</span>;
-                                }
-                              })()}
+                              <span
+                                style={{ cursor: 'pointer', flex: 1 }}
+                                onClick={() => {
+                                  setEditingHypothesisFocusField('type');
+                                  setEditingHypothesisId(hypothesis.id);
+                                  setEditingHypothesisValue(hypothesis.expression);
+                                }}
+                              >
+                                {(() => {
+                                  try {
+                                    const typeExpr = parseExpressionToAST(typeStr.trim());
+                                    return <MathJaxExpressionRenderer expression={typeExpr} readonly={true} inline={true} />;
+                                  } catch (error) {
+                                    // If parsing fails, show as plain text
+                                    return <span style={{ fontFamily: 'monospace' }}>{typeStr}</span>;
+                                  }
+                                })()}
+                              </span>
                             </>
                           );
                         } else {
                           // No colon found, just show the whole thing as text
-                          return <span style={{ fontFamily: 'monospace' }}>{hypothesis.expression}</span>;
+                          return <span
+                            style={{ fontFamily: 'monospace', cursor: 'pointer' }}
+                            onClick={() => {
+                              setEditingHypothesisFocusField('type');
+                              setEditingHypothesisId(hypothesis.id);
+                              setEditingHypothesisValue(hypothesis.expression);
+                            }}
+                          >
+                            {hypothesis.expression}
+                          </span>;
                         }
                       })()}
                     </div>

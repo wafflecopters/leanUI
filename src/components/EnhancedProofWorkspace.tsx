@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   ExpressionNode,
   FocusPath,
@@ -9,7 +9,6 @@ import {
   setNodeAtPath,
   astToString,
   ENHANCED_FOCUS_RULES,
-  StructuredProof,
   createTransformationEquationElement,
   createCommentElement,
   LetElement,
@@ -21,7 +20,7 @@ import { ExpressionInput } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkEq, mkType, mkHole, isNameUsed } from '../types/tt-core';
+import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkEq, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, insertLetBinding, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../types/tt-core';
 import {
   LetProofTerm,
   buildFullProofTerm,
@@ -222,6 +221,67 @@ function EnhancedRuleApplication({ rule, focusedNode, onApply }: EnhancedRuleApp
 
 // EnhancedProofHistory component removed - not currently used but can be re-added if needed
 
+// ============================================================================
+// Helper Functions: Convert between UI types and TT types
+// ============================================================================
+
+/**
+ * Convert a TT Pi-binder to a UI Assumption.
+ */
+function piBinderToAssumption([name, type]: [string, TTerm], id: string): Assumption {
+  // Pretty-print the type
+  let typeStr = '';
+  if (type.tag === 'Hole') {
+    // Type hole: ?type_a
+    typeStr = `?${type.id}`;
+  } else if (type.tag === 'Const') {
+    typeStr = type.name;
+  } else if (type.tag === 'Sort') {
+    typeStr = type.level === 0 ? 'Prop' : 'Type';
+  } else {
+    // For complex types, use pretty-print
+    typeStr = astToString({ type: 'variable', value: type, children: [], raw: '' } as any);
+  }
+
+  return {
+    id,
+    name,
+    expression: `${name} : ${typeStr}`,
+    description: `Hypothesis: ${name} has type ${typeStr}`,
+    introducedBy: 'user',
+    typeHoleId: type.tag === 'Hole' ? type.id : undefined
+  };
+}
+
+/**
+ * Convert a UI Assumption to a TT Pi-binder.
+ */
+function assumptionToPiBinder(assumption: Assumption): [string, TTerm] {
+  // Parse the expression to extract type
+  const match = assumption.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
+  if (!match) {
+    throw new Error(`Invalid assumption expression: ${assumption.expression}`);
+  }
+
+  const typeStr = match[2].trim();
+  let typeTerm: TTerm;
+
+  // Check if this is a type hole reference (e.g., "?type_a")
+  if (typeStr.startsWith('?')) {
+    const typeHoleId = typeStr.substring(1);
+    typeTerm = mkHole(typeHoleId, mkType(1), []);
+  } else if (typeStr === 'Type') {
+    typeTerm = mkType(1);
+  } else if (typeStr === 'Prop') {
+    typeTerm = mkProp();
+  } else {
+    // Named type (e.g., "ℝ")
+    typeTerm = { tag: 'Const', name: typeStr, type: mkProp() };
+  }
+
+  return [assumption.name, typeTerm];
+}
+
 export function EnhancedProofWorkspace() {
   // Start with null expression - proof area is empty initially
   const [currentExpression, setCurrentExpression] = useState<ExpressionNode | null>(null);
@@ -232,27 +292,10 @@ export function EnhancedProofWorkspace() {
   // Track which proof context we're in (null = main proof, or an element id)
   const [activeProofContext, setActiveProofContext] = useState<string | null>(null);
   const [showASTDebug, setShowASTDebug] = useState(false);
-  const [structuredProof, setStructuredProof] = useState<StructuredProof>({
-    elements: [],
-    metadata: {
-      assumptions: [],
-      goal: null  // Goal should be null initially, not currentExpression
-    }
-  });
-
-  const { metadata } = structuredProof
-  const { goal } = metadata
-
-  const setGoal = useCallback((newGoal: ExpressionNode | null) => {
-    setStructuredProof(current => {
-      return {
-        ...current,
-        metadata: { ...current.metadata, goal: newGoal }
-      }
-    })
-  }, [setStructuredProof])
-
-  // State for claim insertion
+  
+  // Proof elements (structured proof steps - comments, equations, etc.)
+  // These are separate from the TT term and are for display/UI only
+  const [proofElements, setProofElements] = useState<ProofElement[]>([]);
 
   // State for let-bindings
   const [letBindings, setLetBindings] = useState<LetElement[]>([]);
@@ -261,80 +304,65 @@ export function EnhancedProofWorkspace() {
   // NEW ARCHITECTURE: Term Definition + Focused Hole
   // ============================================================================
 
-  // Root term definition - replaces the awkward let-wrapper
+  // Root term definition - the single source of truth
+  // - type: contains Pi-binders (assumptions) + goal (return type)
+  // - value: contains let-bindings + proof holes
   const [rootDefinition, setRootDefinition] = useState<TermDefinition>(() =>
     createRootTermDefinition('_root', [], mkProp(), 'proof', [])
   );
 
+  // Store the original goal ExpressionNode (for UI display)
+  // We need this because converting TT → ExpressionNode is complex
+  const [goalExprNode, setGoalExprNode] = useState<ExpressionNode | null>(null);
+
   // Which hole are we currently working on?
   const [focusedHole, setFocusedHole] = useState<string | null>('proof');
-
-  // Get all available holes (for debugging/future use)
-  // const availableHoles = extractHoles(rootDefinition.value);
 
   // Get the currently focused hole (if it exists)
   const currentHole = focusedHole ? findHole(rootDefinition.value, focusedHole) : null;
 
   // ============================================================================
-  // OLD ARCHITECTURE (will be removed in Phase 9)
+  // DERIVED STATE: Extract from TermDefinition
   // ============================================================================
 
-  // Root TT term - the unified proof term model
+  // Extract assumptions from Pi-binders in the type signature
+  const assumptions = useMemo((): Assumption[] => {
+    const binders = flattenPiBinders(rootDefinition.type);
+    return binders.map(([name, type], index) => 
+      piBinderToAssumption([name, type], `assumption-${index}`)
+    );
+  }, [rootDefinition.type]);
+
+  // Goal is stored as ExpressionNode for UI display
+  // The TT representation is in rootDefinition.type (final return type)
+  const goal = goalExprNode;
+
+  // Build a ProofContext for compatibility with existing code
+  const metadata = useMemo((): ProofContext => ({
+    currentExpression: currentExpression!,
+    steps,
+    variables: new Map(),
+    hypotheses: [],
+    assumptions
+  }), [currentExpression, steps, assumptions]);
+
+  // ============================================================================
+  // OLD ARCHITECTURE (keeping for compatibility during migration)
+  // ============================================================================
+
+  // Root TT term - the unified proof term model (OLD - will be removed)
   const [rootTerm, setRootTerm] = useState<TTerm>(() => {
     // Initialize with empty hypotheses and a Prop goal
     return createRootProofTerm([], mkProp(), 'proof', []);
   });
 
-  // Update rootTerm and rootDefinition whenever hypotheses or goal change
+  // Keep rootTerm in sync with rootDefinition (temporary during migration)
   useEffect(() => {
-    // Convert UI hypotheses to TT term format
-    const ttHypotheses: Array<[string, TTerm]> = metadata.assumptions.map(h => {
-      // Parse the hypothesis expression to extract type
-      // Format is either "name : Type" or just "Type"
-      const match = h.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
-      let typeTerm: TTerm;
-
-      if (match) {
-        const typeStr = match[2].trim();
-        // Check if this is a type hole reference (e.g., "?type_a")
-        if (typeStr.startsWith('?')) {
-          // Create a type hole: the hole's type is Type_1
-          const typeHoleId = typeStr.substring(1); // Remove the '?'
-          typeTerm = mkHole(typeHoleId, mkType(1), []);
-        } else if (typeStr === 'Type') {
-          typeTerm = mkType(1);
-        } else if (typeStr === 'Prop') {
-          typeTerm = mkProp();
-        } else {
-          // Named type (e.g., "ℝ")
-          typeTerm = { tag: 'Const', name: typeStr, type: mkProp() };
-        }
-      } else {
-        // No type specified, use Prop
-        typeTerm = mkProp();
-      }
-
-      return [h.name, typeTerm];
-    });
-
-    // Build type context from hypotheses
-    const typeContext = new Map<string, TTerm>();
-    ttHypotheses.forEach(([name, type]) => {
-      typeContext.set(name, type);
-    });
-
-    // Convert goal ExpressionNode to TT term properly, passing type context
-    const goalTerm = goal ? expressionNodeToTTerm(goal, new Map(), typeContext) : mkProp();
-
-    // OLD: Create updated root term (let-wrapper)
-    const newRootTerm = createRootProofTerm(ttHypotheses, goalTerm, 'proof', []);
+    const binders = flattenPiBinders(rootDefinition.type);
+    const goalTerm = getFinalReturnType(rootDefinition.type);
+    const newRootTerm = createRootProofTerm(binders, goalTerm, 'proof', []);
     setRootTerm(newRootTerm);
-
-    // NEW: Create updated term definition
-    const newDefinition = createRootTermDefinition('_root', ttHypotheses, goalTerm, 'proof', []);
-    setRootDefinition(newDefinition);
-    setFocusedHole('proof'); // Reset focus to initial hole
-  }, [metadata.assumptions, goal]);
+  }, [rootDefinition]);
 
   // TT proof terms: Map from let-binding ID to its proof term
   const [letProofTerms, setLetProofTerms] = useState<Map<string, LetProofTerm>>(new Map());
@@ -352,7 +380,7 @@ export function EnhancedProofWorkspace() {
     if (proofScrollRef.current) {
       proofScrollRef.current.scrollTop = proofScrollRef.current.scrollHeight;
     }
-  }, [structuredProof.elements.length]);
+  }, [proofElements.length]);
 
   // Rebuild combined TT proof term when let-proof-terms change
   useEffect(() => {
@@ -366,7 +394,7 @@ export function EnhancedProofWorkspace() {
   }, [letProofTerms]);
 
   // Debug info for development
-  console.debug('Proof workspace state:', { steps: steps.length, elements: structuredProof.elements.length });
+  console.debug('Proof workspace state:', { steps: steps.length, elements: proofElements.length, assumptions: assumptions.length });
 
   // Helper: Update a let-binding's value in the root definition
   const updateLetValueInRootDefinition = useCallback((term: TTerm, letName: string, newValue: TTerm): TTerm => {
@@ -397,8 +425,6 @@ export function EnhancedProofWorkspace() {
 
   // Handlers for let-bindings and hypotheses
   const handleAddLet = useCallback((letElement: LetElement) => {
-    console.log('[ADD-LET] Starting, focusedHole:', focusedHole, 'editorMode:', letElement.editorMode.tag);
-
     // ====================================================================
     // Step 1: Initialize equality proof state if this is an equality proof
     // ====================================================================
@@ -424,13 +450,6 @@ export function EnhancedProofWorkspace() {
 
           // Attach to let element
           letElement.equalityProofState = eqState;
-
-          console.log('[ADD-LET] Created equality proof state:', {
-            start: direction === 'left' ? leftStr : rightStr,
-            target: direction === 'left' ? rightStr : leftStr,
-            holeId: eqState.currentHoleId,
-            direction
-          });
         }
       } catch (error) {
         console.error('[ADD-LET] Failed to initialize equality proof state:', error);
@@ -450,27 +469,19 @@ export function EnhancedProofWorkspace() {
         letElement.equalityProofState.startExpr,
         letElement.equalityProofState.targetExpr
       );
-      console.log('[ADD-LET] Using equality proof term:', {
-        proofTerm: letElement.equalityProofState.proofTerm,
-        type: letTypeTT
-      });
     } else {
       // Regular let: convert expression to TT
       letValueTT = expressionNodeToTTerm(letElement.value);
       letTypeTT = letElement.typeAnnotation
         ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkProp() }
         : mkProp();
-      console.log('[ADD-LET] Using regular value');
     }
 
     // ====================================================================
     // Step 3: Add to UI state
     // ====================================================================
     setLetBindings(prev => [...prev, letElement]);
-    setStructuredProof(prev => ({
-      ...prev,
-      elements: [...prev.elements, letElement]
-    }));
+    setProofElements(prev => [...prev, letElement]);
 
     // ====================================================================
     // Step 4: Nest the let-binding inside the focused hole
@@ -512,8 +523,6 @@ export function EnhancedProofWorkspace() {
     const newFocus = letElement.equalityProofState
       ? letElement.equalityProofState.currentHoleId  // Focus on proof hole INSIDE let's value
       : `after-${letElement.name}`;                   // Focus on hole AFTER let
-
-    console.log('[ADD-LET] Setting focus to:', newFocus);
     setFocusedHole(newFocus);
   }, [focusedHole, rootDefinition, goal]);
 
@@ -524,129 +533,141 @@ export function EnhancedProofWorkspace() {
 
     const varName = letBinding.name;
 
-    // Check if this let-binding is used in the goal
-    if (goal) {
-      const typeContext = new Map<string, TTerm>();
-      // Build type context (simplified - we'd need full context for complete check)
-      const goalTerm = expressionNodeToTTerm(goal, new Map(), typeContext);
-      if (isNameUsed(varName, goalTerm)) {
-        alert(`Cannot delete let-binding "${varName}": it is used in the goal expression`);
-        return;
-      }
+    // Find position of this let in the value term
+    const lets = flattenLetBindings(rootDefinition.value);
+    const position = lets.findIndex(([name]) => name === varName);
+
+    if (position === -1) {
+      console.error('Let-binding not found in value term:', varName);
+      return;
     }
 
-    // Check if used in other let-bindings
-    for (const otherLet of letBindings) {
-      if (otherLet.id === id) continue; // Skip self
-
-      // Check the name itself - if another let has the same name, it depends on this one
-      if (otherLet.name === varName) continue; // Same name is OK (shadowing)
-
-      // Check if the value expression uses this name
-      // For now, do a simple string check on the raw expression
-      if (otherLet.value.raw.includes(varName)) {
-        alert(`Cannot delete let-binding "${varName}": it is used in "${otherLet.name}"`);
-        return;
-      }
+    // Check if used downstream (in subsequent lets or final body)
+    if (isLetUsedDownstream(rootDefinition.value, varName, position)) {
+      alert(`Cannot delete let-binding "${varName}": it is used in a subsequent let-binding or proof term`);
+      return;
     }
 
-    // Check if used in root definition
+    // Check if used in the goal (type signature)
     if (isNameUsed(varName, rootDefinition.type)) {
-      alert(`Cannot delete let-binding "${varName}": it is used in the theorem type`);
+      alert(`Cannot delete let-binding "${varName}": it is used in the type signature (goal or assumptions)`);
       return;
     }
 
-    if (isNameUsed(varName, rootDefinition.value)) {
-      alert(`Cannot delete let-binding "${varName}": it is used in the proof term`);
-      return;
-    }
-
-    // Safe to delete
+    // Safe to delete - remove from UI state
     setLetBindings(prev => prev.filter(l => l.id !== id));
+    setProofElements(prev => prev.filter(e => e.id !== id));
 
-    // Also remove from structured proof
-    setStructuredProof(prev => ({
+    // Remove from TT term
+    const newValue = removeLetBinding(rootDefinition.value, position);
+    setRootDefinition(prev => ({
       ...prev,
-      elements: prev.elements.filter(e => e.id !== id)
+      value: newValue
     }));
-  }, [letBindings, goal, rootDefinition]);
+  }, [letBindings, rootDefinition]);
 
   const handleAddHypothesis = useCallback((hypothesis: Assumption) => {
-    setStructuredProof(prev => ({
+    // Convert hypothesis to Pi-binder and add to type signature
+    const [name, type] = assumptionToPiBinder(hypothesis);
+    const newType = insertPiBinder(
+      rootDefinition.type,
+      flattenPiBinders(rootDefinition.type).length, // Add at end
+      name,
+      type
+    );
+    
+    setRootDefinition(prev => ({
       ...prev,
-      metadata: {
-        ...prev.metadata,
-        assumptions: [...prev.metadata.assumptions, hypothesis]
-      }
+      type: newType
     }));
-  }, []);
+  }, [rootDefinition]);
 
   const handleDeleteHypothesis = useCallback((id: string) => {
-    // Find the hypothesis to delete
-    const hypothesis = metadata.assumptions.find(h => h.id === id);
+    // Find the hypothesis to delete by ID
+    const hypothesis = assumptions.find(h => h.id === id);
     if (!hypothesis) return;
 
-    const varName = hypothesis.name;
-
-    // Build type context for checking
-    const typeContext = new Map<string, TTerm>();
-    metadata.assumptions.forEach(h => {
-      if (h.id === id) return; // Skip the one we're deleting
-      const match = h.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
-      if (match) {
-        const name = match[1].trim();
-        const typeStr = match[2].trim();
-        if (typeStr.startsWith('?')) {
-          const typeHoleId = typeStr.substring(1);
-          typeContext.set(name, mkHole(typeHoleId, mkType(1), []));
-        }
-      }
-    });
-
-    // Check if variable is used in the goal
-    if (goal) {
-      const goalTerm = expressionNodeToTTerm(goal, new Map(), typeContext);
-      if (isNameUsed(varName, goalTerm)) {
-        alert(`Cannot delete hypothesis "${varName}": it is used in the goal expression`);
-        return;
-      }
-    }
-
-    // Check if used in root definition
-    if (isNameUsed(varName, rootDefinition.type)) {
-      alert(`Cannot delete hypothesis "${varName}": it is used in the theorem type`);
+    // Find its position in the Pi-binder chain
+    const binders = flattenPiBinders(rootDefinition.type);
+    const position = binders.findIndex(([name]) => name === hypothesis.name);
+    
+    if (position === -1) {
+      console.error('Hypothesis not found in Pi-binders:', hypothesis.name);
       return;
     }
 
-    if (isNameUsed(varName, rootDefinition.value)) {
-      alert(`Cannot delete hypothesis "${varName}": it is used in the proof term`);
+    // Check if the binder is used downstream
+    if (isBinderUsedDownstream(rootDefinition.type, hypothesis.name, position)) {
+      alert(`Cannot delete hypothesis "${hypothesis.name}": it is used in the goal or other assumptions`);
       return;
     }
 
-    setStructuredProof(prev => ({
+    // Check if used in the proof term (value)
+    if (isNameUsed(hypothesis.name, rootDefinition.value)) {
+      alert(`Cannot delete hypothesis "${hypothesis.name}": it is used in the proof term`);
+      return;
+    }
+
+    // Safe to delete - remove from type signature
+    const newType = removePiBinder(rootDefinition.type, position);
+    setRootDefinition(prev => ({
       ...prev,
-      metadata: {
-        ...prev.metadata,
-        assumptions: prev.metadata.assumptions.filter(a => a.id !== id)
-      }
+      type: newType
     }));
-  }, [metadata, goal, rootDefinition]);
+  }, [assumptions, rootDefinition]);
 
   const handleUpdateHypothesis = useCallback((id: string, updatedHypothesis: Assumption) => {
-    setStructuredProof(prev => ({
-      ...prev,
-      metadata: {
-        ...prev.metadata,
-        assumptions: prev.metadata.assumptions.map(a => a.id === id ? updatedHypothesis : a)
+    // Find the hypothesis by ID
+    const oldHypothesis = assumptions.find(h => h.id === id);
+    if (!oldHypothesis) return;
+
+    // Find its position in the Pi-binder chain
+    const binders = flattenPiBinders(rootDefinition.type);
+    const position = binders.findIndex(([name]) => name === oldHypothesis.name);
+    
+    if (position === -1) {
+      console.error('Hypothesis not found in Pi-binders:', oldHypothesis.name);
+      return;
+    }
+
+    // Check if the old type was a hole and extract its ID
+    const oldType = binders[position][1];
+    const oldTypeHoleId = oldType.tag === 'Hole' ? oldType.id : null;
+
+    // Convert updated hypothesis to Pi-binder
+    const [newName, newType] = assumptionToPiBinder(updatedHypothesis);
+    
+    // Remove old binder and insert new one at same position
+    let newTypeSignature = removePiBinder(rootDefinition.type, position);
+    newTypeSignature = insertPiBinder(newTypeSignature, position, newName, newType);
+    
+    setRootDefinition(prev => {
+      let updatedType = newTypeSignature;
+      let updatedValue = prev.value;
+
+      // If the old type was a hole, replace all occurrences of it throughout the term
+      if (oldTypeHoleId) {
+        console.log(`[UPDATE-HYP] Replacing type hole ?${oldTypeHoleId} with`, newType);
+        updatedType = replaceHole(updatedType, oldTypeHoleId, newType);
+        updatedValue = replaceHole(updatedValue, oldTypeHoleId, newType);
       }
-    }));
-  }, []);
+
+      return {
+        ...prev,
+        type: updatedType,
+        value: updatedValue
+      };
+    });
+  }, [assumptions, rootDefinition]);
 
   const handleSetGoal = useCallback((goalStr: string) => {
-    // Parse goal to AST immediately
+    // Parse goal to AST
     try {
       const goalExpr = parseExpressionToAST(goalStr);
-      setGoal(goalExpr);
+      
+      // Store the goal ExpressionNode for UI display
+      setGoalExprNode(goalExpr);
+      
       const unboundVars = new Set<string>();
 
       // Reserved keywords in type theory that should not be treated as variables
@@ -663,7 +684,7 @@ export function EnhancedProofWorkspace() {
 
           // Check if it's not already a hypothesis or let-binding
           const isAlreadyBound =
-            metadata.assumptions.some(h => h.name === varName) ||
+            assumptions.some(h => h.name === varName) ||
             letBindings.some(l => l.name === varName);
 
           if (!isAlreadyBound) {
@@ -675,27 +696,50 @@ export function EnhancedProofWorkspace() {
 
       extractVars(goalExpr);
 
-      // Create hypotheses for each unbound variable
-      unboundVars.forEach(varName => {
-        const typeHoleId = `type_${varName}`;
-        const hypothesis: Assumption = {
-          id: crypto.randomUUID(),
-          name: varName,
-          expression: `${varName} : ?${typeHoleId}`,
-          description: `Auto-generated from goal: ${varName} has unknown type ?${typeHoleId}`,
-          introducedBy: 'auto',
-          typeHoleId: typeHoleId  // Track the type hole ID
+      // Add all hypotheses and goal in a single update
+      setRootDefinition(prev => {
+        let newType = prev.type;
+        
+        // Add a Pi-binder for each unbound variable WITH TYPE HOLE
+        unboundVars.forEach(varName => {
+          const typeHoleId = `type_${varName}`;
+          const typeHole = mkHole(typeHoleId, mkType(1), []);
+          
+          // Insert Pi-binder at the end (before the goal)
+          const currentBinders = flattenPiBinders(newType);
+          const currentGoal = getFinalReturnType(newType);
+          newType = hypothesesToPi([...currentBinders, [varName, typeHole]], currentGoal);
+        });
+        
+        // Now build type context from ALL hypotheses (including newly added ones)
+        const allBinders = flattenPiBinders(newType);
+        const typeContext = new Map<string, TTerm>();
+        allBinders.forEach(([name, type]) => {
+          typeContext.set(name, type);
+        });
+
+        // Convert goal expression to TT term
+        const goalTT = expressionNodeToTTerm(goalExpr, new Map(), typeContext);
+
+        // Update the final return type in the type signature
+        newType = setFinalReturnType(newType, goalTT);
+        
+        return {
+          ...prev,
+          type: newType
         };
-        handleAddHypothesis(hypothesis);
       });
     } catch (error) {
       console.warn('Could not parse goal:', error);
-      // On error, set goal to null
-      setGoal(null);
+      // On error, clear goal
+      setGoalExprNode(null);
+      const newType = setFinalReturnType(rootDefinition.type, mkProp());
+      setRootDefinition(prev => ({
+        ...prev,
+        type: newType
+      }));
     }
-
-    // TODO: When we have a root TT term, update it using setGoalInRoot()
-  }, [metadata.assumptions, letBindings, handleAddHypothesis]);
+  }, [assumptions, letBindings, handleAddHypothesis, rootDefinition]);
 
   // Handler to activate a let-binding for editing in the proof workspace
   const handleActivateLetEditor = useCallback((letId: string) => {
@@ -871,25 +915,18 @@ export function EnhancedProofWorkspace() {
           return prev;
         });
       } else if (!focusedHole) {
-        // Otherwise add to global structured proof
-        setStructuredProof(prev => ({
-          ...prev,
-          elements: [...prev.elements, equationElement]
-        }));
+        // Otherwise add to global proof elements
+        setProofElements(prev => [...prev, equationElement]);
       }
       console.log('Applied transformation:', rule.displayName);
       console.log('  New expression:', astToString(newExpression));
 
       // Add new assumptions to context
       if (result.newAssumptions && result.newAssumptions.length > 0) {
-        // Update structured proof metadata
-        setStructuredProof(prev => ({
-          ...prev,
-          metadata: {
-            ...prev.metadata,
-            assumptions: [...prev.metadata.assumptions, ...result.newAssumptions!]
-          }
-        }));
+        // Add each new assumption to the type signature
+        result.newAssumptions.forEach(assumption => {
+          handleAddHypothesis(assumption);
+        });
       }
 
     } catch (error) {
@@ -902,10 +939,7 @@ export function EnhancedProofWorkspace() {
 
   const addComment = useCallback((content: string, commentType: 'explanation' | 'assumption' | 'goal' | 'strategy' = 'explanation') => {
     const commentElement = createCommentElement(content, commentType);
-    setStructuredProof(prev => ({
-      ...prev,
-      elements: [...prev.elements, commentElement]
-    }));
+    setProofElements(prev => [...prev, commentElement]);
   }, []);
 
 
@@ -1003,21 +1037,23 @@ export function EnhancedProofWorkspace() {
         <div style={{ display: 'flex', gap: '12px' }}>
           <button
             onClick={() => {
-              setStructuredProof(_value => {
-                return {
-                  elements: [] as ProofElement[],
-                  metadata: {
-                    assumptions: [{
-                      id: crypto.randomUUID(),
-                      name: 'a',
-                      expression: 'a : ℝ',
-                      description: '',
-                      introducedBy: 'template',
-                    }] as Assumption[],
-                    goal: parseExpressionToAST('a + a = 2 * a'),
-                  }
-                }
-              })
+              // Reset proof elements and goal
+              setProofElements([]);
+              setGoalExprNode(null);
+              
+              // Reset root definition
+              setRootDefinition(createRootTermDefinition('_root', [], mkProp(), 'proof', []));
+              
+              // Add hypothesis and goal
+              const hypothesis: Assumption = {
+                id: crypto.randomUUID(),
+                name: 'a',
+                expression: 'a : ℝ',
+                description: '',
+                introducedBy: 'template',
+              };
+              handleAddHypothesis(hypothesis);
+              handleSetGoal('a + a = 2 * a');
             }}
             style={{
               padding: '8px 16px',
@@ -1077,7 +1113,7 @@ export function EnhancedProofWorkspace() {
         }}>
           <LetManager
             letBindings={letBindings}
-            hypotheses={metadata.assumptions.filter(a => {
+            hypotheses={assumptions.filter(a => {
               // Only show IH when we're in the inductive step context
               if (a.introducedBy === 'induction') {
                 return activeProofContext && activeProofContext.endsWith('-inductive');

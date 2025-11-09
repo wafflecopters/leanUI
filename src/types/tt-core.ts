@@ -279,6 +279,69 @@ export function mkType(level: number): TTerm {
 }
 
 // ============================================================================
+// Hole Replacement
+// ============================================================================
+
+/**
+ * Replace all occurrences of a hole with a given term.
+ * 
+ * This is useful when filling in type holes or other metavariables.
+ * For example, replacing ?type_a with ℝ throughout a term.
+ * 
+ * @param term - The term to search and replace in
+ * @param holeId - ID of the hole to replace
+ * @param replacement - Term to replace the hole with
+ * @returns New term with all holes replaced
+ */
+export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TTerm {
+  switch (term.tag) {
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Hole':
+      // If this is the hole we're looking for, replace it
+      return term.id === holeId ? replacement : term;
+
+    case 'Binder': {
+      const newDomain = replaceHole(term.domain, holeId, replacement);
+      const newBody = replaceHole(term.body, holeId, replacement);
+
+      let newBinderKind: BinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = replaceHole(term.binderKind.defVal, holeId, replacement);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: replaceHole(term.fn, holeId, replacement),
+        arg: replaceHole(term.arg, holeId, replacement)
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: replaceHole(term.term, holeId, replacement),
+        type: replaceHole(term.type, holeId, replacement)
+      };
+  }
+}
+
+// ============================================================================
 // Usage Checking (for safe deletion)
 // ============================================================================
 
@@ -798,16 +861,21 @@ export function createRootTermDefinition(
 }
 
 /**
- * Create the root proof term structure.
+ * @deprecated Use createRootTermDefinition instead. This uses the OLD let-wrapper architecture.
+ * 
+ * Create the root proof term structure (OLD let-wrapper architecture).
  *
- * @deprecated Use createRootTermDefinition instead.
  * This creates a single unified term that represents the entire proof workspace:
  *
- *   let _root : (a: R) → (b: R) → P = ?PROOF
+ *   let _root : (a: R) → (b: R) → P = ?PROOF in _root
  *
  * Where:
  * - The type is a Pi-type formed from hypotheses ending with the goal type P
  * - The value is a proof hole (which will contain nested lets)
+ *
+ * NEW ARCHITECTURE:
+ * Use TermDefinition instead, which separates declaration and definition:
+ *   { name: "_root", type: (a: R) → (b: R) → P, value: ?PROOF }
  *
  * @param hypotheses - List of (name, type) pairs for assumptions
  * @param goal - The goal type we're trying to prove (e.g., an equality)
@@ -819,7 +887,7 @@ export function createRootTermDefinition(
  *   createRootProofTerm([["a", Real], ["b", Real]], someEquality)
  *   // Returns:
  *   //   let _root : (a: ℝ) → (b: ℝ) → (x = y)
- *   //            = ?proof
+ *   //            = ?proof in _root
  */
 export function createRootProofTerm(
   hypotheses: Array<[string, TTerm]>,
@@ -839,6 +907,8 @@ export function createRootProofTerm(
 }
 
 /**
+ * @deprecated Use insertLetBinding or fillHoleWith on TermDefinition.value instead.
+ * 
  * Add a let-binding into the proof term (inside the root's value).
  *
  * This takes an existing proof term and wraps the innermost hole with a new let-binding.
@@ -922,7 +992,9 @@ function fillHoleWithLet(
 }
 
 /**
- * Extract hypotheses from the root proof term.
+ * @deprecated Use flattenPiBinders on TermDefinition.type instead.
+ * 
+ * Extract hypotheses from the root proof term (OLD let-wrapper architecture).
  *
  * Extracts the list of (name, type) pairs from the Pi-type in the root let's type.
  *
@@ -936,26 +1008,13 @@ export function extractHypothesesFromRoot(rootTerm: TTerm): Array<[string, TTerm
   }
 
   // Extract from the type (which is the theorem type)
-  return extractHypothesesFromPi(rootTerm.domain);
+  return flattenPiBinders(rootTerm.domain);
 }
 
 /**
- * Helper: Extract hypotheses from a Pi-type chain
- */
-function extractHypothesesFromPi(term: TTerm): Array<[string, TTerm]> {
-  const hypotheses: Array<[string, TTerm]> = [];
-
-  let current = term;
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
-    hypotheses.push([current.name, current.domain]);
-    current = current.body;
-  }
-
-  return hypotheses;
-}
-
-/**
- * Add a hypothesis to the root proof term.
+ * @deprecated Use insertPiBinder on TermDefinition.type instead.
+ * 
+ * Add a hypothesis to the root proof term (OLD let-wrapper architecture).
  *
  * Updates the root's type to include the new hypothesis in the Pi-type chain.
  *
@@ -976,7 +1035,7 @@ export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: T
   hypotheses.push([hypName, hypType]);
 
   // Get the goal (last thing in the Pi chain)
-  const goal = getGoalFromPi(rootTerm.domain);
+  const goal = getFinalReturnType(rootTerm.domain);
 
   // Rebuild the theorem type
   const newTheoremType = hypothesesToPi(hypotheses, goal);
@@ -992,7 +1051,9 @@ export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: T
 }
 
 /**
- * Get the goal from the root proof term.
+ * @deprecated Use getFinalReturnType on TermDefinition.type instead.
+ * 
+ * Get the goal from the root proof term (OLD let-wrapper architecture).
  *
  * Extracts the goal type (the conclusion) from the end of the Pi-type chain.
  *
@@ -1004,11 +1065,13 @@ export function getGoalFromRoot(rootTerm: TTerm): TTerm {
     throw new Error('Expected root to be a let-binding');
   }
 
-  return getGoalFromPi(rootTerm.domain);
+  return getFinalReturnType(rootTerm.domain);
 }
 
 /**
- * Set the goal in the root proof term.
+ * @deprecated Use setFinalReturnType on TermDefinition.type instead.
+ * 
+ * Set the goal in the root proof term (OLD let-wrapper architecture).
  *
  * Updates the goal type (conclusion) at the end of the Pi-type chain.
  *
@@ -1035,17 +1098,6 @@ export function setGoalInRoot(rootTerm: TTerm, newGoal: TTerm): TTerm {
     domain: newTheoremType,
     body: rootTerm.body
   };
-}
-
-/**
- * Helper: Get the goal from the end of a Pi-type chain
- */
-function getGoalFromPi(term: TTerm): TTerm {
-  let current = term;
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
-    current = current.body;
-  }
-  return current;
 }
 
 // ============================================================================
@@ -1079,5 +1131,477 @@ export function occursIn(index: number, term: TTerm): boolean {
       return occursIn(index, term.type);
     case 'Annot':
       return occursIn(index, term.term) || occursIn(index, term.type);
+  }
+}
+
+// ============================================================================
+// TT Engine Helpers: Working with Binders
+// ============================================================================
+
+/**
+ * Flatten Pi-binders from a type signature into an array.
+ * 
+ * Given: (a: R) → (b: R) → (c: R) → Goal
+ * Returns: [['a', R], ['b', R], ['c', R]]
+ * 
+ * This extracts all the Pi-binders at the top level until we hit a non-Pi term.
+ * 
+ * @param term - The type signature (typically a nested Pi-type)
+ * @returns Array of [name, type] pairs for each Pi-binder
+ */
+export function flattenPiBinders(term: TTerm): Array<[string, TTerm]> {
+  const binders: Array<[string, TTerm]> = [];
+  let current = term;
+  
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    binders.push([current.name, current.domain]);
+    current = current.body;
+  }
+  
+  return binders;
+}
+
+/**
+ * Get the final return type after stripping all Pi-binders.
+ * 
+ * Given: (a: R) → (b: R) → Goal
+ * Returns: Goal
+ * 
+ * @param term - The type signature
+ * @returns The final return type (goal)
+ */
+export function getFinalReturnType(term: TTerm): TTerm {
+  let current = term;
+  
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    current = current.body;
+  }
+  
+  return current;
+}
+
+/**
+ * Insert a Pi-binder at a specific position in the type signature.
+ * 
+ * @param term - The type signature
+ * @param position - Where to insert (0 = first, length = last)
+ * @param name - Name of the new binder
+ * @param binderType - Type of the new binder
+ * @returns Updated type signature with new binder inserted
+ */
+export function insertPiBinder(
+  term: TTerm,
+  position: number,
+  name: string,
+  binderType: TTerm
+): TTerm {
+  // Extract current binders
+  const binders = flattenPiBinders(term);
+  const goal = getFinalReturnType(term);
+  
+  // Insert new binder at position
+  binders.splice(position, 0, [name, binderType]);
+  
+  // Rebuild Pi-type
+  return hypothesesToPi(binders, goal);
+}
+
+/**
+ * Remove a Pi-binder at a specific position in the type signature.
+ * 
+ * @param term - The type signature
+ * @param position - Which binder to remove (0-indexed)
+ * @returns Updated type signature with binder removed
+ */
+export function removePiBinder(term: TTerm, position: number): TTerm {
+  // Extract current binders
+  const binders = flattenPiBinders(term);
+  const goal = getFinalReturnType(term);
+  
+  // Remove binder at position
+  binders.splice(position, 1);
+  
+  // Rebuild Pi-type
+  return hypothesesToPi(binders, goal);
+}
+
+/**
+ * Update the final return type (goal) in a type signature.
+ * 
+ * @param term - The type signature
+ * @param newGoal - New goal type
+ * @returns Updated type signature with new goal
+ */
+export function setFinalReturnType(term: TTerm, newGoal: TTerm): TTerm {
+  const binders = flattenPiBinders(term);
+  return hypothesesToPi(binders, newGoal);
+}
+
+/**
+ * Check if a binder (by name) is used "downstream" in a term.
+ * 
+ * This checks if the binder name appears freely in:
+ * - The body of the binder
+ * - Any subsequent binders
+ * 
+ * This is useful for deletion safety: you can only delete a binder if it's not used downstream.
+ * 
+ * @param term - The term to check
+ * @param binderName - Name of the binder to look for
+ * @param position - Position of the binder (for Pi-chains, check from this position onward)
+ * @returns True if the binder is used downstream
+ */
+export function isBinderUsedDownstream(term: TTerm, binderName: string, position: number = 0): boolean {
+  // For Pi-binders, check if the name is used in bodies after this position
+  const binders = flattenPiBinders(term);
+  const goal = getFinalReturnType(term);
+  
+  // Check in subsequent binder types
+  for (let i = position + 1; i < binders.length; i++) {
+    if (isNameUsed(binderName, binders[i][1])) {
+      return true;
+    }
+  }
+  
+  // Check in the goal
+  if (isNameUsed(binderName, goal)) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Flatten let-bindings from a term into an array.
+ * 
+ * Given: let a = 1 in let b = 2 in let c = 3 in body
+ * Returns: [['a', type_a, 1], ['b', type_b, 2], ['c', type_c, 3]]
+ * 
+ * @param term - The term containing let-bindings
+ * @returns Array of [name, type, value] triples for each let-binding
+ */
+export function flattenLetBindings(term: TTerm): Array<[string, TTerm, TTerm]> {
+  const lets: Array<[string, TTerm, TTerm]> = [];
+  let current = term;
+  
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+    lets.push([current.name, current.domain, current.binderKind.defVal]);
+    current = current.body;
+  }
+  
+  return lets;
+}
+
+/**
+ * Get the final body after stripping all let-bindings.
+ * 
+ * @param term - The term
+ * @returns The final body (after all lets)
+ */
+export function getFinalLetBody(term: TTerm): TTerm {
+  let current = term;
+  
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+    current = current.body;
+  }
+  
+  return current;
+}
+
+/**
+ * Insert a let-binding at a specific position.
+ * 
+ * @param term - The term
+ * @param position - Where to insert (0 = outermost, length = innermost)
+ * @param name - Name of the let-binding
+ * @param letType - Type of the bound value
+ * @param letValue - Value being bound
+ * @returns Updated term with new let-binding inserted
+ */
+export function insertLetBinding(
+  term: TTerm,
+  position: number,
+  name: string,
+  letType: TTerm,
+  letValue: TTerm
+): TTerm {
+  // Extract current lets
+  const lets = flattenLetBindings(term);
+  const body = getFinalLetBody(term);
+  
+  // Insert new let at position
+  lets.splice(position, 0, [name, letType, letValue]);
+  
+  // Rebuild let-chain
+  let result = body;
+  for (let i = lets.length - 1; i >= 0; i--) {
+    const [n, t, v] = lets[i];
+    result = mkLet(n, t, v, result);
+  }
+  
+  return result;
+}
+
+/**
+ * Remove a let-binding at a specific position.
+ * 
+ * @param term - The term
+ * @param position - Which let to remove (0-indexed)
+ * @returns Updated term with let-binding removed
+ */
+export function removeLetBinding(term: TTerm, position: number): TTerm {
+  // Extract current lets
+  const lets = flattenLetBindings(term);
+  const body = getFinalLetBody(term);
+  
+  // Remove let at position
+  lets.splice(position, 1);
+  
+  // Rebuild let-chain
+  let result = body;
+  for (let i = lets.length - 1; i >= 0; i--) {
+    const [n, t, v] = lets[i];
+    result = mkLet(n, t, v, result);
+  }
+  
+  return result;
+}
+
+/**
+ * Check if a let-binding (by name) is used downstream.
+ * 
+ * @param term - The term to check
+ * @param letName - Name of the let-binding
+ * @param position - Position of the let (check from this position onward)
+ * @returns True if the let is used downstream
+ */
+export function isLetUsedDownstream(term: TTerm, letName: string, position: number = 0): boolean {
+  const lets = flattenLetBindings(term);
+  const body = getFinalLetBody(term);
+  
+  // Check in subsequent let values and types
+  for (let i = position + 1; i < lets.length; i++) {
+    const [, type, value] = lets[i];
+    if (isNameUsed(letName, type) || isNameUsed(letName, value)) {
+      return true;
+    }
+  }
+  
+  // Check in the final body
+  if (isNameUsed(letName, body)) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Index path for navigating term structure.
+ * Each element is either:
+ * - 'domain' | 'body' | 'defVal' - to navigate into binders
+ * - 'fn' | 'arg' - to navigate into applications
+ * - number - to navigate into a specific let/pi-binder (indexed from outermost)
+ */
+export type TermPath = Array<'domain' | 'body' | 'defVal' | 'fn' | 'arg' | 'type' | 'term' | number>;
+
+/**
+ * Get the term at a specific path.
+ * 
+ * @param term - The root term
+ * @param path - Path to navigate
+ * @returns The term at that path, or null if path is invalid
+ */
+export function getAtPath(term: TTerm, path: TermPath): TTerm | null {
+  let current: TTerm | null = term;
+  
+  for (const step of path) {
+    if (!current) return null;
+    
+    if (typeof step === 'number') {
+      // Navigate to nth binder
+      if (current.tag === 'Binder') {
+        let index = step;
+        while (index > 0 && current && current.tag === 'Binder') {
+          current = current.body;
+          index--;
+        }
+        if (index > 0) return null;
+      } else {
+        return null;
+      }
+    } else {
+      // Navigate by field name
+      switch (step) {
+        case 'domain':
+          if (current.tag === 'Binder') {
+            current = current.domain;
+          } else {
+            return null;
+          }
+          break;
+        case 'body':
+          if (current.tag === 'Binder') {
+            current = current.body;
+          } else {
+            return null;
+          }
+          break;
+        case 'defVal':
+          if (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+            current = current.binderKind.defVal;
+          } else {
+            return null;
+          }
+          break;
+        case 'fn':
+          if (current.tag === 'App') {
+            current = current.fn;
+          } else {
+            return null;
+          }
+          break;
+        case 'arg':
+          if (current.tag === 'App') {
+            current = current.arg;
+          } else {
+            return null;
+          }
+          break;
+        case 'type':
+          if (current.tag === 'Hole' || current.tag === 'Annot') {
+            current = current.type;
+          } else {
+            return null;
+          }
+          break;
+        case 'term':
+          if (current.tag === 'Annot') {
+            current = current.term;
+          } else {
+            return null;
+          }
+          break;
+        default:
+          return null;
+      }
+    }
+  }
+  
+  return current;
+}
+
+/**
+ * Update the term at a specific path.
+ * 
+ * @param term - The root term
+ * @param path - Path to the term to update
+ * @param newTerm - New term to put at that path
+ * @returns Updated root term with change applied
+ */
+export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm {
+  if (path.length === 0) {
+    return newTerm;
+  }
+  
+  const [step, ...rest] = path;
+  
+  if (typeof step === 'number') {
+    // Navigate to nth binder
+    if (term.tag !== 'Binder') {
+      throw new Error('Cannot navigate by index into non-binder term');
+    }
+    
+    if (step === 0) {
+      // Update this binder's body
+      return {
+        ...term,
+        body: updateAtPath(term.body, rest, newTerm)
+      };
+    } else {
+      // Recurse into body
+      return {
+        ...term,
+        body: updateAtPath(term.body, [step - 1, ...rest], newTerm)
+      };
+    }
+  }
+  
+  // Navigate by field name
+  switch (step) {
+    case 'domain':
+      if (term.tag !== 'Binder') {
+        throw new Error('Cannot access domain of non-binder term');
+      }
+      return {
+        ...term,
+        domain: updateAtPath(term.domain, rest, newTerm)
+      };
+      
+    case 'body':
+      if (term.tag !== 'Binder') {
+        throw new Error('Cannot access body of non-binder term');
+      }
+      return {
+        ...term,
+        body: updateAtPath(term.body, rest, newTerm)
+      };
+      
+    case 'defVal':
+      if (term.tag !== 'Binder' || term.binderKind.tag !== 'BLet') {
+        throw new Error('Cannot access defVal of non-let term');
+      }
+      return {
+        ...term,
+        binderKind: {
+          tag: 'BLet',
+          defVal: updateAtPath(term.binderKind.defVal, rest, newTerm)
+        }
+      };
+      
+    case 'fn':
+      if (term.tag !== 'App') {
+        throw new Error('Cannot access fn of non-app term');
+      }
+      return {
+        ...term,
+        fn: updateAtPath(term.fn, rest, newTerm)
+      };
+      
+    case 'arg':
+      if (term.tag !== 'App') {
+        throw new Error('Cannot access arg of non-app term');
+      }
+      return {
+        ...term,
+        arg: updateAtPath(term.arg, rest, newTerm)
+      };
+      
+    case 'type':
+      if (term.tag !== 'Hole' && term.tag !== 'Annot') {
+        throw new Error('Cannot access type of this term');
+      }
+      if (term.tag === 'Hole') {
+        return {
+          ...term,
+          type: updateAtPath(term.type, rest, newTerm)
+        };
+      } else {
+        return {
+          ...term,
+          type: updateAtPath(term.type, rest, newTerm)
+        };
+      }
+      
+    case 'term':
+      if (term.tag !== 'Annot') {
+        throw new Error('Cannot access term of non-annot');
+      }
+      return {
+        ...term,
+        term: updateAtPath(term.term, rest, newTerm)
+      };
+      
+    default:
+      throw new Error(`Unknown path step: ${step}`);
   }
 }

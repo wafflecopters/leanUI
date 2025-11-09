@@ -189,10 +189,12 @@ export function expressionNodeToTTerm(
 }
 
 // ============================================================================
-// Proof Term Construction for Let-Bindings
+// Proof Term Construction for Let-Bindings (DEPRECATED)
 // ============================================================================
 
 /**
+ * @deprecated This interface is deprecated. Use TermDefinition instead.
+ * 
  * Create a TT proof term structure for a let-binding claim.
  *
  * For a claim like: thm: a+a = 2*a
@@ -208,6 +210,11 @@ export function expressionNodeToTTerm(
  * - The TYPE is the proposition we're proving (a+a = 2*a)
  * - The VALUE starts as a hole with an initial proof term (refl for equality start)
  * - As the user applies rules, we fill in the hole progressively
+ * 
+ * NEW ARCHITECTURE:
+ * - Let-bindings are now part of the TermDefinition.value
+ * - They are nested using the BLet binder kind
+ * - No need for separate LetProofTerm tracking
  */
 export interface LetProofTerm {
   letId: string;           // ID of the let-binding
@@ -219,6 +226,8 @@ export interface LetProofTerm {
 }
 
 /**
+ * @deprecated Use the new equality proof system with EqualityProofState instead.
+ * 
  * Initialize a proof term for an equality claim.
  *
  * For equality chaining, we start with:
@@ -263,6 +272,8 @@ export function createEqualityProofTerm(
 }
 
 /**
+ * @deprecated Use the new TermDefinition-based architecture instead.
+ * 
  * Create a proof term for an induction claim.
  *
  * For induction on n with P(n), we create:
@@ -297,10 +308,12 @@ export function createInductionProofTerm(
 }
 
 // ============================================================================
-// Proof Term Updates (as user applies rules)
+// Proof Term Updates (as user applies rules) - DEPRECATED
 // ============================================================================
 
 /**
+ * @deprecated Use the equality proof system with applyEqualityStep instead.
+ * 
  * Apply a transformation step to the proof term.
  *
  * This is called when the user applies a rule in the UI.
@@ -334,6 +347,8 @@ export function applyProofStep(
 }
 
 /**
+ * @deprecated No longer needed - proof completion is tracked in TermDefinition.
+ * 
  * Check if the proof is complete (goal reached).
  *
  * For equality chaining, we check if:
