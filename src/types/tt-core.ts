@@ -52,12 +52,16 @@ export type BinderKind =
  *   Binder("a", BPi, R, Binder("b", BPi, R, K))
  * Which reads as: (a: R) → (b: R) → K
  */
+
+export type TTermApp = { tag: 'App'; fn: TTerm; arg: TTerm }
+export type TTermConst = { tag: 'Const'; name: string; type: TTerm }
+
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: number }                         // Type_i, Prop = Type_0
   | { tag: 'Binder'; name: string; binderKind: BinderKind; domain: TTerm; body: TTerm }  // Unified binder
-  | { tag: 'App'; fn: TTerm; arg: TTerm }                  // Function application (f a)
-  | { tag: 'Const'; name: string; type: TTerm }            // Named constant (nat_elim, eq, etc.)
+  | TTermApp   // Function application (f a)
+  | TTermConst // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
 
@@ -105,16 +109,16 @@ export interface THole {
  */
 export const TT_CONSTANTS = {
   // Natural numbers
-  Nat: { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as TTerm,
-  Zero: { tag: 'Const', name: '0', type: { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } } as TTerm,
+  Nat: { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as const,
+  Zero: { tag: 'Const', name: '0', type: { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } } as const,
   Succ: (() => {
     // Succ : ℕ → ℕ
     const nat = { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as TTerm;
-    return { tag: 'Const', name: 'succ', type: mkPi(nat, nat, 'n') } as TTerm;
+    return { tag: 'Const', name: 'succ', type: mkPi(nat, nat, 'n') } as const;
   })(),
 
   // Real numbers (placeholder - would need proper construction)
-  Real: { tag: 'Const', name: 'ℝ', type: { tag: 'Sort', level: 0 } } as TTerm,
+  Real: { tag: 'Const', name: 'ℝ', type: { tag: 'Sort', level: 0 } } as const,
 
   // Equality type
   // eq : Π (A : Type), A → A → Prop
@@ -127,9 +131,20 @@ export const TT_CONSTANTS = {
       mkPi(A, mkPi(A, sort0, 'y'), 'x'),
       'A'
     );
-    return { tag: 'Const', name: 'eq', type } as TTerm;
+    return { tag: 'Const', name: 'eq', type } as const;
   })(),
-};
+} as const satisfies Record<string, TTermConst>
+
+export type TTConstantInfo =
+  | { tag: 'binop', infixName?: string }
+
+export const TT_CONSTANTS_INFO = {
+  //  eq: { tag: 'binop', infixName: '=' }
+} satisfies Partial<Record<typeof TT_CONSTANTS[keyof typeof TT_CONSTANTS]['name'], TTConstantInfo>>
+
+export function ttconstInfo(term: TTermConst): TTConstantInfo | undefined {
+  return TT_CONSTANTS_INFO[term.name as keyof typeof TT_CONSTANTS_INFO]
+}
 
 /**
  * Natural number eliminator (induction principle)

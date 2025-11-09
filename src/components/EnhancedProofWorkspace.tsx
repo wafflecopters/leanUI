@@ -13,7 +13,8 @@ import {
   createTransformationEquationElement,
   createCommentElement,
   LetElement,
-  parseExpressionToAST
+  parseExpressionToAST,
+  ProofElement
 } from '../types/enhanced-focus';
 import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { ExpressionInput } from './ExpressionRenderer';
@@ -226,10 +227,6 @@ export function EnhancedProofWorkspace() {
   const [currentExpression, setCurrentExpression] = useState<ExpressionNode | null>(null);
 
   const [focusPath, setFocusPath] = useState<FocusPath>([]);
-  const [context, setContext] = useState<ProofContext>({
-    assumptions: [],
-    variables: new Map()
-  });
   const [steps, setSteps] = useState<EnhancedProofStep[]>([]);
 
   // Track which proof context we're in (null = main proof, or an element id)
@@ -243,13 +240,22 @@ export function EnhancedProofWorkspace() {
     }
   });
 
+  const { metadata } = structuredProof
+  const { goal } = metadata
+
+  const setGoal = useCallback((newGoal: ExpressionNode | null) => {
+    setStructuredProof(current => {
+      return {
+        ...current,
+        metadata: { ...current.metadata, goal: newGoal }
+      }
+    })
+  }, [setStructuredProof])
+
   // State for claim insertion
 
   // State for let-bindings
   const [letBindings, setLetBindings] = useState<LetElement[]>([]);
-
-  // State for goal
-  const [goal, setGoal] = useState<ExpressionNode | null>(null);
 
   // ============================================================================
   // NEW ARCHITECTURE: Term Definition + Focused Hole
@@ -282,7 +288,7 @@ export function EnhancedProofWorkspace() {
   // Update rootTerm and rootDefinition whenever hypotheses or goal change
   useEffect(() => {
     // Convert UI hypotheses to TT term format
-    const ttHypotheses: Array<[string, TTerm]> = context.assumptions.map(h => {
+    const ttHypotheses: Array<[string, TTerm]> = metadata.assumptions.map(h => {
       // Parse the hypothesis expression to extract type
       // Format is either "name : Type" or just "Type"
       const match = h.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
@@ -328,7 +334,7 @@ export function EnhancedProofWorkspace() {
     const newDefinition = createRootTermDefinition('_root', ttHypotheses, goalTerm, 'proof', []);
     setRootDefinition(newDefinition);
     setFocusedHole('proof'); // Reset focus to initial hole
-  }, [context.assumptions, goal]);
+  }, [metadata.assumptions, goal]);
 
   // TT proof terms: Map from let-binding ID to its proof term
   const [letProofTerms, setLetProofTerms] = useState<Map<string, LetProofTerm>>(new Map());
@@ -566,11 +572,6 @@ export function EnhancedProofWorkspace() {
   }, [letBindings, goal, rootDefinition]);
 
   const handleAddHypothesis = useCallback((hypothesis: Assumption) => {
-    setContext(prev => ({
-      ...prev,
-      assumptions: [...prev.assumptions, hypothesis]
-    }));
-
     setStructuredProof(prev => ({
       ...prev,
       metadata: {
@@ -582,14 +583,14 @@ export function EnhancedProofWorkspace() {
 
   const handleDeleteHypothesis = useCallback((id: string) => {
     // Find the hypothesis to delete
-    const hypothesis = context.assumptions.find(h => h.id === id);
+    const hypothesis = metadata.assumptions.find(h => h.id === id);
     if (!hypothesis) return;
 
     const varName = hypothesis.name;
 
     // Build type context for checking
     const typeContext = new Map<string, TTerm>();
-    context.assumptions.forEach(h => {
+    metadata.assumptions.forEach(h => {
       if (h.id === id) return; // Skip the one we're deleting
       const match = h.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
       if (match) {
@@ -622,12 +623,6 @@ export function EnhancedProofWorkspace() {
       return;
     }
 
-    // Safe to delete
-    setContext(prev => ({
-      ...prev,
-      assumptions: prev.assumptions.filter(a => a.id !== id)
-    }));
-
     setStructuredProof(prev => ({
       ...prev,
       metadata: {
@@ -635,14 +630,9 @@ export function EnhancedProofWorkspace() {
         assumptions: prev.metadata.assumptions.filter(a => a.id !== id)
       }
     }));
-  }, [context, goal, rootDefinition]);
+  }, [metadata, goal, rootDefinition]);
 
   const handleUpdateHypothesis = useCallback((id: string, updatedHypothesis: Assumption) => {
-    setContext(prev => ({
-      ...prev,
-      assumptions: prev.assumptions.map(a => a.id === id ? updatedHypothesis : a)
-    }));
-
     setStructuredProof(prev => ({
       ...prev,
       metadata: {
@@ -673,7 +663,7 @@ export function EnhancedProofWorkspace() {
 
           // Check if it's not already a hypothesis or let-binding
           const isAlreadyBound =
-            context.assumptions.some(h => h.name === varName) ||
+            metadata.assumptions.some(h => h.name === varName) ||
             letBindings.some(l => l.name === varName);
 
           if (!isAlreadyBound) {
@@ -705,7 +695,7 @@ export function EnhancedProofWorkspace() {
     }
 
     // TODO: When we have a root TT term, update it using setGoalInRoot()
-  }, [context.assumptions, letBindings, handleAddHypothesis]);
+  }, [metadata.assumptions, letBindings, handleAddHypothesis]);
 
   // Handler to activate a let-binding for editing in the proof workspace
   const handleActivateLetEditor = useCallback((letId: string) => {
@@ -735,7 +725,7 @@ export function EnhancedProofWorkspace() {
     }
 
     try {
-      const result = rule.applyRule(focusedNode, currentExpression, params, context);
+      const result = rule.applyRule(focusedNode, currentExpression, params, metadata);
       const newExpression = setNodeAtPath(currentExpression, focusPath, result.newNode);
 
       // Update the raw string of the new expression
@@ -892,11 +882,6 @@ export function EnhancedProofWorkspace() {
 
       // Add new assumptions to context
       if (result.newAssumptions && result.newAssumptions.length > 0) {
-        setContext(prev => ({
-          ...prev,
-          assumptions: [...prev.assumptions, ...result.newAssumptions!]
-        }));
-
         // Update structured proof metadata
         setStructuredProof(prev => ({
           ...prev,
@@ -913,7 +898,7 @@ export function EnhancedProofWorkspace() {
       const focusedNodeStr = focusedNode ? astToString(focusedNode) : 'unknown expression';
       alert(`Error applying rule "${rule.displayName}" to "${focusedNodeStr}":\n\n${errorMessage}`);
     }
-  }, [currentExpression, focusPath, focusedNode, context]);
+  }, [currentExpression, focusPath, focusedNode, metadata]);
 
   const addComment = useCallback((content: string, commentType: 'explanation' | 'assumption' | 'goal' | 'strategy' = 'explanation') => {
     const commentElement = createCommentElement(content, commentType);
@@ -932,7 +917,7 @@ export function EnhancedProofWorkspace() {
     const rules: ExtendedRule[] = [];
 
     // Check forward direction
-    if (rule.isApplicableToFocus(focusedNode, currentExpression, context)) {
+    if (rule.isApplicableToFocus(focusedNode, currentExpression, metadata)) {
       rules.push({
         ...rule,
         isReverse: false,
@@ -944,7 +929,7 @@ export function EnhancedProofWorkspace() {
 
     // Check reverse direction for bidirectional rules
     if (rule.bidirectional && rule.isApplicableReverse && rule.applyReverse) {
-      if (rule.isApplicableReverse(focusedNode, currentExpression, context)) {
+      if (rule.isApplicableReverse(focusedNode, currentExpression, metadata)) {
         // Check if reverse direction needs parameters
         // This happens when the 'to' pattern has fewer variables than 'from'
         // For example: div_self: x/x -> 1, reverse: 1 -> x/x needs x
@@ -1006,7 +991,6 @@ export function EnhancedProofWorkspace() {
       maxWidth: '1200px',
       margin: '0 auto'
     }}>
-      {/* Header */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -1017,6 +1001,37 @@ export function EnhancedProofWorkspace() {
       }}>
         <h2 style={{ margin: 0, color: '#007acc' }}>Mathematical Proof Workspace</h2>
         <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            onClick={() => {
+              setStructuredProof(_value => {
+                return {
+                  elements: [] as ProofElement[],
+                  metadata: {
+                    assumptions: [{
+                      id: crypto.randomUUID(),
+                      name: 'a',
+                      expression: 'a : ℝ',
+                      description: '',
+                      introducedBy: 'template',
+                    }] as Assumption[],
+                    goal: parseExpressionToAST('a + a = 2 * a'),
+                  }
+                }
+              })
+            }}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: '#2845a7',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: 'bold'
+            }}
+          >
+            a+a=2*a
+          </button>
           <button
             onClick={() => {
               const comment = prompt('Add a comment to the proof:');
@@ -1062,7 +1077,7 @@ export function EnhancedProofWorkspace() {
         }}>
           <LetManager
             letBindings={letBindings}
-            hypotheses={context.assumptions.filter(a => {
+            hypotheses={metadata.assumptions.filter(a => {
               // Only show IH when we're in the inductive step context
               if (a.introducedBy === 'induction') {
                 return activeProofContext && activeProofContext.endsWith('-inductive');
@@ -1089,7 +1104,7 @@ export function EnhancedProofWorkspace() {
             rulesByCategory={rulesByCategory}
             focusedNode={focusedNode}
             currentExpression={currentExpression}
-            context={context}
+            context={metadata}
             addStep={addStep}
           />
         )}

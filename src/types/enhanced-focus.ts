@@ -23,7 +23,6 @@ export interface Assumption {
 
 export interface ProofContext {
   assumptions: Assumption[];
-  variables: Map<string, string>; // variable name -> type
 }
 
 // Structured proof rendering types

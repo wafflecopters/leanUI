@@ -12,7 +12,7 @@
  * separate from the UI representation.
  */
 
-import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrint } from '../types/tt-core';
+import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrint, TTermApp } from '../types/tt-core';
 
 // Helper to convert TTerm to plain text string
 function ttermToString(term: TTerm): string {
@@ -276,9 +276,7 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
       },
       Sort: (term) => <span>Sort<sub>{term.level}</sub></span>,
       Binder: (term) => <PrintedBinderTerm binderTerm={term} context={context} />,
-      App: (term) => <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
-        (<PrintedTerm term={term.fn} context={context} /><div style={{ width: '4px' }}></div><PrintedTerm term={term.arg} context={context} />)
-      </div>,
+      App: (term) => <PrintedAppTerm term={term} context={context} />,
       Const: (term) => <span>{term.name}</span>,
       Hole: (term) => <span style={{
         backgroundColor: '#ffeb3b',
@@ -293,6 +291,31 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
     </div>
   )
 }
+
+function PrintedAppTerm({ term, context = [] }: { term: TTermApp; context?: TContext }) {
+  // if (term.fn.tag === 'App' && term.fn.fn.tag === 'Const') {
+  //   const info = ttconstInfo(term.fn.fn)
+  //   if (info) {
+  //     return (
+  //       <PrintedInfixBinopTerm fn={term.fn.fn} arg0={term.fn.arg} arg1={term.arg} info={info} context={context} />
+  //     )
+  //   }
+  // }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+      (<PrintedTerm term={term.fn} context={context} /><div style={{ width: '4px' }}></div><PrintedTerm term={term.arg} context={context} />)
+    </div>
+  )
+}
+
+// function PrintedInfixBinopTerm({ fn, arg0, arg1, info, context = [] }: { fn: TTermConst, arg0: TTerm, arg1: TTerm, info: TTConstantInfo; context?: TContext }) {
+//   return (
+//     <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center' }}>
+//       (<PrintedTerm term={arg0} context={context} /><div>{info.infixName ?? fn.name}</div><PrintedTerm term={arg1} context={context} />)
+//     </div>
+//   )
+// }
 
 function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm, { tag: "Binder" }>; context: TContext }) {
   // Extend context with this binding for the body

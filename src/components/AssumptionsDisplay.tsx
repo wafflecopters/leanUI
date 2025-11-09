@@ -5,10 +5,9 @@ interface AssumptionsDisplayProps {
 }
 
 export function AssumptionsDisplay({ context }: AssumptionsDisplayProps) {
-  const hasVariables = context.variables.size > 0;
   const hasAssumptions = context.assumptions.length > 0;
 
-  if (!hasVariables && !hasAssumptions) {
+  if (!hasAssumptions) {
     return null;
   }
 
@@ -32,41 +31,6 @@ export function AssumptionsDisplay({ context }: AssumptionsDisplayProps) {
       }}>
         Context
       </div>
-
-      {hasVariables && (
-        <div style={{ marginBottom: hasAssumptions ? '8px' : '0' }}>
-          <div style={{
-            fontSize: '12px',
-            color: '#6c757d',
-            marginBottom: '4px',
-            fontWeight: '500'
-          }}>
-            Variables:
-          </div>
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: '8px'
-          }}>
-            {Array.from(context.variables.entries()).map(([variable, type]) => (
-              <span
-                key={variable}
-                style={{
-                  backgroundColor: '#e7f3ff',
-                  color: '#0066cc',
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  fontSize: '13px',
-                  fontFamily: 'monospace',
-                  border: '1px solid #b3d9ff'
-                }}
-              >
-                {variable} : {type}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
 
       {hasAssumptions && (
         <div>
