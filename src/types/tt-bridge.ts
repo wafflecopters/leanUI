@@ -42,6 +42,89 @@ import { fillHole } from './tt-typecheck';
  *
  * Context provides the mapping from variable names to De Bruijn indices.
  */
+/**
+ * Convert ExpressionNode focus path to TTerm path.
+ * 
+ * ExpressionNode and TTerm have different tree structures:
+ * - ExpressionNode for `a + b`: binop with children [a, b]
+ * - TTerm for `a + b`: App(App(+, a), b)
+ * 
+ * So ExpressionNode path [0] (left child) maps to TTerm path [0, 1]
+ * And ExpressionNode path [1] (right child) maps to TTerm path [1]
+ */
+export function expressionPathToTTermPath(
+  expr: ExpressionNode,
+  exprPath: number[]
+): number[] {
+  if (exprPath.length === 0) {
+    return [];
+  }
+
+  const [head, ...rest] = exprPath;
+
+  switch (expr.type) {
+    case 'binop':
+      if (head === 0) {
+        // Left child: in TTerm, this is [0, 1] (fn.arg of App(App(op, left), right))
+        const leftChild = expr.children[0];
+        const remainingPath = expressionPathToTTermPath(leftChild, rest);
+        return [0, 1, ...remainingPath];
+      } else if (head === 1) {
+        // Right child: in TTerm, this is [1] (arg of App(App(op, left), right))
+        const rightChild = expr.children[1];
+        const remainingPath = expressionPathToTTermPath(rightChild, rest);
+        return [1, ...remainingPath];
+      }
+      throw new Error(`Invalid binop child index: ${head}`);
+
+    case 'unop':
+      if (head === 0) {
+        // Unary operator child: in TTerm, this is [1] (arg of App(op, child))
+        const child = expr.children[0];
+        const remainingPath = expressionPathToTTermPath(child, rest);
+        return [1, ...remainingPath];
+      }
+      throw new Error(`Invalid unop child index: ${head}`);
+
+    case 'application':
+      // Application: each child is just [head, ...]
+      // This maps directly since both are application nodes
+      if (head >= 0 && head < expr.children.length) {
+        const child = expr.children[head];
+        const remainingPath = expressionPathToTTermPath(child, rest);
+        // In TTerm, applications are right-associative nested Apps
+        // For now, assume direct mapping (may need refinement)
+        return [head, ...remainingPath];
+      }
+      throw new Error(`Invalid application child index: ${head}`);
+
+    case 'equality':
+      if (head === 0) {
+        // Left side of equality: in TTerm eq is App(App(App(eq, type), left), right)
+        // So left is [0, 1] (the fn.arg of the middle App)
+        const leftChild = expr.children[0];
+        const remainingPath = expressionPathToTTermPath(leftChild, rest);
+        return [0, 1, ...remainingPath];
+      } else if (head === 1) {
+        // Right side: [1]
+        const rightChild = expr.children[1];
+        const remainingPath = expressionPathToTTermPath(rightChild, rest);
+        return [1, ...remainingPath];
+      }
+      throw new Error(`Invalid equality child index: ${head}`);
+
+    case 'variable':
+    case 'literal':
+    case 'hole':
+      // Leaf nodes - no further path
+      return [];
+
+    default:
+      // For unknown types, pass through directly (may not be correct)
+      return exprPath;
+  }
+}
+
 export function expressionNodeToTTerm(
   expr: ExpressionNode,
   context: Map<string, number> = new Map(),

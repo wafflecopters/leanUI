@@ -21,7 +21,7 @@
 import { useState, useMemo } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
 import { ASTModal } from './ASTModal';
-import { expressionNodeToTTerm } from '../types/tt-bridge';
+import { expressionNodeToTTerm, expressionPathToTTermPath } from '../types/tt-bridge';
 import { asLambdaByExtractingTermAtIndexPaths, prettyPrint } from '../types/tt-core';
 
 interface FocusedExpressionRendererProps {
@@ -51,8 +51,11 @@ export function FocusedExpressionRenderer({
       // Convert ExpressionNode to TTerm
       const ttermExpr = expressionNodeToTTerm(expression);
 
+      // Convert ExpressionNode path to TTerm path
+      const ttermPath = expressionPathToTTermPath(expression, focusPath);
+
       // Extract the term at the focus path
-      const result = asLambdaByExtractingTermAtIndexPaths(ttermExpr, [focusPath]);
+      const result = asLambdaByExtractingTermAtIndexPaths(ttermExpr, [ttermPath]);
 
       if ('error' in result) {
         return { error: result.error };

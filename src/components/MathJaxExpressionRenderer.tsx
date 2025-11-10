@@ -3,7 +3,7 @@ import { ExpressionNode, FocusPath } from '../types/enhanced-focus';
 import { findSyntaxRule } from '../config/syntax-mapping';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
-import { expressionNodeToTTerm } from '../types/tt-bridge';
+import { expressionNodeToTTerm, expressionPathToTTermPath } from '../types/tt-bridge';
 import { asLambdaByExtractingTermAtIndexPaths, prettyPrint } from '../types/tt-core';
 
 interface MathJaxExpressionRendererProps<T> {
@@ -161,8 +161,11 @@ export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFoc
       // Convert ExpressionNode to TTerm
       const ttermExpr = expressionNodeToTTerm(exprNode);
 
+      // Convert ExpressionNode path to TTerm path
+      const ttermPath = expressionPathToTTermPath(exprNode, focusPath);
+
       // Extract the term at the focus path
-      const result = asLambdaByExtractingTermAtIndexPaths(ttermExpr, [focusPath]);
+      const result = asLambdaByExtractingTermAtIndexPaths(ttermExpr, [ttermPath]);
 
       if ('error' in result) {
         return { error: result.error };
