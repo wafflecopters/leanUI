@@ -28,6 +28,7 @@ interface LetManagerProps {
   focusPath?: number[];
   onFocusChange?: (path: number[]) => void;
   showFocusAsBetaRedux?: boolean;
+  showFocusType?: boolean;
 }
 
 export function LetManager({
@@ -44,7 +45,8 @@ export function LetManager({
   onActivateLetEditor,
   focusPath = [],
   onFocusChange,
-  showFocusAsBetaRedux = false
+  showFocusAsBetaRedux = false,
+  showFocusType = true
 }: LetManagerProps) {
   const [showAddLet, setShowAddLet] = useState(false);
   const [showAddHypothesis, setShowAddHypothesis] = useState(false);
@@ -1051,6 +1053,7 @@ export function LetManager({
                       isActive={true}
                       readonly={false}
                       showFocusAsBetaRedux={showFocusAsBetaRedux}
+                      showFocusType={showFocusType}
                     />
                   </div>
                 ) : (

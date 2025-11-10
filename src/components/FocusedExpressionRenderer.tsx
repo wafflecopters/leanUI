@@ -22,7 +22,23 @@ import { useState, useMemo } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
 import { ASTModal } from './ASTModal';
 import { expressionNodeToTTerm, expressionPathToTTermPath } from '../types/tt-bridge';
-import { asLambdaByExtractingTermAtIndexPaths, prettyPrint } from '../types/tt-core';
+import { asLambdaByExtractingTermAtIndexPaths, prettyPrint, TContext, TTerm } from '../types/tt-core';
+import { inferType } from '../types/tt-typecheck-inference';
+
+// Helper to convert TContext to Maps for expressionNodeToTTerm
+function contextToMaps(context: TContext): { varContext: Map<string, number>; typeContext: Map<string, TTerm> } {
+  const varContext = new Map<string, number>();
+  const typeContext = new Map<string, TTerm>();
+
+  context.forEach((binding, index) => {
+    // De Bruijn indices are 0 = most recent, so we reverse the index
+    const debruijnIndex = context.length - 1 - index;
+    varContext.set(binding.name, debruijnIndex);
+    typeContext.set(binding.name, binding.type);
+  });
+
+  return { varContext, typeContext };
+}
 
 interface FocusedExpressionRendererProps {
   expression: ExpressionNode;
@@ -30,6 +46,8 @@ interface FocusedExpressionRendererProps {
   onFocusChange: (newPath: FocusPath) => void;
   isActive?: boolean;
   showFocusAsBetaRedux?: boolean;
+  showFocusType?: boolean;
+  typeContext?: TContext;
 }
 
 export function FocusedExpressionRenderer({
@@ -37,9 +55,37 @@ export function FocusedExpressionRenderer({
   focusPath,
   onFocusChange,
   isActive = false,
-  showFocusAsBetaRedux = false
+  showFocusAsBetaRedux = false,
+  showFocusType = false,
+  typeContext = []
 }: FocusedExpressionRendererProps) {
   const [hoveredPath, setHoveredPath] = useState<FocusPath | null>(null);
+
+  // Compute type of focused term if enabled
+  const focusedTypeResult = useMemo(() => {
+    if (!showFocusType || focusPath.length === 0) {
+      return null;
+    }
+
+    try {
+      const focusedNode = getNodeAtPath(expression, focusPath);
+      if (!focusedNode) {
+        return { error: 'Invalid focus path' };
+      }
+
+      const { varContext, typeContext: typeCtxMap } = contextToMaps(typeContext);
+      const focusedTTerm = expressionNodeToTTerm(focusedNode, varContext, typeCtxMap);
+      const typeResult = inferType(focusedTTerm, typeContext);
+
+      if (!typeResult.ok) {
+        return { error: typeResult.error };
+      }
+
+      return { type: prettyPrint(typeResult.type) };
+    } catch (error) {
+      return { error: String(error) };
+    }
+  }, [expression, focusPath, showFocusType, typeContext]);
 
   // Compute beta-redux representation if enabled
   const betaReduxResult = useMemo(() => {
@@ -295,6 +341,40 @@ export function FocusedExpressionRenderer({
           </button>
         )}
       </div>
+
+      {/* Type Inference Footer */}
+      {focusedTypeResult && (
+        <div style={{
+          marginTop: '12px',
+          padding: '12px',
+          backgroundColor: '#f0fff0',
+          border: '2px solid #28a745',
+          borderRadius: '6px',
+          fontSize: '14px',
+          fontFamily: 'monospace'
+        }}>
+          <div style={{
+            fontWeight: 'bold',
+            color: '#28a745',
+            marginBottom: '8px',
+            fontSize: '12px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            Inferred Type
+          </div>
+
+          {'error' in focusedTypeResult ? (
+            <div style={{ color: '#d73a49', fontSize: '13px' }}>
+              Error: {focusedTypeResult.error}
+            </div>
+          ) : (
+            <div style={{ color: '#155724' }}>
+              {focusedTypeResult.type}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Beta-Redux Footer */}
       {betaReduxResult && (

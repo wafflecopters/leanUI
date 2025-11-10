@@ -7,6 +7,9 @@
       "DOM",
       "DOM.Iterable"
     ],
+    "types": [
+      "bun-types"
+    ],
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
@@ -24,8 +27,6 @@
     "src"
   ],
   "exclude": [
-    "**/*.test.ts",
-    "**/*.test.tsx",
     "node_modules"
   ],
   "references": [

@@ -256,13 +256,10 @@ function piBinderToAssumption([name, type]: [string, TTerm], id: string): Assump
  * Convert a UI Assumption to a TT Pi-binder.
  */
 function assumptionToPiBinder(assumption: Assumption): [string, TTerm] {
-  // Parse the expression to extract type
+  // Check if expression is just the type (e.g., "ℝ") or full declaration (e.g., "a : ℝ")
   const match = assumption.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
-  if (!match) {
-    throw new Error(`Invalid assumption expression: ${assumption.expression}`);
-  }
+  const typeStr = match ? match[2].trim() : assumption.expression.trim();
 
-  const typeStr = match[2].trim();
   let typeTerm: TTerm;
 
   // Check if this is a type hole reference (e.g., "?type_a")
@@ -627,37 +624,40 @@ export function EnhancedProofWorkspace() {
       // Store the goal ExpressionNode for UI display
       setGoalExprNode(goalExpr);
 
-      const unboundVars = new Set<string>();
-
-      // Reserved keywords in type theory that should not be treated as variables
-      const reservedKeywords = new Set(['Type', 'Prop', 'Sort']);
-
-      const extractVars = (node: ExpressionNode) => {
-        if (node.type === 'variable' && typeof node.value === 'string') {
-          const varName = node.value;
-
-          // Skip reserved keywords
-          if (reservedKeywords.has(varName)) {
-            return;
-          }
-
-          // Check if it's not already a hypothesis or let-binding
-          const isAlreadyBound =
-            assumptions.some(h => h.name === varName) ||
-            letBindings.some(l => l.name === varName);
-
-          if (!isAlreadyBound) {
-            unboundVars.add(varName);
-          }
-        }
-        node.children?.forEach(extractVars);
-      };
-
-      extractVars(goalExpr);
-
       // Add all hypotheses and goal in a single update
       setRootDefinition(prev => {
         let newType = prev.type;
+        const unboundVars = new Set<string>();
+
+        // Reserved keywords in type theory that should not be treated as variables
+        const reservedKeywords = new Set(['Type', 'Prop', 'Sort']);
+
+        // Get current binders from the type we're about to update
+        const currentBinders = flattenPiBinders(newType);
+        const currentBinderNames = new Set(currentBinders.map(([name]) => name));
+
+        const extractVars = (node: ExpressionNode) => {
+          if (node.type === 'variable' && typeof node.value === 'string') {
+            const varName = node.value;
+
+            // Skip reserved keywords
+            if (reservedKeywords.has(varName)) {
+              return;
+            }
+
+            // Check if it's not already a hypothesis or let-binding
+            const isAlreadyBound =
+              currentBinderNames.has(varName) ||
+              letBindings.some(l => l.name === varName);
+
+            if (!isAlreadyBound) {
+              unboundVars.add(varName);
+            }
+          }
+          node.children?.forEach(extractVars);
+        };
+
+        extractVars(goalExpr);
 
         // Add a Pi-binder for each unbound variable WITH TYPE HOLE
         unboundVars.forEach(varName => {
@@ -1065,18 +1065,16 @@ export function EnhancedProofWorkspace() {
               setProofElements([]);
               setGoalExprNode(null);
 
-              // Reset root definition
-              setRootDefinition(createRootTermDefinition('_root', [], mkProp(), 'proof', []));
-
-              // Add hypothesis and goal
+              // Reset root definition with the hypothesis already included
               const hypothesis: Assumption = {
                 id: crypto.randomUUID(),
                 name: 'a',
-                expression: 'a : ℝ',
+                expression: 'ℝ',
                 description: '',
                 introducedBy: 'template',
               };
-              handleAddHypothesis(hypothesis);
+
+              setRootDefinition(createRootTermDefinition('_root', [['a', { tag: 'Const', name: 'ℝ', type: mkProp() }]], mkProp(), 'proof', []));
               handleSetGoal('a + a = 2 * a');
             }}
             style={{
