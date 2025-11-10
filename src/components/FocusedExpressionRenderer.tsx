@@ -1,3 +1,23 @@
+/**
+ * FocusedExpressionRenderer - Reusable Term Editor Component
+ * 
+ * This component provides an interactive editor for expression trees with focus-based navigation.
+ * It's designed to be reusable for multiple purposes:
+ * 
+ * 1. Creating terms from scratch (building new expressions)
+ * 2. Iterating on existing terms (editing/transforming expressions)
+ * 3. Proof construction (applying rules at focused subexpressions)
+ * 
+ * Key features:
+ * - Focus path tracking for precise subexpression selection
+ * - Click-to-focus navigation through the expression tree
+ * - Hover highlighting for better UX
+ * - Breadcrumb navigation for current focus location
+ * 
+ * The component is stateless w.r.t. the expression and focus - all state
+ * is managed by the parent, making it easy to embed in different contexts.
+ */
+
 import { useState } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
 import { ASTModal } from './ASTModal';

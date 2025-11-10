@@ -99,8 +99,8 @@ export interface InductionProofElement extends ProofElement {
  */
 export type TermEditorMode =
   | { tag: 'value' }  // Hand-written term (text input)
-  | { tag: 'equality-left'; startExpr: ExpressionNode }   // Equality chain starting from left side of goal
-  | { tag: 'equality-right'; startExpr: ExpressionNode }  // Equality chain starting from right side of goal
+  | { tag: 'equality-left'; startExpr: ExpressionNode; goalIndex?: number }   // Equality chain starting from left side of goal (goalIndex for future multi-goal support)
+  | { tag: 'equality-right'; startExpr: ExpressionNode; goalIndex?: number }  // Equality chain starting from right side of goal (goalIndex for future multi-goal support)
   | { tag: 'cases'; eliminator: 'nat' | 'bool' };         // Case split (nat_elim or bool_elim)
 
 export interface LetElement extends ProofElement {

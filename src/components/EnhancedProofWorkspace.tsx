@@ -20,13 +20,12 @@ import { ExpressionInput } from './ExpressionRenderer';
 import { ASTDebugPanel } from './ASTDebugPanel';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkEq, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, insertLetBinding, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../types/tt-core';
+import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../types/tt-core';
 import {
   LetProofTerm,
   buildFullProofTerm,
   applyProofStep,
   expressionNodeToTTerm,
-  startEqualityProof,
   applyEqualityStep
 } from '../types/tt-bridge';
 import { findHole, fillHoleWith } from '../types/tt-typecheck';
@@ -58,7 +57,7 @@ interface EnhancedRuleApplicationProps {
   focusedNode: ExpressionNode | null;
   rootExpression: ExpressionNode;
   context: ProofContext;
-  onApply: (rule: EnhancedFocusRule, params?: any) => void;
+  onApply: (rule: ExtendedRule, params?: any) => void;
 }
 
 function EnhancedRuleApplication({ rule, focusedNode, onApply }: EnhancedRuleApplicationProps) {
@@ -339,12 +338,8 @@ export function EnhancedProofWorkspace() {
 
   // Build a ProofContext for compatibility with existing code
   const metadata = useMemo((): ProofContext => ({
-    currentExpression: currentExpression!,
-    steps,
-    variables: new Map(),
-    hypotheses: [],
     assumptions
-  }), [currentExpression, steps, assumptions]);
+  }), [assumptions]);
 
   // ============================================================================
   // OLD ARCHITECTURE (keeping for compatibility during migration)
@@ -426,56 +421,15 @@ export function EnhancedProofWorkspace() {
   // Handlers for let-bindings and hypotheses
   const handleAddLet = useCallback((letElement: LetElement) => {
     // ====================================================================
-    // Step 1: Initialize equality proof state if this is an equality proof
+    // SIMPLIFIED: Just convert the value to TT, no special equality logic
     // ====================================================================
-    const isEqualityProof = letElement.editorMode.tag === 'equality-left' || letElement.editorMode.tag === 'equality-right';
-
-    if (isEqualityProof && goal) {
-      try {
-        // Parse goal as equality A = B
-        const goalStr = astToString(goal);
-        const eqMatch = goalStr.match(/^(.+?)\s*=\s*(.+)$/);
-
-        if (eqMatch) {
-          const leftStr = eqMatch[1].trim();
-          const rightStr = eqMatch[2].trim();
-
-          // Convert to TT terms
-          const leftTT = expressionNodeToTTerm(parseExpressionToAST(leftStr));
-          const rightTT = expressionNodeToTTerm(parseExpressionToAST(rightStr));
-
-          // Initialize equality proof state
-          const direction = letElement.editorMode.tag === 'equality-left' ? 'left' : 'right';
-          const eqState = startEqualityProof(leftTT, rightTT, direction);
-
-          // Attach to let element
-          letElement.equalityProofState = eqState;
-        }
-      } catch (error) {
-        console.error('[ADD-LET] Failed to initialize equality proof state:', error);
-      }
-    }
-
-    // ====================================================================
-    // Step 2: Determine TT type and value for the let-binding
-    // ====================================================================
-    let letValueTT: TTerm;
-    let letTypeTT: TTerm;
-
-    if (letElement.equalityProofState) {
-      // Equality proof: use the proof term (a Hole) as value
-      letValueTT = letElement.equalityProofState.proofTerm;
-      letTypeTT = mkEq(
-        letElement.equalityProofState.startExpr,
-        letElement.equalityProofState.targetExpr
-      );
-    } else {
-      // Regular let: convert expression to TT
-      letValueTT = expressionNodeToTTerm(letElement.value);
-      letTypeTT = letElement.typeAnnotation
-        ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkProp() }
-        : mkProp();
-    }
+    // Convert expression to TT
+    const letValueTT = expressionNodeToTTerm(letElement.value);
+    
+    // Use type annotation if provided, otherwise create a hole for type inference
+    const letTypeTT = letElement.typeAnnotation
+      ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkProp() }
+      : mkHole(`type-${letElement.name}`, mkType(0));
 
     // ====================================================================
     // Step 3: Add to UI state
@@ -518,13 +472,18 @@ export function EnhancedProofWorkspace() {
     setRootDefinition({ ...rootDefinition, value: newValue });
 
     // ====================================================================
-    // Step 5: Update focus to the correct hole
+    // Step 5: Update focus to the new hole after the let-binding
     // ====================================================================
-    const newFocus = letElement.equalityProofState
-      ? letElement.equalityProofState.currentHoleId  // Focus on proof hole INSIDE let's value
-      : `after-${letElement.name}`;                   // Focus on hole AFTER let
-    setFocusedHole(newFocus);
-  }, [focusedHole, rootDefinition, goal]);
+    setFocusedHole(`after-${letElement.name}`);
+
+    // ====================================================================
+    // Step 6: Activate let for interactive editing if it's from goal left/right
+    // ====================================================================
+    if (letElement.editorMode.tag === 'equality-left' || letElement.editorMode.tag === 'equality-right') {
+      setActiveProofContext(letElement.id);
+      setFocusPath([]); // Start with root focus
+    }
+  }, [focusedHole, rootDefinition]);
 
   const handleDeleteLet = useCallback((id: string) => {
     // Find the let-binding to delete
@@ -924,7 +883,7 @@ export function EnhancedProofWorkspace() {
       // Add new assumptions to context
       if (result.newAssumptions && result.newAssumptions.length > 0) {
         // Add each new assumption to the type signature
-        result.newAssumptions.forEach(assumption => {
+        result.newAssumptions.forEach((assumption: Assumption) => {
           handleAddHypothesis(assumption);
         });
       }
@@ -1017,6 +976,71 @@ export function EnhancedProofWorkspace() {
   // Unused - chaining detection (reserved for future proof display)
   // const currentEquationIsChained = currentExpression && structuredProof.elements.length > 0 ?
   //   elementIsChained(structuredProof.elements[structuredProof.elements.length - 1], currentExpression) : false;
+
+  // ====================================================================
+  // Compute rules for active let value editing
+  // ====================================================================
+  const activeLetBinding = useMemo(() => 
+    activeProofContext ? letBindings.find(l => l.id === activeProofContext) : null,
+    [activeProofContext, letBindings]
+  );
+
+  const letValueExpression = useMemo(() => 
+    activeLetBinding?.value ?? null,
+    [activeLetBinding]
+  );
+
+  const letValueFocusedNode = useMemo(() => 
+    letValueExpression ? getNodeAtPath(letValueExpression, focusPath) : null,
+    [letValueExpression, focusPath]
+  );
+
+  const letValueRulesByCategory = useMemo(() => {
+    if (!letValueExpression || !letValueFocusedNode) return {};
+
+    // Build applicable rules using the same logic as main expression
+    const applicableLetRules: ExtendedRule[] = ENHANCED_FOCUS_RULES.flatMap(rule => {
+      const rules: ExtendedRule[] = [];
+
+      // Check forward direction
+      if (rule.isApplicableToFocus(letValueFocusedNode, letValueExpression, metadata)) {
+        rules.push({
+          ...rule,
+          isReverse: false,
+          displayName: rule.name,
+          displayDescription: rule.description,
+          applyRule: (node: any, expression: any, params: any, ctx: any) => rule.applyToFocus(node, expression, params, ctx)
+        });
+      }
+
+      // Check reverse direction for bidirectional rules
+      if (rule.bidirectional && rule.isApplicableReverse && rule.applyReverse) {
+        if (rule.isApplicableReverse(letValueFocusedNode, letValueExpression, metadata)) {
+          rules.push({
+            ...rule,
+            isReverse: true,
+            displayName: rule.reverseName || `${rule.name} (Reverse)`,
+            displayDescription: rule.reverseDescription || `Reverse of: ${rule.description}`,
+            applyRule: (node: any, expression: any, params: any, ctx: any) => rule.applyReverse!(node, expression, params, ctx)
+          });
+        }
+      }
+
+      return rules;
+    });
+
+    // Group by category
+    return applicableLetRules.reduce((acc, rule) => {
+      if (!acc[rule.category]) acc[rule.category] = [];
+      acc[rule.category].push(rule);
+      return acc;
+    }, {} as Record<string, ExtendedRule[]>);
+  }, [letValueExpression, letValueFocusedNode, metadata]);
+
+  const handleLetValueRuleApplication = useCallback((rule: ExtendedRule, params?: any) => {
+    // TODO: Apply the rule to transform the let value
+    alert(`TODO: Apply rule "${rule.displayName}" to let value\n\nRule ID: ${rule.id}\nIs Reverse: ${rule.isReverse}\nParams: ${JSON.stringify(params, null, 2)}`);
+  }, []);
 
   return (
     <div style={{
@@ -1127,15 +1151,23 @@ export function EnhancedProofWorkspace() {
             onDeleteHypothesis={handleDeleteHypothesis}
             onUpdateHypothesis={handleUpdateHypothesis}
             onSetGoal={handleSetGoal}
-            onActivateLetEditor={handleActivateLetEditor}
             activeLetId={activeProofContext}
-            currentExpression={currentExpression}
+            onActivateLetEditor={handleActivateLetEditor}
             focusPath={focusPath}
             onFocusChange={setFocusPath}
           />
         </div>
 
-        {currentExpression && (
+        {/* Show rules for active let value editing OR current main expression */}
+        {letValueExpression ? (
+          <RulesPanel
+            rulesByCategory={letValueRulesByCategory}
+            focusedNode={letValueFocusedNode}
+            currentExpression={letValueExpression}
+            context={metadata}
+            addStep={handleLetValueRuleApplication}
+          />
+        ) : currentExpression ? (
           <RulesPanel
             rulesByCategory={rulesByCategory}
             focusedNode={focusedNode}
@@ -1143,7 +1175,7 @@ export function EnhancedProofWorkspace() {
             context={metadata}
             addStep={addStep}
           />
-        )}
+        ) : null}
       </div>
 
       {/* AST Debug Panel */}
@@ -1202,7 +1234,7 @@ function RulesPanel({
   focusedNode: ExpressionNode | null;
   currentExpression: ExpressionNode;
   context: ProofContext;
-  addStep: (rule: EnhancedFocusRule, params?: any) => void;
+  addStep: (rule: ExtendedRule, params?: any) => void;
 }) {
   return (
     <div style={{
