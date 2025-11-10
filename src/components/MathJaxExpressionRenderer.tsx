@@ -1,8 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { ExpressionNode, FocusPath } from '../types/enhanced-focus';
 import { findSyntaxRule } from '../config/syntax-mapping';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { expressionNodeToTTerm } from '../types/tt-bridge';
+import { asLambdaByExtractingTermAtIndexPaths, prettyPrint } from '../types/tt-core';
 
 interface MathJaxExpressionRendererProps<T> {
   expression: T;
@@ -11,6 +13,7 @@ interface MathJaxExpressionRendererProps<T> {
   isActive?: boolean;
   readonly?: boolean;
   inline?: boolean;
+  showFocusAsBetaRedux?: boolean;
 }
 
 
@@ -139,14 +142,41 @@ function astToCleanLaTeX(node: ExpressionNode, path: FocusPath = []): string {
 }
 
 export function MathJaxExpressionRenderer(props: MathJaxExpressionRendererProps<ExpressionNode>) {
-  return <MathJaxExpressionRendererRaw {...props} expression={astToCleanLaTeX(props.expression)} raw={props.expression.raw} />;
+  return <MathJaxExpressionRendererRaw {...props} expression={astToCleanLaTeX(props.expression)} raw={props.expression.raw} exprNode={props.expression} />;
 }
 
-export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFocusChange, readonly = true, inline = false, raw }: MathJaxExpressionRendererProps<string> & { raw?: string }) {
+export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFocusChange, readonly = true, inline = false, raw, showFocusAsBetaRedux = false, exprNode }: MathJaxExpressionRendererProps<string> & { raw?: string; exprNode?: ExpressionNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Debug: suppress TypeScript warning
   console.debug('MathJax readonly mode:', readonly);
+
+  // Compute beta-redux representation if enabled
+  const betaReduxResult = useMemo(() => {
+    if (!showFocusAsBetaRedux || !exprNode || focusPath.length === 0) {
+      return null;
+    }
+
+    try {
+      // Convert ExpressionNode to TTerm
+      const ttermExpr = expressionNodeToTTerm(exprNode);
+
+      // Extract the term at the focus path
+      const result = asLambdaByExtractingTermAtIndexPaths(ttermExpr, [focusPath]);
+
+      if ('error' in result) {
+        return { error: result.error };
+      }
+
+      return {
+        lambda: prettyPrint(result.lambda),
+        extracted: prettyPrint(result.extracted),
+        application: `(${prettyPrint(result.lambda)}) ${prettyPrint(result.extracted)}`
+      };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }, [exprNode, focusPath, showFocusAsBetaRedux]);
 
   // Render KaTeX
   useEffect(() => {
@@ -310,6 +340,42 @@ export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFoc
   };
 
   return (
-    <div ref={containerRef} style={{ width: 'max-content', position: 'relative', fontSize: '18px' }} />
+    <>
+      <div ref={containerRef} style={{ width: 'max-content', position: 'relative', fontSize: '18px' }} />
+
+      {/* Beta-Redux Footer */}
+      {betaReduxResult && (
+        <div style={{
+          marginTop: '12px',
+          padding: '12px',
+          backgroundColor: '#f0f8ff',
+          border: '2px solid #007acc',
+          borderRadius: '6px',
+          fontSize: '14px',
+          fontFamily: 'monospace'
+        }}>
+          <div style={{
+            fontWeight: 'bold',
+            color: '#007acc',
+            marginBottom: '8px',
+            fontSize: '12px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            Focus as β-Redux
+          </div>
+
+          {'error' in betaReduxResult ? (
+            <div style={{ color: '#d73a49', fontSize: '13px' }}>
+              Error: {betaReduxResult.error}
+            </div>
+          ) : (
+            <div style={{ color: '#032f62' }}>
+              {betaReduxResult.application}
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 }

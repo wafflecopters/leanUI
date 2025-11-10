@@ -291,7 +291,7 @@ export function EnhancedProofWorkspace() {
   // Track which proof context we're in (null = main proof, or an element id)
   const [activeProofContext, setActiveProofContext] = useState<string | null>(null);
   const [showASTDebug, setShowASTDebug] = useState(false);
-  
+
   // Proof elements (structured proof steps - comments, equations, etc.)
   // These are separate from the TT term and are for display/UI only
   const [proofElements, setProofElements] = useState<ProofElement[]>([]);
@@ -327,7 +327,7 @@ export function EnhancedProofWorkspace() {
   // Extract assumptions from Pi-binders in the type signature
   const assumptions = useMemo((): Assumption[] => {
     const binders = flattenPiBinders(rootDefinition.type);
-    return binders.map(([name, type], index) => 
+    return binders.map(([name, type], index) =>
       piBinderToAssumption([name, type], `assumption-${index}`)
     );
   }, [rootDefinition.type]);
@@ -425,7 +425,7 @@ export function EnhancedProofWorkspace() {
     // ====================================================================
     // Convert expression to TT
     const letValueTT = expressionNodeToTTerm(letElement.value);
-    
+
     // Use type annotation if provided, otherwise create a hole for type inference
     const letTypeTT = letElement.typeAnnotation
       ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkProp() }
@@ -534,7 +534,7 @@ export function EnhancedProofWorkspace() {
       name,
       type
     );
-    
+
     setRootDefinition(prev => ({
       ...prev,
       type: newType
@@ -549,7 +549,7 @@ export function EnhancedProofWorkspace() {
     // Find its position in the Pi-binder chain
     const binders = flattenPiBinders(rootDefinition.type);
     const position = binders.findIndex(([name]) => name === hypothesis.name);
-    
+
     if (position === -1) {
       console.error('Hypothesis not found in Pi-binders:', hypothesis.name);
       return;
@@ -583,7 +583,7 @@ export function EnhancedProofWorkspace() {
     // Find its position in the Pi-binder chain
     const binders = flattenPiBinders(rootDefinition.type);
     const position = binders.findIndex(([name]) => name === oldHypothesis.name);
-    
+
     if (position === -1) {
       console.error('Hypothesis not found in Pi-binders:', oldHypothesis.name);
       return;
@@ -595,11 +595,11 @@ export function EnhancedProofWorkspace() {
 
     // Convert updated hypothesis to Pi-binder
     const [newName, newType] = assumptionToPiBinder(updatedHypothesis);
-    
+
     // Remove old binder and insert new one at same position
     let newTypeSignature = removePiBinder(rootDefinition.type, position);
     newTypeSignature = insertPiBinder(newTypeSignature, position, newName, newType);
-    
+
     setRootDefinition(prev => {
       let updatedType = newTypeSignature;
       let updatedValue = prev.value;
@@ -623,10 +623,10 @@ export function EnhancedProofWorkspace() {
     // Parse goal to AST
     try {
       const goalExpr = parseExpressionToAST(goalStr);
-      
+
       // Store the goal ExpressionNode for UI display
       setGoalExprNode(goalExpr);
-      
+
       const unboundVars = new Set<string>();
 
       // Reserved keywords in type theory that should not be treated as variables
@@ -658,18 +658,18 @@ export function EnhancedProofWorkspace() {
       // Add all hypotheses and goal in a single update
       setRootDefinition(prev => {
         let newType = prev.type;
-        
+
         // Add a Pi-binder for each unbound variable WITH TYPE HOLE
         unboundVars.forEach(varName => {
           const typeHoleId = `type_${varName}`;
           const typeHole = mkHole(typeHoleId, mkType(1), []);
-          
+
           // Insert Pi-binder at the end (before the goal)
           const currentBinders = flattenPiBinders(newType);
           const currentGoal = getFinalReturnType(newType);
           newType = hypothesesToPi([...currentBinders, [varName, typeHole]], currentGoal);
         });
-        
+
         // Now build type context from ALL hypotheses (including newly added ones)
         const allBinders = flattenPiBinders(newType);
         const typeContext = new Map<string, TTerm>();
@@ -682,7 +682,7 @@ export function EnhancedProofWorkspace() {
 
         // Update the final return type in the type signature
         newType = setFinalReturnType(newType, goalTT);
-        
+
         return {
           ...prev,
           type: newType
@@ -980,17 +980,17 @@ export function EnhancedProofWorkspace() {
   // ====================================================================
   // Compute rules for active let value editing
   // ====================================================================
-  const activeLetBinding = useMemo(() => 
+  const activeLetBinding = useMemo(() =>
     activeProofContext ? letBindings.find(l => l.id === activeProofContext) : null,
     [activeProofContext, letBindings]
   );
 
-  const letValueExpression = useMemo(() => 
+  const letValueExpression = useMemo(() =>
     activeLetBinding?.value ?? null,
     [activeLetBinding]
   );
 
-  const letValueFocusedNode = useMemo(() => 
+  const letValueFocusedNode = useMemo(() =>
     letValueExpression ? getNodeAtPath(letValueExpression, focusPath) : null,
     [letValueExpression, focusPath]
   );
@@ -1064,10 +1064,10 @@ export function EnhancedProofWorkspace() {
               // Reset proof elements and goal
               setProofElements([]);
               setGoalExprNode(null);
-              
+
               // Reset root definition
               setRootDefinition(createRootTermDefinition('_root', [], mkProp(), 'proof', []));
-              
+
               // Add hypothesis and goal
               const hypothesis: Assumption = {
                 id: crypto.randomUUID(),
@@ -1155,6 +1155,7 @@ export function EnhancedProofWorkspace() {
             onActivateLetEditor={handleActivateLetEditor}
             focusPath={focusPath}
             onFocusChange={setFocusPath}
+            showFocusAsBetaRedux={true}
           />
         </div>
 

@@ -342,6 +342,262 @@ export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TT
 }
 
 // ============================================================================
+// Definitional Equality & Term Extraction
+// ============================================================================
+
+/**
+ * Check if two terms are definitionally equal.
+ * 
+ * For now, this implements structural equality (alpha-equivalence).
+ * Later, this can be enhanced with:
+ * - Beta-reduction: (λx. e) a ≡ e[a/x]
+ * - Eta-conversion: λx. f x ≡ f (when x not free in f)
+ * - Delta-reduction: unfold definitions
+ * 
+ * @param term1 - First term
+ * @param term2 - Second term
+ * @returns true if terms are definitionally equal
+ */
+export function isDefinitionallyEqual(term1: TTerm, term2: TTerm): boolean {
+  // Structural equality check
+  if (term1.tag !== term2.tag) return false;
+
+  switch (term1.tag) {
+    case 'Var':
+      return term2.tag === 'Var' && term1.index === term2.index;
+
+    case 'Sort':
+      return term2.tag === 'Sort' && term1.level === term2.level;
+
+    case 'Const':
+      return term2.tag === 'Const' && term1.name === term2.name;
+
+    case 'Hole':
+      // Holes are only equal if they have the same ID
+      return term2.tag === 'Hole' && term1.id === term2.id;
+
+    case 'Binder': {
+      if (term2.tag !== 'Binder') return false;
+
+      // Check binder kind
+      if (term1.binderKind.tag !== term2.binderKind.tag) return false;
+      if (term1.binderKind.tag === 'BLet' && term2.binderKind.tag === 'BLet') {
+        if (!isDefinitionallyEqual(term1.binderKind.defVal, term2.binderKind.defVal)) {
+          return false;
+        }
+      }
+
+      // Check domain and body (names don't matter for equality)
+      return isDefinitionallyEqual(term1.domain, term2.domain) &&
+        isDefinitionallyEqual(term1.body, term2.body);
+    }
+
+    case 'App': {
+      if (term2.tag !== 'App') return false;
+      return isDefinitionallyEqual(term1.fn, term2.fn) &&
+        isDefinitionallyEqual(term1.arg, term2.arg);
+    }
+
+    case 'Annot': {
+      if (term2.tag !== 'Annot') return false;
+      return isDefinitionallyEqual(term1.term, term2.term) &&
+        isDefinitionallyEqual(term1.type, term2.type);
+    }
+  }
+}
+
+/**
+ * Get subterm at a given path (index path into the term tree).
+ * 
+ * Path indices navigate the term structure:
+ * - For App: [0] = fn, [1] = arg
+ * - For Binder: [0] = domain, [1] = body
+ * - etc.
+ * 
+ * @param term - The term to navigate
+ * @param path - Array of indices representing the path
+ * @returns The subterm at the path, or null if path is invalid
+ */
+export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
+  if (path.length === 0) return term;
+
+  const [head, ...rest] = path;
+
+  switch (term.tag) {
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+    case 'Hole':
+      // Leaf nodes have no children
+      return null;
+
+    case 'App':
+      if (head === 0) return getSubtermAtPath(term.fn, rest);
+      if (head === 1) return getSubtermAtPath(term.arg, rest);
+      return null;
+
+    case 'Binder':
+      if (head === 0) return getSubtermAtPath(term.domain, rest);
+      if (head === 1) return getSubtermAtPath(term.body, rest);
+      if (head === 2 && term.binderKind.tag === 'BLet') {
+        return getSubtermAtPath(term.binderKind.defVal, rest);
+      }
+      return null;
+
+    case 'Annot':
+      if (head === 0) return getSubtermAtPath(term.term, rest);
+      if (head === 1) return getSubtermAtPath(term.type, rest);
+      return null;
+  }
+}
+
+/**
+ * Replace subterm at a given path with a new term.
+ * 
+ * @param term - The term to modify
+ * @param path - Array of indices representing the path
+ * @param newSubterm - The new subterm to insert
+ * @returns The modified term, or null if path is invalid
+ */
+export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TTerm): TTerm | null {
+  if (path.length === 0) return newSubterm;
+
+  const [head, ...rest] = path;
+
+  switch (term.tag) {
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+    case 'Hole':
+      // Leaf nodes have no children
+      return null;
+
+    case 'App': {
+      if (head === 0) {
+        const newFn = replaceSubtermAtPath(term.fn, rest, newSubterm);
+        return newFn ? { ...term, fn: newFn } : null;
+      }
+      if (head === 1) {
+        const newArg = replaceSubtermAtPath(term.arg, rest, newSubterm);
+        return newArg ? { ...term, arg: newArg } : null;
+      }
+      return null;
+    }
+
+    case 'Binder': {
+      if (head === 0) {
+        const newDomain = replaceSubtermAtPath(term.domain, rest, newSubterm);
+        return newDomain ? { ...term, domain: newDomain } : null;
+      }
+      if (head === 1) {
+        const newBody = replaceSubtermAtPath(term.body, rest, newSubterm);
+        return newBody ? { ...term, body: newBody } : null;
+      }
+      if (head === 2 && term.binderKind.tag === 'BLet') {
+        const newDefVal = replaceSubtermAtPath(term.binderKind.defVal, rest, newSubterm);
+        return newDefVal ? {
+          ...term,
+          binderKind: { tag: 'BLet', defVal: newDefVal }
+        } : null;
+      }
+      return null;
+    }
+
+    case 'Annot': {
+      if (head === 0) {
+        const newTerm = replaceSubtermAtPath(term.term, rest, newSubterm);
+        return newTerm ? { ...term, term: newTerm } : null;
+      }
+      if (head === 1) {
+        const newType = replaceSubtermAtPath(term.type, rest, newSubterm);
+        return newType ? { ...term, type: newType } : null;
+      }
+      return null;
+    }
+  }
+}
+
+/**
+ * Extract terms at given paths and create a lambda abstraction.
+ * 
+ * This implements the "beta-redux" view:
+ * - Given term `a + b` with focus on `b`, produces `(λx. a + x) b`
+ * - Given term `λy. (A -> y)` with focus on `A`, produces `(λx. λy. (x -> y)) A`
+ * 
+ * All subterms at the given paths must be definitionally equal, otherwise
+ * this returns an error.
+ * 
+ * @param term - The term to extract from
+ * @param paths - Array of index paths to the subterms to extract
+ * @returns Object with lambda and extracted term, or error message
+ */
+export function asLambdaByExtractingTermAtIndexPaths(
+  term: TTerm,
+  paths: number[][]
+): { lambda: TTerm; extracted: TTerm } | { error: string } {
+  // Handle empty paths case
+  if (paths.length === 0) {
+    return { error: 'No paths provided for extraction' };
+  }
+
+  // Get the subterms at all paths
+  const subterms = paths.map(path => getSubtermAtPath(term, path));
+
+  // Check if any path is invalid
+  if (subterms.some(t => t === null)) {
+    return { error: 'Invalid path: one or more paths do not point to valid subterms' };
+  }
+
+  // Check that all subterms are definitionally equal
+  const firstSubterm = subterms[0]!;
+  for (let i = 1; i < subterms.length; i++) {
+    if (!isDefinitionallyEqual(firstSubterm, subterms[i]!)) {
+      return {
+        error: `Subterms at paths are not definitionally equal:\n` +
+          `  Path ${JSON.stringify(paths[0])}: ${prettyPrint(firstSubterm)}\n` +
+          `  Path ${JSON.stringify(paths[i])}: ${prettyPrint(subterms[i]!)}`
+      };
+    }
+  }
+
+  // Create a fresh variable (De Bruijn index 0 in the new context)
+  const varTerm: TTerm = { tag: 'Var', index: 0 };
+
+  // Replace all occurrences of the subterm with the variable
+  let lambdaBody = term;
+  for (const path of paths) {
+    const replaced = replaceSubtermAtPath(lambdaBody, path, varTerm);
+    if (!replaced) {
+      return { error: `Failed to replace subterm at path ${JSON.stringify(path)}` };
+    }
+    lambdaBody = replaced;
+  }
+
+  // Note: We should technically shift free variables in the lambda body to account for the new binder.
+  // However, since we're working with terms that may come from ExpressionNodes (which don't use
+  // De Bruijn indices yet), we'll skip this for now. A proper implementation would need to:
+  // 1. Track which variables are free in the original term
+  // 2. Increment their indices by 1 when wrapping with the lambda
+  // For now, we assume the term doesn't have free De Bruijn variables that would conflict.
+
+  // Create the lambda abstraction
+  // Type inference will determine the type of x later
+  const typeHole = mkHole('extracted-type', mkType(0));
+  const lambda: TTerm = {
+    tag: 'Binder',
+    name: 'x',
+    binderKind: { tag: 'BLam' },
+    domain: typeHole,
+    body: lambdaBody
+  };
+
+  return {
+    lambda,
+    extracted: firstSubterm
+  };
+}
+
+// ============================================================================
 // Usage Checking (for safe deletion)
 // ============================================================================
 
@@ -1152,12 +1408,12 @@ export function occursIn(index: number, term: TTerm): boolean {
 export function flattenPiBinders(term: TTerm): Array<[string, TTerm]> {
   const binders: Array<[string, TTerm]> = [];
   let current = term;
-  
+
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     binders.push([current.name, current.domain]);
     current = current.body;
   }
-  
+
   return binders;
 }
 
@@ -1172,11 +1428,11 @@ export function flattenPiBinders(term: TTerm): Array<[string, TTerm]> {
  */
 export function getFinalReturnType(term: TTerm): TTerm {
   let current = term;
-  
+
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     current = current.body;
   }
-  
+
   return current;
 }
 
@@ -1198,10 +1454,10 @@ export function insertPiBinder(
   // Extract current binders
   const binders = flattenPiBinders(term);
   const goal = getFinalReturnType(term);
-  
+
   // Insert new binder at position
   binders.splice(position, 0, [name, binderType]);
-  
+
   // Rebuild Pi-type
   return hypothesesToPi(binders, goal);
 }
@@ -1217,10 +1473,10 @@ export function removePiBinder(term: TTerm, position: number): TTerm {
   // Extract current binders
   const binders = flattenPiBinders(term);
   const goal = getFinalReturnType(term);
-  
+
   // Remove binder at position
   binders.splice(position, 1);
-  
+
   // Rebuild Pi-type
   return hypothesesToPi(binders, goal);
 }
@@ -1255,19 +1511,19 @@ export function isBinderUsedDownstream(term: TTerm, binderName: string, position
   // For Pi-binders, check if the name is used in bodies after this position
   const binders = flattenPiBinders(term);
   const goal = getFinalReturnType(term);
-  
+
   // Check in subsequent binder types
   for (let i = position + 1; i < binders.length; i++) {
     if (isNameUsed(binderName, binders[i][1])) {
       return true;
     }
   }
-  
+
   // Check in the goal
   if (isNameUsed(binderName, goal)) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -1283,12 +1539,12 @@ export function isBinderUsedDownstream(term: TTerm, binderName: string, position
 export function flattenLetBindings(term: TTerm): Array<[string, TTerm, TTerm]> {
   const lets: Array<[string, TTerm, TTerm]> = [];
   let current = term;
-  
+
   while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
     lets.push([current.name, current.domain, current.binderKind.defVal]);
     current = current.body;
   }
-  
+
   return lets;
 }
 
@@ -1300,11 +1556,11 @@ export function flattenLetBindings(term: TTerm): Array<[string, TTerm, TTerm]> {
  */
 export function getFinalLetBody(term: TTerm): TTerm {
   let current = term;
-  
+
   while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
     current = current.body;
   }
-  
+
   return current;
 }
 
@@ -1328,17 +1584,17 @@ export function insertLetBinding(
   // Extract current lets
   const lets = flattenLetBindings(term);
   const body = getFinalLetBody(term);
-  
+
   // Insert new let at position
   lets.splice(position, 0, [name, letType, letValue]);
-  
+
   // Rebuild let-chain
   let result = body;
   for (let i = lets.length - 1; i >= 0; i--) {
     const [n, t, v] = lets[i];
     result = mkLet(n, t, v, result);
   }
-  
+
   return result;
 }
 
@@ -1353,17 +1609,17 @@ export function removeLetBinding(term: TTerm, position: number): TTerm {
   // Extract current lets
   const lets = flattenLetBindings(term);
   const body = getFinalLetBody(term);
-  
+
   // Remove let at position
   lets.splice(position, 1);
-  
+
   // Rebuild let-chain
   let result = body;
   for (let i = lets.length - 1; i >= 0; i--) {
     const [n, t, v] = lets[i];
     result = mkLet(n, t, v, result);
   }
-  
+
   return result;
 }
 
@@ -1378,7 +1634,7 @@ export function removeLetBinding(term: TTerm, position: number): TTerm {
 export function isLetUsedDownstream(term: TTerm, letName: string, position: number = 0): boolean {
   const lets = flattenLetBindings(term);
   const body = getFinalLetBody(term);
-  
+
   // Check in subsequent let values and types
   for (let i = position + 1; i < lets.length; i++) {
     const [, type, value] = lets[i];
@@ -1386,12 +1642,12 @@ export function isLetUsedDownstream(term: TTerm, letName: string, position: numb
       return true;
     }
   }
-  
+
   // Check in the final body
   if (isNameUsed(letName, body)) {
     return true;
   }
-  
+
   return false;
 }
 
@@ -1413,10 +1669,10 @@ export type TermPath = Array<'domain' | 'body' | 'defVal' | 'fn' | 'arg' | 'type
  */
 export function getAtPath(term: TTerm, path: TermPath): TTerm | null {
   let current: TTerm | null = term;
-  
+
   for (const step of path) {
     if (!current) return null;
-    
+
     if (typeof step === 'number') {
       // Navigate to nth binder
       if (current.tag === 'Binder') {
@@ -1486,7 +1742,7 @@ export function getAtPath(term: TTerm, path: TermPath): TTerm | null {
       }
     }
   }
-  
+
   return current;
 }
 
@@ -1502,15 +1758,15 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
   if (path.length === 0) {
     return newTerm;
   }
-  
+
   const [step, ...rest] = path;
-  
+
   if (typeof step === 'number') {
     // Navigate to nth binder
     if (term.tag !== 'Binder') {
       throw new Error('Cannot navigate by index into non-binder term');
     }
-    
+
     if (step === 0) {
       // Update this binder's body
       return {
@@ -1525,7 +1781,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
       };
     }
   }
-  
+
   // Navigate by field name
   switch (step) {
     case 'domain':
@@ -1536,7 +1792,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
         ...term,
         domain: updateAtPath(term.domain, rest, newTerm)
       };
-      
+
     case 'body':
       if (term.tag !== 'Binder') {
         throw new Error('Cannot access body of non-binder term');
@@ -1545,7 +1801,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
         ...term,
         body: updateAtPath(term.body, rest, newTerm)
       };
-      
+
     case 'defVal':
       if (term.tag !== 'Binder' || term.binderKind.tag !== 'BLet') {
         throw new Error('Cannot access defVal of non-let term');
@@ -1557,7 +1813,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
           defVal: updateAtPath(term.binderKind.defVal, rest, newTerm)
         }
       };
-      
+
     case 'fn':
       if (term.tag !== 'App') {
         throw new Error('Cannot access fn of non-app term');
@@ -1566,7 +1822,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
         ...term,
         fn: updateAtPath(term.fn, rest, newTerm)
       };
-      
+
     case 'arg':
       if (term.tag !== 'App') {
         throw new Error('Cannot access arg of non-app term');
@@ -1575,7 +1831,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
         ...term,
         arg: updateAtPath(term.arg, rest, newTerm)
       };
-      
+
     case 'type':
       if (term.tag !== 'Hole' && term.tag !== 'Annot') {
         throw new Error('Cannot access type of this term');
@@ -1591,7 +1847,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
           type: updateAtPath(term.type, rest, newTerm)
         };
       }
-      
+
     case 'term':
       if (term.tag !== 'Annot') {
         throw new Error('Cannot access term of non-annot');
@@ -1600,7 +1856,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
         ...term,
         term: updateAtPath(term.term, rest, newTerm)
       };
-      
+
     default:
       throw new Error(`Unknown path step: ${step}`);
   }

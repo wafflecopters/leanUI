@@ -18,24 +18,55 @@
  * is managed by the parent, making it easy to embed in different contexts.
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
 import { ASTModal } from './ASTModal';
+import { expressionNodeToTTerm } from '../types/tt-bridge';
+import { asLambdaByExtractingTermAtIndexPaths, prettyPrint } from '../types/tt-core';
 
 interface FocusedExpressionRendererProps {
   expression: ExpressionNode;
   focusPath: FocusPath;
   onFocusChange: (newPath: FocusPath) => void;
   isActive?: boolean;
+  showFocusAsBetaRedux?: boolean;
 }
 
 export function FocusedExpressionRenderer({
   expression,
   focusPath,
   onFocusChange,
-  isActive = false
+  isActive = false,
+  showFocusAsBetaRedux = false
 }: FocusedExpressionRendererProps) {
   const [hoveredPath, setHoveredPath] = useState<FocusPath | null>(null);
+
+  // Compute beta-redux representation if enabled
+  const betaReduxResult = useMemo(() => {
+    if (!showFocusAsBetaRedux || focusPath.length === 0) {
+      return null;
+    }
+
+    try {
+      // Convert ExpressionNode to TTerm
+      const ttermExpr = expressionNodeToTTerm(expression);
+
+      // Extract the term at the focus path
+      const result = asLambdaByExtractingTermAtIndexPaths(ttermExpr, [focusPath]);
+
+      if ('error' in result) {
+        return { error: result.error };
+      }
+
+      return {
+        lambda: prettyPrint(result.lambda),
+        extracted: prettyPrint(result.extracted),
+        application: `(${prettyPrint(result.lambda)}) ${prettyPrint(result.extracted)}`
+      };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }, [expression, focusPath, showFocusAsBetaRedux]);
 
   const getStyleForPath = (path: FocusPath) => {
     const isFocused = arraysEqual(path, focusPath);
@@ -261,6 +292,40 @@ export function FocusedExpressionRenderer({
           </button>
         )}
       </div>
+
+      {/* Beta-Redux Footer */}
+      {betaReduxResult && (
+        <div style={{
+          marginTop: '12px',
+          padding: '12px',
+          backgroundColor: '#f0f8ff',
+          border: '2px solid #007acc',
+          borderRadius: '6px',
+          fontSize: '14px',
+          fontFamily: 'monospace'
+        }}>
+          <div style={{
+            fontWeight: 'bold',
+            color: '#007acc',
+            marginBottom: '8px',
+            fontSize: '12px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            Focus as β-Redux
+          </div>
+
+          {'error' in betaReduxResult ? (
+            <div style={{ color: '#d73a49', fontSize: '13px' }}>
+              Error: {betaReduxResult.error}
+            </div>
+          ) : (
+            <div style={{ color: '#032f62' }}>
+              {betaReduxResult.application}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
