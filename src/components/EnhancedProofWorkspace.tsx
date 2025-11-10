@@ -1066,14 +1066,6 @@ export function EnhancedProofWorkspace() {
               setGoalExprNode(null);
 
               // Reset root definition with the hypothesis already included
-              const hypothesis: Assumption = {
-                id: crypto.randomUUID(),
-                name: 'a',
-                expression: 'ℝ',
-                description: '',
-                introducedBy: 'template',
-              };
-
               setRootDefinition(createRootTermDefinition('_root', [['a', { tag: 'Const', name: 'ℝ', type: mkProp() }]], mkProp(), 'proof', []));
               handleSetGoal('a + a = 2 * a');
             }}
