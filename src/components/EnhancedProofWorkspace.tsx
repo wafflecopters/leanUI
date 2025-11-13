@@ -29,6 +29,9 @@ import {
   applyEqualityStep
 } from '../types/tt-bridge';
 import { findHole, fillHoleWith } from '../types/tt-typecheck';
+import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
+import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
+import { createApplicationCommandTree } from '../config/navigationCommands';
 
 interface EnhancedProofStep {
   id: string;
@@ -278,9 +281,12 @@ function assumptionToPiBinder(assumption: Assumption): [string, TTerm] {
   return [assumption.name, typeTerm];
 }
 
-export function EnhancedProofWorkspace() {
+function EnhancedProofWorkspaceInner() {
   // Start with null expression - proof area is empty initially
   const [currentExpression, setCurrentExpression] = useState<ExpressionNode | null>(null);
+
+  // Get navigation context
+  const navigation = useNavigation();
 
   const [focusPath, setFocusPath] = useState<FocusPath>([]);
   const [steps, setSteps] = useState<EnhancedProofStep[]>([]);
@@ -295,6 +301,23 @@ export function EnhancedProofWorkspace() {
 
   // State for let-bindings
   const [letBindings, setLetBindings] = useState<LetElement[]>([]);
+
+  // UI state for keyboard navigation control
+  const [showEditGoal, setShowEditGoal] = useState(false);
+  const [showAddHypothesis, setShowAddHypothesis] = useState(false);
+  const [showAddLet, setShowAddLet] = useState(false);
+
+  // When closing editors, return to navigate mode
+  useEffect(() => {
+    if (!showEditGoal && !showAddHypothesis && !showAddLet) {
+      // All editors are closed, return to navigate mode
+      navigation.setMode('navigate');
+      // Clear the navigation path to go back to the section level
+      if (navigation.state.navigationPath.length > 1) {
+        navigation.navigateTo([navigation.state.navigationPath[0]]);
+      }
+    }
+  }, [showEditGoal, showAddHypothesis, showAddLet, navigation.setMode, navigation.navigateTo, navigation.state.navigationPath]);
 
   // ============================================================================
   // NEW ARCHITECTURE: Term Definition + Focused Hole
@@ -718,8 +741,84 @@ export function EnhancedProofWorkspace() {
     }
   }, [letBindings]);
 
-  // Keyboard navigation handler (unused - reserved for future keyboard shortcuts)
-  // const handleKeyDown = useCallback((e: React.KeyboardEvent) => { ... }, []);
+  // ============================================================================
+  // KEYBOARD NAVIGATION HANDLERS
+  // ============================================================================
+
+  // Navigation command handlers
+  const handleEditGoalCommand = useCallback(() => {
+    setShowEditGoal(true);
+  }, []);
+
+  const handleSetGoalCommand = useCallback(() => {
+    setShowEditGoal(true);
+  }, []);
+
+  const handleClearGoalCommand = useCallback(() => {
+    setGoalExprNode(null);
+    const newType = setFinalReturnType(rootDefinition.type, mkProp());
+    setRootDefinition(prev => ({
+      ...prev,
+      type: newType
+    }));
+  }, [rootDefinition]);
+
+  const handleAddHypothesisCommand = useCallback(() => {
+    setShowAddHypothesis(true);
+  }, []);
+
+  const handleEditHypothesisCommand = useCallback(() => {
+    // TODO: Trigger edit hypothesis UI - need to track selected hypothesis
+    console.log('Edit hypothesis');
+  }, []);
+
+  const handleDeleteHypothesisCommand = useCallback(() => {
+    // TODO: Delete selected hypothesis - need to track selected hypothesis
+    console.log('Delete hypothesis');
+  }, []);
+
+  const handleAddLetBindingCommand = useCallback(() => {
+    setShowAddLet(true);
+  }, []);
+
+  const handleEditLetBindingCommand = useCallback(() => {
+    // TODO: Trigger edit let binding UI - need to track selected let binding
+    console.log('Edit let binding');
+  }, []);
+
+  const handleDeleteLetBindingCommand = useCallback(() => {
+    // TODO: Delete selected let binding - need to track selected let binding
+    console.log('Delete let binding');
+  }, []);
+
+  // Update navigation metadata with command handlers
+  useEffect(() => {
+    navigation.updateMetadata({
+      onEditGoal: handleEditGoalCommand,
+      onSetGoal: handleSetGoalCommand,
+      onClearGoal: handleClearGoalCommand,
+      onAddHypothesis: handleAddHypothesisCommand,
+      onEditHypothesis: handleEditHypothesisCommand,
+      onDeleteHypothesis: handleDeleteHypothesisCommand,
+      onAddLetBinding: handleAddLetBindingCommand,
+      onEditLetBinding: handleEditLetBindingCommand,
+      onDeleteLetBinding: handleDeleteLetBindingCommand,
+      // Add any selected IDs here
+      selectedHypothesisId: null, // TODO: Track selected hypothesis
+      selectedLetBindingId: null, // TODO: Track selected let binding
+    });
+  }, [
+    navigation.updateMetadata,
+    handleEditGoalCommand,
+    handleSetGoalCommand,
+    handleClearGoalCommand,
+    handleAddHypothesisCommand,
+    handleEditHypothesisCommand,
+    handleDeleteHypothesisCommand,
+    handleAddLetBindingCommand,
+    handleEditLetBindingCommand,
+    handleDeleteLetBindingCommand,
+  ]);
 
   const addStep = useCallback((rule: any, params?: any) => {
     if (!focusedNode || !currentExpression) {
@@ -1043,12 +1142,13 @@ export function EnhancedProofWorkspace() {
   }, []);
 
   return (
-    <div style={{
-      padding: '20px',
-      fontFamily: 'system-ui, sans-serif',
-      maxWidth: '1200px',
-      margin: '0 auto'
-    }}>
+    <NavigationFooterSpacer>
+      <div style={{
+        padding: '20px',
+        fontFamily: 'system-ui, sans-serif',
+        maxWidth: '1200px',
+        margin: '0 auto'
+      }}>
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -1146,6 +1246,12 @@ export function EnhancedProofWorkspace() {
             focusPath={focusPath}
             onFocusChange={setFocusPath}
             showFocusAsBetaRedux={true}
+            showEditGoalExternal={showEditGoal}
+            onShowEditGoalChange={setShowEditGoal}
+            showAddHypothesisExternal={showAddHypothesis}
+            onShowAddHypothesisChange={setShowAddHypothesis}
+            showAddLetExternal={showAddLet}
+            onShowAddLetChange={setShowAddLet}
           />
         </div>
 
@@ -1203,7 +1309,22 @@ export function EnhancedProofWorkspace() {
           context={[]}
         />
       </div>
-    </div>
+      </div>
+    </NavigationFooterSpacer>
+  );
+}
+
+/**
+ * Main export - EnhancedProofWorkspace wrapped with NavigationProvider
+ */
+export function EnhancedProofWorkspace() {
+  const commandTree = useMemo(() => createApplicationCommandTree(), []);
+
+  return (
+    <NavigationProvider initialCommandTree={commandTree}>
+      <EnhancedProofWorkspaceInner />
+      <NavigationFooter />
+    </NavigationProvider>
   );
 }
 
