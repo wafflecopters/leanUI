@@ -58,8 +58,8 @@ function createGoalsCommands(): Command[] {
 
     createCommand(
       'goals-clear',
-      'r',
-      'Remove',
+      'd',
+      'Delete',
       (context) => {
         // Trigger clear goal action
         const onClearGoal = context.metadata?.onClearGoal as (() => void) | undefined;
@@ -71,7 +71,7 @@ function createGoalsCommands(): Command[] {
         };
       },
       {
-        description: 'Remove the current goal',
+        description: 'Delete the current goal',
       }
     ),
   ];

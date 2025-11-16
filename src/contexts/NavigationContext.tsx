@@ -36,8 +36,8 @@ interface NavigationContextValue {
   /** Clear navigation context (return to root) */
   clearNavigation: () => void;
 
-  /** Set the focused section ID */
-  setFocusedSection: (sectionId: string | null) => void;
+  /** Set the focused section ID (DEPRECATED - focusedSectionId is now derived from navigationPath) */
+  setFocusedSection?: (sectionId: string | null) => void;
 
   /** Push a modal onto the stack */
   pushModal: (modalId: string) => void;
@@ -96,6 +96,11 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
   // Store navigable sections with their metadata
   const navigableSections = useRef<Map<string, NavigableSection>>(new Map());
 
+  // DERIVED: Compute focusedSectionId directly from navigationPath
+  const focusedSectionId = state.navigationPath.length > 0
+    ? state.navigationPath[0].toLowerCase()
+    : null;
+
   // Navigate to a specific path
   const navigateTo = useCallback((path: string[]) => {
     setState(prev => ({
@@ -112,31 +117,8 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     }));
   }, []);
 
-  // Set focused section
-  const setFocusedSection = useCallback((sectionId: string | null) => {
-    setState(prev => {
-      // Only update if changed
-      if (prev.focusedSectionId === sectionId) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        focusedSectionId: sectionId,
-      };
-    });
-
-    // Focus the section element if we have a ref
-    if (sectionId) {
-      const element = sectionRefs.current.get(sectionId);
-      if (element && document.activeElement !== element) {
-        // Use requestAnimationFrame to ensure DOM is ready
-        requestAnimationFrame(() => {
-          element.focus();
-        });
-      }
-    }
-  }, []);
+  // Note: focusedSectionId is now derived from navigationPath (see line 100-102)
+  // No need for setFocusedSection or useEffect to sync it!
 
   // Modal stack management
   const pushModal = useCallback((modalId: string) => {
@@ -354,24 +336,18 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [executeCommand, state, navigateTo, cycleSection]);
 
-  // Update focused section when navigation path changes
-  useEffect(() => {
-    if (state.navigationPath.length > 0) {
-      // Get the section ID from the last segment of the path
-      const sectionId = state.navigationPath[0].toLowerCase();
-      setFocusedSection(sectionId);
-    } else {
-      setFocusedSection(null);
-    }
-  }, [state.navigationPath, setFocusedSection]);
+  // Create enhanced state with derived focusedSectionId
+  const enhancedState = {
+    ...state,
+    focusedSectionId,
+  };
 
   const value: NavigationContextValue = {
-    state,
+    state: enhancedState,
     commandTree,
     setCommandTree,
     navigateTo,
     clearNavigation,
-    setFocusedSection,
     pushModal,
     popModal,
     updateMetadata,
