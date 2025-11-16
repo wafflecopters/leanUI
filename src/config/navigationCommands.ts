@@ -82,6 +82,7 @@ function createGoalsCommands(): Command[] {
  */
 function createHypothesesCommands(): Command[] {
   return [
+    // Add hypothesis (only when NO hypothesis is selected)
     createCommand(
       'hypotheses-add',
       'a',
@@ -98,56 +99,145 @@ function createHypothesesCommands(): Command[] {
       },
       {
         description: 'Add a new hypothesis',
+        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId == null, // Only when nothing selected
       }
     ),
 
+    // Edit name (only when hypothesis selected) - INLINE
     createCommand(
-      'hypotheses-edit',
-      'e',
-      'Edit',
+      'hypotheses-edit-name',
+      'n',
+      'Name',
       (context) => {
-        // Trigger edit hypothesis action
-        const onEditHypothesis = context.metadata?.onEditHypothesis as (() => void) | undefined;
-        onEditHypothesis?.();
+        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
 
         return {
-          navigationPath: ['Hypotheses', 'Editor'],
+          navigationPath: ['Hypotheses', String(index), 'EditName'],
           preventDefault: true,
         };
       },
       {
-        description: 'Edit selected hypothesis',
-        isAvailable: (ctx) => {
-          // Only available if a hypothesis is selected
-          return ctx.metadata?.selectedHypothesisId != null;
-        },
+        description: 'Edit hypothesis name',
+        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
       }
     ),
 
+    // Edit expression (only when hypothesis selected) - INLINE
+    createCommand(
+      'hypotheses-edit-expr',
+      'e',
+      'Edit',
+      (context) => {
+        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
+
+        return {
+          navigationPath: ['Hypotheses', String(index), 'EditExpression'],
+          preventDefault: true,
+        };
+      },
+      {
+        description: 'Edit hypothesis expression',
+        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
+      }
+    ),
+
+    // Set (clear first, then choose) - only when hypothesis selected
+    createCommand(
+      'hypotheses-set',
+      's',
+      'Set',
+      (context) => {
+        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
+
+        return {
+          navigationPath: ['Hypotheses', String(index), 'Set'],
+          preventDefault: true,
+        };
+      },
+      {
+        description: 'Set hypothesis (clear fields first)',
+        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
+        children: [
+          // Set name (sn)
+          createCommand(
+            'hypotheses-set-name',
+            'n',
+            'Name',
+            (context) => {
+              const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+              if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
+
+              return {
+                navigationPath: ['Hypotheses', String(index), 'SetName'],
+                preventDefault: true,
+              };
+            },
+            {
+              description: 'Set name (clear field)',
+            }
+          ),
+
+          // Set expression (se)
+          createCommand(
+            'hypotheses-set-expr',
+            'e',
+            'Expression',
+            (context) => {
+              const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+              if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
+
+              return {
+                navigationPath: ['Hypotheses', String(index), 'SetExpression'],
+                preventDefault: true,
+              };
+            },
+            {
+              description: 'Set expression (clear field)',
+            }
+          ),
+        ],
+      }
+    ),
+
+    // Delete (with usage check) - only when hypothesis selected
     createCommand(
       'hypotheses-delete',
       'd',
       'Delete',
       (context) => {
-        // Trigger delete hypothesis action
-        const onDeleteHypothesis = context.metadata?.onDeleteHypothesis as (() => void) | undefined;
-        onDeleteHypothesis?.();
+        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
 
+        // Check if hypothesis is used
+        const onCheckUsage = context.metadata?.onCheckHypothesisUsage as ((name: string) => boolean) | undefined;
+        const hypothesisName = context.metadata?.selectedHypothesisName as string | undefined;
+
+        if (onCheckUsage && hypothesisName) {
+          const isUsed = onCheckUsage(hypothesisName);
+          if (isUsed) {
+            // Show error - hypothesis is used
+            alert(`Cannot delete hypothesis "${hypothesisName}" because it is used in other hypotheses, the goal, or the proof body.`);
+            return {
+              navigationPath: ['Hypotheses', String(index)],
+              preventDefault: true,
+            };
+          }
+        }
+
+        // Safe to delete - show confirmation
         return {
-          navigationPath: [],
+          navigationPath: ['Hypotheses', String(index), 'Confirm Delete'],
           preventDefault: true,
         };
       },
       {
-        description: 'Delete selected hypothesis',
-        isAvailable: (ctx) => {
-          // Only available if a hypothesis is selected
-          return ctx.metadata?.selectedHypothesisId != null;
-        },
+        description: 'Delete selected hypothesis (with safety check)',
+        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
       }
     ),
-
-    // TODO: Add navigation between hypotheses (j/k for down/up)
   ];
 }
 

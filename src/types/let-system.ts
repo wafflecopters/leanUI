@@ -80,14 +80,13 @@ export function createHypothesis(
 
 // Convert an Assumption to a LetBinding hypothesis
 export function assumptionToLetBinding(assumption: Assumption): LetBinding {
-  // We need to parse the expression string to ExpressionNode
-  // This is a placeholder - would need actual implementation
-  const expressionNode: ExpressionNode = {
+  // Use the type ExpressionNode directly, or create a placeholder if null
+  const expressionNode: ExpressionNode = assumption.type ?? {
     id: crypto.randomUUID(),
     type: 'variable',
-    value: assumption.expression,
+    value: '?',
     children: [],
-    raw: assumption.expression
+    raw: '?'
   };
 
   return createHypothesis(

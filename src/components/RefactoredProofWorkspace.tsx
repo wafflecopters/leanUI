@@ -45,10 +45,14 @@ function piBinderToAssumption([name, type]: [string, TTerm], index: number): Ass
   return {
     id: `hyp_${index}`,
     name,
-    expression: `${name} : ${typeStr}`,
+    type: {
+      id: `type-hyp_${index}`,
+      type: 'variable' as const,
+      raw: typeStr,
+      children: [],
+    },
     description: `Hypothesis: ${name} has type ${typeStr}`,
-    introducedBy: 'user',
-    typeHoleId: type.tag === 'Hole' ? type.id : undefined
+    introducedBy: 'user'
   };
 }
 

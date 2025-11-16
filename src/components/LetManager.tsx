@@ -160,7 +160,12 @@ export function LetManager({
           const hypothesis: Assumption = {
             id: crypto.randomUUID(),
             name: varName,
-            expression: `${varName} : ?`,
+            type: {
+              id: `type-${crypto.randomUUID()}`,
+              type: 'variable' as const,
+              raw: '?',
+              children: [],
+            },
             description: `Auto-generated: ${varName} is unbound`,
             introducedBy: 'auto'
           };
@@ -288,7 +293,12 @@ export function LetManager({
         const autoHypothesis: Assumption = {
           id: crypto.randomUUID(),
           name: varName,
-          expression: `${varName} : ?`, // Type unknown, marked with ?
+          type: {
+            id: `type-${crypto.randomUUID()}`,
+            type: 'variable' as const,
+            raw: '?',
+            children: [],
+          },
           description: `Auto-generated: ${varName} is unbound`,
           introducedBy: 'auto'
         };
@@ -302,7 +312,12 @@ export function LetManager({
     const hypothesis: Assumption = {
       id: crypto.randomUUID(),
       name: hypothesisName,
-      expression: `${hypothesisName} : ${finalExpression}`,
+      type: {
+        id: `type-${crypto.randomUUID()}`,
+        type: 'variable' as const,
+        raw: finalExpression,
+        children: [],
+      },
       description: hypothesisDescription || `${hypothesisName} : ${finalExpression}`,
       introducedBy: 'user'
     };
@@ -971,8 +986,8 @@ export function LetManager({
                     </div>
                     {letBinding.localHypotheses.map(hyp => (
                       <div key={hyp.id} style={{ fontSize: '12px', color: '#495057', marginBottom: '2px' }}>
-                        <span style={{ fontWeight: 'bold' }}>{hyp.name}:</span> {hyp.expression}
-                        {hyp.description && hyp.description !== hyp.expression && (
+                        <span style={{ fontWeight: 'bold' }}>{hyp.name}:</span> {hyp.type?.raw ?? '?'}
+                        {hyp.description && hyp.description !== `${hyp.name} : ${hyp.type?.raw ?? '?'}` && (
                           <span style={{ color: '#6c757d', fontStyle: 'italic', marginLeft: '4px' }}>
                             ({hyp.description})
                           </span>

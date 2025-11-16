@@ -108,7 +108,12 @@ const inductiveHypothesisExpr = substituteVariableInExpression(claim.value, indu
 const inductiveHypothesis: Assumption = {
   id: crypto.randomUUID(),
   name: 'IH',
-  expression: astToString(inductiveHypothesisExpr),
+  type: {
+    id: `type-${crypto.randomUUID()}`,
+    type: 'variable' as const,
+    raw: astToString(inductiveHypothesisExpr),
+    children: [],
+  },
   description: `Inductive hypothesis: ${claim.name}(k)`,
   introducedBy: 'induction'
 };
@@ -120,7 +125,7 @@ console.log(`Expression: ${astToString(inductiveCaseLet.value)}`);
 console.log(`Derived from: ${inductiveCaseLet.derivedFrom}`);
 console.log(`Local hypotheses:`);
 inductiveCaseLet.localHypotheses?.forEach(hyp => {
-  console.log(`  - ${hyp.name}: ${hyp.expression}`);
+  console.log(`  - ${hyp.name}: ${hyp.type?.raw ?? '?'}`);
   console.log(`    (${hyp.description})`);
 });
 console.log();

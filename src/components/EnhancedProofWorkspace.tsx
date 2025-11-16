@@ -248,10 +248,14 @@ function piBinderToAssumption([name, type]: [string, TTerm], id: string): Assump
   return {
     id,
     name,
-    expression: `${name} : ${typeStr}`,
+    type: {
+      id: `type-${id}`,
+      type: 'variable' as const,
+      raw: typeStr,
+      children: [],
+    },
     description: `Hypothesis: ${name} has type ${typeStr}`,
-    introducedBy: 'user',
-    typeHoleId: type.tag === 'Hole' ? type.id : undefined
+    introducedBy: 'user'
   };
 }
 
@@ -259,9 +263,8 @@ function piBinderToAssumption([name, type]: [string, TTerm], id: string): Assump
  * Convert a UI Assumption to a TT Pi-binder.
  */
 function assumptionToPiBinder(assumption: Assumption): [string, TTerm] {
-  // Check if expression is just the type (e.g., "ℝ") or full declaration (e.g., "a : ℝ")
-  const match = assumption.expression.match(/^\s*(\w+)\s*:\s*(.+)$/);
-  const typeStr = match ? match[2].trim() : assumption.expression.trim();
+  // Get the type string from the type node
+  const typeStr = assumption.type?.raw ?? '?';
 
   let typeTerm: TTerm;
 

@@ -2,19 +2,20 @@
  * Hypothesis-specific commands
  *
  * Commands available when a hypothesis is focused:
- * - e: Edit expression
- * - n: Edit name
- * - d: Delete (with confirmation)
- * - r: Reset (prefix for 're' and 'rn')
+ * - n: Edit name (with current value pre-filled)
+ * - e: Edit expression (with current value pre-filled)
+ * - s: Set (clear fields, then choose n/e)
+ * - d: Delete (with safety check for usage)
  */
 
 import { Command, createCommand } from '../types/commands';
 import { Assumption } from '../types/enhanced-focus';
 
 export interface HypothesisCommandHandlers {
-  onEditExpression: (id: string) => void;
-  onEditName: (id: string) => void;
+  onEditExpression: (id: string, clearFirst?: boolean) => void;
+  onEditName: (id: string, clearFirst?: boolean) => void;
   onDelete: (id: string) => void;
+  onCheckUsage?: (hypothesisName: string) => boolean; // Check if hypothesis is used
 }
 
 /**
@@ -25,34 +26,16 @@ export function createHypothesisCommands(
   index: number,
   handlers: HypothesisCommandHandlers
 ): Command[] {
-  const { onEditExpression, onEditName } = handlers;
+  const { onEditExpression, onEditName, onCheckUsage } = handlers;
 
   return [
-    // Edit expression
-    createCommand(
-      `hyp-${hypothesis.id}-edit-expr`,
-      'e',
-      'Edit',
-      () => {
-        onEditExpression(hypothesis.id);
-        return {
-          navigationPath: ['Hypotheses', `${index}`, 'Expression'],
-          mode: 'edit' as const,
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Edit hypothesis expression',
-      }
-    ),
-
-    // Edit name
+    // Edit name (pre-filled)
     createCommand(
       `hyp-${hypothesis.id}-edit-name`,
       'n',
       'Name',
       () => {
-        onEditName(hypothesis.id);
+        onEditName(hypothesis.id, false); // Pre-fill with current name
         return {
           navigationPath: ['Hypotheses', `${index}`, 'Name'],
           mode: 'edit' as const,
@@ -64,74 +47,104 @@ export function createHypothesisCommands(
       }
     ),
 
-    // Delete (will show confirmation)
+    // Edit expression (pre-filled)
+    createCommand(
+      `hyp-${hypothesis.id}-edit-expr`,
+      'e',
+      'Edit',
+      () => {
+        onEditExpression(hypothesis.id, false); // Pre-fill with current expression
+        return {
+          navigationPath: ['Hypotheses', `${index}`, 'Expression'],
+          mode: 'edit' as const,
+          preventDefault: true,
+        };
+      },
+      {
+        description: 'Edit hypothesis expression',
+      }
+    ),
+
+    // Set (clear fields, then choose n/e)
+    createCommand(
+      `hyp-${hypothesis.id}-set`,
+      's',
+      'Set',
+      () => {
+        return {
+          navigationPath: ['Hypotheses', `${index}`, 'Set'],
+          preventDefault: true,
+        };
+      },
+      {
+        description: 'Set hypothesis (clear fields first)',
+        children: [
+          // Set name (sn)
+          createCommand(
+            `hyp-${hypothesis.id}-set-name`,
+            'n',
+            'Name',
+            () => {
+              onEditName(hypothesis.id, true); // Clear first
+              return {
+                navigationPath: ['Hypotheses', `${index}`, 'Name'],
+                mode: 'edit' as const,
+                preventDefault: true,
+              };
+            },
+            {
+              description: 'Set name (clear field)',
+            }
+          ),
+
+          // Set expression (se)
+          createCommand(
+            `hyp-${hypothesis.id}-set-expr`,
+            'e',
+            'Expression',
+            () => {
+              onEditExpression(hypothesis.id, true); // Clear first
+              return {
+                navigationPath: ['Hypotheses', `${index}`, 'Expression'],
+                mode: 'edit' as const,
+                preventDefault: true,
+              };
+            },
+            {
+              description: 'Set expression (clear field)',
+            }
+          ),
+        ],
+      }
+    ),
+
+    // Delete (with usage check)
     createCommand(
       `hyp-${hypothesis.id}-delete`,
       'd',
       'Delete',
       () => {
+        // Check if hypothesis is used
+        if (onCheckUsage) {
+          const isUsed = onCheckUsage(hypothesis.name);
+          if (isUsed) {
+            // Show error - hypothesis is used and cannot be deleted
+            alert(`Cannot delete hypothesis "${hypothesis.name}" because it is used in other hypotheses, the goal, or the proof body.`);
+            return {
+              navigationPath: ['Hypotheses', `${index}`],
+              preventDefault: true,
+            };
+          }
+        }
+
+        // Safe to delete - show confirmation
         return {
           navigationPath: ['Hypotheses', `${index}`, 'Confirm Delete'],
           preventDefault: true,
         };
       },
       {
-        description: 'Delete hypothesis',
-      }
-    ),
-
-    // Reset (prefix command with children)
-    createCommand(
-      `hyp-${hypothesis.id}-reset`,
-      'r',
-      'Reset',
-      () => {
-        return {
-          navigationPath: ['Hypotheses', `${index}`, 'Reset'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Reset (edit with selection)',
-        children: [
-          // Reset expression (re)
-          createCommand(
-            `hyp-${hypothesis.id}-reset-expr`,
-            'e',
-            'Expression',
-            () => {
-              onEditExpression(hypothesis.id);
-              return {
-                navigationPath: ['Hypotheses', `${index}`, 'Expression'],
-                mode: 'edit' as const,
-                preventDefault: true,
-                escapeLevels: 2, // Pop both 'Reset' and 'Expression' levels
-              };
-            },
-            {
-              description: 'Reset expression (select all)',
-            }
-          ),
-
-          // Reset name (rn)
-          createCommand(
-            `hyp-${hypothesis.id}-reset-name`,
-            'n',
-            'Name',
-            () => {
-              onEditName(hypothesis.id);
-              return {
-                navigationPath: ['Hypotheses', `${index}`, 'Name'],
-                mode: 'edit' as const,
-                preventDefault: true,
-                escapeLevels: 2, // Pop both 'Reset' and 'Name' levels
-              };
-            },
-            {
-              description: 'Reset name (select all)',
-            }
-          ),
-        ],
+        description: 'Delete hypothesis (with safety check)',
       }
     ),
   ];

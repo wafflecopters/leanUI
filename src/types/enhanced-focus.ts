@@ -15,10 +15,9 @@ export type FocusPath = number[];
 export interface Assumption {
   id: string;
   name: string; // e.g., "hf", "h1"
-  expression: string; // e.g., "p ≠ 3"
+  type: ExpressionNode | null; // The type of this hypothesis, null = hole
   description: string; // e.g., "p is not equal to 3"
   introducedBy?: string; // Rule ID that introduced this assumption
-  typeHoleId?: string; // NEW: ID of the type hole for this variable (e.g., "type_a")
 }
 
 export interface ProofContext {

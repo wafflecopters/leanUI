@@ -60,7 +60,7 @@ export function AssumptionsDisplay({ context }: AssumptionsDisplayProps) {
                   border: '1px solid #ffeaa7'
                 }}
               >
-                {assumption.name}: {assumption.expression}
+                {assumption.name}: {assumption.type?.raw ?? '?'}
               </span>
             ))}
           </div>

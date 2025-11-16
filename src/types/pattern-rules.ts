@@ -339,7 +339,12 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
       const newAssumption: Assumption = {
         id: crypto.randomUUID(),
         name: 'h_deriv_exists',
-        expression: `HasDerivAt ${astToString(g)} (deriv ${astToString(g)} ${astToString(x)}) ${astToString(x)}`,
+        type: {
+          id: `type-${crypto.randomUUID()}`,
+          type: 'variable' as const,
+          raw: `HasDerivAt ${astToString(g)} (deriv ${astToString(g)} ${astToString(x)}) ${astToString(x)}`,
+          children: [],
+        },
         description: `${astToString(g)} is differentiable at ${astToString(x)} (from hasDerivAt_iff_tendsto_slope)`,
         introducedBy: 'deriv_limit_def'
       };
@@ -518,7 +523,9 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
 
       return context.assumptions.some(assumption => {
         try {
-          const assumptionExpr = parseExpressionToAST(assumption.expression);
+          const exprStr = assumption.type?.raw ?? '';
+          if (!exprStr) return false;
+          const assumptionExpr = parseExpressionToAST(exprStr);
           if (assumptionExpr.type !== 'equality' || assumptionExpr.operator !== '=') return false;
 
           const leftStr = astToString(assumptionExpr.children[0]);
@@ -538,7 +545,9 @@ export const ENHANCED_FOCUS_RULES: EnhancedFocusRule[] = [
       // Find the first matching assumption
       for (const assumption of context.assumptions) {
         try {
-          const assumptionExpr = parseExpressionToAST(assumption.expression);
+          const exprStr = assumption.type?.raw ?? '';
+          if (!exprStr) continue;
+          const assumptionExpr = parseExpressionToAST(exprStr);
           if (assumptionExpr.type !== 'equality' || assumptionExpr.operator !== '=') continue;
 
           const leftNode = assumptionExpr.children[0];

@@ -5,8 +5,7 @@
 import { Assumption } from '../types/enhanced-focus';
 import { useNavigation } from '../contexts/NavigationContext';
 import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
-import { useArrayItemSelection } from '../hooks/useArrayItemSelection';
-import { useRef, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 interface HypothesesSectionProps {
   hypotheses: Assumption[];
@@ -16,36 +15,176 @@ interface HypothesesSectionProps {
 
 export function HypothesesSection({
   hypotheses,
+  onUpdateHypothesis,
 }: HypothesesSectionProps) {
   const navigation = useNavigation();
-  const updateMetadataRef = useRef(navigation.updateMetadata);
 
-  // Keep ref up to date
+  // Derive everything from navigation path
+  const navPath = navigation.state.navigationPath;
+  const isInFocusChain = navPath[0] === 'Hypotheses';
+  const isActive = navPath.length === 1 && navPath[0] === 'Hypotheses';
+
+  // Parse selected index from navigation path: ['Hypotheses', '0'] or ['Hypotheses', '0', 'EditName']
+  const selectedIndex = navPath.length >= 2 && navPath[0] === 'Hypotheses' && /^\d+$/.test(navPath[1])
+    ? parseInt(navPath[1], 10)
+    : null;
+
+  // Derive edit mode from navigation path
+  const isEditingName = navPath[2] === 'EditName' || navPath[2] === 'SetName';
+  const isEditingExpression = navPath[2] === 'EditExpression' || navPath[2] === 'SetExpression';
+  const isClearMode = navPath[2]?.startsWith('Set'); // SetName or SetExpression
+
+  // Local state for multi-digit mode only
+  const [isInMultiDigitMode, setIsInMultiDigitMode] = useState(false);
+  const [multiDigitBuffer, setMultiDigitBuffer] = useState('');
+
+  // Get selected hypothesis
+  const selectedHypothesis = selectedIndex !== null && selectedIndex < hypotheses.length
+    ? hypotheses[selectedIndex]
+    : null;
+
+  // Keyboard handling for digit selection and arrow keys
   useEffect(() => {
-    updateMetadataRef.current = navigation.updateMetadata;
-  });
+    if (!isActive) {
+      // Clear multi-digit mode when not active
+      if (isInMultiDigitMode) {
+        setIsInMultiDigitMode(false);
+        setMultiDigitBuffer('');
+      }
+      return;
+    }
 
-  // Check if 'Hypotheses' is in the navigation path (but NOT in Editor sub-path)
-  const isInFocusChain = navigation.state.navigationPath.includes('Hypotheses');
-  const isActive = navigation.state.navigationPath[0] === 'Hypotheses' &&
-                   navigation.state.navigationPath[1] !== 'Editor';
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't handle if user is typing in an input
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        return;
+      }
 
-  // Array item selection (with apostrophe multi-digit mode)
-  const {
-    selectedIndex,
-    isInMultiDigitMode,
-    multiDigitBuffer,
-  } = useArrayItemSelection({
-    arrayLength: hypotheses.length,
-    isActive,
-    onSelectionChange: (index) => {
-      // Update navigation metadata with selected hypothesis
-      updateMetadataRef.current({
-        selectedHypothesisId: index !== null ? hypotheses[index]?.id : null,
-        selectedHypothesisIndex: index,
+      // Arrow keys - cycle through items
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        const newIndex = selectedIndex === null ? 0 : (selectedIndex + 1) % hypotheses.length;
+        const hyp = hypotheses[newIndex];
+        navigation.navigateTo(['Hypotheses', String(newIndex)]);
+        // Update metadata immediately
+        navigation.updateMetadata({
+          selectedHypothesisId: hyp.id,
+          selectedHypothesisIndex: newIndex,
+          selectedHypothesisName: hyp.name,
+        });
+        e.preventDefault();
+        return;
+      }
+
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        const newIndex = selectedIndex === null ? hypotheses.length - 1 : (selectedIndex - 1 + hypotheses.length) % hypotheses.length;
+        const hyp = hypotheses[newIndex];
+        navigation.navigateTo(['Hypotheses', String(newIndex)]);
+        // Update metadata immediately
+        navigation.updateMetadata({
+          selectedHypothesisId: hyp.id,
+          selectedHypothesisIndex: newIndex,
+          selectedHypothesisName: hyp.name,
+        });
+        e.preventDefault();
+        return;
+      }
+
+      // Apostrophe - enter multi-digit mode
+      if (e.key === "'" || e.key === 'Quote') {
+        setIsInMultiDigitMode(true);
+        setMultiDigitBuffer('');
+        e.preventDefault();
+        return;
+      }
+
+      // Escape - exit multi-digit mode
+      if (e.key === 'Escape' && isInMultiDigitMode) {
+        setIsInMultiDigitMode(false);
+        setMultiDigitBuffer('');
+        e.preventDefault();
+        return;
+      }
+
+      // Digit keys
+      if (/^[0-9]$/.test(e.key)) {
+        const digit = e.key;
+
+        if (isInMultiDigitMode) {
+          // Multi-digit mode: accumulate digits
+          const newBuffer = multiDigitBuffer + digit;
+          setMultiDigitBuffer(newBuffer);
+
+          // Try to navigate to the item
+          const index = parseInt(newBuffer, 10);
+          if (index >= 0 && index < hypotheses.length) {
+            const hyp = hypotheses[index];
+            navigation.navigateTo(['Hypotheses', String(index)]);
+            // Update metadata immediately
+            navigation.updateMetadata({
+              selectedHypothesisId: hyp.id,
+              selectedHypothesisIndex: index,
+              selectedHypothesisName: hyp.name,
+            });
+          }
+          // Don't exit multi-digit mode automatically
+        } else {
+          // Single digit mode: immediate selection
+          const index = parseInt(digit, 10);
+          if (index >= 0 && index < hypotheses.length) {
+            const hyp = hypotheses[index];
+            navigation.navigateTo(['Hypotheses', String(index)]);
+            // Update metadata immediately
+            navigation.updateMetadata({
+              selectedHypothesisId: hyp.id,
+              selectedHypothesisIndex: index,
+              selectedHypothesisName: hyp.name,
+            });
+          }
+        }
+
+        e.preventDefault();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isActive, selectedIndex, hypotheses, isInMultiDigitMode, multiDigitBuffer, navigation]);
+
+  // Handle save
+  const handleSave = (value: string) => {
+    if (!selectedHypothesis) return;
+
+    if (isEditingName) {
+      onUpdateHypothesis(selectedHypothesis.id, {
+        ...selectedHypothesis,
+        name: value,
       });
-    },
-  });
+    } else if (isEditingExpression) {
+      // Parse the string into an ExpressionNode
+      const typeNode = value.trim() === '' ? null : {
+        id: `type-${selectedHypothesis.id}-${Date.now()}`,
+        type: 'variable' as const,
+        raw: value,
+        children: [],
+      };
+
+      onUpdateHypothesis(selectedHypothesis.id, {
+        ...selectedHypothesis,
+        type: typeNode,
+      });
+    }
+
+    // Pop navigation path back
+    navigation.navigateTo(navigation.state.navigationPath.slice(0, -1));
+  };
+
+  // Handle cancel
+  const handleCancel = () => {
+    // Just pop navigation path back
+    navigation.navigateTo(navigation.state.navigationPath.slice(0, -1));
+  };
 
   return (
     <div>
@@ -71,6 +210,18 @@ export function HypothesesSection({
       <div>
         {hypotheses.map((hypothesis, index) => {
           const isSelected = selectedIndex === index;
+          const isEditingNameForThis = isSelected && isEditingName;
+          const isEditingExpressionForThis = isSelected && isEditingExpression;
+
+          // Derive initial value for input
+          const initialValue = (() => {
+            if (isEditingNameForThis) {
+              return isClearMode ? '' : hypothesis.name;
+            } else if (isEditingExpressionForThis) {
+              return isClearMode ? '' : (hypothesis.type?.raw ?? '');
+            }
+            return '';
+          })();
 
           return (
             <div
@@ -86,6 +237,7 @@ export function HypothesesSection({
                 transition: 'all 0.2s ease',
               }}
             >
+              {/* Index */}
               {isInFocusChain && (
                 <span style={{
                   fontFamily: 'monospace',
@@ -97,11 +249,93 @@ export function HypothesesSection({
                   {index}
                 </span>
               )}
-              <MathJaxExpressionRendererRaw expression={hypothesis.expression} readonly />
+
+              {/* Name - editable if in name edit mode */}
+              {isEditingNameForThis ? (
+                <>
+                  <EditableInput
+                    initialValue={hypothesis.name}
+                    onSave={handleSave}
+                    onCancel={handleCancel}
+                    style={{ minWidth: '100px' }}
+                  />
+                  <span style={{ color: '#999' }}>:</span>
+                </>
+              ) : isEditingExpressionForThis ? (
+                <>
+                  <span style={{
+                    fontFamily: 'monospace',
+                    color: '#0066cc',
+                    fontWeight: isSelected ? 'bold' : 'normal',
+                  }}>
+                    {hypothesis.name}
+                  </span>
+                  <span style={{ color: '#999' }}>:</span>
+                  <EditableInput
+                    initialValue={initialValue}
+                    onSave={handleSave}
+                    onCancel={handleCancel}
+                    style={{ flex: 1, minWidth: '200px' }}
+                  />
+                </>
+              ) : (
+                <>
+                  <span style={{
+                    fontFamily: 'monospace',
+                    color: '#0066cc',
+                    fontWeight: isSelected ? 'bold' : 'normal',
+                  }}>
+                    {hypothesis.name}
+                  </span>
+                  <span style={{ color: '#999' }}>:</span>
+                  <MathJaxExpressionRendererRaw expression={hypothesis.type?.raw ?? '?'} readonly />
+                </>
+              )}
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+// Separate component for editable input to isolate state
+function EditableInput({
+  initialValue,
+  onSave,
+  onCancel,
+  style,
+}: {
+  initialValue: string;
+  onSave: (value: string) => void;
+  onCancel: () => void;
+  style?: React.CSSProperties;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          onSave(value);
+          e.preventDefault();
+        } else if (e.key === 'Escape') {
+          onCancel();
+          e.preventDefault();
+        }
+      }}
+      style={{
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        padding: '2px 4px',
+        border: '1px solid #2845a7',
+        borderRadius: '2px',
+        ...style,
+      }}
+    />
   );
 }
