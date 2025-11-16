@@ -302,20 +302,32 @@ function EnhancedProofWorkspaceInner() {
   // State for let-bindings
   const [letBindings, setLetBindings] = useState<LetElement[]>([]);
 
-  // UI state for keyboard navigation control
-  const [showEditGoal, setShowEditGoal] = useState(false);
-  const [showAddHypothesis, setShowAddHypothesis] = useState(false);
-  const [showAddLet, setShowAddLet] = useState(false);
+  // UI state DERIVED from navigation path (no more React state!)
+  const showEditGoal = navigation.state.navigationPath[0] === 'Goals' &&
+                        navigation.state.navigationPath[1] === 'Editor';
+  const showAddHypothesis = navigation.state.navigationPath[0] === 'Hypotheses' &&
+                             navigation.state.navigationPath[1] === 'Editor';
+  const showAddLet = navigation.state.navigationPath[0] === 'Let Bindings' &&
+                      navigation.state.navigationPath[1] === 'Editor';
 
-  // When closing editors, pop navigation path
-  useEffect(() => {
-    if (!showEditGoal && !showAddHypothesis && !showAddLet) {
-      // All editors are closed, pop back to section level
-      if (navigation.state.navigationPath.length > 1) {
-        navigation.navigateTo([navigation.state.navigationPath[0]]);
-      }
+  // Callbacks to close editors by popping navigation path
+  const closeEditGoal = useCallback(() => {
+    if (navigation.state.navigationPath.length > 1) {
+      navigation.navigateTo([navigation.state.navigationPath[0]]);
     }
-  }, [showEditGoal, showAddHypothesis, showAddLet, navigation.navigateTo, navigation.state.navigationPath]);
+  }, [navigation]);
+
+  const closeAddHypothesis = useCallback(() => {
+    if (navigation.state.navigationPath.length > 1) {
+      navigation.navigateTo([navigation.state.navigationPath[0]]);
+    }
+  }, [navigation]);
+
+  const closeAddLet = useCallback(() => {
+    if (navigation.state.navigationPath.length > 1) {
+      navigation.navigateTo([navigation.state.navigationPath[0]]);
+    }
+  }, [navigation]);
 
   // ============================================================================
   // NEW ARCHITECTURE: Term Definition + Focused Hole
@@ -744,12 +756,13 @@ function EnhancedProofWorkspaceInner() {
   // ============================================================================
 
   // Navigation command handlers
+  // Note: showEditGoal is now derived from navigation path, so these handlers are empty
   const handleEditGoalCommand = useCallback(() => {
-    setShowEditGoal(true);
+    // Navigation path is already set by the command itself
   }, []);
 
   const handleSetGoalCommand = useCallback(() => {
-    setShowEditGoal(true);
+    // Navigation path is already set by the command itself
   }, []);
 
   const handleClearGoalCommand = useCallback(() => {
@@ -762,7 +775,7 @@ function EnhancedProofWorkspaceInner() {
   }, [rootDefinition]);
 
   const handleAddHypothesisCommand = useCallback(() => {
-    setShowAddHypothesis(true);
+    // Navigation path is already set by the command itself
   }, []);
 
   const handleEditHypothesisCommand = useCallback(() => {
@@ -776,7 +789,7 @@ function EnhancedProofWorkspaceInner() {
   }, []);
 
   const handleAddLetBindingCommand = useCallback(() => {
-    setShowAddLet(true);
+    // Navigation path is already set by the command itself
   }, []);
 
   const handleEditLetBindingCommand = useCallback(() => {
@@ -1245,11 +1258,11 @@ function EnhancedProofWorkspaceInner() {
             onFocusChange={setFocusPath}
             showFocusAsBetaRedux={true}
             showEditGoalExternal={showEditGoal}
-            onShowEditGoalChange={setShowEditGoal}
+            onShowEditGoalChange={closeEditGoal}
             showAddHypothesisExternal={showAddHypothesis}
-            onShowAddHypothesisChange={setShowAddHypothesis}
+            onShowAddHypothesisChange={closeAddHypothesis}
             showAddLetExternal={showAddLet}
-            onShowAddLetChange={setShowAddLet}
+            onShowAddLetChange={closeAddLet}
           />
         </div>
 
