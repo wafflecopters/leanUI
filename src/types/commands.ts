@@ -211,6 +211,11 @@ export function buildCommandTree(rootCommands: Command[]): CommandTree {
     let currentCommands = rootCommands;
 
     for (const segment of path) {
+      // Skip numeric segments - these represent selections, not command nodes
+      if (/^\d+$/.test(segment)) {
+        continue;
+      }
+
       const command = currentCommands.find(cmd => cmd.label === segment);
       if (!command || !command.children) {
         return [];
