@@ -20,10 +20,6 @@ export function NavigationFooter() {
   // Build breadcrumb text
   const breadcrumb = NavigationUtils.buildBreadcrumb(state.navigationPath);
 
-  // Get mode display text
-  const modeText = state.mode === 'navigate' ? 'Navigate' : 'Edit';
-  const modeColor = state.mode === 'navigate' ? '#2845a7' : '#28a745';
-
   return (
     <div
       style={{
@@ -43,24 +39,7 @@ export function NavigationFooter() {
         boxShadow: '0 -2px 8px rgba(0, 0, 0, 0.05)',
       }}
     >
-      {/* Mode indicator */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ fontWeight: 'bold', color: '#495057' }}>Mode:</span>
-        <span
-          style={{
-            padding: '2px 8px',
-            backgroundColor: modeColor,
-            color: 'white',
-            borderRadius: '4px',
-            fontWeight: 'bold',
-            fontSize: '12px',
-          }}
-        >
-          {modeText}
-        </span>
-      </div>
-
-      {/* Breadcrumb - show in both modes */}
+      {/* Breadcrumb */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
         <span style={{ fontWeight: 'bold', color: '#495057' }}>Path:</span>
         <span style={{ color: '#6c757d', fontFamily: 'monospace' }}>
@@ -69,7 +48,7 @@ export function NavigationFooter() {
       </div>
 
       {/* Available shortcuts */}
-      {state.mode === 'navigate' && availableCommands.length > 0 && (
+      {availableCommands.length > 0 && (
         <div
           style={{
             display: 'flex',
@@ -122,8 +101,8 @@ export function NavigationFooter() {
         </div>
       )}
 
-      {/* Edit mode hint */}
-      {state.mode === 'edit' && (
+      {/* Escape hint */}
+      {state.navigationPath.length > 0 && (
         <div style={{ color: '#6c757d', fontSize: '12px' }}>
           Press <kbd style={{
             backgroundColor: '#e9ecef',
@@ -131,7 +110,7 @@ export function NavigationFooter() {
             borderRadius: '3px',
             fontWeight: 'bold',
             fontFamily: 'monospace',
-          }}>ESC</kbd> to return to navigation mode
+          }}>ESC</kbd> to go back
         </div>
       )}
     </div>

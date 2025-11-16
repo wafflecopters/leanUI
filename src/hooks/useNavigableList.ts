@@ -122,7 +122,6 @@ export function useNavigableList<T>({
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle if we're in the correct context
       if (!navigation.state.navigationPath.includes(context)) return;
-      if (navigation.state.mode !== 'navigate') return;
 
       const target = e.target as HTMLElement;
       const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA';
@@ -177,6 +176,18 @@ export function useNavigableList<T>({
         e.preventDefault();
         return;
       }
+
+      // Left/Right should also cycle
+      if (e.key === 'ArrowRight') {
+        focusNext();
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        focusPrevious();
+        e.preventDefault();
+        return;
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -188,7 +199,6 @@ export function useNavigableList<T>({
     isApostropheMode,
     numericBuffer,
     navigation.state.navigationPath,
-    navigation.state.mode,
     focusIndex,
     focusNext,
     focusPrevious,

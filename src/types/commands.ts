@@ -4,9 +4,10 @@
  * This module provides a robust, hierarchical command system for keyboard navigation.
  * Commands form a tree structure where each command can have child commands,
  * creating navigation contexts (e.g., "Goals" -> "Editor").
+ *
+ * NO MODES! Navigation is just a path through the tree. If you're at an editable
+ * leaf (like a text input), that's just part of the navigation, not a separate "mode".
  */
-
-export type InputMode = 'navigate' | 'edit';
 
 /**
  * Represents a keyboard shortcut key
@@ -19,8 +20,6 @@ export type CommandKey = string; // e.g., 'h', 'g', 'l', 'e', 's', 'r', 'Escape'
 export interface CommandContext {
   /** Current navigation path (breadcrumb) */
   navigationPath: string[];
-  /** Current input mode */
-  mode: InputMode;
   /** Additional metadata that can be passed to commands */
   metadata?: Record<string, any>;
 }
@@ -31,8 +30,6 @@ export interface CommandContext {
 export interface CommandResult {
   /** Whether to change the navigation path */
   navigationPath?: string[];
-  /** Whether to change the input mode */
-  mode?: InputMode;
   /** Whether to prevent default browser behavior */
   preventDefault?: boolean;
   /** Whether to stop event propagation */
@@ -175,37 +172,29 @@ export function createSectionCommand(
 
 /**
  * Helper to create the default Escape command behavior
- * - First ESC: clear navigation context (return to root)
- * - When already at root: does nothing (stays in navigation mode)
+ * - Pop one level from navigation path
+ * - If at root: does nothing
  */
 export function createEscapeCommand(): Command {
   return createCommand(
     'escape',
     'Escape',
-    'Clear Context',
+    'Go Back',
     (context) => {
-      // If we're in a sub-context, clear it
+      // Pop one level from the path
       if (context.navigationPath.length > 0) {
         return {
-          navigationPath: [],
+          navigationPath: context.navigationPath.slice(0, -1),
           preventDefault: true,
         };
       }
-      // If already at root in navigation mode, stay there
-      if (context.mode === 'navigate') {
-        return {
-          preventDefault: true,
-        };
-      }
-      // If in edit mode, switch to navigate mode
+      // Already at root, do nothing
       return {
-        mode: 'navigate',
-        navigationPath: [],
         preventDefault: true,
       };
     },
     {
-      description: 'Clear navigation context or exit to navigation mode',
+      description: 'Go back one level in navigation',
     }
   );
 }
@@ -254,9 +243,6 @@ export interface NavigationState {
   /** Escape levels stack - tracks how many levels each path segment should pop */
   escapeLevelsStack: number[];
 
-  /** Current input mode */
-  mode: InputMode;
-
   /** Currently focused section/element ID */
   focusedSectionId: string | null;
 
@@ -273,7 +259,6 @@ export interface NavigationState {
 export const initialNavigationState: NavigationState = {
   navigationPath: [],
   escapeLevelsStack: [],
-  mode: 'navigate',
   focusedSectionId: null,
   modalStack: [],
   metadata: {},

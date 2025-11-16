@@ -16,7 +16,6 @@ import {
   CommandTree,
   Command,
   CommandContext,
-  InputMode,
   NavigationUtils,
   NavigableSection,
 } from '../types/commands';
@@ -36,9 +35,6 @@ interface NavigationContextValue {
 
   /** Clear navigation context (return to root) */
   clearNavigation: () => void;
-
-  /** Set the input mode */
-  setMode: (mode: InputMode) => void;
 
   /** Set the focused section ID */
   setFocusedSection: (sectionId: string | null) => void;
@@ -113,14 +109,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     setState(prev => ({
       ...prev,
       navigationPath: [],
-    }));
-  }, []);
-
-  // Set input mode
-  const setMode = useCallback((mode: InputMode) => {
-    setState(prev => ({
-      ...prev,
-      mode,
     }));
   }, []);
 
@@ -246,7 +234,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     // Filter by availability
     const context: CommandContext = {
       navigationPath: state.navigationPath,
-      mode: state.mode,
       metadata: state.metadata,
     };
 
@@ -259,11 +246,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
   // Execute a command by key
   const executeCommand = useCallback((key: string): boolean => {
     if (!commandTree) return false;
-
-    // Don't handle commands if we're in typing mode (unless it's Escape)
-    if (state.mode === 'edit' && key !== 'Escape') {
-      return false;
-    }
 
     // If modal is open, only allow escape to close it
     if (state.modalStack.length > 0) {
@@ -282,7 +264,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     // Check availability
     const context: CommandContext = {
       navigationPath: state.navigationPath,
-      mode: state.mode,
       metadata: state.metadata,
     };
 
@@ -302,10 +283,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
           updates.navigationPath = result.navigationPath;
         }
 
-        if (result.mode !== undefined) {
-          updates.mode = result.mode;
-        }
-
         return { ...prev, ...updates };
       });
 
@@ -321,26 +298,17 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
       const target = e.target as HTMLElement;
       const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
-      // Handle Escape key - special behavior based on context
+      // Handle Escape key - pop one level in navigation path
       if (e.key === 'Escape') {
-        if (isInInput) {
-          // If in an input field, blur it and return to navigate mode
-          target.blur();
-          setMode('navigate');
+        // Pop one level from navigation path (works for both inputs and regular navigation)
+        if (state.navigationPath.length > 0) {
+          navigateTo(NavigationUtils.popPath(state.navigationPath));
+          if (isInInput) {
+            target.blur(); // Also blur the input
+          }
           e.preventDefault();
           e.stopPropagation();
           return;
-        }
-
-        // In navigate mode, Escape clears to root
-        if (state.mode === 'navigate') {
-          if (state.navigationPath.length > 0) {
-            // Clear to root
-            navigateTo(NavigationUtils.clearPath());
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
         }
       }
 
@@ -349,31 +317,28 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
         return;
       }
 
-      // Only handle special keys in navigate mode
-      if (state.mode === 'navigate') {
-        // Backspace/Delete - pop one level
-        if (e.key === 'Backspace' || e.key === 'Delete') {
-          if (state.navigationPath.length > 0) {
-            navigateTo(NavigationUtils.popPath(state.navigationPath));
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
+      // Backspace/Delete - also pops one level (same as Escape)
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        if (state.navigationPath.length > 0) {
+          navigateTo(NavigationUtils.popPath(state.navigationPath));
+          e.preventDefault();
+          e.stopPropagation();
+          return;
         }
+      }
 
-        // Arrow keys - cycle through sibling sections at current level
-        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-          cycleSection('next');
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-          cycleSection('prev');
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
+      // Arrow keys - cycle through sibling sections at current level
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        cycleSection('next');
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        cycleSection('prev');
+        e.preventDefault();
+        e.stopPropagation();
+        return;
       }
 
       // Try to execute command
@@ -387,7 +352,7 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [executeCommand, state, navigateTo, setMode, cycleSection]);
+  }, [executeCommand, state, navigateTo, cycleSection]);
 
   // Update focused section when navigation path changes
   useEffect(() => {
@@ -406,7 +371,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     setCommandTree,
     navigateTo,
     clearNavigation,
-    setMode,
     setFocusedSection,
     pushModal,
     popModal,

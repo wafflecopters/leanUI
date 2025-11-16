@@ -22,14 +22,9 @@ function createGoalsCommands(): Command[] {
       'goals-edit',
       'e',
       'Edit',
-      (context) => {
-        // Trigger edit goal action
-        const onEditGoal = context.metadata?.onEditGoal as (() => void) | undefined;
-        onEditGoal?.();
-
+      () => {
         return {
           navigationPath: ['Goals', 'Editor'],
-          mode: 'edit',
           preventDefault: true,
         };
       },
@@ -42,14 +37,9 @@ function createGoalsCommands(): Command[] {
       'goals-set',
       's',
       'Set',
-      (context) => {
-        // Trigger set goal action (clear and edit)
-        const onSetGoal = context.metadata?.onSetGoal as (() => void) | undefined;
-        onSetGoal?.();
-
+      () => {
         return {
           navigationPath: ['Goals', 'Editor'],
-          mode: 'edit',
           preventDefault: true,
         };
       },
@@ -88,14 +78,9 @@ function createHypothesesCommands(): Command[] {
       'hypotheses-add',
       'a',
       'Add',
-      (context) => {
-        // Trigger add hypothesis action
-        const onAddHypothesis = context.metadata?.onAddHypothesis as (() => void) | undefined;
-        onAddHypothesis?.();
-
+      () => {
         return {
           navigationPath: ['Hypotheses', 'Editor'],
-          mode: 'edit',
           preventDefault: true,
         };
       },
@@ -108,14 +93,9 @@ function createHypothesesCommands(): Command[] {
       'hypotheses-edit',
       'e',
       'Edit',
-      (context) => {
-        // Trigger edit hypothesis action
-        const onEditHypothesis = context.metadata?.onEditHypothesis as (() => void) | undefined;
-        onEditHypothesis?.();
-
+      () => {
         return {
           navigationPath: ['Hypotheses', 'Editor'],
-          mode: 'edit',
           preventDefault: true,
         };
       },
@@ -164,14 +144,9 @@ function createLetBindingsCommands(): Command[] {
       'letbindings-add',
       'a',
       'Add',
-      (context) => {
-        // Trigger add let binding action
-        const onAddLetBinding = context.metadata?.onAddLetBinding as (() => void) | undefined;
-        onAddLetBinding?.();
-
+      () => {
         return {
           navigationPath: ['Let Bindings', 'Editor'],
-          mode: 'edit',
           preventDefault: true,
         };
       },
@@ -184,14 +159,9 @@ function createLetBindingsCommands(): Command[] {
       'letbindings-edit',
       'e',
       'Edit',
-      (context) => {
-        // Trigger edit let binding action
-        const onEditLetBinding = context.metadata?.onEditLetBinding as (() => void) | undefined;
-        onEditLetBinding?.();
-
+      () => {
         return {
           navigationPath: ['Let Bindings', 'Editor'],
-          mode: 'edit',
           preventDefault: true,
         };
       },

@@ -1861,3 +1861,195 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
       throw new Error(`Unknown path step: ${step}`);
   }
 }
+
+// ============================================================================
+// EditableTerm: Immutable wrapper for editing term definitions
+// ============================================================================
+
+/**
+ * EditableTerm provides an immutable, structured interface for editing
+ * a term definition (proof workspace).
+ *
+ * The term definition is decomposed into:
+ * - hypotheses: Array of Pi-binders from the type signature
+ * - goal: The final return type of the signature
+ * - body: The proof term (definition value)
+ *
+ * Example term definition:
+ *   name: theorem
+ *   type: (a: ℝ) → (b: ℝ) → (a + b = b + a)
+ *   value: ?proof
+ *
+ * Becomes EditableTerm with:
+ *   hypotheses: [["a", ℝ], ["b", ℝ]]
+ *   goal: (a + b = b + a)
+ *   body: ?proof
+ */
+export class EditableTerm {
+  readonly name: string;
+  readonly hypotheses: ReadonlyArray<[string, TTerm]>;
+  readonly goal: TTerm;
+  readonly body: TTerm;
+
+  constructor(
+    name: string,
+    hypotheses: ReadonlyArray<[string, TTerm]>,
+    goal: TTerm,
+    body: TTerm
+  ) {
+    this.name = name;
+    this.hypotheses = hypotheses;
+    this.goal = goal;
+    this.body = body;
+  }
+
+  /**
+   * Create an EditableTerm from a TermDefinition by destructuring the type.
+   */
+  static fromTermDefinition(def: TermDefinition): EditableTerm {
+    const hypotheses = flattenPiBinders(def.type);
+    const goal = getFinalReturnType(def.type);
+    return new EditableTerm(def.name, hypotheses, goal, def.value);
+  }
+
+  /**
+   * Convert back to a TermDefinition by reconstructing the type.
+   */
+  toTermDefinition(): TermDefinition {
+    return {
+      name: this.name,
+      type: hypothesesToPi(this.hypotheses as Array<[string, TTerm]>, this.goal),
+      value: this.body
+    };
+  }
+
+  /**
+   * Add a hypothesis (Pi-binder) at the specified position.
+   *
+   * @param index - Position to insert (0 = first, hypotheses.length = last)
+   * @param name - Name of the hypothesis
+   * @param type - Type of the hypothesis
+   * @returns New EditableTerm with hypothesis added
+   */
+  addHypothesis(index: number, name: string, type: TTerm): EditableTerm {
+    const newHypotheses = [...this.hypotheses];
+    newHypotheses.splice(index, 0, [name, type]);
+    return new EditableTerm(this.name, newHypotheses, this.goal, this.body);
+  }
+
+  /**
+   * Remove a hypothesis at the specified position.
+   * Checks if the hypothesis is used before removing.
+   *
+   * @param index - Position of hypothesis to remove
+   * @returns New EditableTerm with hypothesis removed
+   * @throws Error if hypothesis is used in goal or body
+   */
+  removeHypothesis(index: number): EditableTerm {
+    if (index < 0 || index >= this.hypotheses.length) {
+      throw new Error(`Invalid hypothesis index: ${index}`);
+    }
+
+    const [name] = this.hypotheses[index];
+
+    // Check if used in remaining hypotheses' types
+    for (let i = index + 1; i < this.hypotheses.length; i++) {
+      if (isNameUsed(name, this.hypotheses[i][1])) {
+        throw new Error(`Cannot remove hypothesis "${name}": used in hypothesis "${this.hypotheses[i][0]}"`);
+      }
+    }
+
+    // Check if used in goal
+    if (isNameUsed(name, this.goal)) {
+      throw new Error(`Cannot remove hypothesis "${name}": used in goal`);
+    }
+
+    // Check if used in body
+    if (isNameUsed(name, this.body)) {
+      throw new Error(`Cannot remove hypothesis "${name}": used in body`);
+    }
+
+    const newHypotheses = [...this.hypotheses];
+    newHypotheses.splice(index, 1);
+    return new EditableTerm(this.name, newHypotheses, this.goal, this.body);
+  }
+
+  /**
+   * Update a hypothesis at the specified position.
+   *
+   * @param index - Position of hypothesis to update
+   * @param name - New name (or undefined to keep current)
+   * @param type - New type (or undefined to keep current)
+   * @returns New EditableTerm with hypothesis updated
+   */
+  updateHypothesis(
+    index: number,
+    name?: string,
+    type?: TTerm
+  ): EditableTerm {
+    if (index < 0 || index >= this.hypotheses.length) {
+      throw new Error(`Invalid hypothesis index: ${index}`);
+    }
+
+    const newHypotheses = [...this.hypotheses];
+    const [currentName, currentType] = this.hypotheses[index];
+    newHypotheses[index] = [
+      name !== undefined ? name : currentName,
+      type !== undefined ? type : currentType
+    ];
+    return new EditableTerm(this.name, newHypotheses, this.goal, this.body);
+  }
+
+  /**
+   * Update the goal (final return type).
+   *
+   * @param newGoal - New goal term
+   * @returns New EditableTerm with updated goal
+   */
+  updateGoal(newGoal: TTerm): EditableTerm {
+    return new EditableTerm(this.name, this.hypotheses, newGoal, this.body);
+  }
+
+  /**
+   * Update the body (proof term).
+   *
+   * @param newBody - New body term
+   * @returns New EditableTerm with updated body
+   */
+  updateBody(newBody: TTerm): EditableTerm {
+    return new EditableTerm(this.name, this.hypotheses, this.goal, newBody);
+  }
+
+  /**
+   * Update body at a specific path.
+   *
+   * @param path - Path to the subterm to update
+   * @param newTerm - New term to put at that path
+   * @returns New EditableTerm with updated body
+   */
+  updateBodyAt(path: TermPath, newTerm: TTerm): EditableTerm {
+    const newBody = updateAtPath(this.body, path, newTerm);
+    return new EditableTerm(this.name, this.hypotheses, this.goal, newBody);
+  }
+
+  /**
+   * Get hypothesis by index.
+   */
+  getHypothesis(index: number): [string, TTerm] | undefined {
+    return this.hypotheses[index];
+  }
+
+  /**
+   * Get hypothesis by name.
+   */
+  getHypothesisByName(name: string): [string, TTerm] | undefined {
+    return this.hypotheses.find(([n]) => n === name);
+  }
+
+  /**
+   * Get hypothesis index by name.
+   */
+  getHypothesisIndex(name: string): number {
+    return this.hypotheses.findIndex(([n]) => n === name);
+  }
+}

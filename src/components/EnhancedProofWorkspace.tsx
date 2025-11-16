@@ -307,17 +307,15 @@ function EnhancedProofWorkspaceInner() {
   const [showAddHypothesis, setShowAddHypothesis] = useState(false);
   const [showAddLet, setShowAddLet] = useState(false);
 
-  // When closing editors, return to navigate mode
+  // When closing editors, pop navigation path
   useEffect(() => {
     if (!showEditGoal && !showAddHypothesis && !showAddLet) {
-      // All editors are closed, return to navigate mode
-      navigation.setMode('navigate');
-      // Clear the navigation path to go back to the section level
+      // All editors are closed, pop back to section level
       if (navigation.state.navigationPath.length > 1) {
         navigation.navigateTo([navigation.state.navigationPath[0]]);
       }
     }
-  }, [showEditGoal, showAddHypothesis, showAddLet, navigation.setMode, navigation.navigateTo, navigation.state.navigationPath]);
+  }, [showEditGoal, showAddHypothesis, showAddLet, navigation.navigateTo, navigation.state.navigationPath]);
 
   // ============================================================================
   // NEW ARCHITECTURE: Term Definition + Focused Hole
