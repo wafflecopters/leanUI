@@ -608,6 +608,31 @@ function EnhancedProofWorkspaceInner() {
     }));
   }, [assumptions, rootDefinition]);
 
+  // Helper: Rename a variable in an ExpressionNode (for UI display, not TTerm)
+  const renameVarInExprNode = (node: ExpressionNode, oldName: string, newName: string): ExpressionNode => {
+    if (oldName === newName) return node;
+
+    // If this is a variable node with the old name, rename it
+    if (node.type === 'variable' && node.value === oldName) {
+      return {
+        ...node,
+        value: newName,
+        raw: node.raw.replace(new RegExp(`\\b${oldName}\\b`, 'g'), newName)
+      };
+    }
+
+    // Recursively rename in children
+    if (node.children && node.children.length > 0) {
+      return {
+        ...node,
+        children: node.children.map(child => renameVarInExprNode(child, oldName, newName)),
+        raw: node.raw.replace(new RegExp(`\\b${oldName}\\b`, 'g'), newName)
+      };
+    }
+
+    return node;
+  };
+
   const handleUpdateHypothesis = useCallback((id: string, updatedHypothesis: Assumption) => {
     // Find the hypothesis by ID
     const oldHypothesis = assumptions.find(h => h.id === id);
@@ -629,9 +654,20 @@ function EnhancedProofWorkspaceInner() {
     // Convert updated hypothesis to Pi-binder
     const [newName, newType] = assumptionToPiBinder(updatedHypothesis);
 
+    const oldName = oldHypothesis.name;
+    const nameChanged = oldName !== newName;
+
     // Remove old binder and insert new one at same position
+    // Note: TTerm uses De Bruijn indices, so no variable renaming needed in the type signature.
+    // However, the UI goal (ExpressionNode) uses named variables and needs to be updated.
     let newTypeSignature = removePiBinder(rootDefinition.type, position);
     newTypeSignature = insertPiBinder(newTypeSignature, position, newName, newType);
+
+    // If name changed, update the goal ExpressionNode (used for UI display)
+    if (nameChanged && goalExprNode) {
+      const renamedGoal = renameVarInExprNode(goalExprNode, oldName, newName);
+      setGoalExprNode(renamedGoal);
+    }
 
     setRootDefinition(prev => {
       let updatedType = newTypeSignature;
@@ -650,7 +686,7 @@ function EnhancedProofWorkspaceInner() {
         value: updatedValue
       };
     });
-  }, [assumptions, rootDefinition]);
+  }, [assumptions, rootDefinition, goalExprNode]);
 
   const handleSetGoal = useCallback((goalStr: string) => {
     // Parse goal to AST

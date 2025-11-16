@@ -157,6 +157,8 @@ export function HypothesesSection({
     if (!selectedHypothesis) return;
 
     if (isEditingName) {
+      // Note: No need to call rename callback because TTerm uses De Bruijn indices.
+      // The name in a Binder is just for display/pretty-printing, not for variable references.
       onUpdateHypothesis(selectedHypothesis.id, {
         ...selectedHypothesis,
         name: value,
@@ -190,7 +192,6 @@ export function HypothesesSection({
     <div>
       {/* Focus indicator */}
       <div style={{ padding: '8px', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span>{isInFocusChain ? '✓' : '✗'}</span>
         {isInMultiDigitMode && (
           <span style={{
             fontSize: '12px',
@@ -260,6 +261,7 @@ export function HypothesesSection({
                     style={{ minWidth: '100px' }}
                   />
                   <span style={{ color: '#999' }}>:</span>
+                  <MathJaxExpressionRendererRaw expression={hypothesis.type?.raw ?? '?'} readonly />
                 </>
               ) : isEditingExpressionForThis ? (
                 <>

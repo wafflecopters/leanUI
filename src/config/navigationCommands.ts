@@ -38,25 +38,6 @@ function createGoalsCommands(): Command[] {
     ),
 
     createCommand(
-      'goals-set',
-      's',
-      'Set',
-      (context) => {
-        // Trigger set goal action
-        const onSetGoal = context.metadata?.onSetGoal as (() => void) | undefined;
-        onSetGoal?.();
-
-        return {
-          navigationPath: ['Goals', 'Editor'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Set a new goal (clears existing)',
-      }
-    ),
-
-    createCommand(
       'goals-clear',
       'd',
       'Delete',
@@ -140,65 +121,6 @@ function createHypothesesCommands(): Command[] {
       {
         description: 'Edit hypothesis expression',
         isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
-      }
-    ),
-
-    // Set (clear first, then choose) - only when hypothesis selected
-    createCommand(
-      'hypotheses-set',
-      's',
-      'Set',
-      (context) => {
-        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
-        if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
-
-        return {
-          navigationPath: ['Hypotheses', String(index), 'Set'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Set hypothesis (clear fields first)',
-        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
-        children: [
-          // Set name (sn)
-          createCommand(
-            'hypotheses-set-name',
-            'n',
-            'Name',
-            (context) => {
-              const index = context.metadata?.selectedHypothesisIndex as number | undefined;
-              if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
-
-              return {
-                navigationPath: ['Hypotheses', String(index), 'SetName'],
-                preventDefault: true,
-              };
-            },
-            {
-              description: 'Set name (clear field)',
-            }
-          ),
-
-          // Set expression (se)
-          createCommand(
-            'hypotheses-set-expr',
-            'e',
-            'Expression',
-            (context) => {
-              const index = context.metadata?.selectedHypothesisIndex as number | undefined;
-              if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
-
-              return {
-                navigationPath: ['Hypotheses', String(index), 'SetExpression'],
-                preventDefault: true,
-              };
-            },
-            {
-              description: 'Set expression (clear field)',
-            }
-          ),
-        ],
       }
     ),
 

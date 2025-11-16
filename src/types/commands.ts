@@ -211,8 +211,15 @@ export function buildCommandTree(rootCommands: Command[]): CommandTree {
     let currentCommands = rootCommands;
 
     for (const segment of path) {
-      // Skip numeric segments - these represent selections, not command nodes
+      // Skip numeric segments (selections like '0', '1', '2')
       if (/^\d+$/.test(segment)) {
+        continue;
+      }
+
+      // Skip dynamic state segments (EditName, SetExpression, Editor, Confirm Delete, etc.)
+      // but NOT section names (Hypotheses, Goals, Let Bindings)
+      // State segments: start with 'Edit', 'Set', 'Confirm', or are just 'Editor'
+      if (segment.startsWith('Edit') || segment.startsWith('Set') || segment.startsWith('Confirm') || segment === 'Editor') {
         continue;
       }
 
