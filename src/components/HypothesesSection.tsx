@@ -43,6 +43,24 @@ export function HypothesesSection({
     ? hypotheses[selectedIndex]
     : null;
 
+  // Sync metadata with navigation path (single source of truth)
+  useEffect(() => {
+    if (selectedHypothesis && selectedIndex !== null) {
+      navigation.updateMetadata({
+        selectedHypothesisId: selectedHypothesis.id,
+        selectedHypothesisIndex: selectedIndex,
+        selectedHypothesisName: selectedHypothesis.name,
+      });
+    } else if (isInFocusChain && selectedIndex === null) {
+      // At Hypotheses root with no selection - clear metadata
+      navigation.updateMetadata({
+        selectedHypothesisId: null,
+        selectedHypothesisIndex: null,
+        selectedHypothesisName: null,
+      });
+    }
+  }, [selectedHypothesis, selectedIndex, isInFocusChain, navigation]);
+
   // Keyboard handling for digit selection and arrow keys
   useEffect(() => {
     if (!isActive) {
@@ -64,28 +82,14 @@ export function HypothesesSection({
       // Arrow keys - cycle through items
       if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
         const newIndex = selectedIndex === null ? 0 : (selectedIndex + 1) % hypotheses.length;
-        const hyp = hypotheses[newIndex];
         navigation.navigateTo(['Hypotheses', String(newIndex)]);
-        // Update metadata immediately
-        navigation.updateMetadata({
-          selectedHypothesisId: hyp.id,
-          selectedHypothesisIndex: newIndex,
-          selectedHypothesisName: hyp.name,
-        });
         e.preventDefault();
         return;
       }
 
       if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
         const newIndex = selectedIndex === null ? hypotheses.length - 1 : (selectedIndex - 1 + hypotheses.length) % hypotheses.length;
-        const hyp = hypotheses[newIndex];
         navigation.navigateTo(['Hypotheses', String(newIndex)]);
-        // Update metadata immediately
-        navigation.updateMetadata({
-          selectedHypothesisId: hyp.id,
-          selectedHypothesisIndex: newIndex,
-          selectedHypothesisName: hyp.name,
-        });
         e.preventDefault();
         return;
       }
@@ -118,28 +122,14 @@ export function HypothesesSection({
           // Try to navigate to the item
           const index = parseInt(newBuffer, 10);
           if (index >= 0 && index < hypotheses.length) {
-            const hyp = hypotheses[index];
             navigation.navigateTo(['Hypotheses', String(index)]);
-            // Update metadata immediately
-            navigation.updateMetadata({
-              selectedHypothesisId: hyp.id,
-              selectedHypothesisIndex: index,
-              selectedHypothesisName: hyp.name,
-            });
           }
           // Don't exit multi-digit mode automatically
         } else {
           // Single digit mode: immediate selection
           const index = parseInt(digit, 10);
           if (index >= 0 && index < hypotheses.length) {
-            const hyp = hypotheses[index];
             navigation.navigateTo(['Hypotheses', String(index)]);
-            // Update metadata immediately
-            navigation.updateMetadata({
-              selectedHypothesisId: hyp.id,
-              selectedHypothesisIndex: index,
-              selectedHypothesisName: hyp.name,
-            });
           }
         }
 
