@@ -83,6 +83,21 @@ export interface Command {
    * Useful for command chains like 're' where escape should pop both 'r' and 'e'
    */
   escapeLevels?: number;
+
+  /**
+   * Whether this command creates a "transient" navigation segment.
+   *
+   * Transient commands are menus/submenus that only exist to present choices.
+   * When a child of a transient command executes an action, the navigation
+   * automatically pops back through all transient segments to return to
+   * the last "real" location.
+   *
+   * Example: The 'w' (Wrap) command is transient. After pressing 'wa' to
+   * wrap in a Pi, the nav returns to ['Type'] not ['Type', 'Wrap'].
+   *
+   * Default: false
+   */
+  transient?: boolean;
 }
 
 /**
@@ -127,6 +142,7 @@ export function createCommand(
     isAvailable?: (context: CommandContext) => boolean;
     children?: Command[];
     exitToParent?: boolean;
+    transient?: boolean;
   }
 ): Command {
   return {
@@ -255,6 +271,12 @@ export interface NavigationState {
   /** Escape levels stack - tracks how many levels each path segment should pop */
   escapeLevelsStack: number[];
 
+  /**
+   * Indices of path segments that are "transient" (menu states).
+   * When a command completes, we pop through all trailing transient segments.
+   */
+  transientSegmentIndices: Set<number>;
+
   /** Currently focused section/element ID */
   focusedSectionId: string | null;
 
@@ -271,6 +293,7 @@ export interface NavigationState {
 export const initialNavigationState: NavigationState = {
   navigationPath: [],
   escapeLevelsStack: [],
+  transientSegmentIndices: new Set(),
   focusedSectionId: null,
   modalStack: [],
   metadata: {},
@@ -348,5 +371,42 @@ export const NavigationUtils = {
     const newStack = escapeLevelsStack.slice(0, -levelsToPop);
 
     return [newPath, newStack];
+  },
+
+  /**
+   * Get the "base path" by removing all trailing transient segments.
+   * This is where navigation should return after an action completes.
+   *
+   * @param path Current navigation path
+   * @param transientIndices Set of indices that are transient
+   * @returns The path with trailing transient segments removed
+   */
+  getBasePathAfterAction: (path: string[], transientIndices: Set<number>): string[] => {
+    // Work backwards from the end, removing transient segments
+    let endIndex = path.length;
+
+    while (endIndex > 0 && transientIndices.has(endIndex - 1)) {
+      endIndex--;
+    }
+
+    return path.slice(0, endIndex);
+  },
+
+  /**
+   * Update transient indices after path change.
+   * Removes indices that are no longer valid for the new path length.
+   *
+   * @param transientIndices Current transient indices
+   * @param newPathLength Length of the new path
+   * @returns Updated set of transient indices
+   */
+  pruneTransientIndices: (transientIndices: Set<number>, newPathLength: number): Set<number> => {
+    const newSet = new Set<number>();
+    for (const index of transientIndices) {
+      if (index < newPathLength) {
+        newSet.add(index);
+      }
+    }
+    return newSet;
   },
 };

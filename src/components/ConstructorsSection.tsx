@@ -10,8 +10,9 @@ import { useNavigation } from '../contexts/NavigationContext';
 import { EditableInput } from './EditableInput';
 import { TTermRenderer } from './TTermRenderer';
 import { TTerm } from '../types/tt-core';
-import { TermFocusPath } from '../utils/termNavigation';
+import { TermFocusPath, getBinderName, renameBinderAtPath } from '../utils/termNavigation';
 import { createDefaultConstructorType } from '../utils/inductiveTypeUtils';
+import { TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
 
 export interface Constructor {
   id: string;
@@ -41,6 +42,10 @@ export function ConstructorsSection({
   const onUpdateConstructorRef = useRef(onUpdateConstructor);
   onUpdateConstructorRef.current = onUpdateConstructor;
 
+  // Use ref to avoid navigation dependency causing infinite loops
+  const navigationRef = useRef(navigation);
+  navigationRef.current = navigation;
+
   // Derive state from navigation path
   const navPath = navigation.state.navigationPath;
   const isInFocusChain = navPath[0] === 'Constructors';
@@ -54,6 +59,7 @@ export function ConstructorsSection({
   // Derive edit mode
   const isEditingName = navPath[2] === 'EditName';
   const isEditingType = navPath[2] === 'Type';
+  const isEditingBinderName = navPath[2] === 'Type' && navPath[3] === 'EditBinderName';
 
   // Local state for type focus path (when editing a constructor's type)
   const [typeFocusPath, setTypeFocusPath] = useState<TermFocusPath>([]);
@@ -63,21 +69,32 @@ export function ConstructorsSection({
     ? constructors[selectedIndex]
     : null;
 
-  // Sync metadata
+  // Sync metadata - use stable dependencies to avoid infinite loops
   useEffect(() => {
     if (selectedConstructor && selectedIndex !== null) {
-      navigation.updateMetadata({
+      const setCtorType = (newType: TTerm) => {
+        onUpdateConstructorRef.current(selectedConstructor.id, { ...selectedConstructor, type: newType });
+      };
+
+      navigationRef.current.updateMetadata({
+        // Legacy keys (for backward compatibility)
         selectedConstructorId: selectedConstructor.id,
         selectedConstructorIndex: selectedIndex,
         constructorTypeFocusPath: typeFocusPath,
         setConstructorTypeFocusPath: setTypeFocusPath,
         selectedConstructorType: selectedConstructor.type,
-        setSelectedConstructorType: (newType: TTerm) => {
-          onUpdateConstructorRef.current(selectedConstructor.id, { ...selectedConstructor, type: newType });
-        },
+        setSelectedConstructorType: setCtorType,
+        // Standardized TypeEditingContext keys for shared commands
+        [TYPE_EDITING_KEYS.term]: selectedConstructor.type,
+        [TYPE_EDITING_KEYS.focusPath]: typeFocusPath,
+        [TYPE_EDITING_KEYS.setTerm]: setCtorType,
+        [TYPE_EDITING_KEYS.setFocusPath]: setTypeFocusPath,
+        [TYPE_EDITING_KEYS.returnPath]: ['Constructors', String(selectedIndex), 'Type'],
+        [TYPE_EDITING_KEYS.editBinderNamePath]: ['Constructors', String(selectedIndex), 'Type', 'EditBinderName'],
       });
     }
-  }, [selectedConstructor, selectedIndex, typeFocusPath, navigation]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConstructor?.id, selectedIndex, typeFocusPath]);
 
   // Keyboard handling for selection
   useEffect(() => {
@@ -138,6 +155,29 @@ export function ConstructorsSection({
     navigation.navigateTo(['Constructors', String(selectedIndex)]);
   };
 
+  // Handle save binder name
+  const handleSaveBinderName = (value: string) => {
+    if (!selectedConstructor) return;
+    const newType = renameBinderAtPath(selectedConstructor.type, typeFocusPath, value);
+    if (newType) {
+      onUpdateConstructor(selectedConstructor.id, {
+        ...selectedConstructor,
+        type: newType,
+      });
+    }
+    // Go back to Type editing
+    navigation.navigateTo(['Constructors', String(selectedIndex), 'Type']);
+  };
+
+  const handleCancelBinderName = () => {
+    navigation.navigateTo(['Constructors', String(selectedIndex), 'Type']);
+  };
+
+  // Get current binder name if editing
+  const currentBinderName = isEditingBinderName && selectedConstructor
+    ? getBinderName(selectedConstructor.type, typeFocusPath) ?? ''
+    : '';
+
   return (
     <div style={{
       border: isInFocusChain ? '2px solid #007acc' : '2px solid transparent',
@@ -162,6 +202,7 @@ export function ConstructorsSection({
             const isSelected = selectedIndex === index;
             const isEditingNameForThis = isSelected && isEditingName;
             const isEditingTypeForThis = isSelected && isEditingType;
+            const isEditingBinderNameForThis = isSelected && isEditingBinderName;
 
             return (
               <div
@@ -225,11 +266,29 @@ export function ConstructorsSection({
                     term={ctor.type}
                     focusPath={isEditingTypeForThis ? typeFocusPath : []}
                     onFocusChange={setTypeFocusPath}
-                    isActive={isEditingTypeForThis}
-                    readonly={!isEditingTypeForThis}
+                    isActive={isEditingTypeForThis && !isEditingBinderNameForThis}
+                    readonly={!isEditingTypeForThis || isEditingBinderNameForThis}
                     inline={true}
                   />
                 </div>
+
+                {/* Binder name editor */}
+                {isEditingBinderNameForThis && (
+                  <div style={{
+                    marginLeft: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}>
+                    <span style={{ color: '#666', fontSize: '12px' }}>name:</span>
+                    <EditableInput
+                      initialValue={currentBinderName}
+                      onSave={handleSaveBinderName}
+                      onCancel={handleCancelBinderName}
+                      style={{ minWidth: '80px' }}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}

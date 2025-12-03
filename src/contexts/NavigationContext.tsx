@@ -106,6 +106,8 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     setState(prev => ({
       ...prev,
       navigationPath: path,
+      // Prune transient indices that are no longer valid for the new path
+      transientSegmentIndices: NavigationUtils.pruneTransientIndices(prev.transientSegmentIndices, path.length),
     }));
   }, []);
 
@@ -259,17 +261,59 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
     // Apply result
     if (result) {
       setState(prev => {
-        const updates: Partial<NavigationState> = {};
+        let newPath: string[];
+        let newTransientIndices = new Set(prev.transientSegmentIndices);
 
         if (result.navigationPath !== undefined) {
-          updates.navigationPath = result.navigationPath;
+          // Command explicitly set the navigation path
+          newPath = result.navigationPath;
+
+          // If command navigated to a shorter or different path, prune transient indices
+          newTransientIndices = NavigationUtils.pruneTransientIndices(newTransientIndices, newPath.length);
+
+          // If this command is transient AND it's navigating deeper (adding a segment),
+          // mark the new segment as transient
+          if (command.transient && newPath.length > prev.navigationPath.length) {
+            // The last segment of the new path is the transient menu
+            newTransientIndices.add(newPath.length - 1);
+          }
+
+          // If the command was a child of a transient segment and is an "action" (sets explicit path),
+          // we should pop through transient segments to return to the base path
+          if (!command.transient && !command.children?.length) {
+            // This is a leaf command (action) - compute base path after action
+            const basePath = NavigationUtils.getBasePathAfterAction(prev.navigationPath, prev.transientSegmentIndices);
+
+            // If the command set a relative path (same base), use base path instead
+            // This handles the case where 'wa' sets navigationPath: ['Type'] but should pop 'Wrap'
+            if (newPath.length > 0 && basePath.length > 0) {
+              // Check if result path starts with the base path
+              const resultStartsWithBase = basePath.every((seg, i) => newPath[i] === seg);
+              if (resultStartsWithBase) {
+                // Command returned to a valid base - clear transient indices below new path
+                newTransientIndices = NavigationUtils.pruneTransientIndices(newTransientIndices, newPath.length);
+              }
+            }
+          }
         } else if (command.children && command.children.length > 0) {
           // Auto-navigate into children if command has children but didn't specify a path
           // This prevents the common bug of forgetting to return navigationPath for menu commands
-          updates.navigationPath = [...prev.navigationPath, command.label];
+          newPath = [...prev.navigationPath, command.label];
+
+          // If this command is transient, mark the new segment as transient
+          if (command.transient) {
+            newTransientIndices.add(newPath.length - 1);
+          }
+        } else {
+          // No path change
+          newPath = prev.navigationPath;
         }
 
-        return { ...prev, ...updates };
+        return {
+          ...prev,
+          navigationPath: newPath,
+          transientSegmentIndices: newTransientIndices,
+        };
       });
 
       return result.preventDefault !== false; // Default to true
@@ -285,10 +329,27 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
       const isInInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
       // Handle Escape key - pop one level in navigation path
+      // If the current segment is transient, keep popping until we hit a non-transient segment
       if (e.key === 'Escape') {
-        // Pop one level from navigation path (works for both inputs and regular navigation)
         if (state.navigationPath.length > 0) {
-          navigateTo(NavigationUtils.popPath(state.navigationPath));
+          // Compute path after popping through any trailing transient segments
+          const basePath = NavigationUtils.getBasePathAfterAction(
+            state.navigationPath,
+            state.transientSegmentIndices
+          );
+
+          // If we're in a transient segment, pop to base path
+          // Otherwise, just pop one level from base path
+          let newPath: string[];
+          if (basePath.length < state.navigationPath.length) {
+            // We're in transient segments - go back to base path
+            newPath = basePath;
+          } else {
+            // Normal case - pop one level
+            newPath = NavigationUtils.popPath(state.navigationPath);
+          }
+
+          navigateTo(newPath);
           if (isInInput) {
             target.blur(); // Also blur the input
           }
@@ -303,10 +364,22 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
         return;
       }
 
-      // Backspace/Delete - also pops one level (same as Escape)
+      // Backspace/Delete - also pops levels (same as Escape, respects transient segments)
       if (e.key === 'Backspace' || e.key === 'Delete') {
         if (state.navigationPath.length > 0) {
-          navigateTo(NavigationUtils.popPath(state.navigationPath));
+          const basePath = NavigationUtils.getBasePathAfterAction(
+            state.navigationPath,
+            state.transientSegmentIndices
+          );
+
+          let newPath: string[];
+          if (basePath.length < state.navigationPath.length) {
+            newPath = basePath;
+          } else {
+            newPath = NavigationUtils.popPath(state.navigationPath);
+          }
+
+          navigateTo(newPath);
           e.preventDefault();
           e.stopPropagation();
           return;

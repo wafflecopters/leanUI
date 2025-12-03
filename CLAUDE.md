@@ -1,0 +1,174 @@
+# Claude Code Guidelines for LeanUI
+
+## React Hooks: Keep Them Simple
+
+React hooks should be **thin wrappers** that delegate to pure helper/utility functions. Avoid putting complex logic directly inside hooks.
+
+### Why?
+
+1. **Testability**: Pure functions are easier to unit test than hooks
+2. **Debuggability**: When logic is in a pure function, you can trace through it step-by-step without React's batching/timing complications
+3. **Reusability**: Pure functions can be used in multiple hooks or outside React entirely
+4. **Readability**: Hooks become a clear "glue layer" between React and business logic
+
+### Bad: Logic inside hooks
+
+```typescript
+const executeCommand = useCallback((key: string): boolean => {
+  // 50+ lines of complex navigation logic here
+  setState(prev => {
+    let newPath: string[];
+    let newTransientIndices = new Set(prev.transientSegmentIndices);
+
+    if (result.navigationPath !== undefined) {
+      newPath = result.navigationPath;
+      newTransientIndices = NavigationUtils.pruneTransientIndices(newTransientIndices, newPath.length);
+
+      if (command.transient && newPath.length > prev.navigationPath.length) {
+        newTransientIndices.add(newPath.length - 1);
+      }
+      // ... more complex logic
+    }
+    // ... etc
+  });
+}, [commandTree, state, popModal]);
+```
+
+### Good: Delegate to pure functions
+
+```typescript
+// Pure function - easy to test and debug
+function computeNextNavigationState(
+  prevState: NavigationState,
+  command: Command,
+  result: CommandResult
+): NavigationState {
+  // All the complex logic here, fully testable
+}
+
+// Hook is a thin wrapper
+const executeCommand = useCallback((key: string): boolean => {
+  const command = commandTree.findCommand(key, state.navigationPath);
+  if (!command) return false;
+
+  const result = command.execute(context);
+  if (result) {
+    setState(prev => computeNextNavigationState(prev, command, result));
+  }
+  return true;
+}, [commandTree, state]);
+```
+
+### Apply This To:
+
+- `useCallback` handlers
+- `useEffect` side effects
+- `useState` setter functions
+- Any hook with more than ~10 lines of logic
+
+Extract the logic into a pure function in a `utils/` file, then call it from the hook.
+
+## Architectural Principles: Avoid Duplication Through Abstraction
+
+### Recognize Patterns Early
+
+When implementing a feature for one context (e.g., editing an inductive type's signature), ask: "Will this same operation be needed elsewhere?" If yes, build the abstraction immediately.
+
+### The Duplication Anti-Pattern
+
+**Bad**: Copy-pasting code with slightly different variable names.
+
+```typescript
+// In InductiveTypeEditor.tsx
+function createTypeEditingCommands(): Command[] {
+  return [
+    createCommand('wrap-arg', 'a', 'Arg (Pi)', (context) => {
+      const type = context.metadata?.inductiveType;        // Different key
+      const setType = context.metadata?.setInductiveType;  // Different key
+      // ... exact same logic ...
+    }),
+  ];
+}
+
+// In ConstructorsSection.tsx - COPY-PASTED with different keys!
+function createConstructorTypeEditingCommands(): Command[] {
+  return [
+    createCommand('ctor-wrap-arg', 'a', 'Arg (Pi)', (context) => {
+      const type = context.metadata?.selectedConstructorType;  // Different key
+      const setType = context.metadata?.setSelectedConstructorType;  // Different key
+      // ... exact same logic ...
+    }),
+  ];
+}
+```
+
+This leads to:
+1. **Divergent bugs**: Fix a bug in one copy, forget the other
+2. **Maintenance burden**: Every change must be made N times
+3. **Inconsistent behavior**: Copies drift apart over time
+
+### The Abstraction Solution
+
+**Good**: Create a standardized interface that any context can implement.
+
+```typescript
+// utils/typeEditingCommands.ts
+
+// 1. Define a standard context interface
+export interface TypeEditingContext {
+  term: TTerm;
+  focusPath: TermFocusPath;
+  setTerm: (t: TTerm) => void;
+  setFocusPath: (p: TermFocusPath) => void;
+  returnPath: string[];          // Where to navigate after actions
+  editBinderNamePath: string[];  // Where to navigate for binder renaming
+}
+
+// 2. Define standard metadata keys
+export const TYPE_EDITING_KEYS = {
+  term: 'typeEditing.term',
+  focusPath: 'typeEditing.focusPath',
+  setTerm: 'typeEditing.setTerm',
+  // ...
+} as const;
+
+// 3. Create ONE set of commands that reads from the standard keys
+export function createTypeEditingCommands(): Command[] {
+  return [
+    createCommand('type-wrap-arg', 'a', 'Arg (Pi)', (context) => {
+      const ctx = getTypeEditingContext(context);  // Read standard keys
+      if (!ctx) return { preventDefault: true };
+      // ... single implementation of the logic ...
+      return { navigationPath: ctx.returnPath, preventDefault: true };
+    }),
+  ];
+}
+```
+
+Then each consumer just populates the standard metadata keys:
+
+```typescript
+// InductiveTypeEditor
+navigation.updateMetadata({
+  [TYPE_EDITING_KEYS.term]: inductiveDef.type,
+  [TYPE_EDITING_KEYS.setTerm]: (t) => setInductiveDef(prev => ({ ...prev, type: t })),
+  [TYPE_EDITING_KEYS.returnPath]: ['Type'],
+  // ...
+});
+
+// ConstructorsSection
+navigation.updateMetadata({
+  [TYPE_EDITING_KEYS.term]: selectedConstructor.type,
+  [TYPE_EDITING_KEYS.setTerm]: (t) => updateConstructor(id, { ...ctor, type: t }),
+  [TYPE_EDITING_KEYS.returnPath]: ['Constructors', idx, 'Type'],
+  // ...
+});
+```
+
+### When Building New Features, Ask:
+
+1. **"Is this a generic operation?"** - Type editing, name editing, list management, etc.
+2. **"Will multiple contexts need this?"** - Inductive types, constructors, hypotheses, let bindings, etc.
+3. **"Can I define a standard interface?"** - What data/callbacks does this operation need?
+
+If yes to all three: Build the abstraction in `utils/` FIRST, then use it.

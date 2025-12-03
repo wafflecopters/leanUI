@@ -280,3 +280,43 @@ export function navigateLeft(term: TTerm, path: TermFocusPath): TermFocusPath | 
   // No previous sibling, go up
   return navigateUp(path);
 }
+
+/**
+ * Check if the term at the given path is a Binder.
+ */
+export function isBinder(term: TTerm, path: TermFocusPath): boolean {
+  const termAtPath = getTermAtPath(term, path);
+  return termAtPath !== null && termAtPath.tag === 'Binder';
+}
+
+/**
+ * Get the name of a binder at the given path, or null if not a binder.
+ */
+export function getBinderName(term: TTerm, path: TermFocusPath): string | null {
+  const termAtPath = getTermAtPath(term, path);
+  if (termAtPath === null || termAtPath.tag !== 'Binder') return null;
+  return termAtPath.name;
+}
+
+/**
+ * Rename the binder at the given path.
+ * Since we use De Bruijn indices, we only need to update the name field on the Binder itself.
+ * Returns the updated term, or null if the path doesn't point to a Binder.
+ */
+export function renameBinderAtPath(
+  term: TTerm,
+  path: TermFocusPath,
+  newName: string
+): TTerm | null {
+  const termAtPath = getTermAtPath(term, path);
+  if (termAtPath === null || termAtPath.tag !== 'Binder') return null;
+
+  // Create a new binder with the updated name
+  const renamedBinder: TTerm = {
+    ...termAtPath,
+    name: newName,
+  };
+
+  // Replace the binder at the path
+  return setTermAtPath(term, path, renamedBinder);
+}
