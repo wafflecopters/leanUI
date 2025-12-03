@@ -263,6 +263,10 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
 
         if (result.navigationPath !== undefined) {
           updates.navigationPath = result.navigationPath;
+        } else if (command.children && command.children.length > 0) {
+          // Auto-navigate into children if command has children but didn't specify a path
+          // This prevents the common bug of forgetting to return navigationPath for menu commands
+          updates.navigationPath = [...prev.navigationPath, command.label];
         }
 
         return { ...prev, ...updates };
@@ -309,7 +313,16 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
         }
       }
 
-      // Arrow keys - cycle through sibling sections at current level
+      // Try to execute command first (including arrow keys if commands exist for them)
+      const handled = executeCommand(e.key);
+
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+
+      // Arrow keys fallback - cycle through sibling sections at current level
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         cycleSection('next');
         e.preventDefault();
@@ -321,14 +334,6 @@ export function NavigationProvider({ children, initialCommandTree }: NavigationP
         e.preventDefault();
         e.stopPropagation();
         return;
-      }
-
-      // Try to execute command
-      const handled = executeCommand(e.key);
-
-      if (handled) {
-        e.preventDefault();
-        e.stopPropagation();
       }
     };
 

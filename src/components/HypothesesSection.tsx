@@ -5,6 +5,7 @@
 import { Assumption } from '../types/enhanced-focus';
 import { useNavigation } from '../contexts/NavigationContext';
 import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
+import { EditableInput } from './EditableInput';
 import { useEffect, useState } from 'react';
 
 interface HypothesesSectionProps {
@@ -291,43 +292,3 @@ export function HypothesesSection({
   );
 }
 
-// Separate component for editable input to isolate state
-function EditableInput({
-  initialValue,
-  onSave,
-  onCancel,
-  style,
-}: {
-  initialValue: string;
-  onSave: (value: string) => void;
-  onCancel: () => void;
-  style?: React.CSSProperties;
-}) {
-  const [value, setValue] = useState(initialValue);
-
-  return (
-    <input
-      autoFocus
-      type="text"
-      value={value}
-      onChange={(e) => setValue(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          onSave(value);
-          e.preventDefault();
-        } else if (e.key === 'Escape') {
-          onCancel();
-          e.preventDefault();
-        }
-      }}
-      style={{
-        fontFamily: 'monospace',
-        fontSize: '14px',
-        padding: '2px 4px',
-        border: '1px solid #2845a7',
-        borderRadius: '2px',
-        ...style,
-      }}
-    />
-  );
-}

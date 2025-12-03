@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { EnhancedProofWorkspace } from './components/EnhancedProofWorkspace';
+import { InductiveTypeEditor } from './components/InductiveTypeEditor';
 
 interface LeanAST {
   [key: string]: any;
 }
 
 function App() {
-  const [mode, setMode] = useState<'ast' | 'proof'>('proof');
+  const [mode, setMode] = useState<'ast' | 'proof' | 'inductive'>('proof');
   const [ast, setAst] = useState<LeanAST | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,31 +51,92 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
     }
   };
 
+  if (mode === 'inductive') {
+    return (
+      <div>
+        <div style={{
+          padding: '10px 20px',
+          backgroundColor: '#f8f9fa',
+          borderBottom: '1px solid #e9ecef',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h1 style={{ margin: 0, fontSize: '24px' }}>Lean UI - Inductive Type Editor</h1>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setMode('proof')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#007acc',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Proof Assistant
+            </button>
+            <button
+              onClick={() => setMode('ast')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              AST Viewer
+            </button>
+          </div>
+        </div>
+        <InductiveTypeEditor />
+      </div>
+    );
+  }
+
   if (mode === 'proof') {
     return (
       <div>
-        <div style={{ 
-          padding: '10px 20px', 
-          backgroundColor: '#f8f9fa', 
+        <div style={{
+          padding: '10px 20px',
+          backgroundColor: '#f8f9fa',
           borderBottom: '1px solid #e9ecef',
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center'
         }}>
           <h1 style={{ margin: 0, fontSize: '24px' }}>Lean UI - Enhanced Proof Assistant</h1>
-          <button
-            onClick={() => setMode('ast')}
-            style={{
-              padding: '6px 12px',
-              backgroundColor: '#6c757d',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer'
-            }}
-          >
-            AST Viewer
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setMode('inductive')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Inductive Types
+            </button>
+            <button
+              onClick={() => setMode('ast')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              AST Viewer
+            </button>
+          </div>
         </div>
         <EnhancedProofWorkspace />
       </div>
@@ -85,19 +147,34 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
     <div style={{ padding: '20px', fontFamily: 'monospace' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h1>Lean UI - AST Viewer</h1>
-        <button
-          onClick={() => setMode('proof')}
-          style={{
-            padding: '6px 12px',
-            backgroundColor: '#007acc',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer'
-          }}
-        >
-          Proof Assistant
-        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={() => setMode('proof')}
+            style={{
+              padding: '6px 12px',
+              backgroundColor: '#007acc',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Proof Assistant
+          </button>
+          <button
+            onClick={() => setMode('inductive')}
+            style={{
+              padding: '6px 12px',
+              backgroundColor: '#28a745',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Inductive Types
+          </button>
+        </div>
       </div>
       
       <p style={{ color: '#666', fontSize: '14px' }}>
