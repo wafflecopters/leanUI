@@ -10,7 +10,7 @@ import { useNavigation } from '../contexts/NavigationContext';
 import { EditableInput } from './EditableInput';
 import { TTermRenderer } from './TTermRenderer';
 import { TTerm } from '../types/tt-core';
-import { TermFocusPath, getBinderName, renameBinderAtPath } from '../utils/termNavigation';
+import { TermFocusPath } from '../utils/termNavigation';
 import { createDefaultConstructorType } from '../utils/inductiveTypeUtils';
 import { TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
 
@@ -59,7 +59,6 @@ export function ConstructorsSection({
   // Derive edit mode
   const isEditingName = navPath[2] === 'EditName';
   const isEditingType = navPath[2] === 'Type';
-  const isEditingBinderName = navPath[2] === 'Type' && navPath[3] === 'EditBinderName';
 
   // Local state for type focus path (when editing a constructor's type)
   const [typeFocusPath, setTypeFocusPath] = useState<TermFocusPath>([]);
@@ -90,7 +89,6 @@ export function ConstructorsSection({
         [TYPE_EDITING_KEYS.setTerm]: setCtorType,
         [TYPE_EDITING_KEYS.setFocusPath]: setTypeFocusPath,
         [TYPE_EDITING_KEYS.returnPath]: ['Constructors', String(selectedIndex), 'Type'],
-        [TYPE_EDITING_KEYS.editBinderNamePath]: ['Constructors', String(selectedIndex), 'Type', 'EditBinderName'],
       });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -155,29 +153,6 @@ export function ConstructorsSection({
     navigation.navigateTo(['Constructors', String(selectedIndex)]);
   };
 
-  // Handle save binder name
-  const handleSaveBinderName = (value: string) => {
-    if (!selectedConstructor) return;
-    const newType = renameBinderAtPath(selectedConstructor.type, typeFocusPath, value);
-    if (newType) {
-      onUpdateConstructor(selectedConstructor.id, {
-        ...selectedConstructor,
-        type: newType,
-      });
-    }
-    // Go back to Type editing
-    navigation.navigateTo(['Constructors', String(selectedIndex), 'Type']);
-  };
-
-  const handleCancelBinderName = () => {
-    navigation.navigateTo(['Constructors', String(selectedIndex), 'Type']);
-  };
-
-  // Get current binder name if editing
-  const currentBinderName = isEditingBinderName && selectedConstructor
-    ? getBinderName(selectedConstructor.type, typeFocusPath) ?? ''
-    : '';
-
   return (
     <div style={{
       border: isInFocusChain ? '2px solid #007acc' : '2px solid transparent',
@@ -202,7 +177,6 @@ export function ConstructorsSection({
             const isSelected = selectedIndex === index;
             const isEditingNameForThis = isSelected && isEditingName;
             const isEditingTypeForThis = isSelected && isEditingType;
-            const isEditingBinderNameForThis = isSelected && isEditingBinderName;
 
             return (
               <div
@@ -266,29 +240,12 @@ export function ConstructorsSection({
                     term={ctor.type}
                     focusPath={isEditingTypeForThis ? typeFocusPath : []}
                     onFocusChange={setTypeFocusPath}
-                    isActive={isEditingTypeForThis && !isEditingBinderNameForThis}
-                    readonly={!isEditingTypeForThis || isEditingBinderNameForThis}
+                    onTermChange={(newType) => onUpdateConstructor(ctor.id, { ...ctor, type: newType })}
+                    isActive={isEditingTypeForThis}
+                    readonly={!isEditingTypeForThis}
                     inline={true}
                   />
                 </div>
-
-                {/* Binder name editor */}
-                {isEditingBinderNameForThis && (
-                  <div style={{
-                    marginLeft: '8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                  }}>
-                    <span style={{ color: '#666', fontSize: '12px' }}>name:</span>
-                    <EditableInput
-                      initialValue={currentBinderName}
-                      onSave={handleSaveBinderName}
-                      onCancel={handleCancelBinderName}
-                      style={{ minWidth: '80px' }}
-                    />
-                  </div>
-                )}
               </div>
             );
           })}

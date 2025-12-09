@@ -21,7 +21,6 @@ import {
   navigateDown,
   navigateLeft,
   navigateRight,
-  isBinder,
 } from './termNavigation';
 
 /**
@@ -40,8 +39,6 @@ export interface TypeEditingContext {
   setFocusPath: (p: TermFocusPath) => void;
   /** Navigation path to return to after actions complete (the "Type" editing state) */
   returnPath: string[];
-  /** Navigation path for editing binder names */
-  editBinderNamePath: string[];
 }
 
 /** Standard metadata keys for TypeEditingContext */
@@ -51,7 +48,6 @@ export const TYPE_EDITING_KEYS = {
   setTerm: 'typeEditing.setTerm',
   setFocusPath: 'typeEditing.setFocusPath',
   returnPath: 'typeEditing.returnPath',
-  editBinderNamePath: 'typeEditing.editBinderNamePath',
 } as const;
 
 /**
@@ -64,13 +60,12 @@ function getTypeEditingContext(context: CommandContext): TypeEditingContext | nu
   const setTerm = context.metadata?.[TYPE_EDITING_KEYS.setTerm] as ((t: TTerm) => void) | undefined;
   const setFocusPath = context.metadata?.[TYPE_EDITING_KEYS.setFocusPath] as ((p: TermFocusPath) => void) | undefined;
   const returnPath = context.metadata?.[TYPE_EDITING_KEYS.returnPath] as string[] | undefined;
-  const editBinderNamePath = context.metadata?.[TYPE_EDITING_KEYS.editBinderNamePath] as string[] | undefined;
 
-  if (!term || focusPath === undefined || !setTerm || !setFocusPath || !returnPath || !editBinderNamePath) {
+  if (!term || focusPath === undefined || !setTerm || !setFocusPath || !returnPath) {
     return null;
   }
 
-  return { term, focusPath, setTerm, setFocusPath, returnPath, editBinderNamePath };
+  return { term, focusPath, setTerm, setFocusPath, returnPath };
 }
 
 /**
@@ -150,31 +145,6 @@ export function createTypeEditingCommands(): Command[] {
         return { navigationPath: ctx.returnPath, preventDefault: true };
       },
       { description: 'Navigate to next sibling' }
-    ),
-
-    // 'n' - Rename binder
-    createCommand(
-      'type-rename-binder',
-      'n',
-      'Name',
-      (context) => {
-        const ctx = getTypeEditingContext(context);
-        if (!ctx) return { preventDefault: true };
-
-        if (!isBinder(ctx.term, ctx.focusPath)) {
-          return { preventDefault: true };
-        }
-
-        return { navigationPath: ctx.editBinderNamePath, preventDefault: true };
-      },
-      {
-        description: 'Rename the focused binder',
-        isAvailable: (context) => {
-          const ctx = getTypeEditingContext(context);
-          if (!ctx) return false;
-          return isBinder(ctx.term, ctx.focusPath);
-        },
-      }
     ),
 
     // 'w' - Wrap menu

@@ -9,21 +9,45 @@ import { TTerm } from '../types/tt-core';
 
 /**
  * A path into a TTerm structure.
- * Each step is either 'domain' or 'body' for Binder terms,
- * 'fn' or 'arg' for App terms, or 'term' for Annot terms.
+ *
+ * For Binder terms: 'name' (the binder's name), 'domain' (the type), 'body' (the body)
+ *   - This treats binders as having 3 children: [name, domain, body]
+ *   - For Let bindings: [name, domain (value), body]
+ * For App terms: 'fn' or 'arg'
+ * For Annot terms: 'term' or 'type'
+ *
+ * Note: 'name' is special - it's not a sub-term but rather the binder's name string.
+ * Navigation to 'name' means we're editing the binder's name.
  */
-export type TermFocusPath = ('domain' | 'body' | 'fn' | 'arg' | 'term' | 'type')[];
+export type TermFocusPath = ('name' | 'domain' | 'body' | 'fn' | 'arg' | 'term' | 'type')[];
 
 /**
  * Get the sub-term at a given focus path.
  * Returns null if the path is invalid.
+ *
+ * Note: For 'name' paths, returns the parent binder (since name is not a sub-term).
+ * Use isNamePath() to check if focused on a name.
  */
 export function getTermAtPath(term: TTerm, path: TermFocusPath): TTerm | null {
   let current: TTerm = term;
 
-  for (const step of path) {
-    if (current.tag === 'Binder' && (step === 'domain' || step === 'body')) {
-      current = current[step];
+  for (let i = 0; i < path.length; i++) {
+    const step = path[i];
+
+    if (current.tag === 'Binder') {
+      if (step === 'name') {
+        // 'name' is terminal - we're focused on this binder's name
+        // Return the binder itself (the remaining path should be empty)
+        if (i === path.length - 1) {
+          return current;
+        }
+        // Can't navigate further from 'name'
+        return null;
+      } else if (step === 'domain' || step === 'body') {
+        current = current[step];
+      } else {
+        return null;
+      }
     } else if (current.tag === 'App' && (step === 'fn' || step === 'arg')) {
       current = current[step];
     } else if (current.tag === 'Annot' && (step === 'term' || step === 'type')) {
@@ -38,8 +62,32 @@ export function getTermAtPath(term: TTerm, path: TermFocusPath): TTerm | null {
 }
 
 /**
+ * Check if a path points to a binder's name (ends with 'name').
+ */
+export function isNamePath(path: TermFocusPath): boolean {
+  return path.length > 0 && path[path.length - 1] === 'name';
+}
+
+/**
+ * Get the binder that owns the name at the given path.
+ * Returns null if the path doesn't point to a name.
+ */
+export function getBinderForNamePath(term: TTerm, path: TermFocusPath): TTerm | null {
+  if (!isNamePath(path)) return null;
+  // The binder is at the parent path (path without 'name')
+  const parentPath = path.slice(0, -1);
+  const parent = getTermAtPath(term, parentPath);
+  if (parent && parent.tag === 'Binder') {
+    return parent;
+  }
+  return null;
+}
+
+/**
  * Replace the sub-term at a given focus path with a new term.
  * Returns the updated root term, or null if the path is invalid.
+ *
+ * Note: Does NOT handle 'name' paths - use setNameAtPath for those.
  */
 export function setTermAtPath(term: TTerm, path: TermFocusPath, newTerm: TTerm): TTerm | null {
   // Base case: empty path means replace the whole term
@@ -49,8 +97,13 @@ export function setTermAtPath(term: TTerm, path: TermFocusPath, newTerm: TTerm):
 
   const [step, ...restPath] = path;
 
+  // 'name' is not a sub-term, use setNameAtPath instead
+  if (step === 'name') {
+    return null;
+  }
+
   if (term.tag === 'Binder' && (step === 'domain' || step === 'body')) {
-    const updatedSubTerm = setTermAtPath(term[step], restPath, newTerm);
+    const updatedSubTerm = setTermAtPath(term[step], restPath as TermFocusPath, newTerm);
     if (updatedSubTerm === null) return null;
 
     return {
@@ -58,7 +111,7 @@ export function setTermAtPath(term: TTerm, path: TermFocusPath, newTerm: TTerm):
       [step]: updatedSubTerm
     };
   } else if (term.tag === 'App' && (step === 'fn' || step === 'arg')) {
-    const updatedSubTerm = setTermAtPath(term[step], restPath, newTerm);
+    const updatedSubTerm = setTermAtPath(term[step], restPath as TermFocusPath, newTerm);
     if (updatedSubTerm === null) return null;
 
     return {
@@ -66,7 +119,7 @@ export function setTermAtPath(term: TTerm, path: TermFocusPath, newTerm: TTerm):
       [step]: updatedSubTerm
     };
   } else if (term.tag === 'Annot' && (step === 'term' || step === 'type')) {
-    const updatedSubTerm = setTermAtPath(term[step], restPath, newTerm);
+    const updatedSubTerm = setTermAtPath(term[step], restPath as TermFocusPath, newTerm);
     if (updatedSubTerm === null) return null;
 
     return {
@@ -77,6 +130,48 @@ export function setTermAtPath(term: TTerm, path: TermFocusPath, newTerm: TTerm):
 
   // Invalid path
   return null;
+}
+
+/**
+ * Set the name of a binder at the given path.
+ * The path should end with 'name'.
+ * Returns the updated root term, or null if invalid.
+ */
+export function setNameAtPath(term: TTerm, path: TermFocusPath, newName: string): TTerm | null {
+  if (!isNamePath(path)) return null;
+
+  // Get path to the binder (without 'name')
+  const binderPath = path.slice(0, -1);
+
+  if (binderPath.length === 0) {
+    // Renaming the root term's name (if it's a binder)
+    if (term.tag === 'Binder') {
+      return { ...term, name: newName };
+    }
+    return null;
+  }
+
+  // Navigate to parent of the binder and update
+  const parentPath = binderPath.slice(0, -1);
+  const binderStep = binderPath[binderPath.length - 1];
+
+  const parent = getTermAtPath(term, parentPath);
+  if (!parent) return null;
+
+  // Get the binder and update its name
+  let binder: TTerm | null = null;
+  if (parent.tag === 'Binder' && (binderStep === 'domain' || binderStep === 'body')) {
+    binder = parent[binderStep];
+  } else if (parent.tag === 'App' && (binderStep === 'fn' || binderStep === 'arg')) {
+    binder = parent[binderStep];
+  } else if (parent.tag === 'Annot' && (binderStep === 'term' || binderStep === 'type')) {
+    binder = parent[binderStep];
+  }
+
+  if (!binder || binder.tag !== 'Binder') return null;
+
+  const updatedBinder = { ...binder, name: newName };
+  return setTermAtPath(term, binderPath, updatedBinder);
 }
 
 /**
@@ -195,14 +290,21 @@ export function navigateUp(path: TermFocusPath): TermFocusPath | null {
 /**
  * Navigate down in the term tree (go to first child).
  * Returns the new focus path, or null if the term has no children.
+ *
+ * For binders, the first child is 'name' (the binder's name).
+ * Children order: name -> domain -> body
  */
 export function navigateDown(term: TTerm, path: TermFocusPath): TermFocusPath | null {
+  // Can't navigate down from a name
+  if (isNamePath(path)) return null;
+
   const current = getTermAtPath(term, path);
   if (!current) return null;
 
   // For terms with children, go to the first child
   if (current.tag === 'Binder') {
-    return [...path, 'domain'];
+    // First child of a binder is its name
+    return [...path, 'name'];
   } else if (current.tag === 'App') {
     return [...path, 'fn'];
   } else if (current.tag === 'Annot') {
@@ -215,6 +317,8 @@ export function navigateDown(term: TTerm, path: TermFocusPath): TermFocusPath | 
 
 /**
  * Get the next sibling path, or go up if there's no next sibling.
+ *
+ * For binders, sibling order is: name -> domain -> body
  */
 export function navigateRight(term: TTerm, path: TermFocusPath): TermFocusPath | null {
   if (path.length === 0) return null;
@@ -229,7 +333,9 @@ export function navigateRight(term: TTerm, path: TermFocusPath): TermFocusPath |
   let nextStep: TermFocusPath[number] | null = null;
 
   if (parent.tag === 'Binder') {
-    if (currentStep === 'domain') nextStep = 'body';
+    // Order: name -> domain -> body
+    if (currentStep === 'name') nextStep = 'domain';
+    else if (currentStep === 'domain') nextStep = 'body';
     // If at body, no next sibling - go up
   } else if (parent.tag === 'App') {
     if (currentStep === 'fn') nextStep = 'arg';
@@ -249,6 +355,8 @@ export function navigateRight(term: TTerm, path: TermFocusPath): TermFocusPath |
 
 /**
  * Get the previous sibling path, or go up if there's no previous sibling.
+ *
+ * For binders, sibling order is: name -> domain -> body
  */
 export function navigateLeft(term: TTerm, path: TermFocusPath): TermFocusPath | null {
   if (path.length === 0) return null;
@@ -263,8 +371,10 @@ export function navigateLeft(term: TTerm, path: TermFocusPath): TermFocusPath | 
   let prevStep: TermFocusPath[number] | null = null;
 
   if (parent.tag === 'Binder') {
+    // Order: name -> domain -> body (so reverse is body -> domain -> name)
     if (currentStep === 'body') prevStep = 'domain';
-    // If at domain, no previous sibling - go up
+    else if (currentStep === 'domain') prevStep = 'name';
+    // If at name, no previous sibling - go up
   } else if (parent.tag === 'App') {
     if (currentStep === 'arg') prevStep = 'fn';
     // If at fn, no previous sibling - go up

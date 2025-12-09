@@ -3,10 +3,9 @@ import { NavigationProvider, useNavigation } from '../contexts/NavigationContext
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
 import { TTerm, mkType } from '../types/tt-core';
-import { TermFocusPath, getBinderName, renameBinderAtPath } from '../utils/termNavigation';
+import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { ConstructorsSection, Constructor, createConstructorForInductive } from './ConstructorsSection';
-import { EditableInput } from './EditableInput';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
 
 interface InductiveTypeDef {
@@ -32,8 +31,6 @@ function InductiveTypeEditorInner() {
   const isEditingName = navigation.state.navigationPath[0] === 'Name' &&
     navigation.state.navigationPath[1] === 'Editor';
   const isEditingType = navigation.state.navigationPath[0] === 'Type';
-  const isEditingBinderName = navigation.state.navigationPath[0] === 'Type' &&
-    navigation.state.navigationPath[1] === 'EditBinderName';
 
   // Handlers
   const handleEditName = () => {
@@ -50,25 +47,6 @@ function InductiveTypeEditorInner() {
     // Reset focus to root of type
     setTypeFocusPath([]);
   };
-
-  // Handler for saving binder name
-  const handleSaveBinderName = (newName: string) => {
-    const newType = renameBinderAtPath(inductiveDef.type, typeFocusPath, newName);
-    if (newType) {
-      setInductiveDef(prev => ({ ...prev, type: newType }));
-    }
-    // Go back to Type editing
-    navigation.navigateTo(['Type']);
-  };
-
-  const handleCancelBinderName = () => {
-    navigation.navigateTo(['Type']);
-  };
-
-  // Get current binder name if editing
-  const currentBinderName = isEditingBinderName
-    ? getBinderName(inductiveDef.type, typeFocusPath) ?? ''
-    : '';
 
   // Constructor handlers
   const handleUpdateConstructor = (id: string, updated: Constructor) => {
@@ -124,7 +102,6 @@ function InductiveTypeEditorInner() {
       metadata[TYPE_EDITING_KEYS.setTerm] = (newType: TTerm) => setInductiveDef(prev => ({ ...prev, type: newType }));
       metadata[TYPE_EDITING_KEYS.setFocusPath] = setTypeFocusPath;
       metadata[TYPE_EDITING_KEYS.returnPath] = ['Type'];
-      metadata[TYPE_EDITING_KEYS.editBinderNamePath] = ['Type', 'EditBinderName'];
     }
 
     navigation.updateMetadata(metadata);
@@ -211,29 +188,12 @@ function InductiveTypeEditorInner() {
                 term={inductiveDef.type}
                 focusPath={typeFocusPath}
                 onFocusChange={setTypeFocusPath}
-                isActive={isEditingType && !isEditingBinderName}
-                readonly={!isEditingType || isEditingBinderName}
+                onTermChange={(newType) => setInductiveDef(prev => ({ ...prev, type: newType }))}
+                isActive={isEditingType}
+                readonly={!isEditingType}
                 inline={true}
               />
             </div>
-
-            {/* Binder name editor */}
-            {isEditingBinderName && (
-              <div style={{
-                marginLeft: '8px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-              }}>
-                <span style={{ color: '#666', fontSize: '12px' }}>name:</span>
-                <EditableInput
-                  initialValue={currentBinderName}
-                  onSave={handleSaveBinderName}
-                  onCancel={handleCancelBinderName}
-                  style={{ minWidth: '80px' }}
-                />
-              </div>
-            )}
           </div>
 
           {/* Constructors */}

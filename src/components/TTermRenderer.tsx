@@ -1,78 +1,234 @@
 /**
  * TTerm Renderer with Focus Support
  *
- * Renders a TTerm (type theory term) with LaTeX formatting and focus highlighting.
- * Supports clicking on sub-terms to change focus.
+ * Renders a TTerm (type theory term) with focus highlighting and inline editing.
+ * Supports navigating to sub-terms including binder names.
+ *
+ * For binders, the name is treated as child index 0, followed by domain and body.
+ * When focused on a name, an inline text editor appears.
  */
 
-import { useMemo, useEffect, useRef } from 'react';
-import katex from 'katex';
-import 'katex/dist/katex.min.css';
+import { useMemo, useCallback } from 'react';
 import { TTerm } from '../types/tt-core';
-import { TermFocusPath } from '../utils/termNavigation';
+import { TermFocusPath, isNamePath, setNameAtPath } from '../utils/termNavigation';
+import { AutoSizingTextField } from './AutoSizingTextField';
 
 interface TTermRendererProps {
   term: TTerm;
   focusPath?: TermFocusPath;
   onFocusChange?: (newPath: TermFocusPath) => void;
+  onTermChange?: (newTerm: TTerm) => void;
   isActive?: boolean;
   readonly?: boolean;
   inline?: boolean;
 }
 
 /**
- * Convert TTerm to LaTeX with unique IDs for each sub-term.
- * This enables click-to-focus functionality.
+ * Check if two paths are equal.
  */
-function ttermToLaTeX(term: TTerm, path: TermFocusPath = []): string {
-  const pathId = path.join('-') || 'root';
+function pathsEqual(a: TermFocusPath, b: TermFocusPath): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((step, i) => step === b[i]);
+}
 
+/**
+ * Check if a path starts with another path (is a descendant).
+ */
+function pathStartsWith(path: TermFocusPath, prefix: TermFocusPath): boolean {
+  if (path.length < prefix.length) return false;
+  return prefix.every((step, i) => path[i] === step);
+}
+
+interface RenderContext {
+  focusPath: TermFocusPath;
+  onFocusChange?: (newPath: TermFocusPath) => void;
+  onNameChange?: (path: TermFocusPath, newName: string) => void;
+  readonly: boolean;
+}
+
+/**
+ * Render a clickable/focusable span for a sub-expression.
+ */
+function FocusableSpan({
+  path,
+  ctx,
+  children,
+  style,
+}: {
+  path: TermFocusPath;
+  ctx: RenderContext;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}) {
+  const isFocused = pathsEqual(ctx.focusPath, path);
+  const isAncestor = pathStartsWith(ctx.focusPath, path) && !isFocused;
+
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!ctx.readonly && ctx.onFocusChange) {
+      ctx.onFocusChange(path);
+    }
+  }, [ctx, path]);
+
+  return (
+    <span
+      onClick={handleClick}
+      style={{
+        cursor: ctx.readonly ? 'default' : 'pointer',
+        backgroundColor: isFocused
+          ? 'rgba(0, 122, 204, 0.3)'
+          : isAncestor
+            ? 'rgba(0, 122, 204, 0.1)'
+            : undefined,
+        borderRadius: '2px',
+        padding: '0 1px',
+        ...style,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Render a binder name - either as static text or an inline editor when focused.
+ */
+function BinderName({
+  name,
+  path,
+  ctx,
+}: {
+  name: string;
+  path: TermFocusPath;
+  ctx: RenderContext;
+}) {
+  const namePath: TermFocusPath = [...path, 'name'];
+  const isFocused = pathsEqual(ctx.focusPath, namePath);
+
+  if (isFocused && !ctx.readonly && ctx.onNameChange) {
+    return (
+      <AutoSizingTextField
+        value={name}
+        onChange={(newName) => ctx.onNameChange!(namePath, newName)}
+        onSubmit={() => {
+          // Move focus to domain after submitting name
+          if (ctx.onFocusChange) {
+            ctx.onFocusChange([...path, 'domain']);
+          }
+        }}
+        onCancel={() => {
+          // Move focus back to binder
+          if (ctx.onFocusChange) {
+            ctx.onFocusChange(path);
+          }
+        }}
+        minWidth="1.5em"
+        placeholder="_"
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 'inherit',
+        }}
+      />
+    );
+  }
+
+  return (
+    <FocusableSpan path={namePath} ctx={ctx}>
+      {name || '_'}
+    </FocusableSpan>
+  );
+}
+
+/**
+ * Recursively render a TTerm.
+ */
+function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React.ReactNode {
   switch (term.tag) {
     case 'Var':
-      return `\\htmlId{expr-${pathId}}{\\texttt{@${term.index}}}`;
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          <span style={{ fontFamily: 'monospace' }}>@{term.index}</span>
+        </FocusableSpan>
+      );
 
     case 'Sort':
-      return `\\htmlId{expr-${pathId}}{\\text{Type}_{${term.level}}}`;
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          <span>Type<sub>{term.level}</sub></span>
+        </FocusableSpan>
+      );
 
     case 'Binder':
       if (term.binderKind.tag === 'BPi') {
-        const domainLatex = ttermToLaTeX(term.domain, [...path, 'domain']);
-        const bodyLatex = ttermToLaTeX(term.body, [...path, 'body']);
+        const domainNode = renderTerm(term.domain, [...path, 'domain'], ctx);
+        const bodyNode = renderTerm(term.body, [...path, 'body'], ctx);
 
-        // If name is empty, just show "domain -> body"
+        // If name is empty, show as "domain → body"
         if (term.name === '') {
-          return `\\htmlId{expr-${pathId}}{${domainLatex} \\to ${bodyLatex}}`;
+          return (
+            <FocusableSpan path={path} ctx={ctx}>
+              {domainNode} <span style={{ color: '#666' }}>→</span> {bodyNode}
+            </FocusableSpan>
+          );
         }
 
-        // Otherwise show "(name : domain) -> body"
-        return `\\htmlId{expr-${pathId}}{(${term.name} : ${domainLatex}) \\to ${bodyLatex}}`;
+        // Named: "(name : domain) → body"
+        return (
+          <FocusableSpan path={path} ctx={ctx}>
+            (<BinderName name={term.name} path={path} ctx={ctx} /> : {domainNode}) <span style={{ color: '#666' }}>→</span> {bodyNode}
+          </FocusableSpan>
+        );
       } else if (term.binderKind.tag === 'BLam') {
-        const bodyLatex = ttermToLaTeX(term.body, [...path, 'body']);
-        return `\\htmlId{expr-${pathId}}{\\lambda ${term.name}. ${bodyLatex}}`;
+        const bodyNode = renderTerm(term.body, [...path, 'body'], ctx);
+        return (
+          <FocusableSpan path={path} ctx={ctx}>
+            λ<BinderName name={term.name} path={path} ctx={ctx} />. {bodyNode}
+          </FocusableSpan>
+        );
       } else if (term.binderKind.tag === 'BLet') {
-        const defValLatex = ttermToLaTeX(term.binderKind.defVal, [...path, 'domain']);
-        const bodyLatex = ttermToLaTeX(term.body, [...path, 'body']);
-        return `\\htmlId{expr-${pathId}}{\\text{let } ${term.name} := ${defValLatex} \\text{ in } ${bodyLatex}}`;
+        const defValNode = renderTerm(term.binderKind.defVal, [...path, 'domain'], ctx);
+        const bodyNode = renderTerm(term.body, [...path, 'body'], ctx);
+        return (
+          <FocusableSpan path={path} ctx={ctx}>
+            <span style={{ fontWeight: 'bold' }}>let</span>{' '}
+            <BinderName name={term.name} path={path} ctx={ctx} /> := {defValNode}{' '}
+            <span style={{ fontWeight: 'bold' }}>in</span> {bodyNode}
+          </FocusableSpan>
+        );
       }
-      return `\\htmlId{expr-${pathId}}{\\texttt{?binder}}`;
+      return <span style={{ color: 'red' }}>?binder</span>;
 
     case 'App':
-      const fnLatex = ttermToLaTeX(term.fn, [...path, 'fn']);
-      const argLatex = ttermToLaTeX(term.arg, [...path, 'arg']);
-      return `\\htmlId{expr-${pathId}}{(${fnLatex} \\ ${argLatex})}`;
+      const fnNode = renderTerm(term.fn, [...path, 'fn'], ctx);
+      const argNode = renderTerm(term.arg, [...path, 'arg'], ctx);
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          ({fnNode} {argNode})
+        </FocusableSpan>
+      );
 
     case 'Const':
-      return `\\htmlId{expr-${pathId}}{\\texttt{${term.name}}}`;
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          <span style={{ fontFamily: 'monospace' }}>{term.name}</span>
+        </FocusableSpan>
+      );
 
     case 'Hole':
-      // Escape underscores in hole IDs for LaTeX
-      const escapedId = term.id.replace(/_/g, '\\_');
-      return `\\htmlId{expr-${pathId}}{\\texttt{?${escapedId}}}`;
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          <span style={{ color: '#e91e63', fontFamily: 'monospace' }}>?{term.id}</span>
+        </FocusableSpan>
+      );
 
     case 'Annot':
-      const termLatex = ttermToLaTeX(term.term, [...path, 'term']);
-      const typeLatex = ttermToLaTeX(term.type, [...path, 'type']);
-      return `\\htmlId{expr-${pathId}}{(${termLatex} : ${typeLatex})}`;
+      const termNode = renderTerm(term.term, [...path, 'term'], ctx);
+      const typeNode = renderTerm(term.type, [...path, 'type'], ctx);
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          ({termNode} : {typeNode})
+        </FocusableSpan>
+      );
   }
 }
 
@@ -80,103 +236,43 @@ export function TTermRenderer({
   term,
   focusPath = [],
   onFocusChange,
+  onTermChange,
   isActive = true,
   readonly = false,
   inline = false,
 }: TTermRendererProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Convert TTerm to LaTeX
-  const latex = useMemo(() => ttermToLaTeX(term), [term]);
-
-  // Render KaTeX
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    try {
-      katex.render(latex, containerRef.current, {
-        displayMode: !inline,
-        throwOnError: false,
-        trust: (context) => context.command === '\\htmlId',
-        strict: false,
-      });
-
-      // Set up click handlers (only when readonly changes)
-      if (!readonly && onFocusChange) {
-        const allElements = containerRef.current.querySelectorAll('[id^="expr-"]');
-        allElements.forEach(element => {
-          const id = element.id;
-          const pathStr = id.replace('expr-', '');
-          const newPath: TermFocusPath = pathStr === 'root' ? [] : pathStr.split('-') as TermFocusPath;
-
-          (element as HTMLElement).style.cursor = 'pointer';
-          (element as HTMLElement).onclick = (e) => {
-            e.stopPropagation();
-            onFocusChange(newPath);
-          };
-        });
-      }
-    } catch (error) {
-      console.error('KaTeX rendering error:', error);
-      if (containerRef.current) {
-        containerRef.current.textContent = `Error rendering: ${error}`;
+  // Handle name changes
+  const handleNameChange = useCallback((path: TermFocusPath, newName: string) => {
+    if (onTermChange && isNamePath(path)) {
+      const newTerm = setNameAtPath(term, path, newName);
+      if (newTerm) {
+        onTermChange(newTerm);
       }
     }
-  }, [latex, readonly, inline, onFocusChange]);
+  }, [term, onTermChange]);
 
-  // Apply focus highlighting
-  useEffect(() => {
-    if (!containerRef.current) return;
+  const ctx: RenderContext = useMemo(() => ({
+    focusPath,
+    onFocusChange: readonly ? undefined : onFocusChange,
+    onNameChange: readonly ? undefined : handleNameChange,
+    readonly,
+  }), [focusPath, onFocusChange, handleNameChange, readonly]);
 
-    const focusPathId = focusPath.join('-') || 'root';
-    const allElements = containerRef.current.querySelectorAll('[id^="expr-"]');
-
-    // Clear all highlighting
-    allElements.forEach(el => {
-      (el as HTMLElement).style.backgroundColor = '';
-      (el as HTMLElement).style.borderRadius = '';
-      (el as HTMLElement).style.outline = '';
-      (el as HTMLElement).style.outlineOffset = '';
-    });
-
-    // Only apply focus highlight and hover effects if active (not readonly)
-    if (!readonly) {
-      const focusedElement = containerRef.current.querySelector(`#expr-${focusPathId}`);
-      if (focusedElement) {
-        (focusedElement as HTMLElement).style.backgroundColor = 'rgba(0, 122, 204, 0.3)';
-        (focusedElement as HTMLElement).style.borderRadius = '2px';
-        (focusedElement as HTMLElement).style.outline = '1px solid transparent';
-        (focusedElement as HTMLElement).style.outlineOffset = '1px';
-      }
-
-      // Add hover effects
-      if (onFocusChange) {
-        allElements.forEach(element => {
-          const pathStr = element.id.replace('expr-', '');
-
-          (element as HTMLElement).onmouseenter = () => {
-            if (pathStr !== focusPathId) {
-              (element as HTMLElement).style.backgroundColor = 'rgba(255, 193, 7, 0.2)';
-            }
-          };
-
-          (element as HTMLElement).onmouseleave = () => {
-            if (pathStr !== focusPathId) {
-              (element as HTMLElement).style.backgroundColor = '';
-            }
-          };
-        });
-      }
-    }
-  }, [focusPath, readonly, onFocusChange]);
+  const rendered = useMemo(
+    () => renderTerm(term, [], ctx),
+    [term, ctx]
+  );
 
   return (
     <div
-      ref={containerRef}
       style={{
         opacity: isActive ? 1 : 0.6,
         padding: inline ? '2px 4px' : '8px 12px',
+        fontFamily: 'serif',
+        fontSize: '16px',
       }}
-    />
+    >
+      {rendered}
+    </div>
   );
 }
