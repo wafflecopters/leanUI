@@ -230,16 +230,17 @@ test('Pretty print: Dependent Pi type', () => {
   // This is a dependent type where the result type depends on the argument
   const nat = TT_CONSTANTS.Nat;
 
-  // For testing, we'll use: Π (x : ℕ), ℕ where the codomain references x
+  // For testing, we'll use: Π (x : ℕ), x where the codomain references x
   // This means we need Var(0) in the codomain
   const dependentType = mkPi(nat, mkVar(0));
 
   const pretty = prettyPrint(dependentType);
-  console.log('  Π (x : ℕ), x =', pretty);
+  console.log('  (x : ℕ) → x =', pretty);
 
-  // Should use Π since it's dependent
-  if (!pretty.includes('Π')) {
-    throw new Error('Dependent function should use Π');
+  // The pretty printer uses arrow notation with binder name visible: (x : ℕ) → x
+  // This shows it's dependent because x appears in the body
+  if (!pretty.includes('→') || !pretty.includes('x : ℕ')) {
+    throw new Error('Dependent function should show (x : ℕ) → ...');
   }
 });
 
