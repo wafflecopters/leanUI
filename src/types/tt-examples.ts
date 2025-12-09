@@ -1,13 +1,18 @@
 /**
- * TT Examples - Inductive Type Definitions
+ * TT Examples - Inductive Type and Record Definitions
  *
- * This file contains example inductive type definitions built using the
+ * This file contains example type definitions built using the
  * TT (Typed Terms) data structures from tt-core.ts.
  *
- * Each inductive type is defined by:
+ * Inductive types are defined by:
  * - name: The name of the type (e.g., "Nat", "List")
  * - type: The kind/sort of the type (e.g., Type_0, Type_0 → Type_0)
  * - constructors: Array of constructors, each with name and type
+ *
+ * Record types are defined by:
+ * - name: The name of the record (e.g., "Magma", "Semigroup")
+ * - type: The kind/sort of the type
+ * - fields: Array of fields, each with name and type
  */
 
 import {
@@ -17,6 +22,7 @@ import {
   mkConst,
   mkApp,
   mkVar,
+  RecordDef,
 } from './tt-core';
 
 // ============================================================================
@@ -321,48 +327,6 @@ function makeFin(): InductiveTypeDef {
   };
 }
 
-// ============================================================================
-// Magma A - Type with Binary Operation
-// ============================================================================
-
-/**
- * Magma - A type equipped with a binary operation
- *
- * inductive Magma (A : Type) : Type where
- *   | mkMagma : (A → A → A) → Magma A
- *
- * A magma is the simplest algebraic structure - just a set with a
- * binary operation. No laws (associativity, identity, etc.) required.
- */
-function makeMagma(): InductiveTypeDef {
-  // Magma : Type → Type
-  const MagmaKind = mkArrow(Type0, Type0);
-  const Magma = mkInductiveRef('Magma', MagmaKind);
-
-  return {
-    name: 'Magma',
-    type: MagmaKind,
-    constructors: [
-      {
-        name: 'mkMagma',
-        // mkMagma : Π (A : Type). (A → A → A) → Magma A
-        // The binary operation type is: A → A → A
-        // Π (A : Type).              -- A at 0
-        //   Π (_ : A → A → A).       -- A at 1
-        //     Magma A                -- A at 1
-        type: mkPi(
-          Type0,
-          mkPi(
-            mkArrow(mkVar(0), mkArrow(mkVar(0), mkVar(0))), // A → A → A
-            mkApp(Magma, mkVar(1)), // Magma A (A at 1)
-            'op'
-          ),
-          'A'
-        ),
-      },
-    ],
-  };
-}
 
 // ============================================================================
 // Unit - Singleton Type
@@ -451,50 +415,187 @@ function makeSum(): InductiveTypeDef {
   };
 }
 
+
 // ============================================================================
-// Prod A B - Product Type
+// Magma A - Type with Binary Operation (Record)
 // ============================================================================
 
 /**
- * Product type (pairs)
+ * Magma - A type equipped with a binary operation
  *
- * inductive Prod (A B : Type) : Type where
- *   | pair : A → B → Prod A B
+ * structure Magma (A : Type) where
+ *   op : A → A → A
+ *
+ * A magma is the simplest algebraic structure - just a set with a
+ * binary operation. No laws (associativity, identity, etc.) required.
  */
-function makeProd(): InductiveTypeDef {
+function makeMagmaRecord(): RecordDef {
+  // Magma : Type → Type
+  const MagmaKind = mkArrow(Type0, Type0);
+
+  // For the field type, A is bound as a parameter.
+  // In a dependent record context, we represent A as Var(0) assuming
+  // the record is parameterized.
+  // op : A → A → A where A : Type is the parameter
+  const A = mkVar(0);  // Reference to the type parameter
+
+  return {
+    name: 'Magma',
+    type: MagmaKind,
+    fields: [
+      {
+        name: 'op',
+        // op : A → A → A
+        type: mkArrow(A, mkArrow(A, A)),
+      },
+    ],
+  };
+}
+
+// ============================================================================
+// Semigroup A - Magma with Associativity Proof (Record)
+// ============================================================================
+
+/**
+ * Semigroup - A magma where the operation is associative
+ *
+ * structure Semigroup (A : Type) where
+ *   op : A → A → A
+ *   assoc : ∀ x y z, op (op x y) z = op x (op y z)
+ */
+function makeSemigroupRecord(): RecordDef {
+  const SemigroupKind = mkArrow(Type0, Type0);
+  const A = mkVar(0);  // Type parameter
+
+  // For simplicity, we represent the assoc proof type as a placeholder
+  // In a full implementation, this would be a proper equality type
+  const Prop = mkType(0);
+
+  return {
+    name: 'Semigroup',
+    type: SemigroupKind,
+    fields: [
+      {
+        name: 'op',
+        // op : A → A → A
+        type: mkArrow(A, mkArrow(A, A)),
+      },
+      {
+        name: 'assoc',
+        // assoc : Prop (placeholder - would be the associativity law)
+        type: Prop,
+      },
+    ],
+  };
+}
+
+// ============================================================================
+// Monoid A - Semigroup with Identity (Record)
+// ============================================================================
+
+/**
+ * Monoid - A semigroup with an identity element
+ *
+ * structure Monoid (A : Type) where
+ *   op : A → A → A
+ *   e : A
+ *   assoc : ∀ x y z, op (op x y) z = op x (op y z)
+ *   left_id : ∀ x, op e x = x
+ *   right_id : ∀ x, op x e = x
+ */
+function makeMonoidRecord(): RecordDef {
+  const MonoidKind = mkArrow(Type0, Type0);
+  const A = mkVar(0);  // Type parameter
+  const Prop = mkType(0);
+
+  return {
+    name: 'Monoid',
+    type: MonoidKind,
+    fields: [
+      {
+        name: 'op',
+        type: mkArrow(A, mkArrow(A, A)),
+      },
+      {
+        name: 'e',
+        type: A,
+      },
+      {
+        name: 'assoc',
+        type: Prop,
+      },
+      {
+        name: 'left_id',
+        type: Prop,
+      },
+      {
+        name: 'right_id',
+        type: Prop,
+      },
+    ],
+  };
+}
+
+// ============================================================================
+// Point - Simple 2D Point (Record)
+// ============================================================================
+
+/**
+ * Point - A simple 2D point with x and y coordinates
+ *
+ * structure Point where
+ *   x : Nat
+ *   y : Nat
+ */
+function makePointRecord(): RecordDef {
+  const Nat = mkInductiveRef('Nat', Type0);
+
+  return {
+    name: 'Point',
+    type: Type0,
+    fields: [
+      {
+        name: 'x',
+        type: Nat,
+      },
+      {
+        name: 'y',
+        type: Nat,
+      },
+    ],
+  };
+}
+
+// ============================================================================
+// Prod A B - Product Type (Record)
+// ============================================================================
+
+/**
+ * Product type (pairs) as a record
+ *
+ * structure Prod (A B : Type) where
+ *   fst : A
+ *   snd : B
+ */
+function makeProdRecord(): RecordDef {
   // Prod : Type → Type → Type
   const ProdKind = mkArrow(Type0, mkArrow(Type0, Type0));
-  const Prod = mkInductiveRef('Prod', ProdKind);
+
+  // A is at index 1 (outer parameter), B is at index 0 (inner parameter)
+  const A = mkVar(1);
+  const B = mkVar(0);
 
   return {
     name: 'Prod',
     type: ProdKind,
-    constructors: [
+    fields: [
       {
-        name: 'pair',
-        // pair : Π (A : Type). Π (B : Type). A → B → Prod A B
-        // Π (A : Type).       -- A at 0
-        //   Π (B : Type).     -- A at 1, B at 0
-        //     Π (_ : A).      -- A at 2, B at 1
-        //       Π (_ : B).    -- A at 3, B at 2
-        //         Prod A B    -- A at 3, B at 2
-        type: mkPi(
-          Type0,
-          mkPi(
-            Type0,
-            mkPi(
-              mkVar(1), // A (at 1)
-              mkPi(
-                mkVar(1), // B (at 1, was at 0 before entering this Π)
-                mkApp(mkApp(Prod, mkVar(3)), mkVar(2)), // Prod A B
-                '_'
-              ),
-              '_'
-            ),
-            'B'
-          ),
-          'A'
-        ),
+        name: 'fst',
+        type: A,
+      },
+      {
+        name: 'snd',
+        type: B,
       },
     ],
   };
@@ -505,12 +606,13 @@ function makeProd(): InductiveTypeDef {
 // ============================================================================
 
 /**
- * Collection of TT inductive type examples.
+ * Collection of TT type examples.
  *
- * Each type is a complete InductiveTypeDef that can be used as test data
+ * Each type is a complete definition that can be used as test data
  * or examples for the type system.
  */
 export const TTExamples = {
+  /** Inductive types with constructors */
   inductiveTypes: {
     /** Natural numbers: zero, succ */
     Nat: makeNat(),
@@ -533,14 +635,26 @@ export const TTExamples = {
     /** Finite set (numbers less than n): fzero, fsucc */
     Fin: makeFin(),
 
-    /** Magma: type with binary operation */
-    Magma: makeMagma(),
-
     /** Sum type (disjoint union): inl, inr */
     Sum: makeSum(),
+  },
 
-    /** Product type (pairs): pair */
-    Prod: makeProd(),
+  /** Record types (structures) with named fields */
+  recordTypes: {
+    /** Magma: type with binary operation */
+    Magma: makeMagmaRecord(),
+
+    /** Semigroup: magma with associativity */
+    Semigroup: makeSemigroupRecord(),
+
+    /** Monoid: semigroup with identity */
+    Monoid: makeMonoidRecord(),
+
+    /** Point: simple 2D point */
+    Point: makePointRecord(),
+
+    /** Product type (pairs): fst, snd */
+    Prod: makeProdRecord(),
   },
 } as const;
 
@@ -549,5 +663,10 @@ export const TTExamples = {
 // ============================================================================
 
 export type TTExamplesInductiveTypes = typeof TTExamples.inductiveTypes;
-export type TTExampleTypeName = keyof TTExamplesInductiveTypes;
+export type TTExampleInductiveTypeName = keyof TTExamplesInductiveTypes;
 
+export type TTExamplesRecordTypes = typeof TTExamples.recordTypes;
+export type TTExampleRecordTypeName = keyof TTExamplesRecordTypes;
+
+// Legacy alias for backward compatibility
+export type TTExampleTypeName = TTExampleInductiveTypeName;

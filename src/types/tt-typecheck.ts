@@ -95,10 +95,123 @@ export function whnf(term: TTerm, ctx: TContext = []): TTerm {
 }
 
 /**
+ * Check if a variable index is free in a term.
+ *
+ * @param index - The De Bruijn index to check
+ * @param term - The term to search in
+ * @returns true if the variable appears free in the term
+ */
+function isFreeIn(index: number, term: TTerm): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return term.index === index;
+    case 'Sort':
+    case 'Const':
+      return false;
+    case 'Hole':
+      return isFreeIn(index, term.type);
+    case 'App':
+      return isFreeIn(index, term.fn) || isFreeIn(index, term.arg);
+    case 'Binder':
+      // In the body, the index we're looking for is shifted by 1
+      if (isFreeIn(index, term.domain)) return true;
+      if (isFreeIn(index + 1, term.body)) return true;
+      if (term.binderKind.tag === 'BLet') {
+        return isFreeIn(index, term.binderKind.defVal);
+      }
+      return false;
+    case 'Annot':
+      return isFreeIn(index, term.term) || isFreeIn(index, term.type);
+  }
+}
+
+/**
+ * Try to eta-expand a term to a lambda if possible.
+ *
+ * If `t` has a Pi type `(x : A) → B`, we can eta-expand it to `λx. t x`.
+ * This is used when comparing a non-lambda with a lambda.
+ *
+ * @param term - The term to potentially eta-expand
+ * @param ctx - The typing context
+ * @returns The eta-expanded lambda, or null if not applicable
+ */
+function tryEtaExpand(term: TTerm, ctx: TContext): TTerm | null {
+  // Get the type of the term
+  try {
+    const termType = whnf(inferType(term, ctx), ctx);
+    if (termType.tag === 'Binder' && termType.binderKind.tag === 'BPi') {
+      // Eta expand: t → λx. t x
+      // We need to shift t by 1 since we're going under a binder
+      const shiftedTerm = shiftTermBy(term, 1, 0);
+      return {
+        tag: 'Binder',
+        name: termType.name,
+        binderKind: { tag: 'BLam' },
+        domain: termType.domain,
+        body: { tag: 'App', fn: shiftedTerm, arg: { tag: 'Var', index: 0 } }
+      };
+    }
+  } catch {
+    // If type inference fails, can't eta expand
+  }
+  return null;
+}
+
+/**
+ * Shift all free variables in a term by a given amount.
+ *
+ * @param term - The term to shift
+ * @param amount - How much to shift by
+ * @param cutoff - Only shift variables >= cutoff
+ */
+function shiftTermBy(term: TTerm, amount: number, cutoff: number): TTerm {
+  switch (term.tag) {
+    case 'Var':
+      return term.index >= cutoff
+        ? { tag: 'Var', index: term.index + amount }
+        : term;
+    case 'Sort':
+    case 'Const':
+      return term;
+    case 'Hole':
+      return { ...term, type: shiftTermBy(term.type, amount, cutoff) };
+    case 'App':
+      return {
+        tag: 'App',
+        fn: shiftTermBy(term.fn, amount, cutoff),
+        arg: shiftTermBy(term.arg, amount, cutoff)
+      };
+    case 'Binder': {
+      const newDomain = shiftTermBy(term.domain, amount, cutoff);
+      const newBody = shiftTermBy(term.body, amount, cutoff + 1);
+      let newBinderKind = term.binderKind;
+      if (term.binderKind.tag === 'BLet') {
+        newBinderKind = {
+          tag: 'BLet',
+          defVal: shiftTermBy(term.binderKind.defVal, amount, cutoff)
+        };
+      }
+      return { ...term, domain: newDomain, body: newBody, binderKind: newBinderKind };
+    }
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: shiftTermBy(term.term, amount, cutoff),
+        type: shiftTermBy(term.type, amount, cutoff)
+      };
+  }
+}
+
+/**
  * Conversion checking: Are two terms equal up to computation?
  *
  * This is the core of definitional equality in type theory.
  * Two terms are convertible if they reduce to the same normal form.
+ *
+ * Implements:
+ * - Beta reduction: (λx. e) a ≃ e[a/x]
+ * - Let expansion: let x := v in t ≃ t[v/x]
+ * - Eta conversion: λx. f x ≃ f (when x not free in f)
  */
 export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
   const n1 = whnf(t1, ctx);
@@ -116,6 +229,45 @@ export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
       return n2.tag === 'Const' && n1.name === n2.name;
 
     case 'Binder':
+      // Eta rule for lambdas: λx. f x ≃ f (when x not free in f)
+      if (n1.binderKind.tag === 'BLam') {
+        // Check if n1 is of the form λx. f x where x is not free in f
+        if (n1.body.tag === 'App' && n1.body.arg.tag === 'Var' && n1.body.arg.index === 0) {
+          // Check if x (index 0) is not free in f
+          if (!isFreeIn(0, n1.body.fn)) {
+            // Eta contract: λx. f x → f (with index shift)
+            const contracted = subst(0, { tag: 'Var', index: 0 }, n1.body.fn);
+            return convertible(contracted, n2, ctx);
+          }
+        }
+
+        // If n2 is not a lambda but has function type, try eta-expanding n2
+        if (n2.tag !== 'Binder' || n2.binderKind.tag !== 'BLam') {
+          const expanded = tryEtaExpand(n2, ctx);
+          if (expanded) {
+            return convertible(n1, expanded, ctx);
+          }
+        }
+      }
+
+      // Symmetric case: if n2 is a lambda and n1 is not
+      if (n2.tag === 'Binder' && n2.binderKind.tag === 'BLam' &&
+        (n1.tag !== 'Binder' || n1.binderKind.tag !== 'BLam')) {
+        // Check eta contraction on n2
+        if (n2.body.tag === 'App' && n2.body.arg.tag === 'Var' && n2.body.arg.index === 0) {
+          if (!isFreeIn(0, n2.body.fn)) {
+            const contracted = subst(0, { tag: 'Var', index: 0 }, n2.body.fn);
+            return convertible(n1, contracted, ctx);
+          }
+        }
+
+        // Try eta-expanding n1
+        const expanded = tryEtaExpand(n1, ctx);
+        if (expanded) {
+          return convertible(expanded, n2, ctx);
+        }
+      }
+
       // Both must be binders of the same kind
       if (n2.tag !== 'Binder' || n1.binderKind.tag !== n2.binderKind.tag) {
         return false;
@@ -140,6 +292,14 @@ export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
       return true;
 
     case 'App':
+      // Eta expansion for n1: if n2 is a lambda, we might need to eta-expand n1
+      if (n2.tag === 'Binder' && n2.binderKind.tag === 'BLam') {
+        const expanded = tryEtaExpand(n1, ctx);
+        if (expanded) {
+          return convertible(expanded, n2, ctx);
+        }
+      }
+
       return n2.tag === 'App' &&
         convertible(n1.fn, n2.fn, ctx) &&
         convertible(n1.arg, n2.arg, ctx);

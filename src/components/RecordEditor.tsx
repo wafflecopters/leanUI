@@ -1,3 +1,23 @@
+/**
+ * Record Editor
+ *
+ * UI component for editing record type definitions (structures).
+ * Similar to InductiveTypeEditor but for records with named fields
+ * instead of constructors.
+ *
+ * Keyboard navigation:
+ * - n: Edit name
+ * - t: Edit type expression
+ * - f: Focus on fields section
+ *   - a: Add field
+ *   - n: Edit selected field name
+ *   - t: Edit selected field type
+ *   - d: Delete selected field
+ *   - Arrow keys: Navigate between fields
+ *   - 0-9: Jump to field by index
+ * - Escape: Go back one level
+ */
+
 import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
@@ -5,45 +25,56 @@ import { buildCommandTree, createCommand, createEscapeCommand, Command } from '.
 import { TTerm, mkType } from '../types/tt-core';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
-import { ConstructorsSection, Constructor, createConstructorForInductive } from './ConstructorsSection';
+import { FieldsSection, Field, createDefaultField } from './FieldsSection';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
-import { TTExamples, TTExampleTypeName } from '../types/tt-examples';
+import { TTExamples, TTExampleRecordTypeName } from '../types/tt-examples';
 
-interface InductiveTypeDef {
+// ============================================================================
+// Types
+// ============================================================================
+
+interface RecordDef {
   name: string;
-  type: TTerm; // TTerm - params will be inferred later (à la Idris)
-  constructors: Constructor[];
+  type: TTerm;
+  fields: Field[];
 }
 
-// Get all available example names
-const exampleNames = Object.keys(TTExamples.inductiveTypes) as TTExampleTypeName[];
+// ============================================================================
+// Example Loading
+// ============================================================================
+
+const exampleNames = Object.keys(TTExamples.recordTypes) as TTExampleRecordTypeName[];
 
 /**
- * Convert a TT example to the editor's InductiveTypeDef format
- * (adds unique IDs to constructors)
+ * Convert a TT example to the editor's RecordDef format
+ * (adds unique IDs to fields)
  */
-function loadExampleAsEditorState(exampleName: TTExampleTypeName): InductiveTypeDef {
-  const example = TTExamples.inductiveTypes[exampleName];
+function loadExampleAsEditorState(exampleName: TTExampleRecordTypeName): RecordDef {
+  const example = TTExamples.recordTypes[exampleName];
   return {
     name: example.name,
     type: example.type,
-    constructors: example.constructors.map((ctor, idx) => ({
-      id: `${example.name.toLowerCase()}-ctor-${idx}`,
-      name: ctor.name,
-      type: ctor.type,
+    fields: example.fields.map((field, idx) => ({
+      id: `${example.name.toLowerCase()}-field-${idx}`,
+      name: field.name,
+      type: field.type,
     })),
   };
 }
 
-function InductiveTypeEditorInner() {
-  // Top-level state for a single inductive type definition
-  const [inductiveDef, setInductiveDef] = useState<InductiveTypeDef>({
-    name: 'MyInductive',
-    type: mkType(0), // Start with Type_0
-    constructors: []
+// ============================================================================
+// Inner Component
+// ============================================================================
+
+function RecordEditorInner() {
+  // Top-level state for a single record definition
+  const [recordDef, setRecordDef] = useState<RecordDef>({
+    name: 'MyRecord',
+    type: mkType(0),
+    fields: []
   });
 
-  // Track currently selected example (empty string means custom/no example)
+  // Track currently selected example
   const [selectedExample, setSelectedExample] = useState<string>('');
 
   // Focus path within the type term
@@ -62,85 +93,75 @@ function InductiveTypeEditorInner() {
   };
 
   const handleSaveName = (newName: string) => {
-    setInductiveDef(prev => ({ ...prev, name: newName }));
-    // Pop back to root
+    setRecordDef(prev => ({ ...prev, name: newName }));
     navigation.navigateTo([]);
   };
 
   const handleEditType = () => {
-    // Reset focus to root of type
     setTypeFocusPath([]);
   };
 
-  // Constructor handlers
-  const handleUpdateConstructor = (id: string, updated: Constructor) => {
-    setInductiveDef(prev => ({
+  // Field handlers
+  const handleUpdateField = (id: string, updated: Field) => {
+    setRecordDef(prev => ({
       ...prev,
-      constructors: prev.constructors.map(c => c.id === id ? updated : c)
+      fields: prev.fields.map(f => f.id === id ? updated : f)
     }));
   };
 
-  const handleAddConstructor = () => {
-    const newCtor = createConstructorForInductive(
-      `ctor${inductiveDef.constructors.length}`,
-      inductiveDef.name,
-      inductiveDef.type
-    );
-    setInductiveDef(prev => ({
+  const handleAddField = () => {
+    const newField = createDefaultField(`field${recordDef.fields.length}`);
+    setRecordDef(prev => ({
       ...prev,
-      constructors: [...prev.constructors, newCtor]
+      fields: [...prev.fields, newField]
     }));
-    // Navigate to the new constructor
-    navigation.navigateTo(['Constructors', String(inductiveDef.constructors.length)]);
+    navigation.navigateTo(['Fields', String(recordDef.fields.length)]);
   };
 
-  const handleDeleteConstructor = (id: string) => {
-    setInductiveDef(prev => ({
+  const handleDeleteField = (id: string) => {
+    setRecordDef(prev => ({
       ...prev,
-      constructors: prev.constructors.filter(c => c.id !== id)
+      fields: prev.fields.filter(f => f.id !== id)
     }));
-    navigation.navigateTo(['Constructors']);
+    navigation.navigateTo(['Fields']);
   };
 
   // Handler for example dropdown
   const handleExampleChange = (exampleName: string) => {
     setSelectedExample(exampleName);
-    if (exampleName && exampleName in TTExamples.inductiveTypes) {
-      const newState = loadExampleAsEditorState(exampleName as TTExampleTypeName);
-      setInductiveDef(newState);
+    if (exampleName && exampleName in TTExamples.recordTypes) {
+      const newState = loadExampleAsEditorState(exampleName as TTExampleRecordTypeName);
+      setRecordDef(newState);
       setTypeFocusPath([]);
       navigation.navigateTo([]);
     }
   };
 
-  // Update navigation metadata with handlers
-  // Only set TYPE_EDITING_KEYS when we're editing the inductive type (not constructor types)
+  // Update navigation metadata
   useEffect(() => {
     const metadata: Record<string, unknown> = {
       onEditName: handleEditName,
       onEditType: handleEditType,
-      // Legacy keys (for any remaining old code)
       typeFocusPath,
       setTypeFocusPath,
-      inductiveType: inductiveDef.type,
-      setInductiveType: (newType: TTerm) => setInductiveDef(prev => ({ ...prev, type: newType })),
-      // Constructor handlers
-      onAddConstructor: handleAddConstructor,
-      onDeleteConstructor: handleDeleteConstructor,
+      recordType: recordDef.type,
+      setRecordType: (newType: TTerm) => setRecordDef(prev => ({ ...prev, type: newType })),
+      // Field handlers
+      onAddField: handleAddField,
+      onDeleteField: handleDeleteField,
     };
 
-    // Only populate TYPE_EDITING_KEYS when we're at the inductive type level
-    // (not when editing constructor types - ConstructorsSection handles that)
+    // Populate TYPE_EDITING_KEYS when editing the record type
     if (isEditingType) {
-      metadata[TYPE_EDITING_KEYS.term] = inductiveDef.type;
+      metadata[TYPE_EDITING_KEYS.term] = recordDef.type;
       metadata[TYPE_EDITING_KEYS.focusPath] = typeFocusPath;
-      metadata[TYPE_EDITING_KEYS.setTerm] = (newType: TTerm) => setInductiveDef(prev => ({ ...prev, type: newType }));
+      metadata[TYPE_EDITING_KEYS.setTerm] = (newType: TTerm) => setRecordDef(prev => ({ ...prev, type: newType }));
       metadata[TYPE_EDITING_KEYS.setFocusPath] = setTypeFocusPath;
       metadata[TYPE_EDITING_KEYS.returnPath] = ['Type'];
     }
 
     navigation.updateMetadata(metadata);
-  }, [navigation.updateMetadata, typeFocusPath, inductiveDef.name, inductiveDef.type, inductiveDef.constructors, isEditingType]);
+  }, [navigation.updateMetadata, typeFocusPath, recordDef.name, recordDef.type, recordDef.fields, isEditingType]);
 
   return (
     <NavigationFooterSpacer>
@@ -155,13 +176,13 @@ function InductiveTypeEditorInner() {
           justifyContent: 'space-between',
           alignItems: 'center',
           marginBottom: '24px',
-          borderBottom: '2px solid #007acc',
+          borderBottom: '2px solid #2e7d32',
           paddingBottom: '16px'
         }}>
-          <h2 style={{ margin: 0, color: '#007acc' }}>Inductive Type Editor</h2>
+          <h2 style={{ margin: 0, color: '#2e7d32' }}>Record Editor</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <label
-              htmlFor="example-select"
+              htmlFor="record-example-select"
               style={{
                 fontSize: '13px',
                 color: '#666',
@@ -171,7 +192,7 @@ function InductiveTypeEditorInner() {
               Load example:
             </label>
             <select
-              id="example-select"
+              id="record-example-select"
               value={selectedExample}
               onChange={(e) => handleExampleChange(e.target.value)}
               style={{
@@ -187,8 +208,8 @@ function InductiveTypeEditorInner() {
                 transition: 'border-color 0.15s, box-shadow 0.15s',
               }}
               onFocus={(e) => {
-                e.target.style.borderColor = '#007acc';
-                e.target.style.boxShadow = '0 0 0 2px rgba(0, 122, 204, 0.15)';
+                e.target.style.borderColor = '#2e7d32';
+                e.target.style.boxShadow = '0 0 0 2px rgba(46, 125, 50, 0.15)';
               }}
               onBlur={(e) => {
                 e.target.style.borderColor = '#ccd';
@@ -212,20 +233,22 @@ function InductiveTypeEditorInner() {
           padding: '24px',
           boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
         }}>
-          {/* Signature line: Name Params : Type */}
+          {/* Signature line: structure Name : Type where */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
-            marginBottom: '24px',
+            marginBottom: '16px',
             fontFamily: 'monospace',
             fontSize: '18px'
           }}>
+            <span style={{ color: '#666', fontWeight: 500 }}>structure</span>
+
             {/* Name */}
             {isEditingName ? (
               <input
                 type="text"
-                defaultValue={inductiveDef.name}
+                defaultValue={recordDef.name}
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
@@ -239,17 +262,17 @@ function InductiveTypeEditorInner() {
                   fontFamily: 'monospace',
                   fontSize: '18px',
                   fontWeight: 'bold',
-                  border: '2px solid #007acc',
+                  border: '2px solid #2e7d32',
                   borderRadius: '4px',
                   padding: '4px 8px',
-                  backgroundColor: '#f0f8ff',
+                  backgroundColor: '#f0fff0',
                   width: 'auto',
                   minWidth: '100px'
                 }}
               />
             ) : (
               <span style={{ fontWeight: 'bold' }}>
-                {inductiveDef.name}
+                {recordDef.name}
               </span>
             )}
 
@@ -258,29 +281,32 @@ function InductiveTypeEditorInner() {
 
             {/* Type */}
             <div style={{
-              border: isEditingType ? '2px solid #007acc' : '1px solid transparent',
+              border: isEditingType ? '2px solid #2e7d32' : '1px solid transparent',
               borderRadius: '4px',
               padding: '2px 4px',
-              backgroundColor: isEditingType ? '#f0f8ff' : 'transparent'
+              backgroundColor: isEditingType ? '#f0fff0' : 'transparent'
             }}>
               <TTermRenderer
-                term={inductiveDef.type}
+                term={recordDef.type}
                 focusPath={typeFocusPath}
                 onFocusChange={setTypeFocusPath}
-                onTermChange={(newType) => setInductiveDef(prev => ({ ...prev, type: newType }))}
+                onTermChange={(newType) => setRecordDef(prev => ({ ...prev, type: newType }))}
                 isActive={isEditingType}
                 readonly={!isEditingType}
                 inline={true}
               />
             </div>
+
+            {/* where keyword */}
+            <span style={{ color: '#666', fontWeight: 500 }}>where</span>
           </div>
 
-          {/* Constructors */}
-          <ConstructorsSection
-            constructors={inductiveDef.constructors}
-            onUpdateConstructor={handleUpdateConstructor}
-            onAddConstructor={handleAddConstructor}
-            onDeleteConstructor={handleDeleteConstructor}
+          {/* Fields */}
+          <FieldsSection
+            fields={recordDef.fields}
+            onUpdateField={handleUpdateField}
+            onAddField={handleAddField}
+            onDeleteField={handleDeleteField}
           />
         </div>
 
@@ -298,97 +324,99 @@ function InductiveTypeEditorInner() {
   );
 }
 
+// ============================================================================
+// Commands
+// ============================================================================
 
 /**
- * Commands available when in the Constructors section
+ * Commands available when in the Fields section
  */
-function createConstructorCommands(): Command[] {
+function createFieldCommands(): Command[] {
   return [
-    // 'a' - Add constructor
+    // 'a' - Add field
     createCommand(
-      'add-constructor',
+      'add-field',
       'a',
       'Add',
       (context) => {
-        const onAddConstructor = context.metadata?.onAddConstructor as (() => void) | undefined;
-        onAddConstructor?.();
+        const onAddField = context.metadata?.onAddField as (() => void) | undefined;
+        onAddField?.();
         return { preventDefault: true };
       },
       {
-        description: 'Add a new constructor',
+        description: 'Add a new field',
       }
     ),
 
-    // 'n' - Edit selected constructor name
+    // 'n' - Edit selected field name
     createCommand(
-      'edit-constructor-name',
+      'edit-field-name',
       'n',
       'Name',
       (context) => {
-        const selectedIndex = context.metadata?.selectedConstructorIndex as number | undefined;
+        const selectedIndex = context.metadata?.selectedItemIndex as number | undefined;
         if (selectedIndex === undefined) return { preventDefault: true };
 
         return {
-          navigationPath: ['Constructors', String(selectedIndex), 'EditName'],
+          navigationPath: ['Fields', String(selectedIndex), 'EditName'],
           preventDefault: true,
         };
       },
       {
-        description: 'Edit constructor name',
-        isAvailable: (context) => context.metadata?.selectedConstructorIndex !== undefined,
+        description: 'Edit field name',
+        isAvailable: (context) => context.metadata?.selectedItemIndex !== undefined,
       }
     ),
 
-    // 't' - Edit selected constructor type
+    // 't' - Edit selected field type
     createCommand(
-      'edit-constructor-type',
+      'edit-field-type',
       't',
       'Type',
       (context) => {
-        const selectedIndex = context.metadata?.selectedConstructorIndex as number | undefined;
+        const selectedIndex = context.metadata?.selectedItemIndex as number | undefined;
         if (selectedIndex === undefined) return { preventDefault: true };
 
         return {
-          navigationPath: ['Constructors', String(selectedIndex), 'Type'],
+          navigationPath: ['Fields', String(selectedIndex), 'Type'],
           preventDefault: true,
         };
       },
       {
-        description: 'Edit constructor type',
-        isAvailable: (context) => context.metadata?.selectedConstructorIndex !== undefined,
+        description: 'Edit field type',
+        isAvailable: (context) => context.metadata?.selectedItemIndex !== undefined,
         children: createSharedTypeEditingCommands(),
       }
     ),
 
-    // 'd' - Delete selected constructor
+    // 'd' - Delete selected field
     createCommand(
-      'delete-constructor',
+      'delete-field',
       'd',
       'Delete',
       (context) => {
-        const selectedId = context.metadata?.selectedConstructorId as string | undefined;
-        const onDeleteConstructor = context.metadata?.onDeleteConstructor as ((id: string) => void) | undefined;
-        if (selectedId && onDeleteConstructor) {
-          onDeleteConstructor(selectedId);
+        const selectedId = context.metadata?.selectedItemId as string | undefined;
+        const onDeleteField = context.metadata?.onDeleteField as ((id: string) => void) | undefined;
+        if (selectedId && onDeleteField) {
+          onDeleteField(selectedId);
         }
         return {
-          navigationPath: ['Constructors'],
+          navigationPath: ['Fields'],
           preventDefault: true,
         };
       },
       {
-        description: 'Delete selected constructor',
-        isAvailable: (context) => context.metadata?.selectedConstructorIndex !== undefined,
+        description: 'Delete selected field',
+        isAvailable: (context) => context.metadata?.selectedItemIndex !== undefined,
       }
     ),
   ];
 }
 
-
 /**
- * Command tree for inductive type editor navigation
+ * Command tree for record editor navigation
  */
-function createInductiveTypeCommandTree() {
+function createRecordCommandTree() {
   const rootCommands: Command[] = [
     // Escape command
     createEscapeCommand(),
@@ -408,7 +436,7 @@ function createInductiveTypeCommandTree() {
         };
       },
       {
-        description: 'Edit the inductive type name',
+        description: 'Edit the record name',
       }
     ),
 
@@ -432,18 +460,18 @@ function createInductiveTypeCommandTree() {
       }
     ),
 
-    // 'c' - Focus on constructors
+    // 'f' - Focus on fields
     createCommand(
-      'focus-constructors',
-      'c',
-      'Constructors',
+      'focus-fields',
+      'f',
+      'Fields',
       () => ({
-        navigationPath: ['Constructors'],
+        navigationPath: ['Fields'],
         preventDefault: true,
       }),
       {
-        description: 'Navigate to constructors',
-        children: createConstructorCommands(),
+        description: 'Navigate to fields',
+        children: createFieldCommands(),
       }
     ),
   ];
@@ -451,16 +479,21 @@ function createInductiveTypeCommandTree() {
   return buildCommandTree(rootCommands);
 }
 
+// ============================================================================
+// Main Export
+// ============================================================================
+
 /**
- * Main export - InductiveTypeEditor wrapped with NavigationProvider
+ * Record Editor - wrapped with NavigationProvider
  */
-export function InductiveTypeEditor() {
-  const commandTree = useMemo(() => createInductiveTypeCommandTree(), []);
+export function RecordEditor() {
+  const commandTree = useMemo(() => createRecordCommandTree(), []);
 
   return (
     <NavigationProvider initialCommandTree={commandTree}>
-      <InductiveTypeEditorInner />
+      <RecordEditorInner />
       <NavigationFooter />
     </NavigationProvider>
   );
 }
+

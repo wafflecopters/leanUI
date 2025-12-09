@@ -1866,6 +1866,142 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
 // EditableTerm: Immutable wrapper for editing term definitions
 // ============================================================================
 
+// ============================================================================
+// Record Types (Structures)
+// ============================================================================
+
+/**
+ * A field in a record type.
+ *
+ * Fields can depend on previous fields (dependent records), but for simplicity
+ * we start with non-dependent fields where each field type is a closed term.
+ */
+export interface RecordField {
+  name: string;
+  type: TTerm;
+}
+
+/**
+ * A record type definition (structure).
+ *
+ * Records are special single-constructor types with named projections.
+ * In Lean, this would be:
+ *
+ *   structure Magma (A : Type) where
+ *     op : A → A → A
+ *
+ * We represent this as:
+ * - type: The kind of the record (e.g., Type → Type for Magma)
+ * - fields: The named fields with their types
+ *
+ * A record implicitly has:
+ * - A constructor: Record.mk : field1_type → field2_type → ... → Record
+ * - Projections: Record.field1 : Record → field1_type, etc.
+ */
+export interface RecordDef {
+  name: string;
+  type: TTerm;           // The kind of the record type
+  fields: RecordField[]; // Named fields
+}
+
+/**
+ * Create a record projection constant.
+ *
+ * A projection extracts a field from a record instance.
+ * E.g., Magma.op : Magma A → (A → A → A)
+ *
+ * @param recordName - Name of the record type
+ * @param fieldName - Name of the field
+ * @param recordType - The record type (applied to any parameters)
+ * @param fieldType - The type of the field
+ * @returns A Const term representing the projection
+ */
+export function mkProjection(
+  recordName: string,
+  fieldName: string,
+  recordType: TTerm,
+  fieldType: TTerm
+): TTerm {
+  // Projection : Record → FieldType
+  return mkConst(
+    `${recordName}.${fieldName}`,
+    mkPi(recordType, fieldType, 'self')
+  );
+}
+
+/**
+ * Create the constructor type for a record.
+ *
+ * The constructor takes all field values and produces a record instance.
+ * E.g., Magma.mk : (A : Type) → (A → A → A) → Magma A
+ *
+ * @param recordRef - A reference to the record type constant
+ * @param fields - The record fields
+ * @param params - Parameter binders (e.g., [(A, Type)] for polymorphic records)
+ * @returns The type of the constructor
+ */
+export function mkRecordConstructorType(
+  recordRef: TTerm,
+  fields: RecordField[],
+  params: Array<[string, TTerm]> = []
+): TTerm {
+  // Build from inside out: last field → ... → first field → params → Record
+  // The record type is applied to all params
+  let appliedRecord = recordRef;
+  for (let i = 0; i < params.length; i++) {
+    // Apply record to Var(params.length - 1 - i) - the parameter at this position
+    // Since we're building the constructor type where params are the outermost binders
+    appliedRecord = mkApp(appliedRecord, mkVar(params.length - 1 - i + fields.length));
+  }
+
+  // Start with the applied record as the return type
+  let result = appliedRecord;
+
+  // Add field types as arguments (innermost to outermost)
+  for (let i = fields.length - 1; i >= 0; i--) {
+    const field = fields[i];
+    result = mkPi(field.type, result, field.name);
+  }
+
+  // Add parameter types as outermost binders
+  for (let i = params.length - 1; i >= 0; i--) {
+    const [paramName, paramType] = params[i];
+    result = mkPi(paramType, result, paramName);
+  }
+
+  return result;
+}
+
+/**
+ * Create a record constructor constant.
+ *
+ * @param recordName - Name of the record type
+ * @param recordRef - Reference to the record type
+ * @param fields - The record fields
+ * @param params - Parameter binders for polymorphic records
+ * @returns A Const term representing the constructor
+ */
+export function mkRecordConstructor(
+  recordName: string,
+  recordRef: TTerm,
+  fields: RecordField[],
+  params: Array<[string, TTerm]> = []
+): TTerm {
+  const ctorType = mkRecordConstructorType(recordRef, fields, params);
+  return mkConst(`${recordName}.mk`, ctorType);
+}
+
+/**
+ * Create an application of a projection to a record instance.
+ *
+ * @param projection - The projection term
+ * @param instance - The record instance
+ * @returns Application term: projection instance
+ */
+export function mkFieldAccess(projection: TTerm, instance: TTerm): TTerm {
+  return mkApp(projection, instance);
+}
+
 /**
  * EditableTerm provides an immutable, structured interface for editing
  * a term definition (proof workspace).

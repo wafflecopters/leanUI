@@ -44,6 +44,8 @@ interface RenderContext {
   onFocusChange?: (newPath: TermFocusPath) => void;
   onNameChange?: (path: TermFocusPath, newName: string) => void;
   readonly: boolean;
+  /** Telescope of binder names (most recent first, index 0 = innermost binder) */
+  telescope: string[];
 }
 
 /**
@@ -140,16 +142,37 @@ function BinderName({
 }
 
 /**
+ * Create a new context with an extended telescope.
+ */
+function extendTelescope(ctx: RenderContext, name: string): RenderContext {
+  return {
+    ...ctx,
+    telescope: [name, ...ctx.telescope],
+  };
+}
+
+/**
  * Recursively render a TTerm.
  */
 function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React.ReactNode {
   switch (term.tag) {
-    case 'Var':
+    case 'Var': {
+      // Look up the name from the telescope using De Bruijn index
+      const name = term.index < ctx.telescope.length
+        ? ctx.telescope[term.index]
+        : null;
+
+      // Use name if available and non-empty, otherwise fall back to @index
+      const displayName = name && name !== '' && name !== '_'
+        ? name
+        : `@${term.index}`;
+
       return (
         <FocusableSpan path={path} ctx={ctx}>
-          <span style={{ fontFamily: 'monospace' }}>@{term.index}</span>
+          <span style={{ fontFamily: 'monospace' }}>{displayName}</span>
         </FocusableSpan>
       );
+    }
 
     case 'Sort':
       return (
@@ -158,13 +181,16 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
         </FocusableSpan>
       );
 
-    case 'Binder':
+    case 'Binder': {
+      // Extend telescope for body rendering
+      const bodyCtx = extendTelescope(ctx, term.name);
+
       if (term.binderKind.tag === 'BPi') {
         const domainNode = renderTerm(term.domain, [...path, 'domain'], ctx);
-        const bodyNode = renderTerm(term.body, [...path, 'body'], ctx);
+        const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
 
-        // If name is empty, show as "domain → body"
-        if (term.name === '') {
+        // If name is empty or '_', show as "domain → body" (non-dependent arrow)
+        if (term.name === '' || term.name === '_') {
           return (
             <FocusableSpan path={path} ctx={ctx}>
               {domainNode} <span style={{ color: '#666' }}>→</span> {bodyNode}
@@ -179,7 +205,7 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
           </FocusableSpan>
         );
       } else if (term.binderKind.tag === 'BLam') {
-        const bodyNode = renderTerm(term.body, [...path, 'body'], ctx);
+        const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
         return (
           <FocusableSpan path={path} ctx={ctx}>
             λ<BinderName name={term.name} path={path} ctx={ctx} />. {bodyNode}
@@ -187,7 +213,7 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
         );
       } else if (term.binderKind.tag === 'BLet') {
         const defValNode = renderTerm(term.binderKind.defVal, [...path, 'domain'], ctx);
-        const bodyNode = renderTerm(term.body, [...path, 'body'], ctx);
+        const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
         return (
           <FocusableSpan path={path} ctx={ctx}>
             <span style={{ fontWeight: 'bold' }}>let</span>{' '}
@@ -197,8 +223,9 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
         );
       }
       return <span style={{ color: 'red' }}>?binder</span>;
+    }
 
-    case 'App':
+    case 'App': {
       const fnNode = renderTerm(term.fn, [...path, 'fn'], ctx);
       const argNode = renderTerm(term.arg, [...path, 'arg'], ctx);
       return (
@@ -206,6 +233,7 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
           ({fnNode} {argNode})
         </FocusableSpan>
       );
+    }
 
     case 'Const':
       return (
@@ -221,7 +249,7 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
         </FocusableSpan>
       );
 
-    case 'Annot':
+    case 'Annot': {
       const termNode = renderTerm(term.term, [...path, 'term'], ctx);
       const typeNode = renderTerm(term.type, [...path, 'type'], ctx);
       return (
@@ -229,6 +257,7 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
           ({termNode} : {typeNode})
         </FocusableSpan>
       );
+    }
   }
 }
 
@@ -256,6 +285,7 @@ export function TTermRenderer({
     onFocusChange: readonly ? undefined : onFocusChange,
     onNameChange: readonly ? undefined : handleNameChange,
     readonly,
+    telescope: [],  // Start with empty telescope (no binders in scope)
   }), [focusPath, onFocusChange, handleNameChange, readonly]);
 
   const rendered = useMemo(
