@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { EnhancedProofWorkspace } from './components/EnhancedProofWorkspace';
 import { InductiveTypeEditor } from './components/InductiveTypeEditor';
 import { RecordEditor } from './components/RecordEditor';
+import { TextEditorPage } from './components/TextEditorPage';
 
 interface LeanAST {
   [key: string]: any;
 }
 
 function App() {
-  const [mode, setMode] = useState<'ast' | 'proof' | 'inductive' | 'record'>('proof');
+  const [mode, setMode] = useState<'ast' | 'proof' | 'inductive' | 'record' | 'text-editor'>('proof');
   const [ast, setAst] = useState<LeanAST | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +53,78 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
     }
   };
 
+  if (mode === 'text-editor') {
+    return (
+      <div>
+        <div style={{
+          padding: '10px 20px',
+          backgroundColor: '#161b22',
+          borderBottom: '1px solid #30363d',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h1 style={{ margin: 0, fontSize: '24px', color: '#c9d1d9' }}>Lean UI - TT Text Editor</h1>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setMode('proof')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#238636',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Proof Assistant
+            </button>
+            <button
+              onClick={() => setMode('inductive')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#1f6feb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Inductive Types
+            </button>
+            <button
+              onClick={() => setMode('record')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#8957e5',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Records
+            </button>
+            <button
+              onClick={() => setMode('ast')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#6e7681',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              AST Viewer
+            </button>
+          </div>
+        </div>
+        <TextEditorPage />
+      </div>
+    );
+  }
+
   if (mode === 'inductive') {
     return (
       <div>
@@ -77,6 +150,19 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               }}
             >
               Proof Assistant
+            </button>
+            <button
+              onClick={() => setMode('text-editor')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#da3633',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Text Editor
             </button>
             <button
               onClick={() => setMode('record')}
@@ -138,6 +224,19 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Proof Assistant
             </button>
             <button
+              onClick={() => setMode('text-editor')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#da3633',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Text Editor
+            </button>
+            <button
               onClick={() => setMode('inductive')}
               style={{
                 padding: '6px 12px',
@@ -183,6 +282,19 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
         }}>
           <h1 style={{ margin: 0, fontSize: '24px' }}>Lean UI - Enhanced Proof Assistant</h1>
           <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              onClick={() => setMode('text-editor')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: '#da3633',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Text Editor
+            </button>
             <button
               onClick={() => setMode('inductive')}
               style={{
@@ -246,6 +358,19 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
             }}
           >
             Proof Assistant
+          </button>
+          <button
+            onClick={() => setMode('text-editor')}
+            style={{
+              padding: '6px 12px',
+              backgroundColor: '#da3633',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Text Editor
           </button>
           <button
             onClick={() => setMode('inductive')}

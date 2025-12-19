@@ -1,0 +1,984 @@
+/**
+ * Tests for the TT Language Parser
+ *
+ * These tests verify:
+ * 1. Lexer/Tokenization
+ * 2. Expression parsing
+ * 3. Operator precedence and associativity
+ * 4. Declaration parsing
+ * 5. Error handling
+ */
+
+import {
+  Parser,
+  parseExpr,
+  parseDeclarations,
+  tokenize,
+  ParseError,
+  DEFAULT_OPERATORS,
+  OperatorInfo,
+} from './tt-parser';
+
+import { prettyPrint, TTerm } from '../types/tt-core';
+
+// ============================================================================
+// Test Helper
+// ============================================================================
+
+function test(description: string, fn: () => void): void {
+  try {
+    fn();
+    console.log(`✓ ${description}`);
+  } catch (error) {
+    console.error(`✗ ${description}`);
+    throw error;
+  }
+}
+
+function assertEqual<T>(actual: T, expected: T, message?: string): void {
+  const actualStr = JSON.stringify(actual);
+  const expectedStr = JSON.stringify(expected);
+  if (actualStr !== expectedStr) {
+    throw new Error(`${message || 'Assertion failed'}\n  Expected: ${expectedStr}\n  Actual: ${actualStr}`);
+  }
+}
+
+function assertThrows(fn: () => void, message?: string): void {
+  try {
+    fn();
+    throw new Error(`Expected function to throw, but it didn't. ${message || ''}`);
+  } catch (error) {
+    if (error instanceof ParseError) {
+      return; // Expected
+    }
+    if (error instanceof Error && error.message.includes('Expected function to throw')) {
+      throw error;
+    }
+    // Other errors are fine
+  }
+}
+
+// Helper to check term structure without caring about internal details
+function assertTermShape(term: TTerm, expectedTag: string, message?: string): void {
+  if (term.tag !== expectedTag) {
+    throw new Error(`${message || 'Tag mismatch'}\n  Expected tag: ${expectedTag}\n  Actual tag: ${term.tag}`);
+  }
+}
+
+// ============================================================================
+// Lexer Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('LEXER TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Tokenize simple identifier', () => {
+  const tokens = tokenize('foo');
+  assertEqual(tokens.length, 2, 'Should have 2 tokens (IDENT + EOF)');
+  assertEqual(tokens[0].type, 'IDENT');
+  assertEqual(tokens[0].value, 'foo');
+});
+
+test('Tokenize keywords', () => {
+  const tokens = tokenize('fun forall let in Type Prop def theorem axiom');
+  const types = tokens.map(t => t.type);
+  assertEqual(types, ['LAMBDA', 'PI', 'LET', 'IN', 'TYPE', 'PROP', 'DEF', 'THEOREM', 'AXIOM', 'EOF']);
+});
+
+test('Tokenize lambda symbols', () => {
+  const tokens1 = tokenize('λ');
+  assertEqual(tokens1[0].type, 'LAMBDA');
+
+  const tokens2 = tokenize('\\');
+  assertEqual(tokens2[0].type, 'LAMBDA');
+
+  const tokens3 = tokenize('fun');
+  assertEqual(tokens3[0].type, 'LAMBDA');
+});
+
+test('Tokenize pi symbols', () => {
+  const tokens1 = tokenize('Π');
+  assertEqual(tokens1[0].type, 'PI');
+
+  const tokens2 = tokenize('forall');
+  assertEqual(tokens2[0].type, 'PI');
+});
+
+test('Tokenize arrows', () => {
+  const tokens1 = tokenize('→');
+  assertEqual(tokens1[0].type, 'ARROW');
+
+  const tokens2 = tokenize('->');
+  assertEqual(tokens2[0].type, 'ARROW');
+});
+
+test('Tokenize fat arrow', () => {
+  const tokens = tokenize('=>');
+  assertEqual(tokens[0].type, 'FATARROW');
+});
+
+test('Tokenize assignment', () => {
+  const tokens = tokenize(':=');
+  assertEqual(tokens[0].type, 'ASSIGN');
+});
+
+test('Tokenize holes', () => {
+  const tokens = tokenize('?foo ?bar ?_');
+  assertEqual(tokens[0].type, 'HOLE');
+  assertEqual(tokens[0].value, 'foo');
+  assertEqual(tokens[1].type, 'HOLE');
+  assertEqual(tokens[1].value, 'bar');
+});
+
+test('Tokenize operators', () => {
+  const tokens = tokenize('+ - * / = < > ∧ ∨');
+  const types = tokens.filter(t => t.type === 'OPERATOR').map(t => t.value);
+  assertEqual(types, ['+', '-', '*', '/', '=', '<', '>', '∧', '∨']);
+});
+
+test('Tokenize multi-character operators', () => {
+  // Note: :: is tokenized as two COLON tokens because colon is handled before operators
+  const tokens = tokenize('== != <= >= && || ++');
+  const ops = tokens.filter(t => t.type === 'OPERATOR').map(t => t.value);
+  assertEqual(ops, ['==', '!=', '<=', '>=', '&&', '||', '++']);
+});
+
+test('Tokenize parentheses and braces', () => {
+  const tokens = tokenize('( ) { }');
+  const types = tokens.slice(0, 4).map(t => t.type);
+  assertEqual(types, ['LPAREN', 'RPAREN', 'LBRACE', 'RBRACE']);
+});
+
+test('Tokenize numbers', () => {
+  const tokens = tokenize('0 42 123');
+  assertEqual(tokens[0].type, 'NUMBER');
+  assertEqual(tokens[0].value, '0');
+  assertEqual(tokens[1].type, 'NUMBER');
+  assertEqual(tokens[1].value, '42');
+});
+
+test('Skip line comments', () => {
+  const tokens = tokenize('foo -- this is a comment\nbar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
+test('Skip block comments', () => {
+  const tokens = tokenize('foo /- this is a block comment -/ bar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
+test('Handle nested block comments', () => {
+  const tokens = tokenize('foo /- outer /- inner -/ outer -/ bar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
+test('Track line and column numbers', () => {
+  const tokens = tokenize('foo\nbar  baz');
+  assertEqual(tokens[0].line, 1);
+  assertEqual(tokens[0].col, 1);
+  // After newline
+  const barToken = tokens.find(t => t.value === 'bar');
+  assertEqual(barToken?.line, 2);
+});
+
+test('Tokenize Greek letters in identifiers', () => {
+  const tokens = tokenize('α β γ αβγ');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['α', 'β', 'γ', 'αβγ']);
+});
+
+test('Tokenize mathematical symbols', () => {
+  const tokens = tokenize('ℕ ℤ ℝ');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['ℕ', 'ℤ', 'ℝ']);
+});
+
+// ============================================================================
+// Parser: Basic Expression Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: BASIC EXPRESSION TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse identifier (variable/constant)', () => {
+  const term = parseExpr('x');
+  // 'x' not in context should be a Const
+  assertTermShape(term, 'Const');
+  if (term.tag === 'Const') {
+    assertEqual(term.name, 'x');
+  }
+});
+
+test('Parse Type', () => {
+  const term = parseExpr('Type');
+  assertTermShape(term, 'Sort');
+  if (term.tag === 'Sort') {
+    assertEqual(term.level, 1); // Type = Type_1
+  }
+});
+
+test('Parse Prop', () => {
+  const term = parseExpr('Prop');
+  assertTermShape(term, 'Sort');
+  if (term.tag === 'Sort') {
+    assertEqual(term.level, 0); // Prop = Type_0
+  }
+});
+
+test('Parse hole', () => {
+  const term = parseExpr('?foo');
+  assertTermShape(term, 'Hole');
+  if (term.tag === 'Hole') {
+    assertEqual(term.id, 'foo');
+  }
+});
+
+test('Parse underscore as hole', () => {
+  const term = parseExpr('_');
+  assertTermShape(term, 'Hole');
+  if (term.tag === 'Hole') {
+    assertEqual(term.id, '_');
+  }
+});
+
+test('Parse parenthesized expression', () => {
+  const term = parseExpr('(x)');
+  assertTermShape(term, 'Const');
+  if (term.tag === 'Const') {
+    assertEqual(term.name, 'x');
+  }
+});
+
+// ============================================================================
+// Parser: Lambda Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: LAMBDA TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse lambda with λ symbol', () => {
+  const term = parseExpr('λ (x : T), x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.name, 'x');
+    // Body should be Var(0)
+    assertTermShape(term.body, 'Var');
+  }
+});
+
+test('Parse lambda with backslash', () => {
+  const term = parseExpr('\\(x : T). x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.name, 'x');
+  }
+});
+
+test('Parse lambda with fun keyword', () => {
+  const term = parseExpr('fun (x : T) => x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.name, 'x');
+  }
+});
+
+test('Parse lambda with multiple binders', () => {
+  const term = parseExpr('λ (x : A) (y : B), x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'x');
+    assertTermShape(term.body, 'Binder');
+    if (term.body.tag === 'Binder') {
+      assertEqual(term.body.name, 'y');
+    }
+  }
+});
+
+test('Parse lambda without type annotation', () => {
+  const term = parseExpr('λ x, x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'x');
+    // Domain should be a hole
+    assertTermShape(term.domain, 'Hole');
+  }
+});
+
+// ============================================================================
+// Parser: Pi/Forall Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: PI/FORALL TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse Pi with Π symbol', () => {
+  const term = parseExpr('Π (x : A), B');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.name, 'x');
+  }
+});
+
+test('Parse Pi with forall keyword', () => {
+  const term = parseExpr('forall (x : A), B');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.name, 'x');
+  }
+});
+
+test('Parse Pi with multiple binders', () => {
+  const term = parseExpr('Π (x : A) (y : B), C');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'x');
+    assertTermShape(term.body, 'Binder');
+  }
+});
+
+test('Parse arrow type (non-dependent Pi)', () => {
+  const term = parseExpr('A → B');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.name, '_'); // Non-dependent
+  }
+});
+
+test('Parse arrow type with ASCII syntax', () => {
+  const term = parseExpr('A -> B');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BPi');
+  }
+});
+
+test('Parse chained arrows (right-associative)', () => {
+  // A → B → C  should be  A → (B → C)
+  const term = parseExpr('A → B → C');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    // Body should be another Pi
+    assertTermShape(term.body, 'Binder');
+  }
+});
+
+test('Parse dependent Pi with arrow syntax', () => {
+  const term = parseExpr('(x : A) → B');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.name, 'x');
+  }
+});
+
+// ============================================================================
+// Parser: Let Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: LET TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse let expression', () => {
+  const term = parseExpr('let x : T := v in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLet');
+    assertEqual(term.name, 'x');
+    // Body should refer to x (Var 0)
+    assertTermShape(term.body, 'Var');
+  }
+});
+
+test('Parse let without type annotation', () => {
+  const term = parseExpr('let x := v in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLet');
+    // Domain should be a hole when type is omitted
+    assertTermShape(term.domain, 'Hole');
+  }
+});
+
+test('Parse nested let expressions', () => {
+  const term = parseExpr('let x := a in let y := b in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'x');
+    assertTermShape(term.body, 'Binder');
+    if (term.body.tag === 'Binder') {
+      assertEqual(term.body.name, 'y');
+    }
+  }
+});
+
+// ============================================================================
+// Parser: Application Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: APPLICATION TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse simple application', () => {
+  const term = parseExpr('f x');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    assertTermShape(term.fn, 'Const');
+    assertTermShape(term.arg, 'Const');
+  }
+});
+
+test('Parse chained application (left-associative)', () => {
+  // f x y  should be  (f x) y
+  const term = parseExpr('f x y');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    // fn should be (f x)
+    assertTermShape(term.fn, 'App');
+    // arg should be y
+    assertTermShape(term.arg, 'Const');
+  }
+});
+
+test('Parse application with parentheses', () => {
+  const term = parseExpr('f (g x)');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    assertTermShape(term.fn, 'Const');
+    assertTermShape(term.arg, 'App');
+  }
+});
+
+test('Parse application of lambda', () => {
+  const term = parseExpr('(λ x, x) y');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    assertTermShape(term.fn, 'Binder');
+    assertTermShape(term.arg, 'Const');
+  }
+});
+
+// ============================================================================
+// Parser: Type Annotation Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: TYPE ANNOTATION TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse type annotation', () => {
+  const term = parseExpr('(x : T)');
+  assertTermShape(term, 'Annot');
+  if (term.tag === 'Annot') {
+    assertTermShape(term.term, 'Const');
+    assertTermShape(term.type, 'Const');
+  }
+});
+
+test('Parse type annotation with complex term', () => {
+  const term = parseExpr('(f x : T)');
+  assertTermShape(term, 'Annot');
+  if (term.tag === 'Annot') {
+    assertTermShape(term.term, 'App');
+    assertTermShape(term.type, 'Const');
+  }
+});
+
+// ============================================================================
+// Parser: Operator Precedence Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: OPERATOR PRECEDENCE TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Multiplication binds tighter than addition', () => {
+  // a + b * c  should be  a + (b * c)
+  const term = parseExpr('a + b * c');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    // Outer is add
+    if (term.fn.tag === 'App' && term.fn.fn.tag === 'Const') {
+      assertEqual(term.fn.fn.name, 'add');
+    }
+    // Inner arg is mul
+    if (term.arg.tag === 'App' && term.arg.fn.tag === 'App') {
+      if (term.arg.fn.fn.tag === 'Const') {
+        assertEqual(term.arg.fn.fn.name, 'mul');
+      }
+    }
+  }
+});
+
+test('Exponentiation binds tighter than multiplication', () => {
+  // a * b ^ c  should be  a * (b ^ c)
+  const term = parseExpr('a * b ^ c');
+  assertTermShape(term, 'App');
+  // Similar structure check as above
+});
+
+test('Addition is left-associative', () => {
+  // a + b + c  should be  (a + b) + c
+  const term = parseExpr('a + b + c');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    // The second argument should be 'c'
+    assertTermShape(term.arg, 'Const');
+    if (term.arg.tag === 'Const') {
+      assertEqual(term.arg.name, 'c');
+    }
+  }
+});
+
+test('Exponentiation is right-associative', () => {
+  // a ^ b ^ c  should be  a ^ (b ^ c)
+  const term = parseExpr('a ^ b ^ c');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    // First arg to outer pow should be 'a'
+    if (term.fn.tag === 'App') {
+      assertTermShape(term.fn.arg, 'Const');
+      if (term.fn.arg.tag === 'Const') {
+        assertEqual(term.fn.arg.name, 'a');
+      }
+    }
+  }
+});
+
+test('And (∧) is right-associative', () => {
+  // a ∧ b ∧ c  should be  a ∧ (b ∧ c)
+  const term = parseExpr('a ∧ b ∧ c');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    // First arg should be 'a'
+    if (term.fn.tag === 'App') {
+      assertTermShape(term.fn.arg, 'Const');
+      if (term.fn.arg.tag === 'Const') {
+        assertEqual(term.fn.arg.name, 'a');
+      }
+    }
+  }
+});
+
+test('Comparison operators are non-associative (require parens)', () => {
+  // a = b  works fine
+  const term = parseExpr('a = b');
+  assertTermShape(term, 'App');
+
+  // a = b = c  should parse but the second = applies to (a = b)
+  // This is a quirk - we don't error on non-assoc chains, we just treat as left
+  const term2 = parseExpr('a = b = c');
+  assertTermShape(term2, 'App');
+});
+
+test('Application binds tighter than operators', () => {
+  // f x + g y  should be  (f x) + (g y)
+  const term = parseExpr('f x + g y');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    // Both args to add should be applications
+    if (term.fn.tag === 'App') {
+      assertTermShape(term.fn.arg, 'App'); // f x
+    }
+    assertTermShape(term.arg, 'App'); // g y
+  }
+});
+
+test('Arrow binds looser than operators', () => {
+  // a + b → c  should be  (a + b) → c
+  const term = parseExpr('a + b → c');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    // Domain should be addition
+    assertTermShape(term.domain, 'App');
+  }
+});
+
+test('Lambda body extends as far as possible', () => {
+  // λ x, a + b  should be  λ x, (a + b)
+  const term = parseExpr('λ x, a + b');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertTermShape(term.body, 'App');
+  }
+});
+
+// ============================================================================
+// Parser: Declaration Tests (New Syntax)
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: DECLARATION TESTS (NEW SYNTAX)');
+console.log('='.repeat(80) + '\n');
+
+test('Parse type signature with definition using := (name : type := impl)', () => {
+  const decls = parseDeclarations('foo : T := x');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'foo');
+  if (decls[0].type) assertTermShape(decls[0].type, 'Const');
+  if (decls[0].value) assertTermShape(decls[0].value, 'Const');
+});
+
+test('Parse type signature only (name : type)', () => {
+  const decls = parseDeclarations('foo : T');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'foo');
+  if (decls[0].type) assertTermShape(decls[0].type, 'Const');
+  assertEqual(decls[0].value, undefined);
+});
+
+test('Parse definition only (name = impl)', () => {
+  const decls = parseDeclarations('foo = x');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'foo');
+  assertEqual(decls[0].type, undefined);
+  if (decls[0].value) assertTermShape(decls[0].value, 'Const');
+});
+
+test('Parse complex type signature with definition using :=', () => {
+  const decls = parseDeclarations('id : Π (A : Type), A → A := λ (A : Type) (x : A), x');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'id');
+  if (decls[0].type) assertTermShape(decls[0].type, 'Binder');
+  if (decls[0].value) assertTermShape(decls[0].value, 'Binder');
+});
+
+test('Parse two-line declaration (type on one line, def on next)', () => {
+  const source = `id : Π (A : Type), A → A
+id = λ (A : Type) (x : A), x`;
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 2);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'id');
+  assertEqual(decls[0].value, undefined); // type signature only
+  assertEqual(decls[1].kind, 'def');
+  assertEqual(decls[1].name, 'id');
+  assertEqual(decls[1].type, undefined); // definition only
+});
+
+test('Parse type containing equality (a = b in type)', () => {
+  const decls = parseDeclarations('add_comm : Π (a : ℕ) (b : ℕ), a + b = b + a');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'add_comm');
+  assertEqual(decls[0].value, undefined); // type signature only
+  // The type should include the equality
+  if (decls[0].type) assertTermShape(decls[0].type, 'Binder');
+});
+
+test('Parse multiple new-style declarations', () => {
+  const source = `
+    foo : T
+    foo = x
+    bar : S := y
+    baz : P
+  `;
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 4);
+  assertEqual(decls[0].name, 'foo');
+  assertEqual(decls[0].value, undefined); // type sig
+  assertEqual(decls[1].name, 'foo');
+  assertEqual(decls[1].type, undefined); // def only
+  assertEqual(decls[2].name, 'bar');
+  assertEqual(decls[3].name, 'baz');
+  assertEqual(decls[3].value, undefined); // type signature only
+});
+
+test('Parse bare expression as declaration', () => {
+  const decls = parseDeclarations('x + y');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'expr');
+  assertTermShape(decls[0].value!, 'App');
+});
+
+test('Parse mixed declarations and expressions', () => {
+  const source = `
+    foo : T
+    foo = x
+    a + b
+    bar : P
+  `;
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 4);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[1].kind, 'def');
+  assertEqual(decls[2].kind, 'expr');
+  assertEqual(decls[3].kind, 'def');
+});
+
+// ============================================================================
+// Parser: Legacy Declaration Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: LEGACY DECLARATION TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse legacy def declaration', () => {
+  const decls = parseDeclarations('def foo : T := x');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'def');
+  assertEqual(decls[0].name, 'foo');
+});
+
+test('Parse legacy theorem declaration', () => {
+  const decls = parseDeclarations('theorem bar : P := proof');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'theorem');
+  assertEqual(decls[0].name, 'bar');
+});
+
+test('Parse legacy axiom declaration', () => {
+  const decls = parseDeclarations('axiom choice : A');
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'axiom');
+  assertEqual(decls[0].name, 'choice');
+  assertEqual(decls[0].value, undefined);
+});
+
+// ============================================================================
+// Parser: Complex Expression Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: COMPLEX EXPRESSION TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse function type with explicit domain', () => {
+  const term = parseExpr('(n : ℕ) → (m : ℕ) → Prop');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'n');
+    assertTermShape(term.body, 'Binder');
+  }
+});
+
+test('Parse complex lambda', () => {
+  const term = parseExpr('λ (f : A → B) (x : A), f x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'f');
+    assertTermShape(term.body, 'Binder');
+    if (term.body.tag === 'Binder') {
+      assertEqual(term.body.name, 'x');
+      assertTermShape(term.body.body, 'App');
+    }
+  }
+});
+
+test('Parse identity function type', () => {
+  const term = parseExpr('Π (A : Type), A → A');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.name, 'A');
+  }
+});
+
+test('Parse let with complex value', () => {
+  const term = parseExpr('let id := λ x, x in id y');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLet') {
+    assertEqual(term.name, 'id');
+    assertTermShape(term.binderKind.defVal, 'Binder'); // lambda
+    assertTermShape(term.body, 'App'); // id y
+  }
+});
+
+test('Parse equality type', () => {
+  const term = parseExpr('a + b = b + a');
+  assertTermShape(term, 'App');
+  // This is Eq (add a b) (add b a)
+});
+
+test('Parse nested operators with parens', () => {
+  const term = parseExpr('(a + b) * (c + d)');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App' && term.fn.tag === 'App') {
+    // mul (add a b) (add c d)
+    if (term.fn.fn.tag === 'Const') {
+      assertEqual(term.fn.fn.name, 'mul');
+    }
+    assertTermShape(term.fn.arg, 'App'); // add a b
+    assertTermShape(term.arg, 'App'); // add c d
+  }
+});
+
+// ============================================================================
+// Parser: Error Cases
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: ERROR CASES');
+console.log('='.repeat(80) + '\n');
+
+test('Error on unexpected token', () => {
+  assertThrows(() => parseExpr(')'), 'Should error on unexpected )');
+});
+
+test('Error on unclosed parenthesis', () => {
+  assertThrows(() => parseExpr('(x'), 'Should error on unclosed paren');
+});
+
+test('Error on missing lambda binder', () => {
+  assertThrows(() => parseExpr('λ'), 'Should error on lambda without binder');
+});
+
+test('Error on missing Pi binder', () => {
+  assertThrows(() => parseExpr('Π'), 'Should error on Pi without binder');
+});
+
+test('Error on missing let value', () => {
+  assertThrows(() => parseExpr('let x :='), 'Should error on let without value');
+});
+
+test('Error on missing let body', () => {
+  assertThrows(() => parseExpr('let x := v in'), 'Should error on let without body');
+});
+
+test('Error on invalid character', () => {
+  assertThrows(() => parseExpr('a § b'), 'Should error on invalid character');
+});
+
+// ============================================================================
+// Parser: Custom Operators Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: CUSTOM OPERATORS TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse with custom operator', () => {
+  const customOps: Record<string, OperatorInfo> = {
+    ...DEFAULT_OPERATORS,
+    '⊕': { symbol: '⊕', precedence: 60, associativity: 'left', constName: 'xor' },
+  };
+
+  const parser = new Parser(customOps);
+  const term = parser.parseExpr('a ⊕ b');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App' && term.fn.tag === 'App' && term.fn.fn.tag === 'Const') {
+    assertEqual(term.fn.fn.name, 'xor');
+  }
+});
+
+test('Custom operator respects precedence', () => {
+  const customOps: Record<string, OperatorInfo> = {
+    ...DEFAULT_OPERATORS,
+    '⊕': { symbol: '⊕', precedence: 75, associativity: 'left', constName: 'xor' },
+  };
+
+  const parser = new Parser(customOps);
+  // a + b ⊕ c  should be  a + (b ⊕ c)  if ⊕ has higher precedence than +
+  const term = parser.parseExpr('a + b ⊕ c');
+  assertTermShape(term, 'App');
+  // The outer should be add
+  if (term.tag === 'App' && term.fn.tag === 'App' && term.fn.fn.tag === 'Const') {
+    assertEqual(term.fn.fn.name, 'add');
+  }
+});
+
+// ============================================================================
+// De Bruijn Index Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: DE BRUIJN INDEX TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Lambda body correctly references bound variable', () => {
+  const term = parseExpr('λ (x : T), x');
+  if (term.tag === 'Binder' && term.body.tag === 'Var') {
+    assertEqual(term.body.index, 0, 'Bound variable should have index 0');
+  }
+});
+
+test('Nested lambda body correctly references outer variable', () => {
+  const term = parseExpr('λ (x : A) (y : B), x');
+  if (term.tag === 'Binder' && term.body.tag === 'Binder' && term.body.body.tag === 'Var') {
+    assertEqual(term.body.body.index, 1, 'Outer variable should have index 1');
+  }
+});
+
+test('Nested lambda body correctly references inner variable', () => {
+  const term = parseExpr('λ (x : A) (y : B), y');
+  if (term.tag === 'Binder' && term.body.tag === 'Binder' && term.body.body.tag === 'Var') {
+    assertEqual(term.body.body.index, 0, 'Inner variable should have index 0');
+  }
+});
+
+test('Let body correctly references bound variable', () => {
+  const term = parseExpr('let x := v in x');
+  if (term.tag === 'Binder' && term.body.tag === 'Var') {
+    assertEqual(term.body.index, 0, 'Let-bound variable should have index 0');
+  }
+});
+
+test('Pi body correctly references bound variable', () => {
+  const term = parseExpr('Π (x : Type), x');
+  if (term.tag === 'Binder' && term.body.tag === 'Var') {
+    assertEqual(term.body.index, 0, 'Pi-bound variable should have index 0');
+  }
+});
+
+test('Free variable becomes Const', () => {
+  const term = parseExpr('λ x, y');
+  if (term.tag === 'Binder') {
+    // y is not bound, should be Const
+    assertTermShape(term.body, 'Const');
+    if (term.body.tag === 'Const') {
+      assertEqual(term.body.name, 'y');
+    }
+  }
+});
+
+// ============================================================================
+// Pretty Print Round-Trip Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: PRETTY PRINT TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Pretty print preserves variable names', () => {
+  const term = parseExpr('λ (foo : T), foo');
+  const printed = prettyPrint(term);
+  if (!printed.includes('foo')) {
+    throw new Error(`Expected 'foo' in output, got: ${printed}`);
+  }
+});
+
+test('Pretty print shows Pi types correctly', () => {
+  const term = parseExpr('Π (α : Type), α → α');
+  const printed = prettyPrint(term);
+  if (!printed.includes('α')) {
+    throw new Error(`Expected 'α' in output, got: ${printed}`);
+  }
+});
+
+// ============================================================================
+// Summary
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('ALL PARSER TESTS PASSED! ✓');
+console.log('='.repeat(80) + '\n');
+

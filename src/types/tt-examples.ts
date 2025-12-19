@@ -433,20 +433,26 @@ function makeMagmaRecord(): RecordDef {
   // Magma : Type → Type
   const MagmaKind = mkArrow(Type0, Type0);
 
-  // For the field type, A is bound as a parameter.
-  // In a dependent record context, we represent A as Var(0) assuming
-  // the record is parameterized.
-  // op : A → A → A where A : Type is the parameter
-  const A = mkVar(0);  // Reference to the type parameter
-
   return {
     name: 'Magma',
     type: MagmaKind,
     fields: [
       {
         name: 'op',
-        // op : A → A → A
-        type: mkArrow(A, mkArrow(A, A)),
+        // op : Π (A : Type). A → A → A
+        // De Bruijn indices shift as we go under each arrow binder:
+        // - First arg domain: A at index 0
+        // - Second arg domain: A at index 1 (under one _ binder)
+        // - Return type: A at index 2 (under two _ binders)
+        type: mkPi(
+          Type0,
+          mkPi(
+            mkVar(0),
+            mkPi(mkVar(1), mkVar(2), '_'),
+            '_'
+          ),
+          'A'
+        ),
       },
     ],
   };
@@ -465,10 +471,6 @@ function makeMagmaRecord(): RecordDef {
  */
 function makeSemigroupRecord(): RecordDef {
   const SemigroupKind = mkArrow(Type0, Type0);
-  const A = mkVar(0);  // Type parameter
-
-  // For simplicity, we represent the assoc proof type as a placeholder
-  // In a full implementation, this would be a proper equality type
   const Prop = mkType(0);
 
   return {
@@ -477,13 +479,21 @@ function makeSemigroupRecord(): RecordDef {
     fields: [
       {
         name: 'op',
-        // op : A → A → A
-        type: mkArrow(A, mkArrow(A, A)),
+        // op : Π (A : Type). A → A → A
+        type: mkPi(
+          Type0,
+          mkPi(
+            mkVar(0),
+            mkPi(mkVar(1), mkVar(2), '_'),
+            '_'
+          ),
+          'A'
+        ),
       },
       {
         name: 'assoc',
-        // assoc : Prop (placeholder - would be the associativity law)
-        type: Prop,
+        // assoc : Π (A : Type). Prop
+        type: mkPi(Type0, Prop, 'A'),
       },
     ],
   };
@@ -505,7 +515,6 @@ function makeSemigroupRecord(): RecordDef {
  */
 function makeMonoidRecord(): RecordDef {
   const MonoidKind = mkArrow(Type0, Type0);
-  const A = mkVar(0);  // Type parameter
   const Prop = mkType(0);
 
   return {
@@ -514,23 +523,36 @@ function makeMonoidRecord(): RecordDef {
     fields: [
       {
         name: 'op',
-        type: mkArrow(A, mkArrow(A, A)),
+        // op : Π (A : Type). A → A → A
+        type: mkPi(
+          Type0,
+          mkPi(
+            mkVar(0),
+            mkPi(mkVar(1), mkVar(2), '_'),
+            '_'
+          ),
+          'A'
+        ),
       },
       {
         name: 'e',
-        type: A,
+        // e : Π (A : Type). A
+        type: mkPi(Type0, mkVar(0), 'A'),
       },
       {
         name: 'assoc',
-        type: Prop,
+        // assoc : Π (A : Type). Prop
+        type: mkPi(Type0, Prop, 'A'),
       },
       {
         name: 'left_id',
-        type: Prop,
+        // left_id : Π (A : Type). Prop
+        type: mkPi(Type0, Prop, 'A'),
       },
       {
         name: 'right_id',
-        type: Prop,
+        // right_id : Π (A : Type). Prop
+        type: mkPi(Type0, Prop, 'A'),
       },
     ],
   };
@@ -581,21 +603,29 @@ function makeProdRecord(): RecordDef {
   // Prod : Type → Type → Type
   const ProdKind = mkArrow(Type0, mkArrow(Type0, Type0));
 
-  // A is at index 1 (outer parameter), B is at index 0 (inner parameter)
-  const A = mkVar(1);
-  const B = mkVar(0);
-
   return {
     name: 'Prod',
     type: ProdKind,
     fields: [
       {
         name: 'fst',
-        type: A,
+        // fst : Π (A : Type). Π (B : Type). A
+        // A is at index 1 inside the nested Pi
+        type: mkPi(
+          Type0,
+          mkPi(Type0, mkVar(1), 'B'),
+          'A'
+        ),
       },
       {
         name: 'snd',
-        type: B,
+        // snd : Π (A : Type). Π (B : Type). B
+        // B is at index 0 inside the nested Pi
+        type: mkPi(
+          Type0,
+          mkPi(Type0, mkVar(0), 'B'),
+          'A'
+        ),
       },
     ],
   };
