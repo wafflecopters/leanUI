@@ -1,10 +1,13 @@
 /**
  * Tests for type inference and checking
+ *
+ * Note: These tests use TTK (kernel) types directly since the type-checker
+ * operates on kernel terms.
  */
 
 import { describe, it, expect } from 'bun:test';
 import {
-  TContext,
+  TTKContext,
   mkVar,
   mkConst,
   mkProp,
@@ -13,7 +16,7 @@ import {
   mkLambda,
   mkApp,
   prettyPrint
-} from './tt-core';
+} from './tt-kernel';
 import {
   inferType,
   checkType,
@@ -25,7 +28,7 @@ describe('Type Inference - Basic Rules', () => {
   // (VAR) Rule Tests
   // ────────────────────────────────────────────────────────────────
   it('(VAR) should infer type from context', () => {
-    const context: TContext = [
+    const context: TTKContext = [
       { name: 'x', type: mkConst('ℝ', mkType(0)) }
     ];
 
@@ -194,7 +197,7 @@ describe('Type Inference - Functions', () => {
     //   0 = f : Prop -> Prop
     //   1 = x : Prop
     // But we want f at 1 and x at 0, so reverse the context:
-    const context: TContext = [
+    const context: TTKContext = [
       { name: 'f', type: mkPi(mkProp(), mkProp(), '_') },
       { name: 'x', type: mkProp() }
     ];
@@ -214,7 +217,7 @@ describe('Type Inference - Functions', () => {
   it('(APP) should reject application to non-Pi', () => {
     // Given x : Prop
     // Try (x x) - error!
-    const context: TContext = [
+    const context: TTKContext = [
       { name: 'x', type: mkProp() }
     ];
 
@@ -233,7 +236,7 @@ describe('Type Inference - Functions', () => {
     // Given f : Prop -> Prop and x : Type 1
     // Try (f x) - error! (Type 1 is not Prop)
     // Note: Type 0 IS Prop, so use Type 1 for actual mismatch
-    const context: TContext = [
+    const context: TTKContext = [
       { name: 'f', type: mkPi(mkProp(), mkProp(), '_') },
       { name: 'x', type: mkType(1) }
     ];
@@ -257,7 +260,7 @@ describe('Type Inference - Complex Examples', () => {
     // a : Type 0
     // Infer: id a : a -> a
     const idType = mkPi(mkType(0), mkPi(mkVar(0), mkVar(1), 'x'), 'A');
-    const context: TContext = [
+    const context: TTKContext = [
       { name: 'id', type: idType },
       { name: 'a', type: mkType(0) }
     ];

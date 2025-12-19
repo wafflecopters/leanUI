@@ -1,7 +1,9 @@
 /**
- * Type Checker for TT (Typed Terms) Layer
+ * Type Checker for TTK (Typed Terms - Kernel) Layer
  *
  * This implements bidirectional type checking for our dependent type theory.
+ * The type checker operates on KERNEL terms (TTK), not surface terms (TT).
+ *
  * The type checker has two modes:
  *
  * 1. **Synthesis** (inferType): Given a term, compute its type
@@ -16,21 +18,25 @@
  * - Universe checking (Prop : Type_1, Type_i : Type_(i+1))
  * - Conversion checking (are two types equal up to computation?)
  * - Context management (tracking bound variables and their types)
+ *
+ * NOTE: This operates on kernel terms. Surface terms (TT) must be elaborated
+ * to kernel terms (TTK) before type-checking. See tt-elab.ts.
  */
 
 import {
-  TTerm,
-  TContext,
+  TTKTerm,
+  TTKContext,
+  TTKBinderKind,
   subst,
   prettyPrint,
-} from './tt-core';
+} from './tt-kernel';
 
 // ============================================================================
 // Type Checking Errors
 // ============================================================================
 
 export class TypeCheckError extends Error {
-  constructor(message: string, public term?: TTerm, public context?: TContext) {
+  constructor(message: string, public term?: TTKTerm, public context?: TTKContext) {
     super(message);
     this.name = 'TypeCheckError';
   }
@@ -44,14 +50,14 @@ export class TypeCheckError extends Error {
  * Extend context with a new binding
  * This adds a binding at index 0 (most recent)
  */
-export function extendContext(ctx: TContext, name: string, type: TTerm): TContext {
+export function extendContext(ctx: TTKContext, name: string, type: TTKTerm): TTKContext {
   return [{ name, type }, ...ctx];
 }
 
 /**
  * Look up the type of a variable by its De Bruijn index
  */
-export function lookupVar(ctx: TContext, index: number): TTerm | null {
+export function lookupVar(ctx: TTKContext, index: number): TTKTerm | null {
   if (index < 0 || index >= ctx.length) {
     return null;
   }
@@ -69,7 +75,7 @@ export function lookupVar(ctx: TContext, index: number): TTerm | null {
  *
  * This is used for conversion checking.
  */
-export function whnf(term: TTerm, ctx: TContext = []): TTerm {
+export function whnf(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
   switch (term.tag) {
     case 'App': {
       const fn = whnf(term.fn, ctx);
@@ -101,7 +107,7 @@ export function whnf(term: TTerm, ctx: TContext = []): TTerm {
  * @param term - The term to search in
  * @returns true if the variable appears free in the term
  */
-function isFreeIn(index: number, term: TTerm): boolean {
+function isFreeIn(index: number, term: TTKTerm): boolean {
   switch (term.tag) {
     case 'Var':
       return term.index === index;
@@ -135,7 +141,7 @@ function isFreeIn(index: number, term: TTerm): boolean {
  * @param ctx - The typing context
  * @returns The eta-expanded lambda, or null if not applicable
  */
-function tryEtaExpand(term: TTerm, ctx: TContext): TTerm | null {
+function tryEtaExpand(term: TTKTerm, ctx: TTKContext): TTKTerm | null {
   // Get the type of the term
   try {
     const termType = whnf(inferType(term, ctx), ctx);
@@ -164,7 +170,7 @@ function tryEtaExpand(term: TTerm, ctx: TContext): TTerm | null {
  * @param amount - How much to shift by
  * @param cutoff - Only shift variables >= cutoff
  */
-function shiftTermBy(term: TTerm, amount: number, cutoff: number): TTerm {
+function shiftTermBy(term: TTKTerm, amount: number, cutoff: number): TTKTerm {
   switch (term.tag) {
     case 'Var':
       return term.index >= cutoff
@@ -184,7 +190,7 @@ function shiftTermBy(term: TTerm, amount: number, cutoff: number): TTerm {
     case 'Binder': {
       const newDomain = shiftTermBy(term.domain, amount, cutoff);
       const newBody = shiftTermBy(term.body, amount, cutoff + 1);
-      let newBinderKind = term.binderKind;
+      let newBinderKind: TTKBinderKind = term.binderKind;
       if (term.binderKind.tag === 'BLet') {
         newBinderKind = {
           tag: 'BLet',
@@ -213,7 +219,7 @@ function shiftTermBy(term: TTerm, amount: number, cutoff: number): TTerm {
  * - Let expansion: let x := v in t ≃ t[v/x]
  * - Eta conversion: λx. f x ≃ f (when x not free in f)
  */
-export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
+export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boolean {
   const n1 = whnf(t1, ctx);
   const n2 = whnf(t2, ctx);
 
@@ -323,7 +329,7 @@ export function convertible(t1: TTerm, t2: TTerm, ctx: TContext = []): boolean {
  *
  * Returns the type of the given term, or throws TypeCheckError if ill-typed.
  */
-export function inferType(term: TTerm, ctx: TContext = []): TTerm {
+export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
   switch (term.tag) {
     case 'Var': {
       const type = lookupVar(ctx, term.index);
@@ -466,7 +472,7 @@ export function inferType(term: TTerm, ctx: TContext = []): TTerm {
  *
  * Throws TypeCheckError if the term doesn't have the expected type.
  */
-export function checkType(term: TTerm, expectedType: TTerm, ctx: TContext = []): void {
+export function checkType(term: TTKTerm, expectedType: TTKTerm, ctx: TTKContext = []): void {
   // Special case: Lambda can be checked against Pi type
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
     expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
@@ -505,10 +511,10 @@ export function checkType(term: TTerm, expectedType: TTerm, ctx: TContext = []):
  * Extract all holes (metavariables) from a term
  * Returns a list of hole IDs and their types
  */
-export function extractHoles(term: TTerm): { id: string; type: TTerm; context: TContext }[] {
-  const holes: { id: string; type: TTerm; context: TContext }[] = [];
+export function extractHoles(term: TTKTerm): { id: string; type: TTKTerm; context: TTKContext }[] {
+  const holes: { id: string; type: TTKTerm; context: TTKContext }[] = [];
 
-  function traverse(t: TTerm): void {
+  function traverse(t: TTKTerm): void {
     switch (t.tag) {
       case 'Hole':
         holes.push({ id: t.id, type: t.type, context: t.context });
@@ -559,7 +565,7 @@ export function extractHoles(term: TTerm): { id: string; type: TTerm; context: T
  * @param holeId - The ID of the hole to find
  * @returns The hole term or null
  */
-export function findHole(term: TTerm, holeId: string): TTerm | null {
+export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
   switch (term.tag) {
     case 'Hole':
       return term.id === holeId ? term : null;
@@ -617,7 +623,7 @@ export function findHole(term: TTerm, holeId: string): TTerm | null {
  * Fill a hole with a proof term
  * Returns a new term with the hole replaced
  */
-export function fillHole(term: TTerm, holeId: string, proofTerm: TTerm): TTerm {
+export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTKTerm {
   switch (term.tag) {
     case 'Hole':
       return term.id === holeId ? proofTerm : term;
@@ -631,7 +637,7 @@ export function fillHole(term: TTerm, holeId: string, proofTerm: TTerm): TTerm {
       const newDomain = fillHole(term.domain, holeId, proofTerm);
       const newBody = fillHole(term.body, holeId, proofTerm);
 
-      let newBinderKind: import('./tt-core').BinderKind;
+      let newBinderKind: TTKBinderKind;
       if (term.binderKind.tag === 'BLet') {
         const newDefVal = fillHole(term.binderKind.defVal, holeId, proofTerm);
         newBinderKind = { tag: 'BLet', defVal: newDefVal };
@@ -682,10 +688,10 @@ export function fillHole(term: TTerm, holeId: string, proofTerm: TTerm): TTerm {
  *   )
  */
 export function fillHoleWith(
-  term: TTerm,
+  term: TTKTerm,
   holeId: string,
-  generator: (holeType: TTerm, holeContext: import('./tt-core').TContext) => TTerm
-): TTerm {
+  generator: (holeType: TTKTerm, holeContext: TTKContext) => TTKTerm
+): TTKTerm {
   switch (term.tag) {
     case 'Hole':
       if (term.id === holeId) {
@@ -702,7 +708,7 @@ export function fillHoleWith(
       const newDomain = fillHoleWith(term.domain, holeId, generator);
       const newBody = fillHoleWith(term.body, holeId, generator);
 
-      let newBinderKind: import('./tt-core').BinderKind;
+      let newBinderKind: TTKBinderKind;
       if (term.binderKind.tag === 'BLet') {
         const newDefVal = fillHoleWith(term.binderKind.defVal, holeId, generator);
         newBinderKind = { tag: 'BLet', defVal: newDefVal };

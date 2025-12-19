@@ -5,8 +5,10 @@
  * with keyboard navigation, selection, and inline editing.
  */
 
+import { ReactNode } from 'react';
 import { NamedItemsSection, NamedTypedItem, generateItemId } from './NamedItemsSection';
-import { TTerm, mkType, mkHole } from '../types/tt-core';
+import { TTerm, mkType, mkHole, prettyPrintLatex, LatexPrintOptions } from '../types/tt-core';
+import { MathJaxRenderer } from './MathJaxRenderer';
 
 // ============================================================================
 // Types
@@ -27,6 +29,25 @@ interface FieldsSectionProps {
   onUpdateField: (id: string, updated: Field) => void;
   onAddField: () => void;
   onDeleteField: (id: string) => void;
+  /** Names of record params for proper variable rendering */
+  paramContext?: string[];
+}
+
+// ============================================================================
+// LaTeX Rendering
+// ============================================================================
+
+const latexOptions: LatexPrintOptions = {
+  showEqTypeSubscript: true,
+};
+
+function createRenderTypeLatex(paramContext: string[]): (type: TTerm) => ReactNode {
+  return (type: TTerm) => (
+    <MathJaxRenderer
+      tex={prettyPrintLatex(type, paramContext, latexOptions)}
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+    />
+  );
 }
 
 // ============================================================================
@@ -41,7 +62,10 @@ export function FieldsSection({
   onAddField: _onAddField,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onDeleteField: _onDeleteField,
+  paramContext = [],
 }: FieldsSectionProps) {
+  const renderTypeLatex = createRenderTypeLatex(paramContext);
+
   return (
     <NamedItemsSection<Field>
       items={fields}
@@ -52,6 +76,7 @@ export function FieldsSection({
         emptyPlaceholder: '(no fields)',
         nameColor: '#2e7d32',  // Green for fields
         showIndices: true,
+        renderTypeReadonly: renderTypeLatex,
       }}
     />
   );

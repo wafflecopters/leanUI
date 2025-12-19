@@ -22,21 +22,31 @@ import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
-import { TTerm, mkType } from '../types/tt-core';
+import { TTerm, mkType, RecordDef as TTRecordDef, prettyPrintLatex as ttPrettyPrintLatex, LatexPrintOptions } from '../types/tt-core';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { FieldsSection, Field, createDefaultField } from './FieldsSection';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
 import { TTExamples, TTExampleRecordTypeName } from '../types/tt-examples';
+import { inlineExtension, elabRecordFull, createRecordRegistry, type TTKRecordDef } from '../types/tt-elab';
+import { prettyPrintLatex as ttkPrettyPrintLatex } from '../types/tt-kernel';
+import { MathJaxRenderer } from './MathJaxRenderer';
 
 // ============================================================================
 // Types
 // ============================================================================
 
+interface RecordParam {
+  name: string;
+  type: TTerm;
+}
+
 interface RecordDef {
   name: string;
   type: TTerm;
+  params: RecordParam[];  // Parameters that scope over all fields
   fields: Field[];
+  extends?: string[];  // Names of records this record extends
 }
 
 // ============================================================================
@@ -54,12 +64,278 @@ function loadExampleAsEditorState(exampleName: TTExampleRecordTypeName): RecordD
   return {
     name: example.name,
     type: example.type,
+    params: example.params,
     fields: example.fields.map((field, idx) => ({
       id: `${example.name.toLowerCase()}-field-${idx}`,
       name: field.name,
       type: field.type,
     })),
+    extends: example.extends,
   };
+}
+
+// ============================================================================
+// Elaboration Display Component
+// ============================================================================
+
+/**
+ * Displays the record after inlining extensions (TT) and after full elaboration (TTK)
+ */
+function ElaborationDisplay({ recordDef }: { recordDef: RecordDef }) {
+  // Create a registry from all examples for resolving extends
+  const registry = useMemo(() => {
+    const allRecords = Object.values(TTExamples.recordTypes) as TTRecordDef[];
+    return createRecordRegistry(allRecords);
+  }, []);
+
+  // Convert editor RecordDef to TTRecordDef for elaboration
+  const ttRecord: TTRecordDef = useMemo(() => ({
+    name: recordDef.name,
+    type: recordDef.type,
+    params: recordDef.params,
+    fields: recordDef.fields.map(f => ({ name: f.name, type: f.type })),
+    extends: recordDef.extends,
+  }), [recordDef]);
+
+  // Compute inlined record (TT with extensions inlined)
+  const inlinedResult = useMemo(() => {
+    try {
+      const inlined = inlineExtension(ttRecord, registry);
+      return { ok: true as const, value: inlined };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [ttRecord, registry]);
+
+  // Compute fully elaborated record (TTK)
+  const elaboratedResult = useMemo(() => {
+    try {
+      const elaborated = elabRecordFull(ttRecord, registry);
+      return { ok: true as const, value: elaborated };
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [ttRecord, registry]);
+
+  // Don't show if record has no extends (nothing interesting to show)
+  const hasExtends = recordDef.extends && recordDef.extends.length > 0;
+
+  return (
+    <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Inlined Record (TT) */}
+      <div style={{
+        backgroundColor: '#fff8e1',
+        border: '1px solid #ffe082',
+        borderRadius: '8px',
+        padding: '16px',
+      }}>
+        <h4 style={{
+          margin: '0 0 12px 0',
+          color: '#f57c00',
+          fontSize: '14px',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <span style={{
+            backgroundColor: '#fff3e0',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            border: '1px solid #ffcc80',
+            fontFamily: 'monospace',
+            fontSize: '12px'
+          }}>TT</span>
+          After inlineExtension
+          {hasExtends && (
+            <span style={{
+              fontSize: '11px',
+              color: '#888',
+              fontWeight: 'normal',
+              marginLeft: '8px'
+            }}>
+              (extensions inlined into fields)
+            </span>
+          )}
+        </h4>
+        {inlinedResult.ok ? (
+          <InlinedRecordView record={inlinedResult.value} />
+        ) : (
+          <div style={{ color: '#d32f2f', fontFamily: 'monospace', fontSize: '13px' }}>
+            Error: {inlinedResult.error}
+          </div>
+        )}
+      </div>
+
+      {/* Elaborated Record (TTK) */}
+      <div style={{
+        backgroundColor: '#e3f2fd',
+        border: '1px solid #90caf9',
+        borderRadius: '8px',
+        padding: '16px',
+      }}>
+        <h4 style={{
+          margin: '0 0 12px 0',
+          color: '#1565c0',
+          fontSize: '14px',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px'
+        }}>
+          <span style={{
+            backgroundColor: '#e1f5fe',
+            padding: '2px 8px',
+            borderRadius: '4px',
+            border: '1px solid #81d4fa',
+            fontFamily: 'monospace',
+            fontSize: '12px'
+          }}>TTK</span>
+          After elabToKernel
+          <span style={{
+            fontSize: '11px',
+            color: '#888',
+            fontWeight: 'normal',
+            marginLeft: '8px'
+          }}>
+            (kernel representation for type-checking)
+          </span>
+        </h4>
+        {elaboratedResult.ok ? (
+          <ElaboratedRecordView record={elaboratedResult.value} />
+        ) : (
+          <div style={{ color: '#d32f2f', fontFamily: 'monospace', fontSize: '13px' }}>
+            Error: {elaboratedResult.error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Global option to toggle equality type subscripts */
+const latexOptions: LatexPrintOptions = {
+  showEqTypeSubscript: true,  // Set to false for simple "x = y" rendering
+};
+
+/**
+ * Inline KaTeX renderer for type expressions
+ */
+function InlineLatex({ tex }: { tex: string }) {
+  return (
+    <MathJaxRenderer
+      tex={tex}
+      style={{ display: 'inline-block', verticalAlign: 'middle' }}
+    />
+  );
+}
+
+/**
+ * Render params as (A : Type) (B : Type) etc.
+ */
+function renderParamsTT(params: TTRecordDef['params']): React.ReactNode {
+  if (params.length === 0) return null;
+  return params.map((p, idx) => (
+    <span key={idx}>
+      <span style={{ color: '#666' }}>(</span>
+      <span style={{ color: '#1565c0' }}>{p.name}</span>
+      <span style={{ color: '#666' }}> : </span>
+      <InlineLatex tex={ttPrettyPrintLatex(p.type, [], latexOptions)} />
+      <span style={{ color: '#666' }}>)</span>
+      {idx < params.length - 1 && ' '}
+    </span>
+  ));
+}
+
+/**
+ * Read-only view of an inlined TT record
+ */
+function InlinedRecordView({ record }: { record: TTRecordDef }) {
+  // Build context from params for field type printing
+  const paramContext = record.params.map(p => p.name);
+
+  return (
+    <div style={{ fontFamily: 'monospace', fontSize: '14px' }}>
+      <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+        <span style={{ color: '#666' }}>structure </span>
+        <span style={{ fontWeight: 'bold' }}>{record.name}</span>
+        {record.params.length > 0 && <span> </span>}
+        {renderParamsTT(record.params)}
+        <span style={{ color: '#666' }}> where</span>
+      </div>
+      <div style={{
+        marginLeft: '20px',
+        borderLeft: '2px solid #ffe082',
+        paddingLeft: '12px'
+      }}>
+        {record.fields.length === 0 ? (
+          <span style={{ color: '#999', fontStyle: 'italic' }}>no fields</span>
+        ) : (
+          record.fields.map((field, idx) => (
+            <div key={idx} style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#6a1b9a' }}>{field.name}</span>
+              <span> : </span>
+              <InlineLatex tex={ttPrettyPrintLatex(field.type, paramContext, latexOptions)} />
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Render params as (A : Type) (B : Type) etc. for TTK
+ */
+function renderParamsTTK(params: TTKRecordDef['params']): React.ReactNode {
+  if (params.length === 0) return null;
+  return params.map((p, idx) => (
+    <span key={idx}>
+      <span style={{ color: '#666' }}>(</span>
+      <span style={{ color: '#1565c0' }}>{p.name}</span>
+      <span style={{ color: '#666' }}> : </span>
+      <InlineLatex tex={ttkPrettyPrintLatex(p.type, [], latexOptions)} />
+      <span style={{ color: '#666' }}>)</span>
+      {idx < params.length - 1 && ' '}
+    </span>
+  ));
+}
+
+/**
+ * Read-only view of an elaborated TTK record
+ */
+function ElaboratedRecordView({ record }: { record: TTKRecordDef }) {
+  // Build context from params for field type printing
+  const paramContext = record.params.map(p => p.name);
+
+  return (
+    <div style={{ fontFamily: 'monospace', fontSize: '14px' }}>
+      <div style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+        <span style={{ color: '#666' }}>structure </span>
+        <span style={{ fontWeight: 'bold' }}>{record.name}</span>
+        {record.params.length > 0 && <span> </span>}
+        {renderParamsTTK(record.params)}
+        <span style={{ color: '#666' }}> where</span>
+      </div>
+      <div style={{
+        marginLeft: '20px',
+        borderLeft: '2px solid #90caf9',
+        paddingLeft: '12px'
+      }}>
+        {record.fields.length === 0 ? (
+          <span style={{ color: '#999', fontStyle: 'italic' }}>no fields</span>
+        ) : (
+          record.fields.map((field, idx) => (
+            <div key={idx} style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+              <span style={{ color: '#6a1b9a' }}>{field.name}</span>
+              <span> : </span>
+              <InlineLatex tex={ttkPrettyPrintLatex(field.type, paramContext, latexOptions)} />
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ============================================================================
@@ -71,6 +347,7 @@ function RecordEditorInner() {
   const [recordDef, setRecordDef] = useState<RecordDef>({
     name: 'MyRecord',
     type: mkType(0),
+    params: [],
     fields: []
   });
 
@@ -233,14 +510,15 @@ function RecordEditorInner() {
           padding: '24px',
           boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
         }}>
-          {/* Signature line: structure Name : Type where */}
+          {/* Signature line: structure Name [extends Parent1, Parent2] : Type where */}
           <div style={{
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
             marginBottom: '16px',
             fontFamily: 'monospace',
-            fontSize: '18px'
+            fontSize: '18px',
+            flexWrap: 'wrap'
           }}>
             <span style={{ color: '#666', fontWeight: 500 }}>structure</span>
 
@@ -276,6 +554,40 @@ function RecordEditorInner() {
               </span>
             )}
 
+            {/* Parameters */}
+            {recordDef.params.length > 0 && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                {recordDef.params.map((p, idx) => (
+                  <span key={idx} style={{
+                    color: '#1565c0',
+                    backgroundColor: '#e3f2fd',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    border: '1px solid #90caf9'
+                  }}>
+                    ({p.name} : <InlineLatex tex={ttPrettyPrintLatex(p.type, [], latexOptions)} />)
+                  </span>
+                ))}
+              </span>
+            )}
+
+            {/* Extends clause */}
+            {recordDef.extends && recordDef.extends.length > 0 && (
+              <>
+                <span style={{ color: '#9c27b0', fontWeight: 500 }}>extends</span>
+                <span style={{
+                  color: '#7b1fa2',
+                  fontWeight: 600,
+                  backgroundColor: '#f3e5f5',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  border: '1px solid #ce93d8'
+                }}>
+                  {recordDef.extends.join(', ')}
+                </span>
+              </>
+            )}
+
             {/* Colon */}
             <span>:</span>
 
@@ -307,18 +619,12 @@ function RecordEditorInner() {
             onUpdateField={handleUpdateField}
             onAddField={handleAddField}
             onDeleteField={handleDeleteField}
+            paramContext={recordDef.params.map(p => p.name)}
           />
         </div>
 
-        <div style={{
-          marginTop: '16px',
-          padding: '12px',
-          backgroundColor: '#f8f9fa',
-          borderRadius: '6px',
-          fontSize: '12px',
-          color: '#666'
-        }}>
-        </div>
+        {/* Elaboration Display */}
+        <ElaborationDisplay recordDef={recordDef} />
       </div>
     </NavigationFooterSpacer>
   );

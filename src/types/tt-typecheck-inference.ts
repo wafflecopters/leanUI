@@ -1,8 +1,8 @@
 /**
- * Type Inference and Checking for TT (Typed Terms)
+ * Type Inference and Checking for TTK (Typed Terms - Kernel)
  * 
  * Implements bidirectional type checking for a dependent type system
- * based on Lean's type theory.
+ * based on Lean's type theory. This operates on kernel terms (TTK).
  * 
  * Key concepts:
  * - Inference (⇒): Given term t, compute its type T
@@ -16,24 +16,27 @@
  * - Equality: EQ, RFL
  * - Inductive: IND, MATCH (stubbed)
  * - Quotients: QUOT (stubbed)
+ * 
+ * NOTE: This operates on kernel terms. Surface terms (TT) must be elaborated
+ * to kernel terms (TTK) before type-checking. See tt-elab.ts.
  */
 
 import {
-  TTerm,
-  TContext,
+  TTKTerm,
+  TTKContext,
   mkProp,
   mkType,
   prettyPrint,
   isDefinitionallyEqual,
   subst,
-} from './tt-core';
+} from './tt-kernel';
 
 // ============================================================================
 // Type Inference Result
 // ============================================================================
 
 export type InferResult =
-  | { ok: true; type: TTerm }
+  | { ok: true; type: TTKTerm }
   | { ok: false; error: string };
 
 export type CheckResult =
@@ -47,7 +50,7 @@ export type CheckResult =
 /**
  * Check if a variable index is free in a term.
  */
-function isFreeIn(index: number, term: TTerm): boolean {
+function isFreeIn(index: number, term: TTKTerm): boolean {
   switch (term.tag) {
     case 'Var':
       return term.index === index;
@@ -74,7 +77,7 @@ function isFreeIn(index: number, term: TTerm): boolean {
  * Weak-head normal form reduction.
  * Reduces beta and let redexes at the head.
  */
-function whnf(term: TTerm): TTerm {
+function whnf(term: TTKTerm): TTKTerm {
   switch (term.tag) {
     case 'App': {
       const fn = whnf(term.fn);
@@ -106,7 +109,7 @@ function whnf(term: TTerm): TTerm {
  * - δ-reduction: unfold definitions (todo)
  * - ι-reduction: recursor on constructor (todo)
  */
-export function areTypesDefEq(t1: TTerm, t2: TTerm): boolean {
+export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm): boolean {
   // Normalize both terms
   const n1 = whnf(t1);
   const n2 = whnf(t2);
@@ -187,7 +190,7 @@ export function areTypesDefEq(t1: TTerm, t2: TTerm): boolean {
  * @param context - The typing context (Γ)
  * @returns The inferred type or an error
  */
-export function inferType(term: TTerm, context: TContext = []): InferResult {
+export function inferType(term: TTKTerm, context: TTKContext = []): InferResult {
   switch (term.tag) {
     // ────────────────────────────────────────────────────────────────
     // (VAR) - Variable lookup
@@ -250,7 +253,7 @@ export function inferType(term: TTerm, context: TContext = []): InferResult {
         }
 
         // Check body in extended context
-        const extendedContext: TContext = [{ name: term.name, type: term.domain }, ...context];
+        const extendedContext: TTKContext = [{ name: term.name, type: term.domain }, ...context];
         const bodyTypeResult = inferType(term.body, extendedContext);
         if (!bodyTypeResult.ok) {
           return { ok: false, error: `Pi body error: ${bodyTypeResult.error}` };
@@ -298,7 +301,7 @@ export function inferType(term: TTerm, context: TContext = []): InferResult {
         }
 
         // Infer body type in extended context
-        const extendedContext: TContext = [{ name: term.name, type: term.domain }, ...context];
+        const extendedContext: TTKContext = [{ name: term.name, type: term.domain }, ...context];
         const bodyResult = inferType(term.body, extendedContext);
         if (!bodyResult.ok) {
           return { ok: false, error: `Let body error: ${bodyResult.error}` };
@@ -386,7 +389,7 @@ export function inferType(term: TTerm, context: TContext = []): InferResult {
  * @param context - The typing context (Γ)
  * @returns Success or error
  */
-export function checkType(term: TTerm, expectedType: TTerm, context: TContext = []): CheckResult {
+export function checkType(term: TTKTerm, expectedType: TTKTerm, context: TTKContext = []): CheckResult {
   // Special case: Lambda checking
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam') {
     // ────────────────────────────────────────────────────────────────
@@ -409,7 +412,7 @@ export function checkType(term: TTerm, expectedType: TTerm, context: TContext = 
     }
 
     // Check body in extended context
-    const extendedContext: TContext = [{ name: term.name, type: term.domain }, ...context];
+    const extendedContext: TTKContext = [{ name: term.name, type: term.domain }, ...context];
     return checkType(term.body, piType.body, extendedContext);
   }
 
@@ -444,7 +447,7 @@ export function checkType(term: TTerm, expectedType: TTerm, context: TContext = 
  * Extract the universe level from a Sort term.
  * Returns null if the term is not a Sort.
  */
-function extractSort(term: TTerm): number | null {
+function extractSort(term: TTKTerm): number | null {
   if (term.tag === 'Sort') {
     return term.level;
   }
@@ -465,7 +468,7 @@ function extractSort(term: TTerm): number | null {
  * 
  * TODO: Implement Eq as a kernel primitive
  */
-export function mkEq(type: TTerm, lhs: TTerm, rhs: TTerm): TTerm {
+export function mkEq(type: TTKTerm, lhs: TTKTerm, rhs: TTKTerm): TTKTerm {
   // Stubbed: Eq is represented as a Const for now
   return {
     tag: 'App',
@@ -491,7 +494,7 @@ export function mkEq(type: TTerm, lhs: TTerm, rhs: TTerm): TTerm {
  * 
  * TODO: Implement rfl as a kernel primitive
  */
-export function mkRfl(type: TTerm, term: TTerm): TTerm {
+export function mkRfl(type: TTKTerm, term: TTKTerm): TTKTerm {
   return { tag: 'Const', name: 'rfl', type: mkEq(type, term, term) };
 }
 

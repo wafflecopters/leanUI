@@ -1,5 +1,5 @@
 /**
- * Tests for the TT Type Checker
+ * Tests for the TTK Type Checker
  *
  * These tests verify:
  * 1. Type synthesis (inference)
@@ -7,10 +7,18 @@
  * 3. Conversion checking
  * 4. Universe checking
  * 5. Error cases
+ *
+ * Note: Tests construct terms using TT (surface syntax) from tt-core,
+ * then elaborate to TTK before type-checking.
  */
 
 import {
-  TContext,
+  TT_CONSTANTS,
+  NAT_ELIM,
+} from './tt-core';
+
+import {
+  TTKContext,
   mkVar,
   mkPi,
   mkLambda,
@@ -18,9 +26,11 @@ import {
   mkHole,
   mkProp,
   prettyPrint,
-  TT_CONSTANTS,
-  NAT_ELIM,
-} from './tt-core';
+} from './tt-kernel';
+
+import {
+  elabToKernel,
+} from './tt-elab';
 
 import {
   inferType,
@@ -31,6 +41,13 @@ import {
   extractHoles,
   fillHole,
 } from './tt-typecheck';
+
+// Helper: elaborate TT constants to TTK
+const NAT = elabToKernel(TT_CONSTANTS.Nat);
+const ZERO = elabToKernel(TT_CONSTANTS.Zero);
+const SUCC = elabToKernel(TT_CONSTANTS.Succ);
+const REAL = elabToKernel(TT_CONSTANTS.Real);
+const NAT_ELIM_K = elabToKernel(NAT_ELIM);
 
 // ============================================================================
 // Test Helper
@@ -73,8 +90,7 @@ test('Infer type of Sort (universe)', () => {
 });
 
 test('Infer type of Const (ℕ)', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const type = inferType(nat);
+  const type = inferType(NAT);
 
   if (type.tag !== 'Sort' || type.level !== 0) {
     throw new Error(`Expected Type_0, got ${prettyPrint(type)}`);
@@ -84,15 +100,14 @@ test('Infer type of Const (ℕ)', () => {
 });
 
 test('Infer type of variable in context', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const ctx: TContext = [
-    { name: 'x', type: nat }
+  const ctx: TTKContext = [
+    { name: 'x', type: NAT }
   ];
 
   const xVar = mkVar(0);
   const type = inferType(xVar, ctx);
 
-  if (!convertible(type, nat)) {
+  if (!convertible(type, NAT)) {
     throw new Error(`Expected ℕ, got ${prettyPrint(type)}`);
   }
 
@@ -100,8 +115,7 @@ test('Infer type of variable in context', () => {
 });
 
 test('Infer type of Pi (ℕ → ℕ)', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const natToNat = mkPi(nat, nat);
+  const natToNat = mkPi(NAT, NAT);
 
   const type = inferType(natToNat);
 
@@ -113,14 +127,13 @@ test('Infer type of Pi (ℕ → ℕ)', () => {
 });
 
 test('Infer type of Lambda (λx:ℕ. x)', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const identity = mkLambda(nat, mkVar(0), 'x');
+  const identity = mkLambda(NAT, mkVar(0), 'x');
 
   const type = inferType(identity);
 
   // Should be ℕ → ℕ (a Binder with BPi)
   if (type.tag !== 'Binder' || type.binderKind.tag !== 'BPi' ||
-      !convertible(type.domain, nat) || !convertible(type.body, nat)) {
+    !convertible(type.domain, NAT) || !convertible(type.body, NAT)) {
     throw new Error(`Expected ℕ → ℕ, got ${prettyPrint(type)}`);
   }
 
@@ -128,10 +141,10 @@ test('Infer type of Lambda (λx:ℕ. x)', () => {
 });
 
 test('Infer type of application (succ 0)', () => {
-  const succZero = mkApp(TT_CONSTANTS.Succ, TT_CONSTANTS.Zero);
+  const succZero = mkApp(SUCC, ZERO);
   const type = inferType(succZero);
 
-  if (!convertible(type, TT_CONSTANTS.Nat)) {
+  if (!convertible(type, NAT)) {
     throw new Error(`Expected ℕ, got ${prettyPrint(type)}`);
   }
 
@@ -143,9 +156,8 @@ test('Infer type of application (succ 0)', () => {
 // ============================================================================
 
 test('Check lambda against Pi type', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const identity = mkLambda(nat, mkVar(0));
-  const natToNat = mkPi(nat, nat);
+  const identity = mkLambda(NAT, mkVar(0));
+  const natToNat = mkPi(NAT, NAT);
 
   // Should succeed
   checkType(identity, natToNat);
@@ -154,11 +166,8 @@ test('Check lambda against Pi type', () => {
 });
 
 test('Check fails for wrong type', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const real = TT_CONSTANTS.Real;
-
-  const identity = mkLambda(nat, mkVar(0));
-  const realToReal = mkPi(real, real);
+  const identity = mkLambda(NAT, mkVar(0));
+  const realToReal = mkPi(REAL, REAL);
 
   // Should fail
   assertThrows(() => checkType(identity, realToReal), 'Type mismatch should throw');
@@ -171,11 +180,10 @@ test('Check fails for wrong type', () => {
 // ============================================================================
 
 test('Beta reduction: (λx. x) y --> y', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const ctx: TContext = [{ name: 'y', type: nat }];
+  const ctx: TTKContext = [{ name: 'y', type: NAT }];
 
   const term = mkApp(
-    mkLambda(nat, mkVar(0)),  // λx. x
+    mkLambda(NAT, mkVar(0)),  // λx. x
     mkVar(0)                   // y
   );
 
@@ -190,8 +198,8 @@ test('Beta reduction: (λx. x) y --> y', () => {
 });
 
 test('Convertibility: ℕ ≡ ℕ', () => {
-  const nat1 = TT_CONSTANTS.Nat;
-  const nat2 = TT_CONSTANTS.Nat;
+  const nat1 = NAT;
+  const nat2 = NAT;
 
   if (!convertible(nat1, nat2)) {
     throw new Error('ℕ should be convertible with ℕ');
@@ -201,10 +209,9 @@ test('Convertibility: ℕ ≡ ℕ', () => {
 });
 
 test('Convertibility: (λx. x) y ≡ y', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const ctx: TContext = [{ name: 'y', type: nat }];
+  const ctx: TTKContext = [{ name: 'y', type: NAT }];
 
-  const term1 = mkApp(mkLambda(nat, mkVar(0)), mkVar(0));  // (λx. x) y
+  const term1 = mkApp(mkLambda(NAT, mkVar(0)), mkVar(0));  // (λx. x) y
   const term2 = mkVar(0);                                   // y
 
   if (!convertible(term1, term2, ctx)) {
@@ -215,10 +222,9 @@ test('Convertibility: (λx. x) y ≡ y', () => {
 });
 
 test('Not convertible: ℕ ≢ Prop', () => {
-  const nat = TT_CONSTANTS.Nat;
   const prop = mkProp();
 
-  if (convertible(nat, prop)) {
+  if (convertible(NAT, prop)) {
     throw new Error('ℕ should not be convertible with Prop');
   }
 
@@ -230,12 +236,10 @@ test('Not convertible: ℕ ≢ Prop', () => {
 // ============================================================================
 
 test('Extract holes from term', () => {
-  const nat = TT_CONSTANTS.Nat;
-
   // Build a term with two holes: ?base and ?step
   const term = mkApp(
-    mkHole('base', nat),
-    mkHole('step', nat)
+    mkHole('base', NAT),
+    mkHole('step', NAT)
   );
 
   const holes = extractHoles(term);
@@ -252,16 +256,13 @@ test('Extract holes from term', () => {
 });
 
 test('Fill a hole with a proof term', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const zero = TT_CONSTANTS.Zero;
-
   // Term: ?base
-  const term = mkHole('base', nat);
+  const term = mkHole('base', NAT);
 
   // Fill with 0
-  const filled = fillHole(term, 'base', zero);
+  const filled = fillHole(term, 'base', ZERO);
 
-  if (!convertible(filled, zero)) {
+  if (!convertible(filled, ZERO)) {
     throw new Error(`Expected 0, got ${prettyPrint(filled)}`);
   }
 
@@ -269,14 +270,11 @@ test('Fill a hole with a proof term', () => {
 });
 
 test('Fill hole in nested term', () => {
-  const nat = TT_CONSTANTS.Nat;
-  const zero = TT_CONSTANTS.Zero;
-
   // Term: succ ?base
-  const term = mkApp(TT_CONSTANTS.Succ, mkHole('base', nat));
+  const term = mkApp(SUCC, mkHole('base', NAT));
 
   // Fill ?base with 0
-  const filled = fillHole(term, 'base', zero);
+  const filled = fillHole(term, 'base', ZERO);
 
   // Should be succ 0
   if (filled.tag !== 'App') {
@@ -298,10 +296,8 @@ test('Type check induction proof term with holes (simplified)', () => {
    * Using simplified nat_elim : Π (P : Prop), P → (P → P) → ℕ → P
    */
 
-  const nat = TT_CONSTANTS.Nat;
-
   // P is just ℕ for this example
-  const P = nat;
+  const P = NAT;
 
   // Base case: ?base : P
   const baseCase = mkHole('base', P);
@@ -310,13 +306,13 @@ test('Type check induction proof term with holes (simplified)', () => {
   const inductiveStep = mkLambda(P, mkHole('step', P));
 
   // The full proof term (in a context with m : ℕ)
-  const ctx: TContext = [{ name: 'm', type: nat }];
+  const ctx: TTKContext = [{ name: 'm', type: NAT }];
   const m = mkVar(0);
 
   const proofTerm = mkApp(
     mkApp(
       mkApp(
-        mkApp(NAT_ELIM, P),
+        mkApp(NAT_ELIM_K, P),
         baseCase
       ),
       inductiveStep
@@ -342,7 +338,7 @@ test('Type check induction proof term with holes (simplified)', () => {
 
 test('Error: Variable not in context', () => {
   const term = mkVar(0);
-  const emptyCtx: TContext = [];
+  const emptyCtx: TTKContext = [];
 
   assertThrows(() => inferType(term, emptyCtx), 'Should throw for unbound variable');
 
@@ -350,10 +346,8 @@ test('Error: Variable not in context', () => {
 });
 
 test('Error: Application to non-function', () => {
-  const zero = TT_CONSTANTS.Zero;
-
   // Try to apply 0 to something: 0 42
-  const term = mkApp(zero, zero);
+  const term = mkApp(ZERO, ZERO);
 
   assertThrows(() => inferType(term), 'Should throw for non-function application');
 
@@ -361,10 +355,8 @@ test('Error: Application to non-function', () => {
 });
 
 test('Error: Pi domain must be a type', () => {
-  const zero = TT_CONSTANTS.Zero;
-
   // Try: Π (x : 0), ℕ  (domain is not a type)
-  const badPi = mkPi(zero, TT_CONSTANTS.Nat);
+  const badPi = mkPi(ZERO, NAT);
 
   assertThrows(() => inferType(badPi), 'Should throw for non-type Pi domain');
 
@@ -376,7 +368,7 @@ test('Error: Pi domain must be a type', () => {
 // ============================================================================
 
 console.log('\n' + '='.repeat(80));
-console.log('TT TYPE CHECKER TESTS');
+console.log('TTK TYPE CHECKER TESTS');
 console.log('='.repeat(80) + '\n');
 
 console.log('\nAll type checker tests passed! ✓\n');

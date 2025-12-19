@@ -433,27 +433,28 @@ function makeMagmaRecord(): RecordDef {
   // Magma : Type → Type
   const MagmaKind = mkArrow(Type0, Type0);
 
+  // In the field context, A is at De Bruijn index 0
+  // op : A → A → A = Π(_ : A). Π(_ : A). A
+  // Under first binder: A is at index 1
+  // Under second binder: A is at index 2
+  const opType = mkPi(
+    mkVar(0),  // First arg: A (at index 0 in param context)
+    mkPi(
+      mkVar(1),  // Second arg: A (shifted to index 1)
+      mkVar(2),  // Result: A (shifted to index 2)
+      '_'
+    ),
+    '_'
+  );
+
   return {
     name: 'Magma',
     type: MagmaKind,
+    params: [
+      { name: 'A', type: Type0 }
+    ],
     fields: [
-      {
-        name: 'op',
-        // op : Π (A : Type). A → A → A
-        // De Bruijn indices shift as we go under each arrow binder:
-        // - First arg domain: A at index 0
-        // - Second arg domain: A at index 1 (under one _ binder)
-        // - Return type: A at index 2 (under two _ binders)
-        type: mkPi(
-          Type0,
-          mkPi(
-            mkVar(0),
-            mkPi(mkVar(1), mkVar(2), '_'),
-            '_'
-          ),
-          'A'
-        ),
-      },
+      { name: 'op', type: opType },
     ],
   };
 }
@@ -465,36 +466,99 @@ function makeMagmaRecord(): RecordDef {
 /**
  * Semigroup - A magma where the operation is associative
  *
- * structure Semigroup (A : Type) where
- *   op : A → A → A
- *   assoc : ∀ x y z, op (op x y) z = op x (op y z)
+ * structure Semigroup (A : Type) extends Magma A where
+ *   assoc : ∀ a b c, op a (op b c) = op (op a b) c
+ *
+ * Note: Semigroup extends Magma, so it inherits the `op` field.
+ * The `op` field will be inlined during elaboration.
  */
 function makeSemigroupRecord(): RecordDef {
   const SemigroupKind = mkArrow(Type0, Type0);
   const Prop = mkType(0);
 
+  // In field context: A is at index 0 (from params)
+  //
+  // op is a Const that takes A and two values: op : A → A → A
+  // When we use op in a context, we don't need to pass A explicitly
+  // since it's in scope from params. But for now, op is defined as
+  // taking A → A → A in the Magma field context.
+  //
+  // Actually, since op is inherited from Magma and Magma has params,
+  // the inherited op field type is: A → A → A (not Π(A:Type). A → A → A)
+  // So op is just: Π(_ : Var(0)). Π(_ : Var(1)). Var(2) in param context
+
+  // For assoc, we need to reference op as a constant
+  // op as a projection has type: Magma A → (A → A → A)
+  // But in this context, op is a field so we treat it as a constant
+  // The type of op (as used in the field) is: A → A → A
+  const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
+  const op = mkConst('op', opFieldType);
+
+  // Eq : A → A → Type_0 (in param context where A is at index 0)
+  const EqFieldType = mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_');
+  const Eq = mkConst('Eq', EqFieldType);
+
+  // Build assoc : Π (a b c : A), Eq (op a (op b c)) (op (op a b) c)
+  //
+  // In param context: A is at index 0
+  // After binding a: a=0, A=1
+  // After binding b: b=0, a=1, A=2
+  // After binding c: c=0, b=1, a=2, A=3
+  //
+  // op b c: op takes two args from A (which is now at index 3)
+  // Wait, op's type in param context is Var(0) → Var(1) → Var(2)
+  // When we enter binders for a,b,c, those indices shift.
+  // But op is a Const - its type is fixed at definition time.
+  //
+  // Actually we need to be more careful. op as a Const has a closed type.
+  // The type A → A → A in op's definition refers to THAT context's A.
+  // When we use op in assoc's body, we just apply it to values.
+  //
+  // Let's think differently: op applied to two values of type A gives A.
+  // So: op x y where x, y : A (in context where A = Var(index))
+
+  // In the innermost context (under a, b, c binders):
+  // c = Var(0), b = Var(1), a = Var(2), A = Var(3)
+  //
+  // op b c = App(App(op, Var(1)), Var(0))
+  const op_b_c = mkApp(mkApp(op, mkVar(1)), mkVar(0));
+  // op a (op b c)
+  const lhs = mkApp(mkApp(op, mkVar(2)), op_b_c);
+  // op a b
+  const op_a_b = mkApp(mkApp(op, mkVar(2)), mkVar(1));
+  // op (op a b) c
+  const rhs = mkApp(mkApp(op, op_a_b), mkVar(0));
+  // Eq lhs rhs
+  const eqBody = mkApp(mkApp(Eq, lhs), rhs);
+
+  // Build the full type: Π (a b c : A), Eq ...
+  // In param context, A is at index 0
+  // Binding a: domain = Var(0), then a is at 0, A is at 1
+  // Binding b: domain = Var(1), then b is at 0, a is at 1, A is at 2
+  // Binding c: domain = Var(2), then c is at 0, b is at 1, a is at 2, A is at 3
+  const assocType = mkPi(
+    mkVar(0),     // a : A (A at index 0)
+    mkPi(
+      mkVar(1),   // b : A (A at index 1)
+      mkPi(
+        mkVar(2), // c : A (A at index 2)
+        eqBody,   // body with c=0, b=1, a=2, A=3
+        'c'
+      ),
+      'b'
+    ),
+    'a'
+  );
+
   return {
     name: 'Semigroup',
     type: SemigroupKind,
+    params: [
+      { name: 'A', type: Type0 }
+    ],
+    extends: ['Magma'],  // Inherits `op` field from Magma
     fields: [
-      {
-        name: 'op',
-        // op : Π (A : Type). A → A → A
-        type: mkPi(
-          Type0,
-          mkPi(
-            mkVar(0),
-            mkPi(mkVar(1), mkVar(2), '_'),
-            '_'
-          ),
-          'A'
-        ),
-      },
-      {
-        name: 'assoc',
-        // assoc : Π (A : Type). Prop
-        type: mkPi(Type0, Prop, 'A'),
-      },
+      { name: 'assoc', type: assocType },
     ],
   };
 }
@@ -506,54 +570,69 @@ function makeSemigroupRecord(): RecordDef {
 /**
  * Monoid - A semigroup with an identity element
  *
- * structure Monoid (A : Type) where
- *   op : A → A → A
+ * structure Monoid (A : Type) extends Semigroup A where
  *   e : A
- *   assoc : ∀ x y z, op (op x y) z = op x (op y z)
  *   left_id : ∀ x, op e x = x
  *   right_id : ∀ x, op x e = x
+ *
+ * Note: Monoid extends Semigroup, which extends Magma.
+ * It inherits `op` from Magma and `assoc` from Semigroup.
  */
 function makeMonoidRecord(): RecordDef {
   const MonoidKind = mkArrow(Type0, Type0);
   const Prop = mkType(0);
 
+  // In param context: A is at index 0
+  //
+  // op : A → A → A (field type, not Π(A:Type). ...)
+  const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
+  const op = mkConst('op', opFieldType);
+
+  // e : A (field type in param context where A is at index 0)
+  const eFieldType = mkVar(0);
+  const e = mkConst('e', eFieldType);
+
+  // Eq : A → A → Type_0
+  const EqFieldType = mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_');
+  const Eq = mkConst('Eq', EqFieldType);
+
+  // Build left_id : Π (x : A), Eq (op e x) x
+  // In param context: A is at index 0
+  // After binding x: x=0, A=1
+  //
+  // op e x = App(App(op, e), x)
+  const op_e_x = mkApp(mkApp(op, e), mkVar(0));
+  // Eq (op e x) x
+  const leftIdBody = mkApp(mkApp(Eq, op_e_x), mkVar(0));
+  const leftIdType = mkPi(
+    mkVar(0),     // x : A (A at index 0)
+    leftIdBody,   // body with x=0, A=1
+    'x'
+  );
+
+  // Build right_id : Π (x : A), Eq (op x e) x
+  // After binding x: x=0, A=1
+  // op x e = App(App(op, x), e)
+  const op_x_e = mkApp(mkApp(op, mkVar(0)), e);
+  // Eq (op x e) x
+  const rightIdBody = mkApp(mkApp(Eq, op_x_e), mkVar(0));
+  const rightIdType = mkPi(
+    mkVar(0),     // x : A (A at index 0)
+    rightIdBody,  // body with x=0, A=1
+    'x'
+  );
+
   return {
     name: 'Monoid',
     type: MonoidKind,
+    params: [
+      { name: 'A', type: Type0 }
+    ],
+    extends: ['Semigroup'],  // Inherits `op` and `assoc` from Semigroup (which extends Magma)
     fields: [
-      {
-        name: 'op',
-        // op : Π (A : Type). A → A → A
-        type: mkPi(
-          Type0,
-          mkPi(
-            mkVar(0),
-            mkPi(mkVar(1), mkVar(2), '_'),
-            '_'
-          ),
-          'A'
-        ),
-      },
-      {
-        name: 'e',
-        // e : Π (A : Type). A
-        type: mkPi(Type0, mkVar(0), 'A'),
-      },
-      {
-        name: 'assoc',
-        // assoc : Π (A : Type). Prop
-        type: mkPi(Type0, Prop, 'A'),
-      },
-      {
-        name: 'left_id',
-        // left_id : Π (A : Type). Prop
-        type: mkPi(Type0, Prop, 'A'),
-      },
-      {
-        name: 'right_id',
-        // right_id : Π (A : Type). Prop
-        type: mkPi(Type0, Prop, 'A'),
-      },
+      { name: 'e', type: eFieldType },
+      { name: 'left_id', type: leftIdType },
+      { name: 'right_id', type: rightIdType },
     ],
   };
 }
@@ -575,15 +654,10 @@ function makePointRecord(): RecordDef {
   return {
     name: 'Point',
     type: Type0,
+    params: [],  // No parameters
     fields: [
-      {
-        name: 'x',
-        type: Nat,
-      },
-      {
-        name: 'y',
-        type: Nat,
-      },
+      { name: 'x', type: Nat },
+      { name: 'y', type: Nat },
     ],
   };
 }
@@ -603,30 +677,18 @@ function makeProdRecord(): RecordDef {
   // Prod : Type → Type → Type
   const ProdKind = mkArrow(Type0, mkArrow(Type0, Type0));
 
+  // Params: A at index 0, B at index 1
+  // In field context: A = Var(0), B = Var(1)
   return {
     name: 'Prod',
     type: ProdKind,
+    params: [
+      { name: 'A', type: Type0 },
+      { name: 'B', type: Type0 },
+    ],
     fields: [
-      {
-        name: 'fst',
-        // fst : Π (A : Type). Π (B : Type). A
-        // A is at index 1 inside the nested Pi
-        type: mkPi(
-          Type0,
-          mkPi(Type0, mkVar(1), 'B'),
-          'A'
-        ),
-      },
-      {
-        name: 'snd',
-        // snd : Π (A : Type). Π (B : Type). B
-        // B is at index 0 inside the nested Pi
-        type: mkPi(
-          Type0,
-          mkPi(Type0, mkVar(0), 'B'),
-          'A'
-        ),
-      },
+      { name: 'fst', type: mkVar(0) },  // A
+      { name: 'snd', type: mkVar(1) },  // B
     ],
   };
 }

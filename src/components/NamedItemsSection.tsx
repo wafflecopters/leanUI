@@ -11,7 +11,7 @@
  * - FieldsSection (for record fields)
  */
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, ReactNode } from 'react';
 import { useNavigation } from '../contexts/NavigationContext';
 import { EditableInput } from './EditableInput';
 import { TTermRenderer } from './TTermRenderer';
@@ -50,14 +50,18 @@ export interface NamedItemsSectionConfig {
 
   /** Whether to show index numbers when focused */
   showIndices?: boolean;
+
+  /** Optional custom renderer for types when not actively editing */
+  renderTypeReadonly?: (type: TTerm) => ReactNode;
 }
 
-const defaultConfig: Required<NamedItemsSectionConfig> = {
+const defaultConfig: Omit<Required<NamedItemsSectionConfig>, 'renderTypeReadonly'> & { renderTypeReadonly?: (type: TTerm) => ReactNode } = {
   navigationKey: 'Items',
   itemPrefix: '|',
   emptyPlaceholder: '-',
   nameColor: '#0066cc',
   showIndices: true,
+  renderTypeReadonly: undefined,
 };
 
 // ============================================================================
@@ -282,15 +286,29 @@ export function NamedItemsSection<T extends NamedTypedItem>({
                   padding: '2px 4px',
                   backgroundColor: isEditingTypeForThis ? '#f0f8ff' : 'transparent'
                 }}>
-                  <TTermRenderer
-                    term={item.type}
-                    focusPath={isEditingTypeForThis ? typeFocusPath : []}
-                    onFocusChange={setTypeFocusPath}
-                    onTermChange={(newType) => onUpdateItem(item.id, { ...item, type: newType } as T)}
-                    isActive={isEditingTypeForThis}
-                    readonly={!isEditingTypeForThis}
-                    inline={true}
-                  />
+                  {isEditingTypeForThis ? (
+                    <TTermRenderer
+                      term={item.type}
+                      focusPath={typeFocusPath}
+                      onFocusChange={setTypeFocusPath}
+                      onTermChange={(newType) => onUpdateItem(item.id, { ...item, type: newType } as T)}
+                      isActive={true}
+                      readonly={false}
+                      inline={true}
+                    />
+                  ) : config.renderTypeReadonly ? (
+                    config.renderTypeReadonly(item.type)
+                  ) : (
+                    <TTermRenderer
+                      term={item.type}
+                      focusPath={[]}
+                      onFocusChange={setTypeFocusPath}
+                      onTermChange={(newType) => onUpdateItem(item.id, { ...item, type: newType } as T)}
+                      isActive={false}
+                      readonly={true}
+                      inline={true}
+                    />
+                  )}
                 </div>
               </div>
             );

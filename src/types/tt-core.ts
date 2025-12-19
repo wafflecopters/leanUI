@@ -817,13 +817,14 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
   switch (term.tag) {
     case 'Var':
+      // Context is prepended, so index directly into it
       if (term.index < context.length) {
-        return context[context.length - 1 - term.index];
+        return context[term.index];
       }
       return `_${term.index}`;
 
     case 'Sort':
-      return term.level === 0 ? 'Prop' : `Type`;
+      return `Type_${term.level}`;
 
     case 'Const':
       // Try to extract just the meaningful name from verbose strings
@@ -833,16 +834,20 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
       const newContext = [term.name, ...context];
       const body = prettyPrintTerse(term.body, newContext);
       const domain = prettyPrintTerse(term.domain, context);
+      const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
         case 'BPi':
-          // Check if non-dependent (function type)
-          if (!occursIn(0, term.body)) {
+          // Check if non-dependent (function type) or anonymous
+          if (!occursIn(0, term.body) || isAnonymous) {
             return `(${domain} → ${body})`;
           }
           return `(Π ${term.name} : ${domain}, ${body})`;
 
         case 'BLam':
+          if (isAnonymous) {
+            return `(λ ${domain}, ${body})`;
+          }
           return `(λ ${term.name}, ${body})`;
 
         case 'BLet':
@@ -881,14 +886,14 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
 export function prettyPrint(term: TTerm, context: string[] = []): string {
   switch (term.tag) {
     case 'Var':
-      // Look up the name from context
+      // Look up the name from context (context is prepended, so index directly)
       if (term.index < context.length) {
-        return context[context.length - 1 - term.index];
+        return context[term.index];
       }
       return `#${term.index}`;  // Free variable
 
     case 'Sort':
-      return term.level === 0 ? 'Prop' : `Type_${term.level}`;
+      return `Type_${term.level}`;
 
     case 'Const':
       return term.name;
@@ -897,13 +902,21 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
       const domain = prettyPrint(term.domain, context);
       const newContext = [term.name, ...context];
       const body = prettyPrint(term.body, newContext);
+      const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
         case 'BPi':
-          // Always show binder name for clarity: (a : R) → B
+          // If anonymous binder, just show: domain → body
+          // Otherwise show: (name : domain) → body
+          if (isAnonymous) {
+            return `(${domain} → ${body})`;
+          }
           return `((${term.name} : ${domain}) → ${body})`;
 
         case 'BLam':
+          if (isAnonymous) {
+            return `(λ ${domain}, ${body})`;
+          }
           return `(λ (${term.name} : ${domain}), ${body})`;
 
         case 'BLet':
@@ -923,6 +936,121 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
 
     case 'Annot':
       return `(${prettyPrint(term.term, context)} : ${prettyPrint(term.type, context)})`;
+  }
+}
+
+// ============================================================================
+// LaTeX Pretty Printing
+// ============================================================================
+
+/**
+ * Options for LaTeX pretty printing
+ */
+export interface LatexPrintOptions {
+  /** If true, show type subscript on equality: x =_A y. If false, just x = y */
+  showEqTypeSubscript?: boolean;
+}
+
+const defaultLatexOptions: LatexPrintOptions = {
+  showEqTypeSubscript: true,
+};
+
+/**
+ * Try to match a term against the pattern: Eq A x y
+ * Returns { typeArg, lhs, rhs } if matched, otherwise null
+ */
+function matchEqApp(term: TTerm): { typeArg: TTerm; lhs: TTerm; rhs: TTerm } | null {
+  // Eq A x y is App(App(App(Eq, A), x), y)
+  if (term.tag !== 'App') return null;
+  const rhs = term.arg;
+  const app2 = term.fn;
+
+  if (app2.tag !== 'App') return null;
+  const lhs = app2.arg;
+  const app1 = app2.fn;
+
+  if (app1.tag !== 'App') return null;
+  const typeArg = app1.arg;
+  const eqConst = app1.fn;
+
+  if (eqConst.tag !== 'Const' || eqConst.name !== 'Eq') return null;
+
+  return { typeArg, lhs, rhs };
+}
+
+/**
+ * Convert a TT term to a LaTeX string for mathematical rendering
+ */
+export function prettyPrintLatex(
+  term: TTerm,
+  context: string[] = [],
+  options: LatexPrintOptions = defaultLatexOptions
+): string {
+  const opts = { ...defaultLatexOptions, ...options };
+
+  // Check for Eq pattern first
+  const eqMatch = matchEqApp(term);
+  if (eqMatch) {
+    const lhs = prettyPrintLatex(eqMatch.lhs, context, opts);
+    const rhs = prettyPrintLatex(eqMatch.rhs, context, opts);
+    if (opts.showEqTypeSubscript) {
+      const typeArg = prettyPrintLatex(eqMatch.typeArg, context, opts);
+      return `${lhs} =_{${typeArg}} ${rhs}`;
+    } else {
+      return `${lhs} = ${rhs}`;
+    }
+  }
+
+  switch (term.tag) {
+    case 'Var':
+      if (term.index < context.length) {
+        return context[term.index];
+      }
+      return `\\#${term.index}`;
+
+    case 'Sort':
+      return `\\text{Type}_{${term.level}}`;
+
+    case 'Const':
+      // Escape special LaTeX characters in names
+      return term.name.replace(/_/g, '\\_');
+
+    case 'Binder': {
+      const domain = prettyPrintLatex(term.domain, context, opts);
+      const newContext = [term.name, ...context];
+      const body = prettyPrintLatex(term.body, newContext, opts);
+      const isAnonymous = term.name === '_' || term.name === '';
+
+      switch (term.binderKind.tag) {
+        case 'BPi':
+          if (isAnonymous || !occursIn(0, term.body)) {
+            return `(${domain} \\to ${body})`;
+          }
+          return `(\\Pi\\, (${term.name} : ${domain}),\\, ${body})`;
+
+        case 'BLam':
+          if (isAnonymous) {
+            return `(\\lambda\\, ${domain},\\, ${body})`;
+          }
+          return `(\\lambda\\, (${term.name} : ${domain}),\\, ${body})`;
+
+        case 'BLet':
+          const defVal = prettyPrintLatex(term.binderKind.defVal, context, opts);
+          return `(\\text{let } ${term.name} : ${domain} := ${defVal} \\text{ in } ${body})`;
+      }
+    }
+
+    case 'App': {
+      const fn = prettyPrintLatex(term.fn, context, opts);
+      const arg = prettyPrintLatex(term.arg, context, opts);
+      return `(${fn}\\; ${arg})`;
+    }
+
+    case 'Hole':
+      return `?_{${term.id}}`;
+
+    case 'Annot':
+      return `(${prettyPrintLatex(term.term, context, opts)} : ${prettyPrintLatex(term.type, context, opts)})`;
   }
 }
 
@@ -1893,15 +2021,38 @@ export interface RecordField {
  * We represent this as:
  * - type: The kind of the record (e.g., Type → Type for Magma)
  * - fields: The named fields with their types
+ * - extends: (optional) Names of records to extend (inherit fields from)
  *
  * A record implicitly has:
  * - A constructor: Record.mk : field1_type → field2_type → ... → Record
  * - Projections: Record.field1 : Record → field1_type, etc.
+ *
+ * When a record extends other records:
+ * - All fields from extended records are inlined during elaboration
+ * - Field name clashes cause an error
+ * - This is a surface-level feature - the kernel sees the inlined version
+ *
+ * Parameters:
+ * - Records can have parameters (like `A : Type` for `Magma A`)
+ * - Field types are interpreted in a context where params are bound
+ * - param[0] is at De Bruijn index 0 (first param is innermost)
+ *
+ * Example: Magma (A : Type) with op : A → A → A
+ * - params: [{ name: 'A', type: Type_0 }]
+ * - In field context: A is at index 0
+ * - op.type = Π(_ : Var(0)). Π(_ : Var(1)). Var(2)
  */
+export interface RecordParam {
+  name: string;
+  type: TTerm;
+}
+
 export interface RecordDef {
   name: string;
-  type: TTerm;           // The kind of the record type
-  fields: RecordField[]; // Named fields
+  type: TTerm;           // The kind of the record type (e.g., Type_0 → Type_0)
+  params: RecordParam[]; // Parameters that scope over all fields
+  fields: RecordField[]; // Named fields (types are in param context)
+  extends?: string[];    // Names of records to extend (optional)
 }
 
 /**
