@@ -226,27 +226,27 @@ const styles = {
 const EXAMPLE_CODE = `-- Example TT Language Expressions
 
 -- Type signature, then definition on next line
-id : Π (A : Type), A → A
-id = λ (A : Type) (x : A), x
+id : (A : Type) -> A -> A
+id = λ (A : Type) (x : A) => x
 
-const : Π (A : Type) (B : Type), A → B → A
-const = λ A B x y, x
+const : (A : Type) -> (B : Type) -> A -> B -> A
+const = λ A B x y => x
 
 -- Natural number operations
-double : ℕ → ℕ
-double = λ n, n + n
+double : ℕ -> ℕ
+double = λ n => n + n
 
 -- Type signature only (proof goal / axiom)
-add_comm : Π (a : ℕ) (b : ℕ), a + b = b + a
+add_comm : (a : ℕ) -> (b : ℕ) -> a + b = b + a
 
 -- Function extensionality axiom
-funext : Π (A : Type) (B : Type) (f : A → B) (g : A → B), f = g
+funext : (A : Type) -> (B : Type) -> (f : A -> B) -> (g : A -> B) -> f = g
 
 -- Definition without type (will be inferred)
-increment = λ x, x + 1
+increment = λ x => x + 1
 
 -- Standalone expressions
-λ x, x + 1
+λ x => x + 1
 
 (a + b) * c = a * c + b * c
 `;
@@ -503,9 +503,9 @@ export const TextEditorPage: React.FC = () => {
           placeholder="Enter TT language expressions here...
 
 Examples:
-  λ (x : A), x          -- Lambda
-  Π (x : A), B          -- Pi type
-  A → B                 -- Arrow type
+  λ (x : A) => x        -- Lambda
+  (x : A) -> B          -- Pi type
+  A -> B                -- Arrow type
   let x := v in body    -- Let binding
   f x y                 -- Application
   ?hole                 -- Hole
@@ -621,9 +621,9 @@ Examples:
               <h3 style={{ ...styles.sectionTitle, marginTop: '24px' }}>Syntax Reference</h3>
               <div style={styles.panel}>
                 <div style={{ fontSize: '12px', lineHeight: '1.8' }}>
-                  <div><code style={{ color: '#7ee787' }}>λ (x : T), body</code> — Lambda</div>
-                  <div><code style={{ color: '#7ee787' }}>Π (x : A), B</code> — Pi type</div>
-                  <div><code style={{ color: '#7ee787' }}>A → B</code> — Function type</div>
+                  <div><code style={{ color: '#7ee787' }}>λ (x : T) =&gt; body</code> — Lambda</div>
+                  <div><code style={{ color: '#7ee787' }}>(x : A) -&gt; B</code> — Pi type</div>
+                  <div><code style={{ color: '#7ee787' }}>A -&gt; B</code> — Function type</div>
                   <div><code style={{ color: '#7ee787' }}>let x := v in e</code> — Let binding</div>
                   <div><code style={{ color: '#7ee787' }}>f x y</code> — Application</div>
                   <div><code style={{ color: '#7ee787' }}>?name</code> — Hole</div>

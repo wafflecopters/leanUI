@@ -49,9 +49,15 @@ export class TypeCheckError extends Error {
 /**
  * Extend context with a new binding
  * This adds a binding at index 0 (most recent)
+ *
+ * IMPORTANT: The type is shifted by 1 because it was valid in the outer context,
+ * but after extending, all De Bruijn indices need to be incremented to account
+ * for the new binding at index 0.
  */
 export function extendContext(ctx: TTKContext, name: string, type: TTKTerm): TTKContext {
-  return [{ name, type }, ...ctx];
+  // Shift the type by 1 since we're adding a new binding at index 0
+  const shiftedType = shiftTermBy(type, 1, 0);
+  return [{ name, type: shiftedType }, ...ctx];
 }
 
 /**

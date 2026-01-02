@@ -212,35 +212,35 @@ test('Substitution under binders: [0 := 0] in (λx. λy. 2)', () => {
 // ============================================================================
 
 test('Pretty print: Simple Pi type', () => {
-  // ℕ → ℕ
+  // ℕ -> ℕ
   const nat = TT_CONSTANTS.Nat;
   const natToNat = mkPi(nat, nat);
 
   const pretty = prettyPrint(natToNat);
-  console.log('  ℕ → ℕ =', pretty);
+  console.log('  ℕ -> ℕ =', pretty);
 
-  // Should not have Π since it's non-dependent
-  if (pretty.includes('Π')) {
-    throw new Error('Non-dependent function should use →, not Π');
+  // Should use -> notation since it's non-dependent
+  if (!pretty.includes('->')) {
+    throw new Error('Non-dependent function should use -> notation');
   }
 });
 
 test('Pretty print: Dependent Pi type', () => {
-  // Π (n : ℕ), Vec n
+  // (n : ℕ) -> Vec n
   // This is a dependent type where the result type depends on the argument
   const nat = TT_CONSTANTS.Nat;
 
-  // For testing, we'll use: Π (x : ℕ), x where the codomain references x
+  // For testing, we'll use: (x : ℕ) -> x where the codomain references x
   // This means we need Var(0) in the codomain
   const dependentType = mkPi(nat, mkVar(0));
 
   const pretty = prettyPrint(dependentType);
-  console.log('  (x : ℕ) → x =', pretty);
+  console.log('  (x : ℕ) -> x =', pretty);
 
-  // The pretty printer uses arrow notation with binder name visible: (x : ℕ) → x
+  // The pretty printer uses arrow notation with binder name visible: (x : ℕ) -> x
   // This shows it's dependent because x appears in the body
-  if (!pretty.includes('→') || !pretty.includes('x : ℕ')) {
-    throw new Error('Dependent function should show (x : ℕ) → ...');
+  if (!pretty.includes('->') || !pretty.includes('x : ℕ')) {
+    throw new Error('Dependent function should show (x : ℕ) -> ...');
   }
 });
 

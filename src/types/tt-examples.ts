@@ -6,7 +6,7 @@
  *
  * Inductive types are defined by:
  * - name: The name of the type (e.g., "Nat", "List")
- * - type: The kind/sort of the type (e.g., Type_0, Type_0 → Type_0)
+ * - type: The kind/sort of the type (e.g., Type_0, Type_0 -> Type_0)
  * - constructors: Array of constructors, each with name and type
  *
  * Record types are defined by:
@@ -62,7 +62,7 @@ function mkInductiveRef(name: string, kind: TTerm): TTerm {
 }
 
 /**
- * Create a non-dependent function type: A → B
+ * Create a non-dependent function type: A -> B
  * (This is just Pi where the body doesn't use the bound variable)
  */
 function mkArrow(domain: TTerm, codomain: TTerm): TTerm {
@@ -78,7 +78,7 @@ function mkArrow(domain: TTerm, codomain: TTerm): TTerm {
  *
  * inductive Nat : Type where
  *   | zero : Nat
- *   | succ : Nat → Nat
+ *   | succ : Nat -> Nat
  */
 function makeNat(): InductiveTypeDef {
   const Nat = mkInductiveRef('Nat', Type0);
@@ -93,7 +93,7 @@ function makeNat(): InductiveTypeDef {
       },
       {
         name: 'succ',
-        // succ : Nat → Nat
+        // succ : Nat -> Nat
         type: mkArrow(Nat, Nat),
       },
     ],
@@ -157,14 +157,14 @@ function makeVoid(): InductiveTypeDef {
  *
  * inductive List (A : Type) : Type where
  *   | nil : List A
- *   | cons : A → List A → List A
+ *   | cons : A -> List A -> List A
  *
  * Note: We represent this with explicit type parameter quantification:
- *   nil : Π (A : Type). List A
- *   cons : Π (A : Type). A → List A → List A
+ *   nil : (A : Type) -> List A
+ *   cons : (A : Type) -> A -> List A -> List A
  */
 function makeList(): InductiveTypeDef {
-  // List : Type → Type
+  // List : Type -> Type
   const ListKind = mkArrow(Type0, Type0);
   const List = mkInductiveRef('List', ListKind);
 
@@ -174,8 +174,8 @@ function makeList(): InductiveTypeDef {
     constructors: [
       {
         name: 'nil',
-        // nil : Π (A : Type). List A
-        // Inside the Π, A is at index 0
+        // nil : (A : Type) -> List A
+        // Inside the Pi, A is at index 0
         type: mkPi(
           Type0,
           mkApp(List, mkVar(0)),
@@ -184,11 +184,11 @@ function makeList(): InductiveTypeDef {
       },
       {
         name: 'cons',
-        // cons : Π (A : Type). A → List A → List A
+        // cons : (A : Type) -> A -> List A -> List A
         // Building from outside in:
-        // Π (A : Type).       -- A at index 0 in next level
-        //   Π (_ : A).        -- A at index 1, _ at index 0 in next level
-        //     Π (_ : List A). -- A at index 2 in next level
+        // (A : Type) ->       -- A at index 0 in next level
+        //   (_ : A) ->        -- A at index 1, _ at index 0 in next level
+        //     (_ : List A) -> -- A at index 2 in next level
         //       List A        -- A at index 2
         type: mkPi(
           Type0,
@@ -215,9 +215,9 @@ function makeList(): InductiveTypeDef {
 /**
  * Length-indexed vector
  *
- * inductive Vec (A : Type) : Nat → Type where
+ * inductive Vec (A : Type) : Nat -> Type where
  *   | vnil : Vec A 0
- *   | vcons : Π (n : Nat). A → Vec A n → Vec A (succ n)
+ *   | vcons : (n : Nat) -> A -> Vec A n -> Vec A (succ n)
  *
  * Note: Vec is an indexed family - the constructor return types differ in the index.
  */
@@ -225,7 +225,7 @@ function makeVec(): InductiveTypeDef {
   const Nat = mkInductiveRef('Nat', Type0);
   const succ = mkConst('succ', mkArrow(Nat, Nat));
 
-  // Vec : Type → Nat → Type
+  // Vec : Type -> Nat -> Type
   const VecKind = mkPi(Type0, mkArrow(Nat, Type0), 'A');
   const Vec = mkInductiveRef('Vec', VecKind);
 
@@ -246,7 +246,7 @@ function makeVec(): InductiveTypeDef {
       },
       {
         name: 'vcons',
-        // vcons : Π (A : Type). Π (n : Nat). A → Vec A n → Vec A (succ n)
+        // vcons : Π (A : Type). Π (n : Nat). A -> Vec A n -> Vec A (succ n)
         // Levels:
         // Π (A : Type).           -- A at 0
         //   Π (n : Nat).          -- A at 1, n at 0
@@ -282,15 +282,15 @@ function makeVec(): InductiveTypeDef {
 /**
  * Finite set type (numbers less than n)
  *
- * inductive Fin : Nat → Type where
+ * inductive Fin : Nat -> Type where
  *   | fzero : Π (n : Nat). Fin (succ n)
- *   | fsucc : Π (n : Nat). Fin n → Fin (succ n)
+ *   | fsucc : Π (n : Nat). Fin n -> Fin (succ n)
  */
 function makeFin(): InductiveTypeDef {
   const Nat = mkInductiveRef('Nat', Type0);
   const succ = mkConst('succ', mkArrow(Nat, Nat));
 
-  // Fin : Nat → Type
+  // Fin : Nat -> Type
   const FinKind = mkArrow(Nat, Type0);
   const Fin = mkInductiveRef('Fin', FinKind);
 
@@ -309,7 +309,7 @@ function makeFin(): InductiveTypeDef {
       },
       {
         name: 'fsucc',
-        // fsucc : Π (n : Nat). Fin n → Fin (succ n)
+        // fsucc : Π (n : Nat). Fin n -> Fin (succ n)
         // Π (n : Nat).     -- n at 0
         //   Π (_ : Fin n). -- n at 1
         //     Fin (succ n) -- n at 1
@@ -361,11 +361,11 @@ function makeUnit(): InductiveTypeDef {
  * Sum type (disjoint union, Either)
  *
  * inductive Sum (A B : Type) : Type where
- *   | inl : A → Sum A B
- *   | inr : B → Sum A B
+ *   | inl : A -> Sum A B
+ *   | inr : B -> Sum A B
  */
 function makeSum(): InductiveTypeDef {
-  // Sum : Type → Type → Type
+  // Sum : Type -> Type -> Type
   const SumKind = mkArrow(Type0, mkArrow(Type0, Type0));
   const Sum = mkInductiveRef('Sum', SumKind);
 
@@ -375,7 +375,7 @@ function makeSum(): InductiveTypeDef {
     constructors: [
       {
         name: 'inl',
-        // inl : Π (A : Type). Π (B : Type). A → Sum A B
+        // inl : Π (A : Type). Π (B : Type). A -> Sum A B
         // Π (A : Type).       -- A at 0
         //   Π (B : Type).     -- A at 1, B at 0
         //     Π (_ : A).      -- A at 2, B at 1
@@ -396,7 +396,7 @@ function makeSum(): InductiveTypeDef {
       },
       {
         name: 'inr',
-        // inr : Π (A : Type). Π (B : Type). B → Sum A B
+        // inr : Π (A : Type). Π (B : Type). B -> Sum A B
         type: mkPi(
           Type0,
           mkPi(
@@ -424,17 +424,17 @@ function makeSum(): InductiveTypeDef {
  * Magma - A type equipped with a binary operation
  *
  * structure Magma (A : Type) where
- *   op : A → A → A
+ *   op : A -> A -> A
  *
  * A magma is the simplest algebraic structure - just a set with a
  * binary operation. No laws (associativity, identity, etc.) required.
  */
 function makeMagmaRecord(): RecordDef {
-  // Magma : Type → Type
+  // Magma : Type -> Type
   const MagmaKind = mkArrow(Type0, Type0);
 
   // In the field context, A is at De Bruijn index 0
-  // op : A → A → A = Π(_ : A). Π(_ : A). A
+  // op : A -> A -> A = Π(_ : A). Π(_ : A). A
   // Under first binder: A is at index 1
   // Under second binder: A is at index 2
   const opType = mkPi(
@@ -478,44 +478,33 @@ function makeSemigroupRecord(): RecordDef {
 
   // In field context: A is at index 0 (from params)
   //
-  // op is a Const that takes A and two values: op : A → A → A
+  // op is a Const that takes A and two values: op : A -> A -> A
   // When we use op in a context, we don't need to pass A explicitly
   // since it's in scope from params. But for now, op is defined as
-  // taking A → A → A in the Magma field context.
+  // taking A -> A -> A in the Magma field context.
   //
   // Actually, since op is inherited from Magma and Magma has params,
-  // the inherited op field type is: A → A → A (not Π(A:Type). A → A → A)
+  // the inherited op field type is: A -> A -> A (not Π(A:Type). A -> A -> A)
   // So op is just: Π(_ : Var(0)). Π(_ : Var(1)). Var(2) in param context
 
   // For assoc, we need to reference op as a constant
-  // op as a projection has type: Magma A → (A → A → A)
+  // op as a projection has type: Magma A -> (A -> A -> A)
   // But in this context, op is a field so we treat it as a constant
-  // The type of op (as used in the field) is: A → A → A
+  // The type of op (as used in the field) is: A -> A -> A
   const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
   const op = mkConst('op', opFieldType);
 
-  // Eq : A → A → Type_0 (in param context where A is at index 0)
-  const EqFieldType = mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_');
-  const Eq = mkConst('Eq', EqFieldType);
+  // Eq : Π (A : Type). A -> A -> Type_0
+  // In the body of assoc, we apply Eq to (A, lhs, rhs) - 3 args
+  const EqType = mkPi(Type0, mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_'), 'A');
+  const Eq = mkConst('Eq', EqType);
 
-  // Build assoc : Π (a b c : A), Eq (op a (op b c)) (op (op a b) c)
+  // Build assoc : Π (a b c : A), Eq A (op a (op b c)) (op (op a b) c)
   //
   // In param context: A is at index 0
   // After binding a: a=0, A=1
   // After binding b: b=0, a=1, A=2
   // After binding c: c=0, b=1, a=2, A=3
-  //
-  // op b c: op takes two args from A (which is now at index 3)
-  // Wait, op's type in param context is Var(0) → Var(1) → Var(2)
-  // When we enter binders for a,b,c, those indices shift.
-  // But op is a Const - its type is fixed at definition time.
-  //
-  // Actually we need to be more careful. op as a Const has a closed type.
-  // The type A → A → A in op's definition refers to THAT context's A.
-  // When we use op in assoc's body, we just apply it to values.
-  //
-  // Let's think differently: op applied to two values of type A gives A.
-  // So: op x y where x, y : A (in context where A = Var(index))
 
   // In the innermost context (under a, b, c binders):
   // c = Var(0), b = Var(1), a = Var(2), A = Var(3)
@@ -528,8 +517,8 @@ function makeSemigroupRecord(): RecordDef {
   const op_a_b = mkApp(mkApp(op, mkVar(2)), mkVar(1));
   // op (op a b) c
   const rhs = mkApp(mkApp(op, op_a_b), mkVar(0));
-  // Eq lhs rhs
-  const eqBody = mkApp(mkApp(Eq, lhs), rhs);
+  // Eq A lhs rhs (A is at index 3)
+  const eqBody = mkApp(mkApp(mkApp(Eq, mkVar(3)), lhs), rhs);
 
   // Build the full type: Π (a b c : A), Eq ...
   // In param context, A is at index 0
@@ -584,7 +573,7 @@ function makeMonoidRecord(): RecordDef {
 
   // In param context: A is at index 0
   //
-  // op : A → A → A (field type, not Π(A:Type). ...)
+  // op : A -> A -> A (field type, not Π(A:Type). ...)
   const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
   const op = mkConst('op', opFieldType);
 
@@ -592,30 +581,30 @@ function makeMonoidRecord(): RecordDef {
   const eFieldType = mkVar(0);
   const e = mkConst('e', eFieldType);
 
-  // Eq : A → A → Type_0
-  const EqFieldType = mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_');
-  const Eq = mkConst('Eq', EqFieldType);
+  // Eq : Π (A : Type). A -> A -> Type_0
+  const EqType = mkPi(Type0, mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_'), 'A');
+  const Eq = mkConst('Eq', EqType);
 
-  // Build left_id : Π (x : A), Eq (op e x) x
+  // Build left_id : Π (x : A), Eq A (op e x) x
   // In param context: A is at index 0
   // After binding x: x=0, A=1
   //
   // op e x = App(App(op, e), x)
   const op_e_x = mkApp(mkApp(op, e), mkVar(0));
-  // Eq (op e x) x
-  const leftIdBody = mkApp(mkApp(Eq, op_e_x), mkVar(0));
+  // Eq A (op e x) x  (A is at index 1)
+  const leftIdBody = mkApp(mkApp(mkApp(Eq, mkVar(1)), op_e_x), mkVar(0));
   const leftIdType = mkPi(
     mkVar(0),     // x : A (A at index 0)
     leftIdBody,   // body with x=0, A=1
     'x'
   );
 
-  // Build right_id : Π (x : A), Eq (op x e) x
+  // Build right_id : Π (x : A), Eq A (op x e) x
   // After binding x: x=0, A=1
   // op x e = App(App(op, x), e)
   const op_x_e = mkApp(mkApp(op, mkVar(0)), e);
-  // Eq (op x e) x
-  const rightIdBody = mkApp(mkApp(Eq, op_x_e), mkVar(0));
+  // Eq A (op x e) x  (A is at index 1)
+  const rightIdBody = mkApp(mkApp(mkApp(Eq, mkVar(1)), op_x_e), mkVar(0));
   const rightIdType = mkPi(
     mkVar(0),     // x : A (A at index 0)
     rightIdBody,  // body with x=0, A=1
@@ -674,7 +663,7 @@ function makePointRecord(): RecordDef {
  *   snd : B
  */
 function makeProdRecord(): RecordDef {
-  // Prod : Type → Type → Type
+  // Prod : Type -> Type -> Type
   const ProdKind = mkArrow(Type0, mkArrow(Type0, Type0));
 
   // Params: A at index 0, B at index 1

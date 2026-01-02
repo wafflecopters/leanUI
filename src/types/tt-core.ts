@@ -824,7 +824,12 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
       return `_${term.index}`;
 
     case 'Sort':
-      return `Type_${term.level}`;
+      // Sort(0) = Prop, Sort(1) = Type, Sort(n+1) = Type n
+      if (term.level === 0) {
+        return 'Prop';
+      }
+      const typeLevel = term.level - 1;
+      return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
 
     case 'Const':
       // Try to extract just the meaningful name from verbose strings
@@ -840,15 +845,15 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
         case 'BPi':
           // Check if non-dependent (function type) or anonymous
           if (!occursIn(0, term.body) || isAnonymous) {
-            return `(${domain} → ${body})`;
+            return `(${domain} -> ${body})`;
           }
-          return `(Π ${term.name} : ${domain}, ${body})`;
+          return `((${term.name} : ${domain}) -> ${body})`;
 
         case 'BLam':
           if (isAnonymous) {
-            return `(λ ${domain}, ${body})`;
+            return `(λ ${domain} => ${body})`;
           }
-          return `(λ ${term.name}, ${body})`;
+          return `(λ ${term.name} => ${body})`;
 
         case 'BLet':
           const defVal = prettyPrintTerse(term.binderKind.defVal, context);
@@ -893,7 +898,13 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
       return `#${term.index}`;  // Free variable
 
     case 'Sort':
-      return `Type_${term.level}`;
+      // Sort(0) = Prop, Sort(1) = Type (or Type 0), Sort(n+1) = Type n
+      // Following Lean's convention where Type = Sort 1, Type 1 = Sort 2, etc.
+      if (term.level === 0) {
+        return 'Prop';
+      }
+      const typeLevel = term.level - 1;
+      return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
 
     case 'Const':
       return term.name;
@@ -906,18 +917,18 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
 
       switch (term.binderKind.tag) {
         case 'BPi':
-          // If anonymous binder, just show: domain → body
-          // Otherwise show: (name : domain) → body
+          // If anonymous binder, just show: domain -> body
+          // Otherwise show: (name : domain) -> body
           if (isAnonymous) {
-            return `(${domain} → ${body})`;
+            return `(${domain} -> ${body})`;
           }
-          return `((${term.name} : ${domain}) → ${body})`;
+          return `((${term.name} : ${domain}) -> ${body})`;
 
         case 'BLam':
           if (isAnonymous) {
-            return `(λ ${domain}, ${body})`;
+            return `(λ ${domain} => ${body})`;
           }
-          return `(λ (${term.name} : ${domain}), ${body})`;
+          return `(λ (${term.name} : ${domain}) => ${body})`;
 
         case 'BLet':
           const defVal = prettyPrint(term.binderKind.defVal, context);
@@ -1009,7 +1020,12 @@ export function prettyPrintLatex(
       return `\\#${term.index}`;
 
     case 'Sort':
-      return `\\text{Type}_{${term.level}}`;
+      // Sort(0) = Prop, Sort(1) = Type, Sort(n+1) = Type n
+      if (term.level === 0) {
+        return '\\text{Prop}';
+      }
+      const typeLevelLatex = term.level - 1;
+      return typeLevelLatex === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevelLatex}}`;
 
     case 'Const':
       // Escape special LaTeX characters in names

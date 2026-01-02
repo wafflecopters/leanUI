@@ -1,22 +1,23 @@
 /**
  * TT Language Parser
- * 
+ *
  * A parser for the Typed Terms language using a Pratt parser for proper
  * operator precedence and associativity handling.
- * 
+ *
  * Syntax supported:
  * - Sorts: Type, Prop, Type_0, Type_1, ...
  * - Variables/Constants: identifiers (x, foo, myVar)
  * - Holes: ?name
- * - Lambda: λ (x : T), body  or  fun (x : T) => body  or  \(x : T). body
- * - Pi/Forall: Π (x : T), body  or  forall (x : T), body  or  (x : T) → body
- * - Arrow (non-dependent): A → B  or  A -> B
+ * - Lambda: λ x => body  or  \x y => body  or  \(x : T) => body
+ *           \(x, y : T) => body  for multiple binders with same type
+ * - Pi/Forall: (x : T) -> body  (dependent function type)
+ * - Arrow (non-dependent): A -> B
  * - Let: let x : T := val in body
  * - Application: f x y  (left-associative)
  * - Annotation: (term : type)
  * - Parentheses: (expr)
  * - Infix operators: user-defined with configurable precedence and associativity
- * 
+ *
  * Declaration syntax:
  * - Type signature: name : type
  * - Definition: name = impl
@@ -41,10 +42,10 @@ export type TokenType =
   | 'COLON'        // :
   | 'COMMA'        // ,
   | 'DOT'          // .
-  | 'ARROW'        // → or ->
-  | 'FATARROW'     // => 
+  | 'ARROW'        // ->
+  | 'FATARROW'     // =>
   | 'LAMBDA'       // λ or \ or fun
-  | 'PI'           // Π or forall
+  // PI token removed - use (x : T) -> ... syntax instead
   | 'LET'          // let
   | 'IN'           // in
   | 'ASSIGN'       // :=
@@ -256,23 +257,13 @@ export class Lexer {
         break;
     }
 
-    // Lambda: λ or \
+    // Lambda: λ or \ or fun
     if (ch === 'λ' || ch === '\\') {
       this.pos++; this.col++;
       return { type: 'LAMBDA', value: ch, pos: startPos, line: startLine, col: startCol };
     }
 
-    // Pi: Π
-    if (ch === 'Π') {
-      this.pos++; this.col++;
-      return { type: 'PI', value: 'Π', pos: startPos, line: startLine, col: startCol };
-    }
-
-    // Arrow: → or ->
-    if (ch === '→') {
-      this.pos++; this.col++;
-      return { type: 'ARROW', value: '→', pos: startPos, line: startLine, col: startCol };
-    }
+    // Arrow: -> only (removed support for → unicode and Π)
     if (ch === '-' && this.input[this.pos + 1] === '>') {
       this.pos += 2; this.col += 2;
       return { type: 'ARROW', value: '->', pos: startPos, line: startLine, col: startCol };
@@ -317,8 +308,7 @@ export class Lexer {
       switch (ident) {
         case 'fun':
           return { type: 'LAMBDA', value: 'fun', pos: startPos, line: startLine, col: startCol };
-        case 'forall':
-          return { type: 'PI', value: 'forall', pos: startPos, line: startLine, col: startCol };
+        // Removed 'forall' - use (x : T) -> ... syntax instead
         case 'let':
           return { type: 'LET', value: 'let', pos: startPos, line: startLine, col: startCol };
         case 'in':
@@ -452,6 +442,13 @@ export class Parser {
 
   /**
    * Parse multiple top-level declarations from source code.
+   *
+   * Handles Lean-style declaration pairs where type signature and definition
+   * are on separate lines:
+   *   name : type
+   *   name = value
+   *
+   * These are merged into a single declaration with both type and value.
    */
   parseDeclarations(source: string): ParsedDeclaration[] {
     const lexer = new Lexer(source, this.operators);
@@ -466,7 +463,19 @@ export class Parser {
 
       const decl = this.parseDeclaration();
       if (decl) {
-        declarations.push(decl);
+        // Check if this declaration can be merged with the previous one
+        // Merge if: previous has type but no value, current has same name and value but no type
+        const prev = declarations[declarations.length - 1];
+        if (prev &&
+            prev.name &&
+            decl.name === prev.name &&
+            prev.type && !prev.value &&
+            decl.value && !decl.type) {
+          // Merge: add value to previous declaration
+          prev.value = decl.value;
+        } else {
+          declarations.push(decl);
+        }
       }
     }
 
@@ -620,7 +629,10 @@ export class Parser {
         if (ARROW_PRECEDENCE < minPrec) break;
         this.advance();
         // Right-associative: parse RHS with same precedence
-        const right = this.expr(ARROW_PRECEDENCE, ctx);
+        // IMPORTANT: We need to extend the context with the anonymous binder
+        // so that De Bruijn indices in the RHS are correctly shifted
+        const arrowCtx = ['_', ...ctx];
+        const right = this.expr(ARROW_PRECEDENCE, arrowCtx);
         // Non-dependent arrow: Π (_: left) . right
         left = mkPi(left, right, '_');
         continue;
@@ -677,8 +689,7 @@ export class Parser {
       case 'LAMBDA':
         return this.parseLambda(ctx);
 
-      case 'PI':
-        return this.parsePi(ctx);
+      // PI token removed - use (x : T) -> ... syntax instead
 
       case 'LET':
         return this.parseLet(ctx);
@@ -775,29 +786,75 @@ export class Parser {
   }
 
   /**
-   * Parse lambda: λ (x : T), body  or  λ x, body  or  fun (x : T) => body
+   * Parse lambda with new syntax:
+   *   \x => body                    -- x's type is a hole
+   *   \ x => body                   -- same
+   *   \x y => body                  -- multiple untyped binders
+   *   \(x : A) => body              -- typed binder
+   *   \(x : A) y => body            -- mixed
+   *   \(x, y : A) => body           -- multiple names with same type
+   *   \(x : A) (y : B) => body      -- multiple typed binders
+   *
+   * NOT allowed: \ x : A => body    -- parens required for typed binders
    */
   private parseLambda(ctx: NameContext): TTerm {
     this.expect('LAMBDA');
 
-    // Parse binders - can have multiple: λ (x : A) (y : B), body
+    // Parse binders until we see =>
     const binders: Array<{ name: string; type: TTerm }> = [];
 
     while (true) {
-      if (this.current().type === 'LPAREN') {
-        // (x : T) form
+      const current = this.current();
+
+      // Stop if we hit the body separator (only => is allowed)
+      if (current.type === 'FATARROW') {
+        break;
+      }
+
+      if (current.type === 'LPAREN') {
+        // Typed binder(s): (x : T) or (x, y : T) or (x y : T)
         this.advance();
-        const name = this.current().type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
-        if (this.current().type === 'UNDERSCORE') this.advance();
+
+        // Collect names until we see ':'
+        const names: string[] = [];
+        while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
+          const name = this.current().type === 'UNDERSCORE' ? '_' : this.current().value;
+          names.push(name);
+          this.advance();
+
+          // Allow comma between names: (x, y : T)
+          if (this.current().type === 'COMMA') {
+            this.advance();
+          }
+        }
+
+        if (names.length === 0) {
+          throw new ParseError('Expected at least one name in binder', this.current().line, this.current().col);
+        }
+
         this.expect('COLON');
         const type = this.expr(0, ctx);
         this.expect('RPAREN');
-        binders.push({ name, type });
-        ctx = [name, ...ctx];
-      } else if (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
-        // Simple x form (type will be a hole)
-        const name = this.current().type === 'UNDERSCORE' ? '_' : this.current().value;
+
+        // Add all names with the same type
+        for (const name of names) {
+          binders.push({ name, type });
+          ctx = [name, ...ctx];
+        }
+      } else if (current.type === 'IDENT' || current.type === 'UNDERSCORE') {
+        // Untyped binder: just a name, type will be a hole
+        const name = current.type === 'UNDERSCORE' ? '_' : current.value;
+
+        // Peek ahead to check if this is "x : T" without parens (NOT allowed)
         this.advance();
+        if (this.current().type === 'COLON') {
+          throw new ParseError(
+            `Type annotation requires parentheses: use (${name} : T) instead of ${name} : T`,
+            this.current().line,
+            this.current().col
+          );
+        }
+
         binders.push({ name, type: mkHole(`${name}_type`, mkProp()) });
         ctx = [name, ...ctx];
       } else {
@@ -809,9 +866,15 @@ export class Parser {
       throw new ParseError('Expected at least one binder after λ', this.current().line, this.current().col);
     }
 
-    // Expect comma, dot, or =>
-    if (this.current().type === 'COMMA' || this.current().type === 'DOT' || this.current().type === 'FATARROW') {
+    // Expect =>, then consume it
+    if (this.current().type === 'FATARROW') {
       this.advance();
+    } else {
+      throw new ParseError(
+        `Expected '=>' after lambda binders, got ${this.current().type}`,
+        this.current().line,
+        this.current().col
+      );
     }
 
     // Parse body
@@ -826,66 +889,7 @@ export class Parser {
     return result;
   }
 
-  /**
-   * Parse Pi/forall: Π (x : T), body  or  forall (x : T), body
-   */
-  private parsePi(ctx: NameContext): TTerm {
-    this.expect('PI');
-
-    // Parse binders
-    const binders: Array<{ name: string; type: TTerm }> = [];
-
-    while (true) {
-      if (this.current().type === 'LPAREN') {
-        // (x : T) form
-        this.advance();
-        const name = this.current().type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
-        if (this.current().type === 'UNDERSCORE') this.advance();
-        this.expect('COLON');
-        const type = this.expr(0, ctx);
-        this.expect('RPAREN');
-        binders.push({ name, type });
-        ctx = [name, ...ctx];
-      } else if (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
-        // Simple x form with next token being colon
-        const nameToken = this.current();
-        this.advance();
-        if (this.current().type === 'COLON') {
-          this.advance();
-          const type = this.expr(0, ctx);
-          const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
-          binders.push({ name, type });
-          ctx = [name, ...ctx];
-        } else {
-          // Backtrack - this is the body
-          this.pos--;
-          break;
-        }
-      } else {
-        break;
-      }
-    }
-
-    if (binders.length === 0) {
-      throw new ParseError('Expected at least one binder after Π/forall', this.current().line, this.current().col);
-    }
-
-    // Expect comma, dot, or arrow
-    if (this.current().type === 'COMMA' || this.current().type === 'DOT' || this.current().type === 'ARROW') {
-      this.advance();
-    }
-
-    // Parse body
-    const body = this.expr(0, ctx);
-
-    // Build nested Pis from right to left
-    let result = body;
-    for (let i = binders.length - 1; i >= 0; i--) {
-      result = mkPi(binders[i].type, result, binders[i].name);
-    }
-
-    return result;
-  }
+  // parsePi removed - use (x : T) -> ... syntax instead
 
   /**
    * Parse let: let x : T := val in body

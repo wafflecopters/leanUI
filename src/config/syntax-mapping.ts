@@ -19,7 +19,7 @@ export const SYNTAX_RULES: SyntaxRule[] = [
   {
     id: 'lambda',
     name: 'Lambda Expression',
-    description: 'lambda x expr → λ x, expr',
+    description: 'lambda x expr → λ x => expr',
     priority: 100,
     matches: (node) => {
       return node.type === 'application' &&
@@ -32,7 +32,7 @@ export const SYNTAX_RULES: SyntaxRule[] = [
 
       const variable = childRenderer(node.children[1], [1]);
       const expression = childRenderer(node.children[2], [2]);
-      return `\\lambda ${variable}, ${expression}`;
+      return `\\lambda ${variable}. ${expression}`;
     }
   },
 
