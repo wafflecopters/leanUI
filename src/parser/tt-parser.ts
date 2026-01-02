@@ -219,6 +219,32 @@ export class Lexer {
         continue;
       }
 
+      // Skip multiline comments ({- ... -})
+      if (ch === '{' && this.input[this.pos + 1] === '-') {
+        this.pos += 2;
+        this.col += 2;
+        let depth = 1;
+        while (this.pos < this.input.length && depth > 0) {
+          if (this.input[this.pos] === '{' && this.input[this.pos + 1] === '-') {
+            depth++;
+            this.pos += 2;
+            this.col += 2;
+          } else if (this.input[this.pos] === '-' && this.input[this.pos + 1] === '}') {
+            depth--;
+            this.pos += 2;
+            this.col += 2;
+          } else if (this.input[this.pos] === '\n') {
+            this.pos++;
+            this.line++;
+            this.col = 1;
+          } else {
+            this.pos++;
+            this.col++;
+          }
+        }
+        continue;
+      }
+
       break;
     }
   }
@@ -410,6 +436,16 @@ export class ParseError extends Error {
   }
 }
 
+/**
+ * Container for multiple parse errors
+ */
+export class ParseErrors extends Error {
+  constructor(public errors: ParseError[]) {
+    super(`${errors.length} parse error${errors.length !== 1 ? 's' : ''}`);
+    this.name = 'ParseErrors';
+  }
+}
+
 // ============================================================================
 // Parser
 // ============================================================================
@@ -474,6 +510,9 @@ export class Parser {
    *   name = value
    *
    * These are merged into a single declaration with both type and value.
+   *
+   * Error recovery: If a parse error occurs, we skip to the next line and
+   * continue parsing to collect as many errors as possible.
    */
   parseDeclarations(source: string): ParsedDeclaration[] {
     const lexer = new Lexer(source, this.operators);
@@ -481,30 +520,61 @@ export class Parser {
     this.pos = 0;
 
     const declarations: ParsedDeclaration[] = [];
+    const errors: ParseError[] = [];
 
     while (this.current().type !== 'EOF') {
       this.skipNewlines();
       if (this.current().type === 'EOF') break;
 
-      const decl = this.parseDeclaration();
-      if (decl) {
-        // Check if this declaration can be merged with the previous one
-        // Merge if: previous has type but no value, current has same name and value but no type
-        const prev = declarations[declarations.length - 1];
-        if (prev &&
-            prev.name &&
-            decl.name === prev.name &&
-            prev.type && !prev.value &&
-            decl.value && !decl.type) {
-          // Merge: add value to previous declaration
-          prev.value = decl.value;
+      try {
+        const decl = this.parseDeclaration();
+        if (decl) {
+          // Check if this declaration can be merged with the previous one
+          // Merge if: previous has type but no value, current has same name and value but no type
+          const prev = declarations[declarations.length - 1];
+          if (prev &&
+              prev.name &&
+              decl.name === prev.name &&
+              prev.type && !prev.value &&
+              decl.value && !decl.type) {
+            // Merge: add value to previous declaration
+            prev.value = decl.value;
+          } else {
+            declarations.push(decl);
+          }
+        }
+      } catch (e) {
+        if (e instanceof ParseError) {
+          errors.push(e);
+          // Skip to the next line to continue parsing
+          this.skipToNextLine();
         } else {
-          declarations.push(decl);
+          // Re-throw non-parse errors
+          throw e;
         }
       }
     }
 
+    // If we collected any errors, throw them all
+    if (errors.length > 0) {
+      throw new ParseErrors(errors);
+    }
+
     return declarations;
+  }
+
+  /**
+   * Skip tokens until we reach a newline or EOF.
+   * Used for error recovery.
+   */
+  private skipToNextLine(): void {
+    while (this.current().type !== 'EOF' && this.current().type !== 'NEWLINE') {
+      this.advance();
+    }
+    // Skip the newline itself
+    if (this.current().type === 'NEWLINE') {
+      this.advance();
+    }
   }
 
   private skipNewlines(): void {

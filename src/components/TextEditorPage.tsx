@@ -14,6 +14,7 @@ import type { editor as MonacoEditor } from 'monaco-editor';
 import {
   parseDeclarations,
   ParseError,
+  ParseErrors,
   ParsedDeclaration,
   DEFAULT_OPERATORS,
 } from '../parser/tt-parser';
@@ -31,7 +32,7 @@ interface ParseResult {
 
 interface ParseFailure {
   success: false;
-  error: ParseError;
+  errors: ParseError[];
 }
 
 interface TypeCheckResult {
@@ -210,13 +211,59 @@ const styles = {
     fontSize: '12px',
     marginRight: '8px',
   },
+  modalOverlay: {
+    position: 'fixed' as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+  modal: {
+    backgroundColor: '#0d1117',
+    border: '1px solid #30363d',
+    borderRadius: '8px',
+    padding: '24px',
+    maxWidth: '800px',
+    maxHeight: '80vh',
+    overflow: 'auto',
+    width: '90%',
+  },
+  modalHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '16px',
+    paddingBottom: '12px',
+    borderBottom: '1px solid #30363d',
+  },
+  modalTitle: {
+    margin: 0,
+    fontSize: '18px',
+    color: '#e6edf3',
+    fontWeight: 600,
+  },
+  closeButton: {
+    padding: '4px 12px',
+    backgroundColor: '#21262d',
+    color: '#c9d1d9',
+    border: '1px solid #30363d',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+  },
 };
 
 // ============================================================================
 // Example Code
 // ============================================================================
 
-const EXAMPLE_CODE = `inductive Nat : Type where
+const EXAMPLE_CODE = `-- Natural Numbers
+inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
@@ -224,25 +271,28 @@ plus : Nat -> Nat -> Nat
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)
 
+inductive Vec : Nat -> Type where
+  VNil : (A: Type) -> Vec Zero A
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+inductive Equal : (A: Type) -> A -> A -> Type where
+  refl : (A : Type) -> (x : A) -> Equal A x x
+
+{-
 const : (A : Type) -> (B : Type) -> A -> B -> A
-const = \A B x y => x
+const = A B x y => x
 
 twice' = Nat -> Nat
 twice' n = plus n n
 
 twice : Nat -> Nat
-twice = \n => plus n n
-
-inductive Vec : Nat -> Type where
-  VNil : (A: Type) -> Vec Zero A
-  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+twice = 
+ => plus n n
 
 vecConcat : (A : Type) -> (a, b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat _ _ _ (VNil _) v = v
 vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
-
-inductive Equal : (A: Type) -> A -> A -> Type where
-  refl : (A : Type) -> (x : A) -> Equal A x x
+-}
 `
 
 /*
@@ -343,16 +393,34 @@ function tryInferType(term: TTerm, ctx: TContext = []): { success: true; type: s
 // Monaco Editor Configuration
 // ============================================================================
 
+// Color palette for syntax highlighting (changeable later)
+const SYNTAX_COLORS = {
+  keyword: '569cd6',        // Blue - for inductive, where, def, etc.
+  keywordOperator: '94d0ff', // Light blue - for ->, =>
+  typeKeyword: 'cf92cd',    // Light purple/pink - for Type, Prop
+  comment: '6a9955',        // Green - for comments (-- and {- -})
+  string: 'ce9178',         // Orange
+  number: 'b5cea8',         // Light green
+  identifier: 'd4d4d4',     // Light gray
+  delimiter: 'e5c995',      // Light tan/gold - for (, ), {, }, etc.
+  hole: '4fc1ff',           // Bright cyan for holes
+};
+
 // Define a custom dark theme that matches our UI
 const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
   base: 'vs-dark',
   inherit: true,
   rules: [
-    { token: 'comment', foreground: '6e7681', fontStyle: 'italic' },
-    { token: 'keyword', foreground: 'ff7b72' },
-    { token: 'string', foreground: 'a5d6ff' },
-    { token: 'number', foreground: '79c0ff' },
-    { token: 'type', foreground: '7ee787' },
+    { token: 'comment', foreground: SYNTAX_COLORS.comment, fontStyle: 'italic' },
+    { token: 'keyword', foreground: SYNTAX_COLORS.keyword },
+    { token: 'keyword.operator', foreground: SYNTAX_COLORS.keywordOperator },
+    { token: 'type.identifier', foreground: SYNTAX_COLORS.typeKeyword },
+    { token: 'string', foreground: SYNTAX_COLORS.string },
+    { token: 'number', foreground: SYNTAX_COLORS.number },
+    { token: 'identifier', foreground: SYNTAX_COLORS.identifier },
+    { token: 'delimiter', foreground: SYNTAX_COLORS.delimiter },
+    { token: 'delimiter.bracket', foreground: SYNTAX_COLORS.delimiter },
+    { token: 'variable.predefined', foreground: SYNTAX_COLORS.hole },
   ],
   colors: {
     'editor.background': '#161b22',
@@ -509,6 +577,7 @@ const DeclarationCard: React.FC<DeclarationCardProps> = ({ decl, index, typeResu
 
 export const TextEditorPage: React.FC = () => {
   const [code, setCode] = useState(EXAMPLE_CODE);
+  const [showParseTree, setShowParseTree] = useState(false);
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
 
@@ -539,8 +608,11 @@ export const TextEditorPage: React.FC = () => {
       const declarations = parseDeclarations(code);
       return { success: true, declarations };
     } catch (e) {
+      if (e instanceof ParseErrors) {
+        return { success: false, errors: e.errors };
+      }
       if (e instanceof ParseError) {
-        return { success: false, error: e };
+        return { success: false, errors: [e] };
       }
       throw e;
     }
@@ -588,6 +660,9 @@ export const TextEditorPage: React.FC = () => {
     return { total, successful, withErrors };
   }, [parseOutcome, typeCheckResults]);
 
+  // Track whether editor has been mounted
+  const [editorMounted, setEditorMounted] = useState(false);
+
   // Update Monaco markers when parse result changes
   useEffect(() => {
     const monaco = monacoRef.current;
@@ -600,21 +675,22 @@ export const TextEditorPage: React.FC = () => {
     const markers: MonacoEditor.IMarkerData[] = [];
 
     if (!parseOutcome.success) {
-      const error = parseOutcome.error;
+      // Add a marker for each parse error
+      for (const error of parseOutcome.errors) {
+        // Get the end of the line for the error
+        const lineContent = model.getLineContent(error.line);
+        const endCol = Math.max(error.col + 1, lineContent.length + 1);
 
-      // Get the end of the line for the error
-      const lineContent = model.getLineContent(error.line);
-      const endCol = Math.max(error.col + 1, lineContent.length + 1);
-
-      markers.push({
-        severity: monaco.MarkerSeverity.Error,
-        message: error.message.replace(/^Parse error at line \d+, col \d+: /, ''),
-        startLineNumber: error.line,
-        startColumn: error.col,
-        endLineNumber: error.line,
-        endColumn: endCol,
-        source: 'TT Parser',
-      });
+        markers.push({
+          severity: monaco.MarkerSeverity.Error,
+          message: error.message.replace(/^Parse error at line \d+, col \d+: /, ''),
+          startLineNumber: error.line,
+          startColumn: error.col,
+          endLineNumber: error.line,
+          endColumn: endCol,
+          source: 'TT Parser',
+        });
+      }
     }
 
     // Could also add type errors as warnings here in the future
@@ -625,19 +701,87 @@ export const TextEditorPage: React.FC = () => {
     // });
 
     monaco.editor.setModelMarkers(model, 'tt-parser', markers);
-  }, [parseOutcome, typeCheckResults]);
+  }, [parseOutcome, typeCheckResults, editorMounted]);
 
   // Editor mount handler
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
 
+    // Register TT language
+    monaco.languages.register({ id: 'tt' });
+
+    // Define TT language syntax
+    monaco.languages.setMonarchTokensProvider('tt', {
+      keywords: [
+        'inductive', 'where', 'def', 'theorem', 'axiom', 'let', 'in', 'fun'
+      ],
+      typeKeywords: [
+        'Type', 'Prop'
+      ],
+      operators: [
+        '->', '=>', ':=', ':', '=', '+', '-', '*', '/', '\\',
+        '|', '(', ')', '{', '}', ',', '.'
+      ],
+      tokenizer: {
+        root: [
+          // Comments - multiline {- -} must come FIRST before any other tokenization
+          [/\{-/, 'comment', '@comment'],
+          [/--.*$/, 'comment'],
+
+          // Type keywords (Type, Prop) - must come before regular keywords
+          [/\b(Type|Prop)\b/, 'type.identifier'],
+
+          // Regular keywords
+          [/\b(inductive|where|def|theorem|axiom|let|in|fun)\b/, 'keyword'],
+
+          // Holes
+          [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],
+
+          // Identifiers
+          [/[a-zA-Z_][a-zA-Z0-9_']*/, 'identifier'],
+
+          // Numbers
+          [/\d+/, 'number'],
+
+          // Structural operators (arrows)
+          [/->|=>/, 'keyword.operator'],
+
+          // Assignment and type annotation
+          [/:=|:/, 'delimiter'],
+
+          // Pipe (for constructors)
+          [/\|/, 'delimiter.bracket'],
+
+          // Other operators
+          [/[+\-*/=\\(){},.;]/, 'delimiter'],
+
+          // Whitespace
+          [/\s+/, 'white'],
+        ],
+        comment: [
+          [/-\}/, 'comment', '@pop'],  // End comment - pop state (must come first!)
+          [/\{-/, 'comment', '@push'], // Nested comment - push state
+          [/./, 'comment'],             // Match any single character as comment
+        ],
+      },
+    });
+
     // Define and apply custom theme
     monaco.editor.defineTheme('tt-dark', MONACO_THEME);
     monaco.editor.setTheme('tt-dark');
 
+    // Set the model language to 'tt'
+    const model = editor.getModel();
+    if (model) {
+      monaco.editor.setModelLanguage(model, 'tt');
+    }
+
     // Focus the editor
     editor.focus();
+
+    // Trigger diagnostics update
+    setEditorMounted(true);
   }, []);
 
   // Editor change handler
@@ -653,6 +797,14 @@ export const TextEditorPage: React.FC = () => {
     setCode('');
   }, []);
 
+  const handleParseTreeClick = useCallback(() => {
+    setShowParseTree(true);
+  }, []);
+
+  const handleCloseModal = useCallback(() => {
+    setShowParseTree(false);
+  }, []);
+
   return (
     <div style={styles.container}>
       {/* Editor Section */}
@@ -661,7 +813,7 @@ export const TextEditorPage: React.FC = () => {
         <div style={styles.editorWrapper}>
           <Editor
             height="300px"
-            defaultLanguage="plaintext"
+            defaultLanguage="tt"
             value={code}
             onChange={handleEditorChange}
             onMount={handleEditorMount}
@@ -689,6 +841,9 @@ export const TextEditorPage: React.FC = () => {
             <button style={styles.examplesButton} onClick={handleClearClick}>
               Clear
             </button>
+            <button style={styles.examplesButton} onClick={handleParseTreeClick}>
+              Parse Tree
+            </button>
           </div>
 
           {parseOutcome.success && stats && (
@@ -709,7 +864,7 @@ export const TextEditorPage: React.FC = () => {
 
           {!parseOutcome.success && (
             <span style={{ ...styles.badge, ...styles.badgeError }}>
-              ⚠ Parse Error at line {parseOutcome.error.line}
+              ⚠ {parseOutcome.errors.length} Parse Error{parseOutcome.errors.length !== 1 ? 's' : ''}
             </span>
           )}
         </div>
@@ -721,12 +876,16 @@ export const TextEditorPage: React.FC = () => {
         {!parseOutcome.success && (
           <div style={{ ...styles.panel, ...styles.errorPanel }}>
             <h3 style={{ ...styles.sectionTitle, color: '#f85149', marginTop: 0 }}>
-              Parse Error
+              Parse Error{parseOutcome.errors.length !== 1 ? 's' : ''} ({parseOutcome.errors.length})
             </h3>
-            <div style={styles.errorText}>
-              Line {parseOutcome.error.line}, Column {parseOutcome.error.col}
-            </div>
-            <div style={{ marginTop: '8px' }}>{parseOutcome.error.message}</div>
+            {parseOutcome.errors.map((error, idx) => (
+              <div key={idx} style={{ marginBottom: idx < parseOutcome.errors.length - 1 ? '12px' : 0 }}>
+                <div style={styles.errorText}>
+                  Line {error.line}, Column {error.col}
+                </div>
+                <div style={{ marginTop: '4px' }}>{error.message}</div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -811,6 +970,95 @@ export const TextEditorPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Parse Tree Modal */}
+      {showParseTree && (
+        <div style={styles.modalOverlay} onClick={handleCloseModal}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>Parse Tree</h2>
+              <button style={styles.closeButton} onClick={handleCloseModal}>
+                Close
+              </button>
+            </div>
+            <div>
+              {!parseOutcome.success ? (
+                <div style={{ ...styles.panel, ...styles.errorPanel }}>
+                  <div style={styles.errorText}>
+                    Parse Error{parseOutcome.errors.length !== 1 ? 's' : ''} ({parseOutcome.errors.length})
+                  </div>
+                  {parseOutcome.errors.map((error, idx) => (
+                    <div key={idx} style={{ marginTop: '12px' }}>
+                      <div style={{ color: '#c9d1d9' }}>
+                        Line {error.line}, Column {error.col}
+                      </div>
+                      <div style={{ marginTop: '4px', color: '#c9d1d9' }}>
+                        {error.message}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : parseOutcome.declarations.length === 0 ? (
+                <div style={{ ...styles.panel, textAlign: 'center', padding: '40px' }}>
+                  <div style={{ color: '#8b949e' }}>No declarations to display</div>
+                </div>
+              ) : (
+                <div>
+                  {parseOutcome.declarations.map((decl, index) => (
+                    <div key={index} style={{ marginBottom: '24px' }}>
+                      <div style={{
+                        marginBottom: '12px',
+                        paddingBottom: '8px',
+                        borderBottom: '1px solid #30363d',
+                      }}>
+                        <span style={{ ...styles.declKind, ...getKindStyle(decl.kind) }}>
+                          {decl.kind}
+                        </span>
+                        {decl.name && (
+                          <span style={styles.declName}>{decl.name}</span>
+                        )}
+                        {!decl.name && decl.kind === 'expr' && (
+                          <span style={{ color: '#8b949e', fontStyle: 'italic' }}>
+                            expression #{index + 1}
+                          </span>
+                        )}
+                      </div>
+
+                      {decl.kind === 'inductive' && decl.constructors && (
+                        <div style={{ marginBottom: '16px' }}>
+                          <div style={{ color: '#8b949e', fontSize: '12px', marginBottom: '8px' }}>
+                            Constructors:
+                          </div>
+                          {decl.constructors.map((ctor, ctorIdx) => (
+                            <div key={ctorIdx} style={styles.codeBlock}>
+                              <div style={{ color: '#7ee787', marginBottom: '4px' }}>
+                                {ctor.name}
+                              </div>
+                              <ASTViewer term={ctor.type} title={`Constructor Type AST`} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {decl.type && (
+                        <div style={{ marginBottom: '12px' }}>
+                          <ASTViewer term={decl.type} title="Type AST" />
+                        </div>
+                      )}
+
+                      {decl.value && (
+                        <div>
+                          <ASTViewer term={decl.value} title="Value AST" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

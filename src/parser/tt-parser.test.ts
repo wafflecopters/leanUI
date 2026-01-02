@@ -167,6 +167,30 @@ test('Handle nested block comments', () => {
   assertEqual(idents, ['foo', 'bar']);
 });
 
+test('Skip multiline comments', () => {
+  const tokens = tokenize('foo {- this is a multiline comment -} bar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
+test('Handle nested multiline comments', () => {
+  const tokens = tokenize('foo {- outer {- inner -} outer -} bar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
+test('Handle multiline comments with newlines', () => {
+  const tokens = tokenize('foo {- line 1\nline 2\nline 3 -} bar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
+test('Handle deeply nested multiline comments', () => {
+  const tokens = tokenize('foo {- level 1 {- level 2 {- level 3 -} -} -} bar');
+  const idents = tokens.filter(t => t.type === 'IDENT').map(t => t.value);
+  assertEqual(idents, ['foo', 'bar']);
+});
+
 test('Track line and column numbers', () => {
   const tokens = tokenize('foo\nbar  baz');
   assertEqual(tokens[0].line, 1);
