@@ -1,14 +1,16 @@
 /**
- * TextEditorPage - A page for editing TT language expressions in a text editor
- * 
+ * TextEditorPage - A page for editing TT language expressions with Monaco editor
+ *
  * Features:
- * - Textarea for typing TT syntax
- * - Live parsing with error display
+ * - Monaco editor with syntax highlighting (plain text for now)
+ * - Live parsing with inline diagnostics
  * - Type checking/inference results
  * - AST visualization
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import Editor, { OnMount, OnChange } from '@monaco-editor/react';
+import type { editor as MonacoEditor } from 'monaco-editor';
 import {
   parseDeclarations,
   ParseError,
@@ -42,6 +44,10 @@ interface TypeCheckResult {
 
 type ParseOutcome = ParseResult | ParseFailure;
 
+// Monaco type helpers
+type Monaco = typeof import('monaco-editor');
+type IStandaloneCodeEditor = MonacoEditor.IStandaloneCodeEditor;
+
 // ============================================================================
 // Styles
 // ============================================================================
@@ -60,28 +66,15 @@ const styles = {
     padding: '20px',
     borderBottom: '1px solid #30363d',
   },
+  editorWrapper: {
+    border: '1px solid #30363d',
+    borderRadius: '8px',
+    overflow: 'hidden',
+  },
   resultsSection: {
     flex: '1 1 auto',
     overflow: 'auto',
     padding: '20px',
-  },
-  textarea: {
-    width: '100%',
-    minHeight: '200px',
-    padding: '16px',
-    backgroundColor: '#161b22',
-    border: '1px solid #30363d',
-    borderRadius: '8px',
-    color: '#c9d1d9',
-    fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-    fontSize: '14px',
-    lineHeight: '1.6',
-    resize: 'vertical' as const,
-    outline: 'none',
-  },
-  textareaFocus: {
-    borderColor: '#58a6ff',
-    boxShadow: '0 0 0 3px rgba(88, 166, 255, 0.15)',
   },
   sectionTitle: {
     margin: '0 0 12px 0',
@@ -223,18 +216,48 @@ const styles = {
 // Example Code
 // ============================================================================
 
+const EXAMPLE_CODE = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \A B x y => x
+
+twice' = Nat -> Nat
+twice' n = plus n n
+
+twice : Nat -> Nat
+twice = \n => plus n n
+
+inductive Vec : Nat -> Type where
+  VNil : (A: Type) -> Vec Zero A
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a, b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ _ _ (VNil _) v = v
+vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
+
+inductive Equal : (A: Type) -> A -> A -> Type where
+  refl : (A : Type) -> (x : A) -> Equal A x x
+`
+
+/*
 const EXAMPLE_CODE = `-- Example TT Language Expressions
 
 -- Type signature, then definition on next line
 id : (A : Type) -> A -> A
-id = λ (A : Type) (x : A) => x
+id = \\(A : Type) (x : A) => x
 
 const : (A : Type) -> (B : Type) -> A -> B -> A
-const = λ A B x y => x
+const = \\A B x y => x
 
 -- Natural number operations
 double : ℕ -> ℕ
-double = λ n => n + n
+double = \\n => n + n
 
 -- Type signature only (proof goal / axiom)
 add_comm : (a : ℕ) -> (b : ℕ) -> a + b = b + a
@@ -243,13 +266,14 @@ add_comm : (a : ℕ) -> (b : ℕ) -> a + b = b + a
 funext : (A : Type) -> (B : Type) -> (f : A -> B) -> (g : A -> B) -> f = g
 
 -- Definition without type (will be inferred)
-increment = λ x => x + 1
+increment = \\x => x + 1
 
 -- Standalone expressions
-λ x => x + 1
+\\x => x + 1
 
 (a + b) * c = a * c + b * c
 `;
+*/
 
 // ============================================================================
 // Helper Functions
@@ -314,6 +338,71 @@ function tryInferType(term: TTerm, ctx: TContext = []): { success: true; type: s
     return { success: false, error: String(e) };
   }
 }
+
+// ============================================================================
+// Monaco Editor Configuration
+// ============================================================================
+
+// Define a custom dark theme that matches our UI
+const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: '6e7681', fontStyle: 'italic' },
+    { token: 'keyword', foreground: 'ff7b72' },
+    { token: 'string', foreground: 'a5d6ff' },
+    { token: 'number', foreground: '79c0ff' },
+    { token: 'type', foreground: '7ee787' },
+  ],
+  colors: {
+    'editor.background': '#161b22',
+    'editor.foreground': '#c9d1d9',
+    'editor.lineHighlightBackground': '#161b22',
+    'editor.selectionBackground': '#264f78',
+    'editorCursor.foreground': '#58a6ff',
+    'editorLineNumber.foreground': '#6e7681',
+    'editorLineNumber.activeForeground': '#c9d1d9',
+    'editorIndentGuide.background': '#21262d',
+    'editorIndentGuide.activeBackground': '#30363d',
+    'editorBracketMatch.background': '#2d333b',
+    'editorBracketMatch.border': '#58a6ff',
+  },
+};
+
+// Editor options
+const MONACO_OPTIONS: MonacoEditor.IStandaloneEditorConstructionOptions = {
+  fontSize: 14,
+  fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+  lineHeight: 1.6,
+  minimap: { enabled: false },
+  scrollBeyondLastLine: false,
+  wordWrap: 'on',
+  automaticLayout: true,
+  tabSize: 2,
+  insertSpaces: true,
+  renderLineHighlight: 'line',
+  cursorBlinking: 'smooth',
+  smoothScrolling: true,
+  padding: { top: 16, bottom: 16 },
+  folding: true,
+  lineNumbers: 'on',
+  glyphMargin: true,
+  renderWhitespace: 'selection',
+  bracketPairColorization: { enabled: true },
+  // Ensure tooltips/hover widgets render above other page elements
+  fixedOverflowWidgets: true,
+};
+
+// CSS to ensure Monaco widgets render above everything
+const MONACO_WIDGET_STYLES = `
+  .monaco-hover,
+  .monaco-editor .suggest-widget,
+  .monaco-editor .parameter-hints-widget,
+  .monaco-editor-overlaymessage,
+  .monaco-editor .monaco-hover-content {
+    z-index: 10001 !important;
+  }
+`;
 
 // ============================================================================
 // Components
@@ -420,7 +509,25 @@ const DeclarationCard: React.FC<DeclarationCardProps> = ({ decl, index, typeResu
 
 export const TextEditorPage: React.FC = () => {
   const [code, setCode] = useState(EXAMPLE_CODE);
-  const [isFocused, setIsFocused] = useState(false);
+  const editorRef = useRef<IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<Monaco | null>(null);
+
+  // Inject Monaco widget z-index styles on mount
+  useEffect(() => {
+    const styleId = 'monaco-widget-z-index-fix';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = MONACO_WIDGET_STYLES;
+      document.head.appendChild(style);
+    }
+    return () => {
+      const style = document.getElementById(styleId);
+      if (style) {
+        style.remove();
+      }
+    };
+  }, []);
 
   // Parse the code
   const parseOutcome = useMemo((): ParseOutcome => {
@@ -450,17 +557,20 @@ export const TextEditorPage: React.FC = () => {
         kind: decl.kind,
       };
 
-      // Try to infer type based on what we have
-      if (decl.value) {
+      // Determine the type to display:
+      // 1. If there's an explicit type annotation, use it (it's already parsed correctly)
+      // 2. Otherwise, if there's a value, try to infer its type
+      if (decl.type) {
+        // Use the explicitly declared type
+        result.inferredType = prettyPrint(decl.type);
+      } else if (decl.value) {
+        // No type annotation - infer from value
         const typeResult = tryInferType(decl.value);
         if (typeResult.success) {
           result.inferredType = typeResult.type;
         } else {
           result.error = typeResult.error;
         }
-      } else if (decl.type) {
-        // For axioms, the type is provided directly
-        result.inferredType = prettyPrint(decl.type);
       }
 
       return result;
@@ -478,6 +588,63 @@ export const TextEditorPage: React.FC = () => {
     return { total, successful, withErrors };
   }, [parseOutcome, typeCheckResults]);
 
+  // Update Monaco markers when parse result changes
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    if (!monaco || !editor) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const markers: MonacoEditor.IMarkerData[] = [];
+
+    if (!parseOutcome.success) {
+      const error = parseOutcome.error;
+
+      // Get the end of the line for the error
+      const lineContent = model.getLineContent(error.line);
+      const endCol = Math.max(error.col + 1, lineContent.length + 1);
+
+      markers.push({
+        severity: monaco.MarkerSeverity.Error,
+        message: error.message.replace(/^Parse error at line \d+, col \d+: /, ''),
+        startLineNumber: error.line,
+        startColumn: error.col,
+        endLineNumber: error.line,
+        endColumn: endCol,
+        source: 'TT Parser',
+      });
+    }
+
+    // Could also add type errors as warnings here in the future
+    // typeCheckResults.forEach((result, index) => {
+    //   if (result.error) {
+    //     // Would need line/col info from declarations
+    //   }
+    // });
+
+    monaco.editor.setModelMarkers(model, 'tt-parser', markers);
+  }, [parseOutcome, typeCheckResults]);
+
+  // Editor mount handler
+  const handleEditorMount: OnMount = useCallback((editor, monaco) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+
+    // Define and apply custom theme
+    monaco.editor.defineTheme('tt-dark', MONACO_THEME);
+    monaco.editor.setTheme('tt-dark');
+
+    // Focus the editor
+    editor.focus();
+  }, []);
+
+  // Editor change handler
+  const handleEditorChange: OnChange = useCallback((value) => {
+    setCode(value || '');
+  }, []);
+
   const handleExampleClick = useCallback(() => {
     setCode(EXAMPLE_CODE);
   }, []);
@@ -491,27 +658,28 @@ export const TextEditorPage: React.FC = () => {
       {/* Editor Section */}
       <div style={styles.editorSection}>
         <h2 style={styles.sectionTitle}>TT Language Editor</h2>
-        <textarea
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          style={{
-            ...styles.textarea,
-            ...(isFocused ? styles.textareaFocus : {}),
-          }}
-          placeholder="Enter TT language expressions here...
-
-Examples:
-  λ (x : A) => x        -- Lambda
-  (x : A) -> B          -- Pi type
-  A -> B                -- Arrow type
-  let x := v in body    -- Let binding
-  f x y                 -- Application
-  ?hole                 -- Hole
-"
-          spellCheck={false}
-        />
+        <div style={styles.editorWrapper}>
+          <Editor
+            height="300px"
+            defaultLanguage="plaintext"
+            value={code}
+            onChange={handleEditorChange}
+            onMount={handleEditorMount}
+            options={MONACO_OPTIONS}
+            loading={
+              <div style={{
+                backgroundColor: '#161b22',
+                height: '300px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#8b949e'
+              }}>
+                Loading editor...
+              </div>
+            }
+          />
+        </div>
 
         <div style={styles.statusBar}>
           <div>
@@ -541,24 +709,15 @@ Examples:
 
           {!parseOutcome.success && (
             <span style={{ ...styles.badge, ...styles.badgeError }}>
-              ⚠ Parse Error
+              ⚠ Parse Error at line {parseOutcome.error.line}
             </span>
           )}
         </div>
-
-        <p style={styles.helpText}>
-          Supports: <code>λ</code>/<code>fun</code>/<code>\</code> for lambda,
-          <code>Π</code>/<code>forall</code> for Pi,
-          <code>→</code>/<code>-&gt;</code> for arrow,
-          <code>let x := v in body</code>,
-          operators with precedence,
-          <code>def</code>/<code>theorem</code>/<code>axiom</code> declarations
-        </p>
       </div>
 
       {/* Results Section */}
       <div style={styles.resultsSection}>
-        {/* Parse Error Display */}
+        {/* Parse Error Display (redundant with inline markers, but useful for details) */}
         {!parseOutcome.success && (
           <div style={{ ...styles.panel, ...styles.errorPanel }}>
             <h3 style={{ ...styles.sectionTitle, color: '#f85149', marginTop: 0 }}>
@@ -621,7 +780,7 @@ Examples:
               <h3 style={{ ...styles.sectionTitle, marginTop: '24px' }}>Syntax Reference</h3>
               <div style={styles.panel}>
                 <div style={{ fontSize: '12px', lineHeight: '1.8' }}>
-                  <div><code style={{ color: '#7ee787' }}>λ (x : T) =&gt; body</code> — Lambda</div>
+                  <div><code style={{ color: '#7ee787' }}>\(x : T) =&gt; body</code> — Lambda</div>
                   <div><code style={{ color: '#7ee787' }}>(x : A) -&gt; B</code> — Pi type</div>
                   <div><code style={{ color: '#7ee787' }}>A -&gt; B</code> — Function type</div>
                   <div><code style={{ color: '#7ee787' }}>let x := v in e</code> — Let binding</div>
@@ -657,4 +816,3 @@ Examples:
 };
 
 export default TextEditorPage;
-

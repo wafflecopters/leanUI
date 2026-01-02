@@ -19,13 +19,13 @@ export const SYNTAX_RULES: SyntaxRule[] = [
   {
     id: 'lambda',
     name: 'Lambda Expression',
-    description: 'lambda x expr → λ x => expr',
+    description: 'lambda x expr -> \\x => expr',
     priority: 100,
     matches: (node) => {
       return node.type === 'application' &&
              node.children.length >= 3 &&
              node.children[0]?.type === 'variable' &&
-             (node.children[0]?.value === 'lambda' || node.children[0]?.value === 'λ');
+             node.children[0]?.value === 'lambda';
     },
     toLatex: (node, childRenderer, _path) => {
       if (node.children.length < 3) return node.raw;

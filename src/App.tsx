@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { EnhancedProofWorkspace } from './components/EnhancedProofWorkspace';
 import { InductiveTypeEditor } from './components/InductiveTypeEditor';
 import { RecordEditor } from './components/RecordEditor';
@@ -8,8 +9,30 @@ interface LeanAST {
   [key: string]: any;
 }
 
-function App() {
+function AppContent() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [mode, setMode] = useState<'ast' | 'proof' | 'inductive' | 'record' | 'text-editor'>('proof');
+
+  // Sync URL to mode state on mount and when URL changes
+  useEffect(() => {
+    const path = location.pathname;
+    if (path === '/text-editor') setMode('text-editor');
+    else if (path === '/inductive') setMode('inductive');
+    else if (path === '/record') setMode('record');
+    else if (path === '/ast') setMode('ast');
+    else if (path === '/') setMode('proof');
+  }, [location.pathname]);
+
+  // Helper to change mode and update URL
+  const handleModeChange = (newMode: typeof mode) => {
+    setMode(newMode);
+    if (newMode === 'proof') navigate('/');
+    else if (newMode === 'text-editor') navigate('/text-editor');
+    else if (newMode === 'inductive') navigate('/inductive');
+    else if (newMode === 'record') navigate('/record');
+    else if (newMode === 'ast') navigate('/ast');
+  };
   const [ast, setAst] = useState<LeanAST | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +90,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
           <h1 style={{ margin: 0, fontSize: '24px', color: '#c9d1d9' }}>Lean UI - TT Text Editor</h1>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => setMode('proof')}
+              onClick={() => handleModeChange('proof')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#238636',
@@ -80,7 +103,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Proof Assistant
             </button>
             <button
-              onClick={() => setMode('inductive')}
+              onClick={() => handleModeChange('inductive')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#1f6feb',
@@ -93,7 +116,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Inductive Types
             </button>
             <button
-              onClick={() => setMode('record')}
+              onClick={() => handleModeChange('record')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#8957e5',
@@ -106,7 +129,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Records
             </button>
             <button
-              onClick={() => setMode('ast')}
+              onClick={() => handleModeChange('ast')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#6e7681',
@@ -139,7 +162,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
           <h1 style={{ margin: 0, fontSize: '24px' }}>Lean UI - Inductive Type Editor</h1>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => setMode('proof')}
+              onClick={() => handleModeChange('proof')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#007acc',
@@ -152,7 +175,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Proof Assistant
             </button>
             <button
-              onClick={() => setMode('text-editor')}
+              onClick={() => handleModeChange('text-editor')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#da3633',
@@ -165,7 +188,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Text Editor
             </button>
             <button
-              onClick={() => setMode('record')}
+              onClick={() => handleModeChange('record')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#2e7d32',
@@ -178,7 +201,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Records
             </button>
             <button
-              onClick={() => setMode('ast')}
+              onClick={() => handleModeChange('ast')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#6c757d',
@@ -211,7 +234,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
           <h1 style={{ margin: 0, fontSize: '24px' }}>Lean UI - Record Editor</h1>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => setMode('proof')}
+              onClick={() => handleModeChange('proof')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#007acc',
@@ -224,7 +247,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Proof Assistant
             </button>
             <button
-              onClick={() => setMode('text-editor')}
+              onClick={() => handleModeChange('text-editor')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#da3633',
@@ -237,7 +260,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Text Editor
             </button>
             <button
-              onClick={() => setMode('inductive')}
+              onClick={() => handleModeChange('inductive')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#28a745',
@@ -250,7 +273,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Inductive Types
             </button>
             <button
-              onClick={() => setMode('ast')}
+              onClick={() => handleModeChange('ast')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#6c757d',
@@ -283,7 +306,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
           <h1 style={{ margin: 0, fontSize: '24px' }}>Lean UI - Enhanced Proof Assistant</h1>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
-              onClick={() => setMode('text-editor')}
+              onClick={() => handleModeChange('text-editor')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#da3633',
@@ -296,7 +319,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Text Editor
             </button>
             <button
-              onClick={() => setMode('inductive')}
+              onClick={() => handleModeChange('inductive')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#28a745',
@@ -309,7 +332,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Inductive Types
             </button>
             <button
-              onClick={() => setMode('record')}
+              onClick={() => handleModeChange('record')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#2e7d32',
@@ -322,7 +345,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
               Records
             </button>
             <button
-              onClick={() => setMode('ast')}
+              onClick={() => handleModeChange('ast')}
               style={{
                 padding: '6px 12px',
                 backgroundColor: '#6c757d',
@@ -347,7 +370,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
         <h1>Lean UI - AST Viewer</h1>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
-            onClick={() => setMode('proof')}
+            onClick={() => handleModeChange('proof')}
             style={{
               padding: '6px 12px',
               backgroundColor: '#007acc',
@@ -360,7 +383,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
             Proof Assistant
           </button>
           <button
-            onClick={() => setMode('text-editor')}
+            onClick={() => handleModeChange('text-editor')}
             style={{
               padding: '6px 12px',
               backgroundColor: '#da3633',
@@ -373,7 +396,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
             Text Editor
           </button>
           <button
-            onClick={() => setMode('inductive')}
+            onClick={() => handleModeChange('inductive')}
             style={{
               padding: '6px 12px',
               backgroundColor: '#28a745',
@@ -386,7 +409,7 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
             Inductive Types
           </button>
           <button
-            onClick={() => setMode('record')}
+            onClick={() => handleModeChange('record')}
             style={{
               padding: '6px 12px',
               backgroundColor: '#2e7d32',
@@ -447,6 +470,16 @@ theorem sum_formula (n : Nat) : 2 * sum_range n = n * (n + 1) := by
         </div>
       )}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="*" element={<AppContent />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
 

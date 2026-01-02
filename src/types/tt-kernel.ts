@@ -367,9 +367,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
 
         case 'BLam':
           if (isAnonymous) {
-            return `(λ ${domain} => ${body})`;
+            return `(\\${domain} => ${body})`;
           }
-          return `(λ (${term.name} : ${domain}) => ${body})`;
+          return `(\\(${term.name} : ${domain}) => ${body})`;
 
         case 'BLet':
           const defVal = prettyPrint(term.binderKind.defVal, context);

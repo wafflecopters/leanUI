@@ -88,14 +88,12 @@ test('Tokenize keywords', () => {
 });
 
 test('Tokenize lambda symbols', () => {
-  const tokens1 = tokenize('λ');
+  // Only \ and fun are supported (λ unicode removed)
+  const tokens1 = tokenize('\\');
   assertEqual(tokens1[0].type, 'LAMBDA');
 
-  const tokens2 = tokenize('\\');
+  const tokens2 = tokenize('fun');
   assertEqual(tokens2[0].type, 'LAMBDA');
-
-  const tokens3 = tokenize('fun');
-  assertEqual(tokens3[0].type, 'LAMBDA');
 });
 
 // PI token removed - use (x : T) -> ... syntax instead
@@ -211,7 +209,79 @@ test('Parse Type', () => {
   const term = parseExpr('Type');
   assertTermShape(term, 'Sort');
   if (term.tag === 'Sort') {
-    assertEqual(term.level, 1); // Type = Type_1
+    assertEqual(term.level, 1); // Type = Sort(1)
+  }
+});
+
+test('Parse Type n (with space)', () => {
+  // Type 0 = Sort(1) = Type
+  const t0 = parseExpr('Type 0');
+  assertTermShape(t0, 'Sort');
+  if (t0.tag === 'Sort') {
+    assertEqual(t0.level, 1); // Type 0 = Sort(1)
+  }
+
+  // Type 1 = Sort(2)
+  const t1 = parseExpr('Type 1');
+  assertTermShape(t1, 'Sort');
+  if (t1.tag === 'Sort') {
+    assertEqual(t1.level, 2); // Type 1 = Sort(2)
+  }
+
+  // Type 2 = Sort(3)
+  const t2 = parseExpr('Type 2');
+  assertTermShape(t2, 'Sort');
+  if (t2.tag === 'Sort') {
+    assertEqual(t2.level, 3); // Type 2 = Sort(3)
+  }
+});
+
+test('Parse Type_n (with underscore)', () => {
+  // Type_0 = Sort(1) = Type
+  const t0 = parseExpr('Type_0');
+  assertTermShape(t0, 'Sort');
+  if (t0.tag === 'Sort') {
+    assertEqual(t0.level, 1); // Type_0 = Sort(1)
+  }
+
+  // Type_1 = Sort(2)
+  const t1 = parseExpr('Type_1');
+  assertTermShape(t1, 'Sort');
+  if (t1.tag === 'Sort') {
+    assertEqual(t1.level, 2); // Type_1 = Sort(2)
+  }
+
+  // Type_42 = Sort(43)
+  const t42 = parseExpr('Type_42');
+  assertTermShape(t42, 'Sort');
+  if (t42.tag === 'Sort') {
+    assertEqual(t42.level, 43); // Type_42 = Sort(43)
+  }
+});
+
+test('Parse Type in Pi type', () => {
+  // Verify that Type is correctly parsed inside Pi binders
+  const term = parseExpr('(A : Type) -> A');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
+    // Domain should be Sort(1)
+    assertTermShape(term.domain, 'Sort');
+    if (term.domain.tag === 'Sort') {
+      assertEqual(term.domain.level, 1);
+    }
+  }
+});
+
+test('Parse Type 1 in Pi type', () => {
+  // Verify that Type 1 is correctly parsed inside Pi binders
+  const term = parseExpr('(A : Type 1) -> A');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
+    // Domain should be Sort(2)
+    assertTermShape(term.domain, 'Sort');
+    if (term.domain.tag === 'Sort') {
+      assertEqual(term.domain.level, 2);
+    }
   }
 });
 
@@ -359,8 +429,8 @@ test('Parse lambda: ERROR on \\ x : A => x (parens required)', () => {
   );
 });
 
-test('Parse lambda with λ symbol and =>', () => {
-  const term = parseExpr('λ (x : T) => x');
+test('Parse lambda with backslash and =>', () => {
+  const term = parseExpr('\\(x : T) => x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.binderKind.tag, 'BLam');
@@ -504,7 +574,7 @@ test('Parse application with parentheses', () => {
 });
 
 test('Parse application of lambda', () => {
-  const term = parseExpr('(λ x => x) y');
+  const term = parseExpr('(\\x => x) y');
   assertTermShape(term, 'App');
   if (term.tag === 'App') {
     assertTermShape(term.fn, 'Binder');
@@ -649,8 +719,8 @@ test('Arrow binds looser than operators', () => {
 });
 
 test('Lambda body extends as far as possible', () => {
-  // λ x => a + b  should be  λ x => (a + b)
-  const term = parseExpr('λ x => a + b');
+  // \x => a + b  should be  \x => (a + b)
+  const term = parseExpr('\\x => a + b');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertTermShape(term.body, 'App');
@@ -693,7 +763,7 @@ test('Parse definition only (name = impl)', () => {
 });
 
 test('Parse complex type signature with definition using :=', () => {
-  const decls = parseDeclarations('id : (A : Type) -> A -> A := λ (A : Type) (x : A) => x');
+  const decls = parseDeclarations('id : (A : Type) -> A -> A := \\(A : Type) (x : A) => x');
   assertEqual(decls.length, 1);
   assertEqual(decls[0].kind, 'def');
   assertEqual(decls[0].name, 'id');
@@ -703,7 +773,7 @@ test('Parse complex type signature with definition using :=', () => {
 
 test('Parse two-line declaration (type on one line, def on next) - merged', () => {
   const source = `id : (A : Type) -> A -> A
-id = λ (A : Type) (x : A) => x`;
+id = \\(A : Type) (x : A) => x`;
   const decls = parseDeclarations(source);
   // Declarations with same name (type-only followed by value-only) are merged
   assertEqual(decls.length, 1);
@@ -817,7 +887,7 @@ test('Parse function type with explicit domain', () => {
 });
 
 test('Parse complex lambda', () => {
-  const term = parseExpr('λ (f : A -> B) (x : A) => f x');
+  const term = parseExpr('\\(f : A -> B) (x : A) => f x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.name, 'f');
@@ -839,7 +909,7 @@ test('Parse identity function type', () => {
 });
 
 test('Parse let with complex value', () => {
-  const term = parseExpr('let id := λ x => x in id y');
+  const term = parseExpr('let id := \\x => x in id y');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLet') {
     assertEqual(term.name, 'id');
@@ -884,7 +954,7 @@ test('Error on unclosed parenthesis', () => {
 });
 
 test('Error on missing lambda binder', () => {
-  assertThrows(() => parseExpr('λ'), 'Should error on lambda without binder');
+  assertThrows(() => parseExpr('\\'), 'Should error on lambda without binder');
 });
 
 // Removed test for Π error - Π is no longer a valid token
@@ -948,21 +1018,21 @@ console.log('PARSER: DE BRUIJN INDEX TESTS');
 console.log('='.repeat(80) + '\n');
 
 test('Lambda body correctly references bound variable', () => {
-  const term = parseExpr('λ (x : T) => x');
+  const term = parseExpr('\\(x : T) => x');
   if (term.tag === 'Binder' && term.body.tag === 'Var') {
     assertEqual(term.body.index, 0, 'Bound variable should have index 0');
   }
 });
 
 test('Nested lambda body correctly references outer variable', () => {
-  const term = parseExpr('λ (x : A) (y : B) => x');
+  const term = parseExpr('\\(x : A) (y : B) => x');
   if (term.tag === 'Binder' && term.body.tag === 'Binder' && term.body.body.tag === 'Var') {
     assertEqual(term.body.body.index, 1, 'Outer variable should have index 1');
   }
 });
 
 test('Nested lambda body correctly references inner variable', () => {
-  const term = parseExpr('λ (x : A) (y : B) => y');
+  const term = parseExpr('\\(x : A) (y : B) => y');
   if (term.tag === 'Binder' && term.body.tag === 'Binder' && term.body.body.tag === 'Var') {
     assertEqual(term.body.body.index, 0, 'Inner variable should have index 0');
   }
@@ -983,7 +1053,7 @@ test('Pi body correctly references bound variable', () => {
 });
 
 test('Free variable becomes Const', () => {
-  const term = parseExpr('λ x => y');
+  const term = parseExpr('\\x => y');
   if (term.tag === 'Binder') {
     // y is not bound, should be Const
     assertTermShape(term.body, 'Const');
@@ -1002,7 +1072,7 @@ console.log('PARSER: PRETTY PRINT TESTS');
 console.log('='.repeat(80) + '\n');
 
 test('Pretty print preserves variable names', () => {
-  const term = parseExpr('λ (foo : T) => foo');
+  const term = parseExpr('\\(foo : T) => foo');
   const printed = prettyPrint(term);
   if (!printed.includes('foo')) {
     throw new Error(`Expected 'foo' in output, got: ${printed}`);
@@ -1015,6 +1085,79 @@ test('Pretty print shows Pi types correctly', () => {
   if (!printed.includes('α')) {
     throw new Error(`Expected 'α' in output, got: ${printed}`);
   }
+});
+
+// ============================================================================
+// Parser: Inductive Type Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PARSER: INDUCTIVE TYPE TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse simple inductive type (Nat)', () => {
+  const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'inductive');
+  assertEqual(decls[0].name, 'Nat');
+  assertTermShape(decls[0].type!, 'Sort');
+  assertEqual(decls[0].constructors?.length, 2);
+  assertEqual(decls[0].constructors![0].name, 'Zero');
+  assertEqual(decls[0].constructors![1].name, 'Succ');
+});
+
+test('Parse inductive type without where keyword', () => {
+  const source = `inductive Nat : Type
+  Zero : Nat
+  Succ : Nat -> Nat`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'inductive');
+  assertEqual(decls[0].constructors?.length, 2);
+});
+
+test('Parse inductive type with pipes', () => {
+  const source = `inductive Bool : Type where
+  | True : Bool
+  | False : Bool`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'inductive');
+  assertEqual(decls[0].constructors?.length, 2);
+  assertEqual(decls[0].constructors![0].name, 'True');
+  assertEqual(decls[0].constructors![1].name, 'False');
+});
+
+test('Parse parameterized inductive type (List)', () => {
+  const source = `inductive List : Type -> Type where
+  | Nil : (A : Type) -> List A
+  | Cons : (A : Type) -> A -> List A -> List A`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'inductive');
+  assertEqual(decls[0].name, 'List');
+  assertEqual(decls[0].constructors?.length, 2);
+  assertEqual(decls[0].constructors![0].name, 'Nil');
+  assertEqual(decls[0].constructors![1].name, 'Cons');
+});
+
+test('Parse inductive type with complex constructor types', () => {
+  const source = `inductive Expr : Type where
+  | Var : (name : String) -> Expr
+  | App : Expr -> Expr -> Expr
+  | Lam : (name : String) -> Expr -> Expr`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].kind, 'inductive');
+  assertEqual(decls[0].constructors?.length, 3);
 });
 
 // ============================================================================

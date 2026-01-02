@@ -237,7 +237,7 @@ function makeVec(): InductiveTypeDef {
     constructors: [
       {
         name: 'vnil',
-        // vnil : Π (A : Type). Vec A 0
+        // vnil : (A : Type) -> Vec A 0
         type: mkPi(
           Type0,
           mkApp(mkApp(Vec, mkVar(0)), zero),
@@ -246,12 +246,12 @@ function makeVec(): InductiveTypeDef {
       },
       {
         name: 'vcons',
-        // vcons : Π (A : Type). Π (n : Nat). A -> Vec A n -> Vec A (succ n)
+        // vcons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (succ n)
         // Levels:
-        // Π (A : Type).           -- A at 0
-        //   Π (n : Nat).          -- A at 1, n at 0
-        //     Π (_ : A).          -- A at 2, n at 1, _ at 0
-        //       Π (_ : Vec A n).  -- A at 3, n at 2
+        // (A : Type) ->           -- A at 0
+        //   (n : Nat) ->          -- A at 1, n at 0
+        //     (_ : A) ->          -- A at 2, n at 1, _ at 0
+        //       (_ : Vec A n) ->  -- A at 3, n at 2
         //         Vec A (succ n)  -- A at 3, n at 2
         type: mkPi(
           Type0,
@@ -283,8 +283,8 @@ function makeVec(): InductiveTypeDef {
  * Finite set type (numbers less than n)
  *
  * inductive Fin : Nat -> Type where
- *   | fzero : Π (n : Nat). Fin (succ n)
- *   | fsucc : Π (n : Nat). Fin n -> Fin (succ n)
+ *   | fzero : (n : Nat) -> Fin (succ n)
+ *   | fsucc : (n : Nat) -> Fin n -> Fin (succ n)
  */
 function makeFin(): InductiveTypeDef {
   const Nat = mkInductiveRef('Nat', Type0);
@@ -300,7 +300,7 @@ function makeFin(): InductiveTypeDef {
     constructors: [
       {
         name: 'fzero',
-        // fzero : Π (n : Nat). Fin (succ n)
+        // fzero : (n : Nat) -> Fin (succ n)
         type: mkPi(
           Nat,
           mkApp(Fin, mkApp(succ, mkVar(0))),
@@ -309,9 +309,9 @@ function makeFin(): InductiveTypeDef {
       },
       {
         name: 'fsucc',
-        // fsucc : Π (n : Nat). Fin n -> Fin (succ n)
-        // Π (n : Nat).     -- n at 0
-        //   Π (_ : Fin n). -- n at 1
+        // fsucc : (n : Nat) -> Fin n -> Fin (succ n)
+        // (n : Nat) ->     -- n at 0
+        //   (_ : Fin n) -> -- n at 1
         //     Fin (succ n) -- n at 1
         type: mkPi(
           Nat,
@@ -375,10 +375,10 @@ function makeSum(): InductiveTypeDef {
     constructors: [
       {
         name: 'inl',
-        // inl : Π (A : Type). Π (B : Type). A -> Sum A B
-        // Π (A : Type).       -- A at 0
-        //   Π (B : Type).     -- A at 1, B at 0
-        //     Π (_ : A).      -- A at 2, B at 1
+        // inl : (A : Type) -> (B : Type) -> A -> Sum A B
+        // (A : Type) ->       -- A at 0
+        //   (B : Type) ->     -- A at 1, B at 0
+        //     (_ : A) ->      -- A at 2, B at 1
         //       Sum A B       -- A at 2, B at 1
         type: mkPi(
           Type0,
@@ -396,7 +396,7 @@ function makeSum(): InductiveTypeDef {
       },
       {
         name: 'inr',
-        // inr : Π (A : Type). Π (B : Type). B -> Sum A B
+        // inr : (A : Type) -> (B : Type) -> B -> Sum A B
         type: mkPi(
           Type0,
           mkPi(
@@ -434,7 +434,7 @@ function makeMagmaRecord(): RecordDef {
   const MagmaKind = mkArrow(Type0, Type0);
 
   // In the field context, A is at De Bruijn index 0
-  // op : A -> A -> A = Π(_ : A). Π(_ : A). A
+  // op : A -> A -> A = (_ : A) -> (_ : A) -> A
   // Under first binder: A is at index 1
   // Under second binder: A is at index 2
   const opType = mkPi(
@@ -484,8 +484,8 @@ function makeSemigroupRecord(): RecordDef {
   // taking A -> A -> A in the Magma field context.
   //
   // Actually, since op is inherited from Magma and Magma has params,
-  // the inherited op field type is: A -> A -> A (not Π(A:Type). A -> A -> A)
-  // So op is just: Π(_ : Var(0)). Π(_ : Var(1)). Var(2) in param context
+  // the inherited op field type is: A -> A -> A (not (A:Type) -> A -> A -> A)
+  // So op is just: (_ : Var(0)) -> (_ : Var(1)) -> Var(2) in param context
 
   // For assoc, we need to reference op as a constant
   // op as a projection has type: Magma A -> (A -> A -> A)
@@ -494,12 +494,12 @@ function makeSemigroupRecord(): RecordDef {
   const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
   const op = mkConst('op', opFieldType);
 
-  // Eq : Π (A : Type). A -> A -> Type_0
+  // Eq : (A : Type) -> A -> A -> Type_0
   // In the body of assoc, we apply Eq to (A, lhs, rhs) - 3 args
   const EqType = mkPi(Type0, mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_'), 'A');
   const Eq = mkConst('Eq', EqType);
 
-  // Build assoc : Π (a b c : A), Eq A (op a (op b c)) (op (op a b) c)
+  // Build assoc : (a b c : A) -> Eq A (op a (op b c)) (op (op a b) c)
   //
   // In param context: A is at index 0
   // After binding a: a=0, A=1
@@ -520,7 +520,7 @@ function makeSemigroupRecord(): RecordDef {
   // Eq A lhs rhs (A is at index 3)
   const eqBody = mkApp(mkApp(mkApp(Eq, mkVar(3)), lhs), rhs);
 
-  // Build the full type: Π (a b c : A), Eq ...
+  // Build the full type: (a : A) -> (b : A) -> (c : A) -> Eq ...
   // In param context, A is at index 0
   // Binding a: domain = Var(0), then a is at 0, A is at 1
   // Binding b: domain = Var(1), then b is at 0, a is at 1, A is at 2
@@ -573,7 +573,7 @@ function makeMonoidRecord(): RecordDef {
 
   // In param context: A is at index 0
   //
-  // op : A -> A -> A (field type, not Π(A:Type). ...)
+  // op : A -> A -> A (field type, not (A:Type) -> ...)
   const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
   const op = mkConst('op', opFieldType);
 
@@ -581,11 +581,11 @@ function makeMonoidRecord(): RecordDef {
   const eFieldType = mkVar(0);
   const e = mkConst('e', eFieldType);
 
-  // Eq : Π (A : Type). A -> A -> Type_0
+  // Eq : (A : Type) -> A -> A -> Type_0
   const EqType = mkPi(Type0, mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_'), 'A');
   const Eq = mkConst('Eq', EqType);
 
-  // Build left_id : Π (x : A), Eq A (op e x) x
+  // Build left_id : (x : A) -> Eq A (op e x) x
   // In param context: A is at index 0
   // After binding x: x=0, A=1
   //
@@ -599,7 +599,7 @@ function makeMonoidRecord(): RecordDef {
     'x'
   );
 
-  // Build right_id : Π (x : A), Eq A (op x e) x
+  // Build right_id : (x : A) -> Eq A (op x e) x
   // After binding x: x=0, A=1
   // op x e = App(App(op, x), e)
   const op_x_e = mkApp(mkApp(op, mkVar(0)), e);

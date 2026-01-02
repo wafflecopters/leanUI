@@ -8,7 +8,7 @@
  * - Sorts: Type, Prop, Type_0, Type_1, ...
  * - Variables/Constants: identifiers (x, foo, myVar)
  * - Holes: ?name
- * - Lambda: λ x => body  or  \x y => body  or  \(x : T) => body
+ * - Lambda: \x => body  or  \x y => body  or  \(x : T) => body
  *           \(x, y : T) => body  for multiple binders with same type
  * - Pi/Forall: (x : T) -> body  (dependent function type)
  * - Arrow (non-dependent): A -> B
@@ -22,6 +22,7 @@
  * - Type signature: name : type
  * - Definition: name = impl
  * - Combined: name : type followed by name = impl (on next line)
+ * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  * - Legacy: def/theorem/axiom keywords still supported
  */
 
@@ -58,7 +59,10 @@ export type TokenType =
   | 'DEF'          // def keyword
   | 'THEOREM'      // theorem keyword
   | 'AXIOM'        // axiom keyword
-  | 'SEMICOLON';   // ;
+  | 'SEMICOLON'    // ;
+  | 'INDUCTIVE'    // inductive keyword
+  | 'WHERE'        // where keyword
+  | 'PIPE';        // |
 
 export interface Token {
   type: TokenType;
@@ -225,7 +229,7 @@ export class Lexer {
     const startCol = this.col;
     const ch = this.input[this.pos];
 
-    // Single character tokens
+    // Single character tokens (but check for || before |)
     switch (ch) {
       case '(':
         this.pos++; this.col++;
@@ -248,6 +252,14 @@ export class Lexer {
       case ';':
         this.pos++; this.col++;
         return { type: 'SEMICOLON', value: ';', pos: startPos, line: startLine, col: startCol };
+      case '|':
+        // Check for || operator first
+        if (this.input[this.pos + 1] === '|') {
+          // Don't tokenize as PIPE, fall through to operator handling
+          break;
+        }
+        this.pos++; this.col++;
+        return { type: 'PIPE', value: '|', pos: startPos, line: startLine, col: startCol };
       case '_':
         // Check if it's just underscore or part of an identifier
         if (!this.isIdentChar(this.input[this.pos + 1])) {
@@ -257,8 +269,8 @@ export class Lexer {
         break;
     }
 
-    // Lambda: λ or \ or fun
-    if (ch === 'λ' || ch === '\\') {
+    // Lambda: \ or fun (removed λ unicode support)
+    if (ch === '\\') {
       this.pos++; this.col++;
       return { type: 'LAMBDA', value: ch, pos: startPos, line: startLine, col: startCol };
     }
@@ -323,7 +335,19 @@ export class Lexer {
           return { type: 'THEOREM', value: 'theorem', pos: startPos, line: startLine, col: startCol };
         case 'axiom':
           return { type: 'AXIOM', value: 'axiom', pos: startPos, line: startLine, col: startCol };
+        case 'inductive':
+          return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
+        case 'where':
+          return { type: 'WHERE', value: 'where', pos: startPos, line: startLine, col: startCol };
         default:
+          // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
+          if (ident.startsWith('Type_')) {
+            const suffix = ident.substring(5);
+            // Verify suffix is all digits
+            if (/^\d+$/.test(suffix)) {
+              return { type: 'TYPE', value: ident, pos: startPos, line: startLine, col: startCol };
+            }
+          }
           return { type: 'IDENT', value: ident, pos: startPos, line: startLine, col: startCol };
       }
     }
@@ -400,10 +424,11 @@ type NameContext = string[];
  * Result of parsing a top-level declaration.
  */
 export interface ParsedDeclaration {
-  kind: 'def' | 'theorem' | 'axiom' | 'expr';
+  kind: 'def' | 'theorem' | 'axiom' | 'expr' | 'inductive';
   name?: string;
   type?: TTerm;
   value?: TTerm;
+  constructors?: Array<{ name: string; type: TTerm }>;
 }
 
 /**
@@ -490,6 +515,11 @@ export class Parser {
 
   private parseDeclaration(): ParsedDeclaration | null {
     const current = this.current();
+
+    // Inductive: inductive name : type where constructors
+    if (current.type === 'INDUCTIVE') {
+      return this.parseInductiveDeclaration();
+    }
 
     // Legacy: def name : type := value
     if (current.type === 'DEF') {
@@ -610,6 +640,72 @@ export class Parser {
       kind: 'axiom',
       name: nameToken.value,
       type
+    };
+  }
+
+  /**
+   * Parse inductive type declaration:
+   * inductive Name : Type where
+   *   | Constructor1 : Type1
+   *   | Constructor2 : Type2
+   *   ...
+   *
+   * Or without 'where' keyword:
+   * inductive Name : Type
+   *   Constructor1 : Type1
+   *   Constructor2 : Type2
+   */
+  private parseInductiveDeclaration(): ParsedDeclaration {
+    this.expect('INDUCTIVE');
+    const nameToken = this.expect('IDENT');
+    this.expect('COLON');
+    const type = this.expr(0, []);
+
+    // Optional 'where' keyword
+    if (this.current().type === 'WHERE') {
+      this.advance();
+    }
+
+    // Skip newlines before constructors
+    this.skipNewlines();
+
+    // Parse constructors
+    const constructors: Array<{ name: string; type: TTerm }> = [];
+
+    while (this.current().type !== 'EOF') {
+      // Check for pipe or identifier (constructors can start with either)
+      const current = this.current();
+
+      // Stop if we hit something that's not a constructor
+      if (current.type !== 'PIPE' && current.type !== 'IDENT') {
+        break;
+      }
+
+      // Optional pipe before constructor
+      if (current.type === 'PIPE') {
+        this.advance();
+      }
+
+      // Parse constructor: name : type
+      if (this.current().type !== 'IDENT') {
+        break; // No more constructors
+      }
+
+      const ctorName = this.expect('IDENT').value;
+      this.expect('COLON');
+      const ctorType = this.expr(0, []);
+
+      constructors.push({ name: ctorName, type: ctorType });
+
+      // Skip newlines between constructors
+      this.skipNewlines();
+    }
+
+    return {
+      kind: 'inductive',
+      name: nameToken.value,
+      type,
+      constructors
     };
   }
 
@@ -919,27 +1015,38 @@ export class Parser {
   }
 
   /**
-   * Parse Type or Type_n
+   * Parse Type or Type n
+   *
+   * Syntax:
+   * - Type      → Sort(1)
+   * - Type 0    → Sort(1)  (Type 0 = Type)
+   * - Type 1    → Sort(2)
+   * - Type n    → Sort(n+1) for any literal integer n
+   *
+   * Note: Type_n syntax is handled in the lexer, which recognizes
+   * Type_0, Type_1, etc. as TYPE tokens with level information.
    */
   private parseType(): TTerm {
-    this.expect('TYPE');
+    const typeToken = this.expect('TYPE');
 
-    // Check for underscore suffix (Type_n)
-    if (this.current().type === 'UNDERSCORE' ||
-      (this.current().type === 'NUMBER' && this.tokens[this.pos - 1].value === 'Type' &&
-        this.tokens[this.pos - 1].pos + 4 === this.current().pos)) {
-      // Type_n or Type followed immediately by number
-      if (this.current().type === 'UNDERSCORE') {
-        this.advance();
-      }
-      if (this.current().type === 'NUMBER') {
-        const level = parseInt(this.current().value, 10);
-        this.advance();
-        return mkType(level);
+    // Check if the TYPE token has a level suffix (from Type_n in lexer)
+    // The lexer stores this in the token value as "Type_n"
+    if (typeToken.value.startsWith('Type_')) {
+      const levelStr = typeToken.value.substring(5);
+      const level = parseInt(levelStr, 10);
+      if (!isNaN(level)) {
+        return mkType(level + 1);  // Type_n = Sort(n+1)
       }
     }
 
-    // Just "Type" means Type_1
+    // Check for "Type n" syntax (space followed by number)
+    if (this.current().type === 'NUMBER') {
+      const level = parseInt(this.current().value, 10);
+      this.advance();
+      return mkType(level + 1);  // Type n = Sort(n+1)
+    }
+
+    // Just "Type" means Sort(1)
     return mkType(1);
   }
 

@@ -851,9 +851,9 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
 
         case 'BLam':
           if (isAnonymous) {
-            return `(λ ${domain} => ${body})`;
+            return `(\\${domain} => ${body})`;
           }
-          return `(λ ${term.name} => ${body})`;
+          return `(\\${term.name} => ${body})`;
 
         case 'BLet':
           const defVal = prettyPrintTerse(term.binderKind.defVal, context);
@@ -926,9 +926,9 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
 
         case 'BLam':
           if (isAnonymous) {
-            return `(λ ${domain} => ${body})`;
+            return `(\\${domain} => ${body})`;
           }
-          return `(λ (${term.name} : ${domain}) => ${body})`;
+          return `(\\(${term.name} : ${domain}) => ${body})`;
 
         case 'BLet':
           const defVal = prettyPrint(term.binderKind.defVal, context);
