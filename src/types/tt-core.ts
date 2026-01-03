@@ -33,6 +33,53 @@ export type BinderKind =
   | { tag: 'BLam' }                   // λ-binder (function abstraction)
   | { tag: 'BLet'; defVal: TTerm }    // let-binder (local definition with value)
 
+// ============================================================================
+// Pattern Matching
+// ============================================================================
+
+/**
+ * Patterns for pattern matching.
+ *
+ * Patterns destructure values in pattern matching:
+ * - PVar: binds a variable (e.g., 'n' in 'plus n b = ...')
+ * - PCtor: constructor application pattern (e.g., 'Zero' or 'Succ n')
+ * - PWild: wildcard pattern '_' (matches anything, doesn't bind)
+ *
+ * Examples:
+ *   Zero           → PCtor("Zero", [])
+ *   Succ n         → PCtor("Succ", [PVar("n")])
+ *   Succ (Succ m)  → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
+ *   _              → PWild
+ *   x              → PVar("x")
+ */
+export type TPattern =
+  | { tag: 'PVar'; name: string }                    // Variable pattern (binds)
+  | { tag: 'PCtor'; name: string; args: TPattern[] } // Constructor pattern
+  | { tag: 'PWild' }                                  // Wildcard pattern _
+
+/**
+ * A clause in pattern matching.
+ *
+ * Consists of:
+ * - patterns: One pattern per scrutinee (for now just 1, but future: multi-arg)
+ * - rhs: The right-hand side term to evaluate when patterns match
+ *
+ * Examples:
+ *   | Zero => body         → TClause([PCtor("Zero", [])], body)
+ *   | Succ n => body       → TClause([PCtor("Succ", [PVar("n")])], body)
+ *
+ * For function definitions with patterns:
+ *   plus Zero b = b        → TClause([PCtor("Zero", []), PVar("b")], Var(0))
+ *   plus (Succ a) b = ...  → TClause([PCtor("Succ", [PVar("a")]), PVar("b")], ...)
+ *
+ * The patterns bind variables in the RHS. Variables are bound left-to-right,
+ * depth-first through the pattern tree, and accessible via De Bruijn indices.
+ */
+export interface TClause {
+  patterns: TPattern[];  // Patterns to match (one per argument)
+  rhs: TTerm;            // Right-hand side (body) when matched
+}
+
 /**
  * The core term language using De Bruijn indices.
  *
@@ -64,6 +111,7 @@ export type TTerm =
   | TTermConst // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
+  | { tag: 'Match'; scrutinee: TTerm; clauses: TClause[] } // Pattern matching (case/match)
 
 export function mapTTerm<R>(
   term: TTerm,
@@ -338,6 +386,16 @@ export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TT
         term: replaceHole(term.term, holeId, replacement),
         type: replaceHole(term.type, holeId, replacement)
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: replaceHole(term.scrutinee, holeId, replacement),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: replaceHole(c.rhs, holeId, replacement)
+        }))
+      };
   }
 }
 
@@ -403,6 +461,22 @@ export function isDefinitionallyEqual(term1: TTerm, term2: TTerm): boolean {
       return isDefinitionallyEqual(term1.term, term2.term) &&
         isDefinitionallyEqual(term1.type, term2.type);
     }
+
+    case 'Match': {
+      if (term2.tag !== 'Match') return false;
+      // Check scrutinee
+      if (!isDefinitionallyEqual(term1.scrutinee, term2.scrutinee)) return false;
+      // Check same number of clauses
+      if (term1.clauses.length !== term2.clauses.length) return false;
+      // Check each clause (patterns and rhs)
+      for (let i = 0; i < term1.clauses.length; i++) {
+        const c1 = term1.clauses[i];
+        const c2 = term2.clauses[i];
+        // For now, just check RHS equality (pattern equality would need a separate function)
+        if (!isDefinitionallyEqual(c1.rhs, c2.rhs)) return false;
+      }
+      return true;
+    }
   }
 }
 
@@ -447,6 +521,16 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'Annot':
       if (head === 0) return getSubtermAtPath(term.term, rest);
       if (head === 1) return getSubtermAtPath(term.type, rest);
+      return null;
+
+    case 'Match':
+      // path[0] = 0 means scrutinee
+      if (head === 0) return getSubtermAtPath(term.scrutinee, rest);
+      // path[0] = 1, 2, 3, ... means clause index (0, 1, 2, ...)
+      if (head >= 1 && head <= term.clauses.length) {
+        const clauseIndex = head - 1;
+        return getSubtermAtPath(term.clauses[clauseIndex].rhs, rest);
+      }
       return null;
   }
 }
@@ -511,6 +595,24 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
       if (head === 1) {
         const newType = replaceSubtermAtPath(term.type, rest, newSubterm);
         return newType ? { ...term, type: newType } : null;
+      }
+      return null;
+    }
+
+    case 'Match': {
+      // path[0] = 0 means scrutinee
+      if (head === 0) {
+        const newScrutinee = replaceSubtermAtPath(term.scrutinee, rest, newSubterm);
+        return newScrutinee ? { ...term, scrutinee: newScrutinee } : null;
+      }
+      // path[0] = 1, 2, 3, ... means clause index (0, 1, 2, ...)
+      if (head >= 1 && head <= term.clauses.length) {
+        const clauseIndex = head - 1;
+        const newRhs = replaceSubtermAtPath(term.clauses[clauseIndex].rhs, rest, newSubterm);
+        if (!newRhs) return null;
+        const newClauses = [...term.clauses];
+        newClauses[clauseIndex] = { ...term.clauses[clauseIndex], rhs: newRhs };
+        return { ...term, clauses: newClauses };
       }
       return null;
     }
@@ -654,6 +756,15 @@ export function isNameUsed(name: string, term: TTerm): boolean {
 
     case 'Annot':
       return isNameUsed(name, term.term) || isNameUsed(name, term.type);
+
+    case 'Match':
+      // Check scrutinee
+      if (isNameUsed(name, term.scrutinee)) return true;
+      // Check all clause RHS terms
+      for (const clause of term.clauses) {
+        if (isNameUsed(name, clause.rhs)) return true;
+      }
+      return false;
   }
 }
 
@@ -737,6 +848,18 @@ function substHelper(targetIndex: number, replacement: TTerm, term: TTerm, depth
         term: substHelper(targetIndex, replacement, term.term, depth),
         type: substHelper(targetIndex, replacement, term.type, depth)
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: substHelper(targetIndex, replacement, term.scrutinee, depth),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          // TODO: when we implement proper pattern binding, we need to account for
+          // variables bound by patterns when substituting in the RHS
+          rhs: substHelper(targetIndex, replacement, c.rhs, depth)
+        }))
+      };
   }
 }
 
@@ -802,6 +925,18 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
         tag: 'Annot',
         term: shift(amount, term.term, cutoff),
         type: shift(amount, term.type, cutoff)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: shift(amount, term.scrutinee, cutoff),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          // TODO: when we implement proper pattern binding, we need to account for
+          // variables bound by patterns when shifting in the RHS
+          rhs: shift(amount, c.rhs, cutoff)
+        }))
       };
   }
 }
@@ -881,6 +1016,35 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
 
     case 'Annot':
       return prettyPrintTerse(term.term, context);
+
+    case 'Match': {
+      const scrutinee = prettyPrintTerse(term.scrutinee, context);
+      const clauses = term.clauses.map(c => {
+        // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
+        const patternStr = c.patterns.map(p => prettyPrintPattern(p)).join(' ');
+        const rhsStr = prettyPrintTerse(c.rhs, context);
+        return `${patternStr} => ${rhsStr}`;
+      }).join(' | ');
+      return `(match ${scrutinee} | ${clauses})`;
+    }
+  }
+}
+
+/**
+ * Pretty-print a pattern (helper for Match)
+ */
+function prettyPrintPattern(pattern: TPattern): string {
+  switch (pattern.tag) {
+    case 'PVar':
+      return pattern.name;
+    case 'PWild':
+      return '_';
+    case 'PCtor':
+      if (pattern.args.length === 0) {
+        return pattern.name;
+      }
+      const args = pattern.args.map(prettyPrintPattern).join(' ');
+      return `(${pattern.name} ${args})`;
   }
 }
 
@@ -947,6 +1111,17 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
 
     case 'Annot':
       return `(${prettyPrint(term.term, context)} : ${prettyPrint(term.type, context)})`;
+
+    case 'Match': {
+      const scrutinee = prettyPrint(term.scrutinee, context);
+      const clauses = term.clauses.map(c => {
+        // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
+        const patternStr = c.patterns.map(p => prettyPrintPattern(p)).join(' ');
+        const rhsStr = prettyPrint(c.rhs, context);
+        return `${patternStr} => ${rhsStr}`;
+      }).join(' | ');
+      return `(match ${scrutinee} | ${clauses})`;
+    }
   }
 }
 
@@ -1067,6 +1242,35 @@ export function prettyPrintLatex(
 
     case 'Annot':
       return `(${prettyPrintLatex(term.term, context, opts)} : ${prettyPrintLatex(term.type, context, opts)})`;
+
+    case 'Match': {
+      const scrutinee = prettyPrintLatex(term.scrutinee, context, opts);
+      const clauses = term.clauses.map(c => {
+        // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
+        const patternStr = c.patterns.map(p => prettyPrintPatternLatex(p)).join('\\; ');
+        const rhsStr = prettyPrintLatex(c.rhs, context, opts);
+        return `${patternStr} \\Rightarrow ${rhsStr}`;
+      }).join(' \\mid ');
+      return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
+    }
+  }
+}
+
+/**
+ * Pretty-print a pattern in LaTeX format (helper for Match)
+ */
+function prettyPrintPatternLatex(pattern: TPattern): string {
+  switch (pattern.tag) {
+    case 'PVar':
+      return pattern.name;
+    case 'PWild':
+      return '\\_';
+    case 'PCtor':
+      if (pattern.args.length === 0) {
+        return pattern.name.replace(/_/g, '\\_');
+      }
+      const args = pattern.args.map(prettyPrintPatternLatex).join('\\; ');
+      return `(${pattern.name.replace(/_/g, '\\_')}\\; ${args})`;
   }
 }
 
@@ -1388,6 +1592,16 @@ function fillHoleWithLet(
         term: fillHoleWithLet(term.term, holeId, letName, letType, letValue),
         type: fillHoleWithLet(term.type, holeId, letName, letType, letValue)
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: fillHoleWithLet(term.scrutinee, holeId, letName, letType, letValue),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: fillHoleWithLet(c.rhs, holeId, letName, letType, letValue)
+        }))
+      };
   }
 }
 
@@ -1531,6 +1745,16 @@ export function occursIn(index: number, term: TTerm): boolean {
       return occursIn(index, term.type);
     case 'Annot':
       return occursIn(index, term.term) || occursIn(index, term.type);
+
+    case 'Match':
+      // Check scrutinee
+      if (occursIn(index, term.scrutinee)) return true;
+      // Check all clause RHS terms
+      // TODO: when we implement proper pattern binding, adjust index for pattern-bound vars
+      for (const clause of term.clauses) {
+        if (occursIn(index, clause.rhs)) return true;
+      }
+      return false;
   }
 }
 
@@ -1800,9 +2024,11 @@ export function isLetUsedDownstream(term: TTerm, letName: string, position: numb
  * Each element is either:
  * - 'domain' | 'body' | 'defVal' - to navigate into binders
  * - 'fn' | 'arg' - to navigate into applications
- * - number - to navigate into a specific let/pi-binder (indexed from outermost)
+ * - 'scrutinee' | 'clauses' | 'rhs' - to navigate into pattern matching
+ * - 'type' | 'term' - to navigate into type/term containers
+ * - number - to navigate into a specific let/pi-binder (indexed from outermost) or clause index
  */
-export type TermPath = Array<'domain' | 'body' | 'defVal' | 'fn' | 'arg' | 'type' | 'term' | number>;
+export type TermPath = Array<'domain' | 'body' | 'defVal' | 'fn' | 'arg' | 'type' | 'term' | 'scrutinee' | 'clauses' | 'rhs' | number>;
 
 /**
  * Get the term at a specific path.

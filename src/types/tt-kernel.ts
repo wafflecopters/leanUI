@@ -37,6 +37,14 @@ export type TTKBinderKind =
 export type TTKTermApp = { tag: 'App'; fn: TTKTerm; arg: TTKTerm }
 export type TTKTermConst = { tag: 'Const'; name: string; type: TTKTerm }
 
+// Import pattern types from tt-core (these are shared between TT and TTK)
+import type { TPattern } from './tt-core';
+
+export type TTKClause = {
+  patterns: TPattern[];
+  rhs: TTKTerm;
+};
+
 export type TTKTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: number }                         // Type_i, Prop = Type_0
@@ -45,6 +53,7 @@ export type TTKTerm =
   | TTKTermConst // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTKTerm; context: TTKContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTKTerm; type: TTKTerm }          // Type annotation
+  | { tag: 'Match'; scrutinee: TTKTerm; clauses: TTKClause[] } // Pattern matching
 
 /**
  * Named variable in context (for debugging/pretty-printing only)
@@ -211,6 +220,16 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
         term: substHelper(targetIndex, replacement, term.term, depth),
         type: substHelper(targetIndex, replacement, term.type, depth)
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: substHelper(targetIndex, replacement, term.scrutinee, depth),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: substHelper(targetIndex, replacement, c.rhs, depth)
+        }))
+      };
   }
 }
 
@@ -270,6 +289,16 @@ function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
         term: shift(amount, term.term, cutoff),
         type: shift(amount, term.type, cutoff)
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: shift(amount, term.scrutinee, cutoff),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: shift(amount, c.rhs, cutoff)
+        }))
+      };
   }
 }
 
@@ -318,6 +347,16 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
       if (term2.tag !== 'Annot') return false;
       return isDefinitionallyEqual(term1.term, term2.term) &&
         isDefinitionallyEqual(term1.type, term2.type);
+    }
+
+    case 'Match': {
+      if (term2.tag !== 'Match') return false;
+      if (!isDefinitionallyEqual(term1.scrutinee, term2.scrutinee)) return false;
+      if (term1.clauses.length !== term2.clauses.length) return false;
+      for (let i = 0; i < term1.clauses.length; i++) {
+        if (!isDefinitionallyEqual(term1.clauses[i].rhs, term2.clauses[i].rhs)) return false;
+      }
+      return true;
     }
   }
 }
@@ -388,6 +427,31 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
 
     case 'Annot':
       return `(${prettyPrint(term.term, context)} : ${prettyPrint(term.type, context)})`;
+
+    case 'Match': {
+      const scrutinee = prettyPrint(term.scrutinee, context);
+      const clauses = term.clauses.map(c => {
+        const patternStr = c.patterns.map(p => prettyPrintPatternTTK(p)).join(' ');
+        const rhsStr = prettyPrint(c.rhs, context);
+        return `${patternStr} => ${rhsStr}`;
+      }).join(' | ');
+      return `(match ${scrutinee} | ${clauses})`;
+    }
+  }
+}
+
+function prettyPrintPatternTTK(pattern: TPattern): string {
+  switch (pattern.tag) {
+    case 'PVar':
+      return pattern.name;
+    case 'PWild':
+      return '_';
+    case 'PCtor':
+      if (pattern.args.length === 0) {
+        return pattern.name;
+      }
+      const args = pattern.args.map(prettyPrintPatternTTK).join(' ');
+      return `(${pattern.name} ${args})`;
   }
 }
 
@@ -508,6 +572,31 @@ export function prettyPrintLatex(
 
     case 'Annot':
       return `(${prettyPrintLatex(term.term, context, opts)} : ${prettyPrintLatex(term.type, context, opts)})`;
+
+    case 'Match': {
+      const scrutinee = prettyPrintLatex(term.scrutinee, context, opts);
+      const clauses = term.clauses.map(c => {
+        const patternStr = c.patterns.map(p => prettyPrintPatternLatexTTK(p)).join('\\; ');
+        const rhsStr = prettyPrintLatex(c.rhs, context, opts);
+        return `${patternStr} \\Rightarrow ${rhsStr}`;
+      }).join(' \\mid ');
+      return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
+    }
+  }
+}
+
+function prettyPrintPatternLatexTTK(pattern: TPattern): string {
+  switch (pattern.tag) {
+    case 'PVar':
+      return pattern.name;
+    case 'PWild':
+      return '\\_';
+    case 'PCtor':
+      if (pattern.args.length === 0) {
+        return pattern.name.replace(/_/g, '\\_');
+      }
+      const args = pattern.args.map(prettyPrintPatternLatexTTK).join('\\; ');
+      return `(${pattern.name.replace(/_/g, '\\_')}\\; ${args})`;
   }
 }
 
@@ -539,6 +628,13 @@ export function occursIn(index: number, term: TTKTerm): boolean {
       return occursIn(index, term.type);
     case 'Annot':
       return occursIn(index, term.term) || occursIn(index, term.type);
+
+    case 'Match':
+      if (occursIn(index, term.scrutinee)) return true;
+      for (const clause of term.clauses) {
+        if (occursIn(index, clause.rhs)) return true;
+      }
+      return false;
   }
 }
 

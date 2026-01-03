@@ -196,6 +196,16 @@ export function applySubstitution(subst: Substitution, term: TTKTerm): TTKTerm {
         term: applySubstitution(subst, term.term),
         type: applySubstitution(subst, term.type),
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: applySubstitution(subst, term.scrutinee),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: applySubstitution(subst, c.rhs)
+        }))
+      };
   }
 }
 
@@ -248,6 +258,13 @@ export function holeOccursIn(holeId: string, term: TTKTerm): boolean {
 
     case 'Annot':
       return holeOccursIn(holeId, term.term) || holeOccursIn(holeId, term.type);
+
+    case 'Match':
+      if (holeOccursIn(holeId, term.scrutinee)) return true;
+      for (const clause of term.clauses) {
+        if (holeOccursIn(holeId, clause.rhs)) return true;
+      }
+      return false;
   }
 }
 
@@ -313,6 +330,9 @@ export function isRigid(term: TTKTerm): boolean {
       return false;
     case 'Annot':
       return isRigid(term.term);
+
+    case 'Match':
+      return isRigid(term.scrutinee);
   }
 }
 

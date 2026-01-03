@@ -70,6 +70,13 @@ function isFreeIn(index: number, term: TTKTerm): boolean {
       return false;
     case 'Annot':
       return isFreeIn(index, term.term) || isFreeIn(index, term.type);
+
+    case 'Match':
+      if (isFreeIn(index, term.scrutinee)) return true;
+      for (const clause of term.clauses) {
+        if (isFreeIn(index, clause.rhs)) return true;
+      }
+      return false;
   }
 }
 
@@ -174,6 +181,15 @@ export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm): boolean {
 
     case 'Annot':
       return areTypesDefEq(n1.term, n2);
+
+    case 'Match':
+      if (n2.tag !== 'Match') return false;
+      if (!areTypesDefEq(n1.scrutinee, n2.scrutinee)) return false;
+      if (n1.clauses.length !== n2.clauses.length) return false;
+      for (let i = 0; i < n1.clauses.length; i++) {
+        if (!areTypesDefEq(n1.clauses[i].rhs, n2.clauses[i].rhs)) return false;
+      }
+      return true;
   }
 }
 
@@ -366,11 +382,18 @@ export function inferType(term: TTKTerm, context: TTKContext = []): InferResult 
 
     // ────────────────────────────────────────────────────────────────
     // (HOLE) - Metavariable
-    // 
+    //
     // Holes have their expected types stored with them.
     // ────────────────────────────────────────────────────────────────
     case 'Hole': {
       return { ok: true, type: term.type };
+    }
+
+    case 'Match': {
+      // TODO: Implement proper pattern matching type inference
+      // This would require checking all clauses have the same return type
+      // and that patterns are exhaustive
+      return { ok: false, error: 'Pattern matching type inference not yet implemented' };
     }
   }
 }

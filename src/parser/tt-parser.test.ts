@@ -1185,6 +1185,286 @@ test('Parse inductive type with complex constructor types', () => {
 });
 
 // ============================================================================
+// Pattern Matching Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PATTERN MATCHING TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse simple case expression with Zero', () => {
+  const source = `case n where
+  | Zero => b`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match', 'Should parse as Match');
+  if (term.tag === 'Match') {
+    assertEqual(term.clauses.length, 1);
+    assertEqual(term.clauses[0].patterns.length, 1);
+    assertEqual(term.clauses[0].patterns[0].tag, 'PCtor');
+    if (term.clauses[0].patterns[0].tag === 'PCtor') {
+      assertEqual(term.clauses[0].patterns[0].name, 'Zero');
+      assertEqual(term.clauses[0].patterns[0].args.length, 0);
+    }
+  }
+});
+
+test('Parse case expression with Succ pattern', () => {
+  const source = `case n where
+  | Succ a => a`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    assertEqual(term.clauses.length, 1);
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PCtor');
+    if (pattern.tag === 'PCtor') {
+      assertEqual(pattern.name, 'Succ');
+      assertEqual(pattern.args.length, 1);
+      assertEqual(pattern.args[0].tag, 'PVar');
+      if (pattern.args[0].tag === 'PVar') {
+        assertEqual(pattern.args[0].name, 'a');
+      }
+    }
+  }
+});
+
+test('Parse case expression with multiple clauses', () => {
+  const source = `case n where
+  | Zero => b
+  | Succ a => Succ (plus a b)`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    assertEqual(term.clauses.length, 2);
+    // First clause: Zero
+    assertEqual(term.clauses[0].patterns[0].tag, 'PCtor');
+    // Second clause: Succ a
+    assertEqual(term.clauses[1].patterns[0].tag, 'PCtor');
+  }
+});
+
+test('Parse nested pattern (Succ (Succ m))', () => {
+  const source = `case n where
+  | Succ (Succ m) => m`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PCtor');
+    if (pattern.tag === 'PCtor') {
+      assertEqual(pattern.name, 'Succ');
+      assertEqual(pattern.args.length, 1);
+
+      const innerPattern = pattern.args[0];
+      assertEqual(innerPattern.tag, 'PCtor');
+      if (innerPattern.tag === 'PCtor') {
+        assertEqual(innerPattern.name, 'Succ');
+        assertEqual(innerPattern.args.length, 1);
+        assertEqual(innerPattern.args[0].tag, 'PVar');
+      }
+    }
+  }
+});
+
+test('Parse wildcard pattern', () => {
+  const source = `case n where
+  | _ => default`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PWild');
+  }
+});
+
+test('Parse variable pattern', () => {
+  const source = `case n where
+  | x => x`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PVar');
+    if (pattern.tag === 'PVar') {
+      assertEqual(pattern.name, 'x');
+    }
+  }
+});
+
+test('Parse case with match keyword', () => {
+  const source = `match n where
+  | Zero => b
+  | Succ a => a`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match', 'Should parse match keyword');
+});
+
+test('Parse constructor with multiple args (Cons x xs)', () => {
+  const source = `case list where
+  | Nil => Zero
+  | Cons x xs => x`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    assertEqual(term.clauses.length, 2);
+
+    // Second clause: Cons x xs
+    const consPattern = term.clauses[1].patterns[0];
+    assertEqual(consPattern.tag, 'PCtor');
+    if (consPattern.tag === 'PCtor') {
+      assertEqual(consPattern.name, 'Cons');
+      assertEqual(consPattern.args.length, 2);
+      assertEqual(consPattern.args[0].tag, 'PVar');
+      assertEqual(consPattern.args[1].tag, 'PVar');
+    }
+  }
+});
+
+test('Parse pattern with parentheses', () => {
+  const source = `case n where
+  | (Succ a) => a`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PCtor');
+    if (pattern.tag === 'PCtor') {
+      assertEqual(pattern.name, 'Succ');
+    }
+  }
+});
+
+test('Parse case without pipe on first clause', () => {
+  const source = `case n where
+  Zero => b
+  | Succ a => a`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    assertEqual(term.clauses.length, 2);
+  }
+});
+
+test('Parse case with complex RHS', () => {
+  const source = `case n where
+  | Zero => b
+  | Succ a => plus a b`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    // RHS should be parsed as application
+    assertTermShape(term.clauses[1].rhs, 'App');
+  }
+});
+
+test('Pattern variables bound in RHS', () => {
+  const source = `case n where
+  | Succ a => a`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    // RHS should reference 'a' as Var(0) since it's the most recent binding
+    const rhs = term.clauses[0].rhs;
+    assertTermShape(rhs, 'Var');
+    if (rhs.tag === 'Var') {
+      assertEqual(rhs.index, 0, 'Pattern variable should be at index 0');
+    }
+  }
+});
+
+test('Multiple pattern variables in correct order', () => {
+  const source = `case list where
+  | Cons x xs => x`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const rhs = term.clauses[0].rhs;
+    assertTermShape(rhs, 'Var');
+    if (rhs.tag === 'Var') {
+      // x is bound first (index 0), xs is bound second (index 1)
+      // But in De Bruijn indices, most recent = 0, so xs=0, x=1
+      // Wait, let me check the collectPatternVars - it goes left-to-right
+      // So for "Cons x xs", we get [x, xs]
+      // Then rhsCtx = [x, xs, ...ctx]
+      // So x should be at index 1, xs at index 0
+      // But actually, we're referencing 'x', so it should find it in the context
+      // Let me check: rhsCtx = ['x', 'xs', ...ctx], so 'x' is at position 0 in the array
+      assertEqual(rhs.index, 0, 'x should be at index 0 in rhsCtx');
+    }
+  }
+});
+
+test('Parse function definition with pattern clauses', () => {
+  const source = `plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1, 'Should have one merged declaration');
+  assertEqual(decls[0].name, 'plus');
+  assertEqual(decls[0].type !== undefined, true, 'Should have type');
+  assertEqual(decls[0].value !== undefined, true, 'Should have value');
+
+  // Value should be a Match expression
+  const value = decls[0].value!;
+  assertTermShape(value, 'Match');
+  if (value.tag === 'Match') {
+    assertEqual(value.clauses.length, 2, 'Should have 2 clauses merged');
+
+    // First clause: Zero b
+    const clause1 = value.clauses[0];
+    assertEqual(clause1.patterns.length, 2);
+    assertEqual(clause1.patterns[0].tag, 'PCtor');
+    if (clause1.patterns[0].tag === 'PCtor') {
+      assertEqual(clause1.patterns[0].name, 'Zero');
+    }
+    assertEqual(clause1.patterns[1].tag, 'PVar');
+
+    // Second clause: Succ a, b
+    const clause2 = value.clauses[1];
+    assertEqual(clause2.patterns.length, 2);
+    assertEqual(clause2.patterns[0].tag, 'PCtor');
+    if (clause2.patterns[0].tag === 'PCtor') {
+      assertEqual(clause2.patterns[0].name, 'Succ');
+      assertEqual(clause2.patterns[0].args.length, 1);
+    }
+  }
+});
+
+test('Parse single pattern clause definition', () => {
+  const source = `twice : Nat -> Nat
+twice n = plus n n`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].name, 'twice');
+  assertEqual(decls[0].type !== undefined, true);
+  assertEqual(decls[0].value !== undefined, true);
+
+  // Value should be a Match with one clause
+  const value = decls[0].value!;
+  assertTermShape(value, 'Match');
+  if (value.tag === 'Match') {
+    assertEqual(value.clauses.length, 1);
+    assertEqual(value.clauses[0].patterns.length, 1);
+    assertEqual(value.clauses[0].patterns[0].tag, 'PVar');
+  }
+});
+
+test('Parse pattern clause without type signature', () => {
+  const source = `id x = x`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].name, 'id');
+  assertEqual(decls[0].type === undefined, true, 'Should not have type');
+  assertEqual(decls[0].value !== undefined, true);
+
+  const value = decls[0].value!;
+  assertTermShape(value, 'Match');
+});
+
+// ============================================================================
 // Summary
 // ============================================================================
 

@@ -108,6 +108,16 @@ export function elabToKernel(term: TTerm): TTKTerm {
         term: elabToKernel(term.term),
         type: elabToKernel(term.type)
       };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: elabToKernel(term.scrutinee),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: elabToKernel(c.rhs)
+        }))
+      };
   }
 }
 

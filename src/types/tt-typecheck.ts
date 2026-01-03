@@ -30,13 +30,19 @@ import {
   subst,
   prettyPrint,
 } from './tt-kernel';
+import { IndexPath } from './source-position';
 
 // ============================================================================
 // Type Checking Errors
 // ============================================================================
 
 export class TypeCheckError extends Error {
-  constructor(message: string, public term?: TTKTerm, public context?: TTKContext) {
+  constructor(
+    message: string,
+    public term?: TTKTerm,
+    public context?: TTKContext,
+    public termPath?: IndexPath
+  ) {
     super(message);
     this.name = 'TypeCheckError';
   }
@@ -134,6 +140,13 @@ function isFreeIn(index: number, term: TTKTerm): boolean {
       return false;
     case 'Annot':
       return isFreeIn(index, term.term) || isFreeIn(index, term.type);
+
+    case 'Match':
+      if (isFreeIn(index, term.scrutinee)) return true;
+      for (const clause of term.clauses) {
+        if (isFreeIn(index, clause.rhs)) return true;
+      }
+      return false;
   }
 }
 
@@ -210,6 +223,16 @@ function shiftTermBy(term: TTKTerm, amount: number, cutoff: number): TTKTerm {
         tag: 'Annot',
         term: shiftTermBy(term.term, amount, cutoff),
         type: shiftTermBy(term.type, amount, cutoff)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: shiftTermBy(term.scrutinee, amount, cutoff),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: shiftTermBy(c.rhs, amount, cutoff)
+        }))
       };
   }
 }
@@ -323,6 +346,15 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
     case 'Annot':
       // Compare the underlying terms
       return convertible(n1.term, n2, ctx);
+
+    case 'Match':
+      if (n2.tag !== 'Match') return false;
+      if (!convertible(n1.scrutinee, n2.scrutinee, ctx)) return false;
+      if (n1.clauses.length !== n2.clauses.length) return false;
+      for (let i = 0; i < n1.clauses.length; i++) {
+        if (!convertible(n1.clauses[i].rhs, n2.clauses[i].rhs, ctx)) return false;
+      }
+      return true;
   }
 }
 
@@ -334,8 +366,20 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
  * Synthesize (infer) the type of a term
  *
  * Returns the type of the given term, or throws TypeCheckError if ill-typed.
+ *
+ * @param term - The term to infer the type of
+ * @param ctx - The typing context
+ * @param path - Optional index path for source tracking
  */
-export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
+export function inferType(
+  term: TTKTerm,
+  ctx: TTKContext = [],
+  path: IndexPath = []
+): TTKTerm {
+  // For now, we accept the path but don't thread it deeply
+  // TODO: Thread path through all recursive calls for fine-grained error reporting
+  void path;
+
   switch (term.tag) {
     case 'Var': {
       const type = lookupVar(ctx, term.index);
@@ -343,7 +387,8 @@ export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
         throw new TypeCheckError(
           `Variable index ${term.index} not found in context of size ${ctx.length}`,
           term,
-          ctx
+          ctx,
+          path
         );
       }
       return type;
@@ -364,7 +409,8 @@ export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
         case 'BPi': {
           // Check that domain is a type
           const domainType = inferType(term.domain, ctx);
-          if (domainType.tag !== 'Sort') {
+          // Accept Sort or Hole (Hole represents forward references like inductive types)
+          if (domainType.tag !== 'Sort' && domainType.tag !== 'Hole') {
             throw new TypeCheckError(
               `Pi domain must be a type, got: ${prettyPrint(domainType)}`,
               term,
@@ -375,7 +421,8 @@ export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
           // Check that body is a type (in extended context)
           const extCtx = extendContext(ctx, term.name, term.domain);
           const bodyType = inferType(term.body, extCtx);
-          if (bodyType.tag !== 'Sort') {
+          // Accept Sort or Hole (Hole represents forward references)
+          if (bodyType.tag !== 'Sort' && bodyType.tag !== 'Hole') {
             throw new TypeCheckError(
               `Pi codomain must be a type, got: ${prettyPrint(bodyType)}`,
               term,
@@ -384,7 +431,10 @@ export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
           }
 
           // The type of a Pi is the max of its universe levels
-          const level = Math.max(domainType.level, bodyType.level);
+          // If either is a Hole, conservatively return universe 0
+          const domainLevel = domainType.tag === 'Sort' ? domainType.level : 0;
+          const bodyLevel = bodyType.tag === 'Sort' ? bodyType.level : 0;
+          const level = Math.max(domainLevel, bodyLevel);
           return { tag: 'Sort', level };
         }
 
@@ -466,6 +516,14 @@ export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
       checkType(term.term, term.type, ctx);
       return term.type;
     }
+
+    case 'Match': {
+      // TODO: Implement proper pattern matching type checking
+      // For now, just return a placeholder type
+      // This would need to check that all clauses have the same return type
+      // and that the patterns cover all constructors of the scrutinee's type
+      throw new Error('Pattern matching type inference not yet implemented');
+    }
   }
 }
 
@@ -477,8 +535,22 @@ export function inferType(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
  * Check that a term has an expected type
  *
  * Throws TypeCheckError if the term doesn't have the expected type.
+ *
+ * @param term - The term to check
+ * @param expectedType - The expected type
+ * @param ctx - The typing context
+ * @param path - Optional index path for source tracking
  */
-export function checkType(term: TTKTerm, expectedType: TTKTerm, ctx: TTKContext = []): void {
+export function checkType(
+  term: TTKTerm,
+  expectedType: TTKTerm,
+  ctx: TTKContext = [],
+  path: IndexPath = []
+): void {
+  // For now, we accept the path but don't thread it deeply
+  // TODO: Thread path through all recursive calls for fine-grained error reporting
+  void path;
+
   // Special case: Lambda can be checked against Pi type
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
     expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
@@ -487,24 +559,26 @@ export function checkType(term: TTKTerm, expectedType: TTKTerm, ctx: TTKContext 
       throw new TypeCheckError(
         `Lambda domain mismatch.\n  Expected: ${prettyPrint(expectedType.domain)}\n  Got: ${prettyPrint(term.domain)}`,
         term,
-        ctx
+        ctx,
+        path
       );
     }
 
     // Check body against Pi's body
     const extCtx = extendContext(ctx, term.name, term.domain);
-    checkType(term.body, expectedType.body, extCtx);
+    checkType(term.body, expectedType.body, extCtx, path);
     return;
   }
 
   // General case: Synthesize type and check convertibility
-  const inferredType = inferType(term, ctx);
+  const inferredType = inferType(term, ctx, path);
 
   if (!convertible(inferredType, expectedType, ctx)) {
     throw new TypeCheckError(
       `Type mismatch.\n  Expected: ${prettyPrint(expectedType)}\n  Inferred: ${prettyPrint(inferredType)}`,
       term,
-      ctx
+      ctx,
+      path
     );
   }
 }
@@ -542,6 +616,13 @@ export function extractHoles(term: TTKTerm): { id: string; type: TTKTerm; contex
       case 'Annot':
         traverse(t.term);
         traverse(t.type);
+        break;
+
+      case 'Match':
+        traverse(t.scrutinee);
+        for (const clause of t.clauses) {
+          traverse(clause.rhs);
+        }
         break;
 
       case 'Const':
@@ -618,6 +699,18 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
 
       return null;
     }
+
+    case 'Match': {
+      const inScrutinee = findHole(term.scrutinee, holeId);
+      if (inScrutinee) return inScrutinee;
+
+      for (const clause of term.clauses) {
+        const inRhs = findHole(clause.rhs, holeId);
+        if (inRhs) return inRhs;
+      }
+
+      return null;
+    }
   }
 }
 
@@ -672,6 +765,16 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
         tag: 'Annot',
         term: fillHole(term.term, holeId, proofTerm),
         type: fillHole(term.type, holeId, proofTerm)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: fillHole(term.scrutinee, holeId, proofTerm),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: fillHole(c.rhs, holeId, proofTerm)
+        }))
       };
   }
 }
@@ -743,6 +846,16 @@ export function fillHoleWith(
         tag: 'Annot',
         term: fillHoleWith(term.term, holeId, generator),
         type: fillHoleWith(term.type, holeId, generator)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: fillHoleWith(term.scrutinee, holeId, generator),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: fillHoleWith(c.rhs, holeId, generator)
+        }))
       };
   }
 }

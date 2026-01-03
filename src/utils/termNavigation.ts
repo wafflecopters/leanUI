@@ -223,6 +223,10 @@ export function prettyPrintTerm(term: TTerm): string {
       const termStr = prettyPrintTerm(term.term);
       const typeStr = prettyPrintTerm(term.type);
       return `(${termStr} : ${typeStr})`;
+
+    case 'Match':
+      const scrutineeStr = prettyPrintTerm(term.scrutinee);
+      return `match ${scrutineeStr} (${term.clauses.length} clauses)`;
   }
 }
 

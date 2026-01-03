@@ -1,0 +1,72 @@
+Pattern Matching Examples for LeanUI
+=====================================
+
+The TT language now supports pattern matching! Here are examples:
+
+1. Simple case expression:
+   case n where
+     | Zero => b
+     | Succ a => Succ (plus a b)
+
+2. Nested patterns:
+   case n where
+     | Zero => Zero
+     | Succ (Succ m) => m
+
+3. Wildcard patterns:
+   case n where
+     | Zero => Zero
+     | _ => Succ Zero
+
+4. List patterns:
+   case list where
+     | Nil => Zero
+     | Cons x xs => x
+
+5. Using match keyword (alternative):
+   match n where
+     | Zero => b
+     | Succ a => a
+
+6. Function definitions with pattern clauses (✅ NOW SUPPORTED!):
+   plus : Nat -> Nat -> Nat
+   plus Zero b = b
+   plus (Succ a) b = Succ (plus a b)
+
+7. Simple function with pattern:
+   twice : Nat -> Nat
+   twice n = plus n n
+
+8. Identity function:
+   id : (A : Type) -> A -> A
+   id A x = x
+
+Future Extensions (not yet implemented):
+-----------------------------------------
+
+1. Lambda with pattern matching:
+   twice = \n => case n where
+     | Zero => Zero
+     | Succ a => Succ (Succ (twice a))
+
+2. Multiple scrutinees:
+   case m, n where
+     | Zero, b => b
+     | a, Zero => a
+     | Succ a, Succ b => Succ (Succ (plus a b))
+
+Pattern Syntax:
+---------------
+- Constructor patterns: Zero, Succ n, Cons x xs
+- Variable patterns: x, y, acc (lowercase)
+- Wildcard patterns: _
+- Nested patterns: Succ (Succ m)
+- Parenthesized patterns: (Succ a)
+
+Conventions:
+- Uppercase identifiers are constructors
+- Lowercase identifiers are variables
+- _ is a wildcard (matches anything, doesn't bind)
+
+Note: Pattern matching is currently parsed but not yet type-checked or evaluated.
+Full elaboration to eliminators will be added in future updates.

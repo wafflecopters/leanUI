@@ -688,5 +688,14 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
       return b.tag === 'Annot' &&
         termsEqual(a.term, b.term) &&
         termsEqual(a.type, b.type);
+
+    case 'Match':
+      if (b.tag !== 'Match') return false;
+      if (!termsEqual(a.scrutinee, b.scrutinee)) return false;
+      if (a.clauses.length !== b.clauses.length) return false;
+      for (let i = 0; i < a.clauses.length; i++) {
+        if (!termsEqual(a.clauses[i].rhs, b.clauses[i].rhs)) return false;
+      }
+      return true;
   }
 }

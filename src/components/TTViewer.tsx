@@ -286,7 +286,8 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
         fontWeight: 'bold',
         border: '2px solid #ffc107'
       }}>?{term.id}</span>,
-      Annot: () => <div>ANNOT</div>
+      Annot: () => <div>ANNOT</div>,
+      Match: (term) => <div>MATCH({term.clauses.length} clauses)</div>
     })}
     </div>
   )

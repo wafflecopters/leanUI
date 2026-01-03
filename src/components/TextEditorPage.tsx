@@ -20,6 +20,8 @@ import {
 } from '../parser/tt-parser';
 import { TTerm, prettyPrint, TContext } from '../types/tt-core';
 import { inferType, TypeCheckError } from '../types/tt-typecheck';
+import { groupByIndentation, SourceBlock, parseBlock } from '../parser/indentation-grouper';
+import { checkSourceBlocks, BlockCheckResult, summarizeCheckResults } from '../parser/block-checker';
 
 // ============================================================================
 // Types
@@ -41,6 +43,14 @@ interface TypeCheckResult {
   kind: string;
   inferredType?: string;
   error?: string;
+}
+
+interface BlockParseResult {
+  block: SourceBlock;
+  type: 'Inductive' | 'Term' | 'Unknown' | 'Comment';
+  name?: string;
+  parseSuccess: boolean;
+  parseError?: string;
 }
 
 type ParseOutcome = ParseResult | ParseFailure;
@@ -256,6 +266,56 @@ const styles = {
     cursor: 'pointer',
     fontSize: '14px',
   },
+  blockBox: {
+    backgroundColor: '#161b22',
+    border: '1px solid #30363d',
+    borderRadius: '6px',
+    padding: '12px 16px',
+    marginBottom: '12px',
+  },
+  blockHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '13px',
+  },
+  blockTypeLabel: {
+    display: 'inline-block',
+    padding: '3px 10px',
+    borderRadius: '4px',
+    fontSize: '12px',
+    fontWeight: 600,
+  },
+  blockTypeInductive: {
+    backgroundColor: 'rgba(136, 198, 190, 0.2)',
+    color: '#88c6be',
+  },
+  blockTypeTerm: {
+    backgroundColor: 'rgba(88, 166, 255, 0.2)',
+    color: '#58a6ff',
+  },
+  blockTypeUnknown: {
+    backgroundColor: 'rgba(255, 198, 109, 0.2)',
+    color: '#ffc66d',
+  },
+  blockTypeComment: {
+    backgroundColor: 'rgba(110, 118, 129, 0.2)',
+    color: '#6e7681',
+  },
+  blockName: {
+    color: '#e6edf3',
+    fontWeight: 500,
+  },
+  blockStatusFailed: {
+    color: '#f85149',
+    fontSize: '12px',
+  },
+  blockErrorText: {
+    color: '#f0883e',
+    fontSize: '12px',
+    marginTop: '8px',
+    fontFamily: "'JetBrains Mono', monospace",
+  },
 };
 
 // ============================================================================
@@ -389,6 +449,98 @@ function tryInferType(term: TTerm, ctx: TContext = []): { success: true; type: s
   }
 }
 
+function analyzeSourceBlock(block: SourceBlock): BlockParseResult {
+  const blockSource = block.lines.join('\n');
+
+  // Check if this is a comment block
+  if (block.isComment) {
+    return {
+      block,
+      type: 'Comment',
+      parseSuccess: true
+    };
+  }
+
+  // Try to parse the block
+  try {
+    const declarations = parseDeclarations(blockSource);
+
+    if (declarations.length === 0) {
+      return {
+        block,
+        type: 'Unknown',
+        parseSuccess: false,
+        parseError: 'No declarations found'
+      };
+    }
+
+    const firstDecl = declarations[0];
+
+    // Determine block type
+    if (block.isInductive || firstDecl.kind === 'inductive') {
+      return {
+        block,
+        type: 'Inductive',
+        name: firstDecl.name,
+        parseSuccess: true
+      };
+    }
+
+    if (firstDecl.kind === 'def' || firstDecl.kind === 'axiom' || firstDecl.kind === 'theorem' || firstDecl.kind === 'expr') {
+      return {
+        block,
+        type: 'Term',
+        name: firstDecl.name,
+        parseSuccess: true
+      };
+    }
+
+    return {
+      block,
+      type: 'Unknown',
+      name: firstDecl.name,
+      parseSuccess: true
+    };
+
+  } catch (e) {
+    // Parse failed
+    let errorMsg = 'Parse error';
+
+    if (e instanceof ParseErrors) {
+      errorMsg = e.errors.map(err => err.message).join('; ');
+    } else if (e instanceof ParseError) {
+      errorMsg = e.message;
+    } else {
+      errorMsg = String(e);
+    }
+
+    // Try to determine type from the source text
+    const trimmed = blockSource.trim();
+    if (trimmed.startsWith('inductive ')) {
+      const match = trimmed.match(/^inductive\s+([a-zA-Z_][a-zA-Z0-9_']*)/);
+      return {
+        block,
+        type: 'Inductive',
+        name: match?.[1],
+        parseSuccess: false,
+        parseError: errorMsg
+      };
+    }
+
+    // Try to extract name from signature line
+    const firstLine = block.lines[0]?.trim() || '';
+    const nameMatch = firstLine.match(/^([a-zA-Z_][a-zA-Z0-9_']*)\s*:/);
+
+    return {
+      block,
+      type: nameMatch ? 'Term' : 'Unknown',
+      name: nameMatch?.[1],
+      parseSuccess: false,
+      parseError: errorMsg
+    };
+  }
+}
+
 // ============================================================================
 // Monaco Editor Configuration
 // ============================================================================
@@ -508,6 +660,103 @@ const ASTViewer: React.FC<ASTViewerProps> = ({ term, title }) => {
   );
 };
 
+interface EnhancedBlockCardProps {
+  result: BlockCheckResult;
+  index: number;
+}
+
+const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
+  const [showErrors, setShowErrors] = useState(true);
+
+  const getTypeStyle = () => {
+    switch (result.blockType) {
+      case 'Inductive': return styles.blockTypeInductive;
+      case 'Term': return styles.blockTypeTerm;
+      case 'Unknown': return styles.blockTypeUnknown;
+      case 'Comment': return styles.blockTypeComment;
+    }
+  };
+
+  const getStatusIcon = () => {
+    if (result.blockType === 'Comment') return '📝';
+    if (!result.parseSuccess) return '⚠';
+    if (!result.checkSuccess) return '✗';
+    return '✓';
+  };
+
+  const getStatusColor = () => {
+    if (result.blockType === 'Comment') return '#8b949e';
+    if (!result.parseSuccess) return '#f0883e';
+    if (!result.checkSuccess) return '#f85149';
+    return '#3fb950';
+  };
+
+  const typeLabel = result.blockType;
+  const nameDisplay = result.name ? `: ${result.name}` : '';
+
+  return (
+    <div style={styles.blockBox}>
+      <div style={styles.blockHeader}>
+        <span style={{ color: getStatusColor(), marginRight: '8px', fontSize: '14px' }}>
+          {getStatusIcon()}
+        </span>
+        <span style={{ ...styles.blockTypeLabel, ...getTypeStyle() }}>
+          {typeLabel}{nameDisplay}
+        </span>
+      </div>
+
+      {/* Parse errors */}
+      {!result.parseSuccess && result.parseErrors.length > 0 && (
+        <div style={styles.blockErrorText}>
+          <div style={{ fontWeight: 600, marginBottom: '4px' }}>Parse Errors:</div>
+          {result.parseErrors.map((error, i) => (
+            <div key={i} style={{ marginLeft: '12px' }}>
+              Line {error.line}, Col {error.col}: {error.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Type check errors */}
+      {result.parseSuccess && !result.checkSuccess && result.checkErrors.length > 0 && (
+        <div>
+          <div
+            style={{
+              ...styles.blockErrorText,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}
+            onClick={() => setShowErrors(!showErrors)}
+          >
+            <span style={{ fontWeight: 600 }}>
+              Type Errors ({result.checkErrors.length})
+            </span>
+            <span style={{ fontSize: '11px' }}>
+              {showErrors ? '▼' : '▶'}
+            </span>
+          </div>
+          {showErrors && (
+            <div style={{ marginTop: '8px' }}>
+              {result.checkErrors.map((checkError, i) => (
+                <div key={i} style={{ marginLeft: '12px', marginBottom: '8px' }}>
+                  <div style={{ color: '#f85149' }}>{checkError.error.message}</div>
+                  {checkError.location && (
+                    <div style={{ color: '#8b949e', fontSize: '11px', marginTop: '2px' }}>
+                      at line {checkError.location.start.line}, column {checkError.location.start.col}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface DeclarationCardProps {
   decl: ParsedDeclaration;
   index: number;
@@ -618,6 +867,17 @@ export const TextEditorPage: React.FC = () => {
     }
   }, [code]);
 
+  // Check all blocks with full type checking pipeline
+  const blockCheckResults = useMemo((): BlockCheckResult[] => {
+    if (!code.trim()) return [];
+    return checkSourceBlocks(code);
+  }, [code]);
+
+  // Calculate block statistics
+  const blockStats = useMemo(() => {
+    return summarizeCheckResults(blockCheckResults);
+  }, [blockCheckResults]);
+
   // Type check each declaration
   const typeCheckResults = useMemo((): TypeCheckResult[] => {
     if (!parseOutcome.success) return [];
@@ -663,7 +923,7 @@ export const TextEditorPage: React.FC = () => {
   // Track whether editor has been mounted
   const [editorMounted, setEditorMounted] = useState(false);
 
-  // Update Monaco markers when parse result changes
+  // Update Monaco markers with parse and type check errors
   useEffect(() => {
     const monaco = monacoRef.current;
     const editor = editorRef.current;
@@ -674,10 +934,10 @@ export const TextEditorPage: React.FC = () => {
 
     const markers: MonacoEditor.IMarkerData[] = [];
 
-    if (!parseOutcome.success) {
-      // Add a marker for each parse error
-      for (const error of parseOutcome.errors) {
-        // Get the end of the line for the error
+    // Add markers for all block errors
+    for (const blockResult of blockCheckResults) {
+      // Parse errors
+      for (const error of blockResult.parseErrors) {
         const lineContent = model.getLineContent(error.line);
         const endCol = Math.max(error.col + 1, lineContent.length + 1);
 
@@ -691,17 +951,25 @@ export const TextEditorPage: React.FC = () => {
           source: 'TT Parser',
         });
       }
+
+      // Type check errors with source locations
+      for (const checkError of blockResult.checkErrors) {
+        if (checkError.location) {
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: checkError.error.message,
+            startLineNumber: checkError.location.start.line,
+            startColumn: checkError.location.start.col,
+            endLineNumber: checkError.location.end.line,
+            endColumn: checkError.location.end.col,
+            source: 'TT Type Checker',
+          });
+        }
+      }
     }
 
-    // Could also add type errors as warnings here in the future
-    // typeCheckResults.forEach((result, index) => {
-    //   if (result.error) {
-    //     // Would need line/col info from declarations
-    //   }
-    // });
-
-    monaco.editor.setModelMarkers(model, 'tt-parser', markers);
-  }, [parseOutcome, typeCheckResults, editorMounted]);
+    monaco.editor.setModelMarkers(model, 'tt-checker', markers);
+  }, [blockCheckResults, editorMounted]);
 
   // Editor mount handler
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
@@ -885,6 +1153,21 @@ export const TextEditorPage: React.FC = () => {
                 </div>
                 <div style={{ marginTop: '4px' }}>{error.message}</div>
               </div>
+            ))}
+          </div>
+        )}
+
+        {/* Block Check Results Display */}
+        {blockCheckResults.length > 0 && (
+          <div>
+            <h3 style={styles.sectionTitle}>
+              Type-Checked Blocks ({blockCheckResults.length}) -
+              {blockStats.successfulBlocks > 0 && ` ✓ ${blockStats.successfulBlocks} OK`}
+              {blockStats.parseErrorBlocks > 0 && ` ⚠ ${blockStats.parseErrorBlocks} Parse Errors`}
+              {blockStats.checkErrorBlocks > 0 && ` ✗ ${blockStats.checkErrorBlocks} Type Errors`}
+            </h3>
+            {blockCheckResults.map((blockResult, index) => (
+              <EnhancedBlockCard key={index} result={blockResult} index={index} />
             ))}
           </div>
         )}

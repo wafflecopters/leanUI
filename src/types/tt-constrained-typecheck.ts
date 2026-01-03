@@ -352,6 +352,11 @@ export function inferTypeWithConstraints(
         state: currentState,
       };
     }
+
+    case 'Match': {
+      // TODO: Implement proper constraint-based pattern matching type inference
+      throw new Error('Pattern matching in constraint-based type checking not yet implemented');
+    }
   }
 }
 

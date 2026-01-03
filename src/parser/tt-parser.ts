@@ -26,7 +26,17 @@
  * - Legacy: def/theorem/axiom keywords still supported
  */
 
-import { TTerm, mkVar, mkPi, mkLambda, mkLet, mkApp, mkConst, mkHole, mkProp, mkType } from '../types/tt-core';
+import { TTerm, mkVar, mkPi, mkLambda, mkLet, mkApp, mkConst, mkHole, mkProp, mkType, TPattern, TClause } from '../types/tt-core';
+import { groupByIndentation, parseBlock } from './indentation-grouper';
+import {
+  SourceMap,
+  SourcePos,
+  SourceRange,
+  IndexPath,
+  createSourcePos,
+  createSourceRange,
+  serializeIndexPath
+} from '../types/source-position';
 
 // ============================================================================
 // Token Types
@@ -62,7 +72,9 @@ export type TokenType =
   | 'SEMICOLON'    // ;
   | 'INDUCTIVE'    // inductive keyword
   | 'WHERE'        // where keyword
-  | 'PIPE';        // |
+  | 'PIPE'         // |
+  | 'CASE'         // case keyword
+  | 'MATCH';       // match keyword
 
 export interface Token {
   type: TokenType;
@@ -365,6 +377,10 @@ export class Lexer {
           return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
         case 'where':
           return { type: 'WHERE', value: 'where', pos: startPos, line: startLine, col: startCol };
+        case 'case':
+          return { type: 'CASE', value: 'case', pos: startPos, line: startLine, col: startCol };
+        case 'match':
+          return { type: 'MATCH', value: 'match', pos: startPos, line: startLine, col: startCol };
         default:
           // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
           if (ident.startsWith('Type_')) {
@@ -468,11 +484,21 @@ export interface ParsedDeclaration {
 }
 
 /**
+ * Result of parsing a declaration with source position tracking.
+ */
+export interface ParsedDeclarationWithSource {
+  decl: ParsedDeclaration;
+  sourceMap: SourceMap;
+}
+
+/**
  * Pratt parser for the TT language.
  */
 export class Parser {
   private tokens: Token[] = [];
   private pos = 0;
+  private currentSourceMap: SourceMap = new Map();
+  private currentPath: IndexPath = [];
 
   constructor(
     private operators: Record<string, OperatorInfo> = DEFAULT_OPERATORS
@@ -527,11 +553,13 @@ export class Parser {
       if (this.current().type === 'EOF') break;
 
       try {
-        const decl = this.parseDeclaration();
+        const decl = this.parseDeclaration(declarations);
         if (decl) {
           // Check if this declaration can be merged with the previous one
-          // Merge if: previous has type but no value, current has same name and value but no type
           const prev = declarations[declarations.length - 1];
+
+          // Case 1: Merge type signature with definition
+          // prev has type but no value, current has same name and value but no type
           if (prev &&
               prev.name &&
               decl.name === prev.name &&
@@ -539,7 +567,18 @@ export class Parser {
               decl.value && !decl.type) {
             // Merge: add value to previous declaration
             prev.value = decl.value;
-          } else {
+          }
+          // Case 2: Merge multiple pattern clauses
+          // Both have the same name, both have Match expressions as values
+          else if (prev &&
+                   prev.name &&
+                   decl.name === prev.name &&
+                   prev.value?.tag === 'Match' &&
+                   decl.value?.tag === 'Match') {
+            // Merge clauses from decl into prev
+            prev.value.clauses.push(...decl.value.clauses);
+          }
+          else {
             declarations.push(decl);
           }
         }
@@ -564,6 +603,93 @@ export class Parser {
   }
 
   /**
+   * Parse multiple top-level declarations with source position tracking.
+   *
+   * This is similar to parseDeclarations but also returns source maps
+   * for each declaration, enabling error messages to reference exact
+   * source locations.
+   *
+   * Returns an array of {decl, sourceMap} objects, one per successfully
+   * parsed declaration.
+   */
+  parseDeclarationsWithSource(source: string): ParsedDeclarationWithSource[] {
+    const lexer = new Lexer(source, this.operators);
+    this.tokens = lexer.tokenize();
+    this.pos = 0;
+
+    const results: ParsedDeclarationWithSource[] = [];
+    const errors: ParseError[] = [];
+
+    while (this.current().type !== 'EOF') {
+      this.skipNewlines();
+      if (this.current().type === 'EOF') break;
+
+      // Reset source map for each declaration
+      this.currentSourceMap = new Map();
+      this.currentPath = [];
+
+      try {
+        const decl = this.parseDeclaration(results.map(r => r.decl));
+        if (decl) {
+          // Check if this declaration can be merged with the previous one
+          const prev = results[results.length - 1];
+
+          // Case 1: Merge type signature with definition
+          if (prev &&
+              prev.decl.name &&
+              decl.name === prev.decl.name &&
+              prev.decl.type && !prev.decl.value &&
+              decl.value && !decl.type) {
+            // Merge: add value to previous declaration
+            // Also merge the source maps
+            prev.decl.value = decl.value;
+            // Copy all entries from current source map to previous
+            for (const [key, range] of this.currentSourceMap) {
+              prev.sourceMap.set(key, range);
+            }
+          }
+          // Case 2: Merge multiple pattern clauses
+          else if (prev &&
+                   prev.decl.name &&
+                   decl.name === prev.decl.name &&
+                   prev.decl.value?.tag === 'Match' &&
+                   decl.value?.tag === 'Match') {
+            // Merge clauses
+            prev.decl.value.clauses.push(...decl.value.clauses);
+            // Merge source maps
+            for (const [key, range] of this.currentSourceMap) {
+              prev.sourceMap.set(key, range);
+            }
+          }
+          else {
+            // New declaration - save it with its source map
+            results.push({
+              decl,
+              sourceMap: new Map(this.currentSourceMap)
+            });
+          }
+        }
+      } catch (e) {
+        if (e instanceof ParseError) {
+          errors.push(e);
+          // Skip to the next line to continue parsing
+          this.skipToNextLine();
+        } else {
+          // Re-throw non-parse errors
+          throw e;
+        }
+      }
+    }
+
+    // If we collected any errors, throw them all
+    if (errors.length > 0) {
+      throw new ParseErrors(errors);
+    }
+
+    return results;
+  }
+
+  /**
    * Skip tokens until we reach a newline or EOF.
    * Used for error recovery.
    */
@@ -583,7 +709,7 @@ export class Parser {
     }
   }
 
-  private parseDeclaration(): ParsedDeclaration | null {
+  private parseDeclaration(prevDeclarations?: ParsedDeclaration[]): ParsedDeclaration | null {
     const current = this.current();
 
     // Inductive: inductive name : type where constructors
@@ -608,7 +734,7 @@ export class Parser {
 
     // New syntax: name : type  or  name = impl
     if (current.type === 'IDENT') {
-      return this.parseNamedDeclaration();
+      return this.parseNamedDeclaration(prevDeclarations);
     }
 
     // Otherwise it's a bare expression
@@ -620,13 +746,17 @@ export class Parser {
    * Parse new-style declaration:
    * - name : type (type signature only)
    * - name = impl (definition only, type will be inferred - only at line start)
-   * 
+   * - name pattern1 pattern2 = rhs (pattern clause definition)
+   *
    * For same-line type+definition, use := to avoid ambiguity with equality type:
    * - name : type := impl
    */
-  private parseNamedDeclaration(): ParsedDeclaration {
+  private parseNamedDeclaration(prevDeclarations?: ParsedDeclaration[]): ParsedDeclaration {
     const nameToken = this.expect('IDENT');
     const name = nameToken.value;
+
+    // Skip any newlines after the name (e.g., between blocks)
+    this.skipNewlines();
 
     // Check what follows the name
     const next = this.current();
@@ -648,6 +778,16 @@ export class Parser {
       return { kind: 'def', name, type };
     }
 
+    // Check if this is a pattern clause: name pattern1 pattern2 = rhs
+    // We know it's a pattern clause if:
+    // 1. We've already seen a type signature for this name, OR
+    // 2. The next token can start a pattern (IDENT, UNDERSCORE, LPAREN)
+    const hasSeenSignature = prevDeclarations?.some(d => d.name === name && d.type);
+
+    if (hasSeenSignature || this.canStartPattern(next)) {
+      return this.parsePatternClauseDefinition(name);
+    }
+
     // name = impl (definition at line start, without type annotation)
     if (next.type === 'OPERATOR' && next.value === '=') {
       this.advance(); // consume '='
@@ -666,6 +806,64 @@ export class Parser {
     this.pos--; // backtrack to before the identifier
     const expr = this.expr(0, []);
     return { kind: 'expr', value: expr };
+  }
+
+  /**
+   * Parse pattern clause definition:
+   *   plus Zero b = b
+   *   plus (Succ a) b = Succ (plus a b)
+   *
+   * This is syntactic sugar that will be converted to a Match expression.
+   * For now, we just parse a single clause and return it.
+   * Multiple clauses will be merged by parseDeclarations.
+   */
+  private parsePatternClauseDefinition(funcName: string): ParsedDeclaration {
+    // Parse patterns until we hit '='
+    // Each pattern is atomic (no constructor application without parens)
+    const patterns: TPattern[] = [];
+
+    while (this.canStartPattern(this.current())) {
+      patterns.push(this.parsePatternAtom());
+    }
+
+    if (patterns.length === 0) {
+      throw new ParseError(
+        `Expected at least one pattern in pattern clause for '${funcName}'`,
+        this.current().line,
+        this.current().col
+      );
+    }
+
+    // Expect '='
+    if (this.current().type !== 'OPERATOR' || this.current().value !== '=') {
+      throw new ParseError(
+        `Expected '=' in pattern clause, got ${this.current().type} '${this.current().value}'`,
+        this.current().line,
+        this.current().col
+      );
+    }
+    this.advance(); // consume '='
+
+    // Parse RHS with pattern variables bound
+    const patternVars = patterns.flatMap(p => this.collectPatternVars(p));
+    const rhsCtx = patternVars;
+    const rhs = this.expr(0, rhsCtx);
+
+    // Create a Match expression as a placeholder
+    // This will be merged with other clauses and wrapped in lambdas later
+    return {
+      kind: 'def',
+      name: funcName,
+      value: {
+        tag: 'Match',
+        // Placeholder scrutinee - will be fixed during elaboration/desugaring
+        scrutinee: mkHole('_scrutinee', mkHole('_scrutinee_type', mkProp())),
+        clauses: [{
+          patterns,
+          rhs
+        }]
+      }
+    };
   }
 
   private parseLegacyDefDeclaration(): ParsedDeclaration {
@@ -729,12 +927,16 @@ export class Parser {
     this.expect('INDUCTIVE');
     const nameToken = this.expect('IDENT');
     this.expect('COLON');
-    const type = this.expr(0, []);
 
-    // Optional 'where' keyword
-    if (this.current().type === 'WHERE') {
-      this.advance();
-    }
+    // Parse type, but stop at 'where' keyword
+    // The type can span multiple lines, so we only stop at WHERE
+    const type = this.exprUntil(0, [], ['WHERE']);
+
+    // Skip any newlines before 'where'
+    this.skipNewlines();
+
+    // Expect 'where' keyword (it's required to know where the type ends)
+    this.expect('WHERE');
 
     // Skip newlines before constructors
     this.skipNewlines();
@@ -780,12 +982,80 @@ export class Parser {
   }
 
   /**
+   * Parse expression but stop when encountering any of the specified token types.
+   * This is useful for parsing expressions in contexts where certain keywords
+   * act as terminators (e.g., 'where' in inductive declarations).
+   */
+  private exprUntil(minPrec: number, ctx: NameContext, stopTokens: TokenType[]): TTerm {
+    let left = this.parsePrefix(ctx, []);
+
+    while (true) {
+      // Skip newlines within the expression (allow multiline expressions)
+      while (this.current().type === 'NEWLINE') {
+        this.advance();
+      }
+
+      const token = this.current();
+
+      // Stop if we hit a terminating token
+      if (stopTokens.includes(token.type)) {
+        break;
+      }
+
+      // Check for arrow (right-associative, low precedence)
+      if (token.type === 'ARROW') {
+        if (ARROW_PRECEDENCE < minPrec) break;
+        this.advance();
+        const arrowCtx = ['_', ...ctx];
+        const right = this.exprUntil(ARROW_PRECEDENCE, arrowCtx, stopTokens);
+        left = mkPi(left, right, '_');
+        continue;
+      }
+
+      // Check for infix operators
+      if (token.type === 'OPERATOR') {
+        const opInfo = this.operators[token.value];
+        if (!opInfo || opInfo.precedence < minPrec) break;
+
+        this.advance();
+
+        let rightPrec = opInfo.precedence;
+        if (opInfo.associativity === 'left') {
+          rightPrec = opInfo.precedence + 1;
+        } else if (opInfo.associativity === 'none') {
+          rightPrec = opInfo.precedence + 1;
+        }
+
+        const right = this.exprUntil(rightPrec, ctx, stopTokens);
+
+        const opConst = mkConst(opInfo.constName || token.value, mkHole('op_type', mkProp()));
+        left = mkApp(mkApp(opConst, left), right);
+        continue;
+      }
+
+      // Check for application (juxtaposition)
+      if (this.canStartAtom(token)) {
+        if (APPLICATION_PRECEDENCE < minPrec) break;
+        const arg = this.parsePrefix(ctx, []);
+        left = mkApp(left, arg);
+        continue;
+      }
+
+      break;
+    }
+
+    return left;
+  }
+
+  /**
    * Main Pratt parser expression handler.
    * @param minPrec Minimum precedence to continue parsing
    * @param ctx Name context for De Bruijn index resolution
    */
-  private expr(minPrec: number, ctx: NameContext): TTerm {
-    let left = this.parsePrefix(ctx);
+  private expr(minPrec: number, ctx: NameContext, path: IndexPath = []): TTerm {
+    // For now, we don't thread paths through deeply - just accept the parameter
+    // TODO: Thread paths through all sub-expressions for fine-grained tracking
+    let left = this.parsePrefix(ctx, path);
 
     while (true) {
       const token = this.current();
@@ -798,7 +1068,7 @@ export class Parser {
         // IMPORTANT: We need to extend the context with the anonymous binder
         // so that De Bruijn indices in the RHS are correctly shifted
         const arrowCtx = ['_', ...ctx];
-        const right = this.expr(ARROW_PRECEDENCE, arrowCtx);
+        const right = this.expr(ARROW_PRECEDENCE, arrowCtx, path);
         // Non-dependent arrow: Π (_: left) . right
         left = mkPi(left, right, '_');
         continue;
@@ -820,7 +1090,7 @@ export class Parser {
         }
         // right-associative uses same precedence
 
-        const right = this.expr(rightPrec, ctx);
+        const right = this.expr(rightPrec, ctx, path);
 
         // Create binary application: op left right
         const opConst = mkConst(opInfo.constName || token.value, mkHole('op_type', mkProp()));
@@ -831,7 +1101,7 @@ export class Parser {
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
-        const arg = this.parsePrefix(ctx);
+        const arg = this.parsePrefix(ctx, path);
         left = mkApp(left, arg);
         continue;
       }
@@ -845,8 +1115,10 @@ export class Parser {
   /**
    * Parse prefix expressions and atoms.
    */
-  private parsePrefix(ctx: NameContext): TTerm {
+  private parsePrefix(ctx: NameContext, path: IndexPath = []): TTerm {
     const token = this.current();
+    // TODO: Use path for fine-grained source tracking within expressions
+    void path; // Mark as intentionally unused for now
 
     switch (token.type) {
       case 'LPAREN':
@@ -859,6 +1131,10 @@ export class Parser {
 
       case 'LET':
         return this.parseLet(ctx);
+
+      case 'CASE':
+      case 'MATCH':
+        return this.parseMatch(ctx);
 
       case 'TYPE':
         return this.parseType();
@@ -1085,6 +1361,228 @@ export class Parser {
   }
 
   /**
+   * Parse pattern:
+   *   Zero              → PCtor("Zero", [])
+   *   Succ n            → PCtor("Succ", [PVar("n")])
+   *   Succ (Succ m)     → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
+   *   _                 → PWild
+   *   x                 → PVar("x")
+   */
+  private parsePattern(): TPattern {
+    const token = this.current();
+
+    // Wildcard pattern: _
+    if (token.type === 'UNDERSCORE') {
+      this.advance();
+      return { tag: 'PWild' };
+    }
+
+    // Constructor or variable pattern
+    if (token.type === 'IDENT') {
+      const name = token.value;
+      this.advance();
+
+      // Check if this is a constructor application (has arguments in parens)
+      if (this.current().type === 'LPAREN') {
+        // Parse constructor arguments: Ctor (pat1) (pat2) or Ctor(pat1, pat2)
+        const args: TPattern[] = [];
+
+        while (this.current().type === 'LPAREN') {
+          this.advance(); // consume '('
+          args.push(this.parsePattern());
+          this.expect('RPAREN');
+        }
+
+        return { tag: 'PCtor', name, args };
+      }
+
+      // Check if followed by another pattern (application without parens)
+      // e.g., "Succ n" or "Cons x xs"
+      if (this.canStartPattern(this.current())) {
+        // This is a constructor with arguments (no parens)
+        const args: TPattern[] = [];
+        while (this.canStartPattern(this.current())) {
+          args.push(this.parsePatternAtom());
+        }
+        return { tag: 'PCtor', name, args };
+      }
+
+      // Check if uppercase (constructor) or lowercase (variable)
+      // Convention: uppercase = constructor, lowercase = variable
+      const isConstructor = name[0] === name[0].toUpperCase();
+
+      if (isConstructor) {
+        return { tag: 'PCtor', name, args: [] };
+      } else {
+        return { tag: 'PVar', name };
+      }
+    }
+
+    // Parenthesized pattern
+    if (token.type === 'LPAREN') {
+      this.advance();
+      const pattern = this.parsePattern();
+      this.expect('RPAREN');
+      return pattern;
+    }
+
+    throw new ParseError(
+      `Expected pattern, got ${token.type} '${token.value}'`,
+      token.line,
+      token.col
+    );
+  }
+
+  /**
+   * Parse an atomic pattern (for use in constructor arguments)
+   */
+  private parsePatternAtom(): TPattern {
+    const token = this.current();
+
+    if (token.type === 'UNDERSCORE') {
+      this.advance();
+      return { tag: 'PWild' };
+    }
+
+    if (token.type === 'IDENT') {
+      const name = token.value;
+      this.advance();
+
+      // Atomic patterns are either variables or nullary constructors
+      const isConstructor = name[0] === name[0].toUpperCase();
+      if (isConstructor) {
+        return { tag: 'PCtor', name, args: [] };
+      } else {
+        return { tag: 'PVar', name };
+      }
+    }
+
+    if (token.type === 'LPAREN') {
+      this.advance();
+      const pattern = this.parsePattern();
+      this.expect('RPAREN');
+      return pattern;
+    }
+
+    throw new ParseError(
+      `Expected atomic pattern, got ${token.type} '${token.value}'`,
+      token.line,
+      token.col
+    );
+  }
+
+  /**
+   * Check if token can start a pattern
+   */
+  private canStartPattern(token: Token): boolean {
+    return token.type === 'IDENT' ||
+           token.type === 'UNDERSCORE' ||
+           token.type === 'LPAREN';
+  }
+
+  /**
+   * Parse match/case expression:
+   *
+   * Syntax 1 (case with where):
+   *   case n where
+   *     | Zero => body1
+   *     | Succ m => body2
+   *
+   * Syntax 2 (match with):
+   *   match n with
+   *     | Zero => body1
+   *     | Succ m => body2
+   *
+   * For now, we use 'case' with 'where' to avoid conflicts with 'with' keyword
+   */
+  private parseMatch(ctx: NameContext): TTerm {
+    // Consume 'case' or 'match'
+    const keyword = this.current().value;
+    this.advance();
+
+    // Parse scrutinee
+    const scrutinee = this.expr(0, ctx);
+
+    // Expect 'where' (for case) or 'with' (for match, not yet supported)
+    if (this.current().type === 'WHERE') {
+      this.advance();
+    } else {
+      throw new ParseError(
+        `Expected 'where' after ${keyword} scrutinee`,
+        this.current().line,
+        this.current().col
+      );
+    }
+
+    // Skip newlines before clauses
+    this.skipNewlines();
+
+    // Parse clauses
+    const clauses: TClause[] = [];
+
+    while (this.current().type === 'PIPE' || this.canStartPattern(this.current())) {
+      // Optional pipe
+      if (this.current().type === 'PIPE') {
+        this.advance();
+      }
+
+      // Parse patterns (for now, just one pattern per clause)
+      const pattern = this.parsePattern();
+
+      // Expect '=>'
+      this.expect('FATARROW');
+
+      // Parse RHS in a context where pattern variables are bound
+      // For now, we'll use a simplified approach: collect pattern vars and add to context
+      const patternVars = this.collectPatternVars(pattern);
+      const rhsCtx = [...patternVars, ...ctx];
+      const rhs = this.expr(0, rhsCtx);
+
+      clauses.push({
+        patterns: [pattern],
+        rhs
+      });
+
+      // Skip newlines between clauses
+      this.skipNewlines();
+
+      // Stop if we hit something that can't start a clause
+      if (this.current().type !== 'PIPE' && !this.canStartPattern(this.current())) {
+        break;
+      }
+    }
+
+    if (clauses.length === 0) {
+      throw new ParseError(
+        'Expected at least one clause in case expression',
+        this.current().line,
+        this.current().col
+      );
+    }
+
+    return {
+      tag: 'Match',
+      scrutinee,
+      clauses
+    };
+  }
+
+  /**
+   * Collect all variable names bound by a pattern (in left-to-right, depth-first order)
+   */
+  private collectPatternVars(pattern: TPattern): string[] {
+    switch (pattern.tag) {
+      case 'PVar':
+        return [pattern.name];
+      case 'PCtor':
+        // Collect from all arguments, left to right
+        return pattern.args.flatMap(arg => this.collectPatternVars(arg));
+      case 'PWild':
+        return [];
+    }
+  }
+
+  /**
    * Parse Type or Type n
    *
    * Syntax:
@@ -1183,6 +1681,48 @@ export class Parser {
       );
     }
     return this.advance();
+  }
+
+  // ============================================================================
+  // Source Position Tracking Helpers
+  // ============================================================================
+
+  /**
+   * Record a source range for the given index path.
+   *
+   * @param path - The index path identifying the AST node
+   * @param start - The starting token
+   * @param end - The ending token (exclusive)
+   */
+  private recordRange(path: IndexPath, start: Token, end: Token): void {
+    const startPos = createSourcePos(start.line, start.col, start.pos);
+    const endPos = createSourcePos(end.line, end.col, end.pos);
+    const range = createSourceRange(startPos, endPos);
+    const key = serializeIndexPath(path);
+    this.currentSourceMap.set(key, range);
+  }
+
+  /**
+   * Get the current token's position.
+   */
+  private getCurrentPos(): SourcePos {
+    const token = this.current();
+    return createSourcePos(token.line, token.col, token.pos);
+  }
+
+  /**
+   * Get the position just after the previous token.
+   * This is useful for recording the end position of a parsed construct.
+   */
+  private getPrevEndPos(): SourcePos {
+    if (this.pos === 0) {
+      return createSourcePos(1, 1, 0);
+    }
+    const prevToken = this.tokens[this.pos - 1];
+    // End position is after the token, so add its length
+    const endCol = prevToken.col + prevToken.value.length;
+    const endPos = prevToken.pos + prevToken.value.length;
+    return createSourcePos(prevToken.line, endCol, endPos);
   }
 }
 
