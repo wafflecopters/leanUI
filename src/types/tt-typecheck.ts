@@ -78,6 +78,14 @@ export function lookupVar(ctx: TTKContext, index: number): TTKTerm | null {
 }
 
 /**
+ * Extract variable names from a context for pretty printing.
+ * Returns an array where index i contains the name of the variable at De Bruijn index i.
+ */
+export function contextToNames(ctx: TTKContext): string[] {
+  return ctx.map(binding => binding.name);
+}
+
+/**
  * Look up the type of a constant by name in the context.
  * This is used when a Const has a Hole type (unresolved forward reference)
  * but the actual type is known from the context.
@@ -596,8 +604,10 @@ export function checkType(
   const inferredType = inferType(term, ctx, path);
 
   if (!convertible(inferredType, expectedType, ctx)) {
+    // Use context names for readable error messages
+    const names = contextToNames(ctx);
     throw new TypeCheckError(
-      `Type mismatch.\n  Expected: ${prettyPrint(expectedType)}\n  Inferred: ${prettyPrint(inferredType)}`,
+      `Type mismatch.\n  Expected: ${prettyPrint(expectedType, names)}\n  Inferred: ${prettyPrint(inferredType, names)}`,
       term,
       ctx,
       path

@@ -170,7 +170,12 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
   switch (term.tag) {
     case 'Var':
       if (term.index === targetIndex + depth) {
+        // Replace with the replacement, shifted to account for binders we've gone under
         return shift(depth, replacement, 0);
+      } else if (term.index > targetIndex + depth) {
+        // Decrement indices above the substituted variable
+        // because we're removing that binder from the context
+        return { tag: 'Var', index: term.index - 1 };
       }
       return term;
 
