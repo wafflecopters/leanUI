@@ -12,6 +12,9 @@ import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { checkSourceBlocks, BlockCheckResult, summarizeCheckResults } from '../parser/block-checker';
+import { generateEliminator } from '../types/tt-eliminator';
+import { InductiveTypeDef } from '../types/tt-examples';
+import { prettyPrint } from '../types/tt-core';
 
 // ============================================================================
 // Types
@@ -445,6 +448,33 @@ interface EnhancedBlockCardProps {
 
 const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const [showErrors, setShowErrors] = useState(true);
+  const [showElimModal, setShowElimModal] = useState(false);
+
+  // Generate eliminator on-the-fly when modal is open
+  const eliminatorType = useMemo(() => {
+    if (!showElimModal) return null;
+    if (result.blockType !== 'Inductive' || !result.checkSuccess) return null;
+
+    // Get the first declaration (the inductive type)
+    const decl = result.declarations[0];
+    if (!decl || decl.kind !== 'inductive' || !decl.type || !decl.constructors || !decl.name) {
+      return null;
+    }
+
+    // Build InductiveTypeDef from the parsed declaration
+    const inductiveDef: InductiveTypeDef = {
+      name: decl.name,
+      type: decl.type,
+      constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
+    };
+
+    try {
+      const elimType = generateEliminator(inductiveDef);
+      return prettyPrint(elimType);
+    } catch (e) {
+      return `Error generating eliminator: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }, [showElimModal, result]);
 
   const getTypeStyle = () => {
     switch (result.blockType) {
@@ -499,6 +529,25 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
           }}>
             {paramDisplay}
           </span>
+        )}
+        {/* Show Elim button for successfully typechecked inductive types */}
+        {result.blockType === 'Inductive' && result.checkSuccess && (
+          <button
+            onClick={() => setShowElimModal(true)}
+            style={{
+              marginLeft: '12px',
+              padding: '2px 8px',
+              backgroundColor: '#21262d',
+              color: '#58a6ff',
+              border: '1px solid #30363d',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontWeight: 500,
+            }}
+          >
+            Show Elim
+          </button>
         )}
       </div>
 
@@ -567,6 +616,30 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Eliminator Modal */}
+      {showElimModal && (
+        <div style={styles.modalOverlay} onClick={() => setShowElimModal(false)}>
+          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h3 style={styles.modalTitle}>
+                {result.name}Elim
+              </h3>
+              <button
+                style={styles.closeButton}
+                onClick={() => setShowElimModal(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div style={styles.codeBlock}>
+              <code style={{ color: '#7ee787', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {result.name}Elim : {eliminatorType || 'Unable to generate eliminator'}
+              </code>
+            </div>
+          </div>
         </div>
       )}
     </div>

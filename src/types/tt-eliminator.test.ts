@@ -376,6 +376,39 @@ function runTests(): void {
     }
   });
 
+  console.log('\n=== Pretty Print Tests ===');
+
+  test('Nat eliminator pretty-prints without unresolved De Bruijn indices', () => {
+    const nat = makeNat();
+    const elim = generateEliminator(nat);
+    const printed = debugPrint(elim);
+
+    console.log('  Nat-elim printed:', printed);
+
+    // The output should NOT contain #N patterns (unresolved De Bruijn indices)
+    // It should use 'P' for the motive, not #3 or #4
+    if (printed.includes('#')) {
+      throw new Error(`Pretty-printed eliminator contains unresolved De Bruijn indices: ${printed}`);
+    }
+
+    // Should contain 'P' as the motive name applied to arguments
+    if (!printed.includes('P zero') && !printed.includes('(P zero)')) {
+      throw new Error(`Expected 'P zero' in zero case, got: ${printed}`);
+    }
+  });
+
+  test('Bool eliminator pretty-prints without unresolved De Bruijn indices', () => {
+    const bool = makeBool();
+    const elim = generateEliminator(bool);
+    const printed = debugPrint(elim);
+
+    console.log('  Bool-elim printed:', printed);
+
+    if (printed.includes('#')) {
+      throw new Error(`Pretty-printed eliminator contains unresolved De Bruijn indices: ${printed}`);
+    }
+  });
+
   console.log('\n✅ All tests passed!');
 }
 
