@@ -15,6 +15,7 @@
 import { TTKTerm, TTKContext } from './tt-kernel';
 import { inferType, checkType, TypeCheckError } from './tt-typecheck';
 import { IndexPath } from './source-position';
+import { checkInductiveValidity } from './tt-inductive-check';
 
 // ============================================================================
 // Error Types
@@ -53,13 +54,16 @@ export type CheckResult<T = void> =
  * @param inductiveType - Type of the inductive (usually Type or Prop)
  * @param constructors - List of constructors with their types
  * @param ctx - Typing context
+ * @param indexPositions - Positions that are indices (not parameters). Universe constraints
+ *                         only apply to indices. If not provided, all positions are treated as indices.
  * @returns CheckResult indicating success or all collected errors
  */
 export function checkInductiveDeclaration(
   inductiveName: string,
   inductiveType: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm }>,
-  ctx: TTKContext
+  ctx: TTKContext,
+  indexPositions?: number[]
 ): CheckResult<void> {
   const errors: CheckError[] = [];
 
@@ -77,48 +81,55 @@ export function checkInductiveDeclaration(
     }
   }
 
-  // Check each constructor in parallel (collect all errors)
-  // NOTE: We're lenient about Holes in constructor types because they often
-  // reference the inductive type being defined (e.g., Nat in "Succ : Nat -> Nat")
-  // A proper implementation would resolve these references and verify positivity.
+  // Build a context that includes the inductive type being defined.
+  // This allows constructor types like "Nat -> Nat" to reference Nat.
+  const ctxWithInductive: TTKContext = [{ name: inductiveName, type: inductiveType }, ...ctx];
+
+  // Check each constructor (collect all errors)
   for (let i = 0; i < constructors.length; i++) {
     const ctor = constructors[i];
     try {
-      // Constructor type must be well-formed
-      // We check this leniently - Holes are acceptable since they might reference
-      // the inductive type being defined
-      const ctorType = inferType(ctor.type, ctx);
+      // Type-check the constructor type in the context that includes the inductive type.
+      // This naturally catches:
+      // - Wrong arity (e.g., Vec A n when Vec only takes 1 arg)
+      // - Wrong argument types (e.g., Type where Nat expected)
+      // - References to undefined symbols
+      const ctorTypeOfType = inferType(ctor.type, ctxWithInductive);
 
-      // Verify it's a type (not a computational term)
-      // Allow Holes since they represent forward references
-      if (ctorType.tag !== 'Sort' && ctorType.tag !== 'Hole') {
+      // Verify the constructor type is itself a type (not a value)
+      if (ctorTypeOfType.tag !== 'Sort' && ctorTypeOfType.tag !== 'Hole') {
         errors.push({
-          message: `Constructor '${ctor.name}' type must be a Type or Prop, got: ${ctorType.tag}`,
+          message: `Constructor '${ctor.name}' type must be a Type or Prop, got: ${ctorTypeOfType.tag}`,
           path: [],
           term: ctor.type,
-          context: ctx
+          context: ctxWithInductive
         });
       }
 
-      // TODO: Additional checks:
-      // - Constructor return type should be the inductive type
-      // - Positivity checking (no negative occurrences)
-      // - Universe consistency
     } catch (e) {
       if (e instanceof TypeCheckError) {
-        // Skip errors about Holes - they're expected for forward references
-        if (!e.message.includes('Hole') && !e.message.includes('?')) {
-          errors.push({
-            message: `Constructor '${ctor.name}' has invalid type: ${e.message}`,
-            path: e.termPath || [],
-            term: e.term,
-            context: e.context
-          });
-        }
-        // Otherwise silently accept - Holes will be resolved later
+        errors.push({
+          message: `Constructor '${ctor.name}' has invalid type: ${e.message}`,
+          path: e.termPath || [],
+          term: e.term,
+          context: e.context
+        });
       }
     }
   }
+
+  // After basic type checking, run validity checks:
+  // - Constructor return type must be the inductive type
+  // - Strict positivity (no negative occurrences)
+  // - Universe constraints (only for indices, not parameters)
+  const validityResult = checkInductiveValidity(
+    inductiveName,
+    inductiveType,
+    constructors,
+    ctx,
+    indexPositions
+  );
+  errors.push(...validityResult.errors);
 
   if (errors.length > 0) {
     return { success: false, errors };

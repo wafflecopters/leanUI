@@ -100,10 +100,11 @@ test('checkTermDeclaration: neither type nor value', () => {
 
 test('checkInductiveDeclaration: simple inductive type', () => {
   // inductive Unit : Type where
-  //   | unit : Type  (simplified - just check Type is well-formed)
-  const inductiveType = mkType(0);
+  //   | tt : Unit
+  const inductiveType = mkType(1);  // Type = Sort 1
+  const Unit = mkConst('Unit', mkType(1));
   const constructors = [
-    { name: 'unit', type: elabToKernel(mkType(0)) }
+    { name: 'tt', type: elabToKernel(Unit) }
   ];
 
   const result = checkInductiveDeclaration(
@@ -118,12 +119,13 @@ test('checkInductiveDeclaration: simple inductive type', () => {
 
 test('checkInductiveDeclaration: parallel constructor checking', () => {
   // inductive Nat : Type where
-  //   | Zero : Type
-  //   | Succ : Type -> Type  (simplified)
-  const inductiveType = mkType(0);
+  //   | Zero : Nat
+  //   | Succ : Nat -> Nat
+  const inductiveType = mkType(1);  // Type = Sort 1
+  const Nat = mkConst('Nat', mkType(1));
   const constructors = [
-    { name: 'Zero', type: elabToKernel(mkType(0)) },
-    { name: 'Succ', type: elabToKernel(mkPi(mkType(0), mkVar(0), 'n')) }
+    { name: 'Zero', type: elabToKernel(Nat) },
+    { name: 'Succ', type: elabToKernel(mkPi(Nat, Nat, 'n')) }
   ];
 
   const result = checkInductiveDeclaration(

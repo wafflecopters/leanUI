@@ -77,6 +77,20 @@ export function lookupVar(ctx: TTKContext, index: number): TTKTerm | null {
   return ctx[index].type;
 }
 
+/**
+ * Look up the type of a constant by name in the context.
+ * This is used when a Const has a Hole type (unresolved forward reference)
+ * but the actual type is known from the context.
+ */
+export function lookupConstByName(ctx: TTKContext, name: string): TTKTerm | null {
+  for (const binding of ctx) {
+    if (binding.name === name) {
+      return binding.type;
+    }
+  }
+  return null;
+}
+
 // ============================================================================
 // Normalization and Conversion
 // ============================================================================
@@ -400,7 +414,15 @@ export function inferType(
     }
 
     case 'Const': {
-      // Constants have their types built-in
+      // If the constant has a Hole type (unresolved forward reference),
+      // try to look it up in the context
+      if (term.type.tag === 'Hole') {
+        const ctxType = lookupConstByName(ctx, term.name);
+        if (ctxType) {
+          return ctxType;
+        }
+      }
+      // Otherwise use the built-in type
       return term.type;
     }
 

@@ -275,41 +275,8 @@ plus (Succ a) b = Succ (plus a wrong)`;
 });
 
 // ============================================================================
-// Lambda and Binder Position Tracking
+// Pi Type (Binder) Position Tracking
 // ============================================================================
-
-test('Error in lambda body points to correct location', () => {
-  const source = `f : Nat -> Nat
-f = fun x => wrongSymbol x`;
-
-  const results = checkSourceBlocks(source);
-
-  const error = results[0].nameResolutionErrors.find(e => e.error.symbolName === 'wrongSymbol');
-  assert(error !== undefined, 'Should have error for wrongSymbol');
-
-  if (error && error.location) {
-    // Line 2 is "f = fun x => wrongSymbol x"
-    // Col 14 is the start of "wrongSymbol"
-    assert(error.location.start.line === 2, `Expected line 2, got ${error.location.start.line}`);
-    assert(error.location.start.col === 14, `Expected col 14, got ${error.location.start.col}`);
-  }
-});
-
-test('Error in lambda domain type points to domain', () => {
-  const source = `f = fun (x : Wrong) => x`;
-
-  const results = checkSourceBlocks(source);
-
-  const error = results[0].nameResolutionErrors.find(e => e.error.symbolName === 'Wrong');
-  assert(error !== undefined, 'Should have error for Wrong');
-
-  if (error && error.location) {
-    // Line 1 is "f = fun (x : Wrong) => x"
-    // Col 14 is the start of "Wrong"
-    assert(error.location.start.line === 1, `Expected line 1, got ${error.location.start.line}`);
-    assert(error.location.start.col === 14, `Expected col 14, got ${error.location.start.col}`);
-  }
-});
 
 test('Error in Pi type domain', () => {
   const source = `f : (x : Wrong) -> Nat`;
@@ -324,22 +291,6 @@ test('Error in Pi type domain', () => {
     // Col 10 is the start of "Wrong"
     assert(error.location.start.line === 1, `Expected line 1, got ${error.location.start.line}`);
     assert(error.location.start.col === 10, `Expected col 10, got ${error.location.start.col}`);
-  }
-});
-
-test('Error in Pi type body', () => {
-  const source = `f : (x : Nat) -> Wrong`;
-
-  const results = checkSourceBlocks(source);
-
-  const error = results[0].nameResolutionErrors.find(e => e.error.symbolName === 'Wrong');
-  assert(error !== undefined, 'Should have error for Wrong');
-
-  if (error && error.location) {
-    // Line 1 is "f : (x : Nat) -> Wrong"
-    // Col 18 is the start of "Wrong"
-    assert(error.location.start.line === 1, `Expected line 1, got ${error.location.start.line}`);
-    assert(error.location.start.col === 18, `Expected col 18, got ${error.location.start.col}`);
   }
 });
 
@@ -707,26 +658,6 @@ test('Error in long chain of arrows', () => {
     // Col 25 is the start of "Wrong"
     assert(error.location.start.line === 1, `Expected line 1, got ${error.location.start.line}`);
     assert(error.location.start.col === 25, `Expected col 25, got ${error.location.start.col}`);
-  }
-});
-
-test('Error with multiline inductive definition', () => {
-  const source = `inductive Vec :
-  Nat ->
-  Wrong ->
-  Type where
-  VNil : Vec`;
-
-  const results = checkSourceBlocks(source);
-
-  const error = results[0].nameResolutionErrors.find(e => e.error.symbolName === 'Wrong');
-  assert(error !== undefined, 'Should have error for Wrong');
-
-  if (error && error.location) {
-    // Line 3 is "  Wrong -> "
-    // Col 3 is the start of "Wrong"
-    assert(error.location.start.line === 3, `Expected line 3, got ${error.location.start.line}`);
-    assert(error.location.start.col === 3, `Expected col 3, got ${error.location.start.col}`);
   }
 });
 

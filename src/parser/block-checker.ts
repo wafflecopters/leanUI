@@ -19,8 +19,10 @@ import { elabToKernelWithMap } from '../types/tt-elab-source';
 import { checkTermDeclaration, checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines } from '../types/source-position';
-import { TTKTerm } from '../types/tt-kernel';
+import { TTKTerm, TTKContext } from '../types/tt-kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
+import { inferParameterIndices } from '../types/tt-inductive-inference';
+import { prettyPrint, TTerm } from '../types/tt-core';
 
 /**
  * Result of checking a single source block.
@@ -52,6 +54,18 @@ export interface BlockCheckResult {
   blockType: 'Inductive' | 'Term' | 'Comment' | 'Unknown';
   name?: string;
   inferredType?: string;  // String representation of inferred type
+
+  // For inductive types: parameter/index classification
+  inductiveParams?: InductiveParamInfo[];
+}
+
+/**
+ * Information about a parameter or index in an inductive type.
+ */
+export interface InductiveParamInfo {
+  name: string;
+  type: string;  // Pretty-printed type
+  isIndex: boolean;
 }
 
 /**
@@ -298,6 +312,7 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
   }
 
   // Phase 4: Type check all elaborated declarations together
+  // Build a global context as we go, so later declarations can reference earlier ones
   interface CheckResultWithBlock {
     blockIndex: number;
     declIndex: number;
@@ -307,45 +322,81 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
     checkErrors: CheckError[];
   }
 
-  const checkResults: CheckResultWithBlock[] = elaboratedDecls.map(elab => {
+  // Global context accumulates bindings from successfully checked declarations
+  let globalContext: TTKContext = [];
+  const checkResults: CheckResultWithBlock[] = [];
+
+  for (const elab of elaboratedDecls) {
     const { blockIndex, declIndex, decl, sourceMap, elabMap, kernelType, kernelValue, kernelConstructors } = elab;
 
     // Check based on declaration kind
     if (decl.kind === 'inductive' && kernelType && kernelConstructors) {
+      // Compute index positions for universe constraint checking.
+      // Parameters are exempt from universe constraints.
+      let indexPositions: number[] | undefined;
+      if (decl.name && decl.type && decl.constructors) {
+        try {
+          indexPositions = inferParameterIndices({
+            name: decl.name,
+            type: decl.type,
+            constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
+          });
+        } catch {
+          // If inference fails, treat all positions as indices (conservative)
+        }
+      }
+
       const result = checkInductiveDeclaration(
         decl.name || 'anonymous',
         kernelType,
         kernelConstructors,
-        []  // Empty context for now (TODO: build global context)
+        globalContext,
+        indexPositions
       );
 
-      return {
+      checkResults.push({
         blockIndex,
         declIndex,
         sourceMap,
         elabMap,
         checkSuccess: result.success,
         checkErrors: result.success ? [] : result.errors
-      };
+      });
+
+      // If successful, add the inductive type and its constructors to the global context
+      if (result.success && decl.name) {
+        // Add the inductive type itself
+        globalContext = [{ name: decl.name, type: kernelType }, ...globalContext];
+
+        // Add all constructors
+        for (const ctor of kernelConstructors) {
+          globalContext = [{ name: ctor.name, type: ctor.type }, ...globalContext];
+        }
+      }
     } else {
       // Term declaration (def, theorem, axiom, expr)
       const result = checkTermDeclaration(
         decl.name || 'anonymous',
         kernelType,
         kernelValue,
-        []  // Empty context for now (TODO: build global context)
+        globalContext
       );
 
-      return {
+      checkResults.push({
         blockIndex,
         declIndex,
         sourceMap,
         elabMap,
         checkSuccess: result.success,
         checkErrors: result.success ? [] : result.errors
-      };
+      });
+
+      // If successful and has a name, add to global context
+      if (result.success && decl.name && result.value) {
+        globalContext = [{ name: decl.name, type: result.value }, ...globalContext];
+      }
     }
-  });
+  }
 
   // Phase 5: Map results back to blocks
   const blockResults: BlockCheckResult[] = blocks.map((block, blockIndex) => {
@@ -441,6 +492,11 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       firstDecl.kind === 'inductive' ? 'Inductive' : 'Term';
     const name = firstDecl.name;
 
+    // For inductive types, extract parameter/index info
+    const inductiveParams = firstDecl.kind === 'inductive'
+      ? extractInductiveParamInfo(firstDecl)
+      : undefined;
+
     return {
       block,
       blockIndex,
@@ -452,7 +508,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       checkSuccess: allCheckErrors.length === 0,
       checkErrors: allCheckErrors,
       blockType,
-      name
+      name,
+      inductiveParams
     };
   });
 
@@ -483,4 +540,48 @@ export function summarizeCheckResults(results: BlockCheckResult[]): CheckSummary
     totalErrors: results.reduce((sum, r) =>
       sum + r.parseErrors.length + r.nameResolutionErrors.length + r.checkErrors.length, 0)
   };
+}
+
+/**
+ * Extract parameter/index information from a parsed inductive type declaration.
+ *
+ * For `Vec : Type -> Nat -> Type` with appropriate constructors,
+ * returns: [{ name: "A", type: "Type", isIndex: false }, { name: "n", type: "Nat", isIndex: true }]
+ */
+function extractInductiveParamInfo(decl: ParsedDeclaration): InductiveParamInfo[] | undefined {
+  if (decl.kind !== 'inductive' || !decl.type || !decl.constructors || !decl.name) {
+    return undefined;
+  }
+
+  // Convert to the format expected by inferParameterIndices
+  const inductiveDef = {
+    name: decl.name,
+    type: decl.type,
+    constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
+  };
+
+  try {
+    // Get the index positions
+    const indexPositions = new Set(inferParameterIndices(inductiveDef));
+
+    // Extract parameter names and types from the inductive type
+    const params: InductiveParamInfo[] = [];
+    let current: TTerm = decl.type;
+    let position = 0;
+
+    while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+      params.push({
+        name: current.name || `_${position}`,
+        type: prettyPrint(current.domain),
+        isIndex: indexPositions.has(position)
+      });
+      current = current.body;
+      position++;
+    }
+
+    return params.length > 0 ? params : undefined;
+  } catch {
+    // If inference fails, return undefined
+    return undefined;
+  }
 }

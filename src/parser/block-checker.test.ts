@@ -45,15 +45,16 @@ test('checkSourceBlocks: single well-formed definition', () => {
 });
 
 test('checkSourceBlocks: well-formed inductive', () => {
+  // Constructors must return the inductive type being defined, not Type!
   const source = `inductive Nat : Type where
-  | Zero : Type
-  | Succ : Type -> Type`;
+  | Zero : Nat
+  | Succ : Nat -> Nat`;
 
   const results = checkSourceBlocks(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
+  assert(results[0].checkSuccess === true, `Check should succeed, got errors: ${results[0].checkErrors.map(e => e.error.message).join(', ')}`);
   assert(results[0].blockType === 'Inductive', 'Should be inductive');
   assert(results[0].name === 'Nat', 'Should have name "Nat"');
 });
@@ -126,15 +127,16 @@ test('checkSourceBlocks: well-formed inductive (type checking passes)', () => {
   // For now, we test that well-formed inductives pass type checking.
   // The parallel error collection is tested in tt-typecheck-decl.test.ts directly.
 
+  // Constructors must return the inductive type being defined, not Type!
   const source = `inductive Nat : Type where
-  | Zero : Type
-  | Succ : Type -> Type`;
+  | Zero : Nat
+  | Succ : Nat -> Nat`;
 
   const results = checkSourceBlocks(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed for well-formed inductive');
+  assert(results[0].checkSuccess === true, `Check should succeed for well-formed inductive, got: ${results[0].checkErrors.map(e => e.error.message).join(', ')}`);
   assert(results[0].checkErrors.length === 0, 'Should have no errors');
 });
 
@@ -152,7 +154,7 @@ bad parse @#$%
 good2 : Type -> Type -> Type
 
 inductive Nat : Type where
-  | Zero : Type
+  | Zero : Nat
 
 good3 : Type`;
 
@@ -180,7 +182,7 @@ good3 : Type`;
   // Block 4: good inductive
   assert(results[4].name === 'Nat', 'Block 4 name');
   assert(results[4].parseSuccess === true, 'Block 4 parse success');
-  assert(results[4].checkSuccess === true, 'Block 4 check success');
+  assert(results[4].checkSuccess === true, `Block 4 check success, got: ${results[4].checkErrors.map(e => e.error.message).join(', ')}`);
 
   // Block 5: good3
   assert(results[5].name === 'good3', 'Block 5 name');
@@ -262,10 +264,11 @@ good2 : Type -> Type`;
 // ============================================================================
 
 test('checkSourceBlocks: real-world example', () => {
+  // Note: Constructors must return the inductive type, not Type!
   const source = `-- Natural numbers
 inductive Nat : Type where
-  | Zero : Type
-  | Succ : Type -> Type
+  | Zero : Nat
+  | Succ : Nat -> Nat
 
 -- Identity function
 id : Type -> Type
@@ -285,8 +288,121 @@ const : Type -> Type -> Type`;
   assert(results[2].name === 'const', 'Term name');
 
   const summary = summarizeCheckResults(results);
-  assert(summary.successfulBlocks === 3, 'All blocks succeed');
+  assert(summary.successfulBlocks === 3, `All blocks succeed, got errors: ${results.flatMap(r => r.checkErrors.map(e => e.error.message)).join(', ')}`);
   assert(summary.totalErrors === 0, 'No errors');
+});
+
+// ============================================================================
+// Inductive Type Validity Error Tests
+// ============================================================================
+
+test('checkSourceBlocks: constructor wrong return type error', () => {
+  // Constructor returns Type instead of the inductive type
+  const source = `inductive Bad : Type where
+  | wrong : Type`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 1, 'Should have 1 block');
+  assert(results[0].parseSuccess === true, 'Parse should succeed');
+  assert(results[0].checkSuccess === false, 'Check should FAIL for wrong return type');
+  assert(results[0].checkErrors.length > 0, 'Should have errors');
+  assert(
+    results[0].checkErrors.some(e => e.error.message.includes('wrong') && e.error.message.includes('Bad')),
+    `Error should mention wrong constructor and expected type. Got: ${results[0].checkErrors.map(e => e.error.message).join(', ')}`
+  );
+});
+
+test('checkSourceBlocks: strict positivity violation error', () => {
+  // (Bad -> X) -> Bad is a negative occurrence
+  const source = `inductive Bad : Type where
+  | mk : (Bad -> Nat) -> Bad`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 1, 'Should have 1 block');
+  assert(results[0].parseSuccess === true, 'Parse should succeed');
+  assert(results[0].checkSuccess === false, 'Check should FAIL for positivity violation');
+  assert(results[0].checkErrors.length > 0, 'Should have errors');
+  assert(
+    results[0].checkErrors.some(e => e.error.message.includes('negative') || e.error.message.includes('positiv')),
+    `Error should mention positivity. Got: ${results[0].checkErrors.map(e => e.error.message).join(', ')}`
+  );
+});
+
+test('checkSourceBlocks: universe constraint violation error', () => {
+  // Type in Type_0 inductive (without being polymorphic)
+  const source = `inductive Big : Type where
+  | mk : Type -> Big`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 1, 'Should have 1 block');
+  assert(results[0].parseSuccess === true, 'Parse should succeed');
+  assert(results[0].checkSuccess === false, 'Check should FAIL for universe violation');
+  assert(results[0].checkErrors.length > 0, 'Should have errors');
+  assert(
+    results[0].checkErrors.some(e => e.error.message.includes('universe') || e.error.message.includes('Universe')),
+    `Error should mention universe constraint. Got: ${results[0].checkErrors.map(e => e.error.message).join(', ')}`
+  );
+});
+
+// ============================================================================
+// Parameter/Index Inference Tests
+// ============================================================================
+
+test('checkSourceBlocks: inductive with no params (Nat)', () => {
+  const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 1, 'Should have 1 block');
+  assert(results[0].checkSuccess === true, 'Check should succeed');
+  // Nat has no type parameters
+  assert(
+    results[0].inductiveParams === undefined || results[0].inductiveParams.length === 0,
+    `Nat should have no params, got: ${JSON.stringify(results[0].inductiveParams)}`
+  );
+});
+
+test('checkSourceBlocks: inductive with param (List)', () => {
+  // List : Type -> Type with constructors that pass A through uniformly
+  const source = `inductive List : Type -> Type where
+  | nil : (A : Type) -> List A
+  | cons : (A : Type) -> A -> List A -> List A`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 1, 'Should have 1 block');
+  // List has one type parameter A
+  assert(results[0].inductiveParams !== undefined, 'List should have params info');
+  assert(results[0].inductiveParams!.length === 1, `List should have 1 param, got ${results[0].inductiveParams!.length}`);
+  assert(results[0].inductiveParams![0].isIndex === false, 'A should be a parameter, not index');
+  assert(results[0].inductiveParams![0].type === 'Type', `A should have type Type, got ${results[0].inductiveParams![0].type}`);
+});
+
+test('checkSourceBlocks: inductive with param and index (Vec)', () => {
+  // Vec : Type -> Nat -> Type
+  // A is a parameter (uniform), n is an index (varies)
+  const source = `inductive Vec : Type -> Nat -> Type where
+  | nil : (A : Type) -> Vec A Zero
+  | cons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 1, 'Should have 1 block');
+  assert(results[0].inductiveParams !== undefined, 'Vec should have params info');
+  assert(results[0].inductiveParams!.length === 2, `Vec should have 2 params, got ${results[0].inductiveParams!.length}`);
+
+  // First param: A is a parameter
+  assert(results[0].inductiveParams![0].isIndex === false, 'A should be a parameter');
+  assert(results[0].inductiveParams![0].type === 'Type', `A should have type Type`);
+
+  // Second param: n is an index
+  assert(results[0].inductiveParams![1].isIndex === true, 'n should be an index');
+  assert(results[0].inductiveParams![1].type === 'Nat', `n should have type Nat`);
 });
 
 console.log('\n' + '='.repeat(80));

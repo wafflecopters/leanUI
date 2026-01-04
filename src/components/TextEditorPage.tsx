@@ -475,6 +475,13 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const typeLabel = result.blockType;
   const nameDisplay = result.name ? `: ${result.name}` : '';
 
+  // Build param/index display for inductive types
+  const paramDisplay = result.inductiveParams && result.inductiveParams.length > 0
+    ? result.inductiveParams.map(p =>
+        `[${p.isIndex ? 'index' : 'param'} ${p.name} : ${p.type}]`
+      ).join(' ')
+    : null;
+
   return (
     <div style={styles.blockBox}>
       <div style={styles.blockHeader}>
@@ -484,6 +491,16 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
         <span style={{ ...styles.blockTypeLabel, ...getTypeStyle() }}>
           {typeLabel}{nameDisplay}
         </span>
+        {paramDisplay && (
+          <span style={{
+            marginLeft: '8px',
+            fontSize: '11px',
+            color: '#8b949e',
+            fontFamily: 'monospace'
+          }}>
+            {paramDisplay}
+          </span>
+        )}
       </div>
 
       {/* Parse errors */}
