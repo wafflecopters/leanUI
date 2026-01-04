@@ -293,8 +293,8 @@ plus : Nat -> Nat -> Nat
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)
 
-inductive Vec : Nat -> Type where
-  VNil : (A: Type) -> Vec Zero A
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A: Type) -> Vec A Zero
   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
 
 inductive Equal : (A: Type) -> A -> A -> Type where
@@ -302,14 +302,13 @@ inductive Equal : (A: Type) -> A -> A -> Type where
 
 {-
 const : (A : Type) -> (B : Type) -> A -> B -> A
-const = A B x y => x
+const = \\ A B x y => x
 
 twice' = Nat -> Nat
 twice' n = plus n n
 
 twice : Nat -> Nat
-twice = 
- => plus n n
+twice = \\ n => plus n n
 
 vecConcat : (A : Type) -> (a, b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat _ _ _ (VNil _) v = v
@@ -478,8 +477,8 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   // Build param/index display for inductive types
   const paramDisplay = result.inductiveParams && result.inductiveParams.length > 0
     ? result.inductiveParams.map(p =>
-        `[${p.isIndex ? 'index' : 'param'} ${p.name} : ${p.type}]`
-      ).join(' ')
+      `[${p.isIndex ? 'index' : 'param'} ${p.name} : ${p.type}]`
+    ).join(' ')
     : null;
 
   return (
