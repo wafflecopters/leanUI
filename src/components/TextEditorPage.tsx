@@ -11,49 +11,11 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import {
-  parseDeclarations,
-  ParseError,
-  ParseErrors,
-  ParsedDeclaration,
-  DEFAULT_OPERATORS,
-} from '../parser/tt-parser';
-import { TTerm, prettyPrint, TContext } from '../types/tt-core';
-import { inferType, TypeCheckError } from '../types/tt-typecheck';
-import { groupByIndentation, SourceBlock, parseBlock } from '../parser/indentation-grouper';
 import { checkSourceBlocks, BlockCheckResult, summarizeCheckResults } from '../parser/block-checker';
 
 // ============================================================================
 // Types
 // ============================================================================
-
-interface ParseResult {
-  success: true;
-  declarations: ParsedDeclaration[];
-}
-
-interface ParseFailure {
-  success: false;
-  errors: ParseError[];
-}
-
-interface TypeCheckResult {
-  declIndex: number;
-  name?: string;
-  kind: string;
-  inferredType?: string;
-  error?: string;
-}
-
-interface BlockParseResult {
-  block: SourceBlock;
-  type: 'Inductive' | 'Term' | 'Unknown' | 'Comment';
-  name?: string;
-  parseSuccess: boolean;
-  parseError?: string;
-}
-
-type ParseOutcome = ParseResult | ParseFailure;
 
 // Monaco type helpers
 type Monaco = typeof import('monaco-editor');
@@ -388,158 +350,7 @@ increment = \\x => x + 1
 // ============================================================================
 // Helper Functions
 // ============================================================================
-
-function getKindStyle(kind: string): React.CSSProperties {
-  switch (kind) {
-    case 'def': return styles.kindDef;
-    case 'theorem': return styles.kindTheorem;
-    case 'axiom': return styles.kindAxiom;
-    default: return styles.kindExpr;
-  }
-}
-
-function formatAst(term: TTerm, indent: number = 0): string {
-  const pad = '  '.repeat(indent);
-
-  switch (term.tag) {
-    case 'Var':
-      return `${pad}Var(${term.index})`;
-
-    case 'Sort':
-      return `${pad}Sort(level: ${term.level}) ${term.level === 0 ? '-- Prop' : `-- Type_${term.level}`}`;
-
-    case 'Const':
-      return `${pad}Const("${term.name}")`;
-
-    case 'Hole':
-      return `${pad}Hole("${term.id}")`;
-
-    case 'Binder': {
-      const kind = term.binderKind.tag === 'BPi' ? 'Π' :
-        term.binderKind.tag === 'BLam' ? 'λ' : 'let';
-      let result = `${pad}Binder(${kind}, name: "${term.name}")\n`;
-      result += `${pad}  domain:\n${formatAst(term.domain, indent + 2)}\n`;
-      if (term.binderKind.tag === 'BLet') {
-        result += `${pad}  defVal:\n${formatAst(term.binderKind.defVal, indent + 2)}\n`;
-      }
-      result += `${pad}  body:\n${formatAst(term.body, indent + 2)}`;
-      return result;
-    }
-
-    case 'App':
-      return `${pad}App\n${pad}  fn:\n${formatAst(term.fn, indent + 2)}\n${pad}  arg:\n${formatAst(term.arg, indent + 2)}`;
-
-    case 'Annot':
-      return `${pad}Annot\n${pad}  term:\n${formatAst(term.term, indent + 2)}\n${pad}  type:\n${formatAst(term.type, indent + 2)}`;
-
-    default:
-      return `${pad}Unknown`;
-  }
-}
-
-function tryInferType(term: TTerm, ctx: TContext = []): { success: true; type: string } | { success: false; error: string } {
-  try {
-    const inferredType = inferType(term, ctx);
-    return { success: true, type: prettyPrint(inferredType) };
-  } catch (e) {
-    if (e instanceof TypeCheckError) {
-      return { success: false, error: e.message };
-    }
-    return { success: false, error: String(e) };
-  }
-}
-
-function analyzeSourceBlock(block: SourceBlock): BlockParseResult {
-  const blockSource = block.lines.join('\n');
-
-  // Check if this is a comment block
-  if (block.isComment) {
-    return {
-      block,
-      type: 'Comment',
-      parseSuccess: true
-    };
-  }
-
-  // Try to parse the block
-  try {
-    const declarations = parseDeclarations(blockSource);
-
-    if (declarations.length === 0) {
-      return {
-        block,
-        type: 'Unknown',
-        parseSuccess: false,
-        parseError: 'No declarations found'
-      };
-    }
-
-    const firstDecl = declarations[0];
-
-    // Determine block type
-    if (block.isInductive || firstDecl.kind === 'inductive') {
-      return {
-        block,
-        type: 'Inductive',
-        name: firstDecl.name,
-        parseSuccess: true
-      };
-    }
-
-    if (firstDecl.kind === 'def' || firstDecl.kind === 'axiom' || firstDecl.kind === 'theorem' || firstDecl.kind === 'expr') {
-      return {
-        block,
-        type: 'Term',
-        name: firstDecl.name,
-        parseSuccess: true
-      };
-    }
-
-    return {
-      block,
-      type: 'Unknown',
-      name: firstDecl.name,
-      parseSuccess: true
-    };
-
-  } catch (e) {
-    // Parse failed
-    let errorMsg = 'Parse error';
-
-    if (e instanceof ParseErrors) {
-      errorMsg = e.errors.map(err => err.message).join('; ');
-    } else if (e instanceof ParseError) {
-      errorMsg = e.message;
-    } else {
-      errorMsg = String(e);
-    }
-
-    // Try to determine type from the source text
-    const trimmed = blockSource.trim();
-    if (trimmed.startsWith('inductive ')) {
-      const match = trimmed.match(/^inductive\s+([a-zA-Z_][a-zA-Z0-9_']*)/);
-      return {
-        block,
-        type: 'Inductive',
-        name: match?.[1],
-        parseSuccess: false,
-        parseError: errorMsg
-      };
-    }
-
-    // Try to extract name from signature line
-    const firstLine = block.lines[0]?.trim() || '';
-    const nameMatch = firstLine.match(/^([a-zA-Z_][a-zA-Z0-9_']*)\s*:/);
-
-    return {
-      block,
-      type: nameMatch ? 'Term' : 'Unknown',
-      name: nameMatch?.[1],
-      parseSuccess: false,
-      parseError: errorMsg
-    };
-  }
-}
+// (Old helper functions removed - using block-checker.ts instead)
 
 // ============================================================================
 // Monaco Editor Configuration
@@ -628,38 +439,6 @@ const MONACO_WIDGET_STYLES = `
 // Components
 // ============================================================================
 
-interface ASTViewerProps {
-  term: TTerm;
-  title?: string;
-}
-
-const ASTViewer: React.FC<ASTViewerProps> = ({ term, title }) => {
-  const [expanded, setExpanded] = useState(true);
-
-  return (
-    <div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          cursor: 'pointer',
-          marginBottom: '8px',
-        }}
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span style={{ color: '#6e7681' }}>{expanded ? '▼' : '▶'}</span>
-        {title && <span style={{ color: '#8b949e', fontSize: '12px' }}>{title}</span>}
-      </div>
-      {expanded && (
-        <div style={{ ...styles.codeBlock, ...styles.astTree }}>
-          {formatAst(term)}
-        </div>
-      )}
-    </div>
-  );
-};
-
 interface EnhancedBlockCardProps {
   result: BlockCheckResult;
   index: number;
@@ -680,6 +459,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const getStatusIcon = () => {
     if (result.blockType === 'Comment') return '📝';
     if (!result.parseSuccess) return '⚠';
+    if (!result.nameResolutionSuccess) return '✗';
     if (!result.checkSuccess) return '✗';
     return '✓';
   };
@@ -687,6 +467,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const getStatusColor = () => {
     if (result.blockType === 'Comment') return '#8b949e';
     if (!result.parseSuccess) return '#f0883e';
+    if (!result.nameResolutionSuccess) return '#f85149';
     if (!result.checkSuccess) return '#f85149';
     return '#3fb950';
   };
@@ -717,8 +498,27 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
         </div>
       )}
 
+      {/* Name resolution errors */}
+      {result.parseSuccess && !result.nameResolutionSuccess && result.nameResolutionErrors.length > 0 && (
+        <div style={styles.blockErrorText}>
+          <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+            Name Resolution Errors ({result.nameResolutionErrors.length}):
+          </div>
+          {result.nameResolutionErrors.map((nameError, i) => (
+            <div key={i} style={{ marginLeft: '12px' }}>
+              {nameError.error.message}
+              {nameError.location && (
+                <span style={{ fontSize: '11px', color: '#8b949e', marginLeft: '8px' }}>
+                  (line {nameError.location.start.line}, col {nameError.location.start.col})
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Type check errors */}
-      {result.parseSuccess && !result.checkSuccess && result.checkErrors.length > 0 && (
+      {result.parseSuccess && result.nameResolutionSuccess && !result.checkSuccess && result.checkErrors.length > 0 && (
         <div>
           <div
             style={{
@@ -757,76 +557,12 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   );
 };
 
-interface DeclarationCardProps {
-  decl: ParsedDeclaration;
-  index: number;
-  typeResult: TypeCheckResult;
-}
-
-const DeclarationCard: React.FC<DeclarationCardProps> = ({ decl, index, typeResult }) => {
-  const [showAst, setShowAst] = useState(false);
-
-  return (
-    <div style={styles.declCard}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <span style={{ ...styles.declKind, ...getKindStyle(decl.kind) }}>
-            {decl.kind}
-          </span>
-          {decl.name && (
-            <span style={styles.declName}>{decl.name}</span>
-          )}
-          {!decl.name && decl.kind === 'expr' && (
-            <span style={{ color: '#8b949e', fontStyle: 'italic' }}>expression #{index + 1}</span>
-          )}
-        </div>
-        <button
-          onClick={() => setShowAst(!showAst)}
-          style={{
-            ...styles.examplesButton,
-            padding: '4px 8px',
-            fontSize: '11px',
-          }}
-        >
-          {showAst ? 'Hide AST' : 'Show AST'}
-        </button>
-      </div>
-
-      {/* Type information */}
-      <div style={styles.codeBlock}>
-        {typeResult.error ? (
-          <div>
-            <span style={styles.errorText}>⚠ Type Error: </span>
-            <span style={{ color: '#f0883e' }}>{typeResult.error}</span>
-          </div>
-        ) : typeResult.inferredType ? (
-          <div>
-            <span style={styles.typeLabel}>Type:</span>
-            <span style={styles.typeValue}>{typeResult.inferredType}</span>
-          </div>
-        ) : (
-          <span style={{ color: '#6e7681' }}>No type information available</span>
-        )}
-      </div>
-
-      {/* AST visualization */}
-      {showAst && decl.value && (
-        <div style={{ marginTop: '12px' }}>
-          <ASTViewer term={decl.value} title="Value AST" />
-          {decl.type && <ASTViewer term={decl.type} title="Type AST" />}
-        </div>
-      )}
-    </div>
-  );
-};
-
 // ============================================================================
 // Main Component
 // ============================================================================
 
 export const TextEditorPage: React.FC = () => {
   const [code, setCode] = useState(EXAMPLE_CODE);
-  const [showParseTree, setShowParseTree] = useState(false);
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
 
@@ -847,26 +583,6 @@ export const TextEditorPage: React.FC = () => {
     };
   }, []);
 
-  // Parse the code
-  const parseOutcome = useMemo((): ParseOutcome => {
-    if (!code.trim()) {
-      return { success: true, declarations: [] };
-    }
-
-    try {
-      const declarations = parseDeclarations(code);
-      return { success: true, declarations };
-    } catch (e) {
-      if (e instanceof ParseErrors) {
-        return { success: false, errors: e.errors };
-      }
-      if (e instanceof ParseError) {
-        return { success: false, errors: [e] };
-      }
-      throw e;
-    }
-  }, [code]);
-
   // Check all blocks with full type checking pipeline
   const blockCheckResults = useMemo((): BlockCheckResult[] => {
     if (!code.trim()) return [];
@@ -877,48 +593,6 @@ export const TextEditorPage: React.FC = () => {
   const blockStats = useMemo(() => {
     return summarizeCheckResults(blockCheckResults);
   }, [blockCheckResults]);
-
-  // Type check each declaration
-  const typeCheckResults = useMemo((): TypeCheckResult[] => {
-    if (!parseOutcome.success) return [];
-
-    return parseOutcome.declarations.map((decl, index) => {
-      const result: TypeCheckResult = {
-        declIndex: index,
-        name: decl.name,
-        kind: decl.kind,
-      };
-
-      // Determine the type to display:
-      // 1. If there's an explicit type annotation, use it (it's already parsed correctly)
-      // 2. Otherwise, if there's a value, try to infer its type
-      if (decl.type) {
-        // Use the explicitly declared type
-        result.inferredType = prettyPrint(decl.type);
-      } else if (decl.value) {
-        // No type annotation - infer from value
-        const typeResult = tryInferType(decl.value);
-        if (typeResult.success) {
-          result.inferredType = typeResult.type;
-        } else {
-          result.error = typeResult.error;
-        }
-      }
-
-      return result;
-    });
-  }, [parseOutcome]);
-
-  // Calculate statistics
-  const stats = useMemo(() => {
-    if (!parseOutcome.success) return null;
-
-    const total = parseOutcome.declarations.length;
-    const withErrors = typeCheckResults.filter(r => r.error).length;
-    const successful = total - withErrors;
-
-    return { total, successful, withErrors };
-  }, [parseOutcome, typeCheckResults]);
 
   // Track whether editor has been mounted
   const [editorMounted, setEditorMounted] = useState(false);
@@ -943,13 +617,42 @@ export const TextEditorPage: React.FC = () => {
 
         markers.push({
           severity: monaco.MarkerSeverity.Error,
-          message: error.message.replace(/^Parse error at line \d+, col \d+: /, ''),
+          message: (error.message || 'Parse error').replace(/^Parse error at line \d+, col \d+: /, ''),
           startLineNumber: error.line,
           startColumn: error.col,
           endLineNumber: error.line,
           endColumn: endCol,
           source: 'TT Parser',
         });
+      }
+
+      // Name resolution errors with source locations
+      for (const nameError of blockResult.nameResolutionErrors) {
+        if (nameError.location) {
+          // Use precise source location
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: nameError.error.message,
+            startLineNumber: nameError.location.start.line,
+            startColumn: nameError.location.start.col,
+            endLineNumber: nameError.location.end.line,
+            endColumn: nameError.location.end.col,
+            source: 'TT Name Resolution',
+          });
+        } else {
+          // Fallback: mark entire first line if location not available
+          const firstLine = blockResult.block.startLine;
+          const lineContent = model.getLineContent(firstLine);
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: nameError.error.message,
+            startLineNumber: firstLine,
+            startColumn: 1,
+            endLineNumber: firstLine,
+            endColumn: lineContent.length + 1,
+            source: 'TT Name Resolution',
+          });
+        }
       }
 
       // Type check errors with source locations
@@ -1065,14 +768,6 @@ export const TextEditorPage: React.FC = () => {
     setCode('');
   }, []);
 
-  const handleParseTreeClick = useCallback(() => {
-    setShowParseTree(true);
-  }, []);
-
-  const handleCloseModal = useCallback(() => {
-    setShowParseTree(false);
-  }, []);
-
   return (
     <div style={styles.container}>
       {/* Editor Section */}
@@ -1109,56 +804,28 @@ export const TextEditorPage: React.FC = () => {
             <button style={styles.examplesButton} onClick={handleClearClick}>
               Clear
             </button>
-            <button style={styles.examplesButton} onClick={handleParseTreeClick}>
-              Parse Tree
-            </button>
           </div>
 
-          {parseOutcome.success && stats && (
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <span>{stats.total} declaration{stats.total !== 1 ? 's' : ''}</span>
-              {stats.successful > 0 && (
-                <span style={{ ...styles.badge, ...styles.badgeSuccess }}>
-                  ✓ {stats.successful} typed
-                </span>
-              )}
-              {stats.withErrors > 0 && (
-                <span style={{ ...styles.badge, ...styles.badgeError }}>
-                  ⚠ {stats.withErrors} error{stats.withErrors !== 1 ? 's' : ''}
-                </span>
-              )}
-            </div>
-          )}
-
-          {!parseOutcome.success && (
-            <span style={{ ...styles.badge, ...styles.badgeError }}>
-              ⚠ {parseOutcome.errors.length} Parse Error{parseOutcome.errors.length !== 1 ? 's' : ''}
-            </span>
-          )}
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <span>{blockCheckResults.length} block{blockCheckResults.length !== 1 ? 's' : ''}</span>
+            {blockStats.successfulBlocks > 0 && (
+              <span style={{ ...styles.badge, ...styles.badgeSuccess }}>
+                ✓ {blockStats.successfulBlocks} OK
+              </span>
+            )}
+            {blockStats.totalErrors > 0 && (
+              <span style={{ ...styles.badge, ...styles.badgeError }}>
+                ⚠ {blockStats.totalErrors} error{blockStats.totalErrors !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Results Section */}
       <div style={styles.resultsSection}>
-        {/* Parse Error Display (redundant with inline markers, but useful for details) */}
-        {!parseOutcome.success && (
-          <div style={{ ...styles.panel, ...styles.errorPanel }}>
-            <h3 style={{ ...styles.sectionTitle, color: '#f85149', marginTop: 0 }}>
-              Parse Error{parseOutcome.errors.length !== 1 ? 's' : ''} ({parseOutcome.errors.length})
-            </h3>
-            {parseOutcome.errors.map((error, idx) => (
-              <div key={idx} style={{ marginBottom: idx < parseOutcome.errors.length - 1 ? '12px' : 0 }}>
-                <div style={styles.errorText}>
-                  Line {error.line}, Column {error.col}
-                </div>
-                <div style={{ marginTop: '4px' }}>{error.message}</div>
-              </div>
-            ))}
-          </div>
-        )}
-
         {/* Block Check Results Display */}
-        {blockCheckResults.length > 0 && (
+        {blockCheckResults.length > 0 ? (
           <div>
             <h3 style={styles.sectionTitle}>
               Type-Checked Blocks ({blockCheckResults.length}) -
@@ -1170,75 +837,7 @@ export const TextEditorPage: React.FC = () => {
               <EnhancedBlockCard key={index} result={blockResult} index={index} />
             ))}
           </div>
-        )}
-
-        {/* Success Results */}
-        {parseOutcome.success && parseOutcome.declarations.length > 0 && (
-          <div style={styles.twoColumn}>
-            {/* Type Check Results */}
-            <div>
-              <h3 style={styles.sectionTitle}>Type Check Results</h3>
-              {parseOutcome.declarations.map((decl, index) => (
-                <DeclarationCard
-                  key={index}
-                  decl={decl}
-                  index={index}
-                  typeResult={typeCheckResults[index]}
-                />
-              ))}
-            </div>
-
-            {/* Quick Reference */}
-            <div>
-              <h3 style={styles.sectionTitle}>Operator Precedence</h3>
-              <div style={styles.panel}>
-                <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid #30363d' }}>
-                      <th style={{ textAlign: 'left', padding: '4px 8px', color: '#8b949e' }}>Op</th>
-                      <th style={{ textAlign: 'left', padding: '4px 8px', color: '#8b949e' }}>Prec</th>
-                      <th style={{ textAlign: 'left', padding: '4px 8px', color: '#8b949e' }}>Assoc</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(DEFAULT_OPERATORS)
-                      .sort((a, b) => b[1].precedence - a[1].precedence)
-                      .slice(0, 12)
-                      .map(([symbol, info]) => (
-                        <tr key={symbol} style={{ borderBottom: '1px solid #21262d' }}>
-                          <td style={{ padding: '4px 8px', color: '#7ee787' }}>{symbol}</td>
-                          <td style={{ padding: '4px 8px', color: '#c9d1d9' }}>{info.precedence}</td>
-                          <td style={{ padding: '4px 8px', color: '#8b949e' }}>{info.associativity}</td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-                <div style={{ marginTop: '12px', fontSize: '11px', color: '#6e7681' }}>
-                  <div>Application: 100 (left)</div>
-                  <div>Arrow (→): 25 (right)</div>
-                </div>
-              </div>
-
-              <h3 style={{ ...styles.sectionTitle, marginTop: '24px' }}>Syntax Reference</h3>
-              <div style={styles.panel}>
-                <div style={{ fontSize: '12px', lineHeight: '1.8' }}>
-                  <div><code style={{ color: '#7ee787' }}>\(x : T) =&gt; body</code> — Lambda</div>
-                  <div><code style={{ color: '#7ee787' }}>(x : A) -&gt; B</code> — Pi type</div>
-                  <div><code style={{ color: '#7ee787' }}>A -&gt; B</code> — Function type</div>
-                  <div><code style={{ color: '#7ee787' }}>let x := v in e</code> — Let binding</div>
-                  <div><code style={{ color: '#7ee787' }}>f x y</code> — Application</div>
-                  <div><code style={{ color: '#7ee787' }}>?name</code> — Hole</div>
-                  <div><code style={{ color: '#7ee787' }}>def n : T := v</code> — Definition</div>
-                  <div><code style={{ color: '#7ee787' }}>theorem n : T := p</code> — Theorem</div>
-                  <div><code style={{ color: '#7ee787' }}>axiom n : T</code> — Axiom</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Empty State */}
-        {parseOutcome.success && parseOutcome.declarations.length === 0 && (
+        ) : (
           <div style={{
             ...styles.panel,
             textAlign: 'center',
@@ -1246,102 +845,13 @@ export const TextEditorPage: React.FC = () => {
             padding: '40px',
           }}>
             <div style={{ fontSize: '48px', marginBottom: '16px' }}>λ</div>
-            <div style={{ fontSize: '16px', marginBottom: '8px' }}>No expressions yet</div>
+            <div style={{ fontSize: '16px', marginBottom: '8px' }}>No code yet</div>
             <div style={{ fontSize: '12px' }}>
               Type some TT language expressions above, or click "Load Examples"
             </div>
           </div>
         )}
       </div>
-
-      {/* Parse Tree Modal */}
-      {showParseTree && (
-        <div style={styles.modalOverlay} onClick={handleCloseModal}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div style={styles.modalHeader}>
-              <h2 style={styles.modalTitle}>Parse Tree</h2>
-              <button style={styles.closeButton} onClick={handleCloseModal}>
-                Close
-              </button>
-            </div>
-            <div>
-              {!parseOutcome.success ? (
-                <div style={{ ...styles.panel, ...styles.errorPanel }}>
-                  <div style={styles.errorText}>
-                    Parse Error{parseOutcome.errors.length !== 1 ? 's' : ''} ({parseOutcome.errors.length})
-                  </div>
-                  {parseOutcome.errors.map((error, idx) => (
-                    <div key={idx} style={{ marginTop: '12px' }}>
-                      <div style={{ color: '#c9d1d9' }}>
-                        Line {error.line}, Column {error.col}
-                      </div>
-                      <div style={{ marginTop: '4px', color: '#c9d1d9' }}>
-                        {error.message}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : parseOutcome.declarations.length === 0 ? (
-                <div style={{ ...styles.panel, textAlign: 'center', padding: '40px' }}>
-                  <div style={{ color: '#8b949e' }}>No declarations to display</div>
-                </div>
-              ) : (
-                <div>
-                  {parseOutcome.declarations.map((decl, index) => (
-                    <div key={index} style={{ marginBottom: '24px' }}>
-                      <div style={{
-                        marginBottom: '12px',
-                        paddingBottom: '8px',
-                        borderBottom: '1px solid #30363d',
-                      }}>
-                        <span style={{ ...styles.declKind, ...getKindStyle(decl.kind) }}>
-                          {decl.kind}
-                        </span>
-                        {decl.name && (
-                          <span style={styles.declName}>{decl.name}</span>
-                        )}
-                        {!decl.name && decl.kind === 'expr' && (
-                          <span style={{ color: '#8b949e', fontStyle: 'italic' }}>
-                            expression #{index + 1}
-                          </span>
-                        )}
-                      </div>
-
-                      {decl.kind === 'inductive' && decl.constructors && (
-                        <div style={{ marginBottom: '16px' }}>
-                          <div style={{ color: '#8b949e', fontSize: '12px', marginBottom: '8px' }}>
-                            Constructors:
-                          </div>
-                          {decl.constructors.map((ctor, ctorIdx) => (
-                            <div key={ctorIdx} style={styles.codeBlock}>
-                              <div style={{ color: '#7ee787', marginBottom: '4px' }}>
-                                {ctor.name}
-                              </div>
-                              <ASTViewer term={ctor.type} title={`Constructor Type AST`} />
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {decl.type && (
-                        <div style={{ marginBottom: '12px' }}>
-                          <ASTViewer term={decl.type} title="Type AST" />
-                        </div>
-                      )}
-
-                      {decl.value && (
-                        <div>
-                          <ASTViewer term={decl.value} title="Value AST" />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

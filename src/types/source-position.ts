@@ -198,3 +198,33 @@ export function createSourcePos(line: number, col: number, pos: number): SourceP
 export function createSourceRange(start: SourcePos, end: SourcePos): SourceRange {
   return { start, end };
 }
+
+/**
+ * Adjust all line numbers in a SourceMap by a given offset.
+ *
+ * This is useful when parsing blocks independently - each block is parsed
+ * with line numbers starting at 1, but we need to adjust them to be relative
+ * to the full source file.
+ *
+ * @param sourceMap - The SourceMap to adjust
+ * @param lineOffset - The offset to add to all line numbers
+ * @returns A new SourceMap with adjusted line numbers
+ */
+export function adjustSourceMapLines(sourceMap: SourceMap, lineOffset: number): SourceMap {
+  const adjusted = new Map<string, SourceRange>();
+
+  for (const [key, range] of sourceMap.entries()) {
+    adjusted.set(key, {
+      start: {
+        ...range.start,
+        line: range.start.line + lineOffset
+      },
+      end: {
+        ...range.end,
+        line: range.end.line + lineOffset
+      }
+    });
+  }
+
+  return adjusted;
+}

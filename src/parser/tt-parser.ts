@@ -33,6 +33,7 @@ import {
   SourcePos,
   SourceRange,
   IndexPath,
+  IndexPathSegment,
   createSourcePos,
   createSourceRange,
   serializeIndexPath
@@ -505,6 +506,34 @@ export class Parser {
   ) { }
 
   /**
+   * Prefix all paths in the source map that start with `basePath` by adding `suffix`.
+   * This is used when we parse a term and then discover it's part of a larger structure.
+   * For example, when parsing `Na -> Nat`, we parse `Na` at path `p`, then discover
+   * it's the domain of a Pi, so we need to update it to `p.domain`.
+   */
+  private prefixSourceMapPaths(basePath: IndexPath, suffix: IndexPathSegment): void {
+    const basePathStr = serializeIndexPath(basePath);
+    const newEntries = new Map<string, SourceRange>();
+
+    for (const [pathStr, range] of this.currentSourceMap) {
+      // Check if this path starts with basePath
+      if (pathStr === basePathStr || pathStr.startsWith(basePathStr + '.') || pathStr.startsWith(basePathStr + '[')) {
+        // Extract the part after basePath
+        const remainder = pathStr === basePathStr ? '' : pathStr.substring(basePathStr.length);
+        // Insert suffix after basePath
+        const newPath = [...basePath, suffix];
+        const newPathStr = serializeIndexPath(newPath) + remainder;
+        newEntries.set(newPathStr, range);
+      } else {
+        // Keep as-is
+        newEntries.set(pathStr, range);
+      }
+    }
+
+    this.currentSourceMap = newEntries;
+  }
+
+  /**
    * Parse a single expression from source code.
    */
   parseExpr(source: string): TTerm {
@@ -612,13 +641,16 @@ export class Parser {
    * Returns an array of {decl, sourceMap} objects, one per successfully
    * parsed declaration.
    */
-  parseDeclarationsWithSource(source: string): ParsedDeclarationWithSource[] {
+  parseDeclarationsWithSource(source: string, prevDeclarations?: ParsedDeclaration[]): ParsedDeclarationWithSource[] {
     const lexer = new Lexer(source, this.operators);
     this.tokens = lexer.tokenize();
     this.pos = 0;
 
     const results: ParsedDeclarationWithSource[] = [];
     const errors: ParseError[] = [];
+
+    // Combine previous declarations with current results for pattern matching detection
+    const allPrevDecls = [...(prevDeclarations || [])];
 
     while (this.current().type !== 'EOF') {
       this.skipNewlines();
@@ -629,7 +661,8 @@ export class Parser {
       this.currentPath = [];
 
       try {
-        const decl = this.parseDeclaration(results.map(r => r.decl));
+        // Pass both previous declarations AND current results
+        const decl = this.parseDeclaration([...allPrevDecls, ...results.map(r => r.decl)]);
         if (decl) {
           // Check if this declaration can be merged with the previous one
           const prev = results[results.length - 1];
@@ -654,11 +687,21 @@ export class Parser {
                    decl.name === prev.decl.name &&
                    prev.decl.value?.tag === 'Match' &&
                    decl.value?.tag === 'Match') {
+            // The new clause will be appended, so its index is the current length
+            const newClauseIndex = prev.decl.value.clauses.length;
+
             // Merge clauses
             prev.decl.value.clauses.push(...decl.value.clauses);
-            // Merge source maps
+
+            // Merge source maps, adjusting clause indices
+            // Paths like "value.clauses[0].rhs..." need to become "value.clauses[N].rhs..."
             for (const [key, range] of this.currentSourceMap) {
-              prev.sourceMap.set(key, range);
+              // Replace "value.clauses[0]" with "value.clauses[N]"
+              const adjustedKey = key.replace(
+                /^value\.clauses\[0\]/,
+                `value.clauses[${newClauseIndex}]`
+              );
+              prev.sourceMap.set(adjustedKey, range);
             }
           }
           else {
@@ -765,12 +808,15 @@ export class Parser {
     if (next.type === 'COLON') {
       this.advance(); // consume ':'
       // Parse the full type expression (including = as equality operator)
-      const type = this.expr(0, []);
+      // Track source positions with path "type"
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      const type = this.expr(0, [], typePath);
 
       // Only := works for same-line definition (to avoid ambiguity with = in types)
       if (this.current().type === 'ASSIGN') {
         this.advance(); // consume ':='
-        const value = this.expr(0, []);
+        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+        const value = this.expr(0, [], valuePath);
         return { kind: 'def', name, type, value };
       }
 
@@ -847,7 +893,16 @@ export class Parser {
     // Parse RHS with pattern variables bound
     const patternVars = patterns.flatMap(p => this.collectPatternVars(p));
     const rhsCtx = patternVars;
-    const rhs = this.expr(0, rhsCtx);
+
+    // Track source positions with path value.clauses[0].rhs
+    // (We use index 0 here, but it will be adjusted during merging if needed)
+    const rhsPath: IndexPath = [
+      { kind: 'field', name: 'value' },
+      { kind: 'field', name: 'clauses' },
+      { kind: 'array', index: 0 },
+      { kind: 'field', name: 'rhs' }
+    ];
+    const rhs = this.expr(0, rhsCtx, rhsPath);
 
     // Create a Match expression as a placeholder
     // This will be merged with other clauses and wrapped in lambdas later
@@ -930,7 +985,9 @@ export class Parser {
 
     // Parse type, but stop at 'where' keyword
     // The type can span multiple lines, so we only stop at WHERE
-    const type = this.exprUntil(0, [], ['WHERE']);
+    // Track source positions with path 'type'
+    const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+    const type = this.exprUntil(0, [], ['WHERE'], typePath);
 
     // Skip any newlines before 'where'
     this.skipNewlines();
@@ -943,6 +1000,7 @@ export class Parser {
 
     // Parse constructors
     const constructors: Array<{ name: string; type: TTerm }> = [];
+    let ctorIndex = 0;
 
     while (this.current().type !== 'EOF') {
       // Check for pipe or identifier (constructors can start with either)
@@ -965,9 +1023,17 @@ export class Parser {
 
       const ctorName = this.expect('IDENT').value;
       this.expect('COLON');
-      const ctorType = this.expr(0, []);
+
+      // Build path for this constructor's type: constructors[ctorIndex].type
+      const ctorPath: IndexPath = [
+        { kind: 'field', name: 'constructors' },
+        { kind: 'array', index: ctorIndex },
+        { kind: 'field', name: 'type' }
+      ];
+      const ctorType = this.expr(0, [], ctorPath);
 
       constructors.push({ name: ctorName, type: ctorType });
+      ctorIndex++;
 
       // Skip newlines between constructors
       this.skipNewlines();
@@ -986,8 +1052,8 @@ export class Parser {
    * This is useful for parsing expressions in contexts where certain keywords
    * act as terminators (e.g., 'where' in inductive declarations).
    */
-  private exprUntil(minPrec: number, ctx: NameContext, stopTokens: TokenType[]): TTerm {
-    let left = this.parsePrefix(ctx, []);
+  private exprUntil(minPrec: number, ctx: NameContext, stopTokens: TokenType[], path: IndexPath = []): TTerm {
+    let left = this.parsePrefix(ctx, path);
 
     while (true) {
       // Skip newlines within the expression (allow multiline expressions)
@@ -1006,8 +1072,13 @@ export class Parser {
       if (token.type === 'ARROW') {
         if (ARROW_PRECEDENCE < minPrec) break;
         this.advance();
+
+        // Update left side to be at 'domain' path
+        this.prefixSourceMapPaths(path, { kind: 'field', name: 'domain' });
+
         const arrowCtx = ['_', ...ctx];
-        const right = this.exprUntil(ARROW_PRECEDENCE, arrowCtx, stopTokens);
+        const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+        const right = this.exprUntil(ARROW_PRECEDENCE, arrowCtx, stopTokens, bodyPath);
         left = mkPi(left, right, '_');
         continue;
       }
@@ -1036,7 +1107,13 @@ export class Parser {
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
-        const arg = this.parsePrefix(ctx, []);
+
+        // The left side (function) has already been parsed at `path`.
+        // Now we need to update it to be at `path.fn` and parse the arg at `path.arg`.
+        this.prefixSourceMapPaths(path, { kind: 'field', name: 'fn' });
+
+        const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
+        const arg = this.parsePrefix(ctx, argPath);
         left = mkApp(left, arg);
         continue;
       }
@@ -1053,8 +1130,8 @@ export class Parser {
    * @param ctx Name context for De Bruijn index resolution
    */
   private expr(minPrec: number, ctx: NameContext, path: IndexPath = []): TTerm {
-    // For now, we don't thread paths through deeply - just accept the parameter
-    // TODO: Thread paths through all sub-expressions for fine-grained tracking
+    // Parse the initial prefix expression
+    // Note: We parse with the base path, then adjust if it becomes part of a larger structure
     let left = this.parsePrefix(ctx, path);
 
     while (true) {
@@ -1068,7 +1145,15 @@ export class Parser {
         // IMPORTANT: We need to extend the context with the anonymous binder
         // so that De Bruijn indices in the RHS are correctly shifted
         const arrowCtx = ['_', ...ctx];
-        const right = this.expr(ARROW_PRECEDENCE, arrowCtx, path);
+
+        // The left side (domain) has already been parsed at `path`.
+        // Now we need to update all those positions to be under `path.domain`.
+        this.prefixSourceMapPaths(path, { kind: 'field', name: 'domain' });
+
+        // Parse body with extended path for position tracking
+        const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+        const right = this.expr(ARROW_PRECEDENCE, arrowCtx, bodyPath);
+
         // Non-dependent arrow: Π (_: left) . right
         left = mkPi(left, right, '_');
         continue;
@@ -1101,7 +1186,13 @@ export class Parser {
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
-        const arg = this.parsePrefix(ctx, path);
+
+        // The left side (function) has already been parsed at `path`.
+        // Now we need to update it to be at `path.fn` and parse the arg at `path.arg`.
+        this.prefixSourceMapPaths(path, { kind: 'field', name: 'fn' });
+
+        const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
+        const arg = this.parsePrefix(ctx, argPath);
         left = mkApp(left, arg);
         continue;
       }
@@ -1117,12 +1208,10 @@ export class Parser {
    */
   private parsePrefix(ctx: NameContext, path: IndexPath = []): TTerm {
     const token = this.current();
-    // TODO: Use path for fine-grained source tracking within expressions
-    void path; // Mark as intentionally unused for now
 
     switch (token.type) {
       case 'LPAREN':
-        return this.parseParenExpr(ctx);
+        return this.parseParenExpr(ctx, path);
 
       case 'LAMBDA':
         return this.parseLambda(ctx);
@@ -1148,7 +1237,7 @@ export class Parser {
         return mkHole(token.value, mkHole('hole_type', mkProp()));
 
       case 'IDENT':
-        return this.parseIdent(ctx);
+        return this.parseIdent(ctx, path);
 
       case 'NUMBER':
         this.advance();
@@ -1173,7 +1262,7 @@ export class Parser {
    * - Type annotation: (expr : type)
    * - Pi binder: (x : A) → B
    */
-  private parseParenExpr(ctx: NameContext): TTerm {
+  private parseParenExpr(ctx: NameContext, path: IndexPath = []): TTerm {
     this.expect('LPAREN');
 
     // Check if this is a binder: (x : T)
@@ -1186,7 +1275,7 @@ export class Parser {
       if (this.current().type === 'COLON') {
         // This is (x : T) - could be annotation or Pi binder
         this.advance();
-        const type = this.expr(0, ctx);
+        const type = this.expr(0, ctx, path);
         this.expect('RPAREN');
 
         // Check if followed by arrow - then it's a Pi type
@@ -1213,12 +1302,12 @@ export class Parser {
     }
 
     // Regular parenthesized expression
-    const expr = this.expr(0, ctx);
+    const expr = this.expr(0, ctx, path);
 
     // Check for type annotation
     if (this.current().type === 'COLON') {
       this.advance();
-      const type = this.expr(0, ctx);
+      const type = this.expr(0, ctx, path);
       this.expect('RPAREN');
       return { tag: 'Annot', term: expr, type };
     }
@@ -1621,9 +1710,13 @@ export class Parser {
   /**
    * Parse identifier (variable or constant reference)
    */
-  private parseIdent(ctx: NameContext): TTerm {
+  private parseIdent(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
     const token = this.expect('IDENT');
     const name = token.value;
+
+    // Record source range for this identifier
+    this.recordRange(path, startToken, startToken);
 
     // Look up in context for De Bruijn index
     const idx = ctx.indexOf(name);

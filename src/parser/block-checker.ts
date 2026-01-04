@@ -6,19 +6,21 @@
  *
  * 1. Group source into blocks (indentation-based)
  * 2. Parse each block → ParsedDeclaration + SourceMap
- * 3. Elaborate all parsed declarations together → TTKTerm + ElabMap
- * 4. Type check all elaborated declarations together (parallel error collection)
- * 5. Map errors back to source blocks via declaration indices
- * 6. Return comprehensive results for UI display
+ * 3. Name resolution → Validate all symbols are defined
+ * 4. Elaborate all parsed declarations together → TTKTerm + ElabMap
+ * 5. Type check all elaborated declarations together (parallel error collection)
+ * 6. Map errors back to source blocks via declaration indices
+ * 7. Return comprehensive results for UI display
  */
 
 import { groupByIndentation, SourceBlock } from './indentation-grouper';
 import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } from './tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
 import { checkTermDeclaration, checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
-import { resolveErrorLocation, resolveCheckErrorLocation } from '../types/error-resolution';
-import { SourceMap, ElabMap, SourceRange } from '../types/source-position';
+import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
+import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines } from '../types/source-position';
 import { TTKTerm } from '../types/tt-kernel';
+import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 
 /**
  * Result of checking a single source block.
@@ -31,6 +33,13 @@ export interface BlockCheckResult {
   parseSuccess: boolean;
   parseErrors: ParseError[];
   declarations: ParsedDeclaration[];
+
+  // Name resolution result
+  nameResolutionSuccess: boolean;
+  nameResolutionErrors: Array<{
+    error: NameResolutionError;
+    location: SourceRange | null;
+  }>;
 
   // Type check result
   checkSuccess: boolean;
@@ -65,9 +74,10 @@ interface ElaboratedDeclaration {
  * Pipeline:
  * 1. Group source into blocks by indentation
  * 2. Parse each block (collect parse errors)
- * 3. Elaborate all successfully parsed declarations together
- * 4. Type check all elaborated declarations together (parallel error collection)
- * 5. Map check results back to blocks via declaration indices
+ * 3. Name resolution across all blocks (validate symbols)
+ * 4. Elaborate all successfully parsed declarations together
+ * 5. Type check all elaborated declarations together (parallel error collection)
+ * 6. Map check results back to blocks via declaration indices
  *
  * @param source - The full source code
  * @returns Array of check results, one per block
@@ -76,69 +86,162 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
   // Phase 1: Group source into blocks
   const blocks = groupByIndentation(source);
 
+  // Accumulate all previous declarations for pattern matching detection across blocks
+  let allPreviousDeclarations: ParsedDeclaration[] = [];
+
   // Phase 2: Parse each block
-  const parseResults = blocks.map((block, blockIndex): {
+  const parseResults: Array<{
     block: SourceBlock;
     blockIndex: number;
     parseSuccess: boolean;
     parseErrors: ParseError[];
     declarations: ParsedDeclaration[];
     sourceMaps: SourceMap[];
-  } => {
+  }> = [];
+
+  for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+    const block = blocks[blockIndex];
+
     // Skip comment blocks (don't attempt to parse)
     if (block.isComment) {
-      return {
+      parseResults.push({
         block,
         blockIndex,
         parseSuccess: true,
         parseErrors: [],
         declarations: [],
         sourceMaps: []
-      };
+      });
+      continue;
     }
 
     const blockSource = block.lines.join('\n');
     const parser = new Parser();
 
     try {
-      const declsWithSource = parser.parseDeclarationsWithSource(blockSource);
-      return {
+      // Pass all previous declarations so pattern matching detection works across blocks
+      const declsWithSource = parser.parseDeclarationsWithSource(blockSource, allPreviousDeclarations);
+      const newDeclarations = declsWithSource.map(d => d.decl);
+
+      // Add these declarations to the accumulator for next block
+      allPreviousDeclarations = [...allPreviousDeclarations, ...newDeclarations];
+
+      // Adjust source map line numbers to be relative to the full file
+      // Block line numbers start at startLine, but parser sees them starting at line 1
+      const lineOffset = block.startLine - 1;
+      const adjustedSourceMaps = declsWithSource.map(d => adjustSourceMapLines(d.sourceMap, lineOffset));
+
+      parseResults.push({
         block,
         blockIndex,
         parseSuccess: true,
         parseErrors: [],
-        declarations: declsWithSource.map(d => d.decl),
-        sourceMaps: declsWithSource.map(d => d.sourceMap)
-      };
+        declarations: newDeclarations,
+        sourceMaps: adjustedSourceMaps
+      });
     } catch (e) {
       if (e instanceof Error && 'errors' in e) {
         // Parse error with multiple errors
+        // Adjust line numbers to be relative to the original source file
         const parseErrors = (e as any).errors as ParseError[];
-        return {
+        const adjustedErrors = parseErrors.map(err => ({
+          ...err,
+          line: err.line + block.startLine - 1
+        }));
+        parseResults.push({
           block,
           blockIndex,
           parseSuccess: false,
-          parseErrors,
+          parseErrors: adjustedErrors,
           declarations: [],
           sourceMaps: []
-        };
+        });
+      } else {
+        // Unknown error
+        parseResults.push({
+          block,
+          blockIndex,
+          parseSuccess: false,
+          parseErrors: [{
+            name: 'ParseError',
+            message: e instanceof Error ? e.message : String(e),
+            line: block.startLine,
+            col: 1
+          }],
+          declarations: [],
+          sourceMaps: []
+        });
       }
-      // Unknown error
-      return {
-        block,
-        blockIndex,
-        parseSuccess: false,
-        parseErrors: [{
-          name: 'ParseError',
-          message: e instanceof Error ? e.message : String(e),
-          line: block.startLine,
-          col: 1
-        }],
-        declarations: [],
-        sourceMaps: []
-      };
     }
-  });
+  }
+
+  // Phase 2.5: Name resolution - validate all symbols across all blocks
+  interface NameResolutionResultWithBlock {
+    blockIndex: number;
+    success: boolean;
+    errors: Array<{
+      error: NameResolutionError;
+      location: SourceRange | null;
+    }>;
+  }
+
+  const nameResolutionResults: NameResolutionResultWithBlock[] = [];
+  let globalSymbolContext = emptySymbolContext();
+
+  for (const parseResult of parseResults) {
+    if (!parseResult.parseSuccess || parseResult.declarations.length === 0) {
+      // No declarations to validate (parse failed or empty block or comment)
+      nameResolutionResults.push({
+        blockIndex: parseResult.blockIndex,
+        success: true,
+        errors: []
+      });
+      continue;
+    }
+
+    // Validate this block's declarations against the global context
+    const result = validateDeclarations(parseResult.declarations, globalSymbolContext);
+
+    if (result.success) {
+      // Update global context with new symbols
+      globalSymbolContext = result.value;
+      nameResolutionResults.push({
+        blockIndex: parseResult.blockIndex,
+        success: true,
+        errors: []
+      });
+    } else {
+      // Collect errors and resolve to source locations
+      // NOTE: validateDeclarations already adds symbols to context even on error
+      // So we need to rebuild the context ourselves to continue processing
+      let updatedCtx = globalSymbolContext;
+      for (const decl of parseResult.declarations) {
+        if (decl.name) {
+          updatedCtx = new Set([...updatedCtx, decl.name]);
+        }
+        if (decl.constructors) {
+          for (const ctor of decl.constructors) {
+            updatedCtx = new Set([...updatedCtx, ctor.name]);
+          }
+        }
+      }
+      globalSymbolContext = updatedCtx;
+
+      // Resolve each error to a source location
+      // Use the first sourceMap from this block (all declarations in a block share the same source context)
+      const sourceMap = parseResult.sourceMaps[0] || new Map();
+      const resolvedErrors = result.errors.map(error => ({
+        error,
+        location: resolveNameResolutionErrorLocation(error, sourceMap)
+      }));
+
+      nameResolutionResults.push({
+        blockIndex: parseResult.blockIndex,
+        success: false,
+        errors: resolvedErrors
+      });
+    }
+  }
 
   // Phase 3: Elaborate all successfully parsed declarations together
   const elaboratedDecls: ElaboratedDeclaration[] = [];
@@ -256,6 +359,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         parseSuccess: true,
         parseErrors: [],
         declarations: [],
+        nameResolutionSuccess: true,
+        nameResolutionErrors: [],
         checkSuccess: true,
         checkErrors: [],
         blockType: 'Comment'
@@ -270,6 +375,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         parseSuccess: false,
         parseErrors: parseResult.parseErrors,
         declarations: [],
+        nameResolutionSuccess: true,  // N/A when parse fails
+        nameResolutionErrors: [],
         checkSuccess: false,
         checkErrors: [],
         blockType: 'Unknown'
@@ -284,6 +391,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         parseSuccess: true,
         parseErrors: [],
         declarations: [],
+        nameResolutionSuccess: true,
+        nameResolutionErrors: [],
         checkSuccess: true,
         checkErrors: [],
         blockType: 'Unknown'
@@ -293,6 +402,9 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
     // Find check results for this block
     const blockCheckResults = checkResults.filter(r => r.blockIndex === blockIndex);
 
+    // Get name resolution result for this block
+    const nameResResult = nameResolutionResults.find(r => r.blockIndex === blockIndex);
+
     if (blockCheckResults.length === 0) {
       // No check results (shouldn't happen if parse succeeded)
       return {
@@ -301,6 +413,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         parseSuccess: true,
         parseErrors: [],
         declarations: parseResult.declarations,
+        nameResolutionSuccess: nameResResult?.success ?? true,
+        nameResolutionErrors: nameResResult?.errors ?? [],
         checkSuccess: true,
         checkErrors: [],
         blockType: 'Unknown'
@@ -333,6 +447,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       parseSuccess: true,
       parseErrors: [],
       declarations: parseResult.declarations,
+      nameResolutionSuccess: nameResResult?.success ?? true,
+      nameResolutionErrors: nameResResult?.errors ?? [],
       checkSuccess: allCheckErrors.length === 0,
       checkErrors: allCheckErrors,
       blockType,
@@ -351,6 +467,7 @@ export interface CheckSummary {
   commentBlocks: number;
   successfulBlocks: number;
   parseErrorBlocks: number;
+  nameResolutionErrorBlocks: number;
   checkErrorBlocks: number;
   totalErrors: number;
 }
@@ -359,9 +476,11 @@ export function summarizeCheckResults(results: BlockCheckResult[]): CheckSummary
   return {
     totalBlocks: results.length,
     commentBlocks: results.filter(r => r.blockType === 'Comment').length,
-    successfulBlocks: results.filter(r => r.parseSuccess && r.checkSuccess).length,
+    successfulBlocks: results.filter(r => r.parseSuccess && r.nameResolutionSuccess && r.checkSuccess).length,
     parseErrorBlocks: results.filter(r => !r.parseSuccess).length,
-    checkErrorBlocks: results.filter(r => r.parseSuccess && !r.checkSuccess).length,
-    totalErrors: results.reduce((sum, r) => sum + r.parseErrors.length + r.checkErrors.length, 0)
+    nameResolutionErrorBlocks: results.filter(r => r.parseSuccess && !r.nameResolutionSuccess).length,
+    checkErrorBlocks: results.filter(r => r.parseSuccess && r.nameResolutionSuccess && !r.checkSuccess).length,
+    totalErrors: results.reduce((sum, r) =>
+      sum + r.parseErrors.length + r.nameResolutionErrors.length + r.checkErrors.length, 0)
   };
 }

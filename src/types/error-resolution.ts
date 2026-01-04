@@ -9,6 +9,7 @@
 
 import { TypeCheckError } from './tt-typecheck';
 import { CheckError } from './tt-typecheck-decl';
+import { NameResolutionError } from './name-resolution';
 import { ElabMap, SourceMap, SourceRange, IndexPath, serializeIndexPath } from './source-position';
 import { lookupSurfacePath } from './tt-elab-source';
 
@@ -111,6 +112,42 @@ export function resolveCheckErrorLocation(
   const surfacePath = surfaceKey.split('.').filter(s => s.length > 0);
   for (let i = surfacePath.length - 1; i >= 0; i--) {
     const parentKey = surfacePath.slice(0, i).join('.');
+    const parentRange = sourceMap.get(parentKey);
+    if (parentRange) {
+      return parentRange;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a NameResolutionError to a source location.
+ *
+ * Name resolution errors already have surface paths (not kernel paths),
+ * so we skip the ElabMap step and go directly to the SourceMap.
+ *
+ * @param error - The name resolution error to resolve
+ * @param sourceMap - Maps surface paths to source ranges
+ * @returns Source range if found, null otherwise
+ */
+export function resolveNameResolutionErrorLocation(
+  error: NameResolutionError,
+  sourceMap: SourceMap
+): SourceRange | null {
+  // Serialize the path
+  const pathKey = serializeIndexPath(error.path);
+
+  // Try to find in source map
+  const sourceRange = sourceMap.get(pathKey);
+  if (sourceRange) {
+    return sourceRange;
+  }
+
+  // Try parent paths
+  for (let i = error.path.length - 1; i >= 0; i--) {
+    const parentPath = error.path.slice(0, i);
+    const parentKey = serializeIndexPath(parentPath);
     const parentRange = sourceMap.get(parentKey);
     if (parentRange) {
       return parentRange;
