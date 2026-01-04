@@ -824,17 +824,10 @@ export class Parser {
       return { kind: 'def', name, type };
     }
 
-    // Check if this is a pattern clause: name pattern1 pattern2 = rhs
-    // We know it's a pattern clause if:
-    // 1. We've already seen a type signature for this name, OR
-    // 2. The next token can start a pattern (IDENT, UNDERSCORE, LPAREN)
-    const hasSeenSignature = prevDeclarations?.some(d => d.name === name && d.type);
-
-    if (hasSeenSignature || this.canStartPattern(next)) {
-      return this.parsePatternClauseDefinition(name);
-    }
-
     // name = impl (definition at line start, without type annotation)
+    // Check this BEFORE pattern clause detection to handle:
+    //   foo : Type 1
+    //   foo = Type   <-- this is a simple definition, not a pattern clause
     if (next.type === 'OPERATOR' && next.value === '=') {
       this.advance(); // consume '='
       const value = this.expr(0, []);
@@ -846,6 +839,16 @@ export class Parser {
       this.advance(); // consume ':='
       const value = this.expr(0, []);
       return { kind: 'def', name, value };
+    }
+
+    // Check if this is a pattern clause: name pattern1 pattern2 = rhs
+    // We know it's a pattern clause if:
+    // 1. We've already seen a type signature for this name, OR
+    // 2. The next token can start a pattern (IDENT, UNDERSCORE, LPAREN)
+    const hasSeenSignature = prevDeclarations?.some(d => d.name === name && d.type);
+
+    if (hasSeenSignature || this.canStartPattern(next)) {
+      return this.parsePatternClauseDefinition(name);
     }
 
     // Not a declaration pattern, backtrack and parse as expression
