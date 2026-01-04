@@ -18,7 +18,7 @@ import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } fr
 import { elabToKernelWithMap } from '../types/tt-elab-source';
 import { checkTermDeclaration, checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
-import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines } from '../types/source-position';
+import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
 import { TTKTerm, TTKContext } from '../types/tt-kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { inferParameterIndices } from '../types/tt-inductive-inference';
@@ -287,10 +287,18 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
 
         // Elaborate constructors if present (inductive)
         if (decl.constructors) {
-          kernelConstructors = decl.constructors.map(ctor => ({
-            name: ctor.name,
-            type: elabToKernelWithMap(ctor.type, elabMap)
-          }));
+          kernelConstructors = decl.constructors.map((ctor, ctorIndex) => {
+            // Build path for this constructor's type: constructors[i].type
+            const ctorTypePath: IndexPath = [
+              { kind: 'field', name: 'constructors' },
+              { kind: 'array', index: ctorIndex },
+              { kind: 'field', name: 'type' }
+            ];
+            return {
+              name: ctor.name,
+              type: elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath)
+            };
+          });
         }
 
         elaboratedDecls.push({

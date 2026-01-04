@@ -1130,6 +1130,9 @@ export class Parser {
    * @param ctx Name context for De Bruijn index resolution
    */
   private expr(minPrec: number, ctx: NameContext, path: IndexPath = []): TTerm {
+    // Capture start position for recording the full expression range
+    const startToken = this.current();
+
     // Parse the initial prefix expression
     // Note: We parse with the base path, then adjust if it becomes part of a larger structure
     let left = this.parsePrefix(ctx, path);
@@ -1198,6 +1201,13 @@ export class Parser {
       }
 
       break;
+    }
+
+    // Record the full expression range for this path
+    // Use the previous token as the end (the last token we consumed)
+    if (path.length > 0 && this.pos > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
     }
 
     return left;

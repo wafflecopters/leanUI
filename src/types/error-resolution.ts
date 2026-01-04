@@ -87,18 +87,26 @@ export function resolveCheckErrorLocation(
   const kernelKey = serializeIndexPath(error.path);
 
   // Step 1: Get surface path from kernel path
-  const surfaceKey = elabMap.get(kernelKey);
+  // First try exact match
+  let surfaceKey = elabMap.get(kernelKey);
+
+  // If no exact match, try parent paths and preserve the suffix
   if (!surfaceKey) {
-    // Try parent paths
     for (let i = error.path.length - 1; i >= 0; i--) {
       const parentPath = error.path.slice(0, i);
       const parentKey = serializeIndexPath(parentPath);
       const parentSurfaceKey = elabMap.get(parentKey);
       if (parentSurfaceKey) {
-        const range = sourceMap.get(parentSurfaceKey);
-        if (range) return range;
+        // Found a parent match - append the remaining suffix
+        const suffix = error.path.slice(i);
+        const suffixKey = serializeIndexPath(suffix);
+        surfaceKey = suffixKey ? `${parentSurfaceKey}.${suffixKey}` : parentSurfaceKey;
+        break;
       }
     }
+  }
+
+  if (!surfaceKey) {
     return null;
   }
 

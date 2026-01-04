@@ -23,6 +23,22 @@
 import { TTKTerm, TTKContext, prettyPrint } from './tt-kernel';
 import { inferType, whnf } from './tt-typecheck';
 import { CheckError } from './tt-typecheck-decl';
+import { IndexPath } from './source-position';
+
+// ============================================================================
+// Path Helpers
+// ============================================================================
+
+/**
+ * Create a path to a constructor's type: constructors[i].type
+ */
+function constructorTypePath(ctorIndex: number): IndexPath {
+  return [
+    { kind: 'field', name: 'constructors' },
+    { kind: 'array', index: ctorIndex },
+    { kind: 'field', name: 'type' }
+  ];
+}
 
 // ============================================================================
 // Types
@@ -76,6 +92,7 @@ export function checkInductiveValidity(
 
   for (let i = 0; i < constructors.length; i++) {
     const ctor = constructors[i];
+    const ctorPath = constructorTypePath(i);
 
     // Check 1: Constructor return type
     const returnTypeErrors = checkConstructorReturnType(
@@ -83,7 +100,8 @@ export function checkInductiveValidity(
       inductiveType,
       ctor.name,
       ctor.type,
-      ctx
+      ctx,
+      ctorPath
     );
     errors.push(...returnTypeErrors);
 
@@ -92,7 +110,8 @@ export function checkInductiveValidity(
       inductiveName,
       ctor.name,
       ctor.type,
-      ctx
+      ctx,
+      ctorPath
     );
     errors.push(...positivityErrors);
 
@@ -106,7 +125,8 @@ export function checkInductiveValidity(
         ctx,
         indexSet,
         inductiveType,
-        hasIndexInfo
+        hasIndexInfo,
+        ctorPath
       );
       errors.push(...universeErrors);
     }
@@ -139,7 +159,8 @@ function checkConstructorReturnType(
   _inductiveType: TTKTerm,
   ctorName: string,
   ctorType: TTKTerm,
-  ctx: TTKContext
+  ctx: TTKContext,
+  ctorPath: IndexPath
 ): CheckError[] {
   // Unwrap all Pi binders to get to the return type
   const { returnType } = unwrapPis(ctorType);
@@ -151,7 +172,7 @@ function checkConstructorReturnType(
   if (headConst === null) {
     return [{
       message: `Constructor '${ctorName}' must return the inductive type '${inductiveName}', but returns: ${prettyPrint(returnType)}`,
-      path: [],
+      path: ctorPath,
       term: ctorType,
       context: ctx
     }];
@@ -160,7 +181,7 @@ function checkConstructorReturnType(
   if (headConst !== inductiveName) {
     return [{
       message: `Constructor '${ctorName}' must return type '${inductiveName}', but returns '${headConst}'`,
-      path: [],
+      path: ctorPath,
       term: ctorType,
       context: ctx
     }];
@@ -234,15 +255,17 @@ function checkStrictPositivity(
   inductiveName: string,
   ctorName: string,
   ctorType: TTKTerm,
-  ctx: TTKContext
+  ctx: TTKContext,
+  ctorPath: IndexPath
 ): CheckError[] {
   const errors: CheckError[] = [];
 
-  // Unwrap the Pi binders to get the argument types
-  // We only need to check the DOMAINS, not the final return type
-  const { bindings } = unwrapPis(ctorType);
+  // Walk through the Pi binders manually to track paths
+  // For each Pi, we check the domain for positivity violations
+  let current = ctorType;
+  let currentPath = ctorPath;
 
-  for (const binding of bindings) {
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     // Check if the domain contains the inductive type in a negative position
     // An occurrence is negative if it appears:
     // 1. Directly in the domain (e.g., Nat in "Nat -> X")
@@ -251,13 +274,19 @@ function checkStrictPositivity(
     //    - This is NEGATIVE
     //
     // So we need to check recursively WITHIN the domain for nested function types
+    const domainPath = [...currentPath, { kind: 'field' as const, name: 'domain' }];
     checkDomainPositivity(
       inductiveName,
       ctorName,
-      binding.domain,
+      current.domain,
       errors,
-      ctx
+      ctx,
+      domainPath
     );
+
+    // Move to the body
+    currentPath = [...currentPath, { kind: 'field' as const, name: 'body' }];
+    current = current.body;
   }
 
   return errors;
@@ -269,13 +298,16 @@ function checkStrictPositivity(
  * A direct occurrence of the inductive type is fine (strictly positive).
  * But if the inductive type appears in the domain of a nested function type,
  * that's a positivity violation.
+ *
+ * @param termPath - The path to the current term being checked (for error reporting)
  */
 function checkDomainPositivity(
   inductiveName: string,
   ctorName: string,
   domain: TTKTerm,
   errors: CheckError[],
-  ctx: TTKContext
+  ctx: TTKContext,
+  termPath: IndexPath
 ): void {
   switch (domain.tag) {
     case 'Const':
@@ -289,8 +321,10 @@ function checkDomainPositivity(
     case 'App':
       // Application - check both function and argument
       // These are still in strictly positive position
-      checkDomainPositivity(inductiveName, ctorName, domain.fn, errors, ctx);
-      checkDomainPositivity(inductiveName, ctorName, domain.arg, errors, ctx);
+      checkDomainPositivity(inductiveName, ctorName, domain.fn, errors, ctx,
+        [...termPath, { kind: 'field', name: 'fn' }]);
+      checkDomainPositivity(inductiveName, ctorName, domain.arg, errors, ctx,
+        [...termPath, { kind: 'field', name: 'arg' }]);
       break;
 
     case 'Binder':
@@ -304,29 +338,39 @@ function checkDomainPositivity(
           domain,
           'strictly_positive',
           errors,
-          ctx
+          ctx,
+          termPath
         );
       } else if (domain.binderKind.tag === 'BLam') {
         // Lambda in a type - check recursively
-        checkDomainPositivity(inductiveName, ctorName, domain.domain, errors, ctx);
-        checkDomainPositivity(inductiveName, ctorName, domain.body, errors, ctx);
+        checkDomainPositivity(inductiveName, ctorName, domain.domain, errors, ctx,
+          [...termPath, { kind: 'field', name: 'domain' }]);
+        checkDomainPositivity(inductiveName, ctorName, domain.body, errors, ctx,
+          [...termPath, { kind: 'field', name: 'body' }]);
       } else if (domain.binderKind.tag === 'BLet') {
         // Let in a type - check all parts
-        checkDomainPositivity(inductiveName, ctorName, domain.domain, errors, ctx);
-        checkDomainPositivity(inductiveName, ctorName, domain.binderKind.defVal, errors, ctx);
-        checkDomainPositivity(inductiveName, ctorName, domain.body, errors, ctx);
+        checkDomainPositivity(inductiveName, ctorName, domain.domain, errors, ctx,
+          [...termPath, { kind: 'field', name: 'domain' }]);
+        checkDomainPositivity(inductiveName, ctorName, domain.binderKind.defVal, errors, ctx,
+          [...termPath, { kind: 'field', name: 'defVal' }]);
+        checkDomainPositivity(inductiveName, ctorName, domain.body, errors, ctx,
+          [...termPath, { kind: 'field', name: 'body' }]);
       }
       break;
 
     case 'Annot':
-      checkDomainPositivity(inductiveName, ctorName, domain.term, errors, ctx);
-      checkDomainPositivity(inductiveName, ctorName, domain.type, errors, ctx);
+      checkDomainPositivity(inductiveName, ctorName, domain.term, errors, ctx,
+        [...termPath, { kind: 'field', name: 'term' }]);
+      checkDomainPositivity(inductiveName, ctorName, domain.type, errors, ctx,
+        [...termPath, { kind: 'field', name: 'type' }]);
       break;
 
     case 'Match':
-      checkDomainPositivity(inductiveName, ctorName, domain.scrutinee, errors, ctx);
-      for (const clause of domain.clauses) {
-        checkDomainPositivity(inductiveName, ctorName, clause.rhs, errors, ctx);
+      checkDomainPositivity(inductiveName, ctorName, domain.scrutinee, errors, ctx,
+        [...termPath, { kind: 'field', name: 'scrutinee' }]);
+      for (let i = 0; i < domain.clauses.length; i++) {
+        checkDomainPositivity(inductiveName, ctorName, domain.clauses[i].rhs, errors, ctx,
+          [...termPath, { kind: 'field', name: 'clauses' }, { kind: 'array', index: i }, { kind: 'field', name: 'rhs' }]);
       }
       break;
   }
@@ -340,6 +384,8 @@ function checkDomainPositivity(
  * - In the body B, polarity stays the same
  *
  * When we find the inductive type at negative polarity, it's an error.
+ *
+ * @param termPath - The path to the current term being checked (for error reporting)
  */
 function checkNestedPiForNegativeOccurrences(
   inductiveName: string,
@@ -347,7 +393,8 @@ function checkNestedPiForNegativeOccurrences(
   term: TTKTerm,
   polarity: Polarity,
   errors: CheckError[],
-  ctx: TTKContext
+  ctx: TTKContext,
+  termPath: IndexPath
 ): void {
   switch (term.tag) {
     case 'Const':
@@ -356,7 +403,7 @@ function checkNestedPiForNegativeOccurrences(
         if (polarity === 'negative') {
           errors.push({
             message: `Constructor '${ctorName}' has a negative occurrence of '${inductiveName}' (appears to the left of a function arrow)`,
-            path: [],
+            path: termPath,
             term,
             context: ctx
           });
@@ -364,7 +411,7 @@ function checkNestedPiForNegativeOccurrences(
           // Positive but not strictly positive
           errors.push({
             message: `Constructor '${ctorName}' has a non-strictly-positive occurrence of '${inductiveName}' (nested under function arrows)`,
-            path: [],
+            path: termPath,
             term,
             context: ctx
           });
@@ -380,35 +427,48 @@ function checkNestedPiForNegativeOccurrences(
 
     case 'App':
       // Check function and argument with same polarity
-      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.fn, polarity, errors, ctx);
-      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.arg, polarity, errors, ctx);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.fn, polarity, errors, ctx,
+        [...termPath, { kind: 'field', name: 'fn' }]);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.arg, polarity, errors, ctx,
+        [...termPath, { kind: 'field', name: 'arg' }]);
       break;
 
     case 'Binder':
       if (term.binderKind.tag === 'BPi') {
         // Pi type: flip polarity in domain, keep in body
         const domainPolarity = flipPolarity(polarity);
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.domain, domainPolarity, errors, ctx);
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.body, polarity, errors, ctx);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.domain, domainPolarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'domain' }]);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.body, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'body' }]);
       } else if (term.binderKind.tag === 'BLam') {
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.domain, polarity, errors, ctx);
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.body, polarity, errors, ctx);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.domain, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'domain' }]);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.body, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'body' }]);
       } else if (term.binderKind.tag === 'BLet') {
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.domain, polarity, errors, ctx);
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.binderKind.defVal, polarity, errors, ctx);
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.body, polarity, errors, ctx);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.domain, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'domain' }]);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.binderKind.defVal, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'defVal' }]);
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.body, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'body' }]);
       }
       break;
 
     case 'Annot':
-      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.term, polarity, errors, ctx);
-      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.type, polarity, errors, ctx);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.term, polarity, errors, ctx,
+        [...termPath, { kind: 'field', name: 'term' }]);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.type, polarity, errors, ctx,
+        [...termPath, { kind: 'field', name: 'type' }]);
       break;
 
     case 'Match':
-      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.scrutinee, polarity, errors, ctx);
-      for (const clause of term.clauses) {
-        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, clause.rhs, polarity, errors, ctx);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.scrutinee, polarity, errors, ctx,
+        [...termPath, { kind: 'field', name: 'scrutinee' }]);
+      for (let i = 0; i < term.clauses.length; i++) {
+        checkNestedPiForNegativeOccurrences(inductiveName, ctorName, term.clauses[i].rhs, polarity, errors, ctx,
+          [...termPath, { kind: 'field', name: 'clauses' }, { kind: 'array', index: i }, { kind: 'field', name: 'rhs' }]);
       }
       break;
   }
@@ -473,7 +533,8 @@ function checkUniverseConstraints(
   ctx: TTKContext,
   indexPositions: Set<number>,
   inductiveType: TTKTerm,
-  hasIndexInfo: boolean
+  hasIndexInfo: boolean,
+  ctorPath: IndexPath
 ): CheckError[] {
   const errors: CheckError[] = [];
 
@@ -517,7 +578,7 @@ function checkUniverseConstraints(
         if (argLevel >= inductiveLevel) {
           errors.push({
             message: `Constructor '${ctorName}' argument ${argIndex + 1} quantifies over universe ${formatUniverseLevel(argLevel)}, but '${inductiveName}' is in ${formatUniverseLevel(inductiveLevel)}. Type arguments must be in smaller universes.`,
-            path: [],
+            path: ctorPath,
             term: argType,
             context: ctx
           });
