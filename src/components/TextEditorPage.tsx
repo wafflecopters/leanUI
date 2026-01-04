@@ -303,6 +303,18 @@ inductive Vec : Type -> Nat -> Type where
 inductive Equal : (A: Type) -> A -> A -> Type where
   refl : (A : Type) -> (x : A) -> Equal A x x
 
+swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap a = \\f => \\x y => f y x
+
+swap' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap' a f = \\x y => f y x
+
+swap'' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap'' a f x = \\y => f y x
+
+swap''' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap''' a f x y = f y x
+
 {-
 const : (A : Type) -> (B : Type) -> A -> B -> A
 const = \\ A B x y => x

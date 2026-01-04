@@ -61,9 +61,15 @@ export class TypeCheckError extends Error {
  * for the new binding at index 0.
  */
 export function extendContext(ctx: TTKContext, name: string, type: TTKTerm): TTKContext {
-  // Shift the type by 1 since we're adding a new binding at index 0
+  // Shift the new type by 1 since we're adding a new binding at index 0
   const shiftedType = shiftTermBy(type, 1, 0);
-  return [{ name, type: shiftedType }, ...ctx];
+  // Also shift all existing types in the context, as their Var references
+  // now need to point one index higher
+  const shiftedCtx = ctx.map(binding => ({
+    name: binding.name,
+    type: shiftTermBy(binding.type, 1, 0),
+  }));
+  return [{ name, type: shiftedType }, ...shiftedCtx];
 }
 
 /**

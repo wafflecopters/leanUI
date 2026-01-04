@@ -370,6 +370,14 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
 // Pretty Printing
 // ============================================================================
 
+// Helper to strip outer parentheses from a string
+function stripOuterParens(s: string): string {
+  if (s.startsWith('(') && s.endsWith(')')) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
 /**
  * Convert a kernel term to a human-readable string
  */
@@ -395,43 +403,68 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
       return term.name;
 
     case 'Binder': {
-      const domain = prettyPrint(term.domain, context);
       const newContext = [term.name, ...context];
-      const body = prettyPrint(term.body, newContext);
       const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
-        case 'BPi':
-          // If anonymous binder, just show: domain -> body
-          // Otherwise show: (name : domain) -> body
-          if (isAnonymous) {
-            return `(${domain} -> ${body})`;
+        case 'BPi': {
+          // Collect all arrow parts: A -> B -> C -> D becomes [A, B, C, D]
+          const parts: string[] = [];
+          let current: TTKTerm = term;
+          let ctx = context;
+          while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+            const currentAnon = current.name === '_' || current.name === '';
+            const domain = stripOuterParens(prettyPrint(current.domain, ctx));
+            if (currentAnon) {
+              parts.push(domain);
+            } else {
+              parts.push(`(${current.name} : ${domain})`);
+            }
+            ctx = [current.name, ...ctx];
+            current = current.body;
           }
-          return `((${term.name} : ${domain}) -> ${body})`;
+          parts.push(prettyPrint(current, ctx));
+          return `(${parts.join(' -> ')})`;
+        }
 
-        case 'BLam':
+        case 'BLam': {
+          const domain = stripOuterParens(prettyPrint(term.domain, context));
+          const body = prettyPrint(term.body, newContext);
           if (isAnonymous) {
             return `(\\${domain} => ${body})`;
           }
           return `(\\(${term.name} : ${domain}) => ${body})`;
+        }
 
-        case 'BLet':
+        case 'BLet': {
+          const domain = stripOuterParens(prettyPrint(term.domain, context));
+          const body = prettyPrint(term.body, newContext);
           const defVal = prettyPrint(term.binderKind.defVal, context);
           return `(let ${term.name} : ${domain} := ${defVal} in ${body})`;
+        }
       }
     }
 
     case 'App': {
-      const fn = prettyPrint(term.fn, context);
-      const arg = prettyPrint(term.arg, context);
-      return `(${fn} ${arg})`;
+      // Collect all arguments from nested applications: ((f a) b) c -> [f, a, b, c]
+      const parts: string[] = [];
+      let current: TTKTerm = term;
+      while (current.tag === 'App') {
+        parts.unshift(prettyPrint(current.arg, context));
+        current = current.fn;
+      }
+      parts.unshift(prettyPrint(current, context));
+      return `(${parts.join(' ')})`;
     }
 
     case 'Hole':
       return `?${term.id}`;
 
-    case 'Annot':
-      return `(${prettyPrint(term.term, context)} : ${prettyPrint(term.type, context)})`;
+    case 'Annot': {
+      const termStr = prettyPrint(term.term, context);
+      const typeStr = stripOuterParens(prettyPrint(term.type, context));
+      return `(${termStr} : ${typeStr})`;
+    }
 
     case 'Match': {
       const scrutinee = prettyPrint(term.scrutinee, context);

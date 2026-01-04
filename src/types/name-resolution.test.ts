@@ -463,6 +463,122 @@ test('Real-world: typo in type (Na instead of Nat)', () => {
   }
 });
 
+// ============================================================================
+// Duplicate Name Detection Tests
+// ============================================================================
+
+test('validateDeclaration: fails when symbol already defined', () => {
+  // Define Nat, then try to redefine it
+  let ctx = emptySymbolContext();
+  ctx = addSymbol(ctx, 'Nat');
+
+  const result = validateDeclaration('Nat', mkType(0), undefined, undefined, ctx);
+  assert(result.success === false, 'Fails for duplicate symbol');
+  if (!result.success) {
+    assert(result.errors.length === 1, 'One error');
+    assert(result.errors[0].symbolName === 'Nat', 'Error for Nat');
+    assert(result.errors[0].message.includes('already defined'), 'Error says already defined');
+  }
+});
+
+test('validateDeclaration: fails when constructor name conflicts with existing symbol', () => {
+  // Define True, then try to define Bool with True constructor
+  let ctx = emptySymbolContext();
+  ctx = addSymbol(ctx, 'True');
+
+  const constructors = [
+    { name: 'True', type: mkConst('Bool', mkType(0)) },
+    { name: 'False', type: mkConst('Bool', mkType(0)) }
+  ];
+
+  const result = validateDeclaration('Bool', mkType(0), undefined, constructors, ctx);
+  assert(result.success === false, 'Fails for duplicate constructor');
+  if (!result.success) {
+    assert(result.errors.length === 1, 'One error');
+    assert(result.errors[0].symbolName === 'True', 'Error for True');
+    assert(result.errors[0].message.includes('already defined'), 'Error says already defined');
+  }
+});
+
+test('validateDeclaration: fails when inductive name conflicts with existing symbol', () => {
+  // Define Nat type, then try to redefine as inductive
+  let ctx = emptySymbolContext();
+  ctx = addSymbol(ctx, 'Nat');
+
+  const constructors = [
+    { name: 'Zero', type: mkConst('Nat', mkType(0)) },
+    { name: 'Succ', type: mkPi(mkConst('Nat', mkType(0)), mkConst('Nat', mkType(0)), 'n') }
+  ];
+
+  const result = validateDeclaration('Nat', mkType(0), undefined, constructors, ctx);
+  assert(result.success === false, 'Fails for duplicate inductive name');
+  if (!result.success) {
+    assert(result.errors.some(e => e.symbolName === 'Nat'), 'Error for Nat');
+    assert(result.errors.some(e => e.message.includes('already defined')), 'Error says already defined');
+  }
+});
+
+test('validateDeclarations: fails when second declaration redefines first', () => {
+  // foo : Type
+  // foo = Type  (same name - should fail)
+  // Note: This is different from foo : Type followed by foo = value which is a valid pattern match style
+  // Here we're testing when declarations are passed separately to validateDeclarations
+  const declarations = [
+    { name: 'foo', type: mkType(1) },
+    { name: 'foo', type: mkType(0) }  // Redefinition
+  ];
+
+  const result = validateDeclarations(declarations);
+  assert(result.success === false, 'Fails for redefinition');
+  if (!result.success) {
+    assert(result.errors.length === 1, 'One error');
+    assert(result.errors[0].symbolName === 'foo', 'Error for foo');
+    assert(result.errors[0].message.includes('already defined'), 'Error says already defined');
+  }
+});
+
+test('validateDeclarations: fails when term uses same name as previously defined inductive', () => {
+  // inductive Bar : Type where Zero : Bar
+  // Bar : Type  (trying to redefine Bar)
+  const declarations = [
+    {
+      name: 'Bar',
+      type: mkType(0),
+      constructors: [
+        { name: 'Zero', type: mkConst('Bar', mkType(0)) }
+      ]
+    },
+    { name: 'Bar', type: mkType(1) }  // Redefinition of Bar
+  ];
+
+  const result = validateDeclarations(declarations);
+  assert(result.success === false, 'Fails for redefinition of inductive');
+  if (!result.success) {
+    assert(result.errors.some(e => e.symbolName === 'Bar'), 'Error for Bar');
+  }
+});
+
+test('validateDeclarations: fails when term uses same name as constructor', () => {
+  // inductive Bar : Type where Zero : Bar
+  // Zero : Type  (trying to redefine Zero)
+  const declarations = [
+    {
+      name: 'Bar',
+      type: mkType(0),
+      constructors: [
+        { name: 'Zero', type: mkConst('Bar', mkType(0)) }
+      ]
+    },
+    { name: 'Zero', type: mkType(1) }  // Redefinition of Zero
+  ];
+
+  const result = validateDeclarations(declarations);
+  assert(result.success === false, 'Fails for redefinition of constructor');
+  if (!result.success) {
+    assert(result.errors.some(e => e.symbolName === 'Zero'), 'Error for Zero');
+  }
+});
+
 console.log('\n' + '='.repeat(80));
 console.log('ALL NAME RESOLUTION TESTS PASSED! ✓');
 console.log('='.repeat(80) + '\n');

@@ -172,6 +172,15 @@ export function validateDeclaration(
 ): NameResolutionResult<SymbolContext> {
   const errors: NameResolutionError[] = [];
 
+  // Check for duplicate declaration name
+  if (name && isSymbolDefined(ctx, name)) {
+    errors.push({
+      message: `Symbol '${name}' is already defined`,
+      symbolName: name,
+      path: []  // Path to the declaration name itself
+    });
+  }
+
   // Add this declaration to context FIRST (for self-reference)
   let newCtx = ctx;
   if (name) {
@@ -196,8 +205,18 @@ export function validateDeclaration(
 
   // Validate constructors if present (inductive type)
   if (constructors) {
-    // Add all constructor names to context
-    constructors.forEach(ctor => {
+    // Check for duplicate constructor names and add to context
+    constructors.forEach((ctor, i) => {
+      if (isSymbolDefined(newCtx, ctor.name)) {
+        errors.push({
+          message: `Constructor '${ctor.name}' is already defined`,
+          symbolName: ctor.name,
+          path: [
+            { kind: 'field' as const, name: 'constructors' },
+            { kind: 'array' as const, index: i }
+          ]
+        });
+      }
       newCtx = addSymbol(newCtx, ctor.name);
     });
 

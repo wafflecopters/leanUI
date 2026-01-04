@@ -174,6 +174,14 @@ export function setNameAtPath(term: TTerm, path: TermFocusPath, newName: string)
   return setTermAtPath(term, binderPath, updatedBinder);
 }
 
+// Helper to strip outer parentheses from a string
+function stripOuterParens(s: string): string {
+  if (s.startsWith('(') && s.endsWith(')')) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
 /**
  * Pretty-print a TTerm to a string.
  * Handles unnamed binders by omitting the name.
@@ -188,30 +196,44 @@ export function prettyPrintTerm(term: TTerm): string {
 
     case 'Binder':
       if (term.binderKind.tag === 'BPi') {
-        const domainStr = prettyPrintTerm(term.domain);
-        const bodyStr = prettyPrintTerm(term.body);
-
-        // If name is empty, just show "domain -> body"
-        if (term.name === '') {
-          return `${domainStr} -> ${bodyStr}`;
+        // Collect all arrow parts: A -> B -> C -> D
+        const parts: string[] = [];
+        let current: TTerm = term;
+        while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+          const isAnonymous = current.name === '_' || current.name === '';
+          const domain = stripOuterParens(prettyPrintTerm(current.domain));
+          if (isAnonymous) {
+            parts.push(domain);
+          } else {
+            parts.push(`(${current.name} : ${domain})`);
+          }
+          current = current.body;
         }
-
-        // Otherwise show "(name : domain) -> body"
-        return `(${term.name} : ${domainStr}) -> ${bodyStr}`;
+        parts.push(prettyPrintTerm(current));
+        return `(${parts.join(' -> ')})`;
       } else if (term.binderKind.tag === 'BLam') {
+        const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
         const bodyStr = prettyPrintTerm(term.body);
-        return `λ${term.name}. ${bodyStr}`;
+        return `λ(${term.name} : ${domainStr}). ${bodyStr}`;
       } else if (term.binderKind.tag === 'BLet') {
+        const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
         const defValStr = prettyPrintTerm(term.binderKind.defVal);
         const bodyStr = prettyPrintTerm(term.body);
-        return `let ${term.name} := ${defValStr} in ${bodyStr}`;
+        return `let ${term.name} : ${domainStr} := ${defValStr} in ${bodyStr}`;
       }
       return '?';
 
-    case 'App':
-      const fnStr = prettyPrintTerm(term.fn);
-      const argStr = prettyPrintTerm(term.arg);
-      return `(${fnStr} ${argStr})`;
+    case 'App': {
+      // Collect all arguments from nested applications: ((f a) b) c -> [f, a, b, c]
+      const parts: string[] = [];
+      let current: TTerm = term;
+      while (current.tag === 'App') {
+        parts.unshift(prettyPrintTerm(current.arg));
+        current = current.fn;
+      }
+      parts.unshift(prettyPrintTerm(current));
+      return `(${parts.join(' ')})`;
+    }
 
     case 'Const':
       return term.name;
@@ -219,10 +241,11 @@ export function prettyPrintTerm(term: TTerm): string {
     case 'Hole':
       return `?${term.id}`;
 
-    case 'Annot':
+    case 'Annot': {
       const termStr = prettyPrintTerm(term.term);
-      const typeStr = prettyPrintTerm(term.type);
+      const typeStr = stripOuterParens(prettyPrintTerm(term.type));
       return `(${termStr} : ${typeStr})`;
+    }
 
     case 'Match':
       const scrutineeStr = prettyPrintTerm(term.scrutinee);
