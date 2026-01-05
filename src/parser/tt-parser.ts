@@ -1068,6 +1068,9 @@ export class Parser {
    * act as terminators (e.g., 'where' in inductive declarations).
    */
   private exprUntil(minPrec: number, ctx: NameContext, stopTokens: TokenType[], path: IndexPath = []): TTerm {
+    // Capture start position for recording the full expression range
+    const startToken = this.current();
+
     let left = this.parsePrefix(ctx, path);
 
     while (true) {
@@ -1122,6 +1125,16 @@ export class Parser {
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
+
+        // Before moving paths, record the current application's range at path.
+        // This is crucial for intermediate applications: when we have "f y x",
+        // after parsing "f y" we need to record that "f y" spans path
+        // BEFORE we shift things down to make room for x.
+        // This entry will get moved to path.fn by prefixSourceMapPaths below.
+        if (path.length > 0 && this.pos > 0) {
+          const prevToken = this.tokens[this.pos - 1];
+          this.recordRange(path, startToken, prevToken);
+        }
 
         // The left side (function) has already been parsed at `path`.
         // Now we need to update it to be at `path.fn` and parse the arg at `path.arg`.
@@ -1204,6 +1217,16 @@ export class Parser {
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
+
+        // Before moving paths, record the current application's range at path.
+        // This is crucial for intermediate applications: when we have "f y x",
+        // after parsing "f y" we need to record that "f y" spans path
+        // BEFORE we shift things down to make room for x.
+        // This entry will get moved to path.fn by prefixSourceMapPaths below.
+        if (path.length > 0 && this.pos > 0) {
+          const prevToken = this.tokens[this.pos - 1];
+          this.recordRange(path, startToken, prevToken);
+        }
 
         // The left side (function) has already been parsed at `path`.
         // Now we need to update it to be at `path.fn` and parse the arg at `path.arg`.

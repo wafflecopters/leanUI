@@ -507,6 +507,43 @@ swap A = \\f => \\(x: A) (y: A) => f y x`;
       expect(names).toContain('A');
     }
   });
+
+  it('should show f y : A -> A when selecting partial application "f y"', () => {
+    // When selecting "f y" in "f y x", should get type A -> A (partial application)
+    // NOT the type of the full "f y x" application which is A
+    const sourceCode = `swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap A = \\f => \\(x: A) (y: A) => f y x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const swapBlock = results.find(b => b.name === 'swap');
+    expect(swapBlock!.checkSuccess).toBe(true);
+
+    const queryData = swapBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find "f y x" on line 2
+    const lines = sourceCode.split('\n');
+    const fyxPos = lines[1].lastIndexOf('f y x');
+
+    // Select just "f y" (3 characters: 'f', ' ', 'y')
+    const selectionRange = {
+      start: { line: 2, col: fyxPos + 1, pos: 0 },
+      end: { line: 2, col: fyxPos + 4, pos: 0 }  // "f y" is 3 chars
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'swap');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // "f y" should have type (A -> A) - one argument still to apply
+      // NOT type A (which would be the full application f y x)
+      expect(typeStr).toMatch(/A\s*->\s*A/);
+      // Make sure it's NOT A -> A -> A (the type of f alone)
+      expect(typeStr).not.toMatch(/A\s*->\s*A\s*->\s*A/);
+    }
+  });
 });
 
 describe('Integration tests with full parsing pipeline', () => {
