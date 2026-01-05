@@ -173,6 +173,119 @@ function computeClauseRhsExpectedType(
   return current;
 }
 
+/**
+ * Query the type of a pattern or a subpattern.
+ *
+ * Patterns have a different structure than terms:
+ * - PVar: a variable pattern, type is the expected type for this position
+ * - PWild: a wildcard pattern, type is the expected type for this position
+ * - PCtor: a constructor pattern, type is the expected type; can navigate into args
+ *
+ * @param pattern - The pattern to query
+ * @param expectedType - The expected type for this pattern position
+ * @param context - The current context
+ * @param path - The full path being navigated
+ * @param pathIndex - Current position in the path
+ * @returns TypeQueryResult with a synthetic term representing the pattern
+ */
+function queryPatternType(
+  pattern: TPattern,
+  expectedType: TTKTerm,
+  context: TTKContext,
+  path: IndexPath,
+  pathIndex: number
+): TypeQueryResult {
+  // If we've consumed the whole path, return the pattern's type
+  if (pathIndex >= path.length) {
+    // Create a synthetic term to represent the pattern for display purposes
+    let syntheticTerm: TTKTerm;
+    switch (pattern.tag) {
+      case 'PVar':
+        // Variable pattern - create a Const with the variable name
+        syntheticTerm = { tag: 'Const', name: pattern.name, type: expectedType };
+        break;
+      case 'PWild':
+        // Wildcard - create a hole
+        syntheticTerm = { tag: 'Hole', id: '_', type: expectedType, context: [] };
+        break;
+      case 'PCtor':
+        // Constructor pattern - look up the constructor type from context
+        const ctorType = lookupInContext(pattern.name, context);
+        if (ctorType) {
+          syntheticTerm = { tag: 'Const', name: pattern.name, type: ctorType };
+          // If there are args, create applications
+          if (pattern.args.length > 0) {
+            // The full applied constructor has the expected type
+            syntheticTerm = { tag: 'Const', name: `${pattern.name} ...`, type: expectedType };
+          }
+        } else {
+          syntheticTerm = { tag: 'Const', name: pattern.name, type: expectedType };
+        }
+        break;
+    }
+    return {
+      success: true,
+      term: syntheticTerm,
+      type: expectedType,
+      context
+    };
+  }
+
+  // Navigate into the pattern structure
+  const segment = path[pathIndex];
+
+  if (pattern.tag === 'PCtor' && segment.kind === 'field') {
+    if (segment.name === 'name') {
+      // Navigate to the constructor name itself - return the constructor's type
+      const ctorType = lookupInContext(pattern.name, context);
+      if (ctorType) {
+        return {
+          success: true,
+          term: { tag: 'Const', name: pattern.name, type: ctorType },
+          type: ctorType,
+          context
+        };
+      } else {
+        // Constructor not found in context, return what we have
+        return {
+          success: true,
+          term: { tag: 'Const', name: pattern.name, type: expectedType },
+          type: expectedType,
+          context
+        };
+      }
+    } else if (segment.name === 'args') {
+      // Navigate into constructor arguments
+      pathIndex++;
+      if (pathIndex < path.length && path[pathIndex].kind === 'array') {
+        const argIndex = (path[pathIndex] as { kind: 'array'; index: number }).index;
+        if (argIndex < 0 || argIndex >= pattern.args.length) {
+          return { success: false, error: `Pattern arg index ${argIndex} out of bounds` };
+        }
+
+        // Get the constructor type to determine argument types
+        const ctorType = lookupInContext(pattern.name, context);
+        let argType: TTKTerm = { tag: 'Hole', id: '?arg_type', type: { tag: 'Sort', level: 0 }, context: [] };
+
+        if (ctorType) {
+          const ctorTelescope = extractTelescope(ctorType);
+          if (argIndex < ctorTelescope.length) {
+            argType = ctorTelescope[argIndex].type;
+          }
+        }
+
+        // Recurse into the argument pattern
+        pathIndex++;
+        return queryPatternType(pattern.args[argIndex], argType, context, path, pathIndex);
+      } else {
+        return { success: false, error: `Expected array index after 'args' in pattern` };
+      }
+    }
+  }
+
+  return { success: false, error: `Cannot navigate '${JSON.stringify(segment)}' in pattern` };
+}
+
 // ============================================================================
 // Core Types
 // ============================================================================
@@ -462,7 +575,11 @@ export function queryTypeAtPath(
             break;
 
           case 'Match':
-            if (fieldName === 'scrutinee') {
+            if (fieldName === 'value') {
+              // 'value' is a virtual field - the Match term IS the value
+              // This allows paths like "value.clauses[0].rhs" to work
+              pathIndex++;
+            } else if (fieldName === 'scrutinee') {
               currentTerm = currentTerm.scrutinee;
               pathIndex++;
             } else if (fieldName === 'clauses') {
@@ -484,7 +601,7 @@ export function queryTypeAtPath(
           if (index < 0 || index >= currentTerm.clauses.length) {
             return { success: false, error: `Clause index ${index} out of bounds` };
           }
-          // The next segment should be 'rhs'
+          // The next segment should be 'rhs' or 'patterns'
           pathIndex++;
           if (pathIndex < path.length && path[pathIndex].kind === 'field') {
             const nextField = (path[pathIndex] as { kind: 'field'; name: string }).name;
@@ -496,6 +613,29 @@ export function queryTypeAtPath(
               currentExpectedType = computeClauseRhsExpectedType(clause, currentExpectedType);
               currentTerm = clause.rhs;
               pathIndex++;
+            } else if (nextField === 'patterns') {
+              // Navigate into patterns array
+              pathIndex++;
+              if (pathIndex < path.length && path[pathIndex].kind === 'array') {
+                const patternIndex = (path[pathIndex] as { kind: 'array'; index: number }).index;
+                const clause = currentTerm.clauses[index];
+                if (patternIndex < 0 || patternIndex >= clause.patterns.length) {
+                  return { success: false, error: `Pattern index ${patternIndex} out of bounds` };
+                }
+
+                // Compute the type for this pattern position from the function type
+                const telescope = currentExpectedType ? extractTelescope(currentExpectedType) : [];
+                const patternType = patternIndex < telescope.length
+                  ? telescope[patternIndex].type
+                  : { tag: 'Hole' as const, id: '?pattern_type', type: { tag: 'Sort' as const, level: 0 }, context: [] };
+
+                // Now navigate into the pattern structure
+                pathIndex++;
+                const pattern = clause.patterns[patternIndex];
+                return queryPatternType(pattern, patternType, currentContext, path, pathIndex);
+              } else {
+                return { success: false, error: `Expected array index after 'patterns'` };
+              }
             } else {
               return { success: false, error: `Cannot navigate to '${nextField}' in clause` };
             }
@@ -526,7 +666,19 @@ export function queryTypeAtPath(
     }
 
     // Now infer the type of the term we navigated to
-    const type = inferType(currentTerm, currentContext);
+    // If we have an expected type and inference fails (e.g., due to hole domains),
+    // fall back to the expected type
+    let type: TTKTerm;
+    try {
+      type = inferType(currentTerm, currentContext);
+    } catch (inferError) {
+      // If inference fails but we have an expected type, use it
+      if (currentExpectedType) {
+        type = currentExpectedType;
+      } else {
+        throw inferError;
+      }
+    }
 
     return {
       success: true,

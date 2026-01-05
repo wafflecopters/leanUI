@@ -544,6 +544,173 @@ swap A = \\f => \\(x: A) (y: A) => f y x`;
       expect(typeStr).not.toMatch(/A\s*->\s*A\s*->\s*A/);
     }
   });
+
+  it('should show correct type when selecting full pattern clause RHS', () => {
+    // When selecting the entire RHS "\f => \(x : A) (y : A) => f y x",
+    // should get the type of the RHS (A -> A -> A), NOT the full function type
+    const sourceCode = `swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap A = \\f => \\(x: A) (y: A) => f y x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const swapBlock = results.find(b => b.name === 'swap');
+    expect(swapBlock!.checkSuccess).toBe(true);
+
+    const queryData = swapBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the full RHS: "\f => \(x: A) (y: A) => f y x"
+    const lines = sourceCode.split('\n');
+    const rhsStart = lines[1].indexOf('\\f');
+    const rhsEnd = lines[1].length;
+
+    const selectionRange = {
+      start: { line: 2, col: rhsStart + 1, pos: 0 },
+      end: { line: 2, col: rhsEnd + 1, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'swap');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // The RHS has type (f : A -> A -> A) -> (A -> A -> A)
+      // which is the function type after stripping the first pattern (A : Type)
+      // Should NOT be the full swap type with (A : Type) -> ...
+      expect(typeStr).not.toContain('Type');
+      expect(typeStr).toMatch(/A\s*->\s*A\s*->\s*A/);
+    }
+  });
+
+  it('should show A : Type for pattern variable A in swap', () => {
+    // When cursor is on 'A' in "swap A = ...", should show A : Type
+    const sourceCode = `swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap A = \\f => \\(x: A) (y: A) => f y x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const swapBlock = results.find(b => b.name === 'swap');
+    expect(swapBlock!.checkSuccess).toBe(true);
+
+    const queryData = swapBlock!.typeQueryData!;
+
+    // Find 'A' in "swap A = " on line 2
+    const lines = sourceCode.split('\n');
+    const aPos = lines[1].indexOf('A');
+    const pos = { line: 2, col: aPos + 1, pos: 0 };
+
+    // For pattern LHS, we need a different approach - check what paths exist
+    // The pattern A should be tracked in the source map
+    const result = queryTypeAtPosition(pos, queryData.sourceMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'swap', sourceCode);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      expect(typeStr).toBe('Type');
+    }
+  });
+
+  it('should show a : Nat for pattern variable a in Succ pattern', () => {
+    // When cursor is on 'a' in "(Succ a)", should show a : Nat
+    const sourceCode = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const plusBlock = results.find(b => b.name === 'plus');
+    expect(plusBlock!.checkSuccess).toBe(true);
+
+    const queryData = plusBlock!.typeQueryData!;
+
+    // Find 'a' in "(Succ a)" pattern on the last line
+    const lines = sourceCode.split('\n');
+    const lastLine = lines[lines.length - 1];
+    const succAPos = lastLine.indexOf('Succ a)');
+    const aInPatternPos = succAPos + 5; // 'Succ ' is 5 chars
+    const pos = { line: lines.length, col: aInPatternPos + 1, pos: 0 };
+
+    const result = queryTypeAtPosition(pos, queryData.sourceMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'plus', sourceCode);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      expect(typeStr).toBe('Nat');
+    }
+  });
+
+  it('should show Succ a : Nat for constructor pattern', () => {
+    // When selecting "(Succ a)", should show type Nat
+    const sourceCode = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const plusBlock = results.find(b => b.name === 'plus');
+    expect(plusBlock!.checkSuccess).toBe(true);
+
+    const queryData = plusBlock!.typeQueryData!;
+
+    // Find "(Succ a)" pattern on the last line
+    const lines = sourceCode.split('\n');
+    const lastLine = lines[lines.length - 1];
+    const succAStart = lastLine.indexOf('(Succ a)');
+    const succAEnd = succAStart + 8; // "(Succ a)" is 8 chars
+
+    const selectionRange = {
+      start: { line: lines.length, col: succAStart + 1, pos: 0 },
+      end: { line: lines.length, col: succAEnd + 1, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, queryData.sourceMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'plus');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      expect(typeStr).toBe('Nat');
+    }
+  });
+
+  it('should show Succ : Nat -> Nat for constructor in pattern', () => {
+    // When cursor is on 'Succ' in "(Succ a)", should show Succ : Nat -> Nat
+    const sourceCode = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const plusBlock = results.find(b => b.name === 'plus');
+    expect(plusBlock!.checkSuccess).toBe(true);
+
+    const queryData = plusBlock!.typeQueryData!;
+
+    // Find 'Succ' in "(Succ a)" pattern
+    const lines = sourceCode.split('\n');
+    const lastLine = lines[lines.length - 1];
+    const succPos = lastLine.indexOf('(Succ a)') + 1; // +1 to skip '('
+    const pos = { line: lines.length, col: succPos + 1, pos: 0 };
+
+    const result = queryTypeAtPosition(pos, queryData.sourceMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'plus', sourceCode);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      expect(typeStr).toMatch(/Nat\s*->\s*Nat/);
+    }
+  });
 });
 
 describe('Integration tests with full parsing pipeline', () => {

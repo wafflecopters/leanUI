@@ -870,12 +870,25 @@ export class Parser {
     // Track the start of the clause for source position tracking
     const clauseStartPos = this.getCurrentPos();
 
+    // Build base path for patterns: value.clauses[0].patterns[i]
+    const clausePath: IndexPath = [
+      { kind: 'field', name: 'value' },
+      { kind: 'field', name: 'clauses' },
+      { kind: 'array', index: 0 }
+    ];
+
     // Parse patterns until we hit '='
     // Each pattern is atomic (no constructor application without parens)
     const patterns: TPattern[] = [];
 
     while (this.canStartPattern(this.current())) {
-      patterns.push(this.parsePatternAtom());
+      const patternIndex = patterns.length;
+      const patternPath: IndexPath = [
+        ...clausePath,
+        { kind: 'field', name: 'patterns' },
+        { kind: 'array', index: patternIndex }
+      ];
+      patterns.push(this.parsePatternAtomWithSource(patternPath));
     }
 
     if (patterns.length === 0) {
@@ -905,11 +918,6 @@ export class Parser {
 
     // Track source positions with path value.clauses[0].rhs
     // (We use index 0 here, but it will be adjusted during merging if needed)
-    const clausePath: IndexPath = [
-      { kind: 'field', name: 'value' },
-      { kind: 'field', name: 'clauses' },
-      { kind: 'array', index: 0 }
-    ];
     const rhsPath: IndexPath = [...clausePath, { kind: 'field', name: 'rhs' }];
 
     const rhs = this.expr(0, rhsCtx, rhsPath);
@@ -1643,6 +1651,133 @@ export class Parser {
       `Expected atomic pattern, got ${token.type} '${token.value}'`,
       token.line,
       token.col
+    );
+  }
+
+  /**
+   * Parse an atomic pattern with source position tracking.
+   * Records the source range in the source map at the given path.
+   */
+  private parsePatternAtomWithSource(path: IndexPath): TPattern {
+    const startToken = this.current();
+
+    if (startToken.type === 'UNDERSCORE') {
+      this.advance();
+      this.recordRange(path, startToken, startToken);
+      return { tag: 'PWild' };
+    }
+
+    if (startToken.type === 'IDENT') {
+      const name = startToken.value;
+      this.advance();
+
+      // Atomic patterns are either variables or nullary constructors
+      const isConstructor = name[0] === name[0].toUpperCase();
+      this.recordRange(path, startToken, startToken);
+      if (isConstructor) {
+        return { tag: 'PCtor', name, args: [] };
+      } else {
+        return { tag: 'PVar', name };
+      }
+    }
+
+    if (startToken.type === 'LPAREN') {
+      this.advance();
+      const pattern = this.parsePatternWithSource(path);
+      const endToken = this.current();
+      this.expect('RPAREN');
+      // Record from '(' to ')' inclusive
+      this.recordRange(path, startToken, endToken);
+      return pattern;
+    }
+
+    throw new ParseError(
+      `Expected atomic pattern, got ${startToken.type} '${startToken.value}'`,
+      startToken.line,
+      startToken.col
+    );
+  }
+
+  /**
+   * Parse a pattern with source position tracking.
+   * This handles constructor patterns like "Succ n" or "Cons x xs".
+   */
+  private parsePatternWithSource(path: IndexPath): TPattern {
+    const startToken = this.current();
+
+    // Wildcard pattern: _
+    if (startToken.type === 'UNDERSCORE') {
+      this.advance();
+      this.recordRange(path, startToken, startToken);
+      return { tag: 'PWild' };
+    }
+
+    // Constructor or variable pattern
+    if (startToken.type === 'IDENT') {
+      const name = startToken.value;
+      this.advance();
+
+      // Check if this is a constructor application (has arguments in parens)
+      if (this.current().type === 'LPAREN') {
+        // Parse constructor arguments: Ctor (pat1) (pat2) or Ctor(pat1, pat2)
+        const args: TPattern[] = [];
+
+        while (this.current().type === 'LPAREN') {
+          this.advance(); // consume '('
+          const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: args.length }];
+          args.push(this.parsePatternWithSource(argPath));
+          this.expect('RPAREN');
+        }
+
+        const endToken = this.tokens[this.pos - 1];
+        this.recordRange(path, startToken, endToken);
+        return { tag: 'PCtor', name, args };
+      }
+
+      // Check if followed by another pattern (application without parens)
+      // e.g., "Succ n" or "Cons x xs"
+      if (this.canStartPattern(this.current())) {
+        // Record the constructor name itself at path.name
+        const namePath: IndexPath = [...path, { kind: 'field', name: 'name' }];
+        this.recordRange(namePath, startToken, startToken);
+
+        // This is a constructor with arguments (no parens)
+        const args: TPattern[] = [];
+        while (this.canStartPattern(this.current())) {
+          const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: args.length }];
+          args.push(this.parsePatternAtomWithSource(argPath));
+        }
+        const endToken = this.tokens[this.pos - 1];
+        this.recordRange(path, startToken, endToken);
+        return { tag: 'PCtor', name, args };
+      }
+
+      // Check if uppercase (constructor) or lowercase (variable)
+      // Convention: uppercase = constructor, lowercase = variable
+      const isConstructor = name[0] === name[0].toUpperCase();
+
+      this.recordRange(path, startToken, startToken);
+      if (isConstructor) {
+        return { tag: 'PCtor', name, args: [] };
+      } else {
+        return { tag: 'PVar', name };
+      }
+    }
+
+    // Parenthesized pattern
+    if (startToken.type === 'LPAREN') {
+      this.advance();
+      const pattern = this.parsePatternWithSource(path);
+      const endToken = this.current();
+      this.expect('RPAREN');
+      this.recordRange(path, startToken, endToken);
+      return pattern;
+    }
+
+    throw new ParseError(
+      `Expected pattern, got ${startToken.type} '${startToken.value}'`,
+      startToken.line,
+      startToken.col
     );
   }
 
