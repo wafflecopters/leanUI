@@ -228,6 +228,11 @@ Tests cover:
 
 ## File Structure
 
-- `src/types/tt-recursion-check.ts` - Main implementation
-- `src/types/tt-recursion-check.test.ts` - Test suite
+- `src/types/ttk-recursion-check.ts` - Kernel-level implementation (used by type checker)
+- `src/types/ttk-recursion-check.test.ts` - Test suite for kernel checker
+- `src/types/tt-recursion-check.ts` - Surface-level implementation (legacy, for reference)
+- `src/types/tt-recursion-check.test.ts` - Test suite for surface checker
 - `docs/structural-recursion.md` - This documentation
+
+Note: The type checker uses `ttk-recursion-check.ts` which operates on kernel terms (TTKTerm).
+All verification passes happen in the kernel layer. See CLAUDE.md for the TT vs TTK architecture.

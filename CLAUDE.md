@@ -1,5 +1,46 @@
 # Claude Code Guidelines for LeanUI
 
+## Term Representation Layers (TT vs TTK)
+
+This project has multiple layers of term representation. Understanding these is critical:
+
+### The Pipeline
+
+```
+Source Text --parse--> TT --elaborate--> TTK --future--> ULT
+                       ↑                  ↑              ↑
+                   Surface            Kernel        Untyped
+                   Syntax             Terms         Lambda Terms
+```
+
+### TT (Typed Terms - Surface)
+
+- **Location**: `src/types/tt-core.ts`
+- **Purpose**: Surface-level representation, may include syntactic sugar
+- **Types**: `TTerm`, `TPattern`, `TClause`, `BinderKind`
+- **Used by**: Parser output, UI display
+
+### TTK (Typed Terms - Kernel)
+
+- **Location**: `src/types/tt-kernel.ts`
+- **Purpose**: Elaborated/desugared form - the "ground truth" for verification
+- **Types**: `TTKTerm`, `TTKClause`, `TTKBinderKind`, `TTKContext`
+- **Used by**: Type checker, recursion checker, all verification passes
+
+### Key Rule: All Checking Happens in TTK
+
+**Type checking, unification, termination checking, and any other verification
+must operate on `TTKTerm`, not `TTerm`.**
+
+The kernel is designed to be simple and trustworthy. Surface syntax conveniences
+are elaborated away before checking.
+
+### ULT (Untyped Lambda Terms) - Future
+
+Will be the compilation target for interpretation. Types are erased at this stage.
+
+---
+
 ## React Hooks: Keep Them Simple
 
 React hooks should be **thin wrappers** that delegate to pure helper/utility functions. Avoid putting complex logic directly inside hooks.

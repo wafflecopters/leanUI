@@ -16,6 +16,8 @@ import { TTKTerm, TTKContext } from './tt-kernel';
 import { inferType, checkType, TypeCheckError } from './tt-typecheck';
 import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
+import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
+import { checkFunctionTotality } from './ttk-totality-check';
 
 // ============================================================================
 // Error Types
@@ -255,7 +257,49 @@ export function checkTermDeclaration(
         // Pass the 'value' path so errors can be traced back to source positions
         const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
         checkType(value, declaredType, ctxWithSelf, valuePath);
-        // Both passed!
+
+        // PHASE 3: Check structural recursion
+        // Analyze the value for safe/unsafe recursive calls
+        const recursionAnalysis = analyzeRecursionTTK(name, value);
+        if (recursionAnalysis.unsafeRecursion.length > 0) {
+          // Report all unsafe recursion as errors
+          for (const unsafe of recursionAnalysis.unsafeRecursion) {
+            // Prepend 'value' to the path since the recursion checker paths are
+            // relative to the term, but the elabMap keys start with 'value.'
+            const fullPath: IndexPath = [
+              { kind: 'field', name: 'value' },
+              ...termPathToIndexPath(unsafe.termPath)
+            ];
+            errors.push({
+              message: `${unsafe.error}`,
+              path: fullPath,
+              term: value,
+              context: ctxWithSelf
+            });
+          }
+          // Type is valid but recursion is unsafe
+          return { success: false, errors, validType: declaredType };
+        }
+
+        // PHASE 4: Check exhaustiveness (totality) for pattern matching
+        // Only check if the value is a Match expression with clauses
+        if (value.tag === 'Match' && value.clauses.length > 0) {
+          const totalityAnalysis = checkFunctionTotality(declaredType, value.clauses, ctxWithSelf);
+          if (!totalityAnalysis.exhaustive) {
+            for (const missingCase of totalityAnalysis.missingCases) {
+              errors.push({
+                message: `Non-exhaustive pattern match: missing case for ${missingCase.join(' ')}`,
+                path: [{ kind: 'field', name: 'value' }],
+                term: value,
+                context: ctxWithSelf
+              });
+            }
+            // Type is valid but pattern matching is non-exhaustive
+            return { success: false, errors, validType: declaredType };
+          }
+        }
+
+        // All checks passed!
         return { success: true, value: declaredType };
       } catch (e) {
         if (e instanceof TypeCheckError) {

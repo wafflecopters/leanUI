@@ -405,6 +405,93 @@ test('checkSourceBlocks: inductive with param and index (Vec)', () => {
   assert(results[0].inductiveParams![1].type === 'Nat', `n should have type Nat`);
 });
 
+// ============================================================================
+// Structural Recursion Tests
+// ============================================================================
+
+test('checkSourceBlocks: safe structural recursion (plus)', () => {
+  // This should pass - the recursive call uses a structurally smaller argument
+  const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 2, 'Should have 2 blocks');
+  assert(results[0].checkSuccess === true, 'Nat should type check');
+  assert(
+    results[1].checkSuccess === true,
+    `plus should type check with safe recursion. Got errors: ${results[1].checkErrors.map(e => e.error.message).join(', ')}`
+  );
+});
+
+test('checkSourceBlocks: unsafe recursion - same argument', () => {
+  // This should FAIL - recursive call uses the same argument (Succ a) instead of a
+  const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus (Succ a) b)`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 2, 'Should have 2 blocks');
+  assert(results[0].checkSuccess === true, 'Nat should type check');
+  assert(results[1].checkSuccess === false, 'plus should FAIL due to unsafe recursion');
+  assert(results[1].checkErrors.length > 0, 'Should have recursion error');
+  assert(
+    results[1].checkErrors.some(e =>
+      e.error.message.toLowerCase().includes('recursion') ||
+      e.error.message.toLowerCase().includes('recursive')
+    ),
+    `Error should mention recursion. Got: ${results[1].checkErrors.map(e => e.error.message).join(', ')}`
+  );
+});
+
+test('checkSourceBlocks: unsafe recursion - non-decreasing argument', () => {
+  // This should FAIL - recursive call on (Succ n) which is larger, not smaller
+  const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+bad : Nat -> Nat
+bad Zero = Zero
+bad (Succ n) = bad (Succ (Succ n))`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 2, 'Should have 2 blocks');
+  assert(results[0].checkSuccess === true, 'Nat should type check');
+  assert(results[1].checkSuccess === false, 'bad should FAIL due to unsafe recursion');
+  assert(results[1].checkErrors.length > 0, 'Should have recursion error');
+});
+
+test('checkSourceBlocks: non-recursive function passes', () => {
+  // Non-recursive functions should pass without issues
+  const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+isZero : Nat -> Nat
+isZero Zero = Zero
+isZero (Succ n) = Zero`;
+
+  const results = checkSourceBlocks(source);
+
+  assert(results.length === 2, 'Should have 2 blocks');
+  assert(results[0].checkSuccess === true, 'Nat should type check');
+  assert(
+    results[1].checkSuccess === true,
+    `isZero should pass (no recursion). Got errors: ${results[1].checkErrors.map(e => e.error.message).join(', ')}`
+  );
+});
+
 console.log('\n' + '='.repeat(80));
 console.log('ALL BLOCK-LEVEL TYPE CHECKING TESTS PASSED! ✓');
 console.log('='.repeat(80) + '\n');
