@@ -706,6 +706,9 @@ export function checkClause(
   }
 
   // Type-check the RHS in the extended context
+  // The RHS path is clausePath.rhs for error reporting
+  const rhsPath = appendPath(clausePath, fieldSeg('rhs'));
+
   if (expectedReturnType) {
     // The return type uses telescope-relative indices, where Var(k) refers to
     // telescope position (numPatterns - 1 - k). After binding all patterns,
@@ -724,11 +727,11 @@ export function checkClause(
       refinedReturnType = shiftTermBy(refinedReturnType, extraBindings, 0);
     }
     refinedReturnType = applySubstitution(currentSubst, refinedReturnType);
-    checkType(clause.rhs, refinedReturnType, currentCtx);
+    checkType(clause.rhs, refinedReturnType, currentCtx, rhsPath);
     return refinedReturnType;
   } else {
     // Infer the return type
-    return inferType(clause.rhs, currentCtx);
+    return inferType(clause.rhs, currentCtx, rhsPath);
   }
 }
 
@@ -796,7 +799,8 @@ export function inferMatchType(
   }
 
   // Infer the type of the scrutinee
-  const scrutineeType = inferType(scrutinee, ctx);
+  const scrutineePath = appendPath(matchPath, fieldSeg('scrutinee'));
+  const scrutineeType = inferType(scrutinee, ctx, scrutineePath);
 
   // Type-check each clause
   let inferredReturnType: TTKTerm | null = expectedType || null;

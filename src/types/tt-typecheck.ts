@@ -30,7 +30,7 @@ import {
   subst,
   prettyPrint,
 } from './tt-kernel';
-import { IndexPath } from './source-position';
+import { IndexPath, appendPath, fieldSeg } from './source-position';
 import { inferMatchType, checkFunctionClauses } from './tt-pattern-match';
 
 // ============================================================================
@@ -405,10 +405,6 @@ export function inferType(
   ctx: TTKContext = [],
   path: IndexPath = []
 ): TTKTerm {
-  // For now, we accept the path but don't thread it deeply
-  // TODO: Thread path through all recursive calls for fine-grained error reporting
-  void path;
-
   switch (term.tag) {
     case 'Var': {
       const type = lookupVar(ctx, term.index);
@@ -442,28 +438,33 @@ export function inferType(
     }
 
     case 'Binder': {
+      const domainPath = appendPath(path, fieldSeg('domain'));
+      const bodyPath = appendPath(path, fieldSeg('body'));
+
       switch (term.binderKind.tag) {
         case 'BPi': {
           // Check that domain is a type
-          const domainType = inferType(term.domain, ctx);
+          const domainType = inferType(term.domain, ctx, domainPath);
           // Accept Sort or Hole (Hole represents forward references like inductive types)
           if (domainType.tag !== 'Sort' && domainType.tag !== 'Hole') {
             throw new TypeCheckError(
               `Pi domain must be a type, got: ${prettyPrint(domainType)}`,
               term,
-              ctx
+              ctx,
+              domainPath
             );
           }
 
           // Check that body is a type (in extended context)
           const extCtx = extendContext(ctx, term.name, term.domain);
-          const bodyType = inferType(term.body, extCtx);
+          const bodyType = inferType(term.body, extCtx, bodyPath);
           // Accept Sort or Hole (Hole represents forward references)
           if (bodyType.tag !== 'Sort' && bodyType.tag !== 'Hole') {
             throw new TypeCheckError(
               `Pi codomain must be a type, got: ${prettyPrint(bodyType)}`,
               term,
-              ctx
+              ctx,
+              bodyPath
             );
           }
 
@@ -480,18 +481,19 @@ export function inferType(
           // λ(x : A). t  has type  Π(x : A). T  where t : T
 
           // Check domain is a type
-          const domainType = inferType(term.domain, ctx);
+          const domainType = inferType(term.domain, ctx, domainPath);
           if (domainType.tag !== 'Sort') {
             throw new TypeCheckError(
               `Lambda domain must be a type, got: ${prettyPrint(domainType)}`,
               term,
-              ctx
+              ctx,
+              domainPath
             );
           }
 
           // Synthesize type of body
           const extCtx = extendContext(ctx, term.name, term.domain);
-          const bodyType = inferType(term.body, extCtx);
+          const bodyType = inferType(term.body, extCtx, bodyPath);
 
           // Result type: Π(x : domain). bodyType
           return {
@@ -505,39 +507,45 @@ export function inferType(
 
         case 'BLet': {
           // Check definition type
-          const defTypeType = inferType(term.domain, ctx);
+          const defTypeType = inferType(term.domain, ctx, domainPath);
           if (defTypeType.tag !== 'Sort') {
             throw new TypeCheckError(
               `Let definition type must be a type, got: ${prettyPrint(defTypeType)}`,
               term,
-              ctx
+              ctx,
+              domainPath
             );
           }
 
           // Check definition value
-          checkType(term.binderKind.defVal, term.domain, ctx);
+          const defValPath = appendPath(path, fieldSeg('binderKind'), fieldSeg('defVal'));
+          checkType(term.binderKind.defVal, term.domain, ctx, defValPath);
 
           // Synthesize type of body in extended context
           const extCtx = extendContext(ctx, term.name, term.domain);
-          return inferType(term.body, extCtx);
+          return inferType(term.body, extCtx, bodyPath);
         }
       }
     }
 
     case 'App': {
+      const fnPath = appendPath(path, fieldSeg('fn'));
+      const argPath = appendPath(path, fieldSeg('arg'));
+
       // Infer type of function
-      const fnType = whnf(inferType(term.fn, ctx), ctx);
+      const fnType = whnf(inferType(term.fn, ctx, fnPath), ctx);
 
       if (fnType.tag !== 'Binder' || fnType.binderKind.tag !== 'BPi') {
         throw new TypeCheckError(
           `Application requires Pi type, got: ${prettyPrint(fnType)}`,
           term,
-          ctx
+          ctx,
+          fnPath
         );
       }
 
       // Check that argument has the domain type
-      checkType(term.arg, fnType.domain, ctx);
+      checkType(term.arg, fnType.domain, ctx, argPath);
 
       // Result type: body[x := arg]
       return subst(0, term.arg, fnType.body);
@@ -550,7 +558,8 @@ export function inferType(
 
     case 'Annot': {
       // Check that the term has the annotated type
-      checkType(term.term, term.type, ctx);
+      const termPath = appendPath(path, fieldSeg('term'));
+      checkType(term.term, term.type, ctx, termPath);
       return term.type;
     }
 
@@ -580,10 +589,6 @@ export function checkType(
   ctx: TTKContext = [],
   path: IndexPath = []
 ): void {
-  // For now, we accept the path but don't thread it deeply
-  // TODO: Thread path through all recursive calls for fine-grained error reporting
-  void path;
-
   // Special case: Lambda can be checked against Pi type
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
     expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
@@ -596,17 +601,19 @@ export function checkType(
 
     // If domain is specified, check that it matches expected
     if (!domainIsHole && !convertible(term.domain, expectedType.domain, ctx)) {
+      const domainPath = appendPath(path, fieldSeg('domain'));
       throw new TypeCheckError(
         `Lambda domain mismatch.\n  Expected: ${prettyPrint(expectedType.domain)}\n  Got: ${prettyPrint(term.domain)}`,
         term,
         ctx,
-        path
+        domainPath
       );
     }
 
     // Check body against Pi's body, using the effective domain for context extension
     const extCtx = extendContext(ctx, term.name, effectiveDomain);
-    checkType(term.body, expectedType.body, extCtx, path);
+    const bodyPath = appendPath(path, fieldSeg('body'));
+    checkType(term.body, expectedType.body, extCtx, bodyPath);
     return;
   }
 
