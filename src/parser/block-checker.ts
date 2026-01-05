@@ -57,6 +57,26 @@ export interface BlockCheckResult {
 
   // For inductive types: parameter/index classification
   inductiveParams?: InductiveParamInfo[];
+
+  // Type query data (for hover/selection type info)
+  // These are populated when parse and check succeed
+  typeQueryData?: BlockTypeQueryData;
+}
+
+/**
+ * Data needed to query types at positions within a block.
+ */
+export interface BlockTypeQueryData {
+  // The elaborated kernel terms (type and/or value)
+  kernelType?: TTKTerm;
+  kernelValue?: TTKTerm;
+
+  // Maps from source positions to paths and vice versa
+  sourceMap: SourceMap;
+  elabMap: ElabMap;
+
+  // The typing context in which this block was checked
+  context: TTKContext;
 }
 
 /**
@@ -330,6 +350,10 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
     elabMap: ElabMap;
     checkSuccess: boolean;
     checkErrors: CheckError[];
+    // Store kernel terms and context for type queries
+    kernelType?: TTKTerm;
+    kernelValue?: TTKTerm;
+    contextAtCheck: TTKContext;
   }
 
   // Global context accumulates bindings from successfully checked declarations
@@ -370,7 +394,10 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         sourceMap,
         elabMap,
         checkSuccess: result.success,
-        checkErrors: result.success ? [] : result.errors
+        checkErrors: result.success ? [] : result.errors,
+        kernelType,
+        kernelValue: undefined,
+        contextAtCheck: globalContext
       });
 
       // If successful, add the inductive type and its constructors to the global context
@@ -398,7 +425,10 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         sourceMap,
         elabMap,
         checkSuccess: result.success,
-        checkErrors: result.success ? [] : result.errors
+        checkErrors: result.success ? [] : result.errors,
+        kernelType,
+        kernelValue,
+        contextAtCheck: globalContext
       });
 
       // Add to global context if we have a valid type.
@@ -512,6 +542,17 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       ? extractInductiveParamInfo(firstDecl)
       : undefined;
 
+    // Build typeQueryData from the first check result (for term definitions)
+    // This provides the data needed for hover/selection type queries
+    const firstCheckResult = blockCheckResults[0];
+    const typeQueryData: BlockTypeQueryData | undefined = firstCheckResult ? {
+      kernelType: firstCheckResult.kernelType,
+      kernelValue: firstCheckResult.kernelValue,
+      sourceMap: firstCheckResult.sourceMap,
+      elabMap: firstCheckResult.elabMap,
+      context: firstCheckResult.contextAtCheck
+    } : undefined;
+
     return {
       block,
       blockIndex,
@@ -524,7 +565,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       checkErrors: allCheckErrors,
       blockType,
       name,
-      inductiveParams
+      inductiveParams,
+      typeQueryData
     };
   });
 

@@ -365,8 +365,16 @@ export function groupByIndentation(source: string): SourceBlock[] {
         // Indented code line - belongs to current block
         if (inBlock && !isCommentBlock) {
           currentBlock.push(line);
+        } else if (!inBlock) {
+          // Stray indented line - start a new block with it
+          // This ensures the line gets parsed and reports errors
+          // rather than being silently ignored
+          currentBlock = [line];
+          blockStartLine = lineNumber;
+          inBlock = true;
+          isInductiveBlock = false;
+          isCommentBlock = false;
         }
-        // If not in a code block, skip this line (it's a stray indented line)
       }
     }
   }

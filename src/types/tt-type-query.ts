@@ -1,0 +1,682 @@
+/**
+ * Type Query System
+ *
+ * This module provides APIs to query the type of expressions at specific paths
+ * in ASTs. The architecture is layered:
+ *
+ * 1. Core API: Query type by IndexPath in kernel term + context
+ * 2. Source Resolution (separate module): Map source selection → IndexPath
+ * 3. UI (separate module): Display selected expression and its type
+ *
+ * This design allows type queries on machine-assembled ASTs that never have source.
+ */
+
+import { TTKTerm, TTKContext, TTKClause, prettyPrint } from './tt-kernel';
+import type { TPattern } from './tt-core';
+import { inferType, extendContext } from './tt-typecheck';
+import { IndexPath, serializeIndexPath } from './source-position';
+
+// ============================================================================
+// Pattern Binding Helpers
+// ============================================================================
+
+/**
+ * Extract the telescope (parameter types) from a Pi type.
+ * Returns an array of {name, type} for each parameter.
+ */
+function extractTelescope(type: TTKTerm): Array<{ name: string; type: TTKTerm }> {
+  const telescope: Array<{ name: string; type: TTKTerm }> = [];
+  let current = type;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    telescope.push({ name: current.name, type: current.domain });
+    current = current.body;
+  }
+  return telescope;
+}
+
+/**
+ * Look up a name in the context and return its type.
+ */
+function lookupInContext(name: string, context: TTKContext): TTKTerm | null {
+  for (const binding of context) {
+    if (binding.name === name) {
+      return binding.type;
+    }
+  }
+  return null;
+}
+
+/**
+ * Compute the bindings introduced by a pattern given its expected type.
+ *
+ * For constructor patterns like (Succ a), we look up the constructor type in context
+ * to determine the types of nested pattern variables.
+ */
+function computePatternBindings(
+  pattern: TPattern,
+  expectedType: TTKTerm,
+  context: TTKContext
+): Array<{ name: string; type: TTKTerm }> {
+  switch (pattern.tag) {
+    case 'PVar':
+      return [{ name: pattern.name, type: expectedType }];
+    case 'PWild':
+      return [{ name: '_', type: expectedType }];
+    case 'PCtor':
+      // For constructor patterns with no args (like type variables A, B),
+      // treat as binding that name to the expected type
+      if (pattern.args.length === 0) {
+        return [{ name: pattern.name, type: expectedType }];
+      }
+
+      // For constructor patterns with args, look up the constructor type
+      const ctorType = lookupInContext(pattern.name, context);
+      if (ctorType) {
+        // Extract the telescope from the constructor type
+        const ctorTelescope = extractTelescope(ctorType);
+
+        const bindings: Array<{ name: string; type: TTKTerm }> = [];
+        for (let i = 0; i < pattern.args.length; i++) {
+          const argPattern = pattern.args[i];
+          // Use the corresponding telescope type if available
+          const argType = i < ctorTelescope.length
+            ? ctorTelescope[i].type
+            : { tag: 'Hole' as const, id: '?', type: { tag: 'Sort' as const, level: 0 }, context: [] };
+          bindings.push(...computePatternBindings(argPattern, argType, context));
+        }
+        return bindings;
+      }
+
+      // Fallback: if constructor not found in context, use placeholder types
+      const bindings: Array<{ name: string; type: TTKTerm }> = [];
+      for (const arg of pattern.args) {
+        bindings.push(...computePatternBindings(arg, { tag: 'Hole', id: '?', type: { tag: 'Sort', level: 0 }, context: [] }, context));
+      }
+      return bindings;
+  }
+}
+
+/**
+ * Compute the context extension for a clause RHS given the patterns and function type.
+ *
+ * For a function like: swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+ * with clause: swap A = \f => ...
+ *
+ * The pattern A binds a variable of type Type (the first parameter type).
+ * The RHS is typed with context extended by A : Type.
+ */
+function computeClauseBindings(
+  clause: TTKClause,
+  functionType: TTKTerm | undefined,
+  baseContext: TTKContext
+): TTKContext {
+  if (!functionType) {
+    // No function type available, can't compute bindings
+    return baseContext;
+  }
+
+  // Extract the telescope from the function type
+  const telescope = extractTelescope(functionType);
+
+  // Match patterns to telescope positions
+  let ctx = baseContext;
+  let telescopeIndex = 0;
+
+  for (const pattern of clause.patterns) {
+    if (telescopeIndex >= telescope.length) {
+      // More patterns than telescope entries - shouldn't happen for well-typed code
+      break;
+    }
+
+    // Get the type for this telescope position
+    // The type is relative to bindings already in scope
+    const paramType = telescope[telescopeIndex].type;
+
+    // Compute bindings from this pattern, passing the current context for constructor lookup
+    const bindings = computePatternBindings(pattern, paramType, ctx);
+
+    // Extend context with pattern bindings
+    for (const binding of bindings) {
+      ctx = extendContext(ctx, binding.name, binding.type);
+    }
+
+    telescopeIndex++;
+  }
+
+  return ctx;
+}
+
+/**
+ * Compute the expected type for a clause RHS by stripping off matched patterns.
+ *
+ * For a function type: (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+ * After matching pattern A, the RHS expected type is: (f : A -> A -> A) -> (A -> A -> A)
+ *
+ * Note: This is an approximation - proper handling would require substitution.
+ */
+function computeClauseRhsExpectedType(
+  clause: TTKClause,
+  functionType: TTKTerm | undefined
+): TTKTerm | undefined {
+  if (!functionType) return undefined;
+
+  let current = functionType;
+  for (let i = 0; i < clause.patterns.length; i++) {
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+      current = current.body;
+    } else {
+      // No more Pi types to strip
+      break;
+    }
+  }
+
+  return current;
+}
+
+// ============================================================================
+// Core Types
+// ============================================================================
+
+/**
+ * Result of a type query.
+ */
+export type TypeQueryResult =
+  | { success: true; term: TTKTerm; type: TTKTerm; context: TTKContext }
+  | { success: false; error: string };
+
+/**
+ * A navigable node in a term tree.
+ * Contains the term, its type, and the local context.
+ */
+export interface TermNode {
+  term: TTKTerm;
+  type: TTKTerm;
+  context: TTKContext;
+  path: IndexPath;
+}
+
+// ============================================================================
+// Path Navigation
+// ============================================================================
+
+/**
+ * Navigate to a subterm at the given path.
+ *
+ * Returns the subterm or null if the path is invalid.
+ * This does NOT perform type-checking - just structural navigation.
+ *
+ * @param term - The root term to navigate from
+ * @param path - The path to navigate
+ * @returns The subterm at the path, or null if invalid
+ */
+export function navigateToPath(term: TTKTerm, path: IndexPath): TTKTerm | null {
+  let current: TTKTerm = term;
+
+  for (const segment of path) {
+    if (segment.kind === 'field') {
+      const fieldName = segment.name;
+
+      switch (current.tag) {
+        case 'Binder':
+          if (fieldName === 'domain') {
+            current = current.domain;
+          } else if (fieldName === 'body') {
+            current = current.body;
+          } else if (fieldName === 'binderKind' && current.binderKind.tag === 'BLet') {
+            // Navigate into binderKind for BLet
+            if (path.length > 0) {
+              // Need to check next segment
+              continue; // Let the next iteration handle it
+            }
+            return null;
+          } else {
+            return null;
+          }
+          break;
+
+        case 'App':
+          if (fieldName === 'fn') {
+            current = current.fn;
+          } else if (fieldName === 'arg') {
+            current = current.arg;
+          } else {
+            return null;
+          }
+          break;
+
+        case 'Const':
+          if (fieldName === 'type') {
+            current = current.type;
+          } else {
+            return null;
+          }
+          break;
+
+        case 'Annot':
+          if (fieldName === 'term') {
+            current = current.term;
+          } else if (fieldName === 'type') {
+            current = current.type;
+          } else {
+            return null;
+          }
+          break;
+
+        case 'Hole':
+          if (fieldName === 'type') {
+            current = current.type;
+          } else {
+            return null;
+          }
+          break;
+
+        case 'Match':
+          if (fieldName === 'scrutinee') {
+            current = current.scrutinee;
+          } else if (fieldName === 'clauses') {
+            // Need array index next
+            continue;
+          } else {
+            return null;
+          }
+          break;
+
+        default:
+          // Var, Sort don't have navigable fields
+          return null;
+      }
+    } else if (segment.kind === 'array') {
+      const index = segment.index;
+
+      // Handle array navigation (e.g., clauses[0])
+      if (current.tag === 'Match') {
+        if (index >= 0 && index < current.clauses.length) {
+          // We're at a clause, but clauses aren't terms themselves
+          // The next segment should be 'rhs' or 'patterns'
+          continue;
+        } else {
+          return null;
+        }
+      } else if (current.tag === 'Hole' && 'context' in current) {
+        // Navigating hole context
+        if (index >= 0 && index < current.context.length) {
+          current = current.context[index].type;
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
+  }
+
+  return current;
+}
+
+/**
+ * Navigate to a clause RHS in a Match expression.
+ * Handles the special case of Match clauses which aren't direct TTKTerm children.
+ */
+function navigateToClauseRhs(term: TTKTerm, clauseIndex: number): TTKTerm | null {
+  if (term.tag !== 'Match') return null;
+  if (clauseIndex < 0 || clauseIndex >= term.clauses.length) return null;
+  return term.clauses[clauseIndex].rhs;
+}
+
+// ============================================================================
+// Type Query Core API
+// ============================================================================
+
+/**
+ * Query the type of a subterm at a given path.
+ *
+ * This is the CORE API that works with paths directly.
+ * It performs type inference to determine the type at the path.
+ *
+ * @param rootTerm - The root term to query within
+ * @param rootContext - The context at the root term
+ * @param path - The path to the subterm
+ * @param expectedType - Optional expected type of rootTerm (used for pattern binding types)
+ * @returns TypeQueryResult with the term and its type, or an error
+ *
+ * @example
+ * ```typescript
+ * // Query the type of a lambda's body
+ * const result = queryTypeAtPath(
+ *   lambdaTerm,
+ *   [],
+ *   [{ kind: 'field', name: 'body' }]
+ * );
+ * if (result.success) {
+ *   console.log('Body type:', prettyPrint(result.type));
+ * }
+ * ```
+ */
+export function queryTypeAtPath(
+  rootTerm: TTKTerm,
+  rootContext: TTKContext,
+  path: IndexPath,
+  expectedType?: TTKTerm
+): TypeQueryResult {
+  try {
+    // Navigate through the term, building context as we go under binders
+    let currentTerm = rootTerm;
+    let currentContext = rootContext;
+    let currentExpectedType = expectedType;  // Track expected type through navigation
+    let pathIndex = 0;
+
+    while (pathIndex < path.length) {
+      const segment = path[pathIndex];
+
+      if (segment.kind === 'field') {
+        const fieldName = segment.name;
+
+        switch (currentTerm.tag) {
+          case 'Binder': {
+            if (fieldName === 'domain') {
+              currentTerm = currentTerm.domain;
+              currentExpectedType = undefined;  // Domain doesn't have an expected type from parent
+              pathIndex++;
+            } else if (fieldName === 'body') {
+              // When entering a binder body, extend the context
+              // If the domain is a hole and we have an expected Pi type, use the Pi's domain
+              let domainType = currentTerm.domain;
+              if (domainType.tag === 'Hole' && currentExpectedType?.tag === 'Binder' &&
+                  currentExpectedType.binderKind.tag === 'BPi') {
+                domainType = currentExpectedType.domain;
+              }
+              currentContext = extendContext(currentContext, currentTerm.name, domainType);
+
+              // Update expected type: if current expected is Pi, body expected is Pi's body
+              if (currentExpectedType?.tag === 'Binder' && currentExpectedType.binderKind.tag === 'BPi') {
+                currentExpectedType = currentExpectedType.body;
+              } else {
+                currentExpectedType = undefined;
+              }
+
+              currentTerm = currentTerm.body;
+              pathIndex++;
+            } else if (fieldName === 'binderKind') {
+              // Handle BLet defVal
+              if (currentTerm.binderKind.tag === 'BLet') {
+                pathIndex++;
+                if (pathIndex < path.length && path[pathIndex].kind === 'field' &&
+                    (path[pathIndex] as { kind: 'field'; name: string }).name === 'defVal') {
+                  currentTerm = currentTerm.binderKind.defVal;
+                  pathIndex++;
+                } else {
+                  return { success: false, error: `Invalid path after binderKind` };
+                }
+              } else {
+                return { success: false, error: `Cannot navigate binderKind of ${currentTerm.binderKind.tag}` };
+              }
+            } else {
+              return { success: false, error: `Unknown field '${fieldName}' on Binder` };
+            }
+            break;
+          }
+
+          case 'App':
+            if (fieldName === 'fn') {
+              currentTerm = currentTerm.fn;
+              pathIndex++;
+            } else if (fieldName === 'arg') {
+              currentTerm = currentTerm.arg;
+              pathIndex++;
+            } else {
+              return { success: false, error: `Unknown field '${fieldName}' on App` };
+            }
+            break;
+
+          case 'Const':
+            if (fieldName === 'type') {
+              currentTerm = currentTerm.type;
+              pathIndex++;
+            } else {
+              return { success: false, error: `Unknown field '${fieldName}' on Const` };
+            }
+            break;
+
+          case 'Annot':
+            if (fieldName === 'term') {
+              currentTerm = currentTerm.term;
+              pathIndex++;
+            } else if (fieldName === 'type') {
+              currentTerm = currentTerm.type;
+              pathIndex++;
+            } else {
+              return { success: false, error: `Unknown field '${fieldName}' on Annot` };
+            }
+            break;
+
+          case 'Hole':
+            if (fieldName === 'type') {
+              currentTerm = currentTerm.type;
+              pathIndex++;
+            } else if (fieldName === 'context') {
+              // Need array index next
+              pathIndex++;
+            } else {
+              return { success: false, error: `Unknown field '${fieldName}' on Hole` };
+            }
+            break;
+
+          case 'Match':
+            if (fieldName === 'scrutinee') {
+              currentTerm = currentTerm.scrutinee;
+              pathIndex++;
+            } else if (fieldName === 'clauses') {
+              // Need array index next
+              pathIndex++;
+            } else {
+              return { success: false, error: `Unknown field '${fieldName}' on Match` };
+            }
+            break;
+
+          default:
+            return { success: false, error: `Cannot navigate field on ${currentTerm.tag}` };
+        }
+      } else if (segment.kind === 'array') {
+        const index = segment.index;
+
+        if (currentTerm.tag === 'Match') {
+          // We should be at 'clauses' field
+          if (index < 0 || index >= currentTerm.clauses.length) {
+            return { success: false, error: `Clause index ${index} out of bounds` };
+          }
+          // The next segment should be 'rhs'
+          pathIndex++;
+          if (pathIndex < path.length && path[pathIndex].kind === 'field') {
+            const nextField = (path[pathIndex] as { kind: 'field'; name: string }).name;
+            if (nextField === 'rhs') {
+              // Extend context with pattern bindings
+              const clause = currentTerm.clauses[index];
+              currentContext = computeClauseBindings(clause, currentExpectedType, currentContext);
+              // Update expected type for the RHS by stripping matched patterns
+              currentExpectedType = computeClauseRhsExpectedType(clause, currentExpectedType);
+              currentTerm = clause.rhs;
+              pathIndex++;
+            } else {
+              return { success: false, error: `Cannot navigate to '${nextField}' in clause` };
+            }
+          } else {
+            return { success: false, error: `Expected field segment after clause index` };
+          }
+        } else if (currentTerm.tag === 'Hole') {
+          // Navigating hole context bindings
+          if (index < 0 || index >= currentTerm.context.length) {
+            return { success: false, error: `Context index ${index} out of bounds` };
+          }
+          pathIndex++;
+          if (pathIndex < path.length && path[pathIndex].kind === 'field') {
+            const nextField = (path[pathIndex] as { kind: 'field'; name: string }).name;
+            if (nextField === 'type') {
+              currentTerm = currentTerm.context[index].type;
+              pathIndex++;
+            } else {
+              return { success: false, error: `Cannot navigate to '${nextField}' in context binding` };
+            }
+          } else {
+            return { success: false, error: `Expected field segment after context index` };
+          }
+        } else {
+          return { success: false, error: `Cannot use array index on ${currentTerm.tag}` };
+        }
+      }
+    }
+
+    // Now infer the type of the term we navigated to
+    const type = inferType(currentTerm, currentContext);
+
+    return {
+      success: true,
+      term: currentTerm,
+      type,
+      context: currentContext
+    };
+  } catch (e) {
+    return {
+      success: false,
+      error: e instanceof Error ? e.message : String(e)
+    };
+  }
+}
+
+/**
+ * Get a human-readable description of the type at a path.
+ *
+ * @param rootTerm - The root term
+ * @param rootContext - The context at the root
+ * @param path - Path to the subterm
+ * @returns A formatted string with the term and its type
+ */
+export function describeTypeAtPath(
+  rootTerm: TTKTerm,
+  rootContext: TTKContext,
+  path: IndexPath
+): string {
+  const result = queryTypeAtPath(rootTerm, rootContext, path);
+
+  if (!result.success) {
+    return `Error: ${result.error}`;
+  }
+
+  const termStr = prettyPrint(result.term, result.context.map(b => b.name));
+  const typeStr = prettyPrint(result.type, result.context.map(b => b.name));
+
+  return `${termStr} : ${typeStr}`;
+}
+
+// ============================================================================
+// Path Finding (for UI integration)
+// ============================================================================
+
+/**
+ * Information about a term at a path, including display strings.
+ */
+export interface TermInfo {
+  path: IndexPath;
+  pathString: string;
+  term: TTKTerm;
+  termString: string;
+  type: TTKTerm;
+  typeString: string;
+  context: TTKContext;
+}
+
+/**
+ * Enumerate all navigable subterms of a term with their types.
+ *
+ * This is useful for building UI components that show all
+ * selectable subexpressions.
+ *
+ * @param rootTerm - The root term
+ * @param rootContext - The context at the root
+ * @param maxDepth - Maximum depth to traverse (default: 10)
+ * @returns Array of TermInfo for all subterms
+ */
+export function enumerateSubterms(
+  rootTerm: TTKTerm,
+  rootContext: TTKContext,
+  maxDepth: number = 10
+): TermInfo[] {
+  const results: TermInfo[] = [];
+
+  function visit(term: TTKTerm, context: TTKContext, path: IndexPath, depth: number): void {
+    if (depth > maxDepth) return;
+
+    // Try to infer type for this term
+    try {
+      const type = inferType(term, context);
+      const names = context.map(b => b.name);
+
+      results.push({
+        path,
+        pathString: serializeIndexPath(path),
+        term,
+        termString: prettyPrint(term, names),
+        type,
+        typeString: prettyPrint(type, names),
+        context
+      });
+    } catch {
+      // Skip terms that don't type-check
+    }
+
+    // Recurse into children
+    switch (term.tag) {
+      case 'Binder': {
+        visit(term.domain, context, [...path, { kind: 'field', name: 'domain' }], depth + 1);
+
+        const extCtx = extendContext(context, term.name, term.domain);
+        visit(term.body, extCtx, [...path, { kind: 'field', name: 'body' }], depth + 1);
+
+        if (term.binderKind.tag === 'BLet') {
+          visit(
+            term.binderKind.defVal,
+            context,
+            [...path, { kind: 'field', name: 'binderKind' }, { kind: 'field', name: 'defVal' }],
+            depth + 1
+          );
+        }
+        break;
+      }
+
+      case 'App':
+        visit(term.fn, context, [...path, { kind: 'field', name: 'fn' }], depth + 1);
+        visit(term.arg, context, [...path, { kind: 'field', name: 'arg' }], depth + 1);
+        break;
+
+      case 'Const':
+        visit(term.type, context, [...path, { kind: 'field', name: 'type' }], depth + 1);
+        break;
+
+      case 'Annot':
+        visit(term.term, context, [...path, { kind: 'field', name: 'term' }], depth + 1);
+        visit(term.type, context, [...path, { kind: 'field', name: 'type' }], depth + 1);
+        break;
+
+      case 'Hole':
+        visit(term.type, context, [...path, { kind: 'field', name: 'type' }], depth + 1);
+        break;
+
+      case 'Match':
+        visit(term.scrutinee, context, [...path, { kind: 'field', name: 'scrutinee' }], depth + 1);
+        for (let i = 0; i < term.clauses.length; i++) {
+          // TODO: Extend context with pattern bindings
+          visit(
+            term.clauses[i].rhs,
+            context,
+            [...path, { kind: 'field', name: 'clauses' }, { kind: 'array', index: i }, { kind: 'field', name: 'rhs' }],
+            depth + 1
+          );
+        }
+        break;
+
+      // Var, Sort have no children
+    }
+  }
+
+  visit(rootTerm, rootContext, [], 0);
+  return results;
+}

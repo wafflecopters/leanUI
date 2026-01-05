@@ -15,6 +15,7 @@ import { checkSourceBlocks, BlockCheckResult, summarizeCheckResults } from '../p
 import { generateEliminator } from '../types/tt-eliminator';
 import { InductiveTypeDef } from '../types/tt-examples';
 import { prettyPrint } from '../types/tt-core';
+import { useSelectionTypeInfo } from '../hooks/useSelectionTypeInfo';
 
 // ============================================================================
 // Types
@@ -158,6 +159,29 @@ const styles = {
     marginTop: '12px',
     fontSize: '12px',
     color: '#6e7681',
+  },
+  typeInfoPanel: {
+    backgroundColor: '#161b22',
+    border: '1px solid #30363d',
+    borderRadius: '6px',
+    padding: '12px 16px',
+    marginTop: '12px',
+    fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+  },
+  typeInfoLabel: {
+    fontSize: '11px',
+    fontWeight: 600,
+    color: '#8b949e',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+    marginBottom: '8px',
+  },
+  typeInfoCode: {
+    color: '#e6edf3',
+    fontSize: '13px',
+  },
+  typeInfoType: {
+    color: '#7ee787',
   },
   badge: {
     display: 'inline-flex',
@@ -701,6 +725,9 @@ export const TextEditorPage: React.FC = () => {
   // Track whether editor has been mounted
   const [editorMounted, setEditorMounted] = useState(false);
 
+  // Type information for the current cursor position/selection
+  const selectionTypeInfo = useSelectionTypeInfo(editorRef.current, blockCheckResults, code);
+
   // Update Monaco markers with parse and type check errors
   useEffect(() => {
     const monaco = monacoRef.current;
@@ -924,6 +951,18 @@ export const TextEditorPage: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Type Info Panel - shows type at cursor position */}
+        {selectionTypeInfo.hasInfo && (
+          <div style={styles.typeInfoPanel}>
+            <div style={styles.typeInfoLabel}>Type at Cursor</div>
+            <div>
+              <span style={styles.typeInfoCode}>{selectionTypeInfo.selectedCode}</span>
+              <span style={{ color: '#8b949e' }}> : </span>
+              <span style={styles.typeInfoType}>{selectionTypeInfo.typeString}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Results Section */}

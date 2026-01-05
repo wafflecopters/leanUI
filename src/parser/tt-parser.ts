@@ -1239,19 +1239,19 @@ export class Parser {
         return this.parseParenExpr(ctx, path);
 
       case 'LAMBDA':
-        return this.parseLambda(ctx);
+        return this.parseLambda(ctx, path);
 
       // PI token removed - use (x : T) -> ... syntax instead
 
       case 'LET':
-        return this.parseLet(ctx);
+        return this.parseLet(ctx, path);
 
       case 'CASE':
       case 'MATCH':
-        return this.parseMatch(ctx);
+        return this.parseMatch(ctx, path);
 
       case 'TYPE':
-        return this.parseType();
+        return this.parseType(path);
 
       case 'PROP':
         this.advance();
@@ -1353,14 +1353,17 @@ export class Parser {
    *
    * NOT allowed: \ x : A => body    -- parens required for typed binders
    */
-  private parseLambda(ctx: NameContext): TTerm {
+  private parseLambda(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
     this.expect('LAMBDA');
 
     // Parse binders until we see =>
-    const binders: Array<{ name: string; type: TTerm }> = [];
+    // Each binder will have a startToken for position tracking
+    const binders: Array<{ name: string; type: TTerm; startToken: Token }> = [];
 
     while (true) {
       const current = this.current();
+      const binderStartToken = current;
 
       // Stop if we hit the body separator (only => is allowed)
       if (current.type === 'FATARROW') {
@@ -1389,12 +1392,13 @@ export class Parser {
         }
 
         this.expect('COLON');
+        // Parse type - we'll record its position when building the nested lambdas
         const type = this.expr(0, ctx);
         this.expect('RPAREN');
 
         // Add all names with the same type
         for (const name of names) {
-          binders.push({ name, type });
+          binders.push({ name, type, startToken: binderStartToken });
           ctx = [name, ...ctx];
         }
       } else if (current.type === 'IDENT' || current.type === 'UNDERSCORE') {
@@ -1411,7 +1415,7 @@ export class Parser {
           );
         }
 
-        binders.push({ name, type: mkHole(`${name}_type`, mkProp()) });
+        binders.push({ name, type: mkHole(`${name}_type`, mkProp()), startToken: binderStartToken });
         ctx = [name, ...ctx];
       } else {
         break;
@@ -1433,13 +1437,37 @@ export class Parser {
       );
     }
 
-    // Parse body
-    const body = this.expr(0, ctx);
+    // Build the path to the innermost body
+    // For \x y => body, the body is at path.body.body
+    let bodyPath = path;
+    for (let i = 0; i < binders.length; i++) {
+      bodyPath = [...bodyPath, { kind: 'field' as const, name: 'body' }];
+    }
 
-    // Build nested lambdas from right to left
+    // Parse body with the innermost body path
+    const body = this.expr(0, ctx, bodyPath);
+
+    // Build nested lambdas from right to left, recording positions
     let result = body;
+    let currentPath = bodyPath;
+
     for (let i = binders.length - 1; i >= 0; i--) {
       result = mkLambda(binders[i].type, result, binders[i].name);
+
+      // Move path up one level (remove the last .body)
+      currentPath = currentPath.slice(0, -1);
+
+      // Record the lambda at this path
+      if (currentPath.length > 0 || path.length === 0) {
+        const endToken = this.tokens[this.pos - 1];
+        this.recordRange(currentPath.length > 0 ? currentPath : path, binders[i].startToken, endToken);
+      }
+    }
+
+    // Record the full lambda expression
+    if (path.length > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
     }
 
     return result;
@@ -1450,7 +1478,8 @@ export class Parser {
   /**
    * Parse let: let x : T := val in body
    */
-  private parseLet(ctx: NameContext): TTerm {
+  private parseLet(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
     this.expect('LET');
     const name = this.current().type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
     if (this.current().type === 'UNDERSCORE') this.advance();
@@ -1459,17 +1488,26 @@ export class Parser {
     let type: TTerm;
     if (this.current().type === 'COLON') {
       this.advance();
-      type = this.expr(0, ctx);
+      const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+      type = this.expr(0, ctx, domainPath);
     } else {
       type = mkHole(`${name}_type`, mkProp());
     }
 
     this.expect('ASSIGN');
-    const value = this.expr(0, ctx);
+    const defValPath = [...path, { kind: 'field' as const, name: 'binderKind' }, { kind: 'field' as const, name: 'defVal' }];
+    const value = this.expr(0, ctx, defValPath);
     this.expect('IN');
 
     const newCtx = [name, ...ctx];
-    const body = this.expr(0, newCtx);
+    const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+    const body = this.expr(0, newCtx, bodyPath);
+
+    // Record full let expression
+    if (path.length > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
+    }
 
     return mkLet(name, type, value, body);
   }
@@ -1609,13 +1647,16 @@ export class Parser {
    *
    * For now, we use 'case' with 'where' to avoid conflicts with 'with' keyword
    */
-  private parseMatch(ctx: NameContext): TTerm {
+  private parseMatch(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
+
     // Consume 'case' or 'match'
     const keyword = this.current().value;
     this.advance();
 
     // Parse scrutinee
-    const scrutinee = this.expr(0, ctx);
+    const scrutineePath = [...path, { kind: 'field' as const, name: 'scrutinee' }];
+    const scrutinee = this.expr(0, ctx, scrutineePath);
 
     // Expect 'where' (for case) or 'with' (for match, not yet supported)
     if (this.current().type === 'WHERE') {
@@ -1634,6 +1675,7 @@ export class Parser {
     // Parse clauses
     const clauses: TClause[] = [];
 
+    let clauseIndex = 0;
     while (this.current().type === 'PIPE' || this.canStartPattern(this.current())) {
       // Optional pipe
       if (this.current().type === 'PIPE') {
@@ -1650,12 +1692,15 @@ export class Parser {
       // For now, we'll use a simplified approach: collect pattern vars and add to context
       const patternVars = this.collectPatternVars(pattern);
       const rhsCtx = [...patternVars, ...ctx];
-      const rhs = this.expr(0, rhsCtx);
+      const rhsPath = [...path, { kind: 'field' as const, name: 'clauses' }, { kind: 'array' as const, index: clauseIndex }, { kind: 'field' as const, name: 'rhs' }];
+      const rhs = this.expr(0, rhsCtx, rhsPath);
 
       clauses.push({
         patterns: [pattern],
         rhs
       });
+
+      clauseIndex++;
 
       // Skip newlines between clauses
       this.skipNewlines();
@@ -1672,6 +1717,12 @@ export class Parser {
         this.current().line,
         this.current().col
       );
+    }
+
+    // Record full match expression
+    if (path.length > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
     }
 
     return {
@@ -1735,8 +1786,11 @@ export class Parser {
    * Note: Type_n syntax is handled in the lexer, which recognizes
    * Type_0, Type_1, etc. as TYPE tokens with level information.
    */
-  private parseType(): TTerm {
+  private parseType(path: IndexPath = []): TTerm {
+    const startToken = this.current();
     const typeToken = this.expect('TYPE');
+
+    let result: TTerm;
 
     // Check if the TYPE token has a level suffix (from Type_n in lexer)
     // The lexer stores this in the token value as "Type_n"
@@ -1744,19 +1798,27 @@ export class Parser {
       const levelStr = typeToken.value.substring(5);
       const level = parseInt(levelStr, 10);
       if (!isNaN(level)) {
-        return mkType(level + 1);  // Type_n = Sort(n+1)
+        result = mkType(level + 1);  // Type_n = Sort(n+1)
+      } else {
+        result = mkType(1);
       }
-    }
-
-    // Check for "Type n" syntax (space followed by number)
-    if (this.current().type === 'NUMBER') {
+    } else if (this.current().type === 'NUMBER') {
+      // Check for "Type n" syntax (space followed by number)
       const level = parseInt(this.current().value, 10);
       this.advance();
-      return mkType(level + 1);  // Type n = Sort(n+1)
+      result = mkType(level + 1);  // Type n = Sort(n+1)
+    } else {
+      // Just "Type" means Sort(1)
+      result = mkType(1);
     }
 
-    // Just "Type" means Sort(1)
-    return mkType(1);
+    // Record position for Type
+    if (path.length > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
+    }
+
+    return result;
   }
 
   /**
@@ -1767,8 +1829,17 @@ export class Parser {
     const token = this.expect('IDENT');
     const name = token.value;
 
-    // Record source range for this identifier
-    this.recordRange(path, startToken, startToken);
+    // Record source range for this identifier (from start to end of the token)
+    if (path.length > 0) {
+      const startPos = createSourcePos(startToken.line, startToken.col, startToken.pos);
+      // End position is after the token
+      const endCol = startToken.col + startToken.value.length;
+      const endCharPos = startToken.pos + startToken.value.length;
+      const endPos = createSourcePos(startToken.line, endCol, endCharPos);
+      const range = createSourceRange(startPos, endPos);
+      const key = serializeIndexPath(path);
+      this.currentSourceMap.set(key, range);
+    }
 
     // Look up in context for De Bruijn index
     const idx = ctx.indexOf(name);
@@ -1841,7 +1912,10 @@ export class Parser {
    */
   private recordRange(path: IndexPath, start: Token, end: Token): void {
     const startPos = createSourcePos(start.line, start.col, start.pos);
-    const endPos = createSourcePos(end.line, end.col, end.pos);
+    // End position is AFTER the end token (exclusive), so add the token's length
+    const endCol = end.col + end.value.length;
+    const endCharPos = end.pos + end.value.length;
+    const endPos = createSourcePos(end.line, endCol, endCharPos);
     const range = createSourceRange(startPos, endPos);
     const key = serializeIndexPath(path);
     this.currentSourceMap.set(key, range);

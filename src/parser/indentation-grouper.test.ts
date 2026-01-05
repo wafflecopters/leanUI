@@ -394,6 +394,45 @@ id x = x`;
   assertEqual(blocks[0].lines[3], 'id : A -> A');
 });
 
+test('Stray indented lines after blank line form their own block', () => {
+  // Regression test: indented lines after blank line should NOT be silently skipped
+  // They should form their own block so parse errors are reported
+  const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+  foo : Na
+  ?
+  ...`;
+
+  const blocks = groupByIndentation(source);
+  assertEqual(blocks.length, 2, 'Should find 2 blocks (Nat and stray indented lines)');
+  assertEqual(blocks[0].isInductive, true);
+  assertEqual(blocks[0].lines.length, 3, 'Inductive block should have 3 lines');
+  assertEqual(blocks[1].isInductive, false);
+  assertEqual(blocks[1].lines.length, 3, 'Stray indented block should have 3 lines');
+  assertEqual(blocks[1].lines[0], '  foo : Na');
+  assertEqual(blocks[1].lines[1], '  ?');
+  assertEqual(blocks[1].lines[2], '  ...');
+});
+
+test('Multiple stray indented lines are grouped together', () => {
+  const source = `plus : Nat -> Nat -> Nat
+plus Zero b = b
+
+  stray line 1
+  stray line 2
+
+twice : Nat -> Nat`;
+
+  const blocks = groupByIndentation(source);
+  assertEqual(blocks.length, 3, 'Should find 3 blocks');
+  assertEqual(blocks[0].lines[0], 'plus : Nat -> Nat -> Nat');
+  assertEqual(blocks[1].lines.length, 2, 'Stray block should have 2 lines');
+  assertEqual(blocks[1].lines[0], '  stray line 1');
+  assertEqual(blocks[2].lines[0], 'twice : Nat -> Nat');
+});
+
 console.log('\n' + '='.repeat(80));
 console.log('ALL INDENTATION GROUPING TESTS PASSED! ✓');
 console.log('='.repeat(80) + '\n');
