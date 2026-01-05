@@ -19,7 +19,7 @@ import {
   arraySeg,
   serializeIndexPath
 } from './source-position';
-import { elabToKernel } from './tt-elab';
+// Note: We no longer use elabToKernel here - we do full recursive elaboration with path tracking
 
 /**
  * Elaborate a TTerm to TTKTerm while tracking path correspondence.
@@ -41,33 +41,153 @@ export function elabToKernelWithMap(
   const surfaceKey = serializeIndexPath(surfacePath);
   elabMap.set(kernelKey, surfaceKey);
 
-  // For now, use the existing elaborator which does a structural copy
-  // TODO: Recursively elaborate with path tracking for fine-grained correspondence
-  // This will require threading paths through the elaborator similar to the parser
-  const result = elabToKernel(term);
+  // Recursively elaborate with path tracking
+  switch (term.tag) {
+    case 'Var':
+      return { tag: 'Var', index: term.index };
 
-  // In the future, we would recursively track paths like this:
-  // switch (term.tag) {
-  //   case 'Binder':
-  //     return {
-  //       ...elaborated result...,
-  //       domain: elabToKernelWithMap(
-  //         term.domain,
-  //         elabMap,
-  //         appendPath(surfacePath, fieldSeg('domain')),
-  //         appendPath(kernelPath, fieldSeg('domain'))
-  //       ),
-  //       body: elabToKernelWithMap(
-  //         term.body,
-  //         elabMap,
-  //         appendPath(surfacePath, fieldSeg('body')),
-  //         appendPath(kernelPath, fieldSeg('body'))
-  //       )
-  //     };
-  //   // ... other cases
-  // }
+    case 'Sort':
+      return { tag: 'Sort', level: term.level };
 
-  return result;
+    case 'Const':
+      return {
+        tag: 'Const',
+        name: term.name,
+        type: elabToKernelWithMap(
+          term.type,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('type')),
+          appendPath(kernelPath, fieldSeg('type'))
+        )
+      };
+
+    case 'Binder': {
+      const domain = elabToKernelWithMap(
+        term.domain,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('domain')),
+        appendPath(kernelPath, fieldSeg('domain'))
+      );
+      const body = elabToKernelWithMap(
+        term.body,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('body')),
+        appendPath(kernelPath, fieldSeg('body'))
+      );
+
+      let binderKind: import('./tt-kernel').TTKBinderKind;
+      switch (term.binderKind.tag) {
+        case 'BPi':
+          binderKind = { tag: 'BPi' };
+          break;
+        case 'BLam':
+          binderKind = { tag: 'BLam' };
+          break;
+        case 'BLet':
+          binderKind = {
+            tag: 'BLet',
+            defVal: elabToKernelWithMap(
+              term.binderKind.defVal,
+              elabMap,
+              appendPath(surfacePath, fieldSeg('binderKind'), fieldSeg('defVal')),
+              appendPath(kernelPath, fieldSeg('binderKind'), fieldSeg('defVal'))
+            )
+          };
+          break;
+      }
+
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind,
+        domain,
+        body
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: elabToKernelWithMap(
+          term.fn,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('fn')),
+          appendPath(kernelPath, fieldSeg('fn'))
+        ),
+        arg: elabToKernelWithMap(
+          term.arg,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('arg')),
+          appendPath(kernelPath, fieldSeg('arg'))
+        )
+      };
+
+    case 'Hole':
+      return {
+        tag: 'Hole',
+        id: term.id,
+        type: elabToKernelWithMap(
+          term.type,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('type')),
+          appendPath(kernelPath, fieldSeg('type'))
+        ),
+        context: term.context.map((binding, i) => ({
+          name: binding.name,
+          type: elabToKernelWithMap(
+            binding.type,
+            elabMap,
+            appendPath(surfacePath, fieldSeg('context'), arraySeg(i), fieldSeg('type')),
+            appendPath(kernelPath, fieldSeg('context'), arraySeg(i), fieldSeg('type'))
+          )
+        }))
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: elabToKernelWithMap(
+          term.term,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('term')),
+          appendPath(kernelPath, fieldSeg('term'))
+        ),
+        type: elabToKernelWithMap(
+          term.type,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('type')),
+          appendPath(kernelPath, fieldSeg('type'))
+        )
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: elabToKernelWithMap(
+          term.scrutinee,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('scrutinee')),
+          appendPath(kernelPath, fieldSeg('scrutinee'))
+        ),
+        clauses: term.clauses.map((clause, i) => {
+          const clauseSurfacePath = appendPath(surfacePath, fieldSeg('clauses'), arraySeg(i));
+          const clauseKernelPath = appendPath(kernelPath, fieldSeg('clauses'), arraySeg(i));
+
+          // Record the clause mapping
+          elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
+
+          return {
+            patterns: clause.patterns,
+            rhs: elabToKernelWithMap(
+              clause.rhs,
+              elabMap,
+              appendPath(clauseSurfacePath, fieldSeg('rhs')),
+              appendPath(clauseKernelPath, fieldSeg('rhs'))
+            )
+          };
+        })
+      };
+  }
 }
 
 /**

@@ -867,6 +867,9 @@ export class Parser {
    * Multiple clauses will be merged by parseDeclarations.
    */
   private parsePatternClauseDefinition(funcName: string): ParsedDeclaration {
+    // Track the start of the clause for source position tracking
+    const clauseStartPos = this.getCurrentPos();
+
     // Parse patterns until we hit '='
     // Each pattern is atomic (no constructor application without parens)
     const patterns: TPattern[] = [];
@@ -894,18 +897,27 @@ export class Parser {
     this.advance(); // consume '='
 
     // Parse RHS with pattern variables bound
+    // Pattern vars are collected left-to-right, depth-first. But in De Bruijn,
+    // index 0 is the most recently bound variable (the last one collected).
+    // So we reverse the list to match the type-checker's context ordering.
     const patternVars = patterns.flatMap(p => this.collectPatternVars(p));
-    const rhsCtx = patternVars;
+    const rhsCtx = [...patternVars].reverse();
 
     // Track source positions with path value.clauses[0].rhs
     // (We use index 0 here, but it will be adjusted during merging if needed)
-    const rhsPath: IndexPath = [
+    const clausePath: IndexPath = [
       { kind: 'field', name: 'value' },
       { kind: 'field', name: 'clauses' },
-      { kind: 'array', index: 0 },
-      { kind: 'field', name: 'rhs' }
+      { kind: 'array', index: 0 }
     ];
+    const rhsPath: IndexPath = [...clausePath, { kind: 'field', name: 'rhs' }];
+
     const rhs = this.expr(0, rhsCtx, rhsPath);
+
+    // Track the clause itself in the source map (from first pattern to end of RHS)
+    const clauseEndPos = this.getPrevEndPos();
+    const clauseKey = serializeIndexPath(clausePath);
+    this.currentSourceMap.set(clauseKey, createSourceRange(clauseStartPos, clauseEndPos));
 
     // Create a Match expression as a placeholder
     // This will be merged with other clauses and wrapped in lambdas later
@@ -1670,17 +1682,44 @@ export class Parser {
   }
 
   /**
-   * Collect all variable names bound by a pattern (in left-to-right, depth-first order)
+   * Collect all variable names bound by a pattern (in left-to-right, depth-first order).
+   *
+   * IMPORTANT: Wildcards also bind a variable named '_' to match the type-checker's
+   * behavior. This ensures De Bruijn indices in the RHS correctly reference pattern
+   * positions, even when wildcards are present.
+   *
+   * For example, in `head _ default (Nil _) = default`:
+   * - Pattern 1: `_` → binds `_`
+   * - Pattern 2: `default` → binds `default`
+   * - Pattern 3: `(Nil _)` → the inner `_` binds `_`
+   * So the context is ['_', 'default', '_'], and `default` in the RHS is Var(1).
    */
   private collectPatternVars(pattern: TPattern): string[] {
     switch (pattern.tag) {
       case 'PVar':
         return [pattern.name];
       case 'PCtor':
-        // Collect from all arguments, left to right
+        // For no-arg patterns that might be type variables (uppercase single letters
+        // like A, B, T), we need to bind them. But for actual constructors like Zero,
+        // we shouldn't bind them.
+        //
+        // Heuristic: single uppercase letters are likely type variables.
+        // Multi-character uppercase names are likely constructors.
+        // This isn't perfect but handles common cases.
+        if (pattern.args.length === 0) {
+          const name = pattern.name;
+          const isSingleUppercase = name.length === 1 && name === name.toUpperCase();
+          if (isSingleUppercase) {
+            return [name];
+          }
+          // Multi-character or lowercase: don't bind (it's a constructor)
+          return [];
+        }
+        // For constructors with arguments, collect from all arguments left to right
         return pattern.args.flatMap(arg => this.collectPatternVars(arg));
       case 'PWild':
-        return [];
+        // Wildcards bind a variable named '_' for De Bruijn index consistency
+        return ['_'];
     }
   }
 

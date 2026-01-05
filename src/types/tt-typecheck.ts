@@ -31,6 +31,7 @@ import {
   prettyPrint,
 } from './tt-kernel';
 import { IndexPath } from './source-position';
+import { inferMatchType, checkFunctionClauses } from './tt-pattern-match';
 
 // ============================================================================
 // Type Checking Errors
@@ -554,11 +555,7 @@ export function inferType(
     }
 
     case 'Match': {
-      // TODO: Implement proper pattern matching type checking
-      // For now, just return a placeholder type
-      // This would need to check that all clauses have the same return type
-      // and that the patterns cover all constructors of the scrutinee's type
-      throw new Error('Pattern matching type inference not yet implemented');
+      return inferMatchType(term.scrutinee, term.clauses, ctx, undefined, path);
     }
   }
 }
@@ -590,8 +587,15 @@ export function checkType(
   // Special case: Lambda can be checked against Pi type
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
     expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
-    // Check that domains match
-    if (!convertible(term.domain, expectedType.domain, ctx)) {
+    // Determine the domain to use for checking
+    // If the lambda's domain is a hole (unspecified), use the expected domain
+    // This is standard bidirectional type checking: \x => body checked against (x:A) -> B
+    // uses A as x's type even when the lambda doesn't annotate it
+    const domainIsHole = term.domain.tag === 'Hole';
+    const effectiveDomain = domainIsHole ? expectedType.domain : term.domain;
+
+    // If domain is specified, check that it matches expected
+    if (!domainIsHole && !convertible(term.domain, expectedType.domain, ctx)) {
       throw new TypeCheckError(
         `Lambda domain mismatch.\n  Expected: ${prettyPrint(expectedType.domain)}\n  Got: ${prettyPrint(term.domain)}`,
         term,
@@ -600,9 +604,22 @@ export function checkType(
       );
     }
 
-    // Check body against Pi's body
-    const extCtx = extendContext(ctx, term.name, term.domain);
+    // Check body against Pi's body, using the effective domain for context extension
+    const extCtx = extendContext(ctx, term.name, effectiveDomain);
     checkType(term.body, expectedType.body, extCtx, path);
+    return;
+  }
+
+  // Special case: Match expression with placeholder scrutinee being checked against function type
+  // This handles function definitions by pattern matching like:
+  //   plus : Nat -> Nat -> Nat
+  //   plus Zero b = b
+  //   plus (Succ a) b = Succ (plus a b)
+  if (term.tag === 'Match' &&
+    term.scrutinee.tag === 'Hole' &&
+    term.scrutinee.id === '_scrutinee') {
+    // This is a function definition by pattern matching
+    checkFunctionClauses(expectedType, term.clauses, ctx, path);
     return;
   }
 

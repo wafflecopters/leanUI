@@ -35,10 +35,19 @@ export interface CheckError {
 
 /**
  * Result of a type checking operation.
+ *
+ * For declarations with both type and value:
+ * - success: true means both type and value checked
+ * - success: false with validType means type checked but value failed
+ * - success: false without validType means type itself failed
+ *
+ * This distinction matters because even when a value fails to type-check
+ * (e.g., pattern matching not yet implemented), the TYPE signature may be
+ * perfectly valid. Other declarations should be able to reference that type.
  */
 export type CheckResult<T = void> =
   | { success: true; value: T }
-  | { success: false; errors: CheckError[] };
+  | { success: false; errors: CheckError[]; validType?: T };
 
 // ============================================================================
 // Inductive Type Checking
@@ -215,31 +224,61 @@ export function checkTermDeclaration(
 
   // Case 3: Both type and value
   if (declaredType && value) {
+    // PHASE 1: Check that the declared type is well-formed
+    let typeIsValid = false;
     try {
-      // First check type is well-formed
       inferType(declaredType, ctx);
-
-      // Then check value has the declared type
-      checkType(value, declaredType, ctx);
-
-      return { success: true, value: declaredType };
+      typeIsValid = true;
     } catch (e) {
       if (e instanceof TypeCheckError) {
         errors.push({
-          message: `Type check failed for '${name}': ${e.message}`,
+          message: `Type signature for '${name}' is invalid: ${e.message}`,
           path: e.termPath || [],
           term: e.term,
           context: e.context
         });
       } else if (e instanceof Error) {
-        // Generic error (e.g., "Pattern matching not yet implemented")
         errors.push({
-          message: `Type check failed for '${name}': ${e.message}`,
+          message: `Type signature for '${name}' is invalid: ${e.message}`,
           path: []
         });
       }
-      return { success: false, errors };
     }
+
+    // PHASE 2: Check that the value has the declared type
+    // Only do this if the type itself is valid
+    if (typeIsValid) {
+      try {
+        // For recursive functions, we need the function itself in scope when checking
+        // the body. This allows recursive calls like `plus a b` in `plus (Succ a) b = Succ (plus a b)`.
+        const ctxWithSelf: TTKContext = [{ name, type: declaredType }, ...ctx];
+        // Pass the 'value' path so errors can be traced back to source positions
+        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+        checkType(value, declaredType, ctxWithSelf, valuePath);
+        // Both passed!
+        return { success: true, value: declaredType };
+      } catch (e) {
+        if (e instanceof TypeCheckError) {
+          errors.push({
+            message: `Value for '${name}' has wrong type: ${e.message}`,
+            path: e.termPath || [{ kind: 'field', name: 'value' }],
+            term: e.term,
+            context: e.context
+          });
+        } else if (e instanceof Error) {
+          // Generic error (e.g., "Pattern matching not yet implemented")
+          errors.push({
+            message: `Cannot check value for '${name}': ${e.message}`,
+            path: []
+          });
+        }
+        // Type is valid but value failed - return validType so it can be used by later decls
+        return { success: false, errors, validType: declaredType };
+      }
+    }
+
+    // Type itself failed - no validType to provide
+    return { success: false, errors };
   }
 
   // Case 4: Neither (shouldn't happen in well-formed input)

@@ -304,7 +304,10 @@ inductive Equal : (A: Type) -> A -> A -> Type where
   refl : (A : Type) -> (x : A) -> Equal A x x
 
 swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
-swap a = \\f => \\x y => f y x
+swap A = \\f => \\(x: A) (y: A) => f y x
+
+swap_ : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap_ a = \\f => \\x y => f y x
 
 swap' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
 swap' a f = \\x y => f y x

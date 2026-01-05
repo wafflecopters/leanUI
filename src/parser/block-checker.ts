@@ -277,12 +277,14 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       try {
         // Elaborate type if present
         if (decl.type) {
-          kernelType = elabToKernelWithMap(decl.type, elabMap);
+          const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+          kernelType = elabToKernelWithMap(decl.type, elabMap, typePath, typePath);
         }
 
         // Elaborate value if present
         if (decl.value) {
-          kernelValue = elabToKernelWithMap(decl.value, elabMap);
+          const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+          kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath);
         }
 
         // Elaborate constructors if present (inductive)
@@ -399,9 +401,14 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         checkErrors: result.success ? [] : result.errors
       });
 
-      // If successful and has a name, add to global context
-      if (result.success && decl.name && result.value) {
-        globalContext = [{ name: decl.name, type: result.value }, ...globalContext];
+      // Add to global context if we have a valid type.
+      // This includes BOTH successful checks AND cases where the type signature
+      // is valid but the value failed (e.g., pattern matching not implemented).
+      // This allows later declarations to reference the type even if the value
+      // has issues.
+      const typeToAdd = result.success ? result.value : result.validType;
+      if (decl.name && typeToAdd) {
+        globalContext = [{ name: decl.name, type: typeToAdd }, ...globalContext];
       }
     }
   }

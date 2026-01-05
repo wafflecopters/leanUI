@@ -8,7 +8,8 @@
       "DOM.Iterable"
     ],
     "types": [
-      "bun-types"
+      "bun-types",
+      "vitest/globals"
     ],
     "module": "ESNext",
     "skipLibCheck": true,
