@@ -7,42 +7,23 @@
  * IMPORTANT: This operates on TTKTerm (kernel terms), not TTerm (surface terms).
  * All verification passes should happen in the kernel layer.
  *
- * ## What is Structural Recursion?
+ * ## The Algorithm (based on Coq's guard condition and Abel's foetus)
  *
- * A recursive call is **structurally recursive** if it recurses on a strict subterm
- * of a pattern-matched constructor argument. This guarantees termination because:
- * - Each recursive call operates on a structurally smaller value
- * - Inductive types are well-founded (no infinite descending chains)
+ * 1. When we pattern match on variable `x` with pattern `C(y₁, ..., yₙ)`,
+ *    each `yᵢ` becomes **structurally smaller** than `x`.
  *
- * ## Safe Structural Recursion
+ * 2. A recursive call is **safe** if at least one argument position contains
+ *    a term that is **structurally smaller** than the corresponding original
+ *    pattern-matched variable.
  *
- * Safe recursion occurs when:
- * 1. The recursive call is inside a pattern match
- * 2. The recursive argument is a variable bound by a constructor pattern
- * 3. That variable came from deconstructing the original argument
+ * 3. "Structurally smaller" is defined inductively:
+ *    - A variable bound by a constructor pattern is structurally smaller
+ *    - If `t` is structurally smaller, then `(t u)` and `λ_.t` are too
  *
- * Example (safe):
- * ```
- * plus : Nat → Nat → Nat
- * | zero,   b => b
- * | succ a, b => succ (plus a b)  -- ✓ Safe: 'a' is structurally smaller than 'succ a'
- * ```
- *
- * ## Unsafe Recursion
- *
- * Unsafe recursion includes:
- * 1. **General recursion**: Recursion not on pattern-bound variables
- * 2. **Non-decreasing recursion**: Recursion on the same or larger argument
- * 3. **Nested recursion**: Recursion where result is used in recursive call
- * 4. **Mutual recursion**: Not directly on a deconstructed argument
- *
- * Example (unsafe):
- * ```
- * bad : Nat → Nat
- * | n => bad n           -- ✗ Unsafe: same argument (infinite loop)
- * | n => bad (succ n)    -- ✗ Unsafe: larger argument (infinite loop)
- * | n => bad (bad n)     -- ✗ Unsafe: nested recursion
- * ```
+ * ## References
+ * - Coq Reference Manual: Guard Condition (rocq-prover.org)
+ * - Abel, A. "foetus - Termination Checker for Simple Functional Programs"
+ * - Agda Documentation: Termination Checking
  */
 
 import { TTKTerm, TTKClause } from './tt-kernel';
@@ -76,12 +57,18 @@ export interface RecursionAnalysis {
 }
 
 /**
+ * Tracks which variables are structurally smaller than the original scrutinee.
+ * Key: De Bruijn index of a variable that is structurally smaller
+ * Value: true (just using as a set)
+ */
+type StructurallySmaller = Set<number>;
+
+/**
  * Context for tracking pattern-bound variables during traversal.
- * Maps variable De Bruijn indices to whether they're from pattern matching.
  */
 interface RecursionContext {
-  /** Variables bound by pattern matching (structurally smaller) */
-  patternBoundVars: Set<number>;
+  /** Variables that are structurally smaller than the original argument */
+  structurallySmaller: StructurallySmaller;
   /** The name of the function being defined (to detect self-calls) */
   functionName: string;
   /** Current depth (number of binders traversed) */
@@ -103,7 +90,7 @@ export function analyzeRecursionTTK(
   const unsafe: UnsafeRecursion[] = [];
 
   const context: RecursionContext = {
-    patternBoundVars: new Set(),
+    structurallySmaller: new Set(),
     functionName,
     depth: 0,
   };
@@ -151,7 +138,7 @@ function analyzeRecursionHelper(
         // This is a self-reference, but not applied - potentially unsafe
         unsafe.push({
           termPath: currentPath,
-          error: `Direct reference to '${context.functionName}' without application (not a recursive call pattern)`,
+          error: `Direct reference to '${context.functionName}' without application`,
         });
       }
       break;
@@ -163,21 +150,20 @@ function analyzeRecursionHelper(
       if (isRecursiveCall) {
         // Extract the arguments to check if they're structurally smaller
         const args = extractApplicationArgs(term);
-        const isSafe = checkStructuralRecursion(args, context);
+        const checkResult = checkStructuralRecursion(args, context);
 
-        if (isSafe) {
+        if (checkResult.isSafe) {
           safe.push(currentPath);
         } else {
           unsafe.push({
             termPath: currentPath,
-            error: generateUnsafeRecursionError(args, context),
+            error: checkResult.error,
           });
         }
 
         // Still traverse arguments to find any nested recursive calls
         // (e.g., f (f x) has two recursive calls)
         for (const arg of args) {
-          // Build path to argument - simplified, we traverse args but don't track exact path
           analyzeRecursionHelper(arg, [...currentPath, 'arg'], context, safe, unsafe);
         }
       } else {
@@ -211,8 +197,15 @@ function analyzeRecursionHelper(
       );
 
       // Enter body with incremented depth
-      const newContext = {
+      // Shift all structurally smaller indices up by 1 since we're going under a binder
+      const shiftedSmaller = new Set<number>();
+      for (const idx of context.structurallySmaller) {
+        shiftedSmaller.add(idx + 1);
+      }
+
+      const newContext: RecursionContext = {
         ...context,
+        structurallySmaller: shiftedSmaller,
         depth: context.depth + 1,
       };
 
@@ -247,19 +240,57 @@ function analyzeRecursionHelper(
         unsafe
       );
 
+      // Check if scrutinee is a variable - if so, pattern-bound variables are smaller
+      const scrutineeVar = getScrutineeVariable(term.scrutinee);
+
+      // Check if scrutinee is a Hole - this happens at the top level of function definitions
+      // with pattern matching (e.g., `plus Zero b = b`). In this case, the Hole represents
+      // the function arguments being matched, and constructor pattern variables ARE smaller.
+      const scrutineeIsHole = term.scrutinee.tag === 'Hole';
+
       // Analyze each clause
       for (let i = 0; i < term.clauses.length; i++) {
         const clause = term.clauses[i];
         const clausePath: TermPath = [...currentPath, 'clauses', i];
 
-        // Extract pattern-bound variables
-        const patternVars = extractPatternVariables(clause.patterns, context.depth);
+        // Count how many variables are bound by all patterns
+        const numPatternVars = countPatternVariables(clause.patterns);
 
-        // Create new context with pattern-bound variables
+        // Create new context with pattern-bound variables marked as structurally smaller
+        // The pattern variables get indices 0, 1, 2, ... (numPatternVars-1) in the RHS
+        // But only if we're matching on something that could decrease
+        const clauseSmaller = new Set<number>();
+
+        // Shift existing structurally smaller indices
+        for (const idx of context.structurallySmaller) {
+          clauseSmaller.add(idx + numPatternVars);
+        }
+
+        // If the scrutinee is a variable, Hole (top-level pattern match), or structurally smaller,
+        // then constructor pattern variables are structurally smaller
+        if (scrutineeVar !== undefined || scrutineeIsHole || hasStructurallySmallerScrutinee(term.scrutinee, context)) {
+          // Mark variables bound by constructor patterns as structurally smaller
+          // IMPORTANT: De Bruijn indices are assigned right-to-left, so the rightmost
+          // pattern variable gets index 0, and indices increase as we go left.
+          // We need to calculate offsets correctly.
+          //
+          // For patterns [P1, P2] where P1 binds vars at local indices 0..m-1
+          // and P2 binds vars at local indices 0..n-1:
+          // - P2's vars get De Bruijn indices 0..n-1
+          // - P1's vars get De Bruijn indices n..n+m-1
+          //
+          // Strategy: process patterns right-to-left
+          let varIndex = 0;
+          for (let patIdx = clause.patterns.length - 1; patIdx >= 0; patIdx--) {
+            const pattern = clause.patterns[patIdx];
+            varIndex = markPatternVarsAsSmaller(pattern, varIndex, clauseSmaller);
+          }
+        }
+
         const clauseContext: RecursionContext = {
           ...context,
-          patternBoundVars: new Set([...context.patternBoundVars, ...patternVars]),
-          depth: context.depth + patternVars.length,
+          structurallySmaller: clauseSmaller,
+          depth: context.depth + numPatternVars,
         };
 
         // Analyze clause RHS
@@ -301,12 +332,10 @@ function analyzeRecursionHelper(
  * Check if an application is a recursive call to the function being defined.
  */
 function isRecursiveApplication(app: TTKTerm, functionName: string): boolean {
-  // Peel off applications to get to the function
   let fn = app;
   while (fn.tag === 'App') {
     fn = fn.fn;
   }
-
   return fn.tag === 'Const' && fn.name === functionName;
 }
 
@@ -317,129 +346,203 @@ function isRecursiveApplication(app: TTKTerm, functionName: string): boolean {
 function extractApplicationArgs(app: TTKTerm): TTKTerm[] {
   const args: TTKTerm[] = [];
   let current = app;
-
   while (current.tag === 'App') {
     args.unshift(current.arg);
     current = current.fn;
   }
-
   return args;
+}
+
+/**
+ * If the term is a variable, return its index. Otherwise undefined.
+ */
+function getScrutineeVariable(term: TTKTerm): number | undefined {
+  if (term.tag === 'Var') {
+    return term.index;
+  }
+  return undefined;
+}
+
+/**
+ * Check if the scrutinee is structurally smaller than the original argument.
+ */
+function hasStructurallySmallerScrutinee(term: TTKTerm, context: RecursionContext): boolean {
+  return isStructurallySmaller(term, context);
+}
+
+/**
+ * Check if a term is structurally smaller than the original argument.
+ *
+ * A term is structurally smaller if:
+ * - It's a variable in the structurallySmaller set
+ * - It's an application (t u) where t is structurally smaller
+ * - It's a lambda where the body is structurally smaller (after shifting)
+ */
+function isStructurallySmaller(term: TTKTerm, context: RecursionContext): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return context.structurallySmaller.has(term.index);
+
+    case 'App':
+      // (t u) is structurally smaller if t is
+      return isStructurallySmaller(term.fn, context);
+
+    case 'Binder':
+      if (term.binderKind.tag === 'BLam') {
+        // λ_.t is structurally smaller if t is (with shifted indices)
+        const shiftedSmaller = new Set<number>();
+        for (const idx of context.structurallySmaller) {
+          shiftedSmaller.add(idx + 1);
+        }
+        const shiftedContext = { ...context, structurallySmaller: shiftedSmaller };
+        return isStructurallySmaller(term.body, shiftedContext);
+      }
+      return false;
+
+    default:
+      return false;
+  }
+}
+
+/**
+ * Count total variables bound by a list of patterns.
+ */
+function countPatternVariables(patterns: TPattern[]): number {
+  let count = 0;
+  for (const pattern of patterns) {
+    count += countPatternVarsHelper(pattern);
+  }
+  return count;
+}
+
+function countPatternVarsHelper(pattern: TPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+      return 1;
+    case 'PCtor':
+      let count = 0;
+      for (const arg of pattern.args) {
+        count += countPatternVarsHelper(arg);
+      }
+      return count;
+    case 'PWild':
+      return 0;
+    default:
+      const _exhaustive: never = pattern;
+      return 0;
+  }
+}
+
+/**
+ * Mark pattern variables as structurally smaller.
+ * Only variables from CONSTRUCTOR patterns are marked (not top-level variable patterns).
+ *
+ * @param pattern - The pattern to process
+ * @param startIndex - The starting De Bruijn index for variables in this pattern
+ * @param smaller - Set to add structurally smaller indices to
+ * @returns The next available index after processing this pattern
+ */
+function markPatternVarsAsSmaller(
+  pattern: TPattern,
+  startIndex: number,
+  smaller: Set<number>
+): number {
+  switch (pattern.tag) {
+    case 'PVar':
+      // A top-level variable pattern does NOT make the variable structurally smaller
+      // It's just binding the scrutinee itself
+      return startIndex + 1;
+
+    case 'PCtor':
+      // Constructor pattern: all nested variables ARE structurally smaller
+      let index = startIndex;
+      for (const arg of pattern.args) {
+        index = markCtorPatternVarsAsSmaller(arg, index, smaller);
+      }
+      return index;
+
+    case 'PWild':
+      return startIndex;
+
+    default:
+      const _exhaustive: never = pattern;
+      return startIndex;
+  }
+}
+
+/**
+ * Mark all variables in a pattern as structurally smaller.
+ * Used for variables inside constructor patterns.
+ */
+function markCtorPatternVarsAsSmaller(
+  pattern: TPattern,
+  startIndex: number,
+  smaller: Set<number>
+): number {
+  switch (pattern.tag) {
+    case 'PVar':
+      // This variable is inside a constructor pattern, so it's structurally smaller
+      smaller.add(startIndex);
+      return startIndex + 1;
+
+    case 'PCtor':
+      let index = startIndex;
+      for (const arg of pattern.args) {
+        index = markCtorPatternVarsAsSmaller(arg, index, smaller);
+      }
+      return index;
+
+    case 'PWild':
+      return startIndex;
+
+    default:
+      const _exhaustive: never = pattern;
+      return startIndex;
+  }
 }
 
 /**
  * Check if a recursive call is structurally recursive.
  *
- * A call is safe if:
- * 1. ALL arguments are simple variables (not complex expressions)
- * 2. AT LEAST ONE argument is a pattern-bound variable (structurally smaller)
- *
- * This is a conservative check - it rejects some safe programs, but never
- * accepts an unsafe one.
+ * A call is safe if at least one argument is structurally smaller than
+ * the corresponding parameter.
  */
 function checkStructuralRecursion(
   args: TTKTerm[],
   context: RecursionContext
-): boolean {
-  let hasPatternBoundArg = false;
-
-  for (const arg of args) {
-    // All arguments must be simple variables
-    if (arg.tag !== 'Var') {
-      return false;  // Complex expression - not safe
-    }
-
-    // Check if this variable is pattern-bound
-    if (context.patternBoundVars.has(arg.index)) {
-      hasPatternBoundArg = true;
+): { isSafe: boolean; error: string } {
+  // Check if any argument is structurally smaller
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (isStructurallySmaller(arg, context)) {
+      return { isSafe: true, error: '' };
     }
   }
 
-  // Must have at least one pattern-bound argument
-  return hasPatternBoundArg;
-}
-
-/**
- * Extract variables bound by patterns.
- * Returns the De Bruijn indices of variables bound by the patterns.
- */
-function extractPatternVariables(
-  patterns: TPattern[],
-  currentDepth: number
-): number[] {
-  const vars: number[] = [];
-
-  for (const pattern of patterns) {
-    extractPatternVarsHelper(pattern, vars, currentDepth);
+  // No structurally smaller argument found
+  // Generate a helpful error message
+  if (context.structurallySmaller.size === 0) {
+    return {
+      isSafe: false,
+      error: 'Recursive call outside of pattern matching context (no structurally smaller variables available)',
+    };
   }
 
-  return vars;
-}
-
-/**
- * Helper to extract variables from a pattern recursively.
- */
-function extractPatternVarsHelper(
-  pattern: TPattern,
-  vars: number[],
-  currentDepth: number
-): void {
-  switch (pattern.tag) {
-    case 'PVar':
-      // This pattern binds a variable at the current depth
-      vars.push(currentDepth + vars.length);
-      break;
-
-    case 'PCtor':
-      // Constructor pattern may bind variables in its arguments
-      for (const arg of pattern.args) {
-        extractPatternVarsHelper(arg, vars, currentDepth);
+  // Check what's wrong with each argument
+  const argDescriptions: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.tag === 'Var') {
+      if (!context.structurallySmaller.has(arg.index)) {
+        argDescriptions.push(`argument ${i + 1} is not structurally smaller than the pattern`);
       }
-      break;
-
-    case 'PWild':
-      // Wildcard doesn't bind
-      break;
-
-    default:
-      const _exhaustive: never = pattern;
-      break;
-  }
-}
-
-/**
- * Generate a helpful error message for unsafe recursion.
- */
-function generateUnsafeRecursionError(
-  args: TTKTerm[],
-  context: RecursionContext
-): string {
-  // Check what kind of unsafe recursion this is
-  const reasons: string[] = [];
-
-  // Check if any argument is not a variable
-  const nonVarArgs = args.filter((arg) => arg.tag !== 'Var');
-  if (nonVarArgs.length > 0) {
-    reasons.push('recursive call uses complex expressions (not simple variables)');
+    } else {
+      argDescriptions.push(`argument ${i + 1} is not a subterm of the pattern-matched variable`);
+    }
   }
 
-  // Check if arguments are non-pattern-bound variables
-  const varArgs = args.filter((arg) => arg.tag === 'Var');
-  const nonPatternVars = varArgs.filter(
-    (arg) => arg.tag === 'Var' && !context.patternBoundVars.has(arg.index)
-  );
-
-  if (nonPatternVars.length > 0) {
-    reasons.push('recursive call does not use pattern-matched variables');
-  }
-
-  // Check if we're not inside a pattern match at all
-  if (context.patternBoundVars.size === 0) {
-    reasons.push('recursive call outside of pattern matching context');
-  }
-
-  if (reasons.length === 0) {
-    return `Potentially unsafe recursion (unable to verify structural recursion)`;
-  }
-
-  return `Unsafe recursion: ${reasons.join('; ')}`;
+  return {
+    isSafe: false,
+    error: `Recursive call does not decrease structurally: ${argDescriptions.join('; ')}`,
+  };
 }

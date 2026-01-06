@@ -94,6 +94,8 @@ export interface TotalityAnalysis {
 interface ClauseRow {
   /** Remaining patterns (one per remaining argument position) */
   patterns: TPattern[];
+  /** Remaining argument types (aligned with patterns) */
+  argTypes: ArgTypeInfo[];
   /** Original clause index */
   clauseIndex: number;
 }
@@ -120,12 +122,14 @@ interface ArgTypeInfo {
  * @param clauses - The pattern matching clauses
  * @param argTypes - Types of each argument position
  * @param ctx - Typing context (contains constructor information)
+ * @param excludeNames - Names to exclude from constructor lookup (e.g., the function being checked)
  * @returns Analysis result with exhaustiveness status and missing cases
  */
 export function analyzeTotality(
   clauses: TTKClause[],
   argTypes: TTKTerm[],
-  ctx: TTKContext
+  ctx: TTKContext,
+  excludeNames: Set<string> = new Set()
 ): TotalityAnalysis {
   if (clauses.length === 0) {
     // No clauses means completely missing coverage
@@ -146,16 +150,18 @@ export function analyzeTotality(
   }
 
   // Build type info for each argument position
-  const argTypeInfos = argTypes.map(type => getArgTypeInfo(type, ctx));
+  const argTypeInfos = argTypes.map(type => getArgTypeInfo(type, ctx, excludeNames));
 
   // Convert clauses to internal row representation
+  // Each row carries its own copy of argTypeInfos (they may diverge during specialization)
   const rows: ClauseRow[] = clauses.map((clause, index) => ({
     patterns: clause.patterns,
+    argTypes: argTypeInfos,
     clauseIndex: index
   }));
 
   // Build the splitting tree
-  const splitTree = buildSplitTree(rows, argTypeInfos, 0, []);
+  const splitTree = buildSplitTree(rows, ctx, excludeNames, []);
 
   // Find all missing cases
   const missingCases = findMissingCases(splitTree);
@@ -173,8 +179,16 @@ export function analyzeTotality(
 
 /**
  * Extract type information for an argument position.
+ *
+ * @param type - The type of the argument
+ * @param ctx - The typing context
+ * @param excludeNames - Names to exclude from constructor lookup
  */
-function getArgTypeInfo(type: TTKTerm, ctx: TTKContext): ArgTypeInfo {
+function getArgTypeInfo(
+  type: TTKTerm,
+  ctx: TTKContext,
+  excludeNames: Set<string> = new Set()
+): ArgTypeInfo {
   const typeName = getHeadConstName(type);
 
   if (!typeName) {
@@ -187,7 +201,7 @@ function getArgTypeInfo(type: TTKTerm, ctx: TTKContext): ArgTypeInfo {
   }
 
   // Find all constructors for this type
-  const constructors = getConstructorsForType(typeName, ctx);
+  const constructors = getConstructorsForType(typeName, ctx, excludeNames);
   const constructorArities = new Map<string, number>();
 
   for (const ctorName of constructors) {
@@ -233,11 +247,24 @@ function getReturnType(type: TTKTerm): TTKTerm {
 /**
  * Find all constructors for a given inductive type by scanning the context.
  * A binding is a constructor for type T if its return type has T as the head.
+ *
+ * @param typeName - The name of the inductive type
+ * @param ctx - The typing context
+ * @param excludeNames - Names to exclude (e.g., the function being type-checked)
  */
-export function getConstructorsForType(typeName: string, ctx: TTKContext): string[] {
+export function getConstructorsForType(
+  typeName: string,
+  ctx: TTKContext,
+  excludeNames: Set<string> = new Set()
+): string[] {
   const constructors: string[] = [];
 
   for (const binding of ctx) {
+    // Skip excluded names (e.g., the function being type-checked for recursion)
+    if (excludeNames.has(binding.name)) {
+      continue;
+    }
+
     const returnType = getReturnType(binding.type);
     const headName = getHeadConstName(returnType);
     if (headName === typeName) {
@@ -282,15 +309,18 @@ function countCtorArgs(ctorType: TTKTerm, _inductiveName: string): number {
 /**
  * Build the splitting tree recursively.
  *
- * @param rows - Remaining clause rows to process
- * @param argTypeInfos - Type info for each argument position
- * @param currentArg - Current argument position being processed
+ * The algorithm processes patterns left-to-right. Each row carries its own
+ * argTypes array which is updated as patterns are decomposed.
+ *
+ * @param rows - Remaining clause rows to process (each with patterns and argTypes)
+ * @param ctx - Typing context for looking up constructor types
+ * @param excludeNames - Names to exclude from constructor lookup
  * @param currentPath - Path of constructor names to this point
  */
 function buildSplitTree(
   rows: ClauseRow[],
-  argTypeInfos: ArgTypeInfo[],
-  currentArg: number,
+  ctx: TTKContext,
+  excludeNames: Set<string>,
   currentPath: string[]
 ): SplitTree {
   // Base case: no rows means uncovered
@@ -298,32 +328,46 @@ function buildSplitTree(
     return { tag: 'Missing', path: currentPath };
   }
 
-  // Base case: no more arguments to match
-  if (currentArg >= argTypeInfos.length) {
+  // Base case: no more patterns to match in first row
+  if (rows[0].patterns.length === 0) {
     // First clause covers this case
     return { tag: 'Leaf', clauseIndex: rows[0].clauseIndex };
   }
 
+  // Always work with position 0 in the current patterns
+  const patternIndex = 0;
+
   // Check if first row has a wildcard/var at current position - it covers all
-  const firstPattern = rows[0].patterns[currentArg];
+  const firstPattern = rows[0].patterns[patternIndex];
   if (firstPattern && (firstPattern.tag === 'PWild' || firstPattern.tag === 'PVar')) {
     // Check if ALL patterns at this position are wildcards/vars
     const allWildcards = rows.every(row => {
-      const pat = row.patterns[currentArg];
+      const pat = row.patterns[patternIndex];
       return pat && (pat.tag === 'PWild' || pat.tag === 'PVar');
     });
 
     if (allWildcards) {
-      // Skip this argument position and continue
-      return buildSplitTree(rows, argTypeInfos, currentArg + 1, currentPath);
+      // Remove the first pattern and argType from all rows and continue
+      const advancedRows = rows.map(row => ({
+        ...row,
+        patterns: row.patterns.slice(1),
+        argTypes: row.argTypes.slice(1)
+      }));
+      return buildSplitTree(advancedRows, ctx, excludeNames, currentPath);
     }
   }
 
-  const typeInfo = argTypeInfos[currentArg];
+  // Get type info from first row (all rows should have same type at position 0)
+  const typeInfo = rows[0].argTypes[0];
 
-  // If no constructors (non-inductive type), move to next argument
-  if (typeInfo.constructors.length === 0) {
-    return buildSplitTree(rows, argTypeInfos, currentArg + 1, currentPath);
+  // If no constructors (non-inductive type), skip this position
+  if (!typeInfo || typeInfo.constructors.length === 0) {
+    const advancedRows = rows.map(row => ({
+      ...row,
+      patterns: row.patterns.slice(1),
+      argTypes: row.argTypes.slice(1)
+    }));
+    return buildSplitTree(advancedRows, ctx, excludeNames, currentPath);
   }
 
   // Build branches for each constructor
@@ -331,41 +375,40 @@ function buildSplitTree(
 
   // Collect rows that have wildcards/vars at this position (they match all constructors)
   const wildcardRows = rows.filter(row => {
-    const pat = row.patterns[currentArg];
+    const pat = row.patterns[patternIndex];
     return pat && (pat.tag === 'PWild' || pat.tag === 'PVar');
   });
 
   for (const ctorName of typeInfo.constructors) {
-    const ctorArity = typeInfo.constructorArities.get(ctorName) || 0;
-
-    // Specialize rows for this constructor
-    const specializedRows = specializeRows(rows, currentArg, ctorName, ctorArity);
+    // Specialize rows for this constructor, including updating argTypes
+    const specializedRows = specializeRowsWithTypes(rows, patternIndex, ctorName, ctx, excludeNames);
 
     // Build subtree for this constructor branch
     const subtree = buildSplitTree(
       specializedRows,
-      argTypeInfos,
-      currentArg + 1,
+      ctx,
+      excludeNames,
       [...currentPath, ctorName]
     );
 
     branches.set(ctorName, subtree);
   }
 
-  // Build default branch if there are wildcard rows and some constructor is unmatched
+  // Build default branch if there are wildcard rows
   let defaultBranch: SplitTree | undefined;
   if (wildcardRows.length > 0) {
-    // Wildcards advance to next argument without decomposition
+    // Remove the first pattern and argType from wildcard rows and continue
     const defaultRows = wildcardRows.map(row => ({
       ...row,
-      patterns: [...row.patterns] // Keep patterns as-is
+      patterns: row.patterns.slice(1),
+      argTypes: row.argTypes.slice(1)
     }));
-    defaultBranch = buildSplitTree(defaultRows, argTypeInfos, currentArg + 1, [...currentPath, '_']);
+    defaultBranch = buildSplitTree(defaultRows, ctx, excludeNames, [...currentPath, '_']);
   }
 
   return {
     tag: 'Split',
-    argIndex: currentArg,
+    argIndex: currentPath.length,  // Use path length as a proxy for argument depth
     branches,
     defaultBranch
   };
@@ -427,6 +470,91 @@ function specializeRows(
   return result;
 }
 
+/**
+ * Specialize rows for a specific constructor, also updating argTypes.
+ *
+ * This wraps specializeRows and additionally updates the argTypes array
+ * to reflect the decomposed constructor arguments with their proper types.
+ */
+function specializeRowsWithTypes(
+  rows: ClauseRow[],
+  argIndex: number,
+  ctorName: string,
+  ctx: TTKContext,
+  excludeNames: Set<string>
+): ClauseRow[] {
+  // Get constructor arity from the first row's type info
+  const typeInfo = rows[0]?.argTypes[argIndex];
+  const ctorArity = typeInfo?.constructorArities.get(ctorName) ?? 0;
+
+  // Look up the constructor type to get proper argument types
+  const ctorType = lookupTypeByName(ctx, ctorName);
+  const ctorArgTypeInfos = ctorType
+    ? extractCtorArgTypeInfos(ctorType, ctx, excludeNames)
+    : Array(ctorArity).fill({
+        typeName: null,
+        constructors: [],
+        constructorArities: new Map()
+      });
+
+  // Use base specializeRows for pattern handling
+  const specializedPatterns = specializeRows(rows, argIndex, ctorName, ctorArity);
+
+  // Now we need to update argTypes as well
+  // For each specialized row, update its argTypes
+  const result: ClauseRow[] = [];
+
+  for (let i = 0; i < specializedPatterns.length; i++) {
+    const specRow = specializedPatterns[i];
+
+    // Find the original row that this came from
+    const origRow = rows.find(r => r.clauseIndex === specRow.clauseIndex);
+    if (!origRow) continue;
+
+    // Build new argTypes:
+    // - Remove the argType at argIndex
+    // - Insert the constructor's argument types
+    const newArgTypes = [
+      ...origRow.argTypes.slice(0, argIndex),
+      ...ctorArgTypeInfos,
+      ...origRow.argTypes.slice(argIndex + 1)
+    ];
+
+    result.push({
+      patterns: specRow.patterns,
+      argTypes: newArgTypes,
+      clauseIndex: specRow.clauseIndex
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Extract ArgTypeInfo for each argument of a constructor type.
+ *
+ * For `Succ : Nat -> Nat`, returns [ArgTypeInfo for Nat].
+ * For `Cons : (A : Type) -> A -> List A -> List A`,
+ * returns [ArgTypeInfo for Type, ArgTypeInfo for A, ArgTypeInfo for List A].
+ */
+function extractCtorArgTypeInfos(
+  ctorType: TTKTerm,
+  ctx: TTKContext,
+  excludeNames: Set<string>
+): ArgTypeInfo[] {
+  const argTypeInfos: ArgTypeInfo[] = [];
+  let current = ctorType;
+
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    // Get type info for this argument
+    const argTypeInfo = getArgTypeInfo(current.domain, ctx, excludeNames);
+    argTypeInfos.push(argTypeInfo);
+    current = current.body;
+  }
+
+  return argTypeInfos;
+}
+
 // ============================================================================
 // Missing Case Detection
 // ============================================================================
@@ -481,12 +609,14 @@ function collectMissingCases(
  *
  * This is the main entry point called from tt-typecheck-decl.ts.
  *
+ * @param functionName - The name of the function being defined (to exclude from constructor lookup)
  * @param functionType - The type of the function being defined
- * @param body - The body of the function (should be a Match term with clauses)
+ * @param clauses - The pattern matching clauses
  * @param ctx - Typing context
  * @returns Totality analysis result
  */
 export function checkFunctionTotality(
+  functionName: string,
   functionType: TTKTerm,
   clauses: TTKClause[],
   ctx: TTKContext
@@ -494,7 +624,11 @@ export function checkFunctionTotality(
   // Extract argument types from the function type
   const argTypes = extractArgTypes(functionType, clauses.length > 0 ? clauses[0].patterns.length : 0);
 
-  return analyzeTotality(clauses, argTypes, ctx);
+  // Exclude the function itself from constructor lookup
+  // (it's in the context for recursive calls, but it's not a constructor)
+  const excludeNames = new Set([functionName]);
+
+  return analyzeTotality(clauses, argTypes, ctx, excludeNames);
 }
 
 /**

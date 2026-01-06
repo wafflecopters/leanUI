@@ -284,7 +284,7 @@ export function checkTermDeclaration(
         // PHASE 4: Check exhaustiveness (totality) for pattern matching
         // Only check if the value is a Match expression with clauses
         if (value.tag === 'Match' && value.clauses.length > 0) {
-          const totalityAnalysis = checkFunctionTotality(declaredType, value.clauses, ctxWithSelf);
+          const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf);
           if (!totalityAnalysis.exhaustive) {
             for (const missingCase of totalityAnalysis.missingCases) {
               errors.push({

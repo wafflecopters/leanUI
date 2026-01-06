@@ -65,8 +65,8 @@ test('Detects unsafe recursion outside pattern match', () => {
   const analysis = analyzeRecursionTTK('plus', plusApp);
   assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe call');
   assertTrue(
-    analysis.unsafeRecursion[0].error.includes('complex expressions') ||
-    analysis.unsafeRecursion[0].error.includes('outside of pattern'),
+    analysis.unsafeRecursion[0].error.includes('outside of pattern') ||
+    analysis.unsafeRecursion[0].error.includes('does not decrease structurally'),
     `Error should mention issue: ${analysis.unsafeRecursion[0].error}`
   );
 });
@@ -87,7 +87,7 @@ test('Detects safe recursion inside pattern match', () => {
 
 test('Detects unsafe recursion with complex expression inside pattern match', () => {
   // match x with | Succ n => plus (Succ n) y
-  // (Succ n) is not a simple variable, so it's unsafe
+  // (Succ n) is not structurally smaller - it's equal to the original!
   const succN = mkApp(mkConst('Succ', Type0), mkVar(0));
   const plusCall = mkApp(mkApp(mkConst('plus', Type0), succN), mkVar(1));
 
@@ -99,8 +99,9 @@ test('Detects unsafe recursion with complex expression inside pattern match', ()
   assertEqual(analysis.safeRecursion.length, 0, 'Should have no safe calls');
   assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe call');
   assertTrue(
-    analysis.unsafeRecursion[0].error.includes('complex expressions'),
-    `Error should mention complex expressions: ${analysis.unsafeRecursion[0].error}`
+    analysis.unsafeRecursion[0].error.includes('does not decrease structurally') ||
+    analysis.unsafeRecursion[0].error.includes('not structurally smaller'),
+    `Error should mention structural decrease: ${analysis.unsafeRecursion[0].error}`
   );
 });
 

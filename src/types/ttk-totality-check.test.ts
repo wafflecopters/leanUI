@@ -434,4 +434,21 @@ bad (Succ Zero) = Zero
     // Missing: Succ (Succ _)
     expectTypeError(source, 'bad', 'exhaustive');
   });
+
+  test('Missing case in multi-arg Nat function', () => {
+    // This is the exact case the user reported:
+    // plus Zero b = b
+    // plus (Succ a) Zero = a
+    // Missing: plus (Succ a) (Succ b)
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) Zero = a
+`;
+    expectTypeError(source, 'plus', 'exhaustive');
+  });
 });
