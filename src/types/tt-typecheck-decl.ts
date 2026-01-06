@@ -17,7 +17,7 @@ import { inferType, checkType, TypeCheckError } from './tt-typecheck';
 import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
 import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
-import { checkFunctionTotality } from './ttk-totality-check';
+import { checkFunctionTotality, formatMissingCase } from './ttk-totality-check';
 
 // ============================================================================
 // Error Types
@@ -287,8 +287,9 @@ export function checkTermDeclaration(
           const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf);
           if (!totalityAnalysis.exhaustive) {
             for (const missingCase of totalityAnalysis.missingCases) {
+              const formattedCase = formatMissingCase(name, missingCase);
               errors.push({
-                message: `Non-exhaustive pattern match: missing case for ${missingCase.join(' ')}`,
+                message: `Non-exhaustive pattern match: missing case \`${formattedCase}\``,
                 path: [{ kind: 'field', name: 'value' }],
                 term: value,
                 context: ctxWithSelf

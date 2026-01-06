@@ -71,9 +71,19 @@ export interface LeafNode {
  */
 export interface MissingNode {
   tag: 'Missing';
-  /** Path of constructor names leading to this missing case */
+  /** Path of constructor names leading to this missing case (for debugging) */
   path: string[];
+  /** Structured missing patterns (one per original argument) */
+  patterns: MissingPattern[];
 }
+
+/**
+ * A missing pattern for one argument position.
+ * Either a wildcard or a constructor with nested patterns.
+ */
+export type MissingPattern =
+  | { tag: 'MWild' }
+  | { tag: 'MCtor'; name: string; args: MissingPattern[] };
 
 /**
  * Result of totality analysis.
@@ -81,8 +91,8 @@ export interface MissingNode {
 export interface TotalityAnalysis {
   /** Whether the pattern matching is exhaustive */
   exhaustive: boolean;
-  /** List of missing cases (paths of constructor names) */
-  missingCases: string[][];
+  /** List of missing cases as structured patterns */
+  missingCases: MissingPattern[][];
   /** The splitting tree (for debugging/visualization) */
   splitTree: SplitTree;
 }
@@ -98,6 +108,39 @@ interface ClauseRow {
   argTypes: ArgTypeInfo[];
   /** Original clause index */
   clauseIndex: number;
+}
+
+/**
+ * Tracks the pattern being built for each original argument.
+ *
+ * As we traverse the tree, we commit to constructor choices. When a slot is
+ * consumed (either by matching a constructor or by a wildcard), we record what
+ * was matched.
+ *
+ * This is a mutable structure that gets cloned when branching.
+ */
+interface PatternBuildState {
+  /** Pattern being built for each original argument */
+  patterns: MutablePattern[];
+}
+
+/**
+ * A mutable pattern node that can be filled in as we traverse.
+ * Starts as a "hole" and gets filled with either a wildcard or constructor.
+ */
+type MutablePattern =
+  | { tag: 'Hole' }  // Not yet determined
+  | { tag: 'MWild' }  // Committed to wildcard
+  | { tag: 'MCtor'; name: string; args: MutablePattern[] };  // Committed to constructor
+
+/**
+ * Maps current pattern positions to where they should write in the pattern state.
+ */
+interface SlotRef {
+  /** Which original argument this slot writes to */
+  argIndex: number;
+  /** Path to the MutablePattern node to fill (indices into args arrays) */
+  nodePath: number[];
 }
 
 /**
@@ -133,10 +176,12 @@ export function analyzeTotality(
 ): TotalityAnalysis {
   if (clauses.length === 0) {
     // No clauses means completely missing coverage
+    // Create wildcards for each argument
+    const wildcardPatterns: MissingPattern[] = argTypes.map(() => ({ tag: 'MWild' as const }));
     return {
       exhaustive: false,
-      missingCases: [['<all cases>']],
-      splitTree: { tag: 'Missing', path: [] }
+      missingCases: [wildcardPatterns],
+      splitTree: { tag: 'Missing', path: [], patterns: wildcardPatterns }
     };
   }
 
@@ -160,8 +205,17 @@ export function analyzeTotality(
     clauseIndex: index
   }));
 
+  // Initialize pattern state and slot refs
+  const initialState: PatternBuildState = {
+    patterns: argTypes.map(() => ({ tag: 'Hole' as const }))
+  };
+  const initialSlotRefs: SlotRef[] = argTypes.map((_, i) => ({
+    argIndex: i,
+    nodePath: []
+  }));
+
   // Build the splitting tree
-  const splitTree = buildSplitTree(rows, ctx, excludeNames, []);
+  const splitTree = buildSplitTree(rows, ctx, excludeNames, [], initialSlotRefs, initialState);
 
   // Find all missing cases
   const missingCases = findMissingCases(splitTree);
@@ -303,6 +357,93 @@ function countCtorArgs(ctorType: TTKTerm, _inductiveName: string): number {
 }
 
 // ============================================================================
+// Pattern State Manipulation
+// ============================================================================
+
+/**
+ * Deep clone a pattern state so we can modify it without affecting the original.
+ */
+function clonePatternState(state: PatternBuildState): PatternBuildState {
+  return {
+    patterns: state.patterns.map(p => cloneMutablePattern(p))
+  };
+}
+
+/**
+ * Deep clone a mutable pattern.
+ */
+function cloneMutablePattern(pattern: MutablePattern): MutablePattern {
+  switch (pattern.tag) {
+    case 'Hole':
+      return { tag: 'Hole' };
+    case 'MWild':
+      return { tag: 'MWild' };
+    case 'MCtor':
+      return {
+        tag: 'MCtor',
+        name: pattern.name,
+        args: pattern.args.map(a => cloneMutablePattern(a))
+      };
+  }
+}
+
+/**
+ * Set a pattern at the given slot reference.
+ *
+ * @param state - The pattern state to modify (mutated in place)
+ * @param slot - Where to write the pattern
+ * @param pattern - The pattern to write
+ */
+function setPatternAt(state: PatternBuildState, slot: SlotRef, pattern: MutablePattern): void {
+  if (slot.nodePath.length === 0) {
+    // Writing to a top-level argument
+    state.patterns[slot.argIndex] = pattern;
+  } else {
+    // Navigate to the nested position
+    let current = state.patterns[slot.argIndex];
+    for (let i = 0; i < slot.nodePath.length - 1; i++) {
+      if (current.tag === 'MCtor') {
+        current = current.args[slot.nodePath[i]];
+      } else {
+        // Can't navigate further - shouldn't happen with correct usage
+        return;
+      }
+    }
+    // Set the final position
+    if (current.tag === 'MCtor') {
+      const lastIndex = slot.nodePath[slot.nodePath.length - 1];
+      current.args[lastIndex] = pattern;
+    }
+  }
+}
+
+/**
+ * Convert mutable patterns to final MissingPatterns.
+ * Holes become wildcards.
+ */
+function finalizePatterns(state: PatternBuildState): MissingPattern[] {
+  return state.patterns.map(p => finalizeMutablePattern(p));
+}
+
+/**
+ * Convert a mutable pattern to a MissingPattern.
+ */
+function finalizeMutablePattern(pattern: MutablePattern): MissingPattern {
+  switch (pattern.tag) {
+    case 'Hole':
+      return { tag: 'MWild' };
+    case 'MWild':
+      return { tag: 'MWild' };
+    case 'MCtor':
+      return {
+        tag: 'MCtor',
+        name: pattern.name,
+        args: pattern.args.map(a => finalizeMutablePattern(a))
+      };
+  }
+}
+
+// ============================================================================
 // Splitting Tree Construction
 // ============================================================================
 
@@ -315,17 +456,23 @@ function countCtorArgs(ctorType: TTKTerm, _inductiveName: string): number {
  * @param rows - Remaining clause rows to process (each with patterns and argTypes)
  * @param ctx - Typing context for looking up constructor types
  * @param excludeNames - Names to exclude from constructor lookup
- * @param currentPath - Path of constructor names to this point
+ * @param currentPath - Path of constructor names to this point (for debugging)
+ * @param slotRefs - Maps each current pattern position to where it writes in patternState
+ * @param patternState - The patterns being built for each original argument
  */
 function buildSplitTree(
   rows: ClauseRow[],
   ctx: TTKContext,
   excludeNames: Set<string>,
-  currentPath: string[]
+  currentPath: string[],
+  slotRefs: SlotRef[],
+  patternState: PatternBuildState
 ): SplitTree {
   // Base case: no rows means uncovered
   if (rows.length === 0) {
-    return { tag: 'Missing', path: currentPath };
+    // Finalize the pattern state into MissingPatterns
+    const patterns = finalizePatterns(patternState);
+    return { tag: 'Missing', path: currentPath, patterns };
   }
 
   // Base case: no more patterns to match in first row
@@ -347,27 +494,38 @@ function buildSplitTree(
     });
 
     if (allWildcards) {
-      // Remove the first pattern and argType from all rows and continue
+      // Mark this slot as a wildcard in the pattern state
+      const currentSlot = slotRefs[0];
+      const newState = clonePatternState(patternState);
+      setPatternAt(newState, currentSlot, { tag: 'MWild' });
+
+      // Remove the first pattern, argType, and slot ref
       const advancedRows = rows.map(row => ({
         ...row,
         patterns: row.patterns.slice(1),
         argTypes: row.argTypes.slice(1)
       }));
-      return buildSplitTree(advancedRows, ctx, excludeNames, currentPath);
+      const advancedSlots = slotRefs.slice(1);
+      return buildSplitTree(advancedRows, ctx, excludeNames, currentPath, advancedSlots, newState);
     }
   }
 
   // Get type info from first row (all rows should have same type at position 0)
   const typeInfo = rows[0].argTypes[0];
 
-  // If no constructors (non-inductive type), skip this position
+  // If no constructors (non-inductive type), skip this position (treat as wildcard)
   if (!typeInfo || typeInfo.constructors.length === 0) {
+    const currentSlot = slotRefs[0];
+    const newState = clonePatternState(patternState);
+    setPatternAt(newState, currentSlot, { tag: 'MWild' });
+
     const advancedRows = rows.map(row => ({
       ...row,
       patterns: row.patterns.slice(1),
       argTypes: row.argTypes.slice(1)
     }));
-    return buildSplitTree(advancedRows, ctx, excludeNames, currentPath);
+    const advancedSlots = slotRefs.slice(1);
+    return buildSplitTree(advancedRows, ctx, excludeNames, currentPath, advancedSlots, newState);
   }
 
   // Build branches for each constructor
@@ -379,16 +537,44 @@ function buildSplitTree(
     return pat && (pat.tag === 'PWild' || pat.tag === 'PVar');
   });
 
+  // Get the current slot ref for position 0
+  const currentSlot = slotRefs[0];
+
   for (const ctorName of typeInfo.constructors) {
     // Specialize rows for this constructor, including updating argTypes
     const specializedRows = specializeRowsWithTypes(rows, patternIndex, ctorName, ctx, excludeNames);
+
+    // Update pattern state: write the constructor at the current slot
+    const ctorArity = typeInfo.constructorArities.get(ctorName) ?? 0;
+    const newState = clonePatternState(patternState);
+
+    // Create the constructor pattern with holes for its arguments
+    const ctorArgs: MutablePattern[] = [];
+    for (let i = 0; i < ctorArity; i++) {
+      ctorArgs.push({ tag: 'Hole' });
+    }
+    setPatternAt(newState, currentSlot, { tag: 'MCtor', name: ctorName, args: ctorArgs });
+
+    // Update slot refs: create refs for each constructor argument
+    const newSlotRefs: SlotRef[] = [];
+    for (let i = 0; i < ctorArity; i++) {
+      newSlotRefs.push({
+        argIndex: currentSlot.argIndex,
+        nodePath: [...currentSlot.nodePath, i]
+      });
+    }
+
+    // Add remaining slots (positions 1, 2, ... from original)
+    const updatedSlots = [...newSlotRefs, ...slotRefs.slice(1)];
 
     // Build subtree for this constructor branch
     const subtree = buildSplitTree(
       specializedRows,
       ctx,
       excludeNames,
-      [...currentPath, ctorName]
+      [...currentPath, ctorName],
+      updatedSlots,
+      newState
     );
 
     branches.set(ctorName, subtree);
@@ -397,13 +583,17 @@ function buildSplitTree(
   // Build default branch if there are wildcard rows
   let defaultBranch: SplitTree | undefined;
   if (wildcardRows.length > 0) {
-    // Remove the first pattern and argType from wildcard rows and continue
+    // Mark this slot as wildcard (covers all constructors in the default branch)
+    const newState = clonePatternState(patternState);
+    setPatternAt(newState, currentSlot, { tag: 'MWild' });
+
     const defaultRows = wildcardRows.map(row => ({
       ...row,
       patterns: row.patterns.slice(1),
       argTypes: row.argTypes.slice(1)
     }));
-    defaultBranch = buildSplitTree(defaultRows, ctx, excludeNames, [...currentPath, '_']);
+    const advancedSlots = slotRefs.slice(1);
+    defaultBranch = buildSplitTree(defaultRows, ctx, excludeNames, [...currentPath, '_'], advancedSlots, newState);
   }
 
   return {
@@ -415,19 +605,29 @@ function buildSplitTree(
 }
 
 /**
+ * Intermediate result from pattern specialization (before argTypes are updated).
+ */
+interface SpecializedPatternRow {
+  patterns: TPattern[];
+  clauseIndex: number;
+}
+
+/**
  * Specialize rows for a specific constructor at the given argument position.
  *
  * - Rows with PCtor matching the constructor: include, decompose ctor args
  * - Rows with PWild/PVar: include, expand with wildcards for ctor args
  * - Rows with PCtor for different constructor: exclude
+ *
+ * Returns intermediate rows without argTypes (those are added by specializeRowsWithTypes).
  */
 function specializeRows(
   rows: ClauseRow[],
   argIndex: number,
   ctorName: string,
   ctorArity: number
-): ClauseRow[] {
-  const result: ClauseRow[] = [];
+): SpecializedPatternRow[] {
+  const result: SpecializedPatternRow[] = [];
 
   for (const row of rows) {
     const pattern = row.patterns[argIndex];
@@ -561,21 +761,20 @@ function extractCtorArgTypeInfos(
 
 /**
  * Find all missing cases in a splitting tree.
- * Returns paths of constructor names leading to Missing nodes.
+ * Returns structured patterns for each missing case.
  */
-function findMissingCases(tree: SplitTree): string[][] {
-  const missing: string[][] = [];
-  collectMissingCases(tree, [], missing);
+function findMissingCases(tree: SplitTree): MissingPattern[][] {
+  const missing: MissingPattern[][] = [];
+  collectMissingCasesFromTree(tree, missing);
   return missing;
 }
 
 /**
- * Recursively collect missing cases.
+ * Recursively collect missing cases from the tree.
  */
-function collectMissingCases(
+function collectMissingCasesFromTree(
   tree: SplitTree,
-  currentPath: string[],
-  result: string[][]
+  result: MissingPattern[][]
 ): void {
   switch (tree.tag) {
     case 'Leaf':
@@ -583,18 +782,18 @@ function collectMissingCases(
       break;
 
     case 'Missing':
-      // Found an uncovered case
-      result.push(tree.path.length > 0 ? tree.path : currentPath);
+      // Found an uncovered case - use the patterns stored in the node
+      result.push(tree.patterns);
       break;
 
     case 'Split':
       // Recurse into each branch
-      for (const [ctorName, subtree] of tree.branches) {
-        collectMissingCases(subtree, [...currentPath, ctorName], result);
+      for (const [_ctorName, subtree] of tree.branches) {
+        collectMissingCasesFromTree(subtree, result);
       }
       // Also check default branch if present
       if (tree.defaultBranch) {
-        collectMissingCases(tree.defaultBranch, [...currentPath, '_'], result);
+        collectMissingCasesFromTree(tree.defaultBranch, result);
       }
       break;
   }
@@ -649,6 +848,38 @@ function extractArgTypes(type: TTKTerm, numArgs: number): TTKTerm[] {
   }
 
   return argTypes;
+}
+
+// ============================================================================
+// Formatting Utilities
+// ============================================================================
+
+/**
+ * Format a missing case as a human-readable string.
+ *
+ * @param functionName - The function name to include (e.g., "plus")
+ * @param patterns - The missing patterns for each argument
+ * @returns A string like "plus (Succ _) (Succ Zero)"
+ */
+export function formatMissingCase(functionName: string, patterns: MissingPattern[]): string {
+  const formattedPatterns = patterns.map(p => formatMissingPattern(p));
+  return `${functionName} ${formattedPatterns.join(' ')}`;
+}
+
+/**
+ * Format a single missing pattern.
+ */
+function formatMissingPattern(pattern: MissingPattern): string {
+  switch (pattern.tag) {
+    case 'MWild':
+      return '_';
+    case 'MCtor':
+      if (pattern.args.length === 0) {
+        return pattern.name;
+      }
+      const argsStr = pattern.args.map(a => formatMissingPattern(a)).join(' ');
+      return `(${pattern.name} ${argsStr})`;
+  }
 }
 
 // ============================================================================
