@@ -713,6 +713,227 @@ plus (Succ a) b = Succ (plus a b)`;
   });
 });
 
+describe('Selection range bugs - const function example', () => {
+  // BUG: When selecting a lambda like "\ A B x y => x", the type query
+  // should return the type of that lambda expression, not the entire definition.
+
+  // Helper to create value-relative source map
+  function createValueRelativeSourceMap(sourceMap: Map<string, any>): Map<string, any> {
+    const valueRelativeMap = new Map<string, any>();
+    const prefix = 'value.';
+    for (const [pathKey, range] of sourceMap) {
+      if (pathKey.startsWith(prefix)) {
+        valueRelativeMap.set(pathKey.slice(prefix.length), range);
+      } else if (pathKey === 'value') {
+        valueRelativeMap.set('', range);
+      }
+    }
+    return valueRelativeMap;
+  }
+
+  it('should show correct type when selecting the full lambda body "\\ A B x y => x"', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // Selecting "\ A B x y => x" should show type:
+    //   (A : Type) -> (B : Type) -> A -> B -> A
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock).toBeDefined();
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the lambda "\ A B x y => x" on line 2
+    const lines = sourceCode.split('\n');
+    const lambdaStart = lines[1].indexOf('\\');
+    const lambdaEnd = lines[1].length;
+
+    const selectionRange = {
+      start: { line: 2, col: lambdaStart + 1, pos: 0 },
+      end: { line: 2, col: lambdaEnd + 1, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // The lambda has the full function type with named binders
+      // Format: ((A : Type) -> (B : Type) -> A -> B -> A)
+      expect(typeStr).toContain('Type');
+      expect(typeStr).toContain('->');
+      expect(typeStr).not.toContain('?');  // No holes - types are resolved
+    }
+  });
+
+  it('should show correct type when selecting partial lambda "A B x y => x" (without backslash)', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // Selecting "A B x y => x" (excluding the backslash) - the smallest containing
+    // node is still the full lambda since there's no AST node for just "A B x y => x".
+    // The types should be resolved (no holes).
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find "A B x y => x" on line 2 (starting after the backslash)
+    const lines = sourceCode.split('\n');
+    const lambdaStart = lines[1].indexOf('\\');
+    const afterBackslash = lambdaStart + 2; // Skip "\ "
+    const lambdaEnd = lines[1].length;
+
+    const selectionRange = {
+      start: { line: 2, col: afterBackslash + 1, pos: 0 },
+      end: { line: 2, col: lambdaEnd + 1, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should NOT contain '?' (hole markers)
+      expect(typeStr).not.toContain('?');
+      // Should contain Type (the type of A and B parameters)
+      expect(typeStr).toContain('Type');
+    }
+  });
+
+  it('should show the lambda type when selecting just "y" (a binder name)', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // When selecting "y", the smallest AST node containing it is the lambda "\y => x"
+    // whose type is "B -> A". The types should be resolved from the signature.
+    //
+    // NOTE: Ideally selecting a binder name would show the variable's type (B),
+    // but this would require tracking binder name positions separately.
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the "y" parameter position on line 2
+    const lines = sourceCode.split('\n');
+    const yPos = lines[1].lastIndexOf('y');
+
+    const selectionRange = {
+      start: { line: 2, col: yPos + 1, pos: 0 },
+      end: { line: 2, col: yPos + 2, pos: 0 }  // Just 1 character
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // The smallest containing lambda is \y => x with type (B -> A)
+      expect(typeStr).not.toContain('?');  // No holes
+      expect(typeStr).toBe('(B -> A)');
+    }
+  });
+
+  it('should show x : A when selecting just "x" in the lambda body', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // Selecting the final "x" (the body of the lambda) should show:
+    //   x : A
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the final "x" at the end of line 2
+    const lines = sourceCode.split('\n');
+    const xPos = lines[1].lastIndexOf('x');
+
+    const selectionRange = {
+      start: { line: 2, col: xPos + 1, pos: 0 },
+      end: { line: 2, col: xPos + 2, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should be 'A', not '?x_type' or similar
+      expect(typeStr).not.toContain('?');
+      expect(typeStr).toBe('A');
+    }
+  });
+
+  it('should show the lambda type when selecting "A" (a binder name)', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // When selecting "A", the smallest AST node containing it is the full lambda
+    // whose type is the full function type. Types should be resolved from the signature.
+    //
+    // NOTE: Ideally selecting a binder name would show the variable's type (Type),
+    // but this would require tracking binder name positions separately.
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the "A" parameter after the backslash on line 2
+    const lines = sourceCode.split('\n');
+    const lambdaStart = lines[1].indexOf('\\');
+    const aPos = lambdaStart + 2; // "\ A" - A is at position 2 after backslash
+
+    const selectionRange = {
+      start: { line: 2, col: aPos + 1, pos: 0 },
+      end: { line: 2, col: aPos + 2, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should not contain holes - types are resolved from signature
+      expect(typeStr).not.toContain('?');
+      // The full lambda has type ((A : Type) -> (B : Type) -> A -> B -> A)
+      expect(typeStr).toContain('Type');
+      expect(typeStr).toContain('->');
+    }
+  });
+});
+
 describe('Integration tests with full parsing pipeline', () => {
   it('should parse identifier with correct source range', () => {
     // Directly test the parser's source map for identifiers in lambda bodies

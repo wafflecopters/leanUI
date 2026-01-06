@@ -17,6 +17,41 @@ import { inferType, extendContext } from './tt-typecheck';
 import { IndexPath, serializeIndexPath } from './source-position';
 
 // ============================================================================
+// Type Utilities
+// ============================================================================
+
+/**
+ * Check if a type contains any holes at the "value level".
+ * Used to determine if we should prefer an expected type over an inferred type.
+ *
+ * This checks for holes that would appear in the displayed type, NOT holes in
+ * type annotations of constants (e.g., `Nat` is represented as `Const("Nat", Hole("Nat_type"))`
+ * but we don't consider this a hole in the type - `Nat` is a concrete type).
+ */
+function typeContainsHoles(type: TTKTerm): boolean {
+  switch (type.tag) {
+    case 'Hole':
+      return true;
+    case 'Binder':
+      return typeContainsHoles(type.domain) || typeContainsHoles(type.body);
+    case 'App':
+      return typeContainsHoles(type.fn) || typeContainsHoles(type.arg);
+    case 'Annot':
+      return typeContainsHoles(type.term) || typeContainsHoles(type.type);
+    case 'Const':
+      // Don't check const.type - that's the "sort" annotation, not part of the value type
+      // e.g., Nat is Const("Nat", Hole("Nat_type")) but Nat is a concrete type
+      return false;
+    case 'Match':
+      if (typeContainsHoles(type.scrutinee)) return true;
+      return type.clauses.some(c => typeContainsHoles(c.rhs));
+    case 'Var':
+    case 'Sort':
+      return false;
+  }
+}
+
+// ============================================================================
 // Pattern Binding Helpers
 // ============================================================================
 
@@ -666,11 +701,17 @@ export function queryTypeAtPath(
     }
 
     // Now infer the type of the term we navigated to
-    // If we have an expected type and inference fails (e.g., due to hole domains),
-    // fall back to the expected type
+    // If we have an expected type, prefer it over inference when:
+    // 1. The inferred type contains holes (from unannotated binders)
+    // 2. Inference fails
     let type: TTKTerm;
     try {
       type = inferType(currentTerm, currentContext);
+      // If the inferred type contains holes and we have an expected type, use the expected type
+      // This handles cases like \x => body where x has no type annotation
+      if (currentExpectedType && typeContainsHoles(type)) {
+        type = currentExpectedType;
+      }
     } catch (inferError) {
       // If inference fails but we have an expected type, use it
       if (currentExpectedType) {

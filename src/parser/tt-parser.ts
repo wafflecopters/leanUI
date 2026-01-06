@@ -830,14 +830,16 @@ export class Parser {
     //   foo = Type   <-- this is a simple definition, not a pattern clause
     if (next.type === 'OPERATOR' && next.value === '=') {
       this.advance(); // consume '='
-      const value = this.expr(0, []);
+      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+      const value = this.expr(0, [], valuePath);
       return { kind: 'def', name, value };
     }
 
     // name := impl (definition without type annotation, using :=)
     if (next.type === 'ASSIGN') {
       this.advance(); // consume ':='
-      const value = this.expr(0, []);
+      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+      const value = this.expr(0, [], valuePath);
       return { kind: 'def', name, value };
     }
 

@@ -23,6 +23,7 @@ import { TTKTerm, TTKContext } from '../types/tt-kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { prettyPrint, TTerm } from '../types/tt-core';
+import { SplitTree } from '../types/ttk-totality-check';
 
 /**
  * Result of checking a single source block.
@@ -61,6 +62,10 @@ export interface BlockCheckResult {
   // Type query data (for hover/selection type info)
   // These are populated when parse and check succeed
   typeQueryData?: BlockTypeQueryData;
+
+  // Split tree from totality checking (for pattern match visualization)
+  // This is populated for term declarations with pattern matching
+  splitTree?: SplitTree;
 }
 
 /**
@@ -354,6 +359,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
     kernelType?: TTKTerm;
     kernelValue?: TTKTerm;
     contextAtCheck: TTKContext;
+    // Split tree from totality checking (for pattern match visualization)
+    splitTree?: SplitTree;
   }
 
   // Global context accumulates bindings from successfully checked declarations
@@ -428,7 +435,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         checkErrors: result.success ? [] : result.errors,
         kernelType,
         kernelValue,
-        contextAtCheck: globalContext
+        contextAtCheck: globalContext,
+        splitTree: result.splitTree
       });
 
       // Add to global context if we have a valid type.
@@ -566,7 +574,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       blockType,
       name,
       inductiveParams,
-      typeQueryData
+      typeQueryData,
+      splitTree: firstCheckResult?.splitTree
     };
   });
 

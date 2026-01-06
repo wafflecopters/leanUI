@@ -17,7 +17,7 @@ import { inferType, checkType, TypeCheckError } from './tt-typecheck';
 import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
 import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
-import { checkFunctionTotality, formatMissingCase } from './ttk-totality-check';
+import { checkFunctionTotality, formatMissingCase, SplitTree } from './ttk-totality-check';
 
 // ============================================================================
 // Error Types
@@ -48,8 +48,8 @@ export interface CheckError {
  * perfectly valid. Other declarations should be able to reference that type.
  */
 export type CheckResult<T = void> =
-  | { success: true; value: T }
-  | { success: false; errors: CheckError[]; validType?: T };
+  | { success: true; value: T; splitTree?: SplitTree }
+  | { success: false; errors: CheckError[]; validType?: T; splitTree?: SplitTree };
 
 // ============================================================================
 // Inductive Type Checking
@@ -283,8 +283,10 @@ export function checkTermDeclaration(
 
         // PHASE 4: Check exhaustiveness (totality) for pattern matching
         // Only check if the value is a Match expression with clauses
+        let splitTree: SplitTree | undefined;
         if (value.tag === 'Match' && value.clauses.length > 0) {
           const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf);
+          splitTree = totalityAnalysis.splitTree;
           if (!totalityAnalysis.exhaustive) {
             for (const missingCase of totalityAnalysis.missingCases) {
               const formattedCase = formatMissingCase(name, missingCase);
@@ -296,12 +298,12 @@ export function checkTermDeclaration(
               });
             }
             // Type is valid but pattern matching is non-exhaustive
-            return { success: false, errors, validType: declaredType };
+            return { success: false, errors, validType: declaredType, splitTree };
           }
         }
 
         // All checks passed!
-        return { success: true, value: declaredType };
+        return { success: true, value: declaredType, splitTree };
       } catch (e) {
         if (e instanceof TypeCheckError) {
           errors.push({

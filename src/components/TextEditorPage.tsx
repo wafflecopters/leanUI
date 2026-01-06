@@ -16,6 +16,7 @@ import { generateEliminator } from '../types/tt-eliminator';
 import { InductiveTypeDef } from '../types/tt-examples';
 import { prettyPrint } from '../types/tt-core';
 import { useSelectionTypeInfo } from '../hooks/useSelectionTypeInfo';
+import { SplitTreeViewer } from './SplitTreeViewer';
 
 // ============================================================================
 // Types
@@ -342,20 +343,18 @@ swap'' a f x = \\y => f y x
 swap''' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
 swap''' a f x y = f y x
 
-{-
 const : (A : Type) -> (B : Type) -> A -> B -> A
 const = \\ A B x y => x
 
-twice' = Nat -> Nat
+twice' : Nat -> Nat
 twice' n = plus n n
 
 twice : Nat -> Nat
 twice = \\ n => plus n n
 
-vecConcat : (A : Type) -> (a, b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat _ _ _ (VNil _) v = v
 vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
--}
 `
 
 /*
@@ -656,6 +655,14 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
             </div>
           )}
         </div>
+      )}
+
+      {/* Split Tree Viewer for pattern matching functions */}
+      {result.splitTree && (
+        <SplitTreeViewer
+          tree={result.splitTree}
+          functionName={result.name}
+        />
       )}
 
       {/* Eliminator Modal */}
