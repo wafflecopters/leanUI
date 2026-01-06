@@ -40,6 +40,17 @@ function constructorTypePath(ctorIndex: number): IndexPath {
   ];
 }
 
+/**
+ * Create a path to a constructor's name: constructors[i].name
+ */
+function constructorNamePath(ctorIndex: number): IndexPath {
+  return [
+    { kind: 'field', name: 'constructors' },
+    { kind: 'array', index: ctorIndex },
+    { kind: 'field', name: 'name' }
+  ];
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -80,6 +91,19 @@ export function checkInductiveValidity(
   indexPositions?: number[]
 ): InductiveCheckResult {
   const errors: CheckError[] = [];
+
+  // Check 0: Constructor names must start with uppercase letter
+  for (let i = 0; i < constructors.length; i++) {
+    const ctor = constructors[i];
+    if (ctor.name.length > 0 && !/^[A-Z]/.test(ctor.name)) {
+      errors.push({
+        message: `Constructor '${ctor.name}' must start with an uppercase letter`,
+        path: constructorNamePath(i),
+        term: ctor.type,
+        context: ctx
+      });
+    }
+  }
 
   // Determine the universe level of the inductive type
   const inductiveLevel = getInductiveUniverseLevel(inductiveType, ctx);

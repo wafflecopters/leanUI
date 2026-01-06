@@ -59,6 +59,8 @@ import {
   unifyTerms,
   applySubstitution,
   Substitution,
+  emptySubstitution,
+  composeSubstitutions,
 } from './tt-unify';
 import {
   IndexPath,
@@ -216,6 +218,29 @@ export interface PatternCheckResult {
   substitution: Substitution;
   /** The refined type after pattern matching (with indices substituted) */
   refinedType: TTKTerm;
+}
+
+/**
+ * Result of checking a clause, including solved/elaborated information.
+ * This is used to propagate unification results up for UI display.
+ */
+export interface ClauseCheckResult {
+  /** The return type of the RHS (with substitutions applied) */
+  returnType: TTKTerm;
+  /** Bindings introduced by patterns, with SOLVED types (substitutions applied) */
+  solvedBindings: Array<{ name: string; type: TTKTerm }>;
+  /** The full substitution accumulated from pattern matching */
+  substitution: Substitution;
+}
+
+/**
+ * Result of checking all function clauses.
+ */
+export interface FunctionClausesResult {
+  /** Per-clause elaboration results */
+  clauses: ClauseCheckResult[];
+  /** Combined substitution from all clauses */
+  substitution: Substitution;
 }
 
 /**
@@ -650,6 +675,32 @@ export function checkClause(
   ctx: TTKContext,
   clausePath: IndexPath = []
 ): TTKTerm {
+  const result = checkClauseWithResult(clause, scrutineeTypes, expectedReturnType, ctx, clausePath);
+  return result.returnType;
+}
+
+/**
+ * Check a single pattern matching clause, returning full elaboration result.
+ *
+ * This version returns the solved bindings and substitution in addition to the
+ * return type. Use this when you need access to the elaborated context (e.g.,
+ * for type queries that should show solved types).
+ *
+ * @param clause - The clause to check
+ * @param scrutineeTypes - Types of the scrutinees (one per pattern), as a telescope
+ *                         where type[i] may reference Var(j) for j < i
+ * @param expectedReturnType - Expected return type (may reference pattern positions)
+ * @param ctx - The typing context
+ * @param clausePath - Path to this clause in the source (for error reporting)
+ * @returns ClauseCheckResult with return type, solved bindings, and substitution
+ */
+export function checkClauseWithResult(
+  clause: TTKClause,
+  scrutineeTypes: TTKTerm[],
+  expectedReturnType: TTKTerm | null,
+  ctx: TTKContext,
+  clausePath: IndexPath = []
+): ClauseCheckResult {
   if (clause.patterns.length !== scrutineeTypes.length) {
     throw new TypeCheckError(
       `Clause has ${clause.patterns.length} patterns but expected ${scrutineeTypes.length}`,
@@ -705,10 +756,17 @@ export function checkClause(
     }
   }
 
+  // Apply the final substitution to all bindings to get "solved" types
+  const solvedBindings = allBindings.map(binding => ({
+    name: binding.name,
+    type: applySubstitution(currentSubst, binding.type),
+  }));
+
   // Type-check the RHS in the extended context
   // The RHS path is clausePath.rhs for error reporting
   const rhsPath = appendPath(clausePath, fieldSeg('rhs'));
 
+  let returnType: TTKTerm;
   if (expectedReturnType) {
     // The return type uses telescope-relative indices, where Var(k) refers to
     // telescope position (numPatterns - 1 - k). After binding all patterns,
@@ -728,11 +786,17 @@ export function checkClause(
     }
     refinedReturnType = applySubstitution(currentSubst, refinedReturnType);
     checkType(clause.rhs, refinedReturnType, currentCtx, rhsPath);
-    return refinedReturnType;
+    returnType = refinedReturnType;
   } else {
     // Infer the return type
-    return inferType(clause.rhs, currentCtx, rhsPath);
+    returnType = inferType(clause.rhs, currentCtx, rhsPath);
   }
+
+  return {
+    returnType,
+    solvedBindings,
+    substitution: currentSubst,
+  };
 }
 
 /**
@@ -899,6 +963,29 @@ export function checkFunctionClauses(
   ctx: TTKContext,
   valuePath: IndexPath = []
 ): void {
+  // Delegate to the result-returning version, discarding the result
+  checkFunctionClausesWithResult(functionType, clauses, ctx, valuePath);
+}
+
+/**
+ * Type-check a multi-clause function definition, returning elaboration results.
+ *
+ * This version returns the per-clause elaboration results including solved bindings
+ * and substitutions. Use this when you need access to the elaborated context for
+ * type queries or IDE features.
+ *
+ * @param functionType - The declared type of the function
+ * @param clauses - The pattern matching clauses
+ * @param ctx - The typing context (should include the function itself for recursion)
+ * @param valuePath - Path to the match expression in the source (for error reporting)
+ * @returns FunctionClausesResult with per-clause results and combined substitution
+ */
+export function checkFunctionClausesWithResult(
+  functionType: TTKTerm,
+  clauses: TTKClause[],
+  ctx: TTKContext,
+  valuePath: IndexPath = []
+): FunctionClausesResult {
   if (clauses.length === 0) {
     throw new TypeCheckError(
       'Function must have at least one clause',
@@ -946,13 +1033,27 @@ export function checkFunctionClauses(
     baseReturnType
   );
 
-  // Check each clause
+  // Check each clause and collect results
+  const clauseResults: ClauseCheckResult[] = [];
+  let combinedSubstitution: Substitution = emptySubstitution();
+
   for (let i = 0; i < clauses.length; i++) {
     const clause = clauses[i];
     const clausePath = appendPath(valuePath, fieldSeg('clauses'), arraySeg(i));
 
     try {
-      checkClause(clause, patternArgTypes, expectedReturnType, ctx, clausePath);
+      const result = checkClauseWithResult(clause, patternArgTypes, expectedReturnType, ctx, clausePath);
+      clauseResults.push(result);
+
+      // Compose substitutions from all clauses
+      // Note: In practice, each clause's substitution is independent (they're alternative branches),
+      // but we track them for potential cross-clause analysis
+      try {
+        combinedSubstitution = composeSubstitutions(combinedSubstitution, result.substitution);
+      } catch {
+        // If substitutions conflict between clauses, that's fine - they're alternatives
+        // Just keep the first one
+      }
     } catch (e) {
       if (e instanceof TypeCheckError) {
         // Preserve the original path if the error already has one
@@ -966,6 +1067,11 @@ export function checkFunctionClauses(
       throw e;
     }
   }
+
+  return {
+    clauses: clauseResults,
+    substitution: combinedSubstitution,
+  };
 }
 
 /**

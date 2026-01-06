@@ -210,6 +210,64 @@ describe('Totality Checking - Unit Tests', () => {
       const result = analyzeTotality(clauses, [], ctx);
       expect(result.exhaustive).toBe(true);
     });
+
+    test('detects inaccessible clause - duplicate pattern', () => {
+      const ctx = makeBoolContext();
+      const boolType: TTKTerm = mkConst('Bool', mkType(1));
+
+      const clauses: TTKClause[] = [
+        { patterns: [{ tag: 'PCtor', name: 'True', args: [] }], rhs: mkConst('True', boolType) },
+        { patterns: [{ tag: 'PCtor', name: 'False', args: [] }], rhs: mkConst('False', boolType) },
+        { patterns: [{ tag: 'PCtor', name: 'True', args: [] }], rhs: mkConst('False', boolType) }  // Duplicate!
+      ];
+
+      const result = analyzeTotality(clauses, [boolType], ctx);
+      expect(result.exhaustive).toBe(true);  // Still exhaustive
+      expect(result.inaccessibleClauses).toEqual([2]);  // Third clause is inaccessible
+    });
+
+    test('detects inaccessible clause - after wildcard', () => {
+      const ctx = makeBoolContext();
+      const boolType: TTKTerm = mkConst('Bool', mkType(1));
+
+      const clauses: TTKClause[] = [
+        { patterns: [{ tag: 'PWild' }], rhs: mkConst('True', boolType) },
+        { patterns: [{ tag: 'PCtor', name: 'False', args: [] }], rhs: mkConst('False', boolType) }  // Inaccessible!
+      ];
+
+      const result = analyzeTotality(clauses, [boolType], ctx);
+      expect(result.exhaustive).toBe(true);
+      expect(result.inaccessibleClauses).toEqual([1]);
+    });
+
+    test('no inaccessible clauses with disjoint patterns', () => {
+      const ctx = makeBoolContext();
+      const boolType: TTKTerm = mkConst('Bool', mkType(1));
+
+      const clauses: TTKClause[] = [
+        { patterns: [{ tag: 'PCtor', name: 'True', args: [] }], rhs: mkConst('False', boolType) },
+        { patterns: [{ tag: 'PCtor', name: 'False', args: [] }], rhs: mkConst('True', boolType) }
+      ];
+
+      const result = analyzeTotality(clauses, [boolType], ctx);
+      expect(result.exhaustive).toBe(true);
+      expect(result.inaccessibleClauses).toEqual([]);
+    });
+
+    test('no arguments - extra clauses are inaccessible', () => {
+      const ctx = makeBoolContext();
+      const boolType: TTKTerm = mkConst('Bool', mkType(1));
+
+      const clauses: TTKClause[] = [
+        { patterns: [], rhs: mkConst('True', boolType) },
+        { patterns: [], rhs: mkConst('False', boolType) },  // Inaccessible!
+        { patterns: [], rhs: mkConst('True', boolType) }    // Inaccessible!
+      ];
+
+      const result = analyzeTotality(clauses, [], ctx);
+      expect(result.exhaustive).toBe(true);
+      expect(result.inaccessibleClauses).toEqual([1, 2]);
+    });
   });
 
   describe('prettyPrintSplitTree', () => {
@@ -450,5 +508,148 @@ plus Zero b = b
 plus (Succ a) Zero = a
 `;
     expectTypeError(source, 'plus', 'exhaustive');
+  });
+});
+
+// ============================================================================
+// Inaccessible Clause Tests (Excess Patterns)
+// ============================================================================
+
+describe('Totality Checking - Inaccessible Clauses', () => {
+  test('Duplicate clause is inaccessible', () => {
+    const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+bad : Bool -> Bool
+bad True = True
+bad False = False
+bad True = False
+`;
+    // The third clause (bad True = False) is inaccessible
+    expectTypeError(source, 'bad', 'inaccessible');
+  });
+
+  test('Clause after wildcard is inaccessible', () => {
+    const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+bad : Bool -> Bool
+bad _ = True
+bad False = False
+`;
+    // The second clause (bad False = False) is inaccessible because _ already covers all
+    expectTypeError(source, 'bad', 'inaccessible');
+  });
+
+  test('Multiple inaccessible clauses', () => {
+    const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+bad : Bool -> Bool
+bad x = x
+bad True = False
+bad False = True
+`;
+    // Both second and third clauses are inaccessible
+    expectTypeError(source, 'bad', 'inaccessible');
+  });
+
+  test('Inaccessible clause in multi-arg function', () => {
+    const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+bad : Bool -> Bool -> Bool
+bad True _ = True
+bad False _ = False
+bad True True = False
+`;
+    // The third clause is inaccessible (True True already covered by True _)
+    expectTypeError(source, 'bad', 'inaccessible');
+  });
+
+  test('Inaccessible nested pattern', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+bad : Nat -> Nat
+bad Zero = Zero
+bad (Succ _) = Zero
+bad (Succ Zero) = Zero
+`;
+    // The third clause (Succ Zero) is already covered by (Succ _)
+    expectTypeError(source, 'bad', 'inaccessible');
+  });
+
+  test('No inaccessible clauses when order matters', () => {
+    // This should succeed - order matters for pattern matching
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+pred : Nat -> Nat
+pred Zero = Zero
+pred (Succ Zero) = Zero
+pred (Succ (Succ n)) = Succ n
+`;
+    expectSuccess(source);
+  });
+
+  test('No inaccessible clauses with disjoint patterns', () => {
+    const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+not : Bool -> Bool
+not True = False
+not False = True
+`;
+    expectSuccess(source);
+  });
+
+  test('Inaccessible clause with single-constructor type (Equal/Refl)', () => {
+    // When a type has only one constructor (like Equal with Refl),
+    // a wildcard after matching that constructor is inaccessible
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  Refl : (A : Type) -> (x : A) -> Equal A x x
+
+foo : (a : Nat) -> (b : Nat) -> Equal Nat a b -> Nat
+foo _ _ (Refl _ _) = Zero
+foo _ _ _ = Zero
+`;
+    // The second clause is inaccessible because Refl is the only constructor
+    expectTypeError(source, 'foo', 'inaccessible');
+  });
+
+  test('No inaccessible clause when single-constructor is covered by wildcard', () => {
+    // This should succeed - just using wildcard for the only constructor
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  Refl : (A : Type) -> (x : A) -> Equal A x x
+
+foo : (a : Nat) -> (b : Nat) -> Equal Nat a b -> Nat
+foo _ _ _ = Zero
+`;
+    expectSuccess(source);
   });
 });

@@ -416,9 +416,9 @@ test('Error in constructor with complex type', () => {
 
   if (error && error.location) {
     // Line 2 is "  VCons : (A : Type) -> (n : Nat) -> A -> Vec n -> Vec (Wrong n)"
-    // Col 60 is the start of "Wrong"
+    // Col 57 is the start of "Wrong" (the '(' is at 56)
     assert(error.location.start.line === 2, `Expected line 2, got ${error.location.start.line}`);
-    assert(error.location.start.col === 60, `Expected col 60, got ${error.location.start.col}`);
+    assert(error.location.start.col === 57, `Expected col 57, got ${error.location.start.col}`);
   }
 });
 

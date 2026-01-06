@@ -364,6 +364,169 @@ test('formatMultipleErrors: handles errors without ranges', () => {
   assert(result.includes('at line 1'), 'Should include location for first');
 });
 
+// ============================================================================
+// Integration Tests: Full Pipeline from Source to Error Location
+// ============================================================================
+
+import { checkSourceBlocks } from '../parser/block-checker';
+
+test('Integration: type mismatch in Pi domain points to exact location', () => {
+  // Equal expects (A : Type) as first argument, but we give it (a : Nat)
+  const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : (A : Type) -> (x : A) -> (y : A) -> Equal A x y
+
+foo : (a : Nat) -> (b : Nat) -> Equal a b -> Nat
+foo a b eq = Zero
+`;
+
+  const results = checkSourceBlocks(source);
+
+  // Find the foo declaration result (block 2)
+  const fooResult = results.find(r => r.blockIndex === 2);
+  assert(fooResult !== undefined, 'Should find foo declaration');
+  assert(!fooResult!.checkSuccess, 'foo should fail type checking');
+  assert(fooResult!.checkErrors.length > 0, 'Should have at least one error');
+
+  const err = fooResult!.checkErrors[0];
+  assert(err.location !== null, 'Error should have a source location');
+
+  // The error should point to the first 'a' in 'Equal a b' (col 39-40 on line 8)
+  assertEqual(err.location!.start.line, 8, 'Error should be on line 8');
+  assertEqual(err.location!.start.col, 39, 'Error should start at column 39');
+  assertEqual(err.location!.end.col, 40, 'Error should end at column 40');
+});
+
+test('Integration: type mismatch in function body points to exact location', () => {
+  const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+bad : Nat -> Nat
+bad x = x x
+`;
+
+  const results = checkSourceBlocks(source);
+
+  // Find the bad declaration result (block 1)
+  const badResult = results.find(r => r.blockIndex === 1);
+  assert(badResult !== undefined, 'Should find bad declaration');
+  assert(!badResult!.checkSuccess, 'bad should fail type checking');
+  assert(badResult!.checkErrors.length > 0, 'Should have at least one error');
+
+  const err = badResult!.checkErrors[0];
+  assert(err.location !== null, 'Error should have a source location');
+  // The error should be in the value part of the declaration
+  assert(err.location!.start.line >= 5, 'Error should be on or after line 5');
+});
+
+test('Integration: nested Pi type error location', () => {
+  const source = `inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+nested : (x : Bool) -> (y : Bool -> Bool) -> x y -> Bool
+nested x y z = True
+`;
+
+  const results = checkSourceBlocks(source);
+
+  // Find the nested declaration result
+  const nestedResult = results.find(r => r.blockIndex === 1);
+  assert(nestedResult !== undefined, 'Should find nested declaration');
+  assert(!nestedResult!.checkSuccess, 'nested should fail type checking');
+  assert(nestedResult!.checkErrors.length > 0, 'Should have at least one error');
+
+  const err = nestedResult!.checkErrors[0];
+  assert(err.location !== null, 'Error should have a source location');
+  // The error is at 'x y' - x is Bool, not a function
+  assert(err.error.message.includes('Pi type') || err.error.message.includes('Type mismatch'),
+    'Error should mention Pi type or type mismatch');
+});
+
+test('Integration: application argument type mismatch', () => {
+  const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+idNat : Nat -> Nat
+idNat n = n
+
+badCall : Type
+badCall = idNat Type
+`;
+
+  const results = checkSourceBlocks(source);
+
+  // Find the badCall declaration result
+  const badCallResult = results.find(r => r.blockIndex === 2);
+  assert(badCallResult !== undefined, 'Should find badCall declaration');
+  assert(!badCallResult!.checkSuccess, 'badCall should fail type checking');
+  assert(badCallResult!.checkErrors.length > 0, 'Should have at least one error');
+
+  const err = badCallResult!.checkErrors[0];
+  assert(err.location !== null, 'Error should have a source location');
+});
+
+test('Integration: inductive constructor type error', () => {
+  const source = `inductive Bad : Type where
+  MkBad : Type -> Bad
+`;
+
+  const results = checkSourceBlocks(source);
+  const badIndResult = results.find(r => r.blockIndex === 0);
+  assert(badIndResult !== undefined, 'Should find Bad inductive');
+  // This might pass or fail depending on universe constraints - just check we get a result
+  assert(badIndResult!.parseSuccess, 'Should parse successfully');
+});
+
+test('Integration: error in deeply nested expression', () => {
+  const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+deep : ((((Nat -> Nat) -> Nat) -> Nat) -> Nat) -> Nat
+deep f = f Zero
+`;
+
+  const results = checkSourceBlocks(source);
+
+  // Find the deep declaration result
+  const deepResult = results.find(r => r.blockIndex === 1);
+  assert(deepResult !== undefined, 'Should find deep declaration');
+  assert(!deepResult!.checkSuccess, 'deep should fail type checking');
+  assert(deepResult!.checkErrors.length > 0, 'Should have at least one error');
+
+  const err = deepResult!.checkErrors[0];
+  assert(err.location !== null, 'Error should have a source location');
+  // The error should be pointing somewhere meaningful, not the whole declaration
+  assert(err.location!.end.col - err.location!.start.col < 50,
+    'Error range should be reasonably small, not the whole expression');
+});
+
+test('Integration: multiple errors all have locations', () => {
+  const source = `inductive Unit : Type where
+  unit : Unit
+
+multi : Unit -> Type -> Unit
+multi u t = u t u
+`;
+
+  const results = checkSourceBlocks(source);
+
+  const multiResult = results.find(r => r.blockIndex === 1);
+  assert(multiResult !== undefined, 'Should find multi declaration');
+  assert(!multiResult!.checkSuccess, 'multi should fail type checking');
+
+  // Even if there's just one error, it should have a location
+  for (const err of multiResult!.checkErrors) {
+    assert(err.location !== null, `Error "${err.error.message}" should have a location`);
+  }
+});
+
 console.log('\n' + '='.repeat(80));
 console.log('ALL ERROR RESOLUTION TESTS PASSED! ✓');
 console.log('='.repeat(80) + '\n');

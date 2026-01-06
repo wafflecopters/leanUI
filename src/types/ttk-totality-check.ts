@@ -95,6 +95,8 @@ export interface TotalityAnalysis {
   missingCases: MissingPattern[][];
   /** The splitting tree (for debugging/visualization) */
   splitTree: SplitTree;
+  /** Indices of clauses that are inaccessible (never matched) */
+  inaccessibleClauses: number[];
 }
 
 /**
@@ -181,16 +183,22 @@ export function analyzeTotality(
     return {
       exhaustive: false,
       missingCases: [wildcardPatterns],
-      splitTree: { tag: 'Missing', path: [], patterns: wildcardPatterns }
+      splitTree: { tag: 'Missing', path: [], patterns: wildcardPatterns },
+      inaccessibleClauses: []
     };
   }
 
   if (argTypes.length === 0) {
     // No arguments, so the first clause covers everything
+    // All clauses after the first are inaccessible
+    const inaccessibleClauses = clauses.length > 1
+      ? Array.from({ length: clauses.length - 1 }, (_, i) => i + 1)
+      : [];
     return {
       exhaustive: true,
       missingCases: [],
-      splitTree: { tag: 'Leaf', clauseIndex: 0 }
+      splitTree: { tag: 'Leaf', clauseIndex: 0 },
+      inaccessibleClauses
     };
   }
 
@@ -220,10 +228,20 @@ export function analyzeTotality(
   // Find all missing cases
   const missingCases = findMissingCases(splitTree);
 
+  // Find inaccessible clauses (those that don't appear in any Leaf node)
+  const reachableIndices = collectReachableClauseIndices(splitTree);
+  const inaccessibleClauses: number[] = [];
+  for (let i = 0; i < clauses.length; i++) {
+    if (!reachableIndices.has(i)) {
+      inaccessibleClauses.push(i);
+    }
+  }
+
   return {
     exhaustive: missingCases.length === 0,
     missingCases,
-    splitTree
+    splitTree,
+    inaccessibleClauses
   };
 }
 
@@ -537,6 +555,15 @@ function buildSplitTree(
     return pat && (pat.tag === 'PWild' || pat.tag === 'PVar');
   });
 
+  // Collect which constructors are explicitly matched by PCtor patterns
+  const explicitlyMatchedCtors = new Set<string>();
+  for (const row of rows) {
+    const pat = row.patterns[patternIndex];
+    if (pat && pat.tag === 'PCtor') {
+      explicitlyMatchedCtors.add(pat.name);
+    }
+  }
+
   // Get the current slot ref for position 0
   const currentSlot = slotRefs[0];
 
@@ -580,9 +607,14 @@ function buildSplitTree(
     branches.set(ctorName, subtree);
   }
 
-  // Build default branch if there are wildcard rows
+  // Build default branch if there are wildcard rows AND there are constructors
+  // not explicitly matched. If all constructors are covered by PCtor patterns,
+  // the default branch represents no actual cases (would be unreachable).
   let defaultBranch: SplitTree | undefined;
-  if (wildcardRows.length > 0) {
+  const hasUnmatchedConstructors = typeInfo.constructors.some(
+    ctor => !explicitlyMatchedCtors.has(ctor)
+  );
+  if (wildcardRows.length > 0 && hasUnmatchedConstructors) {
     // Mark this slot as wildcard (covers all constructors in the default branch)
     const newState = clonePatternState(patternState);
     setPatternAt(newState, currentSlot, { tag: 'MWild' });
@@ -767,6 +799,37 @@ function findMissingCases(tree: SplitTree): MissingPattern[][] {
   const missing: MissingPattern[][] = [];
   collectMissingCasesFromTree(tree, missing);
   return missing;
+}
+
+/**
+ * Collect all clause indices that appear in the tree (as Leaf nodes).
+ */
+function collectReachableClauseIndices(tree: SplitTree): Set<number> {
+  const indices = new Set<number>();
+  collectReachableClauseIndicesFromTree(tree, indices);
+  return indices;
+}
+
+/**
+ * Recursively collect clause indices from the tree.
+ */
+function collectReachableClauseIndicesFromTree(tree: SplitTree, result: Set<number>): void {
+  switch (tree.tag) {
+    case 'Leaf':
+      result.add(tree.clauseIndex);
+      break;
+    case 'Missing':
+      // No clause matched here
+      break;
+    case 'Split':
+      for (const [_ctorName, subtree] of tree.branches) {
+        collectReachableClauseIndicesFromTree(subtree, result);
+      }
+      if (tree.defaultBranch) {
+        collectReachableClauseIndicesFromTree(tree.defaultBranch, result);
+      }
+      break;
+  }
 }
 
 /**

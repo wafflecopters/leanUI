@@ -225,7 +225,7 @@ export function resolveSelectionToContainingPath(
 // ============================================================================
 
 import { TTKTerm, TTKContext, prettyPrint } from './tt-kernel';
-import { queryTypeAtPath, TypeQueryResult } from './tt-type-query';
+import { queryTypeAtPath, TypeQueryResult, ElaborationContext } from './tt-type-query';
 
 /**
  * Extend context with a definition binding (for recursive references).
@@ -292,6 +292,7 @@ function adjustPositionToToken(pos: SourcePos, sourceCode?: string): SourcePos {
  * @param expectedType - Optional expected type of rootTerm (used for pattern binding types)
  * @param definitionName - Optional name of the definition being queried (for recursive references)
  * @param sourceCode - Optional source code for cursor position adjustment
+ * @param elabContext - Optional elaboration context with solved types from type checking
  * @returns Type query result with the term and its type
  */
 export function queryTypeAtPosition(
@@ -301,7 +302,8 @@ export function queryTypeAtPosition(
   rootContext: TTKContext,
   expectedType?: TTKTerm,
   definitionName?: string,
-  sourceCode?: string
+  sourceCode?: string,
+  elabContext?: ElaborationContext
 ): TypeQueryResult & { sourceRange?: SourceRange } {
   // Step 0: Adjust position to snap to nearest token
   const adjustedPos = adjustPositionToToken(pos, sourceCode);
@@ -315,8 +317,8 @@ export function queryTypeAtPosition(
   // Step 2: Extend context with the definition itself for recursive references
   const contextWithDef = addDefinitionToContext(rootContext, definitionName, expectedType);
 
-  // Step 3: Query type at path
-  const typeResult = queryTypeAtPath(rootTerm, contextWithDef, pathResult.path, expectedType);
+  // Step 3: Query type at path (pass elabContext for solved types)
+  const typeResult = queryTypeAtPath(rootTerm, contextWithDef, pathResult.path, expectedType, elabContext);
   if (!typeResult.success) {
     return typeResult;
   }
@@ -360,6 +362,7 @@ export function queryTypeAtPosition(
  * @param rootContext - The context at the root
  * @param expectedType - Optional expected type of rootTerm (used for pattern binding types)
  * @param definitionName - Optional name of the definition being queried (for recursive references)
+ * @param elabContext - Optional elaboration context with solved types from type checking
  * @returns Type query result
  */
 export function queryTypeForSelection(
@@ -368,7 +371,8 @@ export function queryTypeForSelection(
   rootTerm: TTKTerm,
   rootContext: TTKContext,
   expectedType?: TTKTerm,
-  definitionName?: string
+  definitionName?: string,
+  elabContext?: ElaborationContext
 ): TypeQueryResult & { sourceRange?: SourceRange } {
   // Find the smallest containing path
   const pathResult = resolveSelectionToContainingPath(selection, sourceMap);
@@ -379,8 +383,8 @@ export function queryTypeForSelection(
   // Extend context with the definition itself for recursive references
   const contextWithDef = addDefinitionToContext(rootContext, definitionName, expectedType);
 
-  // Query type at path
-  const typeResult = queryTypeAtPath(rootTerm, contextWithDef, pathResult.path, expectedType);
+  // Query type at path (pass elabContext for solved types)
+  const typeResult = queryTypeAtPath(rootTerm, contextWithDef, pathResult.path, expectedType, elabContext);
   if (!typeResult.success) {
     return typeResult;
   }

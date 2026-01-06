@@ -15,6 +15,61 @@ import { TTKTerm, TTKContext, TTKClause, prettyPrint } from './tt-kernel';
 import type { TPattern } from './tt-core';
 import { inferType, extendContext } from './tt-typecheck';
 import { IndexPath, serializeIndexPath } from './source-position';
+import type { FunctionClausesResult, ClauseCheckResult } from './tt-pattern-match';
+import { Substitution, applySubstitution } from './tt-unify';
+
+// ============================================================================
+// Elaboration Context for Solved Types
+// ============================================================================
+
+/**
+ * Optional elaboration context that contains solved/unified type information.
+ * When provided, type queries will return the "solved" types with unification
+ * results applied, rather than the original telescope types.
+ *
+ * For example, given:
+ *   foo : (a : Nat) -> (b : Nat) -> Equal Nat a b -> Nat
+ *   foo a b eq = Zero
+ *
+ * Without elaboration context: eq has type "Equal Nat a b"
+ * With elaboration context:    eq has type "Equal Nat a a" (unification solved b = a)
+ */
+export interface ElaborationContext {
+  /**
+   * Per-clause elaboration results. Index corresponds to clause index in Match.
+   * Each result contains solved bindings with substitutions already applied.
+   */
+  clauseResults?: ClauseCheckResult[];
+
+  /**
+   * The full function type being matched against.
+   * Used to correlate patterns with telescope positions.
+   */
+  functionType?: TTKTerm;
+}
+
+// ============================================================================
+// Pattern Binding Counting
+// ============================================================================
+
+/**
+ * Count the number of bindings introduced by a pattern.
+ * Variable patterns bind 1, wildcards bind 1 (for telescope purposes),
+ * constructor patterns bind the sum of their argument patterns.
+ */
+function countPatternBindings(pattern: TPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      if (pattern.args.length === 0) {
+        // Zero-arg constructor treated as variable binding
+        return 1;
+      }
+      return pattern.args.reduce((sum, arg) => sum + countPatternBindings(arg), 0);
+  }
+}
 
 // ============================================================================
 // Type Utilities
@@ -504,7 +559,8 @@ export function queryTypeAtPath(
   rootTerm: TTKTerm,
   rootContext: TTKContext,
   path: IndexPath,
-  expectedType?: TTKTerm
+  expectedType?: TTKTerm,
+  elabContext?: ElaborationContext
 ): TypeQueryResult {
   try {
     // Navigate through the term, building context as we go under binders
@@ -643,7 +699,20 @@ export function queryTypeAtPath(
             if (nextField === 'rhs') {
               // Extend context with pattern bindings
               const clause = currentTerm.clauses[index];
-              currentContext = computeClauseBindings(clause, currentExpectedType, currentContext);
+
+              // If we have elaboration context with solved bindings, use those
+              // This gives us types with unification results applied
+              if (elabContext?.clauseResults && index < elabContext.clauseResults.length) {
+                const clauseResult = elabContext.clauseResults[index];
+                // Use the solved bindings from elaboration
+                for (const binding of clauseResult.solvedBindings) {
+                  currentContext = extendContext(currentContext, binding.name, binding.type);
+                }
+              } else {
+                // Fall back to computing bindings without unification results
+                currentContext = computeClauseBindings(clause, currentExpectedType, currentContext);
+              }
+
               // Update expected type for the RHS by stripping matched patterns
               currentExpectedType = computeClauseRhsExpectedType(clause, currentExpectedType);
               currentTerm = clause.rhs;
@@ -658,16 +727,63 @@ export function queryTypeAtPath(
                   return { success: false, error: `Pattern index ${patternIndex} out of bounds` };
                 }
 
-                // Compute the type for this pattern position from the function type
-                const telescope = currentExpectedType ? extractTelescope(currentExpectedType) : [];
-                const patternType = patternIndex < telescope.length
-                  ? telescope[patternIndex].type
-                  : { tag: 'Hole' as const, id: '?pattern_type', type: { tag: 'Sort' as const, level: 0 }, context: [] };
+                // Try to get the solved type from elaboration context
+                let patternType: TTKTerm;
+                let patternContext = currentContext;
+
+                if (elabContext?.clauseResults && index < elabContext.clauseResults.length) {
+                  // Use solved bindings from elaboration
+                  const clauseResult = elabContext.clauseResults[index];
+                  const solvedBindings = clauseResult.solvedBindings;
+
+                  // Find the cumulative binding index for this pattern
+                  // (patterns can bind multiple variables for constructor patterns)
+                  let bindingOffset = 0;
+                  for (let i = 0; i < patternIndex; i++) {
+                    const pat = clause.patterns[i];
+                    bindingOffset += countPatternBindings(pat);
+                  }
+
+                  // Get the type from solved bindings if available
+                  if (bindingOffset < solvedBindings.length) {
+                    patternType = solvedBindings[bindingOffset].type;
+                    // Build context with solved bindings up to this pattern
+                    for (let i = 0; i < bindingOffset; i++) {
+                      patternContext = [{ name: solvedBindings[i].name, type: solvedBindings[i].type }, ...patternContext];
+                    }
+                  } else {
+                    // Fall back to telescope
+                    const telescope = currentExpectedType ? extractTelescope(currentExpectedType) : [];
+                    patternType = patternIndex < telescope.length
+                      ? telescope[patternIndex].type
+                      : { tag: 'Hole' as const, id: '?pattern_type', type: { tag: 'Sort' as const, level: 0 }, context: [] };
+                    for (let i = 0; i < patternIndex && i < telescope.length; i++) {
+                      const pat = clause.patterns[i];
+                      const patName = pat.tag === 'PVar' ? pat.name : telescope[i].name;
+                      patternContext = [{ name: patName, type: telescope[i].type }, ...patternContext];
+                    }
+                  }
+                } else {
+                  // Compute the type for this pattern position from the function type
+                  const telescope = currentExpectedType ? extractTelescope(currentExpectedType) : [];
+                  patternType = patternIndex < telescope.length
+                    ? telescope[patternIndex].type
+                    : { tag: 'Hole' as const, id: '?pattern_type', type: { tag: 'Sort' as const, level: 0 }, context: [] };
+
+                  // Build the context with bindings from patterns 0 through patternIndex-1
+                  // This is needed so that De Bruijn indices in patternType resolve correctly
+                  for (let i = 0; i < patternIndex && i < telescope.length; i++) {
+                    // Get the pattern name (or use telescope name as fallback)
+                    const pat = clause.patterns[i];
+                    const patName = pat.tag === 'PVar' ? pat.name : telescope[i].name;
+                    patternContext = [{ name: patName, type: telescope[i].type }, ...patternContext];
+                  }
+                }
 
                 // Now navigate into the pattern structure
                 pathIndex++;
                 const pattern = clause.patterns[patternIndex];
-                return queryPatternType(pattern, patternType, currentContext, path, pathIndex);
+                return queryPatternType(pattern, patternType, patternContext, path, pathIndex);
               } else {
                 return { success: false, error: `Expected array index after 'patterns'` };
               }

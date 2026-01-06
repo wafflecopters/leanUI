@@ -24,6 +24,7 @@ import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolCo
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { prettyPrint, TTerm } from '../types/tt-core';
 import { SplitTree } from '../types/ttk-totality-check';
+import { ClauseCheckResult } from '../types/tt-pattern-match';
 
 /**
  * Result of checking a single source block.
@@ -82,6 +83,10 @@ export interface BlockTypeQueryData {
 
   // The typing context in which this block was checked
   context: TTKContext;
+
+  // Per-clause elaboration results (for solved type display)
+  // These contain the substitutions applied to pattern bindings
+  clauseResults?: ClauseCheckResult[];
 }
 
 /**
@@ -361,6 +366,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
     contextAtCheck: TTKContext;
     // Split tree from totality checking (for pattern match visualization)
     splitTree?: SplitTree;
+    // Per-clause elaboration results (for solved type display)
+    clauseResults?: ClauseCheckResult[];
   }
 
   // Global context accumulates bindings from successfully checked declarations
@@ -387,12 +394,21 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         }
       }
 
+      // Build paths for error location tracking
+      const inductiveTypePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      const ctorPaths: IndexPath[] = kernelConstructors.map((_, i) => [
+        { kind: 'field', name: 'constructors' },
+        { kind: 'array', index: i },
+        { kind: 'field', name: 'type' }
+      ]);
       const result = checkInductiveDeclaration(
         decl.name || 'anonymous',
         kernelType,
         kernelConstructors,
         globalContext,
-        indexPositions
+        indexPositions,
+        inductiveTypePath,
+        ctorPaths
       );
 
       checkResults.push({
@@ -419,11 +435,16 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       }
     } else {
       // Term declaration (def, theorem, axiom, expr)
+      // Pass type/value paths so errors can be traced back to source positions
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      const valuePathForCheck: IndexPath = [{ kind: 'field', name: 'value' }];
       const result = checkTermDeclaration(
         decl.name || 'anonymous',
         kernelType,
         kernelValue,
-        globalContext
+        globalContext,
+        typePath,
+        valuePathForCheck
       );
 
       checkResults.push({
@@ -436,7 +457,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         kernelType,
         kernelValue,
         contextAtCheck: globalContext,
-        splitTree: result.splitTree
+        splitTree: result.splitTree,
+        clauseResults: result.clauseResults
       });
 
       // Add to global context if we have a valid type.
@@ -558,7 +580,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       kernelValue: firstCheckResult.kernelValue,
       sourceMap: firstCheckResult.sourceMap,
       elabMap: firstCheckResult.elabMap,
-      context: firstCheckResult.contextAtCheck
+      context: firstCheckResult.contextAtCheck,
+      clauseResults: firstCheckResult.clauseResults
     } : undefined;
 
     return {

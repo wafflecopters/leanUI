@@ -18,6 +18,7 @@ import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
 import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
 import { checkFunctionTotality, formatMissingCase, SplitTree } from './ttk-totality-check';
+import { checkFunctionClausesWithResult, FunctionClausesResult, ClauseCheckResult } from './tt-pattern-match';
 
 // ============================================================================
 // Error Types
@@ -48,8 +49,8 @@ export interface CheckError {
  * perfectly valid. Other declarations should be able to reference that type.
  */
 export type CheckResult<T = void> =
-  | { success: true; value: T; splitTree?: SplitTree }
-  | { success: false; errors: CheckError[]; validType?: T; splitTree?: SplitTree };
+  | { success: true; value: T; splitTree?: SplitTree; clauseResults?: ClauseCheckResult[] }
+  | { success: false; errors: CheckError[]; validType?: T; splitTree?: SplitTree; clauseResults?: ClauseCheckResult[] };
 
 // ============================================================================
 // Inductive Type Checking
@@ -67,6 +68,8 @@ export type CheckResult<T = void> =
  * @param ctx - Typing context
  * @param indexPositions - Positions that are indices (not parameters). Universe constraints
  *                         only apply to indices. If not provided, all positions are treated as indices.
+ * @param typePath - Base path for the inductive type (for error location tracking)
+ * @param constructorPaths - Base paths for each constructor type (for error location tracking)
  * @returns CheckResult indicating success or all collected errors
  */
 export function checkInductiveDeclaration(
@@ -74,18 +77,20 @@ export function checkInductiveDeclaration(
   inductiveType: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm }>,
   ctx: TTKContext,
-  indexPositions?: number[]
+  indexPositions?: number[],
+  typePath: IndexPath = [],
+  constructorPaths: IndexPath[] = []
 ): CheckResult<void> {
   const errors: CheckError[] = [];
 
   // First, check that the inductive type itself is well-formed
   try {
-    inferType(inductiveType, ctx);
+    inferType(inductiveType, ctx, typePath);
   } catch (e) {
     if (e instanceof TypeCheckError) {
       errors.push({
         message: `Inductive type '${inductiveName}' is ill-formed: ${e.message}`,
-        path: e.termPath || [],
+        path: e.termPath || typePath,
         term: e.term,
         context: e.context
       });
@@ -99,19 +104,20 @@ export function checkInductiveDeclaration(
   // Check each constructor (collect all errors)
   for (let i = 0; i < constructors.length; i++) {
     const ctor = constructors[i];
+    const ctorPath = constructorPaths[i] || [];
     try {
       // Type-check the constructor type in the context that includes the inductive type.
       // This naturally catches:
       // - Wrong arity (e.g., Vec A n when Vec only takes 1 arg)
       // - Wrong argument types (e.g., Type where Nat expected)
       // - References to undefined symbols
-      const ctorTypeOfType = inferType(ctor.type, ctxWithInductive);
+      const ctorTypeOfType = inferType(ctor.type, ctxWithInductive, ctorPath);
 
       // Verify the constructor type is itself a type (not a value)
       if (ctorTypeOfType.tag !== 'Sort' && ctorTypeOfType.tag !== 'Hole') {
         errors.push({
           message: `Constructor '${ctor.name}' type must be a Type or Prop, got: ${ctorTypeOfType.tag}`,
-          path: [],
+          path: ctorPath,
           term: ctor.type,
           context: ctxWithInductive
         });
@@ -121,7 +127,7 @@ export function checkInductiveDeclaration(
       if (e instanceof TypeCheckError) {
         errors.push({
           message: `Constructor '${ctor.name}' has invalid type: ${e.message}`,
-          path: e.termPath || [],
+          path: e.termPath || ctorPath,
           term: e.term,
           context: e.context
         });
@@ -165,13 +171,17 @@ export function checkInductiveDeclaration(
  * @param declaredType - Declared type (if any)
  * @param value - Definition value (if any)
  * @param ctx - Typing context
+ * @param typePath - Base path for the type term (for error location tracking)
+ * @param valuePath - Base path for the value term (for error location tracking)
  * @returns CheckResult with inferred type or errors
  */
 export function checkTermDeclaration(
   name: string,
   declaredType: TTKTerm | undefined,
   value: TTKTerm | undefined,
-  ctx: TTKContext
+  ctx: TTKContext,
+  typePath: IndexPath = [],
+  valuePath: IndexPath = []
 ): CheckResult<TTKTerm> {
   const errors: CheckError[] = [];
 
@@ -179,13 +189,13 @@ export function checkTermDeclaration(
   if (declaredType && !value) {
     try {
       // Check that the type is well-formed
-      inferType(declaredType, ctx);
+      inferType(declaredType, ctx, typePath);
       return { success: true, value: declaredType };
     } catch (e) {
       if (e instanceof TypeCheckError) {
         errors.push({
           message: `Type signature for '${name}' is invalid: ${e.message}`,
-          path: e.termPath || [],
+          path: e.termPath || typePath,
           term: e.term,
           context: e.context
         });
@@ -193,7 +203,7 @@ export function checkTermDeclaration(
         // Generic error (e.g., "Pattern matching not yet implemented")
         errors.push({
           message: `Type signature for '${name}' is invalid: ${e.message}`,
-          path: []
+          path: typePath
         });
       }
       return { success: false, errors };
@@ -203,13 +213,13 @@ export function checkTermDeclaration(
   // Case 2: Definition only (infer type from value)
   if (!declaredType && value) {
     try {
-      const inferredType = inferType(value, ctx);
+      const inferredType = inferType(value, ctx, valuePath);
       return { success: true, value: inferredType };
     } catch (e) {
       if (e instanceof TypeCheckError) {
         errors.push({
           message: `Cannot infer type for '${name}': ${e.message}`,
-          path: e.termPath || [],
+          path: e.termPath || valuePath,
           term: e.term,
           context: e.context
         });
@@ -217,7 +227,7 @@ export function checkTermDeclaration(
         // Generic error (e.g., "Pattern matching not yet implemented")
         errors.push({
           message: `Cannot infer type for '${name}': ${e.message}`,
-          path: []
+          path: valuePath
         });
       }
       return { success: false, errors };
@@ -229,20 +239,20 @@ export function checkTermDeclaration(
     // PHASE 1: Check that the declared type is well-formed
     let typeIsValid = false;
     try {
-      inferType(declaredType, ctx);
+      inferType(declaredType, ctx, typePath);
       typeIsValid = true;
     } catch (e) {
       if (e instanceof TypeCheckError) {
         errors.push({
           message: `Type signature for '${name}' is invalid: ${e.message}`,
-          path: e.termPath || [],
+          path: e.termPath || typePath,
           term: e.term,
           context: e.context
         });
       } else if (e instanceof Error) {
         errors.push({
           message: `Type signature for '${name}' is invalid: ${e.message}`,
-          path: []
+          path: typePath
         });
       }
     }
@@ -250,13 +260,32 @@ export function checkTermDeclaration(
     // PHASE 2: Check that the value has the declared type
     // Only do this if the type itself is valid
     if (typeIsValid) {
+      // For recursive functions, we need the function itself in scope when checking
+      // the body. This allows recursive calls like `plus a b` in `plus (Succ a) b = Succ (plus a b)`.
+      const ctxWithSelf: TTKContext = [{ name, type: declaredType }, ...ctx];
+
+      // Check if this is a function definition (Match with _scrutinee placeholder)
+      // If so, use checkFunctionClausesWithResult to capture elaboration results
+      let clauseResults: ClauseCheckResult[] | undefined;
+
       try {
-        // For recursive functions, we need the function itself in scope when checking
-        // the body. This allows recursive calls like `plus a b` in `plus (Succ a) b = Succ (plus a b)`.
-        const ctxWithSelf: TTKContext = [{ name, type: declaredType }, ...ctx];
-        // Pass the 'value' path so errors can be traced back to source positions
-        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-        checkType(value, declaredType, ctxWithSelf, valuePath);
+
+        if (value.tag === 'Match' &&
+            value.scrutinee.tag === 'Hole' &&
+            value.scrutinee.id === '_scrutinee') {
+          // Function definition - use result-returning variant to capture elaboration
+          const funcResult = checkFunctionClausesWithResult(
+            declaredType,
+            value.clauses,
+            ctxWithSelf,
+            valuePath
+          );
+          clauseResults = funcResult.clauses;
+        } else {
+          // Regular value - use standard checkType
+          // Pass the value path so errors can be traced back to source positions
+          checkType(value, declaredType, ctxWithSelf, valuePath);
+        }
 
         // PHASE 3: Check structural recursion
         // Analyze the value for safe/unsafe recursive calls
@@ -264,10 +293,10 @@ export function checkTermDeclaration(
         if (recursionAnalysis.unsafeRecursion.length > 0) {
           // Report all unsafe recursion as errors
           for (const unsafe of recursionAnalysis.unsafeRecursion) {
-            // Prepend 'value' to the path since the recursion checker paths are
-            // relative to the term, but the elabMap keys start with 'value.'
+            // Prepend valuePath since the recursion checker paths are
+            // relative to the term, but the elabMap keys start with the valuePath prefix
             const fullPath: IndexPath = [
-              { kind: 'field', name: 'value' },
+              ...valuePath,
               ...termPathToIndexPath(unsafe.termPath)
             ];
             errors.push({
@@ -278,7 +307,7 @@ export function checkTermDeclaration(
             });
           }
           // Type is valid but recursion is unsafe
-          return { success: false, errors, validType: declaredType };
+          return { success: false, errors, validType: declaredType, clauseResults };
         }
 
         // PHASE 4: Check exhaustiveness (totality) for pattern matching
@@ -287,28 +316,48 @@ export function checkTermDeclaration(
         if (value.tag === 'Match' && value.clauses.length > 0) {
           const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf);
           splitTree = totalityAnalysis.splitTree;
+
+          // Check for inaccessible clauses (excess patterns that can never match)
+          for (const clauseIdx of totalityAnalysis.inaccessibleClauses) {
+            // Path to the inaccessible clause
+            const clausePath: IndexPath = [
+              ...valuePath,
+              { kind: 'field', name: 'clauses' },
+              { kind: 'array', index: clauseIdx }
+            ];
+            errors.push({
+              message: `Inaccessible clause: this pattern is already covered by earlier clauses`,
+              path: clausePath,
+              term: value.clauses[clauseIdx].rhs,
+              context: ctxWithSelf
+            });
+          }
+
           if (!totalityAnalysis.exhaustive) {
             for (const missingCase of totalityAnalysis.missingCases) {
               const formattedCase = formatMissingCase(name, missingCase);
               errors.push({
                 message: `Non-exhaustive pattern match: missing case \`${formattedCase}\``,
-                path: [{ kind: 'field', name: 'value' }],
+                path: valuePath,
                 term: value,
                 context: ctxWithSelf
               });
             }
-            // Type is valid but pattern matching is non-exhaustive
-            return { success: false, errors, validType: declaredType, splitTree };
+          }
+
+          // Return failure if there are inaccessible clauses or missing cases
+          if (totalityAnalysis.inaccessibleClauses.length > 0 || !totalityAnalysis.exhaustive) {
+            return { success: false, errors, validType: declaredType, splitTree, clauseResults };
           }
         }
 
         // All checks passed!
-        return { success: true, value: declaredType, splitTree };
+        return { success: true, value: declaredType, splitTree, clauseResults };
       } catch (e) {
         if (e instanceof TypeCheckError) {
           errors.push({
             message: `Value for '${name}' has wrong type: ${e.message}`,
-            path: e.termPath || [{ kind: 'field', name: 'value' }],
+            path: e.termPath || valuePath,
             term: e.term,
             context: e.context
           });
@@ -316,11 +365,11 @@ export function checkTermDeclaration(
           // Generic error (e.g., "Pattern matching not yet implemented")
           errors.push({
             message: `Cannot check value for '${name}': ${e.message}`,
-            path: []
+            path: valuePath
           });
         }
         // Type is valid but value failed - return validType so it can be used by later decls
-        return { success: false, errors, validType: declaredType };
+        return { success: false, errors, validType: declaredType, clauseResults };
       }
     }
 

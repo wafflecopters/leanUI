@@ -1046,7 +1046,17 @@ export class Parser {
         break; // No more constructors
       }
 
-      const ctorName = this.expect('IDENT').value;
+      const ctorNameToken = this.expect('IDENT');
+      const ctorName = ctorNameToken.value;
+
+      // Record source range for the constructor name: constructors[ctorIndex].name
+      const ctorNamePath: IndexPath = [
+        { kind: 'field', name: 'constructors' },
+        { kind: 'array', index: ctorIndex },
+        { kind: 'field', name: 'name' }
+      ];
+      this.recordRange(ctorNamePath, ctorNameToken, ctorNameToken);
+
       this.expect('COLON');
 
       // Build path for this constructor's type: constructors[ctorIndex].type
@@ -1175,12 +1185,17 @@ export class Parser {
     // Note: We parse with the base path, then adjust if it becomes part of a larger structure
     let left = this.parsePrefix(ctx, path);
 
+    // Track whether we've done any infix/application work that extends the expression
+    // If we just parse a prefix and break immediately, the prefix already recorded its range
+    let didInfixWork = false;
+
     while (true) {
       const token = this.current();
 
       // Check for arrow (right-associative, low precedence)
       if (token.type === 'ARROW') {
         if (ARROW_PRECEDENCE < minPrec) break;
+        didInfixWork = true;
         this.advance();
         // Right-associative: parse RHS with same precedence
         // IMPORTANT: We need to extend the context with the anonymous binder
@@ -1205,6 +1220,7 @@ export class Parser {
         const opInfo = this.operators[token.value];
         if (!opInfo || opInfo.precedence < minPrec) break;
 
+        didInfixWork = true;
         this.advance();
 
         // Calculate right precedence based on associativity
@@ -1227,6 +1243,8 @@ export class Parser {
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
+
+        didInfixWork = true;
 
         // Before moving paths, record the current application's range at path.
         // This is crucial for intermediate applications: when we have "f y x",
@@ -1251,9 +1269,10 @@ export class Parser {
       break;
     }
 
-    // Record the full expression range for this path
-    // Use the previous token as the end (the last token we consumed)
-    if (path.length > 0 && this.pos > 0) {
+    // Record the full expression range for this path - but only if we did infix work
+    // If we just parsed a prefix expression (possibly in parens), it already recorded its range
+    // and we don't want to overwrite it with the paren range
+    if (didInfixWork && path.length > 0 && this.pos > 0) {
       const endToken = this.tokens[this.pos - 1];
       this.recordRange(path, startToken, endToken);
     }
@@ -1333,7 +1352,9 @@ export class Parser {
       if (this.current().type === 'COLON') {
         // This is (x : T) - could be annotation or Pi binder
         this.advance();
-        const type = this.expr(0, ctx, path);
+        // Parse the domain type at path.domain
+        const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+        const type = this.expr(0, ctx, domainPath);
         this.expect('RPAREN');
 
         // Check if followed by arrow - then it's a Pi type
@@ -1341,7 +1362,9 @@ export class Parser {
           this.advance();
           const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
           const newCtx = [name, ...ctx];
-          const body = this.expr(ARROW_PRECEDENCE, newCtx);
+          // Parse the body at path.body
+          const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+          const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
           return mkPi(type, body, name);
         }
 

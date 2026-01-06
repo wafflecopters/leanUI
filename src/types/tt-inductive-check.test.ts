@@ -78,8 +78,8 @@ test('Valid: simple inductive with correct return type (Nat)', () => {
     'Nat',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'zero', type: elabToKernel(Nat) as TTKTerm },
-      { name: 'succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
+      { name: 'Zero', type: elabToKernel(Nat) as TTKTerm },
+      { name: 'Succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
     ],
     []
   );
@@ -94,8 +94,8 @@ test('Valid: Bool with two constructors', () => {
     'Bool',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'true', type: elabToKernel(Bool) as TTKTerm },
-      { name: 'false', type: elabToKernel(Bool) as TTKTerm }
+      { name: 'True', type: elabToKernel(Bool) as TTKTerm },
+      { name: 'False', type: elabToKernel(Bool) as TTKTerm }
     ],
     []
   );
@@ -111,15 +111,15 @@ test('Invalid: constructor returns wrong type', () => {
     'Nat',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'zero', type: elabToKernel(Nat) as TTKTerm },
-      { name: 'bad', type: elabToKernel(Bool) as TTKTerm }  // Returns Bool, not Nat!
+      { name: 'Zero', type: elabToKernel(Nat) as TTKTerm },
+      { name: 'Bad', type: elabToKernel(Bool) as TTKTerm }  // Returns Bool, not Nat!
     ],
     []
   );
 
   assert(!result.success, 'Expected failure for wrong return type');
   assert(
-    result.errors.some(e => e.message.includes('bad') && e.message.includes('Nat')),
+    result.errors.some(e => e.message.includes('Bad') && e.message.includes('Nat')),
     'Error should mention the bad constructor and expected type'
   );
 });
@@ -129,7 +129,7 @@ test('Invalid: constructor returns arbitrary type (Type itself)', () => {
     'Weird',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'bad', type: elabToKernel(Type) as TTKTerm }  // Returns Type, not Weird!
+      { name: 'Bad', type: elabToKernel(Type) as TTKTerm }  // Returns Type, not Weird!
     ],
     []
   );
@@ -148,10 +148,10 @@ test('Valid: List with polymorphic constructors (in Type 1)', () => {
   const ListKind = mkArrow(Type, Type1);  // Type -> Type 1
   const List = mkInductiveRef('List', ListKind);
 
-  // nil : (A : Type) -> List A
+  // Nil : (A : Type) -> List A
   const nilType = mkPi(Type, mkApp(List, mkVar(0)), 'A');
 
-  // cons : (A : Type) -> A -> List A -> List A
+  // Cons : (A : Type) -> A -> List A -> List A
   const consType = mkPi(
     Type,
     mkPi(
@@ -170,8 +170,8 @@ test('Valid: List with polymorphic constructors (in Type 1)', () => {
     'List',
     elabToKernel(ListKind) as TTKTerm,
     [
-      { name: 'nil', type: elabToKernel(nilType) as TTKTerm },
-      { name: 'cons', type: elabToKernel(consType) as TTKTerm }
+      { name: 'Nil', type: elabToKernel(nilType) as TTKTerm },
+      { name: 'Cons', type: elabToKernel(consType) as TTKTerm }
     ],
     []
   );
@@ -185,15 +185,15 @@ test('Valid: List with polymorphic constructors (in Type 1)', () => {
 
 console.log('\n--- Strict Positivity Tests ---\n');
 
-test('Valid: strictly positive occurrence in succ (Nat -> Nat)', () => {
+test('Valid: strictly positive occurrence in Succ (Nat -> Nat)', () => {
   const Nat = mkInductiveRef('Nat', Type);
 
   const result = checkInductiveValidity(
     'Nat',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'zero', type: elabToKernel(Nat) as TTKTerm },
-      { name: 'succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
+      { name: 'Zero', type: elabToKernel(Nat) as TTKTerm },
+      { name: 'Succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
     ],
     []
   );
@@ -207,7 +207,7 @@ test('Invalid: negative occurrence (Bad -> X) -> Bad', () => {
   const Bad = mkInductiveRef('Bad', Type);
   const X = mkInductiveRef('X', Type);
 
-  // bad : (Bad -> X) -> Bad
+  // Mk : (Bad -> X) -> Bad
   // In this case, Bad appears in the domain of the outer Pi,
   // which means it's in a negative position
   const badCtorType = mkPi(
@@ -220,7 +220,7 @@ test('Invalid: negative occurrence (Bad -> X) -> Bad', () => {
     'Bad',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'bad', type: elabToKernel(badCtorType) as TTKTerm }
+      { name: 'Mk', type: elabToKernel(badCtorType) as TTKTerm }
     ],
     []
   );
@@ -254,7 +254,7 @@ test('Invalid: non-strictly positive ((Bad -> X) -> X) -> Bad', () => {
     'Bad',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'bad', type: elabToKernel(badCtorType) as TTKTerm }
+      { name: 'Mk', type: elabToKernel(badCtorType) as TTKTerm }
     ],
     []
   );
@@ -268,13 +268,13 @@ test('Invalid: non-strictly positive ((Bad -> X) -> X) -> Bad', () => {
 
 test('Valid: Tree with nested List (nested inductive)', () => {
   // inductive Tree where
-  //   | node : List Tree -> Tree
+  //   | Node : List Tree -> Tree
   // This is a nested inductive type - Tree under List
   // This should be VALID because Tree appears strictly positively
   // (List is a strictly positive type constructor)
 
   // For simplicity, we'll model this as:
-  // node : ListOfTree -> Tree
+  // Node : ListOfTree -> Tree
   // where ListOfTree is a separate type
 
   const Tree = mkInductiveRef('Tree', Type);
@@ -284,7 +284,7 @@ test('Valid: Tree with nested List (nested inductive)', () => {
     'Tree',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'node', type: elabToKernel(mkArrow(ListOfTree, Tree)) as TTKTerm }
+      { name: 'Node', type: elabToKernel(mkArrow(ListOfTree, Tree)) as TTKTerm }
     ],
     []
   );
@@ -294,7 +294,7 @@ test('Valid: Tree with nested List (nested inductive)', () => {
 
 test('Invalid: Tree in contravariant position of function argument', () => {
   // inductive Bad where
-  //   | bad : ((Bad -> Nat) -> Nat) -> Bad
+  //   | Mk : ((Bad -> Nat) -> Nat) -> Bad
   // This should be INVALID - Bad appears in contravariant position
 
   const Bad = mkInductiveRef('Bad', Type);
@@ -315,7 +315,7 @@ test('Invalid: Tree in contravariant position of function argument', () => {
     'Bad',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'bad', type: elabToKernel(badType) as TTKTerm }
+      { name: 'Mk', type: elabToKernel(badType) as TTKTerm }
     ],
     []
   );
@@ -336,8 +336,8 @@ test('Valid: Nat in Type with Nat arguments', () => {
     'Nat',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'zero', type: elabToKernel(Nat) as TTKTerm },
-      { name: 'succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
+      { name: 'Zero', type: elabToKernel(Nat) as TTKTerm },
+      { name: 'Succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
     ],
     []
   );
@@ -347,19 +347,19 @@ test('Valid: Nat in Type with Nat arguments', () => {
 
 test('Invalid: Type in Type_0 (universe too large)', () => {
   // inductive Bad : Type where
-  //   | mk : Type -> Bad
+  //   | Mk : Type -> Bad
   // This should fail because Type (= Sort 1) is not < Sort 1
 
   const Bad = mkInductiveRef('Bad', Type);
 
-  // mk : Type -> Bad
+  // Mk : Type -> Bad
   const mkType_arrow_Bad = mkArrow(Type, Bad);
 
   const result = checkInductiveValidity(
     'Bad',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'mk', type: elabToKernel(mkType_arrow_Bad) as TTKTerm }
+      { name: 'Mk', type: elabToKernel(mkType_arrow_Bad) as TTKTerm }
     ],
     []
   );
@@ -373,19 +373,19 @@ test('Invalid: Type in Type_0 (universe too large)', () => {
 
 test('Valid: Large type in Type_1', () => {
   // inductive Large : Type 1 where
-  //   | mk : Type -> Large
+  //   | Mk : Type -> Large
   // This SHOULD be valid because Type (Sort 1) < Type 1 (Sort 2)
 
   const Large = mkInductiveRef('Large', Type1);
 
-  // mk : Type -> Large
+  // Mk : Type -> Large
   const mkType_arrow_Large = mkArrow(Type, Large);
 
   const result = checkInductiveValidity(
     'Large',
     elabToKernel(Type1) as TTKTerm,
     [
-      { name: 'mk', type: elabToKernel(mkType_arrow_Large) as TTKTerm }
+      { name: 'Mk', type: elabToKernel(mkType_arrow_Large) as TTKTerm }
     ],
     []
   );
@@ -395,19 +395,19 @@ test('Valid: Large type in Type_1', () => {
 
 test('Invalid: Type_1 argument in Type_1 inductive', () => {
   // inductive Bad : Type 1 where
-  //   | mk : Type 1 -> Bad
+  //   | Mk : Type 1 -> Bad
   // This should fail because Type 1 (Sort 2) is not < Sort 2
 
   const Bad = mkInductiveRef('Bad', Type1);
 
-  // mk : Type 1 -> Bad
+  // Mk : Type 1 -> Bad
   const mkType1_arrow_Bad = mkArrow(Type1, Bad);
 
   const result = checkInductiveValidity(
     'Bad',
     elabToKernel(Type1) as TTKTerm,
     [
-      { name: 'mk', type: elabToKernel(mkType1_arrow_Bad) as TTKTerm }
+      { name: 'Mk', type: elabToKernel(mkType1_arrow_Bad) as TTKTerm }
     ],
     []
   );
@@ -423,9 +423,9 @@ console.log('\n--- Combined Tests ---\n');
 
 test('Invalid: multiple violations at once', () => {
   // inductive Bad : Type where
-  //   | bad1 : OtherType        -- Wrong return type
-  //   | bad2 : (Bad -> X) -> Bad  -- Negative occurrence
-  //   | bad3 : Type -> Bad      -- Universe violation
+  //   | Bad1 : OtherType        -- Wrong return type
+  //   | Bad2 : (Bad -> X) -> Bad  -- Negative occurrence
+  //   | Bad3 : Type -> Bad      -- Universe violation
 
   const Bad = mkInductiveRef('Bad', Type);
   const OtherType = mkInductiveRef('OtherType', Type);
@@ -435,9 +435,9 @@ test('Invalid: multiple violations at once', () => {
     'Bad',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'bad1', type: elabToKernel(OtherType) as TTKTerm },
-      { name: 'bad2', type: elabToKernel(mkPi(mkArrow(Bad, X), Bad, '_')) as TTKTerm },
-      { name: 'bad3', type: elabToKernel(mkArrow(Type, Bad)) as TTKTerm }
+      { name: 'Bad1', type: elabToKernel(OtherType) as TTKTerm },
+      { name: 'Bad2', type: elabToKernel(mkPi(mkArrow(Bad, X), Bad, '_')) as TTKTerm },
+      { name: 'Bad3', type: elabToKernel(mkArrow(Type, Bad)) as TTKTerm }
     ],
     []
   );
@@ -464,7 +464,7 @@ test('Valid: Unit type (one nullary constructor)', () => {
     'Unit',
     elabToKernel(Type) as TTKTerm,
     [
-      { name: 'tt', type: elabToKernel(Unit) as TTKTerm }
+      { name: 'Tt', type: elabToKernel(Unit) as TTKTerm }
     ],
     []
   );
@@ -473,7 +473,71 @@ test('Valid: Unit type (one nullary constructor)', () => {
 });
 
 // ============================================================================
-// 5. Helper Function Tests
+// 5. Constructor Naming Tests
+// ============================================================================
+
+console.log('\n--- Constructor Naming Tests ---\n');
+
+test('Valid: constructor starting with uppercase letter', () => {
+  const Nat = mkInductiveRef('Nat', Type);
+
+  const result = checkInductiveValidity(
+    'Nat',
+    elabToKernel(Type) as TTKTerm,
+    [
+      { name: 'Zero', type: elabToKernel(Nat) as TTKTerm },
+      { name: 'Succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
+    ],
+    []
+  );
+
+  assert(result.success, `Expected success, got errors: ${result.errors.map(e => e.message).join(', ')}`);
+});
+
+test('Invalid: constructor starting with lowercase letter', () => {
+  const Nat = mkInductiveRef('Nat', Type);
+
+  const result = checkInductiveValidity(
+    'Nat',
+    elabToKernel(Type) as TTKTerm,
+    [
+      { name: 'zero', type: elabToKernel(Nat) as TTKTerm },
+      { name: 'succ', type: elabToKernel(mkArrow(Nat, Nat)) as TTKTerm }
+    ],
+    []
+  );
+
+  assert(!result.success, 'Expected failure for lowercase constructor names');
+  assert(result.errors.length === 2, `Expected 2 errors, got ${result.errors.length}`);
+  assert(
+    result.errors.every(e => e.message.includes('uppercase')),
+    'Errors should mention uppercase requirement'
+  );
+});
+
+test('Invalid: mixed case constructors - only lowercase ones fail', () => {
+  const Bool = mkInductiveRef('Bool', Type);
+
+  const result = checkInductiveValidity(
+    'Bool',
+    elabToKernel(Type) as TTKTerm,
+    [
+      { name: 'True', type: elabToKernel(Bool) as TTKTerm },
+      { name: 'false', type: elabToKernel(Bool) as TTKTerm }
+    ],
+    []
+  );
+
+  assert(!result.success, 'Expected failure for lowercase constructor');
+  assert(result.errors.length === 1, `Expected 1 error, got ${result.errors.length}`);
+  assert(
+    result.errors[0].message.includes('false'),
+    `Error should mention 'false', got: ${result.errors[0].message}`
+  );
+});
+
+// ============================================================================
+// 6. Helper Function Tests
 // ============================================================================
 
 console.log('\n--- Helper Function Tests ---\n');
@@ -501,7 +565,7 @@ test('containsConstant: finds constant nested in Pi', () => {
 });
 
 // ============================================================================
-// 6. Constructor Argument Type Validation Tests
+// 7. Constructor Argument Type Validation Tests
 // ============================================================================
 
 console.log('\n--- Constructor Argument Type Validation Tests ---\n');
@@ -720,7 +784,7 @@ test('Valid from validity perspective: Fin with wrong index type (type-checker c
 
 test('Valid: Eq with correct identity type', () => {
   // Eq : (A : Type) -> A -> A -> Type 1
-  // refl : (A : Type) -> (x : A) -> Eq A x x
+  // Refl : (A : Type) -> (x : A) -> Eq A x x
   //
   // Note: Eq must be in Type 1 (Sort 2) because it takes a Type parameter
 
@@ -728,7 +792,7 @@ test('Valid: Eq with correct identity type', () => {
   const EqKind = mkPi(Type, mkPi(mkVar(0), mkArrow(mkVar(1), Type1), 'x'), 'A');
   const Eq = mkInductiveRef('Eq', EqKind);
 
-  // refl : (A : Type) -> (x : A) -> Eq A x x
+  // Refl : (A : Type) -> (x : A) -> Eq A x x
   const reflType = mkPi(
     Type,
     mkPi(
@@ -743,7 +807,7 @@ test('Valid: Eq with correct identity type', () => {
     'Eq',
     elabToKernel(EqKind) as TTKTerm,
     [
-      { name: 'refl', type: elabToKernel(reflType) as TTKTerm }
+      { name: 'Refl', type: elabToKernel(reflType) as TTKTerm }
     ],
     []
   );

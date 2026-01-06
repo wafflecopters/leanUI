@@ -100,11 +100,11 @@ test('checkTermDeclaration: neither type nor value', () => {
 
 test('checkInductiveDeclaration: simple inductive type', () => {
   // inductive Unit : Type where
-  //   | tt : Unit
+  //   | Tt : Unit
   const inductiveType = mkType(1);  // Type = Sort 1
   const Unit = mkConst('Unit', mkType(1));
   const constructors = [
-    { name: 'tt', type: elabToKernel(Unit) }
+    { name: 'Tt', type: elabToKernel(Unit) }
   ];
 
   const result = checkInductiveDeclaration(
@@ -140,16 +140,16 @@ test('checkInductiveDeclaration: parallel constructor checking', () => {
 
 test('checkInductiveDeclaration: collects all constructor errors', () => {
   // inductive Bad : Type where
-  //   | bad1 : Nat -> Nat -> Nat -> (ill-formed - Nat undefined)
-  //   | bad2 : Foo -> Bar          (ill-formed - Foo, Bar undefined)
+  //   | Bad1 : Nat -> Nat -> Nat -> (ill-formed - Nat undefined)
+  //   | Bad2 : Foo -> Bar          (ill-formed - Foo, Bar undefined)
 
   // Use variables that don't exist in context
   const badType1 = mkPi(mkVar(5), mkVar(0), 'x');  // Var 5 out of bounds
   const badType2 = mkPi(mkVar(10), mkVar(0), 'y'); // Var 10 out of bounds
 
   const constructors = [
-    { name: 'bad1', type: elabToKernel(badType1) },
-    { name: 'bad2', type: elabToKernel(badType2) }
+    { name: 'Bad1', type: elabToKernel(badType1) },
+    { name: 'Bad2', type: elabToKernel(badType2) }
   ];
 
   const result = checkInductiveDeclaration(
