@@ -82,12 +82,14 @@ export function rangeContainedIn(inner: SourceRange, outer: SourceRange): boolea
  * Smaller ranges are more specific (better matches).
  */
 function rangeSize(range: SourceRange): number {
-  // Use character offset if available, otherwise estimate from lines/cols
-  if (range.start.pos !== undefined && range.end.pos !== undefined) {
+  // Use character offset if available and valid (end > start)
+  // Some callers set pos: 0 for both which is meaningless
+  if (range.start.pos !== undefined && range.end.pos !== undefined &&
+      range.end.pos > range.start.pos) {
     return range.end.pos - range.start.pos;
   }
 
-  // Rough estimate: assume 100 chars per line
+  // Fall back to line/col based estimate
   const lineSpan = range.end.line - range.start.line;
   if (lineSpan === 0) {
     return range.end.col - range.start.col;
@@ -319,6 +321,29 @@ export function queryTypeAtPosition(
     return typeResult;
   }
 
+  // Step 4: Check if cursor is on/near a binder name
+  // Create a zero-width selection at the cursor position for binder detection
+  const cursorSelection: SourceRange = {
+    start: adjustedPos,
+    end: { ...adjustedPos, col: adjustedPos.col + 1 }  // 1-char width for binder detection
+  };
+
+  const pathExpectedType = computeExpectedTypeAtPath(expectedType, pathResult.path);
+  const binderResult = checkBinderNameSelection(
+    cursorSelection,
+    pathResult.range,
+    typeResult.term,
+    pathExpectedType,
+    typeResult.context,
+    sourceMap
+  );
+  if (binderResult) {
+    return {
+      ...binderResult,
+      sourceRange: cursorSelection
+    };
+  }
+
   // Combine results
   return {
     ...typeResult,
@@ -360,10 +385,178 @@ export function queryTypeForSelection(
     return typeResult;
   }
 
+  // Check if the selection is exactly on a binder name
+  // A lambda's source range starts at the binder name (e.g., "x y => body" starts at "x")
+  // If the selection starts at the same position as the containing lambda AND
+  // the selection is small (just the binder name), return the domain type instead
+  //
+  // We need to compute the expected type for this specific path - the type inference
+  // tracked it through navigation, so we can reconstruct it by following the same path
+  const pathExpectedType = computeExpectedTypeAtPath(expectedType, pathResult.path);
+  const binderResult = checkBinderNameSelection(
+    selection,
+    pathResult.range,
+    typeResult.term,
+    pathExpectedType,
+    typeResult.context,
+    sourceMap
+  );
+  if (binderResult) {
+    return {
+      ...binderResult,
+      sourceRange: selection  // Use the actual selection range, not the lambda's range
+    };
+  }
+
   return {
     ...typeResult,
     sourceRange: pathResult.range
   };
+}
+
+/**
+ * Compute the expected type at a given path by following the same navigation
+ * through Pi types that queryTypeAtPath does through lambdas.
+ *
+ * For example, if we have:
+ * - expectedType: (A : Type) -> (B : Type) -> A -> B -> A
+ * - path: ["body", "body", "body"]  (navigating to the 4th lambda)
+ *
+ * We navigate through the Pi type: body -> body -> body
+ * Result: B -> A (the expected type for the 4th lambda)
+ */
+function computeExpectedTypeAtPath(
+  expectedType: TTKTerm | undefined,
+  path: IndexPath
+): TTKTerm | undefined {
+  if (!expectedType) return undefined;
+
+  let current = expectedType;
+  for (const segment of path) {
+    if (segment.kind !== 'field') continue;
+
+    if (segment.name === 'body' && current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+      current = current.body;
+    }
+    // For other path segments (like 'domain', 'fn', 'arg'), we don't have
+    // a corresponding expected type structure, so we stop tracking
+  }
+  return current;
+}
+
+/**
+ * Check if a type contains any holes.
+ */
+function typeHasHoles(type: TTKTerm): boolean {
+  switch (type.tag) {
+    case 'Hole': return true;
+    case 'Binder': return typeHasHoles(type.domain) || typeHasHoles(type.body);
+    case 'App': return typeHasHoles(type.fn) || typeHasHoles(type.arg);
+    case 'Annot': return typeHasHoles(type.term) || typeHasHoles(type.type);
+    case 'Const': return false;  // Don't check sort annotation
+    case 'Match':
+      if (typeHasHoles(type.scrutinee)) return true;
+      return type.clauses.some(c => typeHasHoles(c.rhs));
+    case 'Var':
+    case 'Sort': return false;
+  }
+}
+
+/**
+ * Check if a selection is exactly on a binder name and return the variable's type.
+ *
+ * Lambda source ranges can start in two ways:
+ * - Outer lambda with backslash: "\ A B x => body" starts at "\"
+ * - Nested lambdas (no extra backslash): "B x => body" starts at "B"
+ *
+ * When selecting just "A" or "B", we want to show the binder's type, not the lambda's type.
+ */
+function checkBinderNameSelection(
+  selection: SourceRange,
+  containingRange: SourceRange,
+  term: TTKTerm,
+  expectedType: TTKTerm | undefined,
+  context: TTKContext,
+  sourceMap: SourceMap
+): { success: true; term: TTKTerm; type: TTKTerm; context: TTKContext } | null {
+  // Only applies to lambdas
+  if (term.tag !== 'Binder' || term.binderKind.tag !== 'BLam') {
+    return null;
+  }
+
+  const selectionSize = rangeSize(selection);
+  const binderNameLen = term.name.length;
+
+  // Selection must be small enough to be just this binder's name (allow 1 char tolerance for cursor)
+  // This prevents "B x" (size 3) from matching binder "B" (size 1)
+  if (selectionSize > binderNameLen + 1) {
+    return null;
+  }
+
+  // Check if selection is in the "binder name region" of the lambda
+  // For nested lambdas: selection should start at the same position as the containing range
+  // For outer lambdas with backslash: selection is AFTER the lambda start but BEFORE the body starts
+  const selectionIsAtStart = (selection.start.line === containingRange.start.line &&
+                               selection.start.col === containingRange.start.col);
+
+  let selectionIsInBinderRegion = selectionIsAtStart;
+
+  if (!selectionIsAtStart) {
+    // Find the body's source range to check if selection is in the binder region
+    const bodyRange = findBodyRange(containingRange, sourceMap);
+    if (bodyRange) {
+      const onSameLine = selection.start.line === containingRange.start.line;
+      const afterLambdaStart = selection.start.col > containingRange.start.col;
+      const beforeBodyStart = selection.end.col <= bodyRange.start.col;
+      const withinLambda = selection.end.col <= containingRange.end.col;
+
+      selectionIsInBinderRegion = onSameLine && afterLambdaStart && beforeBodyStart && withinLambda;
+    }
+  }
+
+  if (!selectionIsInBinderRegion) {
+    return null;
+  }
+
+  // Get the binder's domain type
+  // If the lambda's domain has holes and we have an expected Pi type, use the Pi's domain
+  let domainType = term.domain;
+  if (typeHasHoles(domainType) && expectedType?.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
+    domainType = expectedType.domain;
+  }
+
+  // Create a synthetic term representing the bound variable
+  const syntheticVar: TTKTerm = { tag: 'Const', name: term.name, type: domainType };
+
+  return {
+    success: true,
+    term: syntheticVar,
+    type: domainType,
+    context
+  };
+}
+
+/**
+ * Find the body's source range - the range that starts closest to (but after)
+ * the containing range's start, on the same line.
+ */
+function findBodyRange(containingRange: SourceRange, sourceMap: SourceMap): SourceRange | null {
+  let bodyRange: SourceRange | null = null;
+  let closestStart = Infinity;
+
+  for (const [, range] of sourceMap.entries()) {
+    if (range.start.line !== containingRange.start.line) continue;
+    if (range.start.col <= containingRange.start.col) continue;
+    if (range.end.col > containingRange.end.col) continue;
+
+    const distFromStart = range.start.col - containingRange.start.col;
+    if (distFromStart < closestStart) {
+      closestStart = distFromStart;
+      bodyRange = range;
+    }
+  }
+
+  return bodyRange;
 }
 
 /**

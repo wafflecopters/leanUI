@@ -813,15 +813,12 @@ const = \\ A B x y => x`;
     }
   });
 
-  it('should show the lambda type when selecting just "y" (a binder name)', () => {
+  it('should show y : B when selecting just "y" (a binder name)', () => {
     // const : (A : Type) -> (B : Type) -> A -> B -> A
     // const = \ A B x y => x
     //
-    // When selecting "y", the smallest AST node containing it is the lambda "\y => x"
-    // whose type is "B -> A". The types should be resolved from the signature.
-    //
-    // NOTE: Ideally selecting a binder name would show the variable's type (B),
-    // but this would require tracking binder name positions separately.
+    // When the selection is exactly on a binder name "y", we should show
+    // the type of that variable (B), not the containing lambda's type.
     const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
 const = \\ A B x y => x`;
 
@@ -847,9 +844,9 @@ const = \\ A B x y => x`;
     if (result.success) {
       const names = result.context.map(b => b.name);
       const typeStr = prettyPrint(result.type, names);
-      // The smallest containing lambda is \y => x with type (B -> A)
-      expect(typeStr).not.toContain('?');  // No holes
-      expect(typeStr).toBe('(B -> A)');
+      // Should be 'B' - the type of the binder variable y
+      expect(typeStr).not.toContain('?');
+      expect(typeStr).toBe('B');
     }
   });
 
@@ -890,15 +887,12 @@ const = \\ A B x y => x`;
     }
   });
 
-  it('should show the lambda type when selecting "A" (a binder name)', () => {
+  it('should show A : Type when selecting "A" (a binder name)', () => {
     // const : (A : Type) -> (B : Type) -> A -> B -> A
     // const = \ A B x y => x
     //
-    // When selecting "A", the smallest AST node containing it is the full lambda
-    // whose type is the full function type. Types should be resolved from the signature.
-    //
-    // NOTE: Ideally selecting a binder name would show the variable's type (Type),
-    // but this would require tracking binder name positions separately.
+    // When the selection is exactly on binder name "A", we should show
+    // the type of that variable (Type), not the containing lambda's type.
     const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
 const = \\ A B x y => x`;
 
@@ -925,11 +919,172 @@ const = \\ A B x y => x`;
     if (result.success) {
       const names = result.context.map(b => b.name);
       const typeStr = prettyPrint(result.type, names);
-      // Should not contain holes - types are resolved from signature
+      // Should be 'Type' - the type of binder variable A
       expect(typeStr).not.toContain('?');
-      // The full lambda has type ((A : Type) -> (B : Type) -> A -> B -> A)
-      expect(typeStr).toContain('Type');
+      expect(typeStr).toBe('Type');
+    }
+  });
+
+  it('should show x : A when selecting "x" binder (not body)', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // When the selection is exactly on binder name "x" (the third binder),
+    // we should show the type of that variable (A).
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the "x" binder (first x, not the final x in body)
+    const lines = sourceCode.split('\n');
+    const xPos = lines[1].indexOf('x'); // First x is the binder
+
+    const selectionRange = {
+      start: { line: 2, col: xPos + 1, pos: 0 },
+      end: { line: 2, col: xPos + 2, pos: 0 }
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should be 'A' - the type of binder variable x
+      expect(typeStr).not.toContain('?');
+      expect(typeStr).toBe('A');
+    }
+  });
+
+  it('should show y : B when cursor is on "y" binder (position query)', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // When the cursor is ON the binder name "y" (not a selection, just cursor position),
+    // we should show the type of that variable (B).
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the "y" parameter position on line 2
+    const lines = sourceCode.split('\n');
+    const yPos = lines[1].lastIndexOf('y');
+
+    // Query at cursor position (not a selection)
+    const cursorPos = { line: 2, col: yPos + 1, pos: 0 };
+
+    const result = queryTypeAtPosition(
+      cursorPos,
+      valueRelativeMap,
+      queryData.kernelValue!,
+      queryData.context,
+      queryData.kernelType,
+      'const',
+      sourceCode
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should be 'B' - the type of the binder variable y
+      expect(typeStr).not.toContain('?');
+      expect(typeStr).toBe('B');
+    }
+  });
+
+  it('should show A : Type when cursor is next to "A" binder (position query)', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // When the cursor is next to the binder name "A", we should show
+    // the type of that variable (Type).
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find the "A" parameter after the backslash on line 2
+    const lines = sourceCode.split('\n');
+    const lambdaStart = lines[1].indexOf('\\');
+    const aPos = lambdaStart + 2; // "\ A" - A is at position 2 after backslash
+
+    // Query at cursor position (not a selection)
+    const cursorPos = { line: 2, col: aPos + 1, pos: 0 };
+
+    const result = queryTypeAtPosition(
+      cursorPos,
+      valueRelativeMap,
+      queryData.kernelValue!,
+      queryData.context,
+      queryData.kernelType,
+      'const',
+      sourceCode
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should be 'Type' - the type of binder variable A
+      expect(typeStr).not.toContain('?');
+      expect(typeStr).toBe('Type');
+    }
+  });
+
+  it('should show lambda type when selecting multiple binders "B x"', () => {
+    // const : (A : Type) -> (B : Type) -> A -> B -> A
+    // const = \ A B x y => x
+    //
+    // Selecting "B x" spans multiple binders, so we should NOT trigger binder detection.
+    // Instead, fall back to the containing lambda's type.
+    const sourceCode = `const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const constBlock = results.find(b => b.name === 'const');
+    expect(constBlock!.checkSuccess).toBe(true);
+
+    const queryData = constBlock!.typeQueryData!;
+    const valueRelativeMap = createValueRelativeSourceMap(queryData.sourceMap);
+
+    // Find "B x" on line 2
+    const lines = sourceCode.split('\n');
+    const bPos = lines[1].indexOf('B');
+    const xPos = lines[1].indexOf('x');
+
+    const selectionRange = {
+      start: { line: 2, col: bPos + 1, pos: 0 },
+      end: { line: 2, col: xPos + 2, pos: 0 }  // "B x" = 3 chars
+    };
+
+    const result = queryTypeForSelection(selectionRange, valueRelativeMap, queryData.kernelValue!, queryData.context, queryData.kernelType, 'const');
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+      // Should be the B-level lambda type: (B : Type) -> A -> B -> A
+      // NOT just "Type" (which would be wrong - treating it as binder B)
       expect(typeStr).toContain('->');
+      expect(typeStr).toContain('Type');
     }
   });
 });

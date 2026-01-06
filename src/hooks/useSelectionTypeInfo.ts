@@ -250,12 +250,15 @@ export function useSelectionTypeInfo(
           // Single line
           const line = lines[result.sourceRange.start.line - 1] || '';
           selectedCode = line.slice(result.sourceRange.start.col - 1, result.sourceRange.end.col - 1);
-        } else {
-          // Multi-line - just use the pretty-printed term
-          selectedCode = termStr;
+          // For lambdas, ensure we show the backslash (nested lambdas don't include it in source range)
+          const isLambda = result.term.tag === 'Binder' && result.term.binderKind.tag === 'BLam';
+          if (isLambda && !selectedCode.startsWith('\\')) {
+            selectedCode = '\\ ' + selectedCode;
+          }
         }
+        // Multi-line - already using termStr
       } catch {
-        selectedCode = termStr;
+        // Already using termStr
       }
     }
 
