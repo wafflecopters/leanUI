@@ -1,5 +1,22 @@
 # Universe Level Polymorphism Implementation Plan
 
+## Implementation Order Context
+
+This feature is part of a larger roadmap. The implementation order is:
+
+1. **Implicit/Named Arguments** (`NAMED_ARGS_PLAN.md`) - First priority
+2. **Universe Levels** (this plan) - **Second priority**
+3. **Multi-Variable Binders** (`MULTI_ARGS_PLAN.md`) - Third priority
+4. **Records** - Fourth priority (plan TBD)
+
+### Why This Order?
+
+- **Implicit args before levels**: Universe polymorphism typically uses implicit level parameters (`{u : Level} -> Type u`). The implicit argument infrastructure must exist first.
+- **Levels before multi-var**: While not strictly required, having levels enables more realistic multi-var examples like `{A B : Type u}`.
+- **Multi-var can reference levels**: `(u v : Level) -> ...` is a natural use case for multi-variable binders.
+
+---
+
 ## Overview
 
 Add universe level polymorphism to support syntax like:
