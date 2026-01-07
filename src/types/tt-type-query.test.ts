@@ -712,11 +712,7 @@ plus (Succ a) b = Succ (plus a b)`;
     }
   });
 
-  it.skip('should show eq : Equal Nat a b for pattern variable with dependent type', () => {
-    // SKIPPED: Indexed types (Equal) have known issues with type checking.
-    // This test validates the type query infrastructure but depends on
-    // indexed type support being fixed first.
-    //
+  it('should show eq : Equal Nat a b for pattern variable with dependent type', () => {
     // BUG: Pattern variable types that reference earlier pattern bindings
     // were displaying incorrect names due to De Bruijn index mismatch.
     // When querying the type of 'eq' in "foo a b eq = ...",
@@ -727,7 +723,7 @@ plus (Succ a) b = Succ (plus a b)`;
   Succ : Nat -> Nat
 
 inductive Equal : (A : Type) -> A -> A -> Type where
-  refl : (A : Type) -> (x : A) -> Equal A x x
+  Refl : (A : Type) -> (x : A) -> Equal A x x
 
 foo : (a : Nat) -> (b : Nat) -> Equal Nat a b -> Nat
 foo a b eq = Zero`;
@@ -752,12 +748,12 @@ foo a b eq = Zero`;
       const names = result.context.map(b => b.name);
       const typeStr = prettyPrint(result.type, names);
       // Should show "Equal Nat a b" with correct variable names
-      // NOT something garbled like "Equal Nat Equal refl"
+      // NOT something garbled like "Equal Nat Equal Refl"
       expect(typeStr).toContain('Equal');
       expect(typeStr).toContain('Nat');
       expect(typeStr).toContain('a');
       expect(typeStr).toContain('b');
-      expect(typeStr).not.toContain('refl');
+      expect(typeStr).not.toContain('Refl');
     }
   });
 });
@@ -1514,5 +1510,219 @@ plus (Succ a) b = Succ (plus a b)
     const bTypeStr2 = prettyPrint(bBinding2!.type, []);
     expect(aTypeStr).toBe('Nat');
     expect(bTypeStr2).toBe('Nat');
+  });
+
+  it('should show correct substitutions for Equal/Refl pattern with wildcards', () => {
+    // Test case from user bug report:
+    // foo : (p : Nat) -> (q : Nat) -> Equal Nat p q -> Nat
+    // foo i _ (Refl _ _) = i
+    //
+    // Pattern bindings should be (in binding order):
+    //   i : Nat      (from pattern 0 matching p)      - binding index 0, De Bruijn 3
+    //   #1 : Nat     (wildcard from pattern 1 matching q) - binding index 1, De Bruijn 2
+    //   #2 : Type    (wildcard from Refl's first arg A)   - binding index 2, De Bruijn 1
+    //   #3 : Nat     (wildcard from Refl's second arg x)  - binding index 3, De Bruijn 0
+    //
+    // Resolutions should show:
+    //   #1 = i       (because q must equal p due to Refl constraint)
+    //
+    // The bug was showing "#2 = i" which is wrong - the De Bruijn index was not being
+    // correctly converted to binding order index for display.
+    const sourceCode = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  Refl : (A : Type) -> (x : A) -> Equal A x x
+
+foo : (p : Nat) -> (q : Nat) -> Equal Nat p q -> Nat
+foo i _ (Refl _ _) = i
+`;
+
+    const results = checkSourceBlocks(sourceCode);
+
+    // Find the foo declaration
+    const fooBlock = results.find(b => b.name === 'foo');
+    expect(fooBlock).toBeDefined();
+    expect(fooBlock!.checkSuccess).toBe(true);
+    expect(fooBlock!.typeQueryData).toBeDefined();
+
+    const queryData = fooBlock!.typeQueryData!;
+    expect(queryData.clauseResults).toBeDefined();
+    expect(queryData.clauseResults!.length).toBe(1); // One clause
+
+    const clauseResult = queryData.clauseResults![0];
+
+    // Check the solved bindings
+    // Should have 4 bindings: i, _, _, _ (the wildcards)
+    expect(clauseResult.solvedBindings.length).toBe(4);
+
+    // First binding should be 'i' with type Nat
+    expect(clauseResult.solvedBindings[0].name).toBe('i');
+    expect(prettyPrint(clauseResult.solvedBindings[0].type, [])).toBe('Nat');
+
+    // Second binding is the wildcard matching 'q', should have type Nat
+    expect(clauseResult.solvedBindings[1].name).toBe('_');
+    expect(prettyPrint(clauseResult.solvedBindings[1].type, [])).toBe('Nat');
+
+    // Third binding is the wildcard matching 'A' in Refl, should have type Type
+    expect(clauseResult.solvedBindings[2].name).toBe('_');
+    expect(prettyPrint(clauseResult.solvedBindings[2].type, [])).toBe('Type');
+
+    // Fourth binding is the wildcard matching 'x' in Refl, should have type Nat (since A = Nat)
+    expect(clauseResult.solvedBindings[3].name).toBe('_');
+
+    // Check the substitution - the key issue
+    const subst = clauseResult.substitution;
+
+    // The substitution encodes which pattern variables are equal due to unification.
+    // For foo i _ (Refl _ _) matching (p : Nat) -> (q : Nat) -> Equal Nat p q -> Nat:
+    //
+    // The Refl constructor has type: (A : Type) -> (x : A) -> Equal A x x
+    // When matching against Equal Nat p q, we get:
+    //   A = Nat (parameter, first Refl wildcard matches Nat)
+    //   x = p (first value, second Refl wildcard matches p)
+    //   x = q (second index in Equal Nat p q)
+    // Therefore p = q = x (the second Refl arg)
+    //
+    // The substitution should show:
+    //   var:3 = Var(0) meaning i = #3
+    //   var:2 = Var(0) meaning #1 = #3
+    //
+    // With display names: i (#1) = #3, #1 = #3
+    // This correctly encodes: p = q = x (all equal to the second Refl arg)
+
+    // Verify the substitution has the expected entries
+    const var2Entry = subst.get('var:2');
+    const var3Entry = subst.get('var:3');
+
+    // Both should map to Var(0) - the second Refl wildcard (x : A where A = Nat)
+    expect(var2Entry).toBeDefined();
+    expect(var2Entry?.tag).toBe('Var');
+    if (var2Entry?.tag === 'Var') {
+      expect(var2Entry.index).toBe(0);
+    }
+
+    expect(var3Entry).toBeDefined();
+    expect(var3Entry?.tag).toBe('Var');
+    if (var3Entry?.tag === 'Var') {
+      expect(var3Entry.index).toBe(0);
+    }
+
+    // Verify the De Bruijn to binding index conversion formula
+    const numBindings = clauseResult.solvedBindings.length;
+    expect(numBindings).toBe(4);
+
+    // De Bruijn 3 -> binding 0 (i)
+    // De Bruijn 2 -> binding 1 (#1)
+    // De Bruijn 1 -> binding 2 (#2)
+    // De Bruijn 0 -> binding 3 (#3)
+    expect(numBindings - 1 - 3).toBe(0); // De Bruijn 3 -> binding 0
+    expect(numBindings - 1 - 2).toBe(1); // De Bruijn 2 -> binding 1
+    expect(numBindings - 1 - 1).toBe(2); // De Bruijn 1 -> binding 2
+    expect(numBindings - 1 - 0).toBe(3); // De Bruijn 0 -> binding 3
+
+    // So the display should show:
+    // - var:3 = Var(0): bindingIdx(3) = 0 -> "i", value Var(0) -> "#3" => "i = #3"
+    // - var:2 = Var(0): bindingIdx(2) = 1 -> "#1", value Var(0) -> "#3" => "#1 = #3"
+    // This correctly shows that i, #1 (q), and #3 (x) are all equal.
+  });
+
+  it('should show solved type for constructor pattern (Refl _ _) as Equal Nat i i', () => {
+    // STRICT TEST: The type of "(Refl _ _)" MUST be "Equal Nat i i"
+    //
+    // For: foo i _ (Refl _ _) = i
+    // With: foo : (p : Nat) -> (q : Nat) -> Equal Nat p q -> Nat
+    //
+    // Unification determines: p = q (because Refl : Equal A x x forces both indices equal)
+    // Since p is bound to 'i', the type must show "Equal Nat i i"
+    const sourceCode = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  Refl : (A : Type) -> (x : A) -> Equal A x x
+
+foo : (p : Nat) -> (q : Nat) -> Equal Nat p q -> Nat
+foo i _ (Refl _ _) = i
+`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const fooBlock = results.find(b => b.name === 'foo');
+    expect(fooBlock).toBeDefined();
+    expect(fooBlock!.checkSuccess).toBe(true);
+    expect(fooBlock!.typeQueryData).toBeDefined();
+
+    const queryData = fooBlock!.typeQueryData!;
+
+    // Use queryTypeAtPath directly to query the pattern at clause 0, pattern 2
+    // Path: clauses[0].patterns[2] -> the (Refl _ _) pattern
+    const path: IndexPath = [
+      { kind: 'field', name: 'clauses' },
+      { kind: 'array', index: 0 },
+      { kind: 'field', name: 'patterns' },
+      { kind: 'array', index: 2 }
+    ];
+
+    const elabContext = {
+      clauseResults: queryData.clauseResults,
+      functionType: queryData.kernelType
+    };
+
+    const result = queryTypeAtPath(
+      queryData.kernelValue!,
+      queryData.context,
+      path,
+      queryData.kernelType,
+      elabContext
+    );
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const names = result.context.map(b => b.name);
+      const typeStr = prettyPrint(result.type, names);
+
+      // The type MUST be "Equal Nat i i" - both indices the same
+      // NOT "Equal Nat i q" (unsolved)
+      // NOT "Equal Nat _ _" (wildcards)
+      // NOT "Type" (wrong - that's the type of the first Refl arg)
+      expect(typeStr).toBe('(Equal Nat i i)');
+    }
+  });
+
+  it('should record parameter bindings in substitution for display (e.g., #2 = Nat)', () => {
+    // For foo i _ (Refl _ _) where Refl : (A : Type) -> (x : A) -> Equal A x x
+    // The first Refl argument (#2) is a TYPE parameter that equals Nat
+    // This should be recorded in the substitution for display purposes
+    const sourceCode = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  Refl : (A : Type) -> (x : A) -> Equal A x x
+
+foo : (p : Nat) -> (q : Nat) -> Equal Nat p q -> Nat
+foo i _ (Refl _ _) = i
+`;
+
+    const results = checkSourceBlocks(sourceCode);
+    const fooBlock = results.find(b => b.name === 'foo');
+    expect(fooBlock).toBeDefined();
+    expect(fooBlock!.checkSuccess).toBe(true);
+    expect(fooBlock!.typeQueryData?.clauseResults).toBeDefined();
+
+    const clauseResult = fooBlock!.typeQueryData!.clauseResults![0];
+    const subst = clauseResult.substitution;
+
+    // Check that the substitution has a var:1 entry for the first Refl wildcard (#2 = Nat)
+    // Bindings: i(3), _(2), _(1)=#2, _(0)=#3
+    // So var:1 corresponds to #2 (the Type parameter of Refl)
+    const var1Entry = subst.get('var:1');
+    expect(var1Entry).toBeDefined();
+    // It should be Nat (a Const term)
+    expect(var1Entry?.tag).toBe('Const');
+    if (var1Entry?.tag === 'Const') {
+      expect(var1Entry.name).toBe('Nat');
+    }
   });
 });

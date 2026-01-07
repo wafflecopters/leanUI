@@ -29,8 +29,9 @@
  * that all verification happens in the kernel layer.
  */
 
-import { TTKTerm, TTKContext, TTKClause } from './tt-kernel';
+import { TTKTerm, TTKContext, TTKClause, mkType } from './tt-kernel';
 import { TPattern } from './tt-core';
+import { unifyTerms } from './tt-unify';
 
 // ============================================================================
 // Types
@@ -151,6 +152,8 @@ interface SlotRef {
 interface ArgTypeInfo {
   /** Name of the inductive type (e.g., "Nat", "Bool") */
   typeName: string | null;
+  /** The full type expression (e.g., Vec A (Succ n)) - needed for index unification */
+  fullType: TTKTerm | null;
   /** All constructor names for this type */
   constructors: string[];
   /** Number of arguments each constructor takes (for decomposition) */
@@ -267,6 +270,7 @@ function getArgTypeInfo(
     // Not an inductive type (e.g., function type, Sort)
     return {
       typeName: null,
+      fullType: null,
       constructors: [],
       constructorArities: new Map()
     };
@@ -285,6 +289,7 @@ function getArgTypeInfo(
 
   return {
     typeName,
+    fullType: type,  // Preserve the full type for index unification
     constructors,
     constructorArities
   };
@@ -372,6 +377,72 @@ function countCtorArgs(ctorType: TTKTerm, _inductiveName: string): number {
     current = current.body;
   }
   return count;
+}
+
+/**
+ * Extract type indices (arguments) from an applied type.
+ * For `Vec A n`, returns [A, n].
+ * For `Nat`, returns [].
+ */
+function extractTypeIndices(type: TTKTerm): TTKTerm[] {
+  const indices: TTKTerm[] = [];
+  let current = type;
+  while (current.tag === 'App') {
+    indices.unshift(current.arg);
+    current = current.fn;
+  }
+  return indices;
+}
+
+/**
+ * Check if a constructor is possible given an expected type.
+ *
+ * For indexed inductive types, a constructor may be impossible if its
+ * return type indices cannot unify with the expected type's indices.
+ *
+ * For example, VNil : Vec A Zero cannot match Vec A (Succ n) because
+ * Zero cannot unify with (Succ n).
+ *
+ * @param ctorType - The constructor's full type
+ * @param expectedType - The expected type at this position
+ * @param ctx - Typing context
+ * @returns true if the constructor is possible, false if definitely impossible
+ */
+function isConstructorPossible(
+  ctorType: TTKTerm,
+  expectedType: TTKTerm,
+  ctx: TTKContext
+): boolean {
+  // Get the constructor's return type
+  const ctorReturnType = getReturnType(ctorType);
+
+  // Extract indices from both types
+  const ctorIndices = extractTypeIndices(ctorReturnType);
+  const expectedIndices = extractTypeIndices(expectedType);
+
+  // If different number of indices, something is wrong - assume possible
+  if (ctorIndices.length !== expectedIndices.length) {
+    return true;
+  }
+
+  // Try to unify each index
+  // Note: For proper handling, we'd need to account for the constructor's
+  // parameter bindings, but for simple cases like Zero vs (Succ n),
+  // the unification will correctly detect conflicts.
+  for (let i = 0; i < ctorIndices.length; i++) {
+    const ctorIdx = ctorIndices[i];
+    const expIdx = expectedIndices[i];
+
+    // Try unification - we only care about detecting definite conflicts
+    const result = unifyTerms(ctorIdx, expIdx, mkType(0), ctx);
+    if (result.tag === 'failure') {
+      // This constructor is definitely impossible
+      return false;
+    }
+    // If stuck or success, we assume it could be possible
+  }
+
+  return true;
 }
 
 // ============================================================================
@@ -568,6 +639,17 @@ function buildSplitTree(
   const currentSlot = slotRefs[0];
 
   for (const ctorName of typeInfo.constructors) {
+    // Check if this constructor is possible given the expected type's indices.
+    // For indexed types like Vec, some constructors may be impossible due to
+    // index constraints (e.g., VNil can't match Vec A (Succ n)).
+    if (typeInfo.fullType) {
+      const ctorType = lookupTypeByName(ctx, ctorName);
+      if (ctorType && !isConstructorPossible(ctorType, typeInfo.fullType, ctx)) {
+        // This constructor is impossible - skip it (no missing case for it)
+        continue;
+      }
+    }
+
     // Specialize rows for this constructor, including updating argTypes
     const specializedRows = specializeRowsWithTypes(rows, patternIndex, ctorName, ctx, excludeNames);
 

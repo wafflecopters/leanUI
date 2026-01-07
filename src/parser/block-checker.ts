@@ -16,7 +16,7 @@
 import { groupByIndentation, SourceBlock } from './indentation-grouper';
 import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } from './tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { checkTermDeclaration, checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
+import { checkTermDeclaration, checkInductiveDeclaration, CheckError, DefinitionsMap } from '../types/tt-typecheck-decl';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
 import { TTKTerm, TTKContext } from '../types/tt-kernel';
@@ -372,6 +372,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
 
   // Global context accumulates bindings from successfully checked declarations
   let globalContext: TTKContext = [];
+  // Definitions map accumulates function bodies for WHNF reduction
+  const definitions: DefinitionsMap = new Map();
   const checkResults: CheckResultWithBlock[] = [];
 
   for (const elab of elaboratedDecls) {
@@ -444,7 +446,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         kernelValue,
         globalContext,
         typePath,
-        valuePathForCheck
+        valuePathForCheck,
+        definitions
       );
 
       checkResults.push({
@@ -469,6 +472,12 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       const typeToAdd = result.success ? result.value : result.validType;
       if (decl.name && typeToAdd) {
         globalContext = [{ name: decl.name, type: typeToAdd }, ...globalContext];
+      }
+
+      // Add function body to definitions map for WHNF reduction
+      // Only add if check succeeded and we have a value (function body)
+      if (result.success && decl.name && kernelValue) {
+        definitions.set(decl.name, kernelValue);
       }
     }
   }

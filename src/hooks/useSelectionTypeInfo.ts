@@ -193,8 +193,14 @@ export function useSelectionTypeInfo(
     // Query based on whether we have a selection or just a cursor position
     // Pass the kernel type as expectedType so pattern bindings can be computed correctly
     // Pass the definition name so recursive references can be resolved
+    // Pass the elaboration context so unification results are applied to pattern types
     const expectedType = queryData.kernelType;
     const definitionName = block.name;
+    const elabContext = queryData.clauseResults ? {
+      clauseResults: queryData.clauseResults,
+      functionType: queryData.kernelType
+    } : undefined;
+
     let result;
     if (selection &&
         selection.startLineNumber >= block.block.startLine &&
@@ -204,7 +210,7 @@ export function useSelectionTypeInfo(
         start: { line: selection.startLineNumber, col: selection.startColumn, pos: 0 },
         end: { line: selection.endLineNumber, col: selection.endColumn, pos: 0 }
       };
-      result = queryTypeForSelection(selectionRange, sourceMapToUse, term, queryData.context, expectedType, definitionName);
+      result = queryTypeForSelection(selectionRange, sourceMapToUse, term, queryData.context, expectedType, definitionName, elabContext);
     } else {
       // Just a cursor position - find the smallest expression at this point
       const pos: SourcePos = {
@@ -212,7 +218,7 @@ export function useSelectionTypeInfo(
         col: cursorPosition.column,
         pos: 0  // We don't have character offset readily available
       };
-      result = queryTypeAtPosition(pos, sourceMapToUse, term, queryData.context, expectedType, definitionName, sourceCode);
+      result = queryTypeAtPosition(pos, sourceMapToUse, term, queryData.context, expectedType, definitionName, sourceCode, elabContext);
     }
 
     if (!result.success) {

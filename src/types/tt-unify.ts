@@ -52,9 +52,43 @@ export interface UnifyProblem {
 }
 
 /**
- * A substitution maps hole IDs to terms.
+ * A substitution maps hole IDs and variable indices to terms.
+ *
+ * The map uses string keys:
+ * - For holes: the hole ID (e.g., "?x", "?_auto_1")
+ * - For variables: "var:" + index (e.g., "var:0", "var:3")
+ *
+ * Variable substitutions arise from dependent pattern matching on indexed types.
+ * For example, matching on `refl : Equal A x x` against `Equal Nat a b` produces
+ * a substitution that `a = b` (represented as var:1 := Var(0) or vice versa).
  */
 export type Substitution = Map<string, TTKTerm>;
+
+/**
+ * Key prefix for variable substitutions in the substitution map.
+ */
+const VAR_KEY_PREFIX = 'var:';
+
+/**
+ * Create a substitution key for a variable index.
+ */
+export function varKey(index: number): string {
+  return `${VAR_KEY_PREFIX}${index}`;
+}
+
+/**
+ * Check if a substitution key is for a variable (vs a hole).
+ */
+export function isVarKey(key: string): boolean {
+  return key.startsWith(VAR_KEY_PREFIX);
+}
+
+/**
+ * Extract the variable index from a var key.
+ */
+export function varIndexFromKey(key: string): number {
+  return parseInt(key.substring(VAR_KEY_PREFIX.length), 10);
+}
 
 /**
  * Result of a unification attempt.
@@ -142,11 +176,24 @@ export function composeSubstitutions(
 }
 
 /**
- * Apply a substitution to a term, replacing holes with their assigned values.
+ * Apply a substitution to a term, replacing holes and variables with their assigned values.
+ *
+ * This handles both:
+ * - Hole substitutions: ?x -> term (from meta-variable solving)
+ * - Variable substitutions: Var(i) -> term (from dependent pattern matching)
  */
 export function applySubstitution(subst: Substitution, term: TTKTerm): TTKTerm {
   switch (term.tag) {
-    case 'Var':
+    case 'Var': {
+      // Check if this variable has a substitution
+      const replacement = subst.get(varKey(term.index));
+      if (replacement !== undefined) {
+        // Recursively apply substitution in case the replacement has more substitutable terms
+        return applySubstitution(subst, replacement);
+      }
+      return term;
+    }
+
     case 'Sort':
     case 'Const':
       return term;
@@ -669,6 +716,95 @@ function tryEta(
 // ============================================================================
 
 /**
+ * VARIABLE SOLUTION RULE
+ *
+ * If one side is a variable and the other is a different variable or term,
+ * record this equality as a variable substitution.
+ *
+ * This handles dependent pattern matching on indexed types, where unification
+ * determines that one pattern variable equals another.
+ *
+ * For example, matching `refl : Equal A x x` against `Equal Nat a b` produces
+ * a substitution that maps one of `a` or `b` to the other.
+ *
+ * For Var = Var equations, we substitute the higher-indexed variable with
+ * the lower-indexed one. This is a canonical choice that ensures transitivity.
+ *
+ * For Var = Term equations, we substitute the variable with the term
+ * (after checking for cycles).
+ */
+function tryVarSolution(
+  eq: UnifyEquation,
+  ctx: TTKContext,
+  _options: UnifyOptions
+): RuleResult {
+  const lhsWhnf = eq.lhs;
+  const rhsWhnf = eq.rhs;
+
+  // Case 1: Var = Var (different indices)
+  if (lhsWhnf.tag === 'Var' && rhsWhnf.tag === 'Var') {
+    if (lhsWhnf.index === rhsWhnf.index) {
+      // Same variable - already handled by deletion rule
+      return { tag: 'stuck' };
+    }
+
+    // The unification succeeds - these two variables are now known to be equal.
+    // We substitute the higher-indexed variable with the lower-indexed one.
+    // This is a canonical choice for consistency.
+    const subst = new Map<string, TTKTerm>();
+
+    const [higherIdx, lowerIdx] = lhsWhnf.index > rhsWhnf.index
+      ? [lhsWhnf.index, rhsWhnf.index]
+      : [rhsWhnf.index, lhsWhnf.index];
+
+    // Create a substitution: var:higherIdx := Var(lowerIdx)
+    subst.set(varKey(higherIdx), { tag: 'Var', index: lowerIdx });
+
+    // Also record human-readable info for UI display
+    if (higherIdx < ctx.length && lowerIdx < ctx.length) {
+      const higherName = ctx[higherIdx].name;
+      const lowerName = ctx[lowerIdx].name;
+      subst.set(`name:${higherName}`, { tag: 'Const', name: lowerName, type: ctx[lowerIdx].type });
+    }
+
+    return { tag: 'solved', substitution: subst };
+  }
+
+  // Case 2: Var = Term (non-variable, non-hole term)
+  // Substitute the variable with the term
+  if (lhsWhnf.tag === 'Var' && rhsWhnf.tag !== 'Var' && rhsWhnf.tag !== 'Hole') {
+    // Occurs check: fail if the variable appears in the term
+    if (occursIn(lhsWhnf.index, rhsWhnf)) {
+      return {
+        tag: 'failure',
+        reason: `Cycle: variable #${lhsWhnf.index} occurs in ${prettyPrint(rhsWhnf)}`,
+      };
+    }
+
+    const subst = new Map<string, TTKTerm>();
+    subst.set(varKey(lhsWhnf.index), rhsWhnf);
+    return { tag: 'solved', substitution: subst };
+  }
+
+  // Case 3: Term = Var
+  if (rhsWhnf.tag === 'Var' && lhsWhnf.tag !== 'Var' && lhsWhnf.tag !== 'Hole') {
+    // Occurs check
+    if (occursIn(rhsWhnf.index, lhsWhnf)) {
+      return {
+        tag: 'failure',
+        reason: `Cycle: variable #${rhsWhnf.index} occurs in ${prettyPrint(lhsWhnf)}`,
+      };
+    }
+
+    const subst = new Map<string, TTKTerm>();
+    subst.set(varKey(rhsWhnf.index), lhsWhnf);
+    return { tag: 'solved', substitution: subst };
+  }
+
+  return { tag: 'stuck' };
+}
+
+/**
  * Try all unification rules on a single equation.
  * Returns the result of the first rule that makes progress.
  */
@@ -680,14 +816,16 @@ function tryRulesOnEquation(
   // Order of rules matters for efficiency:
   // 1. Deletion - handles trivial reflexive equations
   // 2. Solution - handles holes/metavariables
-  // 3. Injectivity - decomposes constructor equations
-  // 4. Conflict - detects impossible equations
-  // 5. Cycle - detects infinite regress
-  // 6. Eta - handles function/Pi type equations
+  // 3. VarSolution - handles variable-to-variable unification (NEW!)
+  // 4. Injectivity - decomposes constructor equations
+  // 5. Conflict - detects impossible equations
+  // 6. Cycle - detects infinite regress
+  // 7. Eta - handles function/Pi type equations
 
   const rules = [
     tryDeletion,
     trySolution,
+    tryVarSolution,  // NEW: handle Var = Var and Var = Term
     tryInjectivity,
     tryConflict,
     tryCycle,

@@ -13,12 +13,15 @@
  */
 
 import { TTKTerm, TTKContext } from './tt-kernel';
-import { inferType, checkType, TypeCheckError } from './tt-typecheck';
+import { inferType, checkType, TypeCheckError, DefinitionsMap } from './tt-typecheck';
 import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
 import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
 import { checkFunctionTotality, formatMissingCase, SplitTree } from './ttk-totality-check';
 import { checkFunctionClausesWithResult, FunctionClausesResult, ClauseCheckResult } from './tt-pattern-match';
+
+// Re-export DefinitionsMap for use by callers
+export type { DefinitionsMap } from './tt-typecheck';
 
 // ============================================================================
 // Error Types
@@ -173,6 +176,7 @@ export function checkInductiveDeclaration(
  * @param ctx - Typing context
  * @param typePath - Base path for the type term (for error location tracking)
  * @param valuePath - Base path for the value term (for error location tracking)
+ * @param definitions - Map of function names to their definitions (for WHNF reduction)
  * @returns CheckResult with inferred type or errors
  */
 export function checkTermDeclaration(
@@ -181,7 +185,8 @@ export function checkTermDeclaration(
   value: TTKTerm | undefined,
   ctx: TTKContext,
   typePath: IndexPath = [],
-  valuePath: IndexPath = []
+  valuePath: IndexPath = [],
+  definitions?: DefinitionsMap
 ): CheckResult<TTKTerm> {
   const errors: CheckError[] = [];
 
@@ -278,7 +283,8 @@ export function checkTermDeclaration(
             declaredType,
             value.clauses,
             ctxWithSelf,
-            valuePath
+            valuePath,
+            definitions
           );
           clauseResults = funcResult.clauses;
         } else {

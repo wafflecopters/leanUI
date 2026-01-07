@@ -15,6 +15,7 @@ import { checkSourceBlocks, BlockCheckResult, summarizeCheckResults } from '../p
 import { generateEliminator } from '../types/tt-eliminator';
 import { InductiveTypeDef } from '../types/tt-examples';
 import { prettyPrint } from '../types/tt-core';
+import { prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
 import { useSelectionTypeInfo } from '../hooks/useSelectionTypeInfo';
 import { SplitTreeViewer } from './SplitTreeViewer';
 
@@ -25,6 +26,28 @@ import { SplitTreeViewer } from './SplitTreeViewer';
 // Monaco type helpers
 type Monaco = typeof import('monaco-editor');
 type IStandaloneCodeEditor = MonacoEditor.IStandaloneCodeEditor;
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+/**
+ * Replace underscores in source with named metas (#1, #2, etc.)
+ * Returns the modified source and a count of metas found.
+ *
+ * Uses smart naming: standalone underscores become #1, #2, etc.
+ * Underscores in identifiers (like some_var) are preserved.
+ */
+function nameUnderscoresInSource(source: string): { namedSource: string; metaCount: number } {
+  let count = 0;
+  // Match standalone underscores (not part of identifiers)
+  // A standalone _ is preceded by non-identifier char (or start) and followed by non-identifier char (or end)
+  const namedSource = source.replace(/(?<![a-zA-Z0-9_α-ωΑ-Ω])_(?![a-zA-Z0-9_α-ωΑ-Ω])/g, () => {
+    count++;
+    return `#${count}`;
+  });
+  return { namedSource, metaCount: count };
+}
 
 // ============================================================================
 // Styles
@@ -487,6 +510,7 @@ interface EnhancedBlockCardProps {
 const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const [showErrors, setShowErrors] = useState(true);
   const [showElimModal, setShowElimModal] = useState(false);
+  const [showCompileInfoModal, setShowCompileInfoModal] = useState(false);
 
   // Generate eliminator on-the-fly when modal is open
   const eliminatorType = useMemo(() => {
@@ -513,6 +537,134 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
       return `Error generating eliminator: ${e instanceof Error ? e.message : String(e)}`;
     }
   }, [showElimModal, result]);
+
+  // Generate compile info on-the-fly when modal is open
+  const compileInfo = useMemo(() => {
+    if (!showCompileInfoModal) return null;
+
+    const rawSource = result.block.lines.join('\n');
+    // Replace underscores with named metas (#1, #2, etc.)
+    const { namedSource: source } = nameUnderscoresInSource(rawSource);
+    const decl = result.declarations[0];
+
+    // Parsed TT (surface syntax)
+    let parsedTT = '';
+    if (decl) {
+      if (decl.name) {
+        parsedTT += `${decl.name}`;
+      }
+      if (decl.type) {
+        parsedTT += ` : ${prettyPrint(decl.type)}`;
+      }
+      if (decl.value) {
+        parsedTT += `\n${decl.name || '_'} = ${prettyPrint(decl.value)}`;
+      }
+      if (decl.kind === 'inductive' && decl.constructors) {
+        parsedTT += '\nConstructors:';
+        for (const ctor of decl.constructors) {
+          parsedTT += `\n  ${ctor.name} : ${prettyPrint(ctor.type)}`;
+        }
+      }
+    } else {
+      parsedTT = '(no declaration parsed)';
+    }
+
+    // Elaborated TTK (kernel syntax)
+    let elabTTK = '';
+    const queryData = result.typeQueryData;
+    if (queryData) {
+      const contextNames = queryData.context.map(b => b.name);
+      if (queryData.kernelType) {
+        elabTTK += `Type: ${prettyPrintTTK(queryData.kernelType, contextNames)}`;
+      }
+      if (queryData.kernelValue) {
+        elabTTK += `\nValue: ${prettyPrintTTK(queryData.kernelValue, contextNames)}`;
+      }
+    } else {
+      elabTTK = '(no elaboration data available)';
+    }
+
+    // Checked TTK (after type checking)
+    // Show the substitution/resolution list from pattern matching
+    let checkedTTK = '';
+    if (queryData?.clauseResults && queryData.clauseResults.length > 0) {
+      const contextNames = queryData.context.map(b => b.name);
+      const lines: string[] = [];
+
+      for (let clauseIdx = 0; clauseIdx < queryData.clauseResults.length; clauseIdx++) {
+        const clauseResult = queryData.clauseResults[clauseIdx];
+
+        if (queryData.clauseResults.length > 1) {
+          lines.push(`Clause ${clauseIdx + 1}:`);
+        }
+
+        // Show solved bindings (pattern variables with their types)
+        // Generate display names: use actual name if not '_', otherwise generate #N
+        let wildcardCounter = 1;
+        const displayNames: string[] = [];
+        for (const binding of clauseResult.solvedBindings) {
+          if (binding.name === '_') {
+            displayNames.push(`#${wildcardCounter++}`);
+          } else {
+            displayNames.push(binding.name);
+          }
+        }
+
+        if (clauseResult.solvedBindings.length > 0) {
+          lines.push('  Pattern bindings:');
+          for (let i = 0; i < clauseResult.solvedBindings.length; i++) {
+            const binding = clauseResult.solvedBindings[i];
+            const typeStr = prettyPrintTTK(binding.type, contextNames);
+            lines.push(`    ${displayNames[i]} : ${typeStr}`);
+          }
+        }
+
+        // Show substitution (unified metas)
+        if (clauseResult.substitution.size > 0) {
+          lines.push('  Resolutions:');
+          // Build context for printing substitution values
+          // De Bruijn indices are reversed: index 0 = most recent binding
+          // So we need to reverse displayNames for prettyPrint context
+          const reversedDisplayNames = [...displayNames].reverse();
+          const fullContext = [...reversedDisplayNames, ...contextNames];
+
+          for (const [key, value] of clauseResult.substitution) {
+            // Skip internal debug entries (name:X entries are for debugging only)
+            if (key.startsWith('name:')) {
+              continue;
+            }
+
+            const valueStr = prettyPrintTTK(value, fullContext);
+            // Convert var:N keys to more readable form
+            if (key.startsWith('var:')) {
+              const deBruijnIdx = parseInt(key.slice(4), 10);
+              // Convert De Bruijn index to binding order index
+              // De Bruijn index N in a context of length L corresponds to binding at position (L - 1 - N)
+              const bindingIdx = displayNames.length - 1 - deBruijnIdx;
+              // Try to find a name for this variable
+              const name = bindingIdx >= 0 && bindingIdx < displayNames.length
+                ? displayNames[bindingIdx]
+                : `#${deBruijnIdx + 1}`;
+              lines.push(`    ${name} = ${valueStr}`);
+            } else {
+              // Show hole substitutions (like ?x = term)
+              lines.push(`    ${key} = ${valueStr}`);
+            }
+          }
+        }
+
+        if (clauseIdx < queryData.clauseResults.length - 1) {
+          lines.push('');
+        }
+      }
+
+      checkedTTK = lines.length > 0 ? lines.join('\n') : '(no resolutions)';
+    } else {
+      checkedTTK = '(no pattern matching data)';
+    }
+
+    return { source, parsedTT, elabTTK, checkedTTK };
+  }, [showCompileInfoModal, result]);
 
   const getTypeStyle = () => {
     switch (result.blockType) {
@@ -585,6 +737,25 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
             }}
           >
             Show Elim
+          </button>
+        )}
+        {/* Compile Info button - available when parsing succeeded */}
+        {result.parseSuccess && result.declarations.length > 0 && (
+          <button
+            onClick={() => setShowCompileInfoModal(true)}
+            style={{
+              marginLeft: '8px',
+              padding: '2px 8px',
+              backgroundColor: '#21262d',
+              color: '#8b949e',
+              border: '1px solid #30363d',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontWeight: 500,
+            }}
+          >
+            Compile Info
           </button>
         )}
       </div>
@@ -684,6 +855,101 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
               <code style={{ color: '#7ee787', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                 {result.name}Elim : {eliminatorType || 'Unable to generate eliminator'}
               </code>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Compile Info Modal */}
+      {showCompileInfoModal && compileInfo && (
+        <div style={styles.modalOverlay} onClick={() => setShowCompileInfoModal(false)}>
+          <div style={{ ...styles.modal, maxWidth: '900px' }} onClick={(e) => e.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <h3 style={styles.modalTitle}>
+                Compile Info: {result.name || 'anonymous'}
+              </h3>
+              <button
+                style={styles.closeButton}
+                onClick={() => setShowCompileInfoModal(false)}
+              >
+                Close
+              </button>
+            </div>
+
+            {/* Source */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#58a6ff',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px'
+              }}>
+                Source
+              </div>
+              <div style={styles.codeBlock}>
+                <pre style={{ margin: 0, color: '#c9d1d9', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {compileInfo.source}
+                </pre>
+              </div>
+            </div>
+
+            {/* Parsed TT */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#3fb950',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px'
+              }}>
+                Parsed TT (Surface Syntax)
+              </div>
+              <div style={styles.codeBlock}>
+                <pre style={{ margin: 0, color: '#7ee787', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {compileInfo.parsedTT}
+                </pre>
+              </div>
+            </div>
+
+            {/* Elaborated TTK */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#d29922',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px'
+              }}>
+                Elaborated TTK (Kernel)
+              </div>
+              <div style={styles.codeBlock}>
+                <pre style={{ margin: 0, color: '#ffc66d', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {compileInfo.elabTTK}
+                </pre>
+              </div>
+            </div>
+
+            {/* Checked TTK */}
+            <div>
+              <div style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#a371f7',
+                marginBottom: '8px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px'
+              }}>
+                Checked TTK (After Type Checking)
+              </div>
+              <div style={styles.codeBlock}>
+                <pre style={{ margin: 0, color: '#d2a8ff', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {compileInfo.checkedTTK}
+                </pre>
+              </div>
             </div>
           </div>
         </div>

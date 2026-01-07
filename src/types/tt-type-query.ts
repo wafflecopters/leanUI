@@ -107,6 +107,185 @@ function typeContainsHoles(type: TTKTerm): boolean {
 }
 
 // ============================================================================
+// De Bruijn Index Shifting
+// ============================================================================
+
+/**
+ * Shift De Bruijn indices in a term by a given amount.
+ * Indices >= cutoff are shifted; indices < cutoff are unchanged.
+ */
+function shiftTerm(term: TTKTerm, amount: number, cutoff: number = 0): TTKTerm {
+  switch (term.tag) {
+    case 'Var':
+      return term.index >= cutoff
+        ? { tag: 'Var', index: term.index + amount }
+        : term;
+
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Binder': {
+      const newDomain = shiftTerm(term.domain, amount, cutoff);
+      const newBody = shiftTerm(term.body, amount, cutoff + 1);
+
+      let newBinderKind = term.binderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = shiftTerm(term.binderKind.defVal, amount, cutoff);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      }
+
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: shiftTerm(term.fn, amount, cutoff),
+        arg: shiftTerm(term.arg, amount, cutoff)
+      };
+
+    case 'Hole':
+      return {
+        tag: 'Hole',
+        id: term.id,
+        type: shiftTerm(term.type, amount, cutoff),
+        context: term.context
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: shiftTerm(term.term, amount, cutoff),
+        type: shiftTerm(term.type, amount, cutoff)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: shiftTerm(term.scrutinee, amount, cutoff),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: shiftTerm(c.rhs, amount, cutoff)
+        }))
+      };
+  }
+}
+
+// ============================================================================
+// Canonical Name Resolution
+// ============================================================================
+
+/**
+ * Build canonical names for pattern bindings based on substitution equivalences.
+ *
+ * When unification determines that variables are equal (e.g., `i = #3` and `#1 = #3`),
+ * we want to display all equivalent variables using the "best" name - preferring
+ * named variables over wildcards (#N).
+ *
+ * Example: bindings = ['i', '_', '_', '_'], substitution has var:3 = Var(0), var:2 = Var(0)
+ * This means binding 3 (i) equals binding 0, and binding 2 equals binding 0.
+ * The canonical name for all of {0, 2, 3} should be 'i' (the non-wildcard name).
+ *
+ * @param solvedBindings - The pattern bindings with names
+ * @param substitution - The unification substitution
+ * @returns Array of canonical names, one per binding
+ */
+function buildCanonicalNames(
+  solvedBindings: Array<{ name: string; type: TTKTerm }>,
+  substitution?: Substitution
+): string[] {
+  const numBindings = solvedBindings.length;
+  const result: string[] = solvedBindings.map(b => b.name);
+
+  if (!substitution || substitution.size === 0) {
+    return result;
+  }
+
+  // Build equivalence classes using union-find
+  // parent[i] = j means binding i is equivalent to binding j
+  const parent: number[] = [];
+  for (let i = 0; i < numBindings; i++) {
+    parent[i] = i;
+  }
+
+  function find(x: number): number {
+    if (parent[x] !== x) {
+      parent[x] = find(parent[x]);
+    }
+    return parent[x];
+  }
+
+  function union(x: number, y: number): void {
+    const px = find(x);
+    const py = find(y);
+    if (px !== py) {
+      parent[px] = py;
+    }
+  }
+
+  // Process substitution to build equivalence classes
+  // Substitution has var:index -> term, where term is usually Var(anotherIndex)
+  for (const [key, value] of substitution.entries()) {
+    if (key.startsWith('var:') && value.tag === 'Var') {
+      const fromIdx = parseInt(key.slice(4), 10);
+      const toIdx = value.index;
+      if (fromIdx < numBindings && toIdx < numBindings) {
+        // Convert De Bruijn to array index: DB 0 = last, DB n-1 = first
+        // solvedBindings[0] = first pattern = De Bruijn (n-1)
+        // solvedBindings[n-1] = last pattern = De Bruijn 0
+        const fromArrayIdx = numBindings - 1 - fromIdx;
+        const toArrayIdx = numBindings - 1 - toIdx;
+        if (fromArrayIdx >= 0 && toArrayIdx >= 0) {
+          union(fromArrayIdx, toArrayIdx);
+        }
+      }
+    }
+  }
+
+  // For each equivalence class, find the "best" name (prefer non-wildcard)
+  // Group bindings by their representative
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < numBindings; i++) {
+    const rep = find(i);
+    if (!groups.has(rep)) {
+      groups.set(rep, []);
+    }
+    groups.get(rep)!.push(i);
+  }
+
+  // For each group, pick the best name
+  for (const indices of groups.values()) {
+    let bestName: string | null = null;
+    for (const idx of indices) {
+      const name = solvedBindings[idx].name;
+      // Prefer non-wildcard names (names that don't start with '_' or '#')
+      const isWildcard = name === '_' || name.startsWith('#');
+      if (!isWildcard) {
+        bestName = name;
+        break;
+      }
+    }
+    // If all names are wildcards, use the first one
+    if (bestName === null) {
+      bestName = solvedBindings[indices[0]].name;
+    }
+    // Apply best name to all in the group
+    for (const idx of indices) {
+      result[idx] = bestName;
+    }
+  }
+
+  return result;
+}
+
+// ============================================================================
 // Pattern Binding Helpers
 // ============================================================================
 
@@ -276,6 +455,8 @@ function computeClauseRhsExpectedType(
  * @param context - The current context
  * @param path - The full path being navigated
  * @param pathIndex - Current position in the path
+ * @param solvedBindings - Optional solved bindings with unification applied
+ * @param bindingOffset - Offset into solvedBindings for this pattern's variables
  * @returns TypeQueryResult with a synthetic term representing the pattern
  */
 function queryPatternType(
@@ -283,23 +464,37 @@ function queryPatternType(
   expectedType: TTKTerm,
   context: TTKContext,
   path: IndexPath,
-  pathIndex: number
+  pathIndex: number,
+  solvedBindings?: Array<{ name: string; type: TTKTerm }>,
+  bindingOffset: number = 0
 ): TypeQueryResult {
   // If we've consumed the whole path, return the pattern's type
   if (pathIndex >= path.length) {
     // Create a synthetic term to represent the pattern for display purposes
     let syntheticTerm: TTKTerm;
+    let patternType: TTKTerm;
+
     switch (pattern.tag) {
       case 'PVar':
-        // Variable pattern - create a Const with the variable name
-        syntheticTerm = { tag: 'Const', name: pattern.name, type: expectedType };
+        // Variable pattern - use solved binding type if available
+        patternType = expectedType;
+        if (solvedBindings && bindingOffset < solvedBindings.length) {
+          patternType = solvedBindings[bindingOffset].type;
+        }
+        syntheticTerm = { tag: 'Const', name: pattern.name, type: patternType };
         break;
       case 'PWild':
-        // Wildcard - create a hole
-        syntheticTerm = { tag: 'Hole', id: '_', type: expectedType, context: [] };
+        // Wildcard - use solved binding type if available
+        patternType = expectedType;
+        if (solvedBindings && bindingOffset < solvedBindings.length) {
+          patternType = solvedBindings[bindingOffset].type;
+        }
+        syntheticTerm = { tag: 'Hole', id: '_', type: patternType, context: [] };
         break;
       case 'PCtor':
-        // Constructor pattern - look up the constructor type from context
+        // Constructor pattern - the type is the expectedType (the result type of applying the constructor)
+        // NOT the type of the first sub-binding (which would be wrong)
+        patternType = expectedType;
         const ctorType = lookupInContext(pattern.name, context);
         if (ctorType) {
           syntheticTerm = { tag: 'Const', name: pattern.name, type: ctorType };
@@ -316,7 +511,7 @@ function queryPatternType(
     return {
       success: true,
       term: syntheticTerm,
-      type: expectedType,
+      type: patternType,
       context
     };
   }
@@ -364,9 +559,16 @@ function queryPatternType(
           }
         }
 
+        // Calculate the new binding offset for nested pattern
+        // We need to count bindings from previous args
+        let newBindingOffset = bindingOffset;
+        for (let i = 0; i < argIndex; i++) {
+          newBindingOffset += countPatternBindings(pattern.args[i]);
+        }
+
         // Recurse into the argument pattern
         pathIndex++;
-        return queryPatternType(pattern.args[argIndex], argType, context, path, pathIndex);
+        return queryPatternType(pattern.args[argIndex], argType, context, path, pathIndex, solvedBindings, newBindingOffset);
       } else {
         return { success: false, error: `Expected array index after 'args' in pattern` };
       }
@@ -730,11 +932,13 @@ export function queryTypeAtPath(
                 // Try to get the solved type from elaboration context
                 let patternType: TTKTerm;
                 let patternContext = currentContext;
+                const pattern = clause.patterns[patternIndex];
 
                 if (elabContext?.clauseResults && index < elabContext.clauseResults.length) {
                   // Use solved bindings from elaboration
                   const clauseResult = elabContext.clauseResults[index];
                   const solvedBindings = clauseResult.solvedBindings;
+                  const substitution = clauseResult.substitution;
 
                   // Find the cumulative binding index for this pattern
                   // (patterns can bind multiple variables for constructor patterns)
@@ -744,23 +948,39 @@ export function queryTypeAtPath(
                     bindingOffset += countPatternBindings(pat);
                   }
 
-                  // Get the type from solved bindings if available
-                  if (bindingOffset < solvedBindings.length) {
+                  // Build context with ALL solved bindings for proper display
+                  // The substituted type uses De Bruijn indices relative to the full binding context,
+                  // so we need all bindings present for pretty-printing to work correctly.
+                  //
+                  // Also build a canonical name map: for each binding, if it's equivalent to another
+                  // binding via the substitution, use the "best" name (prefer non-wildcard names).
+                  const canonicalNames = buildCanonicalNames(solvedBindings, substitution);
+                  for (let i = 0; i < solvedBindings.length; i++) {
+                    const canonicalName = canonicalNames[i];
+                    patternContext = [{ name: canonicalName, type: solvedBindings[i].type }, ...patternContext];
+                  }
+
+                  // Get the pattern type:
+                  // - For variable patterns, use the solved binding type directly
+                  // - For constructor/wildcard patterns, use telescope type with substitution
+                  if (pattern.tag === 'PVar' && bindingOffset < solvedBindings.length) {
                     patternType = solvedBindings[bindingOffset].type;
-                    // Build context with solved bindings up to this pattern
-                    for (let i = 0; i < bindingOffset; i++) {
-                      patternContext = [{ name: solvedBindings[i].name, type: solvedBindings[i].type }, ...patternContext];
-                    }
                   } else {
-                    // Fall back to telescope
+                    // For constructor patterns, use telescope type with substitution applied
                     const telescope = currentExpectedType ? extractTelescope(currentExpectedType) : [];
                     patternType = patternIndex < telescope.length
                       ? telescope[patternIndex].type
                       : { tag: 'Hole' as const, id: '?pattern_type', type: { tag: 'Sort' as const, level: 0 }, context: [] };
-                    for (let i = 0; i < patternIndex && i < telescope.length; i++) {
-                      const pat = clause.patterns[i];
-                      const patName = pat.tag === 'PVar' ? pat.name : telescope[i].name;
-                      patternContext = [{ name: patName, type: telescope[i].type }, ...patternContext];
+
+                    // Apply unification substitution to get the solved type.
+                    // The telescope type uses De Bruijn indices relative to telescope positions 0..(patternIndex-1).
+                    // The substitution uses indices relative to the full pattern binding context.
+                    // We need to shift the telescope type to match the substitution's index space.
+                    if (substitution && substitution.size > 0) {
+                      const totalBindings = solvedBindings.length;
+                      const shiftAmount = totalBindings - patternIndex;
+                      patternType = shiftTerm(patternType, shiftAmount);
+                      patternType = applySubstitution(substitution, patternType);
                     }
                   }
                 } else {
@@ -782,8 +1002,16 @@ export function queryTypeAtPath(
 
                 // Now navigate into the pattern structure
                 pathIndex++;
-                const pattern = clause.patterns[patternIndex];
-                return queryPatternType(pattern, patternType, patternContext, path, pathIndex);
+                // Pass solved bindings for nested pattern queries
+                const clauseSolvedBindings = elabContext?.clauseResults?.[index]?.solvedBindings;
+                const clauseBindingOffset = (() => {
+                  let offset = 0;
+                  for (let i = 0; i < patternIndex; i++) {
+                    offset += countPatternBindings(clause.patterns[i]);
+                  }
+                  return offset;
+                })();
+                return queryPatternType(pattern, patternType, patternContext, path, pathIndex, clauseSolvedBindings, clauseBindingOffset);
               } else {
                 return { success: false, error: `Expected array index after 'patterns'` };
               }

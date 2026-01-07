@@ -54,6 +54,7 @@ import {
   whnf,
   convertible,
   lookupConstByName,
+  DefinitionsMap,
 } from './tt-typecheck';
 import {
   unifyTerms,
@@ -154,9 +155,8 @@ export function lookupConstructor(
     return null;
   }
 
-  // Count parameters by looking at the inductive type's kind
-  const inductiveType = lookupConstByName(ctx, inductiveName);
-  const numParams = inductiveType ? countPiParams(inductiveType) : 0;
+  // Count parameters by examining the constructor's return type
+  const numParams = countInductiveParams(ctorType);
 
   return {
     name: ctorName,
@@ -192,7 +192,7 @@ function getHeadConstName(type: TTKTerm): string | null {
 }
 
 /**
- * Count the number of Pi parameters in a type.
+ * Count the number of Pi parameters in a type (the arity).
  */
 function countPiParams(type: TTKTerm): number {
   let count = 0;
@@ -202,6 +202,51 @@ function countPiParams(type: TTKTerm): number {
     current = current.body;
   }
   return count;
+}
+
+/**
+ * Count the number of parameters for an inductive type by examining
+ * its constructor's return type.
+ *
+ * Parameters are indices that appear exactly once in the constructor's
+ * return type at their corresponding telescope position. Indices are
+ * positions that appear multiple times or are computed values.
+ *
+ * For example, for `Refl : (A : Type) -> (x : A) -> Equal A x x`:
+ * - A appears once at position 0 in `Equal A x x` → parameter
+ * - x appears twice at positions 1 and 2 → index
+ * So numParams = 1.
+ */
+function countInductiveParams(ctorType: TTKTerm): number {
+  const telescope = extractTelescope(ctorType);
+  const returnType = getReturnType(ctorType);
+  const indices = extractTypeIndices(returnType);
+
+  let numParams = 0;
+  for (let i = 0; i < telescope.length && i < indices.length; i++) {
+    const idx = indices[i];
+    // Check if this index is exactly Var(telescope.length - 1 - i)
+    // which means it's the corresponding telescope variable passed through
+    const expectedVarIndex = telescope.length - 1 - i;
+    if (idx.tag === 'Var' && idx.index === expectedVarIndex) {
+      // Check if this variable appears only once in the indices
+      let count = 0;
+      for (const otherIdx of indices) {
+        if (otherIdx.tag === 'Var' && otherIdx.index === expectedVarIndex) {
+          count++;
+        }
+      }
+      if (count === 1) {
+        numParams++;
+      } else {
+        // Once we hit a non-parameter, all subsequent are indices
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+  return numParams;
 }
 
 // ============================================================================
@@ -452,14 +497,81 @@ function checkConstructorPattern(
   const ctorReturnType = getReturnType(ctorInfo.fullType);
   const ctorIndices = extractTypeIndices(ctorReturnType);
 
-  // Skip parameters in constructor indices
+  // Skip parameters in constructor indices - only unify the actual indices.
+  // Parameters are type arguments that are passed through unchanged (like A in List A).
+  // Indices are type arguments that can vary between constructors (like n in Vec A n).
+  // We only need to unify indices since parameters are handled by the type system.
   const ctorNonParamIndices = ctorIndices.slice(numParams);
   const expectedNonParamIndices = expectedIndices.slice(numParams);
 
-  // Unify each index
+  // Record parameter bindings for display purposes (without running unification)
+  // Parameter position i in the constructor corresponds to expectedIndices[i]
+  // The pattern binding for that parameter is at De Bruijn index (telescopeLen - 1 - i)
+  for (let i = 0; i < numParams && i < expectedIndices.length; i++) {
+    const ctorIdx = ctorIndices[i];
+    // Only record if the constructor index is a variable (pattern binding)
+    if (ctorIdx.tag === 'Var' && ctorIdx.index < telescope.length) {
+      // Shift expected value by bindings added
+      const shiftedExpected = shiftTermBy(expectedIndices[i], bindingsAdded, 0);
+      // Record this binding: the pattern variable at ctorIdx.index equals shiftedExpected
+      currentSubst.set(`var:${ctorIdx.index}`, shiftedExpected);
+    }
+  }
+
+  // Map constructor telescope indices to pattern bindings.
+  // The constructor's return type uses De Bruijn indices relative to its telescope:
+  // - Var(0) refers to the last telescope entry (most recently bound)
+  // - Var(n-1) refers to the first telescope entry
+  // We've added pattern bindings in the same order as the telescope, so:
+  // - Pattern binding 0 (first added) corresponds to telescope entry 0 (first in telescope)
+  // - Pattern binding n-1 (last added) corresponds to telescope entry n-1 (last in telescope)
+  //
+  // In De Bruijn notation after adding bindings:
+  // - The last pattern binding (telescope entry n-1) is at Var(0)
+  // - The first pattern binding (telescope entry 0) is at Var(n-1)
+  //
+  // So Var(k) in constructor return type (which refers to telescope entry (n-1-k))
+  // should map to Var(k) in current context (which refers to pattern binding (n-1-k)).
+  // The indices are the same! We just need to ensure they're within the telescope.
+  const telescopeLen = telescope.length;
+  function mapCtorIndex(term: TTKTerm): TTKTerm {
+    switch (term.tag) {
+      case 'Var':
+        // Only map indices that refer to the constructor's telescope
+        // Indices >= telescopeLen refer to bindings outside the constructor pattern
+        // and should be shifted to account for the new bindings
+        if (term.index < telescopeLen) {
+          // Indices within telescope stay the same - they now refer to pattern bindings
+          return term;
+        }
+        // Indices outside telescope need to be shifted by bindingsAdded
+        // Actually, these shouldn't occur in constructor return type indices
+        return term;
+      case 'App':
+        return { tag: 'App', fn: mapCtorIndex(term.fn), arg: mapCtorIndex(term.arg) };
+      case 'Binder':
+        // Note: We don't expect binders in type indices, but handle for completeness
+        return {
+          ...term,
+          domain: mapCtorIndex(term.domain),
+          body: mapCtorIndex(term.body),
+        };
+      default:
+        return term;
+    }
+  }
+
+  // Unify each non-parameter index
   for (let i = 0; i < Math.min(ctorNonParamIndices.length, expectedNonParamIndices.length); i++) {
     let ctorIdx = ctorNonParamIndices[i];
     let expIdx = expectedNonParamIndices[i];
+
+    // Map constructor indices to pattern context
+    ctorIdx = mapCtorIndex(ctorIdx);
+
+    // Shift expected indices by the number of bindings added by this constructor pattern
+    // Expected indices were valid at the original ctx, but we've extended with bindings
+    expIdx = shiftTermBy(expIdx, bindingsAdded, 0);
 
     // Apply current substitution
     ctorIdx = applySubstitution(currentSubst, ctorIdx);
@@ -666,6 +778,7 @@ function buildAppliedType(
  * @param expectedReturnType - Expected return type (may reference pattern positions)
  * @param ctx - The typing context
  * @param clausePath - Path to this clause in the source (for error reporting)
+ * @param definitions - Map of function definitions for WHNF reduction
  * @returns The inferred return type of the RHS
  */
 export function checkClause(
@@ -673,9 +786,10 @@ export function checkClause(
   scrutineeTypes: TTKTerm[],
   expectedReturnType: TTKTerm | null,
   ctx: TTKContext,
-  clausePath: IndexPath = []
+  clausePath: IndexPath = [],
+  definitions?: DefinitionsMap
 ): TTKTerm {
-  const result = checkClauseWithResult(clause, scrutineeTypes, expectedReturnType, ctx, clausePath);
+  const result = checkClauseWithResult(clause, scrutineeTypes, expectedReturnType, ctx, clausePath, definitions);
   return result.returnType;
 }
 
@@ -692,6 +806,7 @@ export function checkClause(
  * @param expectedReturnType - Expected return type (may reference pattern positions)
  * @param ctx - The typing context
  * @param clausePath - Path to this clause in the source (for error reporting)
+ * @param definitions - Map of function definitions for WHNF reduction
  * @returns ClauseCheckResult with return type, solved bindings, and substitution
  */
 export function checkClauseWithResult(
@@ -699,7 +814,8 @@ export function checkClauseWithResult(
   scrutineeTypes: TTKTerm[],
   expectedReturnType: TTKTerm | null,
   ctx: TTKContext,
-  clausePath: IndexPath = []
+  clausePath: IndexPath = [],
+  definitions?: DefinitionsMap
 ): ClauseCheckResult {
   if (clause.patterns.length !== scrutineeTypes.length) {
     throw new TypeCheckError(
@@ -723,31 +839,61 @@ export function checkClauseWithResult(
   // Track total bindings for shifting the return type at the end
   let totalBindings = 0;
 
+  // Track extra bindings (beyond 1 per pattern) to shift telescope types
+  let extraBindingsFromPreviousPatterns = 0;
+
   for (let i = 0; i < clause.patterns.length; i++) {
     const pattern = clause.patterns[i];
     const patternPath = appendPath(clausePath, fieldSeg('patterns'), arraySeg(i));
 
-    // Get the type for this argument position
-    // The type is from the original telescope, so Var(0) in type[i] refers to
-    // the binding at position i-1, Var(1) to position i-2, etc.
+    // Get the type for this argument position.
+    // The telescope type at position i uses De Bruijn indices relative to that position:
+    // - Var(0) refers to position i-1
+    // - Var(k) refers to position i-1-k
     //
-    // Importantly, we do NOT shift the type here. The telescope indices are
-    // designed to work with De Bruijn indexing: Var(0) refers to the most
-    // recently bound variable, which is exactly how extendContext works.
-    // When we add a binding, extendContext shifts all existing types by 1,
-    // which correctly maintains the telescope references.
+    // If each pattern added exactly 1 binding, we wouldn't need to shift.
+    // But constructor patterns can add multiple bindings (e.g., Refl adds 2).
+    // So we track the "extra" bindings and shift the telescope type accordingly.
     let argType = scrutineeTypes[i];
+    if (extraBindingsFromPreviousPatterns > 0) {
+      argType = shiftTermBy(argType, extraBindingsFromPreviousPatterns, 0);
+    }
 
     // Apply unification substitution
     argType = applySubstitution(currentSubst, argType);
 
     const result = checkPattern(pattern, argType, currentCtx, patternPath);
 
+    // Track how many extra bindings this pattern added (beyond the expected 1)
+    const bindingsAdded = result.bindings.length;
+    extraBindingsFromPreviousPatterns += (bindingsAdded > 0 ? bindingsAdded - 1 : 0);
+
     // Extend context with pattern bindings
+    const bindingsAddedThisPattern = result.bindings.length;
     for (const binding of result.bindings) {
       currentCtx = extendContext(currentCtx, binding.name, binding.type);
       allBindings.push(binding);
       totalBindings++;
+    }
+
+    // Before composing new substitutions, shift existing substitution entries
+    // by the number of bindings we just added (because De Bruijn indices are relative).
+    // Both the keys (var indices) and values need to be shifted.
+    if (bindingsAddedThisPattern > 0) {
+      const shiftedSubst = new Map<string, TTKTerm>();
+      for (const [key, value] of currentSubst.entries()) {
+        // Only shift var: keys (not name: keys which are informational)
+        if (key.startsWith('var:')) {
+          // Shift both the key index and the value
+          const oldIndex = parseInt(key.substring(4), 10);
+          const newKey = 'var:' + (oldIndex + bindingsAddedThisPattern);
+          const newValue = shiftTermBy(value, bindingsAddedThisPattern, 0);
+          shiftedSubst.set(newKey, newValue);
+        } else {
+          shiftedSubst.set(key, value);
+        }
+      }
+      currentSubst = shiftedSubst;
     }
 
     // Compose substitutions from unification
@@ -785,7 +931,31 @@ export function checkClauseWithResult(
       refinedReturnType = shiftTermBy(refinedReturnType, extraBindings, 0);
     }
     refinedReturnType = applySubstitution(currentSubst, refinedReturnType);
-    checkType(clause.rhs, refinedReturnType, currentCtx, rhsPath);
+
+    // Use checkType for bidirectional type checking (important for lambdas).
+    // If checkType fails, we try a fallback that applies substitution to
+    // the inferred type, which handles dependent pattern matching where
+    // the RHS uses original variables that are equal to pattern variables.
+    try {
+      checkType(clause.rhs, refinedReturnType, currentCtx, rhsPath);
+    } catch (e) {
+      if (!(e instanceof TypeCheckError)) throw e;
+
+      // Fallback: try with substitution applied to inferred type
+      const inferredType = inferType(clause.rhs, currentCtx, rhsPath);
+      const normalizedInferred = applySubstitution(currentSubst, inferredType);
+
+      if (!convertible(normalizedInferred, refinedReturnType, currentCtx, definitions)) {
+        // Use context names for readable error messages
+        const names: string[] = currentCtx.map((entry, i) => entry.name || `_${i}`);
+        throw new TypeCheckError(
+          `Type mismatch.\n  Expected: ${prettyPrint(refinedReturnType, names)}\n  Inferred: ${prettyPrint(normalizedInferred, names)}`,
+          clause.rhs,
+          currentCtx,
+          rhsPath
+        );
+      }
+    }
     returnType = refinedReturnType;
   } else {
     // Infer the return type
@@ -851,7 +1021,8 @@ export function inferMatchType(
   clauses: TTKClause[],
   ctx: TTKContext,
   expectedType?: TTKTerm,
-  matchPath: IndexPath = []
+  matchPath: IndexPath = [],
+  definitions?: DefinitionsMap
 ): TTKTerm {
   if (clauses.length === 0) {
     throw new TypeCheckError(
@@ -879,7 +1050,8 @@ export function inferMatchType(
         [scrutineeType],
         inferredReturnType,
         ctx,
-        clausePath
+        clausePath,
+        definitions
       );
 
       if (inferredReturnType === null) {
@@ -887,7 +1059,7 @@ export function inferMatchType(
         inferredReturnType = clauseReturnType;
       } else if (!expectedType) {
         // Subsequent clauses: check compatibility
-        if (!convertible(clauseReturnType, inferredReturnType, ctx)) {
+        if (!convertible(clauseReturnType, inferredReturnType, ctx, definitions)) {
           throw new TypeCheckError(
             `Clause ${i + 1} returns type ${prettyPrint(clauseReturnType)} ` +
             `but previous clauses return ${prettyPrint(inferredReturnType)}`,
@@ -978,13 +1150,15 @@ export function checkFunctionClauses(
  * @param clauses - The pattern matching clauses
  * @param ctx - The typing context (should include the function itself for recursion)
  * @param valuePath - Path to the match expression in the source (for error reporting)
+ * @param definitions - Map of function definitions for WHNF reduction
  * @returns FunctionClausesResult with per-clause results and combined substitution
  */
 export function checkFunctionClausesWithResult(
   functionType: TTKTerm,
   clauses: TTKClause[],
   ctx: TTKContext,
-  valuePath: IndexPath = []
+  valuePath: IndexPath = [],
+  definitions?: DefinitionsMap
 ): FunctionClausesResult {
   if (clauses.length === 0) {
     throw new TypeCheckError(
@@ -1042,7 +1216,7 @@ export function checkFunctionClausesWithResult(
     const clausePath = appendPath(valuePath, fieldSeg('clauses'), arraySeg(i));
 
     try {
-      const result = checkClauseWithResult(clause, patternArgTypes, expectedReturnType, ctx, clausePath);
+      const result = checkClauseWithResult(clause, patternArgTypes, expectedReturnType, ctx, clausePath, definitions);
       clauseResults.push(result);
 
       // Compose substitutions from all clauses

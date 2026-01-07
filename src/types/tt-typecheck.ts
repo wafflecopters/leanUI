@@ -30,6 +30,7 @@ import {
   subst,
   prettyPrint,
 } from './tt-kernel';
+import { TPattern } from './tt-core';
 import { IndexPath, appendPath, fieldSeg } from './source-position';
 import { inferMatchType, checkFunctionClauses } from './tt-pattern-match';
 
@@ -111,18 +112,58 @@ export function lookupConstByName(ctx: TTKContext, name: string): TTKTerm | null
 // ============================================================================
 
 /**
+ * A map from function names to their definitions (Match expressions).
+ * This enables definitional reduction of function applications during WHNF.
+ */
+export type DefinitionsMap = Map<string, TTKTerm>;
+
+/**
  * Weak-head normal form (WHNF)
  * Reduce a term until it's a lambda, pi, or stuck application
  *
  * This is used for conversion checking.
+ *
+ * @param term - The term to reduce
+ * @param ctx - The typing context
+ * @param definitions - Optional map of function definitions for delta reduction
  */
-export function whnf(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
+export function whnf(
+  term: TTKTerm,
+  ctx: TTKContext = [],
+  definitions?: DefinitionsMap
+): TTKTerm {
   switch (term.tag) {
     case 'App': {
-      const fn = whnf(term.fn, ctx);
+      const fn = whnf(term.fn, ctx, definitions);
       if (fn.tag === 'Binder' && fn.binderKind.tag === 'BLam') {
         // Beta reduction: (λx. t) s  -->  t[x := s]
-        return whnf(subst(0, term.arg, fn.body), ctx);
+        return whnf(subst(0, term.arg, fn.body), ctx, definitions);
+      }
+      // Check if fn is a Const with a definition (for delta reduction)
+      if (fn.tag === 'Const' && definitions) {
+        const body = definitions.get(fn.name);
+        if (body) {
+          // Substitute the argument into the function body
+          // The body is a Match expression with _scrutinee placeholder
+          // We need to substitute the argument for the first parameter
+          const reduced = subst(0, term.arg, body);
+          return whnf(reduced, ctx, definitions);
+        }
+      }
+      // Check if fn is an App of a Const (partially applied function)
+      // Collect all arguments and try to reduce
+      const { head, args } = collectAppArgs(term);
+      if (head.tag === 'Const' && definitions) {
+        const body = definitions.get(head.name);
+        if (body) {
+          // Apply all arguments to the body
+          let result = body;
+          for (const arg of args) {
+            result = subst(0, arg, result);
+          }
+          // Try to reduce the result (may be a Match that can now compute)
+          return whnf(result, ctx, definitions);
+        }
       }
       return { tag: 'App', fn, arg: term.arg };
     }
@@ -130,14 +171,89 @@ export function whnf(term: TTKTerm, ctx: TTKContext = []): TTKTerm {
     case 'Binder': {
       // Let expansion: let x := v in t  -->  t[x := v]
       if (term.binderKind.tag === 'BLet') {
-        return whnf(subst(0, term.binderKind.defVal, term.body), ctx);
+        return whnf(subst(0, term.binderKind.defVal, term.body), ctx, definitions);
       }
       // Pi and Lambda are already in normal form
       return term;
     }
 
+    case 'Match': {
+      // Try to reduce the scrutinee
+      const scrutWhnf = whnf(term.scrutinee, ctx, definitions);
+
+      // Try to match the scrutinee against each clause
+      for (const clause of term.clauses) {
+        const matchResult = tryMatchPattern(clause.patterns[0], scrutWhnf);
+        if (matchResult !== null) {
+          // Apply the pattern bindings to the RHS
+          let rhs = clause.rhs;
+          // Bindings are in reverse order (last binding first)
+          for (let i = matchResult.length - 1; i >= 0; i--) {
+            rhs = subst(0, matchResult[i], rhs);
+          }
+          return whnf(rhs, ctx, definitions);
+        }
+      }
+      // Stuck - scrutinee doesn't match any pattern (or is not a constructor)
+      return { ...term, scrutinee: scrutWhnf };
+    }
+
     default:
       return term;
+  }
+}
+
+/**
+ * Collect all arguments from a nested application.
+ * For `f a b c`, returns { head: f, args: [a, b, c] }
+ */
+function collectAppArgs(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+  const args: TTKTerm[] = [];
+  let current = term;
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+  return { head: current, args };
+}
+
+/**
+ * Try to match a pattern against a term (in WHNF).
+ * Returns the list of bound values if successful, null if the pattern doesn't match.
+ *
+ * The bound values are returned in the order they appear in the pattern
+ * (left-to-right, depth-first).
+ */
+function tryMatchPattern(pattern: TPattern, term: TTKTerm): TTKTerm[] | null {
+  switch (pattern.tag) {
+    case 'PWild':
+      // Wildcard matches anything, binds nothing
+      return [];
+
+    case 'PVar':
+      // Variable matches anything, binds the term
+      return [term];
+
+    case 'PCtor': {
+      // Constructor pattern - term must be a matching constructor application
+      const { head, args } = collectAppArgs(term);
+      if (head.tag !== 'Const' || head.name !== pattern.name) {
+        return null; // Different constructor or not a constructor
+      }
+      if (args.length !== pattern.args.length) {
+        return null; // Wrong number of arguments
+      }
+      // Match all sub-patterns
+      const bindings: TTKTerm[] = [];
+      for (let i = 0; i < pattern.args.length; i++) {
+        const subResult = tryMatchPattern(pattern.args[i], args[i]);
+        if (subResult === null) {
+          return null;
+        }
+        bindings.push(...subResult);
+      }
+      return bindings;
+    }
   }
 }
 
@@ -276,10 +392,16 @@ function shiftTermBy(term: TTKTerm, amount: number, cutoff: number): TTKTerm {
  * - Beta reduction: (λx. e) a ≃ e[a/x]
  * - Let expansion: let x := v in t ≃ t[v/x]
  * - Eta conversion: λx. f x ≃ f (when x not free in f)
+ * - Delta reduction: f args → body[args] (when f has a definition)
  */
-export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boolean {
-  const n1 = whnf(t1, ctx);
-  const n2 = whnf(t2, ctx);
+export function convertible(
+  t1: TTKTerm,
+  t2: TTKTerm,
+  ctx: TTKContext = [],
+  definitions?: DefinitionsMap
+): boolean {
+  const n1 = whnf(t1, ctx, definitions);
+  const n2 = whnf(t2, ctx, definitions);
 
   // Structural equality on normal forms
   switch (n1.tag) {
@@ -301,7 +423,7 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
           if (!isFreeIn(0, n1.body.fn)) {
             // Eta contract: λx. f x → f (with index shift)
             const contracted = subst(0, { tag: 'Var', index: 0 }, n1.body.fn);
-            return convertible(contracted, n2, ctx);
+            return convertible(contracted, n2, ctx, definitions);
           }
         }
 
@@ -309,7 +431,7 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
         if (n2.tag !== 'Binder' || n2.binderKind.tag !== 'BLam') {
           const expanded = tryEtaExpand(n2, ctx);
           if (expanded) {
-            return convertible(n1, expanded, ctx);
+            return convertible(n1, expanded, ctx, definitions);
           }
         }
       }
@@ -321,14 +443,14 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
         if (n2.body.tag === 'App' && n2.body.arg.tag === 'Var' && n2.body.arg.index === 0) {
           if (!isFreeIn(0, n2.body.fn)) {
             const contracted = subst(0, { tag: 'Var', index: 0 }, n2.body.fn);
-            return convertible(n1, contracted, ctx);
+            return convertible(n1, contracted, ctx, definitions);
           }
         }
 
         // Try eta-expanding n1
         const expanded = tryEtaExpand(n1, ctx);
         if (expanded) {
-          return convertible(expanded, n2, ctx);
+          return convertible(expanded, n2, ctx, definitions);
         }
       }
 
@@ -338,19 +460,19 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
       }
 
       // Check domains are convertible
-      if (!convertible(n1.domain, n2.domain, ctx)) {
+      if (!convertible(n1.domain, n2.domain, ctx, definitions)) {
         return false;
       }
 
       // Check bodies in extended context
       const extCtx = extendContext(ctx, n1.name, n1.domain);
-      if (!convertible(n1.body, n2.body, extCtx)) {
+      if (!convertible(n1.body, n2.body, extCtx, definitions)) {
         return false;
       }
 
       // For BLet, also check definition values
       if (n1.binderKind.tag === 'BLet' && n2.binderKind.tag === 'BLet') {
-        return convertible(n1.binderKind.defVal, n2.binderKind.defVal, ctx);
+        return convertible(n1.binderKind.defVal, n2.binderKind.defVal, ctx, definitions);
       }
 
       return true;
@@ -360,13 +482,13 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
       if (n2.tag === 'Binder' && n2.binderKind.tag === 'BLam') {
         const expanded = tryEtaExpand(n1, ctx);
         if (expanded) {
-          return convertible(expanded, n2, ctx);
+          return convertible(expanded, n2, ctx, definitions);
         }
       }
 
       return n2.tag === 'App' &&
-        convertible(n1.fn, n2.fn, ctx) &&
-        convertible(n1.arg, n2.arg, ctx);
+        convertible(n1.fn, n2.fn, ctx, definitions) &&
+        convertible(n1.arg, n2.arg, ctx, definitions);
 
     case 'Hole':
       // Holes are only equal if they have the same id
@@ -374,14 +496,14 @@ export function convertible(t1: TTKTerm, t2: TTKTerm, ctx: TTKContext = []): boo
 
     case 'Annot':
       // Compare the underlying terms
-      return convertible(n1.term, n2, ctx);
+      return convertible(n1.term, n2, ctx, definitions);
 
     case 'Match':
       if (n2.tag !== 'Match') return false;
-      if (!convertible(n1.scrutinee, n2.scrutinee, ctx)) return false;
+      if (!convertible(n1.scrutinee, n2.scrutinee, ctx, definitions)) return false;
       if (n1.clauses.length !== n2.clauses.length) return false;
       for (let i = 0; i < n1.clauses.length; i++) {
-        if (!convertible(n1.clauses[i].rhs, n2.clauses[i].rhs, ctx)) return false;
+        if (!convertible(n1.clauses[i].rhs, n2.clauses[i].rhs, ctx, definitions)) return false;
       }
       return true;
   }
