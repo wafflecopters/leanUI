@@ -1155,6 +1155,74 @@ export const TextEditorPage: React.FC = () => {
     // Focus the editor
     editor.focus();
 
+    // Add toggle comment action (Cmd+/ or Ctrl+/)
+    editor.addAction({
+      id: 'toggle-line-comment',
+      label: 'Toggle Line Comment',
+      keybindings: [
+        monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash,
+      ],
+      run: (ed) => {
+        const model = ed.getModel();
+        const selection = ed.getSelection();
+        if (!model || !selection) return;
+
+        const startLine = selection.startLineNumber;
+        // If selection ends at column 1, the last line wasn't actually selected
+        // (user just selected up to the newline, which extends to next line at col 1)
+        const endLine = selection.endColumn === 1 && selection.endLineNumber > selection.startLineNumber
+          ? selection.endLineNumber - 1
+          : selection.endLineNumber;
+
+        // Get all lines in selection
+        const lines: string[] = [];
+        for (let i = startLine; i <= endLine; i++) {
+          lines.push(model.getLineContent(i));
+        }
+
+        // Check if all non-empty lines start with '--' (ignoring leading whitespace)
+        const allCommented = lines.every(line => {
+          const trimmed = line.trimStart();
+          return trimmed === '' || trimmed.startsWith('--');
+        });
+
+        // Build edits
+        const edits: MonacoEditor.IIdentifiedSingleEditOperation[] = [];
+
+        if (allCommented) {
+          // Uncomment: remove the first '--' from each line (preserving leading whitespace)
+          for (let i = startLine; i <= endLine; i++) {
+            const line = model.getLineContent(i);
+            const trimmed = line.trimStart();
+            if (trimmed.startsWith('--')) {
+              const leadingWhitespace = line.length - trimmed.length;
+              // Remove '-- ' if present, otherwise just '--'
+              const removeLen = trimmed.startsWith('-- ') ? 3 : 2;
+              edits.push({
+                range: new monaco.Range(i, leadingWhitespace + 1, i, leadingWhitespace + 1 + removeLen),
+                text: '',
+              });
+            }
+          }
+        } else {
+          // Comment: prepend '-- ' to each line (after leading whitespace)
+          for (let i = startLine; i <= endLine; i++) {
+            const line = model.getLineContent(i);
+            const leadingWhitespace = line.length - line.trimStart().length;
+            edits.push({
+              range: new monaco.Range(i, leadingWhitespace + 1, i, leadingWhitespace + 1),
+              text: '-- ',
+            });
+          }
+        }
+
+        // Apply all edits
+        if (edits.length > 0) {
+          ed.executeEdits('toggle-comment', edits);
+        }
+      },
+    });
+
     // Trigger diagnostics update
     setEditorMounted(true);
   }, []);
