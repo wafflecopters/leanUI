@@ -511,41 +511,283 @@ function shift(amount: ShiftAmount, term: TTKTerm, cutoff: DeBruijnIndex): TTKTe
 
 ---
 
-## 6. Recommendations by Priority
+## 6. THE PLAN: Ordered Steps to a Provable Kernel
 
-### 6.1 Critical (Do Immediately)
+**Execute these steps in order. Do not skip steps. Each step unlocks the next.**
 
-| Action | Files | Impact | Effort |
-|--------|-------|--------|--------|
-| Add fuel to `whnf` | tt-typecheck.ts | Prevents hangs | 1 hour |
-| Remove TPattern import from kernel | tt-kernel.ts | Fixes boundary | 30 min |
-| Add `CheckedTerm` branded type | tt-kernel.ts, tt-typecheck.ts | Type safety | 2 hours |
+---
 
-### 6.2 High (Do This Month)
+### Step 1: ADD FUEL TO WHNF
 
-| Action | Files | Impact | Effort |
-|--------|-------|--------|--------|
-| Document all typing rules | tt-typecheck.ts | Enables verification | 1-2 days |
-| Add metatheory property tests | New test file | Catches bugs | 3-5 days |
-| Create Context module | New file | DRY, correctness | 1 day |
-| Convert exceptions to Results | tt-typecheck.ts | Testability | 2-3 days |
+**What**: Add a `fuel` parameter to the `whnf` function that decrements on each recursive call. Throw an error when fuel hits zero.
 
-### 6.3 Medium (Do This Quarter)
+**Why**: Without this, malformed input can hang the type checker forever. This is a soundness and availability risk. Every other step assumes the type checker terminates.
 
-| Action | Files | Impact | Effort |
-|--------|-------|--------|--------|
-| Create `kernel/` directory | Multiple | Clear TCB | 1-2 weeks |
-| Implement generic term fold | tt-kernel.ts | DRY | 1 week |
-| Add branded index types | Multiple | Type safety | 1 week |
-| Write formal specification | New doc | Verification path | 2-3 weeks |
+**Files**: `tt-typecheck.ts`
 
-### 6.4 Long-term (Roadmap Item)
+**Success**:
+- [ ] `whnf` has signature `whnf(term, ctx, definitions?, fuel = 10000)`
+- [ ] All recursive calls pass `fuel - 1`
+- [ ] Test exists: deeply nested term exhausts fuel and throws
+- [ ] All existing tests still pass
 
-| Action | Impact | Effort |
-|--------|--------|--------|
-| Elaborate Match to eliminators | Minimal kernel | 1-2 months |
-| Formal verification in Lean 4 | Proven correctness | 6-12 months |
-| Certified extraction to TypeScript | Trust chain | 3-6 months additional |
+---
+
+### Step 2: BREAK THE ILLEGAL IMPORT
+
+**What**: Remove `import type { TPattern } from './tt-core'` from `tt-kernel.ts`. Define `TTKPattern` independently in the kernel.
+
+**Why**: The kernel must have zero dependencies on surface code. This import means surface changes can break the kernel. It's a boundary violation.
+
+**Files**: `tt-kernel.ts`, `tt-pattern-match.ts` (update imports)
+
+**Success**:
+- [ ] `tt-kernel.ts` has no imports from `tt-core.ts`
+- [ ] `TTKPattern` is defined in `tt-kernel.ts`
+- [ ] `TTKClause` uses `TTKPattern`, not `TPattern`
+- [ ] Elaboration converts `TPattern` → `TTKPattern`
+- [ ] All tests pass
+
+---
+
+### Step 3: ADD CHECKED TERM BRANDING
+
+**What**: Create a branded type `CheckedTerm` that can only be produced by successful type checking. Functions that require verified terms take `CheckedTerm`, not `TTKTerm`.
+
+**Why**: Currently, nothing prevents passing garbage terms to functions expecting well-typed terms. This is a type-level bug waiting to happen.
+
+**Files**: `tt-kernel.ts`, `tt-typecheck.ts`
+
+**Success**:
+- [ ] `CheckedTerm` type exists: `TTKTerm & { readonly __checked: unique symbol }`
+- [ ] `inferType` returns `CheckedTerm`
+- [ ] `checkType` returns `CheckedTerm`
+- [ ] At least one function signature changed to require `CheckedTerm`
+- [ ] Compiler rejects passing raw `TTKTerm` where `CheckedTerm` expected
+
+---
+
+### Step 4: DOCUMENT EVERY TYPING RULE
+
+**What**: Add a comment above each case in `inferType` and `checkType` showing the formal typing rule being implemented. Use standard notation with inference lines.
+
+**Why**: Without documented rules, we can't verify the implementation matches the theory. This is prerequisite for any formal reasoning.
+
+**Files**: `tt-typecheck.ts`
+
+**Success**:
+- [ ] Every `case` in `inferType` has a rule comment
+- [ ] Every `case` in `checkType` has a rule comment
+- [ ] Rules use standard notation: premises above line, conclusion below
+- [ ] Preconditions and invariants are stated
+- [ ] A reviewer can verify code matches rules by inspection
+
+**Example**:
+```typescript
+/**
+ * Rule APP:
+ *   Γ ⊢ f : Π(x:A).B    Γ ⊢ a : A
+ *   ─────────────────────────────
+ *          Γ ⊢ f a : B[a/x]
+ *
+ * Precondition: f and a are well-formed in Γ
+ * Invariant: result type has a substituted correctly
+ */
+case 'App': { ... }
+```
+
+---
+
+### Step 5: CREATE CONTEXT MODULE
+
+**What**: Create a single `Context` namespace/module with all context operations: `empty`, `extend`, `lookup`, `lookupByName`, `names`, `length`. Delete duplicate implementations elsewhere.
+
+**Why**: Context operations are scattered and inconsistent. A single source of truth prevents subtle bugs from different extend/lookup semantics.
+
+**Files**: New `src/types/context.ts`, update all importers
+
+**Success**:
+- [ ] `context.ts` exists with `Context` namespace
+- [ ] All context operations go through this module
+- [ ] No inline context manipulation remains (search for `[{ name,` patterns)
+- [ ] All tests pass
+
+---
+
+### Step 6: ADD METATHEORY PROPERTY TESTS
+
+**What**: Install `fast-check`. Create `tt-metatheory.test.ts` with property tests for: substitution preserves typing, weakening preserves typing, WHNF preserves typing, conversion is symmetric and transitive.
+
+**Why**: These properties are *necessary* for soundness but *untested*. A bug here means users can prove `False`. Property tests catch edge cases unit tests miss.
+
+**Files**: New `src/types/tt-metatheory.test.ts`, `package.json`
+
+**Success**:
+- [ ] `fast-check` is installed
+- [ ] Arbitrary well-typed term generator exists
+- [ ] Test: substitution lemma (100+ random cases)
+- [ ] Test: weakening lemma (100+ random cases)
+- [ ] Test: WHNF preserves type (100+ random cases)
+- [ ] Test: conversion symmetry
+- [ ] Test: conversion transitivity
+- [ ] All property tests pass
+
+---
+
+### Step 7: CONVERT EXCEPTIONS TO RESULTS
+
+**What**: Change `inferType` and `checkType` to return `Result<T, TypeCheckError>` instead of throwing. Propagate through callers.
+
+**Why**: Exceptions hide control flow and make testing harder. Result types make failure explicit in the type signature. Required for any formal reasoning about the code.
+
+**Files**: `tt-typecheck.ts`, `tt-pattern-match.ts`, `block-checker.ts`
+
+**Success**:
+- [ ] `TypeCheckResult<T> = { ok: true; value: T } | { ok: false; error: TypeCheckError }`
+- [ ] `inferType` returns `TypeCheckResult<CheckedTerm>`
+- [ ] `checkType` returns `TypeCheckResult<void>`
+- [ ] No `throw new TypeCheckError` in kernel code
+- [ ] All callers handle Result properly
+- [ ] All tests updated and passing
+
+---
+
+### Step 8: IMPLEMENT GENERIC TERM FOLD
+
+**What**: Create a generic `foldTerm<R>` function that traverses terms once. Reimplement `subst`, `shift`, and other traversals using it.
+
+**Why**: Term traversal is copy-pasted 4+ times. Each copy is a bug risk. A single fold ensures consistency and reduces code by ~200 lines.
+
+**Files**: `tt-kernel.ts`
+
+**Success**:
+- [ ] `foldTerm<R>(term, visitor, depth)` exists
+- [ ] `TermVisitor<R>` interface defined
+- [ ] `subst` reimplemented using `foldTerm`
+- [ ] `shift` reimplemented using `foldTerm`
+- [ ] Old traversal code deleted
+- [ ] All tests pass
+- [ ] Net code reduction of 100+ lines
+
+---
+
+### Step 9: ADD BRANDED INDEX TYPES
+
+**What**: Create `DeBruijnIndex` and `DeBruijnLevel` branded types. Update function signatures to use them. Add conversion functions.
+
+**Why**: Indices and levels are both `number` but have different semantics. Mixing them up causes subtle bugs. The type system should prevent this.
+
+**Files**: New `src/types/indices.ts`, `tt-kernel.ts`, `tt-typecheck.ts`
+
+**Success**:
+- [ ] `DeBruijnIndex = number & { __brand: 'index' }`
+- [ ] `DeBruijnLevel = number & { __brand: 'level' }`
+- [ ] `Index.of()`, `Level.of()`, `Index.toLevel()`, `Level.toIndex()` exist
+- [ ] `shift`, `subst` use branded types
+- [ ] Compiler catches at least one real bug (or we're confident there are none)
+
+---
+
+### Step 10: CREATE KERNEL DIRECTORY
+
+**What**: Create `src/kernel/` directory. Move minimal kernel code there: `term.ts`, `subst.ts`, `whnf.ts`, `typecheck.ts`, `conversion.ts`. The kernel has NO imports from outside `kernel/`.
+
+**Why**: The kernel boundary must be explicit. "What do we trust?" should be answerable by "the files in `kernel/`". Current code has no clear boundary.
+
+**Files**: New directory structure, move and refactor code
+
+**Success**:
+- [ ] `src/kernel/` directory exists
+- [ ] `src/kernel/index.ts` exports only kernel API
+- [ ] Kernel has 0 imports from outside kernel
+- [ ] Kernel is <1,000 lines total
+- [ ] Non-kernel code imports from `kernel/index.ts` only
+- [ ] All tests pass
+
+---
+
+### Step 11: WRITE FORMAL SPECIFICATION
+
+**What**: Create `SPECIFICATION.md` documenting the complete type theory: syntax, typing rules, reduction rules, conversion rules. Each rule has a name that maps to code.
+
+**Why**: This is the contract. The code implements the spec. Without a spec, "correct" has no meaning. This document is what we'd prove the implementation matches.
+
+**Files**: New `SPECIFICATION.md`
+
+**Success**:
+- [ ] Document defines syntax (BNF or similar)
+- [ ] All typing rules listed with names
+- [ ] All reduction rules listed (β, δ, ι, ζ)
+- [ ] Conversion rules defined
+- [ ] Each rule name appears in code comments
+- [ ] A type theorist can read the spec and understand the system
+
+---
+
+### Step 12: ELABORATE PATTERN MATCHING AWAY
+
+**What**: Change pattern matching to elaborate to eliminators (recursors) at elaboration time. Remove `Match` from kernel terms.
+
+**Why**: Pattern matching is 1,282 lines of complex code. Eliminators are the "correct" primitive—simpler, easier to verify. This cuts kernel size by ~40%.
+
+**Files**: `tt-elab.ts` (major changes), `tt-kernel.ts` (remove Match), `tt-pattern-match.ts` (becomes elaboration-only)
+
+**Success**:
+- [ ] `TTKTerm` has no `Match` variant
+- [ ] Kernel is <600 lines
+- [ ] Eliminators (`nat_rec`, `list_rec`, etc.) are the only recursion primitive in kernel
+- [ ] Pattern matching still works (via elaboration)
+- [ ] All tests pass
+
+---
+
+### CHECKPOINT: High Confidence
+
+After Step 12, you have:
+- Terminating type checker (fuel)
+- Clean kernel boundary (<600 lines, no external deps)
+- Documented typing rules
+- Property-tested metatheory
+- Type-safe interfaces (branded types, Results)
+
+**This is "high confidence" but not "proven".**
+
+---
+
+### Step 13: FORMAL VERIFICATION (OPTIONAL)
+
+**What**: Rewrite the kernel in Lean 4 or Agda. Prove: substitution lemma, weakening, subject reduction, progress, preservation.
+
+**Why**: Machine-checked proofs are the gold standard. No human error possible. This is what Coq (partially) has with MetaCoq.
+
+**Success**:
+- [ ] Kernel exists in Lean 4/Agda (~500 lines)
+- [ ] Substitution lemma proven
+- [ ] Weakening proven
+- [ ] Subject reduction proven
+- [ ] Type safety (progress + preservation) proven
+- [ ] (Optional) Extract verified code back to TypeScript
+
+---
+
+## Summary: The Path
+
+```
+NOW ────────────────────────────────────────────────────────> PROVABLE
+
+Step 1-3:   Safety nets (fuel, boundaries, branding)     [1 day]
+Step 4-5:   Documentation & DRY (rules, context)         [2-3 days]
+Step 6-7:   Verification groundwork (tests, Results)     [1 week]
+Step 8-9:   Code quality (fold, branded indices)         [1 week]
+Step 10-11: Kernel extraction (directory, spec)          [2-3 weeks]
+Step 12:    Kernel minimization (eliminate Match)        [3-4 weeks]
+            ──────────────────────────────────────────────
+            HIGH CONFIDENCE ACHIEVED (~2-3 months)
+
+Step 13:    Formal verification                          [6-12 months]
+            ──────────────────────────────────────────────
+            PROVEN CORRECT
+```
 
 ---
 
