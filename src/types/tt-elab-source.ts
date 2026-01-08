@@ -9,8 +9,8 @@
  * positions via the SourceMap from the parser.
  */
 
-import { TTerm } from './tt-core';
-import { TTKTerm } from './tt-kernel';
+import { TTerm, TPattern } from './tt-core';
+import { TTKTerm, TTKPattern } from './tt-kernel';
 import {
   ElabMap,
   IndexPath,
@@ -177,7 +177,7 @@ export function elabToKernelWithMap(
           elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
 
           return {
-            patterns: clause.patterns,
+            patterns: clause.patterns.map(elabPatternToKernel),
             rhs: elabToKernelWithMap(
               clause.rhs,
               elabMap,
@@ -186,6 +186,24 @@ export function elabToKernelWithMap(
             )
           };
         })
+      };
+  }
+}
+
+/**
+ * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern).
+ * Wildcards are already PVar with unique names (_wN) from the parser.
+ */
+function elabPatternToKernel(pattern: TPattern): TTKPattern {
+  switch (pattern.tag) {
+    case 'PVar':
+      // Includes wildcards (_wN) which are already PVar
+      return { tag: 'PVar', name: pattern.name };
+    case 'PCtor':
+      return {
+        tag: 'PCtor',
+        name: pattern.name,
+        args: pattern.args.map(elabPatternToKernel)
       };
   }
 }

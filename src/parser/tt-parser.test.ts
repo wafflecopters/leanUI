@@ -1273,7 +1273,11 @@ test('Parse wildcard pattern', () => {
   assertTermShape(term, 'Match');
   if (term.tag === 'Match') {
     const pattern = term.clauses[0].patterns[0];
-    assertEqual(pattern.tag, 'PWild');
+    // Wildcards are now parsed as PVar with unique names like _w0
+    assertEqual(pattern.tag, 'PVar');
+    if (pattern.tag === 'PVar') {
+      assert(pattern.name.startsWith('_w'), `Expected wildcard name starting with _w, got ${pattern.name}`);
+    }
   }
 });
 

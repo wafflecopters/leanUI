@@ -29,10 +29,11 @@ import {
   TTKBinderKind,
   subst,
   prettyPrint,
+  substPatternBindings,
 } from './tt-kernel';
 import { TPattern } from './tt-core';
 import { IndexPath, appendPath, fieldSeg } from './source-position';
-import { inferMatchType, checkFunctionClauses } from './tt-pattern-match';
+import { inferMatchType, checkFunctionClauses } from './tt-pattern-elab';
 
 // ============================================================================
 // Type Checking Errors
@@ -139,24 +140,48 @@ export function whnf(
         // Beta reduction: (λx. t) s  -->  t[x := s]
         return whnf(subst(0, term.arg, fn.body), ctx, definitions);
       }
-      // Check if fn is a Const with a definition (for delta reduction)
-      if (fn.tag === 'Const' && definitions) {
-        const body = definitions.get(fn.name);
-        if (body) {
-          // Substitute the argument into the function body
-          // The body is a Match expression with _scrutinee placeholder
-          // We need to substitute the argument for the first parameter
-          const reduced = subst(0, term.arg, body);
-          return whnf(reduced, ctx, definitions);
-        }
-      }
-      // Check if fn is an App of a Const (partially applied function)
+      // Check if this is an application of a defined function
       // Collect all arguments and try to reduce
       const { head, args } = collectAppArgs(term);
       if (head.tag === 'Const' && definitions) {
         const body = definitions.get(head.name);
         if (body) {
-          // Apply all arguments to the body
+          // Special handling for function definitions (Match with _scrutinee placeholder)
+          // These have multi-pattern clauses that need to match all arguments at once
+          if (body.tag === 'Match' && body.scrutinee.tag === 'Hole' && body.scrutinee.id === '_scrutinee') {
+            // Reduce all arguments to WHNF first
+            const argsWhnf = args.map(arg => whnf(arg, ctx, definitions));
+
+            // Try to match each clause against all arguments
+            for (const clause of body.clauses) {
+              if (clause.patterns.length !== argsWhnf.length) {
+                continue; // Pattern arity mismatch, skip this clause
+              }
+
+              // Try to match all patterns against all arguments
+              const allBindings: TTKTerm[] = [];
+              let matched = true;
+              for (let i = 0; i < clause.patterns.length; i++) {
+                const matchResult = tryMatchPattern(clause.patterns[i], argsWhnf[i]);
+                if (matchResult === null) {
+                  matched = false;
+                  break;
+                }
+                allBindings.push(...matchResult);
+              }
+
+              if (matched) {
+                // Apply all pattern bindings to the RHS simultaneously
+                const rhs = substPatternBindings(allBindings, clause.rhs);
+                return whnf(rhs, ctx, definitions);
+              }
+            }
+            // Stuck - no clause matched (could be symbolic argument)
+            // Return the application as-is
+            return term;
+          }
+
+          // Lambda-wrapped body: Apply all arguments via substitution
           let result = body;
           for (const arg of args) {
             result = subst(0, arg, result);
@@ -185,12 +210,8 @@ export function whnf(
       for (const clause of term.clauses) {
         const matchResult = tryMatchPattern(clause.patterns[0], scrutWhnf);
         if (matchResult !== null) {
-          // Apply the pattern bindings to the RHS
-          let rhs = clause.rhs;
-          // Bindings are in reverse order (last binding first)
-          for (let i = matchResult.length - 1; i >= 0; i--) {
-            rhs = subst(0, matchResult[i], rhs);
-          }
+          // Apply all pattern bindings to the RHS simultaneously
+          const rhs = substPatternBindings(matchResult, clause.rhs);
           return whnf(rhs, ctx, definitions);
         }
       }
@@ -226,12 +247,9 @@ function collectAppArgs(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
  */
 function tryMatchPattern(pattern: TPattern, term: TTKTerm): TTKTerm[] | null {
   switch (pattern.tag) {
-    case 'PWild':
-      // Wildcard matches anything, binds nothing
-      return [];
-
     case 'PVar':
       // Variable matches anything, binds the term
+      // Note: Wildcards (names starting with _) are also PVar, they still bind but are typically unused
       return [term];
 
     case 'PCtor': {
@@ -403,6 +421,12 @@ export function convertible(
   const n1 = whnf(t1, ctx, definitions);
   const n2 = whnf(t2, ctx, definitions);
 
+  // Underscore holes unify with anything (handle symmetric case)
+  // Also handle underscore_type which is the type of underscore holes
+  if (n2.tag === 'Hole' && (n2.id === '_' || n2.id === 'underscore_type')) {
+    return true;
+  }
+
   // Structural equality on normal forms
   switch (n1.tag) {
     case 'Var':
@@ -491,7 +515,12 @@ export function convertible(
         convertible(n1.arg, n2.arg, ctx, definitions);
 
     case 'Hole':
-      // Holes are only equal if they have the same id
+      // Underscore holes unify with anything (they represent inferred values)
+      // Also handle underscore_type which is the type of underscore holes
+      if (n1.id === '_' || n1.id === 'underscore_type') {
+        return true;
+      }
+      // Other holes are only equal if they have the same id
       return n2.tag === 'Hole' && n1.id === n2.id;
 
     case 'Annot':
@@ -507,6 +536,27 @@ export function convertible(
       }
       return true;
   }
+}
+
+/**
+ * Convertibility check with a substitution applied first.
+ *
+ * This is used in pattern matching where unification establishes equalities
+ * between variables (e.g., var:6 = Var(2)). We apply the substitution to
+ * both terms before checking convertibility.
+ */
+export function convertibleWithSubst(
+  t1: TTKTerm,
+  t2: TTKTerm,
+  subst: Map<string, TTKTerm>,
+  ctx: TTKContext = [],
+  definitions?: DefinitionsMap
+): boolean {
+  // Import applySubstitution dynamically to avoid circular dependency
+  const { applySubstitution } = require('./tt-unify');
+  const s1 = applySubstitution(subst, t1);
+  const s2 = applySubstitution(subst, t2);
+  return convertible(s1, s2, ctx, definitions);
 }
 
 // ============================================================================
@@ -686,7 +736,7 @@ export function inferType(
     }
 
     case 'Match': {
-      return inferMatchType(term.scrutinee, term.clauses, ctx, undefined, path);
+      return inferMatchType(term.scrutinee, term.clauses, ctx, undefined, undefined, path);
     }
   }
 }
@@ -748,7 +798,7 @@ export function checkType(
     term.scrutinee.tag === 'Hole' &&
     term.scrutinee.id === '_scrutinee') {
     // This is a function definition by pattern matching
-    checkFunctionClauses(expectedType, term.clauses, ctx, path);
+    checkFunctionClauses(expectedType, term.clauses, ctx, undefined, path);
     return;
   }
 

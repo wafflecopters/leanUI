@@ -213,3 +213,26 @@ navigation.updateMetadata({
 3. **"Can I define a standard interface?"** - What data/callbacks does this operation need?
 
 If yes to all three: Build the abstraction in `utils/` FIRST, then use it.
+
+---
+
+## File Creation: Use Write Tool, Not Bash
+
+**IMPORTANT**: When creating new files, always use the `Write` tool directly instead of `cat` heredocs or `echo` redirection via `Bash`. The `Write` tool:
+1. Doesn't require user permission for each file creation
+2. Is cleaner and more reliable
+3. Avoids shell quoting issues
+
+**Bad**:
+```typescript
+// Using Bash with cat/echo - requires permission, error-prone
+cat > /tmp/test.ts << 'EOF'
+const x = 1;
+EOF
+```
+
+**Good**:
+```typescript
+// Using Write tool directly
+Write({ file_path: '/tmp/test.ts', content: 'const x = 1;' })
+```

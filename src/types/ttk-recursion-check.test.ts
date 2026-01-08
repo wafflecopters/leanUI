@@ -3,8 +3,7 @@
  */
 
 import { analyzeRecursionTTK } from './ttk-recursion-check';
-import { TTKTerm, mkConst, mkApp, mkVar, mkType, mkLambda } from './tt-kernel';
-import { TPattern } from './tt-core';
+import { TTKTerm, TTKPattern, mkConst, mkApp, mkVar, mkType, mkLambda } from './tt-kernel';
 
 function test(description: string, fn: () => void): void {
   try {
@@ -35,19 +34,19 @@ function assertTrue(value: boolean, message?: string): void {
 const Type0 = mkType(0);
 const Nat = mkConst('Nat', Type0);
 
-function makeSuccPattern(): TPattern {
+function makeSuccPattern(): TTKPattern {
   return { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] };
 }
 
-function makeZeroPattern(): TPattern {
+function makeZeroPattern(): TTKPattern {
   return { tag: 'PCtor', name: 'Zero', args: [] };
 }
 
-function makeVarPattern(name: string): TPattern {
+function makeVarPattern(name: string): TTKPattern {
   return { tag: 'PVar', name };
 }
 
-function makeMatch(scrutinee: TTKTerm, clauses: { patterns: TPattern[]; rhs: TTKTerm }[]): TTKTerm {
+function makeMatch(scrutinee: TTKTerm, clauses: { patterns: TTKPattern[]; rhs: TTKTerm }[]): TTKTerm {
   return { tag: 'Match', scrutinee, clauses };
 }
 

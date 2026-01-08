@@ -153,7 +153,7 @@ describe('Totality Checking - Unit Tests', () => {
       const boolType: TTKTerm = mkConst('Bool', mkType(1));
 
       const clauses: TTKClause[] = [
-        { patterns: [{ tag: 'PWild' }], rhs: mkConst('True', boolType) }
+        { patterns: [{ tag: 'PVar', name: '_' }], rhs: mkConst('True', boolType) }
       ];
 
       const result = analyzeTotality(clauses, [boolType], ctx);
@@ -181,7 +181,7 @@ describe('Totality Checking - Unit Tests', () => {
       // True explicit, wildcard covers False
       const clauses: TTKClause[] = [
         { patterns: [{ tag: 'PCtor', name: 'True', args: [] }], rhs: mkConst('True', boolType) },
-        { patterns: [{ tag: 'PWild' }], rhs: mkConst('False', boolType) }
+        { patterns: [{ tag: 'PVar', name: '_' }], rhs: mkConst('False', boolType) }
       ];
 
       const result = analyzeTotality(clauses, [boolType], ctx);
@@ -231,7 +231,7 @@ describe('Totality Checking - Unit Tests', () => {
       const boolType: TTKTerm = mkConst('Bool', mkType(1));
 
       const clauses: TTKClause[] = [
-        { patterns: [{ tag: 'PWild' }], rhs: mkConst('True', boolType) },
+        { patterns: [{ tag: 'PVar', name: '_' }], rhs: mkConst('True', boolType) },
         { patterns: [{ tag: 'PCtor', name: 'False', args: [] }], rhs: mkConst('False', boolType) }  // Inaccessible!
       ];
 
@@ -276,7 +276,7 @@ describe('Totality Checking - Unit Tests', () => {
       const boolType: TTKTerm = mkConst('Bool', mkType(1));
 
       const clauses: TTKClause[] = [
-        { patterns: [{ tag: 'PWild' }], rhs: mkConst('True', boolType) }
+        { patterns: [{ tag: 'PVar', name: '_' }], rhs: mkConst('True', boolType) }
       ];
 
       const result = analyzeTotality(clauses, [boolType], ctx);

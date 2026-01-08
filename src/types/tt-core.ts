@@ -43,19 +43,19 @@ export type BinderKind =
  * Patterns destructure values in pattern matching:
  * - PVar: binds a variable (e.g., 'n' in 'plus n b = ...')
  * - PCtor: constructor application pattern (e.g., 'Zero' or 'Succ n')
- * - PWild: wildcard pattern '_' (matches anything, doesn't bind)
+ *
+ * Wildcards are represented as PVar with name "_".
  *
  * Examples:
  *   Zero           → PCtor("Zero", [])
  *   Succ n         → PCtor("Succ", [PVar("n")])
  *   Succ (Succ m)  → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
- *   _              → PWild
+ *   _              → PVar("_")
  *   x              → PVar("x")
  */
 export type TPattern =
-  | { tag: 'PVar'; name: string }                    // Variable pattern (binds)
+  | { tag: 'PVar'; name: string }                    // Variable pattern (binds) - "_" for wildcard
   | { tag: 'PCtor'; name: string; args: TPattern[] } // Constructor pattern
-  | { tag: 'PWild' }                                  // Wildcard pattern _
 
 /**
  * A clause in pattern matching.
@@ -1036,9 +1036,7 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
 function prettyPrintPattern(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
-      return pattern.name;
-    case 'PWild':
-      return '_';
+      return pattern.name;  // "_" for wildcards
     case 'PCtor':
       if (pattern.args.length === 0) {
         return pattern.name;
@@ -1295,9 +1293,8 @@ export function prettyPrintLatex(
 function prettyPrintPatternLatex(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
-      return pattern.name;
-    case 'PWild':
-      return '\\_';
+      // Escape underscores for LaTeX (including "_" wildcards)
+      return pattern.name.replace(/_/g, '\\_');
     case 'PCtor':
       if (pattern.args.length === 0) {
         return pattern.name.replace(/_/g, '\\_');

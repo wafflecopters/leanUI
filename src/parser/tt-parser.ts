@@ -500,10 +500,19 @@ export class Parser {
   private pos = 0;
   private currentSourceMap: SourceMap = new Map();
   private currentPath: IndexPath = [];
+  private wildcardCounter = 0;
 
   constructor(
     private operators: Record<string, OperatorInfo> = DEFAULT_OPERATORS
   ) { }
+
+  /**
+   * Generate a unique wildcard name for pattern matching.
+   * Each wildcard gets a unique name like _w0, _w1, etc. for tracking during elaboration.
+   */
+  private freshWildcard(): string {
+    return `_w${this.wildcardCounter++}`;
+  }
 
   /**
    * Prefix all paths in the source map that start with `basePath` by adding `suffix`.
@@ -1573,16 +1582,16 @@ export class Parser {
    *   Zero              → PCtor("Zero", [])
    *   Succ n            → PCtor("Succ", [PVar("n")])
    *   Succ (Succ m)     → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
-   *   _                 → PWild
+   *   _                 → PVar("_w0"), PVar("_w1"), ... (unique names per wildcard)
    *   x                 → PVar("x")
    */
   private parsePattern(): TPattern {
     const token = this.current();
 
-    // Wildcard pattern: _
+    // Wildcard pattern: _ (represented as PVar with unique name like _w0, _w1)
     if (token.type === 'UNDERSCORE') {
       this.advance();
-      return { tag: 'PWild' };
+      return { tag: 'PVar', name: this.freshWildcard() };
     }
 
     // Constructor or variable pattern
@@ -1649,7 +1658,7 @@ export class Parser {
 
     if (token.type === 'UNDERSCORE') {
       this.advance();
-      return { tag: 'PWild' };
+      return { tag: 'PVar', name: this.freshWildcard() };
     }
 
     if (token.type === 'IDENT') {
@@ -1689,7 +1698,7 @@ export class Parser {
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
       this.recordRange(path, startToken, startToken);
-      return { tag: 'PWild' };
+      return { tag: 'PVar', name: this.freshWildcard() };
     }
 
     if (startToken.type === 'IDENT') {
@@ -1730,11 +1739,11 @@ export class Parser {
   private parsePatternWithSource(path: IndexPath): TPattern {
     const startToken = this.current();
 
-    // Wildcard pattern: _
+    // Wildcard pattern: _ (represented as PVar with unique name like _w0, _w1)
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
       this.recordRange(path, startToken, startToken);
-      return { tag: 'PWild' };
+      return { tag: 'PVar', name: this.freshWildcard() };
     }
 
     // Constructor or variable pattern
@@ -1918,15 +1927,14 @@ export class Parser {
   /**
    * Collect all variable names bound by a pattern (in left-to-right, depth-first order).
    *
-   * IMPORTANT: Wildcards also bind a variable named '_' to match the type-checker's
-   * behavior. This ensures De Bruijn indices in the RHS correctly reference pattern
-   * positions, even when wildcards are present.
+   * IMPORTANT: Wildcards (parsed as PVar with unique names like _w0, _w1) also bind
+   * variables to ensure De Bruijn indices in the RHS correctly reference pattern positions.
    *
    * For example, in `head _ default (Nil _) = default`:
-   * - Pattern 1: `_` → binds `_`
+   * - Pattern 1: `_` → binds `_w0`
    * - Pattern 2: `default` → binds `default`
-   * - Pattern 3: `(Nil _)` → the inner `_` binds `_`
-   * So the context is ['_', 'default', '_'], and `default` in the RHS is Var(1).
+   * - Pattern 3: `(Nil _)` → the inner `_` binds `_w1`
+   * So the context is ['_w0', 'default', '_w1'], and `default` in the RHS is Var(1).
    */
   private collectPatternVars(pattern: TPattern): string[] {
     switch (pattern.tag) {
@@ -1951,9 +1959,6 @@ export class Parser {
         }
         // For constructors with arguments, collect from all arguments left to right
         return pattern.args.flatMap(arg => this.collectPatternVars(arg));
-      case 'PWild':
-        // Wildcards bind a variable named '_' for De Bruijn index consistency
-        return ['_'];
     }
   }
 

@@ -380,6 +380,7 @@ function extractPatternVariables(
 
 /**
  * Helper to extract variables from a pattern recursively.
+ * Note: All PVars (including wildcards _wN) bind and consume a De Bruijn index.
  */
 function extractPatternVarsHelper(
   pattern: TPattern,
@@ -388,7 +389,7 @@ function extractPatternVarsHelper(
 ): void {
   switch (pattern.tag) {
     case 'PVar':
-      // This pattern binds a variable at the current depth
+      // All PVars (including wildcards _wN) bind a variable at the current depth
       vars.push(currentDepth + vars.length);
       break;
 
@@ -397,14 +398,6 @@ function extractPatternVarsHelper(
       for (const arg of pattern.args) {
         extractPatternVarsHelper(arg, vars, currentDepth);
       }
-      break;
-
-    case 'PWild':
-      // Wildcard doesn't bind
-      break;
-
-    default:
-      const _exhaustive: never = pattern;
       break;
   }
 }

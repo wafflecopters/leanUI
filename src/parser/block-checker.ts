@@ -24,7 +24,7 @@ import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolCo
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { prettyPrint, TTerm } from '../types/tt-core';
 import { SplitTree } from '../types/ttk-totality-check';
-import { ClauseCheckResult } from '../types/tt-pattern-match';
+import { ClauseCheckResult } from '../types/tt-pattern-elab';
 
 /**
  * Result of checking a single source block.

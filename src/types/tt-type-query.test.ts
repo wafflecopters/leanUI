@@ -1444,11 +1444,10 @@ foo a b eq = Zero
     }
   });
 
-  it('should have ClauseCheckResult type available for solved bindings', async () => {
-    // Verify the new types are properly exported
-    const { checkClauseWithResult, checkFunctionClausesWithResult } = await import('./tt-pattern-match');
+  it('should have checkFunctionClausesWithResult available for solved bindings', async () => {
+    // Verify the new function is properly exported from tt-pattern-elab
+    const { checkFunctionClausesWithResult } = await import('./tt-pattern-elab');
 
-    expect(checkClauseWithResult).toBeDefined();
     expect(checkFunctionClausesWithResult).toBeDefined();
   });
 

@@ -168,12 +168,14 @@ export function whnf(
 2. Add to `tt-kernel.ts`:
    ```typescript
    export type TTKPattern =
-     | { tag: 'PVar'; name: string }
-     | { tag: 'PWild' }
+     | { tag: 'PVar'; name: string }  // Wildcards are PVar with _wN names
      | { tag: 'PCtor'; name: string; args: TTKPattern[] };
    ```
 3. Update `TTKClause` to use `TTKPattern`
 4. Add pattern elaboration `TPattern` → `TTKPattern` in `tt-elab.ts`
+
+Note: PWild was removed from TTKPattern. Wildcards are now parsed as PVar with
+unique names (_w0, _w1, etc.) by the parser.
 
 **Success**:
 - [ ] `tt-kernel.ts` has zero imports from `tt-core.ts`

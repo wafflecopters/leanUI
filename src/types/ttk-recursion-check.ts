@@ -425,11 +425,6 @@ function countPatternVarsHelper(pattern: TPattern): number {
         count += countPatternVarsHelper(arg);
       }
       return count;
-    case 'PWild':
-      return 0;
-    default:
-      const _exhaustive: never = pattern;
-      return 0;
   }
 }
 
@@ -449,8 +444,9 @@ function markPatternVarsAsSmaller(
 ): number {
   switch (pattern.tag) {
     case 'PVar':
-      // A top-level variable pattern does NOT make the variable structurally smaller
-      // It's just binding the scrutinee itself
+      // A top-level variable pattern (including wildcards _wN) does NOT make the variable
+      // structurally smaller. It's just binding the scrutinee itself.
+      // All PVars (including wildcards) consume one index slot.
       return startIndex + 1;
 
     case 'PCtor':
@@ -460,13 +456,6 @@ function markPatternVarsAsSmaller(
         index = markCtorPatternVarsAsSmaller(arg, index, smaller);
       }
       return index;
-
-    case 'PWild':
-      return startIndex;
-
-    default:
-      const _exhaustive: never = pattern;
-      return startIndex;
   }
 }
 
@@ -481,7 +470,8 @@ function markCtorPatternVarsAsSmaller(
 ): number {
   switch (pattern.tag) {
     case 'PVar':
-      // This variable is inside a constructor pattern, so it's structurally smaller
+      // This variable (including wildcards _wN) is inside a constructor pattern,
+      // so it's structurally smaller. All PVars consume one index slot.
       smaller.add(startIndex);
       return startIndex + 1;
 
@@ -491,13 +481,6 @@ function markCtorPatternVarsAsSmaller(
         index = markCtorPatternVarsAsSmaller(arg, index, smaller);
       }
       return index;
-
-    case 'PWild':
-      return startIndex;
-
-    default:
-      const _exhaustive: never = pattern;
-      return startIndex;
   }
 }
 

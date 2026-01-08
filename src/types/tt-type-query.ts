@@ -15,7 +15,7 @@ import { TTKTerm, TTKContext, TTKClause, prettyPrint } from './tt-kernel';
 import type { TPattern } from './tt-core';
 import { inferType, extendContext } from './tt-typecheck';
 import { IndexPath, serializeIndexPath } from './source-position';
-import type { FunctionClausesResult, ClauseCheckResult } from './tt-pattern-match';
+import type { FunctionClausesResult, ClauseCheckResult } from './tt-pattern-elab';
 import { Substitution, applySubstitution } from './tt-unify';
 
 // ============================================================================
@@ -60,7 +60,7 @@ export interface ElaborationContext {
 function countPatternBindings(pattern: TPattern): number {
   switch (pattern.tag) {
     case 'PVar':
-    case 'PWild':
+      // All PVars (including wildcards like _w0, _w1) count as one binding
       return 1;
     case 'PCtor':
       if (pattern.args.length === 0) {
@@ -328,9 +328,8 @@ function computePatternBindings(
 ): Array<{ name: string; type: TTKTerm }> {
   switch (pattern.tag) {
     case 'PVar':
+      // All PVars (including wildcards like _w0, _w1) bind their name to the expected type
       return [{ name: pattern.name, type: expectedType }];
-    case 'PWild':
-      return [{ name: '_', type: expectedType }];
     case 'PCtor':
       // For constructor patterns with no args (like type variables A, B),
       // treat as binding that name to the expected type
@@ -446,8 +445,7 @@ function computeClauseRhsExpectedType(
  * Query the type of a pattern or a subpattern.
  *
  * Patterns have a different structure than terms:
- * - PVar: a variable pattern, type is the expected type for this position
- * - PWild: a wildcard pattern, type is the expected type for this position
+ * - PVar: a variable pattern, type is the expected type for this position (wildcards are PVar with _wN names)
  * - PCtor: a constructor pattern, type is the expected type; can navigate into args
  *
  * @param pattern - The pattern to query
@@ -476,20 +474,17 @@ function queryPatternType(
 
     switch (pattern.tag) {
       case 'PVar':
-        // Variable pattern - use solved binding type if available
+        // Variable pattern (including wildcards _w0, _w1) - use solved binding type if available
         patternType = expectedType;
         if (solvedBindings && bindingOffset < solvedBindings.length) {
           patternType = solvedBindings[bindingOffset].type;
         }
-        syntheticTerm = { tag: 'Const', name: pattern.name, type: patternType };
-        break;
-      case 'PWild':
-        // Wildcard - use solved binding type if available
-        patternType = expectedType;
-        if (solvedBindings && bindingOffset < solvedBindings.length) {
-          patternType = solvedBindings[bindingOffset].type;
+        // Wildcards (names starting with _) display as Hole, others as Const
+        if (pattern.name.startsWith('_')) {
+          syntheticTerm = { tag: 'Hole', id: pattern.name, type: patternType, context: [] };
+        } else {
+          syntheticTerm = { tag: 'Const', name: pattern.name, type: patternType };
         }
-        syntheticTerm = { tag: 'Hole', id: '_', type: patternType, context: [] };
         break;
       case 'PCtor':
         // Constructor pattern - the type is the expectedType (the result type of applying the constructor)

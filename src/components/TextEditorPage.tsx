@@ -18,6 +18,12 @@ import { prettyPrint } from '../types/tt-core';
 import { prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
 import { useSelectionTypeInfo } from '../hooks/useSelectionTypeInfo';
 import { SplitTreeViewer } from './SplitTreeViewer';
+import { PatternElabStepperViewer } from './PatternElabStepperViewer';
+import {
+  Term as StepperTerm,
+  Clause as StepperClause,
+  ConstructorInfo as StepperConstructorInfo
+} from '../types/pattern-elab-stepper';
 
 // ============================================================================
 // Types
@@ -511,6 +517,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const [showErrors, setShowErrors] = useState(true);
   const [showElimModal, setShowElimModal] = useState(false);
   const [showCompileInfoModal, setShowCompileInfoModal] = useState(false);
+  const [showStepperModal, setShowStepperModal] = useState(false);
 
   // Generate eliminator on-the-fly when modal is open
   const eliminatorType = useMemo(() => {
@@ -666,6 +673,100 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
     return { source, parsedTT, elabTTK, checkedTTK };
   }, [showCompileInfoModal, result]);
 
+  // Generate stepper demo data - for now uses hardcoded examples based on function name
+  const stepperData = useMemo(() => {
+    if (!showStepperModal) return null;
+    if (!result.name) return null;
+
+    // Build a demo environment with Nat and Vec constructors
+    const env = new Map<string, StepperConstructorInfo>();
+    const Nat: StepperTerm = { tag: 'Const', name: 'Nat' };
+    const Type: StepperTerm = { tag: 'Type' };
+    const Zero: StepperTerm = { tag: 'Const', name: 'Zero' };
+    const Succ = (n: StepperTerm): StepperTerm => ({ tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: n });
+    const Vec = (A: StepperTerm, n: StepperTerm): StepperTerm => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Vec' }, arg: A }, arg: n });
+    const mkVar = (name: string, index: number): StepperTerm => ({ tag: 'Var', name, index });
+    const plus = (a: StepperTerm, b: StepperTerm): StepperTerm => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: b });
+
+    env.set('Zero', { name: 'Zero', params: [], returnType: Nat });
+    env.set('Succ', { name: 'Succ', params: [{ name: 'n', type: Nat }], returnType: Nat });
+    env.set('VNil', {
+      name: 'VNil',
+      params: [{ name: 'A', type: Type }],
+      returnType: Vec({ tag: 'Var', name: 'A', index: 0 }, Zero)
+    });
+    env.set('VCons', {
+      name: 'VCons',
+      params: [
+        { name: 'A', type: Type },
+        { name: 'n', type: Nat },
+        { name: 'x', type: { tag: 'Var', name: 'A', index: 1 } },
+        { name: 'xs', type: Vec({ tag: 'Var', name: 'A', index: 2 }, { tag: 'Var', name: 'n', index: 1 }) }
+      ],
+      returnType: Vec({ tag: 'Var', name: 'A', index: 3 }, Succ({ tag: 'Var', name: 'n', index: 2 }))
+    });
+
+    // Check if this is vecConcat or plus - provide appropriate demo
+    if (result.name === 'vecConcat') {
+      // vecConcat type
+      const vecConcatType: StepperTerm = {
+        tag: 'Pi', name: 'A', domain: Type,
+        codomain: {
+          tag: 'Pi', name: 'a', domain: Nat,
+          codomain: {
+            tag: 'Pi', name: 'b', domain: Nat,
+            codomain: {
+              tag: 'Pi', name: 'xs', domain: Vec(mkVar('A', 2), mkVar('a', 1)),
+              codomain: {
+                tag: 'Pi', name: 'ys', domain: Vec(mkVar('A', 3), mkVar('b', 1)),
+                codomain: Vec(mkVar('A', 4), plus(mkVar('a', 3), mkVar('b', 2)))
+              }
+            }
+          }
+        }
+      };
+
+      // Clause 1: vecConcat _ _ _ (VNil _) v = v
+      const clause1: StepperClause = {
+        patterns: [
+          { tag: 'PWild' },
+          { tag: 'PWild' },
+          { tag: 'PWild' },
+          { tag: 'PCtor', name: 'VNil', args: [{ tag: 'PWild' }] },
+          { tag: 'PVar', name: 'v' }
+        ],
+        rhs: mkVar('v', 0)
+      };
+
+      return { clause: clause1, fnType: vecConcatType, env };
+    }
+
+    if (result.name === 'plus') {
+      // plus type: Nat -> Nat -> Nat
+      const plusType: StepperTerm = {
+        tag: 'Pi', name: 'a', domain: Nat,
+        codomain: {
+          tag: 'Pi', name: 'b', domain: Nat,
+          codomain: Nat
+        }
+      };
+
+      // Clause 1: plus Zero b = b
+      const clause1: StepperClause = {
+        patterns: [
+          { tag: 'PCtor', name: 'Zero', args: [] },
+          { tag: 'PVar', name: 'b' }
+        ],
+        rhs: mkVar('b', 0)
+      };
+
+      return { clause: clause1, fnType: plusType, env };
+    }
+
+    // Default: no stepper data available
+    return null;
+  }, [showStepperModal, result.name]);
+
   const getTypeStyle = () => {
     switch (result.blockType) {
       case 'Inductive': return styles.blockTypeInductive;
@@ -756,6 +857,25 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
             }}
           >
             Compile Info
+          </button>
+        )}
+        {/* Stepper button - available for functions with pattern matching (plus, vecConcat) */}
+        {(result.name === 'plus' || result.name === 'vecConcat') && (
+          <button
+            onClick={() => setShowStepperModal(true)}
+            style={{
+              marginLeft: '8px',
+              padding: '2px 8px',
+              backgroundColor: '#21262d',
+              color: '#d2a8ff',
+              border: '1px solid #30363d',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '11px',
+              fontWeight: 500,
+            }}
+          >
+            ▶ Stepper
           </button>
         )}
       </div>
@@ -951,6 +1071,20 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
                 </pre>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stepper Modal */}
+      {showStepperModal && stepperData && (
+        <div style={styles.modalOverlay} onClick={() => setShowStepperModal(false)}>
+          <div style={{ ...styles.modal, maxWidth: '1000px', maxHeight: '90vh' }} onClick={(e) => e.stopPropagation()}>
+            <PatternElabStepperViewer
+              clause={stepperData.clause}
+              fnType={stepperData.fnType}
+              env={stepperData.env}
+              onClose={() => setShowStepperModal(false)}
+            />
           </div>
         </div>
       )}

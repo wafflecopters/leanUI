@@ -21,7 +21,7 @@
  *
  * ## Wildcard Handling
  *
- * `PWild` and `PVar` patterns match ANY constructor. When building the tree:
+ * `PVar` patterns (including wildcards like _w0, _w1) match ANY constructor. When building the tree:
  * - They apply to all constructors not explicitly matched by a `PCtor`
  * - This creates "default" coverage that can fill in missing branches
  *
@@ -36,6 +36,22 @@ import { unifyTerms } from './tt-unify';
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Check if a pattern is a wildcard or variable pattern (matches anything).
+ * Wildcards are now represented as PVar with names starting with '_'.
+ */
+function isWildcardOrVar(pattern: TPattern | undefined): boolean {
+  return pattern !== undefined && pattern.tag === 'PVar';
+}
+
+/** Counter for generating fresh wildcard names during totality checking */
+let wildcardCounter = 0;
+
+/** Generate a fresh wildcard pattern */
+function freshWildcardPattern(): TPattern {
+  return { tag: 'PVar', name: `_tc${wildcardCounter++}` };
+}
 
 /**
  * A splitting tree represents the decision structure of pattern matching.
@@ -575,11 +591,11 @@ function buildSplitTree(
 
   // Check if first row has a wildcard/var at current position - it covers all
   const firstPattern = rows[0].patterns[patternIndex];
-  if (firstPattern && (firstPattern.tag === 'PWild' || firstPattern.tag === 'PVar')) {
+  if (isWildcardOrVar(firstPattern)) {
     // Check if ALL patterns at this position are wildcards/vars
     const allWildcards = rows.every(row => {
       const pat = row.patterns[patternIndex];
-      return pat && (pat.tag === 'PWild' || pat.tag === 'PVar');
+      return isWildcardOrVar(pat);
     });
 
     if (allWildcards) {
@@ -623,7 +639,7 @@ function buildSplitTree(
   // Collect rows that have wildcards/vars at this position (they match all constructors)
   const wildcardRows = rows.filter(row => {
     const pat = row.patterns[patternIndex];
-    return pat && (pat.tag === 'PWild' || pat.tag === 'PVar');
+    return isWildcardOrVar(pat);
   });
 
   // Collect which constructors are explicitly matched by PCtor patterns
@@ -730,7 +746,7 @@ interface SpecializedPatternRow {
  * Specialize rows for a specific constructor at the given argument position.
  *
  * - Rows with PCtor matching the constructor: include, decompose ctor args
- * - Rows with PWild/PVar: include, expand with wildcards for ctor args
+ * - Rows with PVar (including wildcards): include, expand with fresh wildcards for ctor args
  * - Rows with PCtor for different constructor: exclude
  *
  * Returns intermediate rows without argTypes (those are added by specializeRowsWithTypes).
@@ -766,9 +782,9 @@ function specializeRows(
       }
       // Different constructor - row doesn't match, exclude it
     } else {
-      // PWild or PVar - matches any constructor
-      // Expand with wildcards for constructor arguments
-      const wildcards: TPattern[] = Array(ctorArity).fill({ tag: 'PWild' });
+      // PVar (including wildcards) - matches any constructor
+      // Expand with fresh wildcards for constructor arguments
+      const wildcards: TPattern[] = Array.from({ length: ctorArity }, () => freshWildcardPattern());
       const newPatterns = [
         ...row.patterns.slice(0, argIndex),
         ...wildcards,

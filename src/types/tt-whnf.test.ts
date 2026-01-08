@@ -20,6 +20,7 @@ import {
   TTKTerm,
   TTKContext,
   TTKClause,
+  TTKPattern,
   mkVar,
   mkPi,
   mkLambda,
@@ -32,7 +33,6 @@ import {
   prettyPrint,
 } from './tt-kernel';
 import { whnf, DefinitionsMap, convertible } from './tt-typecheck';
-import { TPattern } from './tt-core';
 
 // ============================================================================
 // Test Helpers
@@ -88,17 +88,17 @@ function mkMatch(scrutinee: TTKTerm, clauses: TTKClause[]): TTKTerm {
 }
 
 /** Create a variable pattern */
-function pvar(name: string): TPattern {
+function pvar(name: string): TTKPattern {
   return { tag: 'PVar', name };
 }
 
-/** Create a wildcard pattern */
-function pwild(): TPattern {
-  return { tag: 'PWild' };
+/** Create a wildcard pattern (represented as PVar with name '_' in TTK) */
+function pwild(): TTKPattern {
+  return { tag: 'PVar', name: '_' };
 }
 
 /** Create a constructor pattern */
-function pctor(name: string, args: TPattern[]): TPattern {
+function pctor(name: string, args: TTKPattern[]): TTKPattern {
   return { tag: 'PCtor', name, args };
 }
 

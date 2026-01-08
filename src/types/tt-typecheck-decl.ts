@@ -18,7 +18,7 @@ import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
 import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
 import { checkFunctionTotality, formatMissingCase, SplitTree } from './ttk-totality-check';
-import { checkFunctionClausesWithResult, FunctionClausesResult, ClauseCheckResult } from './tt-pattern-match';
+import { checkFunctionClausesWithResult, FunctionClausesResult, ClauseCheckResult } from './tt-pattern-elab';
 
 // Re-export DefinitionsMap for use by callers
 export type { DefinitionsMap } from './tt-typecheck';
