@@ -112,6 +112,12 @@ export interface UnifyOptions {
    * Default: false (--without-K mode)
    */
   useUIP?: boolean;
+
+  /**
+   * Map of function definitions for WHNF reduction.
+   * This allows unification to reduce function applications like `plus Zero b` to `b`.
+   */
+  definitions?: Map<string, TTKTerm>;
 }
 
 // ============================================================================
@@ -511,11 +517,11 @@ function trySolution(
 function tryInjectivity(
   eq: UnifyEquation,
   ctx: TTKContext,
-  _options: UnifyOptions
+  options: UnifyOptions
 ): RuleResult {
-  // Reduce to WHNF first
-  const lhsWhnf = whnf(eq.lhs, ctx);
-  const rhsWhnf = whnf(eq.rhs, ctx);
+  // Reduce to WHNF first (pass definitions for function reduction)
+  const lhsWhnf = whnf(eq.lhs, ctx, options.definitions);
+  const rhsWhnf = whnf(eq.rhs, ctx, options.definitions);
 
   // Try to decompose as constructor applications
   const lhsCtor = asConstructorApp(lhsWhnf);
@@ -578,11 +584,11 @@ function tryInjectivity(
 function tryConflict(
   eq: UnifyEquation,
   ctx: TTKContext,
-  _options: UnifyOptions
+  options: UnifyOptions
 ): RuleResult {
-  // Reduce to WHNF
-  const lhsWhnf = whnf(eq.lhs, ctx);
-  const rhsWhnf = whnf(eq.rhs, ctx);
+  // Reduce to WHNF (pass definitions for function reduction)
+  const lhsWhnf = whnf(eq.lhs, ctx, options.definitions);
+  const rhsWhnf = whnf(eq.rhs, ctx, options.definitions);
 
   const lhsCtor = asConstructorApp(lhsWhnf);
   const rhsCtor = asConstructorApp(rhsWhnf);
@@ -645,10 +651,10 @@ function tryCycle(
 function tryEta(
   eq: UnifyEquation,
   ctx: TTKContext,
-  _options: UnifyOptions
+  options: UnifyOptions
 ): RuleResult {
-  const lhsWhnf = whnf(eq.lhs, ctx);
-  const rhsWhnf = whnf(eq.rhs, ctx);
+  const lhsWhnf = whnf(eq.lhs, ctx, options.definitions);
+  const rhsWhnf = whnf(eq.rhs, ctx, options.definitions);
 
   // Both are lambdas
   if (

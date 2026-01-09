@@ -287,6 +287,21 @@ export function checkTermDeclaration(
             definitions
           );
           clauseResults = funcResult.clauses;
+
+          // Add any clause errors to the errors array
+          for (const clauseError of funcResult.errors) {
+            errors.push({
+              message: `Value for '${name}' has wrong type: ${clauseError.message}`,
+              path: clauseError.path,
+              term: clauseError.term,
+              context: clauseError.context
+            });
+          }
+
+          // If there were clause errors, return early with the errors
+          if (funcResult.errors.length > 0) {
+            return { success: false, errors, validType: declaredType, clauseResults };
+          }
         } else {
           // Regular value - use standard checkType
           // Pass the value path so errors can be traced back to source positions

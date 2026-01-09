@@ -423,6 +423,82 @@ export function shiftTerm(term: TTKTerm, amount: number, cutoff: number): TTKTer
   return shift(amount, term, cutoff);
 }
 
+/**
+ * Replace variables according to a mapping WITHOUT shifting other indices.
+ * This is for parallel substitution where indices should stay in place.
+ *
+ * @param mapping - Maps variable index to replacement term
+ * @param term - The term to transform
+ */
+export function replaceVars(mapping: Map<number, TTKTerm>, term: TTKTerm): TTKTerm {
+  return replaceVarsHelper(mapping, term, 0);
+}
+
+function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: number): TTKTerm {
+  switch (term.tag) {
+    case 'Var': {
+      const adjustedIndex = term.index - depth;
+      if (adjustedIndex >= 0 && mapping.has(adjustedIndex)) {
+        // Replace with the mapped term, shifted to account for binders we've gone under
+        const replacement = mapping.get(adjustedIndex)!;
+        return depth > 0 ? shift(depth, replacement, 0) : replacement;
+      }
+      // Leave other variables unchanged
+      return term;
+    }
+
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Hole':
+      return {
+        tag: 'Hole',
+        id: term.id,
+        type: replaceVarsHelper(mapping, term.type, depth),
+        context: term.context
+      };
+
+    case 'Binder': {
+      const newDomain = replaceVarsHelper(mapping, term.domain, depth);
+      const newBody = replaceVarsHelper(mapping, term.body, depth + 1);
+
+      let newBinderKind: TTKBinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = replaceVarsHelper(mapping, term.binderKind.defVal, depth);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
+      return { tag: 'Binder', binderKind: newBinderKind, name: term.name, domain: newDomain, body: newBody };
+    }
+
+    case 'App': {
+      const newFn = replaceVarsHelper(mapping, term.fn, depth);
+      const newArg = replaceVarsHelper(mapping, term.arg, depth);
+      return { tag: 'App', fn: newFn, arg: newArg };
+    }
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: replaceVarsHelper(mapping, term.term, depth),
+        type: replaceVarsHelper(mapping, term.type, depth)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: replaceVarsHelper(mapping, term.scrutinee, depth),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: replaceVarsHelper(mapping, c.rhs, depth)
+        }))
+      };
+  }
+}
+
 // ============================================================================
 // Definitional Equality
 // ============================================================================

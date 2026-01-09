@@ -29,15 +29,16 @@ import {
   subst,
   shiftTerm,
   prettyPrint,
+  replaceVars,
 } from './tt-kernel';
 import { MetaContext } from './tt-meta';
-import { TypeCheckError, lookupConstByName, extendContext, inferType, checkType, convertible, DefinitionsMap } from './tt-typecheck';
+import { TypeCheckError, lookupConstByName, extendContext, inferType, DefinitionsMap } from './tt-typecheck';
 import { unifyTerms, Substitution, varKey } from './tt-unify';
 import { IndexPath, appendPath, fieldSeg, arraySeg } from './source-position';
 import { TPattern } from './tt-core';
 
 // Browser-safe debug flag (set to true to enable debug logging)
-const DEBUG_PATTERN_ELAB = false;
+const DEBUG_PATTERN_ELAB = typeof process !== 'undefined' && process.env?.DEBUG_PATTERN_ELAB === '1';
 
 // ============================================================================
 // Types
@@ -55,6 +56,14 @@ export interface PatternElabResult {
   bindings: Array<{ name: string; type: TTKTerm }>;
   /** The refined type after unification (may be more specific than input) */
   refinedType: TTKTerm;
+  /** The term this pattern elaborates to (Var for variables, constructor application for ctors, meta for wildcards) */
+  patternTerm: TTKTerm;
+  /**
+   * Index refinements from dependent pattern matching.
+   * When matching a constructor like VNil against Vec A a, we learn a = Zero.
+   * Maps De Bruijn index (in the expected type at this point) to the refined term.
+   */
+  indexRefinements: Map<number, TTKTerm>;
 }
 
 export interface ClauseElabResult {
@@ -71,10 +80,21 @@ export interface ClauseCheckResult {
   substitution: Substitution;
 }
 
+/** Error from checking a single clause */
+export interface ClauseCheckError {
+  clauseIndex: number;
+  message: string;
+  path: IndexPath;
+  term?: TTKTerm;
+  context?: TTKContext;
+}
+
 /** Result of checking all function clauses */
 export interface FunctionClausesResult {
   clauses: ClauseCheckResult[];
   substitution: Substitution;
+  /** Errors from clauses that failed (allows checking all clauses) */
+  errors: ClauseCheckError[];
 }
 
 // ============================================================================
@@ -147,6 +167,17 @@ function getArgs(type: TTKTerm): TTKTerm[] {
     curr = curr.fn;
   }
   return args;
+}
+
+/**
+ * Substitute a term for a variable at a specific index.
+ * Unlike regular subst, this doesn't decrement other indices.
+ * Used for applying index refinements from dependent pattern matching.
+ */
+function substVarIfPresent(term: TTKTerm, varIndex: number, replacement: TTKTerm): TTKTerm {
+  // Use regular substitution - it will replace Var(varIndex) with replacement
+  // and decrement higher indices. For refinements, this is what we want.
+  return subst(varIndex, replacement, term);
 }
 
 /**
@@ -296,7 +327,8 @@ export function elaboratePattern(
   expectedType: TTKTerm,
   ctx: TTKContext,
   mctx: MetaContext,
-  path: IndexPath = []
+  path: IndexPath = [],
+  defs?: DefinitionsMap
 ): PatternElabResult {
   // Normalize the expected type first
   const normType = expectedType;  // TODO: whnf if needed
@@ -304,15 +336,26 @@ export function elaboratePattern(
   switch (pattern.tag) {
     case 'PVar': {
       // Both wildcards and named variables create a binding
-      // For wildcards, we also create a meta (though we may not need it)
+      // For wildcards, the pattern term is a fresh meta
+      // For named variables, the pattern term is a Var (index will be assigned by caller)
       if (pattern.name === '_') {
         // Wildcard: the binding exists for de Bruijn indexing,
         // but its value is unconstrained (may be solved by unification)
-        mctx.fresh(normType, ctx);
+        const meta = mctx.fresh(normType, ctx);
+        return {
+          bindings: [{ name: pattern.name, type: normType }],
+          refinedType: normType,
+          patternTerm: meta,
+          indexRefinements: new Map()
+        };
       }
+      // Named variable: pattern term will be set by the caller based on binding index
+      // For now, use a placeholder that will be replaced
       return {
         bindings: [{ name: pattern.name, type: normType }],
-        refinedType: normType
+        refinedType: normType,
+        patternTerm: mkVar(0),  // Placeholder - caller will compute actual index
+        indexRefinements: new Map()
       };
     }
 
@@ -324,7 +367,9 @@ export function elaboratePattern(
         if (pattern.args.length === 0) {
           return {
             bindings: [{ name: pattern.name, type: normType }],
-            refinedType: normType
+            refinedType: normType,
+            patternTerm: mkVar(0),  // Placeholder - caller will compute actual index
+            indexRefinements: new Map()
           };
         }
         throw new TypeCheckError(
@@ -342,7 +387,7 @@ export function elaboratePattern(
         );
       }
 
-      return elaborateCtorPattern(pattern, ctor, normType, ctx, mctx, path);
+      return elaborateCtorPattern(pattern, ctor, normType, ctx, mctx, path, defs);
     }
   }
 }
@@ -362,7 +407,8 @@ function elaborateCtorPattern(
   expectedType: TTKTerm,
   ctx: TTKContext,
   mctx: MetaContext,
-  path: IndexPath
+  path: IndexPath,
+  defs?: DefinitionsMap
 ): PatternElabResult {
   const { args: telescope, returnType: ctorReturnType } = unwrapPi(ctor.fullType);
 
@@ -403,7 +449,7 @@ function elaborateCtorPattern(
     console.log(`[DEBUG] Unifying: ${prettyPrint(instantiatedReturn)} =?= ${prettyPrint(expectedType)}`);
     console.log(`[DEBUG] argMetas:`, argMetas.map((m, i) => `${telescope[i].name}: ${prettyPrint(m)}`));
   }
-  const unifyResult = unifyTerms(instantiatedReturn, expectedType, mkType(0), ctx);
+  const unifyResult = unifyTerms(instantiatedReturn, expectedType, mkType(0), ctx, { definitions: defs });
   if (DEBUG_PATTERN_ELAB) {
     console.log(`[DEBUG] Unify result:`, unifyResult.tag);
     if (unifyResult.tag === 'success') {
@@ -417,11 +463,16 @@ function elaborateCtorPattern(
     );
   }
 
-  // 4. Apply unification substitution to solve metas
+  // 4. Apply unification substitution to solve metas and collect index refinements
+  const indexRefinements = new Map<number, TTKTerm>();
   if (unifyResult.tag === 'success') {
     unifyResult.substitution.forEach((value, key) => {
-      // If it's a hole solution, record it in mctx
-      if (!key.startsWith('var:')) {
+      if (key.startsWith('var:')) {
+        // Index refinement: var:N -> term means the variable at index N in expected type equals term
+        const index = parseInt(key.slice(4), 10);
+        indexRefinements.set(index, value);
+      } else {
+        // Metavariable solution
         mctx.solve(key, value);
       }
     });
@@ -467,18 +518,33 @@ function elaborateCtorPattern(
       zonkedArgTypes[i],
       currentCtx,
       mctx,
-      argPath
+      argPath,
+      defs
     );
     for (const b of argResult.bindings) {
       allBindings.push(b);
       currentCtx = extendContext(currentCtx, b.name, b.type);
     }
+    // Merge index refinements from nested patterns
+    // Note: indices from nested patterns are in a different context, so we may need to shift
+    // For now, just merge them directly (this may need adjustment for deeply nested patterns)
+    argResult.indexRefinements.forEach((value, key) => {
+      indexRefinements.set(key, value);
+    });
   }
 
-  // 7. Return the refined type (may have more specific indices now)
+  // 7. Build the constructor term: Ctor applied to zonked metas
+  let ctorTerm: TTKTerm = mkConst(pattern.name, ctor.fullType);
+  for (const m of zonkedMetas) {
+    ctorTerm = mkApp(ctorTerm, mctx.zonk(m));
+  }
+
+  // 8. Return the refined type and the pattern term
   return {
     bindings: allBindings,
-    refinedType: mctx.zonk(expectedType)
+    refinedType: mctx.zonk(expectedType),
+    patternTerm: ctorTerm,
+    indexRefinements
   };
 }
 
@@ -488,6 +554,13 @@ function elaborateCtorPattern(
 
 /**
  * Elaborate a clause (patterns + RHS) against expected argument types and return type.
+ *
+ * Uses "Type Checking Through Unification" approach:
+ * 1. Track patternTerms - what each pattern elaborates to (meta, var, or ctor application)
+ * 2. Substitute patternTerms into subsequent arg types (handles dependent types)
+ * 3. Substitute patternTerms into return type to get the refined return type
+ * 4. Infer RHS type and unify with refined return type
+ * 5. Success = all unifications succeed and no unsolved required metas
  */
 export function elaborateClause(
   clause: TTKClause,
@@ -495,7 +568,7 @@ export function elaborateClause(
   expectedReturn: TTKTerm,
   ctx: TTKContext,
   mctx: MetaContext,
-  _defs?: DefinitionsMap,
+  defs?: DefinitionsMap,
   path: IndexPath = []
 ): ClauseElabResult {
   if (clause.patterns.length !== argTypes.length) {
@@ -505,60 +578,240 @@ export function elaborateClause(
     );
   }
 
-  let currentCtx = ctx;
+  // Track what term each pattern position elaborates to
+  // This is crucial for dependent types - later types may reference earlier patterns
+  const patternTerms: TTKTerm[] = [];
   const allBindings: Array<{ name: string; type: TTKTerm }> = [];
+  const bindingCountsPerPattern: number[] = [];  // Track actual bindings per pattern
+  let bindingCount = 0;
+
+  // Collect all index refinements from pattern matching
+  // Each entry maps (pattern index, variable index in that pattern's expected type) -> refined term
+  // We'll use these to refine the return type after pattern substitution
+  const allIndexRefinements: Array<{ patternIdx: number; refinements: Map<number, TTKTerm> }> = [];
 
   // Elaborate each pattern
   for (let i = 0; i < clause.patterns.length; i++) {
     const patPath = appendPath(path, fieldSeg('patterns'), arraySeg(i));
+
+    // The expected type may reference earlier patterns via De Bruijn indices
+    // De Bruijn index 0 in argTypes[i] refers to pattern i-1, index 1 to i-2, etc.
+    // We substitute patternTerms for these indices using sequential subst.
+    // Note: subst decrements higher indices, which is correct for dependent types
+    // because it accounts for the context changes as we process patterns.
+    let expectedType = argTypes[i];
+    for (let j = 0; j < i; j++) {
+      const patternIndex = i - 1 - j;
+      expectedType = subst(j, patternTerms[patternIndex], expectedType);
+    }
+    expectedType = mctx.zonk(expectedType);
+
+    if (DEBUG_PATTERN_ELAB) {
+      console.log(`[DEBUG] Pattern ${i}: expected type (after subst): ${prettyPrint(expectedType)}`);
+    }
+
     const result = elaboratePattern(
       clause.patterns[i],
-      argTypes[i],
-      currentCtx,
+      expectedType,
+      ctx,  // Use base context - pattern context is separate
       mctx,
-      patPath
+      patPath,
+      defs
     );
+
+    // For variable patterns, the patternTerm should be a Var with the correct index
+    // The index counts from the end of all bindings (De Bruijn convention)
+    let patternTerm = result.patternTerm;
+    if (result.bindings.length === 1 && result.patternTerm.tag === 'Var') {
+      // This is a simple variable binding - set the correct index
+      // The index is relative to the final binding count
+      // We'll fix this up after we know the total binding count
+      patternTerm = mkVar(bindingCount);
+    }
+    patternTerms.push(patternTerm);
+
+    // Collect index refinements from this pattern
+    if (result.indexRefinements.size > 0) {
+      allIndexRefinements.push({ patternIdx: i, refinements: result.indexRefinements });
+    }
+
+    // Track how many bindings this pattern actually contributed
+    bindingCountsPerPattern.push(result.bindings.length);
+
+    if (DEBUG_PATTERN_ELAB) {
+      console.log(`[DEBUG] Pattern ${i} elaborates to: ${prettyPrint(patternTerm)}`);
+      console.log(`[DEBUG] Pattern ${i} bindings: ${result.bindings.length}`);
+      if (result.indexRefinements.size > 0) {
+        console.log(`[DEBUG] Pattern ${i} index refinements:`,
+          Array.from(result.indexRefinements.entries()).map(([k, v]) => `#${k} -> ${prettyPrint(v)}`));
+      }
+    }
+
     for (const b of result.bindings) {
       allBindings.push(b);
-      currentCtx = extendContext(currentCtx, b.name, b.type);
+      bindingCount++;
     }
   }
 
-  // Zonk everything
+  // Fix up pattern term indices now that we know the total binding count
+  // During elaboration, we used mkVar(bindingCount) where bindingCount was the count at that point.
+  // But in the final pattern context, the De Bruijn index should be (totalBindings - 1 - bindingIndex).
+  // For pattern i which introduced binding at cumulative index p, the final index is (bindingCount - 1 - p).
+  let cumulativeBindingIdx = 0;
+  for (let i = 0; i < patternTerms.length; i++) {
+    const pt = patternTerms[i];
+    // Use actual bindings tracked during elaboration, not the pattern structure
+    const bindingsForThisPattern = bindingCountsPerPattern[i];
+
+    if (DEBUG_PATTERN_ELAB) {
+      console.log(`[DEBUG] Fix-up pattern ${i}: actualBindings=${bindingsForThisPattern}, cumulative=${cumulativeBindingIdx}`);
+    }
+
+    if (pt.tag === 'Var') {
+      // Fix the index: it was set to cumulativeBindingIdx, but should be (bindingCount - 1 - cumulativeBindingIdx)
+      const correctIndex = bindingCount - 1 - cumulativeBindingIdx;
+      if (DEBUG_PATTERN_ELAB) {
+        console.log(`[DEBUG]   patternTerms[${i}] is Var, correctIndex = ${bindingCount} - 1 - ${cumulativeBindingIdx} = ${correctIndex}`);
+      }
+      patternTerms[i] = mkVar(correctIndex);
+    }
+    cumulativeBindingIdx += bindingsForThisPattern;
+  }
+
+  // Apply index refinements by updating pattern terms
+  // When we match a constructor like VNil against Vec A a, we learn a = Zero.
+  // The refinement var:N -> term tells us that variable at index N in pattern i's expected type
+  // corresponds to an earlier pattern.
+  //
+  // Due to the way the substitution loop works (with index decrements), var:k after the loop
+  // corresponds to the original telescope index k+1, which maps to pattern k+1.
+  // This is because the substitution loop decrements indices, so original #1 becomes #0, etc.
+  for (const { patternIdx, refinements } of allIndexRefinements) {
+    refinements.forEach((refinedTerm, varIndex) => {
+      // var:k in the expected type after substitution corresponds to pattern k+1
+      // (due to index decrementing in the substitution loop)
+      const targetPatternIdx = varIndex + 1;
+
+      if (targetPatternIdx >= 0 && targetPatternIdx < patternTerms.length) {
+        if (DEBUG_PATTERN_ELAB) {
+          console.log(`[DEBUG] Refinement from pattern ${patternIdx}: var #${varIndex} in expected type`);
+          console.log(`[DEBUG]   -> patternTerms[${targetPatternIdx}] was ${prettyPrint(patternTerms[targetPatternIdx])}, now ${prettyPrint(refinedTerm)}`);
+        }
+        // Update the pattern term with the refined value
+        patternTerms[targetPatternIdx] = refinedTerm;
+      } else {
+        if (DEBUG_PATTERN_ELAB) {
+          console.log(`[DEBUG] Refinement from pattern ${patternIdx}: var #${varIndex} -> ${prettyPrint(refinedTerm)} (no matching pattern term, idx=${targetPatternIdx})`);
+        }
+      }
+    });
+  }
+
+  // Compute the refined return type using parallel substitution.
+  // When bindingCount == arity, the indices in expectedReturn directly correspond
+  // to the pattern context indices. We only need to apply refinements (like a = Zero).
+  //
+  // Build a mapping from function arg index -> pattern term
+  // - Index k in expectedReturn corresponds to pattern (n-1-k)
+  // - If the pattern term is just #k (identity), we can skip it
+  // - If the pattern term is a refinement (like Zero), we must apply it
+  if (DEBUG_PATTERN_ELAB) {
+    console.log('[DEBUG] PatternTerms after fix-up:', patternTerms.map((t, i) => `[${i}]: ${prettyPrint(t)}`));
+    console.log('[DEBUG] Original return type:', prettyPrint(expectedReturn));
+  }
+
+  const n = patternTerms.length;
+  const refinementMap = new Map<number, TTKTerm>();
+
+  // Build the refinement map: only include non-identity substitutions
+  for (let i = 0; i < n; i++) {
+    const targetIndex = n - 1 - i; // Index in the return type
+    const patternTerm = patternTerms[i];
+    // Check if this is NOT an identity (i.e., #targetIndex -> something other than #targetIndex)
+    if (!(patternTerm.tag === 'Var' && patternTerm.index === targetIndex)) {
+      refinementMap.set(targetIndex, patternTerm);
+      if (DEBUG_PATTERN_ELAB) {
+        console.log(`[DEBUG] Refinement: #${targetIndex} -> ${prettyPrint(patternTerm)}`);
+      }
+    }
+  }
+
+  // Apply the refinements using parallel substitution (no index shifting)
+  let refinedReturn = replaceVars(refinementMap, expectedReturn);
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log(`[DEBUG] After replaceVars: ${prettyPrint(refinedReturn)}`);
+  }
+
+  // Note: Binding type translation is complex because sequential subst has shifted indices.
+  // For now, we leave binding types as-is. The return type refinement is the main fix.
+  // TODO: Properly translate binding types when arity != bindingCount
+
+  refinedReturn = mctx.zonk(refinedReturn);
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log(`[DEBUG] Refined return type: ${prettyPrint(refinedReturn)}`);
+  }
+
+  // Zonk bindings
   const zonkedBindings = allBindings.map(b => ({
     name: b.name,
     type: mctx.zonk(b.type)
   }));
-  const zonkedReturn = mctx.zonk(expectedReturn);
-  const zonkedRhs = mctx.zonk(clause.rhs);
 
-  // Build zonked context for type checking
+  // Build pattern context for RHS type checking
   // De Bruijn convention: most recently bound variable is at index 0
-  // So we need to reverse the bindings - last pattern variable should be index 0
-  const zonkedCtx: TTKContext = [];
+  const patternCtx: TTKContext = [];
   for (let i = zonkedBindings.length - 1; i >= 0; i--) {
-    zonkedCtx.push(zonkedBindings[i]);
+    patternCtx.push(zonkedBindings[i]);
   }
   // Add original context entries (they are at higher indices)
   for (const entry of ctx) {
-    zonkedCtx.push(entry);
+    patternCtx.push(entry);
   }
 
-  // Type check RHS using bidirectional checking
-  // This allows lambdas without type annotations to be checked against Pi types
-  const rhsPath = appendPath(path, fieldSeg('rhs'));
   if (DEBUG_PATTERN_ELAB) {
-    console.log('[DEBUG] zonkedRhs:', prettyPrint(zonkedRhs));
-    console.log('[DEBUG] zonkedCtx:', zonkedCtx.map(e => `${e.name}: ${prettyPrint(e.type)}`).join(', '));
-    console.log('[DEBUG] zonkedReturn:', prettyPrint(zonkedReturn));
+    console.log('[DEBUG] Pattern context:', patternCtx.map(e => `${e.name}: ${prettyPrint(e.type)}`).join(', '));
   }
 
-  // Use checkType for bidirectional type checking - this handles lambdas against Pi types
-  checkType(zonkedRhs, zonkedReturn, zonkedCtx, rhsPath);
+  // TYPE CHECK RHS THROUGH UNIFICATION
+  // Infer the type of the RHS in the pattern context
+  const rhsPath = appendPath(path, fieldSeg('rhs'));
+  const zonkedRhs = mctx.zonk(clause.rhs);
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log('[DEBUG] RHS:', prettyPrint(zonkedRhs));
+    console.log('[DEBUG] Expected return:', prettyPrint(refinedReturn));
+  }
+
+  // Infer the RHS type
+  const rhsType = inferType(zonkedRhs, patternCtx, rhsPath);
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log('[DEBUG] Inferred RHS type:', prettyPrint(rhsType));
+  }
+
+  // Unify RHS type with refined return type (pass definitions for WHNF reduction)
+  const unifyResult = unifyTerms(rhsType, refinedReturn, mkType(0), patternCtx, { definitions: defs });
+  if (unifyResult.tag === 'failure') {
+    throw new TypeCheckError(
+      `Type mismatch.\n  Expected: ${prettyPrint(refinedReturn)}\n  Inferred: ${prettyPrint(rhsType)}`,
+      zonkedRhs, patternCtx, rhsPath
+    );
+  }
+
+  // Apply any solutions from the unification
+  if (unifyResult.tag === 'success') {
+    unifyResult.substitution.forEach((value, key) => {
+      if (!key.startsWith('var:')) {
+        mctx.solve(key, value);
+      }
+    });
+  }
 
   return {
     bindings: zonkedBindings,
-    returnType: zonkedReturn
+    returnType: mctx.zonk(refinedReturn)
   };
 }
 
@@ -728,6 +981,7 @@ export function checkFunctionClausesWithResult(
   }
 
   const results: ClauseCheckResult[] = [];
+  const errors: ClauseCheckError[] = [];
   const combined: Substitution = new Map();
 
   for (let i = 0; i < clauses.length; i++) {
@@ -744,16 +998,20 @@ export function checkFunctionClausesWithResult(
       });
     } catch (e) {
       if (e instanceof TypeCheckError) {
-        throw new TypeCheckError(
-          `In clause ${i + 1}: ${e.message}`,
-          e.term,
-          e.context || ctx,
-          e.termPath || cPath
-        );
+        // Accumulate error instead of throwing - continue checking other clauses
+        errors.push({
+          clauseIndex: i,
+          message: `In clause ${i + 1}: ${e.message}`,
+          path: e.termPath || cPath,
+          term: e.term,
+          context: e.context || ctx
+        });
+      } else {
+        // For non-TypeCheckError, still throw (unexpected error)
+        throw e;
       }
-      throw e;
     }
   }
 
-  return { clauses: results, substitution: combined };
+  return { clauses: results, substitution: combined, errors };
 }

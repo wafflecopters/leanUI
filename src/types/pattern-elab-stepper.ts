@@ -5,8 +5,11 @@
  * Each call to `step()` advances the elaboration by one atomic operation,
  * making it perfect for visualization and debugging.
  *
+ * This is the CANONICAL implementation of pattern elaboration.
+ * The typechecker should use this for actual type checking.
+ *
  * Usage:
- *   const stepper = new PatternElabStepper(clause, fnType, env);
+ *   const stepper = createPatternElabStepper(clause, fnType, env);
  *   while (!stepper.isDone()) {
  *     console.log(stepper.describeState());
  *     stepper.step();
@@ -14,33 +17,30 @@
  *   console.log(stepper.getResult());
  */
 
+import {
+  TTKTerm,
+  TTKPattern,
+  TTKClause,
+  TTKContext,
+  mkVar,
+  mkApp,
+  mkConst,
+  mkType,
+  mkPi,
+  mkLambda,
+  subst,
+  shiftTerm,
+  prettyPrint
+} from './tt-kernel';
+
 // =============================================================================
-// Term Representation
+// Constructor Information (for pattern elaboration)
 // =============================================================================
-
-export type Term =
-  | { tag: 'Var'; name: string; index: number }
-  | { tag: 'Meta'; id: string }
-  | { tag: 'Type' }
-  | { tag: 'Const'; name: string }
-  | { tag: 'App'; fn: Term; arg: Term }
-  | { tag: 'Pi'; name: string; domain: Term; codomain: Term }
-  | { tag: 'Lam'; name: string; domain: Term; body: Term };
-
-export type Pattern =
-  | { tag: 'PWild' }
-  | { tag: 'PVar'; name: string }
-  | { tag: 'PCtor'; name: string; args: Pattern[] };
-
-export interface Clause {
-  patterns: Pattern[];
-  rhs: Term;
-}
 
 export interface ConstructorInfo {
   name: string;
-  params: Array<{ name: string; type: Term }>;
-  returnType: Term;
+  params: Array<{ name: string; type: TTKTerm }>;
+  returnType: TTKTerm;
 }
 
 // =============================================================================
@@ -49,8 +49,8 @@ export interface ConstructorInfo {
 
 export interface MetaInfo {
   id: string;
-  type: Term;
-  solution: Term | null;
+  type: TTKTerm;
+  solution: TTKTerm | null;
   createdAt: string;  // Description of when/why it was created
 }
 
@@ -59,17 +59,17 @@ export interface MetaState {
   counter: number;
 }
 
-function freshMeta(state: MetaState, type: Term, reason: string, prefix = 'm'): { state: MetaState; meta: Term } {
+function freshMeta(state: MetaState, type: TTKTerm, reason: string, prefix = 'm'): { state: MetaState; meta: TTKTerm } {
   const id = `?${prefix}${state.counter}`;
   const newMetas = new Map(state.metas);
   newMetas.set(id, { id, type, solution: null, createdAt: reason });
   return {
     state: { metas: newMetas, counter: state.counter + 1 },
-    meta: { tag: 'Meta', id }
+    meta: { tag: 'Hole', id, type, context: [] }
   };
 }
 
-function solveMeta(state: MetaState, id: string, solution: Term): { state: MetaState; success: boolean } {
+function solveMeta(state: MetaState, id: string, solution: TTKTerm): { state: MetaState; success: boolean } {
   const meta = state.metas.get(id);
   if (!meta) return { state, success: false };
   if (meta.solution !== null) {
@@ -81,23 +81,37 @@ function solveMeta(state: MetaState, id: string, solution: Term): { state: MetaS
   return { state: { ...state, metas: newMetas }, success: true };
 }
 
-function zonk(state: MetaState, term: Term): Term {
+function zonk(state: MetaState, term: TTKTerm): TTKTerm {
   switch (term.tag) {
-    case 'Meta': {
+    case 'Hole': {
       const meta = state.metas.get(term.id);
       if (meta?.solution) return zonk(state, meta.solution);
       return term;
     }
     case 'Var':
-    case 'Type':
-    case 'Const':
+    case 'Sort':
       return term;
+    case 'Const':
+      return { ...term, type: zonk(state, term.type) };
     case 'App':
       return { tag: 'App', fn: zonk(state, term.fn), arg: zonk(state, term.arg) };
-    case 'Pi':
-      return { tag: 'Pi', name: term.name, domain: zonk(state, term.domain), codomain: zonk(state, term.codomain) };
-    case 'Lam':
-      return { tag: 'Lam', name: term.name, domain: zonk(state, term.domain), body: zonk(state, term.body) };
+    case 'Binder': {
+      const domain = zonk(state, term.domain);
+      const body = zonk(state, term.body);
+      let binderKind = term.binderKind;
+      if (binderKind.tag === 'BLet') {
+        binderKind = { tag: 'BLet', defVal: zonk(state, binderKind.defVal) };
+      }
+      return { tag: 'Binder', name: term.name, binderKind, domain, body };
+    }
+    case 'Annot':
+      return { tag: 'Annot', term: zonk(state, term.term), type: zonk(state, term.type) };
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: zonk(state, term.scrutinee),
+        clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: zonk(state, c.rhs) }))
+      };
   }
 }
 
@@ -122,7 +136,7 @@ export type PatternSubPhase =
   | { tag: 'CreatingMeta'; reason: string }
   | { tag: 'BindingVariable'; name: string }
   | { tag: 'ProcessingConstructor'; ctorName: string; step: ConstructorStep }
-  | { tag: 'Finished'; term: Term };
+  | { tag: 'Finished'; term: TTKTerm };
 
 export type ConstructorStep =
   | { tag: 'LookingUpCtor' }
@@ -136,8 +150,8 @@ export type ConstructorStep =
  * A constraint generated during elaboration
  */
 export interface Constraint {
-  lhs: Term;
-  rhs: Term;
+  lhs: TTKTerm;
+  rhs: TTKTerm;
   reason: string;
 }
 
@@ -146,7 +160,7 @@ export interface Constraint {
  */
 export interface Binding {
   name: string;
-  type: Term;
+  type: TTKTerm;
   introducedBy: string;  // Description of which pattern introduced this
 }
 
@@ -155,8 +169,8 @@ export interface Binding {
  */
 export interface ElabState {
   // Input
-  clause: Clause;
-  fnType: Term;
+  clause: TTKClause;
+  fnType: TTKTerm;
   env: Map<string, ConstructorInfo>;
 
   // Current phase
@@ -166,13 +180,18 @@ export interface ElabState {
   metaState: MetaState;
 
   // Unwrapped function type
-  argTypes: Array<{ name: string; type: Term }>;
-  returnType: Term | null;
+  argTypes: Array<{ name: string; type: TTKTerm }>;
+  returnType: TTKTerm | null;
 
   // Pattern elaboration progress
-  patternTerms: Term[];           // Term each pattern elaborates to
+  patternTerms: TTKTerm[];           // Term each pattern elaborates to
   bindings: Binding[];            // Variables bound by patterns
-  currentPatternStack: Pattern[]; // Stack for nested pattern processing
+  currentPatternStack: TTKPattern[]; // Stack for nested pattern processing
+
+  // Sub-pattern terms map: maps pattern path to elaborated term
+  // Path format: "patternIndex" for top-level, "patternIndex.subIndex" for sub-patterns
+  // e.g., for pattern 3 being (VNil _), "3" -> (VNil ?A3), "3.0" -> ?A3
+  subPatternTerms: Map<string, TTKTerm>;
 
   // Constraints and solutions
   constraints: Constraint[];      // Unification constraints generated
@@ -197,16 +216,16 @@ export interface StepRecord {
 // Pretty Printing
 // =============================================================================
 
-export function prettyTerm(term: Term, metaState?: MetaState): string {
+export function prettyTerm(term: TTKTerm, metaState?: MetaState): string {
   const t = metaState ? zonk(metaState, term) : term;
   switch (t.tag) {
-    case 'Meta': return t.id;
-    case 'Var': return t.name || `#${t.index}`;
-    case 'Type': return 'Type';
+    case 'Hole': return t.id;
+    case 'Var': return `#${t.index}`;
+    case 'Sort': return t.level === 0 ? 'Prop' : `Type${t.level > 1 ? t.level : ''}`;
     case 'Const': return t.name;
     case 'App': {
-      const args: Term[] = [];
-      let fn: Term = t;
+      const args: TTKTerm[] = [];
+      let fn: TTKTerm = t;
       while (fn.tag === 'App') {
         args.unshift(fn.arg);
         fn = fn.fn;
@@ -214,21 +233,29 @@ export function prettyTerm(term: Term, metaState?: MetaState): string {
       if (args.length === 0) return prettyTerm(fn, metaState);
       return `(${prettyTerm(fn, metaState)} ${args.map(a => prettyTerm(a, metaState)).join(' ')})`;
     }
-    case 'Pi': {
+    case 'Binder': {
       const dom = prettyTerm(t.domain, metaState);
-      const cod = prettyTerm(t.codomain, metaState);
-      if (t.name === '_') return `(${dom} → ${cod})`;
-      return `(${t.name} : ${dom}) → ${cod}`;
+      const cod = prettyTerm(t.body, metaState);
+      if (t.binderKind.tag === 'BPi') {
+        if (t.name === '_') return `(${dom} → ${cod})`;
+        return `(${t.name} : ${dom}) → ${cod}`;
+      } else if (t.binderKind.tag === 'BLam') {
+        return `λ${t.name}. ${cod}`;
+      } else {
+        return `let ${t.name} = ${prettyTerm(t.binderKind.defVal, metaState)} in ${cod}`;
+      }
     }
-    case 'Lam':
-      return `λ${t.name}. ${prettyTerm(t.body, metaState)}`;
+    case 'Annot':
+      return `(${prettyTerm(t.term, metaState)} : ${prettyTerm(t.type, metaState)})`;
+    case 'Match':
+      return `match ${prettyTerm(t.scrutinee, metaState)} { ... }`;
   }
 }
 
-export function prettyPattern(p: Pattern): string {
+export function prettyPattern(p: TTKPattern): string {
   switch (p.tag) {
-    case 'PWild': return '_';
-    case 'PVar': return p.name;
+    case 'PVar':
+      return p.name === '_' || p.name.startsWith('_w') ? '_' : p.name;
     case 'PCtor':
       if (p.args.length === 0) return p.name;
       return `(${p.name} ${p.args.map(prettyPattern).join(' ')})`;
@@ -248,51 +275,15 @@ export function prettyPhase(phase: ElabPhase): string {
 }
 
 // =============================================================================
-// Substitution
+// Substitution helpers
 // =============================================================================
 
-function substitute(term: Term, index: number, replacement: Term): Term {
-  switch (term.tag) {
-    case 'Var':
-      if (term.index === index) return replacement;
-      if (term.index > index) return { ...term, index: term.index - 1 };
-      return term;
-    case 'Meta':
-    case 'Type':
-    case 'Const':
-      return term;
-    case 'App':
-      return { tag: 'App', fn: substitute(term.fn, index, replacement), arg: substitute(term.arg, index, replacement) };
-    case 'Pi':
-      return {
-        tag: 'Pi', name: term.name,
-        domain: substitute(term.domain, index, replacement),
-        codomain: substitute(term.codomain, index + 1, shift(replacement, 0, 1))
-      };
-    case 'Lam':
-      return {
-        tag: 'Lam', name: term.name,
-        domain: substitute(term.domain, index, replacement),
-        body: substitute(term.body, index + 1, shift(replacement, 0, 1))
-      };
-  }
+function substitute(term: TTKTerm, index: number, replacement: TTKTerm): TTKTerm {
+  return subst(index, replacement, term);
 }
 
-function shift(term: Term, cutoff: number, amount: number): Term {
-  switch (term.tag) {
-    case 'Var':
-      return term.index >= cutoff ? { ...term, index: term.index + amount } : term;
-    case 'Meta':
-    case 'Type':
-    case 'Const':
-      return term;
-    case 'App':
-      return { tag: 'App', fn: shift(term.fn, cutoff, amount), arg: shift(term.arg, cutoff, amount) };
-    case 'Pi':
-      return { tag: 'Pi', name: term.name, domain: shift(term.domain, cutoff, amount), codomain: shift(term.codomain, cutoff + 1, amount) };
-    case 'Lam':
-      return { tag: 'Lam', name: term.name, domain: shift(term.domain, cutoff, amount), body: shift(term.body, cutoff + 1, amount) };
-  }
+function shift(term: TTKTerm, cutoff: number, amount: number): TTKTerm {
+  return shiftTerm(term, amount, cutoff);
 }
 
 // =============================================================================
@@ -303,7 +294,7 @@ function shift(term: Term, cutoff: number, amount: number): Term {
  * Performs simple WHNF reduction for known functions.
  * This is a minimal implementation for demonstration purposes.
  */
-function whnf(term: Term, metaState: MetaState): Term {
+function whnf(term: TTKTerm, metaState: MetaState): TTKTerm {
   const t = zonk(metaState, term);
 
   switch (t.tag) {
@@ -325,11 +316,12 @@ function whnf(term: Term, metaState: MetaState): Term {
             firstArg.fn.tag === 'Const' && firstArg.fn.name === 'Succ') {
           const m = firstArg.arg;
           const n = t.arg;
-          return whnf({
-            tag: 'App',
-            fn: { tag: 'Const', name: 'Succ' },
-            arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: m }, arg: n }
-          }, metaState);
+          const plusConst = mkConst('plus', mkType(0)); // Type is placeholder
+          const succConst = mkConst('Succ', mkType(0));
+          return whnf(
+            mkApp(succConst, mkApp(mkApp(plusConst, m), n)),
+            metaState
+          );
         }
       }
 
@@ -345,7 +337,7 @@ function whnf(term: Term, metaState: MetaState): Term {
  * Deep reduction - applies WHNF recursively to all subterms.
  * Used for normalization before display.
  */
-function deepReduce(term: Term, metaState: MetaState): Term {
+function deepReduce(term: TTKTerm, metaState: MetaState): TTKTerm {
   const t = whnf(term, metaState);
 
   switch (t.tag) {
@@ -356,17 +348,11 @@ function deepReduce(term: Term, metaState: MetaState): Term {
         arg: deepReduce(t.arg, metaState)
       };
     }
-    case 'Pi':
+    case 'Binder':
       return {
-        tag: 'Pi',
+        tag: 'Binder',
         name: t.name,
-        domain: deepReduce(t.domain, metaState),
-        codomain: deepReduce(t.codomain, metaState)
-      };
-    case 'Lam':
-      return {
-        tag: 'Lam',
-        name: t.name,
+        binderKind: t.binderKind,
         domain: deepReduce(t.domain, metaState),
         body: deepReduce(t.body, metaState)
       };
@@ -376,13 +362,21 @@ function deepReduce(term: Term, metaState: MetaState): Term {
 }
 
 // =============================================================================
+// Helper: check if pattern is a wildcard
+// =============================================================================
+
+function isWildcard(p: TTKPattern): boolean {
+  return p.tag === 'PVar' && (p.name === '_' || p.name.startsWith('_w'));
+}
+
+// =============================================================================
 // The Stepper Class
 // =============================================================================
 
 export class PatternElabStepper {
   private state: ElabState;
 
-  constructor(clause: Clause, fnType: Term, env: Map<string, ConstructorInfo>) {
+  constructor(clause: TTKClause, fnType: TTKTerm, env: Map<string, ConstructorInfo>) {
     this.state = {
       clause,
       fnType,
@@ -394,6 +388,7 @@ export class PatternElabStepper {
       patternTerms: [],
       bindings: [],
       currentPatternStack: [],
+      subPatternTerms: new Map(),
       constraints: [],
       solvedConstraints: [],
       stepNumber: 0,
@@ -459,7 +454,6 @@ export class PatternElabStepper {
 
   /** Take one step */
   step(): StepRecord {
-    const beforeStep = this.state.stepNumber;
     const record = this.doStep();
     this.state.history.push(record);
     this.state.stepNumber++;
@@ -520,12 +514,12 @@ export class PatternElabStepper {
 
     // Skip to current position
     for (let i = 0; i < piIndex; i++) {
-      if (currentType.tag === 'Pi') {
-        currentType = currentType.codomain;
+      if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        currentType = currentType.body;
       }
     }
 
-    if (currentType.tag === 'Pi' && piIndex < s.clause.patterns.length) {
+    if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi' && piIndex < s.clause.patterns.length) {
       // Extract this argument type
       s.argTypes.push({ name: currentType.name, type: currentType.domain });
       s.phase = { tag: 'UnwrappingType', piIndex: piIndex + 1 };
@@ -578,7 +572,7 @@ export class PatternElabStepper {
         return this.stepBindingVariable(patternIndex, subPhase.name, expectedType);
 
       case 'ProcessingConstructor':
-        return this.stepProcessingConstructor(patternIndex, pattern as { tag: 'PCtor'; name: string; args: Pattern[] }, expectedType, subPhase);
+        return this.stepProcessingConstructor(patternIndex, pattern as { tag: 'PCtor'; name: string; args: TTKPattern[] }, expectedType, subPhase);
 
       case 'Finished':
         // Move to next pattern
@@ -594,32 +588,32 @@ export class PatternElabStepper {
     }
   }
 
-  private stepPatternStart(patternIndex: number, pattern: Pattern, expectedType: Term): StepRecord {
+  private stepPatternStart(patternIndex: number, pattern: TTKPattern, expectedType: TTKTerm): StepRecord {
     const s = this.state;
-    const argName = s.argTypes[patternIndex].name;
 
     switch (pattern.tag) {
-      case 'PWild':
-        s.phase = {
-          tag: 'ElaboratingPattern',
-          patternIndex,
-          subPhase: { tag: 'CreatingMeta', reason: `wildcard at position ${patternIndex + 1}` }
-        };
-        return this.makeRecord(
-          `Pattern ${patternIndex + 1} is wildcard _, expected type: ${prettyTerm(expectedType, s.metaState)}`,
-          'Will create metavariable'
-        );
-
       case 'PVar':
-        s.phase = {
-          tag: 'ElaboratingPattern',
-          patternIndex,
-          subPhase: { tag: 'BindingVariable', name: pattern.name }
-        };
-        return this.makeRecord(
-          `Pattern ${patternIndex + 1} is variable ${pattern.name}, expected type: ${prettyTerm(expectedType, s.metaState)}`,
-          'Will bind variable'
-        );
+        if (isWildcard(pattern)) {
+          s.phase = {
+            tag: 'ElaboratingPattern',
+            patternIndex,
+            subPhase: { tag: 'CreatingMeta', reason: `wildcard at position ${patternIndex + 1}` }
+          };
+          return this.makeRecord(
+            `Pattern ${patternIndex + 1} is wildcard _, expected type: ${prettyTerm(expectedType, s.metaState)}`,
+            'Will create metavariable'
+          );
+        } else {
+          s.phase = {
+            tag: 'ElaboratingPattern',
+            patternIndex,
+            subPhase: { tag: 'BindingVariable', name: pattern.name }
+          };
+          return this.makeRecord(
+            `Pattern ${patternIndex + 1} is variable ${pattern.name}, expected type: ${prettyTerm(expectedType, s.metaState)}`,
+            'Will bind variable'
+          );
+        }
 
       case 'PCtor':
         s.phase = {
@@ -638,7 +632,7 @@ export class PatternElabStepper {
     }
   }
 
-  private stepCreatingMeta(patternIndex: number, expectedType: Term, reason: string): StepRecord {
+  private stepCreatingMeta(patternIndex: number, expectedType: TTKTerm, reason: string): StepRecord {
     const s = this.state;
     const argName = s.argTypes[patternIndex].name;
 
@@ -652,17 +646,18 @@ export class PatternElabStepper {
       subPhase: { tag: 'Finished', term: meta }
     };
 
+    const metaId = (meta as { tag: 'Hole'; id: string }).id;
     return this.makeRecord(
-      `Created metavariable ${prettyTerm(meta)} : ${prettyTerm(expectedType, s.metaState)}`,
+      `Created metavariable ${metaId} : ${prettyTerm(expectedType, s.metaState)}`,
       'Meta created',
-      [(meta as { tag: 'Meta'; id: string }).id]
+      [metaId]
     );
   }
 
-  private stepBindingVariable(patternIndex: number, name: string, expectedType: Term): StepRecord {
+  private stepBindingVariable(patternIndex: number, name: string, expectedType: TTKTerm): StepRecord {
     const s = this.state;
     const index = s.bindings.length;
-    const varTerm: Term = { tag: 'Var', name, index };
+    const varTerm: TTKTerm = mkVar(index);
 
     s.bindings.push({
       name,
@@ -685,8 +680,8 @@ export class PatternElabStepper {
 
   private stepProcessingConstructor(
     patternIndex: number,
-    pattern: { tag: 'PCtor'; name: string; args: Pattern[] },
-    expectedType: Term,
+    pattern: { tag: 'PCtor'; name: string; args: TTKPattern[] },
+    expectedType: TTKTerm,
     subPhase: { tag: 'ProcessingConstructor'; ctorName: string; step: ConstructorStep }
   ): StepRecord {
     const s = this.state;
@@ -718,7 +713,7 @@ export class PatternElabStepper {
 
       case 'CreatingParamMetas': {
         const paramIndex = subPhase.step.paramIndex;
-        const ctorMetas: Term[] = (s as any).currentCtorMetas;
+        const ctorMetas: TTKTerm[] = (s as any).currentCtorMetas;
 
         if (paramIndex >= ctorInfo!.params.length) {
           // Done creating metas, compute return type
@@ -763,15 +758,16 @@ export class PatternElabStepper {
           }
         };
 
+        const metaId = (meta as { tag: 'Hole'; id: string }).id;
         return this.makeRecord(
-          `Created ${prettyTerm(meta)} for constructor param ${param.name} : ${prettyTerm(paramType, s.metaState)}`,
+          `Created ${metaId} for constructor param ${param.name} : ${prettyTerm(paramType, s.metaState)}`,
           'Create param meta',
-          [(meta as { tag: 'Meta'; id: string }).id]
+          [metaId]
         );
       }
 
       case 'ComputingReturnType': {
-        const ctorMetas: Term[] = (s as any).currentCtorMetas;
+        const ctorMetas: TTKTerm[] = (s as any).currentCtorMetas;
         let ctorReturnType = ctorInfo!.returnType;
         for (let i = 0; i < ctorMetas.length; i++) {
           ctorReturnType = substitute(ctorReturnType, ctorInfo!.params.length - 1 - i, ctorMetas[i]);
@@ -833,7 +829,7 @@ export class PatternElabStepper {
 
       case 'ProcessingSubPattern': {
         const argIndex = subPhase.step.argIndex;
-        const ctorMetas: Term[] = (s as any).currentCtorMetas;
+        const ctorMetas: TTKTerm[] = (s as any).currentCtorMetas;
 
         if (argIndex >= pattern.args.length) {
           // Done with sub-patterns, build the term
@@ -862,15 +858,15 @@ export class PatternElabStepper {
         argType = zonk(s.metaState, argType);
 
         // Handle sub-pattern based on its type
-        if (subPattern.tag === 'PWild') {
-          // Create meta for wildcard
-          const { state: newMetaState, meta } = freshMeta(
-            s.metaState,
-            argType,
-            `${pattern.name} arg ${argIndex + 1} wildcard`,
-            ctorInfo!.params[argIndex].name[0]
-          );
-          s.metaState = newMetaState;
+        if (isWildcard(subPattern)) {
+          // For wildcard sub-patterns, we use the corresponding constructor meta
+          // that was already created in CreatingParamMetas phase.
+          // This meta represents the elaborated term for this sub-pattern.
+          const ctorMeta = ctorMetas[argIndex];
+
+          // Store the sub-pattern term in the map for UI access
+          const subPatternPath = `${patternIndex}.${argIndex}`;
+          s.subPatternTerms.set(subPatternPath, ctorMeta);
 
           s.phase = {
             tag: 'ElaboratingPattern',
@@ -883,18 +879,23 @@ export class PatternElabStepper {
           };
 
           return this.makeRecord(
-            `Sub-pattern ${argIndex + 1} is wildcard, created ${prettyTerm(meta)} : ${prettyTerm(argType, s.metaState)}`,
-            'Process sub-pattern',
-            [(meta as { tag: 'Meta'; id: string }).id]
+            `Sub-pattern ${argIndex + 1} is wildcard, elaborates to ${prettyTerm(ctorMeta, s.metaState)} : ${prettyTerm(argType, s.metaState)}`,
+            'Process sub-pattern'
           );
         } else if (subPattern.tag === 'PVar') {
           // Bind variable
           const index = s.bindings.length;
+          const varTerm: TTKTerm = mkVar(index);
+
           s.bindings.push({
             name: subPattern.name,
             type: argType,
             introducedBy: `${pattern.name} arg ${argIndex + 1}`
           });
+
+          // Store the sub-pattern term (the variable) in the map
+          const subPatternPath = `${patternIndex}.${argIndex}`;
+          s.subPatternTerms.set(subPatternPath, varTerm);
 
           s.phase = {
             tag: 'ElaboratingPattern',
@@ -929,10 +930,10 @@ export class PatternElabStepper {
       }
 
       case 'BuildingTerm': {
-        const ctorMetas: Term[] = (s as any).currentCtorMetas;
-        let ctorTerm: Term = { tag: 'Const', name: pattern.name };
+        const ctorMetas: TTKTerm[] = (s as any).currentCtorMetas;
+        let ctorTerm: TTKTerm = mkConst(pattern.name, mkType(0)); // Type is placeholder
         for (const meta of ctorMetas) {
-          ctorTerm = { tag: 'App', fn: ctorTerm, arg: zonk(s.metaState, meta) };
+          ctorTerm = mkApp(ctorTerm, zonk(s.metaState, meta));
         }
 
         s.patternTerms.push(ctorTerm);
@@ -1023,16 +1024,16 @@ export class PatternElabStepper {
   // Unification (simplified)
   // =========================================================================
 
-  private unify(t1: Term, t2: Term): boolean {
+  private unify(t1: TTKTerm, t2: TTKTerm): boolean {
     const a = zonk(this.state.metaState, t1);
     const b = zonk(this.state.metaState, t2);
 
-    if (a.tag === 'Meta') {
+    if (a.tag === 'Hole') {
       const { state, success } = solveMeta(this.state.metaState, a.id, b);
       this.state.metaState = state;
       return success;
     }
-    if (b.tag === 'Meta') {
+    if (b.tag === 'Hole') {
       const { state, success } = solveMeta(this.state.metaState, b.id, a);
       this.state.metaState = state;
       return success;
@@ -1041,15 +1042,18 @@ export class PatternElabStepper {
     if (a.tag !== b.tag) return false;
 
     switch (a.tag) {
-      case 'Type': return true;
+      case 'Sort': return a.level === (b as typeof a).level;
       case 'Var': return a.index === (b as typeof a).index;
       case 'Const': return a.name === (b as typeof a).name;
       case 'App':
         return this.unify(a.fn, (b as typeof a).fn) && this.unify(a.arg, (b as typeof a).arg);
-      case 'Pi':
-        return this.unify(a.domain, (b as typeof a).domain) && this.unify(a.codomain, (b as typeof a).codomain);
-      case 'Lam':
+      case 'Binder':
         return this.unify(a.domain, (b as typeof a).domain) && this.unify(a.body, (b as typeof a).body);
+      case 'Annot':
+        return this.unify(a.term, (b as typeof a).term) && this.unify(a.type, (b as typeof a).type);
+      case 'Match':
+        // Simplified - match expressions rarely need unification
+        return false;
     }
 
     return false;
@@ -1071,33 +1075,49 @@ export class PatternElabStepper {
 }
 
 // =============================================================================
-// Test
+// Factory function to create stepper from TTK types
+// =============================================================================
+
+/**
+ * Create a pattern elaboration stepper from TTK types.
+ * This is the main entry point for the visualization UI.
+ */
+export function createPatternElabStepper(
+  clause: TTKClause,
+  fnType: TTKTerm,
+  env: Map<string, ConstructorInfo>
+): PatternElabStepper {
+  return new PatternElabStepper(clause, fnType, env);
+}
+
+// =============================================================================
+// Test Functions (using TTK types)
 // =============================================================================
 
 function buildTestEnv(): Map<string, ConstructorInfo> {
   const env = new Map<string, ConstructorInfo>();
-  const Nat: Term = { tag: 'Const', name: 'Nat' };
-  const Type: Term = { tag: 'Type' };
-  const Zero: Term = { tag: 'Const', name: 'Zero' };
-  const Succ = (n: Term): Term => ({ tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: n });
-  const Vec = (A: Term, n: Term): Term => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Vec' }, arg: A }, arg: n });
+  const Nat: TTKTerm = mkConst('Nat', mkType(0));
+  const Type: TTKTerm = mkType(0);
+  const Zero: TTKTerm = mkConst('Zero', Nat);
+  const Succ = (n: TTKTerm): TTKTerm => mkApp(mkConst('Succ', mkType(0)), n);
+  const Vec = (A: TTKTerm, n: TTKTerm): TTKTerm => mkApp(mkApp(mkConst('Vec', mkType(0)), A), n);
 
   env.set('Zero', { name: 'Zero', params: [], returnType: Nat });
   env.set('Succ', { name: 'Succ', params: [{ name: 'n', type: Nat }], returnType: Nat });
   env.set('VNil', {
     name: 'VNil',
     params: [{ name: 'A', type: Type }],
-    returnType: Vec({ tag: 'Var', name: 'A', index: 0 }, Zero)
+    returnType: Vec(mkVar(0), Zero)
   });
   env.set('VCons', {
     name: 'VCons',
     params: [
       { name: 'A', type: Type },
       { name: 'n', type: Nat },
-      { name: 'x', type: { tag: 'Var', name: 'A', index: 1 } },
-      { name: 'xs', type: Vec({ tag: 'Var', name: 'A', index: 2 }, { tag: 'Var', name: 'n', index: 1 }) }
+      { name: 'x', type: mkVar(1) },  // x : A (A is at index 1)
+      { name: 'xs', type: Vec(mkVar(2), mkVar(1)) }  // xs : Vec A n
     ],
-    returnType: Vec({ tag: 'Var', name: 'A', index: 3 }, Succ({ tag: 'Var', name: 'n', index: 2 }))
+    returnType: Vec(mkVar(3), Succ(mkVar(2)))  // Vec A (Succ n)
   });
 
   return env;
@@ -1110,45 +1130,39 @@ export function testStepper(): void {
 
   const env = buildTestEnv();
 
-  const Type: Term = { tag: 'Type' };
-  const Nat: Term = { tag: 'Const', name: 'Nat' };
-  const Zero: Term = { tag: 'Const', name: 'Zero' };
-  const mkVar = (name: string, index: number): Term => ({ tag: 'Var', name, index });
-  const Vec = (A: Term, n: Term): Term => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Vec' }, arg: A }, arg: n });
-  const plus = (a: Term, b: Term): Term => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: b });
+  const Type: TTKTerm = mkType(0);
+  const Nat: TTKTerm = mkConst('Nat', mkType(0));
+  const Zero: TTKTerm = mkConst('Zero', Nat);
+  const Vec = (A: TTKTerm, n: TTKTerm): TTKTerm => mkApp(mkApp(mkConst('Vec', mkType(0)), A), n);
+  const plus = (a: TTKTerm, b: TTKTerm): TTKTerm => mkApp(mkApp(mkConst('plus', mkType(0)), a), b);
 
-  // vecConcat type
-  const vecConcatType: Term = {
-    tag: 'Pi', name: 'A', domain: Type,
-    codomain: {
-      tag: 'Pi', name: 'a', domain: Nat,
-      codomain: {
-        tag: 'Pi', name: 'b', domain: Nat,
-        codomain: {
-          tag: 'Pi', name: 'xs', domain: Vec(mkVar('A', 2), mkVar('a', 1)),
-          codomain: {
-            tag: 'Pi', name: 'ys', domain: Vec(mkVar('A', 3), mkVar('b', 1)),
-            codomain: Vec(mkVar('A', 4), plus(mkVar('a', 3), mkVar('b', 2)))
-          }
-        }
-      }
-    }
-  };
+  // vecConcat type using TTK
+  const vecConcatType: TTKTerm = mkPi(Type,
+    mkPi(Nat,
+      mkPi(Nat,
+        mkPi(Vec(mkVar(2), mkVar(1)),
+          mkPi(Vec(mkVar(3), mkVar(1)),
+            Vec(mkVar(4), plus(mkVar(3), mkVar(2))),
+          'ys'),
+        'xs'),
+      'b'),
+    'a'),
+  'A');
 
-  // Clause 1: vecConcat _ Zero _ (VNil _) v = v
-  const clause1: Clause = {
+  // Clause 1: vecConcat _ _ _ (VNil _) v = v
+  const clause1: TTKClause = {
     patterns: [
-      { tag: 'PWild' },
-      { tag: 'PCtor', name: 'Zero', args: [] },
-      { tag: 'PWild' },
-      { tag: 'PCtor', name: 'VNil', args: [{ tag: 'PWild' }] },
+      { tag: 'PVar', name: '_' },
+      { tag: 'PVar', name: '_' },
+      { tag: 'PVar', name: '_' },
+      { tag: 'PCtor', name: 'VNil', args: [{ tag: 'PVar', name: '_' }] },
       { tag: 'PVar', name: 'v' }
     ],
-    rhs: mkVar('v', 0)
+    rhs: mkVar(0)
   };
 
   console.log('\n' + '*'.repeat(70));
-  console.log('* CLAUSE 1: vecConcat _ Zero _ (VNil _) v = v');
+  console.log('* CLAUSE 1: vecConcat _ _ _ (VNil _) v = v');
   console.log('*'.repeat(70));
 
   const stepper = new PatternElabStepper(clause1, vecConcatType, env);
@@ -1168,18 +1182,14 @@ export function testStepper(): void {
   console.log('\n✓ Elaboration complete!');
 }
 
-// =============================================================================
-// Simpler Test - shows refinement clearly
-// =============================================================================
-
 export function testSimple(): void {
   console.log('\n' + '#'.repeat(70));
   console.log('# SIMPLE TEST: isZero function');
   console.log('#'.repeat(70));
 
   const env = new Map<string, ConstructorInfo>();
-  const Nat: Term = { tag: 'Const', name: 'Nat' };
-  const Bool: Term = { tag: 'Const', name: 'Bool' };
+  const Nat: TTKTerm = mkConst('Nat', mkType(0));
+  const Bool: TTKTerm = mkConst('Bool', mkType(0));
 
   env.set('Zero', { name: 'Zero', params: [], returnType: Nat });
   env.set('Succ', {
@@ -1189,15 +1199,12 @@ export function testSimple(): void {
   });
 
   // isZero : Nat -> Bool
-  const isZeroType: Term = {
-    tag: 'Pi', name: 'n', domain: Nat,
-    codomain: Bool
-  };
+  const isZeroType: TTKTerm = mkPi(Nat, Bool, 'n');
 
   // Clause: isZero Zero = True
-  const clause: Clause = {
+  const clause: TTKClause = {
     patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }],
-    rhs: { tag: 'Const', name: 'True' }
+    rhs: mkConst('True', Bool)
   };
 
   console.log('\nClause: isZero Zero = True');
@@ -1220,8 +1227,8 @@ export function testWithSucc(): void {
   console.log('#'.repeat(70));
 
   const env = new Map<string, ConstructorInfo>();
-  const Nat: Term = { tag: 'Const', name: 'Nat' };
-  const Bool: Term = { tag: 'Const', name: 'Bool' };
+  const Nat: TTKTerm = mkConst('Nat', mkType(0));
+  const Bool: TTKTerm = mkConst('Bool', mkType(0));
 
   env.set('Zero', { name: 'Zero', params: [], returnType: Nat });
   env.set('Succ', {
@@ -1231,20 +1238,16 @@ export function testWithSucc(): void {
   });
 
   // isZero : Nat -> Bool
-  const isZeroType: Term = {
-    tag: 'Pi', name: 'n', domain: Nat,
-    codomain: Bool
-  };
+  const isZeroType: TTKTerm = mkPi(Nat, Bool, 'n');
 
   // Clause: isZero (Succ n) = False
-  // This refines the input to Succ ?n and introduces binding n : Nat
-  const clause: Clause = {
+  const clause: TTKClause = {
     patterns: [{
       tag: 'PCtor',
       name: 'Succ',
       args: [{ tag: 'PVar', name: 'n' }]
     }],
-    rhs: { tag: 'Const', name: 'False' }
+    rhs: mkConst('False', Bool)
   };
 
   console.log('\nClause: isZero (Succ n) = False');
@@ -1262,10 +1265,6 @@ export function testWithSucc(): void {
   console.log(stepper.describeState());
 }
 
-// =============================================================================
-// VCons clause test - shows refinement of indexed types
-// =============================================================================
-
 export function testVConsClause(): void {
   console.log('\n' + '#'.repeat(70));
   console.log('# TEST: vecConcat VCons clause - shows full dependent refinement!');
@@ -1273,47 +1272,40 @@ export function testVConsClause(): void {
 
   const env = buildTestEnv();
 
-  const Type: Term = { tag: 'Type' };
-  const Nat: Term = { tag: 'Const', name: 'Nat' };
-  const mkVar = (name: string, index: number): Term => ({ tag: 'Var', name, index });
-  const Vec = (A: Term, n: Term): Term => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Vec' }, arg: A }, arg: n });
-  const plus = (a: Term, b: Term): Term => ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: b });
-  const Succ = (n: Term): Term => ({ tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: n });
+  const Type: TTKTerm = mkType(0);
+  const Nat: TTKTerm = mkConst('Nat', mkType(0));
+  const Vec = (A: TTKTerm, n: TTKTerm): TTKTerm => mkApp(mkApp(mkConst('Vec', mkType(0)), A), n);
+  const plus = (a: TTKTerm, b: TTKTerm): TTKTerm => mkApp(mkApp(mkConst('plus', mkType(0)), a), b);
+  const Succ = (n: TTKTerm): TTKTerm => mkApp(mkConst('Succ', mkType(0)), n);
 
   // vecConcat type
-  const vecConcatType: Term = {
-    tag: 'Pi', name: 'A', domain: Type,
-    codomain: {
-      tag: 'Pi', name: 'a', domain: Nat,
-      codomain: {
-        tag: 'Pi', name: 'b', domain: Nat,
-        codomain: {
-          tag: 'Pi', name: 'xs', domain: Vec(mkVar('A', 2), mkVar('a', 1)),
-          codomain: {
-            tag: 'Pi', name: 'ys', domain: Vec(mkVar('A', 3), mkVar('b', 1)),
-            codomain: Vec(mkVar('A', 4), plus(mkVar('a', 3), mkVar('b', 2)))
-          }
-        }
-      }
-    }
-  };
+  const vecConcatType: TTKTerm = mkPi(Type,
+    mkPi(Nat,
+      mkPi(Nat,
+        mkPi(Vec(mkVar(2), mkVar(1)),
+          mkPi(Vec(mkVar(3), mkVar(1)),
+            Vec(mkVar(4), plus(mkVar(3), mkVar(2))),
+          'ys'),
+        'xs'),
+      'b'),
+    'a'),
+  'A');
 
-  // Clause 2: vecConcat _ (Succ n) _ (VCons _ _ x xs) ys = VCons _ _ x (vecConcat _ n _ xs ys)
-  // Note: We simplify the VCons pattern to match variables/wildcards for the sub-patterns
-  const clause2: Clause = {
+  // Clause 2: vecConcat _ (Succ n) _ (VCons _ _ x xs) ys = ...
+  const clause2: TTKClause = {
     patterns: [
-      { tag: 'PWild' },                                                    // _ : Type (A)
-      { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] }, // Succ n : Nat (a)
-      { tag: 'PWild' },                                                    // _ : Nat (b)
-      { tag: 'PCtor', name: 'VCons', args: [                              // VCons _ n x xs : Vec A (Succ n)
-        { tag: 'PWild' },                                                  // A implicit
-        { tag: 'PWild' },                                                  // n implicit (length of tail)
-        { tag: 'PVar', name: 'x' },                                        // x : A
-        { tag: 'PVar', name: 'xs' }                                        // xs : Vec A n
+      { tag: 'PVar', name: '_' },                                                    // _ : Type (A)
+      { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] },            // Succ n : Nat (a)
+      { tag: 'PVar', name: '_' },                                                    // _ : Nat (b)
+      { tag: 'PCtor', name: 'VCons', args: [                                         // VCons _ n x xs : Vec A (Succ n)
+        { tag: 'PVar', name: '_' },                                                  // A implicit
+        { tag: 'PVar', name: '_' },                                                  // n implicit (length of tail)
+        { tag: 'PVar', name: 'x' },                                                  // x : A
+        { tag: 'PVar', name: 'xs' }                                                  // xs : Vec A n
       ] },
-      { tag: 'PVar', name: 'ys' }                                          // ys : Vec A b
+      { tag: 'PVar', name: 'ys' }                                                    // ys : Vec A b
     ],
-    rhs: { tag: 'Const', name: 'placeholder' }  // RHS not important for this test
+    rhs: mkConst('placeholder', mkType(0))  // RHS not important for this test
   };
 
   console.log('\nClause: vecConcat _ (Succ n) _ (VCons _ _ x xs) ys = ...');
@@ -1329,7 +1321,6 @@ export function testVConsClause(): void {
   // Run through, but only show key steps
   let stepCount = 0;
   while (!stepper.isDone()) {
-    const state = stepper.getState();
     const record = stepper.step();
     stepCount++;
 
