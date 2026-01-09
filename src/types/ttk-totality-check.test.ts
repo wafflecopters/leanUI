@@ -653,3 +653,105 @@ foo _ _ _ = Zero
     expectSuccess(source);
   });
 });
+
+// ============================================================================
+// Constructor vs Function Identification
+// ============================================================================
+
+describe('Totality Checking - Constructor vs Function', () => {
+  test('Function returning Nat is not a constructor', () => {
+    // This tests that `plus` is NOT identified as a constructor for Nat.
+    // The totality checker should only consider Zero and Succ as constructors.
+    // If `plus` were treated as a constructor, missing cases would include `plus _ _`.
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+-- This function should type-check without issues
+double : Nat -> Nat
+double Zero = Zero
+double (Succ n) = Succ (Succ (double n))
+`;
+    expectSuccess(source);
+  });
+
+  test('vecConcat with wildcards should work (no plus as constructor)', () => {
+    // This tests that `plus` is NOT identified as a constructor for Nat.
+    // Previously, this would fail with "missing case: vecConcat _ (plus _ _) _ (VNil _) _"
+    // because functions returning Nat were incorrectly treated as constructors.
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A : Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ _ _ (VNil _) v = v
+vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
+`;
+    expectSuccess(source);
+  });
+
+  test('vecConcat with explicit Zero pattern (dependent type refinement)', () => {
+    // When matching a=Zero, the type Vec A a refines to Vec A Zero,
+    // making VCons impossible and VNil the only valid constructor.
+    // When matching a=Succ n, the type Vec A a refines to Vec A (Succ n),
+    // making VNil impossible and VCons the only valid constructor.
+    // The totality checker uses index bindings to track these refinements.
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A : Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ Zero _ (VNil _) v = v
+vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
+`;
+    expectSuccess(source);
+  });
+
+  test('Multiple functions returning same type should not be constructors', () => {
+    // Ensure multiple functions returning Nat don't appear as constructors
+    // If both plus and mult were constructors, we'd see them in missing cases
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+mult : Nat -> Nat -> Nat
+mult Zero _ = Zero
+mult (Succ a) b = plus b (mult a b)
+
+-- This function should only require Zero and Succ coverage
+isEven : Nat -> Nat
+isEven Zero = Succ Zero
+isEven (Succ Zero) = Zero
+isEven (Succ (Succ n)) = isEven n
+`;
+    expectSuccess(source);
+  });
+});

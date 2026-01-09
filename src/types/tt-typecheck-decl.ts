@@ -177,6 +177,7 @@ export function checkInductiveDeclaration(
  * @param typePath - Base path for the type term (for error location tracking)
  * @param valuePath - Base path for the value term (for error location tracking)
  * @param definitions - Map of function names to their definitions (for WHNF reduction)
+ * @param constructorNames - Set of names that are known to be constructors (for totality checking)
  * @returns CheckResult with inferred type or errors
  */
 export function checkTermDeclaration(
@@ -186,7 +187,8 @@ export function checkTermDeclaration(
   ctx: TTKContext,
   typePath: IndexPath = [],
   valuePath: IndexPath = [],
-  definitions?: DefinitionsMap
+  definitions?: DefinitionsMap,
+  constructorNames?: Set<string>
 ): CheckResult<TTKTerm> {
   const errors: CheckError[] = [];
 
@@ -335,7 +337,7 @@ export function checkTermDeclaration(
         // Only check if the value is a Match expression with clauses
         let splitTree: SplitTree | undefined;
         if (value.tag === 'Match' && value.clauses.length > 0) {
-          const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf);
+          const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf, constructorNames);
           splitTree = totalityAnalysis.splitTree;
 
           // Check for inaccessible clauses (excess patterns that can never match)

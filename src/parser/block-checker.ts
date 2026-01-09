@@ -374,6 +374,9 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
   let globalContext: TTKContext = [];
   // Definitions map accumulates function bodies for WHNF reduction
   const definitions: DefinitionsMap = new Map();
+  // Constructor names set tracks which names are constructors (vs functions)
+  // This is used by the totality checker to distinguish constructors from functions
+  const constructorNames: Set<string> = new Set();
   const checkResults: CheckResultWithBlock[] = [];
 
   for (const elab of elaboratedDecls) {
@@ -430,9 +433,10 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         // Add the inductive type itself
         globalContext = [{ name: decl.name, type: kernelType }, ...globalContext];
 
-        // Add all constructors
+        // Add all constructors and track their names
         for (const ctor of kernelConstructors) {
           globalContext = [{ name: ctor.name, type: ctor.type }, ...globalContext];
+          constructorNames.add(ctor.name);
         }
       }
     } else {
@@ -447,7 +451,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
         globalContext,
         typePath,
         valuePathForCheck,
-        definitions
+        definitions,
+        constructorNames
       );
 
       checkResults.push({

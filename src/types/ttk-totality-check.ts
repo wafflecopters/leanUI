@@ -72,6 +72,8 @@ export interface SplitNode {
   branches: Map<string, SplitTree>;
   /** Default branch for wildcards/variables (applies to unmatched constructors) */
   defaultBranch?: SplitTree;
+  /** Constructors that are impossible due to dependent type index constraints */
+  impossibleBranches?: string[];
 }
 
 /**
@@ -127,6 +129,169 @@ interface ClauseRow {
   argTypes: ArgTypeInfo[];
   /** Original clause index */
   clauseIndex: number;
+}
+
+/**
+ * Tracks index refinements from pattern matches.
+ *
+ * When we match argument position N against a constructor like `Succ n`,
+ * we record that Var(N) should be substituted with `Succ (Var fresh)`.
+ * This is used to update dependent types for later arguments.
+ *
+ * Key: original argument position (before specialization)
+ * Value: the term it's bound to (e.g., Const "Zero" or App(Const "Succ", Var 0))
+ */
+type IndexBindings = Map<number, TTKTerm>;
+
+/**
+ * Apply index bindings to a type term.
+ *
+ * This substitutes De Bruijn variables that reference bound argument positions
+ * with the constructor patterns they were matched against.
+ *
+ * For example, if we matched arg 1 against `Succ n`, and we have type `Vec A (Var 1)`,
+ * this would substitute to get `Vec A (Succ n)`.
+ *
+ * The key insight is that De Bruijn indices in the domain of arg N count backwards:
+ * - Var 0 refers to arg (N-1)
+ * - Var 1 refers to arg (N-2)
+ * - Var k refers to arg (N-1-k)
+ *
+ * @param type - The type to substitute into
+ * @param bindings - Map from argument positions to their bound terms
+ * @param contextSize - Number of binders in scope for this type (equals arg index)
+ * @param depth - Current binding depth within nested binders in the type
+ * @returns The type with substitutions applied
+ */
+function applyIndexBindings(
+  type: TTKTerm,
+  bindings: IndexBindings,
+  contextSize: number,
+  depth: number = 0
+): TTKTerm {
+  if (bindings.size === 0) {
+    return type;
+  }
+
+  switch (type.tag) {
+    case 'Var': {
+      // De Bruijn index counting from innermost
+      const dbIndex = type.index;
+
+      // Only consider variables that refer outside the current nested binders
+      if (dbIndex < depth) {
+        // This var refers to a binder inside the type (e.g., in a Pi domain), not an arg
+        return type;
+      }
+
+      // Compute the original argument position this var refers to
+      // Adjusted dbIndex (relative to the arg context) = dbIndex - depth
+      // Arg position = (contextSize - 1) - (dbIndex - depth)
+      const adjustedDbIndex = dbIndex - depth;
+      const argPosition = (contextSize - 1) - adjustedDbIndex;
+
+      const binding = bindings.get(argPosition);
+      if (binding) {
+        // Shift the binding term to account for any binders we've entered within the type
+        return shiftTerm(binding, depth);
+      }
+      return type;
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: applyIndexBindings(type.fn, bindings, contextSize, depth),
+        arg: applyIndexBindings(type.arg, bindings, contextSize, depth)
+      };
+
+    case 'Binder':
+      return {
+        tag: 'Binder',
+        binderKind: type.binderKind,
+        name: type.name,
+        domain: applyIndexBindings(type.domain, bindings, contextSize, depth),
+        body: applyIndexBindings(type.body, bindings, contextSize, depth + 1)
+      };
+
+    case 'Const':
+    case 'Sort':
+    case 'Hole':
+    case 'Annot':
+    case 'Match':
+      // These don't contain free variables that need substitution,
+      // or shouldn't appear in types during totality checking
+      return type;
+  }
+}
+
+/**
+ * Shift all free variables in a term by a given amount.
+ * This is needed when moving a term into a different binding context.
+ */
+function shiftTerm(term: TTKTerm, amount: number): TTKTerm {
+  if (amount === 0) return term;
+  return shiftTermAbove(term, 0, amount);
+}
+
+/**
+ * Shift variables with index >= cutoff by the given amount.
+ */
+function shiftTermAbove(term: TTKTerm, cutoff: number, amount: number): TTKTerm {
+  switch (term.tag) {
+    case 'Var':
+      if (term.index >= cutoff) {
+        return { tag: 'Var', index: term.index + amount };
+      }
+      return term;
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: shiftTermAbove(term.fn, cutoff, amount),
+        arg: shiftTermAbove(term.arg, cutoff, amount)
+      };
+
+    case 'Binder':
+      return {
+        tag: 'Binder',
+        binderKind: term.binderKind,
+        name: term.name,
+        domain: shiftTermAbove(term.domain, cutoff, amount),
+        body: shiftTermAbove(term.body, cutoff + 1, amount)
+      };
+
+    case 'Const':
+    case 'Sort':
+    case 'Hole':
+    case 'Annot':
+    case 'Match':
+      // These don't need shifting for our purposes
+      return term;
+  }
+}
+
+/**
+ * Convert a constructor name to a term for index binding.
+ * Creates a simple Const application for constructors like Zero or Succ.
+ *
+ * For example, "Succ" with arity 1 becomes App(Const("Succ"), Var(0))
+ * This is used to represent the pattern match constraint in the index bindings.
+ */
+function constructorToTerm(ctorName: string, arity: number): TTKTerm {
+  // Create a placeholder type for the const - we only use this for unification
+  // which looks at structure, not the stored type field
+  const placeholderType: TTKTerm = { tag: 'Sort', level: 0 };
+
+  let result: TTKTerm = { tag: 'Const', name: ctorName, type: placeholderType };
+  for (let i = 0; i < arity; i++) {
+    result = {
+      tag: 'App',
+      fn: result,
+      arg: { tag: 'Var', index: i }  // Fresh variables for constructor args
+    };
+  }
+  return result;
 }
 
 /**
@@ -187,13 +352,15 @@ interface ArgTypeInfo {
  * @param argTypes - Types of each argument position
  * @param ctx - Typing context (contains constructor information)
  * @param excludeNames - Names to exclude from constructor lookup (e.g., the function being checked)
+ * @param knownConstructors - Set of names that are known to be constructors
  * @returns Analysis result with exhaustiveness status and missing cases
  */
 export function analyzeTotality(
   clauses: TTKClause[],
   argTypes: TTKTerm[],
   ctx: TTKContext,
-  excludeNames: Set<string> = new Set()
+  excludeNames: Set<string> = new Set(),
+  knownConstructors?: Set<string>
 ): TotalityAnalysis {
   if (clauses.length === 0) {
     // No clauses means completely missing coverage
@@ -222,7 +389,7 @@ export function analyzeTotality(
   }
 
   // Build type info for each argument position
-  const argTypeInfos = argTypes.map(type => getArgTypeInfo(type, ctx, excludeNames));
+  const argTypeInfos = argTypes.map(type => getArgTypeInfo(type, ctx, excludeNames, knownConstructors));
 
   // Convert clauses to internal row representation
   // Each row carries its own copy of argTypeInfos (they may diverge during specialization)
@@ -242,7 +409,7 @@ export function analyzeTotality(
   }));
 
   // Build the splitting tree
-  const splitTree = buildSplitTree(rows, ctx, excludeNames, [], initialSlotRefs, initialState);
+  const splitTree = buildSplitTree(rows, ctx, excludeNames, [], initialSlotRefs, initialState, knownConstructors);
 
   // Find all missing cases
   const missingCases = findMissingCases(splitTree);
@@ -274,11 +441,13 @@ export function analyzeTotality(
  * @param type - The type of the argument
  * @param ctx - The typing context
  * @param excludeNames - Names to exclude from constructor lookup
+ * @param knownConstructors - Set of names that are known to be constructors
  */
 function getArgTypeInfo(
   type: TTKTerm,
   ctx: TTKContext,
-  excludeNames: Set<string> = new Set()
+  excludeNames: Set<string> = new Set(),
+  knownConstructors?: Set<string>
 ): ArgTypeInfo {
   const typeName = getHeadConstName(type);
 
@@ -293,7 +462,7 @@ function getArgTypeInfo(
   }
 
   // Find all constructors for this type
-  const constructors = getConstructorsForType(typeName, ctx, excludeNames);
+  const constructors = getConstructorsForType(typeName, ctx, excludeNames, knownConstructors);
   const constructorArities = new Map<string, number>();
 
   for (const ctorName of constructors) {
@@ -338,17 +507,26 @@ function getReturnType(type: TTKTerm): TTKTerm {
 }
 
 /**
- * Find all constructors for a given inductive type by scanning the context.
- * A binding is a constructor for type T if its return type has T as the head.
+ * Find all constructors for a given inductive type.
+ *
+ * If `knownConstructors` is provided (recommended), it filters to only include
+ * names that are actually constructors. This is important because functions
+ * like `plus : Nat -> Nat -> Nat` have `Nat` as return type head but are NOT
+ * constructors.
+ *
+ * If `knownConstructors` is not provided (legacy behavior), falls back to
+ * scanning the context by return type head (which may include functions).
  *
  * @param typeName - The name of the inductive type
  * @param ctx - The typing context
  * @param excludeNames - Names to exclude (e.g., the function being type-checked)
+ * @param knownConstructors - Set of names that are known to be constructors
  */
 export function getConstructorsForType(
   typeName: string,
   ctx: TTKContext,
-  excludeNames: Set<string> = new Set()
+  excludeNames: Set<string> = new Set(),
+  knownConstructors?: Set<string>
 ): string[] {
   const constructors: string[] = [];
 
@@ -361,7 +539,16 @@ export function getConstructorsForType(
     const returnType = getReturnType(binding.type);
     const headName = getHeadConstName(returnType);
     if (headName === typeName) {
-      constructors.push(binding.name);
+      // If we have known constructors, only include actual constructors
+      // This filters out functions like `plus : Nat -> Nat -> Nat`
+      if (knownConstructors) {
+        if (knownConstructors.has(binding.name)) {
+          constructors.push(binding.name);
+        }
+      } else {
+        // Legacy behavior: include anything with matching return type head
+        constructors.push(binding.name);
+      }
     }
   }
 
@@ -564,6 +751,8 @@ function finalizeMutablePattern(pattern: MutablePattern): MissingPattern {
  * @param currentPath - Path of constructor names to this point (for debugging)
  * @param slotRefs - Maps each current pattern position to where it writes in patternState
  * @param patternState - The patterns being built for each original argument
+ * @param knownConstructors - Set of names that are known to be constructors
+ * @param indexBindings - Tracks index refinements from pattern matches on earlier args
  */
 function buildSplitTree(
   rows: ClauseRow[],
@@ -571,7 +760,9 @@ function buildSplitTree(
   excludeNames: Set<string>,
   currentPath: string[],
   slotRefs: SlotRef[],
-  patternState: PatternBuildState
+  patternState: PatternBuildState,
+  knownConstructors?: Set<string>,
+  indexBindings: IndexBindings = new Map()
 ): SplitTree {
   // Base case: no rows means uncovered
   if (rows.length === 0) {
@@ -611,7 +802,8 @@ function buildSplitTree(
         argTypes: row.argTypes.slice(1)
       }));
       const advancedSlots = slotRefs.slice(1);
-      return buildSplitTree(advancedRows, ctx, excludeNames, currentPath, advancedSlots, newState);
+      // Wildcards don't refine indices, so pass bindings unchanged
+      return buildSplitTree(advancedRows, ctx, excludeNames, currentPath, advancedSlots, newState, knownConstructors, indexBindings);
     }
   }
 
@@ -630,7 +822,7 @@ function buildSplitTree(
       argTypes: row.argTypes.slice(1)
     }));
     const advancedSlots = slotRefs.slice(1);
-    return buildSplitTree(advancedRows, ctx, excludeNames, currentPath, advancedSlots, newState);
+    return buildSplitTree(advancedRows, ctx, excludeNames, currentPath, advancedSlots, newState, knownConstructors, indexBindings);
   }
 
   // Build branches for each constructor
@@ -651,6 +843,13 @@ function buildSplitTree(
     }
   }
 
+  // Track which constructors we actually create branches for
+  // (some may be skipped due to impossibility from index constraints)
+  const branchedConstructors = new Set<string>();
+
+  // Track constructors that are impossible due to dependent type index constraints
+  const impossibleConstructors: string[] = [];
+
   // Get the current slot ref for position 0
   const currentSlot = slotRefs[0];
 
@@ -660,14 +859,22 @@ function buildSplitTree(
     // index constraints (e.g., VNil can't match Vec A (Succ n)).
     if (typeInfo.fullType) {
       const ctorType = lookupTypeByName(ctx, ctorName);
-      if (ctorType && !isConstructorPossible(ctorType, typeInfo.fullType, ctx)) {
+      // Apply index bindings to get the refined expected type
+      // For example, if we matched arg 1 against Succ, and arg 3 is Vec A (Var 1),
+      // we need to check against Vec A (Succ _) instead of Vec A (Var 1)
+      // The contextSize is the original argument index (how many binders are in scope)
+      const contextSize = currentSlot.argIndex;
+      const refinedExpectedType = applyIndexBindings(typeInfo.fullType, indexBindings, contextSize);
+
+      if (ctorType && !isConstructorPossible(ctorType, refinedExpectedType, ctx)) {
         // This constructor is impossible - skip it (no missing case for it)
+        impossibleConstructors.push(ctorName);
         continue;
       }
     }
 
     // Specialize rows for this constructor, including updating argTypes
-    const specializedRows = specializeRowsWithTypes(rows, patternIndex, ctorName, ctx, excludeNames);
+    const specializedRows = specializeRowsWithTypes(rows, patternIndex, ctorName, ctx, excludeNames, knownConstructors);
 
     // Update pattern state: write the constructor at the current slot
     const ctorArity = typeInfo.constructorArities.get(ctorName) ?? 0;
@@ -692,6 +899,15 @@ function buildSplitTree(
     // Add remaining slots (positions 1, 2, ... from original)
     const updatedSlots = [...newSlotRefs, ...slotRefs.slice(1)];
 
+    // Update index bindings: if we're matching at a top-level position (not nested),
+    // this constrains the index at that argument position
+    const updatedBindings = new Map(indexBindings);
+    if (currentSlot.nodePath.length === 0) {
+      // Top-level argument: add binding for this arg position
+      // The binding maps the original argument index to the constructor term
+      updatedBindings.set(currentSlot.argIndex, constructorToTerm(ctorName, ctorArity));
+    }
+
     // Build subtree for this constructor branch
     const subtree = buildSplitTree(
       specializedRows,
@@ -699,20 +915,28 @@ function buildSplitTree(
       excludeNames,
       [...currentPath, ctorName],
       updatedSlots,
-      newState
+      newState,
+      knownConstructors,
+      updatedBindings
     );
 
     branches.set(ctorName, subtree);
+    branchedConstructors.add(ctorName);
   }
 
   // Build default branch if there are wildcard rows AND there are constructors
-  // not explicitly matched. If all constructors are covered by PCtor patterns,
-  // the default branch represents no actual cases (would be unreachable).
+  // that we didn't create branches for. This can happen if:
+  // 1. A constructor was skipped due to being impossible (isConstructorPossible = false)
+  // 2. We have wildcards covering cases we don't enumerate
+  //
+  // IMPORTANT: If we created branches for ALL constructors, don't create a default
+  // branch. The default branch without index bindings would incorrectly allow
+  // impossible constructor combinations in dependent types.
   let defaultBranch: SplitTree | undefined;
-  const hasUnmatchedConstructors = typeInfo.constructors.some(
-    ctor => !explicitlyMatchedCtors.has(ctor)
+  const hasUnbranchedConstructors = typeInfo.constructors.some(
+    ctor => !branchedConstructors.has(ctor)
   );
-  if (wildcardRows.length > 0 && hasUnmatchedConstructors) {
+  if (wildcardRows.length > 0 && hasUnbranchedConstructors) {
     // Mark this slot as wildcard (covers all constructors in the default branch)
     const newState = clonePatternState(patternState);
     setPatternAt(newState, currentSlot, { tag: 'MWild' });
@@ -723,14 +947,16 @@ function buildSplitTree(
       argTypes: row.argTypes.slice(1)
     }));
     const advancedSlots = slotRefs.slice(1);
-    defaultBranch = buildSplitTree(defaultRows, ctx, excludeNames, [...currentPath, '_'], advancedSlots, newState);
+    // Wildcards don't refine indices, so pass bindings unchanged
+    defaultBranch = buildSplitTree(defaultRows, ctx, excludeNames, [...currentPath, '_'], advancedSlots, newState, knownConstructors, indexBindings);
   }
 
   return {
     tag: 'Split',
     argIndex: currentPath.length,  // Use path length as a proxy for argument depth
     branches,
-    defaultBranch
+    defaultBranch,
+    impossibleBranches: impossibleConstructors.length > 0 ? impossibleConstructors : undefined
   };
 }
 
@@ -811,7 +1037,8 @@ function specializeRowsWithTypes(
   argIndex: number,
   ctorName: string,
   ctx: TTKContext,
-  excludeNames: Set<string>
+  excludeNames: Set<string>,
+  knownConstructors?: Set<string>
 ): ClauseRow[] {
   // Get constructor arity from the first row's type info
   const typeInfo = rows[0]?.argTypes[argIndex];
@@ -820,7 +1047,7 @@ function specializeRowsWithTypes(
   // Look up the constructor type to get proper argument types
   const ctorType = lookupTypeByName(ctx, ctorName);
   const ctorArgTypeInfos = ctorType
-    ? extractCtorArgTypeInfos(ctorType, ctx, excludeNames)
+    ? extractCtorArgTypeInfos(ctorType, ctx, excludeNames, knownConstructors)
     : Array(ctorArity).fill({
         typeName: null,
         constructors: [],
@@ -870,14 +1097,15 @@ function specializeRowsWithTypes(
 function extractCtorArgTypeInfos(
   ctorType: TTKTerm,
   ctx: TTKContext,
-  excludeNames: Set<string>
+  excludeNames: Set<string>,
+  knownConstructors?: Set<string>
 ): ArgTypeInfo[] {
   const argTypeInfos: ArgTypeInfo[] = [];
   let current = ctorType;
 
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     // Get type info for this argument
-    const argTypeInfo = getArgTypeInfo(current.domain, ctx, excludeNames);
+    const argTypeInfo = getArgTypeInfo(current.domain, ctx, excludeNames, knownConstructors);
     argTypeInfos.push(argTypeInfo);
     current = current.body;
   }
@@ -973,13 +1201,15 @@ function collectMissingCasesFromTree(
  * @param functionType - The type of the function being defined
  * @param clauses - The pattern matching clauses
  * @param ctx - Typing context
+ * @param knownConstructors - Set of names that are known to be constructors (optional but recommended)
  * @returns Totality analysis result
  */
 export function checkFunctionTotality(
   functionName: string,
   functionType: TTKTerm,
   clauses: TTKClause[],
-  ctx: TTKContext
+  ctx: TTKContext,
+  knownConstructors?: Set<string>
 ): TotalityAnalysis {
   // Extract argument types from the function type
   const argTypes = extractArgTypes(functionType, clauses.length > 0 ? clauses[0].patterns.length : 0);
@@ -988,7 +1218,7 @@ export function checkFunctionTotality(
   // (it's in the context for recursive calls, but it's not a constructor)
   const excludeNames = new Set([functionName]);
 
-  return analyzeTotality(clauses, argTypes, ctx, excludeNames);
+  return analyzeTotality(clauses, argTypes, ctx, excludeNames, knownConstructors);
 }
 
 /**

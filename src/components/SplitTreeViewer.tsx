@@ -91,6 +91,21 @@ const styles = {
     fontStyle: 'italic',
   } as React.CSSProperties,
 
+  impossibleBranchLabel: {
+    color: '#8b949e',
+    textDecoration: 'line-through',
+    opacity: 0.7,
+  } as React.CSSProperties,
+
+  impossibleBadge: {
+    backgroundColor: '#6e7681',
+    color: '#ffffff',
+    padding: '1px 6px',
+    borderRadius: '10px',
+    fontSize: '10px',
+    fontWeight: 600,
+  } as React.CSSProperties,
+
   clauseIndex: {
     backgroundColor: '#238636',
     color: '#ffffff',
@@ -193,7 +208,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, depth, functionName, parentPa
     case 'Split':
       const branches = Array.from(node.branches.entries());
       const hasDefault = node.defaultBranch !== undefined;
+      const impossibleBranches = node.impossibleBranches || [];
       const totalBranches = branches.length + (hasDefault ? 1 : 0);
+      const hasImpossible = impossibleBranches.length > 0;
 
       return (
         <div>
@@ -206,7 +223,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, depth, functionName, parentPa
               Split on arg {node.argIndex + 1}
             </span>
             <span style={{ color: '#8b949e', fontSize: '11px' }}>
-              ({totalBranches} branch{totalBranches !== 1 ? 'es' : ''})
+              ({totalBranches} branch{totalBranches !== 1 ? 'es' : ''}
+              {hasImpossible ? `, ${impossibleBranches.length} impossible` : ''})
             </span>
           </div>
 
@@ -226,6 +244,17 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, depth, functionName, parentPa
                       functionName={functionName}
                       parentPath={[...parentPath, ctorName]}
                     />
+                  </div>
+                </div>
+              ))}
+
+              {/* Show impossible branches (constructors that can't match due to type constraints) */}
+              {impossibleBranches.map((ctorName) => (
+                <div key={`impossible-${ctorName}`}>
+                  <div style={styles.nodeRow}>
+                    <span style={styles.icon}>├</span>
+                    <span style={styles.impossibleBranchLabel}>{ctorName}</span>
+                    <span style={styles.impossibleBadge}>impossible</span>
                   </div>
                 </div>
               ))}
@@ -262,27 +291,29 @@ interface TreeSummaryProps {
   tree: SplitTree;
 }
 
-function countNodes(tree: SplitTree): { leaves: number; missing: number; splits: number } {
+function countNodes(tree: SplitTree): { leaves: number; missing: number; splits: number; impossible: number } {
   switch (tree.tag) {
     case 'Leaf':
-      return { leaves: 1, missing: 0, splits: 0 };
+      return { leaves: 1, missing: 0, splits: 0, impossible: 0 };
     case 'Missing':
-      return { leaves: 0, missing: 1, splits: 0 };
+      return { leaves: 0, missing: 1, splits: 0, impossible: 0 };
     case 'Split': {
-      let leaves = 0, missing = 0, splits = 1;
+      let leaves = 0, missing = 0, splits = 1, impossible = tree.impossibleBranches?.length || 0;
       for (const subtree of tree.branches.values()) {
         const sub = countNodes(subtree);
         leaves += sub.leaves;
         missing += sub.missing;
         splits += sub.splits;
+        impossible += sub.impossible;
       }
       if (tree.defaultBranch) {
         const sub = countNodes(tree.defaultBranch);
         leaves += sub.leaves;
         missing += sub.missing;
         splits += sub.splits;
+        impossible += sub.impossible;
       }
-      return { leaves, missing, splits };
+      return { leaves, missing, splits, impossible };
     }
   }
 }
@@ -301,6 +332,12 @@ const TreeSummary: React.FC<TreeSummaryProps> = ({ tree }) => {
         <div style={styles.legendItem}>
           <span style={{ color: '#f85149' }}>✗</span>
           <span style={{ color: '#f85149' }}>Missing: {counts.missing}</span>
+        </div>
+      )}
+      {counts.impossible > 0 && (
+        <div style={styles.legendItem}>
+          <span style={{ color: '#8b949e' }}>⊘</span>
+          <span style={{ color: '#8b949e' }}>Impossible: {counts.impossible}</span>
         </div>
       )}
       <div style={styles.legendItem}>
