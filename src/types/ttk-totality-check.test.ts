@@ -730,6 +730,33 @@ vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
     expectSuccess(source);
   });
 
+  test('vecConcat with inaccessible third clause (wildcard after explicit VNil in Zero branch)', () => {
+    // When matching a=Zero, the type Vec A a refines to Vec A Zero,
+    // making VCons impossible. In this branch:
+    // - Clause 1 covers VNil explicitly
+    // - Clause 3 has a wildcard, but since VCons is impossible and VNil is covered,
+    //   clause 3 is INACCESSIBLE (can never match any case)
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A : Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ Zero _ (VNil _) v = v
+vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
+vecConcat _ Zero _ _ p = p
+`;
+    expectTypeError(source, 'vecConcat', 'inaccessible');
+  });
+
   test('Multiple functions returning same type should not be constructors', () => {
     // Ensure multiple functions returning Nat don't appear as constructors
     // If both plus and mult were constructors, we'd see them in missing cases

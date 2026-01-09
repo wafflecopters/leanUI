@@ -926,15 +926,19 @@ function buildSplitTree(
 
   // Build default branch if there are wildcard rows AND there are constructors
   // that we didn't create branches for. This can happen if:
-  // 1. A constructor was skipped due to being impossible (isConstructorPossible = false)
-  // 2. We have wildcards covering cases we don't enumerate
+  // 1. We have wildcards covering cases we don't enumerate
   //
-  // IMPORTANT: If we created branches for ALL constructors, don't create a default
-  // branch. The default branch without index bindings would incorrectly allow
+  // IMPORTANT: If we created branches for ALL *possible* constructors, don't create
+  // a default branch. The default branch without index bindings would incorrectly allow
   // impossible constructor combinations in dependent types.
+  //
+  // NOTE: We exclude impossible constructors from this check. If VCons is impossible
+  // due to index constraints, we shouldn't create a default branch just because
+  // VCons isn't in branchedConstructors - it's unbranched because it CAN'T match,
+  // not because we need a wildcard to cover it.
   let defaultBranch: SplitTree | undefined;
   const hasUnbranchedConstructors = typeInfo.constructors.some(
-    ctor => !branchedConstructors.has(ctor)
+    ctor => !branchedConstructors.has(ctor) && !impossibleConstructors.includes(ctor)
   );
   if (wildcardRows.length > 0 && hasUnbranchedConstructors) {
     // Mark this slot as wildcard (covers all constructors in the default branch)
