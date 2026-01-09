@@ -419,6 +419,51 @@ swap A = \\f => \\(x : A) (y : A) => f y x
     expectSuccess(source);
   });
 
+  test('Function with 1 pattern returning unannotated lambda', () => {
+    // swap with 1 pattern and unannotated lambdas - requires bidirectional checking
+    const source = `
+swap_ : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap_ a = \\f => \\x y => f y x
+`;
+    expectSuccess(source);
+  });
+
+  test('Function with 2 patterns returning unannotated lambda', () => {
+    // swap with 2 patterns and unannotated lambdas
+    const source = `
+swap' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap' a f = \\x y => f y x
+`;
+    expectSuccess(source);
+  });
+
+  test('Function with 3 patterns returning unannotated lambda', () => {
+    // swap with 3 patterns and unannotated lambda
+    const source = `
+swap'' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap'' a f x = \\y => f y x
+`;
+    expectSuccess(source);
+  });
+
+  test('Function with 4 patterns (fully saturated)', () => {
+    // swap with 4 patterns - tests binding type translation with multiple args of same type
+    const source = `
+swap''' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap''' a f x y = f y x
+`;
+    expectSuccess(source);
+  });
+
+  test('const with 0 patterns (all args via lambda)', () => {
+    // const function with no patterns - all args via lambda
+    const source = `
+const : (A : Type) -> (B : Type) -> A -> B -> A
+const = \\ A B x y => x
+`;
+    expectSuccess(source);
+  });
+
   test('Function with 2 patterns returning lambda', () => {
     // swap with 2 patterns
     const source = `

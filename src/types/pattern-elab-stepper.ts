@@ -1083,34 +1083,35 @@ export class PatternElabStepper {
       type: b.type
     }));
 
-    // Infer the type of the RHS
-    const rhsType = this.inferType(s.clause.rhs, patternCtx);
+    const expectedType = s.returnType!;
 
-    if (rhsType) {
-      // Unify inferred type with expected return type
-      const expectedType = s.returnType!;
-      const unified = this.unify(rhsType, expectedType);
+    // Use bidirectional type checking: CHECK the RHS against the expected type
+    // This is crucial for lambdas with unannotated domains (like \f => ...)
+    const checkResult = this.checkType(s.clause.rhs, expectedType, patternCtx);
 
-      if (unified) {
-        s.phase = { tag: 'Done' };
-        return this.makeRecord(
-          `RHS type: ${prettyTerm(rhsType, s.metaState)} ≡ ${prettyTerm(expectedType, s.metaState)}`,
-          'Type check complete'
-        );
-      } else {
+    if (checkResult) {
+      s.phase = { tag: 'Done' };
+      // Show the zonked expected type to reflect any solved metas
+      return this.makeRecord(
+        `RHS checks against type: ${prettyTerm(expectedType, s.metaState)}`,
+        'Type check complete'
+      );
+    } else {
+      // Try to infer type for a better error message
+      const rhsType = this.inferType(s.clause.rhs, patternCtx);
+      if (rhsType) {
         s.phase = { tag: 'Error', message: `Type mismatch: expected ${prettyTerm(expectedType, s.metaState)}, got ${prettyTerm(rhsType, s.metaState)}` };
         return this.makeRecord(
           `Type error: ${prettyTerm(rhsType, s.metaState)} ≠ ${prettyTerm(expectedType, s.metaState)}`,
           'Type check failed'
         );
+      } else {
+        s.phase = { tag: 'Error', message: `Could not type-check RHS against expected type ${prettyTerm(expectedType, s.metaState)}` };
+        return this.makeRecord(
+          `Type error: could not check RHS against ${prettyTerm(expectedType, s.metaState)}`,
+          'Type check failed'
+        );
       }
-    } else {
-      // Couldn't infer type - fall back to just showing expected type
-      s.phase = { tag: 'Done' };
-      return this.makeRecord(
-        `RHS should have type: ${prettyTerm(s.returnType!, s.metaState)}`,
-        'Elaboration complete'
-      );
     }
   }
 
@@ -1120,6 +1121,48 @@ export class PatternElabStepper {
   private lookupConstType(name: string): TTKTerm | null {
     const entry = this.state.typingContext.find(e => e.name === name);
     return entry ? entry.type : null;
+  }
+
+  /**
+   * Check that a term has the expected type (bidirectional checking mode).
+   * Returns true if the term type-checks, false otherwise.
+   *
+   * Key insight: when checking a lambda against a Pi type, we use the Pi's
+   * domain as the bound variable's type, not the lambda's domain (which may
+   * be a hole for unannotated lambdas).
+   */
+  private checkType(term: TTKTerm, expectedType: TTKTerm, ctx: Array<{ name: string; type: TTKTerm }>): boolean {
+    const zonkedTerm = zonk(this.state.metaState, term);
+    const zonkedExpected = zonk(this.state.metaState, expectedType);
+
+    // Key bidirectional rule: check lambda against Pi
+    if (zonkedTerm.tag === 'Binder' && zonkedTerm.binderKind.tag === 'BLam' &&
+        zonkedExpected.tag === 'Binder' && zonkedExpected.binderKind.tag === 'BPi') {
+      // Use the Pi's domain as the type for the bound variable
+      // This is crucial for unannotated lambdas like \f => ...
+      const varType = zonkedExpected.domain;
+
+      // If the lambda has an annotated domain that's not a hole, unify it with Pi's domain
+      if (zonkedTerm.domain.tag !== 'Hole') {
+        if (!this.unify(zonkedTerm.domain, varType)) {
+          return false;
+        }
+      } else {
+        // Lambda domain is a hole - solve it with the Pi's domain
+        this.unify(zonkedTerm.domain, varType);
+      }
+
+      // Check body against the Pi's codomain, with the bound variable having the Pi's domain type
+      const extCtx = [...ctx, { name: zonkedTerm.name, type: varType }];
+      return this.checkType(zonkedTerm.body, zonkedExpected.body, extCtx);
+    }
+
+    // For other terms: infer type and unify with expected
+    const inferredType = this.inferType(zonkedTerm, ctx);
+    if (!inferredType) {
+      return false;
+    }
+    return this.unify(inferredType, zonkedExpected);
   }
 
   /**

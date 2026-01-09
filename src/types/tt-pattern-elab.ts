@@ -549,6 +549,89 @@ function elaborateCtorPattern(
 }
 
 // ============================================================================
+// Bidirectional Type Checking with Unification
+// ============================================================================
+
+/**
+ * Check that a term has the expected type using bidirectional type checking
+ * combined with unification (to solve metavariables).
+ *
+ * Key insight: when checking a lambda against a Pi type, we use the Pi's
+ * domain as the bound variable's type, not the lambda's domain (which may
+ * be a hole for unannotated lambdas).
+ *
+ * This is essential for curried function definitions like:
+ *   swap A = \f => \(x: A) (y: A) => f y x
+ * where \f has no type annotation but is checked against (f : A -> A -> A) -> ...
+ */
+function checkTypeWithUnification(
+  term: TTKTerm,
+  expectedType: TTKTerm,
+  ctx: TTKContext,
+  mctx: MetaContext,
+  defs: DefinitionsMap | undefined,
+  path: IndexPath
+): void {
+  // Check if term is a lambda and expected is Pi - use bidirectional rule
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
+      expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
+    // Use the Pi's domain as the type for the bound variable
+    // This is crucial for unannotated lambdas like \f => ...
+    const varType = expectedType.domain;
+
+    // If the lambda has an annotated domain (not a hole), unify with Pi's domain
+    if (term.domain.tag !== 'Hole') {
+      const unifyDomainResult = unifyTerms(term.domain, varType, mkType(0), ctx, { definitions: defs });
+      if (unifyDomainResult.tag === 'failure') {
+        throw new TypeCheckError(
+          `Lambda domain mismatch.\n  Expected: ${prettyPrint(varType)}\n  Got: ${prettyPrint(term.domain)}`,
+          term, ctx, appendPath(path, fieldSeg('domain'))
+        );
+      }
+      // Apply any solutions from domain unification
+      if (unifyDomainResult.tag === 'success') {
+        unifyDomainResult.substitution.forEach((value, key) => {
+          if (!key.startsWith('var:')) {
+            mctx.solve(key, value);
+          }
+        });
+      }
+    }
+
+    // Check body against the Pi's codomain, with the bound variable having the Pi's domain type
+    const extCtx = extendContext(ctx, term.name, varType);
+    const bodyPath = appendPath(path, fieldSeg('body'));
+    checkTypeWithUnification(term.body, expectedType.body, extCtx, mctx, defs, bodyPath);
+    return;
+  }
+
+  // For non-lambda terms: infer type and unify with expected
+  const inferredType = inferType(term, ctx, path);
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log('[DEBUG] Inferred RHS type:', prettyPrint(inferredType));
+  }
+
+  // Unify inferred type with expected type (pass definitions for WHNF reduction)
+  const unifyResult = unifyTerms(inferredType, expectedType, mkType(0), ctx, { definitions: defs });
+  if (unifyResult.tag === 'failure') {
+    throw new TypeCheckError(
+      `Type mismatch.\n  Expected: ${prettyPrint(expectedType)}\n  Inferred: ${prettyPrint(inferredType)}`,
+      term, ctx, path
+    );
+  }
+
+  // Apply any solutions from the unification
+  if (unifyResult.tag === 'success') {
+    unifyResult.substitution.forEach((value, key) => {
+      if (!key.startsWith('var:')) {
+        mctx.solve(key, value);
+      }
+    });
+  }
+}
+
+// ============================================================================
 // Clause Elaboration
 // ============================================================================
 
@@ -743,9 +826,59 @@ export function elaborateClause(
     console.log(`[DEBUG] After replaceVars: ${prettyPrint(refinedReturn)}`);
   }
 
-  // Note: Binding type translation is complex because sequential subst has shifted indices.
-  // For now, we leave binding types as-is. The return type refinement is the main fix.
-  // TODO: Properly translate binding types when arity != bindingCount
+  // Recompute binding types using argTypes and the correct pattern context mapping.
+  // The binding types computed during pattern elaboration have incorrect indices due to
+  // sequential substitution with index decrementing. We need to translate argTypes directly
+  // using the pattern context index mapping.
+  //
+  // For pattern i in a function with n patterns:
+  // - argTypes[i] has De Bruijn indices relative to the function telescope at position i
+  // - In argTypes[i], index k refers to pattern (i - 1 - k)
+  // - In the pattern context, pattern j is at index (n - 1 - j)
+  // - So we need to map: index k in argTypes[i] -> index (n - 1 - (i - 1 - k)) = (n - i + k)
+  //
+  // But we need to handle the complexity of which binding came from which pattern.
+  // For simple variable patterns (1 binding each), binding i corresponds to argTypes[i].
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log('[DEBUG] Binding types before translation:', allBindings.map(b => `${b.name}: ${prettyPrint(b.type)}`));
+  }
+
+  // Build correct binding types from argTypes
+  // For now, assume simple case where each pattern creates exactly 1 binding
+  // TODO: Handle constructor patterns with multiple bindings
+  const translatedBindings: Array<{ name: string; type: TTKTerm }> = [];
+  let bindingIdx = 0;
+  for (let patIdx = 0; patIdx < n; patIdx++) {
+    const bindingsForPattern = bindingCountsPerPattern[patIdx];
+    for (let k = 0; k < bindingsForPattern; k++) {
+      const binding = allBindings[bindingIdx];
+
+      // Build mapping for this pattern position
+      // In argTypes[patIdx], index j refers to pattern (patIdx - 1 - j)
+      // That pattern is at pattern context index (n - 1 - (patIdx - 1 - j)) = (n - patIdx + j)
+      const typeMap = new Map<number, TTKTerm>();
+      for (let j = 0; j < patIdx; j++) {
+        const refPatternIdx = patIdx - 1 - j;
+        const patternCtxIdx = n - 1 - refPatternIdx;
+        typeMap.set(j, mkVar(patternCtxIdx));
+      }
+
+      // Get the original argType for this pattern position
+      const originalType = argTypes[patIdx];
+      const translatedType = replaceVars(typeMap, originalType);
+
+      translatedBindings.push({
+        name: binding.name,
+        type: translatedType
+      });
+      bindingIdx++;
+    }
+  }
+
+  if (DEBUG_PATTERN_ELAB) {
+    console.log('[DEBUG] Binding types after translation:', translatedBindings.map(b => `${b.name}: ${prettyPrint(b.type)}`));
+  }
 
   refinedReturn = mctx.zonk(refinedReturn);
 
@@ -754,7 +887,7 @@ export function elaborateClause(
   }
 
   // Zonk bindings
-  const zonkedBindings = allBindings.map(b => ({
+  const zonkedBindings = translatedBindings.map(b => ({
     name: b.name,
     type: mctx.zonk(b.type)
   }));
@@ -774,8 +907,11 @@ export function elaborateClause(
     console.log('[DEBUG] Pattern context:', patternCtx.map(e => `${e.name}: ${prettyPrint(e.type)}`).join(', '));
   }
 
-  // TYPE CHECK RHS THROUGH UNIFICATION
-  // Infer the type of the RHS in the pattern context
+  // TYPE CHECK RHS USING BIDIRECTIONAL TYPE CHECKING WITH UNIFICATION
+  // We use a custom bidirectional check that:
+  // 1. For lambdas checked against Pi types, uses the Pi's domain as the bound variable's type
+  //    (this handles unannotated lambdas like \f => ...)
+  // 2. For other terms, infers the type and unifies with expected (to solve metavariables)
   const rhsPath = appendPath(path, fieldSeg('rhs'));
   const zonkedRhs = mctx.zonk(clause.rhs);
 
@@ -784,29 +920,11 @@ export function elaborateClause(
     console.log('[DEBUG] Expected return:', prettyPrint(refinedReturn));
   }
 
-  // Infer the RHS type
-  const rhsType = inferType(zonkedRhs, patternCtx, rhsPath);
+  // Bidirectional check with unification
+  checkTypeWithUnification(zonkedRhs, refinedReturn, patternCtx, mctx, defs, rhsPath);
 
   if (DEBUG_PATTERN_ELAB) {
-    console.log('[DEBUG] Inferred RHS type:', prettyPrint(rhsType));
-  }
-
-  // Unify RHS type with refined return type (pass definitions for WHNF reduction)
-  const unifyResult = unifyTerms(rhsType, refinedReturn, mkType(0), patternCtx, { definitions: defs });
-  if (unifyResult.tag === 'failure') {
-    throw new TypeCheckError(
-      `Type mismatch.\n  Expected: ${prettyPrint(refinedReturn)}\n  Inferred: ${prettyPrint(rhsType)}`,
-      zonkedRhs, patternCtx, rhsPath
-    );
-  }
-
-  // Apply any solutions from the unification
-  if (unifyResult.tag === 'success') {
-    unifyResult.substitution.forEach((value, key) => {
-      if (!key.startsWith('var:')) {
-        mctx.solve(key, value);
-      }
-    });
+    console.log('[DEBUG] RHS type check passed');
   }
 
   return {
