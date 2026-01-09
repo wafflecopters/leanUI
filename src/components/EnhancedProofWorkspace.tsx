@@ -17,7 +17,6 @@ import {
 } from '../types/enhanced-focus';
 import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { ExpressionInput } from './ExpressionRenderer';
-import { ASTDebugPanel } from './ASTDebugPanel';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
 import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../types/tt-core';
@@ -296,7 +295,6 @@ function EnhancedProofWorkspaceInner() {
 
   // Track which proof context we're in (null = main proof, or an element id)
   const [activeProofContext, setActiveProofContext] = useState<string | null>(null);
-  const [showASTDebug, setShowASTDebug] = useState(false);
 
   // Proof elements (structured proof steps - comments, equations, etc.)
   // These are separate from the TT term and are for display/UI only
@@ -1324,16 +1322,6 @@ function EnhancedProofWorkspaceInner() {
           />
         ) : null}
       </div>
-
-      {/* AST Debug Panel */}
-      {currentExpression && (
-        <ASTDebugPanel
-          expression={currentExpression}
-          isVisible={showASTDebug}
-          onToggle={() => setShowASTDebug(!showASTDebug)}
-        />
-      )}
-
 
       {/* TT Proof Term Viewer */}
       <div style={{ marginTop: '24px' }}>

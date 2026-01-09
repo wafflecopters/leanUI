@@ -18,9 +18,8 @@
  * is managed by the parent, making it easy to embed in different contexts.
  */
 
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
-import { ASTModal } from './ASTModal';
 import { expressionNodeToTTerm, expressionPathToTTermPath } from '../types/tt-bridge';
 import { asLambdaByExtractingTermAtIndexPaths, prettyPrint, TContext, TTerm } from '../types/tt-core';
 import { inferType } from '../types/tt-typecheck-inference';
@@ -425,8 +424,6 @@ interface FocusBreadcrumbsProps {
 }
 
 export function FocusBreadcrumbs({ expression, focusPath, onFocusChange }: FocusBreadcrumbsProps) {
-  const [showASTModal, setShowASTModal] = useState(false);
-
   const breadcrumbs = [];
   let currentPath: FocusPath = [];
 
@@ -451,62 +448,32 @@ export function FocusBreadcrumbs({ expression, focusPath, onFocusChange }: Focus
   }
 
   return (
-    <>
-      <div style={{
-        padding: '8px 0',
-        fontFamily: 'monospace',
-        fontSize: '14px',
-        color: '#666',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px'
-      }}>
-        <div>
-          <strong>Focus Path: </strong>
-          {breadcrumbs.map((crumb, index) => (
-            <span key={index}>
-              <button
-                onClick={() => onFocusChange(crumb.path)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: arraysEqual(crumb.path, focusPath) ? '#007acc' : '#666',
-                  textDecoration: 'underline',
-                  cursor: 'pointer',
-                  fontFamily: 'monospace',
-                  fontSize: '14px'
-                }}
-              >
-                {crumb.label}
-              </button>
-              {index < breadcrumbs.length - 1 && ' > '}
-            </span>
-          ))}
-        </div>
-
-        <button
-          onClick={() => setShowASTModal(true)}
-          style={{
-            padding: '4px 12px',
-            backgroundColor: '#007acc',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            fontFamily: 'system-ui, sans-serif'
-          }}
-        >
-          AST
-        </button>
-      </div>
-
-      <ASTModal
-        expression={expression}
-        isOpen={showASTModal}
-        onClose={() => setShowASTModal(false)}
-      />
-    </>
+    <div style={{
+      padding: '8px 0',
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      color: '#666'
+    }}>
+      <strong>Focus Path: </strong>
+      {breadcrumbs.map((crumb, index) => (
+        <span key={index}>
+          <button
+            onClick={() => onFocusChange(crumb.path)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: arraysEqual(crumb.path, focusPath) ? '#007acc' : '#666',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+              fontSize: '14px'
+            }}
+          >
+            {crumb.label}
+          </button>
+          {index < breadcrumbs.length - 1 && ' > '}
+        </span>
+      ))}
+    </div>
   );
 }
