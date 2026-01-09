@@ -722,11 +722,18 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
       }
     }
 
+    // Build typing context from all bindings (for RHS type inference)
+    const typingContext = queryData.context.map(binding => ({
+      name: binding.name,
+      type: binding.type
+    }));
+
     return {
       clauses: fnValue.clauses,
       fnType,
       fnName: result.name,
-      env
+      env,
+      typingContext
     };
   }, [showStepperModal, result]);
 
@@ -1047,6 +1054,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
               fnType={stepperData.fnType}
               fnName={stepperData.fnName}
               env={stepperData.env}
+              typingContext={stepperData.typingContext}
               onClose={() => setShowStepperModal(false)}
             />
           </div>

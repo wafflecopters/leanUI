@@ -305,6 +305,8 @@ interface PatternElabStepperViewerProps {
   fnType: TTKTerm;
   fnName?: string;
   env: Map<string, ConstructorInfo>;
+  /** Typing context for looking up constant/function types during RHS inference */
+  typingContext?: Array<{ name: string; type: TTKTerm }>;
   onClose?: () => void;
 }
 
@@ -583,6 +585,7 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
   fnType,
   fnName = 'f',
   env,
+  typingContext = [],
   onClose
 }) => {
   // Normalize to array of clauses
@@ -611,7 +614,8 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
     bindings: s.bindings.map(b => ({ ...b })),
     constraints: s.constraints.map(c => ({ ...c })),
     solvedConstraints: s.solvedConstraints.map(c => ({ ...c })),
-    history: [...s.history]
+    history: [...s.history],
+    typingContext: [...s.typingContext]
   });
 
   // Run the stepper to completion and collect all snapshots for current clause
@@ -619,7 +623,7 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
     if (!currentClause) {
       return { snapshots: [], finalState: null };
     }
-    const stepper = new PatternElabStepper(currentClause, fnType, env);
+    const stepper = new PatternElabStepper(currentClause, fnType, env, typingContext);
     const snaps: StepperSnapshot[] = [];
 
     // Capture initial state - deep copy to prevent shared references
@@ -641,7 +645,7 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
       snapshots: snaps,
       finalState: stepper.getState()
     };
-  }, [currentClause, fnType, env]);
+  }, [currentClause, fnType, env, typingContext]);
 
   const [currentStep, setCurrentStep] = useState(0);
 

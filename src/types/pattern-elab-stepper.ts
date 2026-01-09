@@ -165,6 +165,14 @@ export interface Binding {
 }
 
 /**
+ * A typing context entry (for looking up types of constants/functions)
+ */
+export interface TypingContextEntry {
+  name: string;
+  type: TTKTerm;
+}
+
+/**
  * The complete state of the elaboration process
  */
 export interface ElabState {
@@ -172,6 +180,8 @@ export interface ElabState {
   clause: TTKClause;
   fnType: TTKTerm;
   env: Map<string, ConstructorInfo>;
+  /** Typing context for looking up constant/function types */
+  typingContext: TypingContextEntry[];
 
   // Current phase
   phase: ElabPhase;
@@ -376,13 +386,23 @@ function isWildcard(p: TTKPattern): boolean {
 export class PatternElabStepper {
   private state: ElabState;
 
-  constructor(clause: TTKClause, fnType: TTKTerm, env: Map<string, ConstructorInfo>) {
+  constructor(
+    clause: TTKClause,
+    fnType: TTKTerm,
+    env: Map<string, ConstructorInfo>,
+    typingContext: TypingContextEntry[] = []
+  ) {
+    // Initialize MetaState with any Holes found in the RHS
+    const initialMetaState: MetaState = { metas: new Map(), counter: 0 };
+    this.scanForHoles(clause.rhs, initialMetaState);
+
     this.state = {
       clause,
       fnType,
       env,
+      typingContext,
       phase: { tag: 'Init' },
-      metaState: { metas: new Map(), counter: 0 },
+      metaState: initialMetaState,
       argTypes: [],
       returnType: null,
       patternTerms: [],
@@ -394,6 +414,53 @@ export class PatternElabStepper {
       stepNumber: 0,
       history: []
     };
+  }
+
+  /**
+   * Scan a term for Holes and add them to the MetaState.
+   * This ensures RHS holes are tracked so they can be solved during type inference.
+   */
+  private scanForHoles(term: TTKTerm, metaState: MetaState): void {
+    switch (term.tag) {
+      case 'Hole':
+        if (!metaState.metas.has(term.id)) {
+          metaState.metas.set(term.id, {
+            id: term.id,
+            type: term.type,
+            solution: null,
+            createdAt: 'RHS implicit argument'
+          });
+          // Update counter if needed
+          const numPart = term.id.replace(/[^0-9]/g, '');
+          const num = parseInt(numPart, 10);
+          if (!isNaN(num) && num >= metaState.counter) {
+            metaState.counter = num + 1;
+          }
+        }
+        break;
+      case 'App':
+        this.scanForHoles(term.fn, metaState);
+        this.scanForHoles(term.arg, metaState);
+        break;
+      case 'Binder':
+        this.scanForHoles(term.domain, metaState);
+        this.scanForHoles(term.body, metaState);
+        if (term.binderKind.tag === 'BLet') {
+          this.scanForHoles(term.binderKind.defVal, metaState);
+        }
+        break;
+      case 'Annot':
+        this.scanForHoles(term.term, metaState);
+        this.scanForHoles(term.type, metaState);
+        break;
+      case 'Match':
+        this.scanForHoles(term.scrutinee, metaState);
+        for (const c of term.clauses) {
+          this.scanForHoles(c.rhs, metaState);
+        }
+        break;
+      // Var, Sort, Const have no sub-terms
+    }
   }
 
   /** Get current state (for visualization) */
@@ -1009,15 +1076,153 @@ export class PatternElabStepper {
   private stepCheckRHS(): StepRecord {
     const s = this.state;
 
-    // In a full implementation, we would type-check the RHS here
-    // For now, just mark as done
+    // Build the pattern context for type inference
+    // Bindings are in order oldest-to-newest, so we can use them directly
+    const patternCtx: Array<{ name: string; type: TTKTerm }> = s.bindings.map(b => ({
+      name: b.name,
+      type: b.type
+    }));
 
-    s.phase = { tag: 'Done' };
+    // Infer the type of the RHS
+    const rhsType = this.inferType(s.clause.rhs, patternCtx);
 
-    return this.makeRecord(
-      `RHS should have type: ${prettyTerm(s.returnType!, s.metaState)}`,
-      'Elaboration complete'
-    );
+    if (rhsType) {
+      // Unify inferred type with expected return type
+      const expectedType = s.returnType!;
+      const unified = this.unify(rhsType, expectedType);
+
+      if (unified) {
+        s.phase = { tag: 'Done' };
+        return this.makeRecord(
+          `RHS type: ${prettyTerm(rhsType, s.metaState)} ≡ ${prettyTerm(expectedType, s.metaState)}`,
+          'Type check complete'
+        );
+      } else {
+        s.phase = { tag: 'Error', message: `Type mismatch: expected ${prettyTerm(expectedType, s.metaState)}, got ${prettyTerm(rhsType, s.metaState)}` };
+        return this.makeRecord(
+          `Type error: ${prettyTerm(rhsType, s.metaState)} ≠ ${prettyTerm(expectedType, s.metaState)}`,
+          'Type check failed'
+        );
+      }
+    } else {
+      // Couldn't infer type - fall back to just showing expected type
+      s.phase = { tag: 'Done' };
+      return this.makeRecord(
+        `RHS should have type: ${prettyTerm(s.returnType!, s.metaState)}`,
+        'Elaboration complete'
+      );
+    }
+  }
+
+  /**
+   * Look up the type of a constant in the typing context
+   */
+  private lookupConstType(name: string): TTKTerm | null {
+    const entry = this.state.typingContext.find(e => e.name === name);
+    return entry ? entry.type : null;
+  }
+
+  /**
+   * Infer the type of a term in the given local context.
+   * Returns null if type cannot be inferred.
+   *
+   * Based on bidirectional type checking:
+   * - Variables: look up in context
+   * - Constants: look up in typing context
+   * - Applications: infer function type, instantiate, check arg
+   * - Holes: return their stored type
+   */
+  private inferType(term: TTKTerm, ctx: Array<{ name: string; type: TTKTerm }>): TTKTerm | null {
+    const zonked = zonk(this.state.metaState, term);
+
+    switch (zonked.tag) {
+      case 'Var': {
+        // Look up in local context (De Bruijn index)
+        if (zonked.index < ctx.length) {
+          const idx = ctx.length - 1 - zonked.index;
+          return ctx[idx].type;
+        }
+        return null;
+      }
+
+      case 'Const': {
+        // Look up in typing context
+        return this.lookupConstType(zonked.name);
+      }
+
+      case 'Hole': {
+        // Return the hole's type
+        return zonked.type;
+      }
+
+      case 'Sort': {
+        // Type : Type (simplified)
+        return mkType(zonked.level + 1);
+      }
+
+      case 'App': {
+        // Infer type of function, then apply to argument
+        const fnType = this.inferType(zonked.fn, ctx);
+        if (!fnType) return null;
+
+        const fnTypeZonked = zonk(this.state.metaState, fnType);
+
+        // Function type should be a Pi
+        if (fnTypeZonked.tag === 'Binder' && fnTypeZonked.binderKind.tag === 'BPi') {
+          // Check/infer arg type and unify with domain
+          const argType = this.inferType(zonked.arg, ctx);
+          if (argType) {
+            this.unify(argType, fnTypeZonked.domain);
+          }
+
+          // Return the codomain with arg substituted for the bound variable
+          return subst(0, zonked.arg, fnTypeZonked.body);
+        }
+
+        // If function type is a hole, we can't do much
+        if (fnTypeZonked.tag === 'Hole') {
+          return null;
+        }
+
+        return null;
+      }
+
+      case 'Binder': {
+        if (zonked.binderKind.tag === 'BLam') {
+          // Lambda: infer body type in extended context
+          const extCtx = [...ctx, { name: zonked.name, type: zonked.domain }];
+          const bodyType = this.inferType(zonked.body, extCtx);
+          if (!bodyType) return null;
+
+          // Return Pi type
+          return mkPi(zonked.domain, bodyType, zonked.name);
+        }
+
+        if (zonked.binderKind.tag === 'BPi') {
+          // Pi type has type Type (simplified)
+          return mkType(1);
+        }
+
+        if (zonked.binderKind.tag === 'BLet') {
+          // Let: infer body type with the let binding in context
+          const extCtx = [...ctx, { name: zonked.name, type: zonked.domain }];
+          return this.inferType(zonked.body, extCtx);
+        }
+
+        return null;
+      }
+
+      case 'Annot': {
+        // Annotated term: return the annotation type
+        return zonked.type;
+      }
+
+      case 'Match': {
+        // For match expressions, we'd need to analyze the return type
+        // For now, return null
+        return null;
+      }
+    }
   }
 
   // =========================================================================
@@ -1085,9 +1290,10 @@ export class PatternElabStepper {
 export function createPatternElabStepper(
   clause: TTKClause,
   fnType: TTKTerm,
-  env: Map<string, ConstructorInfo>
+  env: Map<string, ConstructorInfo>,
+  typingContext: TypingContextEntry[] = []
 ): PatternElabStepper {
-  return new PatternElabStepper(clause, fnType, env);
+  return new PatternElabStepper(clause, fnType, env, typingContext);
 }
 
 // =============================================================================
