@@ -19,10 +19,6 @@ import { prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
 import { useSelectionTypeInfo } from '../hooks/useSelectionTypeInfo';
 import { SplitTreeViewer } from './SplitTreeViewer';
 import { PatternElabStepperViewer } from './PatternElabStepperViewer';
-import { ConstructorInfo as StepperConstructorInfo } from '../types/pattern-elab-stepper';
-import { TTKTerm } from '../types/tt-kernel';
-import { IndexPath } from '../types/source-position';
-import { resolveCheckErrorLocation } from '../types/error-resolution';
 
 // ============================================================================
 // Types
@@ -354,7 +350,7 @@ inductive Vec : Type -> Nat -> Type where
   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
 
 inductive Equal : (A: Type) -> A -> A -> Type where
-  refl : (A : Type) -> (x : A) -> Equal A x x
+  Refl : (A : Type) -> (x : A) -> Equal A x x
 
 swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
 swap A = \\f => \\(x: A) (y: A) => f y x
@@ -381,7 +377,7 @@ twice : Nat -> Nat
 twice = \\ n => plus n n
 
 vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
-vecConcat _ _ _ (VNil _) v = v
+vecConcat A _ _ (VNil _) v = v
 vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
 `
 
@@ -510,10 +506,9 @@ const MONACO_WIDGET_STYLES = `
 interface EnhancedBlockCardProps {
   result: BlockCheckResult;
   index: number;
-  onStepperError?: (error: string, blockIndex: number, clauseIndex: number, patternIndex?: number) => void;
 }
 
-const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, onStepperError }) => {
+const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
   const [showErrors, setShowErrors] = useState(true);
   const [showElimModal, setShowElimModal] = useState(false);
   const [showCompileInfoModal, setShowCompileInfoModal] = useState(false);
@@ -679,50 +674,18 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, on
     if (!result.name) return null;
 
     const queryData = result.typeQueryData;
-    if (!queryData?.kernelType || !queryData?.kernelValue) {
+    const patternData = queryData?.patternData;
+
+    // All required data must be pre-computed
+    if (!patternData || !queryData?.kernelType || !queryData?.kernelValue) {
       return null;
     }
 
-    const fnType = queryData.kernelType;
     const fnValue = queryData.kernelValue;
 
     // Only support Match expressions (functions with pattern matching)
     if (fnValue.tag !== 'Match' || fnValue.clauses.length === 0) {
       return null;
-    }
-
-    // Build constructor environment from the typing context
-    // Each constructor in context has type like: Zero : Nat or Succ : Nat -> Nat
-    const env = new Map<string, StepperConstructorInfo>();
-
-    // Helper to unwrap Pi types and extract params + return type
-    const unwrapPi = (type: TTKTerm): { params: Array<{ name: string; type: TTKTerm }>; returnType: TTKTerm } => {
-      const params: Array<{ name: string; type: TTKTerm }> = [];
-      let curr = type;
-      while (curr.tag === 'Binder' && curr.binderKind.tag === 'BPi') {
-        params.push({ name: curr.name, type: curr.domain });
-        curr = curr.body;
-      }
-      return { params, returnType: curr };
-    };
-
-    // Helper to check if a type looks like it returns an inductive type (not Type/Sort)
-    const isConstructorType = (type: TTKTerm): boolean => {
-      const { returnType } = unwrapPi(type);
-      // Constructors return applications or constants, not Sort/Type
-      return returnType.tag === 'App' || returnType.tag === 'Const';
-    };
-
-    // Extract constructors from context
-    for (const binding of queryData.context) {
-      if (isConstructorType(binding.type)) {
-        const { params, returnType } = unwrapPi(binding.type);
-        env.set(binding.name, {
-          name: binding.name,
-          params,
-          returnType
-        });
-      }
     }
 
     // Build typing context from all bindings (for RHS type inference)
@@ -733,9 +696,9 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, on
 
     return {
       clauses: fnValue.clauses,
-      fnType,
+      fnType: queryData.kernelType,
       fnName: result.name,
-      env,
+      env: patternData.stepperEnv,  // PRE-COMPUTED!
       typingContext
     };
   }, [showStepperModal, result]);
@@ -1059,7 +1022,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, on
               env={stepperData.env}
               typingContext={stepperData.typingContext}
               onClose={() => setShowStepperModal(false)}
-              onError={onStepperError ? (error, clauseIndex, patternIndex) => onStepperError(error, index, clauseIndex, patternIndex) : undefined}
+            // No onError - all errors should come from eager checking, not the stepper
             />
           </div>
         </div>
@@ -1133,25 +1096,6 @@ export const TextEditorPage: React.FC = () => {
 
   // Track whether editor has been mounted
   const [editorMounted, setEditorMounted] = useState(false);
-
-  // Track stepper errors for bubbling to markers
-  // Key: "blockIndex-clauseIndex-patternIndex", Value: error message and indices
-  const [stepperErrors, setStepperErrors] = useState<Map<string, { error: string; blockIndex: number; clauseIndex: number; patternIndex?: number }>>(new Map());
-
-  // Clear stepper errors when code changes (so stale errors don't persist)
-  useEffect(() => {
-    setStepperErrors(new Map());
-  }, [code]);
-
-  // Handler for stepper errors - adds them to the marker system
-  const handleStepperError = useCallback((error: string, blockIndex: number, clauseIndex: number, patternIndex?: number) => {
-    const key = `${blockIndex}-${clauseIndex}-${patternIndex ?? 'none'}`;
-    setStepperErrors(prev => {
-      const next = new Map(prev);
-      next.set(key, { error, blockIndex, clauseIndex, patternIndex });
-      return next;
-    });
-  }, []);
 
   // Type information for the current cursor position/selection
   const selectionTypeInfo = useSelectionTypeInfo(editorRef.current, blockCheckResults, code);
@@ -1230,61 +1174,12 @@ export const TextEditorPage: React.FC = () => {
       }
     }
 
-    // Add stepper errors (bubbled from pattern elaboration stepper)
-    for (const [, { error, blockIndex, clauseIndex, patternIndex }] of stepperErrors) {
-      const blockResult = blockCheckResults[blockIndex];
-      if (blockResult && blockResult.typeQueryData) {
-        // Construct path to the specific pattern within the clause
-        // Path: value.clauses[clauseIndex].patterns[patternIndex] (if patternIndex available)
-        // Otherwise: value.clauses[clauseIndex]
-        const errorPath: IndexPath = [
-          { kind: 'field', name: 'value' },
-          { kind: 'field', name: 'clauses' },
-          { kind: 'array', index: clauseIndex }
-        ];
-
-        // If we have a pattern index, add it to get more specific location
-        if (patternIndex !== undefined) {
-          errorPath.push({ kind: 'field', name: 'patterns' });
-          errorPath.push({ kind: 'array', index: patternIndex });
-        }
-
-        // Try to resolve the location using the source maps
-        const location = resolveCheckErrorLocation(
-          { message: error, path: errorPath },
-          blockResult.typeQueryData.elabMap,
-          blockResult.typeQueryData.sourceMap
-        );
-
-        if (location) {
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: `Pattern elaboration: ${error}`,
-            startLineNumber: location.start.line,
-            startColumn: location.start.col,
-            endLineNumber: location.end.line,
-            endColumn: location.end.col,
-            source: 'TT Pattern Stepper',
-          });
-        } else {
-          // Fallback to first line of block if location can't be resolved
-          const firstLine = blockResult.block.startLine;
-          const lineContent = model.getLineContent(firstLine);
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: `Pattern elaboration: ${error}`,
-            startLineNumber: firstLine,
-            startColumn: 1,
-            endLineNumber: firstLine,
-            endColumn: lineContent.length + 1,
-            source: 'TT Pattern Stepper',
-          });
-        }
-      }
-    }
+    // Note: Stepper errors are NO LONGER displayed here
+    // All errors come from the eager checking phase (above)
+    // The stepper is purely a visualization/debugging tool
 
     monaco.editor.setModelMarkers(model, 'tt-checker', markers);
-  }, [blockCheckResults, editorMounted, stepperErrors]);
+  }, [blockCheckResults, editorMounted]);
 
   // Editor mount handler
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
@@ -1526,7 +1421,7 @@ export const TextEditorPage: React.FC = () => {
               {blockStats.checkErrorBlocks > 0 && ` ✗ ${blockStats.checkErrorBlocks} Type Errors`}
             </h3>
             {blockCheckResults.map((blockResult, index) => (
-              <EnhancedBlockCard key={index} result={blockResult} index={index} onStepperError={handleStepperError} />
+              <EnhancedBlockCard key={index} result={blockResult} index={index} />
             ))}
           </div>
         ) : (

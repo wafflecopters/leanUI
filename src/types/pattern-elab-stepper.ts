@@ -766,6 +766,20 @@ export class PatternElabStepper {
     switch (subPhase.step.tag) {
       case 'LookingUpCtor': {
         if (!ctorInfo) {
+          // Not a known constructor - if no args, treat as a variable binding
+          // This handles identifiers that are variables rather than constructors
+          if (pattern.args.length === 0) {
+            s.phase = {
+              tag: 'ElaboratingPattern',
+              patternIndex,
+              subPhase: { tag: 'BindingVariable', name: pattern.name }
+            };
+            return this.makeRecord(
+              `${pattern.name} is not a constructor, treating as variable with type: ${prettyTerm(expectedType, s.metaState)}`,
+              'Variable binding'
+            );
+          }
+          // Has args but not a known constructor - this is an error
           s.phase = { tag: 'Error', message: `Constructor ${pattern.name} not found`, patternIndex };
           return this.makeRecord(`Constructor ${pattern.name} not found`, 'Error');
         }

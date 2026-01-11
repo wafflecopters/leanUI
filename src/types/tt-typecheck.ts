@@ -253,6 +253,22 @@ function tryMatchPattern(pattern: TPattern, term: TTKTerm): TTKTerm[] | null {
       return [term];
 
     case 'PCtor': {
+      // With uniform identifier parsing, we need to distinguish variable patterns
+      // from constructor patterns using naming conventions:
+      // - Lowercase first letter: variable pattern (matches anything, binds the term)
+      // - Single uppercase letter: type variable pattern (matches anything, binds the term)
+      // - Multi-character starting with uppercase: constructor pattern (must match)
+      if (pattern.args.length === 0) {
+        const name = pattern.name;
+        const firstChar = name[0];
+        const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
+        const isSingleUppercase = name.length === 1 && firstChar === firstChar.toUpperCase();
+        if (isLowercase || isSingleUppercase) {
+          // Variable pattern - matches anything, binds the term
+          return [term];
+        }
+      }
+
       // Constructor pattern - term must be a matching constructor application
       const { head, args } = collectAppArgs(term);
       if (head.tag !== 'Const' || head.name !== pattern.name) {

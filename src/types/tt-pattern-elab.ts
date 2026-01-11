@@ -26,6 +26,7 @@ import {
   mkApp,
   mkConst,
   mkType,
+  mkPi,
   subst,
   shiftTerm,
   prettyPrint,
@@ -85,6 +86,23 @@ export interface ClauseCheckResult {
   returnType: TTKTerm;
   solvedBindings: Array<{ name: string; type: TTKTerm }>;
   substitution: Substitution;
+}
+
+/**
+ * Complete pattern elaboration data for stepper visualization.
+ * Contains all pre-computed information needed for the stepper.
+ */
+export interface PatternElabData {
+  /** Per-clause elaboration results (solved bindings, return types) */
+  clauseResults: ClauseCheckResult[];
+  /** Totality checking split tree (for pattern match visualization) */
+  splitTree: import('./ttk-totality-check').SplitTree;
+  /** Missing pattern cases (non-exhaustive patterns) */
+  missingCases: import('./ttk-totality-check').MissingPattern[][];
+  /** Indices of inaccessible clauses (unreachable patterns) */
+  inaccessibleClauses: number[];
+  /** Constructor environment for stepper (eagerly computed) */
+  stepperEnv: Map<string, import('./pattern-elab-stepper').ConstructorInfo>;
 }
 
 /** Error from checking a single clause */
@@ -351,12 +369,14 @@ export function elaboratePattern(
       // Both wildcards and named variables create a binding
       // For wildcards, the pattern term is a fresh meta
       // For named variables, the pattern term is a Var (index will be assigned by caller)
-      if (pattern.name === '_') {
+      // Wildcards can be '_' or unique names like '_w0', '_w1' (from uniform parsing)
+      if (pattern.name === '_' || pattern.name.startsWith('_w')) {
         // Wildcard: the binding exists for de Bruijn indexing,
         // but its value is unconstrained (may be solved by unification)
+        // Normalize the display name to '_' for user readability
         const meta = mctx.fresh(normType, ctx);
         return {
-          bindings: [{ name: pattern.name, type: normType }],
+          bindings: [{ name: '_', type: normType }],
           refinedType: normType,
           patternTerm: meta,
           indexRefinements: new Map()
@@ -469,7 +489,7 @@ function elaborateCtorPattern(
       console.log(`[DEBUG] Substitution:`, Array.from(unifyResult.substitution.entries()).map(([k, v]) => `${k} -> ${prettyPrint(v)}`));
     }
   }
-  if (unifyResult.tag === 'failure') {
+  if (unifyResult.tag === 'failure' || unifyResult.tag === 'stuck') {
     throw new TypeCheckError(
       `Constructor '${pattern.name}' cannot match expected type '${prettyPrint(expectedType)}': ${unifyResult.reason}`,
       undefined, ctx, path
@@ -538,7 +558,10 @@ function elaborateCtorPattern(
 
     // For simple variable patterns (not wildcards), track the argMeta so it can be
     // solved with the correct global index later by elaborateClause
-    if (pattern.args[i].tag === 'PVar' && pattern.args[i].name !== '_' &&
+    // Wildcards can be '_' or unique names like '_w0', '_w1' (from uniform parsing)
+    const isWildcard = pattern.args[i].tag === 'PVar' &&
+      (pattern.args[i].name === '_' || pattern.args[i].name.startsWith('_w'));
+    if (pattern.args[i].tag === 'PVar' && !isWildcard &&
         argResult.bindings.length === 1) {
       const meta = argMetas[i];
       if (meta.tag === 'Hole' && meta.id) {
@@ -620,9 +643,9 @@ function checkTypeWithUnification(
     // If the lambda has an annotated domain (not a hole), unify with Pi's domain
     if (term.domain.tag !== 'Hole') {
       const unifyDomainResult = unifyTerms(term.domain, varType, mkType(0), ctx, { definitions: defs });
-      if (unifyDomainResult.tag === 'failure') {
+      if (unifyDomainResult.tag === 'failure' || unifyDomainResult.tag === 'stuck') {
         throw new TypeCheckError(
-          `Lambda domain mismatch.\n  Expected: ${prettyPrint(varType)}\n  Got: ${prettyPrint(term.domain)}`,
+          `Lambda domain mismatch.\n  Expected: ${prettyPrint(varType)}\n  Got: ${prettyPrint(term.domain)}${unifyDomainResult.reason ? `: ${unifyDomainResult.reason}` : ''}`,
           term, ctx, appendPath(path, fieldSeg('domain'))
         );
       }
@@ -652,9 +675,9 @@ function checkTypeWithUnification(
 
   // Unify inferred type with expected type (pass definitions for WHNF reduction)
   const unifyResult = unifyTerms(inferredType, expectedType, mkType(0), ctx, { definitions: defs });
-  if (unifyResult.tag === 'failure') {
+  if (unifyResult.tag === 'failure' || unifyResult.tag === 'stuck') {
     throw new TypeCheckError(
-      `Type mismatch.\n  Expected: ${prettyPrint(expectedType)}\n  Inferred: ${prettyPrint(inferredType)}`,
+      `Type mismatch.\n  Expected: ${prettyPrint(expectedType)}\n  Inferred: ${prettyPrint(inferredType)}${unifyResult.reason ? `: ${unifyResult.reason}` : ''}`,
       term, ctx, path
     );
   }
@@ -1201,50 +1224,21 @@ export function checkFunctionClauses(
   fnType: TTKTerm,
   clauses: TTKClause[],
   ctx: TTKContext,
-  defs?: DefinitionsMap,
+  _defs?: DefinitionsMap,  // Not used by stepper-based implementation
   path: IndexPath = []
 ): void {
-  // Determine arity from the first clause
-  const arity = clauses.length > 0 ? clauses[0].patterns.length : unwrapPi(fnType).args.length;
+  // Delegate to the result-returning version which now uses the stepper
+  const result = checkFunctionClausesWithResult(fnType, clauses, ctx, path);
 
-  // Extract only `arity` argument types and keep the rest in returnType
-  const { args, returnType } = unwrapPiN(fnType, arity);
-  const argTypes = args.map(a => a.type);
-
-  if (DEBUG_PATTERN_ELAB) {
-    console.log('[DEBUG checkFunctionClauses] fnType:', prettyPrint(fnType));
-    console.log('[DEBUG checkFunctionClauses] arity:', arity);
-    console.log('[DEBUG checkFunctionClauses] argTypes:', argTypes.map(t => prettyPrint(t)));
-    console.log('[DEBUG checkFunctionClauses] returnType:', prettyPrint(returnType));
-    console.log('[DEBUG checkFunctionClauses] ctx:', ctx.map(e => `${e.name}: ${prettyPrint(e.type)}`));
-  }
-
-  for (let i = 0; i < clauses.length; i++) {
-    const clause = clauses[i];
-    if (clause.patterns.length !== arity) {
-      throw new TypeCheckError(
-        `Clause ${i + 1} has ${clause.patterns.length} patterns but expected ${arity}`,
-        undefined, ctx, appendPath(path, fieldSeg('clauses'), arraySeg(i))
-      );
-    }
-
-    // Create a fresh MetaContext for each clause
-    const mctx = new MetaContext();
-
-    const cPath = appendPath(path, fieldSeg('clauses'), arraySeg(i));
-    try {
-      elaborateClause(clause, argTypes, returnType, ctx, mctx, defs, cPath);
-    } catch (e) {
-      if (e instanceof TypeCheckError) {
-        throw new TypeCheckError(
-          `In clause ${i + 1}: ${e.message}`,
-          e.term,
-          e.context || ctx,
-          e.termPath || cPath
-        );
-      }
-      throw e;
-    }
+  // If there are any errors, throw the first one
+  if (result.errors.length > 0) {
+    const firstError = result.errors[0];
+    throw new TypeCheckError(
+      firstError.message,
+      firstError.term,
+      firstError.context,
+      firstError.path
+    );
   }
 }
 
@@ -1256,7 +1250,7 @@ export function inferMatchType(
   clauses: TTKClause[],
   ctx: TTKContext,
   expected?: TTKTerm,
-  defs?: DefinitionsMap,
+  _defs?: DefinitionsMap,  // Not used by stepper-based implementation
   path: IndexPath = []
 ): TTKTerm {
   if (clauses.length === 0) {
@@ -1266,45 +1260,67 @@ export function inferMatchType(
   // Infer the type of the scrutinee
   const scrutineeType = inferType(scrutinee, ctx, appendPath(path, fieldSeg('scrutinee')));
 
-  // For each clause, elaborate and get the return type
-  // All clauses must have the same return type
-  let returnType: TTKTerm | undefined = expected;
-
+  // Validate all clauses have exactly 1 pattern (for single scrutinee)
   for (let i = 0; i < clauses.length; i++) {
-    const clause = clauses[i];
-    if (clause.patterns.length !== 1) {
+    if (clauses[i].patterns.length !== 1) {
       throw new TypeCheckError(
         `Match clause ${i + 1} must have exactly 1 pattern for single scrutinee`,
         undefined, ctx, appendPath(path, fieldSeg('clauses'), arraySeg(i))
       );
     }
+  }
 
-    const mctx = new MetaContext();
+  // Build a function type for the match: scrutineeType -> returnType
+  // We'll infer returnType from the first clause if not provided
+  const mctx = new MetaContext();
+  const returnTypeMeta = expected || mctx.fresh(mkType(0), ctx);
+  const fnType = mkPi(scrutineeType, returnTypeMeta, '_scrutinee');
+
+  // Build constructor environment and typing context for stepper
+  const { buildStepperEnvironment } = require('./stepper-utils');
+  const stepperEnv = buildStepperEnvironment(ctx);
+  const typingContext = ctx.map(binding => ({
+    name: binding.name,
+    type: binding.type
+  }));
+
+  // Import stepper on-demand
+  const { PatternElabStepper } = require('./pattern-elab-stepper');
+
+  // Use the stepper to check each clause and infer return type
+  let returnType: TTKTerm | undefined = expected;
+
+  for (let i = 0; i < clauses.length; i++) {
+    const clause = clauses[i];
     const cPath = appendPath(path, fieldSeg('clauses'), arraySeg(i));
 
-    try {
-      const result = elaborateClause(
-        clause,
-        [scrutineeType],
-        returnType || mctx.fresh(mkType(0), ctx),
-        ctx,
-        mctx,
-        defs,
-        cPath
-      );
+    const stepper = new PatternElabStepper(clause, fnType, stepperEnv, typingContext);
+
+    // Run stepper to completion
+    while (!stepper.isDone()) {
+      stepper.step();
+    }
+
+    const finalState = stepper.getState();
+
+    if (finalState.phase.tag === 'Error') {
+      const patternIndex = finalState.phase.patternIndex;
+      const errorMsg = patternIndex !== undefined
+        ? `In match clause ${i + 1}, pattern ${patternIndex + 1}: ${finalState.phase.message}`
+        : `In match clause ${i + 1}: ${finalState.phase.message}`;
+
+      throw new TypeCheckError(errorMsg, clause.rhs, ctx, cPath);
+    } else if (finalState.phase.tag === 'Done') {
+      if (!finalState.returnType) {
+        throw new Error(`Internal error: stepper finished but returnType is null for match clause ${i + 1}`);
+      }
+
       if (!returnType) {
-        returnType = result.returnType;
+        returnType = finalState.returnType;
       }
-    } catch (e) {
-      if (e instanceof TypeCheckError) {
-        throw new TypeCheckError(
-          `In match clause ${i + 1}: ${e.message}`,
-          e.term,
-          e.context || ctx,
-          e.termPath || cPath
-        );
-      }
-      throw e;
+      // TODO: Check that all clauses have compatible return types
+    } else {
+      throw new Error(`Internal error: stepper finished but phase is ${finalState.phase.tag}`);
     }
   }
 
@@ -1320,20 +1336,14 @@ export function checkFunctionClausesWithResult(
   clauses: TTKClause[],
   ctx: TTKContext,
   path: IndexPath = [],
-  defs?: DefinitionsMap
+  _defs?: DefinitionsMap  // Not used by stepper-based implementation
 ): FunctionClausesResult {
   if (clauses.length === 0) {
     throw new TypeCheckError('Function must have at least one clause', undefined, ctx, path);
   }
 
-  // Determine arity from the first clause
+  // Validate all clauses have the same arity
   const arity = clauses[0].patterns.length;
-
-  // Extract only `arity` argument types and keep the rest in returnType
-  // This handles curried definitions where the clause has fewer patterns than the full function type
-  const { args, returnType } = unwrapPiN(fnType, arity);
-  const argTypes = args.map(a => a.type);
-
   for (let i = 1; i < clauses.length; i++) {
     if (clauses[i].patterns.length !== arity) {
       throw new TypeCheckError(
@@ -1346,41 +1356,67 @@ export function checkFunctionClausesWithResult(
   if (DEBUG_PATTERN_ELAB) {
     console.log('[DEBUG checkFunctionClausesWithResult] fnType:', prettyPrint(fnType));
     console.log('[DEBUG checkFunctionClausesWithResult] arity:', arity);
-    console.log('[DEBUG checkFunctionClausesWithResult] argTypes:', argTypes.map(t => prettyPrint(t)));
-    console.log('[DEBUG checkFunctionClausesWithResult] returnType:', prettyPrint(returnType));
     console.log('[DEBUG checkFunctionClausesWithResult] ctx:', ctx.map(e => `${e.name}: ${prettyPrint(e.type)}`));
   }
+
+  // Build constructor environment for pattern elaboration (EAGERLY)
+  // This is the same environment the stepper modal uses
+  const { buildStepperEnvironment } = require('./stepper-utils');
+  const stepperEnv = buildStepperEnvironment(ctx);
+
+  // Build typing context for the stepper (for looking up function/constant types during RHS checking)
+  const typingContext = ctx.map(binding => ({
+    name: binding.name,
+    type: binding.type
+  }));
 
   const results: ClauseCheckResult[] = [];
   const errors: ClauseCheckError[] = [];
   const combined: Substitution = new Map();
 
+  // Use the stepper (CANONICAL implementation) to check each clause
   for (let i = 0; i < clauses.length; i++) {
     const clause = clauses[i];
-    const mctx = new MetaContext();
     const cPath = appendPath(path, fieldSeg('clauses'), arraySeg(i));
 
-    try {
-      const result = elaborateClause(clause, argTypes, returnType, ctx, mctx, defs, cPath);
-      results.push({
-        returnType: result.returnType,
-        solvedBindings: result.bindings,
-        substitution: new Map()  // TODO: collect substitutions from mctx if needed
+    // Import stepper on-demand
+    const { PatternElabStepper } = require('./pattern-elab-stepper');
+    const stepper = new PatternElabStepper(clause, fnType, stepperEnv, typingContext);
+
+    // Run stepper to completion
+    while (!stepper.isDone()) {
+      stepper.step();
+    }
+
+    const finalState = stepper.getState();
+
+    if (finalState.phase.tag === 'Error') {
+      // Stepper found an error - accumulate it
+      const patternIndex = finalState.phase.patternIndex;
+      const errorMsg = patternIndex !== undefined
+        ? `In clause ${i + 1}, pattern ${patternIndex + 1}: ${finalState.phase.message}`
+        : `In clause ${i + 1}: ${finalState.phase.message}`;
+
+      errors.push({
+        clauseIndex: i,
+        message: errorMsg,
+        path: cPath,
+        term: clause.rhs,
+        context: ctx
       });
-    } catch (e) {
-      if (e instanceof TypeCheckError) {
-        // Accumulate error instead of throwing - continue checking other clauses
-        errors.push({
-          clauseIndex: i,
-          message: `In clause ${i + 1}: ${e.message}`,
-          path: e.termPath || cPath,
-          term: e.term,
-          context: e.context || ctx
-        });
-      } else {
-        // For non-TypeCheckError, still throw (unexpected error)
-        throw e;
+    } else if (finalState.phase.tag === 'Done') {
+      // Stepper succeeded - extract results
+      if (!finalState.returnType) {
+        throw new Error(`Internal error: stepper finished but returnType is null for clause ${i + 1}`);
       }
+
+      results.push({
+        returnType: finalState.returnType,
+        solvedBindings: finalState.bindings.map((b: { name: string; type: TTKTerm }) => ({ name: b.name, type: b.type })),
+        substitution: new Map()  // TODO: collect substitutions if needed
+      });
+    } else {
+      throw new Error(`Internal error: stepper finished but phase is ${finalState.phase.tag}`);
     }
   }
 

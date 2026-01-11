@@ -16,7 +16,7 @@
 import { groupByIndentation, SourceBlock } from './indentation-grouper';
 import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } from './tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { checkTermDeclaration, checkInductiveDeclaration, CheckError, DefinitionsMap } from '../types/tt-typecheck-decl';
+import { elaborateTT, checkInductiveDeclaration, CheckError, DefinitionsMap } from '../types/tt-typecheck-decl';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
 import { TTKTerm, TTKContext } from '../types/tt-kernel';
@@ -24,7 +24,7 @@ import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolCo
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { prettyPrint, TTerm } from '../types/tt-core';
 import { SplitTree } from '../types/ttk-totality-check';
-import { ClauseCheckResult } from '../types/tt-pattern-elab';
+import { ClauseCheckResult, PatternElabData } from '../types/tt-pattern-elab';
 
 /**
  * Result of checking a single source block.
@@ -87,6 +87,9 @@ export interface BlockTypeQueryData {
   // Per-clause elaboration results (for solved type display)
   // These contain the substitutions applied to pattern bindings
   clauseResults?: ClauseCheckResult[];
+
+  // Complete pattern elaboration data (for stepper, eagerly computed)
+  patternData?: PatternElabData;
 }
 
 /**
@@ -113,20 +116,173 @@ interface ElaboratedDeclaration {
 }
 
 /**
- * Check all source blocks in a file.
+ * Internal type for check results with block metadata.
+ */
+interface CheckResultWithBlock {
+  blockIndex: number;
+  declIndex: number;
+  sourceMap: SourceMap;
+  elabMap: ElabMap;
+  checkSuccess: boolean;
+  checkErrors: CheckError[];
+  kernelType?: TTKTerm;
+  kernelValue?: TTKTerm;
+  contextAtCheck: TTKContext;
+  splitTree?: SplitTree;
+  clauseResults?: ClauseCheckResult[];
+  patternData?: PatternElabData;
+}
+
+/**
+ * Elaborate multiple declarations (CONVENIENCE function - batch processing).
+ * Threads context through declarations so later ones can reference earlier ones.
+ *
+ * This is Layer 2 of the three-layer API (AST-centric design):
+ * - Layer 1: elaborateTT - operates on single terms
+ * - Layer 2: elaborateTTBlocks - operates on multiple terms (THIS FUNCTION)
+ * - Layer 3: processTTSourceCode - parses source then calls this
+ *
+ * @param elaboratedDecls - Already-elaborated declarations (TT → TTK done)
+ * @param initialContext - Starting type checking context
+ * @returns Array of check results with threaded context
+ */
+export function elaborateTTBlocks(
+  elaboratedDecls: ElaboratedDeclaration[],
+  initialContext: TTKContext = []
+): CheckResultWithBlock[] {
+  // Global context accumulates bindings from successfully checked declarations
+  let globalContext: TTKContext = initialContext;
+  // Definitions map accumulates function bodies for WHNF reduction
+  const definitions: DefinitionsMap = new Map();
+  // Constructor names set tracks which names are constructors (vs functions)
+  const constructorNames: Set<string> = new Set();
+  const checkResults: CheckResultWithBlock[] = [];
+
+  for (const elab of elaboratedDecls) {
+    const { blockIndex, declIndex, decl, sourceMap, elabMap, kernelType, kernelValue, kernelConstructors } = elab;
+
+    // Check based on declaration kind
+    if (decl.kind === 'inductive' && kernelType && kernelConstructors) {
+      // Inductive type checking
+      // Infer which positions are parameters vs indices
+      // Parameters can quantify over the same universe, indices must be smaller
+      let indexPositions: number[] | undefined;
+      if (decl.name && decl.type && decl.constructors) {
+        try {
+          indexPositions = inferParameterIndices({
+            name: decl.name,
+            type: decl.type,
+            constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
+          });
+        } catch {
+          // If inference fails, treat all positions as indices (conservative)
+        }
+      }
+
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      const ctorPaths: IndexPath[] = kernelConstructors.map((_, i) => [
+        { kind: 'field', name: 'constructors' },
+        { kind: 'array', index: i },
+        { kind: 'field', name: 'type' }
+      ]);
+
+      const result = checkInductiveDeclaration(
+        decl.name || 'anonymous',
+        kernelType,
+        kernelConstructors,
+        globalContext,
+        indexPositions,  // Now properly inferred!
+        typePath,
+        ctorPaths
+      );
+
+      checkResults.push({
+        blockIndex,
+        declIndex,
+        sourceMap,
+        elabMap,
+        checkSuccess: result.success,
+        checkErrors: result.success ? [] : result.errors,
+        kernelType,
+        kernelValue: undefined,
+        contextAtCheck: globalContext
+      });
+
+      // If successful, add the inductive type and its constructors to the global context
+      if (result.success && decl.name) {
+        globalContext = [{ name: decl.name, type: kernelType }, ...globalContext];
+        for (const ctor of kernelConstructors) {
+          globalContext = [{ name: ctor.name, type: ctor.type }, ...globalContext];
+          constructorNames.add(ctor.name);
+        }
+      }
+    } else {
+      // Term declaration
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      const valuePathForCheck: IndexPath = [{ kind: 'field', name: 'value' }];
+      const result = elaborateTT(
+        decl.name || 'anonymous',
+        kernelType,
+        kernelValue,
+        globalContext,
+        typePath,
+        valuePathForCheck,
+        definitions,
+        constructorNames
+      );
+
+      checkResults.push({
+        blockIndex,
+        declIndex,
+        sourceMap,
+        elabMap,
+        checkSuccess: result.success,
+        checkErrors: result.success ? [] : result.errors,
+        kernelType,
+        kernelValue,
+        contextAtCheck: globalContext,
+        splitTree: result.splitTree,
+        clauseResults: result.clauseResults,
+        patternData: result.patternData
+      });
+
+      // Add to global context if we have a valid type
+      const finalType = result.success ? result.value : result.validType;
+      if (finalType && decl.name) {
+        globalContext = [{ name: decl.name, type: finalType }, ...globalContext];
+
+        // Store function body in definitions map for WHNF reduction
+        if (kernelValue) {
+          definitions.set(decl.name, kernelValue);
+        }
+      }
+    }
+  }
+
+  return checkResults;
+}
+
+/**
+ * Process TT source code (SOURCE FRONTEND - optional parsing layer).
+ * Parses source text → AST, then calls elaborateTTBlocks.
+ *
+ * This is Layer 3 of the three-layer API (AST-centric design):
+ * - Layer 1: elaborateTT - operates on single terms
+ * - Layer 2: elaborateTTBlocks - operates on multiple terms
+ * - Layer 3: processTTSourceCode - parses source then calls Layer 2 (THIS FUNCTION)
  *
  * Pipeline:
  * 1. Group source into blocks by indentation
  * 2. Parse each block (collect parse errors)
  * 3. Name resolution across all blocks (validate symbols)
- * 4. Elaborate all successfully parsed declarations together
- * 5. Type check all elaborated declarations together (parallel error collection)
+ * 4. Elaborate all successfully parsed declarations (TT → TTK)
+ * 5. Type check via elaborateTTBlocks (parallel error collection)
  * 6. Map check results back to blocks via declaration indices
  *
  * @param source - The full source code
  * @returns Array of check results, one per block
  */
-export function checkSourceBlocks(source: string): BlockCheckResult[] {
+export function processTTSourceCode(source: string): BlockCheckResult[] {
   // Phase 1: Group source into blocks
   const blocks = groupByIndentation(source);
 
@@ -352,140 +508,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
   }
 
   // Phase 4: Type check all elaborated declarations together
-  // Build a global context as we go, so later declarations can reference earlier ones
-  interface CheckResultWithBlock {
-    blockIndex: number;
-    declIndex: number;
-    sourceMap: SourceMap;
-    elabMap: ElabMap;
-    checkSuccess: boolean;
-    checkErrors: CheckError[];
-    // Store kernel terms and context for type queries
-    kernelType?: TTKTerm;
-    kernelValue?: TTKTerm;
-    contextAtCheck: TTKContext;
-    // Split tree from totality checking (for pattern match visualization)
-    splitTree?: SplitTree;
-    // Per-clause elaboration results (for solved type display)
-    clauseResults?: ClauseCheckResult[];
-  }
-
-  // Global context accumulates bindings from successfully checked declarations
-  let globalContext: TTKContext = [];
-  // Definitions map accumulates function bodies for WHNF reduction
-  const definitions: DefinitionsMap = new Map();
-  // Constructor names set tracks which names are constructors (vs functions)
-  // This is used by the totality checker to distinguish constructors from functions
-  const constructorNames: Set<string> = new Set();
-  const checkResults: CheckResultWithBlock[] = [];
-
-  for (const elab of elaboratedDecls) {
-    const { blockIndex, declIndex, decl, sourceMap, elabMap, kernelType, kernelValue, kernelConstructors } = elab;
-
-    // Check based on declaration kind
-    if (decl.kind === 'inductive' && kernelType && kernelConstructors) {
-      // Compute index positions for universe constraint checking.
-      // Parameters are exempt from universe constraints.
-      let indexPositions: number[] | undefined;
-      if (decl.name && decl.type && decl.constructors) {
-        try {
-          indexPositions = inferParameterIndices({
-            name: decl.name,
-            type: decl.type,
-            constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
-          });
-        } catch {
-          // If inference fails, treat all positions as indices (conservative)
-        }
-      }
-
-      // Build paths for error location tracking
-      const inductiveTypePath: IndexPath = [{ kind: 'field', name: 'type' }];
-      const ctorPaths: IndexPath[] = kernelConstructors.map((_, i) => [
-        { kind: 'field', name: 'constructors' },
-        { kind: 'array', index: i },
-        { kind: 'field', name: 'type' }
-      ]);
-      const result = checkInductiveDeclaration(
-        decl.name || 'anonymous',
-        kernelType,
-        kernelConstructors,
-        globalContext,
-        indexPositions,
-        inductiveTypePath,
-        ctorPaths
-      );
-
-      checkResults.push({
-        blockIndex,
-        declIndex,
-        sourceMap,
-        elabMap,
-        checkSuccess: result.success,
-        checkErrors: result.success ? [] : result.errors,
-        kernelType,
-        kernelValue: undefined,
-        contextAtCheck: globalContext
-      });
-
-      // If successful, add the inductive type and its constructors to the global context
-      if (result.success && decl.name) {
-        // Add the inductive type itself
-        globalContext = [{ name: decl.name, type: kernelType }, ...globalContext];
-
-        // Add all constructors and track their names
-        for (const ctor of kernelConstructors) {
-          globalContext = [{ name: ctor.name, type: ctor.type }, ...globalContext];
-          constructorNames.add(ctor.name);
-        }
-      }
-    } else {
-      // Term declaration (def, theorem, axiom, expr)
-      // Pass type/value paths so errors can be traced back to source positions
-      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
-      const valuePathForCheck: IndexPath = [{ kind: 'field', name: 'value' }];
-      const result = checkTermDeclaration(
-        decl.name || 'anonymous',
-        kernelType,
-        kernelValue,
-        globalContext,
-        typePath,
-        valuePathForCheck,
-        definitions,
-        constructorNames
-      );
-
-      checkResults.push({
-        blockIndex,
-        declIndex,
-        sourceMap,
-        elabMap,
-        checkSuccess: result.success,
-        checkErrors: result.success ? [] : result.errors,
-        kernelType,
-        kernelValue,
-        contextAtCheck: globalContext,
-        splitTree: result.splitTree,
-        clauseResults: result.clauseResults
-      });
-
-      // Add to global context if we have a valid type.
-      // This includes BOTH successful checks AND cases where the type signature
-      // is valid but the value failed (e.g., pattern matching not implemented).
-      // This allows later declarations to reference the type even if the value
-      // has issues.
-      const typeToAdd = result.success ? result.value : result.validType;
-      if (decl.name && typeToAdd) {
-        globalContext = [{ name: decl.name, type: typeToAdd }, ...globalContext];
-      }
-
-      // Add function body to definitions map for WHNF reduction
-      // Only add if check succeeded and we have a value (function body)
-      if (result.success && decl.name && kernelValue) {
-        definitions.set(decl.name, kernelValue);
-      }
-    }
-  }
+  // Delegate to elaborateTTBlocks (Layer 2 of the three-layer API)
+  const checkResults = elaborateTTBlocks(elaboratedDecls, []);
 
   // Phase 5: Map results back to blocks
   const blockResults: BlockCheckResult[] = blocks.map((block, blockIndex) => {
@@ -595,7 +619,8 @@ export function checkSourceBlocks(source: string): BlockCheckResult[] {
       sourceMap: firstCheckResult.sourceMap,
       elabMap: firstCheckResult.elabMap,
       context: firstCheckResult.contextAtCheck,
-      clauseResults: firstCheckResult.clauseResults
+      clauseResults: firstCheckResult.clauseResults,
+      patternData: firstCheckResult.patternData
     } : undefined;
 
     return {
@@ -687,4 +712,16 @@ function extractInductiveParamInfo(decl: ParsedDeclaration): InductiveParamInfo[
     // If inference fails, return undefined
     return undefined;
   }
+}
+
+/**
+ * Check all source blocks in a file (BACKWARDS COMPATIBILITY ALIAS).
+ *
+ * This is an alias for `processTTSourceCode` kept for backwards compatibility.
+ * New code should use `processTTSourceCode` directly.
+ *
+ * @deprecated Use processTTSourceCode instead
+ */
+export function checkSourceBlocks(source: string): BlockCheckResult[] {
+  return processTTSourceCode(source);
 }

@@ -18,7 +18,8 @@ import { IndexPath } from './source-position';
 import { checkInductiveValidity } from './tt-inductive-check';
 import { analyzeRecursionTTK, termPathToIndexPath } from './ttk-recursion-check';
 import { checkFunctionTotality, formatMissingCase, SplitTree } from './ttk-totality-check';
-import { checkFunctionClausesWithResult, FunctionClausesResult, ClauseCheckResult } from './tt-pattern-elab';
+import { checkFunctionClausesWithResult, FunctionClausesResult, ClauseCheckResult, PatternElabData } from './tt-pattern-elab';
+import { buildStepperEnvironment } from './stepper-utils';
 
 // Re-export DefinitionsMap for use by callers
 export type { DefinitionsMap } from './tt-typecheck';
@@ -52,8 +53,8 @@ export interface CheckError {
  * perfectly valid. Other declarations should be able to reference that type.
  */
 export type CheckResult<T = void> =
-  | { success: true; value: T; splitTree?: SplitTree; clauseResults?: ClauseCheckResult[] }
-  | { success: false; errors: CheckError[]; validType?: T; splitTree?: SplitTree; clauseResults?: ClauseCheckResult[] };
+  | { success: true; value: T; splitTree?: SplitTree; clauseResults?: ClauseCheckResult[]; patternData?: PatternElabData }
+  | { success: false; errors: CheckError[]; validType?: T; splitTree?: SplitTree; clauseResults?: ClauseCheckResult[]; patternData?: PatternElabData };
 
 // ============================================================================
 // Inductive Type Checking
@@ -163,24 +164,34 @@ export function checkInductiveDeclaration(
 // ============================================================================
 
 /**
- * Check a term declaration.
+ * Elaborate and check a single term (CORE function - operates on AST).
+ *
+ * This is the core single-term elaboration function that operates on already-elaborated
+ * kernel terms (TTK). It performs type checking, recursion analysis, totality checking,
+ * and builds complete pattern elaboration data for the stepper.
  *
  * Handles three cases:
  * 1. Type signature only (name : type)
  * 2. Definition only (name = value)
  * 3. Both (name : type; name = value)
  *
- * @param name - Name of the declaration
- * @param declaredType - Declared type (if any)
- * @param value - Definition value (if any)
- * @param ctx - Typing context
- * @param typePath - Base path for the type term (for error location tracking)
- * @param valuePath - Base path for the value term (for error location tracking)
- * @param definitions - Map of function names to their definitions (for WHNF reduction)
- * @param constructorNames - Set of names that are known to be constructors (for totality checking)
- * @returns CheckResult with inferred type or errors
+ * For pattern matching functions, this also:
+ * - Checks all clauses in parallel
+ * - Analyzes structural recursion
+ * - Checks exhaustiveness (totality)
+ * - Builds stepper environment (EAGER - not on-demand)
+ *
+ * @param name - Declaration name (for error messages and recursion analysis)
+ * @param declaredType - Already-elaborated type (TTK)
+ * @param value - Already-elaborated value (TTK)
+ * @param ctx - Type checking context
+ * @param typePath - Index path to type (for error locations)
+ * @param valuePath - Index path to value (for error locations)
+ * @param definitions - Function definitions map (for WHNF reduction)
+ * @param constructorNames - Set of constructor names (for totality checking)
+ * @returns CheckResult with all elaboration data including patternData
  */
-export function checkTermDeclaration(
+export function elaborateTT(
   name: string,
   declaredType: TTKTerm | undefined,
   value: TTKTerm | undefined,
@@ -302,7 +313,7 @@ export function checkTermDeclaration(
 
           // If there were clause errors, return early with the errors
           if (funcResult.errors.length > 0) {
-            return { success: false, errors, validType: declaredType, clauseResults };
+            return { success: false, errors, validType: declaredType, clauseResults, patternData: undefined };
           }
         } else {
           // Regular value - use standard checkType
@@ -330,15 +341,26 @@ export function checkTermDeclaration(
             });
           }
           // Type is valid but recursion is unsafe
-          return { success: false, errors, validType: declaredType, clauseResults };
+          return { success: false, errors, validType: declaredType, clauseResults, patternData: undefined };
         }
 
         // PHASE 4: Check exhaustiveness (totality) for pattern matching
         // Only check if the value is a Match expression with clauses
         let splitTree: SplitTree | undefined;
+        let patternData: PatternElabData | undefined;
         if (value.tag === 'Match' && value.clauses.length > 0) {
           const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf, constructorNames);
           splitTree = totalityAnalysis.splitTree;
+
+          // PHASE 5: Build complete pattern elaboration data for stepper
+          // This is done eagerly so the stepper modal can just read it
+          patternData = {
+            clauseResults: clauseResults || [],
+            splitTree: totalityAnalysis.splitTree,
+            missingCases: totalityAnalysis.missingCases,
+            inaccessibleClauses: totalityAnalysis.inaccessibleClauses,
+            stepperEnv: buildStepperEnvironment(ctxWithSelf)
+          };
 
           // Check for inaccessible clauses (excess patterns that can never match)
           for (const clauseIdx of totalityAnalysis.inaccessibleClauses) {
@@ -370,12 +392,12 @@ export function checkTermDeclaration(
 
           // Return failure if there are inaccessible clauses or missing cases
           if (totalityAnalysis.inaccessibleClauses.length > 0 || !totalityAnalysis.exhaustive) {
-            return { success: false, errors, validType: declaredType, splitTree, clauseResults };
+            return { success: false, errors, validType: declaredType, splitTree, clauseResults, patternData };
           }
         }
 
         // All checks passed!
-        return { success: true, value: declaredType, splitTree, clauseResults };
+        return { success: true, value: declaredType, splitTree, clauseResults, patternData };
       } catch (e) {
         if (e instanceof TypeCheckError) {
           errors.push({
@@ -392,12 +414,12 @@ export function checkTermDeclaration(
           });
         }
         // Type is valid but value failed - return validType so it can be used by later decls
-        return { success: false, errors, validType: declaredType, clauseResults };
+        return { success: false, errors, validType: declaredType, clauseResults, patternData: undefined };
       }
     }
 
     // Type itself failed - no validType to provide
-    return { success: false, errors };
+    return { success: false, errors, patternData: undefined };
   }
 
   // Case 4: Neither (shouldn't happen in well-formed input)
@@ -405,7 +427,28 @@ export function checkTermDeclaration(
     message: `Declaration '${name}' has neither type nor value`,
     path: []
   });
-  return { success: false, errors };
+  return { success: false, errors, patternData: undefined };
+}
+
+/**
+ * Check a term declaration (BACKWARDS COMPATIBILITY ALIAS).
+ *
+ * This is an alias for `elaborateTT` kept for backwards compatibility.
+ * New code should use `elaborateTT` directly.
+ *
+ * @deprecated Use elaborateTT instead
+ */
+export function checkTermDeclaration(
+  name: string,
+  declaredType: TTKTerm | undefined,
+  value: TTKTerm | undefined,
+  ctx: TTKContext,
+  typePath: IndexPath = [],
+  valuePath: IndexPath = [],
+  definitions?: DefinitionsMap,
+  constructorNames?: Set<string>
+): CheckResult<TTKTerm> {
+  return elaborateTT(name, declaredType, value, ctx, typePath, valuePath, definitions, constructorNames);
 }
 
 // ============================================================================

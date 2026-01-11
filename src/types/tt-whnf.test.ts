@@ -41,11 +41,11 @@ import { whnf, DefinitionsMap, convertible } from './tt-typecheck';
 /** Create a Nat constant */
 const NAT: TTKTerm = mkConst('Nat', mkType(0));
 
-/** Create zero constant */
-const ZERO: TTKTerm = mkConst('zero', NAT);
+/** Create Zero constant */
+const ZERO: TTKTerm = mkConst('Zero', NAT);
 
-/** Create succ constant: Nat -> Nat */
-const SUCC: TTKTerm = mkConst('succ', mkPi(NAT, NAT, '_'));
+/** Create Succ constant: Nat -> Nat */
+const SUCC: TTKTerm = mkConst('Succ', mkPi(NAT, NAT, '_'));
 
 /** Create a natural number literal */
 function mkNat(n: number): TTKTerm {
@@ -59,26 +59,26 @@ function mkNat(n: number): TTKTerm {
 /** Create a Bool constant */
 const BOOL: TTKTerm = mkConst('Bool', mkType(0));
 
-/** Create true constant */
-const TRUE: TTKTerm = mkConst('true', BOOL);
+/** Create True constant */
+const TRUE: TTKTerm = mkConst('True', BOOL);
 
-/** Create false constant */
-const FALSE: TTKTerm = mkConst('false', BOOL);
+/** Create False constant */
+const FALSE: TTKTerm = mkConst('False', BOOL);
 
 /** Create List constant: Type -> Type */
 const LIST: TTKTerm = mkConst('List', mkPi(mkType(0), mkType(0), '_'));
 
-/** Create nil constant: (A : Type) -> List A */
-const NIL: TTKTerm = mkConst('nil', mkPi(mkType(0), mkApp(LIST, mkVar(0)), 'A'));
+/** Create Nil constant: (A : Type) -> List A */
+const NIL: TTKTerm = mkConst('Nil', mkPi(mkType(0), mkApp(LIST, mkVar(0)), 'A'));
 
-/** Create cons constant */
+/** Create Cons constant */
 function mkCons(A: TTKTerm, head: TTKTerm, tail: TTKTerm): TTKTerm {
   const consType = mkPi(
     mkType(0),
     mkPi(mkVar(0), mkPi(mkApp(LIST, mkVar(1)), mkApp(LIST, mkVar(2)), '_'), '_'),
     'A'
   );
-  const CONS = mkConst('cons', consType);
+  const CONS = mkConst('Cons', consType);
   return mkApp(mkApp(mkApp(CONS, A), head), tail);
 }
 
@@ -209,7 +209,7 @@ describe('WHNF - Beta Reduction', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -227,7 +227,7 @@ describe('WHNF - Let Expansion', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 
@@ -241,11 +241,11 @@ describe('WHNF - Let Expansion', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
       expect(result.arg.tag).toBe('Const');
       if (result.arg.tag === 'Const') {
-        expect(result.arg.name).toBe('zero');
+        expect(result.arg.name).toBe('Zero');
       }
     }
   });
@@ -262,7 +262,7 @@ describe('WHNF - Let Expansion', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -280,7 +280,7 @@ describe('WHNF - Let Expansion', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -322,7 +322,7 @@ describe('WHNF - Stuck Terms', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 
@@ -385,7 +385,7 @@ describe('WHNF - Stuck Terms', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -415,7 +415,7 @@ describe('WHNF - Delta Reduction', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -439,11 +439,11 @@ describe('WHNF - Delta Reduction', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
       expect(result.arg.tag).toBe('Const');
       if (result.arg.tag === 'Const') {
-        expect(result.arg.name).toBe('zero');
+        expect(result.arg.name).toBe('Zero');
       }
     }
   });
@@ -476,8 +476,8 @@ describe('WHNF - Match Reduction', () => {
   it('should reduce match on zero', () => {
     // match 0 | zero => true | succ n => false
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
-      { patterns: [pctor('succ', [pvar('n')])], rhs: FALSE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
+      { patterns: [pctor('Succ', [pvar('n')])], rhs: FALSE },
     ];
     const term = mkMatch(ZERO, clauses);
 
@@ -485,15 +485,15 @@ describe('WHNF - Match Reduction', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('true');
+      expect(result.name).toBe('True');
     }
   });
 
   it('should reduce match on succ and bind pattern variable', () => {
     // match (succ 0) | zero => 0 | succ n => n
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: ZERO },
-      { patterns: [pctor('succ', [pvar('n')])], rhs: mkVar(0) },  // n bound at 0
+      { patterns: [pctor('Zero', [])], rhs: ZERO },
+      { patterns: [pctor('Succ', [pvar('n')])], rhs: mkVar(0) },  // n bound at 0
     ];
     const term = mkMatch(mkApp(SUCC, ZERO), clauses);
 
@@ -502,7 +502,7 @@ describe('WHNF - Match Reduction', () => {
     // Should reduce to 0 (the bound n)
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 
@@ -517,7 +517,7 @@ describe('WHNF - Match Reduction', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('true');
+      expect(result.name).toBe('True');
     }
   });
 
@@ -535,7 +535,7 @@ describe('WHNF - Match Reduction', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -543,8 +543,8 @@ describe('WHNF - Match Reduction', () => {
   it('should stay stuck when scrutinee is a variable', () => {
     const ctx: TTKContext = [{ name: 'n', type: NAT }];
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
-      { patterns: [pctor('succ', [pvar('m')])], rhs: FALSE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
+      { patterns: [pctor('Succ', [pvar('m')])], rhs: FALSE },
     ];
     const term = mkMatch(mkVar(0), clauses);  // match n
 
@@ -563,7 +563,7 @@ describe('WHNF - Match Reduction', () => {
     const identity = mkLambda(NAT, mkVar(0), 'x');
     const scrutinee = mkApp(identity, ZERO);
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
     ];
     const term = mkMatch(scrutinee, clauses);
 
@@ -571,14 +571,14 @@ describe('WHNF - Match Reduction', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('true');
+      expect(result.name).toBe('True');
     }
   });
 
   it('should match nested constructor patterns', () => {
     // match (succ (succ 0)) | succ (succ n) => n | _ => 0
     const clauses: TTKClause[] = [
-      { patterns: [pctor('succ', [pctor('succ', [pvar('n')])])], rhs: mkVar(0) },
+      { patterns: [pctor('Succ', [pctor('Succ', [pvar('n')])])], rhs: mkVar(0) },
       { patterns: [pwild()], rhs: ZERO },
     ];
     const term = mkMatch(mkNat(2), clauses);
@@ -588,7 +588,7 @@ describe('WHNF - Match Reduction', () => {
     // Should match first pattern and bind n to 0
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 
@@ -597,7 +597,7 @@ describe('WHNF - Match Reduction', () => {
     // First clause (wildcard) should match
     const clauses: TTKClause[] = [
       { patterns: [pwild()], rhs: TRUE },
-      { patterns: [pctor('zero', [])], rhs: FALSE },
+      { patterns: [pctor('Zero', [])], rhs: FALSE },
     ];
     const term = mkMatch(ZERO, clauses);
 
@@ -605,15 +605,15 @@ describe('WHNF - Match Reduction', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('true');
+      expect(result.name).toBe('True');
     }
   });
 
   it('should reduce match in Bool case', () => {
     // match true | true => 0 | false => succ 0
     const clauses: TTKClause[] = [
-      { patterns: [pctor('true', [])], rhs: ZERO },
-      { patterns: [pctor('false', [])], rhs: mkApp(SUCC, ZERO) },
+      { patterns: [pctor('True', [])], rhs: ZERO },
+      { patterns: [pctor('False', [])], rhs: mkApp(SUCC, ZERO) },
     ];
     const term = mkMatch(TRUE, clauses);
 
@@ -621,7 +621,7 @@ describe('WHNF - Match Reduction', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 });
@@ -635,7 +635,7 @@ describe('WHNF - Complex Reductions', () => {
     // match ((λx. x) 0) | zero => true
     const identity = mkLambda(NAT, mkVar(0), 'x');
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
     ];
     const term = mkMatch(mkApp(identity, ZERO), clauses);
 
@@ -643,7 +643,7 @@ describe('WHNF - Complex Reductions', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('true');
+      expect(result.name).toBe('True');
     }
   });
 
@@ -660,7 +660,7 @@ describe('WHNF - Complex Reductions', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -683,7 +683,7 @@ describe('WHNF - Complex Reductions', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -692,8 +692,8 @@ describe('WHNF - Complex Reductions', () => {
     const definitions: DefinitionsMap = new Map();
     // isZero : Nat -> Bool as match expression
     const isZeroMatch = mkMatch(mkVar(0), [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
-      { patterns: [pctor('succ', [pwild()])], rhs: FALSE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
+      { patterns: [pctor('Succ', [pwild()])], rhs: FALSE },
     ]);
     definitions.set('isZero', isZeroMatch);
 
@@ -704,7 +704,7 @@ describe('WHNF - Complex Reductions', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('true');
+      expect(result.name).toBe('True');
     }
   });
 
@@ -713,8 +713,8 @@ describe('WHNF - Complex Reductions', () => {
     // isZero : Nat -> Bool as match
     // The definition body expects one argument at index 0
     const isZeroMatch = mkMatch(mkVar(0), [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
-      { patterns: [pctor('succ', [pwild()])], rhs: FALSE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
+      { patterns: [pctor('Succ', [pwild()])], rhs: FALSE },
     ]);
     definitions.set('isZero', isZeroMatch);
 
@@ -725,7 +725,7 @@ describe('WHNF - Complex Reductions', () => {
     const result1 = whnf(term1, [], definitions);
     expect(result1.tag).toBe('Const');
     if (result1.tag === 'Const') {
-      expect(result1.name).toBe('true');
+      expect(result1.name).toBe('True');
     }
 
     // isZero (succ 0) should return false
@@ -733,7 +733,7 @@ describe('WHNF - Complex Reductions', () => {
     const result2 = whnf(term2, [], definitions);
     expect(result2.tag).toBe('Const');
     if (result2.tag === 'Const') {
-      expect(result2.name).toBe('false');
+      expect(result2.name).toBe('False');
     }
   });
 });
@@ -772,7 +772,7 @@ describe('WHNF - Edge Cases', () => {
   it('should handle match with no matching clauses (stuck)', () => {
     // This shouldn't happen in well-typed terms, but WHNF should handle it
     const clauses: TTKClause[] = [
-      { patterns: [pctor('nonexistent', [])], rhs: TRUE },
+      { patterns: [pctor('Nonexistent', [])], rhs: TRUE },
     ];
     const term = mkMatch(ZERO, clauses);
     const result = whnf(term);
@@ -809,7 +809,7 @@ describe('WHNF - Match with Multiple Pattern Variables', () => {
     const scrutinee = mkNat(2);  // succ (succ zero)
     const clauses: TTKClause[] = [
       {
-        patterns: [pctor('succ', [pctor('succ', [pvar('n')])])],
+        patterns: [pctor('Succ', [pctor('Succ', [pvar('n')])])],
         rhs: mkVar(0)  // n
       },
     ];
@@ -820,7 +820,7 @@ describe('WHNF - Match with Multiple Pattern Variables', () => {
     // n should be bound to zero
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 });
@@ -1009,7 +1009,7 @@ describe('WHNF - De Bruijn Index Handling', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
       expect(result.arg.tag).toBe('Var');
       if (result.arg.tag === 'Var') {
@@ -1046,8 +1046,8 @@ describe('WHNF - De Bruijn Index Handling', () => {
     const identity = mkLambda(NAT, mkVar(0), 'x');
     const scrutinee = mkApp(identity, ZERO);
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: mkVar(0) },  // y (at index 0 in ctx)
-      { patterns: [pctor('succ', [pvar('n')])], rhs: mkVar(0) },
+      { patterns: [pctor('Zero', [])], rhs: mkVar(0) },  // y (at index 0 in ctx)
+      { patterns: [pctor('Succ', [pvar('n')])], rhs: mkVar(0) },
     ];
     const term = mkMatch(scrutinee, clauses);
 
@@ -1118,8 +1118,8 @@ describe('WHNF - Hole Handling', () => {
   it('should get stuck on match with hole scrutinee', () => {
     const hole = mkHole('?n', NAT);
     const clauses: TTKClause[] = [
-      { patterns: [pctor('zero', [])], rhs: TRUE },
-      { patterns: [pctor('succ', [pvar('m')])], rhs: FALSE },
+      { patterns: [pctor('Zero', [])], rhs: TRUE },
+      { patterns: [pctor('Succ', [pvar('m')])], rhs: FALSE },
     ];
     const term = mkMatch(hole, clauses);
 
@@ -1187,11 +1187,11 @@ describe('WHNF - Complex De Bruijn Scenarios', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
       expect(result.arg.tag).toBe('Const');
       if (result.arg.tag === 'Const') {
-        expect(result.arg.name).toBe('zero');
+        expect(result.arg.name).toBe('Zero');
       }
     }
   });
@@ -1201,8 +1201,8 @@ describe('WHNF - Complex De Bruijn Scenarios', () => {
     const fn = mkLambda(
       NAT,
       mkMatch(mkVar(0), [
-        { patterns: [pctor('zero', [])], rhs: ZERO },
-        { patterns: [pctor('succ', [pvar('m')])], rhs: mkVar(0) },  // m
+        { patterns: [pctor('Zero', [])], rhs: ZERO },
+        { patterns: [pctor('Succ', [pvar('m')])], rhs: mkVar(0) },  // m
       ]),
       'n'
     );
@@ -1215,7 +1215,7 @@ describe('WHNF - Complex De Bruijn Scenarios', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });
@@ -1239,7 +1239,7 @@ describe('WHNF - Complex De Bruijn Scenarios', () => {
       }
       expect(result.arg.tag).toBe('Const');
       if (result.arg.tag === 'Const') {
-        expect(result.arg.name).toBe('zero');
+        expect(result.arg.name).toBe('Zero');
       }
     }
   });
@@ -1315,7 +1315,7 @@ describe('WHNF - Pattern Binding Order', () => {
     // n should be bound to zero
     const clauses: TTKClause[] = [
       {
-        patterns: [pctor('succ', [pctor('succ', [pvar('n')])])],
+        patterns: [pctor('Succ', [pctor('Succ', [pvar('n')])])],
         rhs: mkVar(0)  // n
       },
     ];
@@ -1325,7 +1325,7 @@ describe('WHNF - Pattern Binding Order', () => {
 
     expect(result.tag).toBe('Const');
     if (result.tag === 'Const') {
-      expect(result.name).toBe('zero');
+      expect(result.name).toBe('Zero');
     }
   });
 
@@ -1336,7 +1336,7 @@ describe('WHNF - Pattern Binding Order', () => {
     const clauses: TTKClause[] = [
       {
         // Match: succ a where a = succ b
-        patterns: [pctor('succ', [pctor('succ', [pvar('b')])])],
+        patterns: [pctor('Succ', [pctor('Succ', [pvar('b')])])],
         // a would be at index 1 if we bound it, b at index 0
         // but we only have pvar('b'), so just b at 0
         rhs: mkApp(SUCC, mkVar(0))  // succ b
@@ -1351,7 +1351,7 @@ describe('WHNF - Pattern Binding Order', () => {
     if (result.tag === 'App') {
       expect(result.fn.tag).toBe('Const');
       if (result.fn.tag === 'Const') {
-        expect(result.fn.name).toBe('succ');
+        expect(result.fn.name).toBe('Succ');
       }
     }
   });

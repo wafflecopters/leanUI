@@ -420,6 +420,11 @@ function countPatternVarsHelper(pattern: TPattern): number {
     case 'PVar':
       return 1;
     case 'PCtor':
+      // With uniform identifier parsing, a PCtor with no args is treated as a variable
+      if (pattern.args.length === 0) {
+        return 1;
+      }
+      // Otherwise, count variables in arguments
       let count = 0;
       for (const arg of pattern.args) {
         count += countPatternVarsHelper(arg);
@@ -450,6 +455,11 @@ function markPatternVarsAsSmaller(
       return startIndex + 1;
 
     case 'PCtor':
+      // With uniform identifier parsing, a top-level PCtor with no args is a variable pattern.
+      // Like PVar, it does NOT make the variable structurally smaller, but it consumes a slot.
+      if (pattern.args.length === 0) {
+        return startIndex + 1;
+      }
       // Constructor pattern: all nested variables ARE structurally smaller
       let index = startIndex;
       for (const arg of pattern.args) {
@@ -476,6 +486,14 @@ function markCtorPatternVarsAsSmaller(
       return startIndex + 1;
 
     case 'PCtor':
+      // With uniform identifier parsing, a PCtor with no args that's not a known
+      // constructor is treated as a variable binding.
+      if (pattern.args.length === 0) {
+        // Treat as a variable - mark it as structurally smaller
+        smaller.add(startIndex);
+        return startIndex + 1;
+      }
+      // Otherwise, it's a real constructor - process its arguments
       let index = startIndex;
       for (const arg of pattern.args) {
         index = markCtorPatternVarsAsSmaller(arg, index, smaller);

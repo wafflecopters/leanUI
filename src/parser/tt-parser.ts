@@ -1624,15 +1624,9 @@ export class Parser {
         return { tag: 'PCtor', name, args };
       }
 
-      // Check if uppercase (constructor) or lowercase (variable)
-      // Convention: uppercase = constructor, lowercase = variable
-      const isConstructor = name[0] === name[0].toUpperCase();
-
-      if (isConstructor) {
-        return { tag: 'PCtor', name, args: [] };
-      } else {
-        return { tag: 'PVar', name };
-      }
+      // All identifiers are parsed uniformly - elaboration will resolve
+      // whether it's a constructor or variable based on context lookup
+      return { tag: 'PCtor', name, args: [] };
     }
 
     // Parenthesized pattern
@@ -1665,13 +1659,9 @@ export class Parser {
       const name = token.value;
       this.advance();
 
-      // Atomic patterns are either variables or nullary constructors
-      const isConstructor = name[0] === name[0].toUpperCase();
-      if (isConstructor) {
-        return { tag: 'PCtor', name, args: [] };
-      } else {
-        return { tag: 'PVar', name };
-      }
+      // All identifiers are parsed uniformly - elaboration will resolve
+      // whether it's a constructor or variable based on context lookup
+      return { tag: 'PCtor', name, args: [] };
     }
 
     if (token.type === 'LPAREN') {
@@ -1705,14 +1695,10 @@ export class Parser {
       const name = startToken.value;
       this.advance();
 
-      // Atomic patterns are either variables or nullary constructors
-      const isConstructor = name[0] === name[0].toUpperCase();
+      // All identifiers are parsed uniformly - elaboration will resolve
+      // whether it's a constructor or variable based on context lookup
       this.recordRange(path, startToken, startToken);
-      if (isConstructor) {
-        return { tag: 'PCtor', name, args: [] };
-      } else {
-        return { tag: 'PVar', name };
-      }
+      return { tag: 'PCtor', name, args: [] };
     }
 
     if (startToken.type === 'LPAREN') {
@@ -1786,16 +1772,10 @@ export class Parser {
         return { tag: 'PCtor', name, args };
       }
 
-      // Check if uppercase (constructor) or lowercase (variable)
-      // Convention: uppercase = constructor, lowercase = variable
-      const isConstructor = name[0] === name[0].toUpperCase();
-
+      // All identifiers are parsed uniformly - elaboration will resolve
+      // whether it's a constructor or variable based on context lookup
       this.recordRange(path, startToken, startToken);
-      if (isConstructor) {
-        return { tag: 'PCtor', name, args: [] };
-      } else {
-        return { tag: 'PVar', name };
-      }
+      return { tag: 'PCtor', name, args: [] };
     }
 
     // Parenthesized pattern
@@ -1941,20 +1921,22 @@ export class Parser {
       case 'PVar':
         return [pattern.name];
       case 'PCtor':
-        // For no-arg patterns that might be type variables (uppercase single letters
-        // like A, B, T), we need to bind them. But for actual constructors like Zero,
-        // we shouldn't bind them.
+        // With uniform identifier parsing, all identifiers become PCtor nodes.
+        // We need to determine which are variables (should be bound) vs constructors.
         //
-        // Heuristic: single uppercase letters are likely type variables.
-        // Multi-character uppercase names are likely constructors.
-        // This isn't perfect but handles common cases.
+        // Heuristic for no-arg PCtor:
+        // - Lowercase first letter: variable (e.g., 'a', 'b', 'default')
+        // - Single uppercase letter: type variable (e.g., 'A', 'T')
+        // - Multi-character starting with uppercase: constructor (e.g., 'Zero', 'Succ')
         if (pattern.args.length === 0) {
           const name = pattern.name;
-          const isSingleUppercase = name.length === 1 && name === name.toUpperCase();
-          if (isSingleUppercase) {
+          const firstChar = name[0];
+          const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
+          const isSingleUppercase = name.length === 1 && firstChar === firstChar.toUpperCase();
+          if (isLowercase || isSingleUppercase) {
             return [name];
           }
-          // Multi-character or lowercase: don't bind (it's a constructor)
+          // Multi-character uppercase: don't bind (it's a constructor)
           return [];
         }
         // For constructors with arguments, collect from all arguments left to right

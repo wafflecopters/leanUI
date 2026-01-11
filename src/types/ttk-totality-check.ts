@@ -40,9 +40,18 @@ import { unifyTerms } from './tt-unify';
 /**
  * Check if a pattern is a wildcard or variable pattern (matches anything).
  * Wildcards are now represented as PVar with names starting with '_'.
+ *
+ * With uniform identifier parsing, a PCtor with no args that's not a known
+ * constructor is also treated as a variable.
  */
-function isWildcardOrVar(pattern: TPattern | undefined): boolean {
-  return pattern !== undefined && pattern.tag === 'PVar';
+function isWildcardOrVar(pattern: TPattern | undefined, knownConstructors?: Set<string>): boolean {
+  if (!pattern) return false;
+  if (pattern.tag === 'PVar') return true;
+  // PCtor with no args that's not a known constructor is effectively a variable
+  if (pattern.tag === 'PCtor' && pattern.args.length === 0 && knownConstructors && !knownConstructors.has(pattern.name)) {
+    return true;
+  }
+  return false;
 }
 
 /** Counter for generating fresh wildcard names during totality checking */
@@ -782,11 +791,11 @@ function buildSplitTree(
 
   // Check if first row has a wildcard/var at current position - it covers all
   const firstPattern = rows[0].patterns[patternIndex];
-  if (isWildcardOrVar(firstPattern)) {
+  if (isWildcardOrVar(firstPattern, knownConstructors)) {
     // Check if ALL patterns at this position are wildcards/vars
     const allWildcards = rows.every(row => {
       const pat = row.patterns[patternIndex];
-      return isWildcardOrVar(pat);
+      return isWildcardOrVar(pat, knownConstructors);
     });
 
     if (allWildcards) {
@@ -831,14 +840,15 @@ function buildSplitTree(
   // Collect rows that have wildcards/vars at this position (they match all constructors)
   const wildcardRows = rows.filter(row => {
     const pat = row.patterns[patternIndex];
-    return isWildcardOrVar(pat);
+    return isWildcardOrVar(pat, knownConstructors);
   });
 
   // Collect which constructors are explicitly matched by PCtor patterns
+  // Only add names that are actually known constructors (not variables parsed as PCtor)
   const explicitlyMatchedCtors = new Set<string>();
   for (const row of rows) {
     const pat = row.patterns[patternIndex];
-    if (pat && pat.tag === 'PCtor') {
+    if (pat && pat.tag === 'PCtor' && (!knownConstructors || knownConstructors.has(pat.name))) {
       explicitlyMatchedCtors.add(pat.name);
     }
   }
@@ -978,6 +988,7 @@ interface SpecializedPatternRow {
  * - Rows with PCtor matching the constructor: include, decompose ctor args
  * - Rows with PVar (including wildcards): include, expand with fresh wildcards for ctor args
  * - Rows with PCtor for different constructor: exclude
+ * - Rows with PCtor that is NOT a known constructor and has no args: treat as variable (include)
  *
  * Returns intermediate rows without argTypes (those are added by specializeRowsWithTypes).
  */
@@ -985,7 +996,8 @@ function specializeRows(
   rows: ClauseRow[],
   argIndex: number,
   ctorName: string,
-  ctorArity: number
+  ctorArity: number,
+  knownConstructors?: Set<string>
 ): SpecializedPatternRow[] {
   const result: SpecializedPatternRow[] = [];
 
@@ -1009,8 +1021,21 @@ function specializeRows(
           patterns: newPatterns,
           clauseIndex: row.clauseIndex
         });
+      } else if (pattern.args.length === 0 && knownConstructors && !knownConstructors.has(pattern.name)) {
+        // PCtor with no args that's not a known constructor - treat as variable
+        // This handles the case where identifiers are uniformly parsed as PCtor
+        const wildcards: TPattern[] = Array.from({ length: ctorArity }, () => freshWildcardPattern());
+        const newPatterns = [
+          ...row.patterns.slice(0, argIndex),
+          ...wildcards,
+          ...row.patterns.slice(argIndex + 1)
+        ];
+        result.push({
+          patterns: newPatterns,
+          clauseIndex: row.clauseIndex
+        });
       }
-      // Different constructor - row doesn't match, exclude it
+      // Different known constructor - row doesn't match, exclude it
     } else {
       // PVar (including wildcards) - matches any constructor
       // Expand with fresh wildcards for constructor arguments
@@ -1059,7 +1084,7 @@ function specializeRowsWithTypes(
       });
 
   // Use base specializeRows for pattern handling
-  const specializedPatterns = specializeRows(rows, argIndex, ctorName, ctorArity);
+  const specializedPatterns = specializeRows(rows, argIndex, ctorName, ctorArity, knownConstructors);
 
   // Now we need to update argTypes as well
   // For each specialized row, update its argTypes
