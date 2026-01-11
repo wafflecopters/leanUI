@@ -117,8 +117,9 @@ export class MetaContext {
   /**
    * Apply all solutions to a term (zonking).
    * This recursively replaces solved holes with their solutions.
+   * The visiting set tracks which holes we're currently zonking to detect cycles.
    */
-  zonk(term: TTKTerm): TTKTerm {
+  zonk(term: TTKTerm, visiting: Set<string> = new Set()): TTKTerm {
     switch (term.tag) {
       case 'Var':
       case 'Sort':
@@ -128,15 +129,15 @@ export class MetaContext {
         return {
           tag: 'Const',
           name: term.name,
-          type: this.zonk(term.type)
+          type: this.zonk(term.type, visiting)
         };
 
       case 'Binder': {
-        const domain = this.zonk(term.domain);
-        const body = this.zonk(term.body);
+        const domain = this.zonk(term.domain, visiting);
+        const body = this.zonk(term.body, visiting);
         let binderKind = term.binderKind;
         if (binderKind.tag === 'BLet') {
-          binderKind = { tag: 'BLet', defVal: this.zonk(binderKind.defVal) };
+          binderKind = { tag: 'BLet', defVal: this.zonk(binderKind.defVal, visiting) };
         }
         return { tag: 'Binder', name: term.name, binderKind, domain, body };
       }
@@ -144,39 +145,46 @@ export class MetaContext {
       case 'App':
         return {
           tag: 'App',
-          fn: this.zonk(term.fn),
-          arg: this.zonk(term.arg)
+          fn: this.zonk(term.fn, visiting),
+          arg: this.zonk(term.arg, visiting)
         };
 
       case 'Hole': {
+        // Cycle detection: if we're already visiting this hole, return it as-is
+        if (visiting.has(term.id)) {
+          return term;
+        }
         const solution = this.getSolution(term.id);
         if (solution !== undefined) {
+          // Mark this hole as being visited to detect cycles
+          const newVisiting = new Set(visiting);
+          newVisiting.add(term.id);
           // Recursively zonk the solution (it might contain other holes)
-          return this.zonk(solution);
+          return this.zonk(solution, newVisiting);
         }
         // Unsolved hole - zonk its type but keep the hole
         return {
           tag: 'Hole',
           id: term.id,
-          type: this.zonk(term.type),
-          context: term.context.map(b => ({ name: b.name, type: this.zonk(b.type) }))
+          type: this.zonk(term.type, visiting),
+          context: term.context.map(b => ({ name: b.name, type: this.zonk(b.type, visiting) }))
         };
       }
 
       case 'Annot':
         return {
           tag: 'Annot',
-          term: this.zonk(term.term),
-          type: this.zonk(term.type)
+          term: this.zonk(term.term, visiting),
+          type: this.zonk(term.type, visiting)
         };
 
       case 'Match':
         return {
           tag: 'Match',
-          scrutinee: this.zonk(term.scrutinee),
+          scrutinee: this.zonk(term.scrutinee, visiting),
           clauses: term.clauses.map(c => ({
             patterns: c.patterns,  // Patterns don't contain holes
-            rhs: this.zonk(c.rhs)
+            rhs: this.zonk(c.rhs, visiting)
           }))
         };
     }

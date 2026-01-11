@@ -81,36 +81,45 @@ function solveMeta(state: MetaState, id: string, solution: TTKTerm): { state: Me
   return { state: { ...state, metas: newMetas }, success: true };
 }
 
-function zonk(state: MetaState, term: TTKTerm): TTKTerm {
+function zonk(state: MetaState, term: TTKTerm, visiting: Set<string> = new Set()): TTKTerm {
   switch (term.tag) {
     case 'Hole': {
+      // Cycle detection: if we're already visiting this hole, return it as-is
+      if (visiting.has(term.id)) {
+        return term;
+      }
       const meta = state.metas.get(term.id);
-      if (meta?.solution) return zonk(state, meta.solution);
+      if (meta?.solution) {
+        // Mark this hole as being visited to detect cycles
+        const newVisiting = new Set(visiting);
+        newVisiting.add(term.id);
+        return zonk(state, meta.solution, newVisiting);
+      }
       return term;
     }
     case 'Var':
     case 'Sort':
       return term;
     case 'Const':
-      return { ...term, type: zonk(state, term.type) };
+      return { ...term, type: zonk(state, term.type, visiting) };
     case 'App':
-      return { tag: 'App', fn: zonk(state, term.fn), arg: zonk(state, term.arg) };
+      return { tag: 'App', fn: zonk(state, term.fn, visiting), arg: zonk(state, term.arg, visiting) };
     case 'Binder': {
-      const domain = zonk(state, term.domain);
-      const body = zonk(state, term.body);
+      const domain = zonk(state, term.domain, visiting);
+      const body = zonk(state, term.body, visiting);
       let binderKind = term.binderKind;
       if (binderKind.tag === 'BLet') {
-        binderKind = { tag: 'BLet', defVal: zonk(state, binderKind.defVal) };
+        binderKind = { tag: 'BLet', defVal: zonk(state, binderKind.defVal, visiting) };
       }
       return { tag: 'Binder', name: term.name, binderKind, domain, body };
     }
     case 'Annot':
-      return { tag: 'Annot', term: zonk(state, term.term), type: zonk(state, term.type) };
+      return { tag: 'Annot', term: zonk(state, term.term, visiting), type: zonk(state, term.type, visiting) };
     case 'Match':
       return {
         tag: 'Match',
-        scrutinee: zonk(state, term.scrutinee),
-        clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: zonk(state, c.rhs) }))
+        scrutinee: zonk(state, term.scrutinee, visiting),
+        clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: zonk(state, c.rhs, visiting) }))
       };
   }
 }
@@ -757,7 +766,7 @@ export class PatternElabStepper {
     switch (subPhase.step.tag) {
       case 'LookingUpCtor': {
         if (!ctorInfo) {
-          s.phase = { tag: 'Error', message: `Unknown constructor: ${pattern.name}` };
+          s.phase = { tag: 'Error', message: `Constructor ${pattern.name} not found` };
           return this.makeRecord(`Constructor ${pattern.name} not found`, 'Error');
         }
         s.phase = {

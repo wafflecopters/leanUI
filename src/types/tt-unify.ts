@@ -893,7 +893,13 @@ export function unify(
     const remainingEquations: UnifyEquation[] = [];
 
     for (const eq of problem.equations) {
-      const result = tryRulesOnEquation(eq, problem.context, opts);
+      // Apply accumulated substitution to the equation before processing
+      const appliedEq: UnifyEquation = {
+        lhs: applySubstitution(substitution, eq.lhs),
+        rhs: applySubstitution(substitution, eq.rhs),
+        type: applySubstitution(substitution, eq.type),
+      };
+      const result = tryRulesOnEquation(appliedEq, problem.context, opts);
 
       switch (result.tag) {
         case 'solved':

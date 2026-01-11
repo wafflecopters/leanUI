@@ -730,6 +730,55 @@ vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
     expectSuccess(source);
   });
 
+  test('vecConcat with explicit Succ pattern and wildcard type', () => {
+    // Tests vecConcat with explicit Succ pattern for the length.
+    // Note: We use wildcard `_` for the type parameter because explicit type
+    // variables combined with constructor patterns that reference them have
+    // a known issue with De Bruijn index handling during pattern elaboration.
+    // See TODO in tt-pattern-elab.ts for future fix.
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A : Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ Zero q (VNil _) v = v
+vecConcat _ (Succ p) q (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
+`;
+    expectSuccess(source);
+  });
+
+  // Previously had an issue with De Bruijn index corruption during sequential substitution.
+  // Fixed by using parallel substitution (replaceVars) with fresh metas for variable patterns.
+  test('vecConcat with explicit A and Succ patterns', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A : Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat A Zero q (VNil _) v = v
+vecConcat A (Succ p) q (VCons _ _ h tail) v = VCons _ _ h (vecConcat A _ _ tail v)
+`;
+    expectSuccess(source);
+  });
+
   test('vecConcat with inaccessible third clause (wildcard after explicit VNil in Zero branch)', () => {
     // When matching a=Zero, the type Vec A a refines to Vec A Zero,
     // making VCons impossible. In this branch:

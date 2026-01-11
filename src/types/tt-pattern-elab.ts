@@ -64,6 +64,13 @@ export interface PatternElabResult {
    * Maps De Bruijn index (in the expected type at this point) to the refined term.
    */
   indexRefinements: Map<number, TTKTerm>;
+  /**
+   * Metas that need to be solved to variable bindings.
+   * For constructor patterns like (Succ p), we create a meta for the 'p' position
+   * that needs to be connected to the actual binding. The localBindingIdx is the
+   * index into the bindings array (0 = first binding).
+   */
+  nestedVarMetas?: Array<{ meta: TTKTerm; localBindingIdx: number }>;
 }
 
 export interface ClauseElabResult {
@@ -106,10 +113,16 @@ export interface FunctionClausesResult {
  */
 export function lookupConstructor(name: string, ctx: TTKContext): ConstructorInfo | null {
   const type = lookupConstByName(ctx, name);
+  if (DEBUG_PATTERN_ELAB) {
+    console.log(`[DEBUG] lookupConstructor(${name}): type=${type ? prettyPrint(type) : 'null'}`);
+  }
   if (!type) return null;
 
   const { returnType } = unwrapPi(type);
   const headName = getHeadName(returnType);
+  if (DEBUG_PATTERN_ELAB) {
+    console.log(`[DEBUG] lookupConstructor(${name}): returnType=${prettyPrint(returnType)}, headName=${headName}`);
+  }
   if (!headName) return null;
 
   return {
@@ -510,6 +523,7 @@ function elaborateCtorPattern(
 
   // 6. Recursively elaborate each pattern argument
   const allBindings: Array<{ name: string; type: TTKTerm }> = [];
+  const nestedVarMetas: Array<{ meta: TTKTerm; localBindingIdx: number }> = [];
   let currentCtx = ctx;
   for (let i = 0; i < pattern.args.length; i++) {
     const argPath = appendPath(path, fieldSeg('args'), arraySeg(i));
@@ -521,19 +535,42 @@ function elaborateCtorPattern(
       argPath,
       defs
     );
+
+    // For simple variable patterns (not wildcards), track the argMeta so it can be
+    // solved with the correct global index later by elaborateClause
+    if (pattern.args[i].tag === 'PVar' && pattern.args[i].name !== '_' &&
+        argResult.bindings.length === 1) {
+      const meta = argMetas[i];
+      if (meta.tag === 'Hole' && meta.id) {
+        nestedVarMetas.push({ meta, localBindingIdx: allBindings.length });
+      }
+    }
+
     for (const b of argResult.bindings) {
       allBindings.push(b);
       currentCtx = extendContext(currentCtx, b.name, b.type);
     }
+
     // Merge index refinements from nested patterns
     // Note: indices from nested patterns are in a different context, so we may need to shift
     // For now, just merge them directly (this may need adjustment for deeply nested patterns)
     argResult.indexRefinements.forEach((value, key) => {
       indexRefinements.set(key, value);
     });
+
+    // Collect nested var metas from recursive patterns (with adjusted indices)
+    if (argResult.nestedVarMetas) {
+      for (const nvm of argResult.nestedVarMetas) {
+        // Adjust the local binding index to account for bindings added before this arg
+        const adjustedIdx = allBindings.length - argResult.bindings.length + nvm.localBindingIdx;
+        nestedVarMetas.push({ meta: nvm.meta, localBindingIdx: adjustedIdx });
+      }
+    }
   }
 
   // 7. Build the constructor term: Ctor applied to zonked metas
+  // Keep metas in the pattern term - they will be solved with correct global indices
+  // by elaborateClause after all patterns are processed
   let ctorTerm: TTKTerm = mkConst(pattern.name, ctor.fullType);
   for (const m of zonkedMetas) {
     ctorTerm = mkApp(ctorTerm, mctx.zonk(m));
@@ -544,7 +581,8 @@ function elaborateCtorPattern(
     bindings: allBindings,
     refinedType: mctx.zonk(expectedType),
     patternTerm: ctorTerm,
-    indexRefinements
+    indexRefinements,
+    nestedVarMetas: nestedVarMetas.length > 0 ? nestedVarMetas : undefined
   };
 }
 
@@ -673,24 +711,82 @@ export function elaborateClause(
   // We'll use these to refine the return type after pattern substitution
   const allIndexRefinements: Array<{ patternIdx: number; refinements: Map<number, TTKTerm> }> = [];
 
+  // Collect nested var metas from constructor patterns (like ??m1 for 'p' in 'Succ p')
+  // These need to be solved with correct global indices after all patterns are elaborated
+  const allNestedVarMetas: Array<{ meta: TTKTerm; patternIdx: number; localBindingIdx: number }> = [];
+
+  // Track metas created for variable patterns during expected type computation
+  // These need to be solved with the actual pattern Vars after index fix-up
+  const varPatternMetas: Array<{ meta: TTKTerm; patternIndex: number }> = [];
+
+  // Track the meta created for each pattern index, so we can reuse/zonk it later
+  // This ensures that references to the same pattern from different later patterns
+  // are properly connected through unification
+  const patternMetaMap = new Map<number, TTKTerm>();
+
   // Elaborate each pattern
   for (let i = 0; i < clause.patterns.length; i++) {
     const patPath = appendPath(path, fieldSeg('patterns'), arraySeg(i));
 
     // The expected type may reference earlier patterns via De Bruijn indices
     // De Bruijn index 0 in argTypes[i] refers to pattern i-1, index 1 to i-2, etc.
-    // We substitute patternTerms for these indices using sequential subst.
-    // Note: subst decrements higher indices, which is correct for dependent types
-    // because it accounts for the context changes as we process patterns.
+    //
+    // We use PARALLEL substitution (replaceVars) to avoid index corruption.
+    // Sequential subst would decrement indices after each substitution, breaking
+    // the mapping when multiple patterns are involved.
+    //
+    // For variable patterns, we use metas instead of the placeholder Var indices.
+    // We track and reuse these metas so that references to the same pattern
+    // from multiple later patterns are properly unified.
     let expectedType = argTypes[i];
+    const varMap = new Map<number, TTKTerm>();
     for (let j = 0; j < i; j++) {
       const patternIndex = i - 1 - j;
-      expectedType = subst(j, patternTerms[patternIndex], expectedType);
+      let replacement = patternTerms[patternIndex];
+      // For variable patterns (which have placeholder Var indices), use a meta.
+      // If we've already created a meta for this pattern, zonk and reuse it.
+      // This ensures that constraints from earlier pattern matching propagate.
+      if (replacement.tag === 'Var') {
+        const existingMeta = patternMetaMap.get(patternIndex);
+        if (existingMeta) {
+          // Reuse the existing meta (zonked to get any solutions)
+          replacement = mctx.zonk(existingMeta);
+        } else {
+          // Create a new meta for this pattern
+          // Get the type of this pattern position from argTypes
+          // We need to substitute earlier patterns into this type as well
+          let patternType = argTypes[patternIndex];
+          // Apply earlier substitutions to patternType using metas we've already created
+          const typeVarMap = new Map<number, TTKTerm>();
+          for (let k = 0; k < patternIndex; k++) {
+            const prevPatternIndex = patternIndex - 1 - k;
+            if (patternTerms[prevPatternIndex].tag === 'Var') {
+              const prevMeta = patternMetaMap.get(prevPatternIndex);
+              typeVarMap.set(k, prevMeta ? mctx.zonk(prevMeta) : mctx.fresh(mkType(0), ctx));
+            } else {
+              typeVarMap.set(k, patternTerms[prevPatternIndex]);
+            }
+          }
+          if (typeVarMap.size > 0) {
+            patternType = replaceVars(typeVarMap, patternType);
+          }
+          replacement = mctx.fresh(patternType, ctx);
+          // Store this meta for reuse by later patterns
+          patternMetaMap.set(patternIndex, replacement);
+          // Track this meta so we can solve it later with the correct Var
+          varPatternMetas.push({ meta: replacement, patternIndex });
+        }
+      }
+      varMap.set(j, replacement);
+    }
+    if (varMap.size > 0) {
+      expectedType = replaceVars(varMap, expectedType);
     }
     expectedType = mctx.zonk(expectedType);
 
     if (DEBUG_PATTERN_ELAB) {
       console.log(`[DEBUG] Pattern ${i}: expected type (after subst): ${prettyPrint(expectedType)}`);
+      console.log(`[DEBUG] Pattern ${i}: structure = ${JSON.stringify(clause.patterns[i])}`);
     }
 
     const result = elaboratePattern(
@@ -718,6 +814,20 @@ export function elaborateClause(
       allIndexRefinements.push({ patternIdx: i, refinements: result.indexRefinements });
     }
 
+    // Collect nested var metas from constructor patterns
+    // These need to be solved with correct global indices after fix-up
+    if (result.nestedVarMetas) {
+      for (const nvm of result.nestedVarMetas) {
+        // localBindingIdx is relative to this pattern's bindings
+        // cumulativeIdx is the global position of the first binding in this pattern
+        allNestedVarMetas.push({
+          meta: nvm.meta,
+          patternIdx: i,
+          localBindingIdx: nvm.localBindingIdx
+        });
+      }
+    }
+
     // Track how many bindings this pattern actually contributed
     bindingCountsPerPattern.push(result.bindings.length);
 
@@ -740,6 +850,42 @@ export function elaborateClause(
   // During elaboration, we used mkVar(bindingCount) where bindingCount was the count at that point.
   // But in the final pattern context, the De Bruijn index should be (totalBindings - 1 - bindingIndex).
   // For pattern i which introduced binding at cumulative index p, the final index is (bindingCount - 1 - p).
+  //
+  // For constructor patterns like (Succ p), the patternTerm contains Vars with LOCAL indices
+  // (relative to that pattern's bindings). We need to adjust these to GLOBAL indices.
+
+  // Helper to adjust local Var indices in a pattern term to global indices
+  // localBindingCount: number of bindings in this pattern
+  // cumulativeStart: index of first binding from this pattern in global context
+  // totalBindings: total number of bindings across all patterns
+  const adjustLocalToGlobal = (term: TTKTerm, localBindingCount: number, cumulativeStart: number): TTKTerm => {
+    switch (term.tag) {
+      case 'Var':
+        // Local index counts from end of local bindings
+        // local index 0 = last binding in this pattern = binding at position (cumulativeStart + localBindingCount - 1)
+        // In global context, this should be index (totalBindings - 1 - (cumulativeStart + localBindingCount - 1 - localIdx))
+        // = totalBindings - 1 - cumulativeStart - localBindingCount + 1 + localIdx
+        // = totalBindings - cumulativeStart - localBindingCount + localIdx
+        const localIdx = term.index;
+        const globalBindingPos = cumulativeStart + (localBindingCount - 1 - localIdx);
+        const globalIdx = bindingCount - 1 - globalBindingPos;
+        return mkVar(globalIdx);
+      case 'App':
+        return mkApp(
+          adjustLocalToGlobal(term.fn, localBindingCount, cumulativeStart),
+          adjustLocalToGlobal(term.arg, localBindingCount, cumulativeStart)
+        );
+      case 'Const':
+        return term;
+      case 'Hole':
+        // Metas should stay as metas (they're not local bindings)
+        return term;
+      default:
+        // Other term types shouldn't appear in pattern terms, but just return them
+        return term;
+    }
+  };
+
   let cumulativeBindingIdx = 0;
   for (let i = 0; i < patternTerms.length; i++) {
     const pt = patternTerms[i];
@@ -751,14 +897,89 @@ export function elaborateClause(
     }
 
     if (pt.tag === 'Var') {
-      // Fix the index: it was set to cumulativeBindingIdx, but should be (bindingCount - 1 - cumulativeBindingIdx)
+      // Simple variable pattern: fix the index
       const correctIndex = bindingCount - 1 - cumulativeBindingIdx;
       if (DEBUG_PATTERN_ELAB) {
         console.log(`[DEBUG]   patternTerms[${i}] is Var, correctIndex = ${bindingCount} - 1 - ${cumulativeBindingIdx} = ${correctIndex}`);
       }
       patternTerms[i] = mkVar(correctIndex);
+    } else if (pt.tag === 'App') {
+      // Constructor pattern: adjust local indices to global
+      patternTerms[i] = adjustLocalToGlobal(pt, bindingsForThisPattern, cumulativeBindingIdx);
+      if (DEBUG_PATTERN_ELAB) {
+        console.log(`[DEBUG]   patternTerms[${i}] adjusted: ${prettyPrint(pt)} -> ${prettyPrint(patternTerms[i])}`);
+      }
     }
     cumulativeBindingIdx += bindingsForThisPattern;
+  }
+
+  // Handle metas created for variable patterns.
+  // During expected type computation, we created metas to stand in for variable patterns.
+  // These metas may have been solved during unification (e.g., VNil tells us a = Zero).
+  //
+  // If a meta was already solved to something concrete, we should update the pattern term
+  // with that value (this propagates index refinements like a = Zero).
+  // If the meta wasn't solved, we solve it to the pattern's Var index.
+  for (const { meta, patternIndex } of varPatternMetas) {
+    if (meta.tag === 'Hole' && meta.id) {
+      // Check if this meta was already solved during unification
+      const zonked = mctx.zonk(meta);
+
+      // If zonked is different from the original meta, it was solved
+      const wasSolved = zonked.tag !== 'Hole' || (zonked.id !== meta.id);
+
+      if (wasSolved) {
+        // The meta was solved to something concrete (e.g., Zero from VNil matching).
+        // Use this to refine the pattern term - this is how index refinements propagate!
+        if (DEBUG_PATTERN_ELAB) {
+          console.log(`[DEBUG] Meta ${meta.id} was solved during unification to ${prettyPrint(zonked)}`);
+          console.log(`[DEBUG]   Updating patternTerms[${patternIndex}] from ${prettyPrint(patternTerms[patternIndex])} to ${prettyPrint(zonked)}`);
+        }
+        patternTerms[patternIndex] = zonked;
+      } else {
+        // Meta wasn't solved - solve it to the pattern's Var index
+        const patternTerm = patternTerms[patternIndex];
+        if (patternTerm.tag === 'Var') {
+          mctx.solve(meta.id, patternTerm);
+          if (DEBUG_PATTERN_ELAB) {
+            console.log(`[DEBUG] Solved variable pattern meta ${meta.id} -> ${prettyPrint(patternTerm)}`);
+          }
+        }
+      }
+    }
+  }
+
+  // Solve nested var metas from constructor patterns with correct global indices
+  // For (Succ p), we tracked that the argMeta for 'p' needs to be solved to the binding
+  // Now that we know the global indices, we can solve them correctly
+  {
+    // First compute cumulative binding starts for each pattern
+    const cumulativeStarts: number[] = [];
+    let cumStart = 0;
+    for (let i = 0; i < bindingCountsPerPattern.length; i++) {
+      cumulativeStarts.push(cumStart);
+      cumStart += bindingCountsPerPattern[i];
+    }
+
+    for (const { meta, patternIdx, localBindingIdx } of allNestedVarMetas) {
+      if (meta.tag === 'Hole' && meta.id) {
+        // Check if already solved during unification
+        const zonked = mctx.zonk(meta);
+        const wasSolved = zonked.tag !== 'Hole' || (zonked.id !== meta.id);
+
+        if (!wasSolved) {
+          // Compute the global index for this binding
+          // localBindingIdx is the index within this pattern's bindings
+          // cumulativeStarts[patternIdx] is where this pattern's bindings start
+          const globalBindingPos = cumulativeStarts[patternIdx] + localBindingIdx;
+          const globalIdx = bindingCount - 1 - globalBindingPos;
+          mctx.solve(meta.id, mkVar(globalIdx));
+          if (DEBUG_PATTERN_ELAB) {
+            console.log(`[DEBUG] Solved nested var meta ${meta.id} from pattern ${patternIdx} -> #${globalIdx}`);
+          }
+        }
+      }
+    }
   }
 
   // Apply index refinements by updating pattern terms
@@ -844,34 +1065,66 @@ export function elaborateClause(
     console.log('[DEBUG] Binding types before translation:', allBindings.map(b => `${b.name}: ${prettyPrint(b.type)}`));
   }
 
-  // Build correct binding types from argTypes
-  // For now, assume simple case where each pattern creates exactly 1 binding
-  // TODO: Handle constructor patterns with multiple bindings
+  // Build correct binding types
+  // For variable patterns (1 binding): use argTypes[patIdx] with index translation
+  // For constructor patterns (multiple bindings): use binding.type from elaboration
+  //   (these types are already zonked and contain the correct values)
   const translatedBindings: Array<{ name: string; type: TTKTerm }> = [];
+
+  // Compute cumulative binding indices for index translation
+  const cumulativeBindings: number[] = [];
+  let cumulative = 0;
+  for (let patIdx = 0; patIdx < n; patIdx++) {
+    cumulativeBindings.push(cumulative);
+    cumulative += bindingCountsPerPattern[patIdx];
+  }
+  const totalBindings = cumulative;
+
   let bindingIdx = 0;
   for (let patIdx = 0; patIdx < n; patIdx++) {
     const bindingsForPattern = bindingCountsPerPattern[patIdx];
+
     for (let k = 0; k < bindingsForPattern; k++) {
       const binding = allBindings[bindingIdx];
 
-      // Build mapping for this pattern position
-      // In argTypes[patIdx], index j refers to pattern (patIdx - 1 - j)
-      // That pattern is at pattern context index (n - 1 - (patIdx - 1 - j)) = (n - patIdx + j)
-      const typeMap = new Map<number, TTKTerm>();
-      for (let j = 0; j < patIdx; j++) {
-        const refPatternIdx = patIdx - 1 - j;
-        const patternCtxIdx = n - 1 - refPatternIdx;
-        typeMap.set(j, mkVar(patternCtxIdx));
+      // For constructor patterns with multiple bindings, use the types from elaboration
+      // These are already in terms of solved metas and need index translation
+      if (bindingsForPattern > 1) {
+        // Binding types from elaboration are in telescope context
+        // We need to translate de Bruijn indices to pattern context indices
+        // Build map: pattern position -> pattern context index
+        const typeMap = new Map<number, TTKTerm>();
+        for (let j = 0; j < patIdx; j++) {
+          // Index j in the type refers to pattern (patIdx - 1 - j)
+          // That pattern's first binding is at cumulative index cumulativeBindings[patIdx - 1 - j]
+          // In the final context, that binding is at index (totalBindings - 1 - cumulativeBindings[patIdx - 1 - j])
+          const refPatternIdx = patIdx - 1 - j;
+          const refBindingCumIdx = cumulativeBindings[refPatternIdx];
+          const patternCtxIdx = totalBindings - 1 - refBindingCumIdx;
+          typeMap.set(j, mkVar(patternCtxIdx));
+        }
+        const translatedType = typeMap.size > 0 ? replaceVars(typeMap, binding.type) : binding.type;
+        translatedBindings.push({
+          name: binding.name,
+          type: translatedType
+        });
+      } else {
+        // Single binding pattern (variable): use argTypes with index translation
+        // Build mapping for this pattern position
+        const typeMap = new Map<number, TTKTerm>();
+        for (let j = 0; j < patIdx; j++) {
+          const refPatternIdx = patIdx - 1 - j;
+          const refBindingCumIdx = cumulativeBindings[refPatternIdx];
+          const patternCtxIdx = totalBindings - 1 - refBindingCumIdx;
+          typeMap.set(j, mkVar(patternCtxIdx));
+        }
+        const originalType = argTypes[patIdx];
+        const translatedType = typeMap.size > 0 ? replaceVars(typeMap, originalType) : originalType;
+        translatedBindings.push({
+          name: binding.name,
+          type: translatedType
+        });
       }
-
-      // Get the original argType for this pattern position
-      const originalType = argTypes[patIdx];
-      const translatedType = replaceVars(typeMap, originalType);
-
-      translatedBindings.push({
-        name: binding.name,
-        type: translatedType
-      });
       bindingIdx++;
     }
   }

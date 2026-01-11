@@ -21,6 +21,8 @@ import { SplitTreeViewer } from './SplitTreeViewer';
 import { PatternElabStepperViewer } from './PatternElabStepperViewer';
 import { ConstructorInfo as StepperConstructorInfo } from '../types/pattern-elab-stepper';
 import { TTKTerm } from '../types/tt-kernel';
+import { IndexPath } from '../types/source-position';
+import { resolveCheckErrorLocation } from '../types/error-resolution';
 
 // ============================================================================
 // Types
@@ -508,9 +510,10 @@ const MONACO_WIDGET_STYLES = `
 interface EnhancedBlockCardProps {
   result: BlockCheckResult;
   index: number;
+  onStepperError?: (error: string, blockIndex: number, clauseIndex: number) => void;
 }
 
-const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
+const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, onStepperError }) => {
   const [showErrors, setShowErrors] = useState(true);
   const [showElimModal, setShowElimModal] = useState(false);
   const [showCompileInfoModal, setShowCompileInfoModal] = useState(false);
@@ -1056,6 +1059,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result }) => {
               env={stepperData.env}
               typingContext={stepperData.typingContext}
               onClose={() => setShowStepperModal(false)}
+              onError={onStepperError ? (error, clauseIndex) => onStepperError(error, index, clauseIndex) : undefined}
             />
           </div>
         </div>
@@ -1129,6 +1133,25 @@ export const TextEditorPage: React.FC = () => {
 
   // Track whether editor has been mounted
   const [editorMounted, setEditorMounted] = useState(false);
+
+  // Track stepper errors for bubbling to markers
+  // Key: "blockIndex-clauseIndex", Value: error message and indices
+  const [stepperErrors, setStepperErrors] = useState<Map<string, { error: string; blockIndex: number; clauseIndex: number }>>(new Map());
+
+  // Clear stepper errors when code changes (so stale errors don't persist)
+  useEffect(() => {
+    setStepperErrors(new Map());
+  }, [code]);
+
+  // Handler for stepper errors - adds them to the marker system
+  const handleStepperError = useCallback((error: string, blockIndex: number, clauseIndex: number) => {
+    const key = `${blockIndex}-${clauseIndex}`;
+    setStepperErrors(prev => {
+      const next = new Map(prev);
+      next.set(key, { error, blockIndex, clauseIndex });
+      return next;
+    });
+  }, []);
 
   // Type information for the current cursor position/selection
   const selectionTypeInfo = useSelectionTypeInfo(editorRef.current, blockCheckResults, code);
@@ -1207,8 +1230,53 @@ export const TextEditorPage: React.FC = () => {
       }
     }
 
+    // Add stepper errors (bubbled from pattern elaboration stepper)
+    for (const [, { error, blockIndex, clauseIndex }] of stepperErrors) {
+      const blockResult = blockCheckResults[blockIndex];
+      if (blockResult && blockResult.typeQueryData) {
+        // Construct path to the specific clause: value.clauses[clauseIndex]
+        const clausePath: IndexPath = [
+          { kind: 'field', name: 'value' },
+          { kind: 'field', name: 'clauses' },
+          { kind: 'array', index: clauseIndex }
+        ];
+
+        // Try to resolve the clause location using the source maps
+        const location = resolveCheckErrorLocation(
+          { message: error, path: clausePath },
+          blockResult.typeQueryData.elabMap,
+          blockResult.typeQueryData.sourceMap
+        );
+
+        if (location) {
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: `Pattern elaboration: ${error}`,
+            startLineNumber: location.start.line,
+            startColumn: location.start.col,
+            endLineNumber: location.end.line,
+            endColumn: location.end.col,
+            source: 'TT Pattern Stepper',
+          });
+        } else {
+          // Fallback to first line of block if location can't be resolved
+          const firstLine = blockResult.block.startLine;
+          const lineContent = model.getLineContent(firstLine);
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: `Pattern elaboration: ${error}`,
+            startLineNumber: firstLine,
+            startColumn: 1,
+            endLineNumber: firstLine,
+            endColumn: lineContent.length + 1,
+            source: 'TT Pattern Stepper',
+          });
+        }
+      }
+    }
+
     monaco.editor.setModelMarkers(model, 'tt-checker', markers);
-  }, [blockCheckResults, editorMounted]);
+  }, [blockCheckResults, editorMounted, stepperErrors]);
 
   // Editor mount handler
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
@@ -1450,7 +1518,7 @@ export const TextEditorPage: React.FC = () => {
               {blockStats.checkErrorBlocks > 0 && ` ✗ ${blockStats.checkErrorBlocks} Type Errors`}
             </h3>
             {blockCheckResults.map((blockResult, index) => (
-              <EnhancedBlockCard key={index} result={blockResult} index={index} />
+              <EnhancedBlockCard key={index} result={blockResult} index={index} onStepperError={handleStepperError} />
             ))}
           </div>
         ) : (

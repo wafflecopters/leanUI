@@ -98,6 +98,19 @@ const styles = {
     color: '#7ee787',
     marginBottom: '4px',
   },
+  phaseNameError: {
+    fontSize: '13px',
+    fontWeight: 600,
+    color: '#f85149',
+    marginBottom: '4px',
+  },
+  phaseBoxError: {
+    backgroundColor: '#2d1b1b',
+    border: '1px solid #f85149',
+    borderRadius: '6px',
+    padding: '12px',
+    marginBottom: '12px',
+  },
   phaseDescription: {
     color: '#c9d1d9',
     fontSize: '12px',
@@ -216,6 +229,10 @@ const styles = {
   historyItemCurrent: {
     backgroundColor: 'rgba(88, 166, 255, 0.1)',
   },
+  historyItemError: {
+    backgroundColor: 'rgba(248, 81, 73, 0.15)',
+    borderLeft: '3px solid #f85149',
+  },
   historyStep: {
     color: '#8b949e',
     marginRight: '8px',
@@ -308,6 +325,8 @@ interface PatternElabStepperViewerProps {
   /** Typing context for looking up constant/function types during RHS inference */
   typingContext?: Array<{ name: string; type: TTKTerm }>;
   onClose?: () => void;
+  /** Callback when the stepper encounters an error - for bubbling errors to the main UI */
+  onError?: (error: string, clauseIndex: number) => void;
 }
 
 // ============================================================================
@@ -586,7 +605,8 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
   fnName = 'f',
   env,
   typingContext = [],
-  onClose
+  onClose,
+  onError
 }) => {
   // Normalize to array of clauses
   const allClauses = useMemo(() => {
@@ -646,6 +666,20 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
       finalState: stepper.getState()
     };
   }, [currentClause, fnType, env, typingContext]);
+
+  // Track which errors we've already reported to avoid infinite loops
+  const reportedErrorRef = React.useRef<string | null>(null);
+
+  // Notify parent of errors for bubbling to main UI
+  React.useEffect(() => {
+    if (finalState && finalState.phase.tag === 'Error' && onError) {
+      const errorKey = `${selectedClauseIndex}-${finalState.phase.message}`;
+      if (reportedErrorRef.current !== errorKey) {
+        reportedErrorRef.current = errorKey;
+        onError(finalState.phase.message, selectedClauseIndex);
+      }
+    }
+  }, [finalState, selectedClauseIndex, onError]);
 
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -763,11 +797,13 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
       </div>
 
       {/* Current phase and action */}
-      <div style={styles.phaseBox}>
-        <div style={styles.phaseName}>{prettyPhase(state.phase)}</div>
+      <div style={state.phase.tag === 'Error' ? styles.phaseBoxError : styles.phaseBox}>
+        <div style={state.phase.tag === 'Error' ? styles.phaseNameError : styles.phaseName}>
+          {state.phase.tag === 'Error' ? '❌ ' : ''}{prettyPhase(state.phase)}
+        </div>
         {record.stepNumber >= 0 && (
           <div style={styles.phaseDescription}>
-            <strong style={{ color: '#58a6ff' }}>{record.action}:</strong> {record.description}
+            <strong style={{ color: state.phase.tag === 'Error' ? '#f85149' : '#58a6ff' }}>{record.action}:</strong> {record.description}
           </div>
         )}
       </div>
@@ -863,21 +899,29 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
       <div style={styles.historySection}>
         <div style={styles.sectionTitle}>Step History</div>
         <div style={styles.historyContainer}>
-          {snapshots.map((snap, i) => (
-            <div
-              key={i}
-              style={{
-                ...styles.historyItem,
-                ...(i === safeCurrentStep ? styles.historyItemCurrent : {}),
-                cursor: 'pointer',
-              }}
-              onClick={() => setCurrentStep(i)}
-            >
-              <span style={styles.historyStep}>[{i}]</span>
-              <span style={styles.historyAction}>{snap.record.action}</span>
-              <span style={styles.historyDescription}>{snap.record.description}</span>
-            </div>
-          ))}
+          {snapshots.map((snap, i) => {
+            const isError = snap.record.action === 'Error';
+            return (
+              <div
+                key={i}
+                style={{
+                  ...styles.historyItem,
+                  ...(i === safeCurrentStep ? styles.historyItemCurrent : {}),
+                  ...(isError ? styles.historyItemError : {}),
+                  cursor: 'pointer',
+                }}
+                onClick={() => setCurrentStep(i)}
+              >
+                <span style={styles.historyStep}>[{i}]</span>
+                <span style={{ ...styles.historyAction, color: isError ? '#f85149' : '#58a6ff' }}>
+                  {isError ? '❌ ' : ''}{snap.record.action}
+                </span>
+                <span style={{ ...styles.historyDescription, color: isError ? '#f85149' : '#c9d1d9' }}>
+                  {snap.record.description}
+                </span>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
