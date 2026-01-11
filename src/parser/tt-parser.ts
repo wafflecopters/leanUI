@@ -927,6 +927,9 @@ export class Parser {
     const patternVars = patterns.flatMap(p => this.collectPatternVars(p));
     const rhsCtx = [...patternVars].reverse();
 
+    console.log(`[DEBUG parsePatternClauseDefinition] patternVars:`, patternVars);
+    console.log(`[DEBUG parsePatternClauseDefinition] rhsCtx:`, rhsCtx);
+
     // Track source positions with path value.clauses[0].rhs
     // (We use index 0 here, but it will be adjusted during merging if needed)
     const rhsPath: IndexPath = [...clausePath, { kind: 'field', name: 'rhs' }];

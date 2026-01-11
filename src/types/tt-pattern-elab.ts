@@ -37,6 +37,8 @@ import { TypeCheckError, lookupConstByName, extendContext, inferType, Definition
 import { unifyTerms, Substitution, varKey } from './tt-unify';
 import { IndexPath, appendPath, fieldSeg, arraySeg } from './source-position';
 import { TPattern } from './tt-core';
+import { buildStepperEnvironment } from './stepper-utils';
+import { PatternElabStepper } from './pattern-elab-stepper';
 
 // Browser-safe debug flag (set to true to enable debug logging)
 const DEBUG_PATTERN_ELAB = typeof process !== 'undefined' && process.env?.DEBUG_PATTERN_ELAB === '1';
@@ -120,6 +122,8 @@ export interface FunctionClausesResult {
   substitution: Substitution;
   /** Errors from clauses that failed (allows checking all clauses) */
   errors: ClauseCheckError[];
+  /** Constructor environment used by stepper (for building patternData) */
+  stepperEnv?: Map<string, import('./pattern-elab-stepper').ConstructorInfo>;
 }
 
 // ============================================================================
@@ -1277,15 +1281,11 @@ export function inferMatchType(
   const fnType = mkPi(scrutineeType, returnTypeMeta, '_scrutinee');
 
   // Build constructor environment and typing context for stepper
-  const { buildStepperEnvironment } = require('./stepper-utils');
   const stepperEnv = buildStepperEnvironment(ctx);
   const typingContext = ctx.map(binding => ({
     name: binding.name,
     type: binding.type
   }));
-
-  // Import stepper on-demand
-  const { PatternElabStepper } = require('./pattern-elab-stepper');
 
   // Use the stepper to check each clause and infer return type
   let returnType: TTKTerm | undefined = expected;
@@ -1361,7 +1361,6 @@ export function checkFunctionClausesWithResult(
 
   // Build constructor environment for pattern elaboration (EAGERLY)
   // This is the same environment the stepper modal uses
-  const { buildStepperEnvironment } = require('./stepper-utils');
   const stepperEnv = buildStepperEnvironment(ctx);
 
   // Build typing context for the stepper (for looking up function/constant types during RHS checking)
@@ -1379,8 +1378,6 @@ export function checkFunctionClausesWithResult(
     const clause = clauses[i];
     const cPath = appendPath(path, fieldSeg('clauses'), arraySeg(i));
 
-    // Import stepper on-demand
-    const { PatternElabStepper } = require('./pattern-elab-stepper');
     const stepper = new PatternElabStepper(clause, fnType, stepperEnv, typingContext);
 
     // Run stepper to completion
@@ -1420,5 +1417,5 @@ export function checkFunctionClausesWithResult(
     }
   }
 
-  return { clauses: results, substitution: combined, errors };
+  return { clauses: results, substitution: combined, errors, stepperEnv };
 }

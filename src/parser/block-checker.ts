@@ -21,6 +21,7 @@ import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionE
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
 import { TTKTerm, TTKContext } from '../types/tt-kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
+import { resolvePatterns } from './pattern-resolution';
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { prettyPrint, TTerm } from '../types/tt-core';
 import { SplitTree } from '../types/ttk-totality-check';
@@ -440,6 +441,31 @@ export function processTTSourceCode(source: string): BlockCheckResult[] {
         success: false,
         errors: resolvedErrors
       });
+    }
+  }
+
+  // Phase 2.75: Pattern Resolution - resolve PCtor/PVar ambiguity
+  // Convert identifier patterns to PVar if they're not known constructors
+  let patternResolutionContext = emptySymbolContext();
+  for (const parseResult of parseResults) {
+    if (!parseResult.parseSuccess || parseResult.declarations.length === 0) {
+      continue;
+    }
+
+    // Resolve patterns in this block's declarations
+    for (let i = 0; i < parseResult.declarations.length; i++) {
+      parseResult.declarations[i] = resolvePatterns(
+        parseResult.declarations[i],
+        patternResolutionContext
+      );
+
+      // Update context with constructors from this declaration
+      const decl = parseResult.declarations[i];
+      if (decl.constructors) {
+        for (const ctor of decl.constructors) {
+          patternResolutionContext = new Set([...patternResolutionContext, ctor.name]);
+        }
+      }
     }
   }
 

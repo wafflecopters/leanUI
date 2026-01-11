@@ -1110,7 +1110,8 @@ export class PatternElabStepper {
 
     // Use bidirectional type checking: CHECK the RHS against the expected type
     // This is crucial for lambdas with unannotated domains (like \f => ...)
-    const checkResult = this.checkType(s.clause.rhs, expectedType, patternCtx);
+    // Pass patternCtx.length as initialCtxSize so lambda-bound variables get shifted correctly
+    const checkResult = this.checkType(s.clause.rhs, expectedType, patternCtx, patternCtx.length);
 
     if (checkResult) {
       s.phase = { tag: 'Done' };
@@ -1153,8 +1154,10 @@ export class PatternElabStepper {
    * Key insight: when checking a lambda against a Pi type, we use the Pi's
    * domain as the bound variable's type, not the lambda's domain (which may
    * be a hole for unannotated lambdas).
+   *
+   * @param initialCtxSize - Size of the initial context (pattern variables)
    */
-  private checkType(term: TTKTerm, expectedType: TTKTerm, ctx: Array<{ name: string; type: TTKTerm }>): boolean {
+  private checkType(term: TTKTerm, expectedType: TTKTerm, ctx: Array<{ name: string; type: TTKTerm }>, initialCtxSize: number = ctx.length): boolean {
     const zonkedTerm = zonk(this.state.metaState, term);
     const zonkedExpected = zonk(this.state.metaState, expectedType);
 
@@ -1175,13 +1178,13 @@ export class PatternElabStepper {
         this.unify(zonkedTerm.domain, varType);
       }
 
-      // Check body against the Pi's codomain, with the bound variable having the Pi's domain type
+      // Check body against the Pi's codomain, with the bound variable having the Pi's domain type      // The varType is from the Pi, which is already in the right context, so no shift needed
       const extCtx = [...ctx, { name: zonkedTerm.name, type: varType }];
-      return this.checkType(zonkedTerm.body, zonkedExpected.body, extCtx);
+      return this.checkType(zonkedTerm.body, zonkedExpected.body, extCtx, initialCtxSize);
     }
 
     // For other terms: infer type and unify with expected
-    const inferredType = this.inferType(zonkedTerm, ctx);
+    const inferredType = this.inferType(zonkedTerm, ctx, initialCtxSize);
     if (!inferredType) {
       return false;
     }
@@ -1198,7 +1201,7 @@ export class PatternElabStepper {
    * - Applications: infer function type, instantiate, check arg
    * - Holes: return their stored type
    */
-  private inferType(term: TTKTerm, ctx: Array<{ name: string; type: TTKTerm }>): TTKTerm | null {
+  private inferType(term: TTKTerm, ctx: Array<{ name: string; type: TTKTerm }>, initialCtxSize: number = ctx.length): TTKTerm | null {
     const zonked = zonk(this.state.metaState, term);
 
     switch (zonked.tag) {
@@ -1206,7 +1209,19 @@ export class PatternElabStepper {
         // Look up in local context (De Bruijn index)
         if (zonked.index < ctx.length) {
           const idx = ctx.length - 1 - zonked.index;
-          return ctx[idx].type;
+          const resultType = ctx[idx].type;
+
+          // IMPORTANT: Lambda-bound variables (idx >= initialCtxSize) need their types shifted
+          // because the type was added at a shallower binding depth.
+          // Pattern-bound variables (idx < initialCtxSize) don't need shifting.
+          if (idx >= initialCtxSize) {
+            // This is a lambda-bound variable. Shift its type by how many
+            // binders we've gone under since it was added.
+            const bindersSinceAdded = ctx.length - idx;
+            return shiftTerm(resultType, bindersSinceAdded, 0);
+          }
+
+          return resultType;
         }
         return null;
       }
@@ -1228,7 +1243,7 @@ export class PatternElabStepper {
 
       case 'App': {
         // Infer type of function, then apply to argument
-        const fnType = this.inferType(zonked.fn, ctx);
+        const fnType = this.inferType(zonked.fn, ctx, initialCtxSize);
         if (!fnType) return null;
 
         const fnTypeZonked = zonk(this.state.metaState, fnType);
@@ -1236,7 +1251,7 @@ export class PatternElabStepper {
         // Function type should be a Pi
         if (fnTypeZonked.tag === 'Binder' && fnTypeZonked.binderKind.tag === 'BPi') {
           // Check/infer arg type and unify with domain
-          const argType = this.inferType(zonked.arg, ctx);
+          const argType = this.inferType(zonked.arg, ctx, initialCtxSize);
           if (argType) {
             this.unify(argType, fnTypeZonked.domain);
           }
@@ -1256,8 +1271,9 @@ export class PatternElabStepper {
       case 'Binder': {
         if (zonked.binderKind.tag === 'BLam') {
           // Lambda: infer body type in extended context
+          // Use the lambda's domain for the bound variable's type
           const extCtx = [...ctx, { name: zonked.name, type: zonked.domain }];
-          const bodyType = this.inferType(zonked.body, extCtx);
+          const bodyType = this.inferType(zonked.body, extCtx, initialCtxSize);
           if (!bodyType) return null;
 
           // Return Pi type
@@ -1272,7 +1288,7 @@ export class PatternElabStepper {
         if (zonked.binderKind.tag === 'BLet') {
           // Let: infer body type with the let binding in context
           const extCtx = [...ctx, { name: zonked.name, type: zonked.domain }];
-          return this.inferType(zonked.body, extCtx);
+          return this.inferType(zonked.body, extCtx, initialCtxSize);
         }
 
         return null;

@@ -164,6 +164,14 @@ map A B f (Cons _ x xs) = Cons B (f x) (map A B f xs)
 `;
       expectSuccess(source);
     });
+
+    test('swap function - higher-order function with lambdas', () => {
+      const source = `
+swap : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap A = \\f => \\(x: A) (y: A) => f y x
+`;
+      expectSuccess(source);
+    });
   });
 
   // ============================================================================

@@ -202,6 +202,7 @@ export function elaborateTT(
   constructorNames?: Set<string>
 ): CheckResult<TTKTerm> {
   const errors: CheckError[] = [];
+  console.log(`[DEBUG ${name}] checkTermDeclaration called, has type:`, !!declaredType, 'has value:', !!value, 'value tag:', value?.tag);
 
   // Case 1: Type signature only
   if (declaredType && !value) {
@@ -285,14 +286,17 @@ export function elaborateTT(
       // Check if this is a function definition (Match with _scrutinee placeholder)
       // If so, use checkFunctionClausesWithResult to capture elaboration results
       let clauseResults: ClauseCheckResult[] | undefined;
+      let funcResult: FunctionClausesResult | undefined;
 
       try {
+        console.log(`[DEBUG ${name}] About to check if Match, value.tag:`, value.tag, 'scrutinee:', value.tag === 'Match' ? value.scrutinee : 'N/A');
 
         if (value.tag === 'Match' &&
             value.scrutinee.tag === 'Hole' &&
             value.scrutinee.id === '_scrutinee') {
+          console.log(`[DEBUG ${name}] IS a function definition, calling checkFunctionClausesWithResult`);
           // Function definition - use result-returning variant to capture elaboration
-          const funcResult = checkFunctionClausesWithResult(
+          funcResult = checkFunctionClausesWithResult(
             declaredType,
             value.clauses,
             ctxWithSelf,
@@ -310,57 +314,40 @@ export function elaborateTT(
               context: clauseError.context
             });
           }
-
-          // If there were clause errors, return early with the errors
-          if (funcResult.errors.length > 0) {
-            return { success: false, errors, validType: declaredType, clauseResults, patternData: undefined };
-          }
         } else {
           // Regular value - use standard checkType
           // Pass the value path so errors can be traced back to source positions
           checkType(value, declaredType, ctxWithSelf, valuePath);
         }
 
-        // PHASE 3: Check structural recursion
-        // Analyze the value for safe/unsafe recursive calls
-        const recursionAnalysis = analyzeRecursionTTK(name, value);
-        if (recursionAnalysis.unsafeRecursion.length > 0) {
-          // Report all unsafe recursion as errors
-          for (const unsafe of recursionAnalysis.unsafeRecursion) {
-            // Prepend valuePath since the recursion checker paths are
-            // relative to the term, but the elabMap keys start with the valuePath prefix
-            const fullPath: IndexPath = [
-              ...valuePath,
-              ...termPathToIndexPath(unsafe.termPath)
-            ];
-            errors.push({
-              message: `${unsafe.error}`,
-              path: fullPath,
-              term: value,
-              context: ctxWithSelf
-            });
-          }
-          // Type is valid but recursion is unsafe
-          return { success: false, errors, validType: declaredType, clauseResults, patternData: undefined };
-        }
-
-        // PHASE 4: Check exhaustiveness (totality) for pattern matching
-        // Only check if the value is a Match expression with clauses
+        // PHASE 3: Build pattern data and check totality (BEFORE recursion check!)
+        // This ensures patternData is available even if recursion check fails
+        // Build this EVEN when there are clause errors so the stepper can show what it found
         let splitTree: SplitTree | undefined;
         let patternData: PatternElabData | undefined;
         if (value.tag === 'Match' && value.clauses.length > 0) {
+          console.log(`[DEBUG ${name}] Building patternData, funcResult:`, !!funcResult, 'clauseResults:', clauseResults?.length);
           const totalityAnalysis = checkFunctionTotality(name, declaredType, value.clauses, ctxWithSelf, constructorNames);
           splitTree = totalityAnalysis.splitTree;
 
           // PHASE 5: Build complete pattern elaboration data for stepper
           // This is done eagerly so the stepper modal can just read it
+          // Use the stepperEnv from funcResult if available (from stepper run), otherwise build it fresh
+          const stepperEnv = funcResult?.stepperEnv || buildStepperEnvironment(ctxWithSelf);
+          console.log(`[DEBUG ${name}] stepperEnv size:`, stepperEnv?.size);
           patternData = {
             clauseResults: clauseResults || [],
             splitTree: totalityAnalysis.splitTree,
             missingCases: totalityAnalysis.missingCases,
             inaccessibleClauses: totalityAnalysis.inaccessibleClauses,
-            stepperEnv: buildStepperEnvironment(ctxWithSelf)
+            stepperEnv
           };
+          console.log(`[DEBUG ${name}] patternData built:`, !!patternData, 'stepperEnv entries:', patternData.stepperEnv.size);
+
+          // If there were clause errors, return early with the errors BUT include patternData!
+          if (funcResult && funcResult.errors.length > 0) {
+            return { success: false, errors, validType: declaredType, clauseResults, splitTree, patternData };
+          }
 
           // Check for inaccessible clauses (excess patterns that can never match)
           for (const clauseIdx of totalityAnalysis.inaccessibleClauses) {
@@ -394,6 +381,29 @@ export function elaborateTT(
           if (totalityAnalysis.inaccessibleClauses.length > 0 || !totalityAnalysis.exhaustive) {
             return { success: false, errors, validType: declaredType, splitTree, clauseResults, patternData };
           }
+        }
+
+        // PHASE 4: Check structural recursion (AFTER patternData is built!)
+        // We do this last so that patternData is available even if recursion fails
+        const recursionAnalysis = analyzeRecursionTTK(name, value);
+        if (recursionAnalysis.unsafeRecursion.length > 0) {
+          // Report all unsafe recursion as errors
+          for (const unsafe of recursionAnalysis.unsafeRecursion) {
+            // Prepend valuePath since the recursion checker paths are
+            // relative to the term, but the elabMap keys start with the valuePath prefix
+            const fullPath: IndexPath = [
+              ...valuePath,
+              ...termPathToIndexPath(unsafe.termPath)
+            ];
+            errors.push({
+              message: `${unsafe.error}`,
+              path: fullPath,
+              term: value,
+              context: ctxWithSelf
+            });
+          }
+          // Type is valid but recursion is unsafe - return with patternData!
+          return { success: false, errors, validType: declaredType, clauseResults, splitTree, patternData };
         }
 
         // All checks passed!
