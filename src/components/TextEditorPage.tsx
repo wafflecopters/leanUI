@@ -510,7 +510,7 @@ const MONACO_WIDGET_STYLES = `
 interface EnhancedBlockCardProps {
   result: BlockCheckResult;
   index: number;
-  onStepperError?: (error: string, blockIndex: number, clauseIndex: number) => void;
+  onStepperError?: (error: string, blockIndex: number, clauseIndex: number, patternIndex?: number) => void;
 }
 
 const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, onStepperError }) => {
@@ -1059,7 +1059,7 @@ const EnhancedBlockCard: React.FC<EnhancedBlockCardProps> = ({ result, index, on
               env={stepperData.env}
               typingContext={stepperData.typingContext}
               onClose={() => setShowStepperModal(false)}
-              onError={onStepperError ? (error, clauseIndex) => onStepperError(error, index, clauseIndex) : undefined}
+              onError={onStepperError ? (error, clauseIndex, patternIndex) => onStepperError(error, index, clauseIndex, patternIndex) : undefined}
             />
           </div>
         </div>
@@ -1135,8 +1135,8 @@ export const TextEditorPage: React.FC = () => {
   const [editorMounted, setEditorMounted] = useState(false);
 
   // Track stepper errors for bubbling to markers
-  // Key: "blockIndex-clauseIndex", Value: error message and indices
-  const [stepperErrors, setStepperErrors] = useState<Map<string, { error: string; blockIndex: number; clauseIndex: number }>>(new Map());
+  // Key: "blockIndex-clauseIndex-patternIndex", Value: error message and indices
+  const [stepperErrors, setStepperErrors] = useState<Map<string, { error: string; blockIndex: number; clauseIndex: number; patternIndex?: number }>>(new Map());
 
   // Clear stepper errors when code changes (so stale errors don't persist)
   useEffect(() => {
@@ -1144,11 +1144,11 @@ export const TextEditorPage: React.FC = () => {
   }, [code]);
 
   // Handler for stepper errors - adds them to the marker system
-  const handleStepperError = useCallback((error: string, blockIndex: number, clauseIndex: number) => {
-    const key = `${blockIndex}-${clauseIndex}`;
+  const handleStepperError = useCallback((error: string, blockIndex: number, clauseIndex: number, patternIndex?: number) => {
+    const key = `${blockIndex}-${clauseIndex}-${patternIndex ?? 'none'}`;
     setStepperErrors(prev => {
       const next = new Map(prev);
-      next.set(key, { error, blockIndex, clauseIndex });
+      next.set(key, { error, blockIndex, clauseIndex, patternIndex });
       return next;
     });
   }, []);
@@ -1231,19 +1231,27 @@ export const TextEditorPage: React.FC = () => {
     }
 
     // Add stepper errors (bubbled from pattern elaboration stepper)
-    for (const [, { error, blockIndex, clauseIndex }] of stepperErrors) {
+    for (const [, { error, blockIndex, clauseIndex, patternIndex }] of stepperErrors) {
       const blockResult = blockCheckResults[blockIndex];
       if (blockResult && blockResult.typeQueryData) {
-        // Construct path to the specific clause: value.clauses[clauseIndex]
-        const clausePath: IndexPath = [
+        // Construct path to the specific pattern within the clause
+        // Path: value.clauses[clauseIndex].patterns[patternIndex] (if patternIndex available)
+        // Otherwise: value.clauses[clauseIndex]
+        const errorPath: IndexPath = [
           { kind: 'field', name: 'value' },
           { kind: 'field', name: 'clauses' },
           { kind: 'array', index: clauseIndex }
         ];
 
-        // Try to resolve the clause location using the source maps
+        // If we have a pattern index, add it to get more specific location
+        if (patternIndex !== undefined) {
+          errorPath.push({ kind: 'field', name: 'patterns' });
+          errorPath.push({ kind: 'array', index: patternIndex });
+        }
+
+        // Try to resolve the location using the source maps
         const location = resolveCheckErrorLocation(
-          { message: error, path: clausePath },
+          { message: error, path: errorPath },
           blockResult.typeQueryData.elabMap,
           blockResult.typeQueryData.sourceMap
         );

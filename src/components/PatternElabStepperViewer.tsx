@@ -326,7 +326,7 @@ interface PatternElabStepperViewerProps {
   typingContext?: Array<{ name: string; type: TTKTerm }>;
   onClose?: () => void;
   /** Callback when the stepper encounters an error - for bubbling errors to the main UI */
-  onError?: (error: string, clauseIndex: number) => void;
+  onError?: (error: string, clauseIndex: number, patternIndex?: number) => void;
 }
 
 // ============================================================================
@@ -673,10 +673,11 @@ export const PatternElabStepperViewer: React.FC<PatternElabStepperViewerProps> =
   // Notify parent of errors for bubbling to main UI
   React.useEffect(() => {
     if (finalState && finalState.phase.tag === 'Error' && onError) {
-      const errorKey = `${selectedClauseIndex}-${finalState.phase.message}`;
+      const patternIndex = finalState.phase.patternIndex;
+      const errorKey = `${selectedClauseIndex}-${patternIndex}-${finalState.phase.message}`;
       if (reportedErrorRef.current !== errorKey) {
         reportedErrorRef.current = errorKey;
-        onError(finalState.phase.message, selectedClauseIndex);
+        onError(finalState.phase.message, selectedClauseIndex, patternIndex);
       }
     }
   }, [finalState, selectedClauseIndex, onError]);

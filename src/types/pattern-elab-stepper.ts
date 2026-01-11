@@ -138,7 +138,7 @@ export type ElabPhase =
   | { tag: 'ComputingReturnType' }
   | { tag: 'CheckingRHS' }
   | { tag: 'Done' }
-  | { tag: 'Error'; message: string };
+  | { tag: 'Error'; message: string; patternIndex?: number };
 
 export type PatternSubPhase =
   | { tag: 'Start' }
@@ -766,7 +766,7 @@ export class PatternElabStepper {
     switch (subPhase.step.tag) {
       case 'LookingUpCtor': {
         if (!ctorInfo) {
-          s.phase = { tag: 'Error', message: `Constructor ${pattern.name} not found` };
+          s.phase = { tag: 'Error', message: `Constructor ${pattern.name} not found`, patternIndex };
           return this.makeRecord(`Constructor ${pattern.name} not found`, 'Error');
         }
         s.phase = {
@@ -878,7 +878,7 @@ export class PatternElabStepper {
         const solved = this.unify(constraint.lhs, constraint.rhs);
 
         if (!solved) {
-          s.phase = { tag: 'Error', message: `Cannot unify ${prettyTerm(constraint.lhs, s.metaState)} with ${prettyTerm(constraint.rhs, s.metaState)}` };
+          s.phase = { tag: 'Error', message: `Cannot unify ${prettyTerm(constraint.lhs, s.metaState)} with ${prettyTerm(constraint.rhs, s.metaState)}`, patternIndex };
           return this.makeRecord('Unification failed', 'Error');
         }
 
