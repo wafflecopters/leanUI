@@ -662,7 +662,10 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
       const scrutinee = prettyPrint(term.scrutinee, context);
       const clauses = term.clauses.map(c => {
         const patternStr = c.patterns.map(p => prettyPrintPatternTTK(p)).join(' ');
-        const rhsStr = prettyPrint(c.rhs, context);
+        // Collect pattern variable names and add to context for RHS
+        const patternVars = collectPatternVarsTTK(c.patterns);
+        const rhsContext = [...patternVars.reverse(), ...context];
+        const rhsStr = prettyPrint(c.rhs, rhsContext);
         return `${patternStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
@@ -680,6 +683,28 @@ function prettyPrintPatternTTK(pattern: TTKPattern): string {
       }
       const args = pattern.args.map(prettyPrintPatternTTK).join(' ');
       return `(${pattern.name} ${args})`;
+  }
+}
+
+/** Collect variable names from patterns in left-to-right order */
+function collectPatternVarsTTK(patterns: TTKPattern[]): string[] {
+  const vars: string[] = [];
+  for (const p of patterns) {
+    collectPatternVarsHelper(p, vars);
+  }
+  return vars;
+}
+
+function collectPatternVarsHelper(pattern: TTKPattern, vars: string[]): void {
+  switch (pattern.tag) {
+    case 'PVar':
+      vars.push(pattern.name);
+      break;
+    case 'PCtor':
+      for (const arg of pattern.args) {
+        collectPatternVarsHelper(arg, vars);
+      }
+      break;
   }
 }
 

@@ -4,6 +4,7 @@ import { EnhancedProofWorkspace } from './components/EnhancedProofWorkspace';
 import { InductiveTypeEditor } from './components/InductiveTypeEditor';
 import { RecordEditor } from './components/RecordEditor';
 import { TextEditorPage } from './components/TextEditorPage';
+import { TmpDebugPage } from './components/TmpDebugPage';
 
 function AppContent() {
   const navigate = useNavigate();
@@ -110,6 +111,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/tmp-debug" element={<TmpDebugPage />} />
         <Route path="*" element={<AppContent />} />
       </Routes>
     </BrowserRouter>
