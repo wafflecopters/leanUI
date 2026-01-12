@@ -566,11 +566,14 @@ function checkUniverseConstraints(
   const numInductivePositions = countInductivePositions(inductiveType);
 
   // Walk through the Pi binders and check each argument type
+  // Track path through the constructor type for precise error locations
   let current = ctorType;
+  let currentPath = ctorPath;
   let argIndex = 0;
 
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     const argType = current.domain;
+    const domainPath = [...currentPath, { kind: 'field' as const, name: 'domain' }];
 
     // Check if this argument corresponds to a parameter position.
     // The first N arguments of a constructor typically correspond to the N
@@ -602,7 +605,7 @@ function checkUniverseConstraints(
         if (argLevel >= inductiveLevel) {
           errors.push({
             message: `Constructor '${ctorName}' argument ${argIndex + 1} quantifies over universe ${formatUniverseLevel(argLevel)}, but '${inductiveName}' is in ${formatUniverseLevel(inductiveLevel)}. Type arguments must be in smaller universes.`,
-            path: ctorPath,
+            path: domainPath,
             term: argType,
             context: ctx
           });
@@ -613,6 +616,8 @@ function checkUniverseConstraints(
     // we're quantifying over values of that type, not over types themselves.
     // This doesn't contribute to universe constraints.
 
+    // Move to the body for the next iteration
+    currentPath = [...currentPath, { kind: 'field' as const, name: 'body' }];
     current = current.body;
     argIndex++;
   }

@@ -11,8 +11,8 @@ import { elabToKernelWithMap } from '../types/tt-elab-source';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { ElabMap, IndexPath } from '../types/source-position';
-import { checkInductiveDeclaration } from '../types/tt-typecheck-decl';
+import { ElabMap, IndexPath, SourceMap, serializeIndexPath } from '../types/source-position';
+import { checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
 import { inferType, TypeCheckError } from '../types/tt-typecheck';
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 
@@ -24,7 +24,7 @@ import { inferParameterIndices } from '../types/tt-inductive-inference';
  * A single parsed block - either declarations, a comment, or an error
  */
 export type ParsedBlock =
-  | { kind: 'declarations'; declarations: ParsedDeclaration[]; sourceLines: string[]; startLine: number }
+  | { kind: 'declarations'; declarations: ParsedDeclaration[]; sourceMaps: SourceMap[]; sourceLines: string[]; startLine: number }
   | { kind: 'comment'; sourceLines: string[]; startLine: number }
   | { kind: 'error'; errors: ParseError[]; sourceLines: string[]; startLine: number };
 
@@ -51,6 +51,10 @@ export interface ElabDeclaration {
   kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
   /** For inductive types: positions that are indices (not parameters) */
   indexPositions?: number[];
+  /** Maps kernel paths to surface paths (for error mapping) */
+  elabMap?: ElabMap;
+  /** Maps surface paths to source ranges (for error mapping) */
+  sourceMap?: SourceMap;
 }
 
 /**
@@ -94,7 +98,11 @@ export interface CompiledDeclaration {
 
   // Type checking results
   checkSuccess: boolean;
-  checkErrors: string[];
+  checkErrors: CheckError[];
+
+  // Source mapping for error locations
+  elabMap?: ElabMap;
+  sourceMap?: SourceMap;
 }
 
 /**
@@ -103,6 +111,7 @@ export interface CompiledDeclaration {
 export interface CompiledBlock {
   blockIndex: number;
   sourceLines: string[];
+  startLine: number;
 
   // Parsing
   parseSuccess: boolean;
@@ -168,10 +177,12 @@ export function parseTTSource(source: string): ParseResult {
 
     // Parse
     let declarations: ParsedDeclaration[] = [];
+    let sourceMaps: SourceMap[] = [];
 
     try {
       const declsWithSource = parser.parseDeclarationsWithSource(blockSource, allPreviousDeclarations);
       declarations = declsWithSource.map(d => d.decl);
+      sourceMaps = declsWithSource.map(d => d.sourceMap);
       allPreviousDeclarations = [...allPreviousDeclarations, ...declarations];
     } catch (e) {
       let parseErrors: ParseError[];
@@ -202,6 +213,7 @@ export function parseTTSource(source: string): ParseResult {
     parsedBlocks.push({
       kind: 'declarations',
       declarations,
+      sourceMaps,
       sourceLines: block.lines,
       startLine: block.startLine
     });
@@ -284,7 +296,9 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
     // Elaborate declaration blocks
     const elabDeclarations: ElabDeclaration[] = [];
 
-    for (const origDecl of block.declarations) {
+    for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
+      const origDecl = block.declarations[declIndex];
+      const sourceMap = block.sourceMaps[declIndex];
       // Use resolved declaration if available, otherwise fall back to original
       const decl = (origDecl.name && resolvedDeclMap.get(origDecl.name)) || origDecl;
       const elabMap: ElabMap = new Map();
@@ -337,7 +351,9 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           kernelType,
           kernelValue,
           kernelConstructors,
-          indexPositions
+          indexPositions,
+          elabMap,
+          sourceMap
         });
       } catch (e) {
         // Elaboration error - skip this declaration
@@ -377,7 +393,7 @@ function checkDeclaration(
   ctx: TTKContext
 ): CheckDeclarationResult {
   let checkSuccess = true;
-  const checkErrors: string[] = [];
+  const checkErrors: CheckError[] = [];
   let newContext = ctx;
   let errorCount = 0;
 
@@ -392,9 +408,7 @@ function checkDeclaration(
     );
     if (!result.success) {
       checkSuccess = false;
-      for (const err of result.errors) {
-        checkErrors.push(err.message);
-      }
+      checkErrors.push(...result.errors);
       errorCount = result.errors.length;
     } else {
       // Add inductive type and constructors to context
@@ -413,11 +427,16 @@ function checkDeclaration(
       }
     } catch (e) {
       checkSuccess = false;
-      if (e instanceof TypeCheckError) {
-        checkErrors.push(e.message);
-      } else {
-        checkErrors.push(e instanceof Error ? e.message : String(e));
-      }
+      const message = e instanceof TypeCheckError ? e.message :
+        (e instanceof Error ? e.message : String(e));
+      const path: IndexPath = e instanceof TypeCheckError && e.termPath ? e.termPath :
+        [{ kind: 'field', name: 'type' }];
+      checkErrors.push({
+        message,
+        path,
+        term: e instanceof TypeCheckError ? e.term : decl.kernelType,
+        context: e instanceof TypeCheckError ? e.context : ctx
+      });
       errorCount = 1;
     }
   }
@@ -437,7 +456,9 @@ function checkDeclaration(
       prettyType: prettyPrintTTK(c.type)
     })),
     checkSuccess,
-    checkErrors
+    checkErrors,
+    elabMap: decl.elabMap,
+    sourceMap: decl.sourceMap
   };
 
   return { compiled, newContext, errorCount };
@@ -466,6 +487,7 @@ function checkBlock(
       compiled: {
         blockIndex,
         sourceLines: block.sourceLines,
+        startLine: block.startLine,
         parseSuccess: true,
         parseErrors: [],
         nameResolutionSuccess: true,
@@ -484,6 +506,7 @@ function checkBlock(
       compiled: {
         blockIndex,
         sourceLines: block.sourceLines,
+        startLine: block.startLine,
         parseSuccess: false,
         parseErrors: block.errors,
         nameResolutionSuccess: true,
@@ -512,6 +535,7 @@ function checkBlock(
     compiled: {
       blockIndex,
       sourceLines: block.sourceLines,
+      startLine: block.startLine,
       parseSuccess: true,
       parseErrors: [],
       nameResolutionSuccess: true,

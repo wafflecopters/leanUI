@@ -1,11 +1,103 @@
 /**
  * TmpDebugPage - A debug page for viewing code and compilation results
  */
-import React, { useRef, useMemo, useState, useCallback } from 'react';
+import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileTTFromText, CompileResult, CompiledBlock } from '../compiler/compile';
+import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
+
+// Color palette for syntax highlighting (matches TextEditorPage)
+const SYNTAX_COLORS = {
+  keyword: '569cd6',        // Blue - for inductive, where, def, etc.
+  keywordOperator: '94d0ff', // Light blue - for ->, =>
+  typeKeyword: 'cf92cd',    // Light purple/pink - for Type, Prop
+  comment: '6a9955',        // Green - for comments (-- and {- -})
+  string: 'ce9178',         // Orange
+  number: 'b5cea8',         // Light green
+  identifier: 'd4d4d4',     // Light gray
+  delimiter: 'e5c995',      // Light tan/gold - for (, ), {, }, etc.
+  hole: '4fc1ff',           // Bright cyan for holes
+};
+
+// Monaco theme matching TextEditorPage
+const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
+  base: 'vs-dark',
+  inherit: true,
+  rules: [
+    { token: 'comment', foreground: SYNTAX_COLORS.comment, fontStyle: 'italic' },
+    { token: 'keyword', foreground: SYNTAX_COLORS.keyword },
+    { token: 'keyword.operator', foreground: SYNTAX_COLORS.keywordOperator },
+    { token: 'type.identifier', foreground: SYNTAX_COLORS.typeKeyword },
+    { token: 'string', foreground: SYNTAX_COLORS.string },
+    { token: 'number', foreground: SYNTAX_COLORS.number },
+    { token: 'identifier', foreground: SYNTAX_COLORS.identifier },
+    { token: 'delimiter', foreground: SYNTAX_COLORS.delimiter },
+    { token: 'delimiter.bracket', foreground: SYNTAX_COLORS.delimiter },
+    { token: 'variable.predefined', foreground: SYNTAX_COLORS.hole },
+  ],
+  colors: {
+    'editor.background': '#161b22',
+    'editor.foreground': '#c9d1d9',
+    'editor.lineHighlightBackground': '#161b22',
+    'editor.selectionBackground': '#264f78',
+    'editorCursor.foreground': '#58a6ff',
+    'editorLineNumber.foreground': '#6e7681',
+    'editorLineNumber.activeForeground': '#c9d1d9',
+    'editorIndentGuide.background': '#21262d',
+    'editorIndentGuide.activeBackground': '#30363d',
+    'editorBracketMatch.background': '#2d333b',
+    'editorBracketMatch.border': '#58a6ff',
+  },
+};
+
+/**
+ * Map an error path to a source range using the elab and source maps.
+ * Returns null if mapping fails.
+ */
+function mapErrorPathToSourceRange(
+  errorPath: IndexPath,
+  elabMap: ElabMap | undefined,
+  sourceMap: SourceMap | undefined,
+  blockStartLine: number
+): SourceRange | null {
+  if (!elabMap || !sourceMap) return null;
+
+  const kernelPathStr = serializeIndexPath(errorPath);
+
+  // Look up the surface path via elabMap
+  const surfacePathStr = elabMap.get(kernelPathStr);
+  if (!surfacePathStr) {
+    // Try progressively shorter paths (walk up the tree)
+    let currentPath = errorPath;
+    while (currentPath.length > 0) {
+      currentPath = currentPath.slice(0, -1);
+      const shorterPathStr = serializeIndexPath(currentPath);
+      const shorterSurfacePath = elabMap.get(shorterPathStr);
+      if (shorterSurfacePath) {
+        const range = sourceMap.get(shorterSurfacePath);
+        if (range) {
+          return {
+            start: { ...range.start, line: range.start.line + blockStartLine - 1 },
+            end: { ...range.end, line: range.end.line + blockStartLine - 1 }
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  // Look up the source range via sourceMap
+  const range = sourceMap.get(surfacePathStr);
+  if (!range) return null;
+
+  // Adjust line numbers to account for block offset
+  return {
+    start: { ...range.start, line: range.start.line + blockStartLine - 1 },
+    end: { ...range.end, line: range.end.line + blockStartLine - 1 }
+  };
+}
 
 /**
  * Extract parameter/index info from an inductive type's kernel type.
@@ -317,7 +409,7 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
             {decl.checkErrors && decl.checkErrors.length > 0 && (
               <div style={{ marginTop: '8px' }}>
                 {decl.checkErrors.map((err, j) => (
-                  <div key={j} style={styles.errorText}>{err}</div>
+                  <div key={j} style={styles.errorText}>{err.message}</div>
                 ))}
               </div>
             )}
@@ -331,6 +423,7 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
 
 export function TmpDebugPage() {
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
+  const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
 
   // Compile and type check the source code
@@ -342,58 +435,143 @@ export function TmpDebugPage() {
     setCode(value || '');
   }, []);
 
+  // Update Monaco markers with compile errors
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    if (!monaco || !editor) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const markers: MonacoEditor.IMarkerData[] = [];
+
+    // Add markers for all block errors
+    for (const block of compileResult.blocks) {
+      // Parse errors
+      for (const error of block.parseErrors) {
+        const lineContent = model.getLineContent(error.line);
+        const endCol = Math.max(error.col + 1, lineContent.length + 1);
+
+        markers.push({
+          severity: monaco.MarkerSeverity.Error,
+          message: (error.message || 'Parse error').replace(/^Parse error at line \d+, col \d+: /, ''),
+          startLineNumber: error.line,
+          startColumn: error.col,
+          endLineNumber: error.line,
+          endColumn: endCol,
+          source: 'TT Parser',
+        });
+      }
+
+      // Type check errors from declarations
+      for (const decl of block.declarations) {
+        if (decl.checkErrors && decl.checkErrors.length > 0) {
+          for (const err of decl.checkErrors) {
+            // Try to map error path to precise source location
+            const sourceRange = mapErrorPathToSourceRange(
+              err.path,
+              decl.elabMap,
+              decl.sourceMap,
+              block.startLine
+            );
+
+            if (sourceRange) {
+              // Use the mapped source range
+              markers.push({
+                severity: monaco.MarkerSeverity.Error,
+                message: err.message,
+                startLineNumber: sourceRange.start.line,
+                startColumn: sourceRange.start.col,
+                endLineNumber: sourceRange.end.line,
+                endColumn: sourceRange.end.col,
+                source: 'TT Type Checker',
+              });
+            } else {
+              // Fallback: mark the first line of the block
+              const firstLine = block.startLine;
+              markers.push({
+                severity: monaco.MarkerSeverity.Error,
+                message: err.message,
+                startLineNumber: firstLine,
+                startColumn: 1,
+                endLineNumber: firstLine,
+                endColumn: model.getLineContent(firstLine).length + 1,
+                source: 'TT Type Checker',
+              });
+            }
+          }
+        }
+      }
+    }
+
+    monaco.editor.setModelMarkers(model, 'tt-compiler', markers);
+  }, [compileResult]);
+
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
 
     // Register TT language
     monaco.languages.register({ id: 'tt' });
+
+    // Define TT language syntax (matches TextEditorPage)
     monaco.languages.setMonarchTokensProvider('tt', {
+      keywords: [
+        'inductive', 'where', 'def', 'theorem', 'axiom', 'let', 'in', 'fun'
+      ],
+      typeKeywords: [
+        'Type', 'Prop'
+      ],
       tokenizer: {
         root: [
-          [/\b(inductive|where|Type)\b/, 'keyword'],
+          // Comments - multiline {- -} must come FIRST
+          [/\{-/, 'comment', '@comment'],
           [/--.*$/, 'comment'],
-          [/"([^"\\]|\\.)*$/, 'string.invalid'],
-          [/"/, 'string', '@string'],
+
+          // Type keywords (Type, Prop)
+          [/\b(Type|Prop)\b/, 'type.identifier'],
+
+          // Regular keywords
+          [/\b(inductive|where|def|theorem|axiom|let|in|fun)\b/, 'keyword'],
+
+          // Holes
+          [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],
+
+          // Identifiers
+          [/[a-zA-Z_][a-zA-Z0-9_']*/, 'identifier'],
+
+          // Numbers
           [/\d+/, 'number'],
-          [/[=><!~?:&|+\-*/^%]+/, 'operator'],
-          [/[;,.]/, 'delimiter'],
-          [/[()[\]{}]/, '@brackets'],
-          [/[A-Z]\w*/, 'type.identifier'],
-          [/[a-z_]\w*/, 'identifier'],
-          [/_/, 'keyword.control'],
+
+          // Operators
+          [/->|=>/, 'keyword.operator'],
+          [/[=:+\-*/\\|<>!]+/, 'delimiter'],
+
+          // Brackets and delimiters
+          [/[()[\]{}]/, 'delimiter.bracket'],
+          [/[,.]/, 'delimiter'],
+
+          // Whitespace
+          [/\s+/, 'white'],
         ],
-        string: [
-          [/[^\\"]+/, 'string'],
-          [/\\./, 'string.escape'],
-          [/"/, 'string', '@pop']
+        comment: [
+          [/[^{-]+/, 'comment'],
+          [/-\}/, 'comment', '@pop'],
+          [/[{-]/, 'comment'],
         ],
       }
     });
 
-    monaco.editor.defineTheme('tt-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [
-        { token: 'keyword', foreground: 'ff79c6', fontStyle: 'bold' },
-        { token: 'keyword.control', foreground: 'ff79c6' },
-        { token: 'type.identifier', foreground: '8be9fd' },
-        { token: 'identifier', foreground: 'f8f8f2' },
-        { token: 'operator', foreground: 'ff79c6' },
-        { token: 'number', foreground: 'bd93f9' },
-        { token: 'string', foreground: 'f1fa8c' },
-        { token: 'comment', foreground: '6272a4', fontStyle: 'italic' },
-      ],
-      colors: {
-        'editor.background': '#0d1117',
-        'editor.foreground': '#c9d1d9',
-        'editor.lineHighlightBackground': '#161b22',
-        'editorCursor.foreground': '#c9d1d9',
-        'editor.selectionBackground': '#264f78',
-        'editorLineNumber.foreground': '#6e7681',
-      }
-    });
-
+    // Define and apply custom theme
+    monaco.editor.defineTheme('tt-dark', MONACO_THEME);
     monaco.editor.setTheme('tt-dark');
+
+    // Set the model language
+    const model = editor.getModel();
+    if (model) {
+      monaco.editor.setModelLanguage(model, 'tt');
+    }
   };
 
   return (
