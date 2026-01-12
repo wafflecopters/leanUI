@@ -153,6 +153,9 @@ inductive Vec : Type -> Nat -> Type where
   VNil : (A: Type) -> Vec A Zero
   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
 
+const : (A : Type) -> (B : Type) -> A -> B -> A
+const _ _ a = \ _ => a
+
 swap : (A : Type) -> (B : Type) -> (C : Type) -> (f : A -> B -> C) -> B -> A -> C
 swap _ _ _ f = \\x y => f y x
 
@@ -162,7 +165,14 @@ vecConcat A (Succ p) _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat A p _ tail 
 
 vecConcat' : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat' _ _ _ (VNil _) v = v
-vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\d x => x) Zero p) _ tail v) h`;
+vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\d x => x) Zero p) _ tail v) h
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  Refl : (A : Type) -> (x : A) -> Equal A x x
+
+sym : (A : Type) -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
+sym A u _ Refl = Refl
+`;
 
 // Styles
 const styles = {
@@ -363,69 +373,69 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
           : [];
 
         return (
-        <div key={i}>
-          <div style={styles.blockHeader}>
-            <span style={{
-              ...styles.blockBadge,
-              ...(decl.kind === 'inductive' ? styles.blockBadgeInductive : styles.blockBadgeTerm)
-            }}>
-              {decl.kind === 'inductive' ? 'Inductive' : 'Term'}
-            </span>
-            {decl.name && <span style={styles.declName}>{decl.name}</span>}
-            {/* Display param/index info for inductive types */}
-            {paramIndexInfo.length > 0 && (
-              <span style={{ marginLeft: '12px', fontSize: '11px', color: '#8b949e' }}>
-                {paramIndexInfo.map((info, j) => (
-                  <span key={j} style={{ marginRight: '8px' }}>
-                    <span style={{ color: info.isIndex ? '#f0883e' : '#7ee787' }}>
-                      [{info.isIndex ? 'index' : 'param'} {info.name} : {info.type}]
+          <div key={i}>
+            <div style={styles.blockHeader}>
+              <span style={{
+                ...styles.blockBadge,
+                ...(decl.kind === 'inductive' ? styles.blockBadgeInductive : styles.blockBadgeTerm)
+              }}>
+                {decl.kind === 'inductive' ? 'Inductive' : 'Term'}
+              </span>
+              {decl.name && <span style={styles.declName}>{decl.name}</span>}
+              {/* Display param/index info for inductive types */}
+              {paramIndexInfo.length > 0 && (
+                <span style={{ marginLeft: '12px', fontSize: '11px', color: '#8b949e' }}>
+                  {paramIndexInfo.map((info, j) => (
+                    <span key={j} style={{ marginRight: '8px' }}>
+                      <span style={{ color: info.isIndex ? '#f0883e' : '#7ee787' }}>
+                        [{info.isIndex ? 'index' : 'param'} {info.name} : {info.type}]
+                      </span>
                     </span>
-                  </span>
-                ))}
-              </span>
-            )}
-            {decl.checkSuccess ? (
-              <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
-            ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
-              <span style={{ marginLeft: 'auto', color: '#f85149', fontSize: '12px' }}>
-                {decl.checkErrors.length} error(s)
-              </span>
-            ) : null}
+                  ))}
+                </span>
+              )}
+              {decl.checkSuccess ? (
+                <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
+              ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
+                <span style={{ marginLeft: 'auto', color: '#f85149', fontSize: '12px' }}>
+                  {decl.checkErrors.length} error(s)
+                </span>
+              ) : null}
+            </div>
+            <div style={styles.blockBody}>
+              {decl.prettyType && (
+                <div style={styles.typeRow}>
+                  <span style={styles.typeLabel}>Type:</span>
+                  <span style={styles.typeValue}>{decl.prettyType}</span>
+                </div>
+              )}
+              {decl.prettyValue && (
+                <div style={styles.typeRow}>
+                  <span style={styles.typeLabel}>Value:</span>
+                  <span style={styles.valueValue}>{decl.prettyValue}</span>
+                </div>
+              )}
+              {decl.prettyConstructors && decl.prettyConstructors.length > 0 && (
+                <div>
+                  <div style={{ ...styles.typeLabel, marginBottom: '4px' }}>Constructors:</div>
+                  {decl.prettyConstructors.map((ctor, j) => (
+                    <div key={j} style={styles.ctorRow}>
+                      <span style={styles.ctorName}>{ctor.name}</span>
+                      <span style={{ color: '#8b949e' }}> : </span>
+                      <span style={styles.typeValue}>{ctor.prettyType}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {decl.checkErrors && decl.checkErrors.length > 0 && (
+                <div style={{ marginTop: '8px' }}>
+                  {decl.checkErrors.map((err, j) => (
+                    <div key={j} style={styles.errorText}>{err.message}</div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          <div style={styles.blockBody}>
-            {decl.prettyType && (
-              <div style={styles.typeRow}>
-                <span style={styles.typeLabel}>Type:</span>
-                <span style={styles.typeValue}>{decl.prettyType}</span>
-              </div>
-            )}
-            {decl.prettyValue && (
-              <div style={styles.typeRow}>
-                <span style={styles.typeLabel}>Value:</span>
-                <span style={styles.valueValue}>{decl.prettyValue}</span>
-              </div>
-            )}
-            {decl.prettyConstructors && decl.prettyConstructors.length > 0 && (
-              <div>
-                <div style={{ ...styles.typeLabel, marginBottom: '4px' }}>Constructors:</div>
-                {decl.prettyConstructors.map((ctor, j) => (
-                  <div key={j} style={styles.ctorRow}>
-                    <span style={styles.ctorName}>{ctor.name}</span>
-                    <span style={{ color: '#8b949e' }}> : </span>
-                    <span style={styles.typeValue}>{ctor.prettyType}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {decl.checkErrors && decl.checkErrors.length > 0 && (
-              <div style={{ marginTop: '8px' }}>
-                {decl.checkErrors.map((err, j) => (
-                  <div key={j} style={styles.errorText}>{err.message}</div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
         );
       })}
     </div>

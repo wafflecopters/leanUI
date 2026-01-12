@@ -397,48 +397,17 @@ function checkDeclaration(
   let newContext = ctx;
   let errorCount = 0;
 
-  if (decl.kind === 'inductive' && decl.kernelType && decl.kernelConstructors) {
-    // Check inductive type definition (pass indexPositions for correct universe checking)
-    const result = checkInductiveDeclaration(
-      decl.name || 'anonymous',
-      decl.kernelType,
-      decl.kernelConstructors,
-      ctx,
-      decl.indexPositions
-    );
-    if (!result.success) {
-      checkSuccess = false;
-      checkErrors.push(...result.errors);
-      errorCount = result.errors.length;
-    } else {
-      // Add inductive type and constructors to context
-      newContext = [{ name: decl.name || 'anonymous', type: decl.kernelType }, ...newContext];
-      for (const ctor of decl.kernelConstructors) {
-        newContext = [{ name: ctor.name, type: ctor.type }, ...newContext];
-      }
-    }
-  } else if (decl.kernelType) {
-    // Check term signature (just verify the type is well-formed)
-    try {
-      inferType(decl.kernelType, ctx);
-      // Add to context for subsequent declarations
-      if (decl.name) {
-        newContext = [{ name: decl.name, type: decl.kernelType }, ...newContext];
-      }
-    } catch (e) {
-      checkSuccess = false;
-      const message = e instanceof TypeCheckError ? e.message :
-        (e instanceof Error ? e.message : String(e));
-      const path: IndexPath = e instanceof TypeCheckError && e.termPath ? e.termPath :
-        [{ kind: 'field', name: 'type' }];
-      checkErrors.push({
-        message,
-        path,
-        term: e instanceof TypeCheckError ? e.term : decl.kernelType,
-        context: e instanceof TypeCheckError ? e.context : ctx
-      });
-      errorCount = 1;
-    }
+  const result = decl.kind === 'inductive' ?
+    checkInductiveTypeDeclaration(decl, ctx) :
+    decl.kind === 'term' ? checkTermDeclaration(decl, ctx) :
+      { success: false as const, errors: [{ message: 'Declaration is not an inductive or term', path: [] }] };
+
+  if (result.success) {
+    newContext = result.context;
+  } else {
+    checkSuccess = false;
+    checkErrors.push(...result.errors);
+    errorCount = result.errors.length;
   }
 
   // Build compiled declaration with pretty-printed versions
@@ -462,6 +431,114 @@ function checkDeclaration(
   };
 
   return { compiled, newContext, errorCount };
+}
+
+function checkInductiveTypeDeclaration(
+  decl: ElabDeclaration,
+  ctx: TTKContext
+): { success: false, errors: CheckError[] } | { success: true, context: TTKContext } {
+  if (decl.kind !== 'inductive') {
+    return {
+      success: false,
+      errors: [{
+        message: 'Declaration is not an inductive type',
+        path: [],
+      }],
+    }
+  }
+
+  if (!decl.kernelType) {
+    return {
+      success: false,
+      errors: [{
+        message: 'Inductive type declaration is ill-formed',
+        path: [],
+      }],
+    }
+  }
+  if (!decl.kernelConstructors) {
+    return {
+      success: false,
+      errors: [{
+        message: 'Inductive type declaration is ill-formed',
+        path: [],
+      }],
+    }
+  }
+
+  const result = checkInductiveDeclaration(
+    decl.name || 'anonymous',
+    decl.kernelType,
+    decl.kernelConstructors,
+    ctx,
+    decl.indexPositions
+  );
+  if (!result.success) {
+    return {
+      success: false,
+      errors: result.errors,
+    }
+  } else {
+    let newContext = [{ name: decl.name || 'anonymous', type: decl.kernelType }, ...ctx];
+    for (const ctor of decl.kernelConstructors) {
+      newContext = [{ name: ctor.name, type: ctor.type }, ...newContext];
+    }
+    return {
+      success: true,
+      context: newContext,
+    }
+  }
+}
+
+function checkTermDeclaration(
+  decl: ElabDeclaration,
+  ctx: TTKContext
+): { success: false, errors: CheckError[] } | { success: true, context: TTKContext } {
+  if (decl.kind !== 'term') {
+    return {
+      success: false,
+      errors: [{
+        message: 'Declaration is not a term',
+        path: [],
+      }],
+    }
+  }
+
+  if (!decl.kernelType) {
+    return {
+      success: false,
+      errors: [{
+        message: 'Term declaration is ill-formed',
+        path: [],
+      }],
+    }
+  }
+  let newContext = ctx
+
+  try {
+    inferType(decl.kernelType, ctx);
+    // Add to context for subsequent declarations
+    if (decl.name) {
+      newContext = [{ name: decl.name, type: decl.kernelType }, ...newContext];
+    }
+
+    return { success: true, context: newContext }
+  } catch (e) {
+    const message = e instanceof TypeCheckError ? e.message :
+      (e instanceof Error ? e.message : String(e));
+    const path: IndexPath = e instanceof TypeCheckError && e.termPath ? e.termPath :
+      [{ kind: 'field', name: 'type' }];
+
+    return {
+      success: false,
+      errors: [{
+        message,
+        path,
+        term: e instanceof TypeCheckError ? e.term : decl.kernelType,
+        context: e instanceof TypeCheckError ? e.context : ctx
+      }],
+    }
+  }
 }
 
 /**
