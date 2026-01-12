@@ -172,6 +172,7 @@ export interface Binding {
   name: string;
   type: TTKTerm;
   introducedBy: string;  // Description of which pattern introduced this
+  patternIndex: number;  // Which pattern (0-indexed) introduced this binding
 }
 
 /**
@@ -748,6 +749,16 @@ export class PatternElabStepper {
     s.metaState = newMetaState;
     s.patternTerms.push(meta);
 
+    // IMPORTANT: Wildcards must create bindings for De Bruijn indexing
+    // This matches the reference implementation (tt-pattern-elab.ts:377-387)
+    // The binding has name '_' and the pattern term is the metavariable
+    s.bindings.push({
+      name: '_',
+      type: expectedType,
+      introducedBy: `wildcard at position ${patternIndex + 1}`,
+      patternIndex
+    });
+
     s.phase = {
       tag: 'ElaboratingPattern',
       patternIndex,
@@ -756,7 +767,7 @@ export class PatternElabStepper {
 
     const metaId = (meta as { tag: 'Hole'; id: string }).id;
     return this.makeRecord(
-      `Created metavariable ${metaId} : ${prettyTerm(expectedType, s.metaState)}`,
+      `Created metavariable ${metaId} : ${prettyTerm(expectedType, s.metaState)} (wildcard creates binding for De Bruijn indexing)`,
       'Meta created',
       [metaId]
     );
@@ -773,7 +784,8 @@ export class PatternElabStepper {
     s.bindings.push({
       name,
       type: expectedType,
-      introducedBy: `pattern ${patternIndex + 1}`
+      introducedBy: `pattern ${patternIndex + 1}`,
+      patternIndex
     });
     s.patternTerms.push(varTerm);
 
@@ -989,6 +1001,15 @@ export class PatternElabStepper {
           // This meta represents the elaborated term for this sub-pattern.
           const ctorMeta = ctorMetas[argIndex];
 
+          // IMPORTANT: Wildcard sub-patterns must create bindings for De Bruijn indexing
+          // This matches the reference implementation (tt-pattern-elab.ts:377-387)
+          s.bindings.push({
+            name: '_',
+            type: argType,
+            introducedBy: `${pattern.name} arg ${argIndex + 1} (wildcard)`,
+            patternIndex
+          });
+
           // Store the sub-pattern term in the map for UI access
           const subPatternPath = `${patternIndex}.${argIndex}`;
           s.subPatternTerms.set(subPatternPath, ctorMeta);
@@ -1004,7 +1025,7 @@ export class PatternElabStepper {
           };
 
           return this.makeRecord(
-            `Sub-pattern ${argIndex + 1} is wildcard, elaborates to ${prettyTerm(ctorMeta, s.metaState)} : ${prettyTerm(argType, s.metaState)}`,
+            `Sub-pattern ${argIndex + 1} is wildcard, elaborates to ${prettyTerm(ctorMeta, s.metaState)} : ${prettyTerm(argType, s.metaState)} (creates binding for De Bruijn indexing)`,
             'Process sub-pattern'
           );
         } else if (subPattern.tag === 'PVar') {
@@ -1015,7 +1036,8 @@ export class PatternElabStepper {
           s.bindings.push({
             name: subPattern.name,
             type: argType,
-            introducedBy: `${pattern.name} arg ${argIndex + 1}`
+            introducedBy: `${pattern.name} arg ${argIndex + 1}`,
+            patternIndex
           });
 
           // Store the sub-pattern term (the variable) in the map
@@ -1145,31 +1167,62 @@ export class PatternElabStepper {
     //
     // This matches the algorithm in tt-pattern-elab.ts lines 1083-1086
 
-    const n = s.bindings.length;
+    const numPatterns = s.clause.patterns.length;
+    const numBindings = s.bindings.length;
     const translatedBindings: Array<{ name: string; type: TTKTerm }> = [];
 
-    // Use argTypes (not bindings) for translation, since argTypes have indices
-    // relative to the Pi telescope, which is what the translation formula expects
-    for (let i = 0; i < n; i++) {
-      const binding = s.bindings[i];
-      const argType = s.argTypes[i].type;
+    // Build cumulative binding counts per pattern
+    // We need to distinguish variable patterns (1 binding) from constructor patterns (multiple bindings)
+    const bindingCountsPerPattern: number[] = [];
+    for (let patIdx = 0; patIdx < numPatterns; patIdx++) {
+      // Count bindings that came from this pattern using patternIndex
+      const count = s.bindings.filter(b => b.patternIndex === patIdx).length;
+      bindingCountsPerPattern.push(count);
+    }
 
-      // Build a map to translate variable indices
-      // For pattern i, index k in argTypes[i] refers to pattern (i - 1 - k)
-      // In the final context, pattern j is at index (n - 1 - j)
-      const typeMap = new Map<number, TTKTerm>();
-      for (let k = 0; k < i; k++) {
-        const refPatternIdx = i - 1 - k;
-        const patternCtxIdx = n - 1 - refPatternIdx;
-        typeMap.set(k, mkVar(patternCtxIdx));
+    // Compute cumulative binding indices
+    const cumulativeBindings: number[] = [];
+    let cumulative = 0;
+    for (let patIdx = 0; patIdx < numPatterns; patIdx++) {
+      cumulativeBindings.push(cumulative);
+      cumulative += bindingCountsPerPattern[patIdx];
+    }
+
+    // Translate binding types based on whether they're from variable or constructor patterns
+    let bindingIdx = 0;
+    for (let patIdx = 0; patIdx < numPatterns; patIdx++) {
+      const bindingsForPattern = bindingCountsPerPattern[patIdx];
+
+      for (let k = 0; k < bindingsForPattern; k++) {
+        const binding = s.bindings[bindingIdx];
+
+        // Build a map to translate variable indices
+        // For pattern i, index k in the type refers to pattern (i - 1 - k)
+        // In the final context, pattern j is at index (numBindings - 1 - cumulativeBindings[j])
+        const typeMap = new Map<number, TTKTerm>();
+        for (let j = 0; j < patIdx; j++) {
+          const refPatternIdx = patIdx - 1 - j;
+          const refBindingCumIdx = cumulativeBindings[refPatternIdx];
+          const patternCtxIdx = numBindings - 1 - refBindingCumIdx;
+          typeMap.set(j, mkVar(patternCtxIdx));
+        }
+
+        let translatedType: TTKTerm;
+        if (bindingsForPattern > 1) {
+          // Constructor pattern: use binding.type from elaboration (already has correct structure)
+          translatedType = typeMap.size > 0 ? replaceVars(typeMap, binding.type) : binding.type;
+        } else {
+          // Variable pattern: use argTypes[patIdx] (from Pi telescope)
+          const originalType = s.argTypes[patIdx].type;
+          translatedType = typeMap.size > 0 ? replaceVars(typeMap, originalType) : originalType;
+        }
+
+        translatedBindings.push({
+          name: binding.name,
+          type: translatedType
+        });
+        bindingIdx++;
       }
-
-      // Translate the argType (not the substituted binding type)
-      const translatedType = typeMap.size > 0 ? replaceVars(typeMap, argType) : argType;
-      translatedBindings.push({
-        name: binding.name,
-        type: translatedType
-      });
     }
 
     // Now reverse the bindings to build the De Bruijn context
@@ -1179,12 +1232,13 @@ export class PatternElabStepper {
     }
 
     // Also translate the return type using the same formula
-    // The return type was extracted after unwrapping all n Pis, so it's at depth n
+    // The return type was extracted after unwrapping all Pis, so it's at depth numPatterns
     // and its indices refer to patterns using the same Pi telescope mapping
     const returnTypeMap = new Map<number, TTKTerm>();
-    for (let k = 0; k < n; k++) {
-      const refPatternIdx = n - 1 - k;
-      const patternCtxIdx = n - 1 - refPatternIdx;
+    for (let k = 0; k < numPatterns; k++) {
+      const refPatternIdx = numPatterns - 1 - k;
+      const refBindingCumIdx = cumulativeBindings[refPatternIdx];
+      const patternCtxIdx = numBindings - 1 - refBindingCumIdx;
       returnTypeMap.set(k, mkVar(patternCtxIdx));
     }
     const expectedType = returnTypeMap.size > 0 ? replaceVars(returnTypeMap, s.returnType!) : s.returnType!;
