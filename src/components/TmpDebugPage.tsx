@@ -130,6 +130,17 @@ function extractParamIndexInfo(
 type Monaco = typeof import('monaco-editor');
 type IStandaloneCodeEditor = MonacoEditor.IStandaloneCodeEditor;
 
+// CSS to ensure Monaco widgets render above everything
+const MONACO_WIDGET_STYLES = `
+  .monaco-hover,
+  .monaco-editor .suggest-widget,
+  .monaco-editor .parameter-hints-widget,
+  .monaco-editor-overlaymessage,
+  .monaco-editor .monaco-hover-content {
+    z-index: 10001 !important;
+  }
+`;
+
 const SAMPLE_CODE = `inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
@@ -426,6 +437,23 @@ export function TmpDebugPage() {
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
 
+  // Inject Monaco widget z-index styles on mount
+  useEffect(() => {
+    const styleId = 'monaco-widget-z-index-fix';
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style');
+      style.id = styleId;
+      style.textContent = MONACO_WIDGET_STYLES;
+      document.head.appendChild(style);
+    }
+    return () => {
+      const style = document.getElementById(styleId);
+      if (style) {
+        style.remove();
+      }
+    };
+  }, []);
+
   // Compile and type check the source code
   const compileResult = useMemo<CompileResult>(() => {
     return compileTTFromText(code);
@@ -601,6 +629,7 @@ export function TmpDebugPage() {
                 wordWrap: 'off',
                 folding: true,
                 renderWhitespace: 'selection',
+                fixedOverflowWidgets: true,
               }}
             />
           </div>
