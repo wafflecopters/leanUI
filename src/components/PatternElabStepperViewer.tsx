@@ -346,17 +346,16 @@ function isWildcard(p: TTKPattern): boolean {
  */
 function renderPatternWithMetas(
   pattern: TTKPattern,
-  patternTerm: TTKTerm | undefined,
+  _patternTerm: TTKTerm | undefined,
   metaState: MetaState,
   subPatternTerms: Map<string, TTKTerm>,
   patternIndex: number,
   subPath: number[] = [],
   bindings?: Array<{ name: string }>
 ): React.ReactNode {
-  // For simple patterns (wildcard, var), if we have a term, show it
-  if (patternTerm && pattern.tag !== 'PCtor') {
-    return renderTermSpan(patternTerm, metaState, bindings);
-  }
+  // NOTE: We DON'T use _patternTerm because the stepper uses array indices in patternTerms,
+  // not De Bruijn indices. The pattern.name is already correct for PVar patterns.
+  // For constructor patterns, we look up subterms from the subPatternTerms map.
 
   switch (pattern.tag) {
     case 'PVar':

@@ -30,7 +30,8 @@ import {
   mkLambda,
   subst,
   shiftTerm,
-  prettyPrint
+  prettyPrint,
+  replaceVars
 } from './tt-kernel';
 
 // =============================================================================
@@ -576,11 +577,36 @@ export class PatternElabStepper {
   }
 
   private stepInit(): StepRecord {
-    // Start unwrapping the function type
-    this.state.phase = { tag: 'UnwrappingType', piIndex: 0 };
+    const s = this.state;
+    const n = s.clause.patterns.length;
+
+    // Extract ALL argument types upfront
+    // The domains are already at the correct relative depth (Pi telescope convention):
+    // Index k in argTypes[i] refers to pattern (i-1-k)
+    let currentType = s.fnType;
+    for (let i = 0; i < n; i++) {
+      if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        s.argTypes.push({ name: currentType.name, type: currentType.domain });
+        currentType = currentType.body;
+      } else {
+        throw new Error(`Function type has fewer than ${n} Pi binders`);
+      }
+    }
+
+    // Save the return type
+    s.returnType = currentType;
+
+
+    // Start pattern elaboration
+    s.phase = {
+      tag: 'ElaboratingPattern',
+      patternIndex: 0,
+      subPhase: { tag: 'Start' }
+    };
+
     return this.makeRecord(
-      `Starting elaboration of clause with ${this.state.clause.patterns.length} patterns`,
-      'Begin unwrapping function type'
+      `Extracted ${n} argument types. Return type: ${prettyTerm(s.returnType, s.metaState)}`,
+      'Begin pattern elaboration'
     );
   }
 
@@ -631,9 +657,15 @@ export class PatternElabStepper {
     const argInfo = s.argTypes[patternIndex];
 
     // Compute expected type with substitutions
+    // Use PARALLEL substitution (replaceVars) to avoid index corruption
+    // Sequential subst would decrement indices after each substitution, breaking the mapping
     let expectedType = argInfo.type;
+    const varMap = new Map<number, TTKTerm>();
     for (let j = 0; j < patternIndex; j++) {
-      expectedType = substitute(expectedType, patternIndex - 1 - j, s.patternTerms[j]);
+      varMap.set(patternIndex - 1 - j, s.patternTerms[j]);
+    }
+    if (varMap.size > 0) {
+      expectedType = replaceVars(varMap, expectedType);
     }
     expectedType = zonk(s.metaState, expectedType);
 
@@ -732,6 +764,9 @@ export class PatternElabStepper {
 
   private stepBindingVariable(patternIndex: number, name: string, expectedType: TTKTerm): StepRecord {
     const s = this.state;
+
+    // Store bindings WITHOUT shifting - shifting will happen when building the final context
+    // Pattern terms use LEFT-TO-RIGHT indexing (pattern 0, 1, 2, ...)
     const index = s.bindings.length;
     const varTerm: TTKTerm = mkVar(index);
 
@@ -1100,13 +1135,59 @@ export class PatternElabStepper {
     const s = this.state;
 
     // Build the pattern context for type inference
-    // Bindings are in order oldest-to-newest, so we can use them directly
-    const patternCtx: Array<{ name: string; type: TTKTerm }> = s.bindings.map(b => ({
-      name: b.name,
-      type: b.type
-    }));
+    // Bindings are stored left-to-right but need to be reversed for De Bruijn indexing
+    // (most recent = #0 in De Bruijn)
+    //
+    // The types in s.bindings have De Bruijn indices relative to the Pi telescope:
+    // - For pattern i, index k refers to pattern (i - 1 - k)
+    // - In the final pattern context, pattern j is at index (n - 1 - j)
+    // - So we need to translate: index k in binding i -> index (n - i + k)
+    //
+    // This matches the algorithm in tt-pattern-elab.ts lines 1083-1086
 
-    const expectedType = s.returnType!;
+    const n = s.bindings.length;
+    const translatedBindings: Array<{ name: string; type: TTKTerm }> = [];
+
+    // Use argTypes (not bindings) for translation, since argTypes have indices
+    // relative to the Pi telescope, which is what the translation formula expects
+    for (let i = 0; i < n; i++) {
+      const binding = s.bindings[i];
+      const argType = s.argTypes[i].type;
+
+      // Build a map to translate variable indices
+      // For pattern i, index k in argTypes[i] refers to pattern (i - 1 - k)
+      // In the final context, pattern j is at index (n - 1 - j)
+      const typeMap = new Map<number, TTKTerm>();
+      for (let k = 0; k < i; k++) {
+        const refPatternIdx = i - 1 - k;
+        const patternCtxIdx = n - 1 - refPatternIdx;
+        typeMap.set(k, mkVar(patternCtxIdx));
+      }
+
+      // Translate the argType (not the substituted binding type)
+      const translatedType = typeMap.size > 0 ? replaceVars(typeMap, argType) : argType;
+      translatedBindings.push({
+        name: binding.name,
+        type: translatedType
+      });
+    }
+
+    // Now reverse the bindings to build the De Bruijn context
+    const patternCtx: Array<{ name: string; type: TTKTerm }> = [];
+    for (let i = translatedBindings.length - 1; i >= 0; i--) {
+      patternCtx.push(translatedBindings[i]);
+    }
+
+    // Also translate the return type using the same formula
+    // The return type was extracted after unwrapping all n Pis, so it's at depth n
+    // and its indices refer to patterns using the same Pi telescope mapping
+    const returnTypeMap = new Map<number, TTKTerm>();
+    for (let k = 0; k < n; k++) {
+      const refPatternIdx = n - 1 - k;
+      const patternCtxIdx = n - 1 - refPatternIdx;
+      returnTypeMap.set(k, mkVar(patternCtxIdx));
+    }
+    const expectedType = returnTypeMap.size > 0 ? replaceVars(returnTypeMap, s.returnType!) : s.returnType!;
 
     // Use bidirectional type checking: CHECK the RHS against the expected type
     // This is crucial for lambdas with unannotated domains (like \f => ...)
@@ -1178,8 +1259,17 @@ export class PatternElabStepper {
         this.unify(zonkedTerm.domain, varType);
       }
 
-      // Check body against the Pi's codomain, with the bound variable having the Pi's domain type      // The varType is from the Pi, which is already in the right context, so no shift needed
-      const extCtx = [...ctx, { name: zonkedTerm.name, type: varType }];
+      // Check body against the Pi's codomain, with the bound variable having the Pi's domain type
+      // IMPORTANT: Use extendContext logic - shift ALL types when extending!
+      // Shift the new type by 1 since we're adding a new binding at index 0
+      const shiftedVarType = shiftTerm(varType, 1, 0);
+      // Also shift all existing types in the context, as their Var references
+      // now need to point one index higher
+      const shiftedCtx = ctx.map(b => ({
+        name: b.name,
+        type: shiftTerm(b.type, 1, 0)
+      }));
+      const extCtx = [{ name: zonkedTerm.name, type: shiftedVarType }, ...shiftedCtx];
       return this.checkType(zonkedTerm.body, zonkedExpected.body, extCtx, initialCtxSize);
     }
 
@@ -1207,21 +1297,10 @@ export class PatternElabStepper {
     switch (zonked.tag) {
       case 'Var': {
         // Look up in local context (De Bruijn index)
+        // Context is in De Bruijn order: #0 at index 0, #1 at index 1, etc.
+        // Types are already shifted when extending context (see checkType for lambdas)
         if (zonked.index < ctx.length) {
-          const idx = ctx.length - 1 - zonked.index;
-          const resultType = ctx[idx].type;
-
-          // IMPORTANT: Lambda-bound variables (idx >= initialCtxSize) need their types shifted
-          // because the type was added at a shallower binding depth.
-          // Pattern-bound variables (idx < initialCtxSize) don't need shifting.
-          if (idx >= initialCtxSize) {
-            // This is a lambda-bound variable. Shift its type by how many
-            // binders we've gone under since it was added.
-            const bindersSinceAdded = ctx.length - idx;
-            return shiftTerm(resultType, bindersSinceAdded, 0);
-          }
-
-          return resultType;
+          return ctx[zonked.index].type;
         }
         return null;
       }
@@ -1271,7 +1350,7 @@ export class PatternElabStepper {
       case 'Binder': {
         if (zonked.binderKind.tag === 'BLam') {
           // Lambda: infer body type in extended context
-          // Use the lambda's domain for the bound variable's type
+          // NOTE: Don't shift existing context - shifting happens on lookup via initialCtxSize
           const extCtx = [...ctx, { name: zonked.name, type: zonked.domain }];
           const bodyType = this.inferType(zonked.body, extCtx, initialCtxSize);
           if (!bodyType) return null;
@@ -1287,6 +1366,7 @@ export class PatternElabStepper {
 
         if (zonked.binderKind.tag === 'BLet') {
           // Let: infer body type with the let binding in context
+          // NOTE: Don't shift existing context - shifting happens on lookup via initialCtxSize
           const extCtx = [...ctx, { name: zonked.name, type: zonked.domain }];
           return this.inferType(zonked.body, extCtx, initialCtxSize);
         }

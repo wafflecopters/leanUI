@@ -83,6 +83,22 @@ swap A = \\f => \\(x: A) (y: A) => f y x
       expectSuccess(source);
     });
 
+    test('swap with pattern matching - unannotated lambdas', () => {
+      const source = `
+swap' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap' a f = \\x y => f y x
+`;
+      expectSuccess(source);
+    });
+
+    test('swap with all pattern arguments - no lambdas', () => {
+      const source = `
+swap''' : (A : Type) -> (f : A -> A -> A) -> (A -> A -> A)
+swap''' a f x y = f y x
+`;
+      expectSuccess(source);
+    });
+
     test('apply function', () => {
       const source = `
 apply : (A : Type) -> (B : Type) -> (A -> B) -> A -> B
