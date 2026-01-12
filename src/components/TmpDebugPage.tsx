@@ -154,7 +154,7 @@ inductive Vec : Type -> Nat -> Type where
   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
 
 const : (A : Type) -> (B : Type) -> A -> B -> A
-const _ _ a = \ _ => a
+const _ _ a = \\ _ => a
 
 swap : (A : Type) -> (B : Type) -> (C : Type) -> (f : A -> B -> C) -> B -> A -> C
 swap _ _ _ f = \\x y => f y x
@@ -317,50 +317,35 @@ const styles = {
 
 // Block renderer component
 function BlockRenderer({ block }: { block: CompiledBlock }) {
+  let blockHeaderContent: React.ReactNode = null;
+  let blockBodyContent: React.ReactNode = null;
+
   if (block.isComment) {
-    return (
-      <div style={styles.blockCard}>
-        <div style={styles.blockHeader}>
-          <span style={{ ...styles.blockBadge, ...styles.blockBadgeComment }}>Comment</span>
-        </div>
-        <div style={styles.blockBody}>
-          <pre style={{ margin: 0, color: '#6e7681' }}>
-            {block.sourceLines.join('\n')}
-          </pre>
-        </div>
-      </div>
-    );
+    blockHeaderContent = <span style={{ ...styles.blockBadge, ...styles.blockBadgeComment }}>Comment</span>;
+    blockBodyContent = <pre style={{ margin: 0, color: '#6e7681' }}>
+      {block.sourceLines.join('\n')}
+    </pre>;
   }
 
   if (!block.parseSuccess) {
-    return (
-      <div style={styles.blockCard}>
-        <div style={styles.blockHeader}>
-          <span style={{ ...styles.blockBadge, ...styles.blockBadgeError }}>Parse Error</span>
-        </div>
-        <div style={styles.blockBody}>
-          {block.parseErrors.map((err, i) => (
-            <div key={i} style={styles.errorText}>
-              Line {err.line}, Col {err.col}: {err.message}
-            </div>
-          ))}
-        </div>
+    blockHeaderContent = <span style={{ ...styles.blockBadge, ...styles.blockBadgeError }}>Parse Error</span>;
+    blockBodyContent = block.parseErrors.map((err, i) => (
+      <div key={i} style={styles.errorText}>
+        Line {err.line}, Col {err.col}: {err.message}
       </div>
-    );
+    ));
   }
 
   if (!block.nameResolutionSuccess) {
+    blockHeaderContent = <span style={{ ...styles.blockBadge, ...styles.blockBadgeError }}>Name Error</span>;
+    blockBodyContent = block.nameResolutionErrors.map((err, i) => (
+      <div key={i} style={styles.errorText}>{err}</div>
+    ));
+  }
+
+  if (blockHeaderContent && blockBodyContent) {
     return (
-      <div style={styles.blockCard}>
-        <div style={styles.blockHeader}>
-          <span style={{ ...styles.blockBadge, ...styles.blockBadgeError }}>Name Error</span>
-        </div>
-        <div style={styles.blockBody}>
-          {block.nameResolutionErrors.map((err, i) => (
-            <div key={i} style={styles.errorText}>{err}</div>
-          ))}
-        </div>
-      </div>
+      <BlockCard header={blockHeaderContent} body={blockBodyContent} />
     );
   }
 
@@ -373,73 +358,93 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
           : [];
 
         return (
-          <div key={i}>
-            <div style={styles.blockHeader}>
-              <span style={{
-                ...styles.blockBadge,
-                ...(decl.kind === 'inductive' ? styles.blockBadgeInductive : styles.blockBadgeTerm)
-              }}>
-                {decl.kind === 'inductive' ? 'Inductive' : 'Term'}
-              </span>
-              {decl.name && <span style={styles.declName}>{decl.name}</span>}
-              {/* Display param/index info for inductive types */}
-              {paramIndexInfo.length > 0 && (
-                <span style={{ marginLeft: '12px', fontSize: '11px', color: '#8b949e' }}>
-                  {paramIndexInfo.map((info, j) => (
-                    <span key={j} style={{ marginRight: '8px' }}>
-                      <span style={{ color: info.isIndex ? '#f0883e' : '#7ee787' }}>
-                        [{info.isIndex ? 'index' : 'param'} {info.name} : {info.type}]
+          <BlockCard
+            key={i}
+            initiallyExpanded={decl.kind === 'term'}
+            header={
+              <>
+                <span style={{
+                  ...styles.blockBadge,
+                  ...(decl.kind === 'inductive' ? styles.blockBadgeInductive : styles.blockBadgeTerm)
+                }}>
+                  {decl.kind === 'inductive' ? 'Inductive' : 'Term'}
+                </span>
+                {decl.name && <span style={styles.declName}>{decl.name}</span>}
+                {/* Display param/index info for inductive types */}
+                {paramIndexInfo.length > 0 && (
+                  <span style={{ marginLeft: '12px', fontSize: '11px', color: '#8b949e' }}>
+                    {paramIndexInfo.map((info, j) => (
+                      <span key={j} style={{ marginRight: '8px' }}>
+                        <span style={{ color: info.isIndex ? '#f0883e' : '#7ee787' }}>
+                          [{info.isIndex ? 'index' : 'param'} {info.name} : {info.type}]
+                        </span>
                       </span>
-                    </span>
-                  ))}
-                </span>
-              )}
-              {decl.checkSuccess ? (
-                <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
-              ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
-                <span style={{ marginLeft: 'auto', color: '#f85149', fontSize: '12px' }}>
-                  {decl.checkErrors.length} error(s)
-                </span>
-              ) : null}
-            </div>
-            <div style={styles.blockBody}>
-              {decl.prettyType && (
-                <div style={styles.typeRow}>
-                  <span style={styles.typeLabel}>Type:</span>
-                  <span style={styles.typeValue}>{decl.prettyType}</span>
-                </div>
-              )}
-              {decl.prettyValue && (
-                <div style={styles.typeRow}>
-                  <span style={styles.typeLabel}>Value:</span>
-                  <span style={styles.valueValue}>{decl.prettyValue}</span>
-                </div>
-              )}
-              {decl.prettyConstructors && decl.prettyConstructors.length > 0 && (
-                <div>
-                  <div style={{ ...styles.typeLabel, marginBottom: '4px' }}>Constructors:</div>
-                  {decl.prettyConstructors.map((ctor, j) => (
-                    <div key={j} style={styles.ctorRow}>
-                      <span style={styles.ctorName}>{ctor.name}</span>
-                      <span style={{ color: '#8b949e' }}> : </span>
-                      <span style={styles.typeValue}>{ctor.prettyType}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {decl.checkErrors && decl.checkErrors.length > 0 && (
-                <div style={{ marginTop: '8px' }}>
-                  {decl.checkErrors.map((err, j) => (
-                    <div key={j} style={styles.errorText}>{err.message}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        );
+                    ))}
+                  </span>
+                )}
+                {decl.checkSuccess ? (
+                  <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
+                ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
+                  <span style={{ marginLeft: 'auto', color: '#f85149', fontSize: '12px' }}>
+                    {decl.checkErrors.length} error(s)
+                  </span>
+                ) : null}
+              </>
+            }
+            body={
+              <>
+                {decl.prettyType && (
+                  <div style={styles.typeRow}>
+                    <span style={styles.typeLabel}>Type:</span>
+                    <span style={styles.typeValue}>{decl.prettyType}</span>
+                  </div>
+                )}
+                {decl.prettyValue && (
+                  <div style={styles.typeRow}>
+                    <span style={styles.typeLabel}>Value:</span>
+                    <span style={styles.valueValue}>{decl.prettyValue}</span>
+                  </div>
+                )}
+                {decl.prettyConstructors && decl.prettyConstructors.length > 0 && (
+                  <div>
+                    <div style={{ ...styles.typeLabel, marginBottom: '4px' }}>Constructors:</div>
+                    {decl.prettyConstructors.map((ctor, j) => (
+                      <div key={j} style={styles.ctorRow}>
+                        <span style={styles.ctorName}>{ctor.name}</span>
+                        <span style={{ color: '#8b949e' }}> : </span>
+                        <span style={styles.typeValue}>{ctor.prettyType}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {decl.checkErrors && decl.checkErrors.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    {decl.checkErrors.map((err, j) => (
+                      <div key={j} style={styles.errorText}>{err.message}</div>
+                    ))}
+                  </div>
+                )}</>
+            }
+          />
+        )
       })}
     </div>
   );
+}
+
+function BlockCard(props: { header: React.ReactNode, body: React.ReactNode, initiallyExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(props.initiallyExpanded ?? true)
+
+  return (
+    <div style={styles.blockCard}>
+      <div style={styles.blockHeader} onClick={() => setExpanded(e => !e)}>
+        {props.header}
+      </div>
+      {expanded && <div style={styles.blockBody}>
+        {props.body}
+      </div>}
+    </div>
+  )
 }
 
 export function TmpDebugPage() {
