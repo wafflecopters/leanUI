@@ -14,6 +14,7 @@ import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath } from '../types/source-position';
 import { checkInductiveDeclaration } from '../types/tt-typecheck-decl';
 import { inferType, TypeCheckError } from '../types/tt-typecheck';
+import { inferParameterIndices } from '../types/tt-inductive-inference';
 
 // ============================================================================
 // Parse Result Types
@@ -48,6 +49,8 @@ export interface ElabDeclaration {
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
   kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
+  /** For inductive types: positions that are indices (not parameters) */
+  indexPositions?: number[];
 }
 
 /**
@@ -80,6 +83,9 @@ export interface CompiledDeclaration {
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
   kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
+
+  // For inductive types: positions that are indices (not parameters)
+  indexPositions?: number[];
 
   // Pretty-printed versions for display
   prettyType?: string;
@@ -315,12 +321,23 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           });
         }
 
+        // Compute index positions for inductive types (BEFORE elaboration, on TT)
+        let indexPositions: number[] | undefined;
+        if (decl.kind === 'inductive' && decl.name && decl.type && decl.constructors) {
+          indexPositions = inferParameterIndices({
+            name: decl.name,
+            type: decl.type,
+            constructors: decl.constructors
+          });
+        }
+
         elabDeclarations.push({
           name: decl.name,
           kind: decl.kind === 'inductive' ? 'inductive' : 'term',
           kernelType,
           kernelValue,
-          kernelConstructors
+          kernelConstructors,
+          indexPositions
         });
       } catch (e) {
         // Elaboration error - skip this declaration
@@ -365,12 +382,13 @@ function checkDeclaration(
   let errorCount = 0;
 
   if (decl.kind === 'inductive' && decl.kernelType && decl.kernelConstructors) {
-    // Check inductive type definition
+    // Check inductive type definition (pass indexPositions for correct universe checking)
     const result = checkInductiveDeclaration(
       decl.name || 'anonymous',
       decl.kernelType,
       decl.kernelConstructors,
-      ctx
+      ctx,
+      decl.indexPositions
     );
     if (!result.success) {
       checkSuccess = false;
@@ -411,6 +429,7 @@ function checkDeclaration(
     kernelType: decl.kernelType,
     kernelValue: decl.kernelValue,
     kernelConstructors: decl.kernelConstructors,
+    indexPositions: decl.indexPositions,
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
     prettyValue: decl.kernelValue ? prettyPrintTTK(decl.kernelValue) : undefined,
     prettyConstructors: decl.kernelConstructors?.map(c => ({

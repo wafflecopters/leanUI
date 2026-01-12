@@ -5,6 +5,34 @@ import React, { useRef, useMemo, useState, useCallback } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileTTFromText, CompileResult, CompiledBlock } from '../compiler/compile';
+import { TTKTerm, prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
+
+/**
+ * Extract parameter/index info from an inductive type's kernel type.
+ * Returns array of { name, type, isIndex } for each position.
+ */
+function extractParamIndexInfo(
+  kernelType: TTKTerm | undefined,
+  indexPositions: number[] | undefined
+): Array<{ name: string; type: string; isIndex: boolean }> {
+  if (!kernelType) return [];
+
+  const indexSet = new Set(indexPositions ?? []);
+  const result: Array<{ name: string; type: string; isIndex: boolean }> = [];
+  let current = kernelType;
+  let position = 0;
+
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    const name = current.name || '_';
+    const type = prettyPrintTTK(current.domain);
+    const isIndex = indexSet.has(position);
+    result.push({ name, type, isIndex });
+    current = current.body;
+    position++;
+  }
+
+  return result;
+}
 
 // Monaco type helpers
 type Monaco = typeof import('monaco-editor');
@@ -225,7 +253,13 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
 
   return (
     <div style={styles.blockCard}>
-      {block.declarations.map((decl, i) => (
+      {block.declarations.map((decl, i) => {
+        // Extract param/index info for inductive types
+        const paramIndexInfo = decl.kind === 'inductive'
+          ? extractParamIndexInfo(decl.kernelType, decl.indexPositions)
+          : [];
+
+        return (
         <div key={i}>
           <div style={styles.blockHeader}>
             <span style={{
@@ -235,6 +269,18 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
               {decl.kind === 'inductive' ? 'Inductive' : 'Term'}
             </span>
             {decl.name && <span style={styles.declName}>{decl.name}</span>}
+            {/* Display param/index info for inductive types */}
+            {paramIndexInfo.length > 0 && (
+              <span style={{ marginLeft: '12px', fontSize: '11px', color: '#8b949e' }}>
+                {paramIndexInfo.map((info, j) => (
+                  <span key={j} style={{ marginRight: '8px' }}>
+                    <span style={{ color: info.isIndex ? '#f0883e' : '#7ee787' }}>
+                      [{info.isIndex ? 'index' : 'param'} {info.name} : {info.type}]
+                    </span>
+                  </span>
+                ))}
+              </span>
+            )}
             {decl.checkSuccess ? (
               <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
             ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
@@ -277,7 +323,8 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
             )}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
