@@ -44,7 +44,8 @@ export class TypeCheckError extends Error {
     message: string,
     public term?: TTKTerm,
     public context?: TTKContext,
-    public termPath?: IndexPath
+    public termPath?: IndexPath,
+    public definitions?: DefinitionsMap,
   ) {
     super(message);
     this.name = 'TypeCheckError';

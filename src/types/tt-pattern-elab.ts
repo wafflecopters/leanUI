@@ -566,7 +566,7 @@ function elaborateCtorPattern(
     const isWildcard = pattern.args[i].tag === 'PVar' &&
       (pattern.args[i].name === '_' || pattern.args[i].name.startsWith('_w'));
     if (pattern.args[i].tag === 'PVar' && !isWildcard &&
-        argResult.bindings.length === 1) {
+      argResult.bindings.length === 1) {
       const meta = argMetas[i];
       if (meta.tag === 'Hole' && meta.id) {
         nestedVarMetas.push({ meta, localBindingIdx: allBindings.length });
@@ -639,7 +639,7 @@ function checkTypeWithUnification(
 ): void {
   // Check if term is a lambda and expected is Pi - use bidirectional rule
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam' &&
-      expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
+    expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi') {
     // Use the Pi's domain as the type for the bound variable
     // This is crucial for unannotated lambdas like \f => ...
     const varType = expectedType.domain;

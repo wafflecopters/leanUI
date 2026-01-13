@@ -36,6 +36,7 @@ export interface CheckError {
   path: IndexPath;  // Location in the AST where error occurred
   term?: TTKTerm;
   context?: TTKContext;
+  definitions?: DefinitionsMap;
   expected?: TTKTerm;
   actual?: TTKTerm;
 }
@@ -289,8 +290,8 @@ export function elaborateTT(
 
       try {
         if (value.tag === 'Match' &&
-            value.scrutinee.tag === 'Hole' &&
-            value.scrutinee.id === '_scrutinee') {
+          value.scrutinee.tag === 'Hole' &&
+          value.scrutinee.id === '_scrutinee') {
           // Function definition - use result-returning variant to capture elaboration
           funcResult = checkFunctionClausesWithResult(
             declaredType,

@@ -8,17 +8,26 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause } from '../types/tt-kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, prettyPrint, shiftTerm } from '../types/tt-kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { ElabMap, IndexPath, SourceMap, serializeIndexPath } from '../types/source-position';
+import { ElabMap, IndexPath, SourceMap } from '../types/source-position';
 import { checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
-import { checkType, inferType, TypeCheckError } from '../types/tt-typecheck';
 import { inferParameterIndices } from '../types/tt-inductive-inference';
+import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
 
 // ============================================================================
 // Parse Result Types
 // ============================================================================
+
+type DefinitionsMap = Map<string, TTKTerm>
+
+class TypeCheckError extends Error {
+  constructor(message: string, public term?: TTKTerm, public context?: TTKContext, public termPath?: IndexPath, public definitions?: DefinitionsMap) {
+    super(message);
+    this.name = 'TypeCheckError';
+  }
+}
 
 /**
  * A single parsed block - either declarations, a comment, or an error
@@ -381,7 +390,7 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
  */
 interface CheckDeclarationResult {
   compiled: CompiledDeclaration;
-  newContext: TTKContext;
+  newDefinitions: DefinitionsMap;
   errorCount: number;
 }
 
@@ -390,20 +399,20 @@ interface CheckDeclarationResult {
  */
 function checkDeclaration(
   decl: ElabDeclaration,
-  ctx: TTKContext
+  definitions: DefinitionsMap,
 ): CheckDeclarationResult {
   let checkSuccess = true;
   const checkErrors: CheckError[] = [];
-  let newContext = ctx;
+  let newDefinitions = definitions;
   let errorCount = 0;
 
   const result = decl.kind === 'inductive' ?
-    checkInductiveTypeDeclaration(decl, ctx) :
-    decl.kind === 'term' ? checkTermDeclaration(decl, ctx) :
+    checkInductiveTypeDeclaration(decl, definitions) :
+    decl.kind === 'term' ? checkTermDeclaration(decl, definitions) :
       { success: false as const, errors: [{ message: 'Declaration is not an inductive or term', path: [] }] };
 
   if (result.success) {
-    newContext = result.context;
+    newDefinitions = result.definitions;
   } else {
     checkSuccess = false;
     checkErrors.push(...result.errors);
@@ -430,13 +439,13 @@ function checkDeclaration(
     sourceMap: decl.sourceMap
   };
 
-  return { compiled, newContext, errorCount };
+  return { compiled, newDefinitions, errorCount };
 }
 
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
-  ctx: TTKContext
-): { success: false, errors: CheckError[] } | { success: true, context: TTKContext } {
+  definitions: DefinitionsMap,
+): { success: false, errors: CheckError[] } | { success: true, definitions: DefinitionsMap } {
   if (decl.kind !== 'inductive') {
     return failCheck('Declaration is not an inductive type', [])
   }
@@ -452,7 +461,7 @@ function checkInductiveTypeDeclaration(
     decl.name || 'anonymous',
     decl.kernelType,
     decl.kernelConstructors,
-    ctx,
+    [],
     decl.indexPositions
   );
   if (!result.success) {
@@ -461,13 +470,14 @@ function checkInductiveTypeDeclaration(
       errors: result.errors,
     }
   } else {
-    let newContext = [{ name: decl.name || 'anonymous', type: decl.kernelType }, ...ctx];
+    let newDefinitions = new Map<string, TTKTerm>(definitions);
+    newDefinitions.set(decl.name || 'anonymous', decl.kernelType);
     for (const ctor of decl.kernelConstructors) {
-      newContext = [{ name: ctor.name, type: ctor.type }, ...newContext];
+      newDefinitions.set(ctor.name, ctor.type);
     }
     return {
       success: true,
-      context: newContext,
+      definitions: newDefinitions,
     }
   }
 }
@@ -484,8 +494,8 @@ function failCheck(message: string, path: IndexPath): { success: false, errors: 
 
 function checkTermDeclaration(
   decl: ElabDeclaration,
-  ctx: TTKContext
-): { success: false, errors: CheckError[] } | { success: true, context: TTKContext } {
+  definitions: DefinitionsMap,
+): { success: false, errors: CheckError[] } | { success: true, definitions: DefinitionsMap } {
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', [])
   }
@@ -493,21 +503,22 @@ function checkTermDeclaration(
   if (!decl.kernelType) {
     return failCheck('Term declaration is ill-formed', [])
   }
-  let newContext = ctx
+
+  let newDefinitions = definitions
 
   try {
     if (!decl.kernelValue) {
       return failCheck('Term declaration is ill-formed', [])
     }
 
-    const _inferredType = inferType(decl.kernelType, ctx);
+    const _inferredType = inferType(decl.kernelType, [], definitions);
 
     // Add to context for subsequent declarations
     if (decl.name) {
-      newContext = [{ name: decl.name, type: decl.kernelType }, ...newContext];
+      newDefinitions.set(decl.name, decl.kernelType);
     }
 
-    const x = checkTermValue(decl.name, decl.kernelValue, decl.kernelType, ctx);
+    const x = checkTermValue(decl.name, decl.kernelValue, decl.kernelType, newDefinitions);
     if (!x.success) {
       return {
         success: false,
@@ -515,7 +526,7 @@ function checkTermDeclaration(
       }
     }
 
-    return { success: true, context: newContext }
+    return { success: true, definitions: newDefinitions }
   } catch (e) {
     const message = e instanceof TypeCheckError ? e.message :
       (e instanceof Error ? e.message : String(e));
@@ -528,7 +539,7 @@ function checkTermDeclaration(
         message,
         path,
         term: e instanceof TypeCheckError ? e.term : decl.kernelType,
-        context: e instanceof TypeCheckError ? e.context : ctx
+        definitions: e instanceof TypeCheckError ? e.definitions : definitions
       }],
     }
   }
@@ -539,7 +550,7 @@ function checkTermDeclaration(
  */
 interface CheckBlockResult {
   compiled: CompiledBlock;
-  newContext: TTKContext;
+  newDefinitions: DefinitionsMap;
   errorCount: number;
 }
 
@@ -549,7 +560,7 @@ interface CheckBlockResult {
 function checkBlock(
   block: ElabBlock,
   blockIndex: number,
-  ctx: TTKContext
+  definitions: DefinitionsMap,
 ): CheckBlockResult {
   // Handle comment blocks
   if (block.kind === 'comment') {
@@ -565,7 +576,7 @@ function checkBlock(
         declarations: [],
         isComment: true
       },
-      newContext: ctx,
+      newDefinitions: definitions,
       errorCount: 0
     };
   }
@@ -584,20 +595,20 @@ function checkBlock(
         declarations: [],
         isComment: false
       },
-      newContext: ctx,
+      newDefinitions: definitions,
       errorCount: 0
     };
   }
 
   // Handle declaration blocks - type check each declaration
   const compiledDeclarations: CompiledDeclaration[] = [];
-  let currentContext = ctx;
+  let currentDefinitions = definitions;
   let totalErrors = 0;
 
   for (const decl of block.declarations) {
-    const result = checkDeclaration(decl, currentContext);
+    const result = checkDeclaration(decl, currentDefinitions);
     compiledDeclarations.push(result.compiled);
-    currentContext = result.newContext;
+    currentDefinitions = result.newDefinitions;
     totalErrors += result.errorCount;
   }
 
@@ -613,7 +624,7 @@ function checkBlock(
       declarations: compiledDeclarations,
       isComment: false
     },
-    newContext: currentContext,
+    newDefinitions: currentDefinitions,
     errorCount: totalErrors
   };
 }
@@ -624,7 +635,7 @@ function checkBlock(
 interface CheckBlocksResult {
   blocks: CompiledBlock[];
   totalCheckErrors: number;
-  finalContext: TTKContext;
+  finalDefinitions: DefinitionsMap;
 }
 
 /**
@@ -632,24 +643,24 @@ interface CheckBlocksResult {
  */
 function checkBlocks(
   elabResult: ElabResult,
-  initialContext: TTKContext = []
+  initialDefinitions: DefinitionsMap = new Map<string, TTKTerm>(),
 ): CheckBlocksResult {
   const compiledBlocks: CompiledBlock[] = [];
-  let currentContext = initialContext;
+  let currentDefinitions = initialDefinitions;
   let totalCheckErrors = 0;
 
   for (let blockIndex = 0; blockIndex < elabResult.blocks.length; blockIndex++) {
     const block = elabResult.blocks[blockIndex];
-    const result = checkBlock(block, blockIndex, currentContext);
+    const result = checkBlock(block, blockIndex, currentDefinitions);
     compiledBlocks.push(result.compiled);
-    currentContext = result.newContext;
+    currentDefinitions = result.newDefinitions;
     totalCheckErrors += result.errorCount;
   }
 
   return {
     blocks: compiledBlocks,
     totalCheckErrors,
-    finalContext: currentContext
+    finalDefinitions: currentDefinitions
   };
 }
 
@@ -682,27 +693,60 @@ export function compileTTFromText(source: string): CompileResult {
   };
 }
 
+type Signature = { name: string, type: TTKTerm }[];
+type PiSpine = { binders: Signature, body: TTKTerm, term: TTKTerm };
+type AppSpine = { fn: TTKTerm, args: TTKTerm[] };
+
+function signatureToNamesStack(signature: Signature): string[] {
+  return signature.map(n => n.name).reverse()
+}
+
+function extractPiSpine(term: TTKTerm): PiSpine {
+  const binders: Signature = [];
+  let current = term;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    binders.push({ name: current.name, type: current.domain });
+    current = current.body;
+  }
+  return { binders, body: current, term };
+}
+
+function extractAppSpine(term: TTKTerm): AppSpine {
+  const args: TTKTerm[] = [];
+  let current = term;
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+  return { fn: current, args };
+}
+
 function checkTermValue(
-  _name: string | undefined,
+  name: string | undefined,
   value: TTKTerm,
   type: TTKTerm,
-  ctx: TTKContext
+  definitions: DefinitionsMap
 ): { success: false, errors: CheckError[] } | { success: true } {
   if (value.tag !== 'Match') {
     try {
-      checkType(value, type, ctx);
+      checkType(value, type, [], definitions);
       return { success: true };
     } catch (e) {
       return {
-        success: false, errors: [{ message: e instanceof TypeCheckError ? e.message : String(e), path: [], term: value, context: ctx }]
+        success: false, errors: [{ message: e instanceof TypeCheckError ? e.message : String(e), path: [], term: value, definitions }]
       }
     }
   }
 
+  const typePiSpine = extractPiSpine(type);
+
   const errors: CheckError[] = [];
 
-  value.clauses.forEach((clause, clauseIndex) => {
-    const result = checkMatchClause(clause, clauseIndex, value, ctx);
+  // TODO - ensure all clauses have same pattern count
+  // TODO - ensure pattern count is less than or equal type binders count
+
+  value.clauses.forEach((clause, _clauseIndex) => {
+    const result = checkMatchClause(name ?? '???', clause, typePiSpine, definitions);
     if (!result.success) {
       errors.push(...result.errors);
     }
@@ -714,23 +758,189 @@ function checkTermValue(
   return { success: errors.length === 0, errors };
 }
 
+function contextLookup(name: string, ctx: TTKContext): TTKTerm | undefined {
+  for (const binding of ctx) {
+    if (binding.name === name) {
+      return binding.type;
+    }
+  }
+  return undefined;
+}
+
+function loopupTypeAtIndexSignature(signature: Signature, index: number): TTKTerm {
+  const type = signature[index].type;
+
+  // Shift indices to be at tail of signature
+  // The type at position `index` needs to be shifted by (signature.length - 1 - index)
+  // to move it to the tail position
+  const shiftAmount = signature.length - 1 - index;
+  return shiftAmount > 0 ? shiftTerm(type, shiftAmount, 0) : type;
+}
+
+/* PATTERNS */
+
 function checkMatchClause(
-  _clause: TTKClause,
-  _clauseIndex: number,
-  _value: TTKTerm,
-  _ctx: TTKContext
+  termName: string,
+  clause: TTKClause,
+  typePiSpine: PiSpine,
+  definitions: DefinitionsMap
 ): { success: false, errors: CheckError[] } | { success: true } {
+  const result = processMatchClauseLhs(termName, clause.patterns, typePiSpine, definitions)
+  // TODO
   return { success: true };
 }
 
-/*
+const originalConsoleLog = console.log
 
+function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, definitions: DefinitionsMap) {
+  if (termName === 'vecConcat') {
+    console.log = originalConsoleLog
+  } else {
+    console.log = () => { }
+  }
+  console.log(`LHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: patterns })}`);
 
-foo : (m : Nat) -> (n : Nat) -> Vec A n -> A -> A
-foo Zero n v a = a
-foo (Succ m) n v a = let h = (Succ Zero) in
-  case v of
-  (Succ m) Zero | VNil _ =>
-  | VCons _ _ h t => 
+  let sig: Signature = []
+  for (let i = 0; i < patterns.length; i++) {
+    const binder = typePiSpine.binders[i];
+    const checkType = typePiSpine.binders[i].type;
+    const result = checkPattern(patterns[i], binder.name, checkType, sig, definitions);
 
-*/
+    if (result.success) {
+      sig = result.newSignature;
+    } else {
+      console.error(`Error: ${result.errors.map(e => e.message).join(', ')}`);
+      return result
+    }
+  }
+
+  return { success: true, newSignature: sig };
+}
+
+function checkPattern(pattern: TTKPattern, preferredName: string | undefined, checkType: TTKTerm, signature: Signature, definitions: DefinitionsMap): {
+  success: true,
+  newSignature: Signature;
+} | {
+  success: false,
+  errors: CheckError[];
+} {
+  if (pattern.tag === 'PCtor') {
+    const { name, args } = pattern;
+    return checkCtorPattern(name, args, checkType, signature, definitions);
+  } else if (pattern.tag === 'PVar') {
+    let name = pattern.name
+
+    if (pattern.name === '_') {
+      name = `?${preferredName ?? ''}${signature.length}`
+    }
+
+    const type = checkType.tag === 'Var' ? loopupTypeAtIndexSignature(signature, checkType.index) :
+      (checkType.tag === 'Const' || checkType.tag === 'Sort' || checkType.tag === 'App') ? checkType :
+        undefined
+
+    if (!type) {
+      debugger
+      return failCheck(`Unknown pattern type: ${prettyPrint(checkType)}`, []);
+    }
+
+    console.log(`  ${name}: ${prettyPrint(type, signatureToNamesStack(signature))}`);
+
+    return {
+      success: true,
+      newSignature: [...signature, { name, type: checkType }]
+    }
+  }
+
+  return failCheck(`Unknown pattern type: ${prettyPrintPattern(pattern)}`, []);
+}
+
+function checkCtorPattern(
+  patternCtorName: string,
+  patternArgs: TTKPattern[],
+  checkType: TTKTerm,
+  signature: Signature,
+  definitions: DefinitionsMap
+): {
+  success: true,
+  newSignature: Signature;
+} | {
+  success: false,
+  errors: CheckError[];
+} {
+  const definition = definitions.get(patternCtorName);
+  if (!definition) {
+    return { success: false, errors: [{ message: `Constructor '${patternCtorName}' not found`, path: [], term: checkType, definitions } as CheckError] };
+  }
+
+  const { binders: definitionBinders, body: definitionBody } = extractPiSpine(definition);
+
+  if (patternArgs.length !== definitionBinders.length) {
+    return failCheck(`Constructor '${patternCtorName}' has wrong number of arguments`, [])
+  }
+
+  let sig = signature
+  for (let i = 0; i < patternArgs.length; i++) {
+    const result = checkPattern(patternArgs[i], definitionBinders[i].name, definitionBinders[i].type, sig, definitions);
+    if (result.success) {
+      sig = result.newSignature;
+    } else {
+      return result
+    }
+  }
+
+  const result = checkElaboratedPattern(patternCtorName, patternArgs, signature, sig, checkType, definitions)
+  if (!result.success) {
+    return result
+  }
+
+  // TODO?
+
+  return result
+}
+
+function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPattern[], newNames: string[], _preSignature: Signature, signature: Signature): TTKTerm {
+  const fn = mkConst(patternCtorName, mkType(-1) /* HACK */)
+
+  let term = fn
+
+  for (let i = 0; i < patternArgs.length; i++) {
+    const pattern = patternArgs[i]
+    if (pattern.tag === 'PCtor') {
+      debugger
+    } else {
+      const patternName = newNames[i] ?? pattern.name
+      const sigIndex = signature.findIndex(b => b.name === patternName)
+      const arg = mkVar(signature.length - sigIndex - 1)
+      term = mkApp(term, arg)
+    }
+  }
+
+  return term
+}
+
+function checkElaboratedPattern(
+  patternCtorName: string,
+  patternArgs: TTKPattern[],
+  preSignature: Signature,
+  signature: Signature,
+  checkType: TTKTerm,
+  definitions: DefinitionsMap,
+): { success: true, newSignature: Signature } | { success: false, errors: CheckError[] } {
+  const newNames = signature.slice(preSignature.length).map(({ name }) => name)
+  const namesStack = signatureToNamesStack(signature)
+
+  const inferredTerm = convertCtorPatternToAppTerm(patternCtorName, patternArgs, newNames, preSignature, signature)
+  const inferredType = inferType(inferredTerm, [], definitions)
+
+  console.log(`  CHECK: ${prettyPrint(inferredTerm, namesStack)} : ? = ${prettyPrint(checkType, namesStack)}`);
+
+  return { success: true, newSignature: signature }
+}
+
+function inferType(_term: TTKTerm, _path: IndexPath, _definitions: DefinitionsMap): TTKTerm {
+  throw new Error('Not implemented')
+}
+
+function checkType(_term: TTKTerm, _expectedType: TTKTerm, _definitions: DefinitionsMap, _path: IndexPath): void {
+  throw new Error('Not implemented')
+}
