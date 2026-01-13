@@ -599,20 +599,20 @@ export class Parser {
           // Case 1: Merge type signature with definition
           // prev has type but no value, current has same name and value but no type
           if (prev &&
-              prev.name &&
-              decl.name === prev.name &&
-              prev.type && !prev.value &&
-              decl.value && !decl.type) {
+            prev.name &&
+            decl.name === prev.name &&
+            prev.type && !prev.value &&
+            decl.value && !decl.type) {
             // Merge: add value to previous declaration
             prev.value = decl.value;
           }
           // Case 2: Merge multiple pattern clauses
           // Both have the same name, both have Match expressions as values
           else if (prev &&
-                   prev.name &&
-                   decl.name === prev.name &&
-                   prev.value?.tag === 'Match' &&
-                   decl.value?.tag === 'Match') {
+            prev.name &&
+            decl.name === prev.name &&
+            prev.value?.tag === 'Match' &&
+            decl.value?.tag === 'Match') {
             // Merge clauses from decl into prev
             prev.value.clauses.push(...decl.value.clauses);
           }
@@ -678,10 +678,10 @@ export class Parser {
 
           // Case 1: Merge type signature with definition
           if (prev &&
-              prev.decl.name &&
-              decl.name === prev.decl.name &&
-              prev.decl.type && !prev.decl.value &&
-              decl.value && !decl.type) {
+            prev.decl.name &&
+            decl.name === prev.decl.name &&
+            prev.decl.type && !prev.decl.value &&
+            decl.value && !decl.type) {
             // Merge: add value to previous declaration
             // Also merge the source maps
             prev.decl.value = decl.value;
@@ -692,10 +692,10 @@ export class Parser {
           }
           // Case 2: Merge multiple pattern clauses
           else if (prev &&
-                   prev.decl.name &&
-                   decl.name === prev.decl.name &&
-                   prev.decl.value?.tag === 'Match' &&
-                   decl.value?.tag === 'Match') {
+            prev.decl.name &&
+            decl.name === prev.decl.name &&
+            prev.decl.value?.tag === 'Match' &&
+            decl.value?.tag === 'Match') {
             // The new clause will be appended, so its index is the current length
             const newClauseIndex = prev.decl.value.clauses.length;
 
@@ -926,9 +926,6 @@ export class Parser {
     // So we reverse the list to match the type-checker's context ordering.
     const patternVars = patterns.flatMap(p => this.collectPatternVars(p));
     const rhsCtx = [...patternVars].reverse();
-
-    console.log(`[DEBUG parsePatternClauseDefinition] patternVars:`, patternVars);
-    console.log(`[DEBUG parsePatternClauseDefinition] rhsCtx:`, rhsCtx);
 
     // Track source positions with path value.clauses[0].rhs
     // (We use index 0 here, but it will be adjusted during merging if needed)
@@ -1803,8 +1800,8 @@ export class Parser {
    */
   private canStartPattern(token: Token): boolean {
     return token.type === 'IDENT' ||
-           token.type === 'UNDERSCORE' ||
-           token.type === 'LPAREN';
+      token.type === 'UNDERSCORE' ||
+      token.type === 'LPAREN';
   }
 
   /**

@@ -8,12 +8,12 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause } from '../types/tt-kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap, serializeIndexPath } from '../types/source-position';
 import { checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
-import { inferType, TypeCheckError } from '../types/tt-typecheck';
+import { checkType, inferType, TypeCheckError } from '../types/tt-typecheck';
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 
 // ============================================================================
@@ -438,32 +438,14 @@ function checkInductiveTypeDeclaration(
   ctx: TTKContext
 ): { success: false, errors: CheckError[] } | { success: true, context: TTKContext } {
   if (decl.kind !== 'inductive') {
-    return {
-      success: false,
-      errors: [{
-        message: 'Declaration is not an inductive type',
-        path: [],
-      }],
-    }
+    return failCheck('Declaration is not an inductive type', [])
   }
 
   if (!decl.kernelType) {
-    return {
-      success: false,
-      errors: [{
-        message: 'Inductive type declaration is ill-formed',
-        path: [],
-      }],
-    }
+    return failCheck('Inductive type declaration is ill-formed', [])
   }
   if (!decl.kernelConstructors) {
-    return {
-      success: false,
-      errors: [{
-        message: 'Inductive type declaration is ill-formed',
-        path: [],
-      }],
-    }
+    return failCheck('Inductive type declaration is ill-formed', [])
   }
 
   const result = checkInductiveDeclaration(
@@ -490,36 +472,47 @@ function checkInductiveTypeDeclaration(
   }
 }
 
+function failCheck(message: string, path: IndexPath): { success: false, errors: CheckError[] } {
+  return {
+    success: false,
+    errors: [{
+      message,
+      path,
+    }],
+  }
+}
+
 function checkTermDeclaration(
   decl: ElabDeclaration,
   ctx: TTKContext
 ): { success: false, errors: CheckError[] } | { success: true, context: TTKContext } {
   if (decl.kind !== 'term') {
-    return {
-      success: false,
-      errors: [{
-        message: 'Declaration is not a term',
-        path: [],
-      }],
-    }
+    return failCheck('Declaration is not a term', [])
   }
 
   if (!decl.kernelType) {
-    return {
-      success: false,
-      errors: [{
-        message: 'Term declaration is ill-formed',
-        path: [],
-      }],
-    }
+    return failCheck('Term declaration is ill-formed', [])
   }
   let newContext = ctx
 
   try {
-    inferType(decl.kernelType, ctx);
+    if (!decl.kernelValue) {
+      return failCheck('Term declaration is ill-formed', [])
+    }
+
+    const _inferredType = inferType(decl.kernelType, ctx);
+
     // Add to context for subsequent declarations
     if (decl.name) {
       newContext = [{ name: decl.name, type: decl.kernelType }, ...newContext];
+    }
+
+    const x = checkTermValue(decl.name, decl.kernelValue, decl.kernelType, ctx);
+    if (!x.success) {
+      return {
+        success: false,
+        errors: x.errors,
+      }
     }
 
     return { success: true, context: newContext }
@@ -688,3 +681,56 @@ export function compileTTFromText(source: string): CompileResult {
     totalCheckErrors: checkResult.totalCheckErrors
   };
 }
+
+function checkTermValue(
+  _name: string | undefined,
+  value: TTKTerm,
+  type: TTKTerm,
+  ctx: TTKContext
+): { success: false, errors: CheckError[] } | { success: true } {
+  if (value.tag !== 'Match') {
+    try {
+      checkType(value, type, ctx);
+      return { success: true };
+    } catch (e) {
+      return {
+        success: false, errors: [{ message: e instanceof TypeCheckError ? e.message : String(e), path: [], term: value, context: ctx }]
+      }
+    }
+  }
+
+  const errors: CheckError[] = [];
+
+  value.clauses.forEach((clause, clauseIndex) => {
+    const result = checkMatchClause(clause, clauseIndex, value, ctx);
+    if (!result.success) {
+      errors.push(...result.errors);
+    }
+  });
+
+  // TODO: structural recursion check
+  // TODO: totality check
+
+  return { success: errors.length === 0, errors };
+}
+
+function checkMatchClause(
+  _clause: TTKClause,
+  _clauseIndex: number,
+  _value: TTKTerm,
+  _ctx: TTKContext
+): { success: false, errors: CheckError[] } | { success: true } {
+  return { success: true };
+}
+
+/*
+
+
+foo : (m : Nat) -> (n : Nat) -> Vec A n -> A -> A
+foo Zero n v a = a
+foo (Succ m) n v a = let h = (Succ Zero) in
+  case v of
+  (Succ m) Zero | VNil _ =>
+  | VCons _ _ h t => 
+
+*/

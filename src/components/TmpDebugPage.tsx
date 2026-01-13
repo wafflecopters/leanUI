@@ -153,11 +153,17 @@ inductive Vec : Type -> Nat -> Type where
   VNil : (A: Type) -> Vec A Zero
   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
 
+qux : Type
+qux = Nat
+
+qux' : Nat -> Type
+qux' n = Nat
+
 const : (A : Type) -> (B : Type) -> A -> B -> A
 const _ _ a = \\ _ => a
 
 swap : (A : Type) -> (B : Type) -> (C : Type) -> (f : A -> B -> C) -> B -> A -> C
-swap _ _ _ f = \\x y => f y x
+swap _ _ _ f = \\ x y => f y x
 
 vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat _ _ _ (VNil _) v = v
@@ -165,7 +171,7 @@ vecConcat A (Succ p) _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat A p _ tail 
 
 vecConcat' : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat' _ _ _ (VNil _) v = v
-vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\d x => x) Zero p) _ tail v) h
+vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\ d x => x) Zero p) _ tail v) h
 
 inductive Equal : (A : Type) -> A -> A -> Type where
   Refl : (A : Type) -> (x : A) -> Equal A x x
