@@ -1948,10 +1948,10 @@ export class Parser {
    * Parse Type or Type n
    *
    * Syntax:
-   * - Type      → Sort(1)
-   * - Type 0    → Sort(1)  (Type 0 = Type)
-   * - Type 1    → Sort(2)
-   * - Type n    → Sort(n+1) for any literal integer n
+   * - Type      → Sort(0)
+   * - Type 0    → Sort(0)  (Type 0 = Type)
+   * - Type 1    → Sort(1)
+   * - Type n    → Sort(n) for any literal integer n
    *
    * Note: Type_n syntax is handled in the lexer, which recognizes
    * Type_0, Type_1, etc. as TYPE tokens with level information.
@@ -1968,7 +1968,7 @@ export class Parser {
       const levelStr = typeToken.value.substring(5);
       const level = parseInt(levelStr, 10);
       if (!isNaN(level)) {
-        result = mkType(level + 1);  // Type_n = Sort(n+1)
+        result = mkType(level);  // Type_n = Sort(n)
       } else {
         result = mkType(1);
       }
@@ -1976,10 +1976,10 @@ export class Parser {
       // Check for "Type n" syntax (space followed by number)
       const level = parseInt(this.current().value, 10);
       this.advance();
-      result = mkType(level + 1);  // Type n = Sort(n+1)
+      result = mkType(level);  // Type n = Sort(n)
     } else {
-      // Just "Type" means Sort(1)
-      result = mkType(1);
+      // Just "Type" means Sort(0)
+      result = mkType(0);
     }
 
     // Record position for Type

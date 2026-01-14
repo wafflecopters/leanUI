@@ -11,23 +11,16 @@ import { elabToKernelWithMap } from '../types/tt-elab-source';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, prettyPrint, shiftTerm } from '../types/tt-kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { ElabMap, IndexPath, SourceMap } from '../types/source-position';
-import { checkInductiveDeclaration, CheckError } from '../types/tt-typecheck-decl';
+import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
+import { checkType, inferType, lookupTypeAtIndexSignature, TypeCheckError } from './checker';
+import { CheckError, DefinitionsMap, extractPiSpine, PiSpine, Signature, signatureToNamesStack } from './term';
+import { checkInductiveDeclaration } from './inductive';
 
 // ============================================================================
 // Parse Result Types
 // ============================================================================
-
-type DefinitionsMap = Map<string, TTKTerm>
-
-class TypeCheckError extends Error {
-  constructor(message: string, public term?: TTKTerm, public context?: TTKContext, public termPath?: IndexPath, public definitions?: DefinitionsMap) {
-    super(message);
-    this.name = 'TypeCheckError';
-  }
-}
 
 /**
  * A single parsed block - either declarations, a comment, or an error
@@ -190,6 +183,7 @@ export function parseTTSource(source: string): ParseResult {
 
     try {
       const declsWithSource = parser.parseDeclarationsWithSource(blockSource, allPreviousDeclarations);
+
       declarations = declsWithSource.map(d => d.decl);
       sourceMaps = declsWithSource.map(d => d.sourceMap);
       allPreviousDeclarations = [...allPreviousDeclarations, ...declarations];
@@ -461,14 +455,11 @@ function checkInductiveTypeDeclaration(
     decl.name || 'anonymous',
     decl.kernelType,
     decl.kernelConstructors,
-    [],
-    decl.indexPositions
+    decl.indexPositions ?? [],
+    definitions
   );
   if (!result.success) {
-    return {
-      success: false,
-      errors: result.errors,
-    }
+    return result
   } else {
     let newDefinitions = new Map<string, TTKTerm>(definitions);
     newDefinitions.set(decl.name || 'anonymous', decl.kernelType);
@@ -511,7 +502,7 @@ function checkTermDeclaration(
       return failCheck('Term declaration is ill-formed', [])
     }
 
-    const _inferredType = inferType(decl.kernelType, [], definitions);
+    const _inferredType = inferType(decl.kernelType, [], [], definitions);
 
     // Add to context for subsequent declarations
     if (decl.name) {
@@ -693,34 +684,6 @@ export function compileTTFromText(source: string): CompileResult {
   };
 }
 
-type Signature = { name: string, type: TTKTerm }[];
-type PiSpine = { binders: Signature, body: TTKTerm, term: TTKTerm };
-type AppSpine = { fn: TTKTerm, args: TTKTerm[] };
-
-function signatureToNamesStack(signature: Signature): string[] {
-  return signature.map(n => n.name).reverse()
-}
-
-function extractPiSpine(term: TTKTerm): PiSpine {
-  const binders: Signature = [];
-  let current = term;
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
-    binders.push({ name: current.name, type: current.domain });
-    current = current.body;
-  }
-  return { binders, body: current, term };
-}
-
-function extractAppSpine(term: TTKTerm): AppSpine {
-  const args: TTKTerm[] = [];
-  let current = term;
-  while (current.tag === 'App') {
-    args.unshift(current.arg);
-    current = current.fn;
-  }
-  return { fn: current, args };
-}
-
 function checkTermValue(
   name: string | undefined,
   value: TTKTerm,
@@ -729,7 +692,7 @@ function checkTermValue(
 ): { success: false, errors: CheckError[] } | { success: true } {
   if (value.tag !== 'Match') {
     try {
-      checkType(value, type, [], definitions);
+      checkType(value, type, [], [], definitions);
       return { success: true };
     } catch (e) {
       return {
@@ -765,16 +728,6 @@ function contextLookup(name: string, ctx: TTKContext): TTKTerm | undefined {
     }
   }
   return undefined;
-}
-
-function loopupTypeAtIndexSignature(signature: Signature, index: number): TTKTerm {
-  const type = signature[index].type;
-
-  // Shift indices to be at tail of signature
-  // The type at position `index` needs to be shifted by (signature.length - 1 - index)
-  // to move it to the tail position
-  const shiftAmount = signature.length - 1 - index;
-  return shiftAmount > 0 ? shiftTerm(type, shiftAmount, 0) : type;
 }
 
 /* PATTERNS */
@@ -834,7 +787,7 @@ function checkPattern(pattern: TTKPattern, preferredName: string | undefined, ch
       name = `?${preferredName ?? ''}${signature.length}`
     }
 
-    const type = checkType.tag === 'Var' ? loopupTypeAtIndexSignature(signature, checkType.index) :
+    const type = checkType.tag === 'Var' ? lookupTypeAtIndexSignature(signature, checkType.index) :
       (checkType.tag === 'Const' || checkType.tag === 'Sort' || checkType.tag === 'App') ? checkType :
         undefined
 
@@ -872,7 +825,7 @@ function checkCtorPattern(
     return { success: false, errors: [{ message: `Constructor '${patternCtorName}' not found`, path: [], term: checkType, definitions } as CheckError] };
   }
 
-  const { binders: definitionBinders, body: definitionBody } = extractPiSpine(definition);
+  const { binders: definitionBinders, body: _definitionBody } = extractPiSpine(definition);
 
   if (patternArgs.length !== definitionBinders.length) {
     return failCheck(`Constructor '${patternCtorName}' has wrong number of arguments`, [])
@@ -930,17 +883,9 @@ function checkElaboratedPattern(
   const namesStack = signatureToNamesStack(signature)
 
   const inferredTerm = convertCtorPatternToAppTerm(patternCtorName, patternArgs, newNames, preSignature, signature)
-  const inferredType = inferType(inferredTerm, [], definitions)
+  const inferredType = inferType(inferredTerm, [], signature, definitions)
 
   console.log(`  CHECK: ${prettyPrint(inferredTerm, namesStack)} : ? = ${prettyPrint(checkType, namesStack)}`);
 
   return { success: true, newSignature: signature }
-}
-
-function inferType(_term: TTKTerm, _path: IndexPath, _definitions: DefinitionsMap): TTKTerm {
-  throw new Error('Not implemented')
-}
-
-function checkType(_term: TTKTerm, _expectedType: TTKTerm, _definitions: DefinitionsMap, _path: IndexPath): void {
-  throw new Error('Not implemented')
 }

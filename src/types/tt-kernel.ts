@@ -66,6 +66,25 @@ export type TTKTerm =
   | { tag: 'Annot'; term: TTKTerm; type: TTKTerm }          // Type annotation
   | { tag: 'Match'; scrutinee: TTKTerm; clauses: TTKClause[] } // Pattern matching
 
+export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] = []): string {
+  const [updatedName, ...rest] = updatedNames
+  const name = updatedName ?? pattern.name
+
+  if (updatedName && name !== '_' && updatedName !== name) {
+    console.warn(`Unexpected pattern name update: ${name} !== ${updatedName}`)
+  }
+
+  switch (pattern.tag) {
+    case 'PVar':
+      return name;
+    case 'PCtor':
+      if (pattern.args.length === 0) {
+        return name;
+      }
+      return `(${name} ${pattern.args.map(p => prettyPrintPattern(p, rest)).join(' ')})`;
+  }
+}
+
 /**
  * Named variable in context (for debugging/pretty-printing only)
  */
