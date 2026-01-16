@@ -1,4 +1,4 @@
-import { addDefinition, addInductiveDefinition, CheckError, DefinitionsMap } from "./term";
+import { addDefinition, addDefinitionInTCEnv, addInductiveDefinition, addInductiveDefinitionInTCEnv, CheckError, createTCEnv, DefinitionsMap } from "./term";
 import { TTKTerm } from "../types/tt-kernel";
 import { inferType } from "./checker";
 
@@ -15,10 +15,9 @@ export function checkInductiveDeclaration(
   success: true,
   newDefinitions: DefinitionsMap
 } {
-  let newDefinitions = definitions;
+  let newEnv = createTCEnv(definitions);
 
-  // Ensure the signature is well-formed
-  const typeResult = inferType(type, [], [], definitions);
+  const typeResult = inferType(type, [], newEnv);
   if (!typeResult.success) {
     return {
       success: false,
@@ -31,19 +30,19 @@ export function checkInductiveDeclaration(
     }
   }
 
-  newDefinitions = addDefinition(newDefinitions, name, type);
+  newEnv = addDefinitionInTCEnv(newEnv, name, type);
 
   const errors: CheckError[] = [];
 
   // Ensure the constructor types are well-formed
   for (const ctor of constructors) {
-    const ctorResult = inferType(ctor.type, [], [], newDefinitions);
+    const ctorResult = inferType(ctor.type, [], newEnv);
     if (!ctorResult.success) {
       errors.push({
         message: ctorResult.error,
         path: [],
         term: ctor.type,
-        definitions: newDefinitions
+        definitions: newEnv.definitions
       })
     }
   }
@@ -57,17 +56,17 @@ export function checkInductiveDeclaration(
 
   // Add the constructor types to the definitions
   for (const ctor of constructors) {
-    newDefinitions = addDefinition(newDefinitions, ctor.name, ctor.type);
+    newEnv = addDefinitionInTCEnv(newEnv, ctor.name, ctor.type);
   }
 
   // Add the inductive type to the definitions
-  newDefinitions = addInductiveDefinition(newDefinitions, name, type, constructors, indexPositions);
+  newEnv = addInductiveDefinitionInTCEnv(newEnv, name, type, constructors, indexPositions);
 
   // TODO: ensure indices fit within the type
   // TODO: check for strict positivity
 
   return {
     success: true,
-    newDefinitions
+    newDefinitions: newEnv.definitions
   }
 }

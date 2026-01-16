@@ -24,7 +24,69 @@ export interface CheckError {
   actual?: TTKTerm;
 }
 
-export type Signature = { name: string, type: TTKTerm, guardedConstant?: { value: TTKTerm, guards: Constraint[] } }[];
+export type Signature = { name: string, type: TTKTerm, value?: TTKTerm }[];
+
+export type MetaVarState =
+  | { tag: 'unsolved' }
+  | { tag: 'solved', term: TTKTerm }
+  | { tag: 'guarded', term: TTKTerm, constraints: Constraint[] }
+
+export type MetaVar = {
+  ctx: Signature,
+  type: TTKTerm,
+  state: MetaVarState
+}
+
+export type TCEnv = {
+  signature: Signature,
+  definitions: DefinitionsMap,
+  metaVars: Map<string, MetaVar>,
+}
+
+export function createTCEnv(definitions?: DefinitionsMap, signature?: Signature, metaVars?: Map<string, MetaVar>): TCEnv {
+  return {
+    signature: signature ?? [],
+    definitions: definitions ?? createDefinitionsMap(),
+    metaVars: metaVars ?? new Map<string, MetaVar>(),
+  }
+}
+
+export function updateSignatureInTCEnv(env: TCEnv, fn: (s: Signature) => Signature): TCEnv {
+  return {
+    ...env,
+    signature: fn(env.signature),
+  }
+}
+
+export function extendSignatureInTCEnv(env: TCEnv, name: string, type: TTKTerm, value?: TTKTerm): TCEnv {
+  return updateSignatureInTCEnv(env, (s) => [...s, { name, type, value }]);
+}
+
+export function updateDefinitionsInTCEnv(env: TCEnv, fn: (d: DefinitionsMap) => DefinitionsMap): TCEnv {
+  return {
+    ...env,
+    definitions: fn(env.definitions),
+  }
+}
+
+export function addDefinitionInTCEnv(env: TCEnv, name: string, type: TTKTerm): TCEnv {
+  return updateDefinitionsInTCEnv(env, (d) => addDefinition(d, name, type));
+}
+
+export function addInductiveDefinitionInTCEnv(env: TCEnv, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm }>, indexPositions: number[]): TCEnv {
+  return updateDefinitionsInTCEnv(env, (d) => addInductiveDefinition(d, name, type, constructors, indexPositions));
+}
+
+export function updateMetaVarsInTCEnv(env: TCEnv, fn: (m: Map<string, MetaVar>) => Map<string, MetaVar>): TCEnv {
+  return {
+    ...env,
+    metaVars: fn(env.metaVars),
+  }
+}
+
+export function addMetaVarInTCEnv(env: TCEnv, name: string, type: TTKTerm, value?: TTKTerm): TCEnv {
+  return updateMetaVarsInTCEnv(env, (m) => m.set(name, { ctx: env.signature, type, state: { tag: 'unsolved' } }));
+}
 
 export type InductiveDefinition = {
   type: TTKTerm,
