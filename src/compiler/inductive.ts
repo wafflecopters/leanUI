@@ -1,47 +1,73 @@
-import { CheckError, DefinitionsMap } from "./term";
+import { addDefinition, addInductiveDefinition, CheckError, DefinitionsMap } from "./term";
 import { TTKTerm } from "../types/tt-kernel";
 import { inferType } from "./checker";
 
 export function checkInductiveDeclaration(
-  _name: string,
+  name: string,
   type: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm }>,
-  _indexPositions: number[],
+  indexPositions: number[],
   definitions: DefinitionsMap,
 ): {
   success: false,
   errors: CheckError[]
 } | {
   success: true,
-  value: undefined
+  newDefinitions: DefinitionsMap
 } {
-  try {
-    // Ensure the signature is well-formed
-    inferType(type, [], [], definitions);
+  let newDefinitions = definitions;
 
-    const definitionsWithInductive = new Map<string, TTKTerm>(definitions);
-    definitionsWithInductive.set(_name, type);
-
-    // Ensure the constructor types are well-formed
-    for (const ctor of constructors) {
-      inferType(ctor.type, [], [], definitionsWithInductive);
-    }
-  } catch (e) {
+  // Ensure the signature is well-formed
+  const typeResult = inferType(type, [], [], definitions);
+  if (!typeResult.success) {
     return {
       success: false,
       errors: [{
-        message: e instanceof Error ? e.message : String(e),
+        message: typeResult.error,
         path: [],
         term: type,
-        context: []
+        definitions: definitions
       }]
     }
   }
 
-  debugger
+  newDefinitions = addDefinition(newDefinitions, name, type);
+
+  const errors: CheckError[] = [];
+
+  // Ensure the constructor types are well-formed
+  for (const ctor of constructors) {
+    const ctorResult = inferType(ctor.type, [], [], newDefinitions);
+    if (!ctorResult.success) {
+      errors.push({
+        message: ctorResult.error,
+        path: [],
+        term: ctor.type,
+        definitions: newDefinitions
+      })
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      success: false,
+      errors
+    }
+  }
+
+  // Add the constructor types to the definitions
+  for (const ctor of constructors) {
+    newDefinitions = addDefinition(newDefinitions, ctor.name, ctor.type);
+  }
+
+  // Add the inductive type to the definitions
+  newDefinitions = addInductiveDefinition(newDefinitions, name, type, constructors, indexPositions);
+
+  // TODO: ensure indices fit within the type
+  // TODO: check for strict positivity
 
   return {
     success: true,
-    value: undefined
+    newDefinitions
   }
 }

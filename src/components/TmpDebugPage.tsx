@@ -153,6 +153,14 @@ inductive Vec : Type -> Nat -> Type where
   VNil : (A: Type) -> Vec A Zero
   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
 
+inductive Fin : Nat -> Type where
+  FZero : (n : Nat) -> Fin (Succ n)
+  FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
+
+nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
+nth A _ (VCons _ _ h _) (FZero _) = h
+nth A _ (VCons _ (Succ n) h tail) (FSucc _ f) = nth A n tail f
+
 {-
 qux : Type
 qux = Nat
@@ -181,6 +189,7 @@ inductive Equal : (A : Type) -> A -> A -> Type where
 
 sym : (A : Type) -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
 sym A u _ Refl = Refl
+
 -}
 `;
 

@@ -15,7 +15,7 @@ import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
 import { checkType, inferType, lookupTypeAtIndexSignature, TypeCheckError } from './checker';
-import { CheckError, DefinitionsMap, extractPiSpine, PiSpine, Signature, signatureToNamesStack } from './term';
+import { addDefinition, CheckError, createDefinitionsMap, DefinitionsMap, extractPiSpine, getTypeDefinition, PiSpine, Signature, signatureToNamesStack } from './term';
 import { checkInductiveDeclaration } from './inductive';
 
 // ============================================================================
@@ -461,14 +461,9 @@ function checkInductiveTypeDeclaration(
   if (!result.success) {
     return result
   } else {
-    let newDefinitions = new Map<string, TTKTerm>(definitions);
-    newDefinitions.set(decl.name || 'anonymous', decl.kernelType);
-    for (const ctor of decl.kernelConstructors) {
-      newDefinitions.set(ctor.name, ctor.type);
-    }
     return {
       success: true,
-      definitions: newDefinitions,
+      definitions: result.newDefinitions,
     }
   }
 }
@@ -506,7 +501,7 @@ function checkTermDeclaration(
 
     // Add to context for subsequent declarations
     if (decl.name) {
-      newDefinitions.set(decl.name, decl.kernelType);
+      newDefinitions = addDefinition(newDefinitions, decl.name, decl.kernelType);
     }
 
     const x = checkTermValue(decl.name, decl.kernelValue, decl.kernelType, newDefinitions);
@@ -634,7 +629,7 @@ interface CheckBlocksResult {
  */
 function checkBlocks(
   elabResult: ElabResult,
-  initialDefinitions: DefinitionsMap = new Map<string, TTKTerm>(),
+  initialDefinitions: DefinitionsMap = createDefinitionsMap(),
 ): CheckBlocksResult {
   const compiledBlocks: CompiledBlock[] = [];
   let currentDefinitions = initialDefinitions;
@@ -740,13 +735,19 @@ function checkMatchClause(
 ): { success: false, errors: CheckError[] } | { success: true } {
   const result = processMatchClauseLhs(termName, clause.patterns, typePiSpine, definitions)
   // TODO
-  return { success: true };
+  return result;
 }
 
 const originalConsoleLog = console.log
 
-function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, definitions: DefinitionsMap) {
-  if (termName === 'vecConcat') {
+function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, definitions: DefinitionsMap): {
+  success: true,
+  newSignature: Signature;
+} | {
+  success: false,
+  errors: CheckError[];
+} {
+  if (termName === 'vecConcat' || true) {
     console.log = originalConsoleLog
   } else {
     console.log = () => { }
@@ -820,7 +821,7 @@ function checkCtorPattern(
   success: false,
   errors: CheckError[];
 } {
-  const definition = definitions.get(patternCtorName);
+  const definition = getTypeDefinition(definitions, patternCtorName);
   if (!definition) {
     return { success: false, errors: [{ message: `Constructor '${patternCtorName}' not found`, path: [], term: checkType, definitions } as CheckError] };
   }
@@ -828,7 +829,7 @@ function checkCtorPattern(
   const { binders: definitionBinders, body: _definitionBody } = extractPiSpine(definition);
 
   if (patternArgs.length !== definitionBinders.length) {
-    return failCheck(`Constructor '${patternCtorName}' has wrong number of arguments`, [])
+    return failCheck(`Constructor '${patternCtorName}' has wrong number of arguments in pattern. Has ${patternArgs.length} but expected ${definitionBinders.length}`, [])
   }
 
   let sig = signature
@@ -859,7 +860,8 @@ function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPa
   for (let i = 0; i < patternArgs.length; i++) {
     const pattern = patternArgs[i]
     if (pattern.tag === 'PCtor') {
-      debugger
+      const arg = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames, _preSignature, signature)
+      term = mkApp(term, arg)
     } else {
       const patternName = newNames[i] ?? pattern.name
       const sigIndex = signature.findIndex(b => b.name === patternName)
@@ -885,7 +887,11 @@ function checkElaboratedPattern(
   const inferredTerm = convertCtorPatternToAppTerm(patternCtorName, patternArgs, newNames, preSignature, signature)
   const inferredType = inferType(inferredTerm, [], signature, definitions)
 
-  console.log(`  CHECK: ${prettyPrint(inferredTerm, namesStack)} : ? = ${prettyPrint(checkType, namesStack)}`);
+  if (!inferredType.success) {
+    return { success: false, errors: [{ message: inferredType.error, path: [], term: inferredTerm, definitions }] }
+  }
+
+  console.log(`  CHECK: ${prettyPrint(inferredTerm, namesStack)} : ${prettyPrint(inferredType.type, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
 
   return { success: true, newSignature: signature }
 }

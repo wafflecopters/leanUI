@@ -8,39 +8,77 @@ export class TypeCheckError extends Error {
 // INFERENCE
 
 import { arraySeg, IndexPath } from "../types/source-position"
-import { shiftTerm, TTKTerm } from "../types/tt-kernel"
-import { DefinitionsMap, Signature } from "./term";
+import { prettyPrint, shiftTerm, subst, TTKContext, TTKTerm } from "../types/tt-kernel"
+import { DefinitionsMap, getTypeDefinition, Signature } from "./term";
+import { areTypesDefEq } from "./whnf";
 
-function inferBinderType(term: TTKTerm & { tag: 'Binder' }, path: IndexPath, signature: Signature, _definitions: DefinitionsMap): TTKTerm {
+type InferResult = {
+  success: true,
+  type: TTKTerm
+} | {
+  success: false,
+  error: string
+}
+
+function inferBinderType(term: TTKTerm & { tag: 'Binder' }, path: IndexPath, signature: Signature, _definitions: DefinitionsMap): InferResult {
   if (term.binderKind.tag === 'BPi') {
     const domResult = inferType(term.domain, [...path, arraySeg(0)], signature, _definitions)
+
+    if (!domResult.success) {
+      return domResult
+    }
+
     const bodyResult = inferType(term.body, [...path, arraySeg(1)], [...signature, { name: term.name, type: term.domain }], _definitions)
 
-    return maxSort(domResult, bodyResult)
+    if (!bodyResult.success) {
+      return bodyResult
+    }
+
+    return { success: true, type: maxSort(domResult.type, bodyResult.type) }
   }
   debugger
   throw new Error('Not implemented')
 }
 
-export function inferType(term: TTKTerm, path: IndexPath, signature: Signature, definitions: DefinitionsMap): TTKTerm {
+export function inferType(term: TTKTerm, path: IndexPath, signature: Signature, definitions: DefinitionsMap): InferResult {
   if (term.tag === 'Const') {
-    const type = definitions.get(term.name)
+    const type = getTypeDefinition(definitions, term.name)
     if (!type) {
       throw new TypeCheckError(`Constant '${term.name}' not found in definitions`, term, [], path, definitions)
     }
-    return type
+    return { success: true, type }
   } else if (term.tag === 'Binder') {
     return inferBinderType(term, path, signature, definitions)
   } else if (term.tag === 'Sort') {
-    return { tag: 'Sort', level: term.level + 1 }
+    return { success: true, type: { tag: 'Sort', level: term.level + 1 } }
   } else if (term.tag === 'Var') {
-    return lookupTypeAtIndexSignature(signature, term.index)
+    return { success: true, type: lookupTypeAtIndexSignature(signature, term.index) }
   } else if (term.tag === 'App') {
     const fnResult = inferType(term.fn, path, signature, definitions)
+
+    if (!fnResult.success) {
+      return fnResult
+    }
+
+    // Function type must be a Pi
+    if (fnResult.type.tag !== 'Binder' || fnResult.type.binderKind.tag !== 'BPi') {
+      return { success: false, error: `App function is not a Pi type: ${prettyPrint(fnResult.type)}` };
+    }
+
     const argResult = inferType(term.arg, path, signature, definitions)
 
-    debugger
-    return { tag: 'App', fn: fnResult, arg: argResult }
+    if (!argResult.success) {
+      return argResult
+    }
+
+    // Check argument against domain
+    const checkResult = checkType(term.arg, fnResult.type.domain, path, signature, definitions);
+    if (!checkResult.success) {
+      debugger
+      return { success: false, error: new TypeCheckError(`App argument type mismatch: ${checkResult.error}`, term.arg, signature, path, definitions).message };
+    }
+
+    return { success: true, type: subst(0, term.arg, fnResult.type.body) };
   }
   debugger
   throw new Error('Not implemented')
@@ -48,9 +86,60 @@ export function inferType(term: TTKTerm, path: IndexPath, signature: Signature, 
 
 // CHECKING
 
-export function checkType(_term: TTKTerm, _expectedType: TTKTerm, _path: IndexPath, _signature: Signature, _definitions: DefinitionsMap): void {
-  debugger
-  throw new Error('Not implemented')
+export function checkType(term: TTKTerm, expectedType: TTKTerm, path: IndexPath, signature: Signature, definitions: DefinitionsMap): {
+  success: true,
+  type: TTKTerm
+} | {
+  success: false,
+  error: string
+} {
+  // Special case: Lambda checking
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLam') {
+    // ────────────────────────────────────────────────────────────────
+    // (LAM) - Lambda abstraction
+    // 
+    //   Γ ⊢ Π x : A, B
+    //   Γ, x : A ⊢ t ⇐ B
+    //   ───────────────────────────────
+    //   Γ ⊢ λ x : A => t ⇐ Π x : A, B
+    // ────────────────────────────────────────────────────────────────
+    if (expectedType.tag !== 'Binder' || expectedType.binderKind.tag !== 'BPi') {
+      return { success: false, error: `Lambda expected Pi type, got: ${prettyPrint(expectedType)}` };
+    }
+
+    const piType = expectedType;
+
+    // Check that domains match
+    if (!areTypesDefEq(term.domain, piType.domain)) {
+      return { success: false, error: `Lambda domain mismatch: ${prettyPrint(term.domain)} vs ${prettyPrint(piType.domain)}` };
+    }
+
+    // Check body in extended context
+    const extendedSignature: Signature = [...signature, { name: term.name, type: term.domain }];
+    return checkType(term.body, piType.body, [...path, arraySeg(1)], extendedSignature, definitions);
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // (CONV) - Type conversion
+  // 
+  //   Γ ⊢ t ⇒ T
+  //   T ≃ T′
+  //   ─────────────
+  //   Γ ⊢ t ⇐ T′
+  // ────────────────────────────────────────────────────────────────
+  const inferResult = inferType(term, path, signature, definitions);
+  if (!inferResult.success) {
+    return { success: false, error: inferResult.error };
+  }
+
+  if (!areTypesDefEq(inferResult.type, expectedType)) {
+    return {
+      success: false,
+      error: `Type mismatch:\n  Expected: ${prettyPrint(expectedType)}\n  Got:      ${prettyPrint(inferResult.type)}`
+    };
+  }
+
+  return { success: true, type: inferResult.type };
 }
 
 // Helpers
@@ -64,7 +153,8 @@ function maxSort(lhs: TTKTerm, rhs: TTKTerm): TTKTerm {
 }
 
 export function lookupTypeAtIndexSignature(signature: Signature, index: number): TTKTerm {
-  const binder = signature[index];
+  const sigIndex = signature.length - 1 - index
+  const binder = signature[sigIndex];
   if (!binder) {
     debugger
     throw new TypeCheckError(`Type index ${index} not found in signature`)
@@ -72,8 +162,6 @@ export function lookupTypeAtIndexSignature(signature: Signature, index: number):
   const type = binder.type;
 
   // Shift indices to be at tail of signature
-  // The type at position `index` needs to be shifted by (signature.length - 1 - index)
-  // to move it to the tail position
-  const shiftAmount = signature.length - 1 - index;
+  const shiftAmount = signature.length - sigIndex;
   return shiftAmount > 0 ? shiftTerm(type, shiftAmount, 0) : type;
 }
