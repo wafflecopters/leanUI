@@ -143,7 +143,7 @@ const MONACO_WIDGET_STYLES = `
 
 const SAMPLE_CODE = `inductive Nat : Type where
   Zero : Nat
-  Succ : Nat -> Na
+  Succ : (Nat -> Nat) -> Nat
 
 {-
 plus : Nat -> Nat -> Nat

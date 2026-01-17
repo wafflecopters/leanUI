@@ -1,18 +1,17 @@
 // INFERENCE
 
-import { IndexPath } from "../types/source-position"
-import { shiftTerm, subst, TTKTerm } from "../types/tt-kernel"
-import { DefinitionsMap, getTypeDefinition, Signature, TCEnv } from "./term";
+import { subst, TTKTerm } from "../types/tt-kernel"
+import { TCEnv, TCEnvError } from "./term";
 
 function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm> {
   if (env.isBinderPiTerm()) {
     const domResult = inferType(env.inBinderPiDomain())
     const bodyResult = inferType(env.inBinderPiBody())
 
-    return env.withValue(maxSort(domResult.value, bodyResult.value))
+    return env.withValue(maxSort(domResult.value, bodyResult.value, env))
   }
   debugger
-  throw new Error('Not implemented')
+  throw new TCEnvError<TTKTerm>(`Inference not implemented for binder type ${env.value.tag}`, env)
 }
 
 export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
@@ -37,7 +36,7 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     return env.mapValue(term => subst(0, term.arg, fnTypeEnv.value.body))
   }
   debugger
-  throw new Error('Not implemented')
+  throw new TCEnvError<TTKTerm>(`Inference not implemented for term type ${env.value.tag}`, env)
 }
 
 // CHECKING
@@ -74,10 +73,10 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
 
 // Helpers
 
-function maxSort(lhs: TTKTerm, rhs: TTKTerm): TTKTerm {
+function maxSort(lhs: TTKTerm, rhs: TTKTerm, env: TCEnv<unknown>): TTKTerm {
   if (lhs.tag === 'Sort' && rhs.tag === 'Sort') {
     return { tag: 'Sort', level: Math.max(lhs.level, rhs.level) }
   }
   debugger
-  throw new Error('Not implemented')
+  throw new TCEnvError(`Max sort not implemented for term types ${lhs.tag} and ${rhs.tag}`, env)
 }

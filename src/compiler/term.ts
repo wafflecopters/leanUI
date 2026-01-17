@@ -208,13 +208,17 @@ export const MatchPartIndex = {
   ClausePatterns: fieldSeg('patterns'),
 } satisfies Record<string, IndexPathSegment>;
 
-export const MatchClausePartIndex = {
+export const ClausePartIndex = {
   Patterns: fieldSeg('patterns'),
   Rhs: fieldSeg('rhs'),
 } satisfies Record<string, IndexPathSegment>;
 
 export const MatchClauseCtorPatternPartIndex = {
   Args: fieldSeg('args'),
+} satisfies Record<string, IndexPathSegment>;
+
+export const HolePartIndex = {
+  Type: fieldSeg('type'),
 } satisfies Record<string, IndexPathSegment>;
 
 export const AppPartIndex = {
@@ -273,6 +277,10 @@ export class TCEnv<T> {
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
     return new TCEnv(this.signature, this.definitions, this.metaVars, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
+  }
+
+  atIndexPath(this: TCEnv<T>, indexPath: IndexPath): TCEnv<void> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, indexPath, [], undefined);
   }
 
   // Terms
@@ -403,7 +411,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
-      [...this.indexPath, MatchClausePartIndex.Patterns],
+      [...this.indexPath, ClausePartIndex.Patterns],
       [...this.valueStack, this.value],
       this.value.patterns
     );
@@ -427,7 +435,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
-      [...this.indexPath, MatchClausePartIndex.Rhs],
+      [...this.indexPath, ClausePartIndex.Rhs],
       [...this.valueStack, this.value],
       this.value.rhs
     );
@@ -771,4 +779,38 @@ function lookupTypeAtIndexSignature(signature: Signature, index: number): TTKTer
   // Shift indices to be at tail of signature
   const shiftAmount = signature.length - sigIndex;
   return shiftAmount > 0 ? shiftTerm(type, shiftAmount, 0) : type;
+}
+
+export function postOrderTraverseTerm(term: TTKTerm, fn: (term: TTKTerm, indexPath: IndexPath) => void, indexPath: IndexPath) {
+  fn(term, indexPath);
+
+  if (term.tag === 'Binder') {
+    postOrderTraverseTerm(term.domain, fn, [...indexPath, BinderPartSegment.Domain]);
+    postOrderTraverseTerm(term.body, fn, [...indexPath, BinderPartSegment.Body]);
+    if (term.binderKind.tag === 'BLet') {
+      postOrderTraverseTerm(term.binderKind.defVal, fn, [...indexPath, BinderPartSegment.Value]);
+    }
+  } else if (term.tag === 'App') {
+    postOrderTraverseTerm(term.fn, fn, [...indexPath, AppPartIndex.Fn]);
+    postOrderTraverseTerm(term.arg, fn, [...indexPath, AppPartIndex.Arg]);
+  } else if (term.tag === 'Hole') {
+    postOrderTraverseTerm(term.type, fn, [...indexPath, HolePartIndex.Type]);
+  } else if (term.tag === 'Annot') {
+    postOrderTraverseTerm(term.term, fn, [...indexPath, AnnotPartIndex.Term]);
+    postOrderTraverseTerm(term.type, fn, [...indexPath, AnnotPartIndex.Type]);
+  } else if (term.tag === 'Match') {
+    postOrderTraverseTerm(term.scrutinee, fn, [...indexPath, MatchPartIndex.Scrutinee]);
+    term.clauses.forEach((clause, clauseIndex) => {
+      postOrderTraverseTerm(clause.rhs, fn, [...indexPath, MatchPartIndex.Clauses, arraySeg(clauseIndex), ClausePartIndex.Rhs]);
+    });
+  } else if (term.tag === 'Sort') {
+    // No children
+  } else if (term.tag === 'Const') {
+    // No children
+  } else if (term.tag === 'Var') {
+    // No children
+  } else {
+    const _never: never = term as never;
+    throw new Error(`Unhandled term type: ${(_never as { tag: string }).tag}`);
+  }
 }
