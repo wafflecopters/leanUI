@@ -1,4 +1,4 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError } from "./term";
 import { TTKTerm } from "../types/tt-kernel";
 import { inferType } from "./checker";
 
@@ -104,7 +104,7 @@ export function checkInductiveDeclaration(
   const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions);
 
   // TODO: ensure indices fit within the type
-  constructors.forEach((ctor, i) => checkNestedPiForNegativeOccurrences(name, ctor.name, ctorsEnv.inInductiveDefinitionConstructor(i).inInductiveDefinitionConstructorType(), 'strictly_positive', errors));
+  constructors.forEach((_, i) => checkStrictPositivity(name, ctorsEnv.inInductiveDefinitionConstructor(i), errors));
 
   if (errors.length > 0) {
     return { success: false, errors };
@@ -125,6 +125,78 @@ export function checkInductiveDeclaration(
 export type Polarity = 'strictly_positive' | 'positive' | 'negative';
 
 /**
+ * Check that the inductive type occurs only in strictly positive positions.
+ *
+ * A strictly positive occurrence means the inductive type does NOT appear
+ * in the domain (left side) of any function arrow, except as a direct argument.
+ *
+ * The key insight is:
+ * - For `succ : Nat -> Nat`, the `Nat` argument is strictly positive ✓
+ *   (It's a direct argument, not nested under any arrows in its type)
+ * - For `bad : (Nat -> X) -> Bad`, the `Nat` is NEGATIVE ✗
+ *   (It's in the domain of a function type that is itself an argument)
+ *
+ * We check the DOMAINS of the constructor's Pi binders. Within each domain,
+ * any occurrence of the inductive type is problematic because it means
+ * the inductive type appears in a negative position.
+ *
+ * Examples:
+ * - `Nat → Nat` - Nat in argument position is strictly positive ✓
+ * - `(Nat → A) → Nat` - Nat inside the argument type is NEGATIVE ✗
+ * - `((Nat → A) → A) → Nat` - Nat is still negative (nested) ✗
+ */
+function checkStrictPositivity(
+  inductiveName: string,
+  env: TCEnv<{ name: string, type: TTKTerm }>,
+  errors: TCEnvError<unknown>[]
+): TCEnvError<unknown>[] {
+  let traverseEnv = env.inInductiveDefinitionConstructorType();
+  while (traverseEnv.isBinderPiTerm()) {
+    checkDomainPositivity(inductiveName, env.value.name, traverseEnv.inBinderPiDomain(), errors);
+    traverseEnv = traverseEnv.inBinderPiBody();
+  }
+  return errors;
+}
+
+/**
+ * Check a constructor argument type for positivity violations.
+ *
+ * A direct occurrence of the inductive type is fine (strictly positive).
+ * But if the inductive type appears in the domain of a nested function type,
+ * that's a positivity violation.
+ *
+ * @param termPath - The path to the current term being checked (for error reporting)
+ */
+function checkDomainPositivity(
+  inductiveName: string,
+  ctorName: string,
+  env: TCEnv<TTKTerm>,
+  errors: TCEnvError<unknown>[]
+): void {
+  if (env.isConstTerm() || env.isVarTerm() || env.isSortTerm() || env.isHoleTerm()) {
+    // Direct occurrences of constants/vars are fine
+    // Even if it's the inductive type, this is strictly positive
+  } else if (env.isAppTerm()) {
+    checkDomainPositivity(inductiveName, ctorName, env.inAppFn(), errors);
+    checkDomainPositivity(inductiveName, ctorName, env.inAppArg(), errors);
+  } else if (env.isBinderTerm()) {
+    checkNestedPiForNegativeOccurrences(
+      inductiveName,
+      ctorName,
+      env,
+      'strictly_positive',
+      errors,
+    );
+    if (env.isBinderPiTerm()) {
+    } else {
+      throw new Error(`Syntax has been checked already. This should not happen. Binder-${env.value.binderKind.tag}`);
+    }
+  } else {
+    throw new Error(`Syntax has been checked already. This should not happen. ${env.value.tag}`);
+  }
+}
+
+/**
  * Check a nested Pi type for negative occurrences of the inductive type.
  *
  * For a Pi type (A -> B):
@@ -132,35 +204,35 @@ export type Polarity = 'strictly_positive' | 'positive' | 'negative';
  * - In the body B, polarity stays the same
  *
  * When we find the inductive type at negative polarity, it's an error.
+ *
+ * @param termPath - The path to the current term being checked (for error reporting)
  */
 function checkNestedPiForNegativeOccurrences(
   inductiveName: string,
   ctorName: string,
   env: TCEnv<TTKTerm>,
   polarity: Polarity,
-  errorsAcc: TCEnvError<unknown>[]
+  errors: TCEnvError<unknown>[]
 ): void {
-
-  if (env.isConstTerm()) {
+  if (env.isVarTerm() || env.isSortTerm()) {
+    // Valid
+  } else if (env.isConstTerm()) {
     if (env.value.name === inductiveName) {
-      if (polarity !== 'strictly_positive') {
-        const msg = polarity === 'negative' ? 'negative' : '(non-strict) positive'
-        errorsAcc.push(new TCEnvError(
-          `Constructor '${ctorName}' has ${msg} occurrence of '${inductiveName}'`,
-          env
-        ));
-      }
+      const msg = polarity === 'negative' ? 'negative' : '(non-strict) positive';
+      errors.push(new TCEnvError(`Constructor '${ctorName}' has a ${msg} occurrence of '${inductiveName}'.`, env));
     }
-  } else if (env.isVarTerm() || env.isSortTerm() || env.isHoleTerm()) {
-    // No occurrences of the inductive type
   } else if (env.isAppTerm()) {
-    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppFn(), polarity, errorsAcc);
-    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppArg(), polarity, errorsAcc);
-  } else if (env.isBinderPiTerm()) {
-    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiDomain(), flipPolarity(polarity), errorsAcc);
-    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiBody(), polarity, errorsAcc);
+    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppFn(), polarity, errors);
+    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppArg(), polarity, errors);
+  } else if (env.isBinderTerm()) {
+    if (env.isBinderPiTerm()) {
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiDomain(), flipPolarity(polarity), errors);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiBody(), polarity, errors);
+    } else {
+      throw new Error(`Syntax has been checked already. This should not happen. Binder-${env.value.binderKind.tag}`);
+    }
   } else {
-    throw new Error('Syntax has been checked already. This should not happen.');
+    throw new Error(`Syntax has been checked already. This should not happen. ${env.value.tag}`);
   }
 }
 
