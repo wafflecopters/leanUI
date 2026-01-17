@@ -143,8 +143,9 @@ const MONACO_WIDGET_STYLES = `
 
 const SAMPLE_CODE = `inductive Nat : Type where
   Zero : Nat
-  Succ : Nat -> Nat
+  Succ : Nat -> Na
 
+{-
 plus : Nat -> Nat -> Nat
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)
@@ -160,6 +161,7 @@ inductive Fin : Nat -> Type where
 nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
 nth A _ (VCons _ _ h _) (FZero _) = h
 nth A _ (VCons _ (Succ n) h tail) (FSucc _ f) = nth A n tail f
+-}
 
 {-
 qux : Type
@@ -472,6 +474,7 @@ export function TmpDebugPage() {
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
+  const [editorReady, setEditorReady] = useState(false);
 
   // Inject Monaco widget z-index styles on mount
   useEffect(() => {
@@ -534,7 +537,7 @@ export function TmpDebugPage() {
           for (const err of decl.checkErrors) {
             // Try to map error path to precise source location
             const sourceRange = mapErrorPathToSourceRange(
-              err.path,
+              err.env.indexPath,
               decl.elabMap,
               decl.sourceMap,
               block.startLine
@@ -570,11 +573,12 @@ export function TmpDebugPage() {
     }
 
     monaco.editor.setModelMarkers(model, 'tt-compiler', markers);
-  }, [compileResult]);
+  }, [compileResult, editorReady]);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    setEditorReady(true);
 
     // Register TT language
     monaco.languages.register({ id: 'tt' });

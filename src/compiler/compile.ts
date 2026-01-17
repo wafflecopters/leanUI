@@ -14,8 +14,8 @@ import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
-import { checkType, inferType, lookupTypeAtIndexSignature, TypeCheckError } from './checker';
-import { addDefinition, addDefinitionInTCEnv, CheckError, createDefinitionsMap, createTCEnv, DefinitionsMap, extendSignatureInTCEnv, extractPiSpine, getTypeDefinition, PiSpine, Signature, signatureToNamesStack, TCEnv, transformVarsInTerm } from './term';
+import { checkType, inferType } from './checker';
+import { addDefinition, addDefinitionInTCEnv, CheckError, createDefinitionsMap, createTCEnv, DefinitionsMap, extendSignatureInTCEnv, extractPiSpine, getTypeDefinition, PiSpine, Signature, signatureToNamesStack, TCEnv, TCEnvError, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
 
 // ============================================================================
@@ -100,7 +100,7 @@ export interface CompiledDeclaration {
 
   // Type checking results
   checkSuccess: boolean;
-  checkErrors: CheckError[];
+  checkErrors: TCEnvError<unknown>[];
 
   // Source mapping for error locations
   elabMap?: ElabMap;
@@ -396,14 +396,14 @@ function checkDeclaration(
   definitions: DefinitionsMap,
 ): CheckDeclarationResult {
   let checkSuccess = true;
-  const checkErrors: CheckError[] = [];
+  const checkErrors: TCEnvError<unknown>[] = [];
   let newDefinitions = definitions;
   let errorCount = 0;
 
   const result = decl.kind === 'inductive' ?
     checkInductiveTypeDeclaration(decl, definitions) :
     decl.kind === 'term' ? checkTermDeclaration(decl, definitions) :
-      { success: false as const, errors: [{ message: 'Declaration is not an inductive or term', path: [] }] };
+      { success: false as const, errors: [new TCEnvError<unknown>('Declaration is not an inductive or term', createTCEnv(definitions))] };
 
   if (result.success) {
     newDefinitions = result.definitions;
@@ -439,16 +439,16 @@ function checkDeclaration(
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: CheckError[] } | { success: true, definitions: DefinitionsMap } {
+): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap } {
   if (decl.kind !== 'inductive') {
-    return failCheck('Declaration is not an inductive type', [])
+    return failCheck('Declaration is not an inductive type', createTCEnv(definitions))
   }
 
   if (!decl.kernelType) {
-    return failCheck('Inductive type declaration is ill-formed', [])
+    return failCheck('Inductive type declaration is ill-formed', createTCEnv(definitions))
   }
   if (!decl.kernelConstructors) {
-    return failCheck('Inductive type declaration is ill-formed', [])
+    return failCheck('Inductive type declaration is ill-formed', createTCEnv(definitions))
   }
 
   const result = checkInductiveDeclaration(
@@ -468,43 +468,40 @@ function checkInductiveTypeDeclaration(
   }
 }
 
-function failCheck(message: string, path: IndexPath): { success: false, errors: CheckError[] } {
+function failCheck(message: string, env: TCEnv<unknown>): { success: false, errors: TCEnvError<unknown>[] } {
   return {
     success: false,
-    errors: [{
-      message,
-      path,
-    }],
+    errors: [new TCEnvError(message, env)],
   }
 }
 
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: CheckError[] } | { success: true, definitions: DefinitionsMap } {
+): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap } {
+  let env = createTCEnv(definitions)
+
   if (decl.kind !== 'term') {
-    return failCheck('Declaration is not a term', [])
+    return failCheck('Declaration is not a term', env)
   }
 
   if (!decl.kernelType) {
-    return failCheck('Term declaration is ill-formed', [])
+    return failCheck('Term declaration is ill-formed', env)
   }
-
-  let env = createTCEnv(definitions)
 
   try {
     if (!decl.kernelValue) {
-      return failCheck('Term declaration is ill-formed', [])
+      return failCheck('Term declaration is ill-formed', env)
     }
 
-    const _inferredType = inferType(decl.kernelType, [], env);
+    inferType(env.withValue(decl.kernelType));
 
     // Add to context for subsequent declarations
     if (decl.name) {
       env = addDefinitionInTCEnv(env, decl.name, decl.kernelType);
     }
 
-    const x = checkTermValue(decl.name, decl.kernelValue, decl.kernelType, env);
+    const x = checkTermValue(decl.name, env.withValue(decl.kernelValue), decl.kernelType);
     if (!x.success) {
       return {
         success: false,
@@ -514,19 +511,16 @@ function checkTermDeclaration(
 
     return { success: true, definitions: env.definitions }
   } catch (e) {
-    const message = e instanceof TypeCheckError ? e.message :
-      (e instanceof Error ? e.message : String(e));
-    const path: IndexPath = e instanceof TypeCheckError && e.termPath ? e.termPath :
-      [{ kind: 'field', name: 'type' }];
-
-    return {
-      success: false,
-      errors: [{
-        message,
-        path,
-        term: e instanceof TypeCheckError ? e.term : decl.kernelType,
-        definitions: e instanceof TypeCheckError ? e.definitions : definitions
-      }],
+    if (e instanceof TCEnvError) {
+      return {
+        success: false,
+        errors: [e],
+      }
+    } else {
+      return {
+        success: false,
+        errors: [new TCEnvError(e instanceof Error ? e.message : String(e), env)],
+      }
     }
   }
 }
@@ -681,34 +675,41 @@ export function compileTTFromText(source: string): CompileResult {
 
 function checkTermValue(
   name: string | undefined,
-  value: TTKTerm,
+  env: TCEnv<TTKTerm>,
   type: TTKTerm,
-  env: TCEnv<null>
-): { success: false, errors: CheckError[] } | { success: true } {
-  if (value.tag !== 'Match') {
+): { success: false, errors: TCEnvError<unknown>[] } | { success: true } {
+  if (!env.isMatchTerm()) {
     try {
-      checkType(value, type, [], env);
+      checkType(env, type);
       return { success: true };
     } catch (e) {
-      return {
-        success: false, errors: [{ message: e instanceof TypeCheckError ? e.message : String(e), path: [], term: value, context: env.signature, definitions: env.definitions }]
+      if (e instanceof TCEnvError) {
+        return { success: false, errors: [e] };
+      } else {
+        return { success: false, errors: [new TCEnvError(String(e), env)] };
       }
     }
   }
 
   const typePiSpine = extractPiSpine(type);
 
-  const errors: CheckError[] = [];
+  const errors: TCEnvError<unknown>[] = [];
 
   // TODO - ensure all clauses have same pattern count
   // TODO - ensure pattern count is less than or equal type binders count
 
-  value.clauses.forEach((clause, _clauseIndex) => {
-    const result = checkMatchClause(name ?? '???', clause, typePiSpine, env);
-    if (!result.success) {
-      errors.push(...result.errors);
+  const clausesEnv = env.inMatchClauses();
+  for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
+    try {
+      checkMatchClause(name ?? '???', clausesEnv.inMatchClause(clauseIndex), typePiSpine);
+    } catch (e) {
+      if (e instanceof TCEnvError) {
+        errors.push(e);
+      } else {
+        errors.push(new TCEnvError(String(e), clausesEnv.inMatchClause(clauseIndex)));
+      }
     }
-  });
+  }
 
   // TODO: structural recursion check
   // TODO: totality check
@@ -720,71 +721,46 @@ function checkTermValue(
 
 function checkMatchClause(
   termName: string,
-  clause: TTKClause,
+  env: TCEnv<TTKClause>,
   typePiSpine: PiSpine,
-  env: TCEnv<null>
-): { success: false, errors: CheckError[] } | { success: true } {
-  const result = processMatchClauseLhs(termName, clause.patterns, typePiSpine, env)
+): TCEnv<void> {
+  const result = processMatchClauseLhs(termName, env.inMatchClausePatterns(), typePiSpine)
   // TODO
-  return result;
+  return result.withoutValue();
 }
 
 const originalConsoleLog = console.log
 
-function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, env: TCEnv<null>): {
-  success: true,
-  newEnv: TCEnv<null>;
-  patternTerms: (TTKTerm | null)[];
-} | {
-  success: false,
-  errors: CheckError[];
-} {
+function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, typePiSpine: PiSpine): TCEnv<(TTKTerm | null)[]> {
   if (termName === 'vecConcat' || true) {
     console.log = originalConsoleLog
   } else {
     console.log = () => { }
   }
-  console.log(`LHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: patterns })}`);
+  console.log(`LHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
 
   let patternTerms: (TTKTerm | null)[] = []
 
   let newEnv = env
-  for (let i = 0; i < patterns.length; i++) {
+  for (let i = 0; i < env.value.length; i++) {
     const binder = typePiSpine.binders[i];
     const checkType = typePiSpine.binders[i].type;
-    const result = checkPattern(patterns[i], binder.name, patternTerms, checkType, newEnv);
+    const result = checkPattern(env.inMatchClausePattern(i), binder.name, patternTerms, checkType);
 
-    if (result.success) {
-      newEnv = result.newEnv;
-      patternTerms.push(result.patternTerm);
-    } else {
-      console.error(`Error: ${result.errors.map(e => e.message).join(', ')}`);
-      return result
-    }
+    newEnv = result.withValue(env.value);
+    patternTerms.push(result.value);
   }
 
-  return { success: true, newEnv, patternTerms };
+  return newEnv.withValue(patternTerms);
 }
 
-function checkPattern(pattern: TTKPattern, preferredName: string | undefined, patternTerms: (TTKTerm | null)[], checkType: TTKTerm, env: TCEnv<null>): {
-  success: true,
-  newEnv: TCEnv<null>;
-  patternTerm: TTKTerm | null
-} | {
-  success: false,
-  errors: CheckError[];
-} {
-  if (pattern.tag === 'PCtor') {
-    const { name, args } = pattern;
-    return checkCtorPattern(name, args, patternTerms, checkType, env);
-  } else if (pattern.tag === 'PVar') {
-    let name = pattern.name
+function checkPattern(env: TCEnv<TTKPattern>, preferredName: string | undefined, patternTerms: (TTKTerm | null)[], checkType: TTKTerm): TCEnv<TTKTerm | null> {
+  if (env.isMatchClauseCtorPattern()) {
+    return checkCtorPattern(env, patternTerms, checkType);
+  } else if (env.isMatchClauseVarPattern()) {
+    const name = env.value.name === '_' ? `?${preferredName ?? ''}${env.signature.length}` : env.value.name
 
-    if (pattern.name === '_') {
-      name = `?${preferredName ?? ''}${env.signature.length}`
-    }
-
-    if (pattern.name === 'tail') {
+    if (name === 'tail') {
       debugger
     }
 
@@ -802,62 +778,40 @@ function checkPattern(pattern: TTKPattern, preferredName: string | undefined, pa
       debugger
     }
 
-    return {
-      success: true,
-      newEnv: extendSignatureInTCEnv(env, name, adjustedType),
-      patternTerm: null
-    }
+    return env.extendSignature(name, adjustedType).withValue(null);
   }
 
-  return failCheck(`Unknown pattern type: ${prettyPrintPattern(pattern)}`, []);
+  throw env.unknownTagError(env.value, 'pattern', `Unknown pattern type: ${prettyPrintPattern(env.value)}`);
 }
 
 function checkCtorPattern(
-  patternCtorName: string,
-  patternArgs: TTKPattern[],
+  env: TCEnv<TTKPattern & { tag: 'PCtor' }>,
   patternTerms: (TTKTerm | null)[],
   checkType: TTKTerm,
-  env: TCEnv<null>
-): {
-  success: true,
-  newEnv: TCEnv<null>;
-  patternTerm: TTKTerm;
-} | {
-  success: false,
-  errors: CheckError[];
-} {
+): TCEnv<TTKTerm> {
+  const patternCtorName = env.value.name;
   if (patternCtorName === 'Succ') {
     debugger
   }
 
-  const definition = getTypeDefinition(env.definitions, patternCtorName);
-  if (!definition) {
-    return { success: false, errors: [{ message: `Constructor '${patternCtorName}' not found`, path: [], term: checkType, definitions: env.definitions } as CheckError] };
-  }
-
+  const definition = env.getTypeDefinitionAssert(patternCtorName).value;
   const { binders: definitionBinders, body: _definitionBody } = extractPiSpine(definition);
 
-  if (patternArgs.length !== definitionBinders.length) {
-    return failCheck(`Constructor '${patternCtorName}' has wrong number of arguments in pattern. Has ${patternArgs.length} but expected ${definitionBinders.length}`, [])
-  }
+  const patternArgs = env.value.args;
+  env.assertEqualLengths(patternArgs, definitionBinders, `Constructor '${patternCtorName}' has wrong number of arguments in pattern. Has ${patternArgs.length} but expected ${definitionBinders.length}`)
 
-  let newEnv = env
+  const patternsEnv = env.inMatchClauseCtorArgs()
+
+  let newEnv: TCEnv<unknown> = patternsEnv
   let newPatternTerms = [...patternTerms]
 
   for (let i = 0; i < patternArgs.length; i++) {
-    const result = checkPattern(patternArgs[i], definitionBinders[i].name, newPatternTerms, definitionBinders[i].type, newEnv);
-    if (result.success) {
-      newEnv = result.newEnv;
-      newPatternTerms.push(result.patternTerm)
-    } else {
-      return result
-    }
+    const result = checkPattern(newEnv.atValueAndPathOfEnv(patternsEnv).inMatchClausePattern(i), definitionBinders[i].name, newPatternTerms, definitionBinders[i].type);
+    newPatternTerms.push(result.value)
+    newEnv = result;
   }
 
-  const result = checkElaboratedPattern(patternCtorName, patternArgs, env.signature.length, checkType, newEnv)
-  if (!result.success) {
-    return result
-  }
+  const result = checkElaboratedPattern(newEnv.atValueAndPathOfEnv(env), env.signature.length, checkType)
 
   // TODO?
 
@@ -893,23 +847,20 @@ function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPa
 }
 
 function checkElaboratedPattern(
-  patternCtorName: string,
-  patternArgs: TTKPattern[],
+  env: TCEnv<TTKPattern & { tag: 'PCtor' }>,
   preSignatureLength: number,
   checkType: TTKTerm,
-  env: TCEnv<null>,
-): { success: true, newEnv: TCEnv<null>, patternTerm: TTKTerm } | { success: false, errors: CheckError[] } {
+): TCEnv<TTKTerm> {
   const newNames = env.signature.slice(preSignatureLength).map(({ name }) => name)
   const namesStack = signatureToNamesStack(env.signature)
 
-  const patternTerm = convertCtorPatternToAppTerm(patternCtorName, patternArgs, newNames, env.signature).term
-  const inferredType = inferType(patternTerm, [], env)
+  const pattern = env.value;
+  const patternTerm = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames, env.signature).term
 
-  if (!inferredType.success) {
-    return { success: false, errors: [{ message: inferredType.error, path: [], term: patternTerm, context: env.signature, definitions: env.definitions }] }
-  }
+  const patternTermEnv = env.withValue(patternTerm)
+  const inferredType = inferType(patternTermEnv)
 
-  console.log(`  CHECK: ${prettyPrint(patternTerm, namesStack)} : ${prettyPrint(inferredType.type, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
+  console.log(`  CHECK: ${prettyPrint(patternTerm, namesStack)} : ${prettyPrint(inferredType.value, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
 
-  return { success: true, newEnv: env, patternTerm }
+  return patternTermEnv
 }

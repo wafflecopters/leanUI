@@ -1,6 +1,7 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { mkConst, mkProp, TTKClause, TTKContext, TTKPattern, TTKTerm } from "../types/tt-kernel";
-import { TypeCheckError } from "./checker";
+import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "../types/tt-kernel";
+import { shiftTerm } from "./subst";
+import { areTypesDefEq } from "./whnf";
 
 export type Constraint = {
   tag: 'TypeEq';
@@ -212,6 +213,10 @@ export const MatchClausePartIndex = {
   Rhs: fieldSeg('rhs'),
 } satisfies Record<string, IndexPathSegment>;
 
+export const MatchClauseCtorPatternPartIndex = {
+  Args: fieldSeg('args'),
+} satisfies Record<string, IndexPathSegment>;
+
 export const AppPartIndex = {
   Fn: fieldSeg('fn'),
   Arg: fieldSeg('arg'),
@@ -253,6 +258,81 @@ export class TCEnv<T> {
     public readonly value: T
   ) {
   }
+
+  withoutValue(): TCEnv<void> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, this.indexPath, this.valueStack, undefined);
+  }
+
+  withValue<S>(this: TCEnv<T>, value: S): TCEnv<S> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, this.indexPath, this.valueStack, value);
+  }
+
+  mapValue<S>(this: TCEnv<T>, fn: (value: T) => S): TCEnv<S> {
+    return this.withValue(fn(this.value));
+  }
+
+  atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
+  }
+
+  // Terms
+
+  extendSignature(this: TCEnv<T>, name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
+    return new TCEnv(
+      [...this.signature, { name, type, value }],
+      this.definitions,
+      this.metaVars,
+      this.indexPath,
+      this.valueStack,
+      this.value
+    );
+  }
+
+  isAppTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'App' }> {
+    return this.value.tag === 'App';
+  }
+
+  isBinderTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Binder' }> {
+    return this.value.tag === 'Binder';
+  }
+
+  isBinderPiTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BPi' } }> {
+    return this.value.tag === 'Binder' && this.value.binderKind.tag === 'BPi';
+  }
+
+  isBinderLambdaTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }> {
+    return this.value.tag === 'Binder' && this.value.binderKind.tag === 'BLam';
+  }
+
+  isBinderLetTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }> {
+    return this.value.tag === 'Binder' && this.value.binderKind.tag === 'BLet';
+  }
+
+  isMatchTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Match' }> {
+    return this.value.tag === 'Match';
+  }
+
+  isAnnotTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Annot' }> {
+    return this.value.tag === 'Annot';
+  }
+
+  isHoleTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Hole' }> {
+    return this.value.tag === 'Hole';
+  }
+
+  isConstTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Const' }> {
+    return this.value.tag === 'Const';
+  }
+
+  isSortTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Sort' }> {
+    return this.value.tag === 'Sort';
+  }
+
+  isVarTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Var' }> {
+    return this.value.tag === 'Var';
+  }
+
+  // WITH DEFINITIONS
 
   withTermDefinition(this: TCEnv<TTKTerm>, name: string, type: TTKTerm, value?: TTKTerm): TCEnv<TTKTerm> {
     return new TCEnv(
@@ -306,9 +386,7 @@ export class TCEnv<T> {
   }
 
   inMatchClause(this: TCEnv<TTKClause[]>, clauseIndex: number): TCEnv<TTKClause> {
-    if (clauseIndex < 0 || clauseIndex >= this.value.length || !Number.isInteger(clauseIndex)) {
-      throw this.invalidIndexError('clauses', this.value, clauseIndex);
-    }
+    this.assertIndexValid('clauses', this.value, clauseIndex);
 
     return new TCEnv(
       this.signature,
@@ -332,15 +410,13 @@ export class TCEnv<T> {
   }
 
   inMatchClausePattern(this: TCEnv<TTKPattern[]>, patternIndex: number): TCEnv<TTKPattern> {
-    if (patternIndex < 0 || patternIndex >= this.value.length || !Number.isInteger(patternIndex)) {
-      throw this.invalidIndexError('patterns', this.value, patternIndex);
-    }
+    this.assertIndexValid('patterns', this.value, patternIndex);
 
     return new TCEnv(
       this.signature,
       this.definitions,
       this.metaVars,
-      [...this.indexPath, MatchClausePartIndex.Patterns, arraySeg(patternIndex)],
+      [...this.indexPath, arraySeg(patternIndex)],
       [...this.valueStack, this.value],
       this.value[patternIndex]
     );
@@ -357,12 +433,12 @@ export class TCEnv<T> {
     );
   }
 
-  inMatchClauseCtorPatterns(this: TCEnv<TTKPattern & { tag: 'PCtor' }>): TCEnv<TTKPattern[]> {
+  inMatchClauseCtorArgs(this: TCEnv<TTKPattern & { tag: 'PCtor' }>): TCEnv<TTKPattern[]> {
     return new TCEnv(
       this.signature,
       this.definitions,
       this.metaVars,
-      [...this.indexPath, MatchClausePartIndex.Patterns],
+      [...this.indexPath, MatchClauseCtorPatternPartIndex.Args],
       [...this.valueStack, this.value],
       this.value.args
     );
@@ -561,39 +637,119 @@ export class TCEnv<T> {
     );
   }
 
-  inInductiveDefinitionConstructorName(this: TCEnv<Array<{ name: string; type: TTKTerm }>>, constructorIndex: number): TCEnv<string> {
-    if (constructorIndex < 0 || constructorIndex >= this.value.length || !Number.isInteger(constructorIndex)) {
-      throw this.invalidIndexError('constructors', this.value, constructorIndex);
-    }
+  inInductiveDefinitionConstructor(this: TCEnv<Array<{ name: string; type: TTKTerm }>>, constructorIndex: number): TCEnv<{ name: string; type: TTKTerm }> {
+    this.assertIndexValid('constructors', this.value, constructorIndex);
 
     return new TCEnv(
       this.signature,
       this.definitions,
       this.metaVars,
-      [...this.indexPath, arraySeg(constructorIndex), InductiveDefinitionPartIndex.ConstructorName],
+      [...this.indexPath, arraySeg(constructorIndex)],
       [...this.valueStack, this.value],
-      this.value[constructorIndex].name
+      this.value[constructorIndex]
     );
   }
 
-  inInductiveDefinitionConstructorType(this: TCEnv<Array<{ name: string; type: TTKTerm }>>, constructorIndex: number): TCEnv<TTKTerm> {
-    if (constructorIndex < 0 || constructorIndex >= this.value.length || !Number.isInteger(constructorIndex)) {
-      throw this.invalidIndexError('constructors', this.value, constructorIndex);
-    }
-
+  inInductiveDefinitionConstructorName(this: TCEnv<{ name: string; type: TTKTerm }>): TCEnv<string> {
     return new TCEnv(
       this.signature,
       this.definitions,
       this.metaVars,
-      [...this.indexPath, arraySeg(constructorIndex), InductiveDefinitionPartIndex.ConstructorType],
+      [...this.indexPath, InductiveDefinitionPartIndex.ConstructorName],
       [...this.valueStack, this.value],
-      this.value[constructorIndex].type
+      this.value.name
     );
   }
 
-  // PRIVATE HELPERS
+  inInductiveDefinitionConstructorType(this: TCEnv<{ name: string; type: TTKTerm }>): TCEnv<TTKTerm> {
+    return new TCEnv(
+      this.signature,
+      this.definitions,
+      this.metaVars,
+      [...this.indexPath, InductiveDefinitionPartIndex.ConstructorType],
+      [...this.valueStack, this.value],
+      this.value.type
+    );
+  }
+
+  // Patterns
+  isMatchClauseCtorPattern(this: TCEnv<TTKPattern>): this is TCEnv<TTKPattern & { tag: 'PCtor' }> {
+    return this.value.tag === 'PCtor';
+  }
+
+  isMatchClauseVarPattern(this: TCEnv<TTKPattern>): this is TCEnv<TTKPattern & { tag: 'PVar' }> {
+    return this.value.tag === 'PVar';
+  }
+
+  // Error Checkors
+  assertAreTypesDefinitionallyEqual(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
+    if (!areTypesDefEq(lhs, rhs)) {
+      throw this.expectedTypesToBeDefinitionallyEqualError(lhs, rhs, message);
+    }
+    return this;
+  }
+
+  assertIndexValid<S>(field: string, values: S[], index: number): TCEnv<T> {
+    if (index < 0 || index >= values.length || !Number.isInteger(index)) {
+      throw this.invalidIndexError(field, values, index);
+    }
+    return this;
+  }
+
+  getTypeDefinitionAssert(name: string): TCEnv<TTKTerm> {
+    const definition = getTypeDefinition(this.definitions, name);
+    if (!definition) {
+      throw this.typeDefinitionNotFoundError(name);
+    }
+    return this.withValue(definition);
+  }
+
+  getTypeAtIndexInSignatureAssert(index: number): TCEnv<TTKTerm> {
+    const type = lookupTypeAtIndexSignature(this.signature, index);
+    if (!type) {
+      throw this.typeAtIndexNotFoundInSignatureError(index);
+    }
+    return this.withValue(type);
+  }
+
+  assertEqualLengths<A, B>(a: A[], b: B[], message?: string): TCEnv<T> {
+    if (a.length !== b.length) {
+      throw this.expectedEqualLengthsError(a, b, message);
+    }
+    return this;
+  }
+
+  // ERRORS
   private invalidIndexError<S>(field: string, values: S[], index: number): TCEnvError<T> {
     return new TCEnvError<T>(`Invalid index ${index} for ${field} with length ${values.length}.`, this);
+  }
+
+  expectedBinderPiError(this: TCEnv<TTKTerm>): TCEnvError<TTKTerm> {
+    return new TCEnvError<TTKTerm>(`Expected binder Pi type, got: ${prettyPrint(this.value)}`, this);
+  }
+
+  expectedCheckTypeToBeBinderPiError(this: TCEnv<TTKTerm>, checkType: TTKTerm): TCEnvError<TTKTerm> {
+    return new TCEnvError<TTKTerm>(`Expected check type to be binder Pi type, got: ${prettyPrint(checkType)}`, this);
+  }
+
+  expectedTypesToBeDefinitionallyEqualError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnvError<TTKTerm> {
+    return new TCEnvError<TTKTerm>(`Expected types to be definitionally equal: ${prettyPrint(lhs)} vs ${prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
+  }
+
+  typeDefinitionNotFoundError(name: string): TCEnvError<T> {
+    return new TCEnvError<T>(`Type definition not found: ${name}`, this);
+  }
+
+  typeAtIndexNotFoundInSignatureError(index: number): TCEnvError<T> {
+    return new TCEnvError<T>(`Type at index ${index} not found in signature`, this);
+  }
+
+  expectedEqualLengthsError<A, B>(a: A[], b: B[], message?: string): TCEnvError<T> {
+    return new TCEnvError<T>(`Expected equal lengths: ${a.length} vs ${b.length}${message ? `: ${message}` : ''}`, this);
+  }
+
+  unknownTagError(data: { tag: string }, typeName: string, message?: string): TCEnvError<T> {
+    return new TCEnvError<T>(`Unknown tag: ${data.tag} for ${typeName}${message ? `: ${message}` : ''}`, this);
   }
 }
 
@@ -602,4 +758,17 @@ export class TCEnvError<T> {
     public readonly message: string,
     public readonly env: TCEnv<T>
   ) { }
+}
+
+function lookupTypeAtIndexSignature(signature: Signature, index: number): TTKTerm | undefined {
+  const sigIndex = signature.length - 1 - index
+  const binder = signature[sigIndex];
+  if (!binder) {
+    return undefined;
+  }
+  const type = binder.type;
+
+  // Shift indices to be at tail of signature
+  const shiftAmount = signature.length - sigIndex;
+  return shiftAmount > 0 ? shiftTerm(type, shiftAmount, 0) : type;
 }

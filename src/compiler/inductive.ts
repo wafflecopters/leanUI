@@ -1,4 +1,4 @@
-import { addDefinition, addDefinitionInTCEnv, addInductiveDefinition, addInductiveDefinitionInTCEnv, CheckError, createTCEnv, DefinitionsMap } from "./term";
+import { addDefinition, addDefinitionInTCEnv, addInductiveDefinition, addInductiveDefinitionInTCEnv, CheckError, createTCEnv, DefinitionsMap, InductiveDefinition, TCEnvError } from "./term";
 import { TTKTerm } from "../types/tt-kernel";
 import { inferType } from "./checker";
 
@@ -10,41 +10,47 @@ export function checkInductiveDeclaration(
   definitions: DefinitionsMap,
 ): {
   success: false,
-  errors: CheckError[]
+  errors: TCEnvError<unknown>[]
 } | {
   success: true,
   newDefinitions: DefinitionsMap
 } {
-  let newEnv = createTCEnv(definitions);
+  const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions };
+  const defEnv = createTCEnv(definitions).withValue(inductiveDefinition);
 
-  const typeResult = inferType(type, [], newEnv);
-  if (!typeResult.success) {
-    return {
-      success: false,
-      errors: [{
-        message: typeResult.error,
-        path: [],
-        term: type,
-        definitions: definitions
-      }]
+  try {
+    inferType(defEnv.inInductiveDefinitionType());
+  } catch (e) {
+    if (e instanceof TCEnvError) {
+      return {
+        success: false,
+        errors: [e]
+      }
+    } else {
+      return {
+        success: false,
+        errors: [new TCEnvError(e instanceof Error ? e.message : String(e), defEnv)]
+      }
     }
   }
 
-  newEnv = addDefinitionInTCEnv(newEnv, name, type);
+  let ctorsEnv = addDefinitionInTCEnv(defEnv, name, type).inInductiveDefinitionConstructors();
 
-  const errors: CheckError[] = [];
+  const errors: TCEnvError<unknown>[] = [];
 
-  // Ensure the constructor types are well-formed
+  let index = 0
   for (const ctor of constructors) {
-    const ctorResult = inferType(ctor.type, [], newEnv);
-    if (!ctorResult.success) {
-      errors.push({
-        message: ctorResult.error,
-        path: [],
-        term: ctor.type,
-        definitions: newEnv.definitions
-      })
+    try {
+      inferType(ctorsEnv.inInductiveDefinitionConstructor(index).inInductiveDefinitionConstructorType());
+      ctorsEnv = addDefinitionInTCEnv(ctorsEnv, ctor.name, ctor.type);
+    } catch (e) {
+      if (e instanceof TCEnvError) {
+        errors.push(e)
+      } else {
+        errors.push(new TCEnvError(e instanceof Error ? e.message : String(e), ctorsEnv))
+      }
     }
+    index++;
   }
 
   if (errors.length > 0) {
@@ -54,13 +60,7 @@ export function checkInductiveDeclaration(
     }
   }
 
-  // Add the constructor types to the definitions
-  for (const ctor of constructors) {
-    newEnv = addDefinitionInTCEnv(newEnv, ctor.name, ctor.type);
-  }
-
-  // Add the inductive type to the definitions
-  newEnv = addInductiveDefinitionInTCEnv(newEnv, name, type, constructors, indexPositions);
+  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions);
 
   // TODO: ensure indices fit within the type
   // TODO: check for strict positivity
