@@ -145,7 +145,6 @@ const SAMPLE_CODE = `inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
-{-
 plus : Nat -> Nat -> Nat
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)
@@ -161,7 +160,6 @@ inductive Fin : Nat -> Type where
 nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
 nth A _ (VCons _ _ h _) (FZero _) = h
 nth A _ (VCons _ (Succ n) h tail) (FSucc _ f) = nth A n tail f
--}
 
 {-
 qux : Type
@@ -536,6 +534,7 @@ export function TmpDebugPage() {
         if (decl.checkErrors && decl.checkErrors.length > 0) {
           for (const err of decl.checkErrors) {
             // Try to map error path to precise source location
+            debugger
             const sourceRange = mapErrorPathToSourceRange(
               err.env.indexPath,
               decl.elabMap,

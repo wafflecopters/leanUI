@@ -80,6 +80,10 @@ export function addDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTe
   return updateDefinitionsInTCEnv(env, (d) => addDefinition(d, name, type));
 }
 
+export function setDefinitionValueInTCEnv<T>(env: TCEnv<T>, name: string, value: TTKTerm): TCEnv<T> {
+  return updateDefinitionsInTCEnv(env, (d) => setDefinitionValue(d, name, value));
+}
+
 export function addInductiveDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm }>, indexPositions: number[]): TCEnv<T> {
   return updateDefinitionsInTCEnv(env, (d) => addInductiveDefinition(d, name, type, constructors, indexPositions));
 }
@@ -131,6 +135,17 @@ export function addDefinition(definitions: DefinitionsMap, name: string, type: T
     ...definitions,
     terms: newMap,
   };
+}
+
+export function setDefinitionValue(definitions: DefinitionsMap, name: string, value: TTKTerm): DefinitionsMap {
+  const newMap = new Map<string, TermDefinition>(definitions.terms);
+  const existing = newMap.get(name);
+  if (!existing) {
+    debugger
+    throw new Error(`Definition ${name} not found`);
+  }
+  newMap.set(name, { ...existing, value });
+  return { ...definitions, terms: newMap };
 }
 
 export function addInductiveDefinition(definitions: DefinitionsMap, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm }>, indexPositions: number[]): DefinitionsMap {
@@ -246,6 +261,12 @@ export const InductiveDefinitionPartIndex = {
   ConstructorType: fieldSeg('type'),
 } satisfies Record<string, IndexPathSegment>;
 
+export const TermPartIndex = {
+  Name: fieldSeg('name'),
+  Type: fieldSeg('type'),
+  Value: fieldSeg('value'),
+} satisfies Record<string, IndexPathSegment>;
+
 export const TermDefinitionPartIndex = {
   Name: fieldSeg('name'),
   Type: fieldSeg('type'),
@@ -261,6 +282,10 @@ export class TCEnv<T> {
     public readonly valueStack: unknown[],
     public readonly value: T
   ) {
+  }
+
+  hasDefinedValue(this: TCEnv<T>): this is TCEnv<NonNullable<T>> {
+    return this.value !== undefined;
   }
 
   withoutValue(): TCEnv<void> {
@@ -677,6 +702,40 @@ export class TCEnv<T> {
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorType],
       [...this.valueStack, this.value],
       this.value.type
+    );
+  }
+
+  // Term
+  inTermName(this: TCEnv<TermDefinition>): TCEnv<string> {
+    return new TCEnv(
+      this.signature,
+      this.definitions,
+      this.metaVars,
+      [...this.indexPath, TermPartIndex.Name],
+      [...this.valueStack, this.value],
+      this.value.name
+    );
+  }
+
+  inTermType(this: TCEnv<TermDefinition>): TCEnv<TTKTerm> {
+    return new TCEnv(
+      this.signature,
+      this.definitions,
+      this.metaVars,
+      [...this.indexPath, TermPartIndex.Type],
+      [...this.valueStack, this.value],
+      this.value.type
+    );
+  }
+
+  inTermValue(this: TCEnv<TermDefinition>): TCEnv<TTKTerm | undefined> {
+    return new TCEnv(
+      this.signature,
+      this.definitions,
+      this.metaVars,
+      [...this.indexPath, TermPartIndex.Value],
+      [...this.valueStack, this.value],
+      this.value.value
     );
   }
 

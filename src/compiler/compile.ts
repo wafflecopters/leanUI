@@ -8,14 +8,14 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, prettyPrint, shiftTerm } from '../types/tt-kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, prettyPrint } from '../types/tt-kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, CheckError, createDefinitionsMap, createTCEnv, DefinitionsMap, extendSignatureInTCEnv, extractPiSpine, getTypeDefinition, PiSpine, Signature, signatureToNamesStack, TCEnv, TCEnvError, transformVarsInTerm } from './term';
+import { addDefinitionInTCEnv, createDefinitionsMap, createTCEnv, DefinitionsMap, extractPiSpine, PiSpine, setDefinitionValueInTCEnv, Signature, signatureToNamesStack, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
 
 // ============================================================================
@@ -479,6 +479,10 @@ function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
 ): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap } {
+  if (!decl.name) {
+    return failCheck('Term declaration is ill-formed (no name)', createTCEnv(definitions))
+  }
+
   let env = createTCEnv(definitions)
 
   if (decl.kind !== 'term') {
@@ -494,22 +498,31 @@ function checkTermDeclaration(
       return failCheck('Term declaration is ill-formed', env)
     }
 
-    inferType(env.withValue(decl.kernelType));
+    let termEnv = env.withValue<TermDefinition>({
+      name: decl.name,
+      type: decl.kernelType,
+      value: decl.kernelValue,
+    });
+
+    inferType(termEnv.inTermType());
 
     // Add to context for subsequent declarations
     if (decl.name) {
-      env = addDefinitionInTCEnv(env, decl.name, decl.kernelType);
+      termEnv = addDefinitionInTCEnv(termEnv, decl.name, decl.kernelType);
     }
 
-    const x = checkTermValue(decl.name, env.withValue(decl.kernelValue), decl.kernelType);
-    if (!x.success) {
-      return {
-        success: false,
-        errors: x.errors,
-      }
+    const termValueEnv = termEnv.inTermValue()
+    if (!termValueEnv.hasDefinedValue()) {
+      return failCheck('Term declaration is ill-formed (missing value)', termValueEnv)
     }
 
-    return { success: true, definitions: env.definitions }
+    const result = checkTermValue(decl.name, termValueEnv, decl.kernelType);
+    if (!result.success) {
+      return { success: false, errors: result.errors }
+    }
+
+    const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, result.checkedValue);
+    return { success: true, definitions: resultEnv.definitions }
   } catch (e) {
     if (e instanceof TCEnvError) {
       return {
@@ -677,11 +690,11 @@ function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
   type: TTKTerm,
-): { success: false, errors: TCEnvError<unknown>[] } | { success: true } {
+): { success: false, errors: TCEnvError<unknown>[] } | { success: true, checkedValue: TTKTerm } {
   if (!env.isMatchTerm()) {
     try {
-      checkType(env, type);
-      return { success: true };
+      const result = checkType(env, type);
+      return { success: true, checkedValue: result.value };
     } catch (e) {
       if (e instanceof TCEnvError) {
         return { success: false, errors: [e] };
@@ -714,7 +727,11 @@ function checkTermValue(
   // TODO: structural recursion check
   // TODO: totality check
 
-  return { success: errors.length === 0, errors };
+  if (errors.length > 0) {
+    return { success: false, errors };
+  }
+
+  return { success: true, checkedValue: env.value };
 }
 
 /* PATTERNS */
@@ -732,7 +749,7 @@ function checkMatchClause(
 const originalConsoleLog = console.log
 
 function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, typePiSpine: PiSpine): TCEnv<(TTKTerm | null)[]> {
-  if (termName === 'vecConcat' || true) {
+  if (termName === 'vecConcat') {
     console.log = originalConsoleLog
   } else {
     console.log = () => { }
