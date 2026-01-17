@@ -71,7 +71,6 @@ export function inferType(term: TTKTerm, path: IndexPath, env: TCEnv): InferResu
       return argResult
     }
 
-    // Check argument against domain
     const checkResult = checkType(term.arg, fnResult.type.domain, path, env);
     if (!checkResult.success) {
       debugger

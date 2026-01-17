@@ -15,7 +15,7 @@ import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
 import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
 import { checkType, inferType, lookupTypeAtIndexSignature, TypeCheckError } from './checker';
-import { addDefinition, addDefinitionInTCEnv, CheckError, createDefinitionsMap, createTCEnv, DefinitionsMap, extendSignatureInTCEnv, extractPiSpine, getTypeDefinition, PiSpine, Signature, signatureToNamesStack, TCEnv } from './term';
+import { addDefinition, addDefinitionInTCEnv, CheckError, createDefinitionsMap, createTCEnv, DefinitionsMap, extendSignatureInTCEnv, extractPiSpine, getTypeDefinition, PiSpine, Signature, signatureToNamesStack, TCEnv, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
 
 // ============================================================================
@@ -743,6 +743,7 @@ const originalConsoleLog = console.log
 function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, env: TCEnv): {
   success: true,
   newEnv: TCEnv;
+  patternTerms: (TTKTerm | null)[];
 } | {
   success: false,
   errors: CheckError[];
@@ -754,33 +755,37 @@ function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiS
   }
   console.log(`LHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: patterns })}`);
 
+  let patternTerms: (TTKTerm | null)[] = []
+
   let newEnv = env
   for (let i = 0; i < patterns.length; i++) {
     const binder = typePiSpine.binders[i];
     const checkType = typePiSpine.binders[i].type;
-    const result = checkPattern(patterns[i], binder.name, checkType, newEnv);
+    const result = checkPattern(patterns[i], binder.name, patternTerms, checkType, newEnv);
 
     if (result.success) {
       newEnv = result.newEnv;
+      patternTerms.push(result.patternTerm);
     } else {
       console.error(`Error: ${result.errors.map(e => e.message).join(', ')}`);
       return result
     }
   }
 
-  return { success: true, newEnv };
+  return { success: true, newEnv, patternTerms };
 }
 
-function checkPattern(pattern: TTKPattern, preferredName: string | undefined, checkType: TTKTerm, env: TCEnv): {
+function checkPattern(pattern: TTKPattern, preferredName: string | undefined, patternTerms: (TTKTerm | null)[], checkType: TTKTerm, env: TCEnv): {
   success: true,
   newEnv: TCEnv;
+  patternTerm: TTKTerm | null
 } | {
   success: false,
   errors: CheckError[];
 } {
   if (pattern.tag === 'PCtor') {
     const { name, args } = pattern;
-    return checkCtorPattern(name, args, checkType, env);
+    return checkCtorPattern(name, args, patternTerms, checkType, env);
   } else if (pattern.tag === 'PVar') {
     let name = pattern.name
 
@@ -788,20 +793,28 @@ function checkPattern(pattern: TTKPattern, preferredName: string | undefined, ch
       name = `?${preferredName ?? ''}${env.signature.length}`
     }
 
-    const type = checkType.tag === 'Var' ? lookupTypeAtIndexSignature(env.signature, checkType.index) :
-      (checkType.tag === 'Const' || checkType.tag === 'Sort' || checkType.tag === 'App') ? checkType :
-        undefined
-
-    if (!type) {
+    if (pattern.name === 'tail') {
       debugger
-      return failCheck(`Unknown pattern type: ${prettyPrint(checkType)}`, []);
     }
 
-    console.log(`  ${name}: ${prettyPrint(type, signatureToNamesStack(env.signature))}`);
+    const adjustedType = transformVarsInTerm(checkType, (index, signature) => {
+      const p = patternTerms
+      if (name === 'tail') {
+        debugger
+      }
+      return mkVar(index)
+    })
+
+    console.log(`  Extend ${name}: ${prettyPrint(adjustedType)}`);
+
+    if (name === 'tail') {
+      debugger
+    }
 
     return {
       success: true,
-      newEnv: extendSignatureInTCEnv(env, name, checkType),
+      newEnv: extendSignatureInTCEnv(env, name, adjustedType),
+      patternTerm: null
     }
   }
 
@@ -811,15 +824,21 @@ function checkPattern(pattern: TTKPattern, preferredName: string | undefined, ch
 function checkCtorPattern(
   patternCtorName: string,
   patternArgs: TTKPattern[],
+  patternTerms: (TTKTerm | null)[],
   checkType: TTKTerm,
   env: TCEnv
 ): {
   success: true,
   newEnv: TCEnv;
+  patternTerm: TTKTerm;
 } | {
   success: false,
   errors: CheckError[];
 } {
+  if (patternCtorName === 'Succ') {
+    debugger
+  }
+
   const definition = getTypeDefinition(env.definitions, patternCtorName);
   if (!definition) {
     return { success: false, errors: [{ message: `Constructor '${patternCtorName}' not found`, path: [], term: checkType, definitions: env.definitions } as CheckError] };
@@ -832,10 +851,13 @@ function checkCtorPattern(
   }
 
   let newEnv = env
+  let newPatternTerms = [...patternTerms]
+
   for (let i = 0; i < patternArgs.length; i++) {
-    const result = checkPattern(patternArgs[i], definitionBinders[i].name, definitionBinders[i].type, newEnv);
+    const result = checkPattern(patternArgs[i], definitionBinders[i].name, newPatternTerms, definitionBinders[i].type, newEnv);
     if (result.success) {
       newEnv = result.newEnv;
+      newPatternTerms.push(result.patternTerm)
     } else {
       return result
     }
@@ -851,25 +873,32 @@ function checkCtorPattern(
   return result
 }
 
-function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPattern[], newNames: string[], signature: Signature): TTKTerm {
+function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPattern[], newNames: string[], signature: Signature): {
+  term: TTKTerm,
+  patternsTraversed: number,
+} {
   const fn = mkConst(patternCtorName, mkType(-1) /* HACK */)
 
   let term = fn
+  let sig = signature
+  let patternsTraversed = 0
 
   for (let i = 0; i < patternArgs.length; i++) {
     const pattern = patternArgs[i]
     if (pattern.tag === 'PCtor') {
-      const arg = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames, signature)
-      term = mkApp(term, arg)
+      const arg = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames.slice(patternsTraversed), sig)
+      term = mkApp(term, arg.term)
+      patternsTraversed += arg.patternsTraversed
     } else {
       const patternName = newNames[i] ?? pattern.name
-      const sigIndex = signature.findIndex(b => b.name === patternName)
-      const arg = mkVar(signature.length - sigIndex - 1)
+      const sigIndex = sig.findIndex(b => b.name === patternName)
+      const arg = mkVar(sig.length - sigIndex - 1)
       term = mkApp(term, arg)
+      patternsTraversed++
     }
   }
 
-  return term
+  return { term, patternsTraversed }
 }
 
 function checkElaboratedPattern(
@@ -878,18 +907,18 @@ function checkElaboratedPattern(
   preSignatureLength: number,
   checkType: TTKTerm,
   env: TCEnv,
-): { success: true, newEnv: TCEnv } | { success: false, errors: CheckError[] } {
+): { success: true, newEnv: TCEnv, patternTerm: TTKTerm } | { success: false, errors: CheckError[] } {
   const newNames = env.signature.slice(preSignatureLength).map(({ name }) => name)
   const namesStack = signatureToNamesStack(env.signature)
 
-  const inferredTerm = convertCtorPatternToAppTerm(patternCtorName, patternArgs, newNames, env.signature)
-  const inferredType = inferType(inferredTerm, [], env)
+  const patternTerm = convertCtorPatternToAppTerm(patternCtorName, patternArgs, newNames, env.signature).term
+  const inferredType = inferType(patternTerm, [], env)
 
   if (!inferredType.success) {
-    return { success: false, errors: [{ message: inferredType.error, path: [], term: inferredTerm, context: env.signature, definitions: env.definitions }] }
+    return { success: false, errors: [{ message: inferredType.error, path: [], term: patternTerm, context: env.signature, definitions: env.definitions }] }
   }
 
-  console.log(`  CHECK: ${prettyPrint(inferredTerm, namesStack)} : ${prettyPrint(inferredType.type, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
+  console.log(`  CHECK: ${prettyPrint(patternTerm, namesStack)} : ${prettyPrint(inferredType.type, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
 
-  return { success: true, newEnv: env }
+  return { success: true, newEnv: env, patternTerm }
 }
