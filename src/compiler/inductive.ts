@@ -104,10 +104,76 @@ export function checkInductiveDeclaration(
   const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions);
 
   // TODO: ensure indices fit within the type
-  // TODO: check for strict positivity
+  constructors.forEach((ctor, i) => checkNestedPiForNegativeOccurrences(name, ctor.name, ctorsEnv.inInductiveDefinitionConstructor(i).inInductiveDefinitionConstructorType(), 'strictly_positive', errors));
+
+  if (errors.length > 0) {
+    return { success: false, errors };
+  }
 
   return {
     success: true,
     newDefinitions: newEnv.definitions
+  }
+}
+
+/**
+ * Polarity of an occurrence of a type variable.
+ * - 'positive': Can appear here (target of arrows or direct argument)
+ * - 'negative': Cannot appear here (source of arrow)
+ * - 'strictly_positive': Can appear here and is not under any arrow on the left
+ */
+export type Polarity = 'strictly_positive' | 'positive' | 'negative';
+
+/**
+ * Check a nested Pi type for negative occurrences of the inductive type.
+ *
+ * For a Pi type (A -> B):
+ * - In the domain A, polarity is FLIPPED
+ * - In the body B, polarity stays the same
+ *
+ * When we find the inductive type at negative polarity, it's an error.
+ */
+function checkNestedPiForNegativeOccurrences(
+  inductiveName: string,
+  ctorName: string,
+  env: TCEnv<TTKTerm>,
+  polarity: Polarity,
+  errorsAcc: TCEnvError<unknown>[]
+): void {
+
+  if (env.isConstTerm()) {
+    if (env.value.name === inductiveName) {
+      if (polarity !== 'strictly_positive') {
+        const msg = polarity === 'negative' ? 'negative' : '(non-strict) positive'
+        errorsAcc.push(new TCEnvError(
+          `Constructor '${ctorName}' has ${msg} occurrence of '${inductiveName}'`,
+          env
+        ));
+      }
+    }
+  } else if (env.isVarTerm() || env.isSortTerm() || env.isHoleTerm()) {
+    // No occurrences of the inductive type
+  } else if (env.isAppTerm()) {
+    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppFn(), polarity, errorsAcc);
+    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppArg(), polarity, errorsAcc);
+  } else if (env.isBinderPiTerm()) {
+    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiDomain(), flipPolarity(polarity), errorsAcc);
+    checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiBody(), polarity, errorsAcc);
+  } else {
+    throw new Error('Syntax has been checked already. This should not happen.');
+  }
+}
+
+/**
+ * Flip the polarity when entering the domain of a function type.
+ */
+function flipPolarity(p: Polarity): Polarity {
+  switch (p) {
+    case 'strictly_positive':
+      return 'negative';
+    case 'positive':
+      return 'negative';
+    case 'negative':
+      return 'positive';
   }
 }
