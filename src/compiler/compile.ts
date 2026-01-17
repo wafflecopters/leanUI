@@ -12,7 +12,6 @@ import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPatte
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
-import { inferParameterIndices } from '../types/tt-inductive-inference';
 import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, createDefinitionsMap, createTCEnv, DefinitionsMap, extractPiSpine, PiSpine, setDefinitionValueInTCEnv, Signature, signatureToNamesStack, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
@@ -51,8 +50,6 @@ export interface ElabDeclaration {
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
   kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
-  /** For inductive types: positions that are indices (not parameters) */
-  indexPositions?: number[];
   /** Maps kernel paths to surface paths (for error mapping) */
   elabMap?: ElabMap;
   /** Maps surface paths to source ranges (for error mapping) */
@@ -338,23 +335,12 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           });
         }
 
-        // Compute index positions for inductive types (BEFORE elaboration, on TT)
-        let indexPositions: number[] | undefined;
-        if (decl.kind === 'inductive' && decl.name && decl.type && decl.constructors) {
-          indexPositions = inferParameterIndices({
-            name: decl.name,
-            type: decl.type,
-            constructors: decl.constructors
-          });
-        }
-
         elabDeclarations.push({
           name: decl.name,
           kind: decl.kind === 'inductive' ? 'inductive' : 'term',
           kernelType,
           kernelValue,
           kernelConstructors,
-          indexPositions,
           elabMap,
           sourceMap
         });
@@ -399,18 +385,32 @@ function checkDeclaration(
   const checkErrors: TCEnvError<unknown>[] = [];
   let newDefinitions = definitions;
   let errorCount = 0;
+  let indexPositions: number[] | undefined;
 
-  const result = decl.kind === 'inductive' ?
-    checkInductiveTypeDeclaration(decl, definitions) :
-    decl.kind === 'term' ? checkTermDeclaration(decl, definitions) :
-      { success: false as const, errors: [new TCEnvError<unknown>('Declaration is not an inductive or term', createTCEnv(definitions))] };
-
-  if (result.success) {
-    newDefinitions = result.definitions;
+  if (decl.kind === 'inductive') {
+    const result = checkInductiveTypeDeclaration(decl, definitions);
+    if (result.success) {
+      newDefinitions = result.definitions;
+      indexPositions = result.indexPositions;
+    } else {
+      checkSuccess = false;
+      checkErrors.push(...result.errors);
+      errorCount = result.errors.length;
+    }
+  } else if (decl.kind === 'term') {
+    const result = checkTermDeclaration(decl, definitions);
+    if (result.success) {
+      newDefinitions = result.definitions;
+    } else {
+      checkSuccess = false;
+      checkErrors.push(...result.errors);
+      errorCount = result.errors.length;
+    }
   } else {
     checkSuccess = false;
-    checkErrors.push(...result.errors);
-    errorCount = result.errors.length;
+    const error = new TCEnvError<unknown>('Declaration is not an inductive or term', createTCEnv(definitions));
+    checkErrors.push(error);
+    errorCount = 1;
   }
 
   // Build compiled declaration with pretty-printed versions
@@ -420,7 +420,7 @@ function checkDeclaration(
     kernelType: decl.kernelType,
     kernelValue: decl.kernelValue,
     kernelConstructors: decl.kernelConstructors,
-    indexPositions: decl.indexPositions,
+    indexPositions,
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
     prettyValue: decl.kernelValue ? prettyPrintTTK(decl.kernelValue) : undefined,
     prettyConstructors: decl.kernelConstructors?.map(c => ({
@@ -439,7 +439,7 @@ function checkDeclaration(
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap } {
+): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[] } {
   if (decl.kind !== 'inductive') {
     return failCheck('Declaration is not an inductive type', createTCEnv(definitions))
   }
@@ -455,7 +455,6 @@ function checkInductiveTypeDeclaration(
     decl.name || 'anonymous',
     decl.kernelType,
     decl.kernelConstructors,
-    decl.indexPositions ?? [],
     definitions
   );
   if (!result.success) {
@@ -464,6 +463,7 @@ function checkInductiveTypeDeclaration(
     return {
       success: true,
       definitions: result.newDefinitions,
+      indexPositions: result.indexPositions,
     }
   }
 }

@@ -46,16 +46,17 @@ export function checkInductiveDeclaration(
   name: string,
   type: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm }>,
-  indexPositions: number[],
   definitions: DefinitionsMap,
 ): {
   success: false,
   errors: TCEnvError<unknown>[]
 } | {
   success: true,
-  newDefinitions: DefinitionsMap
+  newDefinitions: DefinitionsMap,
+  indexPositions: number[]
 } {
-  const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions };
+  // We'll compute indexPositions after validation, so use empty array initially
+  const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions: [] };
   const defEnv = createTCEnv(definitions).withValue(inductiveDefinition);
 
   const errors: TCEnvError<unknown>[] = [
@@ -101,8 +102,6 @@ export function checkInductiveDeclaration(
     }
   }
 
-  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions);
-
   // TODO: ensure indices fit within the type
   constructors.forEach((_, i) => checkStrictPositivity(name, ctorsEnv.inInductiveDefinitionConstructor(i), errors));
 
@@ -110,9 +109,15 @@ export function checkInductiveDeclaration(
     return { success: false, errors };
   }
 
+  // Compute index positions on the validated TTK terms (after positivity check)
+  const indexPositions = inferParameterIndicesK({ name, type, constructors });
+
+  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions);
+
   return {
     success: true,
-    newDefinitions: newEnv.definitions
+    newDefinitions: newEnv.definitions,
+    indexPositions
   }
 }
 
@@ -248,4 +253,346 @@ function flipPolarity(p: Polarity): Polarity {
     case 'negative':
       return 'positive';
   }
+}
+
+// ============================================================================
+// Parameter/Index Inference for TTK (Kernel Terms)
+// ============================================================================
+
+/**
+ * Inductive type definition using kernel terms (TTK).
+ */
+interface InductiveTypeDefK {
+  name: string;
+  type: TTKTerm;
+  constructors: Array<{ name: string; type: TTKTerm }>;
+}
+
+/**
+ * Infer which positions in an inductive type definition are indices vs parameters.
+ * This operates on kernel terms (TTK) after validation.
+ *
+ * @param def - The inductive type definition with TTK terms
+ * @returns Array of position indices that are type indices (all other positions are parameters)
+ */
+function inferParameterIndicesK(def: InductiveTypeDefK): number[] {
+  const numPositions = countPiArgsK(def.type);
+
+  if (numPositions === 0) {
+    return [];
+  }
+
+  // Phase 1: Syntactic parameter detection
+  const syntacticParams = detectSyntacticParametersK(def, numPositions);
+
+  // Phase 2: Index promotion (equivalence classes)
+  const afterPromotion = promoteIndicesK(def, numPositions, syntacticParams);
+
+  // Phase 2.5: Dependency validation (enforce prefix property)
+  const finalIndices = enforceParameterPrefixK(afterPromotion, numPositions);
+
+  return finalIndices;
+}
+
+/**
+ * Count the number of Pi binders in a TTK type.
+ */
+function countPiArgsK(type: TTKTerm): number {
+  let count = 0;
+  let current = type;
+
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    count++;
+    current = current.body;
+  }
+
+  return count;
+}
+
+/**
+ * Detect positions that are syntactic parameters.
+ */
+function detectSyntacticParametersK(
+  def: InductiveTypeDefK,
+  numPositions: number
+): Set<number> {
+  const params = new Set<number>();
+
+  for (let pos = 0; pos < numPositions; pos++) {
+    if (isSyntacticParameterK(def, pos, numPositions)) {
+      params.add(pos);
+    }
+  }
+
+  return params;
+}
+
+/**
+ * Check if a specific position is a syntactic parameter.
+ */
+function isSyntacticParameterK(
+  def: InductiveTypeDefK,
+  position: number,
+  numPositions: number
+): boolean {
+  for (const ctor of def.constructors) {
+    const ctorArgs = extractInductiveArgsK(ctor.type, def.name, numPositions);
+
+    if (!ctorArgs) {
+      return false;
+    }
+
+    const termAtPos = ctorArgs[position];
+
+    if (termAtPos.tag !== 'Var') {
+      return false;
+    }
+
+    // Check that this variable appears exactly once in all positions
+    let appearances = 0;
+    for (const arg of ctorArgs) {
+      if (arg.tag === 'Var' && arg.index === termAtPos.index) {
+        appearances++;
+      }
+    }
+
+    if (appearances !== 1) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Extract the arguments to the inductive type from a constructor's type.
+ */
+function extractInductiveArgsK(
+  ctorType: TTKTerm,
+  inductiveName: string,
+  expectedArgs: number
+): TTKTerm[] | null {
+  // Navigate to the return type (skip all Pi binders)
+  let returnType = ctorType;
+  while (returnType.tag === 'Binder' && returnType.binderKind.tag === 'BPi') {
+    returnType = returnType.body;
+  }
+
+  // Extract arguments by peeling off applications
+  const args: TTKTerm[] = [];
+  let current = returnType;
+
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+
+  if (current.tag !== 'Const' || current.name !== inductiveName) {
+    return null;
+  }
+
+  if (args.length !== expectedArgs) {
+    return null;
+  }
+
+  return args;
+}
+
+/**
+ * Promote indices to parameters when they're always equal across constructors.
+ */
+function promoteIndicesK(
+  def: InductiveTypeDefK,
+  numPositions: number,
+  syntacticParams: Set<number>
+): Set<number> {
+  const indices = new Set<number>();
+  for (let i = 0; i < numPositions; i++) {
+    if (!syntacticParams.has(i)) {
+      indices.add(i);
+    }
+  }
+
+  if (indices.size <= 1) {
+    return indices;
+  }
+
+  const equivalenceClasses = buildEquivalenceClassesK(def, numPositions, indices);
+
+  const newIndices = new Set<number>();
+
+  for (const eqClass of Array.from(equivalenceClasses)) {
+    if (eqClass.size <= 1) {
+      for (const pos of eqClass) {
+        newIndices.add(pos);
+      }
+    } else {
+      const sorted = Array.from(eqClass).sort((a: number, b: number) => a - b);
+      const toPromote = sorted[0];
+
+      if (canPromotePositionK(def, toPromote, numPositions)) {
+        // Don't add to newIndices - it's promoted to parameter
+      } else {
+        newIndices.add(toPromote);
+      }
+
+      for (let i = 1; i < sorted.length; i++) {
+        newIndices.add(sorted[i]);
+      }
+    }
+  }
+
+  return newIndices;
+}
+
+/**
+ * Build equivalence classes of positions that are always equal across all constructors.
+ */
+function buildEquivalenceClassesK(
+  def: InductiveTypeDefK,
+  numPositions: number,
+  indices: Set<number>
+): Set<Set<number>> {
+  const indexArray = Array.from(indices);
+
+  const equivalent = (i: number, j: number): boolean => {
+    for (const ctor of def.constructors) {
+      const args = extractInductiveArgsK(ctor.type, def.name, numPositions);
+      if (!args) return false;
+
+      if (!termsEqualK(args[i], args[j])) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Union-find
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    if (!parent.has(x)) {
+      parent.set(x, x);
+      return x;
+    }
+    const p = parent.get(x)!;
+    if (p === x) return x;
+    const root = find(p);
+    parent.set(x, root);
+    return root;
+  };
+
+  const union = (x: number, y: number) => {
+    const rootX = find(x);
+    const rootY = find(y);
+    if (rootX !== rootY) {
+      parent.set(rootX, rootY);
+    }
+  };
+
+  for (let i = 0; i < indexArray.length; i++) {
+    for (let j = i + 1; j < indexArray.length; j++) {
+      if (equivalent(indexArray[i], indexArray[j])) {
+        union(indexArray[i], indexArray[j]);
+      }
+    }
+  }
+
+  const classes = new Map<number, Set<number>>();
+  for (const idx of indexArray) {
+    const root = find(idx);
+    if (!classes.has(root)) {
+      classes.set(root, new Set());
+    }
+    classes.get(root)!.add(idx);
+  }
+
+  return new Set(classes.values());
+}
+
+/**
+ * Check if a position can be promoted (must be a variable in all constructors).
+ */
+function canPromotePositionK(
+  def: InductiveTypeDefK,
+  position: number,
+  numPositions: number
+): boolean {
+  for (const ctor of def.constructors) {
+    const args = extractInductiveArgsK(ctor.type, def.name, numPositions);
+    if (!args) return false;
+
+    const term = args[position];
+    if (term.tag !== 'Var') {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Check if two TTK terms are structurally equal.
+ */
+function termsEqualK(t1: TTKTerm, t2: TTKTerm): boolean {
+  if (t1.tag !== t2.tag) return false;
+
+  switch (t1.tag) {
+    case 'Var':
+      return t2.tag === 'Var' && t1.index === t2.index;
+
+    case 'Sort':
+      return t2.tag === 'Sort' && t1.level === t2.level;
+
+    case 'Const':
+      return t2.tag === 'Const' && t1.name === t2.name;
+
+    case 'App':
+      return (
+        t2.tag === 'App' &&
+        termsEqualK(t1.fn, t2.fn) &&
+        termsEqualK(t1.arg, t2.arg)
+      );
+
+    case 'Binder':
+      return (
+        t2.tag === 'Binder' &&
+        t1.binderKind.tag === t2.binderKind.tag &&
+        termsEqualK(t1.domain, t2.domain) &&
+        termsEqualK(t1.body, t2.body)
+      );
+
+    case 'Hole':
+      return t2.tag === 'Hole' && t1.id === t2.id;
+
+    case 'Annot':
+      return (
+        t2.tag === 'Annot' &&
+        termsEqualK(t1.term, t2.term) &&
+        termsEqualK(t1.type, t2.type)
+      );
+
+    case 'Match':
+      return false;
+
+    default:
+      const _exhaustive: never = t1;
+      return false;
+  }
+}
+
+/**
+ * Enforce that parameters form a prefix.
+ */
+function enforceParameterPrefixK(indices: Set<number>, numPositions: number): number[] {
+  if (indices.size === 0) {
+    return [];
+  }
+
+  const firstIndex = Math.min(...Array.from(indices));
+
+  const result: number[] = [];
+  for (let i = firstIndex; i < numPositions; i++) {
+    result.push(i);
+  }
+
+  return result.sort((a, b) => a - b);
 }
