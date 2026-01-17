@@ -683,7 +683,7 @@ function checkTermValue(
   name: string | undefined,
   value: TTKTerm,
   type: TTKTerm,
-  env: TCEnv
+  env: TCEnv<null>
 ): { success: false, errors: CheckError[] } | { success: true } {
   if (value.tag !== 'Match') {
     try {
@@ -716,22 +716,13 @@ function checkTermValue(
   return { success: errors.length === 0, errors };
 }
 
-function contextLookup(name: string, ctx: TTKContext): TTKTerm | undefined {
-  for (const binding of ctx) {
-    if (binding.name === name) {
-      return binding.type;
-    }
-  }
-  return undefined;
-}
-
 /* PATTERNS */
 
 function checkMatchClause(
   termName: string,
   clause: TTKClause,
   typePiSpine: PiSpine,
-  env: TCEnv
+  env: TCEnv<null>
 ): { success: false, errors: CheckError[] } | { success: true } {
   const result = processMatchClauseLhs(termName, clause.patterns, typePiSpine, env)
   // TODO
@@ -740,9 +731,9 @@ function checkMatchClause(
 
 const originalConsoleLog = console.log
 
-function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, env: TCEnv): {
+function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiSpine: PiSpine, env: TCEnv<null>): {
   success: true,
-  newEnv: TCEnv;
+  newEnv: TCEnv<null>;
   patternTerms: (TTKTerm | null)[];
 } | {
   success: false,
@@ -775,9 +766,9 @@ function processMatchClauseLhs(termName: string, patterns: TTKPattern[], typePiS
   return { success: true, newEnv, patternTerms };
 }
 
-function checkPattern(pattern: TTKPattern, preferredName: string | undefined, patternTerms: (TTKTerm | null)[], checkType: TTKTerm, env: TCEnv): {
+function checkPattern(pattern: TTKPattern, preferredName: string | undefined, patternTerms: (TTKTerm | null)[], checkType: TTKTerm, env: TCEnv<null>): {
   success: true,
-  newEnv: TCEnv;
+  newEnv: TCEnv<null>;
   patternTerm: TTKTerm | null
 } | {
   success: false,
@@ -797,7 +788,7 @@ function checkPattern(pattern: TTKPattern, preferredName: string | undefined, pa
       debugger
     }
 
-    const adjustedType = transformVarsInTerm(checkType, (index, signature) => {
+    const adjustedType = transformVarsInTerm(checkType, (index, _signature) => {
       const p = patternTerms
       if (name === 'tail') {
         debugger
@@ -826,10 +817,10 @@ function checkCtorPattern(
   patternArgs: TTKPattern[],
   patternTerms: (TTKTerm | null)[],
   checkType: TTKTerm,
-  env: TCEnv
+  env: TCEnv<null>
 ): {
   success: true,
-  newEnv: TCEnv;
+  newEnv: TCEnv<null>;
   patternTerm: TTKTerm;
 } | {
   success: false,
@@ -906,8 +897,8 @@ function checkElaboratedPattern(
   patternArgs: TTKPattern[],
   preSignatureLength: number,
   checkType: TTKTerm,
-  env: TCEnv,
-): { success: true, newEnv: TCEnv, patternTerm: TTKTerm } | { success: false, errors: CheckError[] } {
+  env: TCEnv<null>,
+): { success: true, newEnv: TCEnv<null>, patternTerm: TTKTerm } | { success: false, errors: CheckError[] } {
   const newNames = env.signature.slice(preSignatureLength).map(({ name }) => name)
   const namesStack = signatureToNamesStack(env.signature)
 

@@ -20,7 +20,7 @@ type InferResult = {
   error: string
 }
 
-function inferBinderType(term: TTKTerm & { tag: 'Binder' }, path: IndexPath, env: TCEnv): InferResult {
+function inferBinderType(term: TTKTerm & { tag: 'Binder' }, path: IndexPath, env: TCEnv<null>): InferResult {
   if (term.binderKind.tag === 'BPi') {
     const domResult = inferType(term.domain, [...path, arraySeg(0)], env)
 
@@ -40,7 +40,7 @@ function inferBinderType(term: TTKTerm & { tag: 'Binder' }, path: IndexPath, env
   throw new Error('Not implemented')
 }
 
-export function inferType(term: TTKTerm, path: IndexPath, env: TCEnv): InferResult {
+export function inferType(term: TTKTerm, path: IndexPath, env: TCEnv<null>): InferResult {
   if (term.tag === 'Const') {
     const type = getTypeDefinition(env.definitions, term.name)
     if (!type) {
@@ -85,7 +85,7 @@ export function inferType(term: TTKTerm, path: IndexPath, env: TCEnv): InferResu
 
 // CHECKING
 
-export function checkType(term: TTKTerm, expectedType: TTKTerm, path: IndexPath, env: TCEnv): {
+export function checkType(term: TTKTerm, expectedType: TTKTerm, path: IndexPath, env: TCEnv<null>): {
   success: true,
   type: TTKTerm
 } | {
