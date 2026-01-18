@@ -8,11 +8,11 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/tt-parser';
 import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, prettyPrint } from '../types/tt-kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from '../types/tt-kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
-import { mkApp, mkConst, mkType, mkVar } from '../types/tt-core';
+import { mkApp, mkConst, mkType, mkVar, prettyPrint } from '../types/tt-core';
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, createDefinitionsMap, createTCEnv, DefinitionsMap, extractPiSpine, PiSpine, setDefinitionValueInTCEnv, Signature, signatureToNamesStack, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
@@ -686,6 +686,8 @@ export function compileTTFromText(source: string): CompileResult {
   };
 }
 
+const originalConsoleLog = console.log
+
 function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
@@ -713,6 +715,12 @@ function checkTermValue(
 
   const clausesEnv = env.inMatchClauses();
   for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
+    if (name === 'nth' && clauseIndex === 1) {
+      console.log = originalConsoleLog
+    } else {
+      console.log = () => { }
+    }
+
     try {
       checkMatchClause(name ?? '???', clausesEnv.inMatchClause(clauseIndex), typePiSpine);
     } catch (e) {
@@ -746,138 +754,179 @@ function checkMatchClause(
   return result.withoutValue();
 }
 
-const originalConsoleLog = console.log
+function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, typePiSpine: PiSpine): TCEnv<unknown> {
+  console.log(`\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
+  const checkStack: PiSpine[] = [typePiSpine]
+  const patternStack: TTKPattern[] = [...env.value].reverse()
 
-function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, typePiSpine: PiSpine): TCEnv<(TTKTerm | null)[]> {
-  if (termName === 'vecConcat') {
-    console.log = originalConsoleLog
-  } else {
-    console.log = () => { }
-  }
-  console.log(`LHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
+  let workEnv: TCEnv<unknown> = env
 
-  let patternTerms: (TTKTerm | null)[] = []
+  console.log(`\n  ~~ INITIAL STATE ~~`)
+  console.log(`    P = [${patternStack.map(p => prettyPrintPattern(p)).join(', ')}]`)
+  console.log(`    T = [${checkStack.map(prettyPrintPiSpine).join(', ')}]`)
 
-  let newEnv = env
-  for (let i = 0; i < env.value.length; i++) {
-    const binder = typePiSpine.binders[i];
-    const checkType = typePiSpine.binders[i].type;
-    const result = checkPattern(env.inMatchClausePattern(i), binder.name, patternTerms, checkType);
+  for (let i = 0; i < 100 && patternStack.length > 0; i++) {
+    const pattern = patternStack.pop() as TTKPattern
+    if (pattern.tag === 'PVar') {
+      const checkType = checkStack.pop() as PiSpine
+      const binder = checkType.binders[0] as { name: string, type: TTKTerm }
 
-    newEnv = result.withValue(env.value);
-    patternTerms.push(result.value);
-  }
+      console.log(`\nSTEP ${prettyPrintPattern(pattern)} against (${binder.name}: ${prettyPrint(binder.type)})`);
+      console.log(`  Binding (${pattern.name} : ${prettyPrint(binder.type)})`);
+      workEnv = workEnv.extendSignature(pattern.name, binder.type)
 
-  return newEnv.withValue(patternTerms);
-}
-
-function checkPattern(env: TCEnv<TTKPattern>, preferredName: string | undefined, patternTerms: (TTKTerm | null)[], checkType: TTKTerm): TCEnv<TTKTerm | null> {
-  if (env.isMatchClauseCtorPattern()) {
-    return checkCtorPattern(env, patternTerms, checkType);
-  } else if (env.isMatchClauseVarPattern()) {
-    const name = env.value.name === '_' ? `?${preferredName ?? ''}${env.signature.length}` : env.value.name
-
-    if (name === 'tail') {
-      debugger
-    }
-
-    const adjustedType = transformVarsInTerm(checkType, (index, _signature) => {
-      const p = patternTerms
-      if (name === 'tail') {
-        debugger
-      }
-      return mkVar(index)
-    })
-
-    console.log(`  Extend ${name}: ${prettyPrint(adjustedType)}`);
-
-    if (name === 'tail') {
-      debugger
-    }
-
-    return env.extendSignature(name, adjustedType).withValue(null);
-  }
-
-  throw env.unknownTagError(env.value, 'pattern', `Unknown pattern type: ${prettyPrintPattern(env.value)}`);
-}
-
-function checkCtorPattern(
-  env: TCEnv<TTKPattern & { tag: 'PCtor' }>,
-  patternTerms: (TTKTerm | null)[],
-  checkType: TTKTerm,
-): TCEnv<TTKTerm> {
-  const patternCtorName = env.value.name;
-  if (patternCtorName === 'Succ') {
-    debugger
-  }
-
-  const definition = env.getTypeDefinitionAssert(patternCtorName).value;
-  const { binders: definitionBinders, body: _definitionBody } = extractPiSpine(definition);
-
-  const patternArgs = env.value.args;
-  env.assertEqualLengths(patternArgs, definitionBinders, `Constructor '${patternCtorName}' has wrong number of arguments in pattern. Has ${patternArgs.length} but expected ${definitionBinders.length}`)
-
-  const patternsEnv = env.inMatchClauseCtorArgs()
-
-  let newEnv: TCEnv<unknown> = patternsEnv
-  let newPatternTerms = [...patternTerms]
-
-  for (let i = 0; i < patternArgs.length; i++) {
-    const result = checkPattern(newEnv.atValueAndPathOfEnv(patternsEnv).inMatchClausePattern(i), definitionBinders[i].name, newPatternTerms, definitionBinders[i].type);
-    newPatternTerms.push(result.value)
-    newEnv = result;
-  }
-
-  const result = checkElaboratedPattern(newEnv.atValueAndPathOfEnv(env), env.signature.length, checkType)
-
-  // TODO?
-
-  return result
-}
-
-function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPattern[], newNames: string[], signature: Signature): {
-  term: TTKTerm,
-  patternsTraversed: number,
-} {
-  const fn = mkConst(patternCtorName, mkType(-1) /* HACK */)
-
-  let term = fn
-  let sig = signature
-  let patternsTraversed = 0
-
-  for (let i = 0; i < patternArgs.length; i++) {
-    const pattern = patternArgs[i]
-    if (pattern.tag === 'PCtor') {
-      const arg = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames.slice(patternsTraversed), sig)
-      term = mkApp(term, arg.term)
-      patternsTraversed += arg.patternsTraversed
+      checkStack.push(dropPiSpineOuterMostBinder(checkType))
     } else {
-      const patternName = newNames[i] ?? pattern.name
-      const sigIndex = sig.findIndex(b => b.name === patternName)
-      const arg = mkVar(sig.length - sigIndex - 1)
-      term = mkApp(term, arg)
-      patternsTraversed++
+      console.log('TODO: handle PCtor pattern');
     }
+
+    console.log(`\n  ~~ RESULT STATE ~~`)
+    console.log(`    Γ = ${workEnv.printSignature()}`)
+    console.log(`    P = [${patternStack.map(p => prettyPrintPattern(p)).join(', ')}]`)
+    console.log(`    T = [${checkStack.map(prettyPrintPiSpine).join(', ')}]`)
   }
 
-  return { term, patternsTraversed }
+  return env
 }
 
-function checkElaboratedPattern(
-  env: TCEnv<TTKPattern & { tag: 'PCtor' }>,
-  preSignatureLength: number,
-  checkType: TTKTerm,
-): TCEnv<TTKTerm> {
-  const newNames = env.signature.slice(preSignatureLength).map(({ name }) => name)
-  const namesStack = signatureToNamesStack(env.signature)
-
-  const pattern = env.value;
-  const patternTerm = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames, env.signature).term
-
-  const patternTermEnv = env.withValue(patternTerm)
-
-  const inferredType = inferType(patternTermEnv)
-  console.log(`  CHECK: ${prettyPrint(patternTerm, namesStack)} : ${prettyPrint(inferredType.value, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
-
-  return patternTermEnv
+function dropPiSpineOuterMostBinder(piSpine: PiSpine): PiSpine {
+  return {
+    binders: piSpine.binders.slice(1),
+    body: piSpine.body,
+  }
 }
+
+function prettyPrintPiSpine(piSpine: PiSpine): string {
+  let names: string[] = []
+  const binders = `(${piSpine.binders.map(b => {
+    const result = b.name && b.name !== '_' ? `(${b.name} : ${prettyPrint(b.type, names)})` : prettyPrint(b.type, names)
+    names.push(b.name)
+    return result
+  }).join(' -> ')})`
+  return `${binders} -> ${prettyPrint(piSpine.body, names.reverse())}`
+}
+
+// function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, typePiSpine: PiSpine): TCEnv<PatternTerm[]> {
+//   console.log(`LHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
+
+//   let patternTerms: PatternTerm[] = []
+//   let newEnv: TCEnv<TTKPattern[]> = env
+
+//   for (let i = 0; i < env.value.length; i++) {
+//     const binder = typePiSpine.binders[i];
+//     const checkType = typePiSpine.binders[i].type;
+//     const result = checkPattern(newEnv.inMatchClausePattern(i), binder.name, patternTerms, checkType);
+//     patternTerms = result.value;
+//     newEnv = result.atValueAndPathOfEnv(env);
+//   }
+
+//   return newEnv.withValue(patternTerms);
+// }
+
+// type PatternTerm = TTKTerm | { tag: 'patternVar', name: string }
+
+// function checkPattern(env: TCEnv<TTKPattern>, preferredName: string | undefined, patternTerms: PatternTerm[], checkType: TTKTerm): TCEnv<PatternTerm[]> {
+//   if (env.isMatchClauseCtorPattern()) {
+//     return checkCtorPattern(env, patternTerms, checkType);
+//   } else if (env.isMatchClauseVarPattern()) {
+//     const name = env.value.name === '_' ? `?${preferredName ?? ''}${env.signature.length}` : env.value.name
+
+//     const adjustedType = transformVarsInTerm(checkType, (index, _signature) => {
+//       const p = patternTerms
+//       if (name === 'tail') {
+//         // debugger
+//       }
+//       return mkVar(index)
+//     });
+
+//     const newPatternTerms: PatternTerm[] = [...patternTerms, { tag: 'patternVar', name }];
+//     const newEnv = env.extendSignature(name, adjustedType).withValue(newPatternTerms);
+//     console.log(`  SIG: ${newEnv.printSignature()}`);
+//     console.log(`  PAT: ${prettyPrintPatternTerms(newPatternTerms, env)}\n\n`);
+//     return newEnv;
+//   }
+
+//   throw env.unknownTagError(env.value, 'pattern', `Unknown pattern type: ${prettyPrintPattern(env.value)}`);
+// }
+
+// function checkCtorPattern(
+//   env: TCEnv<TTKPattern & { tag: 'PCtor' }>,
+//   patternTerms: PatternTerm[],
+//   checkType: TTKTerm,
+// ): TCEnv<PatternTerm[]> {
+//   const patternCtorName = env.value.name;
+//   if (patternCtorName === 'Succ') {
+//     // debugger
+//   }
+
+//   const definition = env.getTypeDefinitionAssert(patternCtorName).value;
+//   const { binders: definitionBinders, body: _definitionBody } = extractPiSpine(definition);
+
+//   const patternArgs = env.value.args;
+//   env.assertEqualLengths(patternArgs, definitionBinders, `Constructor '${patternCtorName}' has wrong number of arguments in pattern. Has ${patternArgs.length} but expected ${definitionBinders.length}`)
+
+//   const patternsEnv = env.inMatchClauseCtorArgs()
+
+//   let newEnv: TCEnv<unknown> = patternsEnv
+//   let newPatternTerms = patternTerms
+
+//   for (let i = 0; i < patternArgs.length; i++) {
+//     const result = checkPattern(newEnv.atValueAndPathOfEnv(patternsEnv).inMatchClausePattern(i), definitionBinders[i].name, newPatternTerms, definitionBinders[i].type);
+//     newPatternTerms = result.value;
+//     newEnv = result.atValueAndPathOfEnv(patternsEnv);
+//   }
+
+//   const result = checkElaboratedPattern(newEnv.atValueAndPathOfEnv(env), env.signature.length, checkType)
+//   newPatternTerms.length -= patternArgs.length;
+//   newPatternTerms.push(result.value);
+//   console.log(`  SIG: ${newEnv.printSignature()}`);
+//   console.log(`  PAT: ${prettyPrintPatternTerms(newPatternTerms, env)}.\n\n`);
+//   return newEnv.withValue(newPatternTerms);
+// }
+
+// function convertCtorPatternToAppTerm(patternCtorName: string, patternArgs: TTKPattern[], newNames: string[], signature: Signature): {
+//   term: TTKTerm,
+//   patternsTraversed: number,
+// } {
+//   const fn = mkConst(patternCtorName, mkType(-1) /* HACK */)
+
+//   let term = fn
+//   let sig = signature
+//   let patternsTraversed = 0
+
+//   for (let i = 0; i < patternArgs.length; i++) {
+//     const pattern = patternArgs[i]
+//     if (pattern.tag === 'PCtor') {
+//       const arg = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames.slice(patternsTraversed), sig)
+//       term = mkApp(term, arg.term)
+//       patternsTraversed += arg.patternsTraversed
+//     } else {
+//       const patternName = newNames[i] ?? pattern.name
+//       const sigIndex = sig.findIndex(b => b.name === patternName)
+//       const arg = mkVar(sig.length - sigIndex - 1)
+//       term = mkApp(term, arg)
+//       patternsTraversed++
+//     }
+//   }
+
+//   return { term, patternsTraversed }
+// }
+
+// function checkElaboratedPattern(
+//   env: TCEnv<TTKPattern & { tag: 'PCtor' }>,
+//   preSignatureLength: number,
+//   checkType: TTKTerm,
+// ): TCEnv<TTKTerm> {
+//   const newNames = env.signature.slice(preSignatureLength).map(({ name }) => name)
+//   const namesStack = signatureToNamesStack(env.signature)
+
+//   const pattern = env.value;
+//   const patternTerm = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames, env.signature).term
+
+//   const patternTermEnv = env.withValue(patternTerm)
+
+//   const inferredType = inferType(patternTermEnv)
+//   console.log(`  CHECK: ${prettyPrint(patternTerm, namesStack)} : ${prettyPrint(inferredType.value, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
+
+//   return patternTermEnv
+// }

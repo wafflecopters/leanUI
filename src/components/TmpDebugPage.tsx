@@ -534,7 +534,6 @@ export function TmpDebugPage() {
         if (decl.checkErrors && decl.checkErrors.length > 0) {
           for (const err of decl.checkErrors) {
             // Try to map error path to precise source location
-            debugger
             const sourceRange = mapErrorPathToSourceRange(
               err.env.indexPath,
               decl.elabMap,

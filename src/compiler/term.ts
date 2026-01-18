@@ -162,7 +162,7 @@ export function getTermDefinition(definitions: DefinitionsMap, name: string) {
   return definitions.terms.get(name);
 }
 
-export type PiSpine = { binders: Signature, body: TTKTerm, term: TTKTerm };
+export type PiSpine = { binders: Signature, body: TTKTerm, term?: TTKTerm };
 export type AppSpine = { fn: TTKTerm, args: TTKTerm[] };
 
 export function signatureToNamesStack(signature: Signature): string[] {
@@ -282,6 +282,17 @@ export class TCEnv<T> {
     public readonly valueStack: unknown[],
     public readonly value: T
   ) {
+  }
+
+  prettyPrint(term: TTKTerm): string {
+    return prettyPrint(term, this.signature.map(s => s.name).reverse());
+  }
+
+  printSignature(this: TCEnv<T>): string {
+    return `{${this.signature.map((s, i) => {
+      const sig = this.signature.slice(0, i)
+      return `${s.name} : ${prettyPrint(s.type, sig.map(s => s.name).reverse())}`
+    }).join(', ')}}`;
   }
 
   hasDefinedValue(this: TCEnv<T>): this is TCEnv<NonNullable<T>> {
@@ -792,7 +803,7 @@ export class TCEnv<T> {
   }
 
   expectedBinderPiError(this: TCEnv<TTKTerm>): TCEnvError<TTKTerm> {
-    return new TCEnvError<TTKTerm>(`Expected binder Pi type, got: ${prettyPrint(this.value)}`, this);
+    return new TCEnvError<TTKTerm>(`Expected binder Pi type, got: ${this.prettyPrint(this.value)}`, this);
   }
 
   expectedCheckTypeToBeBinderPiError(this: TCEnv<TTKTerm>, checkType: TTKTerm): TCEnvError<TTKTerm> {
@@ -800,7 +811,7 @@ export class TCEnv<T> {
   }
 
   expectedTypesToBeDefinitionallyEqualError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnvError<TTKTerm> {
-    return new TCEnvError<TTKTerm>(`Expected types to be definitionally equal: ${prettyPrint(lhs)} vs ${prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
+    return new TCEnvError<TTKTerm>(`Expected types to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
   }
 
   typeDefinitionNotFoundError(name: string): TCEnvError<T> {
