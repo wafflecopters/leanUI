@@ -298,6 +298,10 @@ export function mkApp(fn: TTerm, arg: TTerm): TTerm {
   return { tag: 'App', fn, arg };
 }
 
+export function mkAppSpine(fn: TTerm, args: TTerm[]): TTerm {
+  return args.reduce((acc, arg) => mkApp(acc, arg), fn);
+}
+
 /**
  * Create a constant with a given name and type
  */

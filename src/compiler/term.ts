@@ -4,16 +4,9 @@ import { shiftTerm } from "./subst";
 import { areTypesDefEq } from "./whnf";
 
 export type Constraint = {
-  tag: 'TypeEq';
-  lhs: TTKTerm;
-  rhs: TTKTerm;
-  description?: string;
-} | {
-  tag: 'TermEq';
-  lhs: TTKTerm;
-  rhs: TTKTerm;
-  type: TTKTerm;
-  description?: string;
+  ctx: Signature,
+  meta: string,
+  rhs: TTKTerm,
 }
 
 export interface CheckError {
@@ -28,15 +21,10 @@ export interface CheckError {
 
 export type Signature = { name: string, type: TTKTerm, value?: TTKTerm }[];
 
-export type MetaVarState =
-  | { tag: 'unsolved' }
-  | { tag: 'solved', term: TTKTerm }
-  | { tag: 'guarded', term: TTKTerm, constraints: Constraint[] }
-
 export type MetaVar = {
   ctx: Signature,
   type: TTKTerm,
-  state: MetaVarState
+  solution?: TTKTerm
 }
 
 export function createTCEnv(definitions?: DefinitionsMap, signature?: Signature, metaVars?: Map<string, MetaVar>): TCEnv<null> {
@@ -44,6 +32,7 @@ export function createTCEnv(definitions?: DefinitionsMap, signature?: Signature,
     signature ?? [],
     definitions ?? createDefinitionsMap(),
     metaVars ?? new Map<string, MetaVar>(),
+    [],
     [],
     [],
     null
@@ -55,6 +44,7 @@ export function updateSignatureInTCEnv<T>(env: TCEnv<T>, fn: (s: Signature) => S
     fn(env.signature),
     env.definitions,
     env.metaVars,
+    env.constraints,
     env.indexPath,
     env.valueStack,
     env.value
@@ -68,8 +58,9 @@ export function extendSignatureInTCEnv<T>(env: TCEnv<T>, name: string, type: TTK
 export function updateDefinitionsInTCEnv<T>(env: TCEnv<T>, fn: (d: DefinitionsMap) => DefinitionsMap): TCEnv<T> {
   return new TCEnv(
     env.signature,
-    fn(env.definitions),
+    fn({ ...env.definitions }),
     env.metaVars,
+    env.constraints,
     env.indexPath,
     env.valueStack,
     env.value
@@ -92,15 +83,18 @@ export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, Meta
   return new TCEnv(
     env.signature,
     env.definitions,
-    fn(env.metaVars),
+    fn(new Map(env.metaVars)),
+    env.constraints,
     env.indexPath,
     env.valueStack,
     env.value
   );
 }
 
-export function addMetaVarInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, _value?: TTKTerm): TCEnv<T> {
-  return updateMetaVarsInTCEnv(env, (m) => m.set(name, { ctx: env.signature, type, state: { tag: 'unsolved' } }));
+export function addMetaVarInTCEnv<T>(env: TCEnv<T>, type: TTKTerm): { env: TCEnv<T>, name: string } {
+  const name = `?m${env.metaVars.size}`;
+
+  return { env: updateMetaVarsInTCEnv(env, (m) => m.set(name, { ctx: env.signature, type })), name };
 }
 
 export type InductiveDefinition = {
@@ -273,11 +267,24 @@ export const TermDefinitionPartIndex = {
   Value: fieldSeg('value'),
 } satisfies Record<string, IndexPathSegment>;
 
+export function printCollectionFancy(items: string[], openBracket: string, closeBracket: string, separator: string, options?: { indentLevel?: number, prefixOpeningBracket?: boolean, innerIndentOffset?: number }): string {
+  if (items.length === 0) {
+    return openBracket + closeBracket;
+  }
+  if (items.length === 1) {
+    return openBracket + items[0] + closeBracket;
+  }
+  const bracketPrefix = options?.indentLevel && items.length > 1 ? ' '.repeat(options.indentLevel) : '';
+  const itemPrefix = options?.indentLevel && items.length > 1 ? ' '.repeat(options.indentLevel + (options.innerIndentOffset ?? 1)) : '';
+  return `${options?.prefixOpeningBracket ? bracketPrefix : ''}${openBracket}\n${items.map(item => `${itemPrefix}${item}`).join(`${separator}\n`)}\n${bracketPrefix}${closeBracket}`;
+}
+
 export class TCEnv<T> {
   constructor(
     public readonly signature: Signature,
     public readonly definitions: DefinitionsMap,
     public readonly metaVars: Map<string, MetaVar>,
+    public readonly constraints: Constraint[],
     public readonly indexPath: IndexPath,
     public readonly valueStack: unknown[],
     public readonly value: T
@@ -288,48 +295,74 @@ export class TCEnv<T> {
     return prettyPrint(term, this.signature.map(s => s.name).reverse());
   }
 
-  printSignature(this: TCEnv<T>): string {
-    return `{${this.signature.map((s, i) => {
-      const sig = this.signature.slice(0, i)
+  static printSignature(signature: Signature): string {
+    return `{${signature.map((s, i) => {
+      const sig = signature.slice(0, i)
       return `${s.name} : ${prettyPrint(s.type, sig.map(s => s.name).reverse())}`
     }).join(', ')}}`;
   }
 
-  hasDefinedValue(this: TCEnv<T>): this is TCEnv<NonNullable<T>> {
+  printSignature(): string {
+    return TCEnv.printSignature(this.signature);
+  }
+
+  printMetas(options?: { indentLevel?: number, innerIndentOffset?: number }): string {
+    const itemStrs = Array.from(this.metaVars.entries()).map(([name, meta]) => {
+      return `${name} : ${TCEnv.printSignature(meta.ctx)} -> ${prettyPrint(meta.type, meta.ctx.map(s => s.name))}`
+    })
+
+    return printCollectionFancy(itemStrs, '{', '}', ',', options);
+  }
+
+  static printConstraint(constraint: Constraint): string {
+    return `{ctx: ${TCEnv.printSignature(constraint.ctx)}, meta: ${constraint.meta}, rhs: ${prettyPrint(constraint.rhs)}}`
+  }
+
+  printConstraints(options?: { indentLevel?: number, innerIndentOffset?: number }): string {
+    const itemStrs = this.constraints.map(TCEnv.printConstraint);
+    return printCollectionFancy(itemStrs, '[', ']', ',', options);
+  }
+
+  hasDefinedValue(): this is TCEnv<NonNullable<T>> {
     return this.value !== undefined;
   }
 
   withoutValue(): TCEnv<void> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, this.indexPath, this.valueStack, undefined);
+    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined);
   }
 
-  withValue<S>(this: TCEnv<T>, value: S): TCEnv<S> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, this.indexPath, this.valueStack, value);
+  withValue<S>(value: S): TCEnv<S> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value);
   }
 
-  mapValue<S>(this: TCEnv<T>, fn: (value: T) => S): TCEnv<S> {
+  mapValue<S>(fn: (value: T) => S): TCEnv<S> {
     return this.withValue(fn(this.value));
   }
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
+    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
   }
 
-  atIndexPath(this: TCEnv<T>, indexPath: IndexPath): TCEnv<void> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, indexPath, [], undefined);
+  atIndexPath(indexPath: IndexPath): TCEnv<void> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined);
   }
 
   // Terms
 
-  extendSignature(this: TCEnv<T>, name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
+  extendSignature(name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
     return new TCEnv(
       [...this.signature, { name, type, value }],
       this.definitions,
       this.metaVars,
+      this.constraints,
       this.indexPath,
       this.valueStack,
       this.value
     );
+  }
+
+  withConstraint(constraint: Omit<Constraint, 'ctx'>): TCEnv<T> {
+    return new TCEnv(this.signature, this.definitions, this.metaVars, [...this.constraints, { ctx: this.signature, ...constraint }], this.indexPath, this.valueStack, this.value);
   }
 
   isAppTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'App' }> {
@@ -383,6 +416,7 @@ export class TCEnv<T> {
       this.signature,
       addDefinition(this.definitions, name, type, value),
       this.metaVars,
+      this.constraints,
       this.indexPath,
       this.valueStack,
       this.value
@@ -394,16 +428,11 @@ export class TCEnv<T> {
       this.signature,
       addInductiveDefinition(this.definitions, name, type, constructors, indexPositions),
       this.metaVars,
+      this.constraints,
       this.indexPath,
       this.valueStack,
       this.value
     );
-  }
-
-  withUnsolvedMetaVar(this: TCEnv<TTKTerm>, name: string, type: TTKTerm): TCEnv<TTKTerm> {
-    const newMetaVars = new Map<string, MetaVar>(this.metaVars);
-    newMetaVars.set(name, { ctx: this.signature, type, state: { tag: 'unsolved' } });
-    return new TCEnv(this.signature, this.definitions, newMetaVars, this.indexPath, this.valueStack, this.value);
   }
 
   // Match
@@ -412,6 +441,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, MatchPartIndex.Scrutinee],
       [...this.valueStack, this.value],
       this.value.scrutinee
@@ -423,6 +453,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, MatchPartIndex.Clauses],
       [...this.valueStack, this.value],
       this.value.clauses
@@ -436,6 +467,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, arraySeg(clauseIndex)],
       [...this.valueStack, this.value],
       this.value[clauseIndex]
@@ -447,6 +479,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, ClausePartIndex.Patterns],
       [...this.valueStack, this.value],
       this.value.patterns
@@ -460,6 +493,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, arraySeg(patternIndex)],
       [...this.valueStack, this.value],
       this.value[patternIndex]
@@ -471,6 +505,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, ClausePartIndex.Rhs],
       [...this.valueStack, this.value],
       this.value.rhs
@@ -482,6 +517,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, MatchClauseCtorPatternPartIndex.Args],
       [...this.valueStack, this.value],
       this.value.args
@@ -494,6 +530,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, AppPartIndex.Fn],
       [...this.valueStack, this.value],
       this.value.fn
@@ -505,6 +542,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, AppPartIndex.Arg],
       [...this.valueStack, this.value],
       this.value.arg
@@ -517,6 +555,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, AnnotPartIndex.Term],
       [...this.valueStack, this.value],
       this.value.term
@@ -528,6 +567,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, AnnotPartIndex.Type],
       [...this.valueStack, this.value],
       this.value.type
@@ -540,6 +580,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
       this.value.name
@@ -551,6 +592,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
       this.value.domain
@@ -562,6 +604,7 @@ export class TCEnv<T> {
       [...this.signature, { name: this.value.name, type: this.value.domain }],
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
       this.value.body
@@ -574,6 +617,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
       this.value.name
@@ -585,6 +629,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
       this.value.domain
@@ -596,6 +641,7 @@ export class TCEnv<T> {
       [...this.signature, { name: this.value.name, type: this.value.domain }],
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
       this.value.body
@@ -608,6 +654,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
       this.value.name
@@ -619,6 +666,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
       this.value.domain
@@ -630,6 +678,7 @@ export class TCEnv<T> {
       [...this.signature, { name: this.value.name, type: this.value.domain }],
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
       this.value.body
@@ -641,6 +690,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, BinderPartSegment.Value],
       [...this.valueStack, this.value],
       this.value.binderKind.defVal
@@ -653,6 +703,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.Name],
       [...this.valueStack, this.value],
       this.value.name
@@ -664,6 +715,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.Type],
       [...this.valueStack, this.value],
       this.value.type
@@ -675,6 +727,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.Constructors],
       [...this.valueStack, this.value],
       this.value.constructors
@@ -688,6 +741,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, arraySeg(constructorIndex)],
       [...this.valueStack, this.value],
       this.value[constructorIndex]
@@ -699,6 +753,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorName],
       [...this.valueStack, this.value],
       this.value.name
@@ -710,6 +765,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorType],
       [...this.valueStack, this.value],
       this.value.type
@@ -722,6 +778,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, TermPartIndex.Name],
       [...this.valueStack, this.value],
       this.value.name
@@ -733,6 +790,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, TermPartIndex.Type],
       [...this.valueStack, this.value],
       this.value.type
@@ -744,6 +802,7 @@ export class TCEnv<T> {
       this.signature,
       this.definitions,
       this.metaVars,
+      this.constraints,
       [...this.indexPath, TermPartIndex.Value],
       [...this.valueStack, this.value],
       this.value.value
@@ -882,5 +941,23 @@ export function postOrderTraverseTerm(term: TTKTerm, fn: (term: TTKTerm, indexPa
   } else {
     const _never: never = term as never;
     throw new Error(`Unhandled term type: ${(_never as { tag: string }).tag}`);
+  }
+}
+
+export function assertIsPi(term: TTKTerm, msg?: string): asserts term is TTKTerm & { tag: 'Binder'; binderKind: { tag: 'BPi' } } {
+  if (term.tag !== 'Binder' || term.binderKind.tag !== 'BPi') {
+    throw new Error(msg ?? `Expected Pi type, got: ${prettyPrint(term)}`);
+  }
+}
+
+export function assertIsNotPi(term: TTKTerm, msg?: string): asserts term is Exclude<TTKTerm, { tag: 'Binder'; binderKind: { tag: 'BPi' } }> {
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
+    throw new Error(msg ?? `Expected non-Pi type, got: ${prettyPrint(term)}`);
+  }
+}
+
+export function assertDefined<T>(value: T | undefined, msg?: string): asserts value is T {
+  if (!value) {
+    throw new Error(msg ?? `Expected defined value, got: ${value}`);
   }
 }
