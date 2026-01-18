@@ -1,5 +1,5 @@
-import { TTKBinderKind, TTKTerm } from "../types/tt-kernel";
-import { Constraint, MetaVar, Signature } from "./term";
+import { mkVar, TTKBinderKind, TTKTerm } from "../types/tt-kernel";
+import { Constraint, MetaVar, Signature, transformVarsInTerm } from "./term";
 
 /**
  * Substitute term s for variable with index n in term t
@@ -264,6 +264,40 @@ export function minFreeVarIndex(term: TTKTerm): number {
   return minFreeVarIndexHelper(term, 0);
 }
 
+/**
+ * Check if a term contains a reference to a specific free variable index.
+ */
+export function containsVarIndex(term: TTKTerm, targetIndex: number): boolean {
+  return containsVarIndexHelper(term, targetIndex, 0);
+}
+
+function containsVarIndexHelper(term: TTKTerm, targetIndex: number, depth: number): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return term.index === targetIndex + depth;
+    case 'Sort':
+    case 'Const':
+      return false;
+    case 'Binder':
+      if (containsVarIndexHelper(term.domain, targetIndex, depth)) return true;
+      if (containsVarIndexHelper(term.body, targetIndex, depth + 1)) return true;
+      if (term.binderKind.tag === 'BLet' &&
+        containsVarIndexHelper(term.binderKind.defVal, targetIndex, depth)) return true;
+      return false;
+    case 'App':
+      return containsVarIndexHelper(term.fn, targetIndex, depth) ||
+        containsVarIndexHelper(term.arg, targetIndex, depth);
+    case 'Hole':
+      return containsVarIndexHelper(term.type, targetIndex, depth);
+    case 'Annot':
+      return containsVarIndexHelper(term.term, targetIndex, depth) ||
+        containsVarIndexHelper(term.type, targetIndex, depth);
+    case 'Match':
+      if (containsVarIndexHelper(term.scrutinee, targetIndex, depth)) return true;
+      return term.clauses.some(c => containsVarIndexHelper(c.rhs, targetIndex, depth));
+  }
+}
+
 function minFreeVarIndexHelper(term: TTKTerm, depth: number): number {
   switch (term.tag) {
     case 'Var':
@@ -410,9 +444,22 @@ export function* enumerateAppliedSubstitutions(substitutions: Map<number, TTKTer
 // Each entry's type in Signature is stored with de Bruijn indices relative to that entry's
 // position (entry at position i has type with indices 0..i-1). The varIndex parameter is
 // a de Bruijn index from the tail (0 = last entry, most recently bound).
-export function applySubstitutionToContext(ctx: Signature, varIndex: number, value: TTKTerm): Signature {
+export function applySubstitutionToContext(
+  ctx: Signature,
+  varIndex: number,
+  value: TTKTerm
+): Signature {
   const n = ctx.length;
   const cutoff = n - varIndex - 1; // array index of the variable being removed
+
+  // First, adjust value for the removal in main context
+  // Indices > varIndex in value need to be decremented
+  const adjustedValueInMain = transformVarsInTerm(value, (idx, _sig) => {
+    if (idx > varIndex) {
+      return mkVar(idx - 1);
+    }
+    return mkVar(idx);
+  });
 
   // Remove the binder at cutoff
   const newCtx = ctx.slice(0, cutoff).concat(ctx.slice(cutoff + 1));
@@ -430,9 +477,10 @@ export function applySubstitutionToContext(ctx: Signature, varIndex: number, val
     // had de Bruijn index: origPos - cutoff - 1 = i - cutoff
     const localIdx = i - cutoff;
 
-    // Shift value from full context (n vars) to this entry's original context (origPos vars)
-    const shiftAmount = origPos - n;
-    const shiftedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
+    // Shift adjustedValueInMain from new main context (n-1 vars) to this entry's new context (origPos-1 vars)
+    // New main context has n-1 entries, this entry's new context has origPos-1 entries
+    const shiftAmount = (origPos - 1) - (n - 1);
+    const shiftedValue = shiftAmount !== 0 ? shiftTerm(adjustedValueInMain, shiftAmount, 0) : adjustedValueInMain;
 
     // subst replaces Var(localIdx) with shiftedValue and decrements indices above localIdx
     const newType = subst(localIdx, shiftedValue, s.type);
@@ -480,31 +528,59 @@ export function applySubstitutionToMetaVars(
       // Compute local de Bruijn index in metavar's context
       const localVarIndex = varIndex - (mainSigLength - m);
 
-      // Check for escaping variables: value must not reference variables
-      // outside the metavar's scope (indices < mainSigLength - m)
-      const minFreeVar = minFreeVarIndex(value);
-      const contextBoundary = mainSigLength - m;
-      if (minFreeVar < contextBoundary) {
-        throw new Error(
-          `Escaping variable in substitution for metavar ${name}: ` +
-          `value references Var(${minFreeVar}) but metavar context only has ` +
-          `variables with index >= ${contextBoundary}`
-        );
+      // Check if anything actually references the removed variable.
+      // Only if something needs the value do we need to check for escaping.
+      const typeNeedsValue = containsVarIndex(meta.type, localVarIndex);
+      const solutionNeedsValue = meta.solution !== undefined &&
+        containsVarIndex(meta.solution, localVarIndex);
+
+      // Check if any context entry after the removed one references it
+      const cutoff = m - localVarIndex - 1;
+      let ctxNeedsValue = false;
+      for (let i = cutoff + 1; i < m; i++) {
+        const localIdx = i - cutoff - 1;
+        const entryValue = meta.ctx[i].value;
+        if (containsVarIndex(meta.ctx[i].type, localIdx) ||
+          (entryValue !== undefined && containsVarIndex(entryValue, localIdx))) {
+          ctxNeedsValue = true;
+          break;
+        }
+      }
+
+      if (typeNeedsValue || solutionNeedsValue || ctxNeedsValue) {
+        // Check for escaping variables: value must not reference variables
+        // outside the metavar's scope (indices < mainSigLength - m)
+        const minFreeVar = minFreeVarIndex(value);
+        const contextBoundary = mainSigLength - m;
+        if (minFreeVar < contextBoundary) {
+          debugger
+          throw new Error(
+            `Escaping variable in substitution for metavar ${name}: ` +
+            `value references Var(${minFreeVar}) but metavar context only has ` +
+            `variables with index >= ${contextBoundary}`
+          );
+        }
       }
 
       // Shift value from main context (mainSigLength vars) to metavar context (m vars)
       const shiftAmount = m - mainSigLength;
       const shiftedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
 
-      // Apply substitution to ctx
+      // Apply substitution to ctx (handles adjustment internally)
       const newCtx = applySubstitutionToContext(meta.ctx, localVarIndex, shiftedValue);
 
+      // Adjust value for removal before applying to type/solution
+      // (applySubstitutionToContext does this internally, but subst does not)
+      const adjustedValue = transformVarsInTerm(shiftedValue, (idx) => {
+        return idx > localVarIndex ? mkVar(idx - 1) : mkVar(idx);
+      });
+
       // Apply substitution to type (in metavar's original context)
-      const newType = subst(localVarIndex, shiftedValue, meta.type);
+      const newType = subst(localVarIndex, adjustedValue, meta.type);
 
       // Apply substitution to solution if present
       const newSolution = meta.solution !== undefined
-        ? subst(localVarIndex, shiftedValue, meta.solution)
+        ? subst(localVarIndex, adjustedValue, meta.solution)
         : undefined;
 
       result.set(name, { ctx: newCtx, type: newType, solution: newSolution });
@@ -542,23 +618,48 @@ export function applySubstitutionToConstraints(
     if (varIndex >= mainSigLength - m) {
       const localVarIndex = varIndex - (mainSigLength - m);
 
-      // Check for escaping variables: value must not reference variables
-      // outside the constraint's scope (indices < mainSigLength - m)
-      const minFreeVar = minFreeVarIndex(value);
-      const contextBoundary = mainSigLength - m;
-      if (minFreeVar < contextBoundary) {
-        throw new Error(
-          `Escaping variable in substitution for constraint (meta ${constraint.meta}): ` +
-          `value references Var(${minFreeVar}) but constraint context only has ` +
-          `variables with index >= ${contextBoundary}`
-        );
+      // Check if anything actually references the removed variable.
+      const rhsNeedsValue = containsVarIndex(constraint.rhs, localVarIndex);
+
+      // Check if any context entry after the removed one references it
+      const cutoff = m - localVarIndex - 1;
+      let ctxNeedsValue = false;
+      for (let i = cutoff + 1; i < m; i++) {
+        const localIdx = i - cutoff - 1;
+        const entryValue = constraint.ctx[i].value;
+        if (containsVarIndex(constraint.ctx[i].type, localIdx) ||
+          (entryValue !== undefined && containsVarIndex(entryValue, localIdx))) {
+          ctxNeedsValue = true;
+          break;
+        }
+      }
+
+      if (rhsNeedsValue || ctxNeedsValue) {
+        // Check for escaping variables: value must not reference variables
+        // outside the constraint's scope (indices < mainSigLength - m)
+        const minFreeVar = minFreeVarIndex(value);
+        const contextBoundary = mainSigLength - m;
+        if (minFreeVar < contextBoundary) {
+          throw new Error(
+            `Escaping variable in substitution for constraint (meta ${constraint.meta}): ` +
+            `value references Var(${minFreeVar}) but constraint context only has ` +
+            `variables with index >= ${contextBoundary}`
+          );
+        }
       }
 
       const shiftAmount = m - mainSigLength;
       const shiftedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
 
+      // Apply substitution to ctx (handles adjustment internally)
       const newCtx = applySubstitutionToContext(constraint.ctx, localVarIndex, shiftedValue);
-      const newRhs = subst(localVarIndex, shiftedValue, constraint.rhs);
+
+      // Adjust value for removal before applying to rhs
+      const adjustedValue = transformVarsInTerm(shiftedValue, (idx) => {
+        return idx > localVarIndex ? mkVar(idx - 1) : mkVar(idx);
+      });
+
+      const newRhs = subst(localVarIndex, adjustedValue, constraint.rhs);
 
       return { ...constraint, ctx: newCtx, rhs: newRhs };
     } else {

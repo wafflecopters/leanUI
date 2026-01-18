@@ -7,7 +7,7 @@ export type Substitutions = Map<number, TTKTerm>
 export type UnifyResult = {
   success: true,
   substitutions: Substitutions,
-  // metaConstraints: MetaConstraint[],
+  metaConstraints: unknown[],
 } | {
   success: false,
   reason: 'conflict' | 'cycle',
@@ -24,7 +24,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
         reason: 'conflict',
       }
     }
-    return { success: true, substitutions: new Map() }
+    return { success: true, substitutions: new Map(), metaConstraints: [] }
   }
 
   if (a.tag === 'App' && b.tag === 'App') {
@@ -36,23 +36,23 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
     if (!unifyResultArg.success) {
       return unifyResultArg
     }
-    return { success: true, substitutions: new Map([...unifyResultFn.substitutions, ...unifyResultArg.substitutions]) }
+    return { success: true, substitutions: new Map([...unifyResultFn.substitutions, ...unifyResultArg.substitutions]), metaConstraints: [...unifyResultFn.metaConstraints, ...unifyResultArg.metaConstraints] }
   }
 
   if (a.tag === 'Var' && b.tag === 'Var') {
     const higherIndex = Math.max(a.index, b.index)
     const lowerIndex = Math.min(a.index, b.index)
     return {
-      success: true, substitutions: new Map([[lowerIndex, mkVar(higherIndex)]])
+      success: true, substitutions: new Map([[lowerIndex, mkVar(higherIndex)]]), metaConstraints: []
     }
   }
 
   if (a.tag === 'Var') {
-    return { success: true, substitutions: new Map([[a.index, b]]) }
+    return { success: true, substitutions: new Map([[a.index, b]]), metaConstraints: [] }
   }
 
   if (b.tag === 'Var') {
-    return { success: true, substitutions: new Map([[b.index, a]]) }
+    return { success: true, substitutions: new Map([[b.index, a]]), metaConstraints: [] }
   }
 
   debugger
