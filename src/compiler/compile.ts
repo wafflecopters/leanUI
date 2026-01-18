@@ -17,7 +17,7 @@ import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, createDefinitionsMap, createTCEnv, DefinitionsMap, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { unifyTerms } from './unify';
-import { shiftTerm, subst } from './subst';
+import { enumerateAppliedSubstitutions, shiftTerm, subst } from './subst';
 
 // ============================================================================
 // Parse Result Types
@@ -770,10 +770,18 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const checkType = checkTypeEntry.type
   const nextCheckType = nextCheckTypeEntry.type
 
+  console.log(`  Pop T -> ${prettyPrintInSignature(checkType, workEnv.signature.slice(0, checkTypeEntry.ctxLength))}`)
+  console.log(`  Peek T -> ${prettyPrintInSignature(nextCheckType, workEnv.signature.slice(0, nextCheckTypeEntry.ctxLength))}`)
+
   assertIsPi(nextCheckType, 'Next check type must be a Pi')
   assertIsNotPi(checkType, 'Check type should not be a Pi')
 
-  const unifyResult = unifyTerms(checkType, nextCheckType.domain)
+  const unifyLeft = shiftTerm(checkType, workEnv.signature.length - checkTypeEntry.ctxLength, 0)
+  const unifyRight = shiftTerm(nextCheckType.domain, workEnv.signature.length - nextCheckTypeEntry.ctxLength, 0)
+
+  console.log(`  Unifying: ${workEnv.prettyPrint(unifyLeft)} = ${workEnv.prettyPrint(unifyRight)}`)
+
+  const unifyResult = unifyTerms(unifyLeft, unifyRight)
 
   if (!unifyResult.success) {
     debugger
@@ -782,8 +790,12 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   // TODO: apply substitutions & meta constraints
 
-  if (unifyResult.substitutions.size > 0) {
+  for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
+    console.log(`    Apply: ${workEnv.prettyPrint(mkVar(varIndex))} -> ${workEnv.prettyPrint(value)}`)
     debugger
+    workEnv = workEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
+    applySubstitutionToCheckStackInPlace(checkStack, workEnv.signature.length, varIndex, value)
+    applySubstitutionToElabStackInPlace(elabStack, workEnv.signature.length, varIndex, value)
   }
 
   const elabHead = mkConst(pattern.name, mkType(-1) /* HACK */)
@@ -810,6 +822,59 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   return workEnv
 }
 
+function applySubstitutionToCheckStackInPlace(
+  stack: CheckStackEntry[],
+  mainSigLength: number,
+  varIndex: number,
+  value: TTKTerm
+): CheckStackEntry[] {
+  for (let i = 0; i < stack.length; i++) {
+    const entry = stack[i];
+    const m = entry.ctxLength;
+
+    if (varIndex >= mainSigLength - m) {
+      const localVarIndex = varIndex - (mainSigLength - m);
+      const shiftAmount = m - mainSigLength;
+      const shiftedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
+
+      const newTerm = subst(localVarIndex, shiftedValue, entry.type);
+      // Mutate entry in place
+      stack[i] = { type: newTerm, ctxLength: entry.ctxLength - 1 };
+    }
+    // else, leave entry as is
+  }
+  return stack;
+}
+
+function applySubstitutionToElabStackInPlace(
+  stack: TTKTerm[],
+  mainSigLength: number,
+  varIndex: number,
+  value: TTKTerm
+): TTKTerm[] {
+  // Convert index to level
+  const varLevel = mainSigLength - 1 - varIndex;
+
+  // Convert value from indices to levels
+  const valueInLevels = transformVarsInTerm(value, (idx) => {
+    return mkVar(mainSigLength - 1 - idx);
+  });
+
+  for (let i = 0; i < stack.length; i++) {
+    stack[i] = transformVarsInTerm(stack[i], (level) => {
+      if (level === varLevel) {
+        return valueInLevels;
+      } else if (level > varLevel) {
+        return mkVar(level - 1);
+      } else {
+        return mkVar(level);
+      }
+    });
+  }
+
+  return stack;
+}
+
 function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, patternStack: PatternStackEntry[], checkStack: CheckStackEntry[], elabStack: TTKTerm[], workEnv: TCEnv<unknown>) {
   const checkType = checkTypeEntry.type
   assertIsPi(checkType, 'Check type must be a Pi')
@@ -817,10 +882,6 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
   const binderName = checkType.name
   const binderType = checkType.domain
   const binderBody = checkType.body
-
-  if (prettyPrintPattern(pattern) === 'h') {
-    debugger
-  }
 
   console.log(`\nSTEP ${prettyPrintPattern(pattern)} against (${binderName}: ${workEnv.prettyPrint(binderType)}) -> ...`);
 

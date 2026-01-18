@@ -1,13 +1,7 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
 import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "../types/tt-kernel";
-import { shiftTerm } from "./subst";
+import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, shiftTerm, subst } from "./subst";
 import { areTypesDefEq } from "./whnf";
-
-export type Constraint = {
-  ctx: Signature,
-  meta: string,
-  rhs: TTKTerm,
-}
 
 export interface CheckError {
   message: string;
@@ -18,6 +12,13 @@ export interface CheckError {
   expected?: TTKTerm;
   actual?: TTKTerm;
 }
+
+export type Constraint = {
+  ctx: Signature,
+  meta: string,
+  rhs: TTKTerm,
+}
+
 
 export type Signature = { name: string, type: TTKTerm, value?: TTKTerm }[];
 
@@ -321,6 +322,22 @@ export class TCEnv<T> {
   printConstraints(options?: { indentLevel?: number, innerIndentOffset?: number }): string {
     const itemStrs = this.constraints.map(TCEnv.printConstraint);
     return printCollectionFancy(itemStrs, '[', ']', ',', options);
+  }
+
+  applySubstitutionToContextMetasAndConstraints(varIndex: number, value: TTKTerm): TCEnv<T> {
+    const newSignature = applySubstitutionToContext(this.signature, varIndex, value);
+    const newMetaVars = applySubstitutionToMetaVars(this.metaVars, this.signature.length, varIndex, value);
+    const newConstraints = applySubstitutionToConstraints(this.constraints, this.signature.length, varIndex, value);
+
+    return new TCEnv(
+      newSignature,
+      this.definitions,
+      newMetaVars,
+      newConstraints,
+      this.indexPath,
+      this.valueStack,
+      this.value
+    );
   }
 
   hasDefinedValue(): this is TCEnv<NonNullable<T>> {
