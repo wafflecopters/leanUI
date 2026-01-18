@@ -177,7 +177,11 @@ export function elabToKernelWithMap(
           elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
 
           return {
-            patterns: clause.patterns.map(elabPatternToKernel),
+            patterns: clause.patterns.map((pattern, patternIndex) => {
+              const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
+              const patternKernelPath = appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(patternIndex));
+              return elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
+            }),
             rhs: elabToKernelWithMap(
               clause.rhs,
               elabMap,
@@ -191,10 +195,26 @@ export function elabToKernelWithMap(
 }
 
 /**
- * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern).
- * Wildcards are already PVar with unique names (_wN) from the parser.
+ * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern)
+ * while tracking path correspondence in the elabMap.
+ *
+ * @param pattern - The surface pattern to elaborate
+ * @param elabMap - Map to populate with kernel→surface path mappings
+ * @param surfacePath - Current path in the surface AST
+ * @param kernelPath - Current path in the kernel AST
+ * @returns The elaborated kernel pattern
  */
-function elabPatternToKernel(pattern: TPattern): TTKPattern {
+function elabPatternToKernelWithMap(
+  pattern: TPattern,
+  elabMap: ElabMap,
+  surfacePath: IndexPath,
+  kernelPath: IndexPath
+): TTKPattern {
+  // Record the correspondence between kernel and surface paths
+  const kernelKey = serializeIndexPath(kernelPath);
+  const surfaceKey = serializeIndexPath(surfacePath);
+  elabMap.set(kernelKey, surfaceKey);
+
   switch (pattern.tag) {
     case 'PVar':
       // Includes wildcards (_wN) which are already PVar
@@ -203,7 +223,11 @@ function elabPatternToKernel(pattern: TPattern): TTKPattern {
       return {
         tag: 'PCtor',
         name: pattern.name,
-        args: pattern.args.map(elabPatternToKernel)
+        args: pattern.args.map((arg, argIndex) => {
+          const argSurfacePath = appendPath(surfacePath, fieldSeg('args'), arraySeg(argIndex));
+          const argKernelPath = appendPath(kernelPath, fieldSeg('args'), arraySeg(argIndex));
+          return elabPatternToKernelWithMap(arg, elabMap, argSurfacePath, argKernelPath);
+        })
       };
   }
 }

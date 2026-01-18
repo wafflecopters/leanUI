@@ -875,8 +875,8 @@ function checkElaboratedPattern(
   const patternTerm = convertCtorPatternToAppTerm(pattern.name, pattern.args, newNames, env.signature).term
 
   const patternTermEnv = env.withValue(patternTerm)
-  const inferredType = inferType(patternTermEnv)
 
+  const inferredType = inferType(patternTermEnv)
   console.log(`  CHECK: ${prettyPrint(patternTerm, namesStack)} : ${prettyPrint(inferredType.value, namesStack)} = ${prettyPrint(checkType, namesStack)}`);
 
   return patternTermEnv
