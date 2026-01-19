@@ -12,9 +12,9 @@ import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPatte
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
+import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm, validateTermNameNotDefined, validatePatternVarName } from './term';
+import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, extractAppSpine, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm, validateTermNameNotDefined, validatePatternVarName } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { unifyTerms } from './unify';
 import { enumerateAppliedSubstitutions, shiftTerm, subst } from './subst';
@@ -1634,6 +1634,101 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
   return env
 }
 
+/**
+ * Validate pattern variables after LHS elaboration.
+ *
+ * Traverses the original patterns and elaborated terms in parallel to build a mapping
+ * from de Bruijn indices to pattern variable names. Throws an error if:
+ * - The same de Bruijn index is bound by multiple different names (e.g., A and A2 both map to #0)
+ * - The same name is used multiple times (even if they refer to the same index)
+ */
+function assertPatternVarsValid(
+  env: TCEnv<TTKPattern[]>,
+  elabStack: TTKTerm[]
+): void {
+  const patterns = env.value;
+
+  // Map from de Bruijn index to list of (name, indexPath) entries
+  const varToNames = new Map<number, { name: string; path: IndexPath }[]>();
+
+  function traverse(pattern: TTKPattern, elabTerm: TTKTerm, path: IndexPath): void {
+    switch (pattern.tag) {
+      case 'PVar': {
+        // For PVar, the elabTerm should be a Var after elaboration
+        if (elabTerm.tag === 'Var') {
+          const varIndex = elabTerm.index;
+          const existing = varToNames.get(varIndex);
+          if (existing) {
+            existing.push({ name: pattern.name, path });
+          } else {
+            varToNames.set(varIndex, [{ name: pattern.name, path }]);
+          }
+        }
+        // If elabTerm is not a Var, the pattern variable unified with a complex term.
+        // We skip these cases as we can't easily detect conflicts.
+        break;
+      }
+
+      case 'PWild':
+        // Wildcards don't have user-defined names, nothing to validate
+        break;
+
+      case 'PCtor': {
+        // Extract the App spine from elabTerm
+        const spine = extractAppSpine(elabTerm);
+
+        if (spine.args.length !== pattern.args.length) {
+          // This shouldn't happen if elaboration is correct
+          throw new Error(
+            `Internal error: PCtor arg count mismatch in pattern validation: ` +
+            `pattern '${pattern.name}' has ${pattern.args.length} args, ` +
+            `but elaborated term has ${spine.args.length} args`
+          );
+        }
+
+        for (let i = 0; i < pattern.args.length; i++) {
+          traverse(
+            pattern.args[i],
+            spine.args[i],
+            [...path, fieldSeg('args'), arraySeg(i)]
+          );
+        }
+        break;
+      }
+    }
+  }
+
+  // Traverse all top-level patterns paired with their elaborated terms
+  for (let i = 0; i < patterns.length; i++) {
+    traverse(patterns[i], elabStack[i], [arraySeg(i)]);
+  }
+
+  // Check for conflicts
+  for (const [_varIndex, entries] of varToNames) {
+    if (entries.length > 1) {
+      const names = entries.map(e => e.name);
+      const uniqueNames = [...new Set(names)];
+
+      if (uniqueNames.length === 1) {
+        // Same name used multiple times - duplicate name error
+        const errorPath = entries[1].path; // Point to second occurrence
+        throw new TCEnvError(
+          `Duplicate pattern variable '${names[0]}': this name is already bound earlier in the pattern`,
+          env.atIndexPath([...env.indexPath, ...errorPath])
+        );
+      } else {
+        // Different names refer to same variable - conflict error
+        const nameList = names.map(n => `'${n}'`).join(' and ');
+        const errorPath = entries[1].path; // Point to second occurrence
+        throw new TCEnvError(
+          `Pattern variables ${nameList} refer to the same binding; use a single consistent name`,
+          env.atIndexPath([...env.indexPath, ...errorPath])
+        );
+      }
+    }
+  }
+}
+
 function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<unknown> {
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
   const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.signature.length }]
@@ -1674,6 +1769,9 @@ function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type:
     debugger
     throw new Error('Check stack not empty')
   }
+
+  // Validate pattern variables: check for duplicate names or conflicting bindings
+  assertPatternVarsValid(env, elabStack);
 
   workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 
