@@ -19,7 +19,7 @@ import { elabToKernelWithMap, elabToKernel } from '../compiler/elab';
 import { CheckError } from '../compiler/term';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
-import { TTKTerm, Signature } from '../compiler/kernel';
+import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatterns } from './pattern-resolution';
 import { prettyPrintTT, TTerm } from '../compiler/surface';
@@ -53,7 +53,7 @@ function elaborateTT(
   _name: string,
   _type: TTKTerm | undefined,
   _value: TTKTerm | undefined,
-  _context: Signature,
+  _context: TTKContext,
   _typePath: IndexPath,
   _valuePath: IndexPath,
   _definitions: LocalDefinitionsMap,
@@ -85,7 +85,7 @@ function checkInductiveDeclaration(
   _name: string,
   _type: TTKTerm,
   _constructors: Array<{ name: string; type: TTKTerm }>,
-  _context: Signature,
+  _context: TTKContext,
   _indexPositions: number[] | undefined,
   _typePath: IndexPath,
   _ctorPaths: IndexPath[]
@@ -167,7 +167,7 @@ export interface BlockTypeQueryData {
   elabMap: ElabMap;
 
   // The typing context in which this block was checked
-  context: Signature;
+  context: TTKContext;
 
   // Per-clause elaboration results (for solved type display)
   // These contain the substitutions applied to pattern bindings
@@ -212,7 +212,7 @@ interface CheckResultWithBlock {
   checkErrors: CheckError[];
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
-  contextAtCheck: Signature;
+  contextAtCheck: TTKContext;
   splitTree?: SplitTree;
   clauseResults?: ClauseCheckResult[];
   patternData?: PatternElabData;
@@ -233,10 +233,10 @@ interface CheckResultWithBlock {
  */
 export function elaborateTTBlocks(
   elaboratedDecls: ElaboratedDeclaration[],
-  initialContext: Signature = []
+  initialContext: TTKContext = []
 ): CheckResultWithBlock[] {
   // Global context accumulates bindings from successfully checked declarations
-  let globalContext: Signature = initialContext;
+  let globalContext: TTKContext = initialContext;
   // Definitions map accumulates function bodies for WHNF reduction
   const definitions: LocalDefinitionsMap = new Map();
   // Constructor names set tracks which names are constructors (vs functions)

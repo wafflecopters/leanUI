@@ -1,5 +1,5 @@
 import { mkVar, TTKBinderKind, TTKTerm } from "./kernel";
-import { Constraint, MetaVar, Signature, transformVarsInTerm } from "./term";
+import { Constraint, MetaVar, TTKContext, transformVarsInTerm } from "./term";
 
 /**
  * Substitute term s for variable with index n in term t
@@ -489,14 +489,14 @@ export function* enumerateAppliedSubstitutions(substitutions: Map<number, TTKTer
 
 // Removes the binder at varIndex, applies the substitution, and shifts indices accordingly.
 //
-// Each entry's type in Signature is stored with de Bruijn indices relative to that entry's
+// Each entry's type in TTKContext is stored with de Bruijn indices relative to that entry's
 // position (entry at position i has type with indices 0..i-1). The varIndex parameter is
 // a de Bruijn index from the tail (0 = last entry, most recently bound).
 export function applySubstitutionToContext(
-  ctx: Signature,
+  ctx: TTKContext,
   varIndex: number,
   value: TTKTerm
-): Signature {
+): TTKContext {
   const n = ctx.length;
   const cutoff = n - varIndex - 1; // array index of the variable being removed
 

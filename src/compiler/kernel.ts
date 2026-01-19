@@ -64,7 +64,7 @@ export type TTKTerm =
   | { tag: 'Binder'; name: string; binderKind: TTKBinderKind; domain: TTKTerm; body: TTKTerm }  // Unified binder
   | TTKTermApp   // Function application (f a)
   | TTKTermConst // Named constant (nat_elim, eq, etc.)
-  | { tag: 'Hole'; id: string; type: TTKTerm; context: Signature }  // Metavariable (unproven goal)
+  | { tag: 'Hole'; id: string; type: TTKTerm; context: TTKContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTKTerm; type: TTKTerm }          // Type annotation
   | { tag: 'Match'; scrutinee: TTKTerm; clauses: TTKClause[] } // Pattern matching
 
@@ -93,7 +93,7 @@ export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] =
  * Type-checking context: list of bound variables with optional values.
  * Index 0 is the most recently bound variable.
  */
-export type Signature = { name: string; type: TTKTerm; value?: TTKTerm }[];
+export type TTKContext = { name: string; type: TTKTerm; value?: TTKTerm }[];
 
 
 // ============================================================================
@@ -170,7 +170,7 @@ export function mkConst(name: string): TTKTerm {
 /**
  * Create a hole (metavariable to be filled)
  */
-export function mkHole(id: string, type: TTKTerm, context: Signature = []): TTKTerm {
+export function mkHole(id: string, type: TTKTerm, context: TTKContext = []): TTKTerm {
   return { tag: 'Hole', id, type, context };
 }
 
@@ -632,7 +632,7 @@ export class TypeCheckError extends Error {
   constructor(
     message: string,
     public term?: TTKTerm,
-    public context?: Signature,
+    public context?: TTKContext,
     public termPath?: IndexPath,
   ) {
     super(message);
@@ -652,7 +652,7 @@ export type InferResult =
  * Type inference stub. In the future, this should integrate with the
  * proper type checker in compiler/checker.ts.
  */
-export function inferType(_term: TTKTerm, _context: Signature): InferResult {
+export function inferType(_term: TTKTerm, _context: TTKContext): InferResult {
   // TODO: Implement proper type inference using compiler/checker.ts
   return { ok: false, error: 'Type inference not yet implemented in new compiler' };
 }
@@ -775,7 +775,7 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
 export function fillHoleWith(
   term: TTKTerm,
   holeId: string,
-  generator: (holeType: TTKTerm, holeContext: Signature) => TTKTerm
+  generator: (holeType: TTKTerm, holeContext: TTKContext) => TTKTerm
 ): TTKTerm {
   switch (term.tag) {
     case 'Hole':

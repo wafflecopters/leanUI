@@ -11,7 +11,7 @@
 
 import { describe, test, expect } from "bun:test";
 import { mkVar, TTKTerm } from "./kernel";
-import { Constraint, MetaVar, Signature } from "./term";
+import { Constraint, MetaVar, TTKContext } from "./term";
 import {
   applySubstitutionToContext,
   applySubstitutionToConstraints,
@@ -42,7 +42,7 @@ function assertTermEqual(actual: TTKTerm, expected: TTKTerm, _message?: string):
   expect(actualStr).toBe(expectedStr);
 }
 
-function assertSignatureEqual(actual: Signature, expected: Signature, message?: string): void {
+function assertTTKContextEqual(actual: TTKContext, expected: TTKContext, message?: string): void {
   expect(actual.length).toBe(expected.length);
   for (let i = 0; i < actual.length; i++) {
     expect(actual[i].name).toBe(expected[i].name);
@@ -123,18 +123,18 @@ describe('applySubstitutionToContext', () => {
     //
     // Remove x (varIndex=0)
     // Result: [A: Type]
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'x', type: mkVar(0) },
     ];
 
     const result = applySubstitutionToContext(ctx, 0, Type);
 
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'A', type: Type },
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 
   test('remove first entry (varIndex=n-1)', () => {
@@ -145,18 +145,18 @@ describe('applySubstitutionToContext', () => {
     // After removal: [x: ???]
     // x's type was Var(0) = A, substitute with Type
     // Result: [x: Type]
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'x', type: mkVar(0) },
     ];
 
     const result = applySubstitutionToContext(ctx, 1, Type);
 
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'x', type: Type },
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 
   test('remove middle entry', () => {
@@ -174,7 +174,7 @@ describe('applySubstitutionToContext', () => {
     // x's type was Var(0) = B, substitute with Type
     // Result: [A: Type, x: Type]
 
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'x', type: mkVar(0) },  // x: B (B is Var(0) from x's perspective)
@@ -182,12 +182,12 @@ describe('applySubstitutionToContext', () => {
 
     const result = applySubstitutionToContext(ctx, 1, Type);
 
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'A', type: Type },
       { name: 'x', type: Type },  // B was replaced with Type
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 
   test('entry references variable BEFORE removed one', () => {
@@ -203,7 +203,7 @@ describe('applySubstitutionToContext', () => {
     // Since Var(1) > localIdx=0, it decrements to Var(0)
     // From x's NEW perspective (position 1): Var(0) = A ✓
 
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'x', type: mkVar(1) },  // x: A (A is Var(1) from x's perspective)
@@ -211,12 +211,12 @@ describe('applySubstitutionToContext', () => {
 
     const result = applySubstitutionToContext(ctx, 1, Type);
 
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'A', type: Type },
       { name: 'x', type: mkVar(0) },  // A is now Var(0) from x's new perspective
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 
   test('multiple entries after removed one', () => {
@@ -247,7 +247,7 @@ describe('applySubstitutionToContext', () => {
     //   y's type was Var(1) (B), substitute at index 1
     //   Var(1) == localIdx, replace with shiftedValue = Type
 
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'x', type: mkVar(1) },  // A is Var(1) from x's perspective
@@ -256,13 +256,13 @@ describe('applySubstitutionToContext', () => {
 
     const result = applySubstitutionToContext(ctx, 2, Type);
 
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'A', type: Type },
       { name: 'x', type: mkVar(0) },  // A is now Var(0)
       { name: 'y', type: Type },       // B replaced with Type
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 
   test('Vec example', () => {
@@ -306,7 +306,7 @@ describe('applySubstitutionToContext', () => {
     const Vec = mkConst('Vec');
     const Succ = mkConst('Succ');
 
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'w5', type: Nat },
       { name: 'w6', type: Type },
@@ -317,7 +317,7 @@ describe('applySubstitutionToContext', () => {
 
     const result = applySubstitutionToContext(ctx, 3, Type);
 
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'A', type: Type },
       { name: 'w5', type: Nat },
       { name: 'w7', type: Nat },
@@ -325,7 +325,7 @@ describe('applySubstitutionToContext', () => {
       { name: 'tail', type: mkApp(mkApp(Vec, Type), mkApp(Succ, mkVar(1))) },
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 
   test('value with variables gets shifted', () => {
@@ -345,7 +345,7 @@ describe('applySubstitutionToContext', () => {
     //   From x's new perspective (position 1): Var(0) = A
     //   So result should be Var(0)
 
-    const ctx: Signature = [
+    const ctx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: mkVar(0) },  // B: A (A is Var(0) from B's perspective)
       { name: 'x', type: mkVar(0) },  // x: B (B is Var(0) from x's perspective)
@@ -361,12 +361,12 @@ describe('applySubstitutionToContext', () => {
 
     // Expected: [A: Type, x: A]
     // From x's new perspective: A is Var(0)
-    const expected: Signature = [
+    const expected: TTKContext = [
       { name: 'A', type: Type },
       { name: 'x', type: mkVar(0) },  // x: A
     ];
 
-    assertSignatureEqual(result, expected);
+    assertTTKContextEqual(result, expected);
   });
 });
 
@@ -452,7 +452,7 @@ describe('applySubstitutionToMetaVars', () => {
     // varIndex = 1 is NOT in metavar's ctx (1 < 5-3=2)
     // So no changes should be made
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'C', type: Type },
@@ -468,7 +468,7 @@ describe('applySubstitutionToMetaVars', () => {
     expect(result.size).toBe(1);
     const m = result.get('?m0')!;
     assertTermEqual(m.type, metaType, 'Type should be unchanged');
-    assertSignatureEqual(m.ctx, metaCtx, 'Context should be unchanged');
+    assertTTKContextEqual(m.ctx, metaCtx, 'Context should be unchanged');
   });
 
   test('variable in metavar context', () => {
@@ -482,7 +482,7 @@ describe('applySubstitutionToMetaVars', () => {
     //
     // If metavar type is Var(1), it should be substituted
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'C', type: mkVar(0) },  // C: B
@@ -519,7 +519,7 @@ describe('applySubstitutionToMetaVars', () => {
     const Nat = mkConst('Nat');
     const Succ = mkConst('Succ');
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'C', type: Nat },
@@ -566,7 +566,7 @@ describe('applySubstitutionToMetaVars', () => {
     const Nat = mkConst('Nat');
     const Succ = mkConst('Succ');
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
     ];
@@ -598,7 +598,7 @@ describe('applySubstitutionToMetaVars', () => {
     const Nat = mkConst('Nat');
     const Succ = mkConst('Succ');
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
     ];
@@ -684,7 +684,7 @@ describe('applySubstitutionToMetaVars', () => {
 
     const Nat = mkConst('Nat');
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'C', type: Nat },
@@ -711,7 +711,7 @@ describe('applySubstitutionToMetaVars', () => {
     const Nat = mkConst('Nat');
     const Zero = mkConst('Zero');
 
-    const metaCtx: Signature = [
+    const metaCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'C', type: Nat },
@@ -739,7 +739,7 @@ describe('applySubstitutionToMetaVars', () => {
 
 describe('applySubstitutionToConstraints', () => {
   test('variable not in constraint context', () => {
-    const constraintCtx: Signature = [
+    const constraintCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
     ];
@@ -756,11 +756,11 @@ describe('applySubstitutionToConstraints', () => {
 
     expect(result.length).toBe(1);
     assertTermEqual(result[0].rhs, rhs, 'RHS should be unchanged');
-    assertSignatureEqual(result[0].ctx, constraintCtx, 'Context should be unchanged');
+    assertTTKContextEqual(result[0].ctx, constraintCtx, 'Context should be unchanged');
   });
 
   test('variable in constraint context', () => {
-    const constraintCtx: Signature = [
+    const constraintCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
     ];
@@ -794,7 +794,7 @@ describe('applySubstitutionToConstraints', () => {
     const Nat = mkConst('Nat');
     const Succ = mkConst('Succ');
 
-    const constraintCtx: Signature = [
+    const constraintCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
     ];
@@ -820,7 +820,7 @@ describe('applySubstitutionToConstraints', () => {
     const Nat = mkConst('Nat');
     const Succ = mkConst('Succ');
 
-    const constraintCtx: Signature = [
+    const constraintCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
     ];
@@ -846,7 +846,7 @@ describe('applySubstitutionToConstraints', () => {
     const Nat = mkConst('Nat');
     const Succ = mkConst('Succ');
 
-    const constraintCtx: Signature = [
+    const constraintCtx: TTKContext = [
       { name: 'A', type: Type },
       { name: 'B', type: Type },
       { name: 'C', type: Nat },

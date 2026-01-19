@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, Signature, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -112,7 +112,7 @@ function assertMatchClauseLhsPatternsFullyApplied(env: TCEnv<TTKPattern[]>): voi
 function assertPatternVarsValid(
   env: TCEnv<TTKPattern[]>,
   elabStack: TTKTerm[],
-  signature: Signature
+  signature: TTKContext
 ) {
   const patterns = env.value;
 
@@ -241,7 +241,7 @@ type CheckStackEntry = { type: TTKTerm, ctxLength: number }
 // LHS Unification Helpers
 // ============================================================================
 
-function prettyPrintInSignature(term: TTKTerm, signature: Signature): string {
+function prettyPrintInTTKContext(term: TTKTerm, signature: TTKContext): string {
   return prettyPrintTTK(term, signature.map(s => s.name).reverse())
 }
 
@@ -254,14 +254,14 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const checkType = checkTypeEntry.type
   const nextCheckType = nextCheckTypeEntry.type
 
-  logInfo(() => `  Pop T -> ${prettyPrintInSignature(checkType, workEnv.signature.slice(0, checkTypeEntry.ctxLength))}`)
-  logInfo(() => `  Peek T -> ${prettyPrintInSignature(nextCheckType, workEnv.signature.slice(0, nextCheckTypeEntry.ctxLength))}`)
+  logInfo(() => `  Pop T -> ${prettyPrintInTTKContext(checkType, workEnv.context.slice(0, checkTypeEntry.ctxLength))}`)
+  logInfo(() => `  Peek T -> ${prettyPrintInTTKContext(nextCheckType, workEnv.context.slice(0, nextCheckTypeEntry.ctxLength))}`)
 
   assertIsPi(nextCheckType, 'Next check type must be a Pi')
   assertIsNotPi(checkType, 'Check type should not be a Pi')
 
-  const unifyLeft = shiftTerm(checkType, workEnv.signature.length - checkTypeEntry.ctxLength, 0)
-  const unifyRight = shiftTerm(nextCheckType.domain, workEnv.signature.length - nextCheckTypeEntry.ctxLength, 0)
+  const unifyLeft = shiftTerm(checkType, workEnv.context.length - checkTypeEntry.ctxLength, 0)
+  const unifyRight = shiftTerm(nextCheckType.domain, workEnv.context.length - nextCheckTypeEntry.ctxLength, 0)
 
   logInfo(() => `  Unifying: ${workEnv.prettyPrint(unifyLeft)} = ${workEnv.prettyPrint(unifyRight)}`)
 
@@ -288,20 +288,20 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   // Elab var indices are backwards compared to debruijn indices
   const adjustedElabTerm = transformVarsInTerm(elabTerm, (index) => {
-    return mkVar(workEnv.signature.length - 1 - index)
+    return mkVar(workEnv.context.length - 1 - index)
   })
 
-  const shiftAmount = workEnv.signature.length - nextCheckTypeEntry.ctxLength
+  const shiftAmount = workEnv.context.length - nextCheckTypeEntry.ctxLength
   const adjustedBody = shiftTerm(nextCheckType.body, shiftAmount, 0)
 
-  checkStack.push({ type: subst(shiftAmount, adjustedElabTerm, adjustedBody), ctxLength: workEnv.signature.length })
+  checkStack.push({ type: subst(shiftAmount, adjustedElabTerm, adjustedBody), ctxLength: workEnv.context.length })
 
   for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
     logInfo(() => `    Apply: ${workEnv.prettyPrint(mkVar(varIndex))} -> ${workEnv.prettyPrint(value)}`)
 
     // Update these 2 before the signature
-    applySubstitutionToCheckStackInPlace(checkStack, workEnv.signature.length, varIndex, value)
-    applySubstitutionToElabStackInPlace(elabStack, workEnv.signature.length, varIndex, value)
+    applySubstitutionToCheckStackInPlace(checkStack, workEnv.context.length, varIndex, value)
+    applySubstitutionToElabStackInPlace(elabStack, workEnv.context.length, varIndex, value)
 
     workEnv = workEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
     logResultState(workEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
@@ -384,11 +384,11 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
     logInfo(() => `  Create meta ${name} : ${env.prettyPrint(binderType)}`);
 
     env = newWorkEnv
-      .extendSignature(pattern.name, binderType)
+      .extendTTKContext(pattern.name, binderType)
 
-    env = env.withConstraint({ meta: name, rhs: mkVar(env.signature.length - 1) })
-    checkStack.push({ type: binderBody, ctxLength: env.signature.length })
-    elabStack.push(mkVar(env.signature.length - 1))
+    env = env.withConstraint({ meta: name, rhs: mkVar(env.context.length - 1) })
+    checkStack.push({ type: binderBody, ctxLength: env.context.length })
+    elabStack.push(mkVar(env.context.length - 1))
   } else if (pattern.tag === 'PVar') {
     // Named variable pattern: validate and bind the variable
     // Validate pattern variable naming: must be lowercase, cannot shadow term definitions
@@ -396,21 +396,21 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
     validatePatternVarName(patternNameEnv);
 
     logInfo(() => `  Binding (${pattern.name} : ${env.prettyPrint(binderType)})`);
-    env = env.extendSignature(pattern.name, binderType)
+    env = env.extendTTKContext(pattern.name, binderType)
 
-    checkStack.push({ type: binderBody, ctxLength: env.signature.length })
-    elabStack.push(mkVar(env.signature.length - 1))
+    checkStack.push({ type: binderBody, ctxLength: env.context.length })
+    elabStack.push(mkVar(env.context.length - 1))
   } else {
     logInfo(() => `  Constructor pattern. Push DONE. Push sub-patterns. Push ${pattern.name} type`);
 
-    checkStack.push({ type: checkType, ctxLength: env.signature.length })
+    checkStack.push({ type: checkType, ctxLength: env.context.length })
 
     patternStack.push({ tag: 'done', pattern, arity: pattern.args.length })
     for (let i = pattern.args.length - 1; i >= 0; i--) {
       patternStack.push({ tag: 'pattern', pattern: pattern.args[i] })
     }
 
-    checkStack.push({ type: env.getTypeDefinitionAssert(pattern.name).value, ctxLength: env.signature.length })
+    checkStack.push({ type: env.getTypeDefinitionAssert(pattern.name).value, ctxLength: env.context.length })
   }
 
   return env
@@ -418,7 +418,7 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
 
 function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry[] | undefined, checkStack: CheckStackEntry[], elabStack: TTKTerm[], header?: string) {
   logInfo(() => header ?? `\n  ~~ RESULT STATE ~~`)
-  logInfo(() => `    Γ = ${workEnv.printSignature()}`)
+  logInfo(() => `    Γ = ${workEnv.printTTKContext()}`)
   logInfo(() => `    Σ = ${workEnv.printMetas({ indentLevel: 8, innerIndentOffset: 2 })}`)
   logInfo(() => `    C = ${workEnv.printConstraints({ indentLevel: 8, innerIndentOffset: 2 })}`)
   if (patternStack) {
@@ -431,7 +431,7 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
     }).join(', ')}]`)
   }
   logInfo(() => `    T = ${printCollectionFancy(checkStack.map(s => {
-    return `|${s.ctxLength}| >> ${prettyPrintInSignature(s.type, workEnv.signature.slice(0, s.ctxLength))}`
+    return `|${s.ctxLength}| >> ${prettyPrintInTTKContext(s.type, workEnv.context.slice(0, s.ctxLength))}`
   }), '[', ']', ',', { indentLevel: 8, innerIndentOffset: 2 })}`)
   logInfo(() => `    E = ${printCollectionFancy(elabStack.map(s => prettyPrintTTK(s)), '[', ']', ',', { indentLevel: 8, innerIndentOffset: 2 })}`)
 }
@@ -442,7 +442,7 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
 
 function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[] }> {
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
-  const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.signature.length }]
+  const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.context.length }]
   const patternStack: PatternStackEntry[] = env.value.map(p => ({ tag: 'pattern' as const, pattern: p })).reverse()
   const elabStack: TTKTerm[] = []
 
@@ -456,7 +456,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
       return `DONE(${prettyPrintPattern(p.pattern)}, ${p.arity})`
     }
   }).join(', ')}]`)
-  logInfo(() => `    T = [${checkStack.map(s => prettyPrintInSignature(s.type, env.signature.slice(0, s.ctxLength))).join(', ')}]`)
+  logInfo(() => `    T = [${checkStack.map(s => prettyPrintInTTKContext(s.type, env.context.slice(0, s.ctxLength))).join(', ')}]`)
 
   while (patternStack.length > 0) {
     const patternEntry = patternStack.pop() as PatternStackEntry
@@ -482,7 +482,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
   }
 
   // Validate pattern variables: check for duplicate names or conflicting bindings
-  assertPatternVarsValid(env, elabStack, workEnv.signature);
+  assertPatternVarsValid(env, elabStack, workEnv.context);
 
   workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 

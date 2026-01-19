@@ -4,7 +4,7 @@
  * This file simulates the pattern matching elaboration algorithm described
  * in the vecConcat walkthrough. The key phases are:
  *
- * 1. Signature checking: Verify the type signature is well-formed
+ * 1. Context checking: Verify the type context is well-formed
  * 2. Clause elaboration: For each clause, unify patterns with expected types
  * 3. Constraint solving: Use pattern unification to solve metavariables
  *
@@ -142,7 +142,7 @@ class MetaCtx {
       case 'App': return this.equal(a.fn, (b as typeof a).fn) && this.equal(a.arg, (b as typeof a).arg);
       case 'Pi':
       case 'Lam': return this.equal(a.domain, (b as typeof a).domain) &&
-                        this.equal((a as any).codomain ?? (a as any).body, (b as any).codomain ?? (b as any).body);
+        this.equal((a as any).codomain ?? (a as any).body, (b as any).codomain ?? (b as any).body);
     }
     return false;
   }
@@ -810,12 +810,14 @@ function testVecConcat(): void {
       { tag: 'PWild' },                                    // _ : Type
       { tag: 'PWild' },                                    // _ : Nat (will be refined to Succ n)
       { tag: 'PWild' },                                    // _ : Nat
-      { tag: 'PCtor', name: 'VCons', args: [              // VCons _ _ h tail : Vec ?A ?a
-        { tag: 'PWild' },                                  // _ : Type (A)
-        { tag: 'PWild' },                                  // _ : Nat (n, predecessor)
-        { tag: 'PVar', name: 'h' },                        // h : A
-        { tag: 'PVar', name: 'tail' }                      // tail : Vec A n
-      ]},
+      {
+        tag: 'PCtor', name: 'VCons', args: [              // VCons _ _ h tail : Vec ?A ?a
+          { tag: 'PWild' },                                  // _ : Type (A)
+          { tag: 'PWild' },                                  // _ : Nat (n, predecessor)
+          { tag: 'PVar', name: 'h' },                        // h : A
+          { tag: 'PVar', name: 'tail' }                      // tail : Vec A n
+        ]
+      },
       { tag: 'PVar', name: 'v' }                           // v : Vec ?A ?b
     ],
     rhs: mkVar('placeholder', 0)  // placeholder

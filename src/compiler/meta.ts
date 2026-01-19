@@ -1,10 +1,10 @@
 import { TTKTerm } from "./kernel";
-import { Constraint, MetaVar, Signature, TCEnv } from "./term";
+import { Constraint, MetaVar, TTKContext, TCEnv } from "./term";
 
 export function solveConstraints(
   metaVars: Map<string, MetaVar>,
   constraints: Constraint[],
-  liftContext?: Signature
+  liftContext?: TTKContext
 ): { constraints: Constraint[], metaVars: Map<string, MetaVar> } {
   const stillStuck: Constraint[] = [];
 

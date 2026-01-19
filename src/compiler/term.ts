@@ -1,6 +1,6 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, Signature } from "./kernel";
-export type { Signature } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext } from "./kernel";
+export type { TTKContext } from "./kernel";
 import { canSolveMeta, solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, freeVarIndices, shiftTerm } from "./subst";
 import { areTypesDefEq } from "./whnf";
@@ -9,27 +9,27 @@ export interface CheckError {
   message: string;
   path: IndexPath;  // Location in the AST where error occurred
   term?: TTKTerm;
-  context?: Signature;
+  context?: TTKContext;
   definitions?: DefinitionsMap;
   expected?: TTKTerm;
   actual?: TTKTerm;
 }
 
 export type Constraint = {
-  ctx: Signature,
+  ctx: TTKContext,
   meta: string,
   rhs: TTKTerm,
 }
 
 export type MetaVar = {
-  ctx: Signature,
+  ctx: TTKContext,
   type: TTKTerm,
   solution?: TTKTerm
 }
 
-export function createTCEnv(definitions?: DefinitionsMap, signature?: Signature, metaVars?: Map<string, MetaVar>): TCEnv<null> {
+export function createTCEnv(definitions?: DefinitionsMap, context?: TTKContext, metaVars?: Map<string, MetaVar>): TCEnv<null> {
   return new TCEnv(
-    signature ?? [],
+    context ?? [],
     definitions ?? createDefinitionsMap(),
     metaVars ?? new Map<string, MetaVar>(),
     [],
@@ -39,9 +39,9 @@ export function createTCEnv(definitions?: DefinitionsMap, signature?: Signature,
   );
 }
 
-export function updateSignatureInTCEnv<T>(env: TCEnv<T>, fn: (s: Signature) => Signature): TCEnv<T> {
+export function updateTTKContextInTCEnv<T>(env: TCEnv<T>, fn: (s: TTKContext) => TTKContext): TCEnv<T> {
   return new TCEnv(
-    fn(env.signature),
+    fn(env.context),
     env.definitions,
     env.metaVars,
     env.constraints,
@@ -51,13 +51,13 @@ export function updateSignatureInTCEnv<T>(env: TCEnv<T>, fn: (s: Signature) => S
   );
 }
 
-export function extendSignatureInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
-  return updateSignatureInTCEnv(env, (s) => [...s, { name, type, value }]);
+export function extendTTKContextInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
+  return updateTTKContextInTCEnv(env, (s) => [...s, { name, type, value }]);
 }
 
 export function updateDefinitionsInTCEnv<T>(env: TCEnv<T>, fn: (d: DefinitionsMap) => DefinitionsMap): TCEnv<T> {
   return new TCEnv(
-    env.signature,
+    env.context,
     fn({ ...env.definitions }),
     env.metaVars,
     env.constraints,
@@ -81,7 +81,7 @@ export function addInductiveDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, ty
 
 export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, MetaVar>) => Map<string, MetaVar>): TCEnv<T> {
   return new TCEnv(
-    env.signature,
+    env.context,
     env.definitions,
     fn(new Map(env.metaVars)),
     env.constraints,
@@ -94,7 +94,7 @@ export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, Meta
 export function addMetaVarInTCEnv<T>(env: TCEnv<T>, type: TTKTerm): { env: TCEnv<T>, name: string } {
   const name = `?m${env.metaVars.size}`;
 
-  return { env: updateMetaVarsInTCEnv(env, (m) => m.set(name, { ctx: env.signature, type })), name };
+  return { env: updateMetaVarsInTCEnv(env, (m) => m.set(name, { ctx: env.context, type })), name };
 }
 
 export type InductiveDefinition = {
@@ -156,11 +156,11 @@ export function getTermDefinition(definitions: DefinitionsMap, name: string) {
   return definitions.terms.get(name);
 }
 
-export type PiSpine = { binders: Signature, body: TTKTerm, term?: TTKTerm };
+export type PiSpine = { binders: TTKContext, body: TTKTerm, term?: TTKTerm };
 export type AppSpine = { fn: TTKTerm, args: TTKTerm[] };
 
-export function signatureToNamesStack(signature: Signature): string[] {
-  return signature.map(n => n.name).reverse()
+export function contextToNamesStack(context: TTKContext): string[] {
+  return context.map(n => n.name).reverse()
 }
 
 export function countPiBinders(term: TTKTerm): number {
@@ -174,7 +174,7 @@ export function countPiBinders(term: TTKTerm): number {
 }
 
 export function extractPiSpine(term: TTKTerm): PiSpine {
-  const binders: Signature = [];
+  const binders: TTKContext = [];
   let current = term;
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     binders.push({ name: current.name, type: current.domain });
@@ -193,28 +193,28 @@ export function extractAppSpine(term: TTKTerm): AppSpine {
   return { fn: current, args };
 }
 
-export function transformVarsInTerm(term: TTKTerm, transform: (varIndex: number, signature: Signature) => TTKTerm): TTKTerm {
+export function transformVarsInTerm(term: TTKTerm, transform: (varIndex: number, context: TTKContext) => TTKTerm): TTKTerm {
   return transformVarsInTermAcc(term, transform, []);
 }
 
-function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, signature: Signature) => TTKTerm, signature: Signature): TTKTerm {
+function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, context: TTKContext) => TTKTerm, context: TTKContext): TTKTerm {
   if (term.tag === 'Var') {
-    return transform(term.index, signature);
+    return transform(term.index, context);
   } else if (term.tag === 'Binder') {
-    const bodySignature = [...signature, { name: term.name, type: term.domain }];
-    return { tag: 'Binder', name: term.name, binderKind: term.binderKind, domain: transformVarsInTermAcc(term.domain, transform, signature), body: transformVarsInTermAcc(term.body, transform, bodySignature) };
+    const bodyTTKContext = [...context, { name: term.name, type: term.domain }];
+    return { tag: 'Binder', name: term.name, binderKind: term.binderKind, domain: transformVarsInTermAcc(term.domain, transform, context), body: transformVarsInTermAcc(term.body, transform, bodyTTKContext) };
   } else if (term.tag === 'App') {
-    return { tag: 'App', fn: transformVarsInTermAcc(term.fn, transform, signature), arg: transformVarsInTermAcc(term.arg, transform, signature) };
+    return { tag: 'App', fn: transformVarsInTermAcc(term.fn, transform, context), arg: transformVarsInTermAcc(term.arg, transform, context) };
   } else if (term.tag === 'Const') {
     return { tag: 'Const', name: term.name };
   } else if (term.tag === 'Sort') {
     return { tag: 'Sort', level: term.level };
   } else if (term.tag === 'Hole') {
-    return { tag: 'Hole', id: term.id, type: transformVarsInTermAcc(term.type, transform, signature), context: term.context };
+    return { tag: 'Hole', id: term.id, type: transformVarsInTermAcc(term.type, transform, context), context: term.context };
   } else if (term.tag === 'Annot') {
-    return { tag: 'Annot', term: transformVarsInTermAcc(term.term, transform, signature), type: transformVarsInTermAcc(term.type, transform, signature) };
+    return { tag: 'Annot', term: transformVarsInTermAcc(term.term, transform, context), type: transformVarsInTermAcc(term.type, transform, context) };
   } else if (term.tag === 'Match') {
-    return { tag: 'Match', scrutinee: transformVarsInTermAcc(term.scrutinee, transform, signature), clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: transformVarsInTermAcc(c.rhs, transform, signature) })) };
+    return { tag: 'Match', scrutinee: transformVarsInTermAcc(term.scrutinee, transform, context), clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: transformVarsInTermAcc(c.rhs, transform, context) })) };
   }
 
   const _never: never = term
@@ -291,7 +291,7 @@ export function printCollectionFancy(items: string[], openBracket: string, close
 
 export class TCEnv<T> {
   constructor(
-    public readonly signature: Signature,
+    public readonly context: TTKContext,
     public readonly definitions: DefinitionsMap,
     public readonly metaVars: Map<string, MetaVar>,
     public readonly constraints: Constraint[],
@@ -306,30 +306,30 @@ export class TCEnv<T> {
   }
 
   prettyPrint(term: TTKTerm): string {
-    return prettyPrint(term, this.signature.map(s => s.name).reverse());
+    return prettyPrint(term, this.context.map(s => s.name).reverse());
   }
 
-  static printSignature(signature: Signature): string {
-    return `{${signature.map((s, i) => {
-      const sig = signature.slice(0, i)
+  static printTTKContext(context: TTKContext): string {
+    return `{${context.map((s, i) => {
+      const sig = context.slice(0, i)
       return `${s.name} : ${prettyPrint(s.type, sig.map(s => s.name).reverse())}`
     }).join(', ')}}`;
   }
 
-  printSignature(): string {
-    return TCEnv.printSignature(this.signature);
+  printTTKContext(): string {
+    return TCEnv.printTTKContext(this.context);
   }
 
   printMetas(options?: { indentLevel?: number, innerIndentOffset?: number }): string {
     const itemStrs = Array.from(this.metaVars.entries()).map(([name, meta]) => {
-      return `${name} : ${TCEnv.printSignature(meta.ctx)} -> ${prettyPrint(meta.type, meta.ctx.map(s => s.name))}`
+      return `${name} : ${TCEnv.printTTKContext(meta.ctx)} -> ${prettyPrint(meta.type, meta.ctx.map(s => s.name))}`
     })
 
     return printCollectionFancy(itemStrs, '{', '}', ',', options);
   }
 
   static printConstraint(constraint: Constraint): string {
-    return `{ctx: ${TCEnv.printSignature(constraint.ctx)}, meta: ${constraint.meta}, rhs: ${prettyPrint(constraint.rhs)}}`
+    return `{ctx: ${TCEnv.printTTKContext(constraint.ctx)}, meta: ${constraint.meta}, rhs: ${prettyPrint(constraint.rhs)}}`
   }
 
   printConstraints(options?: { indentLevel?: number, innerIndentOffset?: number }): string {
@@ -338,12 +338,12 @@ export class TCEnv<T> {
   }
 
   applySubstitutionToContextMetasAndConstraints(varIndex: number, value: TTKTerm): TCEnv<T> {
-    const newSignature = applySubstitutionToContext(this.signature, varIndex, value);
-    const newMetaVars = applySubstitutionToMetaVars(this.metaVars, this.signature.length, varIndex, value);
-    const newConstraints = applySubstitutionToConstraints(this.constraints, this.signature.length, varIndex, value);
+    const newTTKContext = applySubstitutionToContext(this.context, varIndex, value);
+    const newMetaVars = applySubstitutionToMetaVars(this.metaVars, this.context.length, varIndex, value);
+    const newConstraints = applySubstitutionToConstraints(this.constraints, this.context.length, varIndex, value);
 
     return new TCEnv(
-      newSignature,
+      newTTKContext,
       this.definitions,
       newMetaVars,
       newConstraints,
@@ -361,10 +361,10 @@ export class TCEnv<T> {
     const { constraints, metaVars } = solveConstraints(
       this.metaVars,
       this.constraints,
-      options.liftMetasToFullContext ? this.signature : undefined
+      options.liftMetasToFullContext ? this.context : undefined
     );
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       metaVars,
       constraints,
@@ -379,11 +379,11 @@ export class TCEnv<T> {
   }
 
   withoutValue(): TCEnv<void> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined);
   }
 
   withValue<S>(value: S): TCEnv<S> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value);
   }
 
   mapValue<S>(fn: (value: T) => S): TCEnv<S> {
@@ -391,18 +391,18 @@ export class TCEnv<T> {
   }
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
   }
 
   atIndexPath(indexPath: IndexPath): TCEnv<void> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined);
   }
 
   // Terms
 
-  extendSignature(name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
+  extendTTKContext(name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {
     return new TCEnv(
-      [...this.signature, { name, type, value }],
+      [...this.context, { name, type, value }],
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -413,7 +413,7 @@ export class TCEnv<T> {
   }
 
   withConstraint(constraint: Omit<Constraint, 'ctx'>): TCEnv<T> {
-    return new TCEnv(this.signature, this.definitions, this.metaVars, [...this.constraints, { ctx: this.signature, ...constraint }], this.indexPath, this.valueStack, this.value);
+    return new TCEnv(this.context, this.definitions, this.metaVars, [...this.constraints, { ctx: this.context, ...constraint }], this.indexPath, this.valueStack, this.value);
   }
 
   isAppTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'App' }> {
@@ -464,7 +464,7 @@ export class TCEnv<T> {
 
   withTermDefinition(this: TCEnv<TTKTerm>, name: string, type: TTKTerm, value?: TTKTerm): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       addDefinition(this.definitions, name, type, value),
       this.metaVars,
       this.constraints,
@@ -476,7 +476,7 @@ export class TCEnv<T> {
 
   withInductiveDefinition(this: TCEnv<TTKTerm>, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm }>, indexPositions: number[]): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       addInductiveDefinition(this.definitions, name, type, constructors, indexPositions),
       this.metaVars,
       this.constraints,
@@ -489,7 +489,7 @@ export class TCEnv<T> {
   // Match
   inMatchScrutinee(this: TCEnv<TTKTerm & { tag: 'Match' }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -501,7 +501,7 @@ export class TCEnv<T> {
 
   inMatchClauses(this: TCEnv<TTKTerm & { tag: 'Match' }>): TCEnv<TTKClause[]> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -515,7 +515,7 @@ export class TCEnv<T> {
     this.assertIndexValid('clauses', this.value, clauseIndex);
 
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -527,7 +527,7 @@ export class TCEnv<T> {
 
   inMatchClausePatterns(this: TCEnv<TTKClause>): TCEnv<TTKPattern[]> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -541,7 +541,7 @@ export class TCEnv<T> {
     this.assertIndexValid('patterns', this.value, patternIndex);
 
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -553,7 +553,7 @@ export class TCEnv<T> {
 
   inMatchClauseRhs(this: TCEnv<TTKClause>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -565,7 +565,7 @@ export class TCEnv<T> {
 
   inMatchClauseCtorArgs(this: TCEnv<TTKPattern & { tag: 'PCtor' }>): TCEnv<TTKPattern[]> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -578,7 +578,7 @@ export class TCEnv<T> {
   // App
   inAppFn(this: TCEnv<TTKTerm & { tag: 'App' }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -590,7 +590,7 @@ export class TCEnv<T> {
 
   inAppArg(this: TCEnv<TTKTerm & { tag: 'App' }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -603,7 +603,7 @@ export class TCEnv<T> {
   // Annot
   inAnnotTerm(this: TCEnv<TTKTerm & { tag: 'Annot' }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -615,7 +615,7 @@ export class TCEnv<T> {
 
   inAnnotType(this: TCEnv<TTKTerm & { tag: 'Annot' }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -628,7 +628,7 @@ export class TCEnv<T> {
   // Binder Pi
   inBinderPiName(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BPi' } }>): TCEnv<string> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -640,7 +640,7 @@ export class TCEnv<T> {
 
   inBinderPiDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BPi' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -652,7 +652,7 @@ export class TCEnv<T> {
 
   inBinderPiBody(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BPi' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      [...this.signature, { name: this.value.name, type: this.value.domain }],
+      [...this.context, { name: this.value.name, type: this.value.domain }],
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -665,7 +665,7 @@ export class TCEnv<T> {
   // Binder Lambda
   inBinderLambdaName(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }>): TCEnv<string> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -677,7 +677,7 @@ export class TCEnv<T> {
 
   inBinderLambdaDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -689,7 +689,7 @@ export class TCEnv<T> {
 
   inBinderLambdaBody(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      [...this.signature, { name: this.value.name, type: this.value.domain }],
+      [...this.context, { name: this.value.name, type: this.value.domain }],
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -702,7 +702,7 @@ export class TCEnv<T> {
   // Binder Let
   inBinderLetName(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>): TCEnv<string> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -714,7 +714,7 @@ export class TCEnv<T> {
 
   inBinderLetDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -726,7 +726,7 @@ export class TCEnv<T> {
 
   inBinderLetBody(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      [...this.signature, { name: this.value.name, type: this.value.domain }],
+      [...this.context, { name: this.value.name, type: this.value.domain }],
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -738,7 +738,7 @@ export class TCEnv<T> {
 
   inBinderLetValue(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -751,7 +751,7 @@ export class TCEnv<T> {
   // Inductive Definition
   inInductiveDefinitionName(this: TCEnv<InductiveDefinition>): TCEnv<string> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -763,7 +763,7 @@ export class TCEnv<T> {
 
   inInductiveDefinitionType(this: TCEnv<InductiveDefinition>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -775,7 +775,7 @@ export class TCEnv<T> {
 
   inInductiveDefinitionConstructors(this: TCEnv<InductiveDefinition>): TCEnv<Array<{ name: string; type: TTKTerm }>> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -789,7 +789,7 @@ export class TCEnv<T> {
     this.assertIndexValid('constructors', this.value, constructorIndex);
 
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -801,7 +801,7 @@ export class TCEnv<T> {
 
   inInductiveDefinitionConstructorName(this: TCEnv<{ name: string; type: TTKTerm }>): TCEnv<string> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -813,7 +813,7 @@ export class TCEnv<T> {
 
   inInductiveDefinitionConstructorType(this: TCEnv<{ name: string; type: TTKTerm }>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -826,7 +826,7 @@ export class TCEnv<T> {
   // Term
   inTermName(this: TCEnv<TermDefinition>): TCEnv<string> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -838,7 +838,7 @@ export class TCEnv<T> {
 
   inTermType(this: TCEnv<TermDefinition>): TCEnv<TTKTerm> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -850,7 +850,7 @@ export class TCEnv<T> {
 
   inTermValue(this: TCEnv<TermDefinition>): TCEnv<TTKTerm | undefined> {
     return new TCEnv(
-      this.signature,
+      this.context,
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -892,10 +892,10 @@ export class TCEnv<T> {
     return this.withValue(definition);
   }
 
-  getTypeAtIndexInSignatureAssert(index: number): TCEnv<TTKTerm> {
-    const type = lookupTypeAtIndexSignature(this.signature, index);
+  getTypeAtIndexInContextAssert(index: number): TCEnv<TTKTerm> {
+    const type = lookupTypeAtIndexContext(this.context, index);
     if (!type) {
-      throw this.typeAtIndexNotFoundInSignatureError(index);
+      throw this.typeAtIndexNotFoundInContextError(index);
     }
     return this.withValue(type);
   }
@@ -939,8 +939,8 @@ export class TCEnv<T> {
     return TCEnvError.create(`Type definition not found: ${name}`, this);
   }
 
-  typeAtIndexNotFoundInSignatureError(index: number): TCEnvError {
-    return TCEnvError.create(`Type at index ${index} not found in signature`, this);
+  typeAtIndexNotFoundInContextError(index: number): TCEnvError {
+    return TCEnvError.create(`Type at index ${index} not found in context`, this);
   }
 
   expectedEqualLengthsError<A, B>(a: A[], b: B[], message?: string): TCEnvError {
@@ -1099,16 +1099,16 @@ export function validatePatternVarName(env: TCEnv<string>): void {
   }
 }
 
-function lookupTypeAtIndexSignature(signature: Signature, index: number): TTKTerm | undefined {
-  const sigIndex = signature.length - 1 - index
-  const binder = signature[sigIndex];
+function lookupTypeAtIndexContext(context: TTKContext, index: number): TTKTerm | undefined {
+  const sigIndex = context.length - 1 - index
+  const binder = context[sigIndex];
   if (!binder) {
     return undefined;
   }
   const type = binder.type;
 
-  // Shift indices to be at tail of signature
-  const shiftAmount = signature.length - sigIndex;
+  // Shift indices to be at tail of context
+  const shiftAmount = context.length - sigIndex;
   return shiftAmount > 0 ? shiftTerm(type, shiftAmount, 0) : type;
 }
 

@@ -23,7 +23,7 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
   } else if (env.isSortTerm()) {
     return env.withValue({ tag: 'Sort', level: env.value.level + 1 })
   } else if (env.isVarTerm()) {
-    return env.getTypeAtIndexInSignatureAssert(env.value.index)
+    return env.getTypeAtIndexInContextAssert(env.value.index)
   } else if (env.isAppTerm()) {
     const fnTypeEnv = inferType(env.inAppFn())
 
