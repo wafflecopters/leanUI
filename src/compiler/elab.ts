@@ -46,28 +46,142 @@ import {
 export type { TTKRecordDef };
 
 // ============================================================================
+// Constructor Parameter Names
+// ============================================================================
+
+/**
+ * Map from constructor name to its parameter names.
+ * Used during pattern elaboration to generate meaningful wildcard names.
+ *
+ * For example, if VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+ * then constructorParamNames.get("VCons") = ["A", "n", "", ""]
+ * (empty string for unnamed parameters)
+ */
+export type ConstructorParamNames = Map<string, string[]>;
+
+/**
+ * Extract parameter names from a constructor's type (a Pi type).
+ *
+ * For example, given:
+ *   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+ *
+ * Returns: ["A", "n", "", ""] (empty strings for unnamed/anonymous binders)
+ *
+ * This walks the Pi chain and collects the binder names until we hit the return type.
+ */
+export function extractConstructorParamNames(ctorType: TTKTerm): string[] {
+  const names: string[] = [];
+  let current = ctorType;
+
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    // Use the binder name, or empty string if it's "_" or empty
+    const name = current.name === '_' || current.name === '' ? '' : current.name;
+    names.push(name);
+    current = current.body;
+  }
+
+  return names;
+}
+
+/**
+ * Build a map of constructor parameter names from elaborated constructors.
+ */
+export function buildConstructorParamNames(
+  constructors: Array<{ name: string; type: TTKTerm }>
+): ConstructorParamNames {
+  const map: ConstructorParamNames = new Map();
+  for (const ctor of constructors) {
+    map.set(ctor.name, extractConstructorParamNames(ctor.type));
+  }
+  return map;
+}
+
+// ============================================================================
 // Wildcard Name Generation
 // ============================================================================
 
 /**
  * Counter for generating unique wildcard names during elaboration.
- * PWild patterns from parsing are converted to PVar with names like ?0, ?1, etc.
- *
- * The counter is reset at the start of each clause, so ?0 is always the first
- * wildcard in each clause. This makes the generated names predictable and
- * easier to read in error messages.
- *
- * Names are simple indices: 0, 1, 2, etc. (no prefix needed since PWild is a distinct tag).
- * The counter resets at the start of each clause for predictable naming.
+ * The counter is reset at the start of each clause, so 0 is always the first
+ * wildcard in each clause.
  */
 let wildcardCounter = 0;
 
 /**
+ * Current constructor parameter names context.
+ * Set when elaborating patterns inside a constructor pattern.
+ */
+let currentCtorParamNames: string[] | null = null;
+
+/**
+ * Current position within constructor arguments.
+ * Tracks which parameter we're at when elaborating sub-patterns.
+ */
+let currentCtorParamIndex: number = 0;
+
+/**
+ * Current term parameter names for top-level pattern elaboration.
+ * Set from the term's type signature before elaborating its value.
+ */
+let currentTermParamNames: string[] | null = null;
+
+/**
+ * Current position within top-level term parameters.
+ */
+let currentTermParamIndex: number = 0;
+
+/**
+ * Global map of constructor parameter names.
+ * Set before elaborating term bodies.
+ */
+let globalConstructorParamNames: ConstructorParamNames = new Map();
+
+/**
+ * Set the global constructor parameter names map for pattern elaboration.
+ */
+export function setConstructorParamNames(map: ConstructorParamNames): void {
+  globalConstructorParamNames = map;
+}
+
+/**
+ * Set the current term parameter names for top-level pattern elaboration.
+ * Call this before elaborating a term's value, using param names from its type.
+ */
+export function setCurrentTermParamNames(names: string[] | null): void {
+  currentTermParamNames = names;
+  currentTermParamIndex = 0;
+}
+
+/**
  * Generate a fresh unique name for a wildcard pattern within the current clause.
- * Returns just the index as a string (e.g., "0", "1", "2").
+ *
+ * The name format is: paramName + counter
+ * - If we're inside a constructor pattern and know the parameter name, use it
+ * - If we're at a top-level pattern and know the term's parameter name, use it
+ * - If the parameter is unnamed, use "?"
+ * - The counter ensures uniqueness within the clause
  */
 function freshWildcardName(): string {
-  return `${wildcardCounter++}`;
+  const counter = wildcardCounter++;
+
+  // If we have constructor context (nested inside a constructor pattern), use the parameter name
+  if (currentCtorParamNames !== null && currentCtorParamIndex < currentCtorParamNames.length) {
+    const paramName = currentCtorParamNames[currentCtorParamIndex];
+    if (paramName && paramName !== '') {
+      return `${paramName}${counter}`;
+    }
+  }
+
+  // If we have term context (top-level patterns), use the term's parameter name
+  if (currentTermParamNames !== null && currentTermParamIndex < currentTermParamNames.length) {
+    const paramName = currentTermParamNames[currentTermParamIndex];
+    if (paramName && paramName !== '') {
+      return `${paramName}${counter}`;
+    }
+  }
+
+  // No parameter name available, use "?"
+  return `?${counter}`;
 }
 
 /**
@@ -75,6 +189,10 @@ function freshWildcardName(): string {
  */
 export function resetWildcardCounter(): void {
   wildcardCounter = 0;
+  currentCtorParamNames = null;
+  currentCtorParamIndex = 0;
+  currentTermParamNames = null;
+  currentTermParamIndex = 0;
 }
 
 // ============================================================================
@@ -160,8 +278,15 @@ export function elabToKernel(term: TTerm): TTKTerm {
         clauses: term.clauses.map(c => {
           // Reset wildcard counter for each clause so _w0 is the first wildcard in each clause
           wildcardCounter = 0;
+          // Reset term param index for each clause
+          currentTermParamIndex = 0;
           return {
-            patterns: c.patterns.map(elabPatternToKernel),
+            patterns: c.patterns.map(p => {
+              const result = elabPatternToKernel(p);
+              // Increment term param index after each top-level pattern
+              currentTermParamIndex++;
+              return result;
+            }),
             rhs: elabToKernel(c.rhs)
           };
         })
@@ -173,6 +298,8 @@ export function elabToKernel(term: TTerm): TTKTerm {
  * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern).
  *
  * Surface PWild patterns become kernel PWild with generated unique names.
+ * When inside a constructor pattern, the wildcard name includes the
+ * constructor's parameter name (e.g., "A0", "n1", "?2" for unnamed params).
  */
 export function elabPatternToKernel(pattern: TPattern): TTKPattern {
   switch (pattern.tag) {
@@ -181,12 +308,37 @@ export function elabPatternToKernel(pattern: TPattern): TTKPattern {
     case 'PWild':
       // Generate a unique name for the wildcard, keeping it as PWild in kernel
       return { tag: 'PWild', name: freshWildcardName() };
-    case 'PCtor':
+    case 'PCtor': {
+      // Look up the constructor's parameter names
+      const paramNames = globalConstructorParamNames.get(pattern.name);
+
+      // Elaborate each argument with the appropriate parameter context
+      const elabArgs: TTKPattern[] = [];
+      for (let i = 0; i < pattern.args.length; i++) {
+        // Save current context
+        const savedParamNames = currentCtorParamNames;
+        const savedParamIndex = currentCtorParamIndex;
+
+        // Set context for this argument
+        if (paramNames) {
+          currentCtorParamNames = paramNames;
+          currentCtorParamIndex = i;
+        }
+
+        // Elaborate the sub-pattern
+        elabArgs.push(elabPatternToKernel(pattern.args[i]));
+
+        // Restore context
+        currentCtorParamNames = savedParamNames;
+        currentCtorParamIndex = savedParamIndex;
+      }
+
       return {
         tag: 'PCtor',
         name: pattern.name,
-        args: pattern.args.map(elabPatternToKernel)
+        args: elabArgs
       };
+    }
   }
 }
 
@@ -371,12 +523,17 @@ export function elabToKernelWithMap(
 
           // Reset wildcard counter for each clause so _w0 is the first wildcard in each clause
           wildcardCounter = 0;
+          // Reset term param index for each clause
+          currentTermParamIndex = 0;
 
           return {
             patterns: clause.patterns.map((pattern, patternIndex) => {
               const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
               const patternKernelPath = appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(patternIndex));
-              return elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
+              const result = elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
+              // Increment term param index after each top-level pattern
+              currentTermParamIndex++;
+              return result;
             }),
             rhs: elabToKernelWithMap(
               clause.rhs,
@@ -411,16 +568,38 @@ function elabPatternToKernelWithMap(
     case 'PWild':
       // Generate a unique name for the wildcard, keeping it as PWild in kernel
       return { tag: 'PWild', name: freshWildcardName() };
-    case 'PCtor':
+    case 'PCtor': {
+      // Look up the constructor's parameter names
+      const paramNames = globalConstructorParamNames.get(pattern.name);
+
+      // Elaborate each argument with the appropriate parameter context
+      const elabArgs: TTKPattern[] = [];
+      for (let argIndex = 0; argIndex < pattern.args.length; argIndex++) {
+        // Save current context
+        const savedParamNames = currentCtorParamNames;
+        const savedParamIndex = currentCtorParamIndex;
+
+        // Set context for this argument
+        if (paramNames) {
+          currentCtorParamNames = paramNames;
+          currentCtorParamIndex = argIndex;
+        }
+
+        const argSurfacePath = appendPath(surfacePath, fieldSeg('args'), arraySeg(argIndex));
+        const argKernelPath = appendPath(kernelPath, fieldSeg('args'), arraySeg(argIndex));
+        elabArgs.push(elabPatternToKernelWithMap(pattern.args[argIndex], elabMap, argSurfacePath, argKernelPath));
+
+        // Restore context
+        currentCtorParamNames = savedParamNames;
+        currentCtorParamIndex = savedParamIndex;
+      }
+
       return {
         tag: 'PCtor',
         name: pattern.name,
-        args: pattern.args.map((arg, argIndex) => {
-          const argSurfacePath = appendPath(surfacePath, fieldSeg('args'), arraySeg(argIndex));
-          const argKernelPath = appendPath(kernelPath, fieldSeg('args'), arraySeg(argIndex));
-          return elabPatternToKernelWithMap(arg, elabMap, argSurfacePath, argKernelPath);
-        })
+        args: elabArgs
       };
+    }
   }
 }
 

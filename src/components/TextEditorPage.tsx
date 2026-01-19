@@ -504,25 +504,9 @@ export function TextEditorPage() {
   }, [compileResult]);
 
   // Keep the ref in sync with the latest hints
+  // Monaco's inlay hints provider will read from the ref when it needs to render
   useEffect(() => {
     wildcardHintsRef.current = wildcardHints;
-    // Trigger inlay hint refresh by notifying Monaco
-    const monaco = monacoRef.current;
-    const editor = editorRef.current;
-    if (monaco && editor) {
-      // Force inlay hints to refresh
-      const model = editor.getModel();
-      if (model) {
-        // Emit a model content change event to trigger inlay hint refresh
-        monaco.editor.getModels().forEach(m => {
-          if (m === model) {
-            // Use Monaco's internal method to signal an update
-            // This is a workaround since there's no official API
-            (editor as any)._modelData?.view?.getInternalEventBus()?.fire('viewZonesChanged');
-          }
-        });
-      }
-    }
   }, [wildcardHints]);
 
   const handleEditorChange: OnChange = useCallback((value) => {
