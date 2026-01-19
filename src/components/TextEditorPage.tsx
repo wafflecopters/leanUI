@@ -663,8 +663,13 @@ export function TextEditorPage() {
           // Uppercase identifiers are const names (types, constructors)
           [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
 
-          // Term name in type signature: lowercase identifier followed by :
-          // e.g., "plus : Nat -> Nat" - "plus" is a term name
+          // Type signature at line start: term definition name followed by :
+          // e.g., "foo : Type" or "  plus : Nat -> Nat -> Nat"
+          // This must come before the general binder rule below
+          [/^(\s*)([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['white', 'identifier.term', 'white', 'delimiter']],
+
+          // Binder name inside expressions: lowercase identifier followed by :
+          // e.g., "(n : Nat)" - "n" is a bound variable name
           // Match identifier + colon together as compound token
           [/([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['identifier.pattern', 'white', 'delimiter']],
 
