@@ -26,7 +26,6 @@
  */
 
 import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, TPattern, TClause } from '../compiler/surface';
-import { groupByIndentation, parseBlock } from './indentation-grouper';
 import {
   SourceMap,
   SourcePos,
@@ -137,6 +136,67 @@ const ARROW_PRECEDENCE = 25; // Low precedence, right-associative
 
 // Application has a high precedence
 const APPLICATION_PRECEDENCE = 100;
+
+// ============================================================================
+// Grammar: Prefix Parselets
+// ============================================================================
+
+/**
+ * Prefix parselet - handles tokens that can start an expression.
+ *
+ * Grammar (prefix expressions):
+ *   atom ::= '(' expr ')'              -- grouping / annotation / pi binder
+ *          | '\' binder+ '=>' expr     -- lambda
+ *          | 'let' IDENT ... 'in' expr -- let binding
+ *          | 'case' expr 'where' ...   -- pattern match
+ *          | 'Type' NUMBER?            -- type universe
+ *          | 'Prop'                    -- prop universe
+ *          | '?' IDENT?                -- hole
+ *          | IDENT                     -- variable / constant
+ *          | NUMBER                    -- numeric literal
+ *          | '_'                       -- wildcard hole
+ */
+type PrefixParselet = (parser: Parser, token: Token, ctx: NameContext, path: IndexPath) => TTerm;
+
+/**
+ * Registry of prefix parselets indexed by token type.
+ * Each entry defines how to parse an expression starting with that token.
+ */
+const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
+  'LPAREN':     (p, _t, ctx, path) => p['parseParenExpr'](ctx, path),
+  'LAMBDA':     (p, _t, ctx, path) => p['parseLambda'](ctx, path),
+  'LET':        (p, _t, ctx, path) => p['parseLet'](ctx, path),
+  'CASE':       (p, _t, ctx, path) => p['parseMatch'](ctx, path),
+  'MATCH':      (p, _t, ctx, path) => p['parseMatch'](ctx, path),
+  'TYPE':       (p, _t, _ctx, path) => p['parseType'](path),
+  'IDENT':      (p, _t, ctx, path) => p['parseIdent'](ctx, path),
+
+  // Simple tokens that don't need helper methods
+  'PROP': (p) => {
+    p['advance']();
+    return mkPropTT();
+  },
+  'HOLE': (p, t) => {
+    p['advance']();
+    return mkHoleTT(t.value, mkHoleTT('hole_type', mkPropTT()));
+  },
+  'NUMBER': (p, t) => {
+    p['advance']();
+    return p['parseNumberLiteral'](t.value);
+  },
+  'UNDERSCORE': (p) => {
+    p['advance']();
+    return mkHoleTT('_', mkHoleTT('underscore_type', mkPropTT()));
+  },
+};
+
+/**
+ * Set of token types that can start an atom (prefix expression).
+ * Derived from PREFIX_PARSELETS for consistency.
+ */
+const ATOM_STARTER_TOKENS: Set<TokenType> = new Set(
+  Object.keys(PREFIX_PARSELETS) as TokenType[]
+);
 
 // ============================================================================
 // Lexer
@@ -1235,55 +1295,21 @@ export class Parser {
 
   /**
    * Parse prefix expressions and atoms.
+   * Uses the PREFIX_PARSELETS table for dispatch.
    */
   private parsePrefix(ctx: NameContext, path: IndexPath = []): TTerm {
     const token = this.current();
+    const parselet = PREFIX_PARSELETS[token.type];
 
-    switch (token.type) {
-      case 'LPAREN':
-        return this.parseParenExpr(ctx, path);
-
-      case 'LAMBDA':
-        return this.parseLambda(ctx, path);
-
-      // PI token removed - use (x : T) -> ... syntax instead
-
-      case 'LET':
-        return this.parseLet(ctx, path);
-
-      case 'CASE':
-      case 'MATCH':
-        return this.parseMatch(ctx, path);
-
-      case 'TYPE':
-        return this.parseType(path);
-
-      case 'PROP':
-        this.advance();
-        return mkPropTT();
-
-      case 'HOLE':
-        this.advance();
-        return mkHoleTT(token.value, mkHoleTT('hole_type', mkPropTT()));
-
-      case 'IDENT':
-        return this.parseIdent(ctx, path);
-
-      case 'NUMBER':
-        this.advance();
-        return this.parseNumberLiteral(token.value);
-
-      case 'UNDERSCORE':
-        this.advance();
-        return mkHoleTT('_', mkHoleTT('underscore_type', mkPropTT()));
-
-      default:
-        throw new ParseError(
-          `Unexpected token: ${token.type} '${token.value}'`,
-          token.line,
-          token.col
-        );
+    if (parselet) {
+      return parselet(this, token, ctx, path);
     }
+
+    throw new ParseError(
+      `Unexpected token: ${token.type} '${token.value}'`,
+      token.line,
+      token.col
+    );
   }
 
   /**
@@ -1998,16 +2024,11 @@ export class Parser {
   }
 
   /**
-   * Check if a token can start an atom (for application detection)
+   * Check if a token can start an atom (for application detection).
+   * Derived from PREFIX_PARSELETS for consistency.
    */
   private canStartAtom(token: Token): boolean {
-    return token.type === 'LPAREN' ||
-      token.type === 'IDENT' ||
-      token.type === 'HOLE' ||
-      token.type === 'TYPE' ||
-      token.type === 'PROP' ||
-      token.type === 'NUMBER' ||
-      token.type === 'UNDERSCORE';
+    return ATOM_STARTER_TOKENS.has(token.type);
   }
 
   // ============================================================================

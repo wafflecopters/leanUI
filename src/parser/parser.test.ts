@@ -1105,15 +1105,16 @@ test('Parse simple inductive type (Nat)', () => {
   assertEqual(decls[0].constructors![1].name, 'Succ');
 });
 
-test('Parse inductive type without where keyword', () => {
+test('Error on inductive type without where keyword', () => {
+  // The parser requires 'where' keyword to know where the type ends
   const source = `inductive Nat : Type
   Zero : Nat
   Succ : Nat -> Nat`;
 
-  const decls = parseDeclarations(source);
-  assertEqual(decls.length, 1);
-  assertEqual(decls[0].kind, 'inductive');
-  assertEqual(decls[0].constructors?.length, 2);
+  assertThrows(
+    () => parseDeclarations(source),
+    'Should error when where keyword is missing'
+  );
 });
 
 test('Parse inductive type with pipes', () => {
@@ -1191,9 +1192,11 @@ test('Parse case expression with Succ pattern', () => {
     if (pattern.tag === 'PCtor') {
       assertEqual(pattern.name, 'Succ');
       assertEqual(pattern.args.length, 1);
-      assertEqual(pattern.args[0].tag, 'PVar');
-      if (pattern.args[0].tag === 'PVar') {
+      // Identifiers are now uniformly parsed as PCtor - elaboration resolves to PVar
+      assertEqual(pattern.args[0].tag, 'PCtor');
+      if (pattern.args[0].tag === 'PCtor') {
         assertEqual(pattern.args[0].name, 'a');
+        assertEqual(pattern.args[0].args.length, 0);
       }
     }
   }
@@ -1231,7 +1234,8 @@ test('Parse nested pattern (Succ (Succ m))', () => {
       if (innerPattern.tag === 'PCtor') {
         assertEqual(innerPattern.name, 'Succ');
         assertEqual(innerPattern.args.length, 1);
-        assertEqual(innerPattern.args[0].tag, 'PVar');
+        // Identifiers are uniformly parsed as PCtor (elaboration resolves)
+        assertEqual(innerPattern.args[0].tag, 'PCtor');
       }
     }
   }
@@ -1256,9 +1260,11 @@ test('Parse variable pattern', () => {
   assertTermShape(term, 'Match');
   if (term.tag === 'Match') {
     const pattern = term.clauses[0].patterns[0];
-    assertEqual(pattern.tag, 'PVar');
-    if (pattern.tag === 'PVar') {
+    // Identifiers are uniformly parsed as PCtor (elaboration resolves to PVar)
+    assertEqual(pattern.tag, 'PCtor');
+    if (pattern.tag === 'PCtor') {
       assertEqual(pattern.name, 'x');
+      assertEqual(pattern.args.length, 0);
     }
   }
 });
@@ -1286,8 +1292,9 @@ test('Parse constructor with multiple args (Cons x xs)', () => {
     if (consPattern.tag === 'PCtor') {
       assertEqual(consPattern.name, 'Cons');
       assertEqual(consPattern.args.length, 2);
-      assertEqual(consPattern.args[0].tag, 'PVar');
-      assertEqual(consPattern.args[1].tag, 'PVar');
+      // Identifiers are uniformly parsed as PCtor (elaboration resolves)
+      assertEqual(consPattern.args[0].tag, 'PCtor');
+      assertEqual(consPattern.args[1].tag, 'PCtor');
     }
   }
 });
@@ -1390,7 +1397,8 @@ plus (Succ a) b = Succ (plus a b)`;
     if (clause1.patterns[0].tag === 'PCtor') {
       assertEqual(clause1.patterns[0].name, 'Zero');
     }
-    assertEqual(clause1.patterns[1].tag, 'PVar');
+    // Identifiers are uniformly parsed as PCtor (elaboration resolves)
+    assertEqual(clause1.patterns[1].tag, 'PCtor');
 
     // Second clause: Succ a, b
     const clause2 = value.clauses[1];
@@ -1419,7 +1427,8 @@ twice n = plus n n`;
   if (value.tag === 'Match') {
     assertEqual(value.clauses.length, 1);
     assertEqual(value.clauses[0].patterns.length, 1);
-    assertEqual(value.clauses[0].patterns[0].tag, 'PVar');
+    // Identifiers are uniformly parsed as PCtor (elaboration resolves)
+    assertEqual(value.clauses[0].patterns[0].tag, 'PCtor');
   }
 });
 
@@ -1599,6 +1608,114 @@ nth A _ (VCons _ (Succ _) h tail) (FSucc (Succ _) f) = nth _ _ tail f`;
       assertEqual(clause2.patterns[3].name, 'FSucc');
       assertEqual(clause2.patterns[3].args.length, 2, 'FSucc should have 2 args');
     }
+  }
+});
+
+// ============================================================================
+// PREFIX_PARSELETS Table Dispatch Tests
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PREFIX_PARSELETS TABLE DISPATCH TESTS');
+console.log('='.repeat(80) + '\n');
+
+// These tests verify the table-driven prefix dispatch mechanism
+
+test('Table dispatch: LPAREN -> parseParenExpr', () => {
+  const term = parseExpr('(x)');
+  assertTermShape(term, 'Const');
+});
+
+test('Table dispatch: LAMBDA -> parseLambda', () => {
+  const term = parseExpr('\\x => x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLamTT');
+  }
+});
+
+test('Table dispatch: LET -> parseLet', () => {
+  const term = parseExpr('let x := y in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+  }
+});
+
+test('Table dispatch: CASE -> parseMatch', () => {
+  const term = parseExpr('case x where | y => y');
+  assertTermShape(term, 'Match');
+});
+
+test('Table dispatch: MATCH -> parseMatch', () => {
+  const term = parseExpr('match x where | y => y');
+  assertTermShape(term, 'Match');
+});
+
+test('Table dispatch: TYPE -> parseType', () => {
+  const term = parseExpr('Type');
+  assertTermShape(term, 'Sort');
+  if (term.tag === 'Sort') {
+    assertEqual(term.level, 1);
+  }
+});
+
+test('Table dispatch: IDENT -> parseIdent', () => {
+  const term = parseExpr('foo');
+  assertTermShape(term, 'Const');
+  if (term.tag === 'Const') {
+    assertEqual(term.name, 'foo');
+  }
+});
+
+test('Table dispatch: PROP -> inline mkPropTT', () => {
+  const term = parseExpr('Prop');
+  assertTermShape(term, 'Sort');
+  if (term.tag === 'Sort') {
+    assertEqual(term.level, 0);
+  }
+});
+
+test('Table dispatch: HOLE -> inline mkHoleTT', () => {
+  const term = parseExpr('?myhole');
+  assertTermShape(term, 'Hole');
+  if (term.tag === 'Hole') {
+    assertEqual(term.id, 'myhole');
+  }
+});
+
+test('Table dispatch: NUMBER -> parseNumberLiteral', () => {
+  const term = parseExpr('42');
+  assertTermShape(term, 'Const');
+  if (term.tag === 'Const') {
+    assertEqual(term.name, '42');
+  }
+});
+
+test('Table dispatch: UNDERSCORE -> inline mkHoleTT', () => {
+  const term = parseExpr('_');
+  assertTermShape(term, 'Hole');
+  if (term.tag === 'Hole') {
+    assertEqual(term.id, '_');
+  }
+});
+
+test('Table dispatch: unknown token throws ParseError', () => {
+  assertThrows(
+    () => parseExpr(')'),
+    'Should error on token not in PREFIX_PARSELETS'
+  );
+});
+
+test('All prefix token types have consistent behavior in expressions', () => {
+  // Complex expression using multiple prefix token types
+  const term = parseExpr('let f := \\x => (x : Type) in f ?hole');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+    // f is a lambda
+    assertTermShape(term.binderKind.defVal, 'Binder');
+    // body is an application
+    assertTermShape(term.body, 'App');
   }
 });
 

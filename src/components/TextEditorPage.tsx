@@ -698,7 +698,7 @@ export function TextEditorPage() {
           }
         }
 
-        return { hints: inlayHints, dispose: () => {} };
+        return { hints: inlayHints, dispose: () => { } };
       }
     });
 
@@ -753,7 +753,7 @@ export function TextEditorPage() {
           resultId: undefined
         };
       },
-      releaseDocumentSemanticTokens: () => {}
+      releaseDocumentSemanticTokens: () => { }
     });
   };
 
