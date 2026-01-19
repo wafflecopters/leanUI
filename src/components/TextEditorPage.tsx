@@ -666,7 +666,7 @@ export function TextEditorPage() {
           // Term name in type signature: lowercase identifier followed by :
           // e.g., "plus : Nat -> Nat" - "plus" is a term name
           // Match identifier + colon together as compound token
-          [/([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['identifier.term', 'white', 'delimiter']],
+          [/([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['identifier.pattern', 'white', 'delimiter']],
 
           // Definition clause: lowercase identifier at start of line (possibly indented)
           // followed by pattern-like things (not :)
