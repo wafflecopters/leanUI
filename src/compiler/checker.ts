@@ -12,7 +12,7 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     return env.withValue(maxSort(domResult.value, bodyResult.value, env))
   }
   debugger
-  throw new TCEnvError<TTKTerm>(`Inference not implemented for binder type ${env.value.tag}`, env)
+  throw TCEnvError.create(`Inference not implemented for binder type ${env.value.tag}`, env)
 }
 
 export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
@@ -37,7 +37,7 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     return env.mapValue(term => subst(0, term.arg, fnTypeEnv.value.body))
   }
   debugger
-  throw new TCEnvError<TTKTerm>(`Inference not implemented for term type ${env.value.tag}`, env)
+  throw TCEnvError.create(`Inference not implemented for term type ${env.value.tag}`, env)
 }
 
 // CHECKING
@@ -79,5 +79,5 @@ function maxSort(lhs: TTKTerm, rhs: TTKTerm, env: TCEnv<unknown>): TTKTerm {
     return { tag: 'Sort', level: Math.max(lhs.level, rhs.level) }
   }
   debugger
-  throw new TCEnvError(`Max sort not implemented for term types ${lhs.tag} and ${rhs.tag}`, env)
+  throw TCEnvError.create(`Max sort not implemented for term types ${lhs.tag} and ${rhs.tag}`, env)
 }

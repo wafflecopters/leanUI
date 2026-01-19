@@ -170,7 +170,7 @@ inductive Fin : Nat -> Type where
 
 nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
 nth A _ (VCons _ _ h _) (FZero _) = h
-nth A _ (VCons A2 (Succ _) h tail) (FSucc _ f) = nth _ _ tail f
+nth A _ (VCons _ (Succ _) h tail) (FSucc A f) = nth _ _ tail f
 
 {-
 qux : Type

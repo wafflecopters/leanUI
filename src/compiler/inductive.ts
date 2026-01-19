@@ -2,8 +2,8 @@ import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, Defin
 import { TTKTerm } from "./kernel";
 import { inferType } from "./checker";
 
-function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError<unknown>[] {
-  const errors: TCEnvError<unknown>[] = [];
+function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError[] {
+  const errors: TCEnvError[] = [];
 
   postOrderTraverseTerm(env.value, (term, indexPath) => {
     if (term.tag === 'Const' || term.tag === 'Var' || term.tag === 'Sort' || term.tag === 'App') {
@@ -19,7 +19,7 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
       }[term.tag] ?? (
           term.tag === 'Binder' ? term.binderKind.tag === 'BLam' ? 'Lambda Expression' : 'Let Expression' : undefined
         ) ?? 'Other syntax'
-      errors.push(new TCEnvError(`Term contains syntax not allowed in an inductive type definition: ${msg}`, env.atIndexPath(indexPath)));
+      errors.push(TCEnvError.create(`Term contains syntax not allowed in an inductive type definition: ${msg}`, env.atIndexPath(indexPath)));
     }
   }, env.indexPath);
 
@@ -29,7 +29,7 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
 function runAndAccumulateErrors<S, T>(
   env: TCEnv<S>,
   fn: (e: TCEnv<S>) => TCEnv<T>,
-  errors: TCEnvError<unknown>[]
+  errors: TCEnvError[]
 ): TCEnv<T> | undefined {
   try {
     return fn(env);
@@ -37,7 +37,7 @@ function runAndAccumulateErrors<S, T>(
     if (e instanceof TCEnvError) {
       errors.push(e);
     } else {
-      errors.push(new TCEnvError(e instanceof Error ? e.message : String(e), env));
+      errors.push(TCEnvError.create(e instanceof Error ? e.message : String(e), env));
     }
   }
 }
@@ -49,7 +49,7 @@ export function checkInductiveDeclaration(
   definitions: DefinitionsMap,
 ): {
   success: false,
-  errors: TCEnvError<unknown>[]
+  errors: TCEnvError[]
 } | {
   success: true,
   newDefinitions: DefinitionsMap,
@@ -60,7 +60,7 @@ export function checkInductiveDeclaration(
   const defEnv = createTCEnv(definitions).withValue(inductiveDefinition);
 
   // Validate naming conventions first
-  const errors: TCEnvError<unknown>[] = [];
+  const errors: TCEnvError[] = [];
   try {
     validateInductiveNamingConventions(defEnv);
   } catch (e) {
@@ -165,8 +165,8 @@ export type Polarity = 'strictly_positive' | 'positive' | 'negative';
 function checkStrictPositivity(
   inductiveName: string,
   env: TCEnv<{ name: string, type: TTKTerm }>,
-  errors: TCEnvError<unknown>[]
-): TCEnvError<unknown>[] {
+  errors: TCEnvError[]
+): TCEnvError[] {
   let traverseEnv = env.inInductiveDefinitionConstructorType();
   while (traverseEnv.isBinderPiTerm()) {
     checkDomainPositivity(inductiveName, env.value.name, traverseEnv.inBinderPiDomain(), errors);
@@ -188,7 +188,7 @@ function checkDomainPositivity(
   inductiveName: string,
   ctorName: string,
   env: TCEnv<TTKTerm>,
-  errors: TCEnvError<unknown>[]
+  errors: TCEnvError[]
 ): void {
   if (env.isConstTerm() || env.isVarTerm() || env.isSortTerm() || env.isHoleTerm()) {
     // Direct occurrences of constants/vars are fine
@@ -229,14 +229,14 @@ function checkNestedPiForNegativeOccurrences(
   ctorName: string,
   env: TCEnv<TTKTerm>,
   polarity: Polarity,
-  errors: TCEnvError<unknown>[]
+  errors: TCEnvError[]
 ): void {
   if (env.isVarTerm() || env.isSortTerm()) {
     // Valid
   } else if (env.isConstTerm()) {
     if (env.value.name === inductiveName) {
       const msg = polarity === 'negative' ? 'negative' : '(non-strict) positive';
-      errors.push(new TCEnvError(`Constructor '${ctorName}' has a ${msg} occurrence of '${inductiveName}'.`, env));
+      errors.push(TCEnvError.create(`Constructor '${ctorName}' has a ${msg} occurrence of '${inductiveName}'.`, env));
     }
   } else if (env.isAppTerm()) {
     checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inAppFn(), polarity, errors);

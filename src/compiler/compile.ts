@@ -109,7 +109,7 @@ export interface CompiledDeclaration {
 
   // Type checking results
   checkSuccess: boolean;
-  checkErrors: TCEnvError<unknown>[];
+  checkErrors: TCEnvError[];
 
   // Source mapping for error locations
   elabMap?: ElabMap;
@@ -967,7 +967,7 @@ function checkDeclaration(
   definitions: DefinitionsMap,
 ): CheckDeclarationResult {
   let checkSuccess = true;
-  const checkErrors: TCEnvError<unknown>[] = [];
+  const checkErrors: TCEnvError[] = [];
   let newDefinitions = definitions;
   let errorCount = 0;
   let indexPositions: number[] | undefined;
@@ -993,7 +993,7 @@ function checkDeclaration(
     }
   } else {
     checkSuccess = false;
-    const error = new TCEnvError<unknown>('Declaration is not an inductive or term', createTCEnv(definitions));
+    const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv(definitions));
     checkErrors.push(error);
     errorCount = 1;
   }
@@ -1029,7 +1029,7 @@ function checkDeclaration(
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[] } {
+): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[] } {
   if (decl.kind !== 'inductive') {
     return failCheck('Declaration is not an inductive type', createTCEnv(definitions))
   }
@@ -1058,17 +1058,17 @@ function checkInductiveTypeDeclaration(
   }
 }
 
-function failCheck(message: string, env: TCEnv<unknown>): { success: false, errors: TCEnvError<unknown>[] } {
+function failCheck(message: string, env: TCEnv<unknown>): { success: false, errors: TCEnvError[] } {
   return {
     success: false,
-    errors: [new TCEnvError(message, env)],
+    errors: [TCEnvError.create(message, env)],
   }
 }
 
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: TCEnvError<unknown>[] } | { success: true, definitions: DefinitionsMap } {
+): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap } {
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv(definitions))
   }
@@ -1125,7 +1125,7 @@ function checkTermDeclaration(
     } else {
       return {
         success: false,
-        errors: [new TCEnvError(e instanceof Error ? e.message : String(e), env)],
+        errors: [TCEnvError.create(e instanceof Error ? e.message : String(e), env)],
       }
     }
   }
@@ -1380,9 +1380,14 @@ export function compileTTFromText(source: string): CompileResult {
 
 let loggingEnabled = true;
 
-function logInfo(fn: () => string) {
+function logInfo(fn: () => (string | unknown[])) {
   if (loggingEnabled) {
-    console.log(fn());
+    const r = fn();
+    if (Array.isArray(r)) {
+      console.log(...r);
+    } else {
+      console.log(r);
+    }
   }
 }
 
@@ -1390,7 +1395,7 @@ function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
   type: TTKTerm,
-): { success: false, errors: TCEnvError<unknown>[] } | { success: true, checkedValue: TTKTerm } {
+): { success: false, errors: TCEnvError[] } | { success: true, checkedValue: TTKTerm } {
   if (!env.isMatchTerm()) {
     try {
       const result = checkType(env, type);
@@ -1399,13 +1404,13 @@ function checkTermValue(
       if (e instanceof TCEnvError) {
         return { success: false, errors: [e] };
       } else {
-        return { success: false, errors: [new TCEnvError(String(e), env)] };
+        return { success: false, errors: [TCEnvError.create(String(e), env)] };
       }
     }
   }
 
   const clausesEnv = env.inMatchClauses();
-  const errors: TCEnvError<unknown>[] = [];
+  const errors: TCEnvError[] = [];
 
   const firstClauseRootPatternsCount = clausesEnv.value[0].patterns.length;
   const maxAllowedPatternsCount = countPiBinders(type);
@@ -1415,9 +1420,9 @@ function checkTermValue(
     const rootPatternsCount = clauseEnv.value.patterns.length;
 
     if (rootPatternsCount !== firstClauseRootPatternsCount) {
-      errors.push(new TCEnvError(`Mismatch in pattern count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected ${firstClauseRootPatternsCount}.`, clauseEnv));
+      errors.push(TCEnvError.create(`Mismatch in pattern count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected ${firstClauseRootPatternsCount}.`, clauseEnv));
     } else if (rootPatternsCount > maxAllowedPatternsCount) {
-      errors.push(new TCEnvError(`Pattern count exceeds type binders count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected <= ${maxAllowedPatternsCount}.`, clauseEnv));
+      errors.push(TCEnvError.create(`Pattern count exceeds type binders count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected <= ${maxAllowedPatternsCount}.`, clauseEnv));
     } else {
       try {
         checkMatchClause(name ?? '???', clauseEnv, type);
@@ -1425,7 +1430,7 @@ function checkTermValue(
         if (e instanceof TCEnvError) {
           errors.push(e);
         } else {
-          errors.push(new TCEnvError(String(e), clausesEnv.inMatchClause(clauseIndex)));
+          errors.push(TCEnvError.create(String(e), clausesEnv.inMatchClause(clauseIndex)));
         }
       }
     }
@@ -1645,13 +1650,20 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
 function assertPatternVarsValid(
   env: TCEnv<TTKPattern[]>,
   elabStack: TTKTerm[]
-): void {
+) {
   const patterns = env.value;
 
   // Map from de Bruijn index to list of (name, indexPath) entries
   const varToNames = new Map<number, { name: string; path: IndexPath }[]>();
+  const nameToTerms = new Map<string, { term: TTKTerm; path: IndexPath }[]>();
+
+  const errors: TCEnvError[] = []
 
   function traverse(pattern: TTKPattern, elabTerm: TTKTerm, path: IndexPath): void {
+    if (pattern.tag === 'PCtor' && pattern.name === 'FSucc') {
+      debugger
+    }
+
     switch (pattern.tag) {
       case 'PVar': {
         // For PVar, the elabTerm should be a Var after elaboration
@@ -1664,8 +1676,13 @@ function assertPatternVarsValid(
             varToNames.set(varIndex, [{ name: pattern.name, path }]);
           }
         }
-        // If elabTerm is not a Var, the pattern variable unified with a complex term.
-        // We skip these cases as we can't easily detect conflicts.
+
+        const existingNameIndices = nameToTerms.get(pattern.name);
+        if (existingNameIndices) {
+          existingNameIndices.push({ term: elabTerm, path });
+        } else {
+          nameToTerms.set(pattern.name, [{ term: elabTerm, path }]);
+        }
         break;
       }
 
@@ -1703,31 +1720,25 @@ function assertPatternVarsValid(
     traverse(patterns[i], elabStack[i], [arraySeg(i)]);
   }
 
-  // Build reverse mapping: name -> list of (de Bruijn index, path) entries
-  const nameToIndices = new Map<string, { varIndex: number; path: IndexPath }[]>();
-  for (const [varIndex, entries] of varToNames) {
-    for (const entry of entries) {
-      const existing = nameToIndices.get(entry.name);
-      if (existing) {
-        existing.push({ varIndex, path: entry.path });
-      } else {
-        nameToIndices.set(entry.name, [{ varIndex, path: entry.path }]);
-      }
-    }
-  }
+  logInfo(() => ['varToNames: ', Object.fromEntries(Array.from(varToNames.entries()).map(([varIndex, names]) => {
+    return [varIndex, names.map(n => n.name)]
+  }))])
+  logInfo(() => ['nameToTerms: ', Object.fromEntries(Array.from(nameToTerms.entries()).map(([name, terms]) => {
+    return [name, terms.map(t => prettyPrintTTK(t.term))]
+  }))])
 
-  // Check 1: Same name used for different de Bruijn indices
-  // e.g., #0 -> [A], #1 -> [A] is an error
-  for (const [name, indexEntries] of nameToIndices) {
-    const uniqueIndices = [...new Set(indexEntries.map(e => e.varIndex))];
-    if (uniqueIndices.length > 1) {
-      const errorPath = indexEntries[1].path; // Point to second occurrence
-      throw new TCEnvError(
-        `Pattern variable '${name}' used for distinct bindings that are not forced to be equal`,
-        env.atIndexPath([...env.indexPath, ...errorPath])
-      );
-    }
-  }
+  // Check 1: Same name used for different terms
+  // e.g. A = [Var#0, Var#1] is an error, as is A = [Var#0, Succ Var#0]
+  // for (const [name, indexEntries] of nameToTerms) {
+  //   const uniqueIndices = [...new Set(indexEntries.map(e => e.varIndex))];
+  //   if (uniqueIndices.length > 1) {
+  //     const errorPath = indexEntries[1].path; // Point to second occurrence
+  //     errors.push(TCEnvError.create(
+  //       `Pattern variable '${name}' used for distinct bindings that are not forced to be equal`,
+  //       env.atIndexPath([...env.indexPath, ...errorPath])
+  //     ));
+  //   }
+  // }
 
   // Check 2: Different names for the same de Bruijn index
   // e.g., #0 -> [A, B] is an error, but #0 -> [A, A] is allowed
@@ -1738,13 +1749,17 @@ function assertPatternVarsValid(
         // Different names refer to same variable - conflict error
         const nameList = uniqueNames.map(n => `'${n}'`).join(' and ');
         const errorPath = entries[1].path; // Point to second occurrence
-        throw new TCEnvError(
+        errors.push(TCEnvError.create(
           `Pattern variables ${nameList} refer to the same binding; use a single consistent name`,
           env.atIndexPath([...env.indexPath, ...errorPath])
-        );
+        ));
       }
       // If uniqueNames.length === 1, that's fine - same name used consistently
     }
+  }
+
+  if (errors.length > 0) {
+    throw TCEnvError.group(errors)
   }
 }
 

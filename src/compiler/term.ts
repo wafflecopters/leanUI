@@ -917,58 +917,94 @@ export class TCEnv<T> {
   }
 
   // ERRORS
-  unsolvedConstraintsError(this: TCEnv<T>): TCEnvError<T> {
-    return new TCEnvError<T>(`Unsolved constraints: ${this.printConstraints()}`, this);
+  unsolvedConstraintsError(this: TCEnv<T>): TCEnvError {
+    return TCEnvError.create(`Unsolved constraints: ${this.printConstraints()}`, this);
   }
 
-  private invalidIndexError<S>(field: string, values: S[], index: number): TCEnvError<T> {
-    return new TCEnvError<T>(`Invalid index ${index} for ${field} with length ${values.length}.`, this);
+  private invalidIndexError<S>(field: string, values: S[], index: number): TCEnvError {
+    return TCEnvError.create(`Invalid index ${index} for ${field} with length ${values.length}.`, this);
   }
 
-  expectedBinderPiError(this: TCEnv<TTKTerm>): TCEnvError<TTKTerm> {
-    return new TCEnvError<TTKTerm>(`Expected binder Pi type, got: ${this.prettyPrint(this.value)}`, this);
+  expectedBinderPiError(this: TCEnv<TTKTerm>): TCEnvError {
+    return TCEnvError.create(`Expected binder Pi type, got: ${this.prettyPrint(this.value)}`, this);
   }
 
-  expectedCheckTypeToBeBinderPiError(this: TCEnv<TTKTerm>, checkType: TTKTerm): TCEnvError<TTKTerm> {
-    return new TCEnvError<TTKTerm>(`Expected check type to be binder Pi type, got: ${prettyPrint(checkType)}`, this);
+  expectedCheckTypeToBeBinderPiError(this: TCEnv<TTKTerm>, checkType: TTKTerm): TCEnvError {
+    return TCEnvError.create(`Expected check type to be binder Pi type, got: ${prettyPrint(checkType)}`, this);
   }
 
-  expectedTypesToBeDefinitionallyEqualError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnvError<TTKTerm> {
-    return new TCEnvError<TTKTerm>(`Expected types to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
+  expectedTypesToBeDefinitionallyEqualError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnvError {
+    return TCEnvError.create(`Expected types to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
   }
 
-  typeDefinitionNotFoundError(name: string): TCEnvError<T> {
-    return new TCEnvError<T>(`Type definition not found: ${name}`, this);
+  typeDefinitionNotFoundError(name: string): TCEnvError {
+    return TCEnvError.create(`Type definition not found: ${name}`, this);
   }
 
-  typeAtIndexNotFoundInSignatureError(index: number): TCEnvError<T> {
-    return new TCEnvError<T>(`Type at index ${index} not found in signature`, this);
+  typeAtIndexNotFoundInSignatureError(index: number): TCEnvError {
+    return TCEnvError.create(`Type at index ${index} not found in signature`, this);
   }
 
-  expectedEqualLengthsError<A, B>(a: A[], b: B[], message?: string): TCEnvError<T> {
-    return new TCEnvError<T>(`Expected equal lengths: ${a.length} vs ${b.length}${message ? `: ${message}` : ''}`, this);
+  expectedEqualLengthsError<A, B>(a: A[], b: B[], message?: string): TCEnvError {
+    return TCEnvError.create(`Expected equal lengths: ${a.length} vs ${b.length}${message ? `: ${message}` : ''}`, this);
   }
 
-  unknownTagError(data: { tag: string }, typeName: string, message?: string): TCEnvError<T> {
-    return new TCEnvError<T>(`Unknown tag: ${data.tag} for ${typeName}${message ? `: ${message}` : ''}`, this);
+  unknownTagError(data: { tag: string }, typeName: string, message?: string): TCEnvError {
+    return TCEnvError.create(`Unknown tag: ${data.tag} for ${typeName}${message ? `: ${message}` : ''}`, this);
   }
 
   // Duplicate name errors
-  nameAlreadyDefinedError(this: TCEnv<string>, existingKind: 'term' | 'inductive' | 'constructor'): TCEnvError<string> {
-    return new TCEnvError<string>(`Name '${this.value}' is already defined as a ${existingKind}`, this);
+  nameAlreadyDefinedError(this: TCEnv<string>, existingKind: 'term' | 'inductive' | 'constructor'): TCEnvError {
+    return TCEnvError.create(`Name '${this.value}' is already defined as a ${existingKind}`, this);
   }
 
   // Pattern variable errors
-  patternVarShadowsTermError(this: TCEnv<string>): TCEnvError<string> {
-    return new TCEnvError<string>(`Pattern variable '${this.value}' shadows an existing term definition`, this);
+  patternVarShadowsTermError(this: TCEnv<string>): TCEnvError {
+    return TCEnvError.create(`Pattern variable '${this.value}' shadows an existing term definition`, this);
   }
 }
 
-export class TCEnvError<T> {
+export abstract class TCEnvError {
+  abstract get errors(): TCEnvError[];
+  abstract get message(): string;
+  abstract get env(): TCEnv<unknown>;
+
+  static create<T>(message: string, env: TCEnv<T>): TCEnvError {
+    return new TCEnvErrorUnit(message, env);
+  }
+
+  static group(errors: TCEnvError[]): TCEnvError {
+    return new TCEnvGroupError(errors);
+  }
+}
+
+class TCEnvErrorUnit<T> extends TCEnvError {
   constructor(
     public readonly message: string,
     public readonly env: TCEnv<T>
-  ) { }
+  ) { super(); }
+
+  get errors(): TCEnvError[] {
+    return [this];
+  }
+}
+
+class TCEnvGroupError extends TCEnvError {
+  constructor(
+    private readonly _errors: TCEnvError[],
+  ) { super(); }
+
+  get errors(): TCEnvError[] {
+    return this._errors.flatMap(e => e.errors);
+  }
+
+  get message(): string {
+    return this._errors[0]?.message ?? 'Multiple errors';
+  }
+
+  get env(): TCEnv<unknown> {
+    return this._errors[0]?.env;
+  }
 }
 
 /**
