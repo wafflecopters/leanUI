@@ -21,6 +21,15 @@ import { enumerateAppliedSubstitutions, shiftTerm, subst } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
 
 // ============================================================================
+// Global Configuration
+// ============================================================================
+
+/**
+ * Whether to show wildcard inlay hints (e.g., `_[n0]`) in the editor.
+ */
+export const SHOW_WILDCARD_INLAY_HINTS = false;
+
+// ============================================================================
 // Parse Result Types
 // ============================================================================
 
@@ -420,6 +429,10 @@ function addSemanticTokenDirect(
  * Match expressions, and returns their positions and generated names.
  */
 export function extractWildcardInlayHints(result: CompileResult): WildcardInlayHint[] {
+  if (!SHOW_WILDCARD_INLAY_HINTS) {
+    return [];
+  }
+
   const hints: WildcardInlayHint[] = [];
 
   for (const block of result.blocks) {
@@ -1665,10 +1678,6 @@ function assertPatternVarsValid(
   const errors: TCEnvError[] = []
 
   function traverse(pattern: TTKPattern, elabTerm: TTKTerm, path: IndexPath): void {
-    if (pattern.tag === 'PCtor' && pattern.name === 'FSucc') {
-      debugger
-    }
-
     switch (pattern.tag) {
       case 'PVar': {
         // For PVar, the elabTerm should be a Var after elaboration
