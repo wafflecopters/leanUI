@@ -81,6 +81,10 @@ function resolvePattern(
       // Already resolved
       return pattern;
 
+    case 'PWild':
+      // Wildcards are already resolved
+      return pattern;
+
     case 'PCtor':
       // Check if this is actually a known constructor
       const isConstructor = symbolContext.has(pattern.name);

@@ -500,19 +500,10 @@ export class Parser {
   private pos = 0;
   private currentSourceMap: SourceMap = new Map();
   private currentPath: IndexPath = [];
-  private wildcardCounter = 0;
 
   constructor(
     private operators: Record<string, OperatorInfo> = DEFAULT_OPERATORS
   ) { }
-
-  /**
-   * Generate a unique wildcard name for pattern matching.
-   * Each wildcard gets a unique name like _w0, _w1, etc. for tracking during elaboration.
-   */
-  private freshWildcard(): string {
-    return `_w${this.wildcardCounter++}`;
-  }
 
   /**
    * Prefix all paths in the source map that start with `basePath` by adding `suffix`.
@@ -1582,14 +1573,14 @@ export class Parser {
    *   Zero              → PCtor("Zero", [])
    *   Succ n            → PCtor("Succ", [PVar("n")])
    *   Succ (Succ m)     → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
-   *   _                 → PVar("_w0"), PVar("_w1"), ... (unique names per wildcard)
-   *   _ x               → PCtor("_", [PVar("x")]) - will be rejected by elaborator
+   *   _                 → PWild
+   *   _ x               → PCtor("_", [PWild]) - will be rejected by elaborator
    *   x                 → PVar("x")
    */
   private parsePattern(): TPattern {
     const token = this.current();
 
-    // Wildcard pattern: _ (represented as PVar with unique name like _w0, _w1)
+    // Wildcard pattern: _ → PWild (names are generated during elaboration)
     // BUT if _ is followed by arguments, it's treated as a PCtor (which elaboration will reject)
     if (token.type === 'UNDERSCORE') {
       this.advance();
@@ -1603,7 +1594,7 @@ export class Parser {
         return { tag: 'PCtor', name: '_', args };
       }
 
-      return { tag: 'PVar', name: this.freshWildcard() };
+      return { tag: 'PWild' };
     }
 
     // Constructor or variable pattern
@@ -1649,7 +1640,7 @@ export class Parser {
 
     if (token.type === 'UNDERSCORE') {
       this.advance();
-      return { tag: 'PVar', name: this.freshWildcard() };
+      return { tag: 'PWild' };
     }
 
     if (token.type === 'IDENT') {
@@ -1685,7 +1676,7 @@ export class Parser {
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
       this.recordRange(path, startToken, startToken);
-      return { tag: 'PVar', name: this.freshWildcard() };
+      return { tag: 'PWild' };
     }
 
     if (startToken.type === 'IDENT') {
@@ -1722,13 +1713,13 @@ export class Parser {
   private parsePatternWithSource(path: IndexPath): TPattern {
     const startToken = this.current();
 
-    // Wildcard pattern: _ (represented as PVar with unique name like _w0, _w1)
+    // Wildcard pattern: _ → PWild (names are generated during elaboration)
     // BUT if _ is followed by arguments, it's treated as a PCtor (which elaboration will reject)
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
 
       // Check if followed by another pattern (application without parens)
-      // e.g., "_ x" would be PCtor("_", [PVar("x")])
+      // e.g., "_ x" would be PCtor("_", [PWild])
       if (this.canStartPattern(this.current())) {
         // Record the constructor name itself at path.name
         const namePath: IndexPath = [...path, { kind: 'field', name: 'name' }];
@@ -1746,7 +1737,7 @@ export class Parser {
       }
 
       this.recordRange(path, startToken, startToken);
-      return { tag: 'PVar', name: this.freshWildcard() };
+      return { tag: 'PWild' };
     }
 
     // Constructor or variable pattern
@@ -1907,19 +1898,24 @@ export class Parser {
   /**
    * Collect all variable names bound by a pattern (in left-to-right, depth-first order).
    *
-   * IMPORTANT: Wildcards (parsed as PVar with unique names like _w0, _w1) also bind
-   * variables to ensure De Bruijn indices in the RHS correctly reference pattern positions.
+   * IMPORTANT: Wildcards (PWild) also bind variables to ensure De Bruijn indices in
+   * the RHS correctly reference pattern positions. We use placeholder names "_" for
+   * wildcards here; actual unique names are generated during elaboration.
    *
    * For example, in `head _ default (Nil _) = default`:
-   * - Pattern 1: `_` → binds `_w0`
+   * - Pattern 1: `_` (PWild) → binds "_"
    * - Pattern 2: `default` → binds `default`
-   * - Pattern 3: `(Nil _)` → the inner `_` binds `_w1`
-   * So the context is ['_w0', 'default', '_w1'], and `default` in the RHS is Var(1).
+   * - Pattern 3: `(Nil _)` → the inner `_` (PWild) binds "_"
+   * So the context is ['_', 'default', '_'], and `default` in the RHS is Var(1).
    */
   private collectPatternVars(pattern: TPattern): string[] {
     switch (pattern.tag) {
       case 'PVar':
         return [pattern.name];
+      case 'PWild':
+        // Wildcards bind a variable too (for De Bruijn indexing)
+        // Use "_" as placeholder; real names generated in elaboration
+        return ['_'];
       case 'PCtor':
         // With uniform identifier parsing, all identifiers become PCtor nodes.
         // We need to determine which are variables (should be bound) vs constructors.

@@ -50,11 +50,12 @@ export type BinderKind =
  *   Zero           → PCtor("Zero", [])
  *   Succ n         → PCtor("Succ", [PVar("n")])
  *   Succ (Succ m)  → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
- *   _              → PVar("_")
+ *   _              → PWild
  *   x              → PVar("x")
  */
 export type TPattern =
-  | { tag: 'PVar'; name: string }                    // Variable pattern (binds) - "_" for wildcard
+  | { tag: 'PVar'; name: string }                    // Named variable pattern (binds)
+  | { tag: 'PWild' }                                 // Wildcard pattern (binds but name generated in elab)
   | { tag: 'PCtor'; name: string; args: TPattern[] } // Constructor pattern
 
 /**
@@ -1160,7 +1161,9 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
 function prettyPrintPatternTT(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
-      return pattern.name;  // "_" for wildcards
+      return pattern.name;
+    case 'PWild':
+      return '_';
     case 'PCtor':
       if (pattern.args.length === 0) {
         return pattern.name;
@@ -1417,8 +1420,10 @@ export function prettyPrintLatexTT(
 function prettyPrintPatternLatexTT(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
-      // Escape underscores for LaTeX (including "_" wildcards)
+      // Escape underscores for LaTeX
       return pattern.name.replace(/_/g, '\\_');
+    case 'PWild':
+      return '\\_';
     case 'PCtor':
       if (pattern.args.length === 0) {
         return pattern.name.replace(/_/g, '\\_');

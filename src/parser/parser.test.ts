@@ -1273,11 +1273,8 @@ test('Parse wildcard pattern', () => {
   assertTermShape(term, 'Match');
   if (term.tag === 'Match') {
     const pattern = term.clauses[0].patterns[0];
-    // Wildcards are now parsed as PVar with unique names like _w0
-    assertEqual(pattern.tag, 'PVar');
-    if (pattern.tag === 'PVar') {
-      assert(pattern.name.startsWith('_w'), `Expected wildcard name starting with _w, got ${pattern.name}`);
-    }
+    // Wildcards are now parsed as PWild (names generated in elaboration)
+    assertEqual(pattern.tag, 'PWild');
   }
 });
 
@@ -1488,7 +1485,7 @@ test('Parse underscore with arguments: (_ _) parses as PCtor', () => {
     if (pattern.tag === 'PCtor') {
       assertEqual(pattern.name, '_', 'Name should be _');
       assertEqual(pattern.args.length, 1, 'Should have 1 argument');
-      assertEqual(pattern.args[0].tag, 'PVar', 'Arg should be PVar (wildcard)');
+      assertEqual(pattern.args[0].tag, 'PWild', 'Arg should be PWild');
     }
   }
 });
@@ -1539,7 +1536,7 @@ test('Parse VCons with nested patterns: VCons _ (Succ _) h tail', () => {
       assertEqual(pattern.args.length, 4, 'VCons should have 4 args');
 
       // First arg: _ (wildcard)
-      assertEqual(pattern.args[0].tag, 'PVar');
+      assertEqual(pattern.args[0].tag, 'PWild');
 
       // Second arg: (Succ _)
       assertEqual(pattern.args[1].tag, 'PCtor');
@@ -1586,7 +1583,7 @@ nth A _ (VCons _ (Succ _) h tail) (FSucc (Succ _) f) = nth _ _ tail f`;
     }
 
     // Pattern 2: _ (wildcard)
-    assertEqual(clause.patterns[1].tag, 'PVar');
+    assertEqual(clause.patterns[1].tag, 'PWild');
 
     // Pattern 3: (VCons _ (Succ _) h tail)
     assertEqual(clause.patterns[2].tag, 'PCtor');
