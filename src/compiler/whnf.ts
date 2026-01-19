@@ -48,7 +48,10 @@ export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm): boolean {
   // Normalize both terms
   const n1 = whnf(t1);
   const n2 = whnf(t2);
+  return areWhnfTypesDefEq(n1, n2);
+}
 
+export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm): boolean {
   // Quick structural check first
   if (isDefinitionallyEqual(n1, n2)) {
     return true;

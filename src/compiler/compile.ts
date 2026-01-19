@@ -18,6 +18,7 @@ import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, 
 import { checkInductiveDeclaration } from './inductive';
 import { unifyTerms } from './unify';
 import { enumerateAppliedSubstitutions, shiftTerm, subst } from './subst';
+import { areWhnfTypesDefEq } from './whnf';
 
 // ============================================================================
 // Parse Result Types
@@ -1649,9 +1650,13 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
  */
 function assertPatternVarsValid(
   env: TCEnv<TTKPattern[]>,
-  elabStack: TTKTerm[]
+  elabStack: TTKTerm[],
+  signature: Signature
 ) {
   const patterns = env.value;
+
+  // Create context for pretty printing (NOT reversed - pattern indices look up left-to-right in signature)
+  const printContext = signature.map(s => s.name);
 
   // Map from de Bruijn index to list of (name, indexPath) entries
   const varToNames = new Map<number, { name: string; path: IndexPath }[]>();
@@ -1729,16 +1734,21 @@ function assertPatternVarsValid(
 
   // Check 1: Same name used for different terms
   // e.g. A = [Var#0, Var#1] is an error, as is A = [Var#0, Succ Var#0]
-  // for (const [name, indexEntries] of nameToTerms) {
-  //   const uniqueIndices = [...new Set(indexEntries.map(e => e.varIndex))];
-  //   if (uniqueIndices.length > 1) {
-  //     const errorPath = indexEntries[1].path; // Point to second occurrence
-  //     errors.push(TCEnvError.create(
-  //       `Pattern variable '${name}' used for distinct bindings that are not forced to be equal`,
-  //       env.atIndexPath([...env.indexPath, ...errorPath])
-  //     ));
-  //   }
-  // }
+  for (const [name, termEntries] of nameToTerms) {
+    if (termEntries.length > 1) {
+      const firstTerm = termEntries[0].term;
+      for (let i = 1; i < termEntries.length; i++) {
+        if (!areWhnfTypesDefEq(firstTerm, termEntries[i].term)) {
+          const termsList = termEntries.map(e => prettyPrintTTK(e.term, printContext)).join(', ');
+          errors.push(TCEnvError.create(
+            `Pattern '${name}' unifies to unequal expressions: ${termsList}`,
+            env.atIndexPath([...env.indexPath, ...termEntries[i].path])
+          ));
+          break; // Only report first mismatch for this name
+        }
+      }
+    }
+  }
 
   // Check 2: Different names for the same de Bruijn index
   // e.g., #0 -> [A, B] is an error, but #0 -> [A, A] is allowed
@@ -1805,7 +1815,7 @@ function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type:
   }
 
   // Validate pattern variables: check for duplicate names or conflicting bindings
-  assertPatternVarsValid(env, elabStack);
+  assertPatternVarsValid(env, elabStack, workEnv.signature);
 
   workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 
