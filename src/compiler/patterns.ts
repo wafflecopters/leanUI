@@ -13,6 +13,7 @@ import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, 
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
+import { checkType } from './checker';
 
 // ============================================================================
 // Logging
@@ -439,7 +440,7 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
 // Main LHS Unification
 // ============================================================================
 
-function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<unknown> {
+function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[] }> {
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
   const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.signature.length }]
   const patternStack: PatternStackEntry[] = env.value.map(p => ({ tag: 'pattern' as const, pattern: p })).reverse()
@@ -485,7 +486,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
 
   workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 
-  return workEnv
+  return workEnv.withValue({ returnType: checkStack[0].type, elabStack })
 }
 
 // ============================================================================
@@ -501,10 +502,15 @@ export function checkMatchClause(
   type: TTKTerm,
 ): TCEnv<void> {
   assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns())
-  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns(), type)
-  // TODO: rhs type check
+  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns(), type);
+  result.assertNoConstraints();
 
-  result.assertNoConstraints()
+  const { returnType } = result.value
+
+  const checkEnv = result.atValueAndPathOfEnv(env).inMatchClauseRhs()
+  const checkedEnv = checkType(checkEnv, returnType);
+
+  // debugger
 
   return result.withoutValue();
 }
