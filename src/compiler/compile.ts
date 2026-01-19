@@ -1467,12 +1467,70 @@ function checkMatchClause(
   env: TCEnv<TTKClause>,
   type: TTKTerm,
 ): TCEnv<void> {
-  const result = processMatchClauseLhs(termName, env.inMatchClausePatterns(), type)
+  assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns())
+  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns(), type)
   // TODO: rhs type check
 
   result.assertNoConstraints()
 
   return result.withoutValue();
+}
+
+/**
+ * Look up a constructor by name and return its expected arity (number of arguments).
+ */
+function getConstructorArity(definitions: DefinitionsMap, ctorName: string): number | undefined {
+  for (const inductive of definitions.inductiveTypes.values()) {
+    for (const ctor of inductive.constructors) {
+      if (ctor.name === ctorName) {
+        return countPiBinders(ctor.type);
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Assert that all PCtor patterns in the LHS are fully applied (have the correct number of arguments).
+ * This is checked before unification to give better error messages.
+ */
+function assertMatchClauseLhsPatternsFullyApplied(env: TCEnv<TTKPattern[]>): void {
+  const patterns = env.value;
+  const errors: TCEnvError[] = [];
+
+  function checkPattern(pattern: TTKPattern, path: IndexPath): void {
+    switch (pattern.tag) {
+      case 'PVar':
+      case 'PWild':
+        // These don't have sub-patterns to check
+        break;
+
+      case 'PCtor': {
+        const expectedArity = getConstructorArity(env.definitions, pattern.name);
+        if (expectedArity !== undefined && pattern.args.length !== expectedArity) {
+          errors.push(TCEnvError.create(
+            `Constructor '${pattern.name}' expects ${expectedArity} argument${expectedArity === 1 ? '' : 's'}, but got ${pattern.args.length}`,
+            env.atIndexPath([...env.indexPath, ...path])
+          ));
+        }
+
+        // Recursively check sub-patterns
+        for (let i = 0; i < pattern.args.length; i++) {
+          checkPattern(pattern.args[i], [...path, fieldSeg('args'), arraySeg(i)]);
+        }
+        break;
+      }
+    }
+  }
+
+  // Check all top-level patterns
+  for (let i = 0; i < patterns.length; i++) {
+    checkPattern(patterns[i], [arraySeg(i)]);
+  }
+
+  if (errors.length > 0) {
+    throw TCEnvError.group(errors);
+  }
 }
 
 type PatternStackEntry = { tag: 'pattern', pattern: TTKPattern } | { tag: 'done', pattern: TTKPattern, arity: number }
@@ -1782,7 +1840,7 @@ function assertPatternVarsValid(
   }
 }
 
-function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<unknown> {
+function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<unknown> {
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
   const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.signature.length }]
   const patternStack: PatternStackEntry[] = env.value.map(p => ({ tag: 'pattern' as const, pattern: p })).reverse()
