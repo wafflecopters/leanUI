@@ -139,6 +139,180 @@ export interface CompileResult {
   totalCheckErrors: number;
 }
 
+/**
+ * Information for a wildcard inlay hint
+ */
+export interface WildcardInlayHint {
+  /** Line number (1-based) */
+  line: number;
+  /** Column number (1-based, position after the underscore) */
+  column: number;
+  /** The generated wildcard name (e.g., "0", "1") */
+  name: string;
+}
+
+/**
+ * Extract wildcard inlay hints from a compile result.
+ *
+ * This walks through the compiled declarations, finds PWild patterns in
+ * Match expressions, and returns their positions and generated names.
+ */
+export function extractWildcardInlayHints(result: CompileResult): WildcardInlayHint[] {
+  const hints: WildcardInlayHint[] = [];
+
+  for (const block of result.blocks) {
+    for (const decl of block.declarations) {
+      if (decl.kernelValue) {
+        // Start with 'value' to match the path format in elabMap
+        collectWildcardsFromTerm(
+          decl.kernelValue,
+          decl.elabMap,
+          decl.sourceMap,
+          block.startLine,
+          ['value'],
+          hints
+        );
+      }
+    }
+  }
+
+  return hints;
+}
+
+/**
+ * Walk a term and collect wildcard hints from Match expressions
+ */
+function collectWildcardsFromTerm(
+  term: TTKTerm,
+  elabMap: ElabMap | undefined,
+  sourceMap: SourceMap | undefined,
+  blockStartLine: number,
+  path: (string | number)[],
+  hints: WildcardInlayHint[]
+): void {
+  if (!elabMap || !sourceMap) return;
+
+  switch (term.tag) {
+    case 'Match':
+      // Collect wildcards from each clause's patterns
+      for (let clauseIdx = 0; clauseIdx < term.clauses.length; clauseIdx++) {
+        const clause = term.clauses[clauseIdx];
+        for (let patIdx = 0; patIdx < clause.patterns.length; patIdx++) {
+          collectWildcardsFromPattern(
+            clause.patterns[patIdx],
+            elabMap,
+            sourceMap,
+            blockStartLine,
+            [...path, 'clauses', clauseIdx, 'patterns', patIdx],
+            hints
+          );
+        }
+        // Also recurse into the RHS
+        collectWildcardsFromTerm(
+          clause.rhs,
+          elabMap,
+          sourceMap,
+          blockStartLine,
+          [...path, 'clauses', clauseIdx, 'rhs'],
+          hints
+        );
+      }
+      // Recurse into scrutinee
+      collectWildcardsFromTerm(
+        term.scrutinee,
+        elabMap,
+        sourceMap,
+        blockStartLine,
+        [...path, 'scrutinee'],
+        hints
+      );
+      break;
+
+    case 'Binder':
+      collectWildcardsFromTerm(term.domain, elabMap, sourceMap, blockStartLine, [...path, 'domain'], hints);
+      collectWildcardsFromTerm(term.body, elabMap, sourceMap, blockStartLine, [...path, 'body'], hints);
+      if (term.binderKind.tag === 'BLet') {
+        collectWildcardsFromTerm(term.binderKind.defVal, elabMap, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], hints);
+      }
+      break;
+
+    case 'App':
+      collectWildcardsFromTerm(term.fn, elabMap, sourceMap, blockStartLine, [...path, 'fn'], hints);
+      collectWildcardsFromTerm(term.arg, elabMap, sourceMap, blockStartLine, [...path, 'arg'], hints);
+      break;
+
+    case 'Annot':
+      collectWildcardsFromTerm(term.term, elabMap, sourceMap, blockStartLine, [...path, 'term'], hints);
+      collectWildcardsFromTerm(term.type, elabMap, sourceMap, blockStartLine, [...path, 'type'], hints);
+      break;
+
+    case 'Hole':
+      collectWildcardsFromTerm(term.type, elabMap, sourceMap, blockStartLine, [...path, 'type'], hints);
+      break;
+
+    // Leaf nodes - no recursion
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      break;
+  }
+}
+
+/**
+ * Collect wildcards from a pattern tree
+ */
+function collectWildcardsFromPattern(
+  pattern: TTKPattern,
+  elabMap: ElabMap,
+  sourceMap: SourceMap,
+  blockStartLine: number,
+  path: (string | number)[],
+  hints: WildcardInlayHint[]
+): void {
+  const pathStr = serializePathForLookup(path);
+
+  if (pattern.tag === 'PWild') {
+    // Look up the source position via elabMap and sourceMap
+    const surfacePathStr = elabMap.get(pathStr);
+    if (surfacePathStr) {
+      const range = sourceMap.get(surfacePathStr);
+      if (range) {
+        hints.push({
+          line: range.start.line + blockStartLine - 1,
+          // Position after the underscore (end column of the range)
+          column: range.end.col,
+          name: pattern.name
+        });
+      }
+    }
+  } else if (pattern.tag === 'PCtor') {
+    // Recurse into constructor arguments
+    for (let i = 0; i < pattern.args.length; i++) {
+      collectWildcardsFromPattern(
+        pattern.args[i],
+        elabMap,
+        sourceMap,
+        blockStartLine,
+        [...path, 'args', i],
+        hints
+      );
+    }
+  }
+  // PVar has no sub-patterns
+}
+
+/**
+ * Serialize a path array to the format used by elabMap
+ */
+function serializePathForLookup(path: (string | number)[]): string {
+  return path.map(seg => {
+    if (typeof seg === 'number') {
+      return `[${seg}]`;
+    }
+    return `.${seg}`;
+  }).join('').replace(/^\./, '');
+}
+
 // ============================================================================
 // Parse Function
 // ============================================================================
@@ -905,24 +1079,24 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
 
   let env = workEnv
 
-  if (pattern.tag === 'PVar') {
-    if (pattern.name.startsWith('_w')) {
-      const { env: newWorkEnv, name } = addMetaVarInTCEnv(env, binderType)
-      logInfo(() => `  Create meta ${name} : ${env.prettyPrint(binderType)}`);
+  if (pattern.tag === 'PWild') {
+    // Wildcard pattern: create a meta variable for the binding
+    const { env: newWorkEnv, name } = addMetaVarInTCEnv(env, binderType)
+    logInfo(() => `  Create meta ${name} : ${env.prettyPrint(binderType)}`);
 
-      env = newWorkEnv
-        .extendSignature(pattern.name, binderType)
+    env = newWorkEnv
+      .extendSignature(pattern.name, binderType)
 
-      env = env.withConstraint({ meta: name, rhs: mkVar(env.signature.length - 1) })
-      checkStack.push({ type: binderBody, ctxLength: env.signature.length })
-      elabStack.push(mkVar(env.signature.length - 1))
-    } else {
-      logInfo(() => `  Binding (${pattern.name} : ${env.prettyPrint(binderType)})`);
-      env = env.extendSignature(pattern.name, binderType)
+    env = env.withConstraint({ meta: name, rhs: mkVar(env.signature.length - 1) })
+    checkStack.push({ type: binderBody, ctxLength: env.signature.length })
+    elabStack.push(mkVar(env.signature.length - 1))
+  } else if (pattern.tag === 'PVar') {
+    // Named variable pattern: bind the variable
+    logInfo(() => `  Binding (${pattern.name} : ${env.prettyPrint(binderType)})`);
+    env = env.extendSignature(pattern.name, binderType)
 
-      checkStack.push({ type: binderBody, ctxLength: env.signature.length })
-      elabStack.push(mkVar(env.signature.length - 1))
-    }
+    checkStack.push({ type: binderBody, ctxLength: env.signature.length })
+    elabStack.push(mkVar(env.signature.length - 1))
   } else {
     logInfo(() => `  Constructor pattern. Push DONE. Push sub-patterns. Push ${pattern.name} type`);
 

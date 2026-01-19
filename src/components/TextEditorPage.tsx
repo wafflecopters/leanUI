@@ -4,7 +4,7 @@
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock } from '../compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint } from '../compiler/compile';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
@@ -473,6 +473,8 @@ export function TextEditorPage() {
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
   const [editorReady, setEditorReady] = useState(false);
+  // Ref to store current wildcard hints (updated from compileResult)
+  const wildcardHintsRef = useRef<WildcardInlayHint[]>([]);
 
   // Inject Monaco widget z-index styles on mount
   useEffect(() => {
@@ -495,6 +497,33 @@ export function TextEditorPage() {
   const compileResult = useMemo<CompileResult>(() => {
     return compileTTFromText(code);
   }, [code]);
+
+  // Extract wildcard hints from compile result
+  const wildcardHints = useMemo(() => {
+    return extractWildcardInlayHints(compileResult);
+  }, [compileResult]);
+
+  // Keep the ref in sync with the latest hints
+  useEffect(() => {
+    wildcardHintsRef.current = wildcardHints;
+    // Trigger inlay hint refresh by notifying Monaco
+    const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    if (monaco && editor) {
+      // Force inlay hints to refresh
+      const model = editor.getModel();
+      if (model) {
+        // Emit a model content change event to trigger inlay hint refresh
+        monaco.editor.getModels().forEach(m => {
+          if (m === model) {
+            // Use Monaco's internal method to signal an update
+            // This is a workaround since there's no official API
+            (editor as any)._modelData?.view?.getInternalEventBus()?.fire('viewZonesChanged');
+          }
+        });
+      }
+    }
+  }, [wildcardHints]);
 
   const handleEditorChange: OnChange = useCallback((value) => {
     setCode(value || '');
@@ -638,6 +667,29 @@ export function TextEditorPage() {
     if (model) {
       monaco.editor.setModelLanguage(model, 'tt');
     }
+
+    // Register inlay hints provider for wildcard names
+    monaco.languages.registerInlayHintsProvider('tt', {
+      provideInlayHints: (_model: MonacoEditor.ITextModel, range: { startLineNumber: number; endLineNumber: number }) => {
+        const hints = wildcardHintsRef.current;
+        const inlayHints: import('monaco-editor').languages.InlayHint[] = [];
+
+        for (const hint of hints) {
+          // Check if hint is within the requested range
+          if (hint.line >= range.startLineNumber && hint.line <= range.endLineNumber) {
+            inlayHints.push({
+              kind: monaco.languages.InlayHintKind.Parameter,
+              position: { lineNumber: hint.line, column: hint.column },
+              label: hint.name,
+              paddingLeft: false,
+              paddingRight: false,
+            });
+          }
+        }
+
+        return { hints: inlayHints, dispose: () => {} };
+      }
+    });
   };
 
   return (

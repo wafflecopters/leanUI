@@ -51,15 +51,23 @@ export type { TTKRecordDef };
 
 /**
  * Counter for generating unique wildcard names during elaboration.
- * PWild patterns from parsing are converted to PVar with names like _w0, _w1, etc.
+ * PWild patterns from parsing are converted to PVar with names like ?0, ?1, etc.
+ *
+ * The counter is reset at the start of each clause, so ?0 is always the first
+ * wildcard in each clause. This makes the generated names predictable and
+ * easier to read in error messages.
+ *
+ * Names are simple indices: 0, 1, 2, etc. (no prefix needed since PWild is a distinct tag).
+ * The counter resets at the start of each clause for predictable naming.
  */
 let wildcardCounter = 0;
 
 /**
- * Generate a fresh unique name for a wildcard pattern.
+ * Generate a fresh unique name for a wildcard pattern within the current clause.
+ * Returns just the index as a string (e.g., "0", "1", "2").
  */
 function freshWildcardName(): string {
-  return `_w${wildcardCounter++}`;
+  return `${wildcardCounter++}`;
 }
 
 /**
@@ -149,10 +157,14 @@ export function elabToKernel(term: TTerm): TTKTerm {
       return {
         tag: 'Match',
         scrutinee: elabToKernel(term.scrutinee),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns.map(elabPatternToKernel),
-          rhs: elabToKernel(c.rhs)
-        }))
+        clauses: term.clauses.map(c => {
+          // Reset wildcard counter for each clause so _w0 is the first wildcard in each clause
+          wildcardCounter = 0;
+          return {
+            patterns: c.patterns.map(elabPatternToKernel),
+            rhs: elabToKernel(c.rhs)
+          };
+        })
       };
   }
 }
@@ -160,15 +172,15 @@ export function elabToKernel(term: TTerm): TTKTerm {
 /**
  * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern).
  *
- * PWild patterns are converted to PVar with generated unique names (_w0, _w1, etc.).
+ * Surface PWild patterns become kernel PWild with generated unique names.
  */
 export function elabPatternToKernel(pattern: TPattern): TTKPattern {
   switch (pattern.tag) {
     case 'PVar':
       return { tag: 'PVar', name: pattern.name };
     case 'PWild':
-      // Generate a unique name for the wildcard
-      return { tag: 'PVar', name: freshWildcardName() };
+      // Generate a unique name for the wildcard, keeping it as PWild in kernel
+      return { tag: 'PWild', name: freshWildcardName() };
     case 'PCtor':
       return {
         tag: 'PCtor',
@@ -357,6 +369,9 @@ export function elabToKernelWithMap(
           // Record the clause mapping
           elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
 
+          // Reset wildcard counter for each clause so _w0 is the first wildcard in each clause
+          wildcardCounter = 0;
+
           return {
             patterns: clause.patterns.map((pattern, patternIndex) => {
               const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
@@ -394,8 +409,8 @@ function elabPatternToKernelWithMap(
     case 'PVar':
       return { tag: 'PVar', name: pattern.name };
     case 'PWild':
-      // Generate a unique name for the wildcard
-      return { tag: 'PVar', name: freshWildcardName() };
+      // Generate a unique name for the wildcard, keeping it as PWild in kernel
+      return { tag: 'PWild', name: freshWildcardName() };
     case 'PCtor':
       return {
         tag: 'PCtor',

@@ -40,15 +40,17 @@ export type TTKTermConst = { tag: 'Const'; name: string; type: TTKTerm }
 /**
  * TTK Pattern - kernel-level patterns
  *
- * In TTK, patterns can only be:
- * - PVar: binds a variable (wildcards become PVar with _wN names after elab)
+ * - PVar: binds a named variable (user-written identifier like x, n, default)
+ * - PWild: binds a wildcard variable with generated name (from surface `_`)
  * - PCtor: matches a constructor with sub-patterns
  *
- * There is no PWild type at the kernel level. Surface-level PWild patterns
- * are converted to PVar with generated names (_w0, _w1, etc.) during elaboration.
+ * PWild exists at kernel level (with generated name) to distinguish wildcards
+ * from user-named variables. This enables proper pretty-printing (show `_` for
+ * wildcards) and IDE features like inlay hints showing the generated names.
  */
 export type TTKPattern =
   | { tag: 'PVar'; name: string }
+  | { tag: 'PWild'; name: string }
   | { tag: 'PCtor'; name: string; args: TTKPattern[] };
 
 export type TTKClause = {
@@ -68,20 +70,22 @@ export type TTKTerm =
 
 export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] = []): string {
   const [updatedName, ...rest] = updatedNames
-  const name = updatedName ?? pattern.name
-
-  if (updatedName && name !== '_' && updatedName !== name) {
-    console.warn(`Unexpected pattern name update: ${name} !== ${updatedName}`)
-  }
 
   switch (pattern.tag) {
-    case 'PVar':
+    case 'PVar': {
+      const name = updatedName ?? pattern.name;
       return name;
-    case 'PCtor':
+    }
+    case 'PWild':
+      // Display wildcards as _ (the generated name is hidden but available for inlays)
+      return '_';
+    case 'PCtor': {
+      const name = updatedName ?? pattern.name;
       if (pattern.args.length === 0) {
         return name;
       }
       return `(${name} ${pattern.args.map(p => prettyPrintPattern(p, rest)).join(' ')})`;
+    }
   }
 }
 
@@ -369,6 +373,8 @@ function prettyPrintPatternInternal(pattern: TTKPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       return pattern.name;
+    case 'PWild':
+      return '_';
     case 'PCtor':
       if (pattern.args.length === 0) {
         return pattern.name;
@@ -390,6 +396,9 @@ function collectPatternVars(patterns: TTKPattern[]): string[] {
 function collectPatternVarsHelper(pattern: TTKPattern, vars: string[]): void {
   switch (pattern.tag) {
     case 'PVar':
+      vars.push(pattern.name);
+      break;
+    case 'PWild':
       vars.push(pattern.name);
       break;
     case 'PCtor':
@@ -531,15 +540,19 @@ export function prettyPrintLatex(
 }
 
 function prettyPrintPatternLatex(pattern: TTKPattern): string {
+  const escapeName = (name: string) => name.replace(/_/g, '\\_');
+
   switch (pattern.tag) {
     case 'PVar':
-      return pattern.name;
+      return escapeName(pattern.name);
+    case 'PWild':
+      return '\\_';
     case 'PCtor':
       if (pattern.args.length === 0) {
-        return pattern.name.replace(/_/g, '\\_');
+        return escapeName(pattern.name);
       }
       const args = pattern.args.map(prettyPrintPatternLatex).join('\\; ');
-      return `(${pattern.name.replace(/_/g, '\\_')}\\; ${args})`;
+      return `(${escapeName(pattern.name)}\\; ${args})`;
   }
 }
 

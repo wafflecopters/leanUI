@@ -274,7 +274,9 @@ export function prettyTerm(term: TTKTerm, metaState?: MetaState): string {
 export function prettyPattern(p: TTKPattern): string {
   switch (p.tag) {
     case 'PVar':
-      return p.name === '_' || p.name.startsWith('_w') ? '_' : p.name;
+      return p.name;
+    case 'PWild':
+      return '_';
     case 'PCtor':
       if (p.args.length === 0) return p.name;
       return `(${p.name} ${p.args.map(prettyPattern).join(' ')})`;
@@ -385,7 +387,7 @@ function deepReduce(term: TTKTerm, metaState: MetaState): TTKTerm {
 // =============================================================================
 
 function isWildcard(p: TTKPattern): boolean {
-  return p.tag === 'PVar' && (p.name === '_' || p.name.startsWith('_w'));
+  return p.tag === 'PWild';
 }
 
 // =============================================================================
@@ -699,28 +701,27 @@ export class PatternElabStepper {
     const s = this.state;
 
     switch (pattern.tag) {
+      case 'PWild':
+        s.phase = {
+          tag: 'ElaboratingPattern',
+          patternIndex,
+          subPhase: { tag: 'CreatingMeta', reason: `wildcard at position ${patternIndex + 1}` }
+        };
+        return this.makeRecord(
+          `Pattern ${patternIndex + 1} is wildcard _, expected type: ${prettyTerm(expectedType, s.metaState)}`,
+          'Will create metavariable'
+        );
+
       case 'PVar':
-        if (isWildcard(pattern)) {
-          s.phase = {
-            tag: 'ElaboratingPattern',
-            patternIndex,
-            subPhase: { tag: 'CreatingMeta', reason: `wildcard at position ${patternIndex + 1}` }
-          };
-          return this.makeRecord(
-            `Pattern ${patternIndex + 1} is wildcard _, expected type: ${prettyTerm(expectedType, s.metaState)}`,
-            'Will create metavariable'
-          );
-        } else {
-          s.phase = {
-            tag: 'ElaboratingPattern',
-            patternIndex,
-            subPhase: { tag: 'BindingVariable', name: pattern.name }
-          };
-          return this.makeRecord(
-            `Pattern ${patternIndex + 1} is variable ${pattern.name}, expected type: ${prettyTerm(expectedType, s.metaState)}`,
-            'Will bind variable'
-          );
-        }
+        s.phase = {
+          tag: 'ElaboratingPattern',
+          patternIndex,
+          subPhase: { tag: 'BindingVariable', name: pattern.name }
+        };
+        return this.makeRecord(
+          `Pattern ${patternIndex + 1} is variable ${pattern.name}, expected type: ${prettyTerm(expectedType, s.metaState)}`,
+          'Will bind variable'
+        );
 
       case 'PCtor':
         s.phase = {
@@ -1001,8 +1002,9 @@ export class PatternElabStepper {
 
           // IMPORTANT: Wildcard sub-patterns must create bindings for De Bruijn indexing
           // This matches the reference implementation (tt-pattern-elab.ts:377-387)
+          // Use the generated wildcard name (e.g., "0", "1") for the binding
           s.bindings.push({
-            name: '_',
+            name: subPattern.name,
             type: argType,
             introducedBy: `${pattern.name} arg ${argIndex + 1} (wildcard)`,
             patternIndex
@@ -1572,10 +1574,10 @@ export function testStepper(): void {
   // Clause 1: vecConcat _ _ _ (VNil _) v = v
   const clause1: TTKClause = {
     patterns: [
-      { tag: 'PVar', name: '_' },
-      { tag: 'PVar', name: '_' },
-      { tag: 'PVar', name: '_' },
-      { tag: 'PCtor', name: 'VNil', args: [{ tag: 'PVar', name: '_' }] },
+      { tag: 'PWild', name: '0' },
+      { tag: 'PWild', name: '1' },
+      { tag: 'PWild', name: '2' },
+      { tag: 'PCtor', name: 'VNil', args: [{ tag: 'PWild', name: '3' }] },
       { tag: 'PVar', name: 'v' }
     ],
     rhs: mkVar(0)
@@ -1714,12 +1716,12 @@ export function testVConsClause(): void {
   // Clause 2: vecConcat _ (Succ n) _ (VCons _ _ x xs) ys = ...
   const clause2: TTKClause = {
     patterns: [
-      { tag: 'PVar', name: '_' },                                                    // _ : Type (A)
+      { tag: 'PWild', name: '0' },                                                   // _ : Type (A)
       { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] },            // Succ n : Nat (a)
-      { tag: 'PVar', name: '_' },                                                    // _ : Nat (b)
+      { tag: 'PWild', name: '1' },                                                   // _ : Nat (b)
       { tag: 'PCtor', name: 'VCons', args: [                                         // VCons _ n x xs : Vec A (Succ n)
-        { tag: 'PVar', name: '_' },                                                  // A implicit
-        { tag: 'PVar', name: '_' },                                                  // n implicit (length of tail)
+        { tag: 'PWild', name: '2' },                                                 // A implicit
+        { tag: 'PWild', name: '3' },                                                 // n implicit (length of tail)
         { tag: 'PVar', name: 'x' },                                                  // x : A
         { tag: 'PVar', name: 'xs' }                                                  // xs : Vec A n
       ] },
