@@ -195,11 +195,11 @@ export function prettyPrintTerm(term: TTerm): string {
       return `Type_${term.level}`;
 
     case 'Binder':
-      if (term.binderKind.tag === 'BPi') {
+      if (term.binderKind.tag === 'BPiTT') {
         // Collect all arrow parts: A -> B -> C -> D
         const parts: string[] = [];
         let current: TTerm = term;
-        while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+        while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
           const isAnonymous = current.name === '_' || current.name === '';
           const domain = stripOuterParens(prettyPrintTerm(current.domain));
           if (isAnonymous) {
@@ -211,11 +211,11 @@ export function prettyPrintTerm(term: TTerm): string {
         }
         parts.push(prettyPrintTerm(current));
         return `(${parts.join(' -> ')})`;
-      } else if (term.binderKind.tag === 'BLam') {
+      } else if (term.binderKind.tag === 'BLamTT') {
         const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
         const bodyStr = prettyPrintTerm(term.body);
         return `λ(${term.name} : ${domainStr}). ${bodyStr}`;
-      } else if (term.binderKind.tag === 'BLet') {
+      } else if (term.binderKind.tag === 'BLetTT') {
         const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
         const defValStr = prettyPrintTerm(term.binderKind.defVal);
         const bodyStr = prettyPrintTerm(term.body);

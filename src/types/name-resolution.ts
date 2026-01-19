@@ -107,7 +107,7 @@ export function validateTerm(
         walk(t.domain, [...p, { kind: 'field', name: 'domain' }]);
 
         // For let bindings, validate the definition value
-        if (t.binderKind.tag === 'BLet') {
+        if (t.binderKind.tag === 'BLetTT') {
           walk(t.binderKind.defVal, [...p, { kind: 'field', name: 'defVal' }]);
         }
 

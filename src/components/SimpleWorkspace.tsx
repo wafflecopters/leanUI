@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import { EditableTerm, TTerm, createRootTermDefinition, mkType, prettyPrint } from '../compiler/surface';
+import { EditableTerm, TTerm, createRootTermDefinition, mkTypeTT, prettyPrintTT } from '../compiler/surface';
 import { useEditableTerm } from '../hooks/useEditableTerm';
 import { useDefinitionNavigation } from '../hooks/useDefinitionNavigation';
 
@@ -28,7 +28,7 @@ export function SimpleWorkspace({ initialTerm }: SimpleWorkspaceProps) {
     if (initialTerm) return initialTerm;
 
     // Create a simple proof: (a: Type) → (b: Type) → ?goal
-    const typeSort = mkType(0);
+    const typeSort = mkTypeTT(0);
     const def = createRootTermDefinition('example', [['a', typeSort], ['b', typeSort]], typeSort, 'proof');
     return EditableTerm.fromTermDefinition(def);
   }, [initialTerm]);
@@ -67,7 +67,7 @@ export function SimpleWorkspace({ initialTerm }: SimpleWorkspaceProps) {
           <span style={{ fontWeight: 'bold', color: '#666' }}>{index}.</span>
           <span style={{ fontFamily: 'monospace', color: '#0066cc' }}>{hyp[0]}</span>
           <span style={{ color: '#999' }}>:</span>
-          <span style={{ fontFamily: 'monospace' }}>{prettyPrint(hyp[1])}</span>
+          <span style={{ fontFamily: 'monospace' }}>{prettyPrintTT(hyp[1])}</span>
         </div>
         {isFocused && (
           <div style={{ marginTop: '4px', fontSize: '12px', color: '#666' }}>
@@ -109,7 +109,7 @@ export function SimpleWorkspace({ initialTerm }: SimpleWorkspaceProps) {
           Goal ({navigation.currentSection === 'goal' ? 'focused' : 'unfocused'})
         </div>
         <div style={{ fontFamily: 'monospace', fontSize: '14px' }}>
-          {prettyPrint(term.goal)}
+          {prettyPrintTT(term.goal)}
         </div>
       </div>
     );
@@ -134,7 +134,7 @@ export function SimpleWorkspace({ initialTerm }: SimpleWorkspaceProps) {
           Body ({navigation.currentSection === 'body' ? 'focused' : 'unfocused'})
         </div>
         <div style={{ fontFamily: 'monospace', fontSize: '14px' }}>
-          {prettyPrint(term.body)}
+          {prettyPrintTT(term.body)}
         </div>
       </div>
     );
@@ -168,7 +168,7 @@ export function SimpleWorkspace({ initialTerm }: SimpleWorkspaceProps) {
             const name = prompt('Hypothesis name:');
             if (!name) return;
             // For now, just add a Type hole
-            const typeSort = mkType(0);
+            const typeSort = mkTypeTT(0);
             dispatch({
               type: 'addHypothesis',
               index: term.hypotheses.length,
@@ -201,10 +201,10 @@ export function SimpleWorkspace({ initialTerm }: SimpleWorkspaceProps) {
               numHypotheses: term.hypotheses.length,
               hypotheses: term.hypotheses.map(([name, type]) => [
                 name,
-                prettyPrint(type),
+                prettyPrintTT(type),
               ]),
-              goal: prettyPrint(term.goal),
-              body: prettyPrint(term.body),
+              goal: prettyPrintTT(term.goal),
+              body: prettyPrintTT(term.body),
             },
             null,
             2

@@ -19,7 +19,7 @@ import {
   OperatorInfo,
 } from './parser';
 
-import { prettyPrint, TTerm } from '../compiler/surface';
+import { prettyPrintTT, TTerm } from '../compiler/surface';
 
 // ============================================================================
 // Test Helper
@@ -287,7 +287,7 @@ test('Parse Type in Pi type', () => {
   // Verify that Type is correctly parsed inside Pi binders
   const term = parseExpr('(A : Type) -> A');
   assertTermShape(term, 'Binder');
-  if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BPiTT') {
     // Domain should be Sort(1)
     assertTermShape(term.domain, 'Sort');
     if (term.domain.tag === 'Sort') {
@@ -300,7 +300,7 @@ test('Parse Type 1 in Pi type', () => {
   // Verify that Type 1 is correctly parsed inside Pi binders
   const term = parseExpr('(A : Type 1) -> A');
   assertTermShape(term, 'Binder');
-  if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BPiTT') {
     // Domain should be Sort(2)
     assertTermShape(term.domain, 'Sort');
     if (term.domain.tag === 'Sort') {
@@ -355,7 +355,7 @@ test('Parse lambda: \\x => x', () => {
   const term = parseExpr('\\x => x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.binderKind.tag, 'BLamTT');
     assertEqual(term.name, 'x');
     assertTermShape(term.domain, 'Hole'); // type is a hole
     assertTermShape(term.body, 'Var');
@@ -366,7 +366,7 @@ test('Parse lambda: \\ x => x (with space)', () => {
   const term = parseExpr('\\ x => x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.binderKind.tag, 'BLamTT');
     assertEqual(term.name, 'x');
   }
 });
@@ -457,7 +457,7 @@ test('Parse lambda with backslash and =>', () => {
   const term = parseExpr('\\(x : T) => x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.binderKind.tag, 'BLamTT');
     assertEqual(term.name, 'x');
   }
 });
@@ -466,7 +466,7 @@ test('Parse lambda with fun keyword', () => {
   const term = parseExpr('fun (x : T) => x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BLam');
+    assertEqual(term.binderKind.tag, 'BLamTT');
     assertEqual(term.name, 'x');
   }
 });
@@ -485,7 +485,7 @@ test('Parse dependent Pi with (x : T) -> syntax', () => {
   const term = parseExpr('(x : A) -> B');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.binderKind.tag, 'BPiTT');
     assertEqual(term.name, 'x');
   }
 });
@@ -503,7 +503,7 @@ test('Parse arrow type (non-dependent Pi)', () => {
   const term = parseExpr('A -> B');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.binderKind.tag, 'BPiTT');
     assertEqual(term.name, '_'); // Non-dependent
   }
 });
@@ -530,7 +530,7 @@ test('Parse let expression', () => {
   const term = parseExpr('let x : T := v in x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BLet');
+    assertEqual(term.binderKind.tag, 'BLetTT');
     assertEqual(term.name, 'x');
     // Body should refer to x (Var 0)
     assertTermShape(term.body, 'Var');
@@ -541,7 +541,7 @@ test('Parse let without type annotation', () => {
   const term = parseExpr('let x := v in x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BLet');
+    assertEqual(term.binderKind.tag, 'BLetTT');
     // Domain should be a hole when type is omitted
     assertTermShape(term.domain, 'Hole');
   }
@@ -927,7 +927,7 @@ test('Parse identity function type', () => {
   const term = parseExpr('(A : Type) -> A -> A');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    assertEqual(term.binderKind.tag, 'BPi');
+    assertEqual(term.binderKind.tag, 'BPiTT');
     assertEqual(term.name, 'A');
   }
 });
@@ -935,7 +935,7 @@ test('Parse identity function type', () => {
 test('Parse let with complex value', () => {
   const term = parseExpr('let id := \\x => x in id y');
   assertTermShape(term, 'Binder');
-  if (term.tag === 'Binder' && term.binderKind.tag === 'BLet') {
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
     assertEqual(term.name, 'id');
     assertTermShape(term.binderKind.defVal, 'Binder'); // lambda
     assertTermShape(term.body, 'App'); // id y
@@ -1097,7 +1097,7 @@ console.log('='.repeat(80) + '\n');
 
 test('Pretty print preserves variable names', () => {
   const term = parseExpr('\\(foo : T) => foo');
-  const printed = prettyPrint(term);
+  const printed = prettyPrintTT(term);
   if (!printed.includes('foo')) {
     throw new Error(`Expected 'foo' in output, got: ${printed}`);
   }
@@ -1105,7 +1105,7 @@ test('Pretty print preserves variable names', () => {
 
 test('Pretty print shows Pi types correctly', () => {
   const term = parseExpr('(α : Type) -> α -> α');
-  const printed = prettyPrint(term);
+  const printed = prettyPrintTT(term);
   if (!printed.includes('α')) {
     throw new Error(`Expected 'α' in output, got: ${printed}`);
   }

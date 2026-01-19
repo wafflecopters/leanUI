@@ -1,6 +1,6 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
 import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "./kernel";
-import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, shiftTerm, subst } from "./subst";
+import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, freeVarIndices, shiftTerm } from "./subst";
 import { areTypesDefEq } from "./whnf";
 
 export interface CheckError {
@@ -897,7 +897,18 @@ export class TCEnv<T> {
     return this;
   }
 
+  assertNoConstraints(this: TCEnv<T>): TCEnv<T> {
+    if (this.hasConstraints()) {
+      throw this.unsolvedConstraintsError();
+    }
+    return this;
+  }
+
   // ERRORS
+  unsolvedConstraintsError(this: TCEnv<T>): TCEnvError<T> {
+    return new TCEnvError<T>(`Unsolved constraints: ${this.printConstraints()}`, this);
+  }
+
   private invalidIndexError<S>(field: string, values: S[], index: number): TCEnvError<T> {
     return new TCEnvError<T>(`Invalid index ${index} for ${field} with length ${values.length}.`, this);
   }
@@ -1001,4 +1012,35 @@ export function assertDefined<T>(value: T | undefined, msg?: string): asserts va
   if (!value) {
     throw new Error(msg ?? `Expected defined value, got: ${value}`);
   }
+}
+
+function solveConstraints(C: Constraint[], Σ: Map<string, MetaVar>): Constraint[] {
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    C = C.filter(constraint => {
+      const meta = Σ.get(constraint.meta)!;
+
+      // Skip if already solved
+      if (meta.solution !== null) {
+        return false;  // Remove from C
+      }
+
+      // Check if solvable
+      const telLen = meta.ctx.length;
+      const freeVars = freeVarIndices(constraint.rhs);
+
+      if (freeVars.every(i => i < telLen)) {
+        // Solve it!
+        meta.solution = constraint.rhs;
+        changed = true;
+        return false;  // Remove from C
+      }
+
+      return true;  // Keep in C (stuck)
+    });
+  }
+
+  return C;
 }

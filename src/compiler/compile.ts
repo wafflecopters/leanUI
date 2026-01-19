@@ -8,11 +8,10 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap } from './elab';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from './kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
-import { mkApp, mkAppSpine, mkConst, mkType, mkVar, prettyPrint } from './surface';
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
@@ -762,6 +761,9 @@ function checkMatchClause(
 ): TCEnv<void> {
   const result = processMatchClauseLhs(termName, env.inMatchClausePatterns(), type)
   // TODO: rhs type check
+
+  result.assertNoConstraints()
+
   return result.withoutValue();
 }
 
@@ -769,7 +771,7 @@ type PatternStackEntry = { tag: 'pattern', pattern: TTKPattern } | { tag: 'done'
 type CheckStackEntry = { type: TTKTerm, ctxLength: number }
 
 function prettyPrintInSignature(term: TTKTerm, signature: Signature): string {
-  return prettyPrint(term, signature.map(s => s.name).reverse())
+  return prettyPrintTTK(term, signature.map(s => s.name).reverse())
 }
 
 function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: CheckStackEntry, checkStack: CheckStackEntry[], elabStack: TTKTerm[], workEnv: TCEnv<unknown>) {
@@ -980,7 +982,7 @@ function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type:
     throw new Error('Check stack not empty')
   }
 
-  return env
+  return workEnv
 }
 
 function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry[] | undefined, checkStack: CheckStackEntry[], elabStack: TTKTerm[], header?: string) {
@@ -1000,5 +1002,5 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
   logInfo(() => `    T = ${printCollectionFancy(checkStack.map(s => {
     return `|${s.ctxLength}| >> ${prettyPrintInSignature(s.type, workEnv.signature.slice(0, s.ctxLength))}`
   }), '[', ']', ',', { indentLevel: 8, innerIndentOffset: 2 })}`)
-  logInfo(() => `    E = ${printCollectionFancy(elabStack.map(s => prettyPrint(s)), '[', ']', ',', { indentLevel: 8, innerIndentOffset: 2 })}`)
+  logInfo(() => `    E = ${printCollectionFancy(elabStack.map(s => prettyPrintTTK(s)), '[', ']', ',', { indentLevel: 8, innerIndentOffset: 2 })}`)
 }

@@ -22,7 +22,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
-import { TTerm, mkType, RecordDef as TTRecordDef, prettyPrintLatex as ttPrettyPrintLatex, LatexPrintOptions } from '../compiler/surface';
+import { TTerm, mkTypeTT, RecordDef as TTRecordDef, prettyPrintLatexTT as ttPrettyPrintLatex, LatexPrintOptions } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { FieldsSection, Field, createDefaultField } from './FieldsSection';
@@ -346,7 +346,7 @@ function RecordEditorInner() {
   // Top-level state for a single record definition
   const [recordDef, setRecordDef] = useState<RecordDef>({
     name: 'MyRecord',
-    type: mkType(0),
+    type: mkTypeTT(0),
     params: [],
     fields: []
   });

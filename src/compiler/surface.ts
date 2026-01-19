@@ -29,9 +29,9 @@
  * Binder kinds: distinguish between different ways to bind variables
  */
 export type BinderKind =
-  | { tag: 'BPi' }                    // Π-binder (dependent function type)
-  | { tag: 'BLam' }                   // λ-binder (function abstraction)
-  | { tag: 'BLet'; defVal: TTerm }    // let-binder (local definition with value)
+  | { tag: 'BPiTT' }                    // Π-binder (dependent function type)
+  | { tag: 'BLamTT' }                   // λ-binder (function abstraction)
+  | { tag: 'BLetTT'; defVal: TTerm }    // let-binder (local definition with value)
 
 // ============================================================================
 // Pattern Matching
@@ -162,7 +162,7 @@ export const TT_CONSTANTS = {
   Succ: (() => {
     // Succ : ℕ → ℕ
     const nat = { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as TTerm;
-    return { tag: 'Const', name: 'succ', type: mkPi(nat, nat, 'n') } as const;
+    return { tag: 'Const', name: 'succ', type: mkPiTT(nat, nat, 'n') } as const;
   })(),
 
   // Real numbers (placeholder - would need proper construction)
@@ -174,9 +174,9 @@ export const TT_CONSTANTS = {
     const sort0 = { tag: 'Sort', level: 0 } as TTerm;
     const A = { tag: 'Var', index: 0 } as TTerm;
     // Build: Π (A : Type), A → A → Prop
-    const type = mkPi(
+    const type = mkPiTT(
       sort0,
-      mkPi(A, mkPi(A, sort0, 'y'), 'x'),
+      mkPiTT(A, mkPiTT(A, sort0, 'y'), 'x'),
       'A'
     );
     return { tag: 'Const', name: 'eq', type } as const;
@@ -213,23 +213,23 @@ export function createNatElimType(): TTerm {
 
   const P = { tag: 'Var', index: 0 } as TTerm;
 
-  // Build type step by step using mkPi:
+  // Build type step by step using mkPiTT:
   // Start from innermost: P (result)
   // Then: ℕ → P
-  const natToP = mkPi(nat, { tag: 'Var', index: 3 }, 'n');
+  const natToP = mkPiTT(nat, { tag: 'Var', index: 3 }, 'n');
 
   // Then: (P → P) → (ℕ → P)
-  const stepThenNat = mkPi(
-    mkPi({ tag: 'Var', index: 1 }, { tag: 'Var', index: 2 }, 'ih'),
+  const stepThenNat = mkPiTT(
+    mkPiTT({ tag: 'Var', index: 1 }, { tag: 'Var', index: 2 }, 'ih'),
     natToP,
     'step'
   );
 
   // Then: P → ((P → P) → (ℕ → P))
-  const baseToRest = mkPi(P, stepThenNat, 'base');
+  const baseToRest = mkPiTT(P, stepThenNat, 'base');
 
   // Finally: Π (P : Prop), ...
-  return mkPi(prop, baseToRest, 'P');
+  return mkPiTT(prop, baseToRest, 'P');
 }
 
 export const NAT_ELIM: TTerm = {
@@ -245,7 +245,7 @@ export const NAT_ELIM: TTerm = {
 /**
  * Create a De Bruijn variable
  */
-export function mkVar(index: number): TTerm {
+export function mkVarTT(index: number): TTerm {
   return { tag: 'Var', index };
 }
 
@@ -253,11 +253,11 @@ export function mkVar(index: number): TTerm {
  * Create a Pi type (dependent function type)
  * If no name is provided, generates a default name
  */
-export function mkPi(domain: TTerm, codomain: TTerm, name: string = 'x'): TTerm {
+export function mkPiTT(domain: TTerm, codomain: TTerm, name: string = 'x'): TTerm {
   return {
     tag: 'Binder',
     name,
-    binderKind: { tag: 'BPi' },
+    binderKind: { tag: 'BPiTT' },
     domain,
     body: codomain
   };
@@ -267,11 +267,11 @@ export function mkPi(domain: TTerm, codomain: TTerm, name: string = 'x'): TTerm 
  * Create a Lambda (function abstraction)
  * If no name is provided, generates a default name
  */
-export function mkLambda(domain: TTerm, body: TTerm, name: string = 'x'): TTerm {
+export function mkLambdaTT(domain: TTerm, body: TTerm, name: string = 'x'): TTerm {
   return {
     tag: 'Binder',
     name,
-    binderKind: { tag: 'BLam' },
+    binderKind: { tag: 'BLamTT' },
     domain,
     body
   };
@@ -281,11 +281,11 @@ export function mkLambda(domain: TTerm, body: TTerm, name: string = 'x'): TTerm 
  * Create a Let binding
  * Requires name for the bound variable and the value being bound
  */
-export function mkLet(name: string, defType: TTerm, defVal: TTerm, body: TTerm): TTerm {
+export function mkLetTT(name: string, defType: TTerm, defVal: TTerm, body: TTerm): TTerm {
   return {
     tag: 'Binder',
     name,
-    binderKind: { tag: 'BLet', defVal },
+    binderKind: { tag: 'BLetTT', defVal },
     domain: defType,
     body
   };
@@ -294,39 +294,39 @@ export function mkLet(name: string, defType: TTerm, defVal: TTerm, body: TTerm):
 /**
  * Create a function application
  */
-export function mkApp(fn: TTerm, arg: TTerm): TTerm {
+export function mkAppTT(fn: TTerm, arg: TTerm): TTerm {
   return { tag: 'App', fn, arg };
 }
 
-export function mkAppSpine(fn: TTerm, args: TTerm[]): TTerm {
-  return args.reduce((acc, arg) => mkApp(acc, arg), fn);
+export function mkAppSpineTT(fn: TTerm, args: TTerm[]): TTerm {
+  return args.reduce((acc, arg) => mkAppTT(acc, arg), fn);
 }
 
 /**
  * Create a constant with a given name and type
  */
-export function mkConst(name: string, type: TTerm): TTerm {
+export function mkConstTT(name: string, type: TTerm): TTerm {
   return { tag: 'Const', name, type };
 }
 
 /**
  * Create a hole (metavariable to be filled)
  */
-export function mkHole(id: string, type: TTerm, context: TContext = []): TTerm {
+export function mkHoleTT(id: string, type: TTerm, context: TContext = []): TTerm {
   return { tag: 'Hole', id, type, context };
 }
 
 /**
  * Create Prop (Type_0)
  */
-export function mkProp(): TTerm {
+export function mkPropTT(): TTerm {
   return { tag: 'Sort', level: 0 };
 }
 
 /**
  * Create Type_i
  */
-export function mkType(level: number): TTerm {
+export function mkTypeTT(level: number): TTerm {
   return { tag: 'Sort', level };
 }
 
@@ -345,7 +345,7 @@ export function mkType(level: number): TTerm {
  * @param replacement - Term to replace the hole with
  * @returns New term with all holes replaced
  */
-export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TTerm {
+export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): TTerm {
   switch (term.tag) {
     case 'Var':
     case 'Sort':
@@ -357,13 +357,13 @@ export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TT
       return term.id === holeId ? replacement : term;
 
     case 'Binder': {
-      const newDomain = replaceHole(term.domain, holeId, replacement);
-      const newBody = replaceHole(term.body, holeId, replacement);
+      const newDomain = replaceHoleTT(term.domain, holeId, replacement);
+      const newBody = replaceHoleTT(term.body, holeId, replacement);
 
       let newBinderKind: BinderKind;
-      if (term.binderKind.tag === 'BLet') {
-        const newDefVal = replaceHole(term.binderKind.defVal, holeId, replacement);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      if (term.binderKind.tag === 'BLetTT') {
+        const newDefVal = replaceHoleTT(term.binderKind.defVal, holeId, replacement);
+        newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
       } else {
         newBinderKind = term.binderKind;
       }
@@ -380,24 +380,144 @@ export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TT
     case 'App':
       return {
         tag: 'App',
-        fn: replaceHole(term.fn, holeId, replacement),
-        arg: replaceHole(term.arg, holeId, replacement)
+        fn: replaceHoleTT(term.fn, holeId, replacement),
+        arg: replaceHoleTT(term.arg, holeId, replacement)
       };
 
     case 'Annot':
       return {
         tag: 'Annot',
-        term: replaceHole(term.term, holeId, replacement),
-        type: replaceHole(term.type, holeId, replacement)
+        term: replaceHoleTT(term.term, holeId, replacement),
+        type: replaceHoleTT(term.type, holeId, replacement)
       };
 
     case 'Match':
       return {
         tag: 'Match',
-        scrutinee: replaceHole(term.scrutinee, holeId, replacement),
+        scrutinee: replaceHoleTT(term.scrutinee, holeId, replacement),
         clauses: term.clauses.map(c => ({
           patterns: c.patterns,
-          rhs: replaceHole(c.rhs, holeId, replacement)
+          rhs: replaceHoleTT(c.rhs, holeId, replacement)
+        }))
+      };
+  }
+}
+
+/**
+ * Find a hole by ID in a term.
+ * Returns the hole if found, null otherwise.
+ */
+export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
+  switch (term.tag) {
+    case 'Hole':
+      return term.id === holeId ? term : null;
+
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return null;
+
+    case 'Binder': {
+      const inDomain = findHoleTT(term.domain, holeId);
+      if (inDomain) return inDomain;
+      const inBody = findHoleTT(term.body, holeId);
+      if (inBody) return inBody;
+      if (term.binderKind.tag === 'BLetTT') {
+        const inDefVal = findHoleTT(term.binderKind.defVal, holeId);
+        if (inDefVal) return inDefVal;
+      }
+      return null;
+    }
+
+    case 'App': {
+      const inFn = findHoleTT(term.fn, holeId);
+      if (inFn) return inFn;
+      return findHoleTT(term.arg, holeId);
+    }
+
+    case 'Annot': {
+      const inTerm = findHoleTT(term.term, holeId);
+      if (inTerm) return inTerm;
+      return findHoleTT(term.type, holeId);
+    }
+
+    case 'Match': {
+      const inScrutinee = findHoleTT(term.scrutinee, holeId);
+      if (inScrutinee) return inScrutinee;
+      for (const clause of term.clauses) {
+        const inRhs = findHoleTT(clause.rhs, holeId);
+        if (inRhs) return inRhs;
+      }
+      return null;
+    }
+  }
+}
+
+/**
+ * Fill a hole with a generated term.
+ *
+ * @param term - The term containing the hole
+ * @param holeId - ID of the hole to fill
+ * @param generator - Function that generates the replacement given hole type and context
+ * @returns The term with the hole filled
+ */
+export function fillHoleWithTT(
+  term: TTerm,
+  holeId: string,
+  generator: (holeType: TTerm, holeContext: TContext) => TTerm
+): TTerm {
+  switch (term.tag) {
+    case 'Hole':
+      if (term.id === holeId) {
+        return generator(term.type, term.context);
+      }
+      return term;
+
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Binder': {
+      const newDomain = fillHoleWithTT(term.domain, holeId, generator);
+      const newBody = fillHoleWithTT(term.body, holeId, generator);
+      let newBinderKind: BinderKind;
+      if (term.binderKind.tag === 'BLetTT') {
+        const newDefVal = fillHoleWithTT(term.binderKind.defVal, holeId, generator);
+        newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: fillHoleWithTT(term.fn, holeId, generator),
+        arg: fillHoleWithTT(term.arg, holeId, generator)
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: fillHoleWithTT(term.term, holeId, generator),
+        type: fillHoleWithTT(term.type, holeId, generator)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: fillHoleWithTT(term.scrutinee, holeId, generator),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: fillHoleWithTT(c.rhs, holeId, generator)
         }))
       };
   }
@@ -420,7 +540,7 @@ export function replaceHole(term: TTerm, holeId: string, replacement: TTerm): TT
  * @param term2 - Second term
  * @returns true if terms are definitionally equal
  */
-export function isDefinitionallyEqual(term1: TTerm, term2: TTerm): boolean {
+export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
   // Structural equality check
   if (term1.tag !== term2.tag) return false;
 
@@ -443,33 +563,33 @@ export function isDefinitionallyEqual(term1: TTerm, term2: TTerm): boolean {
 
       // Check binder kind
       if (term1.binderKind.tag !== term2.binderKind.tag) return false;
-      if (term1.binderKind.tag === 'BLet' && term2.binderKind.tag === 'BLet') {
-        if (!isDefinitionallyEqual(term1.binderKind.defVal, term2.binderKind.defVal)) {
+      if (term1.binderKind.tag === 'BLetTT' && term2.binderKind.tag === 'BLetTT') {
+        if (!isDefinitionallyEqualTT(term1.binderKind.defVal, term2.binderKind.defVal)) {
           return false;
         }
       }
 
       // Check domain and body (names don't matter for equality)
-      return isDefinitionallyEqual(term1.domain, term2.domain) &&
-        isDefinitionallyEqual(term1.body, term2.body);
+      return isDefinitionallyEqualTT(term1.domain, term2.domain) &&
+        isDefinitionallyEqualTT(term1.body, term2.body);
     }
 
     case 'App': {
       if (term2.tag !== 'App') return false;
-      return isDefinitionallyEqual(term1.fn, term2.fn) &&
-        isDefinitionallyEqual(term1.arg, term2.arg);
+      return isDefinitionallyEqualTT(term1.fn, term2.fn) &&
+        isDefinitionallyEqualTT(term1.arg, term2.arg);
     }
 
     case 'Annot': {
       if (term2.tag !== 'Annot') return false;
-      return isDefinitionallyEqual(term1.term, term2.term) &&
-        isDefinitionallyEqual(term1.type, term2.type);
+      return isDefinitionallyEqualTT(term1.term, term2.term) &&
+        isDefinitionallyEqualTT(term1.type, term2.type);
     }
 
     case 'Match': {
       if (term2.tag !== 'Match') return false;
       // Check scrutinee
-      if (!isDefinitionallyEqual(term1.scrutinee, term2.scrutinee)) return false;
+      if (!isDefinitionallyEqualTT(term1.scrutinee, term2.scrutinee)) return false;
       // Check same number of clauses
       if (term1.clauses.length !== term2.clauses.length) return false;
       // Check each clause (patterns and rhs)
@@ -477,7 +597,7 @@ export function isDefinitionallyEqual(term1: TTerm, term2: TTerm): boolean {
         const c1 = term1.clauses[i];
         const c2 = term2.clauses[i];
         // For now, just check RHS equality (pattern equality would need a separate function)
-        if (!isDefinitionallyEqual(c1.rhs, c2.rhs)) return false;
+        if (!isDefinitionallyEqualTT(c1.rhs, c2.rhs)) return false;
       }
       return true;
     }
@@ -517,7 +637,7 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'Binder':
       if (head === 0) return getSubtermAtPath(term.domain, rest);
       if (head === 1) return getSubtermAtPath(term.body, rest);
-      if (head === 2 && term.binderKind.tag === 'BLet') {
+      if (head === 2 && term.binderKind.tag === 'BLetTT') {
         return getSubtermAtPath(term.binderKind.defVal, rest);
       }
       return null;
@@ -581,11 +701,11 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
         const newBody = replaceSubtermAtPath(term.body, rest, newSubterm);
         return newBody ? { ...term, body: newBody } : null;
       }
-      if (head === 2 && term.binderKind.tag === 'BLet') {
+      if (head === 2 && term.binderKind.tag === 'BLetTT') {
         const newDefVal = replaceSubtermAtPath(term.binderKind.defVal, rest, newSubterm);
         return newDefVal ? {
           ...term,
-          binderKind: { tag: 'BLet', defVal: newDefVal }
+          binderKind: { tag: 'BLetTT', defVal: newDefVal }
         } : null;
       }
       return null;
@@ -657,11 +777,11 @@ export function asLambdaByExtractingTermAtIndexPaths(
   // Check that all subterms are definitionally equal
   const firstSubterm = subterms[0]!;
   for (let i = 1; i < subterms.length; i++) {
-    if (!isDefinitionallyEqual(firstSubterm, subterms[i]!)) {
+    if (!isDefinitionallyEqualTT(firstSubterm, subterms[i]!)) {
       return {
         error: `Subterms at paths are not definitionally equal:\n` +
-          `  Path ${JSON.stringify(paths[0])}: ${prettyPrint(firstSubterm)}\n` +
-          `  Path ${JSON.stringify(paths[i])}: ${prettyPrint(subterms[i]!)}`
+          `  Path ${JSON.stringify(paths[0])}: ${prettyPrintTT(firstSubterm)}\n` +
+          `  Path ${JSON.stringify(paths[i])}: ${prettyPrintTT(subterms[i]!)}`
       };
     }
   }
@@ -688,11 +808,11 @@ export function asLambdaByExtractingTermAtIndexPaths(
 
   // Create the lambda abstraction
   // Type inference will determine the type of x later
-  const typeHole = mkHole('extracted-type', mkType(0));
+  const typeHole = mkHoleTT('extracted-type', mkTypeTT(0));
   const lambda: TTerm = {
     tag: 'Binder',
     name: 'x',
-    binderKind: { tag: 'BLam' },
+    binderKind: { tag: 'BLamTT' },
     domain: typeHole,
     body: lambdaBody
   };
@@ -744,7 +864,7 @@ export function isNameUsed(name: string, term: TTerm): boolean {
       if (isNameUsed(name, term.domain)) return true;
 
       // Check let-binding value if present
-      if (term.binderKind.tag === 'BLet') {
+      if (term.binderKind.tag === 'BLetTT') {
         if (isNameUsed(name, term.binderKind.defVal)) return true;
       }
 
@@ -782,8 +902,8 @@ export function isNameUsed(name: string, term: TTerm): boolean {
  *
  * subst(n, s, t) replaces variable n in t with s, adjusting indices
  */
-export function subst(index: number, replacement: TTerm, term: TTerm): TTerm {
-  return substHelper(index, replacement, term, 0);
+export function substTT(index: number, replacement: TTerm, term: TTerm): TTerm {
+  return substHelperTT(index, replacement, term, 0);
 }
 
 /**
@@ -794,7 +914,7 @@ export function subst(index: number, replacement: TTerm, term: TTerm): TTerm {
  * @param term - The term we're substituting into
  * @param depth - Current binding depth (how many binders we've gone under)
  */
-function substHelper(targetIndex: number, replacement: TTerm, term: TTerm, depth: number): TTerm {
+function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, depth: number): TTerm {
   switch (term.tag) {
     case 'Var':
       // If this is the variable we're replacing
@@ -810,14 +930,14 @@ function substHelper(targetIndex: number, replacement: TTerm, term: TTerm, depth
 
     case 'Binder': {
       // Handle all binder types uniformly
-      const newDomain = substHelper(targetIndex, replacement, term.domain, depth);
-      const newBody = substHelper(targetIndex, replacement, term.body, depth + 1);
+      const newDomain = substHelperTT(targetIndex, replacement, term.domain, depth);
+      const newBody = substHelperTT(targetIndex, replacement, term.body, depth + 1);
 
       // For BLet, also substitute in the definition value
       let newBinderKind: BinderKind;
-      if (term.binderKind.tag === 'BLet') {
-        const newDefVal = substHelper(targetIndex, replacement, term.binderKind.defVal, depth);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      if (term.binderKind.tag === 'BLetTT') {
+        const newDefVal = substHelperTT(targetIndex, replacement, term.binderKind.defVal, depth);
+        newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
       } else {
         newBinderKind = term.binderKind;
       }
@@ -834,34 +954,34 @@ function substHelper(targetIndex: number, replacement: TTerm, term: TTerm, depth
     case 'App':
       return {
         tag: 'App',
-        fn: substHelper(targetIndex, replacement, term.fn, depth),
-        arg: substHelper(targetIndex, replacement, term.arg, depth)
+        fn: substHelperTT(targetIndex, replacement, term.fn, depth),
+        arg: substHelperTT(targetIndex, replacement, term.arg, depth)
       };
 
     case 'Hole':
       return {
         tag: 'Hole',
         id: term.id,
-        type: substHelper(targetIndex, replacement, term.type, depth),
+        type: substHelperTT(targetIndex, replacement, term.type, depth),
         context: term.context  // Context doesn't change
       };
 
     case 'Annot':
       return {
         tag: 'Annot',
-        term: substHelper(targetIndex, replacement, term.term, depth),
-        type: substHelper(targetIndex, replacement, term.type, depth)
+        term: substHelperTT(targetIndex, replacement, term.term, depth),
+        type: substHelperTT(targetIndex, replacement, term.type, depth)
       };
 
     case 'Match':
       return {
         tag: 'Match',
-        scrutinee: substHelper(targetIndex, replacement, term.scrutinee, depth),
+        scrutinee: substHelperTT(targetIndex, replacement, term.scrutinee, depth),
         clauses: term.clauses.map(c => ({
           patterns: c.patterns,
           // TODO: when we implement proper pattern binding, we need to account for
           // variables bound by patterns when substituting in the RHS
-          rhs: substHelper(targetIndex, replacement, c.rhs, depth)
+          rhs: substHelperTT(targetIndex, replacement, c.rhs, depth)
         }))
       };
   }
@@ -893,9 +1013,9 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 
       // For BLet, also shift the definition value
       let newBinderKind: BinderKind;
-      if (term.binderKind.tag === 'BLet') {
+      if (term.binderKind.tag === 'BLetTT') {
         const newDefVal = shift(amount, term.binderKind.defVal, cutoff);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+        newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
       } else {
         newBinderKind = term.binderKind;
       }
@@ -953,7 +1073,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
  * Terse pretty-printing for TT terms - compact S-expression style
  * Example: (eq (plus a a) (mul 2 a)) instead of ((a : ℝ) → ...)
  */
-export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
+export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string {
   switch (term.tag) {
     case 'Var':
       // Context is prepended, so index directly into it
@@ -976,33 +1096,33 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
 
     case 'Binder': {
       const newContext = [term.name, ...context];
-      const body = prettyPrintTerse(term.body, newContext);
-      const domain = prettyPrintTerse(term.domain, context);
+      const body = prettyPrintTerseTT(term.body, newContext);
+      const domain = prettyPrintTerseTT(term.domain, context);
       const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
-        case 'BPi':
+        case 'BPiTT':
           // Check if non-dependent (function type) or anonymous
-          if (!occursIn(0, term.body) || isAnonymous) {
+          if (!occursInTT(0, term.body) || isAnonymous) {
             return `(${domain} -> ${body})`;
           }
           return `((${term.name} : ${domain}) -> ${body})`;
 
-        case 'BLam':
+        case 'BLamTT':
           if (isAnonymous) {
             return `(\\${domain} => ${body})`;
           }
           return `(\\${term.name} => ${body})`;
 
-        case 'BLet':
-          const defVal = prettyPrintTerse(term.binderKind.defVal, context);
+        case 'BLetTT':
+          const defVal = prettyPrintTerseTT(term.binderKind.defVal, context);
           return `(let ${term.name} = ${defVal} in ${body})`;
       }
     }
 
     case 'App': {
-      const fn = prettyPrintTerse(term.fn, context);
-      const arg = prettyPrintTerse(term.arg, context);
+      const fn = prettyPrintTerseTT(term.fn, context);
+      const arg = prettyPrintTerseTT(term.arg, context);
 
       // Get function name for cleaner output
       const fnName = term.fn.tag === 'Const' ? term.fn.name : fn;
@@ -1019,14 +1139,14 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
       return '?';
 
     case 'Annot':
-      return prettyPrintTerse(term.term, context);
+      return prettyPrintTerseTT(term.term, context);
 
     case 'Match': {
-      const scrutinee = prettyPrintTerse(term.scrutinee, context);
+      const scrutinee = prettyPrintTerseTT(term.scrutinee, context);
       const clauses = term.clauses.map(c => {
         // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
-        const patternStr = c.patterns.map(p => prettyPrintPattern(p)).join(' ');
-        const rhsStr = prettyPrintTerse(c.rhs, context);
+        const patternStr = c.patterns.map(p => prettyPrintPatternTT(p)).join(' ');
+        const rhsStr = prettyPrintTerseTT(c.rhs, context);
         return `${patternStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
@@ -1037,7 +1157,7 @@ export function prettyPrintTerse(term: TTerm, context: string[] = []): string {
 /**
  * Pretty-print a pattern (helper for Match)
  */
-function prettyPrintPattern(pattern: TPattern): string {
+function prettyPrintPatternTT(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       return pattern.name;  // "_" for wildcards
@@ -1045,7 +1165,7 @@ function prettyPrintPattern(pattern: TPattern): string {
       if (pattern.args.length === 0) {
         return pattern.name;
       }
-      const args = pattern.args.map(prettyPrintPattern).join(' ');
+      const args = pattern.args.map(prettyPrintPatternTT).join(' ');
       return `(${pattern.name} ${args})`;
   }
 }
@@ -1062,7 +1182,7 @@ function stripOuterParens(s: string): string {
  * Convert a term with De Bruijn indices to a human-readable string
  * Now uses the names stored in binders for better readability
  */
-export function prettyPrint(term: TTerm, context: string[] = []): string {
+export function prettyPrintTT(term: TTerm, context: string[] = []): string {
   switch (term.tag) {
     case 'Var':
       // Look up the name from context (context is prepended, so index directly)
@@ -1088,14 +1208,14 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
       const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
-        case 'BPi': {
+        case 'BPiTT': {
           // Collect all arrow parts: A -> B -> C -> D becomes [A, B, C, D]
           const parts: string[] = [];
           let current: TTerm = term;
           let ctx = context;
-          while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+          while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
             const currentAnon = current.name === '_' || current.name === '';
-            const domain = stripOuterParens(prettyPrint(current.domain, ctx));
+            const domain = stripOuterParens(prettyPrintTT(current.domain, ctx));
             if (currentAnon) {
               parts.push(domain);
             } else {
@@ -1104,23 +1224,23 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
             ctx = [current.name, ...ctx];
             current = current.body;
           }
-          parts.push(prettyPrint(current, ctx));
+          parts.push(prettyPrintTT(current, ctx));
           return `(${parts.join(' -> ')})`;
         }
 
-        case 'BLam': {
-          const domain = stripOuterParens(prettyPrint(term.domain, context));
-          const body = prettyPrint(term.body, newContext);
+        case 'BLamTT': {
+          const domain = stripOuterParens(prettyPrintTT(term.domain, context));
+          const body = prettyPrintTT(term.body, newContext);
           if (isAnonymous) {
             return `(\\${domain} => ${body})`;
           }
           return `(\\(${term.name} : ${domain}) => ${body})`;
         }
 
-        case 'BLet': {
-          const domain = stripOuterParens(prettyPrint(term.domain, context));
-          const body = prettyPrint(term.body, newContext);
-          const defVal = prettyPrint(term.binderKind.defVal, context);
+        case 'BLetTT': {
+          const domain = stripOuterParens(prettyPrintTT(term.domain, context));
+          const body = prettyPrintTT(term.body, newContext);
+          const defVal = prettyPrintTT(term.binderKind.defVal, context);
           return `(let ${term.name} : ${domain} := ${defVal} in ${body})`;
         }
       }
@@ -1131,10 +1251,10 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
       const parts: string[] = [];
       let current: TTerm = term;
       while (current.tag === 'App') {
-        parts.unshift(prettyPrint(current.arg, context));
+        parts.unshift(prettyPrintTT(current.arg, context));
         current = current.fn;
       }
-      parts.unshift(prettyPrint(current, context));
+      parts.unshift(prettyPrintTT(current, context));
       return `(${parts.join(' ')})`;
     }
 
@@ -1142,17 +1262,17 @@ export function prettyPrint(term: TTerm, context: string[] = []): string {
       return `?${term.id}`;
 
     case 'Annot': {
-      const termStr = prettyPrint(term.term, context);
-      const typeStr = stripOuterParens(prettyPrint(term.type, context));
+      const termStr = prettyPrintTT(term.term, context);
+      const typeStr = stripOuterParens(prettyPrintTT(term.type, context));
       return `(${termStr} : ${typeStr})`;
     }
 
     case 'Match': {
-      const scrutinee = prettyPrint(term.scrutinee, context);
+      const scrutinee = prettyPrintTT(term.scrutinee, context);
       const clauses = term.clauses.map(c => {
         // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
-        const patternStr = c.patterns.map(p => prettyPrintPattern(p)).join(' ');
-        const rhsStr = prettyPrint(c.rhs, context);
+        const patternStr = c.patterns.map(p => prettyPrintPatternTT(p)).join(' ');
+        const rhsStr = prettyPrintTT(c.rhs, context);
         return `${patternStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
@@ -1202,7 +1322,7 @@ function matchEqApp(term: TTerm): { typeArg: TTerm; lhs: TTerm; rhs: TTerm } | n
 /**
  * Convert a TT term to a LaTeX string for mathematical rendering
  */
-export function prettyPrintLatex(
+export function prettyPrintLatexTT(
   term: TTerm,
   context: string[] = [],
   options: LatexPrintOptions = defaultLatexOptions
@@ -1212,10 +1332,10 @@ export function prettyPrintLatex(
   // Check for Eq pattern first
   const eqMatch = matchEqApp(term);
   if (eqMatch) {
-    const lhs = prettyPrintLatex(eqMatch.lhs, context, opts);
-    const rhs = prettyPrintLatex(eqMatch.rhs, context, opts);
+    const lhs = prettyPrintLatexTT(eqMatch.lhs, context, opts);
+    const rhs = prettyPrintLatexTT(eqMatch.rhs, context, opts);
     if (opts.showEqTypeSubscript) {
-      const typeArg = prettyPrintLatex(eqMatch.typeArg, context, opts);
+      const typeArg = prettyPrintLatexTT(eqMatch.typeArg, context, opts);
       return `${lhs} =_{${typeArg}} ${rhs}`;
     } else {
       return `${lhs} = ${rhs}`;
@@ -1242,33 +1362,33 @@ export function prettyPrintLatex(
       return term.name.replace(/_/g, '\\_');
 
     case 'Binder': {
-      const domain = prettyPrintLatex(term.domain, context, opts);
+      const domain = prettyPrintLatexTT(term.domain, context, opts);
       const newContext = [term.name, ...context];
-      const body = prettyPrintLatex(term.body, newContext, opts);
+      const body = prettyPrintLatexTT(term.body, newContext, opts);
       const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
-        case 'BPi':
-          if (isAnonymous || !occursIn(0, term.body)) {
+        case 'BPiTT':
+          if (isAnonymous || !occursInTT(0, term.body)) {
             return `(${domain} \\to ${body})`;
           }
           return `(\\Pi\\, (${term.name} : ${domain}),\\, ${body})`;
 
-        case 'BLam':
+        case 'BLamTT':
           if (isAnonymous) {
             return `(\\lambda\\, ${domain},\\, ${body})`;
           }
           return `(\\lambda\\, (${term.name} : ${domain}),\\, ${body})`;
 
-        case 'BLet':
-          const defVal = prettyPrintLatex(term.binderKind.defVal, context, opts);
+        case 'BLetTT':
+          const defVal = prettyPrintLatexTT(term.binderKind.defVal, context, opts);
           return `(\\text{let } ${term.name} : ${domain} := ${defVal} \\text{ in } ${body})`;
       }
     }
 
     case 'App': {
-      const fn = prettyPrintLatex(term.fn, context, opts);
-      const arg = prettyPrintLatex(term.arg, context, opts);
+      const fn = prettyPrintLatexTT(term.fn, context, opts);
+      const arg = prettyPrintLatexTT(term.arg, context, opts);
       return `(${fn}\\; ${arg})`;
     }
 
@@ -1276,14 +1396,14 @@ export function prettyPrintLatex(
       return `?_{${term.id}}`;
 
     case 'Annot':
-      return `(${prettyPrintLatex(term.term, context, opts)} : ${prettyPrintLatex(term.type, context, opts)})`;
+      return `(${prettyPrintLatexTT(term.term, context, opts)} : ${prettyPrintLatexTT(term.type, context, opts)})`;
 
     case 'Match': {
-      const scrutinee = prettyPrintLatex(term.scrutinee, context, opts);
+      const scrutinee = prettyPrintLatexTT(term.scrutinee, context, opts);
       const clauses = term.clauses.map(c => {
         // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
-        const patternStr = c.patterns.map(p => prettyPrintPatternLatex(p)).join('\\; ');
-        const rhsStr = prettyPrintLatex(c.rhs, context, opts);
+        const patternStr = c.patterns.map(p => prettyPrintPatternLatexTT(p)).join('\\; ');
+        const rhsStr = prettyPrintLatexTT(c.rhs, context, opts);
         return `${patternStr} \\Rightarrow ${rhsStr}`;
       }).join(' \\mid ');
       return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
@@ -1294,7 +1414,7 @@ export function prettyPrintLatex(
 /**
  * Pretty-print a pattern in LaTeX format (helper for Match)
  */
-function prettyPrintPatternLatex(pattern: TPattern): string {
+function prettyPrintPatternLatexTT(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       // Escape underscores for LaTeX (including "_" wildcards)
@@ -1303,7 +1423,7 @@ function prettyPrintPatternLatex(pattern: TPattern): string {
       if (pattern.args.length === 0) {
         return pattern.name.replace(/_/g, '\\_');
       }
-      const args = pattern.args.map(prettyPrintPatternLatex).join('\\; ');
+      const args = pattern.args.map(prettyPrintPatternLatexTT).join('\\; ');
       return `(${pattern.name.replace(/_/g, '\\_')}\\; ${args})`;
   }
 }
@@ -1336,7 +1456,7 @@ export function hypothesesToPi(hypotheses: Array<[string, TTerm]>, goal: TTerm):
   let result = goal;
   for (let i = hypotheses.length - 1; i >= 0; i--) {
     const [name, type] = hypotheses[i];
-    result = mkPi(type, result, name);
+    result = mkPiTT(type, result, name);
   }
   return result;
 }
@@ -1357,7 +1477,7 @@ export function hypothesesToLambda(hypotheses: Array<[string, TTerm]>, body: TTe
   let result = body;
   for (let i = hypotheses.length - 1; i >= 0; i--) {
     const [name, type] = hypotheses[i];
-    result = mkLambda(type, result, name);
+    result = mkLambdaTT(type, result, name);
   }
   return result;
 }
@@ -1380,7 +1500,7 @@ export function hypothesesToLambda(hypotheses: Array<[string, TTerm]>, body: TTe
  */
 export function mkEq(a: TTerm, b: TTerm): TTerm {
   // Eq a b : Prop
-  return mkApp(mkApp(mkConst('Eq', mkProp()), a), b);
+  return mkAppTT(mkAppTT(mkConstTT('Eq', mkPropTT()), a), b);
 }
 
 /**
@@ -1393,7 +1513,7 @@ export function mkEq(a: TTerm, b: TTerm): TTerm {
  */
 export function mkRefl(a: TTerm): TTerm {
   // refl : ∀ {α : Type} (a : α), a = a
-  return mkApp(mkConst('refl', mkProp()), a);
+  return mkAppTT(mkConstTT('refl', mkPropTT()), a);
 }
 
 /**
@@ -1406,7 +1526,7 @@ export function mkRefl(a: TTerm): TTerm {
  */
 export function mkSym(proof: TTerm): TTerm {
   // sym : ∀ {α : Type} {a b : α}, (a = b) → (b = a)
-  return mkApp(mkConst('sym', mkProp()), proof);
+  return mkAppTT(mkConstTT('sym', mkPropTT()), proof);
 }
 
 /**
@@ -1420,7 +1540,7 @@ export function mkSym(proof: TTerm): TTerm {
  */
 export function mkTrans(proof1: TTerm, proof2: TTerm): TTerm {
   // trans : ∀ {α : Type} {a b c : α}, (a = b) → (b = c) → (a = c)
-  return mkApp(mkApp(mkConst('trans', mkProp()), proof1), proof2);
+  return mkAppTT(mkAppTT(mkConstTT('trans', mkPropTT()), proof1), proof2);
 }
 
 /**
@@ -1434,7 +1554,7 @@ export function mkTrans(proof1: TTerm, proof2: TTerm): TTerm {
  */
 export function mkCong(f: TTerm, proof: TTerm): TTerm {
   // cong : ∀ {α β : Type} (f : α → β) {a b : α}, (a = b) → (f a = f b)
-  return mkApp(mkApp(mkConst('cong', mkProp()), f), proof);
+  return mkAppTT(mkAppTT(mkConstTT('cong', mkPropTT()), f), proof);
 }
 
 // ============================================================================
@@ -1489,7 +1609,7 @@ export function createRootTermDefinition(
   const theoremType = hypothesesToPi(hypotheses, goal);
 
   // Create the initial proof hole
-  const proofHole = mkHole(proofHoleId, theoremType, context);
+  const proofHole = mkHoleTT(proofHoleId, theoremType, context);
 
   return {
     name,
@@ -1538,10 +1658,10 @@ export function createRootProofTerm(
 
   // Create the proof hole (how we prove it)
   // The proof hole's type is the full theorem type
-  const proofHole = mkHole(proofHoleId, theoremType, context);
+  const proofHole = mkHoleTT(proofHoleId, theoremType, context);
 
   // Create the root let-binding
-  return mkLet('_root', theoremType, proofHole, mkVar(0));
+  return mkLetTT('_root', theoremType, proofHole, mkVarTT(0));
 }
 
 /**
@@ -1582,8 +1702,8 @@ function fillHoleWithLet(
     case 'Hole':
       if (term.id === holeId) {
         // Replace this hole with: let letName = letValue in ?newHole
-        const newHole = mkHole(holeId, term.type, term.context);
-        return mkLet(letName, letType, letValue, newHole);
+        const newHole = mkHoleTT(holeId, term.type, term.context);
+        return mkLetTT(letName, letType, letValue, newHole);
       }
       return term;
 
@@ -1597,9 +1717,9 @@ function fillHoleWithLet(
       const newBody = fillHoleWithLet(term.body, holeId, letName, letType, letValue);
 
       let newBinderKind: BinderKind;
-      if (term.binderKind.tag === 'BLet') {
+      if (term.binderKind.tag === 'BLetTT') {
         const newDefVal = fillHoleWithLet(term.binderKind.defVal, holeId, letName, letType, letValue);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+        newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
       } else {
         newBinderKind = term.binderKind;
       }
@@ -1651,7 +1771,7 @@ function fillHoleWithLet(
  */
 export function extractHypothesesFromRoot(rootTerm: TTerm): Array<[string, TTerm]> {
   // Root should be: let _root : (a: R) → (b: R) → ?goal = ...
-  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
   }
 
@@ -1672,7 +1792,7 @@ export function extractHypothesesFromRoot(rootTerm: TTerm): Array<[string, TTerm
  * @returns Updated root term
  */
 export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: TTerm): TTerm {
-  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
   }
 
@@ -1692,7 +1812,7 @@ export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: T
   return {
     tag: 'Binder',
     name: rootTerm.name,
-    binderKind: { tag: 'BLet', defVal: rootTerm.binderKind.defVal },
+    binderKind: { tag: 'BLetTT', defVal: rootTerm.binderKind.defVal },
     domain: newTheoremType,
     body: rootTerm.body
   };
@@ -1709,7 +1829,7 @@ export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: T
  * @returns The goal type
  */
 export function getGoalFromRoot(rootTerm: TTerm): TTerm {
-  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
   }
 
@@ -1728,7 +1848,7 @@ export function getGoalFromRoot(rootTerm: TTerm): TTerm {
  * @returns Updated root term
  */
 export function setGoalInRoot(rootTerm: TTerm, newGoal: TTerm): TTerm {
-  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLet') {
+  if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
   }
 
@@ -1742,7 +1862,7 @@ export function setGoalInRoot(rootTerm: TTerm, newGoal: TTerm): TTerm {
   return {
     tag: 'Binder',
     name: rootTerm.name,
-    binderKind: { tag: 'BLet', defVal: rootTerm.binderKind.defVal },
+    binderKind: { tag: 'BLetTT', defVal: rootTerm.binderKind.defVal },
     domain: newTheoremType,
     body: rootTerm.body
   };
@@ -1755,7 +1875,7 @@ export function setGoalInRoot(rootTerm: TTerm, newGoal: TTerm): TTerm {
 /**
  * Check if variable with De Bruijn index occurs in term
  */
-export function occursIn(index: number, term: TTerm): boolean {
+export function occursInTT(index: number, term: TTerm): boolean {
   switch (term.tag) {
     case 'Var':
       return term.index === index;
@@ -1764,29 +1884,29 @@ export function occursIn(index: number, term: TTerm): boolean {
       return false;
     case 'Binder': {
       // Check in domain and body (going under binder for body)
-      const inDomain = occursIn(index, term.domain);
-      const inBody = occursIn(index + 1, term.body);
+      const inDomain = occursInTT(index, term.domain);
+      const inBody = occursInTT(index + 1, term.body);
 
       // For BLet, also check in the definition value
-      if (term.binderKind.tag === 'BLet') {
-        return inDomain || occursIn(index, term.binderKind.defVal) || inBody;
+      if (term.binderKind.tag === 'BLetTT') {
+        return inDomain || occursInTT(index, term.binderKind.defVal) || inBody;
       }
       return inDomain || inBody;
     }
     case 'App':
-      return occursIn(index, term.fn) || occursIn(index, term.arg);
+      return occursInTT(index, term.fn) || occursInTT(index, term.arg);
     case 'Hole':
-      return occursIn(index, term.type);
+      return occursInTT(index, term.type);
     case 'Annot':
-      return occursIn(index, term.term) || occursIn(index, term.type);
+      return occursInTT(index, term.term) || occursInTT(index, term.type);
 
     case 'Match':
       // Check scrutinee
-      if (occursIn(index, term.scrutinee)) return true;
+      if (occursInTT(index, term.scrutinee)) return true;
       // Check all clause RHS terms
       // TODO: when we implement proper pattern binding, adjust index for pattern-bound vars
       for (const clause of term.clauses) {
-        if (occursIn(index, clause.rhs)) return true;
+        if (occursInTT(index, clause.rhs)) return true;
       }
       return false;
   }
@@ -1811,7 +1931,7 @@ export function flattenPiBinders(term: TTerm): Array<[string, TTerm]> {
   const binders: Array<[string, TTerm]> = [];
   let current = term;
 
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
     binders.push([current.name, current.domain]);
     current = current.body;
   }
@@ -1831,7 +1951,7 @@ export function flattenPiBinders(term: TTerm): Array<[string, TTerm]> {
 export function getFinalReturnType(term: TTerm): TTerm {
   let current = term;
 
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
     current = current.body;
   }
 
@@ -1942,7 +2062,7 @@ export function flattenLetBindings(term: TTerm): Array<[string, TTerm, TTerm]> {
   const lets: Array<[string, TTerm, TTerm]> = [];
   let current = term;
 
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BLetTT') {
     lets.push([current.name, current.domain, current.binderKind.defVal]);
     current = current.body;
   }
@@ -1959,7 +2079,7 @@ export function flattenLetBindings(term: TTerm): Array<[string, TTerm, TTerm]> {
 export function getFinalLetBody(term: TTerm): TTerm {
   let current = term;
 
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BLetTT') {
     current = current.body;
   }
 
@@ -1994,7 +2114,7 @@ export function insertLetBinding(
   let result = body;
   for (let i = lets.length - 1; i >= 0; i--) {
     const [n, t, v] = lets[i];
-    result = mkLet(n, t, v, result);
+    result = mkLetTT(n, t, v, result);
   }
 
   return result;
@@ -2019,7 +2139,7 @@ export function removeLetBinding(term: TTerm, position: number): TTerm {
   let result = body;
   for (let i = lets.length - 1; i >= 0; i--) {
     const [n, t, v] = lets[i];
-    result = mkLet(n, t, v, result);
+    result = mkLetTT(n, t, v, result);
   }
 
   return result;
@@ -2107,7 +2227,7 @@ export function getAtPath(term: TTerm, path: TermPath): TTerm | null {
           }
           break;
         case 'defVal':
-          if (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+          if (current.tag === 'Binder' && current.binderKind.tag === 'BLetTT') {
             current = current.binderKind.defVal;
           } else {
             return null;
@@ -2207,13 +2327,13 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
       };
 
     case 'defVal':
-      if (term.tag !== 'Binder' || term.binderKind.tag !== 'BLet') {
+      if (term.tag !== 'Binder' || term.binderKind.tag !== 'BLetTT') {
         throw new Error('Cannot access defVal of non-let term');
       }
       return {
         ...term,
         binderKind: {
-          tag: 'BLet',
+          tag: 'BLetTT',
           defVal: updateAtPath(term.binderKind.defVal, rest, newTerm)
         }
       };
@@ -2350,9 +2470,9 @@ export function mkProjection(
   fieldType: TTerm
 ): TTerm {
   // Projection : Record → FieldType
-  return mkConst(
+  return mkConstTT(
     `${recordName}.${fieldName}`,
-    mkPi(recordType, fieldType, 'self')
+    mkPiTT(recordType, fieldType, 'self')
   );
 }
 
@@ -2378,7 +2498,7 @@ export function mkRecordConstructorType(
   for (let i = 0; i < params.length; i++) {
     // Apply record to Var(params.length - 1 - i) - the parameter at this position
     // Since we're building the constructor type where params are the outermost binders
-    appliedRecord = mkApp(appliedRecord, mkVar(params.length - 1 - i + fields.length));
+    appliedRecord = mkAppTT(appliedRecord, mkVarTT(params.length - 1 - i + fields.length));
   }
 
   // Start with the applied record as the return type
@@ -2387,13 +2507,13 @@ export function mkRecordConstructorType(
   // Add field types as arguments (innermost to outermost)
   for (let i = fields.length - 1; i >= 0; i--) {
     const field = fields[i];
-    result = mkPi(field.type, result, field.name);
+    result = mkPiTT(field.type, result, field.name);
   }
 
   // Add parameter types as outermost binders
   for (let i = params.length - 1; i >= 0; i--) {
     const [paramName, paramType] = params[i];
-    result = mkPi(paramType, result, paramName);
+    result = mkPiTT(paramType, result, paramName);
   }
 
   return result;
@@ -2415,7 +2535,7 @@ export function mkRecordConstructor(
   params: Array<[string, TTerm]> = []
 ): TTerm {
   const ctorType = mkRecordConstructorType(recordRef, fields, params);
-  return mkConst(`${recordName}.mk`, ctorType);
+  return mkConstTT(`${recordName}.mk`, ctorType);
 }
 
 /**
@@ -2426,7 +2546,7 @@ export function mkRecordConstructor(
  * @returns Application term: projection instance
  */
 export function mkFieldAccess(projection: TTerm, instance: TTerm): TTerm {
-  return mkApp(projection, instance);
+  return mkAppTT(projection, instance);
 }
 
 /**

@@ -12,11 +12,11 @@
  * separate from the UI representation.
  */
 
-import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrint, TTermApp } from '../compiler/surface';
+import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrintTT, TTermApp } from '../compiler/surface';
 
 // Helper to convert TTerm to plain text string
 function ttermToString(term: TTerm): string {
-  return prettyPrint(term);
+  return prettyPrintTT(term);
 }
 
 export interface TTViewerProps {
@@ -322,7 +322,7 @@ function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm,
   // Extend context with this binding for the body
   const extendedContext: TContext = [{ name: binderTerm.name, type: binderTerm.domain }, ...context];
 
-  if (binderTerm.binderKind.tag === 'BLet') {
+  if (binderTerm.binderKind.tag === 'BLetTT') {
     return (
       <div>
         <div style={{ display: 'flex', flexDirection: 'row', gap: '4px', alignItems: 'center' }}>
@@ -333,7 +333,7 @@ function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm,
         </div>
       </div>
     )
-  } else if (binderTerm.binderKind.tag === 'BPi') {
+  } else if (binderTerm.binderKind.tag === 'BPiTT') {
     return (
       <div>
         <div style={{ display: 'flex', flexDirection: 'row', gap: '4px', alignItems: 'center' }}>

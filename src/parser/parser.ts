@@ -26,7 +26,7 @@
  * - Legacy: def/theorem/axiom keywords still supported
  */
 
-import { TTerm, mkVar, mkPi, mkLambda, mkLet, mkApp, mkConst, mkHole, mkProp, mkType, TPattern, TClause } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, TPattern, TClause } from '../compiler/surface';
 import { groupByIndentation, parseBlock } from './indentation-grouper';
 import {
   SourceMap,
@@ -946,7 +946,7 @@ export class Parser {
       value: {
         tag: 'Match',
         // Placeholder scrutinee - will be fixed during elaboration/desugaring
-        scrutinee: mkHole('_scrutinee', mkHole('_scrutinee_type', mkProp())),
+        scrutinee: mkHoleTT('_scrutinee', mkHoleTT('_scrutinee_type', mkPropTT())),
         clauses: [{
           patterns,
           rhs
@@ -1126,7 +1126,7 @@ export class Parser {
         const arrowCtx = ['_', ...ctx];
         const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
         const right = this.exprUntil(ARROW_PRECEDENCE, arrowCtx, stopTokens, bodyPath);
-        left = mkPi(left, right, '_');
+        left = mkPiTT(left, right, '_');
         continue;
       }
 
@@ -1146,8 +1146,8 @@ export class Parser {
 
         const right = this.exprUntil(rightPrec, ctx, stopTokens);
 
-        const opConst = mkConst(opInfo.constName || token.value, mkHole('op_type', mkProp()));
-        left = mkApp(mkApp(opConst, left), right);
+        const opConst = mkConstTT(opInfo.constName || token.value, mkHoleTT('op_type', mkPropTT()));
+        left = mkAppTT(mkAppTT(opConst, left), right);
         continue;
       }
 
@@ -1171,7 +1171,7 @@ export class Parser {
 
         const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
         const arg = this.parsePrefix(ctx, argPath);
-        left = mkApp(left, arg);
+        left = mkAppTT(left, arg);
         continue;
       }
 
@@ -1220,7 +1220,7 @@ export class Parser {
         const right = this.expr(ARROW_PRECEDENCE, arrowCtx, bodyPath);
 
         // Non-dependent arrow: Π (_: left) . right
-        left = mkPi(left, right, '_');
+        left = mkPiTT(left, right, '_');
         continue;
       }
 
@@ -1244,8 +1244,8 @@ export class Parser {
         const right = this.expr(rightPrec, ctx, path);
 
         // Create binary application: op left right
-        const opConst = mkConst(opInfo.constName || token.value, mkHole('op_type', mkProp()));
-        left = mkApp(mkApp(opConst, left), right);
+        const opConst = mkConstTT(opInfo.constName || token.value, mkHoleTT('op_type', mkPropTT()));
+        left = mkAppTT(mkAppTT(opConst, left), right);
         continue;
       }
 
@@ -1271,7 +1271,7 @@ export class Parser {
 
         const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
         const arg = this.parsePrefix(ctx, argPath);
-        left = mkApp(left, arg);
+        left = mkAppTT(left, arg);
         continue;
       }
 
@@ -1316,11 +1316,11 @@ export class Parser {
 
       case 'PROP':
         this.advance();
-        return mkProp();
+        return mkPropTT();
 
       case 'HOLE':
         this.advance();
-        return mkHole(token.value, mkHole('hole_type', mkProp()));
+        return mkHoleTT(token.value, mkHoleTT('hole_type', mkPropTT()));
 
       case 'IDENT':
         return this.parseIdent(ctx, path);
@@ -1331,7 +1331,7 @@ export class Parser {
 
       case 'UNDERSCORE':
         this.advance();
-        return mkHole('_', mkHole('underscore_type', mkProp()));
+        return mkHoleTT('_', mkHoleTT('underscore_type', mkPropTT()));
 
       default:
         throw new ParseError(
@@ -1374,7 +1374,7 @@ export class Parser {
           // Parse the body at path.body
           const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
           const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
-          return mkPi(type, body, name);
+          return mkPiTT(type, body, name);
         }
 
         // Otherwise it's a type annotation or just a parenthesized typed variable
@@ -1383,7 +1383,7 @@ export class Parser {
         // This is tricky - let's assume it's annotation where x is looked up in context
         const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
         const idx = ctx.indexOf(name);
-        const term = idx >= 0 ? mkVar(idx) : mkConst(name, mkHole('const_type', mkProp()));
+        const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name, mkHoleTT('const_type', mkPropTT()));
         return { tag: 'Annot', term, type };
       } else {
         // Not a binder - backtrack and parse as expression
@@ -1480,7 +1480,7 @@ export class Parser {
           );
         }
 
-        binders.push({ name, type: mkHole(`${name}_type`, mkProp()), startToken: binderStartToken });
+        binders.push({ name, type: mkHoleTT(`${name}_type`, mkPropTT()), startToken: binderStartToken });
         ctx = [name, ...ctx];
       } else {
         break;
@@ -1517,7 +1517,7 @@ export class Parser {
     let currentPath = bodyPath;
 
     for (let i = binders.length - 1; i >= 0; i--) {
-      result = mkLambda(binders[i].type, result, binders[i].name);
+      result = mkLambdaTT(binders[i].type, result, binders[i].name);
 
       // Move path up one level (remove the last .body)
       currentPath = currentPath.slice(0, -1);
@@ -1556,7 +1556,7 @@ export class Parser {
       const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
       type = this.expr(0, ctx, domainPath);
     } else {
-      type = mkHole(`${name}_type`, mkProp());
+      type = mkHoleTT(`${name}_type`, mkPropTT());
     }
 
     this.expect('ASSIGN');
@@ -1574,7 +1574,7 @@ export class Parser {
       this.recordRange(path, startToken, endToken);
     }
 
-    return mkLet(name, type, value, body);
+    return mkLetTT(name, type, value, body);
   }
 
   /**
@@ -1969,18 +1969,18 @@ export class Parser {
       const levelStr = typeToken.value.substring(5);
       const level = parseInt(levelStr, 10);
       if (!isNaN(level)) {
-        result = mkType(level + 1);  // Type_n = Sort(n+1)
+        result = mkTypeTT(level + 1);  // Type_n = Sort(n+1)
       } else {
-        result = mkType(1);
+        result = mkTypeTT(1);
       }
     } else if (this.current().type === 'NUMBER') {
       // Check for "Type n" syntax (space followed by number)
       const level = parseInt(this.current().value, 10);
       this.advance();
-      result = mkType(level + 1);  // Type n = Sort(n+1)
+      result = mkTypeTT(level + 1);  // Type n = Sort(n+1)
     } else {
       // Just "Type" means Sort(1)
-      result = mkType(1);
+      result = mkTypeTT(1);
     }
 
     // Record position for Type
@@ -2015,11 +2015,11 @@ export class Parser {
     // Look up in context for De Bruijn index
     const idx = ctx.indexOf(name);
     if (idx >= 0) {
-      return mkVar(idx);
+      return mkVarTT(idx);
     }
 
     // Not in context - treat as constant
-    return mkConst(name, mkHole(`${name}_type`, mkProp()));
+    return mkConstTT(name, mkHoleTT(`${name}_type`, mkPropTT()));
   }
 
   /**
@@ -2028,7 +2028,7 @@ export class Parser {
   private parseNumberLiteral(value: string): TTerm {
     // For now, represent numbers as constants
     // In a full implementation, we'd build Nat.succ chains
-    return mkConst(value, mkConst('ℕ', mkType(0)));
+    return mkConstTT(value, mkConstTT('ℕ', mkTypeTT(0)));
   }
 
   /**

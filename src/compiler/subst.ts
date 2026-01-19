@@ -271,6 +271,54 @@ export function containsVarIndex(term: TTKTerm, targetIndex: number): boolean {
   return containsVarIndexHelper(term, targetIndex, 0);
 }
 
+/**
+ * Get all free variable indices in a term.
+ * Returns an array of indices (De Bruijn levels) that appear free in the term.
+ */
+export function freeVarIndices(term: TTKTerm): number[] {
+  const indices = new Set<number>();
+  freeVarIndicesHelper(term, 0, indices);
+  return Array.from(indices);
+}
+
+function freeVarIndicesHelper(term: TTKTerm, depth: number, indices: Set<number>): void {
+  switch (term.tag) {
+    case 'Var':
+      // Only count as free if index >= depth (not bound by local binders)
+      if (term.index >= depth) {
+        indices.add(term.index - depth);
+      }
+      break;
+    case 'Sort':
+    case 'Const':
+      break;
+    case 'Binder':
+      freeVarIndicesHelper(term.domain, depth, indices);
+      freeVarIndicesHelper(term.body, depth + 1, indices);
+      if (term.binderKind.tag === 'BLet') {
+        freeVarIndicesHelper(term.binderKind.defVal, depth, indices);
+      }
+      break;
+    case 'App':
+      freeVarIndicesHelper(term.fn, depth, indices);
+      freeVarIndicesHelper(term.arg, depth, indices);
+      break;
+    case 'Hole':
+      freeVarIndicesHelper(term.type, depth, indices);
+      break;
+    case 'Annot':
+      freeVarIndicesHelper(term.term, depth, indices);
+      freeVarIndicesHelper(term.type, depth, indices);
+      break;
+    case 'Match':
+      freeVarIndicesHelper(term.scrutinee, depth, indices);
+      for (const clause of term.clauses) {
+        freeVarIndicesHelper(clause.rhs, depth, indices);
+      }
+      break;
+  }
+}
+
 function containsVarIndexHelper(term: TTKTerm, targetIndex: number, depth: number): boolean {
   switch (term.tag) {
     case 'Var':

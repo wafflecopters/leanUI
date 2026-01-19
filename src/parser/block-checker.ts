@@ -15,14 +15,14 @@
 
 import { groupByIndentation, SourceBlock } from './indentation-grouper';
 import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } from './parser';
-import { elabToKernelWithMap } from '../compiler/elab';
+import { elabToKernelWithMap, elabToKernel } from '../compiler/elab';
 import { CheckError } from '../compiler/term';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
 import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatterns } from './pattern-resolution';
-import { prettyPrint, TTerm } from '../compiler/surface';
+import { prettyPrintTT, TTerm } from '../compiler/surface';
 
 // ============================================================================
 // Stub Types and Functions
@@ -252,12 +252,12 @@ export function elaborateTTBlocks(
       // Infer which positions are parameters vs indices
       // Parameters can quantify over the same universe, indices must be smaller
       let indexPositions: number[] | undefined;
-      if (decl.name && decl.type && decl.constructors) {
+      if (decl.name) {
         try {
           indexPositions = inferParameterIndices({
             name: decl.name,
-            type: decl.type,
-            constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
+            type: kernelType,
+            constructors: kernelConstructors.map(c => ({ name: c.name, type: c.type }))
           });
         } catch {
           // If inference fails, treat all positions as indices (conservative)
@@ -791,11 +791,16 @@ function extractInductiveParamInfo(decl: ParsedDeclaration): InductiveParamInfo[
     return undefined;
   }
 
-  // Convert to the format expected by inferParameterIndices
+  // Convert to the format expected by inferParameterIndices (kernel terms)
+  const kernelType = elabToKernel(decl.type);
+  const kernelConstructors = decl.constructors.map(c => ({
+    name: c.name,
+    type: elabToKernel(c.type)
+  }));
   const inductiveDef = {
     name: decl.name,
-    type: decl.type,
-    constructors: decl.constructors.map(c => ({ name: c.name, type: c.type }))
+    type: kernelType,
+    constructors: kernelConstructors
   };
 
   try {
@@ -807,10 +812,10 @@ function extractInductiveParamInfo(decl: ParsedDeclaration): InductiveParamInfo[
     let current: TTerm = decl.type;
     let position = 0;
 
-    while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
       params.push({
         name: current.name || `_${position}`,
-        type: prettyPrint(current.domain),
+        type: prettyPrintTT(current.domain),
         isIndex: indexPositions.has(position)
       });
       current = current.body;

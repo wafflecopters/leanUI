@@ -1,4 +1,4 @@
-import { TTKTerm } from "./kernel";
+import { TTKTerm, isDefinitionallyEqual } from "./kernel";
 import { subst } from "./subst";
 
 /**
@@ -118,62 +118,6 @@ export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm): boolean {
         if (!areTypesDefEq(n1.clauses[i].rhs, n2.clauses[i].rhs)) return false;
       }
       return true;
-  }
-}
-
-
-/**
- * Check if two kernel terms are definitionally equal (structural).
- */
-export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
-  if (term1.tag !== term2.tag) return false;
-
-  switch (term1.tag) {
-    case 'Var':
-      return term2.tag === 'Var' && term1.index === term2.index;
-
-    case 'Sort':
-      return term2.tag === 'Sort' && term1.level === term2.level;
-
-    case 'Const':
-      return term2.tag === 'Const' && term1.name === term2.name;
-
-    case 'Hole':
-      return term2.tag === 'Hole' && term1.id === term2.id;
-
-    case 'Binder': {
-      if (term2.tag !== 'Binder') return false;
-      if (term1.binderKind.tag !== term2.binderKind.tag) return false;
-      if (term1.binderKind.tag === 'BLet' && term2.binderKind.tag === 'BLet') {
-        if (!isDefinitionallyEqual(term1.binderKind.defVal, term2.binderKind.defVal)) {
-          return false;
-        }
-      }
-      return isDefinitionallyEqual(term1.domain, term2.domain) &&
-        isDefinitionallyEqual(term1.body, term2.body);
-    }
-
-    case 'App': {
-      if (term2.tag !== 'App') return false;
-      return isDefinitionallyEqual(term1.fn, term2.fn) &&
-        isDefinitionallyEqual(term1.arg, term2.arg);
-    }
-
-    case 'Annot': {
-      if (term2.tag !== 'Annot') return false;
-      return isDefinitionallyEqual(term1.term, term2.term) &&
-        isDefinitionallyEqual(term1.type, term2.type);
-    }
-
-    case 'Match': {
-      if (term2.tag !== 'Match') return false;
-      if (!isDefinitionallyEqual(term1.scrutinee, term2.scrutinee)) return false;
-      if (term1.clauses.length !== term2.clauses.length) return false;
-      for (let i = 0; i < term1.clauses.length; i++) {
-        if (!isDefinitionallyEqual(term1.clauses[i].rhs, term2.clauses[i].rhs)) return false;
-      }
-      return true;
-    }
   }
 }
 

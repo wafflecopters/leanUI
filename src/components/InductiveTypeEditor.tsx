@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
-import { TTerm, mkType } from '../compiler/surface';
+import { TTerm, mkTypeTT } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { ConstructorsSection, Constructor, createConstructorForInductive } from './ConstructorsSection';
@@ -39,7 +39,7 @@ function InductiveTypeEditorInner() {
   // Top-level state for a single inductive type definition
   const [inductiveDef, setInductiveDef] = useState<InductiveTypeDef>({
     name: 'MyInductive',
-    type: mkType(0), // Start with Type_0
+    type: mkTypeTT(0), // Start with Type_0
     constructors: []
   });
 

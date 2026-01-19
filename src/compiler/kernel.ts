@@ -157,6 +157,13 @@ export function mkApp(fn: TTKTerm, arg: TTKTerm): TTKTerm {
 }
 
 /**
+ * Apply a function to multiple arguments (left-associative)
+ */
+export function mkAppSpine(fn: TTKTerm, args: TTKTerm[]): TTKTerm {
+  return args.reduce((acc, arg) => mkApp(acc, arg), fn);
+}
+
+/**
  * Create a constant with a given name and type
  */
 export function mkConst(name: string, type: TTKTerm): TTKTerm {

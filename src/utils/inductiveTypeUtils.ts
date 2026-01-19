@@ -4,7 +4,7 @@
  * Helper functions for working with inductive type definitions.
  */
 
-import { TTerm, mkApp, mkConst, mkHole, mkType } from '../compiler/surface';
+import { TTerm, mkAppTT, mkConstTT, mkHoleTT, mkTypeTT } from '../compiler/surface';
 import { freshHoleId } from './termNavigation';
 
 /**
@@ -15,7 +15,7 @@ import { freshHoleId } from './termNavigation';
  *   Nat -> Type -> Type -> 2
  */
 export function countPiArgs(type: TTerm): number {
-  if (type.tag === 'Binder' && type.binderKind.tag === 'BPi') {
+  if (type.tag === 'Binder' && type.binderKind.tag === 'BPiTT') {
     return 1 + countPiArgs(type.body);
   }
   return 0;
@@ -29,7 +29,7 @@ export function getPiDomains(type: TTerm): TTerm[] {
   const domains: TTerm[] = [];
   let current = type;
 
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
     domains.push(current.domain);
     current = current.body;
   }
@@ -58,15 +58,15 @@ export function createDefaultConstructorType(
 
   // Start with the inductive type constant
   // The type of the constant is the inductiveType itself
-  let result: TTerm = mkConst(inductiveName, inductiveType);
+  let result: TTerm = mkConstTT(inductiveName, inductiveType);
 
   // Apply fresh holes for each argument
   for (let i = 0; i < argCount; i++) {
     const holeId = freshHoleId();
     // For simplicity, use Type_0 as the hole's type
     // In a real implementation, we'd use the actual domain type
-    const hole = mkHole(holeId, mkType(0), []);
-    result = mkApp(result, hole);
+    const hole = mkHoleTT(holeId, mkTypeTT(0), []);
+    result = mkAppTT(result, hole);
   }
 
   return result;

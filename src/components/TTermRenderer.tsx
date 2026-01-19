@@ -185,7 +185,7 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
       // Extend telescope for body rendering
       const bodyCtx = extendTelescope(ctx, term.name);
 
-      if (term.binderKind.tag === 'BPi') {
+      if (term.binderKind.tag === 'BPiTT') {
         const domainNode = renderTerm(term.domain, [...path, 'domain'], ctx);
         const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
 
@@ -204,14 +204,14 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
             (<BinderName name={term.name} path={path} ctx={ctx} /> : {domainNode}) <span style={{ color: '#666' }}>→</span> {bodyNode}
           </FocusableSpan>
         );
-      } else if (term.binderKind.tag === 'BLam') {
+      } else if (term.binderKind.tag === 'BLamTT') {
         const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
         return (
           <FocusableSpan path={path} ctx={ctx}>
             λ<BinderName name={term.name} path={path} ctx={ctx} />. {bodyNode}
           </FocusableSpan>
         );
-      } else if (term.binderKind.tag === 'BLet') {
+      } else if (term.binderKind.tag === 'BLetTT') {
         const defValNode = renderTerm(term.binderKind.defVal, [...path, 'domain'], ctx);
         const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
         return (

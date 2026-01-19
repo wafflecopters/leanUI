@@ -17,9 +17,9 @@ import {
   TTerm,
   EditableTerm,
   createRootTermDefinition,
-  mkProp,
-  mkType,
-  prettyPrint,
+  mkPropTT,
+  mkTypeTT,
+  prettyPrintTT,
   flattenLetBindings
 } from '../compiler/surface';
 import {
@@ -40,7 +40,7 @@ import { createApplicationCommandTree } from '../config/navigationCommands';
  * Convert a TT Pi-binder to a UI Assumption.
  */
 function piBinderToAssumption([name, type]: [string, TTerm], index: number): Assumption {
-  let typeStr = prettyPrint(type);
+  let typeStr = prettyPrintTT(type);
 
   return {
     id: `hyp_${index}`,
@@ -69,7 +69,7 @@ function RefactoredProofWorkspaceInner() {
 
   // Initialize with empty workspace
   const initialTerm = useMemo(() => {
-    const def = createRootTermDefinition('_root', [], mkProp(), 'proof', []);
+    const def = createRootTermDefinition('_root', [], mkPropTT(), 'proof', []);
     return EditableTerm.fromTermDefinition(def);
   }, []);
 
@@ -127,9 +127,9 @@ function RefactoredProofWorkspaceInner() {
     const [name, typeStr] = parts;
 
     // Parse type string to TTerm
-    const typeTerm = typeStr === 'Type' ? mkType(1) :
-                     typeStr === 'Prop' ? mkProp() :
-                     { tag: 'Const' as const, name: typeStr, type: mkProp() };
+    const typeTerm = typeStr === 'Type' ? mkTypeTT(1) :
+                     typeStr === 'Prop' ? mkPropTT() :
+                     { tag: 'Const' as const, name: typeStr, type: mkPropTT() };
 
     dispatch({
       type: 'addHypothesis',
@@ -201,7 +201,7 @@ function RefactoredProofWorkspaceInner() {
       }}>
         <div><strong>Focus:</strong> {defNav.getFocusDescription()}</div>
         <div><strong>Hypotheses:</strong> {term.hypotheses.length}</div>
-        <div><strong>Goal:</strong> {prettyPrint(term.goal)}</div>
+        <div><strong>Goal:</strong> {prettyPrintTT(term.goal)}</div>
       </div>
 
       {/* Hypotheses Section */}
@@ -246,7 +246,7 @@ function RefactoredProofWorkspaceInner() {
                   </span>
                   <span style={{ color: '#999' }}>:</span>
                   <span style={{ fontFamily: 'monospace' }}>
-                    {prettyPrint(type)}
+                    {prettyPrintTT(type)}
                   </span>
                 </div>
                 {isFocused && (
@@ -309,7 +309,7 @@ function RefactoredProofWorkspaceInner() {
           }}
           onClick={() => defNav.focusGoal()}
         >
-          {prettyPrint(term.goal)}
+          {prettyPrintTT(term.goal)}
         </div>
 
         {/* Edit Goal Form */}
@@ -362,9 +362,9 @@ function RefactoredProofWorkspaceInner() {
                   fontSize: '14px'
                 }}
               >
-                <div><strong>let</strong> {name} : {prettyPrint(type)} :=</div>
+                <div><strong>let</strong> {name} : {prettyPrintTT(type)} :=</div>
                 <div style={{ marginLeft: '20px', marginTop: '4px' }}>
-                  {prettyPrint(value)}
+                  {prettyPrintTT(value)}
                 </div>
               </div>
             ))
@@ -381,7 +381,7 @@ function RefactoredProofWorkspaceInner() {
             fontFamily: 'monospace',
             fontSize: '14px'
           }}>
-            {prettyPrint(term.body)}
+            {prettyPrintTT(term.body)}
           </div>
         </div>
       </section>

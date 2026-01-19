@@ -11,7 +11,7 @@
  */
 
 import { Command, createCommand, CommandContext } from '../types/commands';
-import { TTerm, mkType, mkPi, mkHole } from '../compiler/surface';
+import { TTerm, mkTypeTT, mkPiTT, mkHoleTT } from '../compiler/surface';
 import {
   TermFocusPath,
   getTermAtPath,
@@ -174,8 +174,8 @@ export function createTypeEditingCommands(): Command[] {
               if (!focusedTerm) return { preventDefault: true };
 
               const holeId = freshHoleId();
-              const hole = mkHole(holeId, mkType(0), []);
-              const newPi = mkPi(hole, focusedTerm, '');
+              const hole = mkHoleTT(holeId, mkTypeTT(0), []);
+              const newPi = mkPiTT(hole, focusedTerm, '');
 
               const newTerm = setTermAtPath(ctx.term, ctx.focusPath, newPi);
               if (!newTerm) return { preventDefault: true };
@@ -200,7 +200,7 @@ export function createTypeEditingCommands(): Command[] {
         const ctx = getTypeEditingContext(context);
         if (!ctx) return { preventDefault: true };
 
-        const newTerm = setTermAtPath(ctx.term, ctx.focusPath, mkType(0));
+        const newTerm = setTermAtPath(ctx.term, ctx.focusPath, mkTypeTT(0));
         if (!newTerm) return { preventDefault: true };
 
         ctx.setTerm(newTerm);

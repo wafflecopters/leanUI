@@ -21,8 +21,9 @@
 import { useMemo, useState } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
 import { expressionNodeToTTerm, expressionPathToTTermPath } from '../compiler/bridge';
-import { asLambdaByExtractingTermAtIndexPaths, prettyPrint, TContext, TTerm } from '../compiler/surface';
-import { inferType, TTKContext } from '../compiler/kernel';
+import { asLambdaByExtractingTermAtIndexPaths, prettyPrintTT, TContext, TTerm } from '../compiler/surface';
+import { elabToKernel, elabContextToKernel } from '../compiler/elab';
+import { inferType, TTKContext, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
 // Helper to convert TContext to Maps for expressionNodeToTTerm
 function contextToMaps(context: TContext): { varContext: Map<string, number>; typeContext: Map<string, TTerm> } {
@@ -74,13 +75,16 @@ export function FocusedExpressionRenderer({
 
       const { varContext, typeContext: typeCtxMap } = contextToMaps(typeContext);
       const focusedTTerm = expressionNodeToTTerm(focusedNode, varContext, typeCtxMap);
-      const typeResult = inferType(focusedTTerm, typeContext);
+      // Elaborate to kernel term and context for type inference
+      const focusedTTKTerm = elabToKernel(focusedTTerm);
+      const kernelContext = elabContextToKernel(typeContext);
+      const typeResult = inferType(focusedTTKTerm, kernelContext);
 
       if (!typeResult.ok) {
         return { error: typeResult.error };
       }
 
-      return { type: prettyPrint(typeResult.type) };
+      return { type: prettyPrintTTK(typeResult.type) };
     } catch (error) {
       return { error: String(error) };
     }
@@ -107,9 +111,9 @@ export function FocusedExpressionRenderer({
       }
 
       return {
-        lambda: prettyPrint(result.lambda),
-        extracted: prettyPrint(result.extracted),
-        application: `(${prettyPrint(result.lambda)}) ${prettyPrint(result.extracted)}`
+        lambda: prettyPrintTT(result.lambda),
+        extracted: prettyPrintTT(result.extracted),
+        application: `(${prettyPrintTT(result.lambda)}) ${prettyPrintTT(result.extracted)}`
       };
     } catch (error) {
       return { error: error instanceof Error ? error.message : 'Unknown error' };

@@ -17,11 +17,11 @@
 
 import {
   TTerm,
-  mkType,
-  mkPi,
-  mkConst,
-  mkApp,
-  mkVar,
+  mkTypeTT,
+  mkPiTT,
+  mkConstTT,
+  mkAppTT,
+  mkVarTT,
   RecordDef,
 } from './surface';
 
@@ -51,14 +51,14 @@ export interface InductiveConstructor {
 // ============================================================================
 
 /** Type_0 (the type of types at level 0) */
-const Type0 = mkType(0);
+const Type0 = mkTypeTT(0);
 
 /**
  * Create a constant reference to an inductive type.
  * The type parameter should be the kind of the inductive type.
  */
 function mkInductiveRef(name: string, kind: TTerm): TTerm {
-  return mkConst(name, kind);
+  return mkConstTT(name, kind);
 }
 
 /**
@@ -66,7 +66,7 @@ function mkInductiveRef(name: string, kind: TTerm): TTerm {
  * (This is just Pi where the body doesn't use the bound variable)
  */
 function mkArrow(domain: TTerm, codomain: TTerm): TTerm {
-  return mkPi(domain, codomain, '_');
+  return mkPiTT(domain, codomain, '_');
 }
 
 // ============================================================================
@@ -176,9 +176,9 @@ function makeList(): InductiveTypeDef {
         name: 'nil',
         // nil : (A : Type) -> List A
         // Inside the Pi, A is at index 0
-        type: mkPi(
+        type: mkPiTT(
           Type0,
-          mkApp(List, mkVar(0)),
+          mkAppTT(List, mkVarTT(0)),
           'A'
         ),
       },
@@ -190,13 +190,13 @@ function makeList(): InductiveTypeDef {
         //   (_ : A) ->        -- A at index 1, _ at index 0 in next level
         //     (_ : List A) -> -- A at index 2 in next level
         //       List A        -- A at index 2
-        type: mkPi(
+        type: mkPiTT(
           Type0,
-          mkPi(
-            mkVar(0), // A (at index 0)
-            mkPi(
-              mkApp(List, mkVar(1)), // List A (A at index 1)
-              mkApp(List, mkVar(2)), // List A (A at index 2)
+          mkPiTT(
+            mkVarTT(0), // A (at index 0)
+            mkPiTT(
+              mkAppTT(List, mkVarTT(1)), // List A (A at index 1)
+              mkAppTT(List, mkVarTT(2)), // List A (A at index 2)
               '_'
             ),
             '_'
@@ -223,13 +223,13 @@ function makeList(): InductiveTypeDef {
  */
 function makeVec(): InductiveTypeDef {
   const Nat = mkInductiveRef('Nat', Type0);
-  const succ = mkConst('succ', mkArrow(Nat, Nat));
+  const succ = mkConstTT('succ', mkArrow(Nat, Nat));
 
   // Vec : Type -> Nat -> Type
-  const VecKind = mkPi(Type0, mkArrow(Nat, Type0), 'A');
+  const VecKind = mkPiTT(Type0, mkArrow(Nat, Type0), 'A');
   const Vec = mkInductiveRef('Vec', VecKind);
 
-  const zero = mkConst('zero', Nat);
+  const zero = mkConstTT('zero', Nat);
 
   return {
     name: 'Vec',
@@ -238,9 +238,9 @@ function makeVec(): InductiveTypeDef {
       {
         name: 'vnil',
         // vnil : (A : Type) -> Vec A 0
-        type: mkPi(
+        type: mkPiTT(
           Type0,
-          mkApp(mkApp(Vec, mkVar(0)), zero),
+          mkAppTT(mkAppTT(Vec, mkVarTT(0)), zero),
           'A'
         ),
       },
@@ -253,15 +253,15 @@ function makeVec(): InductiveTypeDef {
         //     (_ : A) ->          -- A at 2, n at 1, _ at 0
         //       (_ : Vec A n) ->  -- A at 3, n at 2
         //         Vec A (succ n)  -- A at 3, n at 2
-        type: mkPi(
+        type: mkPiTT(
           Type0,
-          mkPi(
+          mkPiTT(
             Nat,
-            mkPi(
-              mkVar(1), // A (at index 1)
-              mkPi(
-                mkApp(mkApp(Vec, mkVar(2)), mkVar(1)), // Vec A n (A at 2, n at 1)
-                mkApp(mkApp(Vec, mkVar(3)), mkApp(succ, mkVar(2))), // Vec A (succ n)
+            mkPiTT(
+              mkVarTT(1), // A (at index 1)
+              mkPiTT(
+                mkAppTT(mkAppTT(Vec, mkVarTT(2)), mkVarTT(1)), // Vec A n (A at 2, n at 1)
+                mkAppTT(mkAppTT(Vec, mkVarTT(3)), mkAppTT(succ, mkVarTT(2))), // Vec A (succ n)
                 '_'
               ),
               '_'
@@ -288,7 +288,7 @@ function makeVec(): InductiveTypeDef {
  */
 function makeFin(): InductiveTypeDef {
   const Nat = mkInductiveRef('Nat', Type0);
-  const succ = mkConst('succ', mkArrow(Nat, Nat));
+  const succ = mkConstTT('succ', mkArrow(Nat, Nat));
 
   // Fin : Nat -> Type
   const FinKind = mkArrow(Nat, Type0);
@@ -301,9 +301,9 @@ function makeFin(): InductiveTypeDef {
       {
         name: 'fzero',
         // fzero : (n : Nat) -> Fin (succ n)
-        type: mkPi(
+        type: mkPiTT(
           Nat,
-          mkApp(Fin, mkApp(succ, mkVar(0))),
+          mkAppTT(Fin, mkAppTT(succ, mkVarTT(0))),
           'n'
         ),
       },
@@ -313,11 +313,11 @@ function makeFin(): InductiveTypeDef {
         // (n : Nat) ->     -- n at 0
         //   (_ : Fin n) -> -- n at 1
         //     Fin (succ n) -- n at 1
-        type: mkPi(
+        type: mkPiTT(
           Nat,
-          mkPi(
-            mkApp(Fin, mkVar(0)), // Fin n (n at 0)
-            mkApp(Fin, mkApp(succ, mkVar(1))), // Fin (succ n) (n at 1)
+          mkPiTT(
+            mkAppTT(Fin, mkVarTT(0)), // Fin n (n at 0)
+            mkAppTT(Fin, mkAppTT(succ, mkVarTT(1))), // Fin (succ n) (n at 1)
             '_'
           ),
           'n'
@@ -380,13 +380,13 @@ function makeSum(): InductiveTypeDef {
         //   (B : Type) ->     -- A at 1, B at 0
         //     (_ : A) ->      -- A at 2, B at 1
         //       Sum A B       -- A at 2, B at 1
-        type: mkPi(
+        type: mkPiTT(
           Type0,
-          mkPi(
+          mkPiTT(
             Type0,
-            mkPi(
-              mkVar(1), // A (at 1)
-              mkApp(mkApp(Sum, mkVar(2)), mkVar(1)), // Sum A B
+            mkPiTT(
+              mkVarTT(1), // A (at 1)
+              mkAppTT(mkAppTT(Sum, mkVarTT(2)), mkVarTT(1)), // Sum A B
               '_'
             ),
             'B'
@@ -397,13 +397,13 @@ function makeSum(): InductiveTypeDef {
       {
         name: 'inr',
         // inr : (A : Type) -> (B : Type) -> B -> Sum A B
-        type: mkPi(
+        type: mkPiTT(
           Type0,
-          mkPi(
+          mkPiTT(
             Type0,
-            mkPi(
-              mkVar(0), // B (at 0)
-              mkApp(mkApp(Sum, mkVar(2)), mkVar(1)), // Sum A B
+            mkPiTT(
+              mkVarTT(0), // B (at 0)
+              mkAppTT(mkAppTT(Sum, mkVarTT(2)), mkVarTT(1)), // Sum A B
               '_'
             ),
             'B'
@@ -437,11 +437,11 @@ function makeMagmaRecord(): RecordDef {
   // op : A -> A -> A = (_ : A) -> (_ : A) -> A
   // Under first binder: A is at index 1
   // Under second binder: A is at index 2
-  const opType = mkPi(
-    mkVar(0),  // First arg: A (at index 0 in param context)
-    mkPi(
-      mkVar(1),  // Second arg: A (shifted to index 1)
-      mkVar(2),  // Result: A (shifted to index 2)
+  const opType = mkPiTT(
+    mkVarTT(0),  // First arg: A (at index 0 in param context)
+    mkPiTT(
+      mkVarTT(1),  // Second arg: A (shifted to index 1)
+      mkVarTT(2),  // Result: A (shifted to index 2)
       '_'
     ),
     '_'
@@ -474,7 +474,7 @@ function makeMagmaRecord(): RecordDef {
  */
 function makeSemigroupRecord(): RecordDef {
   const SemigroupKind = mkArrow(Type0, Type0);
-  const Prop = mkType(0);
+  const Prop = mkTypeTT(0);
 
   // In field context: A is at index 0 (from params)
   //
@@ -491,13 +491,13 @@ function makeSemigroupRecord(): RecordDef {
   // op as a projection has type: Magma A -> (A -> A -> A)
   // But in this context, op is a field so we treat it as a constant
   // The type of op (as used in the field) is: A -> A -> A
-  const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
-  const op = mkConst('op', opFieldType);
+  const opFieldType = mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), mkVarTT(2), '_'), '_');
+  const op = mkConstTT('op', opFieldType);
 
   // Eq : (A : Type) -> A -> A -> Type_0
   // In the body of assoc, we apply Eq to (A, lhs, rhs) - 3 args
-  const EqType = mkPi(Type0, mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_'), 'A');
-  const Eq = mkConst('Eq', EqType);
+  const EqType = mkPiTT(Type0, mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), Prop, '_'), '_'), 'A');
+  const Eq = mkConstTT('Eq', EqType);
 
   // Build assoc : (a b c : A) -> Eq A (op a (op b c)) (op (op a b) c)
   //
@@ -510,27 +510,27 @@ function makeSemigroupRecord(): RecordDef {
   // c = Var(0), b = Var(1), a = Var(2), A = Var(3)
   //
   // op b c = App(App(op, Var(1)), Var(0))
-  const op_b_c = mkApp(mkApp(op, mkVar(1)), mkVar(0));
+  const op_b_c = mkAppTT(mkAppTT(op, mkVarTT(1)), mkVarTT(0));
   // op a (op b c)
-  const lhs = mkApp(mkApp(op, mkVar(2)), op_b_c);
+  const lhs = mkAppTT(mkAppTT(op, mkVarTT(2)), op_b_c);
   // op a b
-  const op_a_b = mkApp(mkApp(op, mkVar(2)), mkVar(1));
+  const op_a_b = mkAppTT(mkAppTT(op, mkVarTT(2)), mkVarTT(1));
   // op (op a b) c
-  const rhs = mkApp(mkApp(op, op_a_b), mkVar(0));
+  const rhs = mkAppTT(mkAppTT(op, op_a_b), mkVarTT(0));
   // Eq A lhs rhs (A is at index 3)
-  const eqBody = mkApp(mkApp(mkApp(Eq, mkVar(3)), lhs), rhs);
+  const eqBody = mkAppTT(mkAppTT(mkAppTT(Eq, mkVarTT(3)), lhs), rhs);
 
   // Build the full type: (a : A) -> (b : A) -> (c : A) -> Eq ...
   // In param context, A is at index 0
   // Binding a: domain = Var(0), then a is at 0, A is at 1
   // Binding b: domain = Var(1), then b is at 0, a is at 1, A is at 2
   // Binding c: domain = Var(2), then c is at 0, b is at 1, a is at 2, A is at 3
-  const assocType = mkPi(
-    mkVar(0),     // a : A (A at index 0)
-    mkPi(
-      mkVar(1),   // b : A (A at index 1)
-      mkPi(
-        mkVar(2), // c : A (A at index 2)
+  const assocType = mkPiTT(
+    mkVarTT(0),     // a : A (A at index 0)
+    mkPiTT(
+      mkVarTT(1),   // b : A (A at index 1)
+      mkPiTT(
+        mkVarTT(2), // c : A (A at index 2)
         eqBody,   // body with c=0, b=1, a=2, A=3
         'c'
       ),
@@ -569,32 +569,32 @@ function makeSemigroupRecord(): RecordDef {
  */
 function makeMonoidRecord(): RecordDef {
   const MonoidKind = mkArrow(Type0, Type0);
-  const Prop = mkType(0);
+  const Prop = mkTypeTT(0);
 
   // In param context: A is at index 0
   //
   // op : A -> A -> A (field type, not (A:Type) -> ...)
-  const opFieldType = mkPi(mkVar(0), mkPi(mkVar(1), mkVar(2), '_'), '_');
-  const op = mkConst('op', opFieldType);
+  const opFieldType = mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), mkVarTT(2), '_'), '_');
+  const op = mkConstTT('op', opFieldType);
 
   // e : A (field type in param context where A is at index 0)
-  const eFieldType = mkVar(0);
-  const e = mkConst('e', eFieldType);
+  const eFieldType = mkVarTT(0);
+  const e = mkConstTT('e', eFieldType);
 
   // Eq : (A : Type) -> A -> A -> Type_0
-  const EqType = mkPi(Type0, mkPi(mkVar(0), mkPi(mkVar(1), Prop, '_'), '_'), 'A');
-  const Eq = mkConst('Eq', EqType);
+  const EqType = mkPiTT(Type0, mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), Prop, '_'), '_'), 'A');
+  const Eq = mkConstTT('Eq', EqType);
 
   // Build left_id : (x : A) -> Eq A (op e x) x
   // In param context: A is at index 0
   // After binding x: x=0, A=1
   //
   // op e x = App(App(op, e), x)
-  const op_e_x = mkApp(mkApp(op, e), mkVar(0));
+  const op_e_x = mkAppTT(mkAppTT(op, e), mkVarTT(0));
   // Eq A (op e x) x  (A is at index 1)
-  const leftIdBody = mkApp(mkApp(mkApp(Eq, mkVar(1)), op_e_x), mkVar(0));
-  const leftIdType = mkPi(
-    mkVar(0),     // x : A (A at index 0)
+  const leftIdBody = mkAppTT(mkAppTT(mkAppTT(Eq, mkVarTT(1)), op_e_x), mkVarTT(0));
+  const leftIdType = mkPiTT(
+    mkVarTT(0),     // x : A (A at index 0)
     leftIdBody,   // body with x=0, A=1
     'x'
   );
@@ -602,11 +602,11 @@ function makeMonoidRecord(): RecordDef {
   // Build right_id : (x : A) -> Eq A (op x e) x
   // After binding x: x=0, A=1
   // op x e = App(App(op, x), e)
-  const op_x_e = mkApp(mkApp(op, mkVar(0)), e);
+  const op_x_e = mkAppTT(mkAppTT(op, mkVarTT(0)), e);
   // Eq A (op x e) x  (A is at index 1)
-  const rightIdBody = mkApp(mkApp(mkApp(Eq, mkVar(1)), op_x_e), mkVar(0));
-  const rightIdType = mkPi(
-    mkVar(0),     // x : A (A at index 0)
+  const rightIdBody = mkAppTT(mkAppTT(mkAppTT(Eq, mkVarTT(1)), op_x_e), mkVarTT(0));
+  const rightIdType = mkPiTT(
+    mkVarTT(0),     // x : A (A at index 0)
     rightIdBody,  // body with x=0, A=1
     'x'
   );
@@ -676,8 +676,8 @@ function makeProdRecord(): RecordDef {
       { name: 'B', type: Type0 },
     ],
     fields: [
-      { name: 'fst', type: mkVar(0) },  // A
-      { name: 'snd', type: mkVar(1) },  // B
+      { name: 'fst', type: mkVarTT(0) },  // A
+      { name: 'snd', type: mkVarTT(1) },  // B
     ],
   };
 }

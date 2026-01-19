@@ -7,7 +7,7 @@
 
 import { ReactNode } from 'react';
 import { NamedItemsSection, NamedTypedItem, generateItemId } from './NamedItemsSection';
-import { TTerm, mkType, mkHole, prettyPrintLatex, LatexPrintOptions } from '../compiler/surface';
+import { TTerm, mkTypeTT, mkHoleTT, prettyPrintLatexTT, LatexPrintOptions } from '../compiler/surface';
 import { MathJaxRenderer } from './MathJaxRenderer';
 
 // ============================================================================
@@ -44,7 +44,7 @@ const latexOptions: LatexPrintOptions = {
 function createRenderTypeLatex(paramContext: string[]): (type: TTerm) => ReactNode {
   return (type: TTerm) => (
     <MathJaxRenderer
-      tex={prettyPrintLatex(type, paramContext, latexOptions)}
+      tex={prettyPrintLatexTT(type, paramContext, latexOptions)}
       style={{ display: 'inline-block', verticalAlign: 'middle' }}
     />
   );
@@ -100,7 +100,7 @@ export function createDefaultField(baseName: string): Field {
   return {
     id: generateFieldId(),
     name: baseName,
-    type: mkHole(`type_${baseName}`, mkType(0), []),
+    type: mkHoleTT(`type_${baseName}`, mkTypeTT(0), []),
   };
 }
 

@@ -19,7 +19,7 @@ import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { ExpressionInput } from './ExpressionRenderer';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../compiler/surface';
+import { TTerm, createRootProofTerm, mkPropTT, TermDefinition, createRootTermDefinition, mkTypeTT, mkHoleTT, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHoleTT, findHoleTT, fillHoleWithTT } from '../compiler/surface';
 import {
   LetProofTerm,
   buildFullProofTerm,
@@ -27,7 +27,6 @@ import {
   expressionNodeToTTerm,
   applyEqualityStep
 } from '../compiler/bridge';
-import { findHole, fillHoleWith } from '../compiler/kernel';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { createApplicationCommandTree } from '../config/navigationCommands';
@@ -270,14 +269,14 @@ function assumptionToPiBinder(assumption: Assumption): [string, TTerm] {
   // Check if this is a type hole reference (e.g., "?type_a")
   if (typeStr.startsWith('?')) {
     const typeHoleId = typeStr.substring(1);
-    typeTerm = mkHole(typeHoleId, mkType(1), []);
+    typeTerm = mkHoleTT(typeHoleId, mkTypeTT(1), []);
   } else if (typeStr === 'Type') {
-    typeTerm = mkType(1);
+    typeTerm = mkTypeTT(1);
   } else if (typeStr === 'Prop') {
-    typeTerm = mkProp();
+    typeTerm = mkPropTT();
   } else {
     // Named type (e.g., "ℝ")
-    typeTerm = { tag: 'Const', name: typeStr, type: mkProp() };
+    typeTerm = { tag: 'Const', name: typeStr, type: mkPropTT() };
   }
 
   return [assumption.name, typeTerm];
@@ -338,7 +337,7 @@ function EnhancedProofWorkspaceInner() {
   // - type: contains Pi-binders (assumptions) + goal (return type)
   // - value: contains let-bindings + proof holes
   const [rootDefinition, setRootDefinition] = useState<TermDefinition>(() =>
-    createRootTermDefinition('_root', [], mkProp(), 'proof', [])
+    createRootTermDefinition('_root', [], mkPropTT(), 'proof', [])
   );
 
   // Store the original goal ExpressionNode (for UI display)
@@ -349,7 +348,7 @@ function EnhancedProofWorkspaceInner() {
   const [focusedHole, setFocusedHole] = useState<string | null>('proof');
 
   // Get the currently focused hole (if it exists)
-  const currentHole = focusedHole ? findHole(rootDefinition.value, focusedHole) : null;
+  const currentHole = focusedHole ? findHoleTT(rootDefinition.value, focusedHole) : null;
 
   // ============================================================================
   // DERIVED STATE: Extract from TermDefinition
@@ -379,7 +378,7 @@ function EnhancedProofWorkspaceInner() {
   // Root TT term - the unified proof term model (OLD - will be removed)
   const [rootTerm, setRootTerm] = useState<TTerm>(() => {
     // Initialize with empty hypotheses and a Prop goal
-    return createRootProofTerm([], mkProp(), 'proof', []);
+    return createRootProofTerm([], mkPropTT(), 'proof', []);
   });
 
   // Keep rootTerm in sync with rootDefinition (temporary during migration)
@@ -426,11 +425,11 @@ function EnhancedProofWorkspaceInner() {
   const updateLetValueInRootDefinition = useCallback((term: TTerm, letName: string, newValue: TTerm): TTerm => {
     // Recursively find and update the let-binding
     function updateInTerm(t: TTerm): TTerm {
-      if (t.tag === 'Binder' && t.binderKind.tag === 'BLet' && t.name === letName) {
+      if (t.tag === 'Binder' && t.binderKind.tag === 'BLetTT' && t.name === letName) {
         // Found it! Update the defVal
         return {
           ...t,
-          binderKind: { tag: 'BLet', defVal: newValue }
+          binderKind: { tag: 'BLetTT', defVal: newValue }
         };
       }
 
@@ -459,8 +458,8 @@ function EnhancedProofWorkspaceInner() {
 
     // Use type annotation if provided, otherwise create a hole for type inference
     const letTypeTT = letElement.typeAnnotation
-      ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkProp() }
-      : mkHole(`type-${letElement.name}`, mkType(0));
+      ? { tag: 'Const' as const, name: letElement.typeAnnotation, type: mkPropTT() }
+      : mkHoleTT(`type-${letElement.name}`, mkTypeTT(0));
 
     // ====================================================================
     // Step 3: Add to UI state
@@ -476,7 +475,7 @@ function EnhancedProofWorkspaceInner() {
       return;
     }
 
-    const newValue = fillHoleWith(
+    const newValue = fillHoleWithTT(
       rootDefinition.value,
       focusedHole,
       (holeType, holeContext) => {
@@ -493,7 +492,7 @@ function EnhancedProofWorkspaceInner() {
         return {
           tag: 'Binder' as const,
           name: letElement.name,
-          binderKind: { tag: 'BLet' as const, defVal: letValueTT },
+          binderKind: { tag: 'BLetTT' as const, defVal: letValueTT },
           domain: letTypeTT,
           body: newHole
         };
@@ -674,8 +673,8 @@ function EnhancedProofWorkspaceInner() {
       // If the old type was a hole, replace all occurrences of it throughout the term
       if (oldTypeHoleId) {
         console.log(`[UPDATE-HYP] Replacing type hole ?${oldTypeHoleId} with`, newType);
-        updatedType = replaceHole(updatedType, oldTypeHoleId, newType);
-        updatedValue = replaceHole(updatedValue, oldTypeHoleId, newType);
+        updatedType = replaceHoleTT(updatedType, oldTypeHoleId, newType);
+        updatedValue = replaceHoleTT(updatedValue, oldTypeHoleId, newType);
       }
 
       return {
@@ -732,7 +731,7 @@ function EnhancedProofWorkspaceInner() {
         // Add a Pi-binder for each unbound variable WITH TYPE HOLE
         unboundVars.forEach(varName => {
           const typeHoleId = `type_${varName}`;
-          const typeHole = mkHole(typeHoleId, mkType(1), []);
+          const typeHole = mkHoleTT(typeHoleId, mkTypeTT(1), []);
 
           // Insert Pi-binder at the end (before the goal)
           const currentBinders = flattenPiBinders(newType);
@@ -762,7 +761,7 @@ function EnhancedProofWorkspaceInner() {
       console.warn('Could not parse goal:', error);
       // On error, clear goal
       setGoalExprNode(null);
-      const newType = setFinalReturnType(rootDefinition.type, mkProp());
+      const newType = setFinalReturnType(rootDefinition.type, mkPropTT());
       setRootDefinition(prev => ({
         ...prev,
         type: newType
@@ -804,7 +803,7 @@ function EnhancedProofWorkspaceInner() {
 
   const handleClearGoalCommand = useCallback(() => {
     setGoalExprNode(null);
-    const newType = setFinalReturnType(rootDefinition.type, mkProp());
+    const newType = setFinalReturnType(rootDefinition.type, mkPropTT());
     setRootDefinition(prev => ({
       ...prev,
       type: newType
@@ -974,7 +973,7 @@ function EnhancedProofWorkspaceInner() {
             type: currentHole.type
           };
 
-          const newValue = fillHoleWith(
+          const newValue = fillHoleWithTT(
             rootDefinition.value,
             focusedHole,
             () => proofTerm
@@ -1214,7 +1213,7 @@ function EnhancedProofWorkspaceInner() {
               setGoalExprNode(null);
 
               // Reset root definition with the hypothesis already included
-              setRootDefinition(createRootTermDefinition('_root', [['a', { tag: 'Const', name: 'ℝ', type: mkProp() }]], mkProp(), 'proof', []));
+              setRootDefinition(createRootTermDefinition('_root', [['a', { tag: 'Const', name: 'ℝ', type: mkPropTT() }]], mkPropTT(), 'proof', []));
               handleSetGoal('a + a = 2 * a');
             }}
             style={{

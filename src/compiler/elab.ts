@@ -79,13 +79,13 @@ export function elabToKernel(term: TTerm): TTKTerm {
 
       let binderKind: TTKBinderKind;
       switch (term.binderKind.tag) {
-        case 'BPi':
+        case 'BPiTT':
           binderKind = { tag: 'BPi' };
           break;
-        case 'BLam':
+        case 'BLamTT':
           binderKind = { tag: 'BLam' };
           break;
-        case 'BLet':
+        case 'BLetTT':
           binderKind = { tag: 'BLet', defVal: elabToKernel(term.binderKind.defVal) };
           break;
       }
@@ -234,13 +234,13 @@ export function elabToKernelWithMap(
 
       let binderKind: TTKBinderKind;
       switch (term.binderKind.tag) {
-        case 'BPi':
+        case 'BPiTT':
           binderKind = { tag: 'BPi' };
           break;
-        case 'BLam':
+        case 'BLamTT':
           binderKind = { tag: 'BLam' };
           break;
-        case 'BLet':
+        case 'BLetTT':
           binderKind = {
             tag: 'BLet',
             defVal: elabToKernelWithMap(

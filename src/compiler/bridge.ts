@@ -14,21 +14,21 @@
 
 import {
   TTerm,
-  mkHole,
-  mkVar,
-  mkApp,
-  mkProp,
-  mkLet,
+  mkHoleTT,
+  mkVarTT,
+  mkAppTT,
+  mkPropTT,
+  mkLetTT,
   mkEq,
   mkTrans,
   TT_CONSTANTS,
-  prettyPrint,
-  replaceHole,
+  prettyPrintTT,
+  replaceHoleTT,
 } from './surface';
 import { ExpressionNode, LetElement } from '../types/enhanced-focus';
 
 // Alias for backward compatibility
-const fillHole = replaceHole;
+const fillHole = replaceHoleTT;
 
 // ============================================================================
 // UI → TT Conversion
@@ -137,7 +137,7 @@ export function expressionNodeToTTerm(
     case 'variable':
       const varName = String(expr.value);
       if (context.has(varName)) {
-        return mkVar(context.get(varName)!);
+        return mkVarTT(context.get(varName)!);
       }
       // Not in context - treat as a constant (like 'a', 'b', etc.)
       // Get type from type context (may be a type hole!)
@@ -172,7 +172,7 @@ export function expressionNodeToTTerm(
         type: TT_CONSTANTS.Real // Simplified - operators should have proper function types
       };
 
-      return mkApp(mkApp(opConst, left), right);
+      return mkAppTT(mkAppTT(opConst, left), right);
 
     case 'equality':
       // Equality: (eq type left right)
@@ -205,7 +205,7 @@ export function expressionNodeToTTerm(
       })();
 
       const eqConst = TT_CONSTANTS.Eq;
-      return mkApp(mkApp(mkApp(eqConst, inferredType), eqLeft), eqRight);
+      return mkAppTT(mkAppTT(mkAppTT(eqConst, inferredType), eqLeft), eqRight);
 
     case 'unop':
       if (expr.children.length !== 1) {
@@ -217,7 +217,7 @@ export function expressionNodeToTTerm(
         name: expr.operator!,
         type: TT_CONSTANTS.Real
       };
-      return mkApp(unOpConst, operand);
+      return mkAppTT(unOpConst, operand);
 
     case 'application':
       // Function application: f a b c...
@@ -233,7 +233,7 @@ export function expressionNodeToTTerm(
       // Build nested applications: (((f a) b) c)
       let result = func;
       for (const arg of args) {
-        result = mkApp(result, arg);
+        result = mkAppTT(result, arg);
       }
       return result;
 
@@ -253,7 +253,7 @@ export function expressionNodeToTTerm(
         type: TT_CONSTANTS.Real
       };
 
-      return mkApp(mkApp(ineqOp, ineqLeft), ineqRight);
+      return mkAppTT(mkAppTT(ineqOp, ineqLeft), ineqRight);
 
     case 'hole':
       // A hole in the UI AST represents a proof hole
@@ -264,7 +264,7 @@ export function expressionNodeToTTerm(
 
       // For now, we'll create a hole with Prop type
       // In the future, we might want to infer the type from the expression inside
-      return mkHole(holeId, mkProp(), Array.from(context.entries()).map(([name]) => ({
+      return mkHoleTT(holeId, mkPropTT(), Array.from(context.entries()).map(([name]) => ({
         name,
         type: TT_CONSTANTS.Real  // Simplified - should track actual types
       })));
@@ -335,9 +335,9 @@ export function createEqualityProofTerm(
   const goalTT = expressionNodeToTTerm(goal);
 
   // Create the proposition type: left = goal
-  const propType = mkApp(
-    mkApp(
-      mkApp(TT_CONSTANTS.Eq, TT_CONSTANTS.Real),
+  const propType = mkAppTT(
+    mkAppTT(
+      mkAppTT(TT_CONSTANTS.Eq, TT_CONSTANTS.Real),
       leftTT
     ),
     goalTT
@@ -345,7 +345,7 @@ export function createEqualityProofTerm(
 
   // Create initial proof term: a hole with the type
   const holeId = `proof_${letBinding.id}`;
-  const proofTerm = mkHole(holeId, propType, []);
+  const proofTerm = mkHoleTT(holeId, propType, []);
 
   return {
     letId: letBinding.id,
@@ -381,12 +381,12 @@ export function createInductionProofTerm(
   // For now, return a placeholder with a hole
 
   const holeId = `induction_${letBinding.id}`;
-  const proofTerm = mkHole(holeId, mkProp(), []);
+  const proofTerm = mkHoleTT(holeId, mkPropTT(), []);
 
   return {
     letId: letBinding.id,
     letName: letBinding.name,
-    propType: mkProp(), // Placeholder
+    propType: mkPropTT(), // Placeholder
     proofTerm,
     holes: [holeId],
     completed: false
@@ -461,8 +461,8 @@ export function checkProofComplete(
  * Pretty-print a let proof term for display
  */
 export function prettyPrintLetProof(proof: LetProofTerm, context: string[] = []): string {
-  const typeStr = prettyPrint(proof.propType, context);
-  const termStr = prettyPrint(proof.proofTerm, context);
+  const typeStr = prettyPrintTT(proof.propType, context);
+  const termStr = prettyPrintTT(proof.proofTerm, context);
 
   return `${proof.letName} : ${typeStr}\n${proof.letName} = ${termStr}`;
 }
@@ -482,7 +482,7 @@ export function buildFullProofTerm(proofs: LetProofTerm[]): TTerm | null {
 
   for (let i = proofs.length - 1; i >= 0; i--) {
     const proof = proofs[i];
-    body = mkLet(
+    body = mkLetTT(
       `proof${i}`,
       proof.propType,
       proof.proofTerm,
@@ -545,7 +545,7 @@ export function startEqualityProof(
     // Prove: startExpr = targetExpr
     // Start with a hole for the entire proof
     const holeId = 'eq_proof_init';
-    const proofTerm = mkHole(holeId, mkEq(startExpr, targetExpr), []);
+    const proofTerm = mkHoleTT(holeId, mkEq(startExpr, targetExpr), []);
 
     return {
       startExpr,
@@ -559,7 +559,7 @@ export function startEqualityProof(
     // Prove: targetExpr = startExpr (then we'll use sym to get startExpr = targetExpr)
     // For "right" mode, we actually want to build the proof in reverse
     const holeId = 'eq_proof_init';
-    const proofTerm = mkHole(holeId, mkEq(targetExpr, startExpr), []);
+    const proofTerm = mkHoleTT(holeId, mkEq(targetExpr, startExpr), []);
 
     return {
       startExpr: targetExpr,
@@ -624,7 +624,7 @@ export function applyEqualityStep(
   // Not at target yet, use transitivity
   // trans : (current = new) → (new = target) → (current = target)
   const newHoleId = `eq_step_${crypto.randomUUID()}`;
-  const restProof = mkHole(newHoleId, mkEq(newExpr, state.targetExpr), []);
+  const restProof = mkHoleTT(newHoleId, mkEq(newExpr, state.targetExpr), []);
 
   // Build: trans ruleProof restProof
   const transProof = mkTrans(ruleProof, restProof);
@@ -682,7 +682,7 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
       if (a.binderKind.tag !== b.binderKind.tag) return false;
       if (!termsEqual(a.domain, b.domain)) return false;
       if (!termsEqual(a.body, b.body)) return false;
-      if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {
+      if (a.binderKind.tag === 'BLetTT' && b.binderKind.tag === 'BLetTT') {
         return termsEqual(a.binderKind.defVal, b.binderKind.defVal);
       }
       return true;
