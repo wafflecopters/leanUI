@@ -91,7 +91,7 @@ test('validateTerm: Sort succeeds (no symbols)', () => {
 });
 
 test('validateTerm: Const succeeds when symbol is defined', () => {
-  const term = mkConstTT('Nat', mkTypeTT(0));
+  const term = mkConstTT('Nat');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -101,7 +101,7 @@ test('validateTerm: Const succeeds when symbol is defined', () => {
 
 test('validateTerm: Pi with defined symbol succeeds', () => {
   // (n : Nat) -> Nat
-  const term = mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkVarTT(0), 'n');
+  const term = mkPiTT(mkConstTT('Nat'), mkVarTT(0), 'n');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -111,7 +111,7 @@ test('validateTerm: Pi with defined symbol succeeds', () => {
 
 test('validateTerm: Lambda with defined symbols succeeds', () => {
   // λ(n : Nat). Nat
-  const term = mkLambdaTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'n');
+  const term = mkLambdaTT(mkConstTT('Nat'), mkConstTT('Nat'), 'n');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -121,7 +121,7 @@ test('validateTerm: Lambda with defined symbols succeeds', () => {
 
 test('validateTerm: App with defined symbols succeeds', () => {
   // f x (where both f and x are constants)
-  const term = mkAppTT(mkConstTT('f', mkTypeTT(0)), mkConstTT('x', mkTypeTT(0)));
+  const term = mkAppTT(mkConstTT('f'), mkConstTT('x'));
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'f');
   ctx = addSymbol(ctx, 'x');
@@ -135,7 +135,7 @@ test('validateTerm: App with defined symbols succeeds', () => {
 // ============================================================================
 
 test('validateTerm: Const fails when symbol undefined', () => {
-  const term = mkConstTT('Nat', mkTypeTT(0));
+  const term = mkConstTT('Nat');
   const ctx = emptySymbolContext();
 
   const result = validateTerm(term, ctx);
@@ -149,7 +149,7 @@ test('validateTerm: Const fails when symbol undefined', () => {
 
 test('validateTerm: Pi fails when domain symbol undefined', () => {
   // (n : Nat) -> Bool  (Nat undefined, Bool defined)
-  const term = mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Bool', mkTypeTT(0)), 'n');
+  const term = mkPiTT(mkConstTT('Nat'), mkConstTT('Bool'), 'n');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Bool');
 
@@ -163,7 +163,7 @@ test('validateTerm: Pi fails when domain symbol undefined', () => {
 
 test('validateTerm: Pi fails when body symbol undefined', () => {
   // (n : Nat) -> Bool  (Nat defined, Bool undefined)
-  const term = mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Bool', mkTypeTT(0)), 'n');
+  const term = mkPiTT(mkConstTT('Nat'), mkConstTT('Bool'), 'n');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -177,7 +177,7 @@ test('validateTerm: Pi fails when body symbol undefined', () => {
 
 test('validateTerm: collects multiple errors', () => {
   // (a : Foo) -> Bar  (both undefined)
-  const term = mkPiTT(mkConstTT('Foo', mkTypeTT(0)), mkConstTT('Bar', mkTypeTT(0)), 'a');
+  const term = mkPiTT(mkConstTT('Foo'), mkConstTT('Bar'), 'a');
   const ctx = emptySymbolContext();
 
   const result = validateTerm(term, ctx);
@@ -192,7 +192,7 @@ test('validateTerm: collects multiple errors', () => {
 
 test('validateTerm: App collects errors from fn and arg', () => {
   // foo bar (both undefined)
-  const term = mkAppTT(mkConstTT('foo', mkTypeTT(0)), mkConstTT('bar', mkTypeTT(0)));
+  const term = mkAppTT(mkConstTT('Foo'), mkConstTT('bar'));
   const ctx = emptySymbolContext();
 
   const result = validateTerm(term, ctx);
@@ -211,7 +211,7 @@ test('validateTerm: App collects errors from fn and arg', () => {
 
 test('validateDeclaration: type signature only', () => {
   // id : Nat -> Nat
-  const declType = mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'x');
+  const declType = mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'x');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -225,7 +225,7 @@ test('validateDeclaration: type signature only', () => {
 
 test('validateDeclaration: definition only', () => {
   // id = λ(x : Nat). x
-  const declValue = mkLambdaTT(mkConstTT('Nat', mkTypeTT(0)), mkVarTT(0), 'x');
+  const declValue = mkLambdaTT(mkConstTT('Nat'), mkVarTT(0), 'x');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -239,8 +239,8 @@ test('validateDeclaration: definition only', () => {
 test('validateDeclaration: both type and value', () => {
   // id : Nat -> Nat
   // id = λ(x : Nat). x
-  const declType = mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'x');
-  const declValue = mkLambdaTT(mkConstTT('Nat', mkTypeTT(0)), mkVarTT(0), 'x');
+  const declType = mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'x');
+  const declValue = mkLambdaTT(mkConstTT('Nat'), mkVarTT(0), 'x');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -254,8 +254,8 @@ test('validateDeclaration: both type and value', () => {
 test('validateDeclaration: self-reference allowed', () => {
   // rec : Nat -> Nat
   // rec = λ(x : Nat). rec x  (recursive call to itself)
-  const declType = mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'x');
-  const declValue = mkLambdaTT(mkConstTT('Nat', mkTypeTT(0)), mkAppTT(mkConstTT('rec', mkTypeTT(0)), mkVarTT(0)), 'x');
+  const declType = mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'x');
+  const declValue = mkLambdaTT(mkConstTT('Nat'), mkAppTT(mkConstTT('rec'), mkVarTT(0)), 'x');
   let ctx = emptySymbolContext();
   ctx = addSymbol(ctx, 'Nat');
 
@@ -269,8 +269,8 @@ test('validateDeclaration: inductive with constructors', () => {
   //   False : Bool
   const declType = mkTypeTT(0);
   const constructors = [
-    { name: 'True', type: mkConstTT('Bool', mkTypeTT(0)) },
-    { name: 'False', type: mkConstTT('Bool', mkTypeTT(0)) }
+    { name: 'True', type: mkConstTT('Bool') },
+    { name: 'False', type: mkConstTT('Bool') }
   ];
   const ctx = emptySymbolContext();
 
@@ -285,7 +285,7 @@ test('validateDeclaration: inductive with constructors', () => {
 
 test('validateDeclaration: fails when type uses undefined symbol', () => {
   // bad : Foo -> Bar  (both undefined)
-  const declType = mkPiTT(mkConstTT('Foo', mkTypeTT(0)), mkConstTT('Bar', mkTypeTT(0)), 'x');
+  const declType = mkPiTT(mkConstTT('Foo'), mkConstTT('Bar'), 'x');
   const ctx = emptySymbolContext();
 
   const result = validateDeclaration('bad', declType, undefined, undefined, ctx);
@@ -297,7 +297,7 @@ test('validateDeclaration: fails when type uses undefined symbol', () => {
 
 test('validateDeclaration: fails when value uses undefined symbol', () => {
   // id = λ(x : Foo). x  (Foo undefined)
-  const declValue = mkLambdaTT(mkConstTT('Foo', mkTypeTT(0)), mkVarTT(0), 'x');
+  const declValue = mkLambdaTT(mkConstTT('Foo'), mkVarTT(0), 'x');
   const ctx = emptySymbolContext();
 
   const result = validateDeclaration('id', undefined, declValue, undefined, ctx);
@@ -339,8 +339,8 @@ test('validateDeclarations: forward reference within block', () => {
   // test = id
   const declarations = [
     { name: 'Nat', type: mkTypeTT(0) },
-    { name: 'id', type: mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'x') },
-    { name: 'test', value: mkConstTT('id', mkTypeTT(0)) }
+    { name: 'id', type: mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'x') },
+    { name: 'test', value: mkConstTT('id') }
   ];
 
   const result = validateDeclarations(declarations);
@@ -356,7 +356,7 @@ test('validateDeclarations: continues after errors', () => {
   // bad : Foo  (Foo undefined)
   // good : Type
   const declarations = [
-    { name: 'bad', type: mkConstTT('Foo', mkTypeTT(0)) },
+    { name: 'bad', type: mkConstTT('Foo') },
     { name: 'good', type: mkTypeTT(0) }
   ];
 
@@ -372,8 +372,8 @@ test('validateDeclarations: collects all errors', () => {
   // bad1 : Foo  (undefined)
   // bad2 : Bar  (undefined)
   const declarations = [
-    { name: 'bad1', type: mkConstTT('Foo', mkTypeTT(0)) },
-    { name: 'bad2', type: mkConstTT('Bar', mkTypeTT(0)) }
+    { name: 'bad1', type: mkConstTT('Foo') },
+    { name: 'bad2', type: mkConstTT('Bar') }
   ];
 
   const result = validateDeclarations(declarations);
@@ -393,7 +393,7 @@ test('validateDeclarations: uses initial context', () => {
 
   // id : Nat -> Nat
   const declarations = [
-    { name: 'id', type: mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'x') }
+    { name: 'id', type: mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'x') }
   ];
 
   const result = validateDeclarations(declarations, initialCtx);
@@ -420,13 +420,13 @@ test('Real-world: Nat and plus function', () => {
       name: 'Nat',
       type: mkTypeTT(0),
       constructors: [
-        { name: 'Zero', type: mkConstTT('Nat', mkTypeTT(0)) },
-        { name: 'Succ', type: mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'n') }
+        { name: 'Zero', type: mkConstTT('Nat') },
+        { name: 'Succ', type: mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'n') }
       ]
     },
     {
       name: 'plus',
-      type: mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'b'), 'a')
+      type: mkPiTT(mkConstTT('Nat'), mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'b'), 'a')
     }
   ];
 
@@ -450,7 +450,7 @@ test('Real-world: typo in type (Na instead of Nat)', () => {
     },
     {
       name: 'plus',
-      type: mkPiTT(mkConstTT('Na', mkTypeTT(0)), mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'b'), 'a')
+      type: mkPiTT(mkConstTT('Na'), mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'b'), 'a')
     }
   ];
 
@@ -487,8 +487,8 @@ test('validateDeclaration: fails when constructor name conflicts with existing s
   ctx = addSymbol(ctx, 'True');
 
   const constructors = [
-    { name: 'True', type: mkConstTT('Bool', mkTypeTT(0)) },
-    { name: 'False', type: mkConstTT('Bool', mkTypeTT(0)) }
+    { name: 'True', type: mkConstTT('Bool') },
+    { name: 'False', type: mkConstTT('Bool') }
   ];
 
   const result = validateDeclaration('Bool', mkTypeTT(0), undefined, constructors, ctx);
@@ -506,8 +506,8 @@ test('validateDeclaration: fails when inductive name conflicts with existing sym
   ctx = addSymbol(ctx, 'Nat');
 
   const constructors = [
-    { name: 'Zero', type: mkConstTT('Nat', mkTypeTT(0)) },
-    { name: 'Succ', type: mkPiTT(mkConstTT('Nat', mkTypeTT(0)), mkConstTT('Nat', mkTypeTT(0)), 'n') }
+    { name: 'Zero', type: mkConstTT('Nat') },
+    { name: 'Succ', type: mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'n') }
   ];
 
   const result = validateDeclaration('Nat', mkTypeTT(0), undefined, constructors, ctx);
@@ -545,7 +545,7 @@ test('validateDeclarations: fails when term uses same name as previously defined
       name: 'Bar',
       type: mkTypeTT(0),
       constructors: [
-        { name: 'Zero', type: mkConstTT('Bar', mkTypeTT(0)) }
+        { name: 'Zero', type: mkConstTT('Bar') }
       ]
     },
     { name: 'Bar', type: mkTypeTT(1) }  // Redefinition of Bar
@@ -566,7 +566,7 @@ test('validateDeclarations: fails when term uses same name as constructor', () =
       name: 'Bar',
       type: mkTypeTT(0),
       constructors: [
-        { name: 'Zero', type: mkConstTT('Bar', mkTypeTT(0)) }
+        { name: 'Zero', type: mkConstTT('Bar') }
       ]
     },
     { name: 'Zero', type: mkTypeTT(1) }  // Redefinition of Zero

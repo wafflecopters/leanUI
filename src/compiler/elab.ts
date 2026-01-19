@@ -282,7 +282,6 @@ export function elabToKernel(term: TTerm): TTKTerm {
       return {
         tag: 'Const',
         name: term.name,
-        type: elabToKernel(term.type)
       };
 
     case 'Binder': {
@@ -460,12 +459,6 @@ export function elabToKernelWithMap(
       return {
         tag: 'Const',
         name: term.name,
-        type: elabToKernelWithMap(
-          term.type,
-          elabMap,
-          appendPath(surfacePath, fieldSeg('type')),
-          appendPath(kernelPath, fieldSeg('type'))
-        )
       };
 
     case 'Binder': {

@@ -277,7 +277,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     throw new Error('Meta constraints should not be emitted in clause lhs elaboration')
   }
 
-  const elabHead = mkConst(pattern.name, mkType(-1) /* HACK */)
+  const elabHead = mkConst(pattern.name)
   let elabTerm = elabHead
   if (arity > 0) {
     const elabArgs = elabStack.slice(elabStack.length - arity)
@@ -508,7 +508,7 @@ export function checkMatchClause(
   const { returnType } = result.value
 
   const checkEnv = result.atValueAndPathOfEnv(env).inMatchClauseRhs()
-  const checkedEnv = checkType(checkEnv, returnType);
+  //  const checkedEnv = checkType(checkEnv, returnType);
 
   // debugger
 

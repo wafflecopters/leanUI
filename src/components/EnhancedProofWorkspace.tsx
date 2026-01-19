@@ -276,7 +276,7 @@ function assumptionToPiBinder(assumption: Assumption): [string, TTerm] {
     typeTerm = mkPropTT();
   } else {
     // Named type (e.g., "ℝ")
-    typeTerm = { tag: 'Const', name: typeStr, type: mkPropTT() };
+    typeTerm = { tag: 'Const', name: typeStr };
   }
 
   return [assumption.name, typeTerm];
@@ -304,11 +304,11 @@ function EnhancedProofWorkspaceInner() {
 
   // UI state DERIVED from navigation path (no more React state!)
   const showEditGoal = navigation.state.navigationPath[0] === 'Goals' &&
-                        navigation.state.navigationPath[1] === 'Editor';
+    navigation.state.navigationPath[1] === 'Editor';
   const showAddHypothesis = navigation.state.navigationPath[0] === 'Hypotheses' &&
-                             navigation.state.navigationPath[1] === 'Editor';
+    navigation.state.navigationPath[1] === 'Editor';
   const showAddLet = navigation.state.navigationPath[0] === 'Let Bindings' &&
-                      navigation.state.navigationPath[1] === 'Editor';
+    navigation.state.navigationPath[1] === 'Editor';
 
   // Callbacks to close editors by popping navigation path
   const closeEditGoal = useCallback(() => {
@@ -1196,156 +1196,156 @@ function EnhancedProofWorkspaceInner() {
         maxWidth: '1200px',
         margin: '0 auto'
       }}>
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '24px',
-        borderBottom: '2px solid #007acc',
-        paddingBottom: '16px'
-      }}>
-        <h2 style={{ margin: 0, color: '#007acc' }}>Mathematical Proof Workspace</h2>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <button
-            onClick={() => {
-              // Reset proof elements and goal
-              setProofElements([]);
-              setGoalExprNode(null);
-
-              // Reset root definition with the hypothesis already included
-              setRootDefinition(createRootTermDefinition('_root', [['a', { tag: 'Const', name: 'ℝ', type: mkPropTT() }]], mkPropTT(), 'proof', []));
-              handleSetGoal('a + a = 2 * a');
-            }}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#2845a7',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: 'bold'
-            }}
-          >
-            a+a=2*a
-          </button>
-          <button
-            onClick={() => {
-              const comment = prompt('Add a comment to the proof:');
-              if (comment && comment.trim()) {
-                const type = confirm('Is this an explanation comment? (Cancel for assumption/strategy)')
-                  ? 'explanation' : 'strategy';
-                addComment(comment.trim(), type);
-              }
-            }}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#28a745',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: 'bold'
-            }}
-          >
-            ➕ Add Comment
-          </button>
-        </div>
-      </div>
-
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: '2fr 1fr',
-        gap: '24px',
-        alignItems: 'start',
-        height: 'calc(100vh - 200px)' // Fill viewport minus space for header/margins
-      }}>
-        {/* Main Proof Area */}
         <div style={{
-          backgroundColor: 'white',
-          border: '2px solid #e9ecef',
-          borderRadius: '12px',
-          padding: '24px',
-          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
-          minHeight: '600px',
-          height: '100%',
-          overflowY: 'auto'
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '24px',
+          borderBottom: '2px solid #007acc',
+          paddingBottom: '16px'
         }}>
-          <LetManager
-            letBindings={letBindings}
-            hypotheses={assumptions.filter(a => {
-              // Only show IH when we're in the inductive step context
-              if (a.introducedBy === 'induction') {
-                return activeProofContext && activeProofContext.endsWith('-inductive');
-              }
-              return true;
-            })}
-            goal={goal}
-            onAddLet={handleAddLet}
-            onDeleteLet={handleDeleteLet}
-            onAddHypothesis={handleAddHypothesis}
-            onDeleteHypothesis={handleDeleteHypothesis}
-            onUpdateHypothesis={handleUpdateHypothesis}
-            onSetGoal={handleSetGoal}
-            activeLetId={activeProofContext}
-            onActivateLetEditor={handleActivateLetEditor}
-            focusPath={focusPath}
-            onFocusChange={setFocusPath}
-            showFocusAsBetaRedux={true}
-            showEditGoalExternal={showEditGoal}
-            onShowEditGoalChange={closeEditGoal}
-            showAddHypothesisExternal={showAddHypothesis}
-            onShowAddHypothesisChange={closeAddHypothesis}
-            showAddLetExternal={showAddLet}
-            onShowAddLetChange={closeAddLet}
-          />
+          <h2 style={{ margin: 0, color: '#007acc' }}>Mathematical Proof Workspace</h2>
+          <div style={{ display: 'flex', gap: '12px' }}>
+            <button
+              onClick={() => {
+                // Reset proof elements and goal
+                setProofElements([]);
+                setGoalExprNode(null);
+
+                // Reset root definition with the hypothesis already included
+                setRootDefinition(createRootTermDefinition('_root', [['a', { tag: 'Const', name: 'ℝ' }]], mkPropTT(), 'proof', []));
+                handleSetGoal('a + a = 2 * a');
+              }}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#2845a7',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold'
+              }}
+            >
+              a+a=2*a
+            </button>
+            <button
+              onClick={() => {
+                const comment = prompt('Add a comment to the proof:');
+                if (comment && comment.trim()) {
+                  const type = confirm('Is this an explanation comment? (Cancel for assumption/strategy)')
+                    ? 'explanation' : 'strategy';
+                  addComment(comment.trim(), type);
+                }
+              }}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#28a745',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 'bold'
+              }}
+            >
+              ➕ Add Comment
+            </button>
+          </div>
         </div>
 
-        {/* Show rules for active let value editing OR current main expression */}
-        {letValueExpression ? (
-          <RulesPanel
-            rulesByCategory={letValueRulesByCategory}
-            focusedNode={letValueFocusedNode}
-            currentExpression={letValueExpression}
-            context={metadata}
-            addStep={handleLetValueRuleApplication}
-          />
-        ) : currentExpression ? (
-          <RulesPanel
-            rulesByCategory={rulesByCategory}
-            focusedNode={focusedNode}
-            currentExpression={currentExpression}
-            context={metadata}
-            addStep={addStep}
-          />
-        ) : null}
-      </div>
-
-      {/* TT Proof Term Viewer */}
-      <div style={{ marginTop: '24px' }}>
-        {/* Debug info */}
-        {activeProofContext && (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '2fr 1fr',
+          gap: '24px',
+          alignItems: 'start',
+          height: 'calc(100vh - 200px)' // Fill viewport minus space for header/margins
+        }}>
+          {/* Main Proof Area */}
           <div style={{
-            padding: '8px',
-            backgroundColor: '#e3f2fd',
-            border: '1px solid #2196f3',
-            borderRadius: '4px',
-            marginBottom: '12px',
-            fontSize: '12px',
-            fontFamily: 'monospace'
+            backgroundColor: 'white',
+            border: '2px solid #e9ecef',
+            borderRadius: '12px',
+            padding: '24px',
+            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)',
+            minHeight: '600px',
+            height: '100%',
+            overflowY: 'auto'
           }}>
-            <strong>Debug:</strong> Active proof context: {activeProofContext},
-            Proof terms in map: {letProofTerms.size},
-            Has proof for active: {letProofTerms.has(activeProofContext) ? 'YES' : 'NO'}
+            <LetManager
+              letBindings={letBindings}
+              hypotheses={assumptions.filter(a => {
+                // Only show IH when we're in the inductive step context
+                if (a.introducedBy === 'induction') {
+                  return activeProofContext && activeProofContext.endsWith('-inductive');
+                }
+                return true;
+              })}
+              goal={goal}
+              onAddLet={handleAddLet}
+              onDeleteLet={handleDeleteLet}
+              onAddHypothesis={handleAddHypothesis}
+              onDeleteHypothesis={handleDeleteHypothesis}
+              onUpdateHypothesis={handleUpdateHypothesis}
+              onSetGoal={handleSetGoal}
+              activeLetId={activeProofContext}
+              onActivateLetEditor={handleActivateLetEditor}
+              focusPath={focusPath}
+              onFocusChange={setFocusPath}
+              showFocusAsBetaRedux={true}
+              showEditGoalExternal={showEditGoal}
+              onShowEditGoalChange={closeEditGoal}
+              showAddHypothesisExternal={showAddHypothesis}
+              onShowAddHypothesisChange={closeAddHypothesis}
+              showAddLetExternal={showAddLet}
+              onShowAddLetChange={closeAddLet}
+            />
           </div>
-        )}
-        <TTViewer
-          proofTerm={rootTerm}
-          termDefinition={rootDefinition}
-          context={[]}
-        />
-      </div>
+
+          {/* Show rules for active let value editing OR current main expression */}
+          {letValueExpression ? (
+            <RulesPanel
+              rulesByCategory={letValueRulesByCategory}
+              focusedNode={letValueFocusedNode}
+              currentExpression={letValueExpression}
+              context={metadata}
+              addStep={handleLetValueRuleApplication}
+            />
+          ) : currentExpression ? (
+            <RulesPanel
+              rulesByCategory={rulesByCategory}
+              focusedNode={focusedNode}
+              currentExpression={currentExpression}
+              context={metadata}
+              addStep={addStep}
+            />
+          ) : null}
+        </div>
+
+        {/* TT Proof Term Viewer */}
+        <div style={{ marginTop: '24px' }}>
+          {/* Debug info */}
+          {activeProofContext && (
+            <div style={{
+              padding: '8px',
+              backgroundColor: '#e3f2fd',
+              border: '1px solid #2196f3',
+              borderRadius: '4px',
+              marginBottom: '12px',
+              fontSize: '12px',
+              fontFamily: 'monospace'
+            }}>
+              <strong>Debug:</strong> Active proof context: {activeProofContext},
+              Proof terms in map: {letProofTerms.size},
+              Has proof for active: {letProofTerms.has(activeProofContext) ? 'YES' : 'NO'}
+            </div>
+          )}
+          <TTViewer
+            proofTerm={rootTerm}
+            termDefinition={rootDefinition}
+            context={[]}
+          />
+        </div>
       </div>
     </NavigationFooterSpacer>
   );

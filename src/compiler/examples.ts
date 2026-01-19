@@ -57,8 +57,8 @@ const Type0 = mkTypeTT(0);
  * Create a constant reference to an inductive type.
  * The type parameter should be the kind of the inductive type.
  */
-function mkInductiveRef(name: string, kind: TTerm): TTerm {
-  return mkConstTT(name, kind);
+function mkInductiveRef(name: string): TTerm {
+  return mkConstTT(name);
 }
 
 /**
@@ -81,7 +81,7 @@ function mkArrow(domain: TTerm, codomain: TTerm): TTerm {
  *   | succ : Nat -> Nat
  */
 function makeNat(): InductiveTypeDef {
-  const Nat = mkInductiveRef('Nat', Type0);
+  const Nat = mkInductiveRef('Nat');
 
   return {
     name: 'Nat',
@@ -112,7 +112,7 @@ function makeNat(): InductiveTypeDef {
  *   | false : Bool
  */
 function makeBool(): InductiveTypeDef {
-  const Bool = mkInductiveRef('Bool', Type0);
+  const Bool = mkInductiveRef('Bool');
 
   return {
     name: 'Bool',
@@ -166,7 +166,7 @@ function makeVoid(): InductiveTypeDef {
 function makeList(): InductiveTypeDef {
   // List : Type -> Type
   const ListKind = mkArrow(Type0, Type0);
-  const List = mkInductiveRef('List', ListKind);
+  const List = mkInductiveRef('List');
 
   return {
     name: 'List',
@@ -222,14 +222,14 @@ function makeList(): InductiveTypeDef {
  * Note: Vec is an indexed family - the constructor return types differ in the index.
  */
 function makeVec(): InductiveTypeDef {
-  const Nat = mkInductiveRef('Nat', Type0);
-  const succ = mkConstTT('succ', mkArrow(Nat, Nat));
+  const Nat = mkInductiveRef('Nat');
+  const succ = mkConstTT('succ');
 
   // Vec : Type -> Nat -> Type
   const VecKind = mkPiTT(Type0, mkArrow(Nat, Type0), 'A');
-  const Vec = mkInductiveRef('Vec', VecKind);
+  const Vec = mkInductiveRef('Vec');
 
-  const zero = mkConstTT('zero', Nat);
+  const zero = mkConstTT('zero');
 
   return {
     name: 'Vec',
@@ -287,12 +287,12 @@ function makeVec(): InductiveTypeDef {
  *   | fsucc : (n : Nat) -> Fin n -> Fin (succ n)
  */
 function makeFin(): InductiveTypeDef {
-  const Nat = mkInductiveRef('Nat', Type0);
-  const succ = mkConstTT('succ', mkArrow(Nat, Nat));
+  const Nat = mkInductiveRef('Nat');
+  const succ = mkConstTT('succ');
 
   // Fin : Nat -> Type
   const FinKind = mkArrow(Nat, Type0);
-  const Fin = mkInductiveRef('Fin', FinKind);
+  const Fin = mkInductiveRef('Fin');
 
   return {
     name: 'Fin',
@@ -339,7 +339,7 @@ function makeFin(): InductiveTypeDef {
  *   | tt : Unit
  */
 function makeUnit(): InductiveTypeDef {
-  const Unit = mkInductiveRef('Unit', Type0);
+  const Unit = mkInductiveRef('Unit');
 
   return {
     name: 'Unit',
@@ -367,7 +367,7 @@ function makeUnit(): InductiveTypeDef {
 function makeSum(): InductiveTypeDef {
   // Sum : Type -> Type -> Type
   const SumKind = mkArrow(Type0, mkArrow(Type0, Type0));
-  const Sum = mkInductiveRef('Sum', SumKind);
+  const Sum = mkInductiveRef('Sum');
 
   return {
     name: 'Sum',
@@ -492,12 +492,12 @@ function makeSemigroupRecord(): RecordDef {
   // But in this context, op is a field so we treat it as a constant
   // The type of op (as used in the field) is: A -> A -> A
   const opFieldType = mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), mkVarTT(2), '_'), '_');
-  const op = mkConstTT('op', opFieldType);
+  const op = mkConstTT('op');
 
   // Eq : (A : Type) -> A -> A -> Type_0
   // In the body of assoc, we apply Eq to (A, lhs, rhs) - 3 args
   const EqType = mkPiTT(Type0, mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), Prop, '_'), '_'), 'A');
-  const Eq = mkConstTT('Eq', EqType);
+  const Eq = mkConstTT('Eq');
 
   // Build assoc : (a b c : A) -> Eq A (op a (op b c)) (op (op a b) c)
   //
@@ -575,15 +575,15 @@ function makeMonoidRecord(): RecordDef {
   //
   // op : A -> A -> A (field type, not (A:Type) -> ...)
   const opFieldType = mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), mkVarTT(2), '_'), '_');
-  const op = mkConstTT('op', opFieldType);
+  const op = mkConstTT('op');
 
   // e : A (field type in param context where A is at index 0)
   const eFieldType = mkVarTT(0);
-  const e = mkConstTT('e', eFieldType);
+  const e = mkConstTT('e');
 
   // Eq : (A : Type) -> A -> A -> Type_0
   const EqType = mkPiTT(Type0, mkPiTT(mkVarTT(0), mkPiTT(mkVarTT(1), Prop, '_'), '_'), 'A');
-  const Eq = mkConstTT('Eq', EqType);
+  const Eq = mkConstTT('Eq');
 
   // Build left_id : (x : A) -> Eq A (op e x) x
   // In param context: A is at index 0
@@ -638,7 +638,7 @@ function makeMonoidRecord(): RecordDef {
  *   y : Nat
  */
 function makePointRecord(): RecordDef {
-  const Nat = mkInductiveRef('Nat', Type0);
+  const Nat = mkInductiveRef('Nat');
 
   return {
     name: 'Point',

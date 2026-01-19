@@ -139,13 +139,9 @@ export function expressionNodeToTTerm(
       if (context.has(varName)) {
         return mkVarTT(context.get(varName)!);
       }
-      // Not in context - treat as a constant (like 'a', 'b', etc.)
-      // Get type from type context (may be a type hole!)
-      const varType = typeContext.get(varName) || TT_CONSTANTS.Real;
       return {
         tag: 'Const',
         name: varName,
-        type: varType  // Use actual type (could be a hole!)
       };
 
     case 'literal':
@@ -154,7 +150,6 @@ export function expressionNodeToTTerm(
       return {
         tag: 'Const',
         name: numValue,
-        type: TT_CONSTANTS.Real
       };
 
     case 'binop':
@@ -169,7 +164,6 @@ export function expressionNodeToTTerm(
       const opConst: TTerm = {
         tag: 'Const',
         name: expr.operator!,
-        type: TT_CONSTANTS.Real // Simplified - operators should have proper function types
       };
 
       return mkAppTT(mkAppTT(opConst, left), right);
@@ -215,7 +209,6 @@ export function expressionNodeToTTerm(
       const unOpConst: TTerm = {
         tag: 'Const',
         name: expr.operator!,
-        type: TT_CONSTANTS.Real
       };
       return mkAppTT(unOpConst, operand);
 
@@ -250,7 +243,6 @@ export function expressionNodeToTTerm(
       const ineqOp: TTerm = {
         tag: 'Const',
         name: expr.operator || '<',
-        type: TT_CONSTANTS.Real
       };
 
       return mkAppTT(mkAppTT(ineqOp, ineqLeft), ineqRight);
@@ -600,7 +592,6 @@ export function applyEqualityStep(
   const ruleProof: TTerm = {
     tag: 'Const',
     name: ruleName,
-    type: mkEq(state.currentExpr, newExpr)
   };
 
   // Check if we've reached the target

@@ -58,7 +58,7 @@ export function createDefaultConstructorType(
 
   // Start with the inductive type constant
   // The type of the constant is the inductiveType itself
-  let result: TTerm = mkConstTT(inductiveName, inductiveType);
+  let result: TTerm = mkConstTT(inductiveName);
 
   // Apply fresh holes for each argument
   for (let i = 0; i < argCount; i++) {

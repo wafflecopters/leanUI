@@ -102,7 +102,7 @@ export interface TClause {
  */
 
 export type TTermApp = { tag: 'App'; fn: TTerm; arg: TTerm }
-export type TTermConst = { tag: 'Const'; name: string; type: TTerm }
+export type TTermConst = { tag: 'Const'; name: string; }
 
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
@@ -158,16 +158,16 @@ export interface THole {
  */
 export const TT_CONSTANTS = {
   // Natural numbers
-  Nat: { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as const,
-  Zero: { tag: 'Const', name: '0', type: { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } } as const,
+  Nat: { tag: 'Const', name: 'ℕ' } as const,
+  Zero: { tag: 'Const', name: '0' } as const,
   Succ: (() => {
     // Succ : ℕ → ℕ
-    const nat = { tag: 'Const', name: 'ℕ', type: { tag: 'Sort', level: 0 } } as TTerm;
+    const nat = { tag: 'Const', name: 'ℕ' } as TTerm;
     return { tag: 'Const', name: 'succ', type: mkPiTT(nat, nat, 'n') } as const;
   })(),
 
   // Real numbers (placeholder - would need proper construction)
-  Real: { tag: 'Const', name: 'ℝ', type: { tag: 'Sort', level: 0 } } as const,
+  Real: { tag: 'Const', name: 'ℝ' } as const,
 
   // Equality type
   // eq : Π (A : Type), A → A → Prop
@@ -236,7 +236,6 @@ export function createNatElimType(): TTerm {
 export const NAT_ELIM: TTerm = {
   tag: 'Const',
   name: 'nat_elim',
-  type: createNatElimType()
 };
 
 // ============================================================================
@@ -306,8 +305,8 @@ export function mkAppSpineTT(fn: TTerm, args: TTerm[]): TTerm {
 /**
  * Create a constant with a given name and type
  */
-export function mkConstTT(name: string, type: TTerm): TTerm {
-  return { tag: 'Const', name, type };
+export function mkConstTT(name: string): TTerm {
+  return { tag: 'Const', name };
 }
 
 /**
@@ -1505,7 +1504,7 @@ export function hypothesesToLambda(hypotheses: Array<[string, TTerm]>, body: TTe
  */
 export function mkEq(a: TTerm, b: TTerm): TTerm {
   // Eq a b : Prop
-  return mkAppTT(mkAppTT(mkConstTT('Eq', mkPropTT()), a), b);
+  return mkAppTT(mkAppTT(mkConstTT('Eq'), a), b);
 }
 
 /**
@@ -1518,7 +1517,7 @@ export function mkEq(a: TTerm, b: TTerm): TTerm {
  */
 export function mkRefl(a: TTerm): TTerm {
   // refl : ∀ {α : Type} (a : α), a = a
-  return mkAppTT(mkConstTT('refl', mkPropTT()), a);
+  return mkAppTT(mkConstTT('refl'), a);
 }
 
 /**
@@ -1531,7 +1530,7 @@ export function mkRefl(a: TTerm): TTerm {
  */
 export function mkSym(proof: TTerm): TTerm {
   // sym : ∀ {α : Type} {a b : α}, (a = b) → (b = a)
-  return mkAppTT(mkConstTT('sym', mkPropTT()), proof);
+  return mkAppTT(mkConstTT('sym'), proof);
 }
 
 /**
@@ -1545,7 +1544,7 @@ export function mkSym(proof: TTerm): TTerm {
  */
 export function mkTrans(proof1: TTerm, proof2: TTerm): TTerm {
   // trans : ∀ {α : Type} {a b c : α}, (a = b) → (b = c) → (a = c)
-  return mkAppTT(mkAppTT(mkConstTT('trans', mkPropTT()), proof1), proof2);
+  return mkAppTT(mkAppTT(mkConstTT('trans'), proof1), proof2);
 }
 
 /**
@@ -1559,7 +1558,7 @@ export function mkTrans(proof1: TTerm, proof2: TTerm): TTerm {
  */
 export function mkCong(f: TTerm, proof: TTerm): TTerm {
   // cong : ∀ {α β : Type} (f : α → β) {a b : α}, (a = b) → (f a = f b)
-  return mkAppTT(mkAppTT(mkConstTT('cong', mkPropTT()), f), proof);
+  return mkAppTT(mkAppTT(mkConstTT('cong'), f), proof);
 }
 
 // ============================================================================
@@ -2471,13 +2470,10 @@ export interface RecordDef {
 export function mkProjection(
   recordName: string,
   fieldName: string,
-  recordType: TTerm,
-  fieldType: TTerm
 ): TTerm {
   // Projection : Record → FieldType
   return mkConstTT(
     `${recordName}.${fieldName}`,
-    mkPiTT(recordType, fieldType, 'self')
   );
 }
 
@@ -2535,12 +2531,8 @@ export function mkRecordConstructorType(
  */
 export function mkRecordConstructor(
   recordName: string,
-  recordRef: TTerm,
-  fields: RecordField[],
-  params: Array<[string, TTerm]> = []
 ): TTerm {
-  const ctorType = mkRecordConstructorType(recordRef, fields, params);
-  return mkConstTT(`${recordName}.mk`, ctorType);
+  return mkConstTT(`${recordName}.mk`);
 }
 
 /**

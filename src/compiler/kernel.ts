@@ -35,7 +35,7 @@ export type TTKBinderKind =
  */
 
 export type TTKTermApp = { tag: 'App'; fn: TTKTerm; arg: TTKTerm }
-export type TTKTermConst = { tag: 'Const'; name: string; type: TTKTerm }
+export type TTKTermConst = { tag: 'Const'; name: string }
 
 /**
  * TTK Pattern - kernel-level patterns
@@ -170,8 +170,8 @@ export function mkAppSpine(fn: TTKTerm, args: TTKTerm[]): TTKTerm {
 /**
  * Create a constant with a given name and type
  */
-export function mkConst(name: string, type: TTKTerm): TTKTerm {
-  return { tag: 'Const', name, type };
+export function mkConst(name: string): TTKTerm {
+  return { tag: 'Const', name };
 }
 
 /**

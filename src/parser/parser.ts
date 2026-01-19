@@ -163,13 +163,13 @@ type PrefixParselet = (parser: Parser, token: Token, ctx: NameContext, path: Ind
  * Each entry defines how to parse an expression starting with that token.
  */
 const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
-  'LPAREN':     (p, _t, ctx, path) => p['parseParenExpr'](ctx, path),
-  'LAMBDA':     (p, _t, ctx, path) => p['parseLambda'](ctx, path),
-  'LET':        (p, _t, ctx, path) => p['parseLet'](ctx, path),
-  'CASE':       (p, _t, ctx, path) => p['parseMatch'](ctx, path),
-  'MATCH':      (p, _t, ctx, path) => p['parseMatch'](ctx, path),
-  'TYPE':       (p, _t, _ctx, path) => p['parseType'](path),
-  'IDENT':      (p, _t, ctx, path) => p['parseIdent'](ctx, path),
+  'LPAREN': (p, _t, ctx, path) => p['parseParenExpr'](ctx, path),
+  'LAMBDA': (p, _t, ctx, path) => p['parseLambda'](ctx, path),
+  'LET': (p, _t, ctx, path) => p['parseLet'](ctx, path),
+  'CASE': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
+  'MATCH': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
+  'TYPE': (p, _t, _ctx, path) => p['parseType'](path),
+  'IDENT': (p, _t, ctx, path) => p['parseIdent'](ctx, path),
 
   // Simple tokens that don't need helper methods
   'PROP': (p) => {
@@ -1150,7 +1150,7 @@ export class Parser {
 
         const right = this.exprUntil(rightPrec, ctx, stopTokens);
 
-        const opConst = mkConstTT(opInfo.constName || token.value, mkHoleTT('op_type', mkPropTT()));
+        const opConst = mkConstTT(opInfo.constName || token.value);
         left = mkAppTT(mkAppTT(opConst, left), right);
         continue;
       }
@@ -1248,7 +1248,7 @@ export class Parser {
         const right = this.expr(rightPrec, ctx, path);
 
         // Create binary application: op left right
-        const opConst = mkConstTT(opInfo.constName || token.value, mkHoleTT('op_type', mkPropTT()));
+        const opConst = mkConstTT(opInfo.constName || token.value);
         left = mkAppTT(mkAppTT(opConst, left), right);
         continue;
       }
@@ -1356,7 +1356,7 @@ export class Parser {
         // This is tricky - let's assume it's annotation where x is looked up in context
         const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
         const idx = ctx.indexOf(name);
-        const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name, mkHoleTT('const_type', mkPropTT()));
+        const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name);
         return { tag: 'Annot', term, type };
       } else {
         // Not a binder - backtrack and parse as expression
@@ -2011,7 +2011,7 @@ export class Parser {
     }
 
     // Not in context - treat as constant
-    return mkConstTT(name, mkHoleTT(`${name}_type`, mkPropTT()));
+    return mkConstTT(name);
   }
 
   /**
@@ -2020,7 +2020,7 @@ export class Parser {
   private parseNumberLiteral(value: string): TTerm {
     // For now, represent numbers as constants
     // In a full implementation, we'd build Nat.succ chains
-    return mkConstTT(value, mkConstTT('ℕ', mkTypeTT(0)));
+    return mkConstTT(value);
   }
 
   /**

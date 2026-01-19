@@ -208,7 +208,7 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, sig
   } else if (term.tag === 'App') {
     return { tag: 'App', fn: transformVarsInTermAcc(term.fn, transform, signature), arg: transformVarsInTermAcc(term.arg, transform, signature) };
   } else if (term.tag === 'Const') {
-    return { tag: 'Const', name: term.name, type: transformVarsInTermAcc(term.type, transform, signature) };
+    return { tag: 'Const', name: term.name };
   } else if (term.tag === 'Sort') {
     return { tag: 'Sort', level: term.level };
   } else if (term.tag === 'Hole') {

@@ -27,7 +27,7 @@ import {
 
 const Type: TTKTerm = { tag: 'Sort', level: 0 };
 const mkApp = (fn: TTKTerm, arg: TTKTerm): TTKTerm => ({ tag: 'App', fn, arg });
-const mkConst = (name: string): TTKTerm => ({ tag: 'Const', name, type: Type });
+const mkConst = (name: string): TTKTerm => ({ tag: 'Const', name });
 const mkPi = (name: string, domain: TTKTerm, body: TTKTerm): TTKTerm => ({
   tag: 'Binder',
   name,
