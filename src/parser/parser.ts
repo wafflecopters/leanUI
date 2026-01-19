@@ -798,6 +798,10 @@ export class Parser {
     const nameToken = this.expect('IDENT');
     const name = nameToken.value;
 
+    // Record source range for the term name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
     // Skip any newlines after the name (e.g., between blocks)
     this.skipNewlines();
 
@@ -949,6 +953,11 @@ export class Parser {
   private parseLegacyDefDeclaration(): ParsedDeclaration {
     this.expect('DEF');
     const nameToken = this.expect('IDENT');
+
+    // Record source range for the term name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
     this.expect('COLON');
     const type = this.expr(0, []);
     this.expect('ASSIGN');
@@ -965,6 +974,11 @@ export class Parser {
   private parseLegacyTheoremDeclaration(): ParsedDeclaration {
     this.expect('THEOREM');
     const nameToken = this.expect('IDENT');
+
+    // Record source range for the term name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
     this.expect('COLON');
     const type = this.expr(0, []);
     this.expect('ASSIGN');
@@ -981,6 +995,11 @@ export class Parser {
   private parseLegacyAxiomDeclaration(): ParsedDeclaration {
     this.expect('AXIOM');
     const nameToken = this.expect('IDENT');
+
+    // Record source range for the term name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
     this.expect('COLON');
     const type = this.expr(0, []);
 
@@ -1006,6 +1025,11 @@ export class Parser {
   private parseInductiveDeclaration(): ParsedDeclaration {
     this.expect('INDUCTIVE');
     const nameToken = this.expect('IDENT');
+
+    // Record source range for the inductive type name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
     this.expect('COLON');
 
     // Parse type, but stop at 'where' keyword

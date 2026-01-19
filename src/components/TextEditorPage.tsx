@@ -4,7 +4,7 @@
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint } from '../compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken } from '../compiler/compile';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
@@ -16,7 +16,10 @@ const SYNTAX_COLORS = {
   comment: '6a9955',        // Green - for comments (-- and {- -})
   string: 'ce9178',         // Orange
   number: 'b5cea8',         // Light green
-  identifier: 'd4d4d4',     // Light gray
+  identifier: 'd4d4d4',     // Light gray - default
+  constName: '4ec9b0',      // Teal - for types/constructors (Nat, Vec, Zero, Cons)
+  termName: 'e5b387',       // Warm yellow/tan - for function names (plus, nth)
+  patternVar: '9cdcfe',     // Light blue - for pattern variables (x, n, h)
   delimiter: 'e5c995',      // Light tan/gold - for (, ), {, }, etc.
   hole: '4fc1ff',           // Bright cyan for holes
 };
@@ -33,9 +36,17 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     { token: 'string', foreground: SYNTAX_COLORS.string },
     { token: 'number', foreground: SYNTAX_COLORS.number },
     { token: 'identifier', foreground: SYNTAX_COLORS.identifier },
+    { token: 'identifier.const', foreground: SYNTAX_COLORS.constName },
+    { token: 'identifier.term', foreground: SYNTAX_COLORS.termName },
+    { token: 'identifier.pattern', foreground: SYNTAX_COLORS.patternVar },
     { token: 'delimiter', foreground: SYNTAX_COLORS.delimiter },
     { token: 'delimiter.bracket', foreground: SYNTAX_COLORS.delimiter },
     { token: 'variable.predefined', foreground: SYNTAX_COLORS.hole },
+    // Semantic token rules (override lexical highlighting)
+    { token: 'termName', foreground: SYNTAX_COLORS.termName },
+    { token: 'constName', foreground: SYNTAX_COLORS.constName },
+    { token: 'boundVar', foreground: SYNTAX_COLORS.patternVar },
+    { token: 'patternVar', foreground: SYNTAX_COLORS.patternVar },
   ],
   colors: {
     'editor.background': '#161b22',
@@ -475,6 +486,13 @@ export function TextEditorPage() {
   const [editorReady, setEditorReady] = useState(false);
   // Ref to store current wildcard hints (updated from compileResult)
   const wildcardHintsRef = useRef<WildcardInlayHint[]>([]);
+  // Ref to store current semantic tokens (updated from compileResult)
+  const semanticTokensRef = useRef<SemanticToken[]>([]);
+  // Event emitter for semantic tokens changes
+  const semanticTokensEventRef = useRef<{
+    fire: () => void;
+    event: import('monaco-editor').IEvent<void>;
+  } | null>(null);
 
   // Inject Monaco widget z-index styles on mount
   useEffect(() => {
@@ -503,11 +521,24 @@ export function TextEditorPage() {
     return extractWildcardInlayHints(compileResult);
   }, [compileResult]);
 
-  // Keep the ref in sync with the latest hints
-  // Monaco's inlay hints provider will read from the ref when it needs to render
+  // Extract semantic tokens from compile result
+  const semanticTokens = useMemo(() => {
+    return extractSemanticTokens(compileResult);
+  }, [compileResult]);
+
+  // Keep the refs in sync with the latest data
+  // Monaco's providers will read from these refs when they need to render
   useEffect(() => {
     wildcardHintsRef.current = wildcardHints;
   }, [wildcardHints]);
+
+  useEffect(() => {
+    semanticTokensRef.current = semanticTokens;
+    // Signal Monaco to refresh semantic tokens
+    if (semanticTokensEventRef.current) {
+      semanticTokensEventRef.current.fire();
+    }
+  }, [semanticTokens]);
 
   const handleEditorChange: OnChange = useCallback((value) => {
     setCode(value || '');
@@ -611,21 +642,51 @@ export function TextEditorPage() {
           // Type keywords (Type, Prop)
           [/\b(Type|Prop)\b/, 'type.identifier'],
 
+          // Keywords that introduce term names (def, theorem, axiom)
+          [/\b(def|theorem|axiom)\b/, { token: 'keyword', next: '@termName' }],
+
+          // Keywords that introduce const names (inductive)
+          [/\b(inductive)\b/, { token: 'keyword', next: '@constName' }],
+
           // Regular keywords
-          [/\b(inductive|where|def|theorem|axiom|let|in|fun)\b/, 'keyword'],
+          [/\b(where|let|in)\b/, 'keyword'],
+
+          // fun introduces lambda parameters (bound variables)
+          [/\bfun\b/, { token: 'keyword', next: '@lambda' }],
+
+          // Pattern clause start - switch to pattern mode
+          [/\|/, { token: 'delimiter', next: '@pattern' }],
 
           // Holes
           [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],
 
-          // Identifiers
-          [/[a-zA-Z_][a-zA-Z0-9_']*/, 'identifier'],
+          // Uppercase identifiers are const names (types, constructors)
+          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
+
+          // Term name in type signature: lowercase identifier followed by :
+          // e.g., "plus : Nat -> Nat" - "plus" is a term name
+          // Match identifier + colon together as compound token
+          [/([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['identifier.term', 'white', 'delimiter']],
+
+          // Definition clause: lowercase identifier at start of line (possibly indented)
+          // followed by pattern-like things (not :)
+          // e.g., "plus Zero n = ..." or "  plus Zero n = ..."
+          // Uses compound token to handle leading whitespace
+          [/^(\s*)([a-z_][a-zA-Z0-9_']*)(?=\s+[A-Za-z_(])/, ['white', { token: 'identifier.term', next: '@defClause' }]],
+
+          // Standalone underscore is a hole (wildcard)
+          [/_/, 'variable.predefined'],
+
+          // Lowercase identifiers in expression context are term names (function calls)
+          // With naming conventions enforced, lowercase = term, uppercase = type/constructor
+          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.term'],
 
           // Numbers
           [/\d+/, 'number'],
 
           // Operators
           [/->|=>/, 'keyword.operator'],
-          [/[=:+\-*/\\|<>!]+/, 'delimiter'],
+          [/[=:+\-*/\\<>!]+/, 'delimiter'],
 
           // Brackets and delimiters
           [/[()[\]{}]/, 'delimiter.bracket'],
@@ -634,6 +695,75 @@ export function TextEditorPage() {
           // Whitespace
           [/\s+/, 'white'],
         ],
+
+        // Definition clause line (after term name at start of line)
+        // Patterns until = then back to root for RHS
+        defClause: [
+          [/\{-/, 'comment', '@comment'],
+          [/--.*$/, 'comment'],
+          [/=/, { token: 'delimiter', next: '@pop' }],
+          // Uppercase identifiers are constructors
+          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
+          // Lowercase identifiers in patterns are pattern variables
+          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.pattern'],
+          // Wildcards
+          [/_/, 'identifier.pattern'],
+          [/\d+/, 'number'],
+          [/[()[\]{}]/, 'delimiter.bracket'],
+          [/\s+/, 'white'],
+          [/./, 'delimiter'],
+        ],
+
+        // After def/theorem/axiom - next identifier is a term name
+        termName: [
+          [/\s+/, 'white'],
+          [/[a-zA-Z_][a-zA-Z0-9_']*/, { token: 'identifier.term', next: '@pop' }],
+          [/./, { token: '@rematch', next: '@pop' }],
+        ],
+
+        // After inductive - next identifier is a const name
+        constName: [
+          [/\s+/, 'white'],
+          [/[A-Z][a-zA-Z0-9_']*/, { token: 'identifier.const', next: '@pop' }],
+          [/./, { token: '@rematch', next: '@pop' }],
+        ],
+
+        // After fun - lambda parameters until =>
+        lambda: [
+          [/\{-/, 'comment', '@comment'],
+          [/--.*$/, 'comment'],
+          [/=>/, { token: 'keyword.operator', next: '@pop' }],
+          // Type annotations for parameters
+          [/:/, 'delimiter'],
+          // Uppercase identifiers are types
+          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
+          // Lowercase identifiers are bound variables (like pattern vars)
+          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.pattern'],
+          [/\d+/, 'number'],
+          [/[()[\]{}]/, 'delimiter.bracket'],
+          [/\s+/, 'white'],
+          [/->/, 'keyword.operator'],
+          [/./, 'delimiter'],
+        ],
+
+        // In a pattern clause (after |) until = or where
+        pattern: [
+          [/\{-/, 'comment', '@comment'],
+          [/--.*$/, 'comment'],
+          [/\bwhere\b/, { token: 'keyword', next: '@pop' }],
+          [/=/, { token: 'delimiter', next: '@pop' }],
+          // Uppercase identifiers are constructors
+          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
+          // Lowercase identifiers in patterns are pattern variables
+          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.pattern'],
+          // Wildcards
+          [/_/, 'identifier.pattern'],
+          [/\d+/, 'number'],
+          [/[()[\]{}]/, 'delimiter.bracket'],
+          [/\s+/, 'white'],
+          [/./, 'delimiter'],
+        ],
+
         comment: [
           [/[^{-]+/, 'comment'],
           [/-\}/, 'comment', '@pop'],
@@ -674,6 +804,60 @@ export function TextEditorPage() {
         return { hints: inlayHints, dispose: () => {} };
       }
     });
+
+    // Register semantic tokens provider for precise highlighting
+    // This overrides lexical highlighting with semantic information from the compiler
+    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar'];
+    const tokenModifiers: string[] = [];
+
+    // Create an event emitter for signaling token changes
+    const emitter = new monaco.Emitter<void>();
+    semanticTokensEventRef.current = {
+      fire: () => emitter.fire(),
+      event: emitter.event
+    };
+
+    monaco.languages.registerDocumentSemanticTokensProvider('tt', {
+      getLegend: () => ({
+        tokenTypes,
+        tokenModifiers
+      }),
+      onDidChange: emitter.event,
+      provideDocumentSemanticTokens: (_model: MonacoEditor.ITextModel) => {
+        const tokens = semanticTokensRef.current;
+
+        // Monaco expects delta-encoded tokens:
+        // [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+        // Tokens must be sorted by line, then column
+        const sortedTokens = [...tokens].sort((a, b) => {
+          if (a.line !== b.line) return a.line - b.line;
+          return a.column - b.column;
+        });
+
+        const data: number[] = [];
+        let prevLine = 0;
+        let prevCol = 0;
+
+        for (const token of sortedTokens) {
+          const tokenTypeIndex = tokenTypes.indexOf(token.type);
+          if (tokenTypeIndex === -1) continue;
+
+          const deltaLine = token.line - 1 - prevLine;  // Monaco is 0-indexed
+          const deltaCol = deltaLine === 0 ? token.column - 1 - prevCol : token.column - 1;
+
+          data.push(deltaLine, deltaCol, token.length, tokenTypeIndex, 0);
+
+          prevLine = token.line - 1;
+          prevCol = token.column - 1;
+        }
+
+        return {
+          data: new Uint32Array(data),
+          resultId: undefined
+        };
+      },
+      releaseDocumentSemanticTokens: () => {}
+    });
   };
 
   return (
@@ -704,6 +888,7 @@ export function TextEditorPage() {
                 folding: true,
                 renderWhitespace: 'selection',
                 fixedOverflowWidgets: true,
+                'semanticHighlighting.enabled': true,
               }}
             />
           </div>

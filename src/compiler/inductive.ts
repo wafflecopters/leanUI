@@ -1,4 +1,4 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
 import { TTKTerm } from "./kernel";
 import { inferType } from "./checker";
 
@@ -59,7 +59,19 @@ export function checkInductiveDeclaration(
   const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions: [] };
   const defEnv = createTCEnv(definitions).withValue(inductiveDefinition);
 
-  const errors: TCEnvError<unknown>[] = [
+  // Validate naming conventions first
+  const errors: TCEnvError<unknown>[] = [];
+  try {
+    validateInductiveNamingConventions(defEnv);
+  } catch (e) {
+    if (e instanceof TCEnvError) {
+      errors.push(e);
+    } else {
+      throw e;
+    }
+  }
+
+  errors.push(
     ...checkTermOnlyContainsValidConstructors(defEnv.inInductiveDefinitionType()),
     ...constructors.flatMap((_, index) =>
       checkTermOnlyContainsValidConstructors(
@@ -69,7 +81,7 @@ export function checkInductiveDeclaration(
           .inInductiveDefinitionConstructorType(),
       )
     )
-  ]
+  )
 
   if (errors.length > 0) {
     return { success: false, errors };

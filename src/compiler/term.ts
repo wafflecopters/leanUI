@@ -952,6 +952,16 @@ export class TCEnv<T> {
   unknownTagError(data: { tag: string }, typeName: string, message?: string): TCEnvError<T> {
     return new TCEnvError<T>(`Unknown tag: ${data.tag} for ${typeName}${message ? `: ${message}` : ''}`, this);
   }
+
+  // Duplicate name errors
+  nameAlreadyDefinedError(this: TCEnv<string>, existingKind: 'term' | 'inductive' | 'constructor'): TCEnvError<string> {
+    return new TCEnvError<string>(`Name '${this.value}' is already defined as a ${existingKind}`, this);
+  }
+
+  // Pattern variable errors
+  patternVarShadowsTermError(this: TCEnv<string>): TCEnvError<string> {
+    return new TCEnvError<string>(`Pattern variable '${this.value}' shadows an existing term definition`, this);
+  }
 }
 
 export class TCEnvError<T> {
@@ -959,6 +969,100 @@ export class TCEnvError<T> {
     public readonly message: string,
     public readonly env: TCEnv<T>
   ) { }
+}
+
+/**
+ * Validate that names in an inductive definition are not already defined.
+ * Checks:
+ * 1. Inductive type name is not already defined
+ * 2. Constructor names are not already defined
+ */
+export function validateInductiveNamingConventions(env: TCEnv<InductiveDefinition>): void {
+  // Validate inductive type name is not a duplicate
+  validateInductiveNameNotDefined(env);
+
+  // Validate all constructor names are not duplicates
+  const ctorsEnv = env.inInductiveDefinitionConstructors();
+  for (let i = 0; i < ctorsEnv.value.length; i++) {
+    const ctorEnv = ctorsEnv.inInductiveDefinitionConstructor(i);
+    validateConstructorNameNotDefined(ctorEnv);
+  }
+}
+
+// ============================================================================
+// Duplicate Name Checking
+// ============================================================================
+
+/**
+ * Check what kind of definition a name already has in the definitions map.
+ * Returns undefined if the name is not defined.
+ */
+export function getExistingDefinitionKind(definitions: DefinitionsMap, name: string): 'term' | 'inductive' | 'constructor' | undefined {
+  if (definitions.terms.has(name)) {
+    return 'term';
+  }
+  if (definitions.inductiveTypes.has(name)) {
+    return 'inductive';
+  }
+  // Check if name is a constructor
+  for (const indDef of definitions.inductiveTypes.values()) {
+    for (const ctor of indDef.constructors) {
+      if (ctor.name === name) {
+        return 'constructor';
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Validate that a term name is not already defined.
+ */
+export function validateTermNameNotDefined(env: TCEnv<TermDefinition>): void {
+  const nameEnv = env.inTermName();
+  const existingKind = getExistingDefinitionKind(env.definitions, nameEnv.value);
+  if (existingKind) {
+    throw nameEnv.nameAlreadyDefinedError(existingKind);
+  }
+}
+
+/**
+ * Validate that an inductive type name is not already defined.
+ */
+export function validateInductiveNameNotDefined(env: TCEnv<InductiveDefinition>): void {
+  const nameEnv = env.inInductiveDefinitionName();
+  const existingKind = getExistingDefinitionKind(env.definitions, nameEnv.value);
+  if (existingKind) {
+    throw nameEnv.nameAlreadyDefinedError(existingKind);
+  }
+}
+
+/**
+ * Validate that a constructor name is not already defined.
+ */
+export function validateConstructorNameNotDefined(env: TCEnv<{ name: string; type: TTKTerm }>): void {
+  const nameEnv = env.inInductiveDefinitionConstructorName();
+  const existingKind = getExistingDefinitionKind(env.definitions, nameEnv.value);
+  if (existingKind) {
+    throw nameEnv.nameAlreadyDefinedError(existingKind);
+  }
+}
+
+// ============================================================================
+// Pattern Variable Validation
+// ============================================================================
+
+/**
+ * Validate a pattern variable name:
+ * Cannot shadow a term definition in scope
+ */
+export function validatePatternVarName(env: TCEnv<string>): void {
+  const name = env.value;
+
+  // Check for shadowing term definitions
+  if (env.definitions.terms.has(name)) {
+    throw env.patternVarShadowsTermError();
+  }
 }
 
 function lookupTypeAtIndexSignature(signature: Signature, index: number): TTKTerm | undefined {
