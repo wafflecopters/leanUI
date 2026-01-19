@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-ro
 import { EnhancedProofWorkspace } from './components/EnhancedProofWorkspace';
 import { InductiveTypeEditor } from './components/InductiveTypeEditor';
 import { RecordEditor } from './components/RecordEditor';
-import { TmpDebugPage } from './components/TmpDebugPage';
+import { TextEditorPage } from './components/TextEditorPage';
 
 function AppContent() {
   const navigate = useNavigate();
@@ -86,7 +86,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/tmp-debug" element={<TmpDebugPage />} />
+        <Route path="/text-editor" element={<TextEditorPage />} />
         <Route path="*" element={<AppContent />} />
       </Routes>
     </BrowserRouter>

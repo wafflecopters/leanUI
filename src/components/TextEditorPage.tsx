@@ -1,5 +1,5 @@
 /**
- * TmpDebugPage - A debug page for viewing code and compilation results
+ * TextEditorPage - A page for editing code and viewing compilation results
  */
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
@@ -468,7 +468,7 @@ function BlockCard(props: { header: React.ReactNode, body: React.ReactNode, init
   )
 }
 
-export function TmpDebugPage() {
+export function TextEditorPage() {
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
@@ -643,8 +643,8 @@ export function TmpDebugPage() {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h2 style={styles.title}>Debug View</h2>
-        <p style={styles.subtitle}>Source code and elaborated TTK output</p>
+        <h2 style={styles.title}>Text Editor</h2>
+        <p style={styles.subtitle}>Edit code and view compilation results</p>
       </div>
 
       <div style={styles.mainContent}>
