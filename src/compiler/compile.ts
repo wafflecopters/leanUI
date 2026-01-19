@@ -14,7 +14,7 @@ import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
 import { mkApp, mkAppSpine, mkConst, mkType, mkVar, prettyPrint } from './surface';
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, createDefinitionsMap, createTCEnv, DefinitionsMap, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
+import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { unifyTerms } from './unify';
 import { enumerateAppliedSubstitutions, shiftTerm, subst } from './subst';
@@ -714,22 +714,31 @@ function checkTermValue(
     }
   }
 
+  const clausesEnv = env.inMatchClauses();
   const errors: TCEnvError<unknown>[] = [];
 
-  // TODO - ensure all clauses have same pattern count
-  // TODO - ensure pattern count is less than or equal type binders count
+  const firstClauseRootPatternsCount = clausesEnv.value[0].patterns.length;
+  const maxAllowedPatternsCount = countPiBinders(type);
 
-  const clausesEnv = env.inMatchClauses();
   for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
     loggingEnabled = name === 'nth' && clauseIndex === 1
 
-    try {
-      checkMatchClause(name ?? '???', clausesEnv.inMatchClause(clauseIndex), type);
-    } catch (e) {
-      if (e instanceof TCEnvError) {
-        errors.push(e);
-      } else {
-        errors.push(new TCEnvError(String(e), clausesEnv.inMatchClause(clauseIndex)));
+    const clauseEnv = clausesEnv.inMatchClause(clauseIndex);
+    const rootPatternsCount = clauseEnv.value.patterns.length;
+
+    if (rootPatternsCount !== firstClauseRootPatternsCount) {
+      errors.push(new TCEnvError(`Mismatch in pattern count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected ${firstClauseRootPatternsCount}.`, clauseEnv));
+    } else if (rootPatternsCount > maxAllowedPatternsCount) {
+      errors.push(new TCEnvError(`Pattern count exceeds type binders count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected <= ${maxAllowedPatternsCount}.`, clauseEnv));
+    } else {
+      try {
+        checkMatchClause(name ?? '???', clauseEnv, type);
+      } catch (e) {
+        if (e instanceof TCEnvError) {
+          errors.push(e);
+        } else {
+          errors.push(new TCEnvError(String(e), clausesEnv.inMatchClause(clauseIndex)));
+        }
       }
     }
   }

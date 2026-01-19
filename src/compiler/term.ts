@@ -164,6 +164,16 @@ export function signatureToNamesStack(signature: Signature): string[] {
   return signature.map(n => n.name).reverse()
 }
 
+export function countPiBinders(term: TTKTerm): number {
+  let count = 0;
+  let current = term;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    count++;
+    current = current.body;
+  }
+  return count;
+}
+
 export function extractPiSpine(term: TTKTerm): PiSpine {
   const binders: Signature = [];
   let current = term;
