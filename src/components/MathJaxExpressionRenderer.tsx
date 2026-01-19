@@ -6,7 +6,7 @@ import 'katex/dist/katex.min.css';
 import { expressionNodeToTTerm, expressionPathToTTermPath } from '../compiler/bridge';
 import { asLambdaByExtractingTermAtIndexPaths, prettyPrintTT, TContext, TTerm } from '../compiler/surface';
 import { elabToKernel, elabContextToKernel } from '../compiler/elab';
-import { inferType, TTKContext, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
+import { inferType, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
 // Helper to convert TContext to Maps for expressionNodeToTTerm
 function contextToMaps(context: TContext): { varContext: Map<string, number>; typeContext: Map<string, TTerm> } {

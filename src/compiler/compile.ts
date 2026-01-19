@@ -8,7 +8,7 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from './kernel';
+import { TTKTerm, Signature, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
@@ -695,7 +695,7 @@ export interface ElabOptions {
  * @param options - Elaboration options (e.g., whether to elaborate values)
  * @returns ElabResult with elaborated blocks
  */
-export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [], options: ElabOptions = {}): ElabResult {
+export function elabTT(parseResult: ParseResult, _initialContext: Signature = [], options: ElabOptions = {}): ElabResult {
   const { elabValues = true } = options;
   const elabBlocks: ElabBlock[] = [];
 

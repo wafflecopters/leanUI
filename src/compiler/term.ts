@@ -1,5 +1,6 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, Signature } from "./kernel";
+export type { Signature } from "./kernel";
 import { canSolveMeta, solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, freeVarIndices, shiftTerm } from "./subst";
 import { areTypesDefEq } from "./whnf";
@@ -8,7 +9,7 @@ export interface CheckError {
   message: string;
   path: IndexPath;  // Location in the AST where error occurred
   term?: TTKTerm;
-  context?: TTKContext;
+  context?: Signature;
   definitions?: DefinitionsMap;
   expected?: TTKTerm;
   actual?: TTKTerm;
@@ -19,9 +20,6 @@ export type Constraint = {
   meta: string,
   rhs: TTKTerm,
 }
-
-
-export type Signature = { name: string, type: TTKTerm, value?: TTKTerm }[];
 
 export type MetaVar = {
   ctx: Signature,

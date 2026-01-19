@@ -24,8 +24,7 @@ import type {
 
 import type {
   TTKTerm,
-  TTKContext,
-  TTKBinding,
+  Signature,
   TTKBinderKind,
   TTKPattern,
   TTKRecordDef,
@@ -406,8 +405,8 @@ export function elabPatternToKernel(pattern: TPattern): TTKPattern {
 /**
  * Elaborate a surface context to kernel context.
  */
-export function elabContextToKernel(ctx: TContext): TTKContext {
-  return ctx.map((binding): TTKBinding => ({
+export function elabContextToKernel(ctx: TContext): Signature {
+  return ctx.map((binding) => ({
     name: binding.name,
     type: elabToKernel(binding.type)
   }));
@@ -416,7 +415,7 @@ export function elabContextToKernel(ctx: TContext): TTKContext {
 /**
  * Elaborate a surface binding to kernel binding.
  */
-export function elabBindingToKernel(binding: TBinding): TTKBinding {
+export function elabBindingToKernel(binding: TBinding): Signature[number] {
   return {
     name: binding.name,
     type: elabToKernel(binding.type)
