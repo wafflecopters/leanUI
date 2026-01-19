@@ -1,5 +1,6 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
 import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "./kernel";
+import { canSolveMeta, solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, freeVarIndices, shiftTerm } from "./subst";
 import { areTypesDefEq } from "./whnf";
 
@@ -306,16 +307,6 @@ export class TCEnv<T> {
     return this.constraints.length > 0;
   }
 
-  solveConstraints(): TCEnv<T> {
-    if (!this.hasConstraints()) {
-      return this;
-    }
-
-    debugger
-
-    return this;
-  }
-
   prettyPrint(term: TTKTerm): string {
     return prettyPrint(term, this.signature.map(s => s.name).reverse());
   }
@@ -358,6 +349,27 @@ export class TCEnv<T> {
       this.definitions,
       newMetaVars,
       newConstraints,
+      this.indexPath,
+      this.valueStack,
+      this.value
+    );
+  }
+
+  solveMetasAndConstraints(options: { liftMetasToFullContext: boolean }): TCEnv<T> {
+    if (!this.hasConstraints()) {
+      return this;
+    }
+
+    const { constraints, metaVars } = solveConstraints(
+      this.metaVars,
+      this.constraints,
+      options.liftMetasToFullContext ? this.signature : undefined
+    );
+    return new TCEnv(
+      this.signature,
+      this.definitions,
+      metaVars,
+      constraints,
       this.indexPath,
       this.valueStack,
       this.value
@@ -1012,35 +1024,4 @@ export function assertDefined<T>(value: T | undefined, msg?: string): asserts va
   if (!value) {
     throw new Error(msg ?? `Expected defined value, got: ${value}`);
   }
-}
-
-function solveConstraints(C: Constraint[], Σ: Map<string, MetaVar>): Constraint[] {
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    C = C.filter(constraint => {
-      const meta = Σ.get(constraint.meta)!;
-
-      // Skip if already solved
-      if (meta.solution !== null) {
-        return false;  // Remove from C
-      }
-
-      // Check if solvable
-      const telLen = meta.ctx.length;
-      const freeVars = freeVarIndices(constraint.rhs);
-
-      if (freeVars.every(i => i < telLen)) {
-        // Solve it!
-        meta.solution = constraint.rhs;
-        changed = true;
-        return false;  // Remove from C
-      }
-
-      return true;  // Keep in C (stuck)
-    });
-  }
-
-  return C;
 }

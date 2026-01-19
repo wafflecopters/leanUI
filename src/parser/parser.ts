@@ -1583,14 +1583,26 @@ export class Parser {
    *   Succ n            → PCtor("Succ", [PVar("n")])
    *   Succ (Succ m)     → PCtor("Succ", [PCtor("Succ", [PVar("m")])])
    *   _                 → PVar("_w0"), PVar("_w1"), ... (unique names per wildcard)
+   *   _ x               → PCtor("_", [PVar("x")]) - will be rejected by elaborator
    *   x                 → PVar("x")
    */
   private parsePattern(): TPattern {
     const token = this.current();
 
     // Wildcard pattern: _ (represented as PVar with unique name like _w0, _w1)
+    // BUT if _ is followed by arguments, it's treated as a PCtor (which elaboration will reject)
     if (token.type === 'UNDERSCORE') {
       this.advance();
+
+      // Check if followed by another pattern (application without parens)
+      if (this.canStartPattern(this.current())) {
+        const args: TPattern[] = [];
+        while (this.canStartPattern(this.current())) {
+          args.push(this.parsePatternAtom());
+        }
+        return { tag: 'PCtor', name: '_', args };
+      }
+
       return { tag: 'PVar', name: this.freshWildcard() };
     }
 
@@ -1599,24 +1611,9 @@ export class Parser {
       const name = token.value;
       this.advance();
 
-      // Check if this is a constructor application (has arguments in parens)
-      if (this.current().type === 'LPAREN') {
-        // Parse constructor arguments: Ctor (pat1) (pat2) or Ctor(pat1, pat2)
-        const args: TPattern[] = [];
-
-        while (this.current().type === 'LPAREN') {
-          this.advance(); // consume '('
-          args.push(this.parsePattern());
-          this.expect('RPAREN');
-        }
-
-        return { tag: 'PCtor', name, args };
-      }
-
-      // Check if followed by another pattern (application without parens)
-      // e.g., "Succ n" or "Cons x xs"
+      // Check if followed by pattern arguments (either parenthesized or bare)
+      // This handles: "Ctor (arg1) arg2", "Ctor arg1 arg2", "Ctor (arg1) (arg2)", etc.
       if (this.canStartPattern(this.current())) {
-        // This is a constructor with arguments (no parens)
         const args: TPattern[] = [];
         while (this.canStartPattern(this.current())) {
           args.push(this.parsePatternAtom());
@@ -1726,8 +1723,28 @@ export class Parser {
     const startToken = this.current();
 
     // Wildcard pattern: _ (represented as PVar with unique name like _w0, _w1)
+    // BUT if _ is followed by arguments, it's treated as a PCtor (which elaboration will reject)
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
+
+      // Check if followed by another pattern (application without parens)
+      // e.g., "_ x" would be PCtor("_", [PVar("x")])
+      if (this.canStartPattern(this.current())) {
+        // Record the constructor name itself at path.name
+        const namePath: IndexPath = [...path, { kind: 'field', name: 'name' }];
+        this.recordRange(namePath, startToken, startToken);
+
+        // This is _ with arguments (no parens)
+        const args: TPattern[] = [];
+        while (this.canStartPattern(this.current())) {
+          const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: args.length }];
+          args.push(this.parsePatternAtomWithSource(argPath));
+        }
+        const endToken = this.tokens[this.pos - 1];
+        this.recordRange(path, startToken, endToken);
+        return { tag: 'PCtor', name: '_', args };
+      }
+
       this.recordRange(path, startToken, startToken);
       return { tag: 'PVar', name: this.freshWildcard() };
     }
@@ -1737,31 +1754,14 @@ export class Parser {
       const name = startToken.value;
       this.advance();
 
-      // Check if this is a constructor application (has arguments in parens)
-      if (this.current().type === 'LPAREN') {
-        // Parse constructor arguments: Ctor (pat1) (pat2) or Ctor(pat1, pat2)
-        const args: TPattern[] = [];
-
-        while (this.current().type === 'LPAREN') {
-          this.advance(); // consume '('
-          const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: args.length }];
-          args.push(this.parsePatternWithSource(argPath));
-          this.expect('RPAREN');
-        }
-
-        const endToken = this.tokens[this.pos - 1];
-        this.recordRange(path, startToken, endToken);
-        return { tag: 'PCtor', name, args };
-      }
-
-      // Check if followed by another pattern (application without parens)
-      // e.g., "Succ n" or "Cons x xs"
+      // Check if followed by pattern arguments (either parenthesized or bare)
+      // This handles: "Ctor (arg1) arg2", "Ctor arg1 arg2", "Ctor (arg1) (arg2)", etc.
       if (this.canStartPattern(this.current())) {
         // Record the constructor name itself at path.name
         const namePath: IndexPath = [...path, { kind: 'field', name: 'name' }];
         this.recordRange(namePath, startToken, startToken);
 
-        // This is a constructor with arguments (no parens)
+        // Parse all arguments (mixing parenthesized and bare is allowed)
         const args: TPattern[] = [];
         while (this.canStartPattern(this.current())) {
           const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: args.length }];

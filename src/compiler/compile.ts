@@ -720,8 +720,6 @@ function checkTermValue(
   const maxAllowedPatternsCount = countPiBinders(type);
 
   for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
-    loggingEnabled = name === 'nth' && clauseIndex === 1
-
     const clauseEnv = clausesEnv.inMatchClause(clauseIndex);
     const rootPatternsCount = clauseEnv.value.patterns.length;
 
@@ -836,7 +834,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     logResultState(workEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
   }
 
-  return workEnv.solveConstraints()
+  return workEnv.solveMetasAndConstraints({ liftMetasToFullContext: false })
 }
 
 function applySubstitutionToCheckStackInPlace(
@@ -981,6 +979,8 @@ function processMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type:
     debugger
     throw new Error('Check stack not empty')
   }
+
+  workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 
   return workEnv
 }

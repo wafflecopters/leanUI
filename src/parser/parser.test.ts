@@ -1469,6 +1469,172 @@ test('Parse pattern clause without type signature', () => {
 });
 
 // ============================================================================
+// Pattern Edge Cases (mixed parens/bare args, underscore with args)
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('PATTERN EDGE CASE TESTS');
+console.log('='.repeat(80) + '\n');
+
+test('Parse underscore with arguments: (_ _) parses as PCtor', () => {
+  // This should parse (elaborator will reject it later)
+  const source = `case x where
+  | (_ _) => y`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PCtor', 'Should parse as PCtor');
+    if (pattern.tag === 'PCtor') {
+      assertEqual(pattern.name, '_', 'Name should be _');
+      assertEqual(pattern.args.length, 1, 'Should have 1 argument');
+      assertEqual(pattern.args[0].tag, 'PVar', 'Arg should be PVar (wildcard)');
+    }
+  }
+});
+
+test('Parse constructor with mixed parens and bare args: FSucc (Succ _) f', () => {
+  // This is the case that was failing: (FSucc (Succ _) f)
+  // Should parse as PCtor("FSucc", [PCtor("Succ", [PVar]), PCtor("f", [])])
+  const source = `case x where
+  | (FSucc (Succ _) f) => y`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PCtor');
+    if (pattern.tag === 'PCtor') {
+      assertEqual(pattern.name, 'FSucc');
+      assertEqual(pattern.args.length, 2, 'FSucc should have 2 args');
+
+      // First arg: (Succ _)
+      const arg1 = pattern.args[0];
+      assertEqual(arg1.tag, 'PCtor');
+      if (arg1.tag === 'PCtor') {
+        assertEqual(arg1.name, 'Succ');
+        assertEqual(arg1.args.length, 1);
+      }
+
+      // Second arg: f (parsed as PCtor with no args, will be resolved later)
+      const arg2 = pattern.args[1];
+      assertEqual(arg2.tag, 'PCtor');
+      if (arg2.tag === 'PCtor') {
+        assertEqual(arg2.name, 'f');
+        assertEqual(arg2.args.length, 0);
+      }
+    }
+  }
+});
+
+test('Parse VCons with nested patterns: VCons _ (Succ _) h tail', () => {
+  const source = `case x where
+  | (VCons _ (Succ _) h tail) => y`;
+  const term = parseExpr(source);
+  assertTermShape(term, 'Match');
+  if (term.tag === 'Match') {
+    const pattern = term.clauses[0].patterns[0];
+    assertEqual(pattern.tag, 'PCtor');
+    if (pattern.tag === 'PCtor') {
+      assertEqual(pattern.name, 'VCons');
+      assertEqual(pattern.args.length, 4, 'VCons should have 4 args');
+
+      // First arg: _ (wildcard)
+      assertEqual(pattern.args[0].tag, 'PVar');
+
+      // Second arg: (Succ _)
+      assertEqual(pattern.args[1].tag, 'PCtor');
+      if (pattern.args[1].tag === 'PCtor') {
+        assertEqual(pattern.args[1].name, 'Succ');
+      }
+
+      // Third arg: h
+      assertEqual(pattern.args[2].tag, 'PCtor');
+      if (pattern.args[2].tag === 'PCtor') {
+        assertEqual(pattern.args[2].name, 'h');
+      }
+
+      // Fourth arg: tail
+      assertEqual(pattern.args[3].tag, 'PCtor');
+      if (pattern.args[3].tag === 'PCtor') {
+        assertEqual(pattern.args[3].name, 'tail');
+      }
+    }
+  }
+});
+
+test('Parse complex pattern clause: nth with Vec and Fin patterns', () => {
+  // This was the failing case from the user
+  const source = `nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
+nth A _ (VCons _ (Succ _) h tail) (FSucc (Succ _) f) = nth _ _ tail f`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+  assertEqual(decls[0].name, 'nth');
+
+  const value = decls[0].value!;
+  assertTermShape(value, 'Match');
+
+  if (value.tag === 'Match') {
+    assertEqual(value.clauses.length, 1);
+    const clause = value.clauses[0];
+    assertEqual(clause.patterns.length, 4, 'Should have 4 top-level patterns');
+
+    // Pattern 1: A (variable)
+    assertEqual(clause.patterns[0].tag, 'PCtor');
+    if (clause.patterns[0].tag === 'PCtor') {
+      assertEqual(clause.patterns[0].name, 'A');
+    }
+
+    // Pattern 2: _ (wildcard)
+    assertEqual(clause.patterns[1].tag, 'PVar');
+
+    // Pattern 3: (VCons _ (Succ _) h tail)
+    assertEqual(clause.patterns[2].tag, 'PCtor');
+    if (clause.patterns[2].tag === 'PCtor') {
+      assertEqual(clause.patterns[2].name, 'VCons');
+      assertEqual(clause.patterns[2].args.length, 4);
+    }
+
+    // Pattern 4: (FSucc (Succ _) f)
+    assertEqual(clause.patterns[3].tag, 'PCtor');
+    if (clause.patterns[3].tag === 'PCtor') {
+      assertEqual(clause.patterns[3].name, 'FSucc');
+      assertEqual(clause.patterns[3].args.length, 2);
+    }
+  }
+});
+
+test('Parse multiple pattern clauses with complex patterns', () => {
+  const source = `nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
+nth A _ (VCons _ _ h _) (FZero _) = h
+nth A _ (VCons _ (Succ _) h tail) (FSucc (Succ _) f) = nth _ _ tail f`;
+
+  const decls = parseDeclarations(source);
+  assertEqual(decls.length, 1);
+
+  const value = decls[0].value!;
+  assertTermShape(value, 'Match');
+
+  if (value.tag === 'Match') {
+    assertEqual(value.clauses.length, 2, 'Should have 2 clauses merged');
+
+    // First clause: nth A _ (VCons _ _ h _) (FZero _) = h
+    const clause1 = value.clauses[0];
+    assertEqual(clause1.patterns.length, 4);
+
+    // Second clause: nth A _ (VCons _ (Succ _) h tail) (FSucc (Succ _) f) = ...
+    const clause2 = value.clauses[1];
+    assertEqual(clause2.patterns.length, 4);
+
+    // Verify FSucc has 2 args in second clause
+    if (clause2.patterns[3].tag === 'PCtor') {
+      assertEqual(clause2.patterns[3].name, 'FSucc');
+      assertEqual(clause2.patterns[3].args.length, 2, 'FSucc should have 2 args');
+    }
+  }
+});
+
+// ============================================================================
 // Summary
 // ============================================================================
 
