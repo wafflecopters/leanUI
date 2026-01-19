@@ -1,4 +1,4 @@
-import { mkVar, TTKBinderKind, TTKTerm } from "../types/tt-kernel";
+import { mkVar, TTKBinderKind, TTKTerm } from "./kernel";
 import { Constraint, MetaVar, Signature, transformVarsInTerm } from "./term";
 
 /**

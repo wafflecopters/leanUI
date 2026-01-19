@@ -19,15 +19,15 @@ import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { ExpressionInput } from './ExpressionRenderer';
 import { LetManager } from './LetManager';
 import { TTViewer } from './TTViewer';
-import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../types/tt-core';
+import { TTerm, createRootProofTerm, mkProp, TermDefinition, createRootTermDefinition, mkType, mkHole, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHole } from '../compiler/surface';
 import {
   LetProofTerm,
   buildFullProofTerm,
   applyProofStep,
   expressionNodeToTTerm,
   applyEqualityStep
-} from '../types/tt-bridge';
-import { findHole, fillHoleWith } from '../types/tt-typecheck';
+} from '../compiler/bridge';
+import { findHole, fillHoleWith } from '../compiler/kernel';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { createApplicationCommandTree } from '../config/navigationCommands';

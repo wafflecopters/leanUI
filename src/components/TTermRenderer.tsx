@@ -9,7 +9,7 @@
  */
 
 import { useMemo, useCallback } from 'react';
-import { TTerm } from '../types/tt-core';
+import { TTerm } from '../compiler/surface';
 import { TermFocusPath, isNamePath, setNameAtPath } from '../utils/termNavigation';
 import { AutoSizingTextField } from './AutoSizingTextField';
 

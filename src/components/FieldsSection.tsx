@@ -7,7 +7,7 @@
 
 import { ReactNode } from 'react';
 import { NamedItemsSection, NamedTypedItem, generateItemId } from './NamedItemsSection';
-import { TTerm, mkType, mkHole, prettyPrintLatex, LatexPrintOptions } from '../types/tt-core';
+import { TTerm, mkType, mkHole, prettyPrintLatex, LatexPrintOptions } from '../compiler/surface';
 import { MathJaxRenderer } from './MathJaxRenderer';
 
 // ============================================================================

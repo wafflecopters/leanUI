@@ -12,7 +12,7 @@
  * - Report undefined symbol errors with locations
  */
 
-import { TTerm } from './tt-core';
+import { TTerm } from '../compiler/surface';
 import { IndexPath } from './source-position';
 
 // ============================================================================

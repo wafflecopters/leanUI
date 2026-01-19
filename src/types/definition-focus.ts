@@ -20,7 +20,7 @@
  *   = focusing on a let-binding value in the body
  */
 
-import { TermPath } from './tt-core';
+import { TermPath } from '../compiler/surface';
 
 // ============================================================================
 // Focus Types

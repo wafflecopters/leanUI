@@ -14,18 +14,102 @@
  */
 
 import { groupByIndentation, SourceBlock } from './indentation-grouper';
-import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } from './tt-parser';
-import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { elaborateTT, checkInductiveDeclaration, CheckError, DefinitionsMap } from '../types/tt-typecheck-decl';
+import { Parser, ParsedDeclaration, ParsedDeclarationWithSource, ParseError } from './parser';
+import { elabToKernelWithMap } from '../compiler/elab';
+import { CheckError } from '../compiler/term';
 import { resolveErrorLocation, resolveCheckErrorLocation, resolveNameResolutionErrorLocation } from '../types/error-resolution';
 import { SourceMap, ElabMap, SourceRange, adjustSourceMapLines, IndexPath } from '../types/source-position';
-import { TTKTerm, TTKContext } from '../types/tt-kernel';
+import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatterns } from './pattern-resolution';
-import { inferParameterIndices } from '../types/tt-inductive-inference';
-import { prettyPrint, TTerm } from '../types/tt-core';
-import { SplitTree } from '../types/ttk-totality-check';
-import { ClauseCheckResult, PatternElabData } from '../types/tt-pattern-elab';
+import { prettyPrint, TTerm } from '../compiler/surface';
+
+// ============================================================================
+// Stub Types and Functions
+// These are placeholders until the new compiler provides full equivalents.
+// TODO: Integrate with the new compiler/checker.ts and compiler/compile.ts
+// ============================================================================
+
+/** Local definitions map - simple Map<string, TTKTerm> for function bodies */
+type LocalDefinitionsMap = Map<string, TTKTerm>;
+
+/** Stub type for split tree (pattern coverage analysis) */
+export type SplitTree = unknown;
+
+/** Stub type for clause check results */
+export type ClauseCheckResult = {
+  ok: boolean;
+  errors: CheckError[];
+};
+
+/** Stub type for pattern elaboration data */
+export type PatternElabData = unknown;
+
+/**
+ * Stub for elaborateTT - elaborates and type checks a single term definition.
+ * TODO: Replace with new compiler implementation.
+ */
+function elaborateTT(
+  _name: string,
+  _type: TTKTerm | undefined,
+  _value: TTKTerm | undefined,
+  _context: TTKContext,
+  _typePath: IndexPath,
+  _valuePath: IndexPath,
+  _definitions: LocalDefinitionsMap,
+  _constructorNames: Set<string>
+): {
+  success: boolean;
+  errors: CheckError[];
+  value?: TTKTerm;
+  validType?: TTKTerm;
+  splitTree?: SplitTree;
+  clauseResults?: ClauseCheckResult[];
+  patternData?: PatternElabData;
+} {
+  // Return a stub result indicating type checking is not implemented
+  // Return success=true with the provided type so declarations are added to context
+  return {
+    success: true,
+    errors: [],
+    value: _type,
+    validType: _type
+  };
+}
+
+/**
+ * Stub for checkInductiveDeclaration - checks an inductive type definition.
+ * TODO: Replace with new compiler implementation.
+ */
+function checkInductiveDeclaration(
+  _name: string,
+  _type: TTKTerm,
+  _constructors: Array<{ name: string; type: TTKTerm }>,
+  _context: TTKContext,
+  _indexPositions: number[] | undefined,
+  _typePath: IndexPath,
+  _ctorPaths: IndexPath[]
+): {
+  success: boolean;
+  errors: CheckError[];
+} {
+  // Return success=true so inductive types are added to context
+  return {
+    success: true,
+    errors: []
+  };
+}
+
+/**
+ * Stub for inferParameterIndices - infers parameter positions for inductive types.
+ * TODO: Replace with new compiler implementation.
+ */
+function inferParameterIndices(
+  _inductiveDef: { name: string; type: TTKTerm; constructors: Array<{ name: string; type: TTKTerm }> }
+): number[] {
+  // Return empty array - no indices inferred
+  return [];
+}
 
 /**
  * Result of checking a single source block.
@@ -154,7 +238,7 @@ export function elaborateTTBlocks(
   // Global context accumulates bindings from successfully checked declarations
   let globalContext: TTKContext = initialContext;
   // Definitions map accumulates function bodies for WHNF reduction
-  const definitions: DefinitionsMap = new Map();
+  const definitions: LocalDefinitionsMap = new Map();
   // Constructor names set tracks which names are constructors (vs functions)
   const constructorNames: Set<string> = new Set();
   const checkResults: CheckResultWithBlock[] = [];

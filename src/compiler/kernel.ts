@@ -1,5 +1,5 @@
 /**
- * TTK (Typed Terms - Kernel) Core Layer
+ * TTK (Typed Terms - Kernel) Core Types and Utilities
  *
  * This is the kernel-level representation of terms, used for type-checking
  * and verification. This is the "elaborated" form of terms - the ground truth.
@@ -185,340 +185,6 @@ export function mkType(level: number): TTKTerm {
 }
 
 // ============================================================================
-// Substitution (for De Bruijn indices)
-// ============================================================================
-
-/**
- * Substitute term s for variable with index n in term t
- * This is the core operation for beta-reduction and let-expansion
- */
-export function subst(index: number, replacement: TTKTerm, term: TTKTerm): TTKTerm {
-  return substHelper(index, replacement, term, 0);
-}
-
-function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, depth: number): TTKTerm {
-  switch (term.tag) {
-    case 'Var':
-      if (term.index === targetIndex + depth) {
-        // Replace with the replacement, shifted to account for binders we've gone under
-        return shift(depth, replacement, 0);
-      } else if (term.index > targetIndex + depth) {
-        // Decrement indices above the substituted variable
-        // because we're removing that binder from the context
-        return { tag: 'Var', index: term.index - 1 };
-      }
-      return term;
-
-    case 'Sort':
-    case 'Const':
-      return term;
-
-    case 'Binder': {
-      const newDomain = substHelper(targetIndex, replacement, term.domain, depth);
-      const newBody = substHelper(targetIndex, replacement, term.body, depth + 1);
-
-      let newBinderKind: TTKBinderKind;
-      if (term.binderKind.tag === 'BLet') {
-        const newDefVal = substHelper(targetIndex, replacement, term.binderKind.defVal, depth);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
-      } else {
-        newBinderKind = term.binderKind;
-      }
-
-      return {
-        tag: 'Binder',
-        name: term.name,
-        binderKind: newBinderKind,
-        domain: newDomain,
-        body: newBody
-      };
-    }
-
-    case 'App':
-      return {
-        tag: 'App',
-        fn: substHelper(targetIndex, replacement, term.fn, depth),
-        arg: substHelper(targetIndex, replacement, term.arg, depth)
-      };
-
-    case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: substHelper(targetIndex, replacement, term.type, depth),
-        context: term.context
-      };
-
-    case 'Annot':
-      return {
-        tag: 'Annot',
-        term: substHelper(targetIndex, replacement, term.term, depth),
-        type: substHelper(targetIndex, replacement, term.type, depth)
-      };
-
-    case 'Match':
-      return {
-        tag: 'Match',
-        scrutinee: substHelper(targetIndex, replacement, term.scrutinee, depth),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          rhs: substHelper(targetIndex, replacement, c.rhs, depth)
-        }))
-      };
-  }
-}
-
-/**
- * Shift De Bruijn indices in a term
- */
-function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
-  switch (term.tag) {
-    case 'Var':
-      return term.index >= cutoff
-        ? { tag: 'Var', index: term.index + amount }
-        : term;
-
-    case 'Sort':
-    case 'Const':
-      return term;
-
-    case 'Binder': {
-      const newDomain = shift(amount, term.domain, cutoff);
-      const newBody = shift(amount, term.body, cutoff + 1);
-
-      let newBinderKind: TTKBinderKind;
-      if (term.binderKind.tag === 'BLet') {
-        const newDefVal = shift(amount, term.binderKind.defVal, cutoff);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
-      } else {
-        newBinderKind = term.binderKind;
-      }
-
-      return {
-        tag: 'Binder',
-        name: term.name,
-        binderKind: newBinderKind,
-        domain: newDomain,
-        body: newBody
-      };
-    }
-
-    case 'App':
-      return {
-        tag: 'App',
-        fn: shift(amount, term.fn, cutoff),
-        arg: shift(amount, term.arg, cutoff)
-      };
-
-    case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: shift(amount, term.type, cutoff),
-        context: term.context
-      };
-
-    case 'Annot':
-      return {
-        tag: 'Annot',
-        term: shift(amount, term.term, cutoff),
-        type: shift(amount, term.type, cutoff)
-      };
-
-    case 'Match':
-      return {
-        tag: 'Match',
-        scrutinee: shift(amount, term.scrutinee, cutoff),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          rhs: shift(amount, c.rhs, cutoff)
-        }))
-      };
-  }
-}
-
-/**
- * Substitute multiple pattern bindings simultaneously.
- *
- * Unlike `subst`, this does NOT shift indices after substitution.
- * It replaces Var(0) with bindings[n-1], Var(1) with bindings[n-2], etc.
- * (where n = bindings.length), and shifts remaining variables down by n.
- *
- * This is used for pattern matching evaluation where we replace pattern
- * variables with their matched values all at once.
- *
- * @param bindings - The values to substitute, in order of pattern appearance
- *                   (first pattern's binding is bindings[0])
- * @param term - The term to substitute into
- */
-export function substPatternBindings(bindings: TTKTerm[], term: TTKTerm): TTKTerm {
-  return substPatternBindingsHelper(bindings, term, 0);
-}
-
-function substPatternBindingsHelper(bindings: TTKTerm[], term: TTKTerm, depth: number): TTKTerm {
-  const n = bindings.length;
-
-  switch (term.tag) {
-    case 'Var': {
-      const adjustedIndex = term.index - depth;
-      if (adjustedIndex >= 0 && adjustedIndex < n) {
-        // This is a pattern variable - replace with corresponding binding
-        // Var(0) -> bindings[n-1] (last binding, most recent)
-        // Var(n-1) -> bindings[0] (first binding)
-        const binding = bindings[n - 1 - adjustedIndex];
-        // Shift the binding up by depth to account for binders we've entered
-        return depth > 0 ? shiftTerm(binding, depth, 0) : binding;
-      } else if (adjustedIndex >= n) {
-        // This references something outside the pattern bindings - shift down
-        return { tag: 'Var', index: term.index - n };
-      }
-      // adjustedIndex < 0 means this is bound by an inner binder
-      return term;
-    }
-
-    case 'Sort':
-    case 'Const':
-      return term;
-
-    case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: substPatternBindingsHelper(bindings, term.type, depth),
-        context: term.context
-      };
-
-    case 'Binder': {
-      const newDomain = substPatternBindingsHelper(bindings, term.domain, depth);
-      const newBody = substPatternBindingsHelper(bindings, term.body, depth + 1);
-
-      let newBinderKind: TTKBinderKind;
-      if (term.binderKind.tag === 'BLet') {
-        const newDefVal = substPatternBindingsHelper(bindings, term.binderKind.defVal, depth);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
-      } else {
-        newBinderKind = term.binderKind;
-      }
-
-      return {
-        tag: 'Binder',
-        name: term.name,
-        binderKind: newBinderKind,
-        domain: newDomain,
-        body: newBody
-      };
-    }
-
-    case 'App':
-      return {
-        tag: 'App',
-        fn: substPatternBindingsHelper(bindings, term.fn, depth),
-        arg: substPatternBindingsHelper(bindings, term.arg, depth)
-      };
-
-    case 'Annot':
-      return {
-        tag: 'Annot',
-        term: substPatternBindingsHelper(bindings, term.term, depth),
-        type: substPatternBindingsHelper(bindings, term.type, depth)
-      };
-
-    case 'Match':
-      return {
-        tag: 'Match',
-        scrutinee: substPatternBindingsHelper(bindings, term.scrutinee, depth),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          rhs: substPatternBindingsHelper(bindings, c.rhs, depth)
-        }))
-      };
-  }
-}
-
-/**
- * Shift De Bruijn indices in a term (exported version)
- */
-export function shiftTerm(term: TTKTerm, amount: number, cutoff: number): TTKTerm {
-  return shift(amount, term, cutoff);
-}
-
-/**
- * Replace variables according to a mapping WITHOUT shifting other indices.
- * This is for parallel substitution where indices should stay in place.
- *
- * @param mapping - Maps variable index to replacement term
- * @param term - The term to transform
- */
-export function replaceVars(mapping: Map<number, TTKTerm>, term: TTKTerm): TTKTerm {
-  return replaceVarsHelper(mapping, term, 0);
-}
-
-function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: number): TTKTerm {
-  switch (term.tag) {
-    case 'Var': {
-      const adjustedIndex = term.index - depth;
-      if (adjustedIndex >= 0 && mapping.has(adjustedIndex)) {
-        // Replace with the mapped term, shifted to account for binders we've gone under
-        const replacement = mapping.get(adjustedIndex)!;
-        return depth > 0 ? shift(depth, replacement, 0) : replacement;
-      }
-      // Leave other variables unchanged
-      return term;
-    }
-
-    case 'Sort':
-    case 'Const':
-      return term;
-
-    case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: replaceVarsHelper(mapping, term.type, depth),
-        context: term.context
-      };
-
-    case 'Binder': {
-      const newDomain = replaceVarsHelper(mapping, term.domain, depth);
-      const newBody = replaceVarsHelper(mapping, term.body, depth + 1);
-
-      let newBinderKind: TTKBinderKind;
-      if (term.binderKind.tag === 'BLet') {
-        const newDefVal = replaceVarsHelper(mapping, term.binderKind.defVal, depth);
-        newBinderKind = { tag: 'BLet', defVal: newDefVal };
-      } else {
-        newBinderKind = term.binderKind;
-      }
-
-      return { tag: 'Binder', binderKind: newBinderKind, name: term.name, domain: newDomain, body: newBody };
-    }
-
-    case 'App': {
-      const newFn = replaceVarsHelper(mapping, term.fn, depth);
-      const newArg = replaceVarsHelper(mapping, term.arg, depth);
-      return { tag: 'App', fn: newFn, arg: newArg };
-    }
-
-    case 'Annot':
-      return {
-        tag: 'Annot',
-        term: replaceVarsHelper(mapping, term.term, depth),
-        type: replaceVarsHelper(mapping, term.type, depth)
-      };
-
-    case 'Match':
-      return {
-        tag: 'Match',
-        scrutinee: replaceVarsHelper(mapping, term.scrutinee, depth),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          rhs: replaceVarsHelper(mapping, c.rhs, depth)
-        }))
-      };
-  }
-}
-
-// ============================================================================
 // Definitional Equality
 // ============================================================================
 
@@ -680,9 +346,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
     case 'Match': {
       const scrutinee = prettyPrint(term.scrutinee, context);
       const clauses = term.clauses.map(c => {
-        const patternStr = c.patterns.map(p => prettyPrintPatternTTK(p)).join(' ');
+        const patternStr = c.patterns.map(p => prettyPrintPatternInternal(p)).join(' ');
         // Collect pattern variable names and add to context for RHS
-        const patternVars = collectPatternVarsTTK(c.patterns);
+        const patternVars = collectPatternVars(c.patterns);
         const rhsContext = [...patternVars.reverse(), ...context];
         const rhsStr = prettyPrint(c.rhs, rhsContext);
         return `${patternStr} => ${rhsStr}`;
@@ -692,7 +358,7 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
   }
 }
 
-function prettyPrintPatternTTK(pattern: TTKPattern): string {
+function prettyPrintPatternInternal(pattern: TTKPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       return pattern.name;
@@ -700,13 +366,13 @@ function prettyPrintPatternTTK(pattern: TTKPattern): string {
       if (pattern.args.length === 0) {
         return pattern.name;
       }
-      const args = pattern.args.map(prettyPrintPatternTTK).join(' ');
+      const args = pattern.args.map(prettyPrintPatternInternal).join(' ');
       return `(${pattern.name} ${args})`;
   }
 }
 
 /** Collect variable names from patterns in left-to-right order */
-function collectPatternVarsTTK(patterns: TTKPattern[]): string[] {
+function collectPatternVars(patterns: TTKPattern[]): string[] {
   const vars: string[] = [];
   for (const p of patterns) {
     collectPatternVarsHelper(p, vars);
@@ -848,7 +514,7 @@ export function prettyPrintLatex(
     case 'Match': {
       const scrutinee = prettyPrintLatex(term.scrutinee, context, opts);
       const clauses = term.clauses.map(c => {
-        const patternStr = c.patterns.map(p => prettyPrintPatternLatexTTK(p)).join('\\; ');
+        const patternStr = c.patterns.map(p => prettyPrintPatternLatex(p)).join('\\; ');
         const rhsStr = prettyPrintLatex(c.rhs, context, opts);
         return `${patternStr} \\Rightarrow ${rhsStr}`;
       }).join(' \\mid ');
@@ -857,7 +523,7 @@ export function prettyPrintLatex(
   }
 }
 
-function prettyPrintPatternLatexTTK(pattern: TTKPattern): string {
+function prettyPrintPatternLatex(pattern: TTKPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       return pattern.name;
@@ -865,7 +531,7 @@ function prettyPrintPatternLatexTTK(pattern: TTKPattern): string {
       if (pattern.args.length === 0) {
         return pattern.name.replace(/_/g, '\\_');
       }
-      const args = pattern.args.map(prettyPrintPatternLatexTTK).join('\\; ');
+      const args = pattern.args.map(prettyPrintPatternLatex).join('\\; ');
       return `(${pattern.name.replace(/_/g, '\\_')}\\; ${args})`;
   }
 }
@@ -941,4 +607,216 @@ export interface TTKRecordDef {
   type: TTKTerm;
   params: TTKRecordParam[];
   fields: TTKRecordField[];
+}
+
+// ============================================================================
+// Type Check Error
+// ============================================================================
+
+import { IndexPath } from '../types/source-position';
+
+export class TypeCheckError extends Error {
+  constructor(
+    message: string,
+    public term?: TTKTerm,
+    public context?: TTKContext,
+    public termPath?: IndexPath,
+  ) {
+    super(message);
+    this.name = 'TypeCheckError';
+  }
+}
+
+// ============================================================================
+// Type Inference Stub (TODO: Integrate with compiler/checker.ts)
+// ============================================================================
+
+export type InferResult =
+  | { ok: true; type: TTKTerm }
+  | { ok: false; error: string };
+
+/**
+ * Type inference stub. In the future, this should integrate with the
+ * proper type checker in compiler/checker.ts.
+ */
+export function inferType(_term: TTKTerm, _context: TTKContext): InferResult {
+  // TODO: Implement proper type inference using compiler/checker.ts
+  return { ok: false, error: 'Type inference not yet implemented in new compiler' };
+}
+
+// ============================================================================
+// Hole Utility Functions
+// ============================================================================
+
+/**
+ * Find a hole by ID in a term
+ */
+export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
+  switch (term.tag) {
+    case 'Hole':
+      return term.id === holeId ? term : null;
+
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return null;
+
+    case 'Binder': {
+      const inDomain = findHole(term.domain, holeId);
+      if (inDomain) return inDomain;
+      const inBody = findHole(term.body, holeId);
+      if (inBody) return inBody;
+      if (term.binderKind.tag === 'BLet') {
+        const inDefVal = findHole(term.binderKind.defVal, holeId);
+        if (inDefVal) return inDefVal;
+      }
+      return null;
+    }
+
+    case 'App': {
+      const inFn = findHole(term.fn, holeId);
+      if (inFn) return inFn;
+      return findHole(term.arg, holeId);
+    }
+
+    case 'Annot': {
+      const inTerm = findHole(term.term, holeId);
+      if (inTerm) return inTerm;
+      return findHole(term.type, holeId);
+    }
+
+    case 'Match': {
+      const inScrutinee = findHole(term.scrutinee, holeId);
+      if (inScrutinee) return inScrutinee;
+      for (const clause of term.clauses) {
+        const inRhs = findHole(clause.rhs, holeId);
+        if (inRhs) return inRhs;
+      }
+      return null;
+    }
+  }
+}
+
+/**
+ * Fill a hole with a proof term
+ */
+export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTKTerm {
+  switch (term.tag) {
+    case 'Hole':
+      return term.id === holeId ? proofTerm : term;
+
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Binder': {
+      const newDomain = fillHole(term.domain, holeId, proofTerm);
+      const newBody = fillHole(term.body, holeId, proofTerm);
+      let newBinderKind: TTKBinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = fillHole(term.binderKind.defVal, holeId, proofTerm);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: fillHole(term.fn, holeId, proofTerm),
+        arg: fillHole(term.arg, holeId, proofTerm)
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: fillHole(term.term, holeId, proofTerm),
+        type: fillHole(term.type, holeId, proofTerm)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: fillHole(term.scrutinee, holeId, proofTerm),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: fillHole(c.rhs, holeId, proofTerm)
+        }))
+      };
+  }
+}
+
+/**
+ * Fill a hole with a term generated by a function.
+ * The function receives the hole's type and context, allowing dynamic replacement.
+ */
+export function fillHoleWith(
+  term: TTKTerm,
+  holeId: string,
+  generator: (holeType: TTKTerm, holeContext: TTKContext) => TTKTerm
+): TTKTerm {
+  switch (term.tag) {
+    case 'Hole':
+      if (term.id === holeId) {
+        return generator(term.type, term.context);
+      }
+      return term;
+
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+      return term;
+
+    case 'Binder': {
+      const newDomain = fillHoleWith(term.domain, holeId, generator);
+      const newBody = fillHoleWith(term.body, holeId, generator);
+      let newBinderKind: TTKBinderKind;
+      if (term.binderKind.tag === 'BLet') {
+        const newDefVal = fillHoleWith(term.binderKind.defVal, holeId, generator);
+        newBinderKind = { tag: 'BLet', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: fillHoleWith(term.fn, holeId, generator),
+        arg: fillHoleWith(term.arg, holeId, generator)
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: fillHoleWith(term.term, holeId, generator),
+        type: fillHoleWith(term.type, holeId, generator)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: fillHoleWith(term.scrutinee, holeId, generator),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns,
+          rhs: fillHoleWith(c.rhs, holeId, generator)
+        }))
+      };
+  }
 }

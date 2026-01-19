@@ -2,7 +2,7 @@
  * Tests for source position tracking in the parser
  */
 
-import { Parser } from './tt-parser';
+import { Parser } from './parser';
 
 function test(description: string, fn: () => void): void {
   try {

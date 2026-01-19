@@ -2,7 +2,7 @@
  * Tests for name resolution (symbol validation)
  */
 
-import { mkConst, mkType, mkPi, mkVar, mkLambda, mkApp } from './tt-core';
+import { mkConst, mkType, mkPi, mkVar, mkLambda, mkApp } from '../compiler/surface';
 import {
   emptySymbolContext,
   addSymbol,

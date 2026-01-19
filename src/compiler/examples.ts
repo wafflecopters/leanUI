@@ -23,7 +23,7 @@ import {
   mkApp,
   mkVar,
   RecordDef,
-} from './tt-core';
+} from './surface';
 
 // ============================================================================
 // Inductive Type Definition Interface

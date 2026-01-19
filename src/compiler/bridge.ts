@@ -23,9 +23,12 @@ import {
   mkTrans,
   TT_CONSTANTS,
   prettyPrint,
-} from './tt-core';
-import { ExpressionNode, LetElement } from './enhanced-focus';
-import { fillHole } from './tt-typecheck';
+  replaceHole,
+} from './surface';
+import { ExpressionNode, LetElement } from '../types/enhanced-focus';
+
+// Alias for backward compatibility
+const fillHole = replaceHole;
 
 // ============================================================================
 // UI → TT Conversion

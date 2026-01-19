@@ -5,7 +5,7 @@
  * A TermFocusPath is a sequence of steps that navigate into a term.
  */
 
-import { TTerm } from '../types/tt-core';
+import { TTerm } from '../compiler/surface';
 
 /**
  * A path into a TTerm structure.

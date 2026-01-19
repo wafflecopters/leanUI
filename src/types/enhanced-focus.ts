@@ -117,7 +117,7 @@ export interface LetElement extends ProofElement {
   equalityChain?: ProofElement[]; // The chain of proof steps (for equality modes)
 
   // NEW: TT-level equality proof state
-  equalityProofState?: import('./tt-bridge').EqualityProofState;
+  equalityProofState?: import('../compiler/bridge').EqualityProofState;
 
   // Legacy fields (will be removed as refactor progresses)
   isClaim?: boolean;              // DEPRECATED: Use editorMode instead

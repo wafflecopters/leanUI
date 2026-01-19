@@ -26,7 +26,7 @@
  * - Legacy: def/theorem/axiom keywords still supported
  */
 
-import { TTerm, mkVar, mkPi, mkLambda, mkLet, mkApp, mkConst, mkHole, mkProp, mkType, TPattern, TClause } from '../types/tt-core';
+import { TTerm, mkVar, mkPi, mkLambda, mkLet, mkApp, mkConst, mkHole, mkProp, mkType, TPattern, TClause } from '../compiler/surface';
 import { groupByIndentation, parseBlock } from './indentation-grouper';
 import {
   SourceMap,

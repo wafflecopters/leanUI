@@ -28,11 +28,9 @@ import {
   mkType,
   mkPi,
   mkLambda,
-  subst,
-  shiftTerm,
-  prettyPrint,
-  replaceVars
-} from './tt-kernel';
+  prettyPrint
+} from '../compiler/kernel';
+import { subst, shiftTerm, replaceVars } from '../compiler/subst';
 
 // =============================================================================
 // Constructor Information (for pattern elaboration)

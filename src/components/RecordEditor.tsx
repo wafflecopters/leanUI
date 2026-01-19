@@ -22,14 +22,14 @@ import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
-import { TTerm, mkType, RecordDef as TTRecordDef, prettyPrintLatex as ttPrettyPrintLatex, LatexPrintOptions } from '../types/tt-core';
+import { TTerm, mkType, RecordDef as TTRecordDef, prettyPrintLatex as ttPrettyPrintLatex, LatexPrintOptions } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { FieldsSection, Field, createDefaultField } from './FieldsSection';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
-import { TTExamples, TTExampleRecordTypeName } from '../types/tt-examples';
-import { inlineExtension, elabRecordFull, createRecordRegistry, type TTKRecordDef } from '../types/tt-elab';
-import { prettyPrintLatex as ttkPrettyPrintLatex } from '../types/tt-kernel';
+import { TTExamples, TTExampleRecordTypeName } from '../compiler/examples';
+import { inlineExtension, elabRecordFull, createRecordRegistry, type TTKRecordDef } from '../compiler/elab';
+import { prettyPrintLatex as ttkPrettyPrintLatex } from '../compiler/kernel';
 import { MathJaxRenderer } from './MathJaxRenderer';
 
 // ============================================================================

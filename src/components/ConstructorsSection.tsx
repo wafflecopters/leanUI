@@ -6,7 +6,7 @@
  */
 
 import { NamedItemsSection, NamedTypedItem, generateItemId } from './NamedItemsSection';
-import { TTerm } from '../types/tt-core';
+import { TTerm } from '../compiler/surface';
 import { createDefaultConstructorType } from '../utils/inductiveTypeUtils';
 
 // ============================================================================

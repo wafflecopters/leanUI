@@ -4,7 +4,7 @@
  * Helper functions for working with inductive type definitions.
  */
 
-import { TTerm, mkApp, mkConst, mkHole, mkType } from '../types/tt-core';
+import { TTerm, mkApp, mkConst, mkHole, mkType } from '../compiler/surface';
 import { freshHoleId } from './termNavigation';
 
 /**

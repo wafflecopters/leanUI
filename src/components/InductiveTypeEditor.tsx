@@ -2,12 +2,12 @@ import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
-import { TTerm, mkType } from '../types/tt-core';
+import { TTerm, mkType } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { ConstructorsSection, Constructor, createConstructorForInductive } from './ConstructorsSection';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
-import { TTExamples, TTExampleTypeName } from '../types/tt-examples';
+import { TTExamples, TTExampleTypeName } from '../compiler/examples';
 
 interface InductiveTypeDef {
   name: string;

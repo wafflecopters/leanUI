@@ -6,7 +6,7 @@ import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileTTFromText, CompileResult, CompiledBlock } from '../compiler/compile';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
-import { TTKTerm, prettyPrint as prettyPrintTTK } from '../types/tt-kernel';
+import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
 // Color palette for syntax highlighting (matches TextEditorPage)
 const SYNTAX_COLORS = {

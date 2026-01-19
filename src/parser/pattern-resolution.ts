@@ -8,8 +8,8 @@
  * based on the symbol context (known constructors).
  */
 
-import { TPattern, TTerm } from '../types/tt-core';
-import { ParsedDeclaration } from './tt-parser';
+import { TPattern, TTerm } from '../compiler/surface';
+import { ParsedDeclaration } from './parser';
 import { SymbolContext } from '../types/name-resolution';
 
 /**

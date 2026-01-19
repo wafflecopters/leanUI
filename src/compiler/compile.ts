@@ -6,13 +6,13 @@
  */
 
 import { groupByIndentation } from '../parser/indentation-grouper';
-import { Parser, ParsedDeclaration, ParseError } from '../parser/tt-parser';
-import { elabToKernelWithMap } from '../types/tt-elab-source';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from '../types/tt-kernel';
+import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
+import { elabToKernelWithMap } from './elab';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from './kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
-import { mkApp, mkAppSpine, mkConst, mkType, mkVar, prettyPrint } from '../types/tt-core';
+import { mkApp, mkAppSpine, mkConst, mkType, mkVar, prettyPrint } from './surface';
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, addMetaVarInTCEnv, assertDefined, assertIsNotPi, assertIsPi, createDefinitionsMap, createTCEnv, DefinitionsMap, printCollectionFancy, setDefinitionValueInTCEnv, Signature, TCEnv, TCEnvError, TermDefinition, transformVarsInTerm } from './term';
 import { checkInductiveDeclaration } from './inductive';

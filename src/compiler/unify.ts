@@ -1,5 +1,5 @@
-import { mkVar } from "../types/tt-core";
-import { TTKTerm } from "../types/tt-kernel";
+import { mkVar } from "./kernel";
+import { TTKTerm } from "./kernel";
 import { whnf } from "./whnf";
 
 export type Substitutions = Map<number, TTKTerm>

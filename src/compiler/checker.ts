@@ -1,6 +1,7 @@
 // INFERENCE
 
-import { subst, TTKTerm } from "../types/tt-kernel"
+import { TTKTerm } from "./kernel";
+import { subst } from "./subst";
 import { TCEnv, TCEnvError } from "./term";
 
 function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm> {

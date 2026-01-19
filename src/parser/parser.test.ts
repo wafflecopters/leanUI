@@ -17,9 +17,9 @@ import {
   ParseError,
   DEFAULT_OPERATORS,
   OperatorInfo,
-} from './tt-parser';
+} from './parser';
 
-import { prettyPrint, TTerm } from '../types/tt-core';
+import { prettyPrint, TTerm } from '../compiler/surface';
 
 // ============================================================================
 // Test Helper

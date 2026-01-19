@@ -1,5 +1,5 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "../types/tt-kernel";
+import { prettyPrint, TTKClause, TTKContext, TTKPattern, TTKTerm } from "./kernel";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, shiftTerm, subst } from "./subst";
 import { areTypesDefEq } from "./whnf";
 

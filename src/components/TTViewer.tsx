@@ -12,7 +12,7 @@
  * separate from the UI representation.
  */
 
-import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrint, TTermApp } from '../types/tt-core';
+import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrint, TTermApp } from '../compiler/surface';
 
 // Helper to convert TTerm to plain text string
 function ttermToString(term: TTerm): string {

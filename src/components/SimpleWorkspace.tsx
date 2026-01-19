@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import { EditableTerm, TTerm, createRootTermDefinition, mkType, prettyPrint } from '../types/tt-core';
+import { EditableTerm, TTerm, createRootTermDefinition, mkType, prettyPrint } from '../compiler/surface';
 import { useEditableTerm } from '../hooks/useEditableTerm';
 import { useDefinitionNavigation } from '../hooks/useDefinitionNavigation';
 

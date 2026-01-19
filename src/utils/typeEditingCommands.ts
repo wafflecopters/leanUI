@@ -11,7 +11,7 @@
  */
 
 import { Command, createCommand, CommandContext } from '../types/commands';
-import { TTerm, mkType, mkPi, mkHole } from '../types/tt-core';
+import { TTerm, mkType, mkPi, mkHole } from '../compiler/surface';
 import {
   TermFocusPath,
   getTermAtPath,

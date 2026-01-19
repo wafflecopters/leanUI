@@ -12,7 +12,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react';
-import { EditableTerm, TTerm, TermDefinition } from '../types/tt-core';
+import { EditableTerm, TTerm, TermDefinition } from '../compiler/surface';
 
 // ============================================================================
 // Action Types

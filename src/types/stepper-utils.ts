@@ -1,4 +1,4 @@
-import { TTKTerm, TTKContext } from './tt-kernel';
+import { TTKTerm, TTKContext } from '../compiler/kernel';
 import type { ConstructorInfo as StepperConstructorInfo } from './pattern-elab-stepper';
 
 /**

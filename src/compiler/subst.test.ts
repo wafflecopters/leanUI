@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { mkVar, TTKTerm } from "../types/tt-kernel";
+import { mkVar, TTKTerm } from "./kernel";
 import { Constraint, MetaVar, Signature } from "./term";
 import {
   applySubstitutionToContext,

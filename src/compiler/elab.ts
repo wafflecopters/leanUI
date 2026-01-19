@@ -5,7 +5,8 @@
  * and TTK (kernel syntax). It provides:
  *
  * 1. elabToKernel: TT → TTK - Deep traversal converting surface terms to kernel
- * 2. inlineExtension: Inline extended record fields before elaboration
+ * 2. elabToKernelWithMap: TT → TTK with source position tracking
+ * 3. inlineExtension: Inline extended record fields before elaboration
  *
  * The elaboration pipeline for records is:
  *   RecordDef (with extends) → inlineExtension → RecordDef (no extends) → elabRecordToKernel → TTKRecordDef
@@ -19,7 +20,7 @@ import type {
   RecordDef,
   RecordField,
   RecordParam,
-} from './tt-core';
+} from './surface';
 
 import type {
   TTKTerm,
@@ -30,7 +31,16 @@ import type {
   TTKRecordDef,
   TTKRecordField,
   TTKRecordParam,
-} from './tt-kernel';
+} from './kernel';
+
+import {
+  ElabMap,
+  IndexPath,
+  appendPath,
+  fieldSeg,
+  arraySeg,
+  serializeIndexPath
+} from '../types/source-position';
 
 // Re-export TTKRecordDef for consumers
 export type { TTKRecordDef };
@@ -165,6 +175,247 @@ export function elabBindingToKernel(binding: TBinding): TTKBinding {
 }
 
 // ============================================================================
+// Elaboration with Source Position Tracking
+// ============================================================================
+
+/**
+ * Elaborate a TTerm to TTKTerm while tracking path correspondence.
+ *
+ * @param term - The surface term to elaborate
+ * @param elabMap - Map to populate with kernel→surface path mappings
+ * @param surfacePath - Current path in the surface AST
+ * @param kernelPath - Current path in the kernel AST
+ * @returns The elaborated kernel term
+ */
+export function elabToKernelWithMap(
+  term: TTerm,
+  elabMap: ElabMap,
+  surfacePath: IndexPath = [],
+  kernelPath: IndexPath = []
+): TTKTerm {
+  // Record the correspondence between kernel and surface paths
+  const kernelKey = serializeIndexPath(kernelPath);
+  const surfaceKey = serializeIndexPath(surfacePath);
+  elabMap.set(kernelKey, surfaceKey);
+
+  // Recursively elaborate with path tracking
+  switch (term.tag) {
+    case 'Var':
+      return { tag: 'Var', index: term.index };
+
+    case 'Sort':
+      return { tag: 'Sort', level: term.level };
+
+    case 'Const':
+      return {
+        tag: 'Const',
+        name: term.name,
+        type: elabToKernelWithMap(
+          term.type,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('type')),
+          appendPath(kernelPath, fieldSeg('type'))
+        )
+      };
+
+    case 'Binder': {
+      const domain = elabToKernelWithMap(
+        term.domain,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('domain')),
+        appendPath(kernelPath, fieldSeg('domain'))
+      );
+      const body = elabToKernelWithMap(
+        term.body,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('body')),
+        appendPath(kernelPath, fieldSeg('body'))
+      );
+
+      let binderKind: TTKBinderKind;
+      switch (term.binderKind.tag) {
+        case 'BPi':
+          binderKind = { tag: 'BPi' };
+          break;
+        case 'BLam':
+          binderKind = { tag: 'BLam' };
+          break;
+        case 'BLet':
+          binderKind = {
+            tag: 'BLet',
+            defVal: elabToKernelWithMap(
+              term.binderKind.defVal,
+              elabMap,
+              appendPath(surfacePath, fieldSeg('binderKind'), fieldSeg('defVal')),
+              appendPath(kernelPath, fieldSeg('binderKind'), fieldSeg('defVal'))
+            )
+          };
+          break;
+      }
+
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind,
+        domain,
+        body
+      };
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: elabToKernelWithMap(
+          term.fn,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('fn')),
+          appendPath(kernelPath, fieldSeg('fn'))
+        ),
+        arg: elabToKernelWithMap(
+          term.arg,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('arg')),
+          appendPath(kernelPath, fieldSeg('arg'))
+        )
+      };
+
+    case 'Hole':
+      return {
+        tag: 'Hole',
+        id: term.id,
+        type: elabToKernelWithMap(
+          term.type,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('type')),
+          appendPath(kernelPath, fieldSeg('type'))
+        ),
+        context: term.context.map((binding, i) => ({
+          name: binding.name,
+          type: elabToKernelWithMap(
+            binding.type,
+            elabMap,
+            appendPath(surfacePath, fieldSeg('context'), arraySeg(i), fieldSeg('type')),
+            appendPath(kernelPath, fieldSeg('context'), arraySeg(i), fieldSeg('type'))
+          )
+        }))
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: elabToKernelWithMap(
+          term.term,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('term')),
+          appendPath(kernelPath, fieldSeg('term'))
+        ),
+        type: elabToKernelWithMap(
+          term.type,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('type')),
+          appendPath(kernelPath, fieldSeg('type'))
+        )
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: elabToKernelWithMap(
+          term.scrutinee,
+          elabMap,
+          appendPath(surfacePath, fieldSeg('scrutinee')),
+          appendPath(kernelPath, fieldSeg('scrutinee'))
+        ),
+        clauses: term.clauses.map((clause, i) => {
+          const clauseSurfacePath = appendPath(surfacePath, fieldSeg('clauses'), arraySeg(i));
+          const clauseKernelPath = appendPath(kernelPath, fieldSeg('clauses'), arraySeg(i));
+
+          // Record the clause mapping
+          elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
+
+          return {
+            patterns: clause.patterns.map((pattern, patternIndex) => {
+              const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
+              const patternKernelPath = appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(patternIndex));
+              return elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
+            }),
+            rhs: elabToKernelWithMap(
+              clause.rhs,
+              elabMap,
+              appendPath(clauseSurfacePath, fieldSeg('rhs')),
+              appendPath(clauseKernelPath, fieldSeg('rhs'))
+            )
+          };
+        })
+      };
+  }
+}
+
+/**
+ * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern)
+ * while tracking path correspondence in the elabMap.
+ */
+function elabPatternToKernelWithMap(
+  pattern: TPattern,
+  elabMap: ElabMap,
+  surfacePath: IndexPath,
+  kernelPath: IndexPath
+): TTKPattern {
+  // Record the correspondence between kernel and surface paths
+  const kernelKey = serializeIndexPath(kernelPath);
+  const surfaceKey = serializeIndexPath(surfacePath);
+  elabMap.set(kernelKey, surfaceKey);
+
+  switch (pattern.tag) {
+    case 'PVar':
+      // Includes wildcards (_wN) which are already PVar
+      return { tag: 'PVar', name: pattern.name };
+    case 'PCtor':
+      return {
+        tag: 'PCtor',
+        name: pattern.name,
+        args: pattern.args.map((arg, argIndex) => {
+          const argSurfacePath = appendPath(surfacePath, fieldSeg('args'), arraySeg(argIndex));
+          const argKernelPath = appendPath(kernelPath, fieldSeg('args'), arraySeg(argIndex));
+          return elabPatternToKernelWithMap(arg, elabMap, argSurfacePath, argKernelPath);
+        })
+      };
+  }
+}
+
+/**
+ * Look up a surface path given a kernel path.
+ *
+ * If the exact kernel path is not found, tries parent paths.
+ * This handles cases where errors occur at a more specific location
+ * than we've recorded.
+ */
+export function lookupSurfacePath(
+  kernelPath: IndexPath,
+  elabMap: ElabMap
+): string | undefined {
+  // Try exact match first
+  const kernelKey = serializeIndexPath(kernelPath);
+  const surfaceKey = elabMap.get(kernelKey);
+  if (surfaceKey !== undefined) {
+    return surfaceKey;
+  }
+
+  // Try parent paths (walking up the tree)
+  for (let i = kernelPath.length - 1; i >= 0; i--) {
+    const parentPath = kernelPath.slice(0, i);
+    const parentKey = serializeIndexPath(parentPath);
+    const parentSurfaceKey = elabMap.get(parentKey);
+    if (parentSurfaceKey !== undefined) {
+      return parentSurfaceKey;
+    }
+  }
+
+  // No match found
+  return undefined;
+}
+
+// ============================================================================
 // Record Extension: Inline Extended Fields
 // ============================================================================
 
@@ -203,17 +454,6 @@ export function createRecordRegistry(records: RecordDef[]): RecordRegistry {
  *
  * This is the first step of record elaboration:
  *   RecordDef (with extends) → RecordDef (no extends)
- *
- * The function:
- * 1. Recursively resolves extended records
- * 2. Collects all fields from extended records
- * 3. Checks for field name clashes (throws error if found)
- * 4. Returns a new RecordDef with all fields inlined
- *
- * @param record - The record to process
- * @param registry - Registry to look up extended records
- * @returns A new RecordDef with extensions inlined
- * @throws RecordExtensionError if there are field name clashes
  */
 export function inlineExtension(
   record: RecordDef,
@@ -299,10 +539,6 @@ function elabRecordParamToKernel(param: RecordParam): TTKRecordParam {
  * Elaborate a record definition from TT to TTK.
  *
  * This assumes extensions have already been inlined via inlineExtension.
- * If the record has extends, this will throw an error.
- *
- * @param record - The record definition (should have no extends)
- * @returns Kernel record definition
  */
 export function elabRecordToKernel(record: RecordDef): TTKRecordDef {
   if (record.extends && record.extends.length > 0) {
@@ -323,10 +559,6 @@ export function elabRecordToKernel(record: RecordDef): TTKRecordDef {
  * Full elaboration pipeline for a record:
  * 1. Inline extensions
  * 2. Convert to kernel
- *
- * @param record - The record to elaborate
- * @param registry - Registry for looking up extended records
- * @returns Kernel record definition
  */
 export function elabRecordFull(
   record: RecordDef,
@@ -335,4 +567,3 @@ export function elabRecordFull(
   const inlined = inlineExtension(record, registry);
   return elabRecordToKernel(inlined);
 }
-

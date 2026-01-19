@@ -21,10 +21,10 @@ import {
   mkType,
   prettyPrint,
   flattenLetBindings
-} from '../types/tt-core';
+} from '../compiler/surface';
 import {
   expressionNodeToTTerm,
-} from '../types/tt-bridge';
+} from '../compiler/bridge';
 import { useEditableTerm } from '../hooks/useEditableTerm';
 import { useDefinitionNavigation } from '../hooks/useDefinitionNavigation';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';

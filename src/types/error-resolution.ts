@@ -7,11 +7,11 @@
  * TypeCheckError → kernel path → surface path → source range
  */
 
-import { TypeCheckError } from './tt-typecheck';
-import { CheckError } from './tt-typecheck-decl';
+import { TypeCheckError } from '../compiler/kernel';
+import { CheckError } from '../compiler/term';
 import { NameResolutionError } from './name-resolution';
 import { ElabMap, SourceMap, SourceRange, IndexPath, serializeIndexPath } from './source-position';
-import { lookupSurfacePath } from './tt-elab-source';
+import { lookupSurfacePath } from '../compiler/elab';
 
 // ============================================================================
 // Error Location Resolution

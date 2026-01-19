@@ -1,5 +1,5 @@
 import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError } from "./term";
-import { TTKTerm } from "../types/tt-kernel";
+import { TTKTerm } from "./kernel";
 import { inferType } from "./checker";
 
 function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError<unknown>[] {

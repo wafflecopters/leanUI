@@ -20,9 +20,9 @@
 
 import { useMemo, useState } from 'react';
 import { ExpressionNode, FocusPath, getNodeAtPath } from '../types/enhanced-focus';
-import { expressionNodeToTTerm, expressionPathToTTermPath } from '../types/tt-bridge';
-import { asLambdaByExtractingTermAtIndexPaths, prettyPrint, TContext, TTerm } from '../types/tt-core';
-import { inferType } from '../types/tt-typecheck-inference';
+import { expressionNodeToTTerm, expressionPathToTTermPath } from '../compiler/bridge';
+import { asLambdaByExtractingTermAtIndexPaths, prettyPrint, TContext, TTerm } from '../compiler/surface';
+import { inferType, TTKContext } from '../compiler/kernel';
 
 // Helper to convert TContext to Maps for expressionNodeToTTerm
 function contextToMaps(context: TContext): { varContext: Map<string, number>; typeContext: Map<string, TTerm> } {

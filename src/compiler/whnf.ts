@@ -1,4 +1,4 @@
-import { TTKTerm } from "../types/tt-kernel";
+import { TTKTerm } from "./kernel";
 import { subst } from "./subst";
 
 /**

@@ -15,7 +15,7 @@ import { useEffect, useState, useRef, useCallback, ReactNode } from 'react';
 import { useNavigation } from '../contexts/NavigationContext';
 import { EditableInput } from './EditableInput';
 import { TTermRenderer } from './TTermRenderer';
-import { TTerm } from '../types/tt-core';
+import { TTerm } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
 
