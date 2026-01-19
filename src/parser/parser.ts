@@ -23,7 +23,6 @@
  * - Definition: name = impl
  * - Combined: name : type followed by name = impl (on next line)
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
- * - Legacy: def/theorem/axiom keywords still supported
  */
 
 import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, TPattern, TClause } from '../compiler/surface';
@@ -67,9 +66,6 @@ export type TokenType =
   | 'OPERATOR'     // infix/prefix operators
   | 'EOF'          // end of input
   | 'NEWLINE'      // newline (for separating declarations)
-  | 'DEF'          // def keyword
-  | 'THEOREM'      // theorem keyword
-  | 'AXIOM'        // axiom keyword
   | 'SEMICOLON'    // ;
   | 'INDUCTIVE'    // inductive keyword
   | 'WHERE'        // where keyword
@@ -368,12 +364,6 @@ export class Lexer {
           return { type: 'TYPE', value: 'Type', pos: startPos, line: startLine, col: startCol };
         case 'Prop':
           return { type: 'PROP', value: 'Prop', pos: startPos, line: startLine, col: startCol };
-        case 'def':
-          return { type: 'DEF', value: 'def', pos: startPos, line: startLine, col: startCol };
-        case 'theorem':
-          return { type: 'THEOREM', value: 'theorem', pos: startPos, line: startLine, col: startCol };
-        case 'axiom':
-          return { type: 'AXIOM', value: 'axiom', pos: startPos, line: startLine, col: startCol };
         case 'inductive':
           return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
         case 'where':
@@ -477,7 +467,7 @@ type NameContext = string[];
  * Result of parsing a top-level declaration.
  */
 export interface ParsedDeclaration {
-  kind: 'def' | 'theorem' | 'axiom' | 'expr' | 'inductive';
+  kind: 'def' | 'expr' | 'inductive';
   name?: string;
   type?: TTerm;
   value?: TTerm;
@@ -677,7 +667,16 @@ export class Parser {
             // Also merge the source maps
             prev.decl.value = decl.value;
             // Copy all entries from current source map to previous
+            // BUT preserve the original 'name' entry (from type signature line)
+            // AND record the clause's term name at a separate path for highlighting
             for (const [key, range] of this.currentSourceMap) {
+              if (key === 'name') {
+                if (prev.sourceMap.has('name')) {
+                  // Record the term name on this clause line at value.clauses[0].defName
+                  prev.sourceMap.set('value.clauses[0].defName', range);
+                  continue; // Keep the original declaration name location
+                }
+              }
               prev.sourceMap.set(key, range);
             }
           }
@@ -696,6 +695,11 @@ export class Parser {
             // Merge source maps, adjusting clause indices
             // Paths like "value.clauses[0].rhs..." need to become "value.clauses[N].rhs..."
             for (const [key, range] of this.currentSourceMap) {
+              if (key === 'name') {
+                // Record the term name on this clause line at value.clauses[N].defName
+                prev.sourceMap.set(`value.clauses[${newClauseIndex}].defName`, range);
+                continue; // Don't overwrite the declaration name from the first line
+              }
               // Replace "value.clauses[0]" with "value.clauses[N]"
               const adjustedKey = key.replace(
                 /^value\.clauses\[0\]/,
@@ -760,22 +764,7 @@ export class Parser {
       return this.parseInductiveDeclaration();
     }
 
-    // Legacy: def name : type := value
-    if (current.type === 'DEF') {
-      return this.parseLegacyDefDeclaration();
-    }
-
-    // Legacy: theorem name : type := value
-    if (current.type === 'THEOREM') {
-      return this.parseLegacyTheoremDeclaration();
-    }
-
-    // Legacy: axiom name : type
-    if (current.type === 'AXIOM') {
-      return this.parseLegacyAxiomDeclaration();
-    }
-
-    // New syntax: name : type  or  name = impl
+    // Named declaration: name : type  or  name = impl
     if (current.type === 'IDENT') {
       return this.parseNamedDeclaration(prevDeclarations);
     }
@@ -947,66 +936,6 @@ export class Parser {
           rhs
         }]
       }
-    };
-  }
-
-  private parseLegacyDefDeclaration(): ParsedDeclaration {
-    this.expect('DEF');
-    const nameToken = this.expect('IDENT');
-
-    // Record source range for the term name
-    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
-    this.recordRange(namePath, nameToken, nameToken);
-
-    this.expect('COLON');
-    const type = this.expr(0, []);
-    this.expect('ASSIGN');
-    const value = this.expr(0, []);
-
-    return {
-      kind: 'def',
-      name: nameToken.value,
-      type,
-      value
-    };
-  }
-
-  private parseLegacyTheoremDeclaration(): ParsedDeclaration {
-    this.expect('THEOREM');
-    const nameToken = this.expect('IDENT');
-
-    // Record source range for the term name
-    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
-    this.recordRange(namePath, nameToken, nameToken);
-
-    this.expect('COLON');
-    const type = this.expr(0, []);
-    this.expect('ASSIGN');
-    const value = this.expr(0, []);
-
-    return {
-      kind: 'theorem',
-      name: nameToken.value,
-      type,
-      value
-    };
-  }
-
-  private parseLegacyAxiomDeclaration(): ParsedDeclaration {
-    this.expect('AXIOM');
-    const nameToken = this.expect('IDENT');
-
-    // Record source range for the term name
-    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
-    this.recordRange(namePath, nameToken, nameToken);
-
-    this.expect('COLON');
-    const type = this.expr(0, []);
-
-    return {
-      kind: 'axiom',
-      name: nameToken.value,
-      type
     };
   }
 
@@ -1385,6 +1314,9 @@ export class Parser {
         if (this.current().type === 'ARROW') {
           this.advance();
           const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
+          // Record the binder name's source range
+          const namePath = [...path, { kind: 'field' as const, name: 'name' }];
+          this.recordRange(namePath, nameToken, nameToken);
           const newCtx = [name, ...ctx];
           // Parse the body at path.body
           const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
@@ -1438,8 +1370,8 @@ export class Parser {
     this.expect('LAMBDA');
 
     // Parse binders until we see =>
-    // Each binder will have a startToken for position tracking
-    const binders: Array<{ name: string; type: TTerm; startToken: Token }> = [];
+    // Each binder will have a startToken for position tracking and nameToken for name highlighting
+    const binders: Array<{ name: string; type: TTerm; startToken: Token; nameToken: Token }> = [];
 
     while (true) {
       const current = this.current();
@@ -1454,11 +1386,12 @@ export class Parser {
         // Typed binder(s): (x : T) or (x, y : T) or (x y : T)
         this.advance();
 
-        // Collect names until we see ':'
-        const names: string[] = [];
+        // Collect names and their tokens until we see ':'
+        const namesWithTokens: Array<{ name: string; token: Token }> = [];
         while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
-          const name = this.current().type === 'UNDERSCORE' ? '_' : this.current().value;
-          names.push(name);
+          const nameToken = this.current();
+          const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
+          namesWithTokens.push({ name, token: nameToken });
           this.advance();
 
           // Allow comma between names: (x, y : T)
@@ -1467,7 +1400,7 @@ export class Parser {
           }
         }
 
-        if (names.length === 0) {
+        if (namesWithTokens.length === 0) {
           throw new ParseError('Expected at least one name in binder', this.current().line, this.current().col);
         }
 
@@ -1477,12 +1410,13 @@ export class Parser {
         this.expect('RPAREN');
 
         // Add all names with the same type
-        for (const name of names) {
-          binders.push({ name, type, startToken: binderStartToken });
+        for (const { name, token } of namesWithTokens) {
+          binders.push({ name, type, startToken: binderStartToken, nameToken: token });
           ctx = [name, ...ctx];
         }
       } else if (current.type === 'IDENT' || current.type === 'UNDERSCORE') {
         // Untyped binder: just a name, type will be a hole
+        const nameToken = current;
         const name = current.type === 'UNDERSCORE' ? '_' : current.value;
 
         // Peek ahead to check if this is "x : T" without parens (NOT allowed)
@@ -1495,7 +1429,7 @@ export class Parser {
           );
         }
 
-        binders.push({ name, type: mkHoleTT(`${name}_type`, mkPropTT()), startToken: binderStartToken });
+        binders.push({ name, type: mkHoleTT(`${name}_type`, mkPropTT()), startToken: binderStartToken, nameToken });
         ctx = [name, ...ctx];
       } else {
         break;
@@ -1537,10 +1471,15 @@ export class Parser {
       // Move path up one level (remove the last .body)
       currentPath = currentPath.slice(0, -1);
 
+      // Record the binder name at this path
+      const binderPath = currentPath.length > 0 ? currentPath : path;
+      const namePath = [...binderPath, { kind: 'field' as const, name: 'name' }];
+      this.recordRange(namePath, binders[i].nameToken, binders[i].nameToken);
+
       // Record the lambda at this path
       if (currentPath.length > 0 || path.length === 0) {
         const endToken = this.tokens[this.pos - 1];
-        this.recordRange(currentPath.length > 0 ? currentPath : path, binders[i].startToken, endToken);
+        this.recordRange(binderPath, binders[i].startToken, endToken);
       }
     }
 
@@ -1561,8 +1500,15 @@ export class Parser {
   private parseLet(ctx: NameContext, path: IndexPath = []): TTerm {
     const startToken = this.current();
     this.expect('LET');
-    const name = this.current().type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
-    if (this.current().type === 'UNDERSCORE') this.advance();
+
+    // Capture the name token for source range recording
+    const nameToken = this.current();
+    const name = nameToken.type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
+    if (nameToken.type === 'UNDERSCORE') this.advance();
+
+    // Record the binder name's source range
+    const namePath = [...path, { kind: 'field' as const, name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
 
     // Type annotation is optional
     let type: TTerm;

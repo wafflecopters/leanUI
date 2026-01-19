@@ -9,6 +9,7 @@ import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
+import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { ElabMap, IndexPath, SourceMap } from '../types/source-position'
@@ -48,6 +49,11 @@ export interface ParseResult {
 export interface ElabDeclaration {
   name: string | undefined;
   kind: 'inductive' | 'term';
+  // Surface (parsed) terms - used for syntax highlighting
+  surfaceType?: TTerm;
+  surfaceValue?: TTerm;
+  surfaceConstructors?: Array<{ name: string; type: TTerm }>;
+  // Elaborated kernel terms
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
   kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
@@ -82,6 +88,11 @@ export interface ElabResult {
 export interface CompiledDeclaration {
   name: string | undefined;
   kind: 'inductive' | 'term';
+
+  // Surface (parsed) terms - used for syntax highlighting
+  surfaceType?: TTerm;
+  surfaceValue?: TTerm;
+  surfaceConstructors?: Array<{ name: string; type: TTerm }>;
 
   // Elaborated kernel terms
   kernelType?: TTKTerm;
@@ -173,23 +184,34 @@ export interface SemanticToken {
 /**
  * Extract semantic tokens from a compile result for syntax highlighting.
  *
- * This walks through the compiled declarations and identifies:
+ * This walks through the SURFACE terms (TTerm, TPattern) directly,
+ * using the sourceMap to find source positions. No elabMap needed.
+ *
+ * Token types:
  * - Var (de Bruijn) → boundVar (light blue)
  * - Const lowercase → termName (yellow)
- * - Const uppercase → constName (teal)
+ * - Const uppercase → constName (white)
+ * - Binder name → patternVar (light blue)
  * - PVar/PWild → patternVar (light blue)
- * - PCtor → constName (teal)
+ * - PCtor → constName (white)
  */
 export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
   const tokens: SemanticToken[] = [];
 
   for (const block of result.blocks) {
     for (const decl of block.declarations) {
-      // Process declaration type
-      if (decl.kernelType) {
-        collectSemanticTokensFromTerm(
-          decl.kernelType,
-          decl.elabMap,
+      if (!decl.sourceMap) continue;
+
+      // Process declaration name (e.g., "Nat" in "inductive Nat", "plus" in "plus : ...")
+      if (decl.name) {
+        const tokenType = decl.kind === 'inductive' ? 'constName' : 'termName';
+        addSemanticTokenDirect(['name'], decl.sourceMap, block.startLine, tokenType, tokens);
+      }
+
+      // Process declaration type (surface)
+      if (decl.surfaceType) {
+        collectSemanticTokensFromSurfaceTerm(
+          decl.surfaceType,
           decl.sourceMap,
           block.startLine,
           ['type'],
@@ -197,24 +219,39 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
         );
       }
 
-      // Process declaration value
-      if (decl.kernelValue) {
-        collectSemanticTokensFromTerm(
-          decl.kernelValue,
-          decl.elabMap,
+      // Process declaration value (surface)
+      if (decl.surfaceValue) {
+        collectSemanticTokensFromSurfaceTerm(
+          decl.surfaceValue,
           decl.sourceMap,
           block.startLine,
           ['value'],
           tokens
         );
+
+        // For pattern matching definitions, also emit tokens for term names on each clause line
+        // These are recorded at value.clauses[N].defName by the parser
+        if (decl.surfaceValue.tag === 'Match') {
+          for (let i = 0; i < decl.surfaceValue.clauses.length; i++) {
+            addSemanticTokenDirect(
+              ['value', 'clauses', i, 'defName'],
+              decl.sourceMap,
+              block.startLine,
+              'termName',
+              tokens
+            );
+          }
+        }
       }
 
-      // Process constructors
-      if (decl.kernelConstructors) {
-        for (let i = 0; i < decl.kernelConstructors.length; i++) {
-          collectSemanticTokensFromTerm(
-            decl.kernelConstructors[i].type,
-            decl.elabMap,
+      // Process constructors (surface)
+      if (decl.surfaceConstructors) {
+        for (let i = 0; i < decl.surfaceConstructors.length; i++) {
+          // Constructor name at definition site (e.g., "Zero" in "Zero : Nat")
+          addSemanticTokenDirect(['constructors', i, 'name'], decl.sourceMap, block.startLine, 'constName', tokens);
+          // Constructor type
+          collectSemanticTokensFromSurfaceTerm(
+            decl.surfaceConstructors[i].type,
             decl.sourceMap,
             block.startLine,
             ['constructors', i, 'type'],
@@ -229,22 +266,20 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
 }
 
 /**
- * Walk a term and collect semantic tokens
+ * Walk a surface term (TTerm) and collect semantic tokens.
+ * Surface term paths map directly to sourceMap paths.
  */
-function collectSemanticTokensFromTerm(
-  term: TTKTerm,
-  elabMap: ElabMap | undefined,
-  sourceMap: SourceMap | undefined,
+function collectSemanticTokensFromSurfaceTerm(
+  term: TTerm,
+  sourceMap: SourceMap,
   blockStartLine: number,
   path: (string | number)[],
   tokens: SemanticToken[]
 ): void {
-  if (!elabMap || !sourceMap) return;
-
   switch (term.tag) {
     case 'Var':
       // Bound variable reference
-      addSemanticToken(path, elabMap, sourceMap, blockStartLine, 'boundVar', tokens);
+      addSemanticTokenDirect(path, sourceMap, blockStartLine, 'boundVar', tokens);
       break;
 
     case 'Const':
@@ -253,47 +288,48 @@ function collectSemanticTokensFromTerm(
         const firstChar = term.name[0];
         const isUppercase = firstChar >= 'A' && firstChar <= 'Z';
         const tokenType = isUppercase ? 'constName' : 'termName';
-        addSemanticToken(path, elabMap, sourceMap, blockStartLine, tokenType, tokens);
+        addSemanticTokenDirect(path, sourceMap, blockStartLine, tokenType, tokens);
       }
       break;
 
     case 'Sort':
-      // Type/Prop keywords - could add a type for these but skip for now
+      // Type/Prop keywords - skip for now
       break;
 
     case 'Hole':
-      collectSemanticTokensFromTerm(term.type, elabMap, sourceMap, blockStartLine, [...path, 'type'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.type, sourceMap, blockStartLine, [...path, 'type'], tokens);
       break;
 
     case 'Binder':
-      // Binder name is a pattern variable
-      addSemanticTokenForBinderName(path, elabMap, sourceMap, blockStartLine, tokens);
-      collectSemanticTokensFromTerm(term.domain, elabMap, sourceMap, blockStartLine, [...path, 'domain'], tokens);
-      collectSemanticTokensFromTerm(term.body, elabMap, sourceMap, blockStartLine, [...path, 'body'], tokens);
-      if (term.binderKind.tag === 'BLet') {
-        collectSemanticTokensFromTerm(term.binderKind.defVal, elabMap, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], tokens);
+      // Binder name is a pattern variable (light blue)
+      addSemanticTokenDirect([...path, 'name'], sourceMap, blockStartLine, 'patternVar', tokens);
+      // Recurse into domain and body
+      collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
+      // Handle let binding value
+      if (term.binderKind.tag === 'BLetTT') {
+        collectSemanticTokensFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], tokens);
       }
       break;
 
     case 'App':
-      collectSemanticTokensFromTerm(term.fn, elabMap, sourceMap, blockStartLine, [...path, 'fn'], tokens);
-      collectSemanticTokensFromTerm(term.arg, elabMap, sourceMap, blockStartLine, [...path, 'arg'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.fn, sourceMap, blockStartLine, [...path, 'fn'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.arg, sourceMap, blockStartLine, [...path, 'arg'], tokens);
       break;
 
     case 'Annot':
-      collectSemanticTokensFromTerm(term.term, elabMap, sourceMap, blockStartLine, [...path, 'term'], tokens);
-      collectSemanticTokensFromTerm(term.type, elabMap, sourceMap, blockStartLine, [...path, 'type'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.term, sourceMap, blockStartLine, [...path, 'term'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.type, sourceMap, blockStartLine, [...path, 'type'], tokens);
       break;
 
     case 'Match':
-      collectSemanticTokensFromTerm(term.scrutinee, elabMap, sourceMap, blockStartLine, [...path, 'scrutinee'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.scrutinee, sourceMap, blockStartLine, [...path, 'scrutinee'], tokens);
       for (let i = 0; i < term.clauses.length; i++) {
         const clause = term.clauses[i];
         // Collect from patterns
         for (let j = 0; j < clause.patterns.length; j++) {
-          collectSemanticTokensFromPattern(
+          collectSemanticTokensFromSurfacePattern(
             clause.patterns[j],
-            elabMap,
             sourceMap,
             blockStartLine,
             [...path, 'clauses', i, 'patterns', j],
@@ -301,9 +337,8 @@ function collectSemanticTokensFromTerm(
           );
         }
         // Collect from RHS
-        collectSemanticTokensFromTerm(
+        collectSemanticTokensFromSurfaceTerm(
           clause.rhs,
-          elabMap,
           sourceMap,
           blockStartLine,
           [...path, 'clauses', i, 'rhs'],
@@ -315,11 +350,10 @@ function collectSemanticTokensFromTerm(
 }
 
 /**
- * Collect semantic tokens from a pattern
+ * Collect semantic tokens from a surface pattern (TPattern)
  */
-function collectSemanticTokensFromPattern(
-  pattern: TTKPattern,
-  elabMap: ElabMap,
+function collectSemanticTokensFromSurfacePattern(
+  pattern: TPattern,
   sourceMap: SourceMap,
   blockStartLine: number,
   path: (string | number)[],
@@ -329,67 +363,53 @@ function collectSemanticTokensFromPattern(
     case 'PVar':
     case 'PWild':
       // Pattern variable - light blue
-      addSemanticToken(path, elabMap, sourceMap, blockStartLine, 'patternVar', tokens);
+      addSemanticTokenDirect(path, sourceMap, blockStartLine, 'patternVar', tokens);
       break;
 
     case 'PCtor':
-      // Constructor pattern - teal for the constructor name only (not the whole pattern)
-      // The constructor name is recorded at path.name in the source map
-      addSemanticToken([...path, 'name'], elabMap, sourceMap, blockStartLine, 'constName', tokens);
-      // Recurse into args
-      for (let i = 0; i < pattern.args.length; i++) {
-        collectSemanticTokensFromPattern(
-          pattern.args[i],
-          elabMap,
-          sourceMap,
-          blockStartLine,
-          [...path, 'args', i],
-          tokens
-        );
+      // Constructor pattern - white for the constructor name
+      // For patterns with args, the name is recorded at path.name
+      // For zero-arg patterns, the name is recorded at path itself
+      if (pattern.args.length > 0) {
+        addSemanticTokenDirect([...path, 'name'], sourceMap, blockStartLine, 'constName', tokens);
+        // Recurse into args
+        for (let i = 0; i < pattern.args.length; i++) {
+          collectSemanticTokensFromSurfacePattern(
+            pattern.args[i],
+            sourceMap,
+            blockStartLine,
+            [...path, 'args', i],
+            tokens
+          );
+        }
+      } else {
+        // Zero-arg constructor: the whole pattern range IS the constructor name
+        addSemanticTokenDirect(path, sourceMap, blockStartLine, 'constName', tokens);
       }
       break;
   }
 }
 
 /**
- * Add a semantic token if source position can be found
+ * Add a semantic token directly from sourceMap (no elabMap needed for surface terms)
  */
-function addSemanticToken(
+function addSemanticTokenDirect(
   path: (string | number)[],
-  elabMap: ElabMap,
   sourceMap: SourceMap,
   blockStartLine: number,
   type: SemanticTokenType,
   tokens: SemanticToken[]
 ): void {
   const pathStr = serializePathForLookup(path);
-  const surfacePathStr = elabMap.get(pathStr);
-  if (surfacePathStr) {
-    const range = sourceMap.get(surfacePathStr);
-    if (range) {
-      tokens.push({
-        line: range.start.line + blockStartLine - 1,
-        column: range.start.col,
-        length: range.end.col - range.start.col,
-        type
-      });
-    }
+  const range = sourceMap.get(pathStr);
+  if (range) {
+    tokens.push({
+      line: range.start.line + blockStartLine - 1,
+      column: range.start.col,
+      length: range.end.col - range.start.col,
+      type
+    });
   }
-}
-
-/**
- * Add a semantic token for a binder name (Pi, Lambda, Let)
- */
-function addSemanticTokenForBinderName(
-  path: (string | number)[],
-  elabMap: ElabMap,
-  sourceMap: SourceMap,
-  blockStartLine: number,
-  tokens: SemanticToken[]
-): void {
-  // The binder name is stored at path + 'name' in the surface term
-  const namePath = [...path, 'name'];
-  addSemanticToken(namePath, elabMap, sourceMap, blockStartLine, 'patternVar', tokens);
 }
 
 /**
@@ -764,6 +784,11 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
         elabDeclarations.push({
           name: decl.name,
           kind: decl.kind === 'inductive' ? 'inductive' : 'term',
+          // Surface terms for syntax highlighting
+          surfaceType: decl.type,
+          surfaceValue: decl.value,
+          surfaceConstructors: decl.constructors,
+          // Kernel terms for type checking
           kernelType,
           kernelValue,
           kernelConstructors,
@@ -878,6 +903,7 @@ export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResul
 
         newDeclarations.push({
           ...elabDecl,
+          surfaceValue: resolvedDecl.value,
           kernelValue,
           elabMap,
         });
@@ -976,6 +1002,11 @@ function checkDeclaration(
   const compiled: CompiledDeclaration = {
     name: decl.name,
     kind: decl.kind,
+    // Surface terms (for syntax highlighting)
+    surfaceType: decl.surfaceType,
+    surfaceValue: decl.surfaceValue,
+    surfaceConstructors: decl.surfaceConstructors,
+    // Kernel terms
     kernelType: decl.kernelType,
     kernelValue: decl.kernelValue,
     kernelConstructors: decl.kernelConstructors,

@@ -625,14 +625,8 @@ export function TextEditorPage() {
     // Register TT language
     monaco.languages.register({ id: 'tt' });
 
-    // Define TT language syntax (matches TextEditorPage)
+    // Simplified tokenizer - semantic tokens from parse tree handle identifier classification
     monaco.languages.setMonarchTokensProvider('tt', {
-      keywords: [
-        'inductive', 'where', 'def', 'theorem', 'axiom', 'let', 'in', 'fun'
-      ],
-      typeKeywords: [
-        'Type', 'Prop'
-      ],
       tokenizer: {
         root: [
           // Comments - multiline {- -} must come FIRST
@@ -642,56 +636,22 @@ export function TextEditorPage() {
           // Type keywords (Type, Prop)
           [/\b(Type|Prop)\b/, 'type.identifier'],
 
-          // Keywords that introduce term names (def, theorem, axiom)
-          [/\b(def|theorem|axiom)\b/, { token: 'keyword', next: '@termName' }],
-
-          // Keywords that introduce const names (inductive)
-          [/\b(inductive)\b/, { token: 'keyword', next: '@constName' }],
-
-          // Regular keywords
-          [/\b(where|let|in)\b/, 'keyword'],
-
-          // fun introduces lambda parameters (bound variables)
-          [/\bfun\b/, { token: 'keyword', next: '@lambda' }],
-
-          // Pattern clause start - switch to pattern mode
-          [/\|/, { token: 'delimiter', next: '@pattern' }],
+          // Keywords
+          [/\b(inductive|where|let|in|fun)\b/, 'keyword'],
 
           // Holes
           [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],
-
-          // Uppercase identifiers are const names (types, constructors)
-          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
-
-          // Type signature at line start: term definition name followed by :
-          // e.g., "foo : Type" or "  plus : Nat -> Nat -> Nat"
-          // This must come before the general binder rule below
-          [/^(\s*)([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['white', 'identifier.term', 'white', 'delimiter']],
-
-          // Binder name inside expressions: lowercase identifier followed by :
-          // e.g., "(n : Nat)" - "n" is a bound variable name
-          // Match identifier + colon together as compound token
-          [/([a-z_][a-zA-Z0-9_']*)(\s*)(:)/, ['identifier.pattern', 'white', 'delimiter']],
-
-          // Definition clause: lowercase identifier at start of line (possibly indented)
-          // followed by pattern-like things (not :)
-          // e.g., "plus Zero n = ..." or "  plus Zero n = ..."
-          // Uses compound token to handle leading whitespace
-          [/^(\s*)([a-z_][a-zA-Z0-9_']*)(?=\s+[A-Za-z_(])/, ['white', { token: 'identifier.term', next: '@defClause' }]],
-
-          // Standalone underscore is a hole (wildcard)
           [/_/, 'variable.predefined'],
 
-          // Lowercase identifiers in expression context are term names (function calls)
-          // With naming conventions enforced, lowercase = term, uppercase = type/constructor
-          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.term'],
+          // Identifiers - semantic tokens will override with proper classification
+          [/[a-zA-Z_][a-zA-Z0-9_']*/, 'identifier'],
 
           // Numbers
           [/\d+/, 'number'],
 
           // Operators
           [/->|=>/, 'keyword.operator'],
-          [/[=:+\-*/\\<>!]+/, 'delimiter'],
+          [/[=:+\-*/\\<>!|]+/, 'delimiter'],
 
           // Brackets and delimiters
           [/[()[\]{}]/, 'delimiter.bracket'],
@@ -699,74 +659,6 @@ export function TextEditorPage() {
 
           // Whitespace
           [/\s+/, 'white'],
-        ],
-
-        // Definition clause line (after term name at start of line)
-        // Patterns until = then back to root for RHS
-        defClause: [
-          [/\{-/, 'comment', '@comment'],
-          [/--.*$/, 'comment'],
-          [/=/, { token: 'delimiter', next: '@pop' }],
-          // Uppercase identifiers are constructors
-          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
-          // Lowercase identifiers in patterns are pattern variables
-          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.pattern'],
-          // Wildcards
-          [/_/, 'identifier.pattern'],
-          [/\d+/, 'number'],
-          [/[()[\]{}]/, 'delimiter.bracket'],
-          [/\s+/, 'white'],
-          [/./, 'delimiter'],
-        ],
-
-        // After def/theorem/axiom - next identifier is a term name
-        termName: [
-          [/\s+/, 'white'],
-          [/[a-zA-Z_][a-zA-Z0-9_']*/, { token: 'identifier.term', next: '@pop' }],
-          [/./, { token: '@rematch', next: '@pop' }],
-        ],
-
-        // After inductive - next identifier is a const name
-        constName: [
-          [/\s+/, 'white'],
-          [/[A-Z][a-zA-Z0-9_']*/, { token: 'identifier.const', next: '@pop' }],
-          [/./, { token: '@rematch', next: '@pop' }],
-        ],
-
-        // After fun - lambda parameters until =>
-        lambda: [
-          [/\{-/, 'comment', '@comment'],
-          [/--.*$/, 'comment'],
-          [/=>/, { token: 'keyword.operator', next: '@pop' }],
-          // Type annotations for parameters
-          [/:/, 'delimiter'],
-          // Uppercase identifiers are types
-          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
-          // Lowercase identifiers are bound variables (like pattern vars)
-          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.pattern'],
-          [/\d+/, 'number'],
-          [/[()[\]{}]/, 'delimiter.bracket'],
-          [/\s+/, 'white'],
-          [/->/, 'keyword.operator'],
-          [/./, 'delimiter'],
-        ],
-
-        // In a pattern clause (after |) until = or where
-        pattern: [
-          [/\{-/, 'comment', '@comment'],
-          [/--.*$/, 'comment'],
-          [/\bwhere\b/, { token: 'keyword', next: '@pop' }],
-          [/=/, { token: 'delimiter', next: '@pop' }],
-          // Uppercase identifiers are constructors
-          [/[A-Z][a-zA-Z0-9_']*/, 'identifier.const'],
-          // Lowercase identifiers in patterns are pattern variables
-          [/[a-z_][a-zA-Z0-9_']*/, 'identifier.pattern'],
-          // Wildcards
-          [/_/, 'identifier.pattern'],
-          [/\d+/, 'number'],
-          [/[()[\]{}]/, 'delimiter.bracket'],
-          [/\s+/, 'white'],
-          [/./, 'delimiter'],
         ],
 
         comment: [

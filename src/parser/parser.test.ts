@@ -82,9 +82,10 @@ test('Tokenize simple identifier', () => {
 
 test('Tokenize keywords', () => {
   // Note: 'forall' is no longer a keyword - use (x : T) -> ... syntax instead
-  const tokens = tokenize('fun let in Type Prop def theorem axiom');
+  // Note: 'def', 'theorem', 'axiom' removed - use name : type := value syntax instead
+  const tokens = tokenize('fun let in Type Prop');
   const types = tokens.map(t => t.type);
-  assertEqual(types, ['LAMBDA', 'LET', 'IN', 'TYPE', 'PROP', 'DEF', 'THEOREM', 'AXIOM', 'EOF']);
+  assertEqual(types, ['LAMBDA', 'LET', 'IN', 'TYPE', 'PROP', 'EOF']);
 });
 
 test('Tokenize lambda symbols', () => {
@@ -861,36 +862,6 @@ test('Parse mixed declarations and expressions with merging', () => {
   assertTermShape(decls[0].value!, 'Const');
   assertEqual(decls[1].kind, 'expr');
   assertEqual(decls[2].kind, 'def');
-});
-
-// ============================================================================
-// Parser: Legacy Declaration Tests
-// ============================================================================
-
-console.log('\n' + '='.repeat(80));
-console.log('PARSER: LEGACY DECLARATION TESTS');
-console.log('='.repeat(80) + '\n');
-
-test('Parse legacy def declaration', () => {
-  const decls = parseDeclarations('def foo : T := x');
-  assertEqual(decls.length, 1);
-  assertEqual(decls[0].kind, 'def');
-  assertEqual(decls[0].name, 'foo');
-});
-
-test('Parse legacy theorem declaration', () => {
-  const decls = parseDeclarations('theorem bar : P := proof');
-  assertEqual(decls.length, 1);
-  assertEqual(decls[0].kind, 'theorem');
-  assertEqual(decls[0].name, 'bar');
-});
-
-test('Parse legacy axiom declaration', () => {
-  const decls = parseDeclarations('axiom choice : A');
-  assertEqual(decls.length, 1);
-  assertEqual(decls[0].kind, 'axiom');
-  assertEqual(decls[0].name, 'choice');
-  assertEqual(decls[0].value, undefined);
 });
 
 // ============================================================================
