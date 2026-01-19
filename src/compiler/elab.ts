@@ -50,37 +50,88 @@ export type { TTKRecordDef };
 // ============================================================================
 
 /**
- * Map from constructor name to its parameter names.
+ * Information about a parameter for wildcard naming.
+ * - name: the explicit binder name (empty if unnamed)
+ * - typePrefix: lowercase first letter of type name (null if type is complex)
+ */
+export interface ParamInfo {
+  name: string;
+  typePrefix: string | null;
+}
+
+/**
+ * Map from constructor name to its parameter info.
  * Used during pattern elaboration to generate meaningful wildcard names.
  *
  * For example, if VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
- * then constructorParamNames.get("VCons") = ["A", "n", "", ""]
- * (empty string for unnamed parameters)
+ * then constructorParamNames.get("VCons") = [
+ *   { name: "A", typePrefix: null },  // named param
+ *   { name: "n", typePrefix: null },  // named param
+ *   { name: "", typePrefix: "a" },    // unnamed, type is A (variable)
+ *   { name: "", typePrefix: "v" },    // unnamed, type is Vec (head of application)
+ * ]
  */
-export type ConstructorParamNames = Map<string, string[]>;
+export type ConstructorParamNames = Map<string, ParamInfo[]>;
 
 /**
- * Extract parameter names from a constructor's type (a Pi type).
+ * Extract the type prefix for wildcard naming from a type term.
+ * Returns lowercase first letter of type name, or null if type is complex.
+ *
+ * Simple cases we handle (no whnf needed):
+ * - Const: use lowercase first letter of name
+ * - Var: use lowercase first letter of name
+ * - App: recurse into fn to find the head
+ *
+ * Complex cases we skip:
+ * - Binder (Pi/Lambda types)
+ * - Sort, Hole, Match, Annot
+ */
+function extractTypePrefix(type: TTKTerm): string | null {
+  switch (type.tag) {
+    case 'Const':
+      return type.name.length > 0 ? type.name[0].toLowerCase() : null;
+    case 'Var':
+      // Var uses de Bruijn indices - we don't have access to the name here
+      // Could potentially look it up in context, but for now skip
+      return null;
+    case 'App':
+      // For applications like (Vec A n), recurse into fn to find Vec
+      return extractTypePrefix(type.fn);
+    default:
+      // Binder, Sort, Hole, Match, Annot - too complex
+      return null;
+  }
+}
+
+/**
+ * Extract parameter info from a constructor's type (a Pi type).
  *
  * For example, given:
  *   VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
  *
- * Returns: ["A", "n", "", ""] (empty strings for unnamed/anonymous binders)
+ * Returns: [
+ *   { name: "A", typePrefix: null },
+ *   { name: "n", typePrefix: null },
+ *   { name: "", typePrefix: "a" },    // from type A
+ *   { name: "", typePrefix: "v" },    // from type Vec
+ * ]
  *
- * This walks the Pi chain and collects the binder names until we hit the return type.
+ * This walks the Pi chain and collects binder names and type prefixes.
  */
-export function extractConstructorParamNames(ctorType: TTKTerm): string[] {
-  const names: string[] = [];
+export function extractConstructorParamNames(ctorType: TTKTerm): ParamInfo[] {
+  const params: ParamInfo[] = [];
   let current = ctorType;
 
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
     // Use the binder name, or empty string if it's "_" or empty
     const name = current.name === '_' || current.name === '' ? '' : current.name;
-    names.push(name);
+    // Extract type prefix for unnamed params
+    const typePrefix = name === '' ? extractTypePrefix(current.domain) : null;
+    params.push({ name, typePrefix });
     current = current.body;
   }
 
-  return names;
+  return params;
 }
 
 /**
@@ -108,10 +159,10 @@ export function buildConstructorParamNames(
 let wildcardCounter = 0;
 
 /**
- * Current constructor parameter names context.
+ * Current constructor parameter info context.
  * Set when elaborating patterns inside a constructor pattern.
  */
-let currentCtorParamNames: string[] | null = null;
+let currentCtorParamNames: ParamInfo[] | null = null;
 
 /**
  * Current position within constructor arguments.
@@ -120,10 +171,10 @@ let currentCtorParamNames: string[] | null = null;
 let currentCtorParamIndex: number = 0;
 
 /**
- * Current term parameter names for top-level pattern elaboration.
+ * Current term parameter info for top-level pattern elaboration.
  * Set from the term's type signature before elaborating its value.
  */
-let currentTermParamNames: string[] | null = null;
+let currentTermParamNames: ParamInfo[] | null = null;
 
 /**
  * Current position within top-level term parameters.
@@ -144,43 +195,54 @@ export function setConstructorParamNames(map: ConstructorParamNames): void {
 }
 
 /**
- * Set the current term parameter names for top-level pattern elaboration.
- * Call this before elaborating a term's value, using param names from its type.
+ * Set the current term parameter info for top-level pattern elaboration.
+ * Call this before elaborating a term's value, using param info from its type.
  */
-export function setCurrentTermParamNames(names: string[] | null): void {
-  currentTermParamNames = names;
+export function setCurrentTermParamNames(params: ParamInfo[] | null): void {
+  currentTermParamNames = params;
   currentTermParamIndex = 0;
 }
 
 /**
  * Generate a fresh unique name for a wildcard pattern within the current clause.
  *
- * The name format is: paramName + counter
- * - If we're inside a constructor pattern and know the parameter name, use it
- * - If we're at a top-level pattern and know the term's parameter name, use it
- * - If the parameter is unnamed, use "?"
- * - The counter ensures uniqueness within the clause
+ * The naming priority is:
+ * 1. If we have an explicit parameter name (e.g., "A" from "(A : Type)"), use it
+ * 2. If we have a type prefix (lowercase first letter of type), use it
+ * 3. Fall back to "?"
+ *
+ * The counter ensures uniqueness within the clause.
  */
 function freshWildcardName(): string {
   const counter = wildcardCounter++;
 
-  // If we have constructor context (nested inside a constructor pattern), use the parameter name
+  // If we have constructor context (nested inside a constructor pattern)
   if (currentCtorParamNames !== null && currentCtorParamIndex < currentCtorParamNames.length) {
-    const paramName = currentCtorParamNames[currentCtorParamIndex];
-    if (paramName && paramName !== '') {
-      return `${paramName}${counter}`;
+    const paramInfo = currentCtorParamNames[currentCtorParamIndex];
+    // Priority 1: explicit parameter name
+    if (paramInfo.name !== '') {
+      return `${paramInfo.name}${counter}`;
+    }
+    // Priority 2: type-based prefix
+    if (paramInfo.typePrefix !== null) {
+      return `${paramInfo.typePrefix}${counter}`;
     }
   }
 
-  // If we have term context (top-level patterns), use the term's parameter name
+  // If we have term context (top-level patterns)
   if (currentTermParamNames !== null && currentTermParamIndex < currentTermParamNames.length) {
-    const paramName = currentTermParamNames[currentTermParamIndex];
-    if (paramName && paramName !== '') {
-      return `${paramName}${counter}`;
+    const paramInfo = currentTermParamNames[currentTermParamIndex];
+    // Priority 1: explicit parameter name
+    if (paramInfo.name !== '') {
+      return `${paramInfo.name}${counter}`;
+    }
+    // Priority 2: type-based prefix
+    if (paramInfo.typePrefix !== null) {
+      return `${paramInfo.typePrefix}${counter}`;
     }
   }
 
-  // No parameter name available, use "?"
+  // No parameter name or type prefix available, use "?"
   return `?${counter}`;
 }
 

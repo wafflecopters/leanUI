@@ -7,7 +7,7 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames } from './elab';
+import { elabToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
@@ -903,15 +903,15 @@ export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResul
  * Collect constructor param names from checked inductive declarations.
  * This should be called after phase 1 type checking.
  */
-function collectConstructorParamNames(compiledBlocks: CompiledBlock[]): Map<string, string[]> {
-  const result: Map<string, string[]> = new Map();
+function collectConstructorParamNames(compiledBlocks: CompiledBlock[]): ConstructorParamNames {
+  const result: ConstructorParamNames = new Map();
 
   for (const block of compiledBlocks) {
     for (const decl of block.declarations) {
       if (decl.kind === 'inductive' && decl.checkSuccess && decl.kernelConstructors) {
         const ctorParamNames = buildConstructorParamNames(decl.kernelConstructors);
-        for (const [ctorName, paramNames] of ctorParamNames) {
-          result.set(ctorName, paramNames);
+        for (const [ctorName, paramInfo] of ctorParamNames) {
+          result.set(ctorName, paramInfo);
         }
       }
     }
