@@ -302,6 +302,20 @@ export class TCEnv<T> {
   ) {
   }
 
+  hasConstraints(): this is TCEnv<T> & { constraints: Constraint[] } {
+    return this.constraints.length > 0;
+  }
+
+  solveConstraints(): TCEnv<T> {
+    if (!this.hasConstraints()) {
+      return this;
+    }
+
+    debugger
+
+    return this;
+  }
+
   prettyPrint(term: TTKTerm): string {
     return prettyPrint(term, this.signature.map(s => s.name).reverse());
   }

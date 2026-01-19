@@ -761,7 +761,7 @@ function checkMatchClause(
   type: TTKTerm,
 ): TCEnv<void> {
   const result = processMatchClauseLhs(termName, env.inMatchClausePatterns(), type)
-  // TODO
+  // TODO: rhs type check
   return result.withoutValue();
 }
 
@@ -801,7 +801,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   if (unifyResult.metaConstraints.length > 0) {
     debugger
-    throw new Error('TODO: meta constraints should not be emitted in clause lhs elaboration')
+    throw new Error('Meta constraints should not be emitted in clause lhs elaboration')
   }
 
   const elabHead = mkConst(pattern.name, mkType(-1) /* HACK */)
@@ -833,9 +833,8 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     workEnv = workEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
     logResultState(workEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
   }
-  // TODO: try solve constraints
 
-  return workEnv
+  return workEnv.solveConstraints()
 }
 
 function applySubstitutionToCheckStackInPlace(
