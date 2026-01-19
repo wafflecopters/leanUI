@@ -1703,28 +1703,47 @@ function assertPatternVarsValid(
     traverse(patterns[i], elabStack[i], [arraySeg(i)]);
   }
 
-  // Check for conflicts
+  // Build reverse mapping: name -> list of (de Bruijn index, path) entries
+  const nameToIndices = new Map<string, { varIndex: number; path: IndexPath }[]>();
+  for (const [varIndex, entries] of varToNames) {
+    for (const entry of entries) {
+      const existing = nameToIndices.get(entry.name);
+      if (existing) {
+        existing.push({ varIndex, path: entry.path });
+      } else {
+        nameToIndices.set(entry.name, [{ varIndex, path: entry.path }]);
+      }
+    }
+  }
+
+  // Check 1: Same name used for different de Bruijn indices
+  // e.g., #0 -> [A], #1 -> [A] is an error
+  for (const [name, indexEntries] of nameToIndices) {
+    const uniqueIndices = [...new Set(indexEntries.map(e => e.varIndex))];
+    if (uniqueIndices.length > 1) {
+      const errorPath = indexEntries[1].path; // Point to second occurrence
+      throw new TCEnvError(
+        `Pattern variable '${name}' used for distinct bindings that are not forced to be equal`,
+        env.atIndexPath([...env.indexPath, ...errorPath])
+      );
+    }
+  }
+
+  // Check 2: Different names for the same de Bruijn index
+  // e.g., #0 -> [A, B] is an error, but #0 -> [A, A] is allowed
   for (const [_varIndex, entries] of varToNames) {
     if (entries.length > 1) {
-      const names = entries.map(e => e.name);
-      const uniqueNames = [...new Set(names)];
-
-      if (uniqueNames.length === 1) {
-        // Same name used multiple times - duplicate name error
-        const errorPath = entries[1].path; // Point to second occurrence
-        throw new TCEnvError(
-          `Duplicate pattern variable '${names[0]}': this name is already bound earlier in the pattern`,
-          env.atIndexPath([...env.indexPath, ...errorPath])
-        );
-      } else {
+      const uniqueNames = [...new Set(entries.map(e => e.name))];
+      if (uniqueNames.length > 1) {
         // Different names refer to same variable - conflict error
-        const nameList = names.map(n => `'${n}'`).join(' and ');
+        const nameList = uniqueNames.map(n => `'${n}'`).join(' and ');
         const errorPath = entries[1].path; // Point to second occurrence
         throw new TCEnvError(
           `Pattern variables ${nameList} refer to the same binding; use a single consistent name`,
           env.atIndexPath([...env.indexPath, ...errorPath])
         );
       }
+      // If uniqueNames.length === 1, that's fine - same name used consistently
     }
   }
 }

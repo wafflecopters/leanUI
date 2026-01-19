@@ -55,6 +55,5 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
     return { success: true, substitutions: new Map([[b.index, a]]), metaConstraints: [] }
   }
 
-  debugger
   return { success: false, reason: 'conflict' }
 }
