@@ -21,12 +21,12 @@ const rhs: TTKTerm = {
   tag: 'Binder',
   name: 'x',
   binderKind: { tag: 'BLam' },
-  domain: { tag: 'Hole', id: '_x_type', type: { tag: 'Sort', level: 0 }, context: [] },
+  domain: { tag: 'Hole', id: '_x_type' },
   body: {
     tag: 'Binder',
     name: 'y',
     binderKind: { tag: 'BLam' },
-    domain: { tag: 'Hole', id: '_y_type', type: { tag: 'Sort', level: 0 }, context: [] },
+    domain: { tag: 'Hole', id: '_y_type' },
     body: {
       tag: 'App',
       fn: {

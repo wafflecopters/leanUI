@@ -55,12 +55,10 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
       };
 
     case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: substHelper(targetIndex, replacement, term.type, depth),
-        context: term.context
-      };
+      return { tag: 'Hole', id: term.id };
+
+    case 'Meta':
+      return { tag: 'Meta', id: term.id };
 
     case 'Annot':
       return {
@@ -124,12 +122,10 @@ function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
       };
 
     case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: shift(amount, term.type, cutoff),
-        context: term.context
-      };
+      return { tag: 'Hole', id: term.id };
+
+    case 'Meta':
+      return { tag: 'Meta', id: term.id };
 
     case 'Annot':
       return {
@@ -194,12 +190,10 @@ function substPatternBindingsHelper(bindings: TTKTerm[], term: TTKTerm, depth: n
       return term;
 
     case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: substPatternBindingsHelper(bindings, term.type, depth),
-        context: term.context
-      };
+      return { tag: 'Hole', id: term.id };
+
+    case 'Meta':
+      return { tag: 'Meta', id: term.id };
 
     case 'Binder': {
       const newDomain = substPatternBindingsHelper(bindings, term.domain, depth);
@@ -304,7 +298,8 @@ function freeVarIndicesHelper(term: TTKTerm, depth: number, indices: Set<number>
       freeVarIndicesHelper(term.arg, depth, indices);
       break;
     case 'Hole':
-      freeVarIndicesHelper(term.type, depth, indices);
+    case 'Meta':
+      // No free variables in holes/metas
       break;
     case 'Annot':
       freeVarIndicesHelper(term.term, depth, indices);
@@ -336,7 +331,8 @@ function containsVarIndexHelper(term: TTKTerm, targetIndex: number, depth: numbe
       return containsVarIndexHelper(term.fn, targetIndex, depth) ||
         containsVarIndexHelper(term.arg, targetIndex, depth);
     case 'Hole':
-      return containsVarIndexHelper(term.type, targetIndex, depth);
+    case 'Meta':
+      return false; // No variables in holes/metas
     case 'Annot':
       return containsVarIndexHelper(term.term, targetIndex, depth) ||
         containsVarIndexHelper(term.type, targetIndex, depth);
@@ -373,7 +369,8 @@ function minFreeVarIndexHelper(term: TTKTerm, depth: number): number {
       );
 
     case 'Hole':
-      return minFreeVarIndexHelper(term.type, depth);
+    case 'Meta':
+      return Infinity; // No free variables in holes/metas
 
     case 'Annot':
       return Math.min(
@@ -418,12 +415,10 @@ function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: 
       return term;
 
     case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: replaceVarsHelper(mapping, term.type, depth),
-        context: term.context
-      };
+      return { tag: 'Hole', id: term.id };
+
+    case 'Meta':
+      return { tag: 'Meta', id: term.id };
 
     case 'Binder': {
       const newDomain = replaceVarsHelper(mapping, term.domain, depth);

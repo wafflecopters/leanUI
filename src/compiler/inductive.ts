@@ -14,6 +14,7 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
       const msg = {
         Annot: 'Explicit annotation',
         Hole: 'Inferred type',
+        Meta: 'Metavariable',
         Match: 'Pattern matching',
         Binder: undefined,
       }[term.tag] ?? (
@@ -574,6 +575,9 @@ function termsEqualK(t1: TTKTerm, t2: TTKTerm): boolean {
 
     case 'Hole':
       return t2.tag === 'Hole' && t1.id === t2.id;
+
+    case 'Meta':
+      return t2.tag === 'Meta' && t1.id === t2.id;
 
     case 'Annot':
       return (

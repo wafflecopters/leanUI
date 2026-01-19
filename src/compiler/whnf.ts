@@ -10,9 +10,9 @@ function isFreeIn(index: number, term: TTKTerm): boolean {
       return term.index === index;
     case 'Sort':
     case 'Const':
-      return false;
     case 'Hole':
-      return isFreeIn(index, term.type);
+    case 'Meta':
+      return false;
     case 'App':
       return isFreeIn(index, term.fn) || isFreeIn(index, term.arg);
     case 'Binder':
@@ -109,6 +109,9 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm): boolean {
 
     case 'Hole':
       return n2.tag === 'Hole' && n1.id === n2.id;
+
+    case 'Meta':
+      return n2.tag === 'Meta' && n1.id === n2.id;
 
     case 'Annot':
       return areTypesDefEq(n1.term, n2);

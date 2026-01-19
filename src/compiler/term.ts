@@ -210,7 +210,9 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
   } else if (term.tag === 'Sort') {
     return { tag: 'Sort', level: term.level };
   } else if (term.tag === 'Hole') {
-    return { tag: 'Hole', id: term.id, type: transformVarsInTermAcc(term.type, transform, context), context: term.context };
+    return { tag: 'Hole', id: term.id };
+  } else if (term.tag === 'Meta') {
+    return { tag: 'Meta', id: term.id };
   } else if (term.tag === 'Annot') {
     return { tag: 'Annot', term: transformVarsInTermAcc(term.term, transform, context), type: transformVarsInTermAcc(term.type, transform, context) };
   } else if (term.tag === 'Match') {
@@ -236,9 +238,8 @@ export const MatchClauseCtorPatternPartIndex = {
   Args: fieldSeg('args'),
 } satisfies Record<string, IndexPathSegment>;
 
-export const HolePartIndex = {
-  Type: fieldSeg('type'),
-} satisfies Record<string, IndexPathSegment>;
+// Note: Holes are now simple { tag: 'Hole', id: string } with no type field
+// HolePartIndex removed as holes no longer have substructure
 
 export const AppPartIndex = {
   Fn: fieldSeg('fn'),
@@ -1125,7 +1126,9 @@ export function postOrderTraverseTerm(term: TTKTerm, fn: (term: TTKTerm, indexPa
     postOrderTraverseTerm(term.fn, fn, [...indexPath, AppPartIndex.Fn]);
     postOrderTraverseTerm(term.arg, fn, [...indexPath, AppPartIndex.Arg]);
   } else if (term.tag === 'Hole') {
-    postOrderTraverseTerm(term.type, fn, [...indexPath, HolePartIndex.Type]);
+    // No children - holes are simple { tag: 'Hole', id: string }
+  } else if (term.tag === 'Meta') {
+    // No children - metas are simple { tag: 'Meta', id: string }
   } else if (term.tag === 'Annot') {
     postOrderTraverseTerm(term.term, fn, [...indexPath, AnnotPartIndex.Term]);
     postOrderTraverseTerm(term.type, fn, [...indexPath, AnnotPartIndex.Type]);

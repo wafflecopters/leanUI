@@ -519,11 +519,9 @@ function collectWildcardsFromTerm(
       collectWildcardsFromTerm(term.type, elabMap, sourceMap, blockStartLine, [...path, 'type'], hints);
       break;
 
-    case 'Hole':
-      collectWildcardsFromTerm(term.type, elabMap, sourceMap, blockStartLine, [...path, 'type'], hints);
-      break;
-
     // Leaf nodes - no recursion
+    case 'Hole':
+    case 'Meta':
     case 'Var':
     case 'Sort':
     case 'Const':

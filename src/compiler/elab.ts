@@ -317,12 +317,9 @@ export function elabToKernel(term: TTerm): TTKTerm {
       };
 
     case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: elabToKernel(term.type),
-        context: elabContextToKernel(term.context)
-      };
+      // Kernel holes are simple - type/context info from surface is discarded
+      // Type checking will instantiate metas as needed
+      return { tag: 'Hole', id: term.id };
 
     case 'Annot':
       return {
@@ -522,25 +519,8 @@ export function elabToKernelWithMap(
       };
 
     case 'Hole':
-      return {
-        tag: 'Hole',
-        id: term.id,
-        type: elabToKernelWithMap(
-          term.type,
-          elabMap,
-          appendPath(surfacePath, fieldSeg('type')),
-          appendPath(kernelPath, fieldSeg('type'))
-        ),
-        context: term.context.map((binding, i) => ({
-          name: binding.name,
-          type: elabToKernelWithMap(
-            binding.type,
-            elabMap,
-            appendPath(surfacePath, fieldSeg('context'), arraySeg(i), fieldSeg('type')),
-            appendPath(kernelPath, fieldSeg('context'), arraySeg(i), fieldSeg('type'))
-          )
-        }))
-      };
+      // Kernel holes are simple - type/context info from surface is discarded
+      return { tag: 'Hole', id: term.id };
 
     case 'Annot':
       return {

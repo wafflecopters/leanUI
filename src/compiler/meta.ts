@@ -61,13 +61,11 @@ function maxFreeVarIndexAt(term: TTKTerm, depth: number): number {
         maxFreeVarIndexAt(term.arg, depth),
       );
     case 'Hole':
-      return maxFreeVarIndexAt(term.type, depth);
+    case 'Meta':
+      return -Infinity; // No free variables
     case 'Annot':
       return Math.max(maxFreeVarIndexAt(term.term, depth), maxFreeVarIndexAt(term.type, depth));
     case 'Match':
       return Math.max(maxFreeVarIndexAt(term.scrutinee, depth), ...term.clauses.map(c => maxFreeVarIndexAt(c.rhs, depth)));
   }
-
-  const _never: never = term;
-  throw new Error(`Unexpected term tag: ${_never}`);
 }
