@@ -4,7 +4,7 @@
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken } from '../compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, HoleLocation } from '../compiler/compile';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
@@ -60,6 +60,8 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     'editorIndentGuide.activeBackground': '#30363d',
     'editorBracketMatch.background': '#2d333b',
     'editorBracketMatch.border': '#58a6ff',
+    // Warning squiggle color matches hole color (bright cyan)
+    'editorWarning.foreground': '#' + SYNTAX_COLORS.hole,
   },
 };
 
@@ -171,6 +173,9 @@ inductive Fin : Nat -> Type where
 nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
 nth A _ (VCons _ _ h _) (FZero _) = h
 nth A _ (VCons _ (Succ _) h tail) (FSucc _ f) = nth _ _ tail f
+
+double : Nat -> Nat
+double n = ?sorry
 
 {-
 qux : Type
@@ -526,6 +531,11 @@ export function TextEditorPage() {
     return extractSemanticTokens(compileResult);
   }, [compileResult]);
 
+  // Extract hole locations from compile result for warning markers
+  const holeLocations = useMemo(() => {
+    return extractHoleLocations(compileResult);
+  }, [compileResult]);
+
   // Keep the refs in sync with the latest data
   // Monaco's providers will read from these refs when they need to render
   useEffect(() => {
@@ -614,8 +624,21 @@ export function TextEditorPage() {
       }
     }
 
+    // Add warning markers for holes (user-created holes are unsound)
+    for (const hole of holeLocations) {
+      markers.push({
+        severity: monaco.MarkerSeverity.Warning,
+        message: `Hole '${hole.id}' is unsound - proof incomplete`,
+        startLineNumber: hole.line,
+        startColumn: hole.column,
+        endLineNumber: hole.line,
+        endColumn: hole.endColumn,
+        source: 'TT Holes',
+      });
+    }
+
     monaco.editor.setModelMarkers(model, 'tt-compiler', markers);
-  }, [compileResult, editorReady]);
+  }, [compileResult, editorReady, holeLocations]);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;

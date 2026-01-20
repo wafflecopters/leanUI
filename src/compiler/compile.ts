@@ -190,6 +190,20 @@ export interface SemanticToken {
 }
 
 /**
+ * Information about a hole location for warning markers
+ */
+export interface HoleLocation {
+  /** Line number (1-based) */
+  line: number;
+  /** Column number (1-based) */
+  column: number;
+  /** End column (1-based, exclusive) */
+  endColumn: number;
+  /** The hole identifier (e.g., "?sorry") */
+  id: string;
+}
+
+/**
  * Extract semantic tokens from a compile result for syntax highlighting.
  *
  * This walks through the SURFACE terms (TTerm, TPattern) directly,
@@ -416,6 +430,139 @@ function addSemanticTokenDirect(
       column: range.start.col,
       length: range.end.col - range.start.col,
       type
+    });
+  }
+}
+
+/**
+ * Extract hole locations from a compile result for warning markers.
+ *
+ * This walks through the SURFACE terms (TTerm) to find holes (e.g., ?sorry)
+ * and returns their source positions for displaying warning squiggles.
+ */
+export function extractHoleLocations(result: CompileResult): HoleLocation[] {
+  const holes: HoleLocation[] = [];
+
+  for (const block of result.blocks) {
+    for (const decl of block.declarations) {
+      if (!decl.sourceMap) continue;
+
+      // Process declaration type (surface)
+      if (decl.surfaceType) {
+        collectHolesFromSurfaceTerm(
+          decl.surfaceType,
+          decl.sourceMap,
+          block.startLine,
+          ['type'],
+          holes
+        );
+      }
+
+      // Process declaration value (surface)
+      if (decl.surfaceValue) {
+        collectHolesFromSurfaceTerm(
+          decl.surfaceValue,
+          decl.sourceMap,
+          block.startLine,
+          ['value'],
+          holes
+        );
+      }
+
+      // Process constructors (surface)
+      if (decl.surfaceConstructors) {
+        for (let i = 0; i < decl.surfaceConstructors.length; i++) {
+          collectHolesFromSurfaceTerm(
+            decl.surfaceConstructors[i].type,
+            decl.sourceMap,
+            block.startLine,
+            ['constructors', i, 'type'],
+            holes
+          );
+        }
+      }
+    }
+  }
+
+  return holes;
+}
+
+/**
+ * Walk a surface term (TTerm) and collect hole locations.
+ */
+function collectHolesFromSurfaceTerm(
+  term: TTerm,
+  sourceMap: SourceMap,
+  blockStartLine: number,
+  path: (string | number)[],
+  holes: HoleLocation[]
+): void {
+  switch (term.tag) {
+    case 'Hole':
+      // Found a hole - add its location
+      addHoleLocation(path, sourceMap, blockStartLine, term.id, holes);
+      // Also recurse into the hole's type (which might contain more holes)
+      collectHolesFromSurfaceTerm(term.type, sourceMap, blockStartLine, [...path, 'type'], holes);
+      break;
+
+    case 'Var':
+    case 'Const':
+    case 'Sort':
+      // Leaf nodes - no holes
+      break;
+
+    case 'Binder':
+      collectHolesFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], holes);
+      collectHolesFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], holes);
+      if (term.binderKind.tag === 'BLetTT') {
+        collectHolesFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], holes);
+      }
+      break;
+
+    case 'App':
+      collectHolesFromSurfaceTerm(term.fn, sourceMap, blockStartLine, [...path, 'fn'], holes);
+      collectHolesFromSurfaceTerm(term.arg, sourceMap, blockStartLine, [...path, 'arg'], holes);
+      break;
+
+    case 'Annot':
+      collectHolesFromSurfaceTerm(term.term, sourceMap, blockStartLine, [...path, 'term'], holes);
+      collectHolesFromSurfaceTerm(term.type, sourceMap, blockStartLine, [...path, 'type'], holes);
+      break;
+
+    case 'Match':
+      collectHolesFromSurfaceTerm(term.scrutinee, sourceMap, blockStartLine, [...path, 'scrutinee'], holes);
+      for (let i = 0; i < term.clauses.length; i++) {
+        const clause = term.clauses[i];
+        collectHolesFromSurfaceTerm(
+          clause.rhs,
+          sourceMap,
+          blockStartLine,
+          [...path, 'clauses', i, 'rhs'],
+          holes
+        );
+      }
+      break;
+  }
+}
+
+/**
+ * Add a hole location from sourceMap
+ */
+function addHoleLocation(
+  path: (string | number)[],
+  sourceMap: SourceMap,
+  blockStartLine: number,
+  id: string,
+  holes: HoleLocation[]
+): void {
+  const pathStr = serializePathForLookup(path);
+  const range = sourceMap.get(pathStr);
+  if (range) {
+    holes.push({
+      line: range.start.line + blockStartLine - 1,
+      column: range.start.col,
+      endColumn: range.end.col,
+      id
     });
   }
 }
