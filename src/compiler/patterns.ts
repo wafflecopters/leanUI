@@ -326,7 +326,15 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   logInfo(() => `  Unifying: ${workEnv.prettyPrint(unifyLeft)} = ${workEnv.prettyPrint(unifyRight)}`)
 
-  const unifyResult = unifyTerms(unifyLeft, unifyRight, { flexibleVars: true })
+  // Pattern-local bindings (from constructor sub-patterns like wildcards) are at
+  // de Bruijn indices 0 to (numPatternLocalBindings - 1). These should be flexible.
+  // Function parameters are at indices >= numPatternLocalBindings. These should be rigid.
+  // We use nextCheckTypeEntry.ctxLength because that's the context BEFORE wildcards were added.
+  const numPatternLocalBindings = workEnv.context.length - nextCheckTypeEntry.ctxLength
+  const unifyResult = unifyTerms(unifyLeft, unifyRight, {
+    flexibleVars: true,
+    rigidVarsAtOrAbove: numPatternLocalBindings,
+  })
 
   if (!unifyResult.success) {
     const leftStr = workEnv.prettyPrint(unifyLeft)
