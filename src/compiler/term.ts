@@ -1,10 +1,10 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkLZero } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkLZero, Level, mkLMVar } from "./kernel";
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
-import { canSolveMeta, solveConstraints } from "./meta";
+import { solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, shiftTerm } from "./subst";
-import { unifyTerms as doUnify } from "./unify";
+import { unifyTerms } from "./unify";
 import { areTypesDefEq } from "./whnf";
 
 export interface CheckError {
@@ -89,7 +89,8 @@ export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, Meta
     env.constraints,
     env.indexPath,
     env.valueStack,
-    env.value
+    env.value,
+    env.levelMetas
   );
 }
 
@@ -292,6 +293,13 @@ export function printCollectionFancy(items: string[], openBracket: string, close
   return `${options?.prefixOpeningBracket ? bracketPrefix : ''}${openBracket}\n${items.map(item => `${itemPrefix}${item}`).join(`${separator}\n`)}\n${bracketPrefix}${closeBracket}`;
 }
 
+/**
+ * Level metavariable tracking.
+ * - undefined means unsolved
+ * - Level value means solved to that level
+ */
+export type LevelMeta = Level | undefined;
+
 export class TCEnv<T> {
   constructor(
     public readonly context: TTKContext,
@@ -300,7 +308,8 @@ export class TCEnv<T> {
     public readonly constraints: Constraint[],
     public readonly indexPath: IndexPath,
     public readonly valueStack: unknown[],
-    public readonly value: T
+    public readonly value: T,
+    public readonly levelMetas: Map<string, LevelMeta> = new Map()
   ) {
   }
 
@@ -356,7 +365,8 @@ export class TCEnv<T> {
       newConstraints,
       this.indexPath,
       this.valueStack,
-      this.value
+      this.value,
+      this.levelMetas
     );
   }
 
@@ -377,7 +387,8 @@ export class TCEnv<T> {
       constraints,
       this.indexPath,
       this.valueStack,
-      this.value
+      this.value,
+      this.levelMetas
     );
   }
 
@@ -392,7 +403,7 @@ export class TCEnv<T> {
    * the context, metas, and constraints - not the value itself.
    */
   unifyTerms<S extends TTKTerm>(this: TCEnv<S>, lhs: TTKTerm, rhs: TTKTerm): TCEnv<S> {
-    const result = doUnify(lhs, rhs);
+    const result = unifyTerms(lhs, rhs);
 
     if (!result.success) {
       throw (this as unknown as TCEnv<TTKTerm>).unificationFailedError(lhs, rhs, result.reason);
@@ -419,11 +430,11 @@ export class TCEnv<T> {
   }
 
   withoutValue(): TCEnv<void> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined, this.levelMetas);
   }
 
   withValue<S>(value: S): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value, this.levelMetas);
   }
 
   mapValue<S>(fn: (value: T) => S): TCEnv<S> {
@@ -431,11 +442,11 @@ export class TCEnv<T> {
   }
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas);
   }
 
   atIndexPath(indexPath: IndexPath): TCEnv<void> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined, this.levelMetas);
   }
 
   // Terms
@@ -448,12 +459,13 @@ export class TCEnv<T> {
       this.constraints,
       this.indexPath,
       this.valueStack,
-      this.value
+      this.value,
+      this.levelMetas
     );
   }
 
   withConstraint(constraint: Omit<Constraint, 'ctx'>): TCEnv<T> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, [...this.constraints, { ctx: this.context, ...constraint }], this.indexPath, this.valueStack, this.value);
+    return new TCEnv(this.context, this.definitions, this.metaVars, [...this.constraints, { ctx: this.context, ...constraint }], this.indexPath, this.valueStack, this.value, this.levelMetas);
   }
 
   isAppTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'App' }> {
@@ -508,30 +520,35 @@ export class TCEnv<T> {
       this.constraints,
       this.indexPath,
       this.valueStack,
-      metaTerm
+      metaTerm,
+      this.levelMetas
     );
   }
 
   /**
    * Create a fresh meta variable for a type (used when inferring holes).
-   * The meta has type `Type` (Sort 1).
+   * The meta has type `Type` with a fresh level metavariable.
    * Returns the updated env and the meta term.
    */
   createMetaForType<S>(this: TCEnv<S>): { env: TCEnv<S>, metaTerm: TTKTerm } {
-    const name = `?m${this.metaVars.size}`;
-    const newMetaVars = new Map(this.metaVars);
-    newMetaVars.set(name, { ctx: this.context, type: this.typeSort() });
+    // First create a fresh level meta for the type's universe
+    const { env: envWithLevel, sort: typeSort } = this.typeSortFresh();
+
+    const name = `?m${envWithLevel.metaVars.size}`;
+    const newMetaVars = new Map(envWithLevel.metaVars);
+    newMetaVars.set(name, { ctx: envWithLevel.context, type: typeSort });
 
     const metaTerm: TTKTerm = { tag: 'Meta', id: name };
 
     const env = new TCEnv(
-      this.context,
-      this.definitions,
+      envWithLevel.context,
+      envWithLevel.definitions,
       newMetaVars,
-      this.constraints,
-      this.indexPath,
-      this.valueStack,
-      this.value
+      envWithLevel.constraints,
+      envWithLevel.indexPath,
+      envWithLevel.valueStack,
+      envWithLevel.value,
+      envWithLevel.levelMetas
     );
 
     return { env, metaTerm };
@@ -549,6 +566,31 @@ export class TCEnv<T> {
    */
   normalize(this: TCEnv<unknown>, term: TTKTerm): TTKTerm {
     return doNormalize(term);
+  }
+
+  /**
+   * Create a fresh level metavariable for universe inference.
+   * Returns the updated env and the level meta.
+   */
+  freshLevelMeta<S>(this: TCEnv<S>): { env: TCEnv<S>, level: Level } {
+    const id = `l${this.levelMetas.size}`;
+    const newLevelMetas = new Map(this.levelMetas);
+    newLevelMetas.set(id, undefined);  // unsolved
+
+    const level: Level = mkLMVar(id);
+
+    const env = new TCEnv(
+      this.context,
+      this.definitions,
+      this.metaVars,
+      this.constraints,
+      this.indexPath,
+      this.valueStack,
+      this.value,
+      newLevelMetas
+    );
+
+    return { env, level };
   }
 
   isConstTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Const' }> {
@@ -573,7 +615,8 @@ export class TCEnv<T> {
       this.constraints,
       this.indexPath,
       this.valueStack,
-      this.value
+      this.value,
+      this.levelMetas
     );
   }
 
@@ -585,7 +628,8 @@ export class TCEnv<T> {
       this.constraints,
       this.indexPath,
       this.valueStack,
-      this.value
+      this.value,
+      this.levelMetas
     );
   }
 
@@ -598,7 +642,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, MatchPartIndex.Scrutinee],
       [...this.valueStack, this.value],
-      this.value.scrutinee
+      this.value.scrutinee,
+      this.levelMetas
     );
   }
 
@@ -610,7 +655,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, MatchPartIndex.Clauses],
       [...this.valueStack, this.value],
-      this.value.clauses
+      this.value.clauses,
+      this.levelMetas
     );
   }
 
@@ -624,7 +670,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, arraySeg(clauseIndex)],
       [...this.valueStack, this.value],
-      this.value[clauseIndex]
+      this.value[clauseIndex],
+      this.levelMetas
     );
   }
 
@@ -636,7 +683,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, ClausePartIndex.Patterns],
       [...this.valueStack, this.value],
-      this.value.patterns
+      this.value.patterns,
+      this.levelMetas
     );
   }
 
@@ -650,7 +698,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, arraySeg(patternIndex)],
       [...this.valueStack, this.value],
-      this.value[patternIndex]
+      this.value[patternIndex],
+      this.levelMetas
     );
   }
 
@@ -662,7 +711,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, ClausePartIndex.Rhs],
       [...this.valueStack, this.value],
-      this.value.rhs
+      this.value.rhs,
+      this.levelMetas
     );
   }
 
@@ -674,7 +724,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, MatchClauseCtorPatternPartIndex.Args],
       [...this.valueStack, this.value],
-      this.value.args
+      this.value.args,
+      this.levelMetas
     );
   }
 
@@ -687,7 +738,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, AppPartIndex.Fn],
       [...this.valueStack, this.value],
-      this.value.fn
+      this.value.fn,
+      this.levelMetas
     );
   }
 
@@ -699,7 +751,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, AppPartIndex.Arg],
       [...this.valueStack, this.value],
-      this.value.arg
+      this.value.arg,
+      this.levelMetas
     );
   }
 
@@ -712,7 +765,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, AnnotPartIndex.Term],
       [...this.valueStack, this.value],
-      this.value.term
+      this.value.term,
+      this.levelMetas
     );
   }
 
@@ -724,7 +778,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, AnnotPartIndex.Type],
       [...this.valueStack, this.value],
-      this.value.type
+      this.value.type,
+      this.levelMetas
     );
   }
 
@@ -737,7 +792,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
-      this.value.name
+      this.value.name,
+      this.levelMetas
     );
   }
 
@@ -749,7 +805,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
-      this.value.domain
+      this.value.domain,
+      this.levelMetas
     );
   }
 
@@ -761,7 +818,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
-      this.value.body
+      this.value.body,
+      this.levelMetas
     );
   }
 
@@ -774,7 +832,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
-      this.value.name
+      this.value.name,
+      this.levelMetas
     );
   }
 
@@ -786,7 +845,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
-      this.value.domain
+      this.value.domain,
+      this.levelMetas
     );
   }
 
@@ -798,7 +858,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
-      this.value.body
+      this.value.body,
+      this.levelMetas
     );
   }
 
@@ -811,7 +872,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
-      this.value.name
+      this.value.name,
+      this.levelMetas
     );
   }
 
@@ -823,7 +885,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
-      this.value.domain
+      this.value.domain,
+      this.levelMetas
     );
   }
 
@@ -835,7 +898,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
-      this.value.body
+      this.value.body,
+      this.levelMetas
     );
   }
 
@@ -847,7 +911,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, BinderPartSegment.Value],
       [...this.valueStack, this.value],
-      this.value.binderKind.defVal
+      this.value.binderKind.defVal,
+      this.levelMetas
     );
   }
 
@@ -860,7 +925,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.Name],
       [...this.valueStack, this.value],
-      this.value.name
+      this.value.name,
+      this.levelMetas
     );
   }
 
@@ -872,7 +938,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.Type],
       [...this.valueStack, this.value],
-      this.value.type
+      this.value.type,
+      this.levelMetas
     );
   }
 
@@ -884,7 +951,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.Constructors],
       [...this.valueStack, this.value],
-      this.value.constructors
+      this.value.constructors,
+      this.levelMetas
     );
   }
 
@@ -898,7 +966,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, arraySeg(constructorIndex)],
       [...this.valueStack, this.value],
-      this.value[constructorIndex]
+      this.value[constructorIndex],
+      this.levelMetas
     );
   }
 
@@ -910,7 +979,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorName],
       [...this.valueStack, this.value],
-      this.value.name
+      this.value.name,
+      this.levelMetas
     );
   }
 
@@ -922,7 +992,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorType],
       [...this.valueStack, this.value],
-      this.value.type
+      this.value.type,
+      this.levelMetas
     );
   }
 
@@ -935,7 +1006,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, TermPartIndex.Name],
       [...this.valueStack, this.value],
-      this.value.name
+      this.value.name,
+      this.levelMetas
     );
   }
 
@@ -947,7 +1019,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, TermPartIndex.Type],
       [...this.valueStack, this.value],
-      this.value.type
+      this.value.type,
+      this.levelMetas
     );
   }
 
@@ -959,7 +1032,8 @@ export class TCEnv<T> {
       this.constraints,
       [...this.indexPath, TermPartIndex.Value],
       [...this.valueStack, this.value],
-      this.value.value
+      this.value.value,
+      this.levelMetas
     );
   }
 
@@ -1036,15 +1110,17 @@ export class TCEnv<T> {
     }
 
     if (normalized.tag === 'Hole' || normalized.tag === 'Meta') {
-      // Create: Π(x: ?A). ?B
-      const { env: domainEnv, name: domainMetaId } = addMetaVarInTCEnv(this, this.typeSort());
-      const { env: codomainEnv, name: codomainMetaId } = addMetaVarInTCEnv(domainEnv, this.typeSort()); // in extended context
+      // Create: Π(x: ?A). ?B with fresh level metas
+      const { env: env1, sort: domainSort } = this.typeSortFresh();
+      const { env: domainEnv, name: domainMetaId } = addMetaVarInTCEnv(env1, domainSort);
+      const { env: env2, sort: codomainSort } = domainEnv.typeSortFresh();
+      const { env: codomainEnv, name: codomainMetaId } = addMetaVarInTCEnv(env2, codomainSort);
       const domainMeta: TTKTerm = { tag: 'Meta', id: domainMetaId };
       const codomainMeta: TTKTerm = { tag: 'Meta', id: codomainMetaId };
       const piType = mkPi(domainMeta, codomainMeta);
 
       // Unify the original type with this Pi
-      return this.unifyTerms(this.value, piType).withValue({
+      return codomainEnv.unifyTerms(this.value, piType).withValue({
         tag: 'Binder',
         name: 'x',  // Default name for inferred Pi
         binderKind: { tag: 'BPi' },
@@ -1056,13 +1132,25 @@ export class TCEnv<T> {
     throw this.expectedBinderPiError();
   }
 
-  typeSort(): TTKTerm & { tag: 'Sort' } {
-    /*
-    TODO: this should actually do (when we add universe levels)
+  /**
+   * Get a Type sort with a fresh level metavariable.
+   * Use this when you need proper universe inference and can thread the env through.
+   */
+  typeSortFresh<S>(this: TCEnv<S>): { env: TCEnv<S>, sort: TTKTerm & { tag: 'Sort' } } {
+    const { env, level } = this.freshLevelMeta();
+    return { env, sort: { tag: 'Sort', level } };
+  }
 
-    const levelMeta = this.freshLevelMeta();
-    return { tag: 'Sort', level: levelMeta };
-    */
+  /**
+   * Get a Type sort with a fixed level (Sort 0 = Prop).
+   *
+   * Use `typeSortFresh()` for proper universe inference - it creates
+   * a fresh level metavariable and returns the updated env.
+   *
+   * This method is kept for convenience in cases where universe
+   * polymorphism isn't needed.
+   */
+  typeSort(): TTKTerm & { tag: 'Sort' } {
     return { tag: 'Sort', level: mkLZero() };
   }
 

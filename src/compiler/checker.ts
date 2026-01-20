@@ -14,9 +14,18 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     //   ─────────────────────────────
     //   Γ ⊢ Π x : A, B ⇒ Type_max(i,j)
     // ────────────────────────────────────────────────────────────────
-    const domEnv = checkType(env.inBinderPiDomain(), env.typeSort());
-    const bodyEnv = checkType(domEnv.atValueAndPathOfEnv(env).inBinderPiBody(), domEnv.typeSort());
-    const resultSort = maxSort(domEnv.value, bodyEnv.value, bodyEnv);
+    // Create fresh level metas for domain and body
+    const { env: env1, sort: domainSort } = env.typeSortFresh();
+    const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderPiDomain(), domainSort);
+
+    const { env: env2, sort: bodySort } = domEnv.typeSortFresh();
+    const bodyEnv = checkType(env2.atValueAndPathOfEnv(env).inBinderPiBody(), bodySort);
+
+    // Result is Sort(max(l_i, l_j)) where the levels come from the fresh metas
+    const resultSort: TTKTerm = {
+      tag: 'Sort',
+      level: simplifyLevel(mkLMax(domainSort.level, bodySort.level))
+    };
     return bodyEnv.withValue(resultSort);
   }
 
@@ -34,7 +43,8 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     if (env.lambdaDomainIsHole()) {
       throw TCEnvError.create('Cannot infer type of unannotated lambda', env);
     }
-    const domEnv = checkType(env.inBinderLambdaDomain(), env.typeSort());
+    const { env: env1, sort: domainSort } = env.typeSortFresh();
+    const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderLambdaDomain(), domainSort);
     const bodyEnv = inferType(domEnv.atValueAndPathOfEnv(env).inBinderLambdaBody());
     // Build Π(x : A). B where A is the domain and B is the inferred body type
     const piType = mkPi(env.value.domain, bodyEnv.value, env.value.name);
@@ -118,7 +128,8 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────────
     //   Γ ⊢ (t : T) ⇒ T
     // ────────────────────────────────────────────────────────────────
-    const typeEnv = checkType(env.inAnnotType(), env.typeSort());
+    const { env: env1, sort: typeSort } = env.typeSortFresh();
+    const typeEnv = checkType(env1.atValueAndPathOfEnv(env).inAnnotType(), typeSort);
     // The checked type annotation becomes the expected type for the term
     const annotationType = env.value.type;  // Use the original annotation type
     const termEnv = checkType(typeEnv.atValueAndPathOfEnv(env).inAnnotTerm(), annotationType);
@@ -176,12 +187,3 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   return unifiedEnv.atValueAndPathOfEnv(env);
 }
 
-// Helpers
-
-function maxSort(lhs: TTKTerm, rhs: TTKTerm, env: TCEnv<unknown>): TTKTerm {
-  if (lhs.tag === 'Sort' && rhs.tag === 'Sort') {
-    return { tag: 'Sort', level: simplifyLevel(mkLMax(lhs.level, rhs.level)) }
-  }
-  debugger
-  throw TCEnvError.create(`Max sort not implemented for term types ${lhs.tag} and ${rhs.tag}`, env)
-}
