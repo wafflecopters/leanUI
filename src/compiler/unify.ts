@@ -11,9 +11,15 @@ import { whnf } from "./whnf";
  * - flexibleVars: If true, de Bruijn variables can be substituted (like metas).
  *   Use this for pattern LHS elaboration where we discover variable bindings.
  *   Default false: variables are rigid skolems that only unify with themselves.
+ *
+ * - rigidVarsAtOrAbove: When flexibleVars is true, vars with de Bruijn index >= this
+ *   value are treated as rigid (cannot be substituted with each other). This allows
+ *   pattern-local bindings (lower indices) to be flexible while function parameters
+ *   (higher indices) remain rigid. If undefined, all vars are flexible.
  */
 export type UnifyOptions = {
   flexibleVars?: boolean;
+  rigidVarsAtOrAbove?: number;
 }
 
 // ============================================================================
@@ -345,18 +351,37 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
   // quantified type parameters and cannot be instantiated.
   //
   // With flexibleVars: true, variables can be substituted (like pattern vars
-  // during LHS elaboration).
+  // during LHS elaboration). If rigidVarsAtOrAbove is set, vars at or above
+  // that index are treated as rigid even when flexibleVars is true.
   //
   // Var x vs Var x: trivially equal
   // Var x vs Var y: rigid -> conflict; flexible -> substitute lower with higher
   // Var x vs t:     rigid -> conflict; flexible -> substitute x with t
   // ─────────────────────────────────────────────────────────────────────────
+
+  // Helper: check if a var index is rigid (cannot be substituted)
+  const isRigidVar = (index: number): boolean => {
+    if (!options.flexibleVars) return true;
+    if (options.rigidVarsAtOrAbove !== undefined && index >= options.rigidVarsAtOrAbove) return true;
+    return false;
+  };
+
   if (a.tag === 'Var' && b.tag === 'Var') {
     if (a.index === b.index) {
       return emptySuccess;
     }
-    if (options.flexibleVars) {
-      // Substitute lower index with higher (arbitrary choice that preserves more bound structure)
+
+    const aRigid = isRigidVar(a.index);
+    const bRigid = isRigidVar(b.index);
+
+    // Both rigid: cannot unify different rigid vars
+    if (aRigid && bRigid) {
+      return { success: false, reason: 'conflict' };
+    }
+
+    // At least one is flexible: substitute the flexible one
+    if (!aRigid && !bRigid) {
+      // Both flexible: substitute lower index with higher (preserves more structure)
       const [lower, higher] = a.index < b.index
         ? [a.index, b.index]
         : [b.index, a.index];
@@ -367,39 +392,47 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
         levelConstraints: [],
       };
     }
-    return { success: false, reason: 'conflict' };
+
+    // One rigid, one flexible: substitute the flexible one with the rigid one
+    const [flexibleIdx, rigidIdx] = aRigid ? [b.index, a.index] : [a.index, b.index];
+    return {
+      success: true,
+      substitutions: new Map([[flexibleIdx, mkVar(rigidIdx)]]),
+      metaConstraints: [],
+      levelConstraints: [],
+    };
   }
 
   if (a.tag === 'Var') {
-    if (options.flexibleVars) {
-      // Occurs check: prevent x = ... x ...
-      if (varOccursIn(a.index, b)) {
-        return { success: false, reason: 'cycle' };
-      }
-      return {
-        success: true,
-        substitutions: new Map([[a.index, b]]),
-        metaConstraints: [],
-        levelConstraints: [],
-      };
+    if (isRigidVar(a.index)) {
+      return { success: false, reason: 'conflict' };
     }
-    return { success: false, reason: 'conflict' };
+    // Occurs check: prevent x = ... x ...
+    if (varOccursIn(a.index, b)) {
+      return { success: false, reason: 'cycle' };
+    }
+    return {
+      success: true,
+      substitutions: new Map([[a.index, b]]),
+      metaConstraints: [],
+      levelConstraints: [],
+    };
   }
 
   if (b.tag === 'Var') {
-    if (options.flexibleVars) {
-      // Occurs check: prevent x = ... x ...
-      if (varOccursIn(b.index, a)) {
-        return { success: false, reason: 'cycle' };
-      }
-      return {
-        success: true,
-        substitutions: new Map([[b.index, a]]),
-        metaConstraints: [],
-        levelConstraints: [],
-      };
+    if (isRigidVar(b.index)) {
+      return { success: false, reason: 'conflict' };
     }
-    return { success: false, reason: 'conflict' };
+    // Occurs check: prevent x = ... x ...
+    if (varOccursIn(b.index, a)) {
+      return { success: false, reason: 'cycle' };
+    }
+    return {
+      success: true,
+      substitutions: new Map([[b.index, a]]),
+      metaConstraints: [],
+      levelConstraints: [],
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
