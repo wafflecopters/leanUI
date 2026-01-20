@@ -505,7 +505,7 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
           const domain = stripOuterParens(prettyPrint(term.domain, context));
           const body = prettyPrint(term.body, newContext);
           const defVal = prettyPrint(term.binderKind.defVal, context);
-          return `(let ${term.name} : ${domain} := ${defVal} in ${body})`;
+          return `(let ${term.name} : ${domain} = ${defVal} in ${body})`;
         }
       }
     }
@@ -695,7 +695,7 @@ export function prettyPrintLatex(
 
         case 'BLet':
           const defVal = prettyPrintLatex(term.binderKind.defVal, context, opts);
-          return `(\\text{let } ${term.name} : ${domain} := ${defVal} \\text{ in } ${body})`;
+          return `(\\text{let } ${term.name} : ${domain} = ${defVal} \\text{ in } ${body})`;
       }
     }
 

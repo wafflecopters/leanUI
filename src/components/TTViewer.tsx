@@ -320,13 +320,15 @@ function PrintedAppTerm({ term, context = [] }: { term: TTermApp; context?: TCon
 
 function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm, { tag: "Binder" }>; context: TContext }) {
   // Extend context with this binding for the body
-  const extendedContext: TContext = [{ name: binderTerm.name, type: binderTerm.domain }, ...context];
+  // For let bindings without type annotation, use a placeholder type
+  const bindingType = binderTerm.domain ?? { tag: 'Hole' as const, id: '_', type: { tag: 'Sort' as const, level: 0 }, context: [] };
+  const extendedContext: TContext = [{ name: binderTerm.name, type: bindingType }, ...context];
 
   if (binderTerm.binderKind.tag === 'BLetTT') {
     return (
       <div>
         <div style={{ display: 'flex', flexDirection: 'row', gap: '4px', alignItems: 'center' }}>
-          let {binderTerm.name} : <PrintedTerm term={binderTerm.domain} context={context} /> := <PrintedTerm term={binderTerm.binderKind.defVal} context={context} /> in
+          let {binderTerm.name}{binderTerm.domain !== undefined && <> : <PrintedTerm term={binderTerm.domain} context={context} /></>} = <PrintedTerm term={binderTerm.binderKind.defVal} context={context} /> in
         </div>
         <div style={{ marginLeft: '16px' }}>
           <PrintedTerm term={binderTerm.body} context={extendedContext} />
@@ -334,10 +336,11 @@ function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm,
       </div>
     )
   } else if (binderTerm.binderKind.tag === 'BPiTT') {
+    // Pi binders always have domain
     return (
       <div>
         <div style={{ display: 'flex', flexDirection: 'row', gap: '4px', alignItems: 'center' }}>
-          ({binderTerm.name} : <PrintedTerm term={binderTerm.domain} context={context} />) → <PrintedTerm term={binderTerm.body} context={extendedContext} />
+          ({binderTerm.name} : <PrintedTerm term={binderTerm.domain!} context={context} />) → <PrintedTerm term={binderTerm.body} context={extendedContext} />
         </div>
       </div>
     )

@@ -32,7 +32,14 @@ import type {
   TTKRecordParam,
 } from './kernel';
 
-import { mkLevelNum } from './kernel';
+import { mkLevelNum, mkMeta } from './kernel';
+
+// Counter for generating unique meta IDs for implicit let types
+let implicitLetTypeCounter = 0;
+
+function freshImplicitLetTypeMeta(letName: string): TTKTerm {
+  return mkMeta(`${letName}_type_${implicitLetTypeCounter++}`);
+}
 
 import {
   ElabMap,
@@ -286,19 +293,29 @@ export function elabToKernel(term: TTerm): TTKTerm {
       };
 
     case 'Binder': {
-      const domain = elabToKernel(term.domain);
       const body = elabToKernel(term.body);
 
       let binderKind: TTKBinderKind;
+      let domain: TTKTerm;
+
       switch (term.binderKind.tag) {
         case 'BPiTT':
           binderKind = { tag: 'BPi' };
+          // Pi binders must have a domain
+          domain = elabToKernel(term.domain!);
           break;
         case 'BLamTT':
           binderKind = { tag: 'BLam' };
+          // Lambda binders must have a domain
+          domain = elabToKernel(term.domain!);
           break;
         case 'BLetTT':
           binderKind = { tag: 'BLet', defVal: elabToKernel(term.binderKind.defVal) };
+          // Let binders may have an implicit type (domain undefined in surface)
+          // In this case, create a fresh meta for type inference
+          domain = term.domain !== undefined
+            ? elabToKernel(term.domain)
+            : freshImplicitLetTypeMeta(term.name);
           break;
       }
 
@@ -460,12 +477,6 @@ export function elabToKernelWithMap(
       };
 
     case 'Binder': {
-      const domain = elabToKernelWithMap(
-        term.domain,
-        elabMap,
-        appendPath(surfacePath, fieldSeg('domain')),
-        appendPath(kernelPath, fieldSeg('domain'))
-      );
       const body = elabToKernelWithMap(
         term.body,
         elabMap,
@@ -474,12 +485,28 @@ export function elabToKernelWithMap(
       );
 
       let binderKind: TTKBinderKind;
+      let domain: TTKTerm;
+
       switch (term.binderKind.tag) {
         case 'BPiTT':
           binderKind = { tag: 'BPi' };
+          // Pi binders must have a domain
+          domain = elabToKernelWithMap(
+            term.domain!,
+            elabMap,
+            appendPath(surfacePath, fieldSeg('domain')),
+            appendPath(kernelPath, fieldSeg('domain'))
+          );
           break;
         case 'BLamTT':
           binderKind = { tag: 'BLam' };
+          // Lambda binders must have a domain
+          domain = elabToKernelWithMap(
+            term.domain!,
+            elabMap,
+            appendPath(surfacePath, fieldSeg('domain')),
+            appendPath(kernelPath, fieldSeg('domain'))
+          );
           break;
         case 'BLetTT':
           binderKind = {
@@ -491,6 +518,15 @@ export function elabToKernelWithMap(
               appendPath(kernelPath, fieldSeg('binderKind'), fieldSeg('defVal'))
             )
           };
+          // Let binders may have an implicit type (domain undefined in surface)
+          domain = term.domain !== undefined
+            ? elabToKernelWithMap(
+                term.domain,
+                elabMap,
+                appendPath(surfacePath, fieldSeg('domain')),
+                appendPath(kernelPath, fieldSeg('domain'))
+              )
+            : freshImplicitLetTypeMeta(term.name);
           break;
       }
 

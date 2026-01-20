@@ -671,7 +671,14 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
       if (b.tag !== 'Binder') return false;
       if (a.name !== b.name) return false;
       if (a.binderKind.tag !== b.binderKind.tag) return false;
-      if (!termsEqual(a.domain, b.domain)) return false;
+      // Handle optional domain (both undefined, or both defined and equal)
+      if (a.domain === undefined && b.domain === undefined) {
+        // OK
+      } else if (a.domain !== undefined && b.domain !== undefined) {
+        if (!termsEqual(a.domain, b.domain)) return false;
+      } else {
+        return false; // One undefined, one defined
+      }
       if (!termsEqual(a.body, b.body)) return false;
       if (a.binderKind.tag === 'BLetTT' && b.binderKind.tag === 'BLetTT') {
         return termsEqual(a.binderKind.defVal, b.binderKind.defVal);

@@ -102,7 +102,7 @@ function RefactoredProofWorkspaceInner() {
   }, [term.hypotheses]);
 
   // Extract let-bindings from body (for display)
-  const letBindings = useMemo((): Array<[string, TTerm, TTerm]> => {
+  const letBindings = useMemo((): Array<[string, TTerm | undefined, TTerm]> => {
     return flattenLetBindings(term.body);
   }, [term.body]);
 
@@ -362,7 +362,7 @@ function RefactoredProofWorkspaceInner() {
                   fontSize: '14px'
                 }}
               >
-                <div><strong>let</strong> {name} : {prettyPrintTT(type)} :=</div>
+                <div><strong>let</strong> {name}{type !== undefined ? <> : {prettyPrintTT(type)}</> : null} =</div>
                 <div style={{ marginLeft: '20px', marginTop: '4px' }}>
                   {prettyPrintTT(value)}
                 </div>

@@ -30,7 +30,8 @@ export function getPiDomains(type: TTerm): TTerm[] {
   let current = type;
 
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
-    domains.push(current.domain);
+    // Pi binders always have domain
+    domains.push(current.domain!);
     current = current.body;
   }
 

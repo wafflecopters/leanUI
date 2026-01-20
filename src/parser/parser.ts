@@ -12,7 +12,7 @@
  *           \(x, y : T) => body  for multiple binders with same type
  * - Pi/Forall: (x : T) -> body  (dependent function type)
  * - Arrow (non-dependent): A -> B
- * - Let: let x : T := val in body
+ * - Let: let x = val in body  or  let x : T = val in body  or  let (x : T) = val in body
  * - Application: f x y  (left-associative)
  * - Annotation: (term : type)
  * - Parentheses: (expr)
@@ -1521,36 +1521,93 @@ export class Parser {
   // parsePi removed - use (x : T) -> ... syntax instead
 
   /**
-   * Parse let: let x : T := val in body
+   * Parse let expression.
+   *
+   * Syntax variants:
+   *   let x = val in body           -- no type annotation
+   *   let x : T = val in body       -- with type annotation
+   *   let (x : T) = val in body     -- parenthesized type annotation
+   *   let (x : _) = val in body     -- explicit hole type
+   *   let x : _ = val in body       -- explicit hole type
+   *
+   * When the body follows 'in' on a new line, it must be indented beyond 'let'.
    */
   private parseLet(ctx: NameContext, path: IndexPath = []): TTerm {
     const startToken = this.current();
+    const letCol = startToken.col; // Track column for indentation checking
     this.expect('LET');
 
-    // Capture the name token for source range recording
-    const nameToken = this.current();
-    const name = nameToken.type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
-    if (nameToken.type === 'UNDERSCORE') this.advance();
+    let name: string;
+    let nameToken: Token;
+    let type: TTerm | undefined = undefined;
+
+    if (this.current().type === 'LPAREN') {
+      // Parenthesized form: let (x : T) = val in body
+      this.advance();
+      nameToken = this.current();
+      name = nameToken.type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
+      if (nameToken.type === 'UNDERSCORE') this.advance();
+
+      this.expect('COLON');
+      const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+      // Inside parens, can parse full expression including = operator
+      type = this.expr(0, ctx, domainPath);
+      this.expect('RPAREN');
+    } else {
+      // Non-parenthesized: let x = val or let x : T = val
+      nameToken = this.current();
+      name = nameToken.type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
+      if (nameToken.type === 'UNDERSCORE') this.advance();
+
+      // Optional type annotation
+      if (this.current().type === 'COLON') {
+        this.advance();
+        const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+        // Parse type with precedence > 50 to stop before '=' operator (precedence 50)
+        // This way 'let x : Nat = 5 in x' parses type as 'Nat', not 'Nat = 5'
+        type = this.expr(51, ctx, domainPath);
+      }
+    }
 
     // Record the binder name's source range
     const namePath = [...path, { kind: 'field' as const, name: 'name' }];
     this.recordRange(namePath, nameToken, nameToken);
 
-    // Type annotation is optional
-    let type: TTerm;
-    if (this.current().type === 'COLON') {
-      this.advance();
-      const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
-      type = this.expr(0, ctx, domainPath);
-    } else {
-      type = mkHoleTT(`${name}_type`, mkPropTT());
+    // Expect '=' (as OPERATOR token with value '=')
+    if (this.current().type !== 'OPERATOR' || this.current().value !== '=') {
+      throw new ParseError(
+        `Expected '=' in let expression, got '${this.current().type === 'OPERATOR' ? this.current().value : this.current().type}'`,
+        this.current().line,
+        this.current().col
+      );
     }
+    this.advance();
 
-    this.expect('ASSIGN');
+    // Parse the value being bound
     const defValPath = [...path, { kind: 'field' as const, name: 'binderKind' }, { kind: 'field' as const, name: 'defVal' }];
     const value = this.expr(0, ctx, defValPath);
+
+    // Expect 'in'
     this.expect('IN');
 
+    // Handle indentation: if there's a newline after 'in', body must be indented
+    if (this.current().type === 'NEWLINE') {
+      this.advance(); // consume the newline
+      // Skip any additional newlines
+      while (this.current().type === 'NEWLINE') {
+        this.advance();
+      }
+      // The body must be indented beyond the 'let' keyword
+      if (this.current().col <= letCol) {
+        throw new ParseError(
+          `Body of let expression must be indented beyond 'let' (column ${letCol}), found at column ${this.current().col}`,
+          this.current().line,
+          this.current().col
+        );
+      }
+    }
+
+    // Parse body with name in context
     const newCtx = [name, ...ctx];
     const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
     const body = this.expr(0, newCtx, bodyPath);

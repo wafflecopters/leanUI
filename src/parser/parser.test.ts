@@ -289,10 +289,10 @@ test('Parse Type in Pi type', () => {
   const term = parseExpr('(A : Type) -> A');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder' && term.binderKind.tag === 'BPiTT') {
-    // Domain should be Sort(1)
-    assertTermShape(term.domain, 'Sort');
-    if (term.domain.tag === 'Sort') {
-      assertEqual(term.domain.level, 1);
+    // Domain should be Sort(1) - Pi binders always have domain
+    assertTermShape(term.domain!, 'Sort');
+    if (term.domain!.tag === 'Sort') {
+      assertEqual(term.domain!.level, 1);
     }
   }
 });
@@ -302,10 +302,10 @@ test('Parse Type 1 in Pi type', () => {
   const term = parseExpr('(A : Type 1) -> A');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder' && term.binderKind.tag === 'BPiTT') {
-    // Domain should be Sort(2)
-    assertTermShape(term.domain, 'Sort');
-    if (term.domain.tag === 'Sort') {
-      assertEqual(term.domain.level, 2);
+    // Domain should be Sort(2) - Pi binders always have domain
+    assertTermShape(term.domain!, 'Sort');
+    if (term.domain!.tag === 'Sort') {
+      assertEqual(term.domain!.level, 2);
     }
   }
 });
@@ -358,7 +358,8 @@ test('Parse lambda: \\x => x', () => {
   if (term.tag === 'Binder') {
     assertEqual(term.binderKind.tag, 'BLamTT');
     assertEqual(term.name, 'x');
-    assertTermShape(term.domain, 'Hole'); // type is a hole
+    // Lambda binders always have domain
+    assertTermShape(term.domain!, 'Hole'); // type is a hole
     assertTermShape(term.body, 'Var');
   }
 });
@@ -377,11 +378,12 @@ test('Parse lambda: \\x y => x + y (multiple untyped)', () => {
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.name, 'x');
-    assertTermShape(term.domain, 'Hole');
+    // Lambda binders always have domain
+    assertTermShape(term.domain!, 'Hole');
     assertTermShape(term.body, 'Binder');
     if (term.body.tag === 'Binder') {
       assertEqual(term.body.name, 'y');
-      assertTermShape(term.body.domain, 'Hole');
+      assertTermShape(term.body.domain!, 'Hole');
     }
   }
 });
@@ -391,7 +393,8 @@ test('Parse lambda: \\(x : A) => x (typed)', () => {
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.name, 'x');
-    assertTermShape(term.domain, 'Const'); // A is a const
+    // Lambda binders always have domain
+    assertTermShape(term.domain!, 'Const'); // A is a const
   }
 });
 
@@ -400,11 +403,12 @@ test('Parse lambda: \\(x : A) y => x (mixed typed/untyped)', () => {
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.name, 'x');
-    assertTermShape(term.domain, 'Const'); // x : A
+    // Lambda binders always have domain
+    assertTermShape(term.domain!, 'Const'); // x : A
     assertTermShape(term.body, 'Binder');
     if (term.body.tag === 'Binder') {
       assertEqual(term.body.name, 'y');
-      assertTermShape(term.body.domain, 'Hole'); // y's type is a hole
+      assertTermShape(term.body.domain!, 'Hole'); // y's type is a hole
     }
   }
 });
@@ -414,11 +418,12 @@ test('Parse lambda: \\(x, y : A) => x (multiple names same type)', () => {
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.name, 'x');
-    assertTermShape(term.domain, 'Const'); // x : A
+    // Lambda binders always have domain
+    assertTermShape(term.domain!, 'Const'); // x : A
     assertTermShape(term.body, 'Binder');
     if (term.body.tag === 'Binder') {
       assertEqual(term.body.name, 'y');
-      assertTermShape(term.body.domain, 'Const'); // y : A (same type)
+      assertTermShape(term.body.domain!, 'Const'); // y : A (same type)
     }
   }
 });
@@ -527,29 +532,75 @@ console.log('\n' + '='.repeat(80));
 console.log('PARSER: LET TESTS');
 console.log('='.repeat(80) + '\n');
 
-test('Parse let expression', () => {
-  const term = parseExpr('let x : T := v in x');
+// ============================================================================
+// Positive Tests for Let Expressions
+// ============================================================================
+
+test('Parse let expression without type annotation', () => {
+  const term = parseExpr('let x = v in x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.binderKind.tag, 'BLetTT');
     assertEqual(term.name, 'x');
+    // Domain should be undefined when type is omitted
+    assertEqual(term.domain, undefined);
     // Body should refer to x (Var 0)
     assertTermShape(term.body, 'Var');
   }
 });
 
-test('Parse let without type annotation', () => {
-  const term = parseExpr('let x := v in x');
+test('Parse let expression with type annotation', () => {
+  const term = parseExpr('let x : T = v in x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.binderKind.tag, 'BLetTT');
-    // Domain should be a hole when type is omitted
-    assertTermShape(term.domain, 'Hole');
+    assertEqual(term.name, 'x');
+    // Domain should be the type T
+    assertTermShape(term.domain!, 'Const');
+    if (term.domain?.tag === 'Const') {
+      assertEqual(term.domain.name, 'T');
+    }
+    assertTermShape(term.body, 'Var');
+  }
+});
+
+test('Parse let expression with parenthesized type annotation', () => {
+  const term = parseExpr('let (x : T) = v in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    assertEqual(term.name, 'x');
+    // Domain should be the type T
+    assertTermShape(term.domain!, 'Const');
+    if (term.domain?.tag === 'Const') {
+      assertEqual(term.domain.name, 'T');
+    }
+    assertTermShape(term.body, 'Var');
+  }
+});
+
+test('Parse let expression with explicit hole type (_)', () => {
+  const term = parseExpr('let x : _ = v in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    // Domain should be a Hole (explicit underscore)
+    assertTermShape(term.domain!, 'Hole');
+  }
+});
+
+test('Parse let expression with parenthesized hole type', () => {
+  const term = parseExpr('let (x : _) = v in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    // Domain should be a Hole (explicit underscore)
+    assertTermShape(term.domain!, 'Hole');
   }
 });
 
 test('Parse nested let expressions', () => {
-  const term = parseExpr('let x := a in let y := b in x');
+  const term = parseExpr('let x = a in let y = b in x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.name, 'x');
@@ -558,6 +609,110 @@ test('Parse nested let expressions', () => {
       assertEqual(term.body.name, 'y');
     }
   }
+});
+
+test('Parse let with complex type (arrow)', () => {
+  const term = parseExpr('let f : A -> B = v in f');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    // Domain should be a Pi (A -> B)
+    assertTermShape(term.domain!, 'Binder');
+    if (term.domain?.tag === 'Binder') {
+      assertEqual(term.domain.binderKind.tag, 'BPiTT');
+    }
+  }
+});
+
+test('Parse let with complex value (lambda)', () => {
+  const term = parseExpr('let f = \\x => x in f');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+    // Value should be a lambda
+    assertTermShape(term.binderKind.defVal, 'Binder');
+    if (term.binderKind.defVal.tag === 'Binder') {
+      assertEqual(term.binderKind.defVal.binderKind.tag, 'BLamTT');
+    }
+  }
+});
+
+test('Parse let with multiline body (indented)', () => {
+  const term = parseExpr('let x = v in\n  x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    assertEqual(term.name, 'x');
+    assertTermShape(term.body, 'Var');
+  }
+});
+
+test('Parse nested let with multiline (both indented)', () => {
+  const term = parseExpr('let x = a in\n  let y = b in\n    y');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.name, 'x');
+    assertTermShape(term.body, 'Binder');
+    if (term.body.tag === 'Binder') {
+      assertEqual(term.body.name, 'y');
+      assertTermShape(term.body.body, 'Var');
+    }
+  }
+});
+
+test('Parse let with equality in parenthesized type', () => {
+  // Inside parentheses, = can be used as equality operator
+  const term = parseExpr('let (x : a = b) = v in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    // Domain should be an application (Eq a b)
+    assertTermShape(term.domain!, 'App');
+  }
+});
+
+test('Parse let distinguishes assignment = from equality', () => {
+  // let x : Nat = 5 in x
+  // The = after Nat is assignment, not equality
+  const term = parseExpr('let x : Nat = five in x');
+  assertTermShape(term, 'Binder');
+  if (term.tag === 'Binder') {
+    assertEqual(term.binderKind.tag, 'BLetTT');
+    // Domain should be Nat (not Nat = five)
+    assertTermShape(term.domain!, 'Const');
+    if (term.domain?.tag === 'Const') {
+      assertEqual(term.domain.name, 'Nat');
+    }
+    // Value should be five
+    if (term.binderKind.tag === 'BLetTT') {
+      assertTermShape(term.binderKind.defVal, 'Const');
+    }
+  }
+});
+
+// ============================================================================
+// Negative Tests for Let Expressions
+// ============================================================================
+
+test('Error on missing = in let', () => {
+  assertThrows(() => parseExpr('let x v in x'), 'Should error on let without =');
+});
+
+test('Error on missing in after let value', () => {
+  assertThrows(() => parseExpr('let x = v x'), 'Should error on let without in');
+});
+
+test('Error on missing body after in', () => {
+  assertThrows(() => parseExpr('let x = v in'), 'Should error on let without body');
+});
+
+test('Error on let body not indented after newline', () => {
+  // Body on new line must be indented beyond the let keyword
+  assertThrows(() => parseExpr('let x = v in\nx'), 'Should error when body is not indented');
+});
+
+test('Error on nested let body not sufficiently indented', () => {
+  // Nested body must be indented beyond its let keyword
+  assertThrows(() => parseExpr('let x = a in\n  let y = b in\n  y'), 'Should error when nested body aligns with parent let');
 });
 
 // ============================================================================
@@ -738,8 +893,8 @@ test('Arrow binds looser than operators', () => {
   const term = parseExpr('a + b -> c');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
-    // Domain should be addition
-    assertTermShape(term.domain, 'App');
+    // Domain should be addition (Pi binders always have domain)
+    assertTermShape(term.domain!, 'App');
   }
 });
 
@@ -903,8 +1058,8 @@ test('Parse identity function type', () => {
   }
 });
 
-test('Parse let with complex value', () => {
-  const term = parseExpr('let id := \\x => x in id y');
+test('Parse let with complex value (function application)', () => {
+  const term = parseExpr('let id = \\x => x in id y');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
     assertEqual(term.name, 'id');
@@ -954,12 +1109,12 @@ test('Error on missing lambda binder', () => {
 
 // Removed test for Π error - Π is no longer a valid token
 
-test('Error on missing let value', () => {
-  assertThrows(() => parseExpr('let x :='), 'Should error on let without value');
+test('Error on missing let value (old syntax)', () => {
+  assertThrows(() => parseExpr('let x ='), 'Should error on let without value');
 });
 
-test('Error on missing let body', () => {
-  assertThrows(() => parseExpr('let x := v in'), 'Should error on let without body');
+test('Error on missing let body (old syntax)', () => {
+  assertThrows(() => parseExpr('let x = v in'), 'Should error on let without body');
 });
 
 test('Error on invalid character', () => {
@@ -1034,7 +1189,7 @@ test('Nested lambda body correctly references inner variable', () => {
 });
 
 test('Let body correctly references bound variable', () => {
-  const term = parseExpr('let x := v in x');
+  const term = parseExpr('let x = v in x');
   if (term.tag === 'Binder' && term.body.tag === 'Var') {
     assertEqual(term.body.index, 0, 'Let-bound variable should have index 0');
   }
@@ -1635,7 +1790,7 @@ test('Table dispatch: LAMBDA -> parseLambda', () => {
 });
 
 test('Table dispatch: LET -> parseLet', () => {
-  const term = parseExpr('let x := y in x');
+  const term = parseExpr('let x = y in x');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder') {
     assertEqual(term.binderKind.tag, 'BLetTT');
@@ -1709,7 +1864,7 @@ test('Table dispatch: unknown token throws ParseError', () => {
 
 test('All prefix token types have consistent behavior in expressions', () => {
   // Complex expression using multiple prefix token types
-  const term = parseExpr('let f := \\x => (x : Type) in f ?hole');
+  const term = parseExpr('let f = \\x => (x : Type) in f ?hole');
   assertTermShape(term, 'Binder');
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
     // f is a lambda

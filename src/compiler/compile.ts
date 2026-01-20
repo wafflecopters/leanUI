@@ -313,8 +313,10 @@ function collectSemanticTokensFromSurfaceTerm(
     case 'Binder':
       // Binder name is a pattern variable (light blue)
       addSemanticTokenDirect([...path, 'name'], sourceMap, blockStartLine, 'patternVar', tokens);
-      // Recurse into domain and body
-      collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
+      // Recurse into domain (if present) and body
+      if (term.domain !== undefined) {
+        collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
+      }
       collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
       // Handle let binding value
       if (term.binderKind.tag === 'BLetTT') {

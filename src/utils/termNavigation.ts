@@ -43,8 +43,11 @@ export function getTermAtPath(term: TTerm, path: TermFocusPath): TTerm | null {
         }
         // Can't navigate further from 'name'
         return null;
-      } else if (step === 'domain' || step === 'body') {
-        current = current[step];
+      } else if (step === 'domain') {
+        if (current.domain === undefined) return null;
+        current = current.domain;
+      } else if (step === 'body') {
+        current = current.body;
       } else {
         return null;
       }
@@ -102,15 +105,19 @@ export function setTermAtPath(term: TTerm, path: TermFocusPath, newTerm: TTerm):
     return null;
   }
 
-  if (term.tag === 'Binder' && (step === 'domain' || step === 'body')) {
-    const updatedSubTerm = setTermAtPath(term[step], restPath as TermFocusPath, newTerm);
-    if (updatedSubTerm === null) return null;
-
-    return {
-      ...term,
-      [step]: updatedSubTerm
-    };
-  } else if (term.tag === 'App' && (step === 'fn' || step === 'arg')) {
+  if (term.tag === 'Binder') {
+    if (step === 'domain') {
+      if (term.domain === undefined) return null;
+      const updatedSubTerm = setTermAtPath(term.domain, restPath as TermFocusPath, newTerm);
+      if (updatedSubTerm === null) return null;
+      return { ...term, domain: updatedSubTerm };
+    } else if (step === 'body') {
+      const updatedSubTerm = setTermAtPath(term.body, restPath as TermFocusPath, newTerm);
+      if (updatedSubTerm === null) return null;
+      return { ...term, body: updatedSubTerm };
+    }
+  }
+  if (term.tag === 'App' && (step === 'fn' || step === 'arg')) {
     const updatedSubTerm = setTermAtPath(term[step], restPath as TermFocusPath, newTerm);
     if (updatedSubTerm === null) return null;
 
@@ -160,8 +167,12 @@ export function setNameAtPath(term: TTerm, path: TermFocusPath, newName: string)
 
   // Get the binder and update its name
   let binder: TTerm | null = null;
-  if (parent.tag === 'Binder' && (binderStep === 'domain' || binderStep === 'body')) {
-    binder = parent[binderStep];
+  if (parent.tag === 'Binder') {
+    if (binderStep === 'domain') {
+      binder = parent.domain ?? null;
+    } else if (binderStep === 'body') {
+      binder = parent.body;
+    }
   } else if (parent.tag === 'App' && (binderStep === 'fn' || binderStep === 'arg')) {
     binder = parent[binderStep];
   } else if (parent.tag === 'Annot' && (binderStep === 'term' || binderStep === 'type')) {
@@ -201,7 +212,8 @@ export function prettyPrintTerm(term: TTerm): string {
         let current: TTerm = term;
         while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
           const isAnonymous = current.name === '_' || current.name === '';
-          const domain = stripOuterParens(prettyPrintTerm(current.domain));
+          // Pi binders always have domain
+          const domain = stripOuterParens(prettyPrintTerm(current.domain!));
           if (isAnonymous) {
             parts.push(domain);
           } else {
@@ -212,14 +224,18 @@ export function prettyPrintTerm(term: TTerm): string {
         parts.push(prettyPrintTerm(current));
         return `(${parts.join(' -> ')})`;
       } else if (term.binderKind.tag === 'BLamTT') {
-        const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
+        // Lambda binders always have domain
+        const domainStr = stripOuterParens(prettyPrintTerm(term.domain!));
         const bodyStr = prettyPrintTerm(term.body);
         return `λ(${term.name} : ${domainStr}). ${bodyStr}`;
       } else if (term.binderKind.tag === 'BLetTT') {
-        const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
         const defValStr = prettyPrintTerm(term.binderKind.defVal);
         const bodyStr = prettyPrintTerm(term.body);
-        return `let ${term.name} : ${domainStr} := ${defValStr} in ${bodyStr}`;
+        if (term.domain !== undefined) {
+          const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
+          return `let ${term.name} : ${domainStr} = ${defValStr} in ${bodyStr}`;
+        }
+        return `let ${term.name} = ${defValStr} in ${bodyStr}`;
       }
       return '?';
 

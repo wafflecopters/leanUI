@@ -107,7 +107,7 @@ export type TTermConst = { tag: 'Const'; name: string; }
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: number }                         // Type_i, Prop = Type_0
-  | { tag: 'Binder'; name: string; binderKind: BinderKind; domain: TTerm; body: TTerm }  // Unified binder
+  | { tag: 'Binder'; name: string; binderKind: BinderKind; domain?: TTerm; body: TTerm }  // Unified binder (domain optional for let without type annotation)
   | TTermApp   // Function application (f a)
   | TTermConst // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
@@ -280,8 +280,9 @@ export function mkLambdaTT(domain: TTerm, body: TTerm, name: string = 'x'): TTer
 /**
  * Create a Let binding
  * Requires name for the bound variable and the value being bound
+ * defType is optional - undefined means no type annotation in source
  */
-export function mkLetTT(name: string, defType: TTerm, defVal: TTerm, body: TTerm): TTerm {
+export function mkLetTT(name: string, defType: TTerm | undefined, defVal: TTerm, body: TTerm): TTerm {
   return {
     tag: 'Binder',
     name,
@@ -357,7 +358,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
       return term.id === holeId ? replacement : term;
 
     case 'Binder': {
-      const newDomain = replaceHoleTT(term.domain, holeId, replacement);
+      const newDomain = term.domain !== undefined ? replaceHoleTT(term.domain, holeId, replacement) : undefined;
       const newBody = replaceHoleTT(term.body, holeId, replacement);
 
       let newBinderKind: BinderKind;
@@ -418,8 +419,10 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
       return null;
 
     case 'Binder': {
-      const inDomain = findHoleTT(term.domain, holeId);
-      if (inDomain) return inDomain;
+      if (term.domain !== undefined) {
+        const inDomain = findHoleTT(term.domain, holeId);
+        if (inDomain) return inDomain;
+      }
       const inBody = findHoleTT(term.body, holeId);
       if (inBody) return inBody;
       if (term.binderKind.tag === 'BLetTT') {
@@ -479,7 +482,7 @@ export function fillHoleWithTT(
       return term;
 
     case 'Binder': {
-      const newDomain = fillHoleWithTT(term.domain, holeId, generator);
+      const newDomain = term.domain !== undefined ? fillHoleWithTT(term.domain, holeId, generator) : undefined;
       const newBody = fillHoleWithTT(term.body, holeId, generator);
       let newBinderKind: BinderKind;
       if (term.binderKind.tag === 'BLetTT') {
@@ -569,9 +572,17 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
         }
       }
 
-      // Check domain and body (names don't matter for equality)
-      return isDefinitionallyEqualTT(term1.domain, term2.domain) &&
-        isDefinitionallyEqualTT(term1.body, term2.body);
+      // Check domain (both undefined, or both defined and equal)
+      if (term1.domain === undefined && term2.domain === undefined) {
+        // Both undefined - OK
+      } else if (term1.domain !== undefined && term2.domain !== undefined) {
+        if (!isDefinitionallyEqualTT(term1.domain, term2.domain)) return false;
+      } else {
+        return false; // One undefined, one defined
+      }
+
+      // Check body (names don't matter for equality)
+      return isDefinitionallyEqualTT(term1.body, term2.body);
     }
 
     case 'App': {
@@ -635,7 +646,10 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
       return null;
 
     case 'Binder':
-      if (head === 0) return getSubtermAtPath(term.domain, rest);
+      if (head === 0) {
+        if (term.domain === undefined) return null;
+        return getSubtermAtPath(term.domain, rest);
+      }
       if (head === 1) return getSubtermAtPath(term.body, rest);
       if (head === 2 && term.binderKind.tag === 'BLetTT') {
         return getSubtermAtPath(term.binderKind.defVal, rest);
@@ -694,6 +708,7 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
 
     case 'Binder': {
       if (head === 0) {
+        if (term.domain === undefined) return null;
         const newDomain = replaceSubtermAtPath(term.domain, rest, newSubterm);
         return newDomain ? { ...term, domain: newDomain } : null;
       }
@@ -860,8 +875,8 @@ export function isNameUsed(name: string, term: TTerm): boolean {
       return isNameUsed(name, term.type);
 
     case 'Binder':
-      // Check domain
-      if (isNameUsed(name, term.domain)) return true;
+      // Check domain (if present)
+      if (term.domain !== undefined && isNameUsed(name, term.domain)) return true;
 
       // Check let-binding value if present
       if (term.binderKind.tag === 'BLetTT') {
@@ -930,7 +945,9 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
 
     case 'Binder': {
       // Handle all binder types uniformly
-      const newDomain = substHelperTT(targetIndex, replacement, term.domain, depth);
+      const newDomain = term.domain !== undefined
+        ? substHelperTT(targetIndex, replacement, term.domain, depth)
+        : undefined;
       const newBody = substHelperTT(targetIndex, replacement, term.body, depth + 1);
 
       // For BLet, also substitute in the definition value
@@ -1008,7 +1025,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 
     case 'Binder': {
       // Handle all binder types uniformly
-      const newDomain = shift(amount, term.domain, cutoff);
+      const newDomain = term.domain !== undefined ? shift(amount, term.domain, cutoff) : undefined;
       const newBody = shift(amount, term.body, cutoff + 1);
 
       // For BLet, also shift the definition value
@@ -1097,7 +1114,7 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
     case 'Binder': {
       const newContext = [term.name, ...context];
       const body = prettyPrintTerseTT(term.body, newContext);
-      const domain = prettyPrintTerseTT(term.domain, context);
+      const domain = term.domain !== undefined ? prettyPrintTerseTT(term.domain, context) : undefined;
       const isAnonymous = term.name === '_' || term.name === '';
 
       switch (term.binderKind.tag) {
@@ -1116,6 +1133,9 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
 
         case 'BLetTT':
           const defVal = prettyPrintTerseTT(term.binderKind.defVal, context);
+          if (term.domain !== undefined) {
+            return `(let ${term.name} : ${domain} = ${defVal} in ${body})`;
+          }
           return `(let ${term.name} = ${defVal} in ${body})`;
       }
     }
@@ -1217,7 +1237,8 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
           let ctx = context;
           while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
             const currentAnon = current.name === '_' || current.name === '';
-            const domain = stripOuterParens(prettyPrintTT(current.domain, ctx));
+            // Pi binders always have domain
+            const domain = stripOuterParens(prettyPrintTT(current.domain!, ctx));
             if (currentAnon) {
               parts.push(domain);
             } else {
@@ -1231,7 +1252,8 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
         }
 
         case 'BLamTT': {
-          const domain = stripOuterParens(prettyPrintTT(term.domain, context));
+          // Lambda binders always have domain
+          const domain = stripOuterParens(prettyPrintTT(term.domain!, context));
           const body = prettyPrintTT(term.body, newContext);
           if (isAnonymous) {
             return `(\\${domain} => ${body})`;
@@ -1240,10 +1262,13 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
         }
 
         case 'BLetTT': {
-          const domain = stripOuterParens(prettyPrintTT(term.domain, context));
           const body = prettyPrintTT(term.body, newContext);
           const defVal = prettyPrintTT(term.binderKind.defVal, context);
-          return `(let ${term.name} : ${domain} := ${defVal} in ${body})`;
+          if (term.domain !== undefined) {
+            const domain = stripOuterParens(prettyPrintTT(term.domain, context));
+            return `(let ${term.name} : ${domain} = ${defVal} in ${body})`;
+          }
+          return `(let ${term.name} = ${defVal} in ${body})`;
         }
       }
     }
@@ -1364,7 +1389,7 @@ export function prettyPrintLatexTT(
       return term.name.replace(/_/g, '\\_');
 
     case 'Binder': {
-      const domain = prettyPrintLatexTT(term.domain, context, opts);
+      const domain = term.domain !== undefined ? prettyPrintLatexTT(term.domain, context, opts) : undefined;
       const newContext = [term.name, ...context];
       const body = prettyPrintLatexTT(term.body, newContext, opts);
       const isAnonymous = term.name === '_' || term.name === '';
@@ -1384,7 +1409,10 @@ export function prettyPrintLatexTT(
 
         case 'BLetTT':
           const defVal = prettyPrintLatexTT(term.binderKind.defVal, context, opts);
-          return `(\\text{let } ${term.name} : ${domain} := ${defVal} \\text{ in } ${body})`;
+          if (domain !== undefined) {
+            return `(\\text{let } ${term.name} : ${domain} = ${defVal} \\text{ in } ${body})`;
+          }
+          return `(\\text{let } ${term.name} = ${defVal} \\text{ in } ${body})`;
       }
     }
 
@@ -1717,7 +1745,9 @@ function fillHoleWithLet(
       return term;
 
     case 'Binder': {
-      const newDomain = fillHoleWithLet(term.domain, holeId, letName, letType, letValue);
+      const newDomain = term.domain !== undefined
+        ? fillHoleWithLet(term.domain, holeId, letName, letType, letValue)
+        : undefined;
       const newBody = fillHoleWithLet(term.body, holeId, letName, letType, letValue);
 
       let newBinderKind: BinderKind;
@@ -1778,6 +1808,9 @@ export function extractHypothesesFromRoot(rootTerm: TTerm): Array<[string, TTerm
   if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
   }
+  if (rootTerm.domain === undefined) {
+    throw new Error('Expected root let-binding to have a type annotation');
+  }
 
   // Extract from the type (which is the theorem type)
   return flattenPiBinders(rootTerm.domain);
@@ -1798,6 +1831,9 @@ export function extractHypothesesFromRoot(rootTerm: TTerm): Array<[string, TTerm
 export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: TTerm): TTerm {
   if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
+  }
+  if (rootTerm.domain === undefined) {
+    throw new Error('Expected root let-binding to have a type annotation');
   }
 
   // Extract current hypotheses
@@ -1835,6 +1871,9 @@ export function addHypothesisToRoot(rootTerm: TTerm, hypName: string, hypType: T
 export function getGoalFromRoot(rootTerm: TTerm): TTerm {
   if (rootTerm.tag !== 'Binder' || rootTerm.binderKind.tag !== 'BLetTT') {
     throw new Error('Expected root to be a let-binding');
+  }
+  if (rootTerm.domain === undefined) {
+    throw new Error('Expected root let-binding to have a type annotation');
   }
 
   return getFinalReturnType(rootTerm.domain);
@@ -1887,8 +1926,8 @@ export function occursInTT(index: number, term: TTerm): boolean {
     case 'Const':
       return false;
     case 'Binder': {
-      // Check in domain and body (going under binder for body)
-      const inDomain = occursInTT(index, term.domain);
+      // Check in domain (if present) and body (going under binder for body)
+      const inDomain = term.domain !== undefined ? occursInTT(index, term.domain) : false;
       const inBody = occursInTT(index + 1, term.body);
 
       // For BLet, also check in the definition value
@@ -1936,7 +1975,8 @@ export function flattenPiBinders(term: TTerm): Array<[string, TTerm]> {
   let current = term;
 
   while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
-    binders.push([current.name, current.domain]);
+    // Pi binders always have domain
+    binders.push([current.name, current.domain!]);
     current = current.body;
   }
 
@@ -2055,15 +2095,15 @@ export function isBinderUsedDownstream(term: TTerm, binderName: string, position
 
 /**
  * Flatten let-bindings from a term into an array.
- * 
+ *
  * Given: let a = 1 in let b = 2 in let c = 3 in body
  * Returns: [['a', type_a, 1], ['b', type_b, 2], ['c', type_c, 3]]
- * 
+ *
  * @param term - The term containing let-bindings
- * @returns Array of [name, type, value] triples for each let-binding
+ * @returns Array of [name, type (or undefined), value] triples for each let-binding
  */
-export function flattenLetBindings(term: TTerm): Array<[string, TTerm, TTerm]> {
-  const lets: Array<[string, TTerm, TTerm]> = [];
+export function flattenLetBindings(term: TTerm): Array<[string, TTerm | undefined, TTerm]> {
+  const lets: Array<[string, TTerm | undefined, TTerm]> = [];
   let current = term;
 
   while (current.tag === 'Binder' && current.binderKind.tag === 'BLetTT') {
@@ -2164,7 +2204,7 @@ export function isLetUsedDownstream(term: TTerm, letName: string, position: numb
   // Check in subsequent let values and types
   for (let i = position + 1; i < lets.length; i++) {
     const [, type, value] = lets[i];
-    if (isNameUsed(letName, type) || isNameUsed(letName, value)) {
+    if ((type !== undefined && isNameUsed(letName, type)) || isNameUsed(letName, value)) {
       return true;
     }
   }
@@ -2218,6 +2258,7 @@ export function getAtPath(term: TTerm, path: TermPath): TTerm | null {
       switch (step) {
         case 'domain':
           if (current.tag === 'Binder') {
+            if (current.domain === undefined) return null;
             current = current.domain;
           } else {
             return null;
@@ -2315,6 +2356,9 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
     case 'domain':
       if (term.tag !== 'Binder') {
         throw new Error('Cannot access domain of non-binder term');
+      }
+      if (term.domain === undefined) {
+        throw new Error('Cannot update domain of let-binding without type annotation');
       }
       return {
         ...term,
