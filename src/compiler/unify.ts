@@ -439,6 +439,19 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
 
   if (a.tag === 'Var') {
     if (isRigidVar(a.index)) {
+      // In pattern mode, rigid variables can be refined by terms
+      // e.g., n0 = Succ n2 is valid when learning index constraints
+      if (options.mode === 'pattern') {
+        if (varOccursIn(a.index, b)) {
+          return { success: false, reason: 'cycle' };
+        }
+        return {
+          success: true,
+          substitutions: [[a.index, b]],
+          metaConstraints: [],
+          levelConstraints: [],
+        };
+      }
       return { success: false, reason: 'conflict' };
     }
     // Occurs check: prevent x = ... x ...
@@ -455,6 +468,18 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
 
   if (b.tag === 'Var') {
     if (isRigidVar(b.index)) {
+      // In pattern mode, rigid variables can be refined by terms
+      if (options.mode === 'pattern') {
+        if (varOccursIn(b.index, a)) {
+          return { success: false, reason: 'cycle' };
+        }
+        return {
+          success: true,
+          substitutions: [[b.index, a]],
+          metaConstraints: [],
+          levelConstraints: [],
+        };
+      }
       return { success: false, reason: 'conflict' };
     }
     // Occurs check: prevent x = ... x ...

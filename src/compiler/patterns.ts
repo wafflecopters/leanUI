@@ -325,6 +325,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const unifyRight = shiftTerm(nextCheckType.domain, workEnv.context.length - nextCheckTypeEntry.ctxLength, 0)
 
   logInfo(() => `  Unifying: ${workEnv.prettyPrint(unifyLeft)} = ${workEnv.prettyPrint(unifyRight)}`)
+  debugger
 
   // Pattern-local bindings (from constructor sub-patterns like wildcards) are at
   // de Bruijn indices 0 to (numPatternLocalBindings - 1). These should be flexible.
@@ -638,9 +639,6 @@ export function checkMatchClause(
 
   // Type check the transformed RHS
   const checkEnv = result.withValue(transformedRhs).withCheckingMode('check');
-
-  debugger
-
   const checkedEnv = checkType(checkEnv, returnType);
 
   // Return the checked clause with the solved RHS
