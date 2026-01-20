@@ -31,7 +31,6 @@
 
 import { TTKTerm, TTKClause, TTKPattern, mkType } from './kernel';
 import { DefinitionsMap, InductiveDefinition, countPiBinders } from './term';
-import { unifyTerms } from './unify';
 
 // ============================================================================
 // Types
@@ -378,7 +377,11 @@ function lookupConstructorType(definitions: DefinitionsMap, ctorName: string): T
  * Check if a constructor is possible given an expected type.
  *
  * For indexed inductive types, a constructor may be impossible if its
- * return type indices cannot unify with the expected type's indices.
+ * return type indices have a DEFINITE conflict with the expected indices.
+ *
+ * We use a conservative check: only rule out a constructor if there's a
+ * head symbol conflict (e.g., Zero vs Succ). If either side has a variable
+ * at the head, we assume the constructor could be possible.
  */
 function isConstructorPossible(
   ctorType: TTKTerm,
@@ -397,13 +400,66 @@ function isConstructorPossible(
     const ctorIdx = ctorIndices[i];
     const expIdx = expectedIndices[i];
 
-    const result = unifyTerms(ctorIdx, expIdx, {});
-    if (!result.success) {
+    // Check for definite head conflicts only
+    // If either side has a variable, we can't rule out the constructor
+    if (hasDefiniteConflict(ctorIdx, expIdx)) {
       return false;
     }
   }
 
   return true;
+}
+
+/**
+ * Check if two terms have a definite head symbol conflict.
+ * Returns true only if both terms have concrete heads that differ.
+ * If either term is or starts with a variable, returns false (no definite conflict).
+ */
+function hasDefiniteConflict(t1: TTKTerm, t2: TTKTerm): boolean {
+  // Peel off applications to get to the head
+  let h1 = t1;
+  let h2 = t2;
+  const args1: TTKTerm[] = [];
+  const args2: TTKTerm[] = [];
+
+  while (h1.tag === 'App') {
+    args1.unshift(h1.arg);
+    h1 = h1.fn;
+  }
+  while (h2.tag === 'App') {
+    args2.unshift(h2.arg);
+    h2 = h2.fn;
+  }
+
+  // If either head is a variable, no definite conflict
+  if (h1.tag === 'Var' || h2.tag === 'Var') {
+    return false;
+  }
+
+  // If either head is a meta/hole, no definite conflict
+  if (h1.tag === 'Meta' || h2.tag === 'Meta' || h1.tag === 'Hole' || h2.tag === 'Hole') {
+    return false;
+  }
+
+  // If heads are different constants, definite conflict
+  if (h1.tag === 'Const' && h2.tag === 'Const') {
+    if (h1.name !== h2.name) {
+      return true;
+    }
+    // Same constant head - check arguments recursively
+    if (args1.length !== args2.length) {
+      return false; // Shouldn't happen, but be safe
+    }
+    for (let i = 0; i < args1.length; i++) {
+      if (hasDefiniteConflict(args1[i], args2[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Different head types but not both Const - no definite conflict
+  return false;
 }
 
 // ============================================================================
@@ -631,6 +687,12 @@ function buildSplitTree(
     return { tag: 'Leaf', clauseIndex: rows[0].clauseIndex };
   }
 
+  // Safety check: slotRefs should match patterns
+  if (slotRefs.length === 0) {
+    // No more slots but still have patterns - treat remaining patterns as matched
+    return { tag: 'Leaf', clauseIndex: rows[0].clauseIndex };
+  }
+
   const patternIndex = 0;
 
   // Check if first row has a wildcard/var at current position
@@ -690,12 +752,15 @@ function buildSplitTree(
 
   for (const ctorName of typeInfo.constructors) {
     // Check if constructor is possible
+    // Note: We use the fullType directly without applying index bindings, because
+    // the index bindings mechanism doesn't correctly handle dependent type scoping
+    // (de Bruijn indices vs pattern argument positions are different).
+    // The hasDefiniteConflict function is conservative and only rejects constructors
+    // when there's a clear head symbol conflict.
     if (typeInfo.fullType) {
       const ctorType = lookupConstructorType(definitions, ctorName);
-      const contextSize = currentSlot.argIndex;
-      const refinedExpectedType = applyIndexBindings(typeInfo.fullType, indexBindings, contextSize);
 
-      if (ctorType && !isConstructorPossible(ctorType, refinedExpectedType, definitions)) {
+      if (ctorType && !isConstructorPossible(ctorType, typeInfo.fullType, definitions)) {
         impossibleConstructors.push(ctorName);
         continue;
       }
