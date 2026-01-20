@@ -76,6 +76,9 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
           rhs: substHelper(targetIndex, replacement, c.rhs, depth)
         }))
       };
+
+    case 'ULevel':
+      return term;
   }
 }
 
@@ -143,6 +146,9 @@ function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
           rhs: shift(amount, c.rhs, cutoff)
         }))
       };
+
+    case 'ULevel':
+      return term;
   }
 }
 
@@ -239,6 +245,9 @@ function substPatternBindingsHelper(bindings: TTKTerm[], term: TTKTerm, depth: n
           rhs: substPatternBindingsHelper(bindings, c.rhs, depth)
         }))
       };
+
+    case 'ULevel':
+      return term;
   }
 }
 
@@ -311,6 +320,10 @@ function freeVarIndicesHelper(term: TTKTerm, depth: number, indices: Set<number>
         freeVarIndicesHelper(clause.rhs, depth, indices);
       }
       break;
+
+    case 'ULevel':
+      // No free variables in ULevel
+      break;
   }
 }
 
@@ -339,6 +352,9 @@ function containsVarIndexHelper(term: TTKTerm, targetIndex: number, depth: numbe
     case 'Match':
       if (containsVarIndexHelper(term.scrutinee, targetIndex, depth)) return true;
       return term.clauses.some(c => containsVarIndexHelper(c.rhs, targetIndex, depth));
+
+    case 'ULevel':
+      return false;
   }
 }
 
@@ -383,6 +399,9 @@ function minFreeVarIndexHelper(term: TTKTerm, depth: number): number {
       const clauseMins = term.clauses.map(c => minFreeVarIndexHelper(c.rhs, depth));
       return Math.min(scrutineeMin, ...clauseMins);
     }
+
+    case 'ULevel':
+      return Infinity; // No free variables in ULevel
   }
 }
 
@@ -457,6 +476,9 @@ function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: 
           rhs: replaceVarsHelper(mapping, c.rhs, depth)
         }))
       };
+
+    case 'ULevel':
+      return term;
   }
 }
 

@@ -1157,7 +1157,7 @@ function checkDeclaration(
     }
   } else {
     checkSuccess = false;
-    const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv(definitions));
+    const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv({ definitions, options: { mode: 'check' } }));
     checkErrors.push(error);
     errorCount = 1;
   }
@@ -1195,14 +1195,14 @@ function checkInductiveTypeDeclaration(
   definitions: DefinitionsMap,
 ): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[] } {
   if (decl.kind !== 'inductive') {
-    return failCheck('Declaration is not an inductive type', createTCEnv(definitions))
+    return failCheck('Declaration is not an inductive type', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
 
   if (!decl.kernelType) {
-    return failCheck('Inductive type declaration is ill-formed', createTCEnv(definitions))
+    return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
   if (!decl.kernelConstructors) {
-    return failCheck('Inductive type declaration is ill-formed', createTCEnv(definitions))
+    return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
 
   const result = checkInductiveDeclaration(
@@ -1234,10 +1234,10 @@ function checkTermDeclaration(
   definitions: DefinitionsMap,
 ): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap } {
   if (!decl.name) {
-    return failCheck('Term declaration is ill-formed (no name)', createTCEnv(definitions))
+    return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
 
-  let env = createTCEnv(definitions)
+  let env = createTCEnv({ definitions, options: { mode: 'check' } })
 
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', env)

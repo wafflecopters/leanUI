@@ -31,6 +31,9 @@ function isFreeIn(index: number, term: TTKTerm): boolean {
         if (isFreeIn(index, clause.rhs)) return true;
       }
       return false;
+
+    case 'ULevel':
+      return false;
   }
 }
 
@@ -124,6 +127,9 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm): boolean {
         if (!areTypesDefEq(n1.clauses[i].rhs, n2.clauses[i].rhs)) return false;
       }
       return true;
+
+    case 'ULevel':
+      return n2.tag === 'ULevel';
   }
 }
 

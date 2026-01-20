@@ -19,7 +19,7 @@ import { checkType } from './checker';
 // Logging
 // ============================================================================
 
-let loggingEnabled = false;
+let loggingEnabled = true;
 
 export function setPatternLoggingEnabled(enabled: boolean): void {
   loggingEnabled = enabled;
@@ -335,6 +335,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const unifyResult = unifyTerms(unifyLeft, unifyRight, {
     flexibleVars: true,
     rigidVarsAtOrAbove: numPatternLocalBindings,
+    mode: 'pattern'
   })
 
   if (!unifyResult.success) {
@@ -549,6 +550,8 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
 // ============================================================================
 
 function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm, rhsInLevels: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[], rhsInLevels: TTKTerm }> {
+  env.assertCheckingMode('pattern')
+
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
   const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.context.length }]
   const patternStack: PatternStackEntry[] = env.value.map(p => ({ tag: 'pattern' as const, pattern: p })).reverse()
@@ -624,7 +627,7 @@ export function checkMatchClause(
   const rhsInLevels = deBruijnToLevels(originalRhs, originalContextLength);
 
   // Run LHS unification, which will transform the RHS alongside elabStack
-  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns(), type, rhsInLevels);
+  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns().withCheckingMode('pattern'), type, rhsInLevels);
   result.assertNoConstraints();
 
   const { returnType, rhsInLevels: transformedRhsInLevels } = result.value;
@@ -634,7 +637,10 @@ export function checkMatchClause(
   const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
 
   // Type check the transformed RHS
-  const checkEnv = result.withValue(transformedRhs);
+  const checkEnv = result.withValue(transformedRhs).withCheckingMode('check');
+
+  debugger
+
   const checkedEnv = checkType(checkEnv, returnType);
 
   // Return the checked clause with the solved RHS

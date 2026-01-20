@@ -737,6 +737,9 @@ export function prettyPrintLatex(
       }).join(' \\mid ');
       return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
     }
+
+    case 'ULevel':
+      return '\\text{Level}';
   }
 }
 
@@ -792,6 +795,9 @@ export function occursIn(index: number, term: TTKTerm): boolean {
       for (const clause of term.clauses) {
         if (occursIn(index, clause.rhs)) return true;
       }
+      return false;
+
+    case 'ULevel':
       return false;
   }
 }
@@ -917,6 +923,9 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
       }
       return null;
     }
+
+    case 'ULevel':
+      return null;
   }
 }
 
@@ -976,6 +985,9 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
           rhs: fillHole(c.rhs, holeId, proofTerm)
         }))
       };
+
+    case 'ULevel':
+      return term;
   }
 }
 

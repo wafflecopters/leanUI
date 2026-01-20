@@ -20,6 +20,7 @@ import { whnf } from "./whnf";
 export type UnifyOptions = {
   flexibleVars?: boolean;
   rigidVarsAtOrAbove?: number;
+  mode: 'pattern' | 'check'
 }
 
 // ============================================================================
@@ -107,6 +108,9 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
         // Conservative: patterns bind variables, shifting indices in RHS
         if (varOccursIn(varIndex, clause.rhs)) return true;
       }
+      return false;
+
+    case 'ULevel':
       return false;
   }
 }
@@ -394,15 +398,19 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
     // Both rigid: still allowed! This is a refinement (e.g., x = y in dependent matching)
     // Substitute the higher index with the lower (arbitrary choice, but consistent)
     if (aRigid && bRigid) {
-      const [lower, higher] = a.index < b.index
-        ? [a.index, b.index]
-        : [b.index, a.index];
-      return {
-        success: true,
-        substitutions: [[higher, mkVar(lower)]],
-        metaConstraints: [],
-        levelConstraints: [],
-      };
+      if (options.mode === 'pattern') {
+        const [lower, higher] = a.index < b.index
+          ? [a.index, b.index]
+          : [b.index, a.index];
+        return {
+          success: true,
+          substitutions: [[higher, mkVar(lower)]],
+          metaConstraints: [],
+          levelConstraints: [],
+        };
+      } else {
+        return { success: false, reason: 'conflict' };
+      }
     }
 
     // At least one is flexible: substitute the flexible one

@@ -29,15 +29,31 @@ export type MetaVar = {
   solution?: TTKTerm
 }
 
-export function createTCEnv(definitions?: DefinitionsMap, context?: TTKContext, metaVars?: Map<string, MetaVar>): TCEnv<null> {
+export type TCEnvOptions = {
+  mode: 'pattern' | 'check'
+}
+
+export function createTCEnv(data: {
+  definitions?: DefinitionsMap,
+  context?: TTKContext,
+  metaVars?: Map<string, MetaVar>,
+  constraints?: Constraint[],
+  indexPath?: IndexPath,
+  valueStack?: unknown[],
+  value?: null,
+  levelMetas?: Map<string, LevelMeta>,
+  options: TCEnvOptions
+}): TCEnv<null> {
   return new TCEnv(
-    context ?? [],
-    definitions ?? createDefinitionsMap(),
-    metaVars ?? new Map<string, MetaVar>(),
-    [],
-    [],
-    [],
-    null
+    data.context ?? [],
+    data.definitions ?? createDefinitionsMap(),
+    data.metaVars ?? new Map<string, MetaVar>(),
+    data.constraints ?? [],
+    data.indexPath ?? [],
+    data.valueStack ?? [],
+    null,
+    data.levelMetas ?? new Map<string, LevelMeta>(),
+    data.options
   );
 }
 
@@ -49,7 +65,9 @@ export function updateTTKContextInTCEnv<T>(env: TCEnv<T>, fn: (s: TTKContext) =>
     env.constraints,
     env.indexPath,
     env.valueStack,
-    env.value
+    env.value,
+    env.levelMetas,
+    env.options
   );
 }
 
@@ -65,7 +83,9 @@ export function updateDefinitionsInTCEnv<T>(env: TCEnv<T>, fn: (d: DefinitionsMa
     env.constraints,
     env.indexPath,
     env.valueStack,
-    env.value
+    env.value,
+    env.levelMetas,
+    env.options
   );
 }
 
@@ -90,7 +110,8 @@ export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, Meta
     env.indexPath,
     env.valueStack,
     env.value,
-    env.levelMetas
+    env.levelMetas,
+    env.options
   );
 }
 
@@ -212,8 +233,6 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
     return { tag: 'Const', name: term.name };
   } else if (term.tag === 'Sort') {
     return { tag: 'Sort', level: term.level };
-  } else if (term.tag === 'ULevel') {
-    return { tag: 'ULevel' };
   } else if (term.tag === 'Hole') {
     return { tag: 'Hole', id: term.id };
   } else if (term.tag === 'Meta') {
@@ -222,6 +241,8 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
     return { tag: 'Annot', term: transformVarsInTermAcc(term.term, transform, context), type: transformVarsInTermAcc(term.type, transform, context) };
   } else if (term.tag === 'Match') {
     return { tag: 'Match', scrutinee: transformVarsInTermAcc(term.scrutinee, transform, context), clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: transformVarsInTermAcc(c.rhs, transform, context) })) };
+  } else if (term.tag === 'ULevel') {
+    return { tag: 'ULevel' };
   }
 
   const _never: never = term
@@ -311,7 +332,8 @@ export class TCEnv<T> {
     public readonly indexPath: IndexPath,
     public readonly valueStack: unknown[],
     public readonly value: T,
-    public readonly levelMetas: Map<string, LevelMeta> = new Map()
+    public readonly levelMetas: Map<string, LevelMeta>,
+    public readonly options: TCEnvOptions
   ) {
   }
 
@@ -355,6 +377,10 @@ export class TCEnv<T> {
     return printCollectionFancy(itemStrs, '[', ']', ',', options);
   }
 
+  withCheckingMode(mode: 'pattern' | 'check'): TCEnv<T> {
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, this.value, this.levelMetas, { ...this.options, mode });
+  }
+
   applySubstitutionToContextMetasAndConstraints(varIndex: number, value: TTKTerm): TCEnv<T> {
     const newTTKContext = applySubstitutionToContext(this.context, varIndex, value);
     const newMetaVars = applySubstitutionToMetaVars(this.metaVars, this.context.length, varIndex, value);
@@ -368,7 +394,8 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       this.value,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -390,7 +417,8 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       this.value,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -405,7 +433,9 @@ export class TCEnv<T> {
    * the context, metas, and constraints - not the value itself.
    */
   unifyTerms<S extends TTKTerm>(this: TCEnv<S>, lhs: TTKTerm, rhs: TTKTerm): TCEnv<S> {
-    const result = unifyTerms(lhs, rhs, {});
+    const result = unifyTerms(lhs, rhs, {
+      mode: this.options.mode
+    });
 
     if (!result.success) {
       throw (this as unknown as TCEnv<TTKTerm>).unificationFailedError(lhs, rhs, result.reason);
@@ -432,11 +462,11 @@ export class TCEnv<T> {
   }
 
   withoutValue(): TCEnv<void> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined, this.levelMetas);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, undefined, this.levelMetas, this.options);
   }
 
   withValue<S>(value: S): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value, this.levelMetas);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value, this.levelMetas, this.options);
   }
 
   mapValue<S>(fn: (value: T) => S): TCEnv<S> {
@@ -444,7 +474,7 @@ export class TCEnv<T> {
   }
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas, this.options);
   }
 
   /**
@@ -453,11 +483,11 @@ export class TCEnv<T> {
    * Used when checking Pi body: we want the original context but updated metas.
    */
   withMetasConstraintsLevelMetasFrom<S>(otherEnv: TCEnv<S>): TCEnv<T> {
-    return new TCEnv(this.context, this.definitions, otherEnv.metaVars, otherEnv.constraints, this.indexPath, this.valueStack, this.value, otherEnv.levelMetas);
+    return new TCEnv(this.context, this.definitions, otherEnv.metaVars, otherEnv.constraints, this.indexPath, this.valueStack, this.value, otherEnv.levelMetas, this.options);
   }
 
   atIndexPath(indexPath: IndexPath): TCEnv<void> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined, this.levelMetas);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined, this.levelMetas, this.options);
   }
 
   // Terms
@@ -471,12 +501,13 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       this.value,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
   withConstraint(constraint: Omit<Constraint, 'ctx'>): TCEnv<T> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, [...this.constraints, { ctx: this.context, ...constraint }], this.indexPath, this.valueStack, this.value, this.levelMetas);
+    return new TCEnv(this.context, this.definitions, this.metaVars, [...this.constraints, { ctx: this.context, ...constraint }], this.indexPath, this.valueStack, this.value, this.levelMetas, this.options);
   }
 
   isAppTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'App' }> {
@@ -532,7 +563,8 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       metaTerm,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -559,7 +591,8 @@ export class TCEnv<T> {
       envWithLevel.indexPath,
       envWithLevel.valueStack,
       envWithLevel.value,
-      envWithLevel.levelMetas
+      envWithLevel.levelMetas,
+      envWithLevel.options
     );
 
     return { env, metaTerm };
@@ -598,7 +631,8 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       this.value,
-      newLevelMetas
+      newLevelMetas,
+      this.options
     );
 
     return { env, level };
@@ -627,7 +661,8 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       this.value,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -640,7 +675,8 @@ export class TCEnv<T> {
       this.indexPath,
       this.valueStack,
       this.value,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -654,7 +690,8 @@ export class TCEnv<T> {
       [...this.indexPath, MatchPartIndex.Scrutinee],
       [...this.valueStack, this.value],
       this.value.scrutinee,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -667,7 +704,8 @@ export class TCEnv<T> {
       [...this.indexPath, MatchPartIndex.Clauses],
       [...this.valueStack, this.value],
       this.value.clauses,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -682,7 +720,8 @@ export class TCEnv<T> {
       [...this.indexPath, arraySeg(clauseIndex)],
       [...this.valueStack, this.value],
       this.value[clauseIndex],
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -695,7 +734,8 @@ export class TCEnv<T> {
       [...this.indexPath, ClausePartIndex.Patterns],
       [...this.valueStack, this.value],
       this.value.patterns,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -710,7 +750,8 @@ export class TCEnv<T> {
       [...this.indexPath, arraySeg(patternIndex)],
       [...this.valueStack, this.value],
       this.value[patternIndex],
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -723,7 +764,8 @@ export class TCEnv<T> {
       [...this.indexPath, ClausePartIndex.Rhs],
       [...this.valueStack, this.value],
       this.value.rhs,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -736,7 +778,8 @@ export class TCEnv<T> {
       [...this.indexPath, MatchClauseCtorPatternPartIndex.Args],
       [...this.valueStack, this.value],
       this.value.args,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -750,7 +793,8 @@ export class TCEnv<T> {
       [...this.indexPath, AppPartIndex.Fn],
       [...this.valueStack, this.value],
       this.value.fn,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -763,7 +807,8 @@ export class TCEnv<T> {
       [...this.indexPath, AppPartIndex.Arg],
       [...this.valueStack, this.value],
       this.value.arg,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -777,7 +822,8 @@ export class TCEnv<T> {
       [...this.indexPath, AnnotPartIndex.Term],
       [...this.valueStack, this.value],
       this.value.term,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -790,7 +836,8 @@ export class TCEnv<T> {
       [...this.indexPath, AnnotPartIndex.Type],
       [...this.valueStack, this.value],
       this.value.type,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -804,7 +851,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
       this.value.name,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -817,7 +865,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
       this.value.domain,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -830,7 +879,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
       this.value.body,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -844,7 +894,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
       this.value.name,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -857,7 +908,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
       this.value.domain,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -870,7 +922,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
       this.value.body,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -884,7 +937,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Name],
       [...this.valueStack, this.value],
       this.value.name,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -897,7 +951,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Domain],
       [...this.valueStack, this.value],
       this.value.domain,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -910,7 +965,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Body],
       [...this.valueStack, this.value],
       this.value.body,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -923,7 +979,8 @@ export class TCEnv<T> {
       [...this.indexPath, BinderPartSegment.Value],
       [...this.valueStack, this.value],
       this.value.binderKind.defVal,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -937,7 +994,8 @@ export class TCEnv<T> {
       [...this.indexPath, InductiveDefinitionPartIndex.Name],
       [...this.valueStack, this.value],
       this.value.name,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -950,7 +1008,8 @@ export class TCEnv<T> {
       [...this.indexPath, InductiveDefinitionPartIndex.Type],
       [...this.valueStack, this.value],
       this.value.type,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -963,7 +1022,8 @@ export class TCEnv<T> {
       [...this.indexPath, InductiveDefinitionPartIndex.Constructors],
       [...this.valueStack, this.value],
       this.value.constructors,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -978,7 +1038,8 @@ export class TCEnv<T> {
       [...this.indexPath, arraySeg(constructorIndex)],
       [...this.valueStack, this.value],
       this.value[constructorIndex],
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -991,7 +1052,8 @@ export class TCEnv<T> {
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorName],
       [...this.valueStack, this.value],
       this.value.name,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -1004,7 +1066,8 @@ export class TCEnv<T> {
       [...this.indexPath, InductiveDefinitionPartIndex.ConstructorType],
       [...this.valueStack, this.value],
       this.value.type,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -1018,7 +1081,8 @@ export class TCEnv<T> {
       [...this.indexPath, TermPartIndex.Name],
       [...this.valueStack, this.value],
       this.value.name,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -1031,7 +1095,8 @@ export class TCEnv<T> {
       [...this.indexPath, TermPartIndex.Type],
       [...this.valueStack, this.value],
       this.value.type,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -1044,7 +1109,8 @@ export class TCEnv<T> {
       [...this.indexPath, TermPartIndex.Value],
       [...this.valueStack, this.value],
       this.value.value,
-      this.levelMetas
+      this.levelMetas,
+      this.options
     );
   }
 
@@ -1107,6 +1173,17 @@ export class TCEnv<T> {
       throw this.unsolvedConstraintsError();
     }
     return this;
+  }
+
+  assertCheckingMode(this: TCEnv<T>, mode: 'pattern' | 'check'): TCEnv<T> {
+    if (this.options.mode !== mode) {
+      throw this.expectedModeError(mode);
+    }
+    return this;
+  }
+
+  expectedModeError(this: TCEnv<T>, mode: 'pattern' | 'check'): TCEnvError {
+    return TCEnvError.create(`Expected mode ${mode}, got: ${this.options.mode}`, this);
   }
 
   withSortOfSort(this: TCEnv<TTKTerm & { tag: 'Sort' }>): TCEnv<TTKTerm> {

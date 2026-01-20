@@ -178,6 +178,17 @@ double : Nat -> Nat
 double n = ?sorry
 
 {-
+wrongCodomain : (A : Type) -> (B : Type) -> B -> A -> B
+wrongCodomain A B b = \\(x: A) => x
+
+wrongDomain : (A : Type) -> (B : Type) -> B -> A -> B
+wrongDomain A B b = \\(x: B) => b
+-}
+
+right : (A : Type) -> (B : Type) -> B -> A -> B
+right A B b = \\(x: A) => b
+
+{-
 qux : Type
 qux = Nat
 

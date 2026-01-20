@@ -67,5 +67,8 @@ function maxFreeVarIndexAt(term: TTKTerm, depth: number): number {
       return Math.max(maxFreeVarIndexAt(term.term, depth), maxFreeVarIndexAt(term.type, depth));
     case 'Match':
       return Math.max(maxFreeVarIndexAt(term.scrutinee, depth), ...term.clauses.map(c => maxFreeVarIndexAt(c.rhs, depth)));
+
+    case 'ULevel':
+      return -1;
   }
 }

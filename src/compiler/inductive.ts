@@ -59,7 +59,7 @@ export function checkInductiveDeclaration(
 } {
   // We'll compute indexPositions after validation, so use empty array initially
   const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions: [] };
-  const defEnv = createTCEnv(definitions).withValue(inductiveDefinition);
+  const defEnv = createTCEnv({ definitions, options: { mode: 'check' } }).withValue(inductiveDefinition);
 
   // Validate naming conventions first
   const errors: TCEnvError[] = [];

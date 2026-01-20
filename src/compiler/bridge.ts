@@ -698,5 +698,8 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
         if (!termsEqual(a.clauses[i].rhs, b.clauses[i].rhs)) return false;
       }
       return true;
+
+    case 'ULevel':
+      return b.tag === 'ULevel';
   }
 }

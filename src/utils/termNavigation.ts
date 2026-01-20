@@ -266,6 +266,9 @@ export function prettyPrintTerm(term: TTerm): string {
     case 'Match':
       const scrutineeStr = prettyPrintTerm(term.scrutinee);
       return `match ${scrutineeStr} (${term.clauses.length} clauses)`;
+
+    case 'ULevel':
+      return 'Level';
   }
 }
 

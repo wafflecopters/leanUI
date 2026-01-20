@@ -244,18 +244,20 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     // ────────────────────────────────────────────────────────────────
     assertIsPi(expectedType)
 
+    let lambdaEnv: typeof env | undefined = undefined
+
     try {
-      return env
-        .unifyTerms(env.value.domain, expectedType.domain)
-        .then(e => checkType(e.inBinderLambdaBody(), expectedType.body))
+      lambdaEnv = env.unifyTerms(env.value.domain, expectedType.domain)
     } catch (e) {
       if (e instanceof TCEnvError) {
-        const lambdaDomain = env.prettyPrint(env.value.domain);
-        const expectedDomain = env.prettyPrint(expectedType.domain);
-        throw e.wrappedBy(`Lambda parameter '${env.value.name}' has type ${lambdaDomain} but expected ${expectedDomain}`);
+        debugger
+        throw e.wrappedBy(`Lambda parameter '${env.value.name}' has type ${e.env.prettyPrint(env.value.domain)} but expected ${e.env.prettyPrint(expectedType.domain)}`);
       }
       throw e;
     }
+
+    const bodyEnv = lambdaEnv.inBinderLambdaBody()
+    return checkType(bodyEnv, expectedType.body)
   }
 
   if (env.isHoleTerm()) {

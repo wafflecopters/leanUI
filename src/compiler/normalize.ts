@@ -71,5 +71,8 @@ export function normalize(term: TTKTerm): TTKTerm {
       // For now, just return the normalized match
       return { tag: 'Match', scrutinee, clauses };
     }
+
+    case 'ULevel':
+      return term;
   }
 }
