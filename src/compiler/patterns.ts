@@ -196,9 +196,19 @@ function assertPatternVarsValid(
       const firstTerm = termEntries[0].term;
       for (let i = 1; i < termEntries.length; i++) {
         if (!areWhnfTypesDefEq(firstTerm, termEntries[i].term)) {
-          const termsList = termEntries.map(e => prettyPrintTTK(e.term, printContext)).join(', ');
+          // Format each term with its type annotation if it's a variable
+          const formatTermWithType = (term: TTKTerm): string => {
+            const termStr = prettyPrintTTK(term, printContext);
+            if (term.tag === 'Var' && term.index < signature.length) {
+              const typeStr = prettyPrintTTK(signature[term.index].type, printContext);
+              return `${termStr} : ${typeStr}`;
+            }
+            return termStr;
+          };
+          const first = formatTermWithType(firstTerm);
+          const second = formatTermWithType(termEntries[i].term);
           errors.push(TCEnvError.create(
-            `Pattern '${name}' unifies to unequal expressions: ${termsList}`,
+            `Pattern '${name}' binds to incompatible values: ${first} vs ${second}`,
             env.atIndexPath([...env.indexPath, ...termEntries[i].path])
           ));
           break; // Only report first mismatch for this name
