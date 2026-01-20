@@ -18,6 +18,7 @@ import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause } from './patterns';
 import { checkFunctionTotality, formatMissingCase } from './ttk-totality-check';
+import { analyzeRecursionTTK } from './ttk-recursion-check';
 
 // ============================================================================
 // Global Configuration
@@ -1422,6 +1423,7 @@ function checkTermValue(
 
   const clausesEnv = env.inMatchClauses();
   const errors: TCEnvError[] = [];
+  const checkedClauses: TTKClause[] = [];
 
   const firstClauseRootPatternsCount = clausesEnv.value[0].patterns.length;
   const maxAllowedPatternsCount = countPiBinders(type);
@@ -1436,7 +1438,8 @@ function checkTermValue(
       errors.push(TCEnvError.create(`Pattern count exceeds type binders count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected <= ${maxAllowedPatternsCount}.`, clauseEnv));
     } else {
       try {
-        checkMatchClause(name ?? '???', clauseEnv, type);
+        const checkedClauseEnv = checkMatchClause(name ?? '???', clauseEnv, type);
+        checkedClauses.push(checkedClauseEnv.value);
       } catch (e) {
         if (e instanceof TCEnvError) {
           errors.push(e);
@@ -1451,7 +1454,24 @@ function checkTermValue(
     return { success: false, errors };
   }
 
-  // TODO: structural recursion check
+  // Build the checked Match term with solved/reified RHS terms
+  const checkedValue: TTKTerm = {
+    tag: 'Match',
+    scrutinee: env.value.scrutinee,
+    clauses: checkedClauses
+  };
+
+  // Structural recursion check: ensure all recursive calls are on structurally smaller arguments
+  // We analyze the CHECKED term (with metas solved) not the raw input term
+  if (name !== undefined) {
+    const recursionAnalysis = analyzeRecursionTTK(name, checkedValue);
+    if (recursionAnalysis.unsafeRecursion.length > 0) {
+      for (const unsafe of recursionAnalysis.unsafeRecursion) {
+        errors.push(TCEnvError.create(`Unsafe recursion in '${name}': ${unsafe.error}`, env));
+      }
+      return { success: false, errors };
+    }
+  }
 
   // Totality check - verify all patterns are covered
   if (name) {
@@ -1479,5 +1499,5 @@ function checkTermValue(
     return { success: false, errors };
   }
 
-  return { success: true, checkedValue: env.value };
+  return { success: true, checkedValue };
 }
