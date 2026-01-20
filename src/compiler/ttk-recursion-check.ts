@@ -4,13 +4,13 @@
  * This module analyzes recursive calls in kernel term definitions to determine
  * if they are structurally recursive (guaranteed to terminate) or potentially unsafe.
  *
- * IMPORTANT: This operates on TTKTerm (kernel terms), not TTerm (surface terms).
- * All verification passes should happen in the kernel layer.
+ * IMPORTANT: This operates on TTKTerm (kernel terms), following the project convention
+ * that all verification passes happen in the kernel layer.
  *
  * ## The Algorithm (based on Coq's guard condition and Abel's foetus)
  *
- * 1. When we pattern match on variable `x` with pattern `C(y₁, ..., yₙ)`,
- *    each `yᵢ` becomes **structurally smaller** than `x`.
+ * 1. When we pattern match on variable `x` with pattern `C(y1, ..., yn)`,
+ *    each `yi` becomes **structurally smaller** than `x`.
  *
  * 2. A recursive call is **safe** if at least one argument position contains
  *    a term that is **structurally smaller** than the corresponding original
@@ -18,7 +18,7 @@
  *
  * 3. "Structurally smaller" is defined inductively:
  *    - A variable bound by a constructor pattern is structurally smaller
- *    - If `t` is structurally smaller, then `(t u)` and `λ_.t` are too
+ *    - If `t` is structurally smaller, then `(t u)` and `lambda_.t` are too
  *
  * ## References
  * - Coq Reference Manual: Guard Condition (rocq-prover.org)
@@ -389,7 +389,7 @@ function isStructurallySmaller(term: TTKTerm, context: RecursionContext): boolea
 
     case 'Binder':
       if (term.binderKind.tag === 'BLam') {
-        // λ_.t is structurally smaller if t is (with shifted indices)
+        // lambda_.t is structurally smaller if t is (with shifted indices)
         const shiftedSmaller = new Set<number>();
         for (const idx of context.structurallySmaller) {
           shiftedSmaller.add(idx + 1);
@@ -405,7 +405,7 @@ function isStructurallySmaller(term: TTKTerm, context: RecursionContext): boolea
 }
 
 /**
- * Count total variables bound by a list of kernel patterns.
+ * Count total variables bound by a list of patterns.
  */
 function countPatternVariables(patterns: TTKPattern[]): number {
   let count = 0;
@@ -421,11 +421,6 @@ function countPatternVarsHelper(pattern: TTKPattern): number {
     case 'PWild':
       return 1;
     case 'PCtor':
-      // With uniform identifier parsing, a PCtor with no args is treated as a variable
-      if (pattern.args.length === 0) {
-        return 1;
-      }
-      // Otherwise, count variables in arguments
       let count = 0;
       for (const arg of pattern.args) {
         count += countPatternVarsHelper(arg);
@@ -453,15 +448,10 @@ function markPatternVarsAsSmaller(
     case 'PWild':
       // A top-level variable pattern (including wildcards) does NOT make the variable
       // structurally smaller. It's just binding the scrutinee itself.
-      // All PVars/PWild consume one index slot.
+      // All PVars/PWilds consume one index slot.
       return startIndex + 1;
 
     case 'PCtor':
-      // With uniform identifier parsing, a top-level PCtor with no args is a variable pattern.
-      // Like PVar, it does NOT make the variable structurally smaller, but it consumes a slot.
-      if (pattern.args.length === 0) {
-        return startIndex + 1;
-      }
       // Constructor pattern: all nested variables ARE structurally smaller
       let index = startIndex;
       for (const arg of pattern.args) {
@@ -484,19 +474,11 @@ function markCtorPatternVarsAsSmaller(
     case 'PVar':
     case 'PWild':
       // This variable (including wildcards) is inside a constructor pattern,
-      // so it's structurally smaller. All PVars/PWild consume one index slot.
+      // so it's structurally smaller. All PVars/PWilds consume one index slot.
       smaller.add(startIndex);
       return startIndex + 1;
 
     case 'PCtor':
-      // With uniform identifier parsing, a PCtor with no args that's not a known
-      // constructor is treated as a variable binding.
-      if (pattern.args.length === 0) {
-        // Treat as a variable - mark it as structurally smaller
-        smaller.add(startIndex);
-        return startIndex + 1;
-      }
-      // Otherwise, it's a real constructor - process its arguments
       let index = startIndex;
       for (const arg of pattern.args) {
         index = markCtorPatternVarsAsSmaller(arg, index, smaller);
