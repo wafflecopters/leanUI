@@ -17,6 +17,7 @@ import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause } from './patterns';
+import { checkFunctionTotality, formatMissingCase } from './ttk-totality-check';
 
 // ============================================================================
 // Global Configuration
@@ -1451,7 +1452,32 @@ function checkTermValue(
   }
 
   // TODO: structural recursion check
-  // TODO: totality check
+
+  // Totality check - verify all patterns are covered
+  if (name) {
+    const totalityAnalysis = checkFunctionTotality(name, type, clausesEnv.value, env.definitions);
+    if (!totalityAnalysis.exhaustive) {
+      const missingCasesStr = totalityAnalysis.missingCases
+        .map(mc => formatMissingCase(name, mc))
+        .join('\n  ');
+      errors.push(TCEnvError.create(
+        `Non-exhaustive pattern match in '${name}'. Missing cases:\n  ${missingCasesStr}`,
+        env
+      ));
+    }
+
+    // Report inaccessible clauses (shadowed by earlier patterns)
+    for (const clauseIdx of totalityAnalysis.inaccessibleClauses) {
+      errors.push(TCEnvError.create(
+        `Inaccessible clause: clause ${clauseIdx + 1} is never reached (shadowed by earlier patterns)`,
+        clausesEnv.inMatchClause(clauseIdx)
+      ));
+    }
+  }
+
+  if (errors.length > 0) {
+    return { success: false, errors };
+  }
 
   return { success: true, checkedValue: env.value };
 }
