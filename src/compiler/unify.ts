@@ -2,6 +2,21 @@ import { Level, levelsEqual, mkVar, TTKTerm } from "./kernel";
 import { whnf } from "./whnf";
 
 // ============================================================================
+// Unification Options
+// ============================================================================
+
+/**
+ * Options for unification behavior.
+ *
+ * - flexibleVars: If true, de Bruijn variables can be substituted (like metas).
+ *   Use this for pattern LHS elaboration where we discover variable bindings.
+ *   Default false: variables are rigid skolems that only unify with themselves.
+ */
+export type UnifyOptions = {
+  flexibleVars?: boolean;
+}
+
+// ============================================================================
 // Unification Result Types
 // ============================================================================
 
@@ -28,8 +43,31 @@ export type UnifyResult = {
 // ============================================================================
 
 /**
+ * Check if a level metavariable occurs in a level.
+ * Used for the occurs check to prevent cyclic level constraints.
+ */
+function levelMVarOccursIn(lmvarId: string, level: Level): boolean {
+  switch (level.tag) {
+    case 'LZero':
+    case 'LParam':
+      return false;
+
+    case 'LMVar':
+      return level.id === lmvarId;
+
+    case 'LSucc':
+      return levelMVarOccursIn(lmvarId, level.pred);
+
+    case 'LMax':
+    case 'LIMax':
+      return levelMVarOccursIn(lmvarId, level.left) ||
+        levelMVarOccursIn(lmvarId, level.right);
+  }
+}
+
+/**
  * Check if a variable index occurs free in a term.
- * Used for the occurs check to prevent cyclic substitutions.
+ * Used for the occurs check to prevent cyclic substitutions when vars are flexible.
  */
 function varOccursIn(varIndex: number, term: TTKTerm): boolean {
   switch (term.tag) {
@@ -61,33 +99,9 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
       if (varOccursIn(varIndex, term.scrutinee)) return true;
       for (const clause of term.clauses) {
         // Conservative: patterns bind variables, shifting indices in RHS
-        // For proper check, we'd count pattern binders
         if (varOccursIn(varIndex, clause.rhs)) return true;
       }
       return false;
-  }
-}
-
-/**
- * Check if a level metavariable occurs in a level.
- * Used for the occurs check to prevent cyclic level constraints.
- */
-function levelMVarOccursIn(lmvarId: string, level: Level): boolean {
-  switch (level.tag) {
-    case 'LZero':
-    case 'LParam':
-      return false;
-
-    case 'LMVar':
-      return level.id === lmvarId;
-
-    case 'LSucc':
-      return levelMVarOccursIn(lmvarId, level.pred);
-
-    case 'LMax':
-    case 'LIMax':
-      return levelMVarOccursIn(lmvarId, level.left) ||
-             levelMVarOccursIn(lmvarId, level.right);
   }
 }
 
@@ -226,12 +240,16 @@ function unifyLevels(l1: Level, l2: Level): UnifyResult {
  *
  * Both terms are reduced to WHNF before comparison.
  *
+ * Options:
+ * - flexibleVars: If true, de Bruijn variables can be substituted.
+ *   Default false (variables are rigid skolems).
+ *
  * Returns:
  * - substitutions: Map from de Bruijn indices to terms
  * - metaConstraints: Deferred ?m = t constraints
  * - levelConstraints: Deferred ?l = level constraints
  */
-export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
+export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {}): UnifyResult {
   // Reduce both to weak head normal form
   const a = whnf(lhs);
   const b = whnf(rhs);
@@ -287,51 +305,65 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
   // ─────────────────────────────────────────────────────────────────────────
   // VAR - Variable
   //
+  // By default, context variables are rigid/skolem - they represent universally
+  // quantified type parameters and cannot be instantiated.
+  //
+  // With flexibleVars: true, variables can be substituted (like pattern vars
+  // during LHS elaboration).
+  //
   // Var x vs Var x: trivially equal
-  // Var x vs Var y: substitute lower index with higher (arbitrary choice
-  //                 that tends to preserve more bound structure)
-  // Var x vs t:     substitute x with t (with occurs check)
+  // Var x vs Var y: rigid -> conflict; flexible -> substitute lower with higher
+  // Var x vs t:     rigid -> conflict; flexible -> substitute x with t
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Var' && b.tag === 'Var') {
     if (a.index === b.index) {
       return emptySuccess;
     }
-    // Substitute lower index with higher
-    const [lower, higher] = a.index < b.index
-      ? [a.index, b.index]
-      : [b.index, a.index];
-    return {
-      success: true,
-      substitutions: new Map([[lower, mkVar(higher)]]),
-      metaConstraints: [],
-      levelConstraints: [],
-    };
+    if (options.flexibleVars) {
+      // Substitute lower index with higher (arbitrary choice that preserves more bound structure)
+      const [lower, higher] = a.index < b.index
+        ? [a.index, b.index]
+        : [b.index, a.index];
+      return {
+        success: true,
+        substitutions: new Map([[lower, mkVar(higher)]]),
+        metaConstraints: [],
+        levelConstraints: [],
+      };
+    }
+    return { success: false, reason: 'conflict' };
   }
 
   if (a.tag === 'Var') {
-    // Occurs check: prevent x = ... x ...
-    if (varOccursIn(a.index, b)) {
-      return { success: false, reason: 'cycle' };
+    if (options.flexibleVars) {
+      // Occurs check: prevent x = ... x ...
+      if (varOccursIn(a.index, b)) {
+        return { success: false, reason: 'cycle' };
+      }
+      return {
+        success: true,
+        substitutions: new Map([[a.index, b]]),
+        metaConstraints: [],
+        levelConstraints: [],
+      };
     }
-    return {
-      success: true,
-      substitutions: new Map([[a.index, b]]),
-      metaConstraints: [],
-      levelConstraints: [],
-    };
+    return { success: false, reason: 'conflict' };
   }
 
   if (b.tag === 'Var') {
-    // Occurs check: prevent x = ... x ...
-    if (varOccursIn(b.index, a)) {
-      return { success: false, reason: 'cycle' };
+    if (options.flexibleVars) {
+      // Occurs check: prevent x = ... x ...
+      if (varOccursIn(b.index, a)) {
+        return { success: false, reason: 'cycle' };
+      }
+      return {
+        success: true,
+        substitutions: new Map([[b.index, a]]),
+        metaConstraints: [],
+        levelConstraints: [],
+      };
     }
-    return {
-      success: true,
-      substitutions: new Map([[b.index, a]]),
-      metaConstraints: [],
-      levelConstraints: [],
-    };
+    return { success: false, reason: 'conflict' };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -362,10 +394,10 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
   // (f a) vs (g b): unify f with g, then a with b
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'App' && b.tag === 'App') {
-    const fnResult = unifyTerms(a.fn, b.fn);
+    const fnResult = unifyTerms(a.fn, b.fn, options);
     if (!fnResult.success) return fnResult;
 
-    const argResult = unifyTerms(a.arg, b.arg);
+    const argResult = unifyTerms(a.arg, b.arg, options);
     return combineResults(fnResult, argResult);
   }
 
@@ -386,18 +418,18 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
     }
 
     // Unify domains
-    const domResult = unifyTerms(a.domain, b.domain);
+    const domResult = unifyTerms(a.domain, b.domain, options);
     if (!domResult.success) return domResult;
 
     // Unify bodies (both are under a binder, so indices align)
-    const bodyResult = unifyTerms(a.body, b.body);
+    const bodyResult = unifyTerms(a.body, b.body, options);
     if (!bodyResult.success) return bodyResult;
 
     let result = combineResults(domResult, bodyResult);
 
     // For Let, also unify the definition values
     if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {
-      const valResult = unifyTerms(a.binderKind.defVal, b.binderKind.defVal);
+      const valResult = unifyTerms(a.binderKind.defVal, b.binderKind.defVal, options);
       result = combineResults(result, valResult);
     }
 
@@ -411,11 +443,11 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
   // term, stripping the annotation.
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Annot') {
-    return unifyTerms(a.term, b);
+    return unifyTerms(a.term, b, options);
   }
 
   if (b.tag === 'Annot') {
-    return unifyTerms(a, b.term);
+    return unifyTerms(a, b.term, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -429,7 +461,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Match' && b.tag === 'Match') {
     // Unify scrutinees
-    const scrutResult = unifyTerms(a.scrutinee, b.scrutinee);
+    const scrutResult = unifyTerms(a.scrutinee, b.scrutinee, options);
     if (!scrutResult.success) return scrutResult;
 
     // Must have same number of clauses
@@ -449,7 +481,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm): UnifyResult {
       }
 
       // Unify RHS (under pattern bindings - indices align if patterns match)
-      const rhsResult = unifyTerms(clauseA.rhs, clauseB.rhs);
+      const rhsResult = unifyTerms(clauseA.rhs, clauseB.rhs, options);
       if (!rhsResult.success) return rhsResult;
       result = combineResults(result, rhsResult);
     }

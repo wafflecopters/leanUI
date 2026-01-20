@@ -216,6 +216,57 @@ If yes to all three: Build the abstraction in `utils/` FIRST, then use it.
 
 ---
 
+## Type Checker Error Philosophy
+
+Errors should be **semantic and user-friendly** at the top level, with technical details available for those who want to dig deeper.
+
+### Structure
+
+```
+PRIMARY MESSAGE: What went wrong in terms the user understands
+↳ CAUSE: Technical details about why it failed
+↳ DEEPER CAUSE: Even lower-level details if applicable
+```
+
+### Example
+
+**Good** (semantic primary, technical detail):
+```
+'Succ' expects Nat but was applied to (Nat -> Nat -> Nat)
+↳ unification failed: (Nat -> Nat -> Nat) vs Nat
+```
+
+**Bad** (technical primary, semantic context):
+```
+Unification failed (conflicting heads): (Nat -> Nat -> Nat) vs Nat
+• while checking argument to 'Succ'
+```
+
+### Implementation
+
+When catching low-level errors (like unification failures), higher-level code uses `wrappedBy()` to provide a semantic message that becomes the new primary:
+
+```typescript
+try {
+  argEnv = checkType(argEnv.inAppArg(), expectedType);
+} catch (e) {
+  if (e instanceof TCEnvError) {
+    // Semantic error becomes primary, original error becomes cause
+    throw e.wrappedBy(`'Succ' expects Nat but was applied to (Nat -> Nat -> Nat)`);
+  }
+  throw e;
+}
+```
+
+### Guidelines
+
+1. **Primary messages** should answer: "What did the user do wrong?"
+2. **Cause messages** should answer: "Why did the system reject it?"
+3. The further down the cause stack, the more technical it can be
+4. Users should be able to understand the primary message without knowing type theory
+
+---
+
 ## File Creation: Use Write Tool, Not Bash
 
 **IMPORTANT**: When creating new files, always use the `Write` tool directly instead of `cat` heredocs or `echo` redirection via `Bash`. The `Write` tool:

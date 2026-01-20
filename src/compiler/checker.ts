@@ -1,8 +1,66 @@
 // INFERENCE
 
-import { TTKTerm, mkLMax, simplifyLevel, mkPi } from "./kernel";
+import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint } from "./kernel";
 import { subst } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError } from "./term";
+
+/**
+ * Get a readable name for a function being applied.
+ * Used to provide helpful error context like "while checking argument to 'Succ'".
+ */
+function getFunctionName(fn: TTKTerm, env: TCEnv<unknown>): string {
+  // Unwrap applications to get the head
+  let head = fn;
+  while (head.tag === 'App') {
+    head = head.fn;
+  }
+
+  if (head.tag === 'Const') {
+    return `'${head.name}'`;
+  }
+  if (head.tag === 'Var') {
+    const name = env.context[env.context.length - 1 - head.index]?.name;
+    if (name) {
+      return `'${name}'`;
+    }
+  }
+  // Fallback: pretty print the function (truncated if too long)
+  const printed = prettyPrint(fn, env.context.map(c => c.name).reverse());
+  if (printed.length > 30) {
+    return 'function';
+  }
+  return printed;
+}
+
+/**
+ * Get a short description of a term for error messages.
+ */
+function getTermDescription(term: TTKTerm, env: TCEnv<unknown>): string {
+  if (term.tag === 'Const') {
+    return `'${term.name}'`;
+  }
+  if (term.tag === 'Var') {
+    const name = env.context[env.context.length - 1 - term.index]?.name;
+    if (name) {
+      return `'${name}'`;
+    }
+    return 'variable';
+  }
+  if (term.tag === 'App') {
+    return `application of ${getFunctionName(term.fn, env)}`;
+  }
+  if (term.tag === 'Binder') {
+    if (term.binderKind.tag === 'BLam') return 'lambda';
+    if (term.binderKind.tag === 'BPi') return 'Pi type';
+    if (term.binderKind.tag === 'BLet') return 'let expression';
+  }
+  if (term.tag === 'Sort') return 'Type';
+  if (term.tag === 'Hole') return 'hole';
+  if (term.tag === 'Meta') return 'metavariable';
+  if (term.tag === 'Annot') return 'annotated term';
+  if (term.tag === 'Match') return 'match expression';
+  return 'term';
+}
 
 function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm> {
   if (env.isBinderPiTerm()) {
@@ -98,7 +156,34 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   Γ ⊢ f e ⇒ B[x := e]
     // ────────────────────────────────────────────────────────────────
     const fnTypeEnv = inferType(env.inAppFn()).ensurePi();
-    const argEnv = checkType(fnTypeEnv.atValueAndPathOfEnv(env).inAppArg(), fnTypeEnv.value.domain);
+
+    // Check the argument against the expected domain type
+    let argEnv: TCEnv<TTKTerm>;
+    try {
+      argEnv = checkType(fnTypeEnv.atValueAndPathOfEnv(env).inAppArg(), fnTypeEnv.value.domain);
+    } catch (e) {
+      if (e instanceof TCEnvError) {
+        // Provide semantic error: what function, what it expects, what it got
+        const fnName = getFunctionName(env.value.fn, env);
+        const expectedType = env.prettyPrint(fnTypeEnv.value.domain);
+
+        // Try to infer the argument's type to show what was actually provided
+        let actualType: string | undefined;
+        try {
+          const argTypeEnv = inferType(env.inAppArg());
+          actualType = env.prettyPrint(argTypeEnv.value);
+        } catch {
+          // Couldn't infer argument type - that's fine, we'll show a simpler message
+        }
+
+        const msg = actualType
+          ? `${fnName} expects ${expectedType} but was applied to ${actualType}`
+          : `${fnName} expects ${expectedType}`;
+        throw e.wrappedBy(msg);
+      }
+      throw e;
+    }
+
     // Result type is B[x := e] where B is the body and e is the argument
     const resultType = subst(0, env.value.arg, fnTypeEnv.value.body);
     return argEnv.withValue(resultType);
@@ -154,9 +239,18 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     // ────────────────────────────────────────────────────────────────
     assertIsPi(expectedType)
 
-    return env
-      .unifyTerms(env.value.domain, expectedType.domain)
-      .then(e => checkType(e.inBinderLambdaBody(), expectedType.body))
+    try {
+      return env
+        .unifyTerms(env.value.domain, expectedType.domain)
+        .then(e => checkType(e.inBinderLambdaBody(), expectedType.body))
+    } catch (e) {
+      if (e instanceof TCEnvError) {
+        const lambdaDomain = env.prettyPrint(env.value.domain);
+        const expectedDomain = env.prettyPrint(expectedType.domain);
+        throw e.wrappedBy(`Lambda parameter '${env.value.name}' has type ${lambdaDomain} but expected ${expectedDomain}`);
+      }
+      throw e;
+    }
   }
 
   if (env.isHoleTerm()) {
@@ -182,8 +276,18 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   const inferredEnv = inferType(env);
   // inferredEnv.value is the INFERRED TYPE, not the term
   // We unify the inferred type with the expected type
-  const unifiedEnv = inferredEnv.unifyTerms(inferredEnv.value, expectedType);
-  // Return with the original term (env.value), not the type
-  return unifiedEnv.atValueAndPathOfEnv(env);
+  try {
+    const unifiedEnv = inferredEnv.unifyTerms(inferredEnv.value, expectedType);
+    // Return with the original term (env.value), not the type
+    return unifiedEnv.atValueAndPathOfEnv(env);
+  } catch (e) {
+    if (e instanceof TCEnvError) {
+      const termDesc = getTermDescription(env.value, env);
+      const inferredType = env.prettyPrint(inferredEnv.value);
+      const expected = env.prettyPrint(expectedType);
+      throw e.wrappedBy(`${termDesc} has type ${inferredType} but expected ${expected}`);
+    }
+    throw e;
+  }
 }
 

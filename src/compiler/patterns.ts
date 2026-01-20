@@ -265,11 +265,15 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   logInfo(() => `  Unifying: ${workEnv.prettyPrint(unifyLeft)} = ${workEnv.prettyPrint(unifyRight)}`)
 
-  const unifyResult = unifyTerms(unifyLeft, unifyRight)
+  const unifyResult = unifyTerms(unifyLeft, unifyRight, { flexibleVars: true })
 
   if (!unifyResult.success) {
-    debugger
-    throw new Error('TODO: unification failed')
+    const leftStr = workEnv.prettyPrint(unifyLeft)
+    const rightStr = workEnv.prettyPrint(unifyRight)
+    throw TCEnvError.create(
+      `Constructor '${pattern.name}' has result type ${leftStr} but expected ${rightStr}`,
+      workEnv
+    )
   }
 
   if (unifyResult.metaConstraints.length > 0) {
@@ -506,6 +510,8 @@ export function checkMatchClause(
   result.assertNoConstraints();
 
   const { returnType } = result.value
+
+  debugger
 
   const checkEnv = result.atValueAndPathOfEnv(env).inMatchClauseRhs()
   const checkedEnv = checkType(checkEnv, returnType);

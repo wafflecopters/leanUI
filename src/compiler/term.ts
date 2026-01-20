@@ -1207,10 +1207,63 @@ export class TCEnv<T> {
   }
 }
 
+/**
+ * Error Philosophy:
+ *
+ * Errors should be semantic and user-friendly at the top level, with technical
+ * details available for those who want to dig deeper.
+ *
+ * - PRIMARY MESSAGE: What went wrong in terms the user understands
+ *   e.g., "'Succ' expects Nat but was applied to (Nat -> Nat -> Nat)"
+ *
+ * - CAUSE/DETAILS: Technical details about why it failed
+ *   e.g., "unification failed: (Nat -> Nat -> Nat) vs Nat"
+ *
+ * When catching low-level errors (like unification failures), higher-level code
+ * should use `wrappedBy()` to provide a semantic message that becomes the new
+ * primary, with the original error becoming the cause/detail.
+ */
 export abstract class TCEnvError {
   abstract get errors(): TCEnvError[];
   abstract get message(): string;
   abstract get env(): TCEnv<unknown>;
+  abstract get causeStack(): string[];
+
+  /**
+   * Get the full error message including cause stack.
+   * Format:
+   *   <primary message>
+   *   ↳ <cause 1>
+   *   ↳ <cause 2>
+   */
+  get fullMessage(): string {
+    if (this.causeStack.length === 0) {
+      return this.message;
+    }
+    const causeLines = this.causeStack.map(cause => `↳ ${cause}`).join('\n');
+    return `${this.message}\n${causeLines}`;
+  }
+
+  /**
+   * Wrap this error with a new primary message.
+   * The current error's message becomes a cause/detail.
+   *
+   * Use this when catching low-level errors to provide semantic context:
+   *   catch (e) {
+   *     throw e.wrappedBy("'Succ' expects Nat but was applied to ...");
+   *   }
+   */
+  wrappedBy(primaryMessage: string): TCEnvError {
+    return new TCEnvWrappedError(primaryMessage, this);
+  }
+
+  /**
+   * Add a cause/detail below the current message without changing the primary.
+   * Use sparingly - prefer wrappedBy() for most cases.
+   */
+  withCause(cause: string): TCEnvError {
+    return new TCEnvCauseError(this, cause);
+  }
 
   static create<T>(message: string, env: TCEnv<T>): TCEnvError {
     return new TCEnvErrorUnit(message, env);
@@ -1230,6 +1283,10 @@ class TCEnvErrorUnit<T> extends TCEnvError {
   get errors(): TCEnvError[] {
     return [this];
   }
+
+  get causeStack(): string[] {
+    return [];
+  }
 }
 
 class TCEnvGroupError extends TCEnvError {
@@ -1247,6 +1304,63 @@ class TCEnvGroupError extends TCEnvError {
 
   get env(): TCEnv<unknown> {
     return this._errors[0]?.env;
+  }
+
+  get causeStack(): string[] {
+    return this._errors[0]?.causeStack ?? [];
+  }
+}
+
+/**
+ * Wraps an inner error with a new primary message.
+ * The inner error's message becomes a cause/detail.
+ */
+class TCEnvWrappedError extends TCEnvError {
+  constructor(
+    private readonly primaryMessage: string,
+    private readonly inner: TCEnvError
+  ) { super(); }
+
+  get errors(): TCEnvError[] {
+    return this.inner.errors;
+  }
+
+  get message(): string {
+    return this.primaryMessage;
+  }
+
+  get env(): TCEnv<unknown> {
+    return this.inner.env;
+  }
+
+  get causeStack(): string[] {
+    return [this.inner.message, ...this.inner.causeStack];
+  }
+}
+
+/**
+ * Adds a cause/detail below the current message without changing the primary.
+ */
+class TCEnvCauseError extends TCEnvError {
+  constructor(
+    private readonly inner: TCEnvError,
+    private readonly cause: string
+  ) { super(); }
+
+  get errors(): TCEnvError[] {
+    return this.inner.errors;
+  }
+
+  get message(): string {
+    return this.inner.message;
+  }
+
+  get env(): TCEnv<unknown> {
+    return this.inner.env;
+  }
+
+  get causeStack(): string[] {
+    return [...this.inner.causeStack, this.cause];
   }
 }
 
