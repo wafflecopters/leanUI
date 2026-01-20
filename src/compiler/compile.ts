@@ -1446,12 +1446,12 @@ function checkTermValue(
     }
   }
 
-  // TODO: structural recursion check
-  // TODO: totality check
-
   if (errors.length > 0) {
     return { success: false, errors };
   }
+
+  // TODO: structural recursion check
+  // TODO: totality check
 
   return { success: true, checkedValue: env.value };
 }
