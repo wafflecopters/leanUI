@@ -501,8 +501,11 @@ function collectHolesFromSurfaceTerm(
 ): void {
   switch (term.tag) {
     case 'Hole':
-      // Found a hole - add its location
-      addHoleLocation(path, sourceMap, blockStartLine, term.id, holes);
+      // Only add explicit user holes (like ?sorry), not wildcards (_)
+      // Wildcards are represented as holes with id '_'
+      if (term.id !== '_') {
+        addHoleLocation(path, sourceMap, blockStartLine, term.id, holes);
+      }
       // Also recurse into the hole's type (which might contain more holes)
       collectHolesFromSurfaceTerm(term.type, sourceMap, blockStartLine, [...path, 'type'], holes);
       break;
