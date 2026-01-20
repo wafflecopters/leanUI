@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, TPattern, TClause } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLevel, mkLNumTT, mkLNameTT, mkLSuccTT, mkLMaxTT, mkLIMaxTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -61,6 +61,10 @@ export type TokenType =
   | 'ASSIGN'       // :=
   | 'TYPE'         // Type
   | 'PROP'         // Prop
+  | 'ULEVEL'       // ULevel - the type of universe levels
+  | 'USUCC'        // USucc - successor of universe level
+  | 'UMAX'         // UMax - maximum of two universe levels
+  | 'UIMAX'        // UIMax - impredicative max of two universe levels
   | 'UNDERSCORE'   // _
   | 'OPERATOR'     // infix/prefix operators
   | 'EOF'          // end of input
@@ -175,6 +179,11 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
   'PROP': (p) => {
     p['advance']();
     return mkPropTT();
+  },
+  // ULevel is the type of universe levels
+  'ULEVEL': (p) => {
+    p['advance']();
+    return mkULevelTT();
   },
   'HOLE': (p, t, _ctx, path) => {
     p['advance']();
@@ -428,6 +437,14 @@ export class Lexer {
           return { type: 'TYPE', value: 'Type', pos: startPos, line: startLine, col: startCol };
         case 'Prop':
           return { type: 'PROP', value: 'Prop', pos: startPos, line: startLine, col: startCol };
+        case 'ULevel':
+          return { type: 'ULEVEL', value: 'ULevel', pos: startPos, line: startLine, col: startCol };
+        case 'USucc':
+          return { type: 'USUCC', value: 'USucc', pos: startPos, line: startLine, col: startCol };
+        case 'UMax':
+          return { type: 'UMAX', value: 'UMax', pos: startPos, line: startLine, col: startCol };
+        case 'UIMax':
+          return { type: 'UIMAX', value: 'UIMax', pos: startPos, line: startLine, col: startCol };
         case 'inductive':
           return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
         case 'where':
@@ -2001,14 +2018,16 @@ export class Parser {
   }
 
   /**
-   * Parse Type or Type n
+   * Parse Type or Type with level expression
    *
    * Syntax:
-   * - Prop      → Sort(0)
-   * - Type      → Sort(1)
-   * - Type 0    → Sort(1)  (Type 0 = Type)
-   * - Type 1    → Sort(1)
-   * - Type n    → Sort(n+1) for any literal integer n
+   * - Prop           → Sort(LNum(0))
+   * - Type           → Sort(LNum(1))
+   * - Type 0         → Sort(LNum(1))  (Type 0 = Type)
+   * - Type 1         → Sort(LNum(2))
+   * - Type n         → Sort(LNum(n+1)) for any literal integer n
+   * - Type U         → Sort(LName("U")) for identifier U
+   * - Type (expr)    → Sort with level expression (USucc, UMax, UIMax)
    *
    * Note: Type_n syntax is handled in the lexer, which recognizes
    * Type_0, Type_1, etc. as TYPE tokens with level information.
@@ -2034,6 +2053,17 @@ export class Parser {
       const level = parseInt(this.current().value, 10);
       this.advance();
       result = mkTypeTT(level + 1);  // Type n = Sort(n+1)
+    } else if (this.current().type === 'IDENT') {
+      // Type U - level variable
+      const name = this.current().value;
+      this.advance();
+      result = mkSortTT(mkLNameTT(name));
+    } else if (this.current().type === 'LPAREN') {
+      // Type (level-expr) - parenthesized level expression
+      this.advance(); // consume '('
+      const level = this.parseLevelExpr();
+      this.expect('RPAREN');
+      result = mkSortTT(level);
     } else {
       // Just "Type" means Sort(1)
       result = mkTypeTT(1);
@@ -2046,6 +2076,99 @@ export class Parser {
     }
 
     return result;
+  }
+
+  /**
+   * Parse a universe level expression.
+   *
+   * Syntax:
+   * - n           → LNum(n) for numeric literal
+   * - U           → LName("U") for identifier
+   * - USucc e     → LSucc(e)
+   * - UMax e1 e2  → LMax(e1, e2)
+   * - UIMax e1 e2 → LIMax(e1, e2)
+   * - (expr)      → parenthesized level expression
+   */
+  private parseLevelExpr(): TLevel {
+    const current = this.current();
+
+    if (current.type === 'NUMBER') {
+      const n = parseInt(current.value, 10);
+      this.advance();
+      return mkLNumTT(n);
+    }
+
+    if (current.type === 'IDENT') {
+      const name = current.value;
+      this.advance();
+      return mkLNameTT(name);
+    }
+
+    if (current.type === 'USUCC') {
+      this.advance(); // consume 'USucc'
+      const pred = this.parseLevelAtom();
+      return mkLSuccTT(pred);
+    }
+
+    if (current.type === 'UMAX') {
+      this.advance(); // consume 'UMax'
+      const left = this.parseLevelAtom();
+      const right = this.parseLevelAtom();
+      return mkLMaxTT(left, right);
+    }
+
+    if (current.type === 'UIMAX') {
+      this.advance(); // consume 'UIMax'
+      const left = this.parseLevelAtom();
+      const right = this.parseLevelAtom();
+      return mkLIMaxTT(left, right);
+    }
+
+    if (current.type === 'LPAREN') {
+      this.advance(); // consume '('
+      const level = this.parseLevelExpr();
+      this.expect('RPAREN');
+      return level;
+    }
+
+    throw new ParseError(
+      `Expected level expression, got ${current.type} '${current.value}'`,
+      current.line,
+      current.col
+    );
+  }
+
+  /**
+   * Parse an atomic level expression (for use as argument to USucc, UMax, UIMax).
+   * This is either a number, identifier, or parenthesized expression.
+   */
+  private parseLevelAtom(): TLevel {
+    const current = this.current();
+
+    if (current.type === 'NUMBER') {
+      const n = parseInt(current.value, 10);
+      this.advance();
+      return mkLNumTT(n);
+    }
+
+    if (current.type === 'IDENT') {
+      const name = current.value;
+      this.advance();
+      return mkLNameTT(name);
+    }
+
+    if (current.type === 'LPAREN') {
+      this.advance(); // consume '('
+      const level = this.parseLevelExpr();
+      this.expect('RPAREN');
+      return level;
+    }
+
+    throw new ParseError(
+      `Expected level atom (number, identifier, or parenthesized expression), got ${current.type} '${current.value}'`,
+      current.line,
+      current.col
+    );
   }
 
   /**

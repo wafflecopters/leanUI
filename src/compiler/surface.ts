@@ -22,6 +22,82 @@
  */
 
 // ============================================================================
+// Universe Levels (Surface Syntax)
+// ============================================================================
+
+/**
+ * Surface-level universe level expressions.
+ * These are converted to kernel Level types during elaboration.
+ *
+ * Examples:
+ * - Type 0        → LNum(0)
+ * - Type U        → LName("U")
+ * - Type (USucc U) → LSucc(LName("U"))
+ * - Type (UMax U V) → LMax(LName("U"), LName("V"))
+ */
+export type TLevel =
+  | { tag: 'LNum'; n: number }                     // Concrete number (e.g., Type_0 → LNum(0))
+  | { tag: 'LName'; name: string }                 // Level variable reference (e.g., Type U)
+  | { tag: 'LSucc'; pred: TLevel }                 // USucc(l)
+  | { tag: 'LMax'; left: TLevel; right: TLevel }   // UMax(l1, l2)
+  | { tag: 'LIMax'; left: TLevel; right: TLevel }  // UIMax(l1, l2)
+
+// TLevel constructors
+export const mkLNumTT = (n: number): TLevel => ({ tag: 'LNum', n });
+export const mkLNameTT = (name: string): TLevel => ({ tag: 'LName', name });
+export const mkLSuccTT = (pred: TLevel): TLevel => ({ tag: 'LSucc', pred });
+export const mkLMaxTT = (left: TLevel, right: TLevel): TLevel => ({ tag: 'LMax', left, right });
+export const mkLIMaxTT = (left: TLevel, right: TLevel): TLevel => ({ tag: 'LIMax', left, right });
+
+/**
+ * Extract numeric value from a TLevel if it's a simple LNum.
+ * Returns undefined for complex level expressions.
+ */
+export function tlevelToNumber(level: TLevel): number | undefined {
+  if (level.tag === 'LNum') {
+    return level.n;
+  }
+  return undefined;
+}
+
+/**
+ * Check if two TLevel expressions are equal.
+ */
+export function tlevelsEqual(l1: TLevel, l2: TLevel): boolean {
+  if (l1.tag !== l2.tag) return false;
+  switch (l1.tag) {
+    case 'LNum':
+      return l1.n === (l2 as typeof l1).n;
+    case 'LName':
+      return l1.name === (l2 as typeof l1).name;
+    case 'LSucc':
+      return tlevelsEqual(l1.pred, (l2 as typeof l1).pred);
+    case 'LMax':
+    case 'LIMax':
+      return tlevelsEqual(l1.left, (l2 as typeof l1).left) &&
+             tlevelsEqual(l1.right, (l2 as typeof l1).right);
+  }
+}
+
+/**
+ * Pretty-print a TLevel expression.
+ */
+export function prettyPrintTLevel(level: TLevel): string {
+  switch (level.tag) {
+    case 'LNum':
+      return level.n.toString();
+    case 'LName':
+      return level.name;
+    case 'LSucc':
+      return `(USucc ${prettyPrintTLevel(level.pred)})`;
+    case 'LMax':
+      return `(UMax ${prettyPrintTLevel(level.left)} ${prettyPrintTLevel(level.right)})`;
+    case 'LIMax':
+      return `(UIMax ${prettyPrintTLevel(level.left)} ${prettyPrintTLevel(level.right)})`;
+  }
+}
+
+// ============================================================================
 // Core Term Language
 // ============================================================================
 
@@ -106,7 +182,8 @@ export type TTermConst = { tag: 'Const'; name: string; }
 
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
-  | { tag: 'Sort'; level: number }                         // Type_i, Prop = Type_0
+  | { tag: 'Sort'; level: TLevel }                         // Type_i, Prop = Type_0 (now with TLevel)
+  | { tag: 'ULevel' }                                      // The type of universe levels
   | { tag: 'Binder'; name: string; binderKind: BinderKind; domain?: TTerm; body: TTerm }  // Unified binder (domain optional for let without type annotation)
   | TTermApp   // Function application (f a)
   | TTermConst // Named constant (nat_elim, eq, etc.)
@@ -172,7 +249,7 @@ export const TT_CONSTANTS = {
   // Equality type
   // eq : Π (A : Type), A → A → Prop
   Eq: (() => {
-    const sort0 = { tag: 'Sort', level: 0 } as TTerm;
+    const sort0 = { tag: 'Sort', level: mkLNumTT(0) } as TTerm;
     const A = { tag: 'Var', index: 0 } as TTerm;
     // Build: Π (A : Type), A → A → Prop
     const type = mkPiTT(
@@ -206,7 +283,7 @@ export function ttconstInfo(term: TTermConst): TTConstantInfo | undefined {
  * This is sufficient for testing and will be expanded to the full dependent version later.
  */
 export function createNatElimType(): TTerm {
-  const prop: TTerm = { tag: 'Sort', level: 0 };
+  const prop: TTerm = { tag: 'Sort', level: mkLNumTT(0) };
   const nat = TT_CONSTANTS.Nat;
 
   // Simplified nat_elim for testing:
@@ -321,14 +398,28 @@ export function mkHoleTT(id: string, type: TTerm, context: TContext = []): TTerm
  * Create Prop (Type_0)
  */
 export function mkPropTT(): TTerm {
-  return { tag: 'Sort', level: 0 };
+  return { tag: 'Sort', level: mkLNumTT(0) };
 }
 
 /**
- * Create Type_i
+ * Create Type_i (with numeric level)
  */
 export function mkTypeTT(level: number): TTerm {
+  return { tag: 'Sort', level: mkLNumTT(level) };
+}
+
+/**
+ * Create Sort with a TLevel expression
+ */
+export function mkSortTT(level: TLevel): TTerm {
   return { tag: 'Sort', level };
+}
+
+/**
+ * Create ULevel (the type of universe levels)
+ */
+export function mkULevelTT(): TTerm {
+  return { tag: 'ULevel' };
 }
 
 // ============================================================================
@@ -351,6 +442,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
     case 'Var':
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return term;
 
     case 'Hole':
@@ -416,6 +508,7 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
     case 'Var':
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return null;
 
     case 'Binder': {
@@ -479,6 +572,7 @@ export function fillHoleWithTT(
     case 'Var':
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return term;
 
     case 'Binder': {
@@ -552,7 +646,10 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
       return term2.tag === 'Var' && term1.index === term2.index;
 
     case 'Sort':
-      return term2.tag === 'Sort' && term1.level === term2.level;
+      return term2.tag === 'Sort' && tlevelsEqual(term1.level, term2.level);
+
+    case 'ULevel':
+      return term2.tag === 'ULevel';
 
     case 'Const':
       return term2.tag === 'Const' && term1.name === term2.name;
@@ -637,6 +734,7 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'Sort':
     case 'Const':
     case 'Hole':
+    case 'ULevel':
       // Leaf nodes have no children
       return null;
 
@@ -691,6 +789,7 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
     case 'Sort':
     case 'Const':
     case 'Hole':
+    case 'ULevel':
       // Leaf nodes have no children
       return null;
 
@@ -867,6 +966,7 @@ export function isNameUsed(name: string, term: TTerm): boolean {
       return term.name === name;
 
     case 'Sort':
+    case 'ULevel':
       // No names to check
       return false;
 
@@ -941,6 +1041,7 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
 
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return term;
 
     case 'Binder': {
@@ -1021,6 +1122,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return term;
 
     case 'Binder': {
@@ -1087,6 +1189,58 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 // ============================================================================
 
 /**
+ * Helper to pretty-print a Sort with a TLevel.
+ * Sort(LNum(0)) = Prop
+ * Sort(LNum(1)) = Type (or Type 0)
+ * Sort(LNum(n+1)) = Type n
+ * Sort(level) = Sort level (for complex level expressions)
+ */
+function prettyPrintSortTT(level: TLevel): string {
+  if (level.tag === 'LNum') {
+    if (level.n === 0) {
+      return 'Prop';
+    }
+    const typeLevel = level.n - 1;
+    return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+  }
+  // For non-numeric levels, use "Type <level>" syntax
+  return `Type ${prettyPrintTLevel(level)}`;
+}
+
+/**
+ * Helper to pretty-print a Sort with a TLevel in LaTeX format.
+ */
+function prettyPrintSortLatexTT(level: TLevel): string {
+  if (level.tag === 'LNum') {
+    if (level.n === 0) {
+      return '\\text{Prop}';
+    }
+    const typeLevel = level.n - 1;
+    return typeLevel === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevel}}`;
+  }
+  // For non-numeric levels, use "Type <level>" syntax
+  return `\\text{Type}_{${prettyPrintTLevelLatex(level)}}`;
+}
+
+/**
+ * Pretty-print a TLevel expression in LaTeX format.
+ */
+function prettyPrintTLevelLatex(level: TLevel): string {
+  switch (level.tag) {
+    case 'LNum':
+      return level.n.toString();
+    case 'LName':
+      return level.name;
+    case 'LSucc':
+      return `\\text{USucc}(${prettyPrintTLevelLatex(level.pred)})`;
+    case 'LMax':
+      return `\\text{UMax}(${prettyPrintTLevelLatex(level.left)}, ${prettyPrintTLevelLatex(level.right)})`;
+    case 'LIMax':
+      return `\\text{UIMax}(${prettyPrintTLevelLatex(level.left)}, ${prettyPrintTLevelLatex(level.right)})`;
+  }
+}
+
+/**
  * Terse pretty-printing for TT terms - compact S-expression style
  * Example: (eq (plus a a) (mul 2 a)) instead of ((a : ℝ) → ...)
  */
@@ -1100,12 +1254,11 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
       return `_${term.index}`;
 
     case 'Sort':
-      // Sort(0) = Prop, Sort(1) = Type, Sort(n+1) = Type n
-      if (term.level === 0) {
-        return 'Prop';
-      }
-      const typeLevel = term.level - 1;
-      return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+      // Pretty print Sort with TLevel
+      return prettyPrintSortTT(term.level);
+
+    case 'ULevel':
+      return 'ULevel';
 
     case 'Const':
       // Try to extract just the meaningful name from verbose strings
@@ -1214,13 +1367,11 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
       return `#${term.index}`;  // Free variable
 
     case 'Sort':
-      // Sort(0) = Prop, Sort(1) = Type (or Type 0), Sort(n+1) = Type n
-      // Following Lean's convention where Type = Sort 1, Type 1 = Sort 2, etc.
-      if (term.level === 0) {
-        return 'Prop';
-      }
-      const typeLevel = term.level - 1;
-      return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+      // Pretty print Sort with TLevel
+      return prettyPrintSortTT(term.level);
+
+    case 'ULevel':
+      return 'ULevel';
 
     case 'Const':
       return term.name;
@@ -1377,12 +1528,11 @@ export function prettyPrintLatexTT(
       return `\\#${term.index}`;
 
     case 'Sort':
-      // Sort(0) = Prop, Sort(1) = Type, Sort(n+1) = Type n
-      if (term.level === 0) {
-        return '\\text{Prop}';
-      }
-      const typeLevelLatex = term.level - 1;
-      return typeLevelLatex === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevelLatex}}`;
+      // Pretty print Sort with TLevel in LaTeX
+      return prettyPrintSortLatexTT(term.level);
+
+    case 'ULevel':
+      return '\\text{ULevel}';
 
     case 'Const':
       // Escape special LaTeX characters in names
@@ -1924,6 +2074,7 @@ export function occursInTT(index: number, term: TTerm): boolean {
       return term.index === index;
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return false;
     case 'Binder': {
       // Check in domain (if present) and body (going under binder for body)
