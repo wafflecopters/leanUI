@@ -1,4 +1,4 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, defaultTCEnvOptions, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, TCEnv, TCEnvError, TCEnvOptions, validateInductiveNamingConventions } from "./term";
 import { TTKTerm, levelsEqual } from "./kernel";
 import { inferType } from "./checker";
 
@@ -49,6 +49,7 @@ export function checkInductiveDeclaration(
   type: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>,
   definitions: DefinitionsMap,
+  tcEnvOptions: TCEnvOptions = defaultTCEnvOptions,
 ): {
   success: false,
   errors: TCEnvError[]
@@ -59,7 +60,7 @@ export function checkInductiveDeclaration(
 } {
   // We'll compute indexPositions after validation, so use empty array initially
   const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions: [] };
-  const defEnv = createTCEnv({ definitions, options: { mode: 'check' } }).withValue(inductiveDefinition);
+const defEnv = createTCEnv({ definitions, options: tcEnvOptions }).withValue(inductiveDefinition);
 
   // Validate naming conventions first
   const errors: TCEnvError[] = [];

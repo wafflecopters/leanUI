@@ -16,11 +16,18 @@ import { whnf } from "./whnf";
  *   value are treated as rigid (cannot be substituted with each other). This allows
  *   pattern-local bindings (lower indices) to be flexible while function parameters
  *   (higher indices) remain rigid. If undefined, all vars are flexible.
+ *
+ * - allowRigidDeletion: Controls the deletion rule for rigid variables.
+ *   When true (default): `x = x` succeeds trivially for rigid vars (assumes K/UIP).
+ *   When false: `x = x` fails for rigid vars (K-free mode for HoTT compatibility).
+ *   This affects pattern matching on identity types - without K, you cannot prove
+ *   that all proofs of `x = x` are equal to `refl`.
  */
 export type UnifyOptions = {
   flexibleVars?: boolean;
   rigidVarsAtOrAbove?: number;
-  mode: 'pattern' | 'check'
+mode: 'pattern' | 'check'
+  allowRigidDeletion?: boolean;
 }
 
 // ============================================================================
@@ -42,7 +49,13 @@ export type UnifyResult = {
   levelConstraints: LevelConstraint[];
 } | {
   success: false;
-  reason: 'conflict' | 'cycle';
+  /**
+   * Failure reason:
+   * - 'conflict': Terms have incompatible structure (e.g., different constructors)
+   * - 'cycle': Occurs check failed (would create cyclic substitution)
+   * - 'k-required': Rigid variable self-equality (x = x) requires K/UIP assumption
+   */
+  reason: 'conflict' | 'cycle' | 'k-required';
 }
 
 // ============================================================================
@@ -389,6 +402,13 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
 
   if (a.tag === 'Var' && b.tag === 'Var') {
     if (a.index === b.index) {
+      // DELETION RULE: x = x succeeds trivially
+      // However, in K-free mode, this is NOT allowed for rigid variables
+      // because it relies on K (uniqueness of identity proofs)
+      const bothRigid = isRigidVar(a.index);
+      if (bothRigid && options.allowRigidDeletion === false) {
+        return { success: false, reason: 'k-required' };
+      }
       return emptySuccess;
     }
 

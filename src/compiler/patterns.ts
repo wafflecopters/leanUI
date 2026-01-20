@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, transformVarsInTermWithBinders, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -484,12 +484,23 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const unifyResult = unifyTerms(unifyLeft, unifyRight, {
     flexibleVars: true,
     rigidVarsAtOrAbove: numPatternLocalBindings,
-    mode: 'pattern'
+    mode: 'pattern',
+    // In K-free mode (assumeUIP=false), reject the deletion rule for rigid variables.
+    // This prevents pattern matching on identity types like `Equal A x x` from implicitly
+    // assuming that all proofs of `x = x` are equal to `refl`.
+    allowRigidDeletion: workEnv.options.assumeUIP,
   })
 
   if (!unifyResult.success) {
     const leftStr = workEnv.prettyPrint(unifyLeft)
     const rightStr = workEnv.prettyPrint(unifyRight)
+    if (unifyResult.reason === 'k-required') {
+      throw TCEnvError.create(
+        `Pattern matching on '${pattern.name}' requires axiom K (UIP). ` +
+        `Cannot unify ${leftStr} with ${rightStr} without assuming uniqueness of identity proofs.`,
+        workEnv
+      )
+    }
     throw TCEnvError.create(
       `Constructor '${pattern.name}' has result type ${leftStr} but expected ${rightStr}`,
       workEnv
@@ -515,10 +526,35 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     return mkVar(workEnv.context.length - 1 - index)
   })
 
-  const shiftAmount = workEnv.context.length - nextCheckTypeEntry.ctxLength
-  const adjustedBody = shiftTerm(nextCheckType.body, shiftAmount, 0)
+  // The Pi body is in a context of length (nextCheckTypeEntry.ctxLength + 1) because
+  // the Pi binder adds one variable to the context. We need to:
+  // 1. Shift FREE variables (indices >= 1) to account for the difference between
+  //    the Pi body context and the current working context
+  // 2. Replace the BOUND variable (index 0) with the elaborated term
+  //
+  // We use transformVarsInTerm instead of shiftTerm+subst because subst would
+  // incorrectly shift down variables after replacement (assuming we're removing a binder),
+  // but we're keeping all variables in the working context.
+  const bodyCtxLength = nextCheckTypeEntry.ctxLength + 1
+  const shiftAmount = workEnv.context.length - bodyCtxLength
 
-  checkStack.push({ type: subst(shiftAmount, adjustedElabTerm, adjustedBody), ctxLength: workEnv.context.length })
+  const returnType = transformVarsInTermWithBinders(nextCheckType.body, (varIndex, binderDepth) => {
+    const adjustedIndex = varIndex - binderDepth;
+    if (adjustedIndex === 0) {
+      // Bound variable (the Pi's parameter) - replace with the elaborated term
+      // The elaborated term is already in the working context, but we need to
+      // shift it up by binderDepth to account for any inner binders we've entered
+      return binderDepth > 0 ? shiftTerm(adjustedElabTerm, binderDepth, 0) : adjustedElabTerm;
+    } else if (adjustedIndex > 0) {
+      // Free variable from the Pi body context - shift up by shiftAmount
+      return mkVar(varIndex + shiftAmount);
+    } else {
+      // Variable bound by an inner binder - leave unchanged
+      return mkVar(varIndex);
+    }
+  });
+
+  checkStack.push({ type: returnType, ctxLength: workEnv.context.length })
 
   for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
     logInfo(() => `    Apply: ${workEnv.prettyPrint(mkVar(varIndex))} -> ${workEnv.prettyPrint(value)}`)
@@ -549,9 +585,20 @@ function applySubstitutionToCheckStackInPlace(
     if (varIndex >= mainSigLength - m) {
       const localVarIndex = varIndex - (mainSigLength - m);
       const shiftAmount = m - mainSigLength;
-      const shiftedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
+      let adjustedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
 
-      const newTerm = subst(localVarIndex, shiftedValue, entry.type);
+      // The value comes from the same context that's being modified by this substitution.
+      // Indices in the value that are > varIndex refer to variables that will shift down
+      // by 1 after the substitution removes varIndex from the context.
+      // We need to pre-adjust these indices in the value.
+      adjustedValue = transformVarsInTerm(adjustedValue, (idx) => {
+        if (idx > varIndex) {
+          return mkVar(idx - 1);
+        }
+        return mkVar(idx);
+      });
+
+      const newTerm = subst(localVarIndex, adjustedValue, entry.type);
       // Mutate entry in place
       stack[i] = { type: newTerm, ctxLength: entry.ctxLength - 1 };
     }

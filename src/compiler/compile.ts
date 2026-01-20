@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TCEnvOptions, defaultTCEnvOptions, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -1296,6 +1296,7 @@ interface CheckDeclarationResult {
 function checkDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
+  tcEnvOptions: TCEnvOptions = defaultTCEnvOptions,
 ): CheckDeclarationResult {
   let checkSuccess = true;
   const checkErrors: TCEnvError[] = [];
@@ -1305,17 +1306,17 @@ function checkDeclaration(
   let totalityResult: TotalityResult | undefined;
   let checkedValue: TTKTerm | undefined;
 
-  // Check for elaboration errors first (e.g., named argument errors)
+// Check for elaboration errors first (e.g., named argument errors)
   if (decl.elabError) {
     checkSuccess = false;
     // Create TCEnv with the error path so the error points to the correct source location
     const errorPath = decl.elabErrorPath ? deserializeIndexPath(decl.elabErrorPath) : [];
-    const env = createTCEnv({ definitions, indexPath: errorPath, options: { mode: 'check' } });
+    const env = createTCEnv({ definitions, indexPath: errorPath, options: tcEnvOptions });
     const error = TCEnvError.create(decl.elabError, env);
     checkErrors.push(error);
     errorCount = 1;
   } else if (decl.kind === 'inductive') {
-    const result = checkInductiveTypeDeclaration(decl, definitions);
+    const result = checkInductiveTypeDeclaration(decl, definitions, tcEnvOptions);
     if (result.success) {
       newDefinitions = result.definitions;
       indexPositions = result.indexPositions;
@@ -1325,7 +1326,7 @@ function checkDeclaration(
       errorCount = result.errors.length;
     }
   } else if (decl.kind === 'term') {
-    const result = checkTermDeclaration(decl, definitions);
+    const result = checkTermDeclaration(decl, definitions, tcEnvOptions);
     if (result.success) {
       newDefinitions = result.definitions;
       totalityResult = result.totalityResult;
@@ -1339,7 +1340,7 @@ function checkDeclaration(
     }
   } else {
     checkSuccess = false;
-    const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv({ definitions, options: { mode: 'check' } }));
+const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv({ definitions, options: tcEnvOptions }));
     checkErrors.push(error);
     errorCount = 1;
   }
@@ -1379,23 +1380,25 @@ function checkDeclaration(
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
+  tcEnvOptions: TCEnvOptions = defaultTCEnvOptions,
 ): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[] } {
   if (decl.kind !== 'inductive') {
-    return failCheck('Declaration is not an inductive type', createTCEnv({ definitions, options: { mode: 'check' } }))
+return failCheck('Declaration is not an inductive type', createTCEnv({ definitions, options: tcEnvOptions }))
   }
 
   if (!decl.kernelType) {
-    return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: { mode: 'check' } }))
+    return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: tcEnvOptions }))
   }
   if (!decl.kernelConstructors) {
-    return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: { mode: 'check' } }))
+    return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: tcEnvOptions }))
   }
 
   const result = checkInductiveDeclaration(
     decl.name || 'anonymous',
     decl.kernelType,
     decl.kernelConstructors,
-    definitions
+    definitions,
+    tcEnvOptions
   );
   if (!result.success) {
     return result
@@ -1418,12 +1421,13 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
+tcEnvOptions: TCEnvOptions = defaultTCEnvOptions,
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   if (!decl.name) {
-    return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
+return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: tcEnvOptions }))
   }
 
-  let env = createTCEnv({ definitions, options: { mode: 'check' } })
+  let env = createTCEnv({ definitions, options: tcEnvOptions })
 
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', env)
@@ -1553,6 +1557,7 @@ function checkBlock(
   block: ElabBlock,
   blockIndex: number,
   definitions: DefinitionsMap,
+  tcEnvOptions: TCEnvOptions = defaultTCEnvOptions,
 ): CheckBlockResult {
   // Handle comment blocks
   if (block.kind === 'comment') {
@@ -1598,7 +1603,7 @@ function checkBlock(
   let totalErrors = 0;
 
   for (const decl of block.declarations) {
-    const result = checkDeclaration(decl, currentDefinitions);
+    const result = checkDeclaration(decl, currentDefinitions, tcEnvOptions);
     compiledDeclarations.push(result.compiled);
     currentDefinitions = result.newDefinitions;
     totalErrors += result.errorCount;
@@ -1638,6 +1643,8 @@ interface CheckOptions {
   onlyKind?: 'inductive' | 'term';
   /** Existing compiled blocks to merge with (for phase 2) */
   existingBlocks?: CompiledBlock[];
+  /** Type checking environment options (default: defaultTCEnvOptions) */
+  tcEnvOptions?: TCEnvOptions;
 }
 
 /**
@@ -1648,7 +1655,7 @@ function checkBlocks(
   initialDefinitions: DefinitionsMap = createDefinitionsMap(),
   options: CheckOptions = {},
 ): CheckBlocksResult {
-  const { onlyKind, existingBlocks } = options;
+  const { onlyKind, existingBlocks, tcEnvOptions = defaultTCEnvOptions } = options;
   const compiledBlocks: CompiledBlock[] = [];
   let currentDefinitions = initialDefinitions;
   let totalCheckErrors = 0;
@@ -1689,7 +1696,7 @@ function checkBlocks(
         startLine: block.startLine,
       };
 
-      const result = checkBlock(filteredBlock, blockIndex, currentDefinitions);
+      const result = checkBlock(filteredBlock, blockIndex, currentDefinitions, tcEnvOptions);
 
       // Merge with existing blocks if provided (for phase 2, merge with phase 1 results)
       if (existingBlocks && existingBlocks[blockIndex]) {
@@ -1714,7 +1721,7 @@ function checkBlocks(
       totalCheckErrors += result.errorCount;
     } else {
       // No filtering - check all declarations
-      const result = checkBlock(block, blockIndex, currentDefinitions);
+      const result = checkBlock(block, blockIndex, currentDefinitions, tcEnvOptions);
       compiledBlocks.push(result.compiled);
       currentDefinitions = result.newDefinitions;
       totalCheckErrors += result.errorCount;
@@ -1733,6 +1740,17 @@ function checkBlocks(
 // ============================================================================
 
 /**
+ * Options for compiling TT source code.
+ */
+export interface CompileOptions {
+  /**
+   * Type checking environment options.
+   * Controls behavior like assumeUIP (Uniqueness of Identity Proofs / axiom K).
+   */
+  tcEnvOptions?: TCEnvOptions;
+}
+
+/**
  * Compile TT source code to elaborated kernel terms.
  *
  * Pipeline (phased for constructor-aware wildcard naming):
@@ -1744,9 +1762,12 @@ function checkBlocks(
  * 6. Phase 2 type check: check term declarations
  *
  * @param source - The full source code
+ * @param options - Compilation options (optional)
  * @returns CompileResult with elaborated declarations
  */
-export function compileTTFromText(source: string): CompileResult {
+export function compileTTFromText(source: string, options: CompileOptions = {}): CompileResult {
+  const { tcEnvOptions = defaultTCEnvOptions } = options;
+
   // Reset wildcard counter for fresh compilation
   resetWildcardCounter();
 
@@ -1757,7 +1778,8 @@ export function compileTTFromText(source: string): CompileResult {
 
   // Phase 1: Type check inductive types only
   const checkResultPhase1 = checkBlocks(elabResultPhase1, createDefinitionsMap(), {
-    onlyKind: 'inductive'
+    onlyKind: 'inductive',
+    tcEnvOptions,
   });
 
   // Build constructor param names from checked inductives
@@ -1770,7 +1792,8 @@ export function compileTTFromText(source: string): CompileResult {
   // Phase 2: Type check term declarations
   const checkResultPhase2 = checkBlocks(elabResultPhase2, checkResultPhase1.finalDefinitions, {
     onlyKind: 'term',
-    existingBlocks: checkResultPhase1.blocks
+    existingBlocks: checkResultPhase1.blocks,
+    tcEnvOptions,
   });
 
   const totalCheckErrors = checkResultPhase1.totalCheckErrors + checkResultPhase2.totalCheckErrors;

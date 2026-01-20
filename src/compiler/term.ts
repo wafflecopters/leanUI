@@ -29,10 +29,6 @@ export type MetaVar = {
   solution?: TTKTerm
 }
 
-export type TCEnvOptions = {
-  mode: 'pattern' | 'check'
-}
-
 export function createTCEnv(data: {
   definitions?: DefinitionsMap,
   context?: TTKContext,
@@ -377,6 +373,61 @@ function replaceHolesWithMetasInTerm<S>(env: TCEnv<S>, term: TTKTerm): { env: TC
   }
 }
 
+/**
+ * Transform variables in a term, with binder depth tracking.
+ * Similar to transformVarsInTerm, but passes a numeric binder depth instead of full context.
+ * This is useful when you only need to know how many binders you're under, not their details.
+ */
+export function transformVarsInTermWithBinders(term: TTKTerm, transform: (varIndex: number, binderDepth: number) => TTKTerm): TTKTerm {
+  return transformVarsInTermWithBindersAcc(term, transform, 0);
+}
+
+function transformVarsInTermWithBindersAcc(term: TTKTerm, transform: (varIndex: number, binderDepth: number) => TTKTerm, depth: number): TTKTerm {
+  if (term.tag === 'Var') {
+    return transform(term.index, depth);
+  } else if (term.tag === 'Binder') {
+    return {
+      tag: 'Binder',
+      name: term.name,
+      binderKind: term.binderKind,
+      domain: transformVarsInTermWithBindersAcc(term.domain, transform, depth),
+      body: transformVarsInTermWithBindersAcc(term.body, transform, depth + 1)
+    };
+  } else if (term.tag === 'App') {
+    return {
+      tag: 'App',
+      fn: transformVarsInTermWithBindersAcc(term.fn, transform, depth),
+      arg: transformVarsInTermWithBindersAcc(term.arg, transform, depth)
+    };
+  } else if (term.tag === 'Const') {
+    return { tag: 'Const', name: term.name };
+  } else if (term.tag === 'Sort') {
+    return { tag: 'Sort', level: term.level };
+  } else if (term.tag === 'Hole') {
+    return { tag: 'Hole', id: term.id };
+  } else if (term.tag === 'Meta') {
+    return { tag: 'Meta', id: term.id };
+  } else if (term.tag === 'Annot') {
+    return {
+      tag: 'Annot',
+      term: transformVarsInTermWithBindersAcc(term.term, transform, depth),
+      type: transformVarsInTermWithBindersAcc(term.type, transform, depth)
+    };
+  } else if (term.tag === 'Match') {
+    return {
+      tag: 'Match',
+      scrutinee: transformVarsInTermWithBindersAcc(term.scrutinee, transform, depth),
+      clauses: term.clauses.map(c => ({
+        patterns: c.patterns,
+        rhs: transformVarsInTermWithBindersAcc(c.rhs, transform, depth)
+      }))
+    };
+  }
+
+  const _never: never = term
+  throw new Error(`Unexpected tag: ${(term as { tag: string }).tag}`);
+}
+
 export const MatchPartIndex = {
   Scrutinee: fieldSeg('scrutinee'),
   Clauses: fieldSeg('clauses'),
@@ -451,6 +502,46 @@ export function printCollectionFancy(items: string[], openBracket: string, close
  */
 export type LevelMeta = Level | undefined;
 
+/**
+ * Options that affect type checking behavior.
+ *
+ * These options control various aspects of the type checker, particularly
+ * around axiom assumptions like UIP (Uniqueness of Identity Proofs).
+ */
+export type TCEnvOptions = {
+  /**
+   * Mode for type checking.
+   * - 'pattern': Pattern matching mode
+   * - 'check': Regular type checking mode
+   */
+  mode: 'pattern' | 'check';
+
+  /**
+   * Whether to assume UIP (Uniqueness of Identity Proofs) / Axiom K.
+   *
+   * When true:
+   * - Pattern matching on identity proofs (like `refl`) can assume all proofs
+   *   of `x = x` are definitionally equal to `refl`
+   * - This enables Streicher's K axiom and related principles
+   *
+   * When false (default):
+   * - Pattern matching on identity types is more restrictive
+   * - Cannot assume all proofs of `x = x` are equal to `refl`
+   * - Compatible with Homotopy Type Theory (HoTT)
+   *
+   * Default: false
+   */
+  assumeUIP: boolean;
+}
+
+/**
+ * Default type checking options.
+ */
+export const defaultTCEnvOptions: TCEnvOptions = {
+  mode: 'check',
+  assumeUIP: false,
+};
+
 export class TCEnv<T> {
   constructor(
     public readonly context: TTKContext,
@@ -460,7 +551,7 @@ export class TCEnv<T> {
     public readonly indexPath: IndexPath,
     public readonly valueStack: unknown[],
     public readonly value: T,
-    public readonly levelMetas: Map<string, LevelMeta>,
+public readonly levelMetas: Map<string, LevelMeta>,
     public readonly options: TCEnvOptions,
     /**
      * The elaborated term (with Holes replaced by Metas, etc.)
@@ -614,7 +705,10 @@ export class TCEnv<T> {
   }
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas, this.options, this.elaboratedTerm);
+// Use otherEnv.context to avoid context leaks from nested type checking.
+    // When checking nested Pi types, the body check extends the context, but
+    // we don't want those extensions to leak to sibling checks.
+    return new TCEnv(otherEnv.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas, this.options, this.elaboratedTerm);
   }
 
   /**
@@ -1415,8 +1509,12 @@ export class TCEnv<T> {
     return TCEnvError.create(`Expected terms to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
   }
 
-  unificationFailedError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, reason: 'conflict' | 'cycle'): TCEnvError {
-    const reasonMsg = reason === 'conflict' ? 'conflicting heads' : 'occurs check failed (cyclic)';
+  unificationFailedError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, reason: 'conflict' | 'cycle' | 'k-required'): TCEnvError {
+    const reasonMsg = {
+      'conflict': 'conflicting heads',
+      'cycle': 'occurs check failed (cyclic)',
+      'k-required': 'rigid variable self-equality requires axiom K'
+    }[reason];
     return TCEnvError.create(`Unification failed (${reasonMsg}): ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}`, this);
   }
 
