@@ -445,6 +445,15 @@ export class TCEnv<T> {
     return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas);
   }
 
+  /**
+   * Create a new env with this env's context/definitions/value/path,
+   * but with metaVars/constraints/levelMetas from another env.
+   * Used when checking Pi body: we want the original context but updated metas.
+   */
+  withMetasConstraintsLevelMetasFrom<S>(otherEnv: TCEnv<S>): TCEnv<T> {
+    return new TCEnv(this.context, this.definitions, otherEnv.metaVars, otherEnv.constraints, this.indexPath, this.valueStack, this.value, otherEnv.levelMetas);
+  }
+
   atIndexPath(indexPath: IndexPath): TCEnv<void> {
     return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined, this.levelMetas);
   }

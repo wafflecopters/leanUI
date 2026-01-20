@@ -76,8 +76,13 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     const { env: env1, sort: domainSort } = env.typeSortFresh();
     const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderPiDomain(), domainSort);
 
+    // IMPORTANT: Use env1's context (original), not domEnv's context.
+    // Checking the domain may extend the context (if domain is itself a Pi),
+    // but that extension should NOT leak into the body's context.
+    // We only need domEnv for its metaVars/constraints/levelMetas.
     const { env: env2, sort: bodySort } = domEnv.typeSortFresh();
-    const bodyEnv = checkType(env2.atValueAndPathOfEnv(env).inBinderPiBody(), bodySort);
+    const envForBody = env1.withMetasConstraintsLevelMetasFrom(env2);
+    const bodyEnv = checkType(envForBody.atValueAndPathOfEnv(env).inBinderPiBody(), bodySort);
 
     // Result is Sort(max(l_i, l_j)) where the levels come from the fresh metas
     const resultSort: TTKTerm = {
