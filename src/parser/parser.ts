@@ -1534,7 +1534,10 @@ export class Parser {
    */
   private parseLet(ctx: NameContext, path: IndexPath = []): TTerm {
     const startToken = this.current();
-    const letCol = startToken.col; // Track column for indentation checking
+    // Track the starting column of the line containing 'let' for indentation checking
+    // This handles cases like: plus (Succ a) b = let x = ... in\n  x
+    // where the body just needs to be more indented than the line start, not the 'let' keyword
+    const letLineStartCol = this.getLineStartCol(startToken.line);
     this.expect('LET');
 
     let name: string;
@@ -1597,10 +1600,10 @@ export class Parser {
       while (this.current().type === 'NEWLINE') {
         this.advance();
       }
-      // The body must be indented beyond the 'let' keyword
-      if (this.current().col <= letCol) {
+      // The body must be indented beyond the start of the line containing 'let'
+      if (this.current().col <= letLineStartCol) {
         throw new ParseError(
-          `Body of let expression must be indented beyond 'let' (column ${letCol}), found at column ${this.current().col}`,
+          `Body of let expression must be indented beyond line start (column ${letLineStartCol}), found at column ${this.current().col}`,
           this.current().line,
           this.current().col
         );
@@ -2112,6 +2115,19 @@ export class Parser {
       );
     }
     return this.advance();
+  }
+
+  /**
+   * Get the column of the first non-NEWLINE token on a given line.
+   * Used for indentation checking in let expressions.
+   */
+  private getLineStartCol(line: number): number {
+    for (const token of this.tokens) {
+      if (token.line === line && token.type !== 'NEWLINE') {
+        return token.col;
+      }
+    }
+    return 0;
   }
 
   // ============================================================================
