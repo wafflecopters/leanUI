@@ -628,7 +628,7 @@ export function TextEditorPage() {
     for (const hole of holeLocations) {
       markers.push({
         severity: monaco.MarkerSeverity.Warning,
-        message: `Hole '${hole.id}' is unsound - proof incomplete`,
+        message: `Holes are unsound.`,
         startLineNumber: hole.line,
         startColumn: hole.column,
         endLineNumber: hole.line,

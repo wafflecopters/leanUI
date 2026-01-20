@@ -176,16 +176,20 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
     p['advance']();
     return mkPropTT();
   },
-  'HOLE': (p, t) => {
+  'HOLE': (p, t, _ctx, path) => {
     p['advance']();
+    // Record source position for the hole (add 1 for the '?' prefix not in token.value)
+    p['recordTokenSourcePositionWithLength'](t, path, t.value.length + 1);
     return mkHoleTT(t.value, mkHoleTT('hole_type', mkPropTT()));
   },
   'NUMBER': (p, t) => {
     p['advance']();
     return p['parseNumberLiteral'](t.value);
   },
-  'UNDERSCORE': (p) => {
+  'UNDERSCORE': (p, t, _ctx, path) => {
     p['advance']();
+    // Record source position for the underscore
+    p['recordTokenSourcePosition'](t, path);
     return mkHoleTT('_', mkHoleTT('underscore_type', mkPropTT()));
   },
 };
@@ -2133,6 +2137,30 @@ export class Parser {
   // ============================================================================
   // Source Position Tracking Helpers
   // ============================================================================
+
+  /**
+   * Record a source position for a single token at the given path.
+   * Used by parselets that handle simple tokens like HOLE and UNDERSCORE.
+   */
+  private recordTokenSourcePosition(token: Token, path: IndexPath): void {
+    this.recordTokenSourcePositionWithLength(token, path, token.value.length);
+  }
+
+  /**
+   * Record a source position for a token with an explicit length.
+   * Useful when the token's value doesn't include prefix characters (e.g., '?' for holes).
+   */
+  private recordTokenSourcePositionWithLength(token: Token, path: IndexPath, length: number): void {
+    if (path.length > 0) {
+      const startPos = createSourcePos(token.line, token.col, token.pos);
+      const endCol = token.col + length;
+      const endCharPos = token.pos + length;
+      const endPos = createSourcePos(token.line, endCol, endCharPos);
+      const range = createSourceRange(startPos, endPos);
+      const key = serializeIndexPath(path);
+      this.currentSourceMap.set(key, range);
+    }
+  }
 
   /**
    * Record a source range for the given index path.

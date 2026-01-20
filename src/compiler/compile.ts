@@ -516,7 +516,9 @@ function collectHolesFromSurfaceTerm(
       break;
 
     case 'Binder':
-      collectHolesFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], holes);
+      if (term.domain !== undefined) {
+        collectHolesFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], holes);
+      }
       collectHolesFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], holes);
       if (term.binderKind.tag === 'BLetTT') {
         collectHolesFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], holes);
