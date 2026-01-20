@@ -18,6 +18,7 @@ import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause } from './patterns';
 import { checkFunctionTotality, formatMissingCase } from './ttk-totality-check';
+import { analyzeRecursionTTK } from './ttk-recursion-check';
 
 // ============================================================================
 // Global Configuration
@@ -1451,7 +1452,16 @@ function checkTermValue(
     return { success: false, errors };
   }
 
-  // TODO: structural recursion check
+  // Structural recursion check: ensure all recursive calls are on structurally smaller arguments
+  if (name !== undefined) {
+    const recursionAnalysis = analyzeRecursionTTK(name, env.value);
+    if (recursionAnalysis.unsafeRecursion.length > 0) {
+      for (const unsafe of recursionAnalysis.unsafeRecursion) {
+        errors.push(TCEnvError.create(`Unsafe recursion in '${name}': ${unsafe.error}`, env));
+      }
+      return { success: false, errors };
+    }
+  }
 
   // Totality check - verify all patterns are covered
   if (name) {

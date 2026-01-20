@@ -23,6 +23,7 @@ import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { validateDeclarations, NameResolutionError, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatterns } from './pattern-resolution';
 import { prettyPrintTT, TTerm } from '../compiler/surface';
+import { analyzeRecursionTTK } from '../compiler/ttk-recursion-check';
 
 // ============================================================================
 // Stub Types and Functions
@@ -67,8 +68,29 @@ function elaborateTT(
   clauseResults?: ClauseCheckResult[];
   patternData?: PatternElabData;
 } {
-  // Return a stub result indicating type checking is not implemented
+  const errors: CheckError[] = [];
+
+  // Structural recursion check: ensure all recursive calls are on structurally smaller arguments
+  if (_name && _value) {
+    const recursionAnalysis = analyzeRecursionTTK(_name, _value);
+    if (recursionAnalysis.unsafeRecursion.length > 0) {
+      for (const unsafe of recursionAnalysis.unsafeRecursion) {
+        errors.push({
+          message: `Unsafe recursion in '${_name}': ${unsafe.error}`,
+          path: _valuePath
+        });
+      }
+      return {
+        success: false,
+        errors,
+        value: _type,
+        validType: _type
+      };
+    }
+  }
+
   // Return success=true with the provided type so declarations are added to context
+  // TODO: Replace with full type checking implementation
   return {
     success: true,
     errors: [],
