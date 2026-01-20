@@ -813,9 +813,10 @@ function extractInductiveParamInfo(decl: ParsedDeclaration): InductiveParamInfo[
     let position = 0;
 
     while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      // Pi binders always have domain
       params.push({
         name: current.name || `_${position}`,
-        type: prettyPrintTT(current.domain),
+        type: prettyPrintTT(current.domain!),
         isIndex: indexPositions.has(position)
       });
       current = current.body;

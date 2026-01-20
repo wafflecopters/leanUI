@@ -103,8 +103,10 @@ export function validateTerm(
         break;
 
       case 'Binder':
-        // Validate domain
-        walk(t.domain, [...p, { kind: 'field', name: 'domain' }]);
+        // Validate domain (if present - let bindings may have optional domain)
+        if (t.domain !== undefined) {
+          walk(t.domain, [...p, { kind: 'field', name: 'domain' }]);
+        }
 
         // For let bindings, validate the definition value
         if (t.binderKind.tag === 'BLetTT') {

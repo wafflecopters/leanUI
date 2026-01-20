@@ -186,7 +186,8 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
       const bodyCtx = extendTelescope(ctx, term.name);
 
       if (term.binderKind.tag === 'BPiTT') {
-        const domainNode = renderTerm(term.domain, [...path, 'domain'], ctx);
+        // Pi binders always have domain
+        const domainNode = renderTerm(term.domain!, [...path, 'domain'], ctx);
         const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
 
         // If name is empty or '_', show as "domain → body" (non-dependent arrow)
@@ -212,12 +213,17 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
           </FocusableSpan>
         );
       } else if (term.binderKind.tag === 'BLetTT') {
+        // For focus tracking, use 'domain' path for defVal (matches original design)
         const defValNode = renderTerm(term.binderKind.defVal, [...path, 'domain'], ctx);
         const bodyNode = renderTerm(term.body, [...path, 'body'], bodyCtx);
+        // Only show type annotation if present
+        const typeNode = term.domain !== undefined
+          ? <> : {renderTerm(term.domain, [...path, 'type'], ctx)}</>
+          : null;
         return (
           <FocusableSpan path={path} ctx={ctx}>
             <span style={{ fontWeight: 'bold' }}>let</span>{' '}
-            <BinderName name={term.name} path={path} ctx={ctx} /> := {defValNode}{' '}
+            <BinderName name={term.name} path={path} ctx={ctx} />{typeNode} = {defValNode}{' '}
             <span style={{ fontWeight: 'bold' }}>in</span> {bodyNode}
           </FocusableSpan>
         );
