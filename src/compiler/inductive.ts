@@ -1,5 +1,5 @@
 import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
-import { TTKTerm } from "./kernel";
+import { TTKTerm, levelsEqual } from "./kernel";
 import { inferType } from "./checker";
 
 function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError[] {
@@ -553,7 +553,7 @@ function termsEqualK(t1: TTKTerm, t2: TTKTerm): boolean {
       return t2.tag === 'Var' && t1.index === t2.index;
 
     case 'Sort':
-      return t2.tag === 'Sort' && t1.level === t2.level;
+      return t2.tag === 'Sort' && levelsEqual(t1.level, t2.level);
 
     case 'Const':
       return t2.tag === 'Const' && t1.name === t2.name;

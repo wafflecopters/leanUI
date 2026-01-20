@@ -508,7 +508,7 @@ export function checkMatchClause(
   const { returnType } = result.value
 
   const checkEnv = result.atValueAndPathOfEnv(env).inMatchClauseRhs()
-  //  const checkedEnv = checkType(checkEnv, returnType);
+  const checkedEnv = checkType(checkEnv, returnType);
 
   // debugger
 

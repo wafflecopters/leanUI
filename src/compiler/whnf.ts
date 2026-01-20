@@ -1,4 +1,4 @@
-import { TTKTerm, isDefinitionallyEqual } from "./kernel";
+import { TTKTerm, isDefinitionallyEqual, levelsEqual } from "./kernel";
 import { subst } from "./subst";
 
 /**
@@ -86,7 +86,7 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm): boolean {
       return n2.tag === 'Var' && n1.index === n2.index;
 
     case 'Sort':
-      return n2.tag === 'Sort' && n1.level === n2.level;
+      return n2.tag === 'Sort' && levelsEqual(n1.level, n2.level);
 
     case 'Const':
       return n2.tag === 'Const' && n1.name === n2.name;

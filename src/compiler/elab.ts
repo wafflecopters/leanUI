@@ -32,6 +32,8 @@ import type {
   TTKRecordParam,
 } from './kernel';
 
+import { mkLevelNum } from './kernel';
+
 import {
   ElabMap,
   IndexPath,
@@ -275,7 +277,7 @@ export function elabToKernel(term: TTerm): TTKTerm {
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: term.level };
+      return { tag: 'Sort', level: mkLevelNum(term.level) };
 
     case 'Const':
       return {
@@ -449,7 +451,7 @@ export function elabToKernelWithMap(
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: term.level };
+      return { tag: 'Sort', level: mkLevelNum(term.level) };
 
     case 'Const':
       return {

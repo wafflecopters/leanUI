@@ -1,5 +1,6 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkLZero } from "./kernel";
+import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
 import { canSolveMeta, solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, shiftTerm } from "./subst";
@@ -511,6 +512,45 @@ export class TCEnv<T> {
     );
   }
 
+  /**
+   * Create a fresh meta variable for a type (used when inferring holes).
+   * The meta has type `Type` (Sort 1).
+   * Returns the updated env and the meta term.
+   */
+  createMetaForType<S>(this: TCEnv<S>): { env: TCEnv<S>, metaTerm: TTKTerm } {
+    const name = `?m${this.metaVars.size}`;
+    const newMetaVars = new Map(this.metaVars);
+    newMetaVars.set(name, { ctx: this.context, type: this.typeSort() });
+
+    const metaTerm: TTKTerm = { tag: 'Meta', id: name };
+
+    const env = new TCEnv(
+      this.context,
+      this.definitions,
+      newMetaVars,
+      this.constraints,
+      this.indexPath,
+      this.valueStack,
+      this.value
+    );
+
+    return { env, metaTerm };
+  }
+
+  /**
+   * Check if this lambda binder has a hole as its domain (unannotated lambda).
+   */
+  lambdaDomainIsHole(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }>): boolean {
+    return this.value.domain.tag === 'Hole';
+  }
+
+  /**
+   * Normalize a term to its normal form.
+   */
+  normalize(this: TCEnv<unknown>, term: TTKTerm): TTKTerm {
+    return doNormalize(term);
+  }
+
   isConstTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Const' }> {
     return this.value.tag === 'Const';
   }
@@ -982,6 +1022,48 @@ export class TCEnv<T> {
       throw this.unsolvedConstraintsError();
     }
     return this;
+  }
+
+  withSortOfSort(this: TCEnv<TTKTerm & { tag: 'Sort' }>): TCEnv<TTKTerm> {
+    return this.withValue({ tag: 'Sort', level: mkLSucc(this.value.level) });
+  }
+
+  ensurePi(this: TCEnv<TTKTerm>): TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BPi' } }> {
+    const normalized = this.normalize(this.value);
+
+    if (normalized.tag === 'Binder' && normalized.binderKind.tag === 'BPi') {
+      return this.withValue({ tag: 'Binder', name: normalized.name, binderKind: { tag: 'BPi' }, domain: normalized.domain, body: normalized.body });
+    }
+
+    if (normalized.tag === 'Hole' || normalized.tag === 'Meta') {
+      // Create: Π(x: ?A). ?B
+      const { env: domainEnv, name: domainMetaId } = addMetaVarInTCEnv(this, this.typeSort());
+      const { env: codomainEnv, name: codomainMetaId } = addMetaVarInTCEnv(domainEnv, this.typeSort()); // in extended context
+      const domainMeta: TTKTerm = { tag: 'Meta', id: domainMetaId };
+      const codomainMeta: TTKTerm = { tag: 'Meta', id: codomainMetaId };
+      const piType = mkPi(domainMeta, codomainMeta);
+
+      // Unify the original type with this Pi
+      return this.unifyTerms(this.value, piType).withValue({
+        tag: 'Binder',
+        name: 'x',  // Default name for inferred Pi
+        binderKind: { tag: 'BPi' },
+        domain: domainMeta,
+        body: codomainMeta
+      });
+    }
+
+    throw this.expectedBinderPiError();
+  }
+
+  typeSort(): TTKTerm & { tag: 'Sort' } {
+    /*
+    TODO: this should actually do (when we add universe levels)
+
+    const levelMeta = this.freshLevelMeta();
+    return { tag: 'Sort', level: levelMeta };
+    */
+    return { tag: 'Sort', level: mkLZero() };
   }
 
   // ERRORS

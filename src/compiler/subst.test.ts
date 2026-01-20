@@ -10,7 +10,7 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { mkVar, TTKTerm } from "./kernel";
+import { mkVar, TTKTerm, mkLZero } from "./kernel";
 import { Constraint, MetaVar, TTKContext } from "./term";
 import {
   applySubstitutionToContext,
@@ -25,7 +25,7 @@ import {
 // Helper Functions
 // ============================================================================
 
-const Type: TTKTerm = { tag: 'Sort', level: 0 };
+const Type: TTKTerm = { tag: 'Sort', level: mkLZero() };
 const mkApp = (fn: TTKTerm, arg: TTKTerm): TTKTerm => ({ tag: 'App', fn, arg });
 const mkConst = (name: string): TTKTerm => ({ tag: 'Const', name });
 const mkPi = (name: string, domain: TTKTerm, body: TTKTerm): TTKTerm => ({

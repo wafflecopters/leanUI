@@ -16,6 +16,165 @@
  */
 
 // ============================================================================
+// Universe Levels
+// ============================================================================
+
+/**
+ * Universe levels for the type hierarchy.
+ *
+ * - LZero: The zero level (Prop)
+ * - LSucc: Successor level (l + 1)
+ * - LMax: Maximum of two levels (for Pi types)
+ * - LIMax: Impredicative max - max(l1, l2) but 0 if l2 = 0 (for Prop)
+ * - LParam: Level parameter (for universe-polymorphic definitions)
+ * - LMVar: Level metavariable (for inference)
+ */
+export type Level =
+  | { tag: 'LZero' }
+  | { tag: 'LSucc'; pred: Level }
+  | { tag: 'LMax'; left: Level; right: Level }
+  | { tag: 'LIMax'; left: Level; right: Level }
+  | { tag: 'LParam'; name: string }
+  | { tag: 'LMVar'; id: string }
+
+// Level constructors
+export const mkLZero = (): Level => ({ tag: 'LZero' });
+export const mkLSucc = (pred: Level): Level => ({ tag: 'LSucc', pred });
+export const mkLMax = (left: Level, right: Level): Level => ({ tag: 'LMax', left, right });
+export const mkLIMax = (left: Level, right: Level): Level => ({ tag: 'LIMax', left, right });
+export const mkLParam = (name: string): Level => ({ tag: 'LParam', name });
+export const mkLMVar = (id: string): Level => ({ tag: 'LMVar', id });
+
+// Convenience: create a concrete level from a number
+export function mkLevelNum(n: number): Level {
+  let level: Level = mkLZero();
+  for (let i = 0; i < n; i++) {
+    level = mkLSucc(level);
+  }
+  return level;
+}
+
+// Try to convert a level to a concrete number, returns undefined if it contains variables/metas
+export function levelToNumber(level: Level): number | undefined {
+  switch (level.tag) {
+    case 'LZero':
+      return 0;
+    case 'LSucc': {
+      const pred = levelToNumber(level.pred);
+      return pred !== undefined ? pred + 1 : undefined;
+    }
+    case 'LMax': {
+      const left = levelToNumber(level.left);
+      const right = levelToNumber(level.right);
+      return left !== undefined && right !== undefined ? Math.max(left, right) : undefined;
+    }
+    case 'LIMax': {
+      const left = levelToNumber(level.left);
+      const right = levelToNumber(level.right);
+      if (right === 0) return 0;  // imax(_, 0) = 0
+      return left !== undefined && right !== undefined ? Math.max(left, right) : undefined;
+    }
+    case 'LParam':
+    case 'LMVar':
+      return undefined;
+  }
+}
+
+// Simplify a level (basic simplifications)
+export function simplifyLevel(level: Level): Level {
+  switch (level.tag) {
+    case 'LZero':
+    case 'LParam':
+    case 'LMVar':
+      return level;
+
+    case 'LSucc':
+      return mkLSucc(simplifyLevel(level.pred));
+
+    case 'LMax': {
+      const left = simplifyLevel(level.left);
+      const right = simplifyLevel(level.right);
+
+      // max(0, l) = l, max(l, 0) = l
+      if (left.tag === 'LZero') return right;
+      if (right.tag === 'LZero') return left;
+
+      // max(l, l) = l
+      if (levelsEqual(left, right)) return left;
+
+      // If both are concrete, compute the max
+      const leftNum = levelToNumber(left);
+      const rightNum = levelToNumber(right);
+      if (leftNum !== undefined && rightNum !== undefined) {
+        return mkLevelNum(Math.max(leftNum, rightNum));
+      }
+
+      return mkLMax(left, right);
+    }
+
+    case 'LIMax': {
+      const left = simplifyLevel(level.left);
+      const right = simplifyLevel(level.right);
+
+      // imax(_, 0) = 0
+      if (right.tag === 'LZero') return mkLZero();
+
+      // If right is definitely not zero, imax = max
+      const rightNum = levelToNumber(right);
+      if (rightNum !== undefined && rightNum > 0) {
+        return simplifyLevel(mkLMax(left, right));
+      }
+
+      return mkLIMax(left, right);
+    }
+  }
+}
+
+// Check if two levels are structurally equal
+export function levelsEqual(l1: Level, l2: Level): boolean {
+  if (l1.tag !== l2.tag) return false;
+
+  switch (l1.tag) {
+    case 'LZero':
+      return true;
+    case 'LSucc':
+      return levelsEqual(l1.pred, (l2 as typeof l1).pred);
+    case 'LMax':
+    case 'LIMax':
+      return levelsEqual(l1.left, (l2 as typeof l1).left) &&
+             levelsEqual(l1.right, (l2 as typeof l1).right);
+    case 'LParam':
+      return l1.name === (l2 as typeof l1).name;
+    case 'LMVar':
+      return l1.id === (l2 as typeof l1).id;
+  }
+}
+
+// Pretty print a level
+export function prettyPrintLevel(level: Level): string {
+  // Try to get a concrete number first
+  const num = levelToNumber(level);
+  if (num !== undefined) {
+    return num.toString();
+  }
+
+  switch (level.tag) {
+    case 'LZero':
+      return '0';
+    case 'LSucc':
+      return `(${prettyPrintLevel(level.pred)} + 1)`;
+    case 'LMax':
+      return `max(${prettyPrintLevel(level.left)}, ${prettyPrintLevel(level.right)})`;
+    case 'LIMax':
+      return `imax(${prettyPrintLevel(level.left)}, ${prettyPrintLevel(level.right)})`;
+    case 'LParam':
+      return level.name;
+    case 'LMVar':
+      return `?${level.id}`;
+  }
+}
+
+// ============================================================================
 // Core Kernel Term Language
 // ============================================================================
 
@@ -60,7 +219,7 @@ export type TTKClause = {
 
 export type TTKTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
-  | { tag: 'Sort'; level: number }                         // Type_i, Prop = Type_0
+  | { tag: 'Sort'; level: Level }                          // Sort l (Type l, Prop = Sort 0)
   | { tag: 'Binder'; name: string; binderKind: TTKBinderKind; domain: TTKTerm; body: TTKTerm }  // Unified binder
   | TTKTermApp   // Function application (f a)
   | TTKTermConst // Named constant (nat_elim, eq, etc.)
@@ -183,16 +342,26 @@ export function mkMeta(id: string): TTKTerm {
 }
 
 /**
- * Create Prop (Type_0)
+ * Create Prop (Sort 0)
  */
 export function mkProp(): TTKTerm {
-  return { tag: 'Sort', level: 0 };
+  return { tag: 'Sort', level: mkLZero() };
 }
 
 /**
- * Create Type_i
+ * Create Type_i (Sort (i+1) in our convention)
+ * Type = Type_0 = Sort 1
+ * Type 1 = Sort 2
+ * etc.
  */
-export function mkType(level: number): TTKTerm {
+export function mkType(n: number = 0): TTKTerm {
+  return { tag: 'Sort', level: mkLSucc(mkLevelNum(n)) };
+}
+
+/**
+ * Create Sort with explicit level
+ */
+export function mkSort(level: Level): TTKTerm {
   return { tag: 'Sort', level };
 }
 
@@ -211,7 +380,7 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
       return term2.tag === 'Var' && term1.index === term2.index;
 
     case 'Sort':
-      return term2.tag === 'Sort' && term1.level === term2.level;
+      return term2.tag === 'Sort' && levelsEqual(term1.level, term2.level);
 
     case 'Const':
       return term2.tag === 'Const' && term1.name === term2.name;
@@ -282,14 +451,18 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
       }
       return `#${term.index}`;
 
-    case 'Sort':
-      // Sort(0) = Prop, Sort(1) = Type, Sort(n+1) = Type n
+    case 'Sort': {
+      // Sort 0 = Prop, Sort 1 = Type, Sort (n+1) = Type n
       // Following Lean's convention where Type = Sort 1, Type 1 = Sort 2, etc.
-      if (term.level === 0) {
-        return 'Prop';
+      const levelNum = levelToNumber(term.level);
+      if (levelNum !== undefined) {
+        if (levelNum === 0) return 'Prop';
+        const typeLevel = levelNum - 1;
+        return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
       }
-      const typeLevel = term.level - 1;
-      return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+      // Level contains variables/metas, show as Sort l
+      return `Sort ${prettyPrintLevel(term.level)}`;
+    }
 
     case 'Const':
       return term.name;
@@ -485,13 +658,17 @@ export function prettyPrintLatex(
       }
       return `\\#${term.index}`;
 
-    case 'Sort':
-      // Sort(0) = Prop, Sort(1) = Type, Sort(n+1) = Type n
-      if (term.level === 0) {
-        return '\\text{Prop}';
+    case 'Sort': {
+      // Sort 0 = Prop, Sort 1 = Type, Sort (n+1) = Type n
+      const levelNum = levelToNumber(term.level);
+      if (levelNum !== undefined) {
+        if (levelNum === 0) return '\\text{Prop}';
+        const typeLevel = levelNum - 1;
+        return typeLevel === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevel}}`;
       }
-      const typeLevelLatex = term.level - 1;
-      return typeLevelLatex === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevelLatex}}`;
+      // Level contains variables/metas
+      return `\\text{Sort}\\; ${prettyPrintLevel(term.level)}`;
+    }
 
     case 'Const':
       // Escape special LaTeX characters in names

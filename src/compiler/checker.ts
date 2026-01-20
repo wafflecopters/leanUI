@@ -1,41 +1,130 @@
 // INFERENCE
 
-import { TTKTerm } from "./kernel";
+import { TTKTerm, mkLMax, simplifyLevel, mkPi } from "./kernel";
 import { subst } from "./subst";
-import { TCEnv, TCEnvError } from "./term";
+import { assertIsPi, TCEnv, TCEnvError } from "./term";
 
 function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm> {
   if (env.isBinderPiTerm()) {
-    const domResult = inferType(env.inBinderPiDomain())
-    const bodyResult = inferType(env.inBinderPiBody())
-
-    return env.withValue(maxSort(domResult.value, bodyResult.value, env))
+    // ────────────────────────────────────────────────────────────────
+    // (PI) - Pi type
+    //
+    //   Γ ⊢ A ⇐ Type_i
+    //   Γ, x : A ⊢ B ⇐ Type_j
+    //   ─────────────────────────────
+    //   Γ ⊢ Π x : A, B ⇒ Type_max(i,j)
+    // ────────────────────────────────────────────────────────────────
+    const domEnv = checkType(env.inBinderPiDomain(), env.typeSort());
+    const bodyEnv = checkType(domEnv.atValueAndPathOfEnv(env).inBinderPiBody(), domEnv.typeSort());
+    const resultSort = maxSort(domEnv.value, bodyEnv.value, bodyEnv);
+    return bodyEnv.withValue(resultSort);
   }
+
+  if (env.isBinderLambdaTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (LAM-INFER) - Lambda without expected type
+    //
+    //   Γ ⊢ A ⇐ Type
+    //   Γ, x : A ⊢ t ⇒ B
+    //   ─────────────────────────────
+    //   Γ ⊢ λ x : A => t ⇒ Π x : A, B
+    // ────────────────────────────────────────────────────────────────
+    // Note: This requires the lambda to have a domain annotation.
+    // If unannotated, we can't infer — must use checkType instead.
+    if (env.lambdaDomainIsHole()) {
+      throw TCEnvError.create('Cannot infer type of unannotated lambda', env);
+    }
+    const domEnv = checkType(env.inBinderLambdaDomain(), env.typeSort());
+    const bodyEnv = inferType(domEnv.atValueAndPathOfEnv(env).inBinderLambdaBody());
+    // Build Π(x : A). B where A is the domain and B is the inferred body type
+    const piType = mkPi(env.value.domain, bodyEnv.value, env.value.name);
+    return bodyEnv.withValue(piType);
+  }
+
   debugger
-  throw TCEnvError.create(`Inference not implemented for binder type ${env.value.tag}`, env)
+  throw TCEnvError.create(`Inference not implemented for binder type ${env.value.binderKind.tag}`, env)
 }
 
 export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
-  if (env.isConstTerm()) {
-    return env.getTypeDefinitionAssert(env.value.name)
-  } else if (env.isBinderTerm()) {
-    return inferBinderType(env)
-  } else if (env.isSortTerm()) {
-    return env.withValue({ tag: 'Sort', level: env.value.level + 1 })
-  } else if (env.isVarTerm()) {
+  if (env.isVarTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (VAR) - Variable
+    //
+    //   (x : T) ∈ Γ
+    //   ─────────────
+    //   Γ ⊢ x ⇒ T
+    // ────────────────────────────────────────────────────────────────
     return env.getTypeAtIndexInContextAssert(env.value.index)
-  } else if (env.isAppTerm()) {
-    const fnTypeEnv = inferType(env.inAppFn())
-
-    if (!fnTypeEnv.isBinderPiTerm()) {
-      throw fnTypeEnv.expectedBinderPiError()
-    }
-
-    const argEnv = env.inAppArg()
-    inferType(argEnv)
-    checkType(argEnv, fnTypeEnv.value.domain);
-    return env.mapValue(term => subst(0, term.arg, fnTypeEnv.value.body))
   }
+
+  if (env.isConstTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (CONST) - Constant
+    //
+    //   (c : T) ∈ Σ
+    //   ─────────────
+    //   Γ ⊢ c ⇒ T
+    // ────────────────────────────────────────────────────────────────
+    return env.getTypeDefinitionAssert(env.value.name)
+  }
+
+  if (env.isSortTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (SORT) - Type/Sort
+    //
+    //   ─────────────────
+    //   Γ ⊢ Type_i ⇒ Type_(i+1)
+    // ────────────────────────────────────────────────────────────────
+    return env.withSortOfSort();
+  }
+
+  if (env.isAppTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (APP) - Application
+    //
+    //   Γ ⊢ f ⇒ Π x : A, B
+    //   Γ ⊢ e ⇐ A
+    //   ─────────────────────────
+    //   Γ ⊢ f e ⇒ B[x := e]
+    // ────────────────────────────────────────────────────────────────
+    const fnTypeEnv = inferType(env.inAppFn()).ensurePi();
+    const argEnv = checkType(fnTypeEnv.atValueAndPathOfEnv(env).inAppArg(), fnTypeEnv.value.domain);
+    // Result type is B[x := e] where B is the body and e is the argument
+    const resultType = subst(0, env.value.arg, fnTypeEnv.value.body);
+    return argEnv.withValue(resultType);
+  }
+
+  if (env.isBinderTerm()) {
+    return inferBinderType(env)
+  }
+
+  if (env.isHoleTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (HOLE-INFER) - Hole in infer mode
+    //
+    // Can't infer the type of a hole — need expected type.
+    // Create a meta for both the type and the term.
+    // ────────────────────────────────────────────────────────────────
+    const { env: envWithTypeMeta, metaTerm: typeMeta } = env.createMetaForType();
+    return envWithTypeMeta.createMetaForHole(typeMeta);
+  }
+
+  if (env.isAnnotTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (ANNOT) - Type annotation
+    //
+    //   Γ ⊢ T ⇐ Type
+    //   Γ ⊢ t ⇐ T
+    //   ─────────────────
+    //   Γ ⊢ (t : T) ⇒ T
+    // ────────────────────────────────────────────────────────────────
+    const typeEnv = checkType(env.inAnnotType(), env.typeSort());
+    // The checked type annotation becomes the expected type for the term
+    const annotationType = env.value.type;  // Use the original annotation type
+    const termEnv = checkType(typeEnv.atValueAndPathOfEnv(env).inAnnotTerm(), annotationType);
+    return termEnv.withValue(annotationType);
+  }
+
   debugger
   throw TCEnvError.create(`Inference not implemented for term type ${env.value.tag}`, env)
 }
@@ -46,37 +135,52 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   if (env.isBinderLambdaTerm()) {
     // ────────────────────────────────────────────────────────────────
     // (LAM) - Lambda abstraction
-    // 
+    //
     //   Γ ⊢ Π x : A, B
     //   Γ, x : A ⊢ t ⇐ B
     //   ───────────────────────────────
     //   Γ ⊢ λ x : A => t ⇐ Π x : A, B
     // ────────────────────────────────────────────────────────────────
-    if (expectedType.tag !== 'Binder' || expectedType.binderKind.tag !== 'BPi') {
-      throw env.expectedCheckTypeToBeBinderPiError(expectedType)
-    }
-    env.assertAreTypesDefinitionallyEqual(env.value.domain, expectedType.domain, 'Lambda domain mismatch')
-    return checkType(env.inBinderLambdaBody(), expectedType.body);
+    assertIsPi(expectedType)
+
+    return env
+      .unifyTerms(env.value.domain, expectedType.domain)
+      .then(e => checkType(e.inBinderLambdaBody(), expectedType.body))
+  }
+
+  if (env.isHoleTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (HOLE) - Hole
+    //
+    //   ?m fresh
+    //   Γ ⊢ ?m : T
+    //   ─────────────
+    //   Γ ⊢ _ ⇐ T
+    // ────────────────────────────────────────────────────────────────
+    return env.createMetaForHole(expectedType, 'Hole type mismatch')
   }
 
   // ────────────────────────────────────────────────────────────────
   // (CONV) - Type conversion
-  // 
+  //
   //   Γ ⊢ t ⇒ T
   //   T ≃ T′
   //   ─────────────
   //   Γ ⊢ t ⇐ T′
   // ────────────────────────────────────────────────────────────────
-  const inferResult = inferType(env);
-  env.assertAreTypesDefinitionallyEqual(inferResult.value, expectedType, 'Type mismatch')
-  return inferResult
+  const inferredEnv = inferType(env);
+  // inferredEnv.value is the INFERRED TYPE, not the term
+  // We unify the inferred type with the expected type
+  const unifiedEnv = inferredEnv.unifyTerms(inferredEnv.value, expectedType);
+  // Return with the original term (env.value), not the type
+  return unifiedEnv.atValueAndPathOfEnv(env);
 }
 
 // Helpers
 
 function maxSort(lhs: TTKTerm, rhs: TTKTerm, env: TCEnv<unknown>): TTKTerm {
   if (lhs.tag === 'Sort' && rhs.tag === 'Sort') {
-    return { tag: 'Sort', level: Math.max(lhs.level, rhs.level) }
+    return { tag: 'Sort', level: simplifyLevel(mkLMax(lhs.level, rhs.level)) }
   }
   debugger
   throw TCEnvError.create(`Max sort not implemented for term types ${lhs.tag} and ${rhs.tag}`, env)
