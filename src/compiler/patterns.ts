@@ -19,7 +19,7 @@ import { checkType } from './checker';
 // Logging
 // ============================================================================
 
-let loggingEnabled = true;
+let loggingEnabled = false;
 
 export function setPatternLoggingEnabled(enabled: boolean): void {
   loggingEnabled = enabled;
