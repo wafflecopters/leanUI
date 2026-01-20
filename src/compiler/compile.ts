@@ -18,7 +18,6 @@ import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause } from './patterns';
 import { checkFunctionTotality, formatMissingCase } from './ttk-totality-check';
-import { analyzeRecursionTTK } from './ttk-recursion-check';
 
 // ============================================================================
 // Global Configuration
