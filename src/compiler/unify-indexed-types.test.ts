@@ -46,11 +46,9 @@ function compileAndCheck(source: string): { success: boolean; errors: string[] }
   const errors: string[] = [];
 
   for (const block of result.blocks) {
-    if (block.kind === 'checked') {
-      for (const decl of block.declarations) {
-        if (!decl.checkSuccess) {
-          errors.push(...decl.checkErrors.map(e => e.error.message));
-        }
+    for (const decl of block.declarations) {
+      if (!decl.checkSuccess) {
+        errors.push(...decl.checkErrors.map(e => e.message));
       }
     }
   }
