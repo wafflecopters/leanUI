@@ -10,7 +10,7 @@
  *   "Application requires Pi type, got: ?plus_type"
  */
 
-import { checkSourceBlocks } from './block-checker';
+import { compileSource } from '../test-utils';
 
 function test(description: string, fn: () => void): void {
   try {
@@ -64,14 +64,14 @@ F : Nat -> Type
 -- then check F (plus Zero Zero) : Type
 test : F (plus Zero Zero)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   console.log(`  Found ${results.length} blocks`);
 
   for (const r of results) {
     console.log(`  Block ${r.name}: parse=${r.parseSuccess}, check=${r.checkSuccess}`);
     if (!r.checkSuccess && r.checkErrors.length > 0) {
-      console.log(`    Errors: ${r.checkErrors.map(e => e.error.message).join('; ')}`);
+      console.log(`    Errors: ${r.checkErrors.map(e => e.message).join('; ')}`);
     }
   }
 
@@ -79,7 +79,7 @@ test : F (plus Zero Zero)`;
   assert(testBlock !== undefined, 'Should find test block');
   assert(
     testBlock!.checkSuccess === true,
-    `test should type-check when using 'plus' in type. Error: ${testBlock!.checkErrors.map(e => e.error.message).join(', ')}`
+    `test should type-check when using 'plus' in type. Error: ${testBlock!.checkErrors.map(e => e.message).join(', ')}`
   );
 });
 
@@ -109,14 +109,14 @@ inductive Vec : Type -> Nat -> Type where
 -- The key test: using 'plus' in the RETURN TYPE of vecConcat
 vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   console.log(`  Found ${results.length} blocks`);
 
   for (const r of results) {
     console.log(`  Block ${r.name}: parse=${r.parseSuccess}, check=${r.checkSuccess}`);
     if (!r.checkSuccess && r.checkErrors.length > 0) {
-      console.log(`    Errors: ${r.checkErrors.map(e => e.error.message).join('; ')}`);
+      console.log(`    Errors: ${r.checkErrors.map(e => e.message).join('; ')}`);
     }
   }
 
@@ -129,7 +129,7 @@ vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A 
   //   "Application requires Pi type, got: ?plus_type"
   assert(
     vecConcatBlock!.checkSuccess === true,
-    `vecConcat should type-check. Error: ${vecConcatBlock!.checkErrors.map(e => e.error.message).join(', ')}`
+    `vecConcat should type-check. Error: ${vecConcatBlock!.checkErrors.map(e => e.message).join(', ')}`
   );
 });
 
@@ -155,14 +155,14 @@ vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A 
 vecConcat _ _ _ (VNil _) v = v
 vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   console.log(`  Found ${results.length} blocks`);
 
   for (const r of results) {
     console.log(`  Block ${r.name}: parse=${r.parseSuccess}, check=${r.checkSuccess}`);
     if (!r.checkSuccess && r.checkErrors.length > 0) {
-      console.log(`    Errors: ${r.checkErrors.map(e => e.error.message).join('; ')}`);
+      console.log(`    Errors: ${r.checkErrors.map(e => e.message).join('; ')}`);
     }
   }
 
@@ -180,7 +180,7 @@ vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)`;
   // - The error we get now should be about pattern matching in vecConcat's
   //   OWN value, NOT about an unresolved `plus_type` hole
   if (!vecConcatBlock!.checkSuccess) {
-    const errorMsg = vecConcatBlock!.checkErrors.map(e => e.error.message).join(', ');
+    const errorMsg = vecConcatBlock!.checkErrors.map(e => e.message).join(', ');
     console.log(`  VECCONCAT ERROR: ${errorMsg}`);
 
     // The OLD bug: unresolved constant type

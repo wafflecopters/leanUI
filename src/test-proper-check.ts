@@ -1,4 +1,4 @@
-import { checkSourceBlocks, summarizeCheckResults } from './parser/block-checker';
+import { compileSource, summarizeResults } from './test-utils';
 
 // Test case from user: Vec with wrong args
 const brokenVec = `
@@ -15,8 +15,8 @@ console.log('Testing broken Vec (wrong args):');
 console.log(brokenVec);
 console.log('---');
 
-const results = checkSourceBlocks(brokenVec);
-const summary = summarizeCheckResults(results);
+const results = compileSource(brokenVec);
+const summary = summarizeResults(results);
 
 console.log('Summary:', summary);
 
@@ -24,9 +24,9 @@ for (const result of results) {
   if (!result.parseSuccess) {
     console.log(`Block ${result.blockIndex}: Parse errors:`, result.parseErrors.map(e => e.message));
   } else if (!result.nameResolutionSuccess) {
-    console.log(`Block ${result.blockIndex}: Name resolution errors:`, result.nameResolutionErrors.map(e => e.error.message));
+    console.log(`Block ${result.blockIndex}: Name resolution errors:`, result.nameResolutionErrors.map(e => e.message));
   } else if (!result.checkSuccess) {
-    console.log(`Block ${result.blockIndex}: Check errors:`, result.checkErrors.map(e => e.error.message));
+    console.log(`Block ${result.blockIndex}: Check errors:`, result.checkErrors.map(e => e.message));
   } else {
     console.log(`Block ${result.blockIndex}: SUCCESS`);
   }

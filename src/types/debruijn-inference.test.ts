@@ -7,20 +7,20 @@
  */
 
 import { describe, test, expect } from 'vitest';
-import { checkSourceBlocks } from '../parser/block-checker';
+import { compileSource } from '../test-utils';
 
 /**
  * Helper to check if a source string type-checks successfully.
  */
 function expectSuccess(source: string): void {
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   for (const r of results) {
     if (!r.parseSuccess) {
       throw new Error(`Parse failed for ${r.name}: ${r.parseErrors[0]?.message || 'Unknown parse error'}`);
     }
     if (!r.checkSuccess) {
-      throw new Error(`Type check failed for ${r.name}: ${r.checkErrors[0]?.error?.message || 'Unknown error'}`);
+      throw new Error(`Type check failed for ${r.name}: ${r.checkErrors[0]?.message || 'Unknown error'}`);
     }
   }
 }
@@ -29,12 +29,12 @@ function expectSuccess(source: string): void {
  * Helper to check if a source string type-checks with specific error.
  */
 function expectError(source: string, expectedMessage: string): void {
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   let foundError = false;
   for (const r of results) {
     if (!r.checkSuccess) {
-      const errorMsg = r.checkErrors[0]?.error?.message || '';
+      const errorMsg = r.checkErrors[0]?.message || '';
       if (errorMsg.includes(expectedMessage)) {
         foundError = true;
         break;

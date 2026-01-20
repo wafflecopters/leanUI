@@ -2,7 +2,7 @@
  * Tests for pattern matching syntax parsing
  */
 
-import { checkSourceBlocks } from './block-checker';
+import { compileSource } from '../test-utils';
 
 function test(description: string, fn: () => void): void {
   try {
@@ -33,7 +33,7 @@ test('Pattern matching: simple function with type signature', () => {
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -46,7 +46,7 @@ test('Pattern matching: multiple clauses', () => {
 isZero Zero = True
 isZero (Succ n) = False`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -58,7 +58,7 @@ test('Pattern matching: nested patterns', () => {
 add Zero n = n
 add (Succ m) n = Succ (add m n)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -68,7 +68,7 @@ test('Pattern matching: underscore patterns', () => {
   const source = `const : A -> B -> A
 const x _ = x`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -78,7 +78,7 @@ test('Pattern matching: variable patterns', () => {
   const source = `id : A -> A
 id x = x`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');

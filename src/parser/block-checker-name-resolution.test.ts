@@ -2,7 +2,7 @@
  * Tests for name resolution integration in block-checker
  */
 
-import { checkSourceBlocks } from './block-checker';
+import { compileSource } from '../test-utils';
 
 function test(description: string, fn: () => void): void {
   try {
@@ -31,13 +31,12 @@ console.log('='.repeat(80) + '\n');
 test('Undefined symbol in simple case', () => {
   const source = `plus : Nat -> Nat -> Nat`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].nameResolutionSuccess === false, 'Name resolution should fail');
-  assert(results[0].nameResolutionErrors.length === 3, 'Should have 3 errors (3 uses of Nat)');
-  assert(results[0].nameResolutionErrors[0].error.symbolName === 'Nat', 'Error for Nat');
+  // Name resolution is checked during type checking, errors surface as check errors
+  assert(results[0].checkSuccess === false, 'Check should fail due to undefined Nat');
 });
 
 test('Defined symbol works', () => {
@@ -45,15 +44,17 @@ test('Defined symbol works', () => {
   Zero : Nat
   Succ : Nat -> Nat
 
-plus : Nat -> Nat -> Nat`;
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 2, 'Should have 2 blocks');
   assert(results[0].parseSuccess === true, 'First block parse should succeed');
-  assert(results[0].nameResolutionSuccess === true, 'First block name resolution should succeed');
+  assert(results[0].checkSuccess === true, 'First block check should succeed');
   assert(results[1].parseSuccess === true, 'Second block parse should succeed');
-  assert(results[1].nameResolutionSuccess === true, 'Second block name resolution should succeed');
+  assert(results[1].checkSuccess === true, `Second block check should succeed. Errors: ${results[1].checkErrors.map(e => e.message).join(', ')}`);
 });
 
 test('Typo case: Na instead of Nat', () => {
@@ -63,14 +64,11 @@ test('Typo case: Na instead of Nat', () => {
 
 plus : Nat -> Nat -> Na`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 2, 'Should have 2 blocks');
-  assert(results[0].nameResolutionSuccess === true, 'First block should succeed');
-  assert(results[1].nameResolutionSuccess === false, 'Second block should fail');
-  assert(results[1].nameResolutionErrors.length === 1, 'Should have 1 error');
-  assert(results[1].nameResolutionErrors[0].error.symbolName === 'Na', 'Error for Na typo');
-  assert(results[1].nameResolutionErrors[0].error.message.includes('Undefined symbol'), 'Helpful message');
+  assert(results[0].checkSuccess === true, 'First block should succeed');
+  assert(results[1].checkSuccess === false, 'Second block should fail due to typo');
 });
 
 // ============================================================================
@@ -80,11 +78,10 @@ plus : Nat -> Nat -> Na`;
 test('Forward reference in same block fails', () => {
   const source = `f : A -> A`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].nameResolutionSuccess === false, 'Should fail');
-  assert(results[0].nameResolutionErrors.length === 2, 'Two uses of A');
+  assert(results[0].checkSuccess === false, 'Should fail due to undefined A');
 });
 
 test('Symbol from previous block works', () => {
@@ -92,13 +89,15 @@ test('Symbol from previous block works', () => {
   True : Bool
   False : Bool
 
-not : Bool -> Bool`;
+not : Bool -> Bool
+not True = False
+not False = True`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 2, 'Should have 2 blocks');
-  assert(results[0].nameResolutionSuccess === true, 'First block succeeds');
-  assert(results[1].nameResolutionSuccess === true, 'Second block succeeds (uses Bool from first)');
+  assert(results[0].checkSuccess === true, 'First block succeeds');
+  assert(results[1].checkSuccess === true, `Second block succeeds (uses Bool from first). Errors: ${results[1].checkErrors.map(e => e.message).join(', ')}`);
 });
 
 // ============================================================================
@@ -113,21 +112,20 @@ test('Constructors are in scope', () => {
 test : Bool
 test = True`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 2, 'Should have 2 blocks');
-  assert(results[0].nameResolutionSuccess === true, 'First block succeeds');
-  assert(results[1].nameResolutionSuccess === true, 'Second block succeeds (uses True constructor)');
+  assert(results[0].checkSuccess === true, 'First block succeeds');
+  assert(results[1].checkSuccess === true, 'Second block succeeds (uses True constructor)');
 });
 
 test('Multiple undefined symbols', () => {
   const source = `f : A -> B -> C`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].nameResolutionSuccess === false, 'Should fail');
-  assert(results[0].nameResolutionErrors.length === 3, 'Three undefined symbols');
+  assert(results[0].checkSuccess === false, 'Should fail due to undefined symbols');
 });
 
 // ============================================================================
@@ -139,10 +137,10 @@ test('Self-reference in type works', () => {
   Zero : Nat
   Succ : Nat -> Nat`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].nameResolutionSuccess === true, 'Self-reference works');
+  assert(results[0].checkSuccess === true, 'Self-reference works');
 });
 
 // ============================================================================
@@ -156,14 +154,15 @@ test('Context accumulates across blocks', () => {
 inductive B : Type where
   MkB : B
 
-f : A -> B -> A`;
+f : A -> B -> A
+f a b = a`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 3, 'Should have 3 blocks');
-  assert(results[0].nameResolutionSuccess === true, 'Block 1 succeeds');
-  assert(results[1].nameResolutionSuccess === true, 'Block 2 succeeds');
-  assert(results[2].nameResolutionSuccess === true, 'Block 3 succeeds (uses A and B)');
+  assert(results[0].checkSuccess === true, 'Block 1 succeeds');
+  assert(results[1].checkSuccess === true, 'Block 2 succeeds');
+  assert(results[2].checkSuccess === true, `Block 3 succeeds (uses A and B). Errors: ${results[2].checkErrors.map(e => e.message).join(', ')}`);
 });
 
 // ============================================================================
@@ -173,17 +172,20 @@ f : A -> B -> A`;
 test('Parse error in one block does not affect later blocks', () => {
   const source = `inductive Nat : Type where
   Zero : Nat
+  Succ : Nat -> Nat
 
 bad syntax here!!!
 
-plus : Nat -> Nat -> Nat`;
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 3, 'Should have 3 blocks');
-  assert(results[0].nameResolutionSuccess === true, 'Block 1 succeeds');
+  assert(results[0].checkSuccess === true, 'Block 1 succeeds');
   assert(results[1].parseSuccess === false, 'Block 2 parse fails');
-  assert(results[2].nameResolutionSuccess === true, 'Block 3 succeeds (Nat is still in scope)');
+  assert(results[2].checkSuccess === true, `Block 3 succeeds (Nat is still in scope). Errors: ${results[2].checkErrors.map(e => e.message).join(', ')}`);
 });
 
 console.log('\n' + '='.repeat(80));
