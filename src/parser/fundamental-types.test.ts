@@ -5,7 +5,7 @@
  * and type check successfully.
  */
 
-import { checkSourceBlocks } from './block-checker';
+import { compileSource } from '../test-utils';
 
 function test(description: string, fn: () => void): void {
   try {
@@ -36,7 +36,7 @@ test('Nat: basic definition', () => {
   Zero : Nat
   Succ : Nat -> Nat`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -54,7 +54,7 @@ test('List: polymorphic list definition', () => {
   Nil : List A
   Cons : A -> List A -> List A`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -72,7 +72,7 @@ test('Bool: boolean type', () => {
   True : Bool
   False : Bool`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -89,7 +89,7 @@ test('Unit: trivial type', () => {
   const source = `inductive Unit : Type where
   unit : Unit`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -105,7 +105,7 @@ test('Unit: trivial type', () => {
 test('Empty: empty type with no constructors', () => {
   const source = `inductive Empty : Type where`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -123,7 +123,7 @@ test('Sum: binary sum type', () => {
   Left : A -> Sum A B
   Right : B -> Sum A B`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -140,7 +140,7 @@ test('Prod: binary product type', () => {
   const source = `inductive Prod : Type -> Type -> Type where
   Pair : A -> B -> Prod A B`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -158,7 +158,7 @@ test('Option: optional value type', () => {
   None : Option A
   Some : A -> Option A`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -176,7 +176,7 @@ test('Vec: length-indexed vectors', () => {
   VNil : Vec A Zero
   VCons : A -> Vec A n -> Vec A (Succ n)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -194,7 +194,7 @@ test('Fin: bounded natural numbers', () => {
   FZero : Fin (Succ n)
   FSucc : Fin n -> Fin (Succ n)`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -211,7 +211,7 @@ test('Eq: propositional equality', () => {
   const source = `inductive Eq : A -> A -> Type where
   Refl : Eq x x`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -228,7 +228,7 @@ test('Exists: sigma type (dependent pair)', () => {
   const source = `inductive Exists : (A -> Type) -> Type where
   ExIntro : (x : A) -> P x -> Exists P`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -245,7 +245,7 @@ test('Acc: accessibility predicate', () => {
   const source = `inductive Acc : (A -> A -> Type) -> A -> Type where
   AccIntro : ((y : A) -> R y x -> Acc R y) -> Acc R x`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
@@ -271,7 +271,7 @@ inductive List : Type -> Type where
   Nil : List A
   Cons : A -> List A -> List A`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 3, 'Should have 3 blocks');
   assert(results[0].name === 'Nat', 'First should be Nat');
@@ -290,13 +290,13 @@ test('Multiline inductive type signature with where', () => {
   -> Type where
   Bar : Foo`;
 
-  const results = checkSourceBlocks(source);
+  const results = compileSource(source);
 
   assert(results.length === 1, 'Should have 1 block');
   assert(results[0].parseSuccess === true, 'Parse should succeed');
   assert(results[0].checkSuccess === true, 'Check should succeed');
   assert(results[0].name === 'Foo', 'Should have correct name');
-  assert(results[0].declarations?.[0].constructors?.length === 1, 'Should have 1 constructor');
+  assert(results[0].declarations?.[0].kernelConstructors?.length === 1, 'Should have 1 constructor');
 });
 
 console.log('\n' + '='.repeat(80));
