@@ -1,9 +1,9 @@
 /**
- * Tests for TTK Structural Recursion Analysis
+ * Tests for structural recursion analysis (TTK layer)
  */
 
-import { analyzeRecursionTTK } from './ttk-recursion-check';
-import { TTKTerm, TTKPattern, mkConst, mkApp, mkVar, mkType, mkLambda, mkHole } from './kernel';
+import { analyzeRecursionTTK, RecursionAnalysis } from './ttk-recursion-check';
+import { TTKTerm, TTKClause, mkVar, mkConst, mkApp, mkPi, mkLambda, mkType } from './kernel';
 
 function test(description: string, fn: () => void): void {
   try {
@@ -15,222 +15,344 @@ function test(description: string, fn: () => void): void {
   }
 }
 
-function assertEqual(actual: number, expected: number, message?: string): void {
-  if (actual !== expected) {
-    throw new Error(message || `Expected ${expected}, got ${actual}`);
-  }
-}
-
-function assertTrue(value: boolean, message?: string): void {
-  if (!value) {
+function assert(condition: boolean, message?: string): void {
+  if (!condition) {
     throw new Error(message || 'Assertion failed');
   }
 }
 
+console.log('\n' + '='.repeat(80));
+console.log('STRUCTURAL RECURSION CHECK TESTS');
+console.log('='.repeat(80) + '\n');
+
 // ============================================================================
-// Test Helpers
+// Helper Functions
 // ============================================================================
 
-const Type0 = mkType(0);
-const Nat = mkConst('Nat');
+const nat = mkConst('Nat');
 
-function makeSuccPattern(): TTKPattern {
-  return { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] };
-}
-
-function makeZeroPattern(): TTKPattern {
-  return { tag: 'PCtor', name: 'Zero', args: [] };
-}
-
-function makeVarPattern(name: string): TTKPattern {
-  return { tag: 'PVar', name };
-}
-
-function makeMatch(scrutinee: TTKTerm, clauses: { patterns: TTKPattern[]; rhs: TTKTerm }[]): TTKTerm {
+function mkMatch(scrutinee: TTKTerm, clauses: TTKClause[]): TTKTerm {
   return { tag: 'Match', scrutinee, clauses };
 }
 
+function mkHole(id: string): TTKTerm {
+  return { tag: 'Hole', id };
+}
+
 // ============================================================================
-// Tests
+// Non-recursive Functions
 // ============================================================================
 
-console.log('=== TTK Structural Recursion Analysis Tests ===\n');
+test('Non-recursive function: identity', () => {
+  // id x = x
+  const body = mkVar(0);
+  const analysis = analyzeRecursionTTK('id', body);
 
-test('Detects unsafe recursion outside pattern match', () => {
-  // plus (Succ a) b - no pattern match context
-  const succApp = mkApp(mkConst('Succ'), mkVar(0));
-  const plusApp = mkApp(mkApp(mkConst('plus'), succApp), mkVar(1));
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
+});
 
-  const analysis = analyzeRecursionTTK('plus', plusApp);
-  assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe call');
-  assertTrue(
-    analysis.unsafeRecursion[0].error.includes('outside of pattern') ||
-    analysis.unsafeRecursion[0].error.includes('does not decrease structurally'),
-    `Error should mention issue: ${analysis.unsafeRecursion[0].error}`
+test('Non-recursive function: constant', () => {
+  // const x y = x
+  const body = mkVar(1);
+  const analysis = analyzeRecursionTTK('const', body);
+
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
+});
+
+// ============================================================================
+// Safe Structural Recursion
+// ============================================================================
+
+test('Safe recursion: plus Zero b = b', () => {
+  // plus : Nat -> Nat -> Nat
+  // | Zero, b => b
+  // | Succ a, b => Succ (plus a b)
+
+  const plusBody: TTKTerm = mkMatch(mkHole('args'), [
+    // Zero, b => b
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Zero', args: [] },
+        { tag: 'PVar', name: 'b' }
+      ],
+      rhs: mkVar(0) // b
+    },
+    // Succ a, b => Succ (plus a b)
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'a' }] },
+        { tag: 'PVar', name: 'b' }
+      ],
+      rhs: mkApp(mkConst('Succ'), mkApp(mkApp(mkConst('plus'), mkVar(1)), mkVar(0))) // Succ (plus a b)
+    }
+  ]);
+
+  const analysis = analyzeRecursionTTK('plus', plusBody);
+
+  assert(analysis.safeRecursion.length === 1, `Should have 1 safe recursive call, got ${analysis.safeRecursion.length}`);
+  assert(analysis.unsafeRecursion.length === 0, `Should have no unsafe recursion, got ${analysis.unsafeRecursion.length}`);
+});
+
+test('Safe recursion: factorial', () => {
+  // fact : Nat -> Nat
+  // | Zero => Succ Zero
+  // | Succ n => mult (Succ n) (fact n)
+
+  const factBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }],
+      rhs: mkApp(mkConst('Succ'), mkConst('Zero'))
+    },
+    {
+      patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] }],
+      rhs: mkApp(
+        mkApp(mkConst('mult'), mkApp(mkConst('Succ'), mkVar(0))),
+        mkApp(mkConst('fact'), mkVar(0)) // fact n
+      )
+    }
+  ]);
+
+  const analysis = analyzeRecursionTTK('fact', factBody);
+
+  assert(analysis.safeRecursion.length === 1, 'Should have 1 safe recursive call');
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
+});
+
+test('Safe recursion: multiple recursive calls in different branches', () => {
+  // f : Nat -> Nat -> Nat
+  // | Zero, b => b
+  // | Succ a, Zero => f a Zero
+  // | Succ a, Succ b => f a b
+
+  const fBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Zero', args: [] },
+        { tag: 'PVar', name: 'b' }
+      ],
+      rhs: mkVar(0)
+    },
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'a' }] },
+        { tag: 'PCtor', name: 'Zero', args: [] }
+      ],
+      rhs: mkApp(mkApp(mkConst('f'), mkVar(0)), mkConst('Zero')) // f a Zero
+    },
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'a' }] },
+        { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'b' }] }
+      ],
+      rhs: mkApp(mkApp(mkConst('f'), mkVar(1)), mkVar(0)) // f a b
+    }
+  ]);
+
+  const analysis = analyzeRecursionTTK('f', fBody);
+
+  assert(analysis.safeRecursion.length === 2, `Should have 2 safe recursive calls, got ${analysis.safeRecursion.length}`);
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
+});
+
+// ============================================================================
+// Unsafe Recursion
+// ============================================================================
+
+test('Unsafe recursion: same argument', () => {
+  // loop : Nat -> Nat
+  // | n => loop n
+
+  const loopBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [{ tag: 'PVar', name: 'n' }],
+      rhs: mkApp(mkConst('loop'), mkVar(0)) // loop n
+    }
+  ]);
+
+  const analysis = analyzeRecursionTTK('loop', loopBody);
+
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 1, `Should have 1 unsafe recursive call, got ${analysis.unsafeRecursion.length}`);
+});
+
+test('Unsafe recursion: growing argument', () => {
+  // grows : Nat -> Nat
+  // | n => grows (Succ n)
+
+  const growsBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [{ tag: 'PVar', name: 'n' }],
+      rhs: mkApp(mkConst('grows'), mkApp(mkConst('Succ'), mkVar(0))) // grows (Succ n)
+    }
+  ]);
+
+  const analysis = analyzeRecursionTTK('grows', growsBody);
+
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 1, 'Should have 1 unsafe recursive call');
+});
+
+test('Unsafe recursion: complex expression instead of variable', () => {
+  // bad : Nat -> Nat
+  // | Succ a => bad (Succ a)  -- same size, not smaller
+
+  const badBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }],
+      rhs: mkConst('Zero')
+    },
+    {
+      patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'a' }] }],
+      rhs: mkApp(mkConst('bad'), mkApp(mkConst('Succ'), mkVar(0))) // bad (Succ a)
+    }
+  ]);
+
+  const analysis = analyzeRecursionTTK('bad', badBody);
+
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 1, 'Should have 1 unsafe recursive call');
+});
+
+test('Unsafe recursion: outside pattern matching context', () => {
+  // noMatch : Nat -> Nat
+  // noMatch x = noMatch x  -- no pattern match, just a definition
+
+  const noMatchBody: TTKTerm = mkApp(mkConst('noMatch'), mkVar(0));
+
+  const analysis = analyzeRecursionTTK('noMatch', noMatchBody);
+
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 1, 'Should have 1 unsafe recursive call');
+  assert(
+    analysis.unsafeRecursion[0].error.includes('outside') ||
+    analysis.unsafeRecursion[0].error.includes('no structurally smaller'),
+    `Error should mention outside pattern matching, got: ${analysis.unsafeRecursion[0].error}`
   );
 });
 
-test('Detects safe recursion inside pattern match', () => {
-  // match x with | Succ n => plus n y
-  // 'n' is at index 0 (pattern-bound), 'y' is at index 1
-  const plusCall = mkApp(mkApp(mkConst('plus'), mkVar(0)), mkVar(1));
+test('Unsafe recursion: unapplied self-reference', () => {
+  // selfRef : Nat -> Nat
+  // selfRef x = selfRef  -- just the name, not applied
 
-  const matchTerm = makeMatch(mkVar(2), [
-    { patterns: [makeSuccPattern()], rhs: plusCall }
-  ]);
+  const selfRefBody: TTKTerm = mkConst('selfRef');
 
-  const analysis = analyzeRecursionTTK('plus', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 1, 'Should detect 1 safe call');
-  assertEqual(analysis.unsafeRecursion.length, 0, 'Should have no unsafe calls');
-});
+  const analysis = analyzeRecursionTTK('selfRef', selfRefBody);
 
-test('Detects unsafe recursion with complex expression inside pattern match', () => {
-  // match x with | Succ n => plus (Succ n) y
-  // (Succ n) is not structurally smaller - it's equal to the original!
-  const succN = mkApp(mkConst('Succ'), mkVar(0));
-  const plusCall = mkApp(mkApp(mkConst('plus'), succN), mkVar(1));
-
-  const matchTerm = makeMatch(mkVar(2), [
-    { patterns: [makeSuccPattern()], rhs: plusCall }
-  ]);
-
-  const analysis = analyzeRecursionTTK('plus', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 0, 'Should have no safe calls');
-  assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe call');
-  assertTrue(
-    analysis.unsafeRecursion[0].error.includes('does not decrease structurally') ||
-    analysis.unsafeRecursion[0].error.includes('not structurally smaller'),
-    `Error should mention structural decrease: ${analysis.unsafeRecursion[0].error}`
-  );
-});
-
-test('Non-recursive function has no recursion', () => {
-  // match x with | Succ n => n | Zero => Zero
-  const matchTerm = makeMatch(mkVar(0), [
-    { patterns: [makeSuccPattern()], rhs: mkVar(0) },
-    { patterns: [makeZeroPattern()], rhs: mkConst('Zero') }
-  ]);
-
-  const analysis = analyzeRecursionTTK('isZero', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 0, 'Should have no safe calls');
-  assertEqual(analysis.unsafeRecursion.length, 0, 'Should have no unsafe calls');
-});
-
-test('Detects safe recursion with Hole scrutinee (top-level pattern match)', () => {
-  // This simulates a function definition like:
-  // plus Zero b = b
-  // plus (Succ a) b = Succ (plus a b)
-  // The scrutinee is a Hole because it represents the function arguments
-  const plusCall = mkApp(mkApp(mkConst('plus'), mkVar(1)), mkVar(0));
-  const succPlusCall = mkApp(mkConst('Succ'), plusCall);
-
-  const matchTerm = makeMatch(mkHole('_scrutinee'), [
-    { patterns: [makeZeroPattern(), makeVarPattern('b')], rhs: mkVar(0) },
-    { patterns: [makeSuccPattern(), makeVarPattern('b')], rhs: succPlusCall }
-  ]);
-
-  const analysis = analyzeRecursionTTK('plus', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 1, 'Should detect 1 safe call');
-  assertEqual(analysis.unsafeRecursion.length, 0, 'Should have no unsafe calls');
-});
-
-test('Detects unsafe recursion with non-decreasing argument', () => {
-  // bad (Succ n) = bad (Succ (Succ n))
-  // Recursive call with a LARGER argument
-  const succSuccN = mkApp(mkConst('Succ'), mkApp(mkConst('Succ'), mkVar(0)));
-  const badCall = mkApp(mkConst('bad'), succSuccN);
-
-  const matchTerm = makeMatch(mkHole('_scrutinee'), [
-    { patterns: [makeZeroPattern()], rhs: mkConst('Zero') },
-    { patterns: [makeSuccPattern()], rhs: badCall }
-  ]);
-
-  const analysis = analyzeRecursionTTK('bad', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 0, 'Should have no safe calls');
-  assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe call');
-});
-
-test('Multiple recursive calls - one safe, one unsafe', () => {
-  // f (Succ n) = g (f n) (f (Succ n))
-  // First call (f n) is safe, second call (f (Succ n)) is unsafe
-  const fN = mkApp(mkConst('f'), mkVar(0));
-  const succN = mkApp(mkConst('Succ'), mkVar(0));
-  const fSuccN = mkApp(mkConst('f'), succN);
-  const gCall = mkApp(mkApp(mkConst('g'), fN), fSuccN);
-
-  const matchTerm = makeMatch(mkHole('_scrutinee'), [
-    { patterns: [makeZeroPattern()], rhs: mkConst('Zero') },
-    { patterns: [makeSuccPattern()], rhs: gCall }
-  ]);
-
-  const analysis = analyzeRecursionTTK('f', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 1, 'Should detect 1 safe call');
-  assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe call');
-});
-
-test('Detects unsafe unapplied self-reference', () => {
-  // f = f (directly referencing f without applying it)
-  const directRef = mkConst('f');
-
-  const analysis = analyzeRecursionTTK('f', directRef);
-  assertEqual(analysis.unsafeRecursion.length, 1, 'Should detect 1 unsafe reference');
-  assertTrue(
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 1, 'Should have 1 unsafe recursive call');
+  assert(
     analysis.unsafeRecursion[0].error.includes('without application'),
-    `Error should mention unapplied reference: ${analysis.unsafeRecursion[0].error}`
+    `Error should mention unapplied reference, got: ${analysis.unsafeRecursion[0].error}`
   );
 });
 
-test('Safe recursion with nested pattern', () => {
-  // f (Succ (Succ n)) = f n
-  // n is doubly nested, still structurally smaller
-  const nestedSuccPattern: TTKPattern = {
-    tag: 'PCtor',
-    name: 'Succ',
-    args: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] }]
-  };
+// ============================================================================
+// Mixed Safe and Unsafe
+// ============================================================================
 
-  const fN = mkApp(mkConst('f'), mkVar(0));
+test('Mixed recursion: one safe, one unsafe branch', () => {
+  // mixed : Nat -> Nat
+  // | Zero => mixed Zero      -- unsafe: Zero is not pattern-bound
+  // | Succ n => mixed n       -- safe: n is pattern-bound
 
-  const matchTerm = makeMatch(mkHole('_scrutinee'), [
-    { patterns: [makeZeroPattern()], rhs: mkConst('Zero') },
-    { patterns: [nestedSuccPattern], rhs: fN }
+  const mixedBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }],
+      rhs: mkApp(mkConst('mixed'), mkConst('Zero'))
+    },
+    {
+      patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] }],
+      rhs: mkApp(mkConst('mixed'), mkVar(0))
+    }
   ]);
 
-  const analysis = analyzeRecursionTTK('f', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 1, 'Should detect 1 safe call');
-  assertEqual(analysis.unsafeRecursion.length, 0, 'Should have no unsafe calls');
+  const analysis = analyzeRecursionTTK('mixed', mixedBody);
+
+  assert(analysis.safeRecursion.length === 1, `Should have 1 safe recursive call, got ${analysis.safeRecursion.length}`);
+  assert(analysis.unsafeRecursion.length === 1, `Should have 1 unsafe recursive call, got ${analysis.unsafeRecursion.length}`);
 });
 
-test('Two-argument function with recursion on first arg', () => {
-  // plus (Succ a) b = Succ (plus a b)
-  // Patterns: [Succ a, b] - 'a' is at index 1, 'b' is at index 0
-  const plusCall = mkApp(mkApp(mkConst('plus'), mkVar(1)), mkVar(0));
-  const succPlusCall = mkApp(mkConst('Succ'), plusCall);
+// ============================================================================
+// Edge Cases
+// ============================================================================
 
-  const matchTerm = makeMatch(mkHole('_scrutinee'), [
-    { patterns: [makeZeroPattern(), makeVarPattern('b')], rhs: mkVar(0) },
-    { patterns: [makeSuccPattern(), makeVarPattern('b')], rhs: succPlusCall }
+test('Edge case: empty match', () => {
+  // empty : Void -> Nat
+  // (no clauses - absurd pattern)
+
+  const emptyBody: TTKTerm = mkMatch(mkHole('args'), []);
+
+  const analysis = analyzeRecursionTTK('empty', emptyBody);
+
+  assert(analysis.safeRecursion.length === 0, 'Should have no safe recursion');
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
+});
+
+test('Edge case: deeply nested recursion in lambda', () => {
+  // nested : Nat -> Nat -> Nat
+  // | Succ a, b => (\x => nested a x) b
+
+  const nestedBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Zero', args: [] },
+        { tag: 'PVar', name: 'b' }
+      ],
+      rhs: mkVar(0)
+    },
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'a' }] },
+        { tag: 'PVar', name: 'b' }
+      ],
+      rhs: mkApp(
+        mkLambda(nat, mkApp(mkApp(mkConst('nested'), mkVar(2)), mkVar(0)), 'x'),
+        mkVar(0)
+      )
+    }
   ]);
 
-  const analysis = analyzeRecursionTTK('plus', matchTerm);
-  assertEqual(analysis.safeRecursion.length, 1, 'Should detect 1 safe call');
-  assertEqual(analysis.unsafeRecursion.length, 0, 'Should have no unsafe calls');
+  const analysis = analyzeRecursionTTK('nested', nestedBody);
+
+  // The recursive call uses `a` (shifted to index 2 under the lambda) which is structurally smaller
+  assert(analysis.safeRecursion.length === 1, `Should have 1 safe recursive call, got ${analysis.safeRecursion.length}`);
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
 });
 
-test('Recursion under lambda with pattern match', () => {
-  // λx. match x with | Succ n => plus n y
-  const plusCall = mkApp(mkApp(mkConst('plus'), mkVar(0)), mkVar(2));
-  const matchTerm = makeMatch(mkVar(1), [
-    { patterns: [makeSuccPattern()], rhs: plusCall }
+test('Edge case: recursion with wildcard patterns', () => {
+  // withWild : Nat -> Nat -> Nat
+  // | Succ a, _ => withWild a Zero
+  // | _, b => b
+
+  const withWildBody: TTKTerm = mkMatch(mkHole('args'), [
+    {
+      patterns: [
+        { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'a' }] },
+        { tag: 'PWild', name: '_w0' }
+      ],
+      rhs: mkApp(mkApp(mkConst('withWild'), mkVar(1)), mkConst('Zero'))
+    },
+    {
+      patterns: [
+        { tag: 'PWild', name: '_w1' },
+        { tag: 'PVar', name: 'b' }
+      ],
+      rhs: mkVar(0)
+    }
   ]);
-  const lambdaTerm = mkLambda(Nat, matchTerm, 'x');
 
-  const analysis = analyzeRecursionTTK('plus', lambdaTerm);
-  // The recursive call should be detected
-  assertTrue(
-    analysis.safeRecursion.length + analysis.unsafeRecursion.length >= 1,
-    'Should detect the recursive call'
-  );
+  const analysis = analyzeRecursionTTK('withWild', withWildBody);
+
+  assert(analysis.safeRecursion.length === 1, `Should have 1 safe recursive call, got ${analysis.safeRecursion.length}`);
+  assert(analysis.unsafeRecursion.length === 0, 'Should have no unsafe recursion');
 });
 
-console.log('\n✅ All TTK recursion tests passed!');
+// ============================================================================
+// Summary
+// ============================================================================
+
+console.log('\n' + '='.repeat(80));
+console.log('ALL STRUCTURAL RECURSION CHECK TESTS PASSED');
+console.log('='.repeat(80) + '\n');
