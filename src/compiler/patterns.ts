@@ -331,6 +331,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   // Function parameters are at indices >= numPatternLocalBindings. These should be rigid.
   // We use nextCheckTypeEntry.ctxLength because that's the context BEFORE wildcards were added.
   const numPatternLocalBindings = workEnv.context.length - nextCheckTypeEntry.ctxLength
+
   const unifyResult = unifyTerms(unifyLeft, unifyRight, {
     flexibleVars: true,
     rigidVarsAtOrAbove: numPatternLocalBindings,

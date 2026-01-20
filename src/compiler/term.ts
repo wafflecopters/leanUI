@@ -403,7 +403,7 @@ export class TCEnv<T> {
    * the context, metas, and constraints - not the value itself.
    */
   unifyTerms<S extends TTKTerm>(this: TCEnv<S>, lhs: TTKTerm, rhs: TTKTerm): TCEnv<S> {
-    const result = unifyTerms(lhs, rhs);
+    const result = unifyTerms(lhs, rhs, {});
 
     if (!result.success) {
       throw (this as unknown as TCEnv<TTKTerm>).unificationFailedError(lhs, rhs, result.reason);

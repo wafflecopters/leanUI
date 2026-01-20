@@ -26,7 +26,7 @@ export type UnifyOptions = {
 // Unification Result Types
 // ============================================================================
 
-export type Substitutions = Map<number, TTKTerm>
+export type Substitutions = [number, TTKTerm][]
 
 /** Constraint: metavariable ?m should equal rhs */
 export type MetaConstraint = { meta: string; rhs: TTKTerm }
@@ -117,57 +117,74 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
 
 const emptySuccess: UnifyResult = {
   success: true,
-  substitutions: new Map(),
+  substitutions: [],
   metaConstraints: [],
   levelConstraints: [],
 };
 
-/** Combine two successful unification results, checking for conflicting substitutions */
-function combineResults(r1: UnifyResult, r2: UnifyResult, options: UnifyOptions = {}): UnifyResult {
+function combineUnificationResults(r1: UnifyResult, r2: UnifyResult, options: UnifyOptions): UnifyResult {
   if (!r1.success) return r1;
   if (!r2.success) return r2;
 
-  // Check for conflicting substitutions: if the same variable is mapped to
-  // different values, we must recursively unify those values
-  const combined = new Map(r1.substitutions);
-  let extraConstraints: MetaConstraint[] = [];
-  let extraLevelConstraints: LevelConstraint[] = [];
+  if (r1.substitutions.length === 0) return r2;
+  if (r2.substitutions.length === 0) return r1;
 
-  for (const [varIndex, val2] of r2.substitutions) {
-    const val1 = combined.get(varIndex);
-    if (val1 !== undefined) {
-      // Same variable has two values - must unify them
-      const reconcile = unifyTerms(val1, val2, options);
-      if (!reconcile.success) {
-        return reconcile;  // Conflict - the two values cannot be unified
-      }
-      // Merge any additional constraints/substitutions from reconciliation
-      for (const [k, v] of reconcile.substitutions) {
-        const existing = combined.get(k);
-        if (existing !== undefined) {
-          // Recursively check this new conflict
-          const innerReconcile = unifyTerms(existing, v, options);
-          if (!innerReconcile.success) return innerReconcile;
-          // For simplicity, we don't deeply merge here - the main case is
-          // that reconcile.substitutions is empty (values were equal)
-        } else {
-          combined.set(k, v);
+  let adjustedSubstitutions: [number, TTKTerm][] = [];
+  let derivedEquations: [number, TTKTerm][] = [];
+
+  for (const [idx2, val2] of r2.substitutions) {
+    let currentVal = val2;
+    let foundMatch = false;
+
+    for (const [idx1, val1] of r1.substitutions) {
+      // Apply substitution to the value
+      currentVal = applyNonShiftingSubstitutionToTerm(idx1, val1, currentVal);
+
+      if (idx2 === idx1) {
+        // Transitivity: idx = val1 AND idx = val2
+        // Derive: val1 = currentVal
+        const derived = unifyTerms(val1, currentVal, options);
+        if (!derived.success) {
+          return derived;
         }
+        derivedEquations.push(...derived.substitutions);
+        foundMatch = true;
+        break;
       }
-      extraConstraints.push(...reconcile.metaConstraints);
-      extraLevelConstraints.push(...reconcile.levelConstraints);
-      // Keep val1 in the map (arbitrary choice - they should be equivalent after unification)
-    } else {
-      combined.set(varIndex, val2);
+    }
+
+    if (!foundMatch) {
+      adjustedSubstitutions.push([idx2, currentVal]);
     }
   }
 
-  return {
+  let result: UnifyResult = {
     success: true,
-    substitutions: combined,
-    metaConstraints: [...r1.metaConstraints, ...r2.metaConstraints, ...extraConstraints],
-    levelConstraints: [...r1.levelConstraints, ...r2.levelConstraints, ...extraLevelConstraints],
+    substitutions: [...r1.substitutions, ...adjustedSubstitutions],
+    metaConstraints: [...r1.metaConstraints, ...r2.metaConstraints],
+    levelConstraints: [...r1.levelConstraints, ...r2.levelConstraints],
   };
+
+  if (derivedEquations.length > 0) {
+    result = combineUnificationResults(result, {
+      success: true,
+      substitutions: derivedEquations,
+      metaConstraints: [],
+      levelConstraints: [],
+    }, options);
+  }
+
+  return result;
+}
+
+function applyNonShiftingSubstitutionToTerm(varIndex: number, value: TTKTerm, term: TTKTerm): TTKTerm {
+  // Replace occurrences of varIndex with value, but DON'T adjust other indices
+  return transformVarsInTerm(term, (idx) => {
+    if (idx === varIndex) {
+      return value;
+    }
+    return mkVar(idx);  // Keep index as-is
+  });
 }
 
 // ============================================================================
@@ -183,7 +200,7 @@ function combineResults(r1: UnifyResult, r2: UnifyResult, options: UnifyOptions 
  * - Level parameters (LParam) → must match exactly
  * - Max/IMax → structural unification
  */
-function unifyLevels(l1: Level, l2: Level): UnifyResult {
+function unifyLevels(l1: Level, l2: Level, options: UnifyOptions): UnifyResult {
   // Quick structural equality check first
   if (levelsEqual(l1, l2)) {
     return emptySuccess;
@@ -198,7 +215,7 @@ function unifyLevels(l1: Level, l2: Level): UnifyResult {
     }
     return {
       success: true,
-      substitutions: new Map(),
+      substitutions: [],
       metaConstraints: [],
       levelConstraints: [{ lmvar: l1.id, rhs: l2 }],
     };
@@ -210,7 +227,7 @@ function unifyLevels(l1: Level, l2: Level): UnifyResult {
     }
     return {
       success: true,
-      substitutions: new Map(),
+      substitutions: [],
       metaConstraints: [],
       levelConstraints: [{ lmvar: l2.id, rhs: l1 }],
     };
@@ -227,7 +244,7 @@ function unifyLevels(l1: Level, l2: Level): UnifyResult {
   // LSUCC - Successor: unify predecessors
   // ─────────────────────────────────────────────────────────────────────────
   if (l1.tag === 'LSucc' && l2.tag === 'LSucc') {
-    return unifyLevels(l1.pred, l2.pred);
+    return unifyLevels(l1.pred, l2.pred, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -238,20 +255,20 @@ function unifyLevels(l1: Level, l2: Level): UnifyResult {
   // need constraint solving.
   // ─────────────────────────────────────────────────────────────────────────
   if (l1.tag === 'LMax' && l2.tag === 'LMax') {
-    const leftResult = unifyLevels(l1.left, l2.left);
+    const leftResult = unifyLevels(l1.left, l2.left, options);
     if (!leftResult.success) return leftResult;
-    const rightResult = unifyLevels(l1.right, l2.right);
-    return combineResults(leftResult, rightResult);
+    const rightResult = unifyLevels(l1.right, l2.right, options);
+    return combineUnificationResults(leftResult, rightResult, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   // LIMAX - Impredicative max: structural unification
   // ─────────────────────────────────────────────────────────────────────────
   if (l1.tag === 'LIMax' && l2.tag === 'LIMax') {
-    const leftResult = unifyLevels(l1.left, l2.left);
+    const leftResult = unifyLevels(l1.left, l2.left, options);
     if (!leftResult.success) return leftResult;
-    const rightResult = unifyLevels(l1.right, l2.right);
-    return combineResults(leftResult, rightResult);
+    const rightResult = unifyLevels(l1.right, l2.right, options);
+    return combineUnificationResults(leftResult, rightResult, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -291,7 +308,7 @@ function unifyLevels(l1: Level, l2: Level): UnifyResult {
  * - metaConstraints: Deferred ?m = t constraints
  * - levelConstraints: Deferred ?l = level constraints
  */
-export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {}): UnifyResult {
+export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): UnifyResult {
   // Reduce both to weak head normal form
   const a = whnf(lhs);
   const b = whnf(rhs);
@@ -305,7 +322,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
   if (a.tag === 'Meta') {
     return {
       success: true,
-      substitutions: new Map(),
+      substitutions: [],
       metaConstraints: [{ meta: a.id, rhs: b }],
       levelConstraints: [],
     };
@@ -314,7 +331,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
   if (b.tag === 'Meta') {
     return {
       success: true,
-      substitutions: new Map(),
+      substitutions: [],
       metaConstraints: [{ meta: b.id, rhs: a }],
       levelConstraints: [],
     };
@@ -329,7 +346,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
   if (a.tag === 'Hole') {
     return {
       success: true,
-      substitutions: new Map(),
+      substitutions: [],
       metaConstraints: [{ meta: `hole:${a.id}`, rhs: b }],
       levelConstraints: [],
     };
@@ -338,7 +355,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
   if (b.tag === 'Hole') {
     return {
       success: true,
-      substitutions: new Map(),
+      substitutions: [],
       metaConstraints: [{ meta: `hole:${b.id}`, rhs: a }],
       levelConstraints: [],
     };
@@ -374,9 +391,18 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     const aRigid = isRigidVar(a.index);
     const bRigid = isRigidVar(b.index);
 
-    // Both rigid: cannot unify different rigid vars
+    // Both rigid: still allowed! This is a refinement (e.g., x = y in dependent matching)
+    // Substitute the higher index with the lower (arbitrary choice, but consistent)
     if (aRigid && bRigid) {
-      return { success: false, reason: 'conflict' };
+      const [lower, higher] = a.index < b.index
+        ? [a.index, b.index]
+        : [b.index, a.index];
+      return {
+        success: true,
+        substitutions: [[higher, mkVar(lower)]],
+        metaConstraints: [],
+        levelConstraints: [],
+      };
     }
 
     // At least one is flexible: substitute the flexible one
@@ -387,7 +413,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
         : [b.index, a.index];
       return {
         success: true,
-        substitutions: new Map([[lower, mkVar(higher)]]),
+        substitutions: [[lower, mkVar(higher)]],
         metaConstraints: [],
         levelConstraints: [],
       };
@@ -397,7 +423,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     const [flexibleIdx, rigidIdx] = aRigid ? [b.index, a.index] : [a.index, b.index];
     return {
       success: true,
-      substitutions: new Map([[flexibleIdx, mkVar(rigidIdx)]]),
+      substitutions: [[flexibleIdx, mkVar(rigidIdx)]],
       metaConstraints: [],
       levelConstraints: [],
     };
@@ -413,7 +439,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     }
     return {
       success: true,
-      substitutions: new Map([[a.index, b]]),
+      substitutions: [[a.index, b]],
       metaConstraints: [],
       levelConstraints: [],
     };
@@ -429,7 +455,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     }
     return {
       success: true,
-      substitutions: new Map([[b.index, a]]),
+      substitutions: [[b.index, a]],
       metaConstraints: [],
       levelConstraints: [],
     };
@@ -441,7 +467,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
   // Sort l1 vs Sort l2: unify the levels
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Sort' && b.tag === 'Sort') {
-    return unifyLevels(a.level, b.level);
+    return unifyLevels(a.level, b.level, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -467,7 +493,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     if (!fnResult.success) return fnResult;
 
     const argResult = unifyTerms(a.arg, b.arg, options);
-    return combineResults(fnResult, argResult, options);
+    return combineUnificationResults(fnResult, argResult, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -494,12 +520,12 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     const bodyResult = unifyTerms(a.body, b.body, options);
     if (!bodyResult.success) return bodyResult;
 
-    let result = combineResults(domResult, bodyResult, options);
+    let result = combineUnificationResults(domResult, bodyResult, options);
 
     // For Let, also unify the definition values
     if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {
       const valResult = unifyTerms(a.binderKind.defVal, b.binderKind.defVal, options);
-      result = combineResults(result, valResult, options);
+      result = combineUnificationResults(result, valResult, options);
     }
 
     return result;
@@ -552,7 +578,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
       // Unify RHS (under pattern bindings - indices align if patterns match)
       const rhsResult = unifyTerms(clauseA.rhs, clauseB.rhs, options);
       if (!rhsResult.success) return rhsResult;
-      result = combineResults(result, rhsResult, options);
+      result = combineUnificationResults(result, rhsResult, options);
     }
 
     return result;
@@ -569,6 +595,8 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
 // ============================================================================
 
 import { TTKPattern } from "./kernel";
+import { subst } from "./subst";
+import { transformVarsInTerm } from "./term";
 
 /**
  * Check if two pattern lists are structurally identical.

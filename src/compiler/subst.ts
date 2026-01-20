@@ -460,21 +460,25 @@ function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: 
   }
 }
 
-export function* enumerateAppliedSubstitutions(substitutions: Map<number, TTKTerm>) {
-  let remaining = new Map(substitutions);
-  while (remaining.size > 0) {
-    const [varIndex, value] = remaining.entries().next().value as [number, TTKTerm];
-    remaining.delete(varIndex);
+export function* enumerateAppliedSubstitutions(substitutions: [number, TTKTerm][]) {
+  let remaining = substitutions.slice();
+  while (remaining.length > 0) {
+    const [varIndex, value] = remaining.shift() as [number, TTKTerm];
 
     // Apply the current substitution to all remaining substitutions
     // and adjust their indices since we're removing varIndex from the context
-    const updated = new Map<number, TTKTerm>();
-    for (const [otherIndex, otherValue] of remaining.entries()) {
+    const updated: [number, TTKTerm][] = [];
+    for (const [otherIndex, otherValue] of remaining) {
+      if (otherIndex === varIndex) {
+        throw new Error(`Duplicate substitution index: ${varIndex}. combineUnificationResults should have merged these.`);
+      }
+
       // Apply substitution to the value
       const newValue = subst(varIndex, value, otherValue);
+
       // Indices above varIndex shift down by 1 after the variable is removed
       const newIndex = otherIndex > varIndex ? otherIndex - 1 : otherIndex;
-      updated.set(newIndex, newValue);
+      updated.push([newIndex, newValue]);
     }
     remaining = updated;
 

@@ -376,9 +376,7 @@ describe('applySubstitutionToContext', () => {
 
 describe('enumerateAppliedSubstitutions', () => {
   test('single substitution', () => {
-    const substs = new Map<number, TTKTerm>([
-      [2, Type],
-    ]);
+    const substs: [number, TTKTerm][] = [[2, Type]];
 
     const results = [...enumerateAppliedSubstitutions(substs)];
 
@@ -397,10 +395,10 @@ describe('enumerateAppliedSubstitutions', () => {
     const A = mkConst('A');
     const B = mkConst('B');
 
-    const substs = new Map<number, TTKTerm>([
+    const substs: [number, TTKTerm][] = [
       [0, A],
       [2, B],
-    ]);
+    ];
 
     const results = [...enumerateAppliedSubstitutions(substs)];
 
@@ -423,10 +421,10 @@ describe('enumerateAppliedSubstitutions', () => {
     //   New remaining: {1 -> Type}
     // Yields: {1 -> Type}, {1 -> Type}
 
-    const substs = new Map<number, TTKTerm>([
+    const substs: [number, TTKTerm][] = [
       [1, Type],
       [2, mkVar(1)],  // References the variable at index 1
-    ]);
+    ];
 
     const results = [...enumerateAppliedSubstitutions(substs)];
 
