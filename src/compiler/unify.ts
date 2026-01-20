@@ -116,15 +116,51 @@ const emptySuccess: UnifyResult = {
   levelConstraints: [],
 };
 
-/** Combine two successful unification results */
-function combineResults(r1: UnifyResult, r2: UnifyResult): UnifyResult {
+/** Combine two successful unification results, checking for conflicting substitutions */
+function combineResults(r1: UnifyResult, r2: UnifyResult, options: UnifyOptions = {}): UnifyResult {
   if (!r1.success) return r1;
   if (!r2.success) return r2;
+
+  // Check for conflicting substitutions: if the same variable is mapped to
+  // different values, we must recursively unify those values
+  const combined = new Map(r1.substitutions);
+  let extraConstraints: MetaConstraint[] = [];
+  let extraLevelConstraints: LevelConstraint[] = [];
+
+  for (const [varIndex, val2] of r2.substitutions) {
+    const val1 = combined.get(varIndex);
+    if (val1 !== undefined) {
+      // Same variable has two values - must unify them
+      const reconcile = unifyTerms(val1, val2, options);
+      if (!reconcile.success) {
+        return reconcile;  // Conflict - the two values cannot be unified
+      }
+      // Merge any additional constraints/substitutions from reconciliation
+      for (const [k, v] of reconcile.substitutions) {
+        const existing = combined.get(k);
+        if (existing !== undefined) {
+          // Recursively check this new conflict
+          const innerReconcile = unifyTerms(existing, v, options);
+          if (!innerReconcile.success) return innerReconcile;
+          // For simplicity, we don't deeply merge here - the main case is
+          // that reconcile.substitutions is empty (values were equal)
+        } else {
+          combined.set(k, v);
+        }
+      }
+      extraConstraints.push(...reconcile.metaConstraints);
+      extraLevelConstraints.push(...reconcile.levelConstraints);
+      // Keep val1 in the map (arbitrary choice - they should be equivalent after unification)
+    } else {
+      combined.set(varIndex, val2);
+    }
+  }
+
   return {
     success: true,
-    substitutions: new Map([...r1.substitutions, ...r2.substitutions]),
-    metaConstraints: [...r1.metaConstraints, ...r2.metaConstraints],
-    levelConstraints: [...r1.levelConstraints, ...r2.levelConstraints],
+    substitutions: combined,
+    metaConstraints: [...r1.metaConstraints, ...r2.metaConstraints, ...extraConstraints],
+    levelConstraints: [...r1.levelConstraints, ...r2.levelConstraints, ...extraLevelConstraints],
   };
 }
 
@@ -398,7 +434,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     if (!fnResult.success) return fnResult;
 
     const argResult = unifyTerms(a.arg, b.arg, options);
-    return combineResults(fnResult, argResult);
+    return combineResults(fnResult, argResult, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -425,12 +461,12 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
     const bodyResult = unifyTerms(a.body, b.body, options);
     if (!bodyResult.success) return bodyResult;
 
-    let result = combineResults(domResult, bodyResult);
+    let result = combineResults(domResult, bodyResult, options);
 
     // For Let, also unify the definition values
     if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {
       const valResult = unifyTerms(a.binderKind.defVal, b.binderKind.defVal, options);
-      result = combineResults(result, valResult);
+      result = combineResults(result, valResult, options);
     }
 
     return result;
@@ -483,7 +519,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions = {
       // Unify RHS (under pattern bindings - indices align if patterns match)
       const rhsResult = unifyTerms(clauseA.rhs, clauseB.rhs, options);
       if (!rhsResult.success) return rhsResult;
-      result = combineResults(result, rhsResult);
+      result = combineResults(result, rhsResult, options);
     }
 
     return result;
