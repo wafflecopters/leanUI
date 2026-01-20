@@ -1390,19 +1390,6 @@ export function compileTTFromText(source: string): CompileResult {
   };
 }
 
-let loggingEnabled = false;
-
-function logInfo(fn: () => (string | unknown[])) {
-  if (loggingEnabled) {
-    const r = fn();
-    if (Array.isArray(r)) {
-      console.log(...r);
-    } else {
-      console.log(r);
-    }
-  }
-}
-
 function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
