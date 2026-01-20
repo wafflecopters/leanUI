@@ -2,98 +2,73 @@
  * Tests for source position tracking in the parser
  */
 
+import { describe, test, expect } from 'vitest';
 import { Parser } from './parser';
 
-function test(description: string, fn: () => void): void {
-  try {
-    fn();
-    console.log(`✓ ${description}`);
-  } catch (error) {
-    console.error(`✗ ${description}`);
-    throw error;
-  }
-}
+describe('Parser Source Tracking', () => {
+  test('parseDeclarationsWithSource returns declarations with source maps', () => {
+    const parser = new Parser();
+    const source = `id : A -> A`;
 
-function assert(condition: boolean, message?: string): void {
-  if (!condition) {
-    throw new Error(message || 'Assertion failed');
-  }
-}
+    const results = parser.parseDeclarationsWithSource(source);
 
-console.log('\n' + '='.repeat(80));
-console.log('PARSER SOURCE TRACKING TESTS');
-console.log('='.repeat(80) + '\n');
+    expect(results.length).toBe(1);
+    expect(results[0].decl).toBeDefined();
+    expect(results[0].sourceMap).toBeDefined();
+    expect(results[0].sourceMap instanceof Map).toBe(true);
+  });
 
-// ============================================================================
-// Basic parseDeclarationsWithSource Tests
-// ============================================================================
-
-test('parseDeclarationsWithSource returns declarations with source maps', () => {
-  const parser = new Parser();
-  const source = `id : A -> A`;
-
-  const results = parser.parseDeclarationsWithSource(source);
-
-  assert(results.length === 1, 'Should have 1 declaration');
-  assert(results[0].decl !== undefined, 'Should have declaration');
-  assert(results[0].sourceMap !== undefined, 'Should have source map');
-  assert(results[0].sourceMap instanceof Map, 'Source map should be a Map');
-});
-
-test('parseDeclarationsWithSource with multiple declarations', () => {
-  const parser = new Parser();
-  const source = `id : A -> A
+  test('parseDeclarationsWithSource with multiple declarations', () => {
+    const parser = new Parser();
+    const source = `id : A -> A
 
 const : A -> B -> A`;
 
-  const results = parser.parseDeclarationsWithSource(source);
+    const results = parser.parseDeclarationsWithSource(source);
 
-  assert(results.length === 2, 'Should have 2 declarations');
-  assert(results[0].decl.name === 'id', 'First declaration name should be id');
-  assert(results[1].decl.name === 'const', 'Second declaration name should be const');
-});
+    expect(results.length).toBe(2);
+    expect(results[0].decl.name).toBe('id');
+    expect(results[1].decl.name).toBe('const');
+  });
 
-test('parseDeclarationsWithSource with merged type and value', () => {
-  const parser = new Parser();
-  const source = `id : A -> A
+  test('parseDeclarationsWithSource with merged type and value', () => {
+    const parser = new Parser();
+    const source = `id : A -> A
 id x = x`;
 
-  const results = parser.parseDeclarationsWithSource(source);
+    const results = parser.parseDeclarationsWithSource(source);
 
-  assert(results.length === 1, 'Should merge into 1 declaration');
-  assert(results[0].decl.name === 'id', 'Declaration name should be id');
-  assert(results[0].decl.type !== undefined, 'Should have type');
-  assert(results[0].decl.value !== undefined, 'Should have value');
-  // Source map should have entries from both lines
-  assert(results[0].sourceMap.size >= 0, 'Should have source map entries');
-});
+    expect(results.length).toBe(1);
+    expect(results[0].decl.name).toBe('id');
+    expect(results[0].decl.type).toBeDefined();
+    expect(results[0].decl.value).toBeDefined();
+    // Source map should have entries from both lines
+    expect(results[0].sourceMap.size).toBeGreaterThanOrEqual(0);
+  });
 
-test('Source map is separate for each declaration', () => {
-  const parser = new Parser();
-  const source = `id : A -> A
+  test('source map is separate for each declaration', () => {
+    const parser = new Parser();
+    const source = `id : A -> A
 
 const : A -> B -> A`;
 
-  const results = parser.parseDeclarationsWithSource(source);
+    const results = parser.parseDeclarationsWithSource(source);
 
-  // Each should have its own source map instance
-  assert(results[0].sourceMap !== results[1].sourceMap, 'Source maps should be different instances');
-});
+    // Each should have its own source map instance
+    expect(results[0].sourceMap).not.toBe(results[1].sourceMap);
+  });
 
-test('parseDeclarationsWithSource handles inductive', () => {
-  const parser = new Parser();
-  const source = `inductive Nat : Type where
+  test('parseDeclarationsWithSource handles inductive', () => {
+    const parser = new Parser();
+    const source = `inductive Nat : Type where
   | Zero : Nat
   | Succ : Nat -> Nat`;
 
-  const results = parser.parseDeclarationsWithSource(source);
+    const results = parser.parseDeclarationsWithSource(source);
 
-  assert(results.length === 1, 'Should have 1 inductive declaration');
-  assert(results[0].decl.kind === 'inductive', 'Should be inductive kind');
-  assert(results[0].decl.name === 'Nat', 'Name should be Nat');
-  assert(results[0].sourceMap instanceof Map, 'Should have source map');
+    expect(results.length).toBe(1);
+    expect(results[0].decl.kind).toBe('inductive');
+    expect(results[0].decl.name).toBe('Nat');
+    expect(results[0].sourceMap instanceof Map).toBe(true);
+  });
 });
-
-console.log('\n' + '='.repeat(80));
-console.log('ALL PARSER SOURCE TRACKING TESTS PASSED! ✓');
-console.log('='.repeat(80) + '\n');

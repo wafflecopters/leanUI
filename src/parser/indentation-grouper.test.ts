@@ -2,223 +2,116 @@
  * Tests for indentation-based source grouping
  */
 
+import { describe, test, expect } from 'vitest';
 import { groupByIndentation, parseBlock } from './indentation-grouper';
 
-function test(description: string, fn: () => void): void {
-  try {
-    fn();
-    console.log(`✓ ${description}`);
-  } catch (error) {
-    console.error(`✗ ${description}`);
-    throw error;
-  }
-}
-
-function assertEqual<T>(actual: T, expected: T, message?: string): void {
-  const actualStr = JSON.stringify(actual);
-  const expectedStr = JSON.stringify(expected);
-  if (actualStr !== expectedStr) {
-    throw new Error(`${message || 'Assertion failed'}\n  Expected: ${expectedStr}\n  Actual: ${actualStr}`);
-  }
-}
-
-console.log('\n' + '='.repeat(80));
-console.log('INDENTATION GROUPING TESTS');
-console.log('='.repeat(80) + '\n');
-
-test('Group single definition with pattern clauses', () => {
-  const source = `plus : Nat -> Nat -> Nat
+describe('Indentation Grouping', () => {
+  describe('Basic Grouping', () => {
+    test('group single definition with pattern clauses', () => {
+      const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1);
-  assertEqual(blocks[0].isInductive, false);
-  assertEqual(blocks[0].lines.length, 3);
-  assertEqual(blocks[0].lines[0], 'plus : Nat -> Nat -> Nat');
-  assertEqual(blocks[0].lines[1], 'plus Zero b = b');
-  assertEqual(blocks[0].lines[2], 'plus (Succ a) b = Succ (plus a b)');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].isInductive).toBe(false);
+      expect(blocks[0].lines.length).toBe(3);
+      expect(blocks[0].lines[0]).toBe('plus : Nat -> Nat -> Nat');
+      expect(blocks[0].lines[1]).toBe('plus Zero b = b');
+      expect(blocks[0].lines[2]).toBe('plus (Succ a) b = Succ (plus a b)');
+    });
 
-test('Group definition with indented continuation', () => {
-  const source = `plus : Nat
+    test('group definition with indented continuation', () => {
+      const source = `plus : Nat
   -> Nat -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1);
-  assertEqual(blocks[0].lines.length, 3);
-  assertEqual(blocks[0].lines[0], 'plus : Nat');
-  assertEqual(blocks[0].lines[1], '  -> Nat -> Nat');
-  assertEqual(blocks[0].lines[2], 'plus Zero b = b');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].lines.length).toBe(3);
+      expect(blocks[0].lines[0]).toBe('plus : Nat');
+      expect(blocks[0].lines[1]).toBe('  -> Nat -> Nat');
+      expect(blocks[0].lines[2]).toBe('plus Zero b = b');
+    });
 
-test('Separate blocks with blank line', () => {
-  const source = `plus : Nat -> Nat -> Nat
+    test('separate blocks with blank line', () => {
+      const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 
 twice : Nat -> Nat
 twice n = plus n n`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 2);
-  assertEqual(blocks[0].lines.length, 2);
-  assertEqual(blocks[1].lines.length, 2);
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].lines.length).toBe(2);
+      expect(blocks[1].lines.length).toBe(2);
+    });
+  });
 
-test('Group inductive definition', () => {
-  const source = `inductive Nat : Type where
+  describe('Inductive Types', () => {
+    test('group inductive definition', () => {
+      const source = `inductive Nat : Type where
   | Zero : Nat
   | Succ : Nat -> Nat`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1);
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[0].lines.length, 3);
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[0].lines.length).toBe(3);
+    });
 
-test('Separate inductive from regular definition', () => {
-  const source = `inductive Nat : Type where
+    test('separate inductive from regular definition', () => {
+      const source = `inductive Nat : Type where
   | Zero : Nat
 
 plus : Nat -> Nat -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 2);
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[1].isInductive, false);
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[1].isInductive).toBe(false);
+    });
+  });
 
-test('Handle line comments', () => {
-  const source = `plus : Nat -> Nat -> Nat
+  describe('Comments', () => {
+    test('handle line comments', () => {
+      const source = `plus : Nat -> Nat -> Nat
 -- This is the base case
 plus Zero b = b
 -- Recursive case
 plus (Succ a) b = Succ (plus a b)`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1);
-  assertEqual(blocks[0].lines.length, 5);
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].lines.length).toBe(5);
+    });
 
-test('Blank line with only comment', () => {
-  const source = `plus : Nat -> Nat -> Nat
+    test('blank line with only comment', () => {
+      const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 -- Just a comment
 
 twice : Nat -> Nat`;
 
-  const blocks = groupByIndentation(source);
-  // The comment line should not prevent the blank line from separating blocks
-  assertEqual(blocks.length, 2);
-});
+      const blocks = groupByIndentation(source);
+      // The comment line should not prevent the blank line from separating blocks
+      expect(blocks.length).toBe(2);
+    });
 
-test('Indented continuation with comment', () => {
-  const source = `plus : Nat -> Nat
+    test('indented continuation with comment', () => {
+      const source = `plus : Nat -> Nat
   -- comment in signature
   -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1);
-  assertEqual(blocks[0].lines.length, 4);
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].lines.length).toBe(4);
+    });
 
-test('Pattern clause with indented body', () => {
-  const source = `plus : Nat -> Nat -> Nat
-plus Zero b =
-  b
-plus (Succ a) b =
-  Succ (plus a b)`;
-
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1);
-  assertEqual(blocks[0].lines.length, 5);
-});
-
-test('Parse block into signature and clauses', () => {
-  const source = `plus : Nat -> Nat -> Nat
-plus Zero b = b
-plus (Succ a) b = Succ (plus a b)`;
-
-  const blocks = groupByIndentation(source);
-  const parsed = parseBlock(blocks[0]);
-
-  assertEqual(parsed.signature, 'plus : Nat -> Nat -> Nat');
-  assertEqual(parsed.clauses.length, 2);
-  assertEqual(parsed.clauses[0], 'plus Zero b = b');
-  assertEqual(parsed.clauses[1], 'plus (Succ a) b = Succ (plus a b)');
-});
-
-test('Parse block with indented continuation in signature', () => {
-  const source = `plus : Nat
-  -> Nat -> Nat
-plus Zero b = b`;
-
-  const blocks = groupByIndentation(source);
-  const parsed = parseBlock(blocks[0]);
-
-  assertEqual(parsed.signature, 'plus : Nat\n  -> Nat -> Nat');
-  assertEqual(parsed.clauses.length, 1);
-  assertEqual(parsed.clauses[0], 'plus Zero b = b');
-});
-
-test('Parse block with indented continuation in clause', () => {
-  const source = `plus : Nat -> Nat -> Nat
-plus Zero b = b
-plus (Succ a) b =
-  Succ (plus a b)`;
-
-  const blocks = groupByIndentation(source);
-  const parsed = parseBlock(blocks[0]);
-
-  assertEqual(parsed.signature, 'plus : Nat -> Nat -> Nat');
-  assertEqual(parsed.clauses.length, 2);
-  assertEqual(parsed.clauses[0], 'plus Zero b = b');
-  assertEqual(parsed.clauses[1], 'plus (Succ a) b =\n  Succ (plus a b)');
-});
-
-test('Parse inductive block', () => {
-  const source = `inductive Nat : Type where
-  | Zero : Nat
-  | Succ : Nat -> Nat`;
-
-  const blocks = groupByIndentation(source);
-  const parsed = parseBlock(blocks[0]);
-
-  // For inductive, everything is in signature
-  assertEqual(parsed.signature, 'inductive Nat : Type where\n  | Zero : Nat\n  | Succ : Nat -> Nat');
-  assertEqual(parsed.clauses.length, 0);
-});
-
-test('Multiple blocks with various indentations', () => {
-  const source = `plus : Nat
-  -> Nat
-  -> Nat
-plus Zero b = b
-plus (Succ a) b =
-  Succ
-    (plus a b)
-
-twice : Nat -> Nat
-twice n =
-  plus n n`;
-
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 2);
-
-  const parsed1 = parseBlock(blocks[0]);
-  assertEqual(parsed1.signature, 'plus : Nat\n  -> Nat\n  -> Nat');
-  assertEqual(parsed1.clauses.length, 2);
-
-  const parsed2 = parseBlock(blocks[1]);
-  assertEqual(parsed2.signature, 'twice : Nat -> Nat');
-  assertEqual(parsed2.clauses.length, 1);
-});
-
-test('Block comments are their own blocks', () => {
-  const source = `plus : Nat -> Nat -> Nat
+    test('block comments are their own blocks', () => {
+      const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 
 {-
@@ -229,15 +122,15 @@ const A x = x
 twice : Nat -> Nat
 twice n = plus n n`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 3, 'Should find 3 blocks (plus, comment, twice)');
-  assertEqual(blocks[0].lines[0], 'plus : Nat -> Nat -> Nat');
-  assertEqual(blocks[1].isComment, true, 'Middle block should be a comment');
-  assertEqual(blocks[2].lines[0], 'twice : Nat -> Nat');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(3);
+      expect(blocks[0].lines[0]).toBe('plus : Nat -> Nat -> Nat');
+      expect(blocks[1].isComment).toBe(true);
+      expect(blocks[2].lines[0]).toBe('twice : Nat -> Nat');
+    });
 
-test('Handle nested block comments', () => {
-  const source = `inductive Nat : Type where
+    test('handle nested block comments', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat
 
 {- Comment {- nested -} comment -}
@@ -245,15 +138,15 @@ test('Handle nested block comments', () => {
 plus : Nat -> Nat -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 3, 'Should find 3 blocks (Nat, comment, plus)');
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[1].isComment, true, 'Second block is the nested comment');
-  assertEqual(blocks[2].lines[0], 'plus : Nat -> Nat -> Nat');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(3);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[1].isComment).toBe(true);
+      expect(blocks[2].lines[0]).toBe('plus : Nat -> Nat -> Nat');
+    });
 
-test('Block comments spanning multiple blocks', () => {
-  const source = `inductive Nat : Type where
+    test('block comments spanning multiple blocks', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat
 
 {-
@@ -267,15 +160,15 @@ const x y = x
 id : A -> A
 id x = x`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 3, 'Should find 3 blocks (Nat, comment block, and id)');
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[1].isComment, true, 'Second block should be marked as comment');
-  assertEqual(blocks[2].lines[0], 'id : A -> A');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(3);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[1].isComment).toBe(true);
+      expect(blocks[2].lines[0]).toBe('id : A -> A');
+    });
 
-test('Standalone line comment block (separated by blank lines)', () => {
-  const source = `plus : Nat -> Nat -> Nat
+    test('standalone line comment block (separated by blank lines)', () => {
+      const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 
 -- This is a standalone comment
@@ -284,30 +177,30 @@ plus Zero b = b
 twice : Nat -> Nat
 twice n = plus n n`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 3, 'Should find 3 blocks (plus, comment, twice)');
-  assertEqual(blocks[0].lines[0], 'plus : Nat -> Nat -> Nat');
-  assertEqual(blocks[1].isComment, true, 'Middle block should be a comment');
-  assertEqual(blocks[1].lines.length, 2, 'Comment block should have 2 lines');
-  assertEqual(blocks[2].lines[0], 'twice : Nat -> Nat');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(3);
+      expect(blocks[0].lines[0]).toBe('plus : Nat -> Nat -> Nat');
+      expect(blocks[1].isComment).toBe(true);
+      expect(blocks[1].lines.length).toBe(2);
+      expect(blocks[2].lines[0]).toBe('twice : Nat -> Nat');
+    });
 
-test('Inline comments are part of code block', () => {
-  const source = `inductive Nat : Type where
+    test('inline comments are part of code block', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat  -- base case
   Succ : Nat -> Nat  -- successor`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1, 'Should be one block');
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[0].isComment || false, false, 'Should not be marked as comment');
-  // The inline comments should still be in the lines
-  const hasInlineComment = blocks[0].lines.some(line => line.includes('-- base case'));
-  assertEqual(hasInlineComment, true, 'Inline comments should be preserved');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[0].isComment || false).toBe(false);
+      // The inline comments should still be in the lines
+      const hasInlineComment = blocks[0].lines.some(line => line.includes('-- base case'));
+      expect(hasInlineComment).toBe(true);
+    });
 
-test('Mixed standalone and inline comments', () => {
-  const source = `-- Header comment
+    test('mixed standalone and inline comments', () => {
+      const source = `-- Header comment
 -- explaining the module
 
 inductive Nat : Type where
@@ -319,16 +212,16 @@ inductive Nat : Type where
 plus : Nat -> Nat -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 4, 'Should find 4 blocks');
-  assertEqual(blocks[0].isComment, true, 'First block is comment');
-  assertEqual(blocks[1].isInductive, true, 'Second block is Nat');
-  assertEqual(blocks[2].isComment, true, 'Third block is comment');
-  assertEqual(blocks[3].lines[0], 'plus : Nat -> Nat -> Nat');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(4);
+      expect(blocks[0].isComment).toBe(true);
+      expect(blocks[1].isInductive).toBe(true);
+      expect(blocks[2].isComment).toBe(true);
+      expect(blocks[3].lines[0]).toBe('plus : Nat -> Nat -> Nat');
+    });
 
-test('Attached line comment (no blank line before code)', () => {
-  const source = `inductive Nat : Type where
+    test('attached line comment (no blank line before code)', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat
 
 -- This comment is attached to plus
@@ -338,66 +231,107 @@ plus Zero b = b
 twice : Nat -> Nat
 twice n = plus n n`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 3, 'Should find 3 blocks (Nat, plus with comment, twice)');
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[1].isComment, false, 'Second block should be Term, not Comment');
-  assertEqual(blocks[1].lines[0], '-- This comment is attached to plus', 'Comment should be first line of block');
-  assertEqual(blocks[1].lines[1], 'plus : Nat -> Nat -> Nat', 'Signature should be second line');
-  assertEqual(blocks[2].lines[0], 'twice : Nat -> Nat');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(3);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[1].isComment).toBe(false);
+      expect(blocks[1].lines[0]).toBe('-- This comment is attached to plus');
+      expect(blocks[1].lines[1]).toBe('plus : Nat -> Nat -> Nat');
+      expect(blocks[2].lines[0]).toBe('twice : Nat -> Nat');
+    });
 
-test('Attached block comment (no blank line before code)', () => {
-  const source = `inductive Nat : Type where
+    test('attached block comment (no blank line before code)', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat
 
 {- This comment explains plus -}
 plus : Nat -> Nat -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 2, 'Should find 2 blocks (Nat, plus with comment)');
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[1].isComment, false, 'Second block should be Term, not Comment');
-  assertEqual(blocks[1].lines[0], '{- This comment explains plus -}', 'Comment should be first line');
-  assertEqual(blocks[1].lines[1], 'plus : Nat -> Nat -> Nat', 'Signature should be second line');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[1].isComment).toBe(false);
+      expect(blocks[1].lines[0]).toBe('{- This comment explains plus -}');
+      expect(blocks[1].lines[1]).toBe('plus : Nat -> Nat -> Nat');
+    });
 
-test('Multi-line attached block comment', () => {
-  const source = `{-
+    test('multi-line attached block comment', () => {
+      const source = `{-
   This is a detailed explanation
   of the plus function
 -}
 plus : Nat -> Nat -> Nat
 plus Zero b = b`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1, 'Should find 1 block (plus with attached comment)');
-  assertEqual(blocks[0].isComment, false, 'Should be Term, not Comment');
-  assertEqual(blocks[0].lines[0], '{-', 'Comment start should be first line');
-  assertEqual(blocks[0].lines[blocks[0].lines.length - 2], 'plus : Nat -> Nat -> Nat', 'Signature should come after comment');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].isComment).toBe(false);
+      expect(blocks[0].lines[0]).toBe('{-');
+      expect(blocks[0].lines[blocks[0].lines.length - 2]).toBe('plus : Nat -> Nat -> Nat');
+    });
 
-test('Multiple attached line comments', () => {
-  const source = `-- Comment line 1
+    test('multiple attached line comments', () => {
+      const source = `-- Comment line 1
 -- Comment line 2
 -- Comment line 3
 id : A -> A
 id x = x`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 1, 'Should find 1 block (id with attached comments)');
-  assertEqual(blocks[0].isComment, false, 'Should be Term, not Comment');
-  assertEqual(blocks[0].lines[0], '-- Comment line 1');
-  assertEqual(blocks[0].lines[1], '-- Comment line 2');
-  assertEqual(blocks[0].lines[2], '-- Comment line 3');
-  assertEqual(blocks[0].lines[3], 'id : A -> A');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].isComment).toBe(false);
+      expect(blocks[0].lines[0]).toBe('-- Comment line 1');
+      expect(blocks[0].lines[1]).toBe('-- Comment line 2');
+      expect(blocks[0].lines[2]).toBe('-- Comment line 3');
+      expect(blocks[0].lines[3]).toBe('id : A -> A');
+    });
+  });
 
-test('Stray indented lines after blank line form their own block', () => {
-  // Regression test: indented lines after blank line should NOT be silently skipped
-  // They should form their own block so parse errors are reported
-  const source = `inductive Nat : Type where
+  describe('Indented Patterns', () => {
+    test('pattern clause with indented body', () => {
+      const source = `plus : Nat -> Nat -> Nat
+plus Zero b =
+  b
+plus (Succ a) b =
+  Succ (plus a b)`;
+
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].lines.length).toBe(5);
+    });
+
+    test('multiple blocks with various indentations', () => {
+      const source = `plus : Nat
+  -> Nat
+  -> Nat
+plus Zero b = b
+plus (Succ a) b =
+  Succ
+    (plus a b)
+
+twice : Nat -> Nat
+twice n =
+  plus n n`;
+
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(2);
+
+      const parsed1 = parseBlock(blocks[0]);
+      expect(parsed1.signature).toBe('plus : Nat\n  -> Nat\n  -> Nat');
+      expect(parsed1.clauses.length).toBe(2);
+
+      const parsed2 = parseBlock(blocks[1]);
+      expect(parsed2.signature).toBe('twice : Nat -> Nat');
+      expect(parsed2.clauses.length).toBe(1);
+    });
+  });
+
+  describe('Stray Indented Lines', () => {
+    test('stray indented lines after blank line form their own block', () => {
+      // Regression test: indented lines after blank line should NOT be silently skipped
+      // They should form their own block so parse errors are reported
+      const source = `inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
@@ -405,19 +339,19 @@ test('Stray indented lines after blank line form their own block', () => {
   ?
   ...`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 2, 'Should find 2 blocks (Nat and stray indented lines)');
-  assertEqual(blocks[0].isInductive, true);
-  assertEqual(blocks[0].lines.length, 3, 'Inductive block should have 3 lines');
-  assertEqual(blocks[1].isInductive, false);
-  assertEqual(blocks[1].lines.length, 3, 'Stray indented block should have 3 lines');
-  assertEqual(blocks[1].lines[0], '  foo : Na');
-  assertEqual(blocks[1].lines[1], '  ?');
-  assertEqual(blocks[1].lines[2], '  ...');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].isInductive).toBe(true);
+      expect(blocks[0].lines.length).toBe(3);
+      expect(blocks[1].isInductive).toBe(false);
+      expect(blocks[1].lines.length).toBe(3);
+      expect(blocks[1].lines[0]).toBe('  foo : Na');
+      expect(blocks[1].lines[1]).toBe('  ?');
+      expect(blocks[1].lines[2]).toBe('  ...');
+    });
 
-test('Multiple stray indented lines are grouped together', () => {
-  const source = `plus : Nat -> Nat -> Nat
+    test('multiple stray indented lines are grouped together', () => {
+      const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 
   stray line 1
@@ -425,14 +359,69 @@ plus Zero b = b
 
 twice : Nat -> Nat`;
 
-  const blocks = groupByIndentation(source);
-  assertEqual(blocks.length, 3, 'Should find 3 blocks');
-  assertEqual(blocks[0].lines[0], 'plus : Nat -> Nat -> Nat');
-  assertEqual(blocks[1].lines.length, 2, 'Stray block should have 2 lines');
-  assertEqual(blocks[1].lines[0], '  stray line 1');
-  assertEqual(blocks[2].lines[0], 'twice : Nat -> Nat');
-});
+      const blocks = groupByIndentation(source);
+      expect(blocks.length).toBe(3);
+      expect(blocks[0].lines[0]).toBe('plus : Nat -> Nat -> Nat');
+      expect(blocks[1].lines.length).toBe(2);
+      expect(blocks[1].lines[0]).toBe('  stray line 1');
+      expect(blocks[2].lines[0]).toBe('twice : Nat -> Nat');
+    });
+  });
 
-console.log('\n' + '='.repeat(80));
-console.log('ALL INDENTATION GROUPING TESTS PASSED! ✓');
-console.log('='.repeat(80) + '\n');
+  describe('parseBlock', () => {
+    test('parse block into signature and clauses', () => {
+      const source = `plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)`;
+
+      const blocks = groupByIndentation(source);
+      const parsed = parseBlock(blocks[0]);
+
+      expect(parsed.signature).toBe('plus : Nat -> Nat -> Nat');
+      expect(parsed.clauses.length).toBe(2);
+      expect(parsed.clauses[0]).toBe('plus Zero b = b');
+      expect(parsed.clauses[1]).toBe('plus (Succ a) b = Succ (plus a b)');
+    });
+
+    test('parse block with indented continuation in signature', () => {
+      const source = `plus : Nat
+  -> Nat -> Nat
+plus Zero b = b`;
+
+      const blocks = groupByIndentation(source);
+      const parsed = parseBlock(blocks[0]);
+
+      expect(parsed.signature).toBe('plus : Nat\n  -> Nat -> Nat');
+      expect(parsed.clauses.length).toBe(1);
+      expect(parsed.clauses[0]).toBe('plus Zero b = b');
+    });
+
+    test('parse block with indented continuation in clause', () => {
+      const source = `plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b =
+  Succ (plus a b)`;
+
+      const blocks = groupByIndentation(source);
+      const parsed = parseBlock(blocks[0]);
+
+      expect(parsed.signature).toBe('plus : Nat -> Nat -> Nat');
+      expect(parsed.clauses.length).toBe(2);
+      expect(parsed.clauses[0]).toBe('plus Zero b = b');
+      expect(parsed.clauses[1]).toBe('plus (Succ a) b =\n  Succ (plus a b)');
+    });
+
+    test('parse inductive block', () => {
+      const source = `inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat`;
+
+      const blocks = groupByIndentation(source);
+      const parsed = parseBlock(blocks[0]);
+
+      // For inductive, everything is in signature
+      expect(parsed.signature).toBe('inductive Nat : Type where\n  | Zero : Nat\n  | Succ : Nat -> Nat');
+      expect(parsed.clauses.length).toBe(0);
+    });
+  });
+});

@@ -5,261 +5,214 @@
  * and type check successfully.
  */
 
+import { describe, test, expect } from 'vitest';
 import { compileSource } from '../test-utils';
 
-function test(description: string, fn: () => void): void {
-  try {
-    fn();
-    console.log(`✓ ${description}`);
-  } catch (error) {
-    console.error(`✗ ${description}`);
-    throw error;
-  }
-}
-
-function assert(condition: boolean, message?: string): void {
-  if (!condition) {
-    throw new Error(message || 'Assertion failed');
-  }
-}
-
-console.log('\n' + '='.repeat(80));
-console.log('FUNDAMENTAL INDUCTIVE TYPES TESTS');
-console.log('='.repeat(80) + '\n');
-
-// ============================================================================
-// Natural Numbers (Nat)
-// ============================================================================
-
-test('Nat: basic definition', () => {
-  const source = `inductive Nat : Type where
+describe('Fundamental Inductive Types', () => {
+  describe('Natural Numbers', () => {
+    test('Nat: basic definition', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Nat', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Nat');
+    });
+  });
 
-// ============================================================================
-// Lists (polymorphic)
-// ============================================================================
-
-test('List: polymorphic list definition', () => {
-  const source = `inductive List : Type -> Type where
+  describe('Lists', () => {
+    test('List: polymorphic list definition', () => {
+      const source = `inductive List : Type -> Type where
   Nil : List A
   Cons : A -> List A -> List A`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'List', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('List');
+    });
+  });
 
-// ============================================================================
-// Booleans
-// ============================================================================
-
-test('Bool: boolean type', () => {
-  const source = `inductive Bool : Type where
+  describe('Booleans', () => {
+    test('Bool: boolean type', () => {
+      const source = `inductive Bool : Type where
   True : Bool
   False : Bool`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Bool', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Bool');
+    });
+  });
 
-// ============================================================================
-// Unit type
-// ============================================================================
-
-test('Unit: trivial type', () => {
-  const source = `inductive Unit : Type where
+  describe('Unit Type', () => {
+    test('Unit: trivial type', () => {
+      const source = `inductive Unit : Type where
   unit : Unit`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Unit', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Unit');
+    });
+  });
 
-// ============================================================================
-// Empty type (False)
-// ============================================================================
+  describe('Empty Type', () => {
+    test('Empty: empty type with no constructors', () => {
+      const source = `inductive Empty : Type where`;
 
-test('Empty: empty type with no constructors', () => {
-  const source = `inductive Empty : Type where`;
+      const results = compileSource(source);
 
-  const results = compileSource(source);
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Empty');
+    });
+  });
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Empty', 'Should have correct name');
-});
-
-// ============================================================================
-// Sum type (Either/Or)
-// ============================================================================
-
-test('Sum: binary sum type', () => {
-  const source = `inductive Sum : Type -> Type -> Type where
+  describe('Sum Type', () => {
+    test('Sum: binary sum type', () => {
+      const source = `inductive Sum : Type -> Type -> Type where
   Left : A -> Sum A B
   Right : B -> Sum A B`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Sum', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Sum');
+    });
+  });
 
-// ============================================================================
-// Product type (Pair)
-// ============================================================================
-
-test('Prod: binary product type', () => {
-  const source = `inductive Prod : Type -> Type -> Type where
+  describe('Product Type', () => {
+    test('Prod: binary product type', () => {
+      const source = `inductive Prod : Type -> Type -> Type where
   Pair : A -> B -> Prod A B`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Prod', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Prod');
+    });
+  });
 
-// ============================================================================
-// Option/Maybe type
-// ============================================================================
-
-test('Option: optional value type', () => {
-  const source = `inductive Option : Type -> Type where
+  describe('Option Type', () => {
+    test('Option: optional value type', () => {
+      const source = `inductive Option : Type -> Type where
   None : Option A
   Some : A -> Option A`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Option', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Option');
+    });
+  });
 
-// ============================================================================
-// Vectors (length-indexed lists)
-// ============================================================================
-
-test('Vec: length-indexed vectors', () => {
-  const source = `inductive Vec : Type -> Nat -> Type where
+  describe('Vectors', () => {
+    test('Vec: length-indexed vectors', () => {
+      const source = `inductive Vec : Type -> Nat -> Type where
   VNil : Vec A Zero
   VCons : A -> Vec A n -> Vec A (Succ n)`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Vec', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Vec');
+    });
+  });
 
-// ============================================================================
-// Fin (bounded natural numbers)
-// ============================================================================
-
-test('Fin: bounded natural numbers', () => {
-  const source = `inductive Fin : Nat -> Type where
+  describe('Finite Numbers', () => {
+    test('Fin: bounded natural numbers', () => {
+      const source = `inductive Fin : Nat -> Type where
   FZero : Fin (Succ n)
   FSucc : Fin n -> Fin (Succ n)`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Fin', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Fin');
+    });
+  });
 
-// ============================================================================
-// Equality (propositional equality)
-// ============================================================================
-
-test('Eq: propositional equality', () => {
-  const source = `inductive Eq : A -> A -> Type where
+  describe('Equality', () => {
+    test('Eq: propositional equality', () => {
+      const source = `inductive Eq : A -> A -> Type where
   Refl : Eq x x`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Eq', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Eq');
+    });
+  });
 
-// ============================================================================
-// Exists (Sigma type / dependent pair)
-// ============================================================================
-
-test('Exists: sigma type (dependent pair)', () => {
-  const source = `inductive Exists : (A -> Type) -> Type where
+  describe('Existential', () => {
+    test('Exists: sigma type (dependent pair)', () => {
+      const source = `inductive Exists : (A -> Type) -> Type where
   ExIntro : (x : A) -> P x -> Exists P`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Exists', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Exists');
+    });
+  });
 
-// ============================================================================
-// Accessibility (well-founded recursion)
-// ============================================================================
-
-test('Acc: accessibility predicate', () => {
-  const source = `inductive Acc : (A -> A -> Type) -> A -> Type where
+  describe('Accessibility', () => {
+    test('Acc: accessibility predicate', () => {
+      const source = `inductive Acc : (A -> A -> Type) -> A -> Type where
   AccIntro : ((y : A) -> R y x -> Acc R y) -> Acc R x`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].checkErrors.length === 0, 'Should have no errors');
-  assert(results[0].name === 'Acc', 'Should have correct name');
-});
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].checkErrors.length).toBe(0);
+      expect(results[0].name).toBe('Acc');
+    });
+  });
 
-// ============================================================================
-// Multiple types in one file
-// ============================================================================
-
-test('Multiple fundamental types together', () => {
-  const source = `inductive Nat : Type where
+  describe('Multiple Types', () => {
+    test('Multiple fundamental types together', () => {
+      const source = `inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
@@ -271,34 +224,30 @@ inductive List : Type -> Type where
   Nil : List A
   Cons : A -> List A -> List A`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 3, 'Should have 3 blocks');
-  assert(results[0].name === 'Nat', 'First should be Nat');
-  assert(results[1].name === 'Bool', 'Second should be Bool');
-  assert(results[2].name === 'List', 'Third should be List');
-  assert(results.every(r => r.parseSuccess === true), 'All should parse');
-  assert(results.every(r => r.checkSuccess === true), 'All should check');
-});
+      expect(results.length).toBe(3);
+      expect(results[0].name).toBe('Nat');
+      expect(results[1].name).toBe('Bool');
+      expect(results[2].name).toBe('List');
+      expect(results.every(r => r.parseSuccess)).toBe(true);
+      expect(results.every(r => r.checkSuccess)).toBe(true);
+    });
+  });
 
-// ============================================================================
-// Multiline type signatures
-// ============================================================================
-
-test('Multiline inductive type signature with where', () => {
-  const source = `inductive Foo : Type
+  describe('Multiline Signatures', () => {
+    test('Multiline inductive type signature with where', () => {
+      const source = `inductive Foo : Type
   -> Type where
   Bar : Foo`;
 
-  const results = compileSource(source);
+      const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].checkSuccess === true, 'Check should succeed');
-  assert(results[0].name === 'Foo', 'Should have correct name');
-  assert(results[0].declarations?.[0].kernelConstructors?.length === 1, 'Should have 1 constructor');
+      expect(results.length).toBe(1);
+      expect(results[0].parseSuccess).toBe(true);
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[0].name).toBe('Foo');
+      expect(results[0].declarations?.[0].kernelConstructors?.length).toBe(1);
+    });
+  });
 });
-
-console.log('\n' + '='.repeat(80));
-console.log('ALL FUNDAMENTAL TYPES TESTS PASSED! ✓');
-console.log('='.repeat(80) + '\n');

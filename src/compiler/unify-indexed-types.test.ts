@@ -7,27 +7,8 @@
  * 3. Properly propagates index constraints to the RHS
  */
 
+import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
-
-function test(description: string, fn: () => void): void {
-  try {
-    fn();
-    console.log(`✓ ${description}`);
-  } catch (error) {
-    console.error(`✗ ${description}`);
-    throw error;
-  }
-}
-
-function assert(condition: boolean, message?: string): void {
-  if (!condition) {
-    throw new Error(message || 'Assertion failed');
-  }
-}
-
-console.log('\n' + '='.repeat(80));
-console.log('INDEXED TYPE UNIFICATION TESTS');
-console.log('='.repeat(80) + '\n');
 
 // ============================================================================
 // Setup: Define Equal type for all tests
@@ -56,85 +37,65 @@ function compileAndCheck(source: string): { success: boolean; errors: string[] }
   return { success: result.success, errors };
 }
 
-// ============================================================================
-// Basic Equal Type Tests
-// ============================================================================
+describe('Indexed Type Unification', () => {
+  describe('Basic Equal Type', () => {
+    test('Equal type definition is valid', () => {
+      const result = compileAndCheck(EQUAL_DEF);
+      expect(result.success).toBe(true);
+    });
+  });
 
-test('Equal type definition is valid', () => {
-  const result = compileAndCheck(EQUAL_DEF);
-  assert(result.success, `Equal should compile. Errors: ${result.errors.join(', ')}`);
-});
-
-// ============================================================================
-// Impossible Pattern Tests - These should FAIL
-// ============================================================================
-
-test('REJECT: sym A x y (refl _ _) - impossible pattern with distinct variables', () => {
-  const source = `${EQUAL_DEF}
+  describe('Impossible Patterns - Should FAIL', () => {
+    test('REJECT: sym A x y (refl _ _) - impossible pattern with distinct variables', () => {
+      const source = `${EQUAL_DEF}
 
 sym : (A : Type) -> (x : A) -> (y : A) -> Equal A x y -> Equal A y x
 sym A x y (refl _ _) = refl _ _`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    !result.success,
-    `sym with distinct x,y should FAIL - refl requires indices to be equal. Got success.`
-  );
-});
+      expect(result.success).toBe(false);
+    });
 
-test('REJECT: wildcards cannot hide index mismatch', () => {
-  const source = `${EQUAL_DEF}
+    test('REJECT: wildcards cannot hide index mismatch', () => {
+      const source = `${EQUAL_DEF}
 
 bad_sym : (A : Type) -> (x : A) -> (y : A) -> Equal A x y -> Equal A y x
 bad_sym _ _ _ (refl _ _) = refl _ _`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    !result.success,
-    `bad_sym should FAIL even with wildcards - indices still mismatch.`
-  );
-});
+      expect(result.success).toBe(false);
+    });
+  });
 
-// ============================================================================
-// Valid Pattern Tests - These should SUCCEED
-// ============================================================================
-
-test('ACCEPT: reflexivity proof', () => {
-  const source = `${EQUAL_DEF}
+  describe('Valid Patterns - Should SUCCEED', () => {
+    test('ACCEPT: reflexivity proof', () => {
+      const source = `${EQUAL_DEF}
 
 refl_proof : (A : Type) -> (x : A) -> Equal A x x
 refl_proof A x = refl A x`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    result.success,
-    `refl_proof should succeed - indices are the same. Errors: ${result.errors.join(', ')}`
-  );
-});
+      expect(result.success).toBe(true);
+    });
 
-test('ACCEPT: matching on refl where indices are already equal', () => {
-  const source = `${EQUAL_DEF}
+    test('ACCEPT: matching on refl where indices are already equal', () => {
+      const source = `${EQUAL_DEF}
 
 refl_elim : (A : Type) -> (x : A) -> Equal A x x -> Equal A x x
 refl_elim A x (refl _ _) = refl A x`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    result.success,
-    `refl_elim should succeed - x = x is trivially satisfiable. Errors: ${result.errors.join(', ')}`
-  );
-});
+      expect(result.success).toBe(true);
+    });
+  });
 
-// ============================================================================
-// Vec-like Indexed Type Tests
-// ============================================================================
-
-test('ACCEPT: Vec head with cons pattern', () => {
-  const source = `${NAT_DEF}
+  describe('Vec-like Indexed Type', () => {
+    test('ACCEPT: Vec head with cons pattern', () => {
+      const source = `${NAT_DEF}
 
 inductive Vec : Type -> Nat -> Type where
   | nil : (A : Type) -> Vec A Zero
@@ -143,16 +104,13 @@ inductive Vec : Type -> Nat -> Type where
 head : (A : Type) -> (n : Nat) -> Vec A (Succ n) -> A
 head A n (cons _ _ x _) = x`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    result.success,
-    `head should succeed - cons matches Succ n. Errors: ${result.errors.join(', ')}`
-  );
-});
+      expect(result.success).toBe(true);
+    });
 
-test('REJECT: Vec nil pattern cannot match Succ n index', () => {
-  const source = `${NAT_DEF}
+    test('REJECT: Vec nil pattern cannot match Succ n index', () => {
+      const source = `${NAT_DEF}
 
 inductive Vec : Type -> Nat -> Type where
   | nil : (A : Type) -> Vec A Zero
@@ -161,50 +119,37 @@ inductive Vec : Type -> Nat -> Type where
 bad_head : (A : Type) -> (n : Nat) -> Vec A (Succ n) -> A
 bad_head A n (nil _) = bad_head A n (nil _)`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    !result.success,
-    `bad_head should FAIL - nil cannot match Succ n.`
-  );
-});
+      expect(result.success).toBe(false);
+    });
+  });
 
-// ============================================================================
-// Multiple Index Constraint Tests
-// ============================================================================
-
-test('REJECT: Equal with multiple conflicting constraints (Zero vs Succ)', () => {
-  const source = `${NAT_DEF}
+  describe('Multiple Index Constraints', () => {
+    test('REJECT: Equal with multiple conflicting constraints (Zero vs Succ)', () => {
+      const source = `${NAT_DEF}
 
 ${EQUAL_DEF}
 
 bad : Equal Nat Zero (Succ Zero) -> Nat
 bad (refl _ _) = Zero`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    !result.success,
-    `bad should FAIL - Zero cannot equal Succ Zero.`
-  );
-});
+      expect(result.success).toBe(false);
+    });
 
-test('ACCEPT: Equal with consistent index', () => {
-  const source = `${NAT_DEF}
+    test('ACCEPT: Equal with consistent index', () => {
+      const source = `${NAT_DEF}
 
 ${EQUAL_DEF}
 
 good : Equal Nat Zero Zero -> Nat
 good (refl _ _) = Zero`;
 
-  const result = compileAndCheck(source);
+      const result = compileAndCheck(source);
 
-  assert(
-    result.success,
-    `good should succeed - Zero = Zero is fine. Errors: ${result.errors.join(', ')}`
-  );
+      expect(result.success).toBe(true);
+    });
+  });
 });
-
-console.log('\n' + '='.repeat(80));
-console.log('ALL INDEXED TYPE UNIFICATION TESTS PASSED! ✓');
-console.log('='.repeat(80) + '\n');

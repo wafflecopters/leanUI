@@ -1,3 +1,4 @@
+import { describe, test, expect } from 'vitest';
 import { parseExpressionToAST, astToString, ENHANCED_FOCUS_RULES } from './enhanced-focus';
 
 // Helper function to apply a rule and get the result
@@ -23,73 +24,30 @@ function applyRule(ruleId: string, expression: string, isReverse: boolean = fals
   return astToString(result.newNode);
 }
 
-// Test cases
-const tests = [
-  {
-    name: 'Division by self',
-    ruleId: 'div_self',
-    input: 'x / x',
-    expected: '1'
-  },
-  {
-    name: 'Subtraction by self',
-    ruleId: 'sub_self',
-    input: 'a - a',
-    expected: '0'
-  },
-  {
-    name: 'Subtraction as addition of negation',
-    ruleId: 'sub_as_add_neg',
-    input: 'a - b',
-    expected: 'a + (-b)'
-  },
-  {
-    name: 'Subtraction as addition (complex expression)',
-    ruleId: 'sub_as_add_neg',
-    input: '(a + a) - a',
-    expected: 'a + a + (-a)'  // Parentheses are lost in AST parsing
-  },
-  {
-    name: 'Reverse: Addition as subtraction',
-    ruleId: 'sub_as_add_neg',
-    input: 'x + (-y)',
-    expected: 'x - y',
-    isReverse: true
-  }
-];
+describe('Pattern Rules', () => {
+  test('Division by self', () => {
+    const result = applyRule('div_self', 'x / x');
+    expect(result).toBe('1');
+  });
 
-// Run tests
-console.log('Running pattern rule tests...\n');
+  test('Subtraction by self', () => {
+    const result = applyRule('sub_self', 'a - a');
+    expect(result).toBe('0');
+  });
 
-let passed = 0;
-let failed = 0;
+  test('Subtraction as addition of negation', () => {
+    const result = applyRule('sub_as_add_neg', 'a - b');
+    expect(result).toBe('a + (-b)');
+  });
 
-for (const test of tests) {
-  try {
-    const result = applyRule(test.ruleId, test.input, test.isReverse);
+  test('Subtraction as addition (complex expression)', () => {
+    const result = applyRule('sub_as_add_neg', '(a + a) - a');
+    // Parentheses are lost in AST parsing
+    expect(result).toBe('a + a + (-a)');
+  });
 
-    if (result === test.expected) {
-      console.log(`✅ ${test.name}`);
-      console.log(`   Input: ${test.input}`);
-      console.log(`   Output: ${result}`);
-      passed++;
-    } else {
-      console.log(`❌ ${test.name}`);
-      console.log(`   Input: ${test.input}`);
-      console.log(`   Expected: ${test.expected}`);
-      console.log(`   Got: ${result}`);
-      failed++;
-    }
-  } catch (error) {
-    console.log(`❌ ${test.name}`);
-    console.log(`   Input: ${test.input}`);
-    console.log(`   Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    failed++;
-  }
-  console.log('');
-}
-
-console.log(`\nResults: ${passed} passed, ${failed} failed`);
-
-// Export for potential use in Jest or other test runners
-export { tests, applyRule };
+  test('Reverse: Addition as subtraction', () => {
+    const result = applyRule('sub_as_add_neg', 'x + (-y)', true);
+    expect(result).toBe('x - y');
+  });
+});

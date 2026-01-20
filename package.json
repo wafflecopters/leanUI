@@ -7,7 +7,9 @@
     "build": "rsbuild build",
     "preview": "rsbuild preview",
     "server": "tsx server/index.ts",
-    "start": "npm run server & npm run dev"
+    "start": "npm run server & npm run dev",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

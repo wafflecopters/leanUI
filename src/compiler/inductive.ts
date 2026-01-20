@@ -88,7 +88,14 @@ export function checkInductiveDeclaration(
     return { success: false, errors };
   }
 
-  runAndAccumulateErrors(defEnv.inInductiveDefinitionType(), inferType, errors);
+  const sigResult = runAndAccumulateErrors(defEnv.inInductiveDefinitionType(), inferType, errors);
+  if (sigResult?.metaVars.size ?? 0 > 0) {
+    return {
+      success: false, errors: [
+        TCEnvError.create('Checking the inductive type signature produced unsolved metas.', defEnv)
+      ]
+    }
+  }
 
   if (errors.length > 0) {
     return { success: false, errors };
@@ -101,7 +108,11 @@ export function checkInductiveDeclaration(
       ctorsEnv.inInductiveDefinitionConstructor(index).inInductiveDefinitionConstructorType(),
       e => {
         const result = inferType(e)
-        ctorsEnv = addDefinitionInTCEnv(ctorsEnv, ctor.name, ctor.type);
+        if (result.metaVars.size > 0) {
+          errors.push(TCEnvError.create('Checking the constructor signature produced unsolved metas.', e));
+        } else {
+          ctorsEnv = addDefinitionInTCEnv(ctorsEnv, ctor.name, ctor.type);
+        }
         return result
       },
       errors

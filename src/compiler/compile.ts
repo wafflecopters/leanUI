@@ -1261,7 +1261,14 @@ function checkTermDeclaration(
     // Check for duplicate names
     validateTermNameNotDefined(termEnv);
 
-    inferType(termEnv.inTermType());
+    const sigResult = inferType(termEnv.inTermType());
+    if (sigResult.metaVars.size > 0) {
+      return {
+        success: false, errors: [
+          TCEnvError.create('Checking the signature produced unsolved metas.', env)
+        ]
+      }
+    }
 
     // Add to context for subsequent declarations
     if (decl.name) {

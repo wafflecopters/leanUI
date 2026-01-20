@@ -2,88 +2,63 @@
  * Tests for pattern matching syntax parsing
  */
 
+import { describe, test, expect } from 'vitest';
 import { compileSource } from '../test-utils';
 
-function test(description: string, fn: () => void): void {
-  try {
-    fn();
-    console.log(`✓ ${description}`);
-  } catch (error) {
-    console.error(`✗ ${description}`);
-    throw error;
-  }
-}
-
-function assert(condition: boolean, message?: string): void {
-  if (!condition) {
-    throw new Error(message || 'Assertion failed');
-  }
-}
-
-console.log('\n' + '='.repeat(80));
-console.log('PATTERN MATCHING TESTS');
-console.log('='.repeat(80) + '\n');
-
-// ============================================================================
-// Basic Pattern Matching
-// ============================================================================
-
-test('Pattern matching: simple function with type signature', () => {
-  const source = `plus : Nat -> Nat -> Nat
+describe('Pattern Matching', () => {
+  test('simple function with type signature', () => {
+    const source = `plus : Nat -> Nat -> Nat
 plus Zero b = b
 plus (Succ a) b = Succ (plus a b)`;
 
-  const results = compileSource(source);
+    const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].name === 'plus', 'Should have correct name');
-  assert(results[0].declarations?.length === 1, 'Should have 1 declaration (merged)');
-});
+    expect(results.length).toBe(1);
+    expect(results[0].parseSuccess).toBe(true);
+    expect(results[0].name).toBe('plus');
+    expect(results[0].declarations?.length).toBe(1);
+  });
 
-test('Pattern matching: multiple clauses', () => {
-  const source = `isZero : Nat -> Bool
+  test('multiple clauses', () => {
+    const source = `isZero : Nat -> Bool
 isZero Zero = True
 isZero (Succ n) = False`;
 
-  const results = compileSource(source);
+    const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-  assert(results[0].name === 'isZero', 'Should have correct name');
-});
+    expect(results.length).toBe(1);
+    expect(results[0].parseSuccess).toBe(true);
+    expect(results[0].name).toBe('isZero');
+  });
 
-test('Pattern matching: nested patterns', () => {
-  const source = `add : Nat -> Nat -> Nat
+  test('nested patterns', () => {
+    const source = `add : Nat -> Nat -> Nat
 add Zero n = n
 add (Succ m) n = Succ (add m n)`;
 
-  const results = compileSource(source);
+    const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-});
+    expect(results.length).toBe(1);
+    expect(results[0].parseSuccess).toBe(true);
+  });
 
-test('Pattern matching: underscore patterns', () => {
-  const source = `const : A -> B -> A
+  test('underscore patterns', () => {
+    const source = `const : A -> B -> A
 const x _ = x`;
 
-  const results = compileSource(source);
+    const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
-});
+    expect(results.length).toBe(1);
+    expect(results[0].parseSuccess).toBe(true);
+  });
 
-test('Pattern matching: variable patterns', () => {
-  const source = `id : A -> A
+  test('variable patterns', () => {
+    const source = `id : A -> A
 id x = x`;
 
-  const results = compileSource(source);
+    const results = compileSource(source);
 
-  assert(results.length === 1, 'Should have 1 block');
-  assert(results[0].parseSuccess === true, 'Parse should succeed');
+    expect(results.length).toBe(1);
+    expect(results[0].parseSuccess).toBe(true);
+  });
 });
-
-console.log('\n' + '='.repeat(80));
-console.log('ALL PATTERN MATCHING TESTS PASSED! ✓');
-console.log('='.repeat(80) + '\n');
