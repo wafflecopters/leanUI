@@ -689,6 +689,22 @@ test('Parse let distinguishes assignment = from equality', () => {
   }
 });
 
+test('Parse let in middle of line with multiline body', () => {
+  // This simulates: plus (Succ a) b = let x = Succ (plus a b) in\n  x
+  // The let is in the middle of the line but body just needs to be more
+  // indented than the line start (column 0), not the 'let' keyword column
+  const term = parseExpr('foo (let x = Succ a in\n  x)');
+  assertTermShape(term, 'App');
+  if (term.tag === 'App') {
+    assertTermShape(term.fn, 'Const');
+    assertTermShape(term.arg, 'Binder');
+    if (term.arg.tag === 'Binder') {
+      assertEqual(term.arg.binderKind.tag, 'BLetTT');
+      assertEqual(term.arg.name, 'x');
+    }
+  }
+});
+
 // ============================================================================
 // Negative Tests for Let Expressions
 // ============================================================================
@@ -706,12 +722,12 @@ test('Error on missing body after in', () => {
 });
 
 test('Error on let body not indented after newline', () => {
-  // Body on new line must be indented beyond the let keyword
+  // Body on new line must be indented beyond the line start
   assertThrows(() => parseExpr('let x = v in\nx'), 'Should error when body is not indented');
 });
 
 test('Error on nested let body not sufficiently indented', () => {
-  // Nested body must be indented beyond its let keyword
+  // Nested body must be indented beyond the start of the line containing its let
   assertThrows(() => parseExpr('let x = a in\n  let y = b in\n  y'), 'Should error when nested body aligns with parent let');
 });
 
