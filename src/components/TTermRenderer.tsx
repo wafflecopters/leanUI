@@ -9,7 +9,7 @@
  */
 
 import { useMemo, useCallback } from 'react';
-import { TTerm } from '../compiler/surface';
+import { TTerm, prettyPrintTLevel } from '../compiler/surface';
 import { TermFocusPath, isNamePath, setNameAtPath } from '../utils/termNavigation';
 import { AutoSizingTextField } from './AutoSizingTextField';
 
@@ -177,7 +177,14 @@ function renderTerm(term: TTerm, path: TermFocusPath, ctx: RenderContext): React
     case 'Sort':
       return (
         <FocusableSpan path={path} ctx={ctx}>
-          <span>Type<sub>{term.level}</sub></span>
+          <span>Type<sub>{prettyPrintTLevel(term.level)}</sub></span>
+        </FocusableSpan>
+      );
+
+    case 'ULevel':
+      return (
+        <FocusableSpan path={path} ctx={ctx}>
+          <span>ULevel</span>
         </FocusableSpan>
       );
 

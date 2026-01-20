@@ -20,6 +20,7 @@ import type {
   RecordDef,
   RecordField,
   RecordParam,
+  TLevel,
 } from './surface';
 
 import type {
@@ -32,7 +33,7 @@ import type {
   TTKRecordParam,
 } from './kernel';
 
-import { mkLevelNum, mkMeta } from './kernel';
+import { mkLevelNum, mkMeta, mkLParam, mkLSucc, mkLMax, mkLIMax, Level } from './kernel';
 
 // Counter for generating unique meta IDs for implicit let types
 let implicitLetTypeCounter = 0;
@@ -266,6 +267,32 @@ export function resetWildcardCounter(): void {
 }
 
 // ============================================================================
+// Level Elaboration: TLevel → Level
+// ============================================================================
+
+/**
+ * Elaborate a surface-level level expression (TLevel) to a kernel level (Level).
+ *
+ * @param level - Surface level expression
+ * @returns Kernel level
+ */
+export function elabLevelToKernel(level: TLevel): Level {
+  switch (level.tag) {
+    case 'LNum':
+      return mkLevelNum(level.n);
+    case 'LName':
+      // Level variable - use LParam in kernel
+      return mkLParam(level.name);
+    case 'LSucc':
+      return mkLSucc(elabLevelToKernel(level.pred));
+    case 'LMax':
+      return mkLMax(elabLevelToKernel(level.left), elabLevelToKernel(level.right));
+    case 'LIMax':
+      return mkLIMax(elabLevelToKernel(level.left), elabLevelToKernel(level.right));
+  }
+}
+
+// ============================================================================
 // Term Elaboration: TT → TTK
 // ============================================================================
 
@@ -284,7 +311,10 @@ export function elabToKernel(term: TTerm): TTKTerm {
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: mkLevelNum(term.level) };
+      return { tag: 'Sort', level: elabLevelToKernel(term.level) };
+
+    case 'ULevel':
+      return { tag: 'ULevel' };
 
     case 'Const':
       return {
@@ -468,7 +498,10 @@ export function elabToKernelWithMap(
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: mkLevelNum(term.level) };
+      return { tag: 'Sort', level: elabLevelToKernel(term.level) };
+
+    case 'ULevel':
+      return { tag: 'ULevel' };
 
     case 'Const':
       return {

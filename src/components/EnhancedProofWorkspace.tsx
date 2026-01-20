@@ -237,7 +237,9 @@ function piBinderToAssumption([name, type]: [string, TTerm], id: string): Assump
   } else if (type.tag === 'Const') {
     typeStr = type.name;
   } else if (type.tag === 'Sort') {
-    typeStr = type.level === 0 ? 'Prop' : 'Type';
+    typeStr = type.level.tag === 'LNum' && type.level.n === 0 ? 'Prop' : 'Type';
+  } else if (type.tag === 'ULevel') {
+    typeStr = 'ULevel';
   } else {
     // For complex types, use pretty-print
     typeStr = astToString({ type: 'variable', value: type, children: [], raw: '' } as any);

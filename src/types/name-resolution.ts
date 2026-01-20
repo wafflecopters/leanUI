@@ -16,6 +16,35 @@ import { TTerm } from '../compiler/surface';
 import { IndexPath } from './source-position';
 
 // ============================================================================
+// Reserved Names
+// ============================================================================
+
+/**
+ * Set of reserved keywords that cannot be used as names for types,
+ * constructors, terms, records, etc.
+ *
+ * These include:
+ * - Type and Prop (universe sorts)
+ * - ULevel (type of universe levels)
+ * - USucc, UMax, UIMax (universe level operations)
+ */
+export const RESERVED_NAMES: ReadonlySet<string> = new Set([
+  'Type',
+  'Prop',
+  'ULevel',
+  'USucc',
+  'UMax',
+  'UIMax',
+]);
+
+/**
+ * Check if a name is reserved and cannot be used as a declaration name.
+ */
+export function isReservedName(name: string): boolean {
+  return RESERVED_NAMES.has(name);
+}
+
+// ============================================================================
 // Error Types
 // ============================================================================
 
@@ -88,6 +117,7 @@ export function validateTerm(
       case 'Var':
       case 'Sort':
       case 'Hole':
+      case 'ULevel':
         // These don't reference symbols
         break;
 
@@ -174,6 +204,15 @@ export function validateDeclaration(
 ): NameResolutionResult<SymbolContext> {
   const errors: NameResolutionError[] = [];
 
+  // Check for reserved name
+  if (name && isReservedName(name)) {
+    errors.push({
+      message: `'${name}' is a reserved keyword and cannot be used as a name`,
+      symbolName: name,
+      path: []  // Path to the declaration name itself
+    });
+  }
+
   // Check for duplicate declaration name
   if (name && isSymbolDefined(ctx, name)) {
     errors.push({
@@ -207,8 +246,20 @@ export function validateDeclaration(
 
   // Validate constructors if present (inductive type)
   if (constructors) {
-    // Check for duplicate constructor names and add to context
+    // Check for reserved and duplicate constructor names, and add to context
     constructors.forEach((ctor, i) => {
+      // Check for reserved name
+      if (isReservedName(ctor.name)) {
+        errors.push({
+          message: `'${ctor.name}' is a reserved keyword and cannot be used as a constructor name`,
+          symbolName: ctor.name,
+          path: [
+            { kind: 'field' as const, name: 'constructors' },
+            { kind: 'array' as const, index: i }
+          ]
+        });
+      }
+      // Check for duplicate
       if (isSymbolDefined(newCtx, ctor.name)) {
         errors.push({
           message: `Constructor '${ctor.name}' is already defined`,

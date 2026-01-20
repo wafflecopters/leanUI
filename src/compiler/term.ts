@@ -212,6 +212,8 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
     return { tag: 'Const', name: term.name };
   } else if (term.tag === 'Sort') {
     return { tag: 'Sort', level: term.level };
+  } else if (term.tag === 'ULevel') {
+    return { tag: 'ULevel' };
   } else if (term.tag === 'Hole') {
     return { tag: 'Hole', id: term.id };
   } else if (term.tag === 'Meta') {

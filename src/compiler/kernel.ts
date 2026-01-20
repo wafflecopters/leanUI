@@ -220,6 +220,7 @@ export type TTKClause = {
 export type TTKTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: Level }                          // Sort l (Type l, Prop = Sort 0)
+  | { tag: 'ULevel' }                                      // The type of universe levels
   | { tag: 'Binder'; name: string; binderKind: TTKBinderKind; domain: TTKTerm; body: TTKTerm }  // Unified binder
   | TTKTermApp   // Function application (f a)
   | TTKTermConst // Named constant (nat_elim, eq, etc.)
@@ -365,6 +366,13 @@ export function mkSort(level: Level): TTKTerm {
   return { tag: 'Sort', level };
 }
 
+/**
+ * Create ULevel (the type of universe levels)
+ */
+export function mkULevel(): TTKTerm {
+  return { tag: 'ULevel' };
+}
+
 // ============================================================================
 // Definitional Equality
 // ============================================================================
@@ -381,6 +389,9 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
 
     case 'Sort':
       return term2.tag === 'Sort' && levelsEqual(term1.level, term2.level);
+
+    case 'ULevel':
+      return term2.tag === 'ULevel';
 
     case 'Const':
       return term2.tag === 'Const' && term1.name === term2.name;
@@ -463,6 +474,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
       // Level contains variables/metas, show as Sort l
       return `Sort ${prettyPrintLevel(term.level)}`;
     }
+
+    case 'ULevel':
+      return 'ULevel';
 
     case 'Const':
       return term.name;
