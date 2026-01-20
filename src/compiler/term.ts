@@ -1,8 +1,9 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi } from "./kernel";
 export type { TTKContext } from "./kernel";
 import { canSolveMeta, solveConstraints } from "./meta";
-import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, freeVarIndices, shiftTerm } from "./subst";
+import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, shiftTerm } from "./subst";
+import { unifyTerms as doUnify } from "./unify";
 import { areTypesDefEq } from "./whnf";
 
 export interface CheckError {
@@ -302,6 +303,10 @@ export class TCEnv<T> {
   ) {
   }
 
+  then<S>(fn: (env: TCEnv<T>) => S): S {
+    return fn(this);
+  }
+
   hasConstraints(): this is TCEnv<T> & { constraints: Constraint[] } {
     return this.constraints.length > 0;
   }
@@ -373,6 +378,39 @@ export class TCEnv<T> {
       this.valueStack,
       this.value
     );
+  }
+
+  /**
+   * Unify two terms, applying all resulting substitutions to the context,
+   * metas, and constraints. Also adds any meta constraints produced by unification.
+   *
+   * Returns a new TCEnv with all substitutions and constraints applied.
+   * Throws if unification fails.
+   *
+   * Note: This preserves the value type T since unification only affects
+   * the context, metas, and constraints - not the value itself.
+   */
+  unifyTerms<S extends TTKTerm>(this: TCEnv<S>, lhs: TTKTerm, rhs: TTKTerm): TCEnv<S> {
+    const result = doUnify(lhs, rhs);
+
+    if (!result.success) {
+      throw (this as unknown as TCEnv<TTKTerm>).unificationFailedError(lhs, rhs, result.reason);
+    }
+
+    // Apply all substitutions sequentially
+    // enumerateAppliedSubstitutions handles adjusting indices as each substitution
+    // removes a variable from the context
+    let env: TCEnv<S> = this;
+    for (const { varIndex, value } of enumerateAppliedSubstitutions(result.substitutions)) {
+      env = env.applySubstitutionToContextMetasAndConstraints(varIndex, value);
+    }
+
+    // Add any meta constraints from unification
+    for (const metaConstraint of result.metaConstraints) {
+      env = env.withConstraint(metaConstraint);
+    }
+
+    return env;
   }
 
   hasDefinedValue(): this is TCEnv<NonNullable<T>> {
@@ -447,6 +485,30 @@ export class TCEnv<T> {
 
   isHoleTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Hole' }> {
     return this.value.tag === 'Hole';
+  }
+
+  /**
+   * Create a fresh meta variable for a hole during type checking.
+   * The meta gets the expected type and current context.
+   * The hole is replaced with a Meta term in the returned env's value.
+   */
+  createMetaForHole(this: TCEnv<TTKTerm & { tag: 'Hole' }>, expectedType: TTKTerm, _message?: string): TCEnv<TTKTerm> {
+    const name = `?m${this.metaVars.size}`;
+    const newMetaVars = new Map(this.metaVars);
+    newMetaVars.set(name, { ctx: this.context, type: expectedType });
+
+    // Replace the Hole with a Meta term (elaboration: Hole -> Meta)
+    const metaTerm: TTKTerm = { tag: 'Meta', id: name };
+
+    return new TCEnv(
+      this.context,
+      this.definitions,
+      newMetaVars,
+      this.constraints,
+      this.indexPath,
+      this.valueStack,
+      metaTerm
+    );
   }
 
   isConstTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Const' }> {
@@ -871,9 +933,16 @@ export class TCEnv<T> {
   }
 
   // Error Checkors
-  assertAreTypesDefinitionallyEqual(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
+  assertTermsAreDefinitionallyEqual(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
     if (!areTypesDefEq(lhs, rhs)) {
-      throw this.expectedTypesToBeDefinitionallyEqualError(lhs, rhs, message);
+      throw this.expectedTermsToBeDefinitionallyEqualError(lhs, rhs, message);
+    }
+    return this;
+  }
+
+  assertValueIsDefinitionallyEqual(this: TCEnv<TTKTerm>, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
+    if (!areTypesDefEq(this.value, rhs)) {
+      throw this.expectedTermsToBeDefinitionallyEqualError(this.value, rhs, message);
     }
     return this;
   }
@@ -932,8 +1001,13 @@ export class TCEnv<T> {
     return TCEnvError.create(`Expected check type to be binder Pi type, got: ${prettyPrint(checkType)}`, this);
   }
 
-  expectedTypesToBeDefinitionallyEqualError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnvError {
-    return TCEnvError.create(`Expected types to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
+  expectedTermsToBeDefinitionallyEqualError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnvError {
+    return TCEnvError.create(`Expected terms to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
+  }
+
+  unificationFailedError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, reason: 'conflict' | 'cycle'): TCEnvError {
+    const reasonMsg = reason === 'conflict' ? 'conflicting heads' : 'occurs check failed (cyclic)';
+    return TCEnvError.create(`Unification failed (${reasonMsg}): ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}`, this);
   }
 
   typeDefinitionNotFoundError(name: string): TCEnvError {

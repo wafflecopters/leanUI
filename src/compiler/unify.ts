@@ -4,10 +4,12 @@ import { whnf } from "./whnf";
 
 export type Substitutions = Map<number, TTKTerm>
 
+export type MetaConstraint = { meta: string, rhs: TTKTerm }
+
 export type UnifyResult = {
   success: true,
   substitutions: Substitutions,
-  metaConstraints: unknown[],
+  metaConstraints: MetaConstraint[],
 } | {
   success: false,
   reason: 'conflict' | 'cycle',
