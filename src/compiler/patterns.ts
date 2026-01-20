@@ -238,6 +238,67 @@ type PatternStackEntry = { tag: 'pattern', pattern: TTKPattern } | { tag: 'done'
 type CheckStackEntry = { type: TTKTerm, ctxLength: number }
 
 // ============================================================================
+// Pattern Variable Counting
+// ============================================================================
+
+/**
+ * Count the number of variables bound by a pattern.
+ * Both PVar and PWild bind variables.
+ */
+function countPatternVarsInPattern(pattern: TTKPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      let count = 0;
+      for (const arg of pattern.args) {
+        count += countPatternVarsInPattern(arg);
+      }
+      return count;
+  }
+}
+
+/**
+ * Count total variables bound by all patterns.
+ */
+function countPatternVars(patterns: TTKPattern[]): number {
+  let count = 0;
+  for (const p of patterns) {
+    count += countPatternVarsInPattern(p);
+  }
+  return count;
+}
+
+// ============================================================================
+// De Bruijn ↔ Levels Conversion for RHS
+// ============================================================================
+
+/**
+ * Convert de Bruijn indices to "levels" representation.
+ * Level 0 = first binder (outermost), like elabStack uses.
+ * De Bruijn 0 = most recent binder (innermost).
+ *
+ * Conversion: level = contextLength - 1 - deBruijnIndex
+ */
+function deBruijnToLevels(term: TTKTerm, contextLength: number): TTKTerm {
+  return transformVarsInTerm(term, (index) => {
+    return mkVar(contextLength - 1 - index);
+  });
+}
+
+/**
+ * Convert levels back to de Bruijn indices.
+ *
+ * Conversion: deBruijnIndex = contextLength - 1 - level
+ */
+function levelsToDeBruijn(term: TTKTerm, contextLength: number): TTKTerm {
+  return transformVarsInTerm(term, (level) => {
+    return mkVar(contextLength - 1 - level);
+  });
+}
+
+// ============================================================================
 // LHS Unification Helpers
 // ============================================================================
 
@@ -245,7 +306,7 @@ function prettyPrintInTTKContext(term: TTKTerm, signature: TTKContext): string {
   return prettyPrintTTK(term, signature.map(s => s.name).reverse())
 }
 
-function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: CheckStackEntry, checkStack: CheckStackEntry[], elabStack: TTKTerm[], workEnv: TCEnv<unknown>) {
+function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: CheckStackEntry, checkStack: CheckStackEntry[], elabStack: TTKTerm[], rhsContainer: { rhsInLevels: TTKTerm }, workEnv: TCEnv<unknown>) {
   logInfo(() => `STEP DONE(${prettyPrintPattern(pattern)}, ${arity})`);
 
   const nextCheckTypeEntry = checkStack.pop() as CheckStackEntry
@@ -303,9 +364,11 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
     logInfo(() => `    Apply: ${workEnv.prettyPrint(mkVar(varIndex))} -> ${workEnv.prettyPrint(value)}`)
 
-    // Update these 2 before the signature
+    // Update these before the signature
     applySubstitutionToCheckStackInPlace(checkStack, workEnv.context.length, varIndex, value)
     applySubstitutionToElabStackInPlace(elabStack, workEnv.context.length, varIndex, value)
+    // Also apply to RHS (which is in levels form, same as elabStack)
+    rhsContainer.rhsInLevels = applySubstitutionToTermInLevels(rhsContainer.rhsInLevels, workEnv.context.length, varIndex, value)
 
     workEnv = workEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
     logResultState(workEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
@@ -368,6 +431,38 @@ function applySubstitutionToElabStackInPlace(
   }
 
   return stack;
+}
+
+/**
+ * Apply a substitution to a single term that uses "levels" representation.
+ * Same logic as applySubstitutionToElabStackInPlace but for a single term.
+ */
+function applySubstitutionToTermInLevels(
+  term: TTKTerm,
+  mainSigLength: number,
+  varIndex: number,
+  value: TTKTerm
+): TTKTerm {
+  const varLevel = mainSigLength - 1 - varIndex;
+
+  const valueInLevels = transformVarsInTerm(value, (idx) => {
+    const level = mainSigLength - 1 - idx;
+    if (level > varLevel) {
+      return mkVar(level - 1);
+    } else {
+      return mkVar(level);
+    }
+  });
+
+  return transformVarsInTerm(term, (level) => {
+    if (level === varLevel) {
+      return valueInLevels;
+    } else if (level > varLevel) {
+      return mkVar(level - 1);
+    } else {
+      return mkVar(level);
+    }
+  });
 }
 
 function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, patternStack: PatternStackEntry[], checkStack: CheckStackEntry[], elabStack: TTKTerm[], workEnv: TCEnv<unknown>) {
@@ -444,11 +539,13 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
 // Main LHS Unification
 // ============================================================================
 
-function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[] }> {
+function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm, rhsInLevels: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[], rhsInLevels: TTKTerm }> {
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
   const checkStack: CheckStackEntry[] = [{ type, ctxLength: env.context.length }]
   const patternStack: PatternStackEntry[] = env.value.map(p => ({ tag: 'pattern' as const, pattern: p })).reverse()
   const elabStack: TTKTerm[] = []
+  // Container for RHS so it can be mutated during substitution application
+  const rhsContainer = { rhsInLevels }
 
   let workEnv: TCEnv<unknown> = env
 
@@ -472,7 +569,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
     }
 
     if (patternEntry.tag === 'done') {
-      workEnv = constructorDone(patternEntry.pattern, patternEntry.arity, checkTypeEntry, checkStack, elabStack, workEnv)
+      workEnv = constructorDone(patternEntry.pattern, patternEntry.arity, checkTypeEntry, checkStack, elabStack, rhsContainer, workEnv)
     } else {
       workEnv = processPattern(patternEntry.pattern, checkTypeEntry, patternStack, checkStack, elabStack, workEnv)
     }
@@ -490,7 +587,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
 
   workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 
-  return workEnv.withValue({ returnType: checkStack[0].type, elabStack })
+  return workEnv.withValue({ returnType: checkStack[0].type, elabStack, rhsInLevels: rhsContainer.rhsInLevels })
 }
 
 // ============================================================================
@@ -506,17 +603,29 @@ export function checkMatchClause(
   type: TTKTerm,
 ): TCEnv<void> {
   assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns())
-  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns(), type);
+
+  // Get the original RHS and convert to levels representation
+  // The RHS was parsed with de Bruijn indices based on ALL pattern variables
+  const originalRhs = env.value.rhs;
+  const patterns = env.value.patterns;
+  const originalContextLength = countPatternVars(patterns);
+
+  // Convert RHS from de Bruijn indices to "levels" (same representation as elabStack)
+  const rhsInLevels = deBruijnToLevels(originalRhs, originalContextLength);
+
+  // Run LHS unification, which will transform the RHS alongside elabStack
+  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns(), type, rhsInLevels);
   result.assertNoConstraints();
 
-  const { returnType } = result.value
+  const { returnType, rhsInLevels: transformedRhsInLevels } = result.value;
 
-  debugger
+  // Convert the transformed RHS back to de Bruijn indices using the final context length
+  const finalContextLength = result.context.length;
+  const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
 
-  const checkEnv = result.atValueAndPathOfEnv(env).inMatchClauseRhs()
+  // Type check the transformed RHS
+  const checkEnv = result.withValue(transformedRhs);
   const checkedEnv = checkType(checkEnv, returnType);
-
-  // debugger
 
   return result.withoutValue();
 }
