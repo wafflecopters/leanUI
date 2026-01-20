@@ -596,12 +596,13 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
 
 /**
  * Check a match clause by validating patterns and unifying the LHS.
+ * Returns the checked clause with the solved/reified RHS.
  */
 export function checkMatchClause(
   termName: string,
   env: TCEnv<TTKClause>,
   type: TTKTerm,
-): TCEnv<void> {
+): TCEnv<TTKClause> {
   assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns())
 
   // Get the original RHS and convert to levels representation
@@ -627,5 +628,10 @@ export function checkMatchClause(
   const checkEnv = result.withValue(transformedRhs);
   const checkedEnv = checkType(checkEnv, returnType);
 
-  return result.withoutValue();
+  // Return the checked clause with the solved RHS
+  const checkedClause: TTKClause = {
+    patterns: env.value.patterns,
+    rhs: checkedEnv.value
+  };
+  return result.withValue(checkedClause);
 }
