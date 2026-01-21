@@ -191,6 +191,7 @@ export type TTerm =
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
   | { tag: 'Match'; scrutinee: TTerm; clauses: TClause[] } // Pattern matching (case/match)
+  | { tag: 'AbsurdMarker' }                               // #absurd marker for absurd cases
 
 export function mapTTerm<R>(
   term: TTerm,
@@ -444,6 +445,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'AbsurdMarker':
       return term;
 
     case 'Hole':
@@ -522,6 +524,7 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'AbsurdMarker':
       return null;
 
     case 'Binder': {
@@ -592,6 +595,7 @@ export function fillHoleWithTT(
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'AbsurdMarker':
       return term;
 
     case 'Binder': {
@@ -682,6 +686,9 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
     case 'Const':
       return term2.tag === 'Const' && term1.name === term2.name;
 
+    case 'AbsurdMarker':
+      return term2.tag === 'AbsurdMarker';
+
     case 'Hole':
       // Holes are only equal if they have the same ID
       return term2.tag === 'Hole' && term1.id === term2.id;
@@ -771,6 +778,7 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'Const':
     case 'Hole':
     case 'ULevel':
+    case 'AbsurdMarker':
       // Leaf nodes have no children
       return null;
 
@@ -831,6 +839,7 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
     case 'Const':
     case 'Hole':
     case 'ULevel':
+    case 'AbsurdMarker':
       // Leaf nodes have no children
       return null;
 
@@ -1020,6 +1029,7 @@ export function isNameUsed(name: string, term: TTerm): boolean {
 
     case 'Sort':
     case 'ULevel':
+    case 'AbsurdMarker':
       // No names to check
       return false;
 
@@ -1102,6 +1112,7 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'AbsurdMarker':
       return term;
 
     case 'Binder': {
@@ -1196,6 +1207,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'AbsurdMarker':
       return term;
 
     case 'Binder': {
@@ -1349,6 +1361,9 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
       // Try to extract just the meaningful name from verbose strings
       return term.name;
 
+    case 'AbsurdMarker':
+      return '#absurd';
+
     case 'Binder': {
       const newContext = [term.name, ...context];
       const body = prettyPrintTerseTT(term.body, newContext);
@@ -1478,6 +1493,9 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
 
     case 'Const':
       return term.name;
+
+    case 'AbsurdMarker':
+      return '#absurd';
 
     case 'Binder': {
       const newContext = [term.name, ...context];
@@ -1656,6 +1674,9 @@ export function prettyPrintLatexTT(
     case 'Const':
       // Escape special LaTeX characters in names
       return term.name.replace(/_/g, '\\_');
+
+    case 'AbsurdMarker':
+      return '\\text{\\#absurd}';
 
     case 'Binder': {
       const domain = term.domain !== undefined ? prettyPrintLatexTT(term.domain, context, opts) : undefined;
@@ -2027,6 +2048,8 @@ function fillHoleWithLet(
     case 'Var':
     case 'Sort':
     case 'Const':
+    case 'ULevel':
+    case 'AbsurdMarker':
       return term;
 
     case 'Binder': {
@@ -2222,6 +2245,7 @@ export function occursInTT(index: number, term: TTerm): boolean {
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'AbsurdMarker':
       return false;
     case 'Binder': {
       // Check in domain (if present) and body (going under binder for body)

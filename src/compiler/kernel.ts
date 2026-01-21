@@ -922,6 +922,7 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
     case 'Var':
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return null;
 
     case 'Binder': {
@@ -975,6 +976,7 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
     case 'Var':
     case 'Sort':
     case 'Const':
+    case 'ULevel':
       return term;
 
     case 'Binder': {

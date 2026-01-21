@@ -282,6 +282,9 @@ export function prettyPrintTerm(term: TTerm): string {
         return `let ${namesStr} : ${domainStr} = ... in ${bodyStr}`;
       }
     }
+
+    case 'AbsurdMarker':
+      return '#absurd';
   }
 }
 

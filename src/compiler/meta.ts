@@ -11,12 +11,22 @@ export function solveConstraints(
   const newMetaVars = new Map(metaVars);
 
   for (const constraint of constraints) {
-    const meta = newMetaVars.get(constraint.meta)!;
+    const meta = newMetaVars.get(constraint.meta);
 
-    if (meta.solution !== null) continue;
+    // Skip constraints for metas that don't exist in the map.
+    // This happens when unification creates constraints for unelaborated Holes
+    // (with names like 'hole:f_type') which haven't been converted to Metas yet.
+    if (!meta) continue;
 
-    if (canSolveMeta(meta, constraint.rhs)) {
-      newMetaVars.set(constraint.meta, { ...meta, solution: constraint.rhs, ctx: liftContext ?? meta.ctx });
+    // Skip metas that already have a solution
+    if (meta.solution !== undefined) continue;
+
+    // When liftContext is provided, use it for the scope check.
+    // This allows solving constraints where the RHS references variables
+    // that weren't in scope when the meta was created, but are in the current context.
+    const effectiveContext = liftContext ?? meta.ctx;
+    if (canSolveMetaInContext(constraint.rhs, effectiveContext.length)) {
+      newMetaVars.set(constraint.meta, { ...meta, solution: constraint.rhs, ctx: effectiveContext });
     } else {
       stillStuck.push(constraint);
     }
@@ -26,7 +36,11 @@ export function solveConstraints(
 }
 
 export function canSolveMeta(meta: MetaVar, rhs: TTKTerm): boolean {
-  return maxFreeVarIndex(rhs) < meta.ctx.length;
+  return canSolveMetaInContext(rhs, meta.ctx.length);
+}
+
+function canSolveMetaInContext(rhs: TTKTerm, contextLength: number): boolean {
+  return maxFreeVarIndex(rhs) < contextLength;
 }
 
 function maxFreeVarIndex(term: TTKTerm): number {

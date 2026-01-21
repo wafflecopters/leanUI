@@ -74,7 +74,8 @@ export type TokenType =
   | 'WHERE'        // where keyword
   | 'PIPE'         // |
   | 'CASE'         // case keyword
-  | 'MATCH';       // match keyword
+  | 'MATCH'        // match keyword
+  | 'ABSURD';      // #absurd marker for absurd cases
 
 export interface Token {
   type: TokenType;
@@ -200,6 +201,12 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
     // Record source position for the underscore
     p['recordTokenSourcePosition'](t, path);
     return mkHoleTT('_', mkHoleTT('underscore_type', mkPropTT()));
+  },
+  'ABSURD': (p, t, _ctx, path) => {
+    p['advance']();
+    // Record source position for the absurd marker
+    p['recordTokenSourcePosition'](t, path);
+    return { tag: 'AbsurdMarker' } as TTerm;
   },
 };
 
@@ -412,6 +419,17 @@ export class Lexer {
       this.pos++; this.col++;
       const name = this.readWhile(c => this.isIdentChar(c));
       return { type: 'HOLE', value: name || '_', pos: startPos, line: startLine, col: startCol };
+    }
+
+    // Absurd marker: #absurd
+    if (ch === '#') {
+      this.pos++; this.col++;
+      const name = this.readWhile(c => this.isIdentChar(c));
+      if (name === 'absurd') {
+        return { type: 'ABSURD', value: '#absurd', pos: startPos, line: startLine, col: startCol };
+      }
+      // Unknown # syntax - error (for now, treat as unknown token)
+      throw new Error(`Unknown syntax: #${name} at line ${startLine}, column ${startCol}`);
     }
 
     // Numbers

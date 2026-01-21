@@ -316,6 +316,10 @@ export function elabToKernel(term: TTerm): TTKTerm {
     case 'ULevel':
       return { tag: 'ULevel' };
 
+    case 'AbsurdMarker':
+      // AbsurdMarker should only appear as clause RHS and is filtered out at the Match level
+      throw new Error('AbsurdMarker should not be elaborated directly - it should be filtered at the clause level');
+
     case 'Const':
       return {
         tag: 'Const',
@@ -378,24 +382,28 @@ export function elabToKernel(term: TTerm): TTKTerm {
       };
 
     case 'Match':
+      // Filter out #absurd clauses - they are dropped during elaboration
+      // and validated separately during type checking
       return {
         tag: 'Match',
         scrutinee: elabToKernel(term.scrutinee),
-        clauses: term.clauses.map(c => {
-          // Reset wildcard counter for each clause so _w0 is the first wildcard in each clause
-          wildcardCounter = 0;
-          // Reset term param index for each clause
-          currentTermParamIndex = 0;
-          return {
-            patterns: c.patterns.map(p => {
-              const result = elabPatternToKernel(p);
-              // Increment term param index after each top-level pattern
-              currentTermParamIndex++;
-              return result;
-            }),
-            rhs: elabToKernel(c.rhs)
-          };
-        })
+        clauses: term.clauses
+          .filter(c => c.rhs.tag !== 'AbsurdMarker')
+          .map(c => {
+            // Reset wildcard counter for each clause so _w0 is the first wildcard in each clause
+            wildcardCounter = 0;
+            // Reset term param index for each clause
+            currentTermParamIndex = 0;
+            return {
+              patterns: c.patterns.map(p => {
+                const result = elabPatternToKernel(p);
+                // Increment term param index after each top-level pattern
+                currentTermParamIndex++;
+                return result;
+              }),
+              rhs: elabToKernel(c.rhs)
+            };
+          })
       };
 
     case 'MultiBinder': {
@@ -539,6 +547,10 @@ export function elabToKernelWithMap(
     case 'ULevel':
       return { tag: 'ULevel' };
 
+    case 'AbsurdMarker':
+      // AbsurdMarker should only appear as clause RHS and is filtered out at the Match level
+      throw new Error('AbsurdMarker should not be elaborated directly - it should be filtered at the clause level');
+
     case 'Const':
       return {
         tag: 'Const',
@@ -646,7 +658,13 @@ export function elabToKernelWithMap(
         )
       };
 
-    case 'Match':
+    case 'Match': {
+      // Filter out #absurd clauses - they are dropped during elaboration
+      // and validated separately during type checking
+      const nonAbsurdClauses = term.clauses
+        .map((clause, surfaceIndex) => ({ clause, surfaceIndex }))
+        .filter(({ clause }) => clause.rhs.tag !== 'AbsurdMarker');
+
       return {
         tag: 'Match',
         scrutinee: elabToKernelWithMap(
@@ -655,9 +673,9 @@ export function elabToKernelWithMap(
           appendPath(surfacePath, fieldSeg('scrutinee')),
           appendPath(kernelPath, fieldSeg('scrutinee'))
         ),
-        clauses: term.clauses.map((clause, i) => {
-          const clauseSurfacePath = appendPath(surfacePath, fieldSeg('clauses'), arraySeg(i));
-          const clauseKernelPath = appendPath(kernelPath, fieldSeg('clauses'), arraySeg(i));
+        clauses: nonAbsurdClauses.map(({ clause, surfaceIndex }, kernelIndex) => {
+          const clauseSurfacePath = appendPath(surfacePath, fieldSeg('clauses'), arraySeg(surfaceIndex));
+          const clauseKernelPath = appendPath(kernelPath, fieldSeg('clauses'), arraySeg(kernelIndex));
 
           // Record the clause mapping
           elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
@@ -685,6 +703,7 @@ export function elabToKernelWithMap(
           };
         })
       };
+    }
 
     case 'MultiBinder': {
       // Expand MultiBinder into nested single Binder terms

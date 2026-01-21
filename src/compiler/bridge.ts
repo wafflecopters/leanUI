@@ -711,5 +711,8 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
       if (a.binderKind.tag !== b.binderKind.tag) return false;
       if (!termsEqual(a.domain, b.domain)) return false;
       return termsEqual(a.body, b.body);
+
+    case 'AbsurdMarker':
+      return b.tag === 'AbsurdMarker';
   }
 }

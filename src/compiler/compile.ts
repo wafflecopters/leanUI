@@ -7,7 +7,7 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
+import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
@@ -1291,12 +1291,44 @@ function checkTermDeclaration(
       termEnv = addDefinitionInTCEnv(termEnv, decl.name, decl.kernelType);
     }
 
+    // Handle #absurd clauses from surface value
+    // These are filtered out during elaboration, so we validate them here
+    const absurdClauseErrors: TCEnvError[] = [];
+    const annotatedAbsurdClauses: number[] = [];
+
+    if (decl.surfaceValue?.tag === 'Match') {
+      for (let i = 0; i < decl.surfaceValue.clauses.length; i++) {
+        const clause = decl.surfaceValue.clauses[i];
+        if (clause.rhs.tag === 'AbsurdMarker') {
+          // Elaborate the patterns to TTKPattern for validation
+          const kernelPatterns = clause.patterns.map(p => elabPatternToKernel(p));
+          const patternsEnv = termEnv.withValue(kernelPatterns);
+          const isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, decl.kernelType);
+
+          if (isAbsurd) {
+            // Valid #absurd annotation - track for totality display
+            annotatedAbsurdClauses.push(i);
+          } else {
+            // Patterns are NOT absurd but #absurd was used - error
+            absurdClauseErrors.push(TCEnvError.create(
+              `#absurd used but case is not absurd: patterns can be inhabited`,
+              termEnv
+            ));
+          }
+        }
+      }
+    }
+
+    if (absurdClauseErrors.length > 0) {
+      return { success: false, errors: absurdClauseErrors };
+    }
+
     const termValueEnv = termEnv.inTermValue()
     if (!termValueEnv.hasDefinedValue()) {
       return failCheck('Term declaration is ill-formed (missing value)', termValueEnv)
     }
 
-    const result = checkTermValue(decl.name, termValueEnv, decl.kernelType);
+    const result = checkTermValue(decl.name, termValueEnv, decl.kernelType, annotatedAbsurdClauses);
     if (!result.success) {
       return { success: false, errors: result.errors, totalityResult: result.totalityResult }
     }
@@ -1614,6 +1646,7 @@ function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
   type: TTKTerm,
+  annotatedAbsurdClauses: number[] = [],
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   if (!env.isMatchTerm()) {
     try {
@@ -1638,6 +1671,9 @@ function checkTermValue(
 
   const firstClauseRootPatternsCount = hasNoClauses ? 0 : clausesEnv.value[0].patterns.length;
   const maxAllowedPatternsCount = countPiBinders(type);
+
+  // Note: #absurd clauses are validated in checkTermDeclaration and filtered during elaboration
+  // The annotatedAbsurdClauses parameter contains their surface indices
 
   for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
     const clauseEnv = clausesEnv.inMatchClause(clauseIndex);
@@ -1756,9 +1792,15 @@ function checkTermValue(
     totalityErrors.push(TCEnvError.create(`Non-exhaustive patterns`, env));
   }
 
+  // Add annotatedAbsurdClauses to the totality result
+  const enrichedTotalityResult: TotalityResult = {
+    ...totalityResult,
+    annotatedAbsurdClauses: annotatedAbsurdClauses.length > 0 ? annotatedAbsurdClauses : undefined
+  };
+
   if (totalityErrors.length > 0) {
-    return { success: false, errors: totalityErrors, totalityResult };
+    return { success: false, errors: totalityErrors, totalityResult: enrichedTotalityResult };
   }
 
-  return { success: true, checkedValue, totalityResult };
+  return { success: true, checkedValue, totalityResult: enrichedTotalityResult };
 }

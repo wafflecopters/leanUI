@@ -36,6 +36,8 @@ export interface TotalityResult {
   caseTree: CaseTree | null;
   unreachableClauses: number[];
   isExhaustive: boolean;
+  /** Clauses that were annotated with #absurd and successfully validated as absurd */
+  annotatedAbsurdClauses?: number[];
 }
 
 /**
