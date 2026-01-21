@@ -186,6 +186,61 @@ function markAbsurdInMutableTree(
 
 The `AbsurdityChecker` uses LHS pattern unification - if unifying the patterns with the expected type fails, the case is absurd.
 
+### Step 3b: Agda-Style Recursive Splitting
+
+Basic absurdity checking only catches cases where the explicit patterns conflict. But some cases are absurd due to **remaining arguments** that have no valid constructors.
+
+Consider `nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A`:
+- When the Vec argument is `VNil`, we have `n = Zero` (from `VNil : Vec A Zero`)
+- The Fin argument must then be `Fin Zero`
+- But `Fin Zero` is uninhabited! Both constructors require `Fin (Succ m)`:
+  - `FZero : (m : Nat) -> Fin (Succ m)` — requires `Succ m = Zero` → conflict
+  - `FSucc : (m : Nat) -> Fin m -> Fin (Succ m)` — requires `Succ m = Zero` → conflict
+
+The enhanced absurdity checker handles this by **splitting on remaining arguments**:
+
+```typescript
+function absurdityChecker(patterns: TTKPattern[]): boolean {
+  // Pad patterns with wildcards to match function arity
+  const paddedPatterns = padToArity(patterns, functionType);
+
+  // Basic check: do the explicit patterns conflict?
+  if (arePatternsAbsurd(paddedPatterns, functionType)) {
+    return true;
+  }
+
+  // Agda-style: try splitting on each padded wildcard position
+  for (let pos = patterns.length; pos < expectedArgCount; pos++) {
+    const argType = getTypeAtPosition(functionType, pos);
+    const inductiveType = extractInductiveTypeName(argType);
+
+    if (inductiveType) {
+      let allConstructorsFail = true;
+
+      for (const ctor of constructorsOf(inductiveType)) {
+        // Replace wildcard at pos with this constructor
+        const newPatterns = [...patterns, constructorPattern(ctor)];
+
+        // If this constructor works, the case isn't absurd
+        if (!arePatternsAbsurd(newPatterns, functionType)) {
+          allConstructorsFail = false;
+          break;
+        }
+      }
+
+      // If ALL constructors fail at this position → case is absurd
+      if (allConstructorsFail) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+```
+
+**Key insight from Agda**: We only split **once** per position. We don't recursively expand constructor arguments. This guarantees termination while still catching common absurdity patterns like `Fin Zero`.
+
 ### Step 4: Convert to Immutable CaseTree
 
 Finally, convert the mutable trie to an immutable CaseTree, collapsing Wildcard nodes:
@@ -320,6 +375,76 @@ Split(Nat)
 
 ---
 
+## Trace: `nth` Function (Recursive Splitting)
+
+This example demonstrates the Agda-style recursive splitting for detecting absurdity.
+
+### Input
+
+```tt
+inductive Vec : Type -> Nat -> Type where
+  | VNil : (A : Type) -> Vec A Zero
+  | VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+inductive Fin : Nat -> Type where
+  | FZero : (n : Nat) -> Fin (Succ n)
+  | FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
+
+nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
+nth A _ (VCons _ _ h _) (FZero _) = h
+nth A _ (VCons _ _ _ tail) (FSucc _ f) = nth A _ tail f
+```
+
+### Case Tree After Building
+
+```
+Wildcard → Wildcard → Split(Vec)
+  VNil:  Wildcard → Uncovered      [4th arg (Fin) is missing!]
+  VCons: Wildcard → ... → Split(Fin)
+    FZero: → clause 0
+    FSucc: → clause 1
+```
+
+### Absurdity Checking for VNil
+
+Path to VNil's Uncovered: `[PWild, PWild, PCtor(VNil, [PWild])]`
+
+**Basic check**: The path only has 3 patterns, but `nth` has 4 arguments. Pad with wildcard:
+- Padded: `[PWild, PWild, PCtor(VNil, [PWild]), PWild]`
+- This succeeds (wildcards match anything) → NOT absurd by basic check
+
+**Recursive splitting on position 3** (the padded Fin argument):
+
+The type at position 3 is `Fin n`. After VNil constrains `n = Zero`, it becomes `Fin Zero`.
+
+Try each Fin constructor:
+
+1. **Try FZero**: `[PWild, PWild, PCtor(VNil, [PWild]), PCtor(FZero, [PWild])]`
+   - FZero : `(m : Nat) -> Fin (Succ m)`
+   - VNil constrains `n = Zero`
+   - FZero requires `Fin (Succ m)`, unify with `Fin n = Fin Zero`
+   - `Succ m = Zero` → **CONFLICT!** → absurd
+
+2. **Try FSucc**: `[PWild, PWild, PCtor(VNil, [PWild]), PCtor(FSucc, [PWild, PWild])]`
+   - FSucc : `(m : Nat) -> Fin m -> Fin (Succ m)`
+   - Same conflict: `Succ m = Zero` → **CONFLICT!** → absurd
+
+**All constructors of Fin fail** → VNil case is absurd!
+
+### Final Case Tree
+
+```
+Split(Vec)
+  VNil:  → absurd
+  VCons: Split(Fin)
+    FZero: → clause 0
+    FSucc: → clause 1
+```
+
+**Result:** Exhaustive (VNil is absurd because Fin Zero is uninhabited)
+
+---
+
 ## Key Design Decisions
 
 ### Why DFS Flattening?
@@ -355,6 +480,9 @@ The absurdity checker needs the full pattern path including constructor arities.
 2. **Build trie incrementally** — add each clause by walking flattened patterns
 3. **On constructor at Uncovered** — create Split with ALL constructors, each with wildcard chain
 4. **On wildcard at Split** — recurse into ALL branches
-5. **Mark absurd cases** — use LHS unification to detect impossible patterns
+5. **Mark absurd cases** — use LHS unification to detect impossible patterns:
+   - First try basic unification with the current patterns
+   - If that succeeds, try Agda-style recursive splitting on remaining arguments
+   - If ALL constructors of any remaining argument fail unification → absurd
 6. **Convert to CaseTree** — collapse wildcards for visualization
 7. **Check exhaustiveness** — tree is exhaustive if all leaves are Leaf or Absurd

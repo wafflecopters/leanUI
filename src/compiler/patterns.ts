@@ -654,6 +654,9 @@ export function checkMatchClause(
   const checkEnv = result.withValue(transformedRhs).withCheckingMode('check');
   const checkedEnv = checkType(checkEnv, returnType);
 
+  // Solve any constraints from RHS checking to populate meta solutions
+  const solvedEnv = checkedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
   // Extract context names for pretty printing (de Bruijn order: index 0 = most recent)
   // TTKContext has oldest at index 0 (appended), but we need most recent at index 0
   const contextNames = result.context.map(entry => entry.name).reverse();
@@ -661,10 +664,10 @@ export function checkMatchClause(
   // Return the checked clause with the solved RHS, elaborated arguments, and meta solutions
   const checkedClause: TTKClause = {
     patterns: env.value.patterns,
-    rhs: checkedEnv.value,
+    rhs: solvedEnv.value,
     elabArgs,
     contextNames,
-    metaVars: checkedEnv.metaVars
+    metaVars: solvedEnv.metaVars
   };
   return result.withValue(checkedClause);
 }

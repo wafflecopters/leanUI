@@ -417,9 +417,8 @@ export function checkTotality(
   definitions: DefinitionsMap,
   absurdityChecker?: AbsurdityChecker
 ): TotalityResult {
-  if (clauses.length === 0) {
-    return { caseTree: null, unreachableClauses: [], isExhaustive: false };
-  }
+  // Don't short-circuit for zero clauses - let absurdity checker determine
+  // if zero clauses is valid (e.g., for absurd : Void -> A)
 
   const { typeInfo, ctorToType } = buildTypeInfoMaps(definitions);
 

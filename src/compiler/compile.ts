@@ -1261,14 +1261,17 @@ function checkTermDeclaration(
   }
 
   try {
-    if (!decl.kernelValue) {
-      return failCheck('Term declaration is ill-formed', env)
-    }
+    // If no value is provided, treat as a term with zero clauses (e.g., absurd : Void -> A)
+    const kernelValue: TTKTerm = decl.kernelValue ?? {
+      tag: 'Match',
+      scrutinee: { tag: 'Hole', id: '_scrutinee' },
+      clauses: []
+    };
 
     let termEnv = env.withValue<TermDefinition>({
       name: decl.name,
       type: decl.kernelType,
-      value: decl.kernelValue,
+      value: kernelValue,
     });
 
     // Check for duplicate names
@@ -1562,6 +1565,51 @@ export function compileTTFromText(source: string): CompileResult {
   };
 }
 
+// ============================================================================
+// Helper Functions for Absurdity Checking
+// ============================================================================
+
+/**
+ * Get the type of the Nth argument in a Pi type.
+ * Note: This returns the type as-is (may contain bound variables).
+ */
+function getNthPiArgType(type: TTKTerm, n: number): TTKTerm | null {
+  let current = type;
+  for (let i = 0; i < n; i++) {
+    if (current.tag !== 'Binder' || current.binderKind.tag !== 'BPi') {
+      return null;
+    }
+    current = current.body;
+  }
+  if (current.tag !== 'Binder' || current.binderKind.tag !== 'BPi') {
+    return null;
+  }
+  return current.domain;
+}
+
+/**
+ * Extract the inductive type name from a type term.
+ * Handles applications like "Vec A n" by extracting the head "Vec".
+ */
+function extractInductiveTypeName(type: TTKTerm, definitions: DefinitionsMap): string | null {
+  // Unwrap applications to get the head
+  let head = type;
+  while (head.tag === 'App') {
+    head = head.fn;
+  }
+
+  // Check if it's a Const reference to an inductive type
+  if (head.tag === 'Const' && definitions.inductiveTypes.has(head.name)) {
+    return head.name;
+  }
+
+  return null;
+}
+
+// ============================================================================
+// Term Value Checking
+// ============================================================================
+
 function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
@@ -1584,7 +1632,11 @@ function checkTermValue(
   const errors: TCEnvError[] = [];
   const checkedClauses: TTKClause[] = [];
 
-  const firstClauseRootPatternsCount = clausesEnv.value[0].patterns.length;
+  // Handle zero-clause case (e.g., absurd : Void -> A)
+  // Skip clause checking, go directly to totality check
+  const hasNoClauses = clausesEnv.value.length === 0;
+
+  const firstClauseRootPatternsCount = hasNoClauses ? 0 : clausesEnv.value[0].patterns.length;
   const maxAllowedPatternsCount = countPiBinders(type);
 
   for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
@@ -1623,10 +1675,72 @@ function checkTermValue(
   // TODO: structural recursion check
 
   // Create absurdity checker that uses pattern LHS unification
+  // Enhanced with Agda-style recursive splitting on remaining arguments
   const absurdityChecker = (patterns: TTKPattern[]): boolean => {
-    // Create an env with the patterns to check
-    const patternEnv = env.withValue(patterns);
-    return arePatternsAbsurd(name ?? '???', patternEnv, type);
+    const termName = name ?? '???';
+    const expectedArgCount = countPiBinders(type);
+
+    // Pad patterns with wildcards if needed
+    const paddedPatterns = [...patterns];
+    while (paddedPatterns.length < expectedArgCount) {
+      paddedPatterns.push({ tag: 'PWild', name: '_' });
+    }
+
+    // Basic absurdity check with padded patterns
+    const patternEnv = env.withValue(paddedPatterns);
+    if (arePatternsAbsurd(termName, patternEnv, type)) {
+      return true;
+    }
+
+    // Try splitting on each padded wildcard position (Agda-style)
+    // If ALL constructors of an argument type fail unification, the case is absurd
+    for (let pos = patterns.length; pos < expectedArgCount; pos++) {
+      const argType = getNthPiArgType(type, pos);
+      if (!argType) continue;
+
+      const typeName = extractInductiveTypeName(argType, env.definitions);
+      if (!typeName) continue;
+
+      const inductiveDef = env.definitions.inductiveTypes.get(typeName);
+      if (!inductiveDef) continue;
+
+      // A type with zero constructors (like Void) is uninhabited - the case is absurd
+      if (inductiveDef.constructors.length === 0) {
+        return true;
+      }
+
+      let allConstructorsFail = true;
+      for (const ctor of inductiveDef.constructors) {
+        const ctorArity = countPiBinders(ctor.type);
+        const ctorPattern: TTKPattern = {
+          tag: 'PCtor',
+          name: ctor.name,
+          args: Array(ctorArity).fill(null).map(() => ({ tag: 'PWild' as const, name: '_' }))
+        };
+
+        // Build patterns with constructor at this position
+        const newPatterns = [...patterns];
+        for (let j = patterns.length; j < pos; j++) {
+          newPatterns.push({ tag: 'PWild', name: '_' });
+        }
+        newPatterns.push(ctorPattern);
+        while (newPatterns.length < expectedArgCount) {
+          newPatterns.push({ tag: 'PWild', name: '_' });
+        }
+
+        const newEnv = env.withValue(newPatterns);
+        if (!arePatternsAbsurd(termName, newEnv, type)) {
+          allConstructorsFail = false;
+          break;
+        }
+      }
+
+      if (allConstructorsFail) {
+        return true; // All constructors at this position fail → absurd
+      }
+    }
+
+    return false;
   };
 
   // Run totality checking (builds case tree and checks coverage)

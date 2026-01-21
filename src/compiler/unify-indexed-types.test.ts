@@ -125,6 +125,32 @@ bad_head A n (nil _) = bad_head A n (nil _)`;
 
       expect(result.success).toBe(false);
     });
+
+    test('ACCEPT: nth function with Fin - VNil case is absurd via Fin Zero splitting', () => {
+      // This tests the Agda-style recursive splitting:
+      // - VNil gives Vec A Zero, so Fin n becomes Fin Zero
+      // - Fin Zero has no valid constructors (FZero and FSucc both require Succ n)
+      // - Therefore VNil case is absurd and doesn't need to be covered
+      const source = `${NAT_DEF}
+
+inductive Vec : Type -> Nat -> Type where
+  | VNil : (A : Type) -> Vec A Zero
+  | VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+inductive Fin : Nat -> Type where
+  | FZero : (n : Nat) -> Fin (Succ n)
+  | FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
+
+nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
+nth A _ (VCons _ _ h _) (FZero _) = h
+nth A _ (VCons _ _ _ tail) (FSucc _ f) = nth A _ tail f`;
+
+      const result = compileAndCheck(source);
+
+      // Should succeed because VNil case is absurd:
+      // VNil constrains n=Zero, but Fin Zero is uninhabited
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('Multiple Index Constraints', () => {
@@ -152,6 +178,31 @@ good (refl _ _) = Zero`;
       const result = compileAndCheck(source);
 
       expect(result.success).toBe(true);
+    });
+  });
+
+  describe('Zero-Clause Functions (Uninhabited Types)', () => {
+    test('ACCEPT: absurd function with zero clauses - Void has no constructors', () => {
+      const source = `inductive Void : Type where
+
+absurd : (A : Type) -> Void -> A`;
+
+      const result = compileAndCheck(source);
+
+      // Should succeed because Void has no constructors
+      // Zero clauses is exhaustive when the type is uninhabited
+      expect(result.success).toBe(true);
+    });
+
+    test('REJECT: zero-clause function where argument IS inhabited', () => {
+      const source = `${NAT_DEF}
+
+bad : Nat -> Nat`;
+
+      const result = compileAndCheck(source);
+
+      // Should fail - Nat has constructors, so zero clauses is not exhaustive
+      expect(result.success).toBe(false);
     });
   });
 });

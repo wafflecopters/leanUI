@@ -171,8 +171,19 @@ inductive Fin : Nat -> Type where
   FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
 
 nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
+-- nth _ _ (VNil _) f = ?foo
 nth A _ (VCons _ _ h _) (FZero _) = h
 nth A _ (VCons _ (Succ _) h tail) (FSucc _ f) = nth _ _ tail f
+
+inductive Void : Type where
+
+absurd : (A : Type) -> Void -> A
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : (A : Type) -> (a : A) -> Equal A a a
+
+zeroNeqSucc : (n : Nat) -> Equal Nat Zero (Succ n) -> Void
+zeroNeqSucc Z (refl _ _) = #absurd
 
 double : Nat -> Nat
 double n = ?sorry
