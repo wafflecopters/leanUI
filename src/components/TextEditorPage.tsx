@@ -21,8 +21,8 @@ const SYNTAX_COLORS = {
   termName: 'e5b387',       // Warm yellow/tan - for function names (plus, nth)
   patternVar: '9cdcfe',     // Light blue - for pattern variables (x, n, h)
   delimiter: 'e5c995',      // Light tan/gold - for (, ), {, }, etc.
-  hole: '4fc1ff',           // Bright cyan for holes
-  absurd: 'f85149',         // Red - for #absurd marker
+  hole: 'f85149',           // Red for holes (unfinished code)
+  absurd: '4fc1ff',         // Bright cyan - for #absurd marker
 };
 
 // Monaco theme matching TextEditorPage
@@ -43,11 +43,13 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     { token: 'delimiter', foreground: SYNTAX_COLORS.delimiter },
     { token: 'delimiter.bracket', foreground: SYNTAX_COLORS.delimiter },
     { token: 'variable.predefined', foreground: SYNTAX_COLORS.hole },
+    { token: 'variable.wildcard', foreground: SYNTAX_COLORS.patternVar },
     // Semantic token rules (override lexical highlighting)
     { token: 'termName', foreground: SYNTAX_COLORS.termName },
     { token: 'constName', foreground: SYNTAX_COLORS.constName },
     { token: 'boundVar', foreground: SYNTAX_COLORS.patternVar },
     { token: 'patternVar', foreground: SYNTAX_COLORS.patternVar },
+    { token: 'absurd', foreground: SYNTAX_COLORS.absurd },
   ],
   colors: {
     'editor.background': '#161b22',
@@ -172,7 +174,6 @@ inductive Fin : Nat -> Type where
   FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
 
 nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
--- nth _ _ (VNil _) f = ?foo
 nth A _ (VCons _ _ h _) (FZero _) = h
 nth A _ (VCons _ (Succ _) h tail) (FSucc _ f) = nth _ _ tail f
 
@@ -188,14 +189,6 @@ zeroNeqSucc Z (refl _ _) = #absurd
 
 double : Nat -> Nat
 double n = ?sorry
-
-{-
-wrongCodomain : (A : Type) -> (B : Type) -> B -> A -> B
-wrongCodomain A B b = \\(x: A) => x
-
-wrongDomain : (A : Type) -> (B : Type) -> B -> A -> B
-wrongDomain A B b = \\(x: B) => b
--}
 
 right : (A : Type) -> (B : Type) -> B -> A -> B
 right A B b = \\(x: A) => b
@@ -823,9 +816,11 @@ export function TextEditorPage() {
           // Keywords
           [/\b(inductive|where|let|in|fun)\b/, 'keyword'],
 
-          // Holes
+          // Holes (unfinished code that needs attention)
           [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],
-          [/_/, 'variable.predefined'],
+
+          // Wildcards (will be solved during elaboration)
+          [/_/, 'variable.wildcard'],
 
           // Identifiers - semantic tokens will override with proper classification
           [/[a-zA-Z_][a-zA-Z0-9_']*/, 'identifier'],
@@ -888,7 +883,7 @@ export function TextEditorPage() {
 
     // Register semantic tokens provider for precise highlighting
     // This overrides lexical highlighting with semantic information from the compiler
-    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar'];
+    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd'];
     const tokenModifiers: string[] = [];
 
     // Create an event emitter for signaling token changes

@@ -205,4 +205,132 @@ bad : Nat -> Nat`;
       expect(result.success).toBe(false);
     });
   });
+
+  describe('#absurd Syntax', () => {
+    test('ACCEPT: #absurd on truly absurd case (nil in Vec (Succ n))', () => {
+      const source = `${NAT_DEF}
+
+inductive Vec : Type -> Nat -> Type where
+  | nil : (A : Type) -> Vec A Zero
+  | cons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+head : (A : Type) -> (n : Nat) -> Vec A (Succ n) -> A
+head A n (nil _) = #absurd
+head A n (cons _ _ x _) = x`;
+
+      const result = compileAndCheck(source);
+
+      // Should succeed - nil case is genuinely absurd (Zero ≠ Succ n)
+      expect(result.success).toBe(true);
+    });
+
+    test('REJECT: #absurd on reachable case (cons is NOT absurd)', () => {
+      const source = `${NAT_DEF}
+
+inductive Vec : Type -> Nat -> Type where
+  | nil : (A : Type) -> Vec A Zero
+  | cons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+bad : (A : Type) -> (n : Nat) -> Vec A (Succ n) -> A
+bad A n (cons _ _ x _) = #absurd`;
+
+      const result = compileAndCheck(source);
+
+      // Should fail - cons is NOT absurd, it's a valid case
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.includes('#absurd') || e.includes('not absurd'))).toBe(true);
+    });
+
+    test('ACCEPT: #absurd via recursive splitting (Fin Zero is uninhabited)', () => {
+      // This tests that #absurd validation uses Agda-style recursive splitting
+      const source = `${NAT_DEF}
+
+inductive Fin : Nat -> Type where
+  | FZero : (n : Nat) -> Fin (Succ n)
+  | FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
+
+absurdFinZero : Fin Zero -> (A : Type) -> A
+absurdFinZero f _ = #absurd`;
+
+      const result = compileAndCheck(source);
+
+      // Should succeed - Fin Zero is uninhabited (both constructors require Succ n)
+      // This requires the Agda-style splitting to detect
+      expect(result.success).toBe(true);
+    });
+
+    test('REJECT: #absurd on inhabited type (Fin (Succ n) has constructors)', () => {
+      const source = `${NAT_DEF}
+
+inductive Fin : Nat -> Type where
+  | FZero : (n : Nat) -> Fin (Succ n)
+  | FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
+
+bad : (n : Nat) -> Fin (Succ n) -> (A : Type) -> A
+bad n f _ = #absurd`;
+
+      const result = compileAndCheck(source);
+
+      // Should fail - Fin (Succ n) IS inhabited (FZero n works)
+      expect(result.success).toBe(false);
+    });
+
+    test('ACCEPT: #absurd with conflicting Equal indices', () => {
+      const source = `${NAT_DEF}
+
+${EQUAL_DEF}
+
+zeroNotSucc : Equal Nat Zero (Succ Zero) -> (A : Type) -> A
+zeroNotSucc eq _ = #absurd`;
+
+      const result = compileAndCheck(source);
+
+      // Should succeed - Equal Nat Zero (Succ Zero) is uninhabited
+      // refl requires both indices to be equal, but Zero ≠ Succ Zero
+      expect(result.success).toBe(true);
+    });
+
+    test('REJECT: #absurd with satisfiable Equal indices', () => {
+      const source = `${NAT_DEF}
+
+${EQUAL_DEF}
+
+bad : Equal Nat Zero Zero -> (A : Type) -> A
+bad eq _ = #absurd`;
+
+      const result = compileAndCheck(source);
+
+      // Should fail - Equal Nat Zero Zero IS inhabited (refl Nat Zero)
+      expect(result.success).toBe(false);
+    });
+
+    test('ACCEPT: #absurd clause is erased during elaboration', () => {
+      // Verify that #absurd clauses don't appear in the kernel output
+      const source = `${NAT_DEF}
+
+inductive Vec : Type -> Nat -> Type where
+  | nil : (A : Type) -> Vec A Zero
+  | cons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+head : (A : Type) -> (n : Nat) -> Vec A (Succ n) -> A
+head A n (nil _) = #absurd
+head A n (cons _ _ x _) = x`;
+
+      const result = compileTTFromText(source);
+
+      // Find the head definition
+      const headDecl = result.blocks
+        .flatMap(b => b.declarations)
+        .find(d => d.name === 'head');
+
+      expect(headDecl).toBeDefined();
+      expect(headDecl?.checkSuccess).toBe(true);
+
+      // The kernel should only have 1 clause (cons), not 2
+      // The #absurd clause should be erased during elaboration
+      if (headDecl?.kernelValue?.tag === 'Match') {
+        expect(headDecl.kernelValue.clauses.length).toBe(1);
+      }
+    });
+  });
 });

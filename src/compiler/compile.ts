@@ -178,7 +178,7 @@ export interface WildcardInlayHint {
 /**
  * Semantic token types for syntax highlighting
  */
-export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar';
+export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd';
 
 /**
  * A semantic token for highlighting
@@ -374,6 +374,24 @@ function collectSemanticTokensFromSurfaceTerm(
           tokens
         );
       }
+      break;
+
+    case 'AbsurdMarker':
+      // #absurd marker - highlight in red
+      addSemanticTokenDirect(path, sourceMap, blockStartLine, 'absurd', tokens);
+      break;
+
+    case 'ULevel':
+      // Level type keyword - skip for now
+      break;
+
+    case 'MultiBinder':
+      // Multi-binder: (a b c : T) -> B
+      for (let i = 0; i < term.names.length; i++) {
+        addSemanticTokenDirect([...path, 'names', i], sourceMap, blockStartLine, 'patternVar', tokens);
+      }
+      collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
+      collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
       break;
   }
 }
@@ -1303,7 +1321,21 @@ function checkTermDeclaration(
           // Elaborate the patterns to TTKPattern for validation
           const kernelPatterns = clause.patterns.map(p => elabPatternToKernel(p));
           const patternsEnv = termEnv.withValue(kernelPatterns);
-          const isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, decl.kernelType);
+
+          // First try basic absurdity check
+          let isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, decl.kernelType);
+
+          // If basic check passes (not absurd), try Agda-style recursive splitting
+          // This handles cases like Fin Zero where the type is uninhabited
+          if (!isAbsurd) {
+            isAbsurd = tryCaseSplitsInSearchOfAbsurdity(
+              decl.name,
+              kernelPatterns,
+              decl.kernelType,
+              termEnv.definitions,
+              termEnv
+            );
+          }
 
           if (isAbsurd) {
             // Valid #absurd annotation - track for totality display
@@ -1638,6 +1670,98 @@ function extractInductiveTypeName(type: TTKTerm, definitions: DefinitionsMap): s
   return null;
 }
 
+/**
+ * Try Agda-style recursive splitting on remaining arguments to find absurdity.
+ *
+ * This is used when basic LHS unification succeeds but we suspect the case
+ * might still be absurd due to uninhabited argument types (like Fin Zero).
+ *
+ * The algorithm tries splitting on each wildcard position after the explicit patterns.
+ * If ALL constructors at any position fail unification, the case is absurd.
+ *
+ * @param termName - The term being checked (for error messages)
+ * @param patterns - The explicit patterns to check
+ * @param type - The function type
+ * @param definitions - The definitions map (for looking up constructors)
+ * @param env - A TCEnv for creating pattern environments
+ * @returns true if the patterns are absurd, false otherwise
+ */
+function tryCaseSplitsInSearchOfAbsurdity(
+  termName: string,
+  patterns: TTKPattern[],
+  type: TTKTerm,
+  definitions: DefinitionsMap,
+  env: TCEnv<unknown>
+): boolean {
+  const expectedArgCount = countPiBinders(type);
+
+  // Helper to try splitting at a given position
+  const trySplitAtPosition = (pos: number): boolean => {
+    const argType = getNthPiArgType(type, pos);
+    if (!argType) return false;
+
+    const typeName = extractInductiveTypeName(argType, definitions);
+    if (!typeName) return false;
+
+    const inductiveDef = definitions.inductiveTypes.get(typeName);
+    if (!inductiveDef) return false;
+
+    // A type with zero constructors (like Void) is uninhabited - the case is absurd
+    if (inductiveDef.constructors.length === 0) {
+      return true;
+    }
+
+    let allConstructorsFail = true;
+    for (const ctor of inductiveDef.constructors) {
+      const ctorArity = countPiBinders(ctor.type);
+      const ctorPattern: TTKPattern = {
+        tag: 'PCtor',
+        name: ctor.name,
+        args: Array(ctorArity).fill(null).map(() => ({ tag: 'PWild' as const, name: '_' }))
+      };
+
+      // Build patterns with constructor at this position
+      const newPatterns: TTKPattern[] = [];
+      for (let j = 0; j < expectedArgCount; j++) {
+        if (j === pos) {
+          newPatterns.push(ctorPattern);
+        } else if (j < patterns.length) {
+          newPatterns.push(patterns[j]);
+        } else {
+          newPatterns.push({ tag: 'PWild', name: '_' });
+        }
+      }
+
+      const newEnv = env.withValue(newPatterns);
+      if (!arePatternsAbsurd(termName, newEnv, type)) {
+        allConstructorsFail = false;
+        break;
+      }
+    }
+
+    return allConstructorsFail;
+  };
+
+  // Try splitting on existing wildcard positions (PVar or PWild)
+  for (let pos = 0; pos < patterns.length; pos++) {
+    const pattern = patterns[pos];
+    if (pattern.tag === 'PVar' || pattern.tag === 'PWild') {
+      if (trySplitAtPosition(pos)) {
+        return true;
+      }
+    }
+  }
+
+  // Try splitting on padded wildcard positions (positions after the pattern list)
+  for (let pos = patterns.length; pos < expectedArgCount; pos++) {
+    if (trySplitAtPosition(pos)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // ============================================================================
 // Term Value Checking
 // ============================================================================
@@ -1728,55 +1852,8 @@ function checkTermValue(
       return true;
     }
 
-    // Try splitting on each padded wildcard position (Agda-style)
-    // If ALL constructors of an argument type fail unification, the case is absurd
-    for (let pos = patterns.length; pos < expectedArgCount; pos++) {
-      const argType = getNthPiArgType(type, pos);
-      if (!argType) continue;
-
-      const typeName = extractInductiveTypeName(argType, env.definitions);
-      if (!typeName) continue;
-
-      const inductiveDef = env.definitions.inductiveTypes.get(typeName);
-      if (!inductiveDef) continue;
-
-      // A type with zero constructors (like Void) is uninhabited - the case is absurd
-      if (inductiveDef.constructors.length === 0) {
-        return true;
-      }
-
-      let allConstructorsFail = true;
-      for (const ctor of inductiveDef.constructors) {
-        const ctorArity = countPiBinders(ctor.type);
-        const ctorPattern: TTKPattern = {
-          tag: 'PCtor',
-          name: ctor.name,
-          args: Array(ctorArity).fill(null).map(() => ({ tag: 'PWild' as const, name: '_' }))
-        };
-
-        // Build patterns with constructor at this position
-        const newPatterns = [...patterns];
-        for (let j = patterns.length; j < pos; j++) {
-          newPatterns.push({ tag: 'PWild', name: '_' });
-        }
-        newPatterns.push(ctorPattern);
-        while (newPatterns.length < expectedArgCount) {
-          newPatterns.push({ tag: 'PWild', name: '_' });
-        }
-
-        const newEnv = env.withValue(newPatterns);
-        if (!arePatternsAbsurd(termName, newEnv, type)) {
-          allConstructorsFail = false;
-          break;
-        }
-      }
-
-      if (allConstructorsFail) {
-        return true; // All constructors at this position fail → absurd
-      }
-    }
-
-    return false;
+    // Try Agda-style recursive splitting on remaining arguments
+    return tryCaseSplitsInSearchOfAbsurdity(termName, patterns, type, env.definitions, env);
   };
 
   // Run totality checking (builds case tree and checks coverage)
