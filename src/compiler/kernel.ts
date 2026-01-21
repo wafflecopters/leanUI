@@ -215,6 +215,12 @@ export type TTKPattern =
 export type TTKClause = {
   patterns: TTKPattern[];
   rhs: TTKTerm;
+  /** Elaborated arguments from LHS unification - shows the solved values for pattern positions */
+  elabArgs?: TTKTerm[];
+  /** Context variable names for printing (in de Bruijn order: index 0 first) */
+  contextNames?: string[];
+  /** Meta variable solutions for printing solved terms in this clause */
+  metaVars?: PrettyPrintMetaVars;
 };
 
 export type TTKTerm =
@@ -238,8 +244,8 @@ export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] =
       return name;
     }
     case 'PWild':
-      // Display wildcards as _ (the generated name is hidden but available for inlays)
-      return '_';
+      // Display wildcards with their generated name visible
+      return `_[${pattern.name}]`;
     case 'PCtor': {
       const name = updatedName ?? pattern.name;
       if (pattern.args.length === 0) {
@@ -450,10 +456,14 @@ function stripOuterParens(s: string): string {
   return s;
 }
 
+/** Optional meta variable solutions for pretty printing solved terms */
+export type PrettyPrintMetaVars = Map<string, { solution?: TTKTerm }>;
+
 /**
- * Convert a kernel term to a human-readable string
+ * Convert a kernel term to a human-readable string.
+ * If metaVars is provided, Meta nodes will be printed as their solutions.
  */
-export function prettyPrint(term: TTKTerm, context: string[] = []): string {
+export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: PrettyPrintMetaVars): string {
   switch (term.tag) {
     case 'Var':
       // Context is prepended, so index directly into it
@@ -493,7 +503,7 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
           let ctx = context;
           while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
             const currentAnon = current.name === '_' || current.name === '';
-            const domain = stripOuterParens(prettyPrint(current.domain, ctx));
+            const domain = stripOuterParens(prettyPrint(current.domain, ctx, metaVars));
             if (currentAnon) {
               parts.push(domain);
             } else {
@@ -502,13 +512,13 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
             ctx = [current.name, ...ctx];
             current = current.body;
           }
-          parts.push(prettyPrint(current, ctx));
+          parts.push(prettyPrint(current, ctx, metaVars));
           return `(${parts.join(' -> ')})`;
         }
 
         case 'BLam': {
-          const domain = stripOuterParens(prettyPrint(term.domain, context));
-          const body = prettyPrint(term.body, newContext);
+          const domain = stripOuterParens(prettyPrint(term.domain, context, metaVars));
+          const body = prettyPrint(term.body, newContext, metaVars);
           if (isAnonymous) {
             return `(\\${domain} => ${body})`;
           }
@@ -516,9 +526,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
         }
 
         case 'BLet': {
-          const domain = stripOuterParens(prettyPrint(term.domain, context));
-          const body = prettyPrint(term.body, newContext);
-          const defVal = prettyPrint(term.binderKind.defVal, context);
+          const domain = stripOuterParens(prettyPrint(term.domain, context, metaVars));
+          const body = prettyPrint(term.body, newContext, metaVars);
+          const defVal = prettyPrint(term.binderKind.defVal, context, metaVars);
           return `(let ${term.name} : ${domain} = ${defVal} in ${body})`;
         }
       }
@@ -529,34 +539,48 @@ export function prettyPrint(term: TTKTerm, context: string[] = []): string {
       const parts: string[] = [];
       let current: TTKTerm = term;
       while (current.tag === 'App') {
-        parts.unshift(prettyPrint(current.arg, context));
+        parts.unshift(prettyPrint(current.arg, context, metaVars));
         current = current.fn;
       }
-      parts.unshift(prettyPrint(current, context));
+      parts.unshift(prettyPrint(current, context, metaVars));
       return `(${parts.join(' ')})`;
     }
 
     case 'Hole':
       return `?${term.id}`;
 
-    case 'Meta':
+    case 'Meta': {
+      // If we have meta solutions, print the solved value instead
+      const solution = metaVars?.get(term.id)?.solution;
+      if (solution) {
+        return prettyPrint(solution, context, metaVars);
+      }
       return `?${term.id}`;
+    }
 
     case 'Annot': {
-      const termStr = prettyPrint(term.term, context);
-      const typeStr = stripOuterParens(prettyPrint(term.type, context));
+      const termStr = prettyPrint(term.term, context, metaVars);
+      const typeStr = stripOuterParens(prettyPrint(term.type, context, metaVars));
       return `(${termStr} : ${typeStr})`;
     }
 
     case 'Match': {
-      const scrutinee = prettyPrint(term.scrutinee, context);
+      const scrutinee = prettyPrint(term.scrutinee, context, metaVars);
       const clauses = term.clauses.map(c => {
-        const patternStr = c.patterns.map(p => prettyPrintPatternInternal(p)).join(' ');
-        // Collect pattern variable names and add to context for RHS
-        const patternVars = collectPatternVars(c.patterns);
-        const rhsContext = [...patternVars.reverse(), ...context];
-        const rhsStr = prettyPrint(c.rhs, rhsContext);
-        return `${patternStr} => ${rhsStr}`;
+        // Use stored context names if available (from checking), otherwise derive from patterns
+        const clauseContext = c.contextNames
+          ? [...c.contextNames, ...context]
+          : [...collectPatternVars(c.patterns).reverse(), ...context];
+        // Use clause's metaVars if available (for solved terms), otherwise fall back to outer metaVars
+        const clauseMetaVars = c.metaVars ?? metaVars;
+
+        // If elabArgs are available, show them (the solved elaboration); otherwise show patterns
+        const lhsStr = c.elabArgs
+          ? c.elabArgs.map(arg => prettyPrint(arg, clauseContext, clauseMetaVars)).join(' ')
+          : c.patterns.map(p => prettyPrintPatternInternal(p)).join(' ');
+
+        const rhsStr = prettyPrint(c.rhs, clauseContext, clauseMetaVars);
+        return `${lhsStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
     }
@@ -568,7 +592,8 @@ function prettyPrintPatternInternal(pattern: TTKPattern): string {
     case 'PVar':
       return pattern.name;
     case 'PWild':
-      return '_';
+      // Display wildcards with their generated name visible
+      return `_[${pattern.name}]`;
     case 'PCtor':
       if (pattern.args.length === 0) {
         return pattern.name;
@@ -731,9 +756,17 @@ export function prettyPrintLatex(
     case 'Match': {
       const scrutinee = prettyPrintLatex(term.scrutinee, context, opts);
       const clauses = term.clauses.map(c => {
-        const patternStr = c.patterns.map(p => prettyPrintPatternLatex(p)).join('\\; ');
-        const rhsStr = prettyPrintLatex(c.rhs, context, opts);
-        return `${patternStr} \\Rightarrow ${rhsStr}`;
+        // Collect pattern variable names and add to context for RHS and elabArgs
+        const patternVars = collectPatternVars(c.patterns);
+        const clauseContext = [...patternVars.reverse(), ...context];
+
+        // If elabArgs are available, show them (the solved elaboration); otherwise show patterns
+        const lhsStr = c.elabArgs
+          ? c.elabArgs.map(arg => prettyPrintLatex(arg, clauseContext, opts)).join('\\; ')
+          : c.patterns.map(p => prettyPrintPatternLatex(p)).join('\\; ');
+
+        const rhsStr = prettyPrintLatex(c.rhs, clauseContext, opts);
+        return `${lhsStr} \\Rightarrow ${rhsStr}`;
       }).join(' \\mid ');
       return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
     }
@@ -750,7 +783,8 @@ function prettyPrintPatternLatex(pattern: TTKPattern): string {
     case 'PVar':
       return escapeName(pattern.name);
     case 'PWild':
-      return '\\_';
+      // Display wildcards with their generated name visible
+      return `\\_{[${escapeName(pattern.name)}]}`;
     case 'PCtor':
       if (pattern.args.length === 0) {
         return escapeName(pattern.name);

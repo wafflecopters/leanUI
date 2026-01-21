@@ -4,7 +4,7 @@
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, HoleLocation } from '../compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, HoleLocation, CaseTree, TotalityResult } from '../compiler/compile';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
@@ -217,7 +217,7 @@ inductive Equal : (A : Type) -> A -> A -> Type where
   Refl : (A : Type) -> (x : A) -> Equal A x x
 
 sym : (A : Type) -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
-sym A u _ Refl = Refl
+sym A u _ (Refl _ _) = Refl _ _
 
 -}
 `;
@@ -363,6 +363,146 @@ const styles = {
   },
 };
 
+// ============================================================================
+// Case Tree Visualization
+// ============================================================================
+
+const caseTreeStyles = {
+  container: {
+    marginTop: '12px',
+    padding: '12px',
+    backgroundColor: '#0d1117',
+    borderRadius: '4px',
+    border: '1px solid #30363d',
+    fontSize: '12px',
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '8px',
+    color: '#8b949e',
+    fontSize: '11px',
+    fontWeight: 600,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+  },
+  exhaustiveBadge: {
+    padding: '2px 6px',
+    borderRadius: '3px',
+    fontSize: '10px',
+    fontWeight: 600,
+  },
+  exhaustiveYes: {
+    backgroundColor: 'rgba(63, 185, 80, 0.2)',
+    color: '#3fb950',
+  },
+  exhaustiveNo: {
+    backgroundColor: 'rgba(248, 81, 73, 0.2)',
+    color: '#f85149',
+  },
+  treeNode: {
+    paddingLeft: '16px',
+    borderLeft: '1px solid #30363d',
+    marginLeft: '4px',
+  },
+  splitLabel: {
+    color: '#8b949e',
+    marginBottom: '4px',
+  },
+  branchRow: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    marginBottom: '4px',
+  },
+  ctorName: {
+    color: '#ffa657',
+    minWidth: '80px',
+  },
+  leafClause: {
+    color: '#7ee787',
+  },
+  uncovered: {
+    color: '#f85149',
+    fontStyle: 'italic' as const,
+  },
+  absurd: {
+    color: '#8b949e',
+    fontStyle: 'italic' as const,
+  },
+  unreachableWarning: {
+    marginTop: '8px',
+    padding: '8px',
+    backgroundColor: 'rgba(248, 81, 73, 0.1)',
+    borderRadius: '4px',
+    color: '#f85149',
+    fontSize: '11px',
+  },
+};
+
+/**
+ * Render a case tree node recursively.
+ * @param tree The case tree node
+ * @param depth Current nesting depth (for indentation)
+ */
+function CaseTreeNode({ tree, depth = 0 }: { tree: CaseTree; depth?: number }): JSX.Element {
+  if (tree.tag === 'Leaf') {
+    return <span style={caseTreeStyles.leafClause}>→ clause {tree.clauseIndex}</span>;
+  }
+
+  if (tree.tag === 'Uncovered') {
+    return <span style={caseTreeStyles.uncovered}>→ MISSING</span>;
+  }
+
+  if (tree.tag === 'Absurd') {
+    return <span style={caseTreeStyles.absurd}>→ absurd</span>;
+  }
+
+  // Split node - all constructors are enumerated
+  const branches = Array.from(tree.branches.entries());
+
+  return (
+    <div style={depth > 0 ? caseTreeStyles.treeNode : undefined}>
+      {branches.map(([ctorName, subTree]) => (
+        <div key={ctorName} style={caseTreeStyles.branchRow}>
+          <span style={caseTreeStyles.ctorName}>{ctorName}:</span>
+          <CaseTreeNode tree={subTree} depth={depth + 1} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Render totality checking results with case tree visualization
+ */
+function TotalityResultView({ result }: { result: TotalityResult }): JSX.Element | null {
+  if (!result.caseTree) {
+    return null;
+  }
+
+  return (
+    <div style={caseTreeStyles.container}>
+      <div style={caseTreeStyles.header}>
+        <span>Case Tree</span>
+        <span style={{
+          ...caseTreeStyles.exhaustiveBadge,
+          ...(result.isExhaustive ? caseTreeStyles.exhaustiveYes : caseTreeStyles.exhaustiveNo)
+        }}>
+          {result.isExhaustive ? 'Exhaustive' : 'Non-exhaustive'}
+        </span>
+      </div>
+      <CaseTreeNode tree={result.caseTree} />
+      {result.unreachableClauses.length > 0 && (
+        <div style={caseTreeStyles.unreachableWarning}>
+          Warning: Unreachable clause(s): {result.unreachableClauses.map(i => i + 1).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Block renderer component
 function BlockRenderer({ block }: { block: CompiledBlock }) {
   let blockHeaderContent: React.ReactNode = null;
@@ -471,6 +611,9 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
                       <div key={j} style={styles.errorText}>{err.message}</div>
                     ))}
                   </div>
+                )}
+                {decl.totalityResult && (
+                  <TotalityResultView result={decl.totalityResult} />
                 )}</>
             }
           />

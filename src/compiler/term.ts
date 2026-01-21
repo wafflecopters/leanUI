@@ -249,6 +249,78 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
   throw new Error(`Unexpected tag: ${(term as { tag: string }).tag}`);
 }
 
+/**
+ * Replace all Holes in a term with fresh Metas.
+ * Returns the updated env (with new metas in metaVars) and the transformed term.
+ */
+function replaceHolesWithMetasInTerm<S>(env: TCEnv<S>, term: TTKTerm): { env: TCEnv<S>, term: TTKTerm } {
+  switch (term.tag) {
+    case 'Hole': {
+      // Create a fresh meta for this hole
+      // We don't know the type yet, so we create a type meta as well
+      const { env: envWithTypeMeta, metaTerm: typeMeta } = env.createMetaForType();
+      const metaName = `?m${envWithTypeMeta.metaVars.size}`;
+      const newMetaVars = new Map(envWithTypeMeta.metaVars);
+      newMetaVars.set(metaName, { ctx: envWithTypeMeta.context, type: typeMeta });
+      const metaTerm: TTKTerm = { tag: 'Meta', id: metaName };
+      const newEnv = new TCEnv(
+        envWithTypeMeta.context,
+        envWithTypeMeta.definitions,
+        newMetaVars,
+        envWithTypeMeta.constraints,
+        envWithTypeMeta.indexPath,
+        envWithTypeMeta.valueStack,
+        envWithTypeMeta.value,
+        envWithTypeMeta.levelMetas,
+        envWithTypeMeta.options
+      );
+      return { env: newEnv, term: metaTerm };
+    }
+
+    case 'Var':
+    case 'Const':
+    case 'Sort':
+    case 'Meta':
+    case 'ULevel':
+      return { env, term };
+
+    case 'Binder': {
+      const { env: env1, term: domain } = replaceHolesWithMetasInTerm(env, term.domain);
+      const { env: env2, term: body } = replaceHolesWithMetasInTerm(env1, term.body);
+      return {
+        env: env2,
+        term: { tag: 'Binder', name: term.name, binderKind: term.binderKind, domain, body }
+      };
+    }
+
+    case 'App': {
+      const { env: env1, term: fn } = replaceHolesWithMetasInTerm(env, term.fn);
+      const { env: env2, term: arg } = replaceHolesWithMetasInTerm(env1, term.arg);
+      return { env: env2, term: { tag: 'App', fn, arg } };
+    }
+
+    case 'Annot': {
+      const { env: env1, term: innerTerm } = replaceHolesWithMetasInTerm(env, term.term);
+      const { env: env2, term: type } = replaceHolesWithMetasInTerm(env1, term.type);
+      return { env: env2, term: { tag: 'Annot', term: innerTerm, type } };
+    }
+
+    case 'Match': {
+      let currentEnv = env;
+      const { env: env1, term: scrutinee } = replaceHolesWithMetasInTerm(currentEnv, term.scrutinee);
+      currentEnv = env1;
+
+      const clauses = term.clauses.map(c => {
+        const { env: clauseEnv, term: rhs } = replaceHolesWithMetasInTerm(currentEnv, c.rhs);
+        currentEnv = clauseEnv;
+        return { patterns: c.patterns, rhs };
+      });
+
+      return { env: currentEnv, term: { tag: 'Match', scrutinee, clauses } };
+    }
+  }
+}
+
 export const MatchPartIndex = {
   Scrutinee: fieldSeg('scrutinee'),
   Clauses: fieldSeg('clauses'),
@@ -333,7 +405,12 @@ export class TCEnv<T> {
     public readonly valueStack: unknown[],
     public readonly value: T,
     public readonly levelMetas: Map<string, LevelMeta>,
-    public readonly options: TCEnvOptions
+    public readonly options: TCEnvOptions,
+    /**
+     * The elaborated term (with Holes replaced by Metas, etc.)
+     * Used by inferType to pass the elaborated term to checkType's CONV case.
+     */
+    public readonly elaboratedTerm?: TTKTerm
   ) {
   }
 
@@ -466,7 +543,14 @@ export class TCEnv<T> {
   }
 
   withValue<S>(value: S): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value, this.levelMetas, this.options);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, value, this.levelMetas, this.options, this.elaboratedTerm);
+  }
+
+  /**
+   * Set the elaborated term (used by inferType to communicate the elaborated term to checkType).
+   */
+  withElaboratedTerm(term: TTKTerm): TCEnv<T> {
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, this.indexPath, this.valueStack, this.value, this.levelMetas, this.options, term);
   }
 
   mapValue<S>(fn: (value: T) => S): TCEnv<S> {
@@ -474,7 +558,7 @@ export class TCEnv<T> {
   }
 
   atValueAndPathOfEnv<S>(otherEnv: TCEnv<S>): TCEnv<S> {
-    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas, this.options);
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, otherEnv.indexPath, otherEnv.valueStack, otherEnv.value, this.levelMetas, this.options, this.elaboratedTerm);
   }
 
   /**
@@ -596,6 +680,18 @@ export class TCEnv<T> {
     );
 
     return { env, metaTerm };
+  }
+
+  /**
+   * Replace all Holes in a term with fresh Metas.
+   * This is useful for elaborating a term before checking, so that the
+   * resulting term structure contains Metas (which can be looked up during printing)
+   * rather than Holes.
+   *
+   * Returns the updated env (with new metas in metaVars) and the elaborated term.
+   */
+  replaceHolesWithMetas<S>(this: TCEnv<S>, term: TTKTerm): { env: TCEnv<S>, term: TTKTerm } {
+    return replaceHolesWithMetasInTerm(this, term);
   }
 
   /**

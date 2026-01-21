@@ -190,8 +190,16 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     }
 
     // Result type is B[x := e] where B is the body and e is the argument
-    const resultType = subst(0, env.value.arg, fnTypeEnv.value.body);
-    return argEnv.withValue(resultType);
+    // Use the ELABORATED argument for substitution (in case it was a Hole->Meta)
+    const elaboratedArg = argEnv.value;
+    const resultType = subst(0, elaboratedArg, fnTypeEnv.value.body);
+
+    // Construct the elaborated App with the elaborated function and argument
+    // The function's elaborated form is in fnTypeEnv.elaboratedTerm (if set)
+    const elaboratedFn = fnTypeEnv.elaboratedTerm ?? env.value.fn;
+    const elaboratedApp: TTKTerm = { tag: 'App', fn: elaboratedFn, arg: elaboratedArg };
+
+    return argEnv.withValue(resultType).withElaboratedTerm(elaboratedApp);
   }
 
   if (env.isBinderTerm()) {
@@ -257,7 +265,17 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     }
 
     const bodyEnv = lambdaEnv.inBinderLambdaBody()
-    return checkType(bodyEnv, expectedType.body)
+    const checkedBodyEnv = checkType(bodyEnv, expectedType.body)
+
+    // Reconstruct the Lambda with the elaborated body
+    const elaboratedLambda: TTKTerm = {
+      tag: 'Binder',
+      name: env.value.name,
+      binderKind: env.value.binderKind,
+      domain: env.value.domain,
+      body: checkedBodyEnv.value  // Use the elaborated body
+    };
+    return checkedBodyEnv.withValue(elaboratedLambda);
   }
 
   if (env.isHoleTerm()) {
@@ -282,11 +300,13 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   // ────────────────────────────────────────────────────────────────
   const inferredEnv = inferType(env);
   // inferredEnv.value is the INFERRED TYPE, not the term
+  // inferredEnv.elaboratedTerm is the ELABORATED TERM (if set)
   // We unify the inferred type with the expected type
   try {
     const unifiedEnv = inferredEnv.unifyTerms(inferredEnv.value, expectedType);
-    // Return with the original term (env.value), not the type
-    return unifiedEnv.atValueAndPathOfEnv(env);
+    // Return with the elaborated term (if available), otherwise the original term
+    const elaboratedTerm = inferredEnv.elaboratedTerm ?? env.value;
+    return unifiedEnv.withValue(elaboratedTerm);
   } catch (e) {
     if (e instanceof TCEnvError) {
       const termDesc = getTermDescription(env.value, env);

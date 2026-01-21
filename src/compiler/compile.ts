@@ -16,8 +16,9 @@ import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap } from '../types/sour
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
-import { checkMatchClause } from './patterns';
-import { checkTotality } from './totality';
+import { checkMatchClause, arePatternsAbsurd } from './patterns';
+import { checkTotality, TotalityResult, CaseTree } from './totality';
+export type { TotalityResult, CaseTree };
 
 // ============================================================================
 // Global Configuration
@@ -119,6 +120,9 @@ export interface CompiledDeclaration {
   // Type checking results
   checkSuccess: boolean;
   checkErrors: TCEnvError[];
+
+  // Totality checking results (for pattern matching terms)
+  totalityResult?: TotalityResult;
 
   // Source mapping for error locations
   elabMap?: ElabMap;
@@ -1136,6 +1140,8 @@ function checkDeclaration(
   let newDefinitions = definitions;
   let errorCount = 0;
   let indexPositions: number[] | undefined;
+  let totalityResult: TotalityResult | undefined;
+  let checkedValue: TTKTerm | undefined;
 
   if (decl.kind === 'inductive') {
     const result = checkInductiveTypeDeclaration(decl, definitions);
@@ -1151,10 +1157,14 @@ function checkDeclaration(
     const result = checkTermDeclaration(decl, definitions);
     if (result.success) {
       newDefinitions = result.definitions;
+      totalityResult = result.totalityResult;
+      checkedValue = result.checkedValue;
     } else {
       checkSuccess = false;
       checkErrors.push(...result.errors);
       errorCount = result.errors.length;
+      // Still capture totalityResult even on failure (for UI visualization)
+      totalityResult = result.totalityResult;
     }
   } else {
     checkSuccess = false;
@@ -1177,13 +1187,15 @@ function checkDeclaration(
     kernelConstructors: decl.kernelConstructors,
     indexPositions,
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
-    prettyValue: decl.kernelValue ? prettyPrintTTK(decl.kernelValue) : undefined,
+    // Use checkedValue (with solutions) if available, otherwise fall back to elaborated kernelValue
+    prettyValue: (checkedValue ?? decl.kernelValue) ? prettyPrintTTK(checkedValue ?? decl.kernelValue!) : undefined,
     prettyConstructors: decl.kernelConstructors?.map(c => ({
       name: c.name,
       prettyType: prettyPrintTTK(c.type)
     })),
     checkSuccess,
     checkErrors,
+    totalityResult,
     elabMap: decl.elabMap,
     sourceMap: decl.sourceMap
   };
@@ -1233,7 +1245,7 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap } {
+): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
@@ -1283,11 +1295,11 @@ function checkTermDeclaration(
 
     const result = checkTermValue(decl.name, termValueEnv, decl.kernelType);
     if (!result.success) {
-      return { success: false, errors: result.errors }
+      return { success: false, errors: result.errors, totalityResult: result.totalityResult }
     }
 
     const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, result.checkedValue);
-    return { success: true, definitions: resultEnv.definitions }
+    return { success: true, definitions: resultEnv.definitions, checkedValue: result.checkedValue, totalityResult: result.totalityResult }
   } catch (e) {
     if (e instanceof TCEnvError) {
       return {
@@ -1554,7 +1566,7 @@ function checkTermValue(
   name: string | undefined,
   env: TCEnv<TTKTerm>,
   type: TTKTerm,
-): { success: false, errors: TCEnvError[] } | { success: true, checkedValue: TTKTerm } {
+): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   if (!env.isMatchTerm()) {
     try {
       const result = checkType(env, type);
@@ -1610,8 +1622,29 @@ function checkTermValue(
 
   // TODO: structural recursion check
 
-  // Run totality checking (builds and prints case tree)
-  checkTotality(name ?? '???', checkedClauses);
+  // Create absurdity checker that uses pattern LHS unification
+  const absurdityChecker = (patterns: TTKPattern[]): boolean => {
+    // Create an env with the patterns to check
+    const patternEnv = env.withValue(patterns);
+    return arePatternsAbsurd(name ?? '???', patternEnv, type);
+  };
 
-  return { success: true, checkedValue };
+  // Run totality checking (builds case tree and checks coverage)
+  const totalityResult = checkTotality(name ?? '???', checkedClauses, env.definitions, absurdityChecker);
+
+  // Convert totality issues to errors
+  const totalityErrors: TCEnvError[] = [];
+  for (const clauseIdx of totalityResult.unreachableClauses) {
+    const clauseEnv = clausesEnv.inMatchClause(clauseIdx);
+    totalityErrors.push(TCEnvError.create(`Unreachable clause`, clauseEnv));
+  }
+  if (!totalityResult.isExhaustive) {
+    totalityErrors.push(TCEnvError.create(`Non-exhaustive patterns`, env));
+  }
+
+  if (totalityErrors.length > 0) {
+    return { success: false, errors: totalityErrors, totalityResult };
+  }
+
+  return { success: true, checkedValue, totalityResult };
 }

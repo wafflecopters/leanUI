@@ -641,20 +641,55 @@ export function checkMatchClause(
   const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns().withCheckingMode('pattern'), type, rhsInLevels);
   result.assertNoConstraints();
 
-  const { returnType, rhsInLevels: transformedRhsInLevels } = result.value;
+  const { returnType, elabStack, rhsInLevels: transformedRhsInLevels } = result.value;
 
   // Convert the transformed RHS back to de Bruijn indices using the final context length
   const finalContextLength = result.context.length;
   const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
 
+  // Convert elabStack to de Bruijn indices as well
+  const elabArgs = elabStack.map(term => levelsToDeBruijn(term, finalContextLength));
+
   // Type check the transformed RHS
   const checkEnv = result.withValue(transformedRhs).withCheckingMode('check');
   const checkedEnv = checkType(checkEnv, returnType);
 
-  // Return the checked clause with the solved RHS
+  // Extract context names for pretty printing (de Bruijn order: index 0 = most recent)
+  // TTKContext has oldest at index 0 (appended), but we need most recent at index 0
+  const contextNames = result.context.map(entry => entry.name).reverse();
+
+  // Return the checked clause with the solved RHS, elaborated arguments, and meta solutions
   const checkedClause: TTKClause = {
     patterns: env.value.patterns,
-    rhs: checkedEnv.value
+    rhs: checkedEnv.value,
+    elabArgs,
+    contextNames,
+    metaVars: checkedEnv.metaVars
   };
   return result.withValue(checkedClause);
+}
+
+/**
+ * Check if patterns are absurd (type-theoretically impossible).
+ * This runs LHS unification only - if it fails, the patterns are absurd.
+ *
+ * @param termName The name of the term (for error messages)
+ * @param env The TCEnv containing the patterns to check
+ * @param type The expected type
+ * @returns true if patterns are absurd, false if they could be inhabited
+ */
+export function arePatternsAbsurd(
+  termName: string,
+  env: TCEnv<TTKPattern[]>,
+  type: TTKTerm,
+): boolean {
+  try {
+    // Use a dummy RHS (a hole) - we only care about LHS unification
+    const dummyRhs: TTKTerm = { tag: 'Hole', id: '_absurd_check' };
+    unifyMatchClauseLhs(termName, env.withCheckingMode('pattern'), type, dummyRhs);
+    return false; // Unification succeeded - not absurd
+  } catch (e) {
+    // Unification failed - patterns are absurd
+    return true;
+  }
 }
