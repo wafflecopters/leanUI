@@ -22,6 +22,7 @@ const SYNTAX_COLORS = {
   patternVar: '9cdcfe',     // Light blue - for pattern variables (x, n, h)
   delimiter: 'e5c995',      // Light tan/gold - for (, ), {, }, etc.
   hole: '4fc1ff',           // Bright cyan for holes
+  absurd: 'f85149',         // Red - for #absurd marker
 };
 
 // Monaco theme matching TextEditorPage
@@ -199,7 +200,6 @@ wrongDomain A B b = \\(x: B) => b
 right : (A : Type) -> (B : Type) -> B -> A -> B
 right A B b = \\(x: A) => b
 
-{-
 qux : Type
 qux = Nat
 
@@ -211,7 +211,6 @@ const _ _ a = \\ _ => a
 
 swap : (A : Type) -> (B : Type) -> (C : Type) -> (f : A -> B -> C) -> B -> A -> C
 swap _ _ _ f = \\ x y => f y x
--}
 
 {-
 vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
@@ -223,14 +222,11 @@ vecConcat A (Succ p) _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat A p _ tail 
 vecConcat' : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat' _ _ _ (VNil _) v = v
 vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\ d x => x) Zero p) _ tail v) h
-
-inductive Equal : (A : Type) -> A -> A -> Type where
-  Refl : (A : Type) -> (x : A) -> Equal A x x
+-}
 
 sym : (A : Type) -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
-sym A u _ (Refl _ _) = Refl _ _
+sym A u _ (refl _ _) = refl _ _
 
--}
 `;
 
 // Styles
