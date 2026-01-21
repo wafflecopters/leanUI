@@ -1,16 +1,16 @@
 /**
- * Totality Checker - Case Tree Construction
+ * Totality Checker - Case Tree Construction and Coverage Analysis
  *
- * This module builds a case tree from elaborated pattern clauses to track
- * coverage and detect unreachable patterns.
+ * This module builds a case tree from elaborated pattern clauses to detect:
+ * - Missing patterns (inputs no clause handles)
+ * - Unreachable clauses (clauses that can never match)
  *
- * The case tree represents the decision structure of pattern matching:
- * - Each constructor pattern creates a split (branching on which constructor)
- * - Variable/wildcard patterns don't split (they match anything)
- * - Leaves represent reaching a specific clause
+ * The algorithm enumerates ALL constructors at each split point.
+ * Wildcards/variables are "specialized" to match each constructor.
  */
 
-import { TTKPattern, prettyPrintPattern } from './kernel';
+import { TTKPattern } from './kernel';
+import { DefinitionsMap } from './term';
 
 // ============================================================================
 // Case Tree Types
@@ -20,195 +20,293 @@ import { TTKPattern, prettyPrintPattern } from './kernel';
  * A case tree represents the decision structure of pattern matching.
  *
  * - Leaf: A clause has been matched (clauseIndex identifies which one)
- * - Split: We're splitting on a constructor; branches map constructor names
- *   to subtrees, and default_ catches anything not explicitly listed
+ * - Split: We're splitting on a type; branches contains ALL constructors of that type
+ * - Uncovered: This path has no clause that handles it (missing pattern)
  */
 export type CaseTree =
   | { tag: 'Leaf'; clauseIndex: number }
-  | { tag: 'Split'; branches: Map<string, CaseTree>; default_: CaseTree | null };
+  | { tag: 'Split'; typeName: string; branches: Map<string, CaseTree> }
+  | { tag: 'Uncovered' };
+
+/**
+ * Result of totality checking
+ */
+export interface TotalityResult {
+  /** The case tree representing the pattern matching structure */
+  caseTree: CaseTree | null;
+  /** Indices of clauses that are unreachable (covered by earlier clauses) */
+  unreachableClauses: number[];
+  /** Whether the patterns are exhaustive (no uncovered cases) */
+  isExhaustive: boolean;
+}
+
+/**
+ * Information about an inductive type's constructors
+ */
+export interface TypeInfo {
+  constructors: string[];
+  arities: Map<string, number>;
+}
+
+/**
+ * Maps type names to their constructor info
+ */
+export type TypeInfoMap = Map<string, TypeInfo>;
+
+/**
+ * Maps constructor names to their parent type
+ */
+export type ConstructorToTypeMap = Map<string, string>;
+
+/**
+ * Build type info maps from definitions
+ */
+export function buildTypeInfoMaps(definitions: DefinitionsMap): { typeInfo: TypeInfoMap; ctorToType: ConstructorToTypeMap } {
+  const typeInfo: TypeInfoMap = new Map();
+  const ctorToType: ConstructorToTypeMap = new Map();
+
+  for (const [typeName, inductiveDef] of definitions.inductiveTypes) {
+    const constructors: string[] = [];
+    const arities = new Map<string, number>();
+
+    for (const ctor of inductiveDef.constructors) {
+      constructors.push(ctor.name);
+      // Count arity by counting Pi binders in constructor type
+      arities.set(ctor.name, countConstructorArity(ctor.type));
+      ctorToType.set(ctor.name, typeName);
+    }
+
+    typeInfo.set(typeName, { constructors, arities });
+  }
+
+  return { typeInfo, ctorToType };
+}
+
+/**
+ * Count the arity of a constructor (number of arguments it takes)
+ */
+function countConstructorArity(type: import('./kernel').TTKTerm): number {
+  let count = 0;
+  let current = type;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    count++;
+    current = current.body;
+  }
+  return count;
+}
+
+// ============================================================================
+// Internal Clause Representation
+// ============================================================================
+
+interface InternalClause {
+  patterns: TTKPattern[];
+  clauseIndex: number;
+}
 
 // ============================================================================
 // Building the Case Tree
 // ============================================================================
 
 /**
- * Add a clause's patterns to a case tree, returning the updated tree.
- * Returns undefined if the clause is unreachable (doesn't add any new coverage).
+ * Build a case tree from clauses.
  *
- * @param tree The existing case tree (or null for the first clause)
- * @param patterns The patterns for this clause
- * @param clauseIndex The index of this clause
- * @returns Updated tree, or undefined if the clause is unreachable
+ * @param clauses The clauses with their patterns
+ * @param typeInfo Map of type names to constructor info
+ * @param ctorToType Map of constructor names to their parent type
+ * @returns The case tree
  */
-export function addClausePatternsToCaseTree(
-  tree: CaseTree | null,
-  patterns: TTKPattern[],
-  clauseIndex: number
-): CaseTree | undefined {
-  // First clause: build initial tree
-  if (tree === null) {
-    return buildTreeFromPatterns(patterns, clauseIndex);
+function buildTree(
+  clauses: InternalClause[],
+  typeInfo: TypeInfoMap,
+  ctorToType: ConstructorToTypeMap
+): CaseTree {
+  // Base case: no clauses cover this path
+  if (clauses.length === 0) {
+    return { tag: 'Uncovered' };
   }
 
-  // Subsequent clause: walk and extend
-  const result = extendTree(tree, patterns, clauseIndex);
-  return result.modified ? result.tree : undefined;
+  // Check if first clause has all wildcards/variables (no constructor patterns)
+  const firstClause = clauses[0];
+  if (firstClause.patterns.length === 0 || allWildcards(firstClause.patterns)) {
+    // This clause matches - it's a leaf
+    return { tag: 'Leaf', clauseIndex: firstClause.clauseIndex };
+  }
+
+  // Find first column with a constructor pattern
+  const splitCol = findSplitColumn(clauses);
+  if (splitCol === -1) {
+    // All patterns are wildcards - first clause matches
+    return { tag: 'Leaf', clauseIndex: firstClause.clauseIndex };
+  }
+
+  // Get the type being split on (from the first constructor pattern in this column)
+  const typeName = getTypeAtColumn(clauses, splitCol, ctorToType);
+  if (typeName === null) {
+    // Can't determine type - treat as all wildcards matching first clause
+    return { tag: 'Leaf', clauseIndex: firstClause.clauseIndex };
+  }
+
+  const info = typeInfo.get(typeName);
+  if (!info) {
+    // Unknown type - treat as all wildcards
+    return { tag: 'Leaf', clauseIndex: firstClause.clauseIndex };
+  }
+
+  // Build a branch for EACH constructor of this type
+  const branches = new Map<string, CaseTree>();
+  for (const ctorName of info.constructors) {
+    const arity = info.arities.get(ctorName) ?? 0;
+    const specialized = specializeClauses(clauses, splitCol, ctorName, arity);
+    branches.set(ctorName, buildTree(specialized, typeInfo, ctorToType));
+  }
+
+  return { tag: 'Split', typeName, branches };
 }
 
 /**
- * Build a case tree from a single clause's patterns.
- * This is used for the first clause.
+ * Check if all patterns are wildcards or variables
  */
-function buildTreeFromPatterns(patterns: TTKPattern[], clauseIndex: number): CaseTree {
-  return buildRec(patterns, clauseIndex);
+function allWildcards(patterns: TTKPattern[]): boolean {
+  return patterns.every(p => p.tag === 'PVar' || p.tag === 'PWild');
 }
 
 /**
- * Recursively build tree from a flat list of patterns.
- * When we encounter a PCtor, its args are prepended to the remaining patterns.
+ * Find the first column (index) that has a constructor pattern in any clause
  */
-function buildRec(patterns: TTKPattern[], clauseIndex: number): CaseTree {
-  if (patterns.length === 0) {
-    return { tag: 'Leaf', clauseIndex };
-  }
+function findSplitColumn(clauses: InternalClause[]): number {
+  if (clauses.length === 0) return -1;
 
-  const [first, ...rest] = patterns;
-
-  switch (first.tag) {
-    case 'PVar':
-    case 'PWild':
-      // Variable/wildcard: don't split, continue with rest
-      return buildRec(rest, clauseIndex);
-
-    case 'PCtor': {
-      // Constructor: split here, recurse into [ctorArgs..., rest...]
-      const innerPatterns = [...first.args, ...rest];
-      const subTree = buildRec(innerPatterns, clauseIndex);
-      return {
-        tag: 'Split',
-        branches: new Map([[first.name, subTree]]),
-        default_: null
-      };
+  const numCols = clauses[0].patterns.length;
+  for (let col = 0; col < numCols; col++) {
+    for (const clause of clauses) {
+      if (col < clause.patterns.length && clause.patterns[col].tag === 'PCtor') {
+        return col;
+      }
     }
   }
+  return -1;
+}
+
+/**
+ * Get the type name for the column being split on
+ */
+function getTypeAtColumn(
+  clauses: InternalClause[],
+  col: number,
+  ctorToType: ConstructorToTypeMap
+): string | null {
+  for (const clause of clauses) {
+    if (col < clause.patterns.length) {
+      const pat = clause.patterns[col];
+      if (pat.tag === 'PCtor') {
+        return ctorToType.get(pat.name) ?? null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Specialize clauses for a specific constructor.
+ *
+ * For each clause:
+ * - If pattern at col is a wildcard: expand to `arity` fresh wildcards
+ * - If pattern at col is PCtor with matching name: splice in the ctor's args
+ * - Otherwise: clause doesn't match this constructor, drop it
+ */
+function specializeClauses(
+  clauses: InternalClause[],
+  col: number,
+  ctorName: string,
+  arity: number
+): InternalClause[] {
+  const result: InternalClause[] = [];
+
+  for (const clause of clauses) {
+    if (col >= clause.patterns.length) {
+      // No pattern at this column - treat as wildcard
+      // Expand to `arity` wildcards
+      const newPatterns = [
+        ...clause.patterns.slice(0, col),
+        ...Array(arity).fill({ tag: 'PWild' as const, name: '_' }),
+        ...clause.patterns.slice(col)
+      ];
+      result.push({ patterns: newPatterns, clauseIndex: clause.clauseIndex });
+      continue;
+    }
+
+    const pat = clause.patterns[col];
+
+    if (pat.tag === 'PVar' || pat.tag === 'PWild') {
+      // Wildcard matches any constructor
+      // Replace with `arity` fresh wildcards for the constructor's arguments
+      const newPatterns = [
+        ...clause.patterns.slice(0, col),
+        ...Array(arity).fill({ tag: 'PWild' as const, name: '_' }),
+        ...clause.patterns.slice(col + 1)
+      ];
+      result.push({ patterns: newPatterns, clauseIndex: clause.clauseIndex });
+    } else if (pat.tag === 'PCtor' && pat.name === ctorName) {
+      // Constructor pattern matches
+      // Splice in the constructor's argument patterns
+      const newPatterns = [
+        ...clause.patterns.slice(0, col),
+        ...pat.args,
+        ...clause.patterns.slice(col + 1)
+      ];
+      result.push({ patterns: newPatterns, clauseIndex: clause.clauseIndex });
+    }
+    // else: pattern is a different constructor, clause doesn't match
+  }
+
+  return result;
 }
 
 // ============================================================================
-// Extending the Case Tree
+// Coverage Analysis
 // ============================================================================
 
-type ExtendResult = { tree: CaseTree; modified: boolean };
-
 /**
- * Extend an existing tree with a new clause's patterns.
- * Returns the (possibly modified) tree and whether any modification was made.
+ * Check if a case tree has any uncovered paths
  */
-function extendTree(tree: CaseTree, patterns: TTKPattern[], clauseIndex: number): ExtendResult {
-  return extendRec(tree, patterns, clauseIndex);
-}
-
-function extendRec(tree: CaseTree, patterns: TTKPattern[], clauseIndex: number): ExtendResult {
-  // If we've reached a leaf, this path is already covered - no modification
-  if (tree.tag === 'Leaf') {
-    return { tree, modified: false };
-  }
-
-  // tree.tag === 'Split'
-  // Treat empty patterns as an implicit wildcard (match anything remaining)
-  if (patterns.length === 0) {
-    return extendWithWildcard(tree, [], clauseIndex);
-  }
-
-  const [first, ...rest] = patterns;
-
-  switch (first.tag) {
-    case 'PVar':
-    case 'PWild':
-      return extendWithWildcard(tree, rest, clauseIndex);
-
-    case 'PCtor': {
-      // Constructor pattern at a split
-      const ctorName = first.name;
-
-      // Check if this constructor already has a branch
-      if (tree.branches.has(ctorName)) {
-        // Extend existing branch with [ctorArgs..., rest...]
-        const existingSubTree = tree.branches.get(ctorName)!;
-        const innerPatterns = [...first.args, ...rest];
-        const extResult = extendRec(existingSubTree, innerPatterns, clauseIndex);
-
-        if (extResult.modified) {
-          const newBranches = new Map(tree.branches);
-          newBranches.set(ctorName, extResult.tree);
-          return { tree: { ...tree, branches: newBranches }, modified: true };
-        }
-        return { tree, modified: false };
+export function isTreeExhaustive(tree: CaseTree): boolean {
+  switch (tree.tag) {
+    case 'Leaf':
+      return true;
+    case 'Uncovered':
+      return false;
+    case 'Split':
+      // All branches must be exhaustive
+      for (const subTree of tree.branches.values()) {
+        if (!isTreeExhaustive(subTree)) return false;
       }
-
-      // No existing branch for this constructor
-      // If there's a default, this case is already covered
-      if (tree.default_ !== null) {
-        // The pattern is more specific than the default, but semantically covered
-        // This clause is unreachable for this path
-        return { tree, modified: false };
-      }
-
-      // No branch and no default: add new branch
-      const innerPatterns = [...first.args, ...rest];
-      const newSubTree = buildRec(innerPatterns, clauseIndex);
-      const newBranches = new Map(tree.branches);
-      newBranches.set(ctorName, newSubTree);
-      return {
-        tree: { tag: 'Split', branches: newBranches, default_: null },
-        modified: true
-      };
-    }
+      return true;
   }
 }
 
 /**
- * Extend a Split node with a wildcard/variable pattern.
- * This means the clause matches anything at this split point, so we need to:
- * 1. Set/extend the default (for constructors not explicitly listed)
- * 2. Extend all existing branches (to fill in gaps deeper in the tree)
+ * Find which clauses are actually reachable in the tree
  */
-function extendWithWildcard(
-  tree: CaseTree & { tag: 'Split' },
-  rest: TTKPattern[],
-  clauseIndex: number
-): ExtendResult {
-  let modified = false;
+function findReachableClauses(tree: CaseTree): Set<number> {
+  const reachable = new Set<number>();
+  collectReachable(tree, reachable);
+  return reachable;
+}
 
-  // Extend default
-  let newDefault: CaseTree | null = tree.default_;
-  if (newDefault === null) {
-    // No default yet - create one by building tree from remaining patterns
-    newDefault = buildRec(rest, clauseIndex);
-    modified = true;
-  } else {
-    // Default exists - try to extend it
-    const extResult = extendRec(newDefault, rest, clauseIndex);
-    if (extResult.modified) {
-      newDefault = extResult.tree;
-      modified = true;
-    }
+function collectReachable(tree: CaseTree, reachable: Set<number>): void {
+  switch (tree.tag) {
+    case 'Leaf':
+      reachable.add(tree.clauseIndex);
+      break;
+    case 'Uncovered':
+      break;
+    case 'Split':
+      for (const subTree of tree.branches.values()) {
+        collectReachable(subTree, reachable);
+      }
+      break;
   }
-
-  // Extend all existing branches
-  // (The wildcard matches any constructor, so we need to extend coverage in each branch)
-  const newBranches = new Map(tree.branches);
-  for (const [ctor, subTree] of tree.branches) {
-    const extResult = extendRec(subTree, rest, clauseIndex);
-    if (extResult.modified) {
-      newBranches.set(ctor, extResult.tree);
-      modified = true;
-    }
-  }
-
-  return {
-    tree: { tag: 'Split', branches: newBranches, default_: newDefault },
-    modified
-  };
 }
 
 // ============================================================================
@@ -216,71 +314,27 @@ function extendWithWildcard(
 // ============================================================================
 
 /**
- * Pretty-print a case tree for debugging.
+ * Pretty-print a case tree for debugging
  */
 export function printCaseTree(tree: CaseTree, indent: number = 0): string {
   const pad = '  '.repeat(indent);
 
-  if (tree.tag === 'Leaf') {
-    return `${pad}→ Clause ${tree.clauseIndex}`;
-  }
+  switch (tree.tag) {
+    case 'Leaf':
+      return `${pad}→ clause ${tree.clauseIndex}`;
 
-  // Split node
-  const lines: string[] = [];
+    case 'Uncovered':
+      return `${pad}→ MISSING`;
 
-  // Print each constructor branch
-  for (const [ctorName, subTree] of tree.branches) {
-    lines.push(`${pad}${ctorName}:`);
-    lines.push(printCaseTree(subTree, indent + 1));
-  }
-
-  // Print default if present
-  if (tree.default_ !== null) {
-    lines.push(`${pad}_:`);
-    lines.push(printCaseTree(tree.default_, indent + 1));
-  } else {
-    lines.push(`${pad}_ : <uncovered>`);
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * Build a case tree from all clauses and print it.
- * Returns the final tree (or null if no clauses).
- */
-export function buildAndPrintCaseTree(
-  clauses: { patterns: TTKPattern[] }[],
-  termName: string
-): CaseTree | null {
-  if (clauses.length === 0) {
-    console.log(`[Totality] ${termName}: no clauses`);
-    return null;
-  }
-
-  let tree: CaseTree | null = null;
-  const unreachableClauses: number[] = [];
-
-  for (let i = 0; i < clauses.length; i++) {
-    const result = addClausePatternsToCaseTree(tree, clauses[i].patterns, i);
-    if (result === undefined) {
-      unreachableClauses.push(i);
-      // Keep the tree as-is (clause didn't add coverage)
-    } else {
-      tree = result;
+    case 'Split': {
+      const lines: string[] = [];
+      for (const [ctorName, subTree] of tree.branches) {
+        lines.push(`${pad}${ctorName}:`);
+        lines.push(printCaseTree(subTree, indent + 1));
+      }
+      return lines.join('\n');
     }
   }
-
-  console.log(`\n[Totality] Case tree for '${termName}':`);
-  if (tree) {
-    console.log(printCaseTree(tree));
-  }
-
-  if (unreachableClauses.length > 0) {
-    console.log(`\n[Totality] Unreachable clauses: ${unreachableClauses.join(', ')}`);
-  }
-
-  return tree;
 }
 
 // ============================================================================
@@ -288,15 +342,68 @@ export function buildAndPrintCaseTree(
 // ============================================================================
 
 /**
+ * Build a case tree and check totality.
+ */
+export function buildCaseTree(
+  clauses: { patterns: TTKPattern[] }[],
+  definitions: DefinitionsMap
+): TotalityResult {
+  if (clauses.length === 0) {
+    return {
+      caseTree: null,
+      unreachableClauses: [],
+      isExhaustive: false
+    };
+  }
+
+  const { typeInfo, ctorToType } = buildTypeInfoMaps(definitions);
+
+  // Convert to internal format with clause indices
+  const internalClauses: InternalClause[] = clauses.map((c, i) => ({
+    patterns: c.patterns,
+    clauseIndex: i
+  }));
+
+  // Build the tree
+  const caseTree = buildTree(internalClauses, typeInfo, ctorToType);
+
+  // Find unreachable clauses
+  const reachable = findReachableClauses(caseTree);
+  const unreachableClauses: number[] = [];
+  for (let i = 0; i < clauses.length; i++) {
+    if (!reachable.has(i)) {
+      unreachableClauses.push(i);
+    }
+  }
+
+  return {
+    caseTree,
+    unreachableClauses,
+    isExhaustive: isTreeExhaustive(caseTree)
+  };
+}
+
+/**
  * Run totality checking on a pattern-matching term.
- * For now, this just builds and prints the case tree.
- *
- * @param termName The name of the term being checked
- * @param clauses The elaborated clauses with their patterns
  */
 export function checkTotality(
   termName: string,
-  clauses: { patterns: TTKPattern[] }[]
-): void {
-  buildAndPrintCaseTree(clauses, termName);
+  clauses: { patterns: TTKPattern[] }[],
+  definitions: DefinitionsMap
+): TotalityResult {
+  const result = buildCaseTree(clauses, definitions);
+
+  // Log for debugging
+  console.log(`\n[Totality] Case tree for '${termName}':`);
+  if (result.caseTree) {
+    console.log(printCaseTree(result.caseTree));
+  }
+  if (result.unreachableClauses.length > 0) {
+    console.log(`[Totality] Unreachable clauses: ${result.unreachableClauses.join(', ')}`);
+  }
+  if (!result.isExhaustive) {
+    console.log(`[Totality] WARNING: Patterns are not exhaustive`);
+  }
+
+  return result;
 }
