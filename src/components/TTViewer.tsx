@@ -288,7 +288,8 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
         border: '2px solid #ffc107'
       }}>?{term.id}</span>,
       Annot: () => <div>ANNOT</div>,
-      Match: (term) => <div>MATCH({term.clauses.length} clauses)</div>
+      Match: (term) => <div>MATCH({term.clauses.length} clauses)</div>,
+      MultiBinder: (term) => <span>({term.names.join(' ')} : <PrintedTerm term={term.domain} context={context} />) {term.binderKind.tag === 'BPiTT' ? '→' : '=>'} <PrintedTerm term={term.body} context={context} /></span>
     })}
     </div>
   )

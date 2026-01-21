@@ -1,5 +1,16 @@
 # Claude Code Guidelines for LeanUI
 
+## Language Specification
+
+The file `language-spec.md` documents the surface syntax of the LeanUI language. **When making changes to the parser or surface syntax, update `language-spec.md` to reflect those changes.**
+
+This includes:
+- Adding new syntax forms (e.g., new binder types, operators)
+- Changing existing syntax (e.g., modifying how multi-parameter binders work)
+- Removing deprecated syntax
+
+---
+
 ## Term Representation Layers (TT vs TTK)
 
 This project has multiple layers of term representation. Understanding these is critical:

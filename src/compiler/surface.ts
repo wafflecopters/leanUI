@@ -185,6 +185,7 @@ export type TTerm =
   | { tag: 'Sort'; level: TLevel }                         // Type_i, Prop = Type_0 (now with TLevel)
   | { tag: 'ULevel' }                                      // The type of universe levels
   | { tag: 'Binder'; name: string; binderKind: BinderKind; domain?: TTerm; body: TTerm }  // Unified binder (domain optional for let without type annotation)
+  | { tag: 'MultiBinder'; names: string[]; binderKind: BinderKind; domain: TTerm; body: TTerm }  // Multi-name binder: (a b c : T) -> body
   | TTermApp   // Function application (f a)
   | TTermConst // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
@@ -470,6 +471,18 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
       };
     }
 
+    case 'MultiBinder': {
+      const newDomain = replaceHoleTT(term.domain, holeId, replacement);
+      const newBody = replaceHoleTT(term.body, holeId, replacement);
+      return {
+        tag: 'MultiBinder',
+        names: term.names,
+        binderKind: term.binderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
     case 'App':
       return {
         tag: 'App',
@@ -523,6 +536,12 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
         if (inDefVal) return inDefVal;
       }
       return null;
+    }
+
+    case 'MultiBinder': {
+      const inDomain = findHoleTT(term.domain, holeId);
+      if (inDomain) return inDomain;
+      return findHoleTT(term.body, holeId);
     }
 
     case 'App': {
@@ -593,6 +612,15 @@ export function fillHoleWithTT(
         body: newBody
       };
     }
+
+    case 'MultiBinder':
+      return {
+        tag: 'MultiBinder',
+        names: term.names,
+        binderKind: term.binderKind,
+        domain: fillHoleWithTT(term.domain, holeId, generator),
+        body: fillHoleWithTT(term.body, holeId, generator)
+      };
 
     case 'App':
       return {
@@ -682,6 +710,14 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
       return isDefinitionallyEqualTT(term1.body, term2.body);
     }
 
+    case 'MultiBinder': {
+      if (term2.tag !== 'MultiBinder') return false;
+      if (term1.binderKind.tag !== term2.binderKind.tag) return false;
+      if (term1.names.length !== term2.names.length) return false;
+      if (!isDefinitionallyEqualTT(term1.domain, term2.domain)) return false;
+      return isDefinitionallyEqualTT(term1.body, term2.body);
+    }
+
     case 'App': {
       if (term2.tag !== 'App') return false;
       return isDefinitionallyEqualTT(term1.fn, term2.fn) &&
@@ -754,6 +790,11 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
       }
       return null;
 
+    case 'MultiBinder':
+      if (head === 0) return getSubtermAtPath(term.domain, rest);
+      if (head === 1) return getSubtermAtPath(term.body, rest);
+      return null;
+
     case 'Annot':
       if (head === 0) return getSubtermAtPath(term.term, rest);
       if (head === 1) return getSubtermAtPath(term.type, rest);
@@ -821,6 +862,18 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
           ...term,
           binderKind: { tag: 'BLetTT', defVal: newDefVal }
         } : null;
+      }
+      return null;
+    }
+
+    case 'MultiBinder': {
+      if (head === 0) {
+        const newDomain = replaceSubtermAtPath(term.domain, rest, newSubterm);
+        return newDomain ? { ...term, domain: newDomain } : null;
+      }
+      if (head === 1) {
+        const newBody = replaceSubtermAtPath(term.body, rest, newSubterm);
+        return newBody ? { ...term, body: newBody } : null;
       }
       return null;
     }
@@ -990,6 +1043,13 @@ export function isNameUsed(name: string, term: TTerm): boolean {
       }
       return isNameUsed(name, term.body);
 
+    case 'MultiBinder':
+      // Check domain
+      if (isNameUsed(name, term.domain)) return true;
+      // Check body - if any name shadows, stop
+      if (term.names.includes(name)) return false;
+      return isNameUsed(name, term.body);
+
     case 'App':
       return isNameUsed(name, term.fn) || isNameUsed(name, term.arg);
 
@@ -1069,6 +1129,19 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
       };
     }
 
+    case 'MultiBinder': {
+      const newDomain = substHelperTT(targetIndex, replacement, term.domain, depth);
+      // Body is under term.names.length binders
+      const newBody = substHelperTT(targetIndex, replacement, term.body, depth + term.names.length);
+      return {
+        tag: 'MultiBinder',
+        names: term.names,
+        binderKind: term.binderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
     case 'App':
       return {
         tag: 'App',
@@ -1143,6 +1216,18 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
         tag: 'Binder',
         name: term.name,
         binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'MultiBinder': {
+      const newDomain = shift(amount, term.domain, cutoff);
+      const newBody = shift(amount, term.body, cutoff + term.names.length);
+      return {
+        tag: 'MultiBinder',
+        names: term.names,
+        binderKind: term.binderKind,
         domain: newDomain,
         body: newBody
       };
@@ -1293,6 +1378,24 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
       }
     }
 
+    case 'MultiBinder': {
+      // Extend context with all names (in reverse order since context is prepended)
+      const newContext = [...term.names].reverse().concat(context);
+      const body = prettyPrintTerseTT(term.body, newContext);
+      const domain = prettyPrintTerseTT(term.domain, context);
+      const namesStr = term.names.join(' ');
+
+      switch (term.binderKind.tag) {
+        case 'BPiTT':
+          return `((${namesStr} : ${domain}) -> ${body})`;
+        case 'BLamTT':
+          return `(\\(${namesStr} : ${domain}) => ${body})`;
+        case 'BLetTT':
+          // MultiBinder doesn't really make sense for let, but handle it
+          return `(let ${namesStr} : ${domain} in ${body})`;
+      }
+    }
+
     case 'App': {
       const fn = prettyPrintTerseTT(term.fn, context);
       const arg = prettyPrintTerseTT(term.arg, context);
@@ -1421,6 +1524,22 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
           }
           return `(let ${term.name} = ${defVal} in ${body})`;
         }
+      }
+    }
+
+    case 'MultiBinder': {
+      const newContext = [...term.names].reverse().concat(context);
+      const domain = stripOuterParens(prettyPrintTT(term.domain, context));
+      const body = prettyPrintTT(term.body, newContext);
+      const namesStr = term.names.join(' ');
+
+      switch (term.binderKind.tag) {
+        case 'BPiTT':
+          return `((${namesStr} : ${domain}) -> ${body})`;
+        case 'BLamTT':
+          return `(\\(${namesStr} : ${domain}) => ${body})`;
+        case 'BLetTT':
+          return `(let ${namesStr} : ${domain} in ${body})`;
       }
     }
 
@@ -1563,6 +1682,22 @@ export function prettyPrintLatexTT(
             return `(\\text{let } ${term.name} : ${domain} = ${defVal} \\text{ in } ${body})`;
           }
           return `(\\text{let } ${term.name} = ${defVal} \\text{ in } ${body})`;
+      }
+    }
+
+    case 'MultiBinder': {
+      const domain = prettyPrintLatexTT(term.domain, context, opts);
+      const newContext = [...term.names].reverse().concat(context);
+      const body = prettyPrintLatexTT(term.body, newContext, opts);
+      const namesStr = term.names.join('\\, ');
+
+      switch (term.binderKind.tag) {
+        case 'BPiTT':
+          return `(\\Pi\\, (${namesStr} : ${domain}),\\, ${body})`;
+        case 'BLamTT':
+          return `(\\lambda\\, (${namesStr} : ${domain}),\\, ${body})`;
+        case 'BLetTT':
+          return `(\\text{let } ${namesStr} : ${domain} \\text{ in } ${body})`;
       }
     }
 
@@ -1917,6 +2052,15 @@ function fillHoleWithLet(
       };
     }
 
+    case 'MultiBinder':
+      return {
+        tag: 'MultiBinder',
+        names: term.names,
+        binderKind: term.binderKind,
+        domain: fillHoleWithLet(term.domain, holeId, letName, letType, letValue),
+        body: fillHoleWithLet(term.body, holeId, letName, letType, letValue)
+      };
+
     case 'App':
       return {
         tag: 'App',
@@ -2106,6 +2250,12 @@ export function occursInTT(index: number, term: TTerm): boolean {
         if (occursInTT(index, clause.rhs)) return true;
       }
       return false;
+
+    case 'MultiBinder': {
+      // Check domain and body (going under names.length binders for body)
+      if (occursInTT(index, term.domain)) return true;
+      return occursInTT(index + term.names.length, term.body);
+    }
   }
 }
 

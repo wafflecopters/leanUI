@@ -1342,43 +1342,90 @@ export class Parser {
   private parseParenExpr(ctx: NameContext, path: IndexPath = []): TTerm {
     this.expect('LPAREN');
 
-    // Check if this is a binder: (x : T)
+    // Check if this is a binder: (x : T) or (x y z : T) for Pi
     const startPos = this.pos;
 
     if (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
-      const nameToken = this.current();
-      this.advance();
+      // Collect all names (space-separated) until we see ':'
+      const nameTokens: Token[] = [];
 
-      if (this.current().type === 'COLON') {
-        // This is (x : T) - could be annotation or Pi binder
+      while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
+        nameTokens.push(this.current());
         this.advance();
-        // Parse the domain type at path.domain
-        const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
-        const type = this.expr(0, ctx, domainPath);
-        this.expect('RPAREN');
+      }
 
-        // Check if followed by arrow - then it's a Pi type
-        if (this.current().type === 'ARROW') {
-          this.advance();
-          const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
-          // Record the binder name's source range
-          const namePath = [...path, { kind: 'field' as const, name: 'name' }];
-          this.recordRange(namePath, nameToken, nameToken);
-          const newCtx = [name, ...ctx];
-          // Parse the body at path.body
-          const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
-          const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
-          return mkPiTT(type, body, name);
+      if (this.current().type === 'COLON' && nameTokens.length > 0) {
+        // This is (x : T) or (x y : T) - could be annotation or Pi binder
+        // For multiple names, it MUST be a Pi, so we need to see '->' after
+        // For single name, could be either annotation or Pi
+
+        if (nameTokens.length > 1) {
+          // Multiple names - must be a Pi binder: (a b c : T) -> ...
+          this.advance(); // consume ':'
+          const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+          const type = this.expr(0, ctx, domainPath);
+          this.expect('RPAREN');
+
+          if (this.current().type === 'ARROW') {
+            this.advance();
+            const names = nameTokens.map(t => t.type === 'UNDERSCORE' ? '_' : t.value);
+
+            // Extend context with all names
+            let newCtx = ctx;
+            for (const name of names) {
+              newCtx = [name, ...newCtx];
+            }
+
+            // Parse the body at path.body
+            const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+            const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
+
+            // Multiple names - use MultiBinder
+            return {
+              tag: 'MultiBinder',
+              names,
+              binderKind: { tag: 'BPiTT' },
+              domain: type,
+              body
+            };
+          } else {
+            // No arrow after multiple identifiers + colon + type + rparen
+            // This means it was actually (expr : type) where expr is an application
+            // e.g., (f x : T) is the application (f x) annotated with type T
+            // Backtrack and parse as regular expression
+            this.pos = startPos;
+          }
+        } else {
+          // Single name - could be annotation or Pi binder
+          this.advance(); // consume ':'
+          const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+          const type = this.expr(0, ctx, domainPath);
+          this.expect('RPAREN');
+
+          // Check if followed by arrow - then it's a Pi type
+          if (this.current().type === 'ARROW') {
+            this.advance();
+            const name = nameTokens[0].type === 'UNDERSCORE' ? '_' : nameTokens[0].value;
+
+            // Extend context with the name
+            const newCtx = [name, ...ctx];
+
+            // Parse the body at path.body
+            const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+            const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
+
+            // Single name - use regular Binder
+            const namePath = [...path, { kind: 'field' as const, name: 'name' }];
+            this.recordRange(namePath, nameTokens[0], nameTokens[0]);
+            return mkPiTT(type, body, name);
+          }
+
+          // Otherwise it's a type annotation
+          const name = nameTokens[0].type === 'UNDERSCORE' ? '_' : nameTokens[0].value;
+          const idx = ctx.indexOf(name);
+          const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name);
+          return { tag: 'Annot', term, type };
         }
-
-        // Otherwise it's a type annotation or just a parenthesized typed variable
-        // If we parsed (x : T) and there's no arrow, treat it as annotation if x is a term
-        // For simplicity, we'll treat single-identifier (x : T) as a typed reference
-        // This is tricky - let's assume it's annotation where x is looked up in context
-        const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
-        const idx = ctx.indexOf(name);
-        const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name);
-        return { tag: 'Annot', term, type };
       } else {
         // Not a binder - backtrack and parse as expression
         this.pos = startPos;
@@ -1407,7 +1454,7 @@ export class Parser {
    *   \x y => body                  -- multiple untyped binders
    *   \(x : A) => body              -- typed binder
    *   \(x : A) y => body            -- mixed
-   *   \(x, y : A) => body           -- multiple names with same type
+   *   \(x y : A) => body            -- multiple names with same type (space-separated)
    *   \(x : A) (y : B) => body      -- multiple typed binders
    *
    * NOT allowed: \ x : A => body    -- parens required for typed binders
@@ -1416,13 +1463,15 @@ export class Parser {
     const startToken = this.current();
     this.expect('LAMBDA');
 
-    // Parse binders until we see =>
-    // Each binder will have a startToken for position tracking and nameToken for name highlighting
-    const binders: Array<{ name: string; type: TTerm; startToken: Token; nameToken: Token }> = [];
+    // Parse binder groups until we see =>
+    // Each group can be a single untyped name, or a typed group with multiple names
+    type BinderGroup =
+      | { kind: 'single'; name: string; type: TTerm; nameToken: Token }
+      | { kind: 'multi'; names: string[]; type: TTerm; nameTokens: Token[] };
+    const groups: BinderGroup[] = [];
 
     while (true) {
       const current = this.current();
-      const binderStartToken = current;
 
       // Stop if we hit the body separator (only => is allowed)
       if (current.type === 'FATARROW') {
@@ -1430,36 +1479,36 @@ export class Parser {
       }
 
       if (current.type === 'LPAREN') {
-        // Typed binder(s): (x : T) or (x, y : T) or (x y : T)
+        // Typed binder(s): (x : T) or (x y : T) - space-separated names
         this.advance();
 
         // Collect names and their tokens until we see ':'
-        const namesWithTokens: Array<{ name: string; token: Token }> = [];
+        const nameTokens: Token[] = [];
         while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
-          const nameToken = this.current();
-          const name = nameToken.type === 'UNDERSCORE' ? '_' : nameToken.value;
-          namesWithTokens.push({ name, token: nameToken });
+          nameTokens.push(this.current());
           this.advance();
-
-          // Allow comma between names: (x, y : T)
-          if (this.current().type === 'COMMA') {
-            this.advance();
-          }
         }
 
-        if (namesWithTokens.length === 0) {
+        if (nameTokens.length === 0) {
           throw new ParseError('Expected at least one name in binder', this.current().line, this.current().col);
         }
 
         this.expect('COLON');
-        // Parse type - we'll record its position when building the nested lambdas
+        // Parse type
         const type = this.expr(0, ctx);
         this.expect('RPAREN');
 
-        // Add all names with the same type
-        for (const { name, token } of namesWithTokens) {
-          binders.push({ name, type, startToken: binderStartToken, nameToken: token });
+        const names = nameTokens.map(t => t.type === 'UNDERSCORE' ? '_' : t.value);
+
+        // Extend context with all names
+        for (const name of names) {
           ctx = [name, ...ctx];
+        }
+
+        if (names.length === 1) {
+          groups.push({ kind: 'single', name: names[0], type, nameToken: nameTokens[0] });
+        } else {
+          groups.push({ kind: 'multi', names, type, nameTokens });
         }
       } else if (current.type === 'IDENT' || current.type === 'UNDERSCORE') {
         // Untyped binder: just a name, type will be a hole
@@ -1476,14 +1525,14 @@ export class Parser {
           );
         }
 
-        binders.push({ name, type: mkHoleTT(`${name}_type`, mkPropTT()), startToken: binderStartToken, nameToken });
+        groups.push({ kind: 'single', name, type: mkHoleTT(`${name}_type`, mkPropTT()), nameToken });
         ctx = [name, ...ctx];
       } else {
         break;
       }
     }
 
-    if (binders.length === 0) {
+    if (groups.length === 0) {
       throw new ParseError('Expected at least one binder after λ', this.current().line, this.current().col);
     }
 
@@ -1498,35 +1547,52 @@ export class Parser {
       );
     }
 
+    // Count total number of binders for path calculation
+    const totalBinders = groups.reduce(
+      (acc, g) => acc + (g.kind === 'single' ? 1 : g.names.length),
+      0
+    );
+
     // Build the path to the innermost body
-    // For \x y => body, the body is at path.body.body
     let bodyPath = path;
-    for (let i = 0; i < binders.length; i++) {
+    for (let i = 0; i < totalBinders; i++) {
       bodyPath = [...bodyPath, { kind: 'field' as const, name: 'body' }];
     }
 
     // Parse body with the innermost body path
     const body = this.expr(0, ctx, bodyPath);
 
-    // Build nested lambdas from right to left, recording positions
-    let result = body;
+    // Build nested lambdas/multi-binders from right to left
+    let result: TTerm = body;
     let currentPath = bodyPath;
 
-    for (let i = binders.length - 1; i >= 0; i--) {
-      result = mkLambdaTT(binders[i].type, result, binders[i].name);
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const group = groups[i];
 
-      // Move path up one level (remove the last .body)
-      currentPath = currentPath.slice(0, -1);
+      if (group.kind === 'single') {
+        result = mkLambdaTT(group.type, result, group.name);
 
-      // Record the binder name at this path
-      const binderPath = currentPath.length > 0 ? currentPath : path;
-      const namePath = [...binderPath, { kind: 'field' as const, name: 'name' }];
-      this.recordRange(namePath, binders[i].nameToken, binders[i].nameToken);
+        // Move path up one level (remove the last .body)
+        currentPath = currentPath.slice(0, -1);
 
-      // Record the lambda at this path
-      if (currentPath.length > 0 || path.length === 0) {
-        const endToken = this.tokens[this.pos - 1];
-        this.recordRange(binderPath, binders[i].startToken, endToken);
+        // Record the binder name at this path
+        const binderPath = currentPath.length > 0 ? currentPath : path;
+        const namePath = [...binderPath, { kind: 'field' as const, name: 'name' }];
+        this.recordRange(namePath, group.nameToken, group.nameToken);
+      } else {
+        // Multi-name group - produce MultiBinder
+        result = {
+          tag: 'MultiBinder',
+          names: group.names,
+          binderKind: { tag: 'BLamTT' },
+          domain: group.type,
+          body: result
+        };
+
+        // Move path up by the number of names (remove .body for each)
+        for (let j = 0; j < group.names.length; j++) {
+          currentPath = currentPath.slice(0, -1);
+        }
       }
     }
 

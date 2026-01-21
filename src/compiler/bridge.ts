@@ -701,5 +701,15 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
 
     case 'ULevel':
       return b.tag === 'ULevel';
+
+    case 'MultiBinder':
+      if (b.tag !== 'MultiBinder') return false;
+      if (a.names.length !== b.names.length) return false;
+      for (let i = 0; i < a.names.length; i++) {
+        if (a.names[i] !== b.names[i]) return false;
+      }
+      if (a.binderKind.tag !== b.binderKind.tag) return false;
+      if (!termsEqual(a.domain, b.domain)) return false;
+      return termsEqual(a.body, b.body);
   }
 }

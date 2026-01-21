@@ -397,6 +397,42 @@ export function elabToKernel(term: TTerm): TTKTerm {
           };
         })
       };
+
+    case 'MultiBinder': {
+      // Expand MultiBinder into nested single Binder terms
+      // (a b c : T) -> B  becomes  (a : T) -> (b : T) -> (c : T) -> B
+      const domain = elabToKernel(term.domain);
+      let body = elabToKernel(term.body);
+
+      // Convert surface binder kind to kernel binder kind
+      let binderKindFactory: () => TTKBinderKind;
+      if (term.binderKind.tag === 'BPiTT') {
+        binderKindFactory = () => ({ tag: 'BPi' });
+      } else if (term.binderKind.tag === 'BLamTT') {
+        binderKindFactory = () => ({ tag: 'BLam' });
+      } else {
+        // BLetTT - MultiBinder with BLet doesn't really make sense semantically
+        // but we handle it anyway
+        const letDefVal = elabToKernel(term.binderKind.defVal);
+        binderKindFactory = () => ({
+          tag: 'BLet',
+          defVal: letDefVal
+        });
+      }
+
+      // Build nested binders from inside out (reverse order)
+      for (let i = term.names.length - 1; i >= 0; i--) {
+        body = {
+          tag: 'Binder',
+          name: term.names[i],
+          binderKind: binderKindFactory(),
+          domain,
+          body
+        };
+      }
+
+      return body;
+    }
   }
 }
 
@@ -649,6 +685,60 @@ export function elabToKernelWithMap(
           };
         })
       };
+
+    case 'MultiBinder': {
+      // Expand MultiBinder into nested single Binder terms
+      // (a b c : T) -> B  becomes  (a : T) -> (b : T) -> (c : T) -> B
+      // For path tracking, the domain maps to the first binder's domain
+      // and the body maps to the innermost binder's body
+      const domain = elabToKernelWithMap(
+        term.domain,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('domain')),
+        appendPath(kernelPath, fieldSeg('domain'))
+      );
+
+      // Build the path to the innermost body - it will be nested under n-1 'body' segments
+      let innerBodyKernelPath = kernelPath;
+      for (let i = 0; i < term.names.length; i++) {
+        innerBodyKernelPath = appendPath(innerBodyKernelPath, fieldSeg('body'));
+      }
+
+      let body = elabToKernelWithMap(
+        term.body,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('body')),
+        innerBodyKernelPath
+      );
+
+      // Convert surface binder kind to kernel binder kind
+      let binderKindFactory: () => TTKBinderKind;
+      if (term.binderKind.tag === 'BPiTT') {
+        binderKindFactory = () => ({ tag: 'BPi' });
+      } else if (term.binderKind.tag === 'BLamTT') {
+        binderKindFactory = () => ({ tag: 'BLam' });
+      } else {
+        // BLetTT
+        const letDefVal = elabToKernel(term.binderKind.defVal);
+        binderKindFactory = () => ({
+          tag: 'BLet',
+          defVal: letDefVal
+        });
+      }
+
+      // Build nested binders from inside out (reverse order)
+      for (let i = term.names.length - 1; i >= 0; i--) {
+        body = {
+          tag: 'Binder',
+          name: term.names[i],
+          binderKind: binderKindFactory(),
+          domain,
+          body
+        };
+      }
+
+      return body;
+    }
   }
 }
 

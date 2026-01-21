@@ -371,30 +371,15 @@ describe('Parser: Lambda', () => {
     }
   });
 
-  test('Parse lambda: \\(x, y : A) => x (multiple names same type)', () => {
-    const term = parseExpr('\\(x, y : A) => x');
-    assertTermShape(term, 'Binder');
-    if (term.tag === 'Binder') {
-      expect(term.name).toBe('x');
-      // Lambda binders always have domain
-      assertTermShape(term.domain!, 'Const'); // x : A
-      assertTermShape(term.body, 'Binder');
-      if (term.body.tag === 'Binder') {
-        expect(term.body.name).toBe('y');
-        assertTermShape(term.body.domain!, 'Const'); // y : A (same type)
-      }
-    }
-  });
-
-  test('Parse lambda: \\(x y : A) => x (multiple names same type, no comma)', () => {
+  test('Parse lambda: \\(x y : A) => x (multiple names same type, space-separated)', () => {
     const term = parseExpr('\\(x y : A) => x');
-    assertTermShape(term, 'Binder');
-    if (term.tag === 'Binder') {
-      expect(term.name).toBe('x');
-      assertTermShape(term.body, 'Binder');
-      if (term.body.tag === 'Binder') {
-        expect(term.body.name).toBe('y');
-      }
+    // Multiple names with same type produces MultiBinder
+    assertTermShape(term, 'MultiBinder');
+    if (term.tag === 'MultiBinder') {
+      expect(term.names).toEqual(['x', 'y']);
+      expect(term.binderKind.tag).toBe('BLamTT');
+      assertTermShape(term.domain, 'Const'); // : A
+      assertTermShape(term.body, 'Var'); // x
     }
   });
 
@@ -472,6 +457,54 @@ describe('Parser: Pi/Arrow', () => {
     if (term.tag === 'Binder') {
       // Body should be another Pi
       assertTermShape(term.body, 'Binder');
+    }
+  });
+
+  test('Parse multi-name Pi: (a b : X) -> Y', () => {
+    const term = parseExpr('(a b : X) -> Y');
+    // Multiple names with same type produces MultiBinder
+    assertTermShape(term, 'MultiBinder');
+    if (term.tag === 'MultiBinder') {
+      expect(term.names).toEqual(['a', 'b']);
+      expect(term.binderKind.tag).toBe('BPiTT');
+      assertTermShape(term.domain, 'Const'); // X
+      assertTermShape(term.body, 'Const'); // Y
+    }
+  });
+
+  test('Parse multi-name Pi with many names: (a b c d : Nat) -> T', () => {
+    const term = parseExpr('(a b c d : Nat) -> T');
+    assertTermShape(term, 'MultiBinder');
+    if (term.tag === 'MultiBinder') {
+      expect(term.names).toEqual(['a', 'b', 'c', 'd']);
+      expect(term.binderKind.tag).toBe('BPiTT');
+      assertTermShape(term.domain, 'Const');
+      if (term.domain.tag === 'Const') {
+        expect(term.domain.name).toBe('Nat');
+      }
+    }
+  });
+
+  test('Parse multi-name Pi followed by more binders', () => {
+    const term = parseExpr('(a b : Nat) -> (c : Bool) -> T');
+    assertTermShape(term, 'MultiBinder');
+    if (term.tag === 'MultiBinder') {
+      expect(term.names).toEqual(['a', 'b']);
+      // Body should be another Pi (single-name Binder)
+      assertTermShape(term.body, 'Binder');
+      if (term.body.tag === 'Binder') {
+        expect(term.body.name).toBe('c');
+        expect(term.body.binderKind.tag).toBe('BPiTT');
+      }
+    }
+  });
+
+  test('Single name Pi still produces Binder (not MultiBinder)', () => {
+    const term = parseExpr('(x : A) -> B');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      expect(term.name).toBe('x');
+      expect(term.binderKind.tag).toBe('BPiTT');
     }
   });
 });

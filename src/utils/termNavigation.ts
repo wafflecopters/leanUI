@@ -269,6 +269,19 @@ export function prettyPrintTerm(term: TTerm): string {
 
     case 'ULevel':
       return 'Level';
+
+    case 'MultiBinder': {
+      const domainStr = stripOuterParens(prettyPrintTerm(term.domain));
+      const bodyStr = prettyPrintTerm(term.body);
+      const namesStr = term.names.join(' ');
+      if (term.binderKind.tag === 'BPiTT') {
+        return `((${namesStr} : ${domainStr}) -> ${bodyStr})`;
+      } else if (term.binderKind.tag === 'BLamTT') {
+        return `λ(${namesStr} : ${domainStr}). ${bodyStr}`;
+      } else {
+        return `let ${namesStr} : ${domainStr} = ... in ${bodyStr}`;
+      }
+    }
   }
 }
 
