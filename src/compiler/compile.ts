@@ -17,6 +17,7 @@ import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause } from './patterns';
+import { checkTotality } from './totality';
 
 // ============================================================================
 // Global Configuration
@@ -1608,7 +1609,9 @@ function checkTermValue(
   };
 
   // TODO: structural recursion check
-  // TODO: totality checkarent of 3c190ec (Handle missing leaves in pattern matching (#1))
+
+  // Run totality checking (builds and prints case tree)
+  checkTotality(name ?? '???', checkedClauses);
 
   return { success: true, checkedValue };
 }
