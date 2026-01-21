@@ -9,7 +9,7 @@
  * 5. minFreeVarIndex - finding minimum free variable index
  */
 
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect } from "vitest";
 import { mkVar, TTKTerm, mkLZero } from "./kernel";
 import { Constraint, MetaVar, TTKContext } from "./term";
 import {
