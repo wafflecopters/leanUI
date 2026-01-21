@@ -587,6 +587,147 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
   }
 }
 
+/**
+ * Pretty print options for formatted output
+ */
+export interface PrettyPrintOptions {
+  /** Current indentation level (number of spaces) */
+  indent?: number;
+  /** Number of spaces per indentation level */
+  indentSize?: number;
+}
+
+/**
+ * Convert a kernel term to a formatted, human-readable string with proper indentation.
+ * Match statements and let bodies are printed on new lines.
+ */
+export function prettyPrintFormatted(
+  term: TTKTerm,
+  context: string[] = [],
+  metaVars?: PrettyPrintMetaVars,
+  options: PrettyPrintOptions = {}
+): string {
+  const indent = options.indent ?? 0;
+  const indentSize = options.indentSize ?? 2;
+  const nextIndent = indent + indentSize;
+
+  switch (term.tag) {
+    case 'Var':
+      if (term.index < context.length) {
+        return context[term.index];
+      }
+      return `#${term.index}`;
+
+    case 'Sort': {
+      const levelNum = levelToNumber(term.level);
+      if (levelNum !== undefined) {
+        if (levelNum === 0) return 'Prop';
+        const typeLevel = levelNum - 1;
+        return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+      }
+      return `Sort ${prettyPrintLevel(term.level)}`;
+    }
+
+    case 'ULevel':
+      return 'ULevel';
+
+    case 'Const':
+      return term.name;
+
+    case 'Binder': {
+      const newContext = [term.name, ...context];
+      const isAnonymous = term.name === '_' || term.name === '';
+
+      switch (term.binderKind.tag) {
+        case 'BPi': {
+          const parts: string[] = [];
+          let current: TTKTerm = term;
+          let ctx = context;
+          while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+            const currentAnon = current.name === '_' || current.name === '';
+            const domain = stripOuterParens(prettyPrintFormatted(current.domain, ctx, metaVars, options));
+            if (currentAnon) {
+              parts.push(domain);
+            } else {
+              parts.push(`(${current.name} : ${domain})`);
+            }
+            ctx = [current.name, ...ctx];
+            current = current.body;
+          }
+          parts.push(prettyPrintFormatted(current, ctx, metaVars, options));
+          return `(${parts.join(' -> ')})`;
+        }
+
+        case 'BLam': {
+          const domain = stripOuterParens(prettyPrintFormatted(term.domain, context, metaVars, options));
+          const body = prettyPrintFormatted(term.body, newContext, metaVars, options);
+          if (isAnonymous) {
+            return `(\\${domain} => ${body})`;
+          }
+          return `(\\(${term.name} : ${domain}) => ${body})`;
+        }
+
+        case 'BLet': {
+          const domain = stripOuterParens(prettyPrintFormatted(term.domain, context, metaVars, options));
+          const defVal = prettyPrintFormatted(term.binderKind.defVal, context, metaVars, options);
+          const nextPad = ' '.repeat(nextIndent);
+          const body = prettyPrintFormatted(term.body, newContext, metaVars, { ...options, indent: nextIndent });
+          return `(let ${term.name} : ${domain} = ${defVal} in\n${nextPad}${body})`;
+        }
+      }
+    }
+
+    case 'App': {
+      const parts: string[] = [];
+      let current: TTKTerm = term;
+      while (current.tag === 'App') {
+        parts.unshift(prettyPrintFormatted(current.arg, context, metaVars, options));
+        current = current.fn;
+      }
+      parts.unshift(prettyPrintFormatted(current, context, metaVars, options));
+      return `(${parts.join(' ')})`;
+    }
+
+    case 'Hole':
+      return `?${term.id}`;
+
+    case 'Meta': {
+      const solution = metaVars?.get(term.id)?.solution;
+      if (solution) {
+        return prettyPrintFormatted(solution, context, metaVars, options);
+      }
+      return `?${term.id}`;
+    }
+
+    case 'Annot': {
+      const termStr = prettyPrintFormatted(term.term, context, metaVars, options);
+      const typeStr = stripOuterParens(prettyPrintFormatted(term.type, context, metaVars, options));
+      return `(${termStr} : ${typeStr})`;
+    }
+
+    case 'Match': {
+      const scrutinee = prettyPrintFormatted(term.scrutinee, context, metaVars, options);
+      const nextPad = ' '.repeat(nextIndent);
+
+      const clauses = term.clauses.map(c => {
+        const clauseContext = c.contextNames
+          ? [...c.contextNames, ...context]
+          : [...collectPatternVars(c.patterns).reverse(), ...context];
+        const clauseMetaVars = c.metaVars ?? metaVars;
+
+        const lhsStr = c.elabArgs
+          ? c.elabArgs.map(arg => prettyPrintFormatted(arg, clauseContext, clauseMetaVars, options)).join(' ')
+          : c.patterns.map(p => prettyPrintPatternInternal(p)).join(' ');
+
+        const rhsStr = prettyPrintFormatted(c.rhs, clauseContext, clauseMetaVars, { ...options, indent: nextIndent });
+        return `${nextPad}| ${lhsStr} => ${rhsStr}`;
+      }).join('\n');
+
+      return `(match ${scrutinee}\n${clauses})`;
+    }
+  }
+}
+
 function prettyPrintPatternInternal(pattern: TTKPattern): string {
   switch (pattern.tag) {
     case 'PVar':

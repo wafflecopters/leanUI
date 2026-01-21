@@ -8,7 +8,7 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, TTKClause, TTKPattern, prettyPrintPattern } from './kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
@@ -1206,7 +1206,8 @@ function checkDeclaration(
     indexPositions,
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
     // Use checkedValue (with solutions) if available, otherwise fall back to elaborated kernelValue
-    prettyValue: (checkedValue ?? decl.kernelValue) ? prettyPrintTTK(checkedValue ?? decl.kernelValue!) : undefined,
+    // Use formatted pretty print for better readability of match/let expressions
+    prettyValue: (checkedValue ?? decl.kernelValue) ? prettyPrintFormatted(checkedValue ?? decl.kernelValue!) : undefined,
     prettyConstructors: decl.kernelConstructors?.map(c => ({
       name: c.name,
       prettyType: prettyPrintTTK(c.type)

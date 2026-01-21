@@ -350,6 +350,7 @@ const styles = {
   },
   valueValue: {
     color: '#d2a8ff',
+    whiteSpace: 'pre-wrap',
   },
   ctorRow: {
     marginLeft: '16px',
