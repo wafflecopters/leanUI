@@ -55,6 +55,302 @@ import {
 export type { TTKRecordDef };
 
 // ============================================================================
+// Elaboration Environment (ElabEnv)
+// ============================================================================
+
+/**
+ * Elaboration environment that tracks path through the surface AST.
+ *
+ * Similar to TCEnv in the type checker, ElabEnv provides:
+ * 1. Path tracking for error location reporting
+ * 2. Navigation methods that update paths automatically
+ * 3. Error creation with automatic path inclusion
+ *
+ * The surfacePath tracks position in the source AST, which maps via
+ * sourceMap to actual source code locations.
+ */
+export class ElabEnv<T = TTerm> {
+  constructor(
+    /** Current path in the surface AST */
+    public readonly surfacePath: IndexPath,
+    /** Current path in the kernel AST (may differ due to desugaring) */
+    public readonly kernelPath: IndexPath,
+    /** Map recording kernel→surface path correspondence */
+    public readonly elabMap: ElabMap,
+    /** Named arg map for pattern reordering (from function type) */
+    public readonly patternNamedArgMap: NamedArgMap | undefined,
+    /** Lookup for named arg maps of functions (for application elaboration) */
+    public readonly appNamedArgLookup: NamedArgMapLookup | undefined,
+    /** The current surface term being elaborated */
+    public readonly value: T
+  ) {}
+
+  /**
+   * Record the current kernel→surface path mapping in elabMap.
+   */
+  recordMapping(): void {
+    const kernelKey = serializeIndexPath(this.kernelPath);
+    const surfaceKey = serializeIndexPath(this.surfacePath);
+    this.elabMap.set(kernelKey, surfaceKey);
+  }
+
+  /**
+   * Create an elaboration error at the current surface path.
+   */
+  error(message: string): NamedArgElabError {
+    return new NamedArgElabError(message, this.surfacePath);
+  }
+
+  /**
+   * Create a new ElabEnv with updated value but same paths.
+   */
+  withValue<S>(value: S): ElabEnv<S> {
+    return new ElabEnv(
+      this.surfacePath,
+      this.kernelPath,
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      value
+    );
+  }
+
+  // ============================================================================
+  // Navigation Methods - Binder
+  // ============================================================================
+
+  inBinderDomain(this: ElabEnv<TTerm & { tag: 'Binder' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('domain')),
+      appendPath(this.kernelPath, fieldSeg('domain')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.domain!
+    );
+  }
+
+  inBinderBody(this: ElabEnv<TTerm & { tag: 'Binder' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('body')),
+      appendPath(this.kernelPath, fieldSeg('body')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.body
+    );
+  }
+
+  inBinderLetDefVal(this: ElabEnv<TTerm & { tag: 'Binder'; binderKind: { tag: 'BLetTT'; defVal: TTerm } }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('binderKind'), fieldSeg('defVal')),
+      appendPath(this.kernelPath, fieldSeg('binderKind'), fieldSeg('defVal')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.binderKind.defVal
+    );
+  }
+
+  // ============================================================================
+  // Navigation Methods - MultiBinder
+  // ============================================================================
+
+  inMultiBinderDomain(this: ElabEnv<TTerm & { tag: 'MultiBinder' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('domain')),
+      appendPath(this.kernelPath, fieldSeg('domain')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.domain
+    );
+  }
+
+  /**
+   * Navigate to MultiBinder body.
+   * Note: kernel path needs special handling since MultiBinder expands to nested Binders.
+   * @param nestingDepth - Number of names in the MultiBinder (for kernel path calculation)
+   */
+  inMultiBinderBody(this: ElabEnv<TTerm & { tag: 'MultiBinder' }>, nestingDepth: number): ElabEnv<TTerm> {
+    // Kernel path: nested under n 'body' segments due to expansion
+    let innerKernelPath = this.kernelPath;
+    for (let i = 0; i < nestingDepth; i++) {
+      innerKernelPath = appendPath(innerKernelPath, fieldSeg('body'));
+    }
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('body')),
+      innerKernelPath,
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.body
+    );
+  }
+
+  // ============================================================================
+  // Navigation Methods - App
+  // ============================================================================
+
+  inAppFn(this: ElabEnv<TTerm & { tag: 'App' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('fn')),
+      appendPath(this.kernelPath, fieldSeg('fn')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.fn
+    );
+  }
+
+  inAppArg(this: ElabEnv<TTerm & { tag: 'App' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('arg')),
+      appendPath(this.kernelPath, fieldSeg('arg')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.arg
+    );
+  }
+
+  // ============================================================================
+  // Navigation Methods - Annot
+  // ============================================================================
+
+  inAnnotTerm(this: ElabEnv<TTerm & { tag: 'Annot' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('term')),
+      appendPath(this.kernelPath, fieldSeg('term')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.term
+    );
+  }
+
+  inAnnotType(this: ElabEnv<TTerm & { tag: 'Annot' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('type')),
+      appendPath(this.kernelPath, fieldSeg('type')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.type
+    );
+  }
+
+  // ============================================================================
+  // Navigation Methods - Match
+  // ============================================================================
+
+  inMatchScrutinee(this: ElabEnv<TTerm & { tag: 'Match' }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('scrutinee')),
+      appendPath(this.kernelPath, fieldSeg('scrutinee')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.scrutinee
+    );
+  }
+
+  /**
+   * Navigate to a specific clause in a Match.
+   * surfaceIndex and kernelIndex may differ due to absurd clause filtering.
+   */
+  inMatchClause(
+    this: ElabEnv<TTerm & { tag: 'Match' }>,
+    surfaceIndex: number,
+    kernelIndex: number
+  ): ElabEnv<{ patterns: TPattern[]; rhs: TTerm }> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('clauses'), arraySeg(surfaceIndex)),
+      appendPath(this.kernelPath, fieldSeg('clauses'), arraySeg(kernelIndex)),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.clauses[surfaceIndex]
+    );
+  }
+
+  /**
+   * Navigate to a pattern within a clause.
+   */
+  inClausePattern(
+    this: ElabEnv<{ patterns: TPattern[]; rhs: TTerm }>,
+    patternIndex: number
+  ): ElabEnv<TPattern> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('patterns'), arraySeg(patternIndex)),
+      appendPath(this.kernelPath, fieldSeg('patterns'), arraySeg(patternIndex)),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.patterns[patternIndex]
+    );
+  }
+
+  /**
+   * Navigate to the RHS of a clause.
+   */
+  inClauseRhs(this: ElabEnv<{ patterns: TPattern[]; rhs: TTerm }>): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('rhs')),
+      appendPath(this.kernelPath, fieldSeg('rhs')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      this.value.rhs
+    );
+  }
+
+  // ============================================================================
+  // Navigation Methods - Inductive Definition Parts
+  // ============================================================================
+
+  /**
+   * Navigate to a constructor type within an inductive definition context.
+   * Used when elaborating constructor types.
+   */
+  inConstructorType(ctorIndex: number, ctorType: TTerm): ElabEnv<TTerm> {
+    return new ElabEnv(
+      appendPath(this.surfacePath, fieldSeg('constructors'), arraySeg(ctorIndex), fieldSeg('type')),
+      appendPath(this.kernelPath, fieldSeg('constructors'), arraySeg(ctorIndex), fieldSeg('type')),
+      this.elabMap,
+      this.patternNamedArgMap,
+      this.appNamedArgLookup,
+      ctorType
+    );
+  }
+
+  // ============================================================================
+  // Factory Methods
+  // ============================================================================
+
+  /**
+   * Create an initial ElabEnv for elaborating a term.
+   */
+  static create(
+    term: TTerm,
+    elabMap: ElabMap,
+    surfacePath: IndexPath = [],
+    kernelPath: IndexPath = [],
+    patternNamedArgMap?: NamedArgMap,
+    appNamedArgLookup?: NamedArgMapLookup
+  ): ElabEnv<TTerm> {
+    return new ElabEnv(
+      surfacePath,
+      kernelPath,
+      elabMap,
+      patternNamedArgMap,
+      appNamedArgLookup,
+      term
+    );
+  }
+}
+
+// ============================================================================
 // Constructor Parameter Names
 // ============================================================================
 

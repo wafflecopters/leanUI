@@ -20,7 +20,8 @@ const SYNTAX_COLORS = {
   constName: '4ec9b0',      // Teal - for types/constructors (Nat, Vec, Zero, Cons)
   termName: 'e5b387',       // Warm yellow/tan - for function names (plus, nth)
   patternVar: '9cdcfe',     // Light blue - for pattern variables (x, n, h)
-  delimiter: 'e5c995',      // Light tan/gold - for (, ), {, }, etc.
+  delimiter: 'e5c995',      // Light tan/gold - for (, ), etc.
+  namedBrace: '6e7681',     // Dark grey - for { } in named arguments/binders
   hole: 'f85149',           // Red for holes (unfinished code)
   absurd: '4fc1ff',         // Bright cyan - for #absurd marker
 };
@@ -50,6 +51,7 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     { token: 'boundVar', foreground: SYNTAX_COLORS.patternVar },
     { token: 'patternVar', foreground: SYNTAX_COLORS.patternVar },
     { token: 'absurd', foreground: SYNTAX_COLORS.absurd },
+    { token: 'namedBrace', foreground: SYNTAX_COLORS.namedBrace },
   ],
   colors: {
     'editor.background': '#161b22',
@@ -884,7 +886,7 @@ export function TextEditorPage() {
 
     // Register semantic tokens provider for precise highlighting
     // This overrides lexical highlighting with semantic information from the compiler
-    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd'];
+    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd', 'namedBrace'];
     const tokenModifiers: string[] = [];
 
     // Create an event emitter for signaling token changes

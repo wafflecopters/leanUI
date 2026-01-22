@@ -12,7 +12,7 @@ import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatte
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap, serializeIndexPath } from '../types/source-position'
+import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
@@ -170,6 +170,45 @@ export interface CompileResult {
   totalCheckErrors: number;
 }
 
+// ============================================================================
+// SourceMap Adjustment Helper
+// ============================================================================
+
+/**
+ * Adjust a sourceMap's line numbers by adding a block offset.
+ * This converts block-relative positions to file-absolute positions.
+ *
+ * @param sourceMap - Original sourceMap with block-relative positions
+ * @param blockStartLine - 1-based line number where the block starts in the file
+ * @returns New sourceMap with file-absolute positions
+ */
+function adjustSourceMapToAbsolute(sourceMap: SourceMap, blockStartLine: number): SourceMap {
+  if (blockStartLine === 1) {
+    // No adjustment needed for first block
+    return sourceMap;
+  }
+
+  const offset = blockStartLine - 1;
+  const adjusted = new Map<string, { start: { line: number; col: number; pos: number }; end: { line: number; col: number; pos: number } }>();
+
+  for (const [key, range] of sourceMap) {
+    adjusted.set(key, {
+      start: {
+        line: range.start.line + offset,
+        col: range.start.col,
+        pos: range.start.pos  // Note: pos is relative to block, not adjusted
+      },
+      end: {
+        line: range.end.line + offset,
+        col: range.end.col,
+        pos: range.end.pos
+      }
+    });
+  }
+
+  return adjusted;
+}
+
 /**
  * Information for a wildcard inlay hint
  */
@@ -185,7 +224,7 @@ export interface WildcardInlayHint {
 /**
  * Semantic token types for syntax highlighting
  */
-export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd';
+export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace';
 
 /**
  * A semantic token for highlighting
@@ -337,6 +376,11 @@ function collectSemanticTokensFromSurfaceTerm(
     case 'Binder':
       // Binder name is a pattern variable (light blue)
       addSemanticTokenDirect([...path, 'name'], sourceMap, blockStartLine, 'patternVar', tokens);
+      // If named (e.g., { A : Type } ->), emit tokens for braces
+      if (term.named) {
+        addSemanticTokenDirect([...path, 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+        addSemanticTokenDirect([...path, 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+      }
       // Recurse into domain (if present) and body
       if (term.domain !== undefined) {
         collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
@@ -351,6 +395,11 @@ function collectSemanticTokensFromSurfaceTerm(
     case 'App':
       collectSemanticTokensFromSurfaceTerm(term.fn, sourceMap, blockStartLine, [...path, 'fn'], tokens);
       collectSemanticTokensFromSurfaceTerm(term.arg, sourceMap, blockStartLine, [...path, 'arg'], tokens);
+      // If named argument (e.g., f { A := x }), emit tokens for braces
+      if (term.argName) {
+        addSemanticTokenDirect([...path, 'arg', 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+        addSemanticTokenDirect([...path, 'arg', 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+      }
       break;
 
     case 'Annot':
@@ -393,9 +442,14 @@ function collectSemanticTokensFromSurfaceTerm(
       break;
 
     case 'MultiBinder':
-      // Multi-binder: (a b c : T) -> B
+      // Multi-binder: (a b c : T) -> B or { a b : T } -> B
       for (let i = 0; i < term.names.length; i++) {
         addSemanticTokenDirect([...path, 'names', i], sourceMap, blockStartLine, 'patternVar', tokens);
+      }
+      // If named (e.g., { A B : Type } ->), emit tokens for braces
+      if (term.named) {
+        addSemanticTokenDirect([...path, 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+        addSemanticTokenDirect([...path, 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
       }
       collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
       collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
@@ -418,6 +472,11 @@ function collectSemanticTokensFromSurfacePattern(
     case 'PWild':
       // Pattern variable - light blue
       addSemanticTokenDirect(path, sourceMap, blockStartLine, 'patternVar', tokens);
+      // If named (e.g., {A} or {_}), emit tokens for braces
+      if (pattern.named) {
+        addSemanticTokenDirect([...path, 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+        addSemanticTokenDirect([...path, 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+      }
       break;
 
     case 'PCtor':
@@ -450,17 +509,22 @@ function collectSemanticTokensFromSurfacePattern(
 function addSemanticTokenDirect(
   path: (string | number)[],
   sourceMap: SourceMap,
-  blockStartLine: number,
+  _blockStartLine: number,  // Unused - sourceMap already has absolute positions
   type: SemanticTokenType,
   tokens: SemanticToken[]
 ): void {
   const pathStr = serializePathForLookup(path);
   const range = sourceMap.get(pathStr);
   if (range) {
+    // Note: sourceMap positions are already file-absolute (adjusted in elaboration phase)
+    // Length calculation assumes single-line tokens; for multi-line tokens this may need revision
+    const length = range.start.line === range.end.line
+      ? range.end.col - range.start.col
+      : 1;  // Fallback for multi-line tokens
     tokens.push({
-      line: range.start.line + blockStartLine - 1,
+      line: range.start.line,
       column: range.start.col,
-      length: range.end.col - range.start.col,
+      length,
       type
     });
   }
@@ -588,15 +652,16 @@ function collectHolesFromSurfaceTerm(
 function addHoleLocation(
   path: (string | number)[],
   sourceMap: SourceMap,
-  blockStartLine: number,
+  _blockStartLine: number,  // Unused - sourceMap already has absolute positions
   id: string,
   holes: HoleLocation[]
 ): void {
   const pathStr = serializePathForLookup(path);
   const range = sourceMap.get(pathStr);
   if (range) {
+    // Note: sourceMap positions are already file-absolute (adjusted in elaboration phase)
     holes.push({
-      line: range.start.line + blockStartLine - 1,
+      line: range.start.line,
       column: range.start.col,
       endColumn: range.end.col,
       id
@@ -720,7 +785,7 @@ function collectWildcardsFromPattern(
   pattern: TTKPattern,
   elabMap: ElabMap,
   sourceMap: SourceMap,
-  blockStartLine: number,
+  _blockStartLine: number,  // Unused - sourceMap already has absolute positions
   path: (string | number)[],
   hints: WildcardInlayHint[]
 ): void {
@@ -732,8 +797,9 @@ function collectWildcardsFromPattern(
     if (surfacePathStr) {
       const range = sourceMap.get(surfacePathStr);
       if (range) {
+        // Note: sourceMap positions are already file-absolute (adjusted in elaboration phase)
         hints.push({
-          line: range.start.line + blockStartLine - 1,
+          line: range.start.line,
           // Position after the underscore (end column of the range)
           column: range.end.col,
           name: pattern.name
@@ -747,7 +813,7 @@ function collectWildcardsFromPattern(
         pattern.args[i],
         elabMap,
         sourceMap,
-        blockStartLine,
+        _blockStartLine,
         [...path, 'args', i],
         hints
       );
@@ -938,7 +1004,8 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 
     for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
       const origDecl = block.declarations[declIndex];
-      const sourceMap = block.sourceMaps[declIndex];
+      // Adjust sourceMap to file-absolute positions
+      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine);
       // Use resolved declaration if available, otherwise fall back to original
       const decl = (origDecl.name && resolvedDeclMap.get(origDecl.name)) || origDecl;
       const elabMap: ElabMap = new Map();
@@ -1235,7 +1302,10 @@ function checkDeclaration(
   // Check for elaboration errors first (e.g., named argument errors)
   if (decl.elabError) {
     checkSuccess = false;
-    const error = TCEnvError.create(decl.elabError, createTCEnv({ definitions, options: { mode: 'check' } }));
+    // Create TCEnv with the error path so the error points to the correct source location
+    const errorPath = decl.elabErrorPath ? deserializeIndexPath(decl.elabErrorPath) : [];
+    const env = createTCEnv({ definitions, indexPath: errorPath, options: { mode: 'check' } });
+    const error = TCEnvError.create(decl.elabError, env);
     checkErrors.push(error);
     errorCount = 1;
   } else if (decl.kind === 'inductive') {

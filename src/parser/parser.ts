@@ -1406,7 +1406,12 @@ export class Parser {
    * Assumes we're positioned at the opening brace.
    */
   private parseNamedArgument(ctx: NameContext, path: IndexPath): { name: string; value: TTerm } {
+    // Record open brace position for syntax highlighting
+    const openBraceToken = this.current();
     this.expect('LBRACE');
+    const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
+    const openBracePath = [...argPath, { kind: 'field' as const, name: 'openBrace' }];
+    this.recordRange(openBracePath, openBraceToken, openBraceToken);
 
     const nameToken = this.current();
     if (nameToken.type !== 'IDENT') {
@@ -1421,10 +1426,13 @@ export class Parser {
 
     this.expect('ASSIGN'); // ':='
 
-    const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
     const value = this.expr(0, ctx, argPath);
 
+    // Record close brace position for syntax highlighting
+    const closeBraceToken = this.current();
     this.expect('RBRACE');
+    const closeBracePath = [...argPath, { kind: 'field' as const, name: 'closeBrace' }];
+    this.recordRange(closeBracePath, closeBraceToken, closeBraceToken);
 
     return { name, value };
   }
@@ -1570,7 +1578,11 @@ export class Parser {
    * Named binders are used for named arguments that can be passed by name at call sites.
    */
   private parseBraceExpr(ctx: NameContext, path: IndexPath = []): TTerm {
+    // Capture the opening brace for syntax highlighting
+    const openBraceToken = this.current();
     this.expect('LBRACE');
+    const openBracePath = [...path, { kind: 'field' as const, name: 'openBrace' }];
+    this.recordRange(openBracePath, openBraceToken, openBraceToken);
 
     // Collect all names (space-separated) until we see ':'
     const nameTokens: Token[] = [];
@@ -1590,7 +1602,12 @@ export class Parser {
     this.expect('COLON');
     const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
     const type = this.expr(0, ctx, domainPath);
+
+    // Capture the closing brace for syntax highlighting
+    const closeBraceToken = this.current();
     this.expect('RBRACE');
+    const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
+    this.recordRange(closeBracePath, closeBraceToken, closeBraceToken);
 
     // Named binders must be followed by '->'
     if (this.current().type !== 'ARROW') {
@@ -2026,6 +2043,9 @@ export class Parser {
 
     // Named pattern: {name} or {_}
     if (startToken.type === 'LBRACE') {
+      // Record open brace position
+      const openBracePath = [...path, { kind: 'field' as const, name: 'openBrace' }];
+      this.recordRange(openBracePath, startToken, startToken);
       this.advance();
       const innerToken = this.current();
 
@@ -2033,12 +2053,18 @@ export class Parser {
         const name = innerToken.value;
         this.advance();
         const endToken = this.current();
+        // Record close brace position
+        const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
+        this.recordRange(closeBracePath, endToken, endToken);
         this.expect('RBRACE');
         this.recordRange(path, startToken, endToken);
         return { tag: 'PVar', name, named: true };
       } else if (innerToken.type === 'UNDERSCORE') {
         this.advance();
         const endToken = this.current();
+        // Record close brace position
+        const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
+        this.recordRange(closeBracePath, endToken, endToken);
         this.expect('RBRACE');
         this.recordRange(path, startToken, endToken);
         return { tag: 'PWild', named: true };
