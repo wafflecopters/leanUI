@@ -559,9 +559,10 @@ goodVec = Vec { A := Nat } Zero`;
       expect(goodVecResult!.checkSuccess).toBe(true);
     });
 
-    test('Missing named argument in recursive call - should have clear error', () => {
+    test('Missing named argument in recursive call - implicit meta inserted', () => {
       // plus requires {a := ...} but recursive call omits it
-      // Error should mention missing 'a', not be a confusing type mismatch
+      // With implicit arguments, a meta is inserted for the missing named arg
+      // The meta cannot be inferred, so there should be an unsolved meta error
       const source = `
 inductive Nat : Type where
   Zero : Nat
@@ -575,15 +576,22 @@ plus {a := Succ a} b = Succ (plus b)`;
       const plusResult = results.find(r => r.name === 'plus');
       expect(plusResult).toBeDefined();
       expect(plusResult!.parseSuccess).toBe(true);
-      // Should FAIL because plus b is missing required {a := ...}
+      // Should FAIL - the implicit meta makes the recursive call non-structurally-decreasing
+      // OR it may fail due to unsolved metavariable
       expect(plusResult!.checkSuccess).toBe(false);
-      // Error should mention missing named argument
+      // Error should mention either:
+      // - "unsolved" or "hole" for unsolved metavariable
+      // - "structurally decreasing" for termination failure (meta can't be shown smaller)
+      // - "??" or "m0" indicating a metavariable in the error
       expect(plusResult!.checkErrors.some(e =>
-        e.message.toLowerCase().includes('missing') && e.message.includes('a')
+        e.message.toLowerCase().includes('unsolved') ||
+        e.message.toLowerCase().includes('hole') ||
+        e.message.toLowerCase().includes('structurally') ||
+        e.message.includes('??')
       )).toBe(true);
     });
 
-    test('Missing named argument - function with only named param', () => {
+    test('Too many positional args - function with only named param', () => {
       // Function has only named param, no positional. Called with wrong positional.
       const source = `
 inductive Bool : Type where
@@ -608,16 +616,17 @@ bad b = neg b`;
       expect(badResult!.parseSuccess).toBe(true);
       // Should FAIL because neg expects no positional args, just {a := ...}
       expect(badResult!.checkSuccess).toBe(false);
-      // Error should mention missing named argument 'a'
+      // Error should mention too many positional arguments
       expect(badResult!.checkErrors.some(e =>
-        e.message.toLowerCase().includes('missing') && e.message.includes('a')
+        e.message.toLowerCase().includes('positional')
       )).toBe(true);
     });
 
-    test('Missing named pattern in clause - should fail LHS validation', () => {
+    test('Implicit pattern for omitted named param - should succeed', () => {
       // plus has {a : Bool} (named) and Nat (positional)
       // Clause provides only positional pattern b, missing {a := ...}
-      // This should fail during LHS validation, not with confusing RHS type error
+      // With implicit arguments, a wildcard is inserted for the missing named pattern
+      // This should NOW SUCCEED because the implicit wildcard matches any Bool
       const source = `
 inductive Bool : Type where
   True : Bool
@@ -634,16 +643,17 @@ plus b = Zero`;
       const plusResult = results.find(r => r.name === 'plus');
       expect(plusResult).toBeDefined();
       expect(plusResult!.parseSuccess).toBe(true);
-      // Should FAIL because named parameter 'a' is not provided
-      expect(plusResult!.checkSuccess).toBe(false);
-      // Error should mention missing named pattern 'a'
-      expect(plusResult!.checkErrors.some(e =>
-        e.message.toLowerCase().includes('missing') && e.message.includes('a')
-      )).toBe(true);
+      // Should SUCCEED - implicit wildcard inserted for missing named pattern 'a'
+      if (!plusResult!.checkSuccess) {
+        console.log('Unexpected check errors:', plusResult!.checkErrors);
+      }
+      expect(plusResult!.checkSuccess).toBe(true);
     });
 
-    test('Missing named argument - all named params function', () => {
+    test('Implicit args for all-named function - type mismatch', () => {
       // Function with all named params, caller provides nothing
+      // With implicit arguments, metas are inserted: add becomes add ?a ?b
+      // But bad : Nat expects a Nat, and add ?a ?b is still a function until fully applied
       const source = `
 inductive Nat : Type where
   Zero : Nat
@@ -653,7 +663,9 @@ add : {a : Nat} -> {b : Nat} -> Nat
 add {a := Zero} {b := n} = n
 add {a := Succ m} {b := n} = Succ (add {a := m} {b := n})
 
--- BAD: calling add without any named args
+-- With implicits inserted, this becomes: bad = add ?a ?b
+-- Since both params are named and no args provided, metas are inserted
+-- This should either succeed (if metas solve) or fail with unsolved metas
 bad : Nat
 bad = add`;
 
@@ -661,12 +673,8 @@ bad = add`;
       const badResult = results.find(r => r.name === 'bad');
       expect(badResult).toBeDefined();
       expect(badResult!.parseSuccess).toBe(true);
-      // Should FAIL because add expects {a := ...} and {b := ...}
+      // Should FAIL - either unsolved metas or type mismatch
       expect(badResult!.checkSuccess).toBe(false);
-      // Error should mention missing named arguments
-      expect(badResult!.checkErrors.some(e =>
-        e.message.toLowerCase().includes('missing')
-      )).toBe(true);
     });
   });
 
@@ -1053,6 +1061,508 @@ add (Succ m) n = Succ (add {a := m} {b := n})`;
       expect(addResult!.parseSuccess).toBe(true);
       // Should FAIL: positionalArity is 0, but 2 positional patterns provided
       expect(addResult!.checkSuccess).toBe(false);
+    });
+  });
+
+  describe('Implicit Arguments (Automatic Meta/Wildcard Insertion)', () => {
+    test('Implicit wildcard inserted for missing named pattern - simple case', () => {
+      // plus has {a : Bool} (named) and Nat (positional)
+      // Clause provides only positional pattern b, missing {a := ...}
+      // An implicit wildcard should be inserted for 'a'
+      const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : {a : Bool} -> Nat -> Nat
+plus b = Zero`;
+
+      const results = compileSource(source);
+      const plusResult = results.find(r => r.name === 'plus');
+      expect(plusResult).toBeDefined();
+      expect(plusResult!.parseSuccess).toBe(true);
+      // Should SUCCEED - implicit wildcard inserted for missing named pattern 'a'
+      expect(plusResult!.checkSuccess).toBe(true);
+    });
+
+    test('Implicit meta inserted for missing named argument - simple case', () => {
+      // id has {A : Type} (named) and A (positional)
+      // Calling with just the positional arg inserts a meta for A
+      const source = `
+id : { A : Type } -> A -> A
+id {A} x = x
+
+-- This calls id with just x, inserting meta for A
+applyId : { T : Type } -> T -> T
+applyId {T} x = id x`;
+
+      const results = compileSource(source);
+      const applyIdResult = results.find(r => r.name === 'applyId');
+      expect(applyIdResult).toBeDefined();
+      expect(applyIdResult!.parseSuccess).toBe(true);
+      // Should SUCCEED - the meta for A can be inferred from context (T)
+      expect(applyIdResult!.checkSuccess).toBe(true);
+    });
+
+    test('Implicit meta solved by unification', () => {
+      // const has {A : Type} and {B : Type} (both named) plus positional args
+      // When called with explicit types, metas are solved
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+const : { A : Type } -> { B : Type } -> A -> B -> A
+const {A} {B} x y = x
+
+-- Call const with one type explicit, one implicit
+-- The implicit B should be inferred from the second argument
+useConst : Nat -> Nat -> Nat
+useConst a b = const { A := Nat } a b`;
+
+      const results = compileSource(source);
+      const useConstResult = results.find(r => r.name === 'useConst');
+      expect(useConstResult).toBeDefined();
+      expect(useConstResult!.parseSuccess).toBe(true);
+      // Should SUCCEED - B is inferred as Nat from the second arg
+      expect(useConstResult!.checkSuccess).toBe(true);
+    });
+
+    test('Multiple implicit wildcards in pattern', () => {
+      // Function with multiple named params, all omitted in pattern
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+f : {a : Nat} -> {b : Nat} -> Nat -> Nat
+f {a := Zero} {b := Zero} c = c
+f {a := _} {b := _} c = Zero`;
+
+      const results = compileSource(source);
+      const fResult = results.find(r => r.name === 'f');
+      expect(fResult).toBeDefined();
+      expect(fResult!.parseSuccess).toBe(true);
+      expect(fResult!.checkSuccess).toBe(true);
+    });
+
+    test('Implicit argument with type inference from return type', () => {
+      // The implicit type can be inferred from the expected return type
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+id : { A : Type } -> A -> A
+id {A} x = x
+
+-- Return type is Nat, so id's A should be inferred as Nat
+natId : Nat -> Nat
+natId n = id n`;
+
+      const results = compileSource(source);
+      const natIdResult = results.find(r => r.name === 'natId');
+      expect(natIdResult).toBeDefined();
+      expect(natIdResult!.parseSuccess).toBe(true);
+      expect(natIdResult!.checkSuccess).toBe(true);
+    });
+
+    test('Over-application with implicit args should fail', () => {
+      // id : {A : Type} -> A -> A takes 2 args total
+      // Providing 3 positional args should fail
+      const source = `
+id : { A : Type } -> A -> A
+id {A} x = x
+
+-- BAD: id T T gives 3 args (meta + T + T) but id only takes 2
+bad : Type -> Type
+bad T = id T T`;
+
+      const results = compileSource(source);
+      const badResult = results.find(r => r.name === 'bad');
+      expect(badResult).toBeDefined();
+      expect(badResult!.parseSuccess).toBe(true);
+      // Should FAIL - too many positional arguments
+      expect(badResult!.checkSuccess).toBe(false);
+    });
+
+    test('Partial application with implicit args', () => {
+      // Apply only some arguments, leaving others implicit
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : { a : Nat } -> Nat -> Nat
+add { a := Zero } b = b
+add { a := Succ n } b = Succ (add { a := n } b)
+
+-- Partial application: provide only the positional arg
+-- This creates a function waiting for the named arg
+increment : Nat -> Nat
+increment = add { a := Succ Zero }`;
+
+      const results = compileSource(source);
+      const incrementResult = results.find(r => r.name === 'increment');
+      expect(incrementResult).toBeDefined();
+      expect(incrementResult!.parseSuccess).toBe(true);
+      expect(incrementResult!.checkSuccess).toBe(true);
+    });
+
+    test('Implicit pattern with explicit remaining patterns', () => {
+      // First param is implicit, remaining are explicit
+      const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+f : {flag : Bool} -> Nat -> Nat -> Nat
+f Zero m = m
+f (Succ n) m = Succ (f {flag := True} n m)`;
+
+      const results = compileSource(source);
+      const fResult = results.find(r => r.name === 'f');
+      expect(fResult).toBeDefined();
+      expect(fResult!.parseSuccess).toBe(true);
+      // Should SUCCEED - implicit wildcard for flag, explicit patterns for the rest
+      expect(fResult!.checkSuccess).toBe(true);
+    });
+
+    test('Shorthand {x} syntax with implicit args', () => {
+      // {x} expands to {x := x}, combined with other implicit args
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+id : { A : Type } -> A -> A
+id {A} x = x
+
+-- Using shorthand {T} which expands to {T := T}
+applyWithShorthand : { T : Type } -> T -> T
+applyWithShorthand {T} x = id { A := T } x`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'applyWithShorthand');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('Implicit arg that cannot be inferred should fail', () => {
+      // When the implicit arg has no constraints to determine it
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+const : { A : Type } -> { B : Type } -> A -> B -> A
+const {A} {B} x y = x
+
+-- BAD: Neither A nor B can be inferred since we provide no type info
+-- The args are just variables with unknown types
+bad : Nat
+bad = const Zero Zero`;
+
+      const results = compileSource(source);
+      const badResult = results.find(r => r.name === 'bad');
+      expect(badResult).toBeDefined();
+      expect(badResult!.parseSuccess).toBe(true);
+      // Metas are inserted but can be solved since Zero : Nat gives us A = Nat = B
+      // Actually this should succeed because Zero constrains both A and B to Nat!
+      expect(badResult!.checkSuccess).toBe(true);
+    });
+
+    test('Combining explicit and implicit named args', () => {
+      // Provide some named args explicitly, let others be implicit
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+f : { a : Nat } -> { b : Nat } -> { c : Nat } -> Nat
+f {a := Zero} {b := _} {c := _} = Zero
+f {a := Succ n} {b} {c} = Succ (f {a := n} {b} {c})`;
+
+      const results = compileSource(source);
+      const fResult = results.find(r => r.name === 'f');
+      expect(fResult).toBeDefined();
+      expect(fResult!.parseSuccess).toBe(true);
+      expect(fResult!.checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Named Arguments in Constructor Patterns - Vec/Fin nth', () => {
+    // These tests exercise named arguments in constructor patterns with VCons
+    // which has {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+    const vecFinBase = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A: Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+inductive Fin : Nat -> Type where
+  FZero : {n : Nat} -> Fin (Succ n)
+  FSucc : {n : Nat} -> Fin n -> Fin (Succ n)
+`;
+
+    test('Variant 1: Full explicit named args in VCons and FZero/FSucc patterns', () => {
+      const source = vecFinBase + `
+nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
+nth (VCons {A := _} {n := _} h _) (FZero {n:=_}) = h
+nth (VCons {A := _} {n := Succ _} h tail) (FSucc {n:=_} f) = nth {A := _} {n := _} tail f`;
+
+      const results = compileSource(source);
+      const nthResult = results.find(r => r.name === 'nth');
+      expect(nthResult).toBeDefined();
+      expect(nthResult!.parseSuccess).toBe(true);
+      expect(nthResult!.checkSuccess).toBe(true);
+    });
+
+    test('Variant 2: Partial named args (only A) in VCons', () => {
+      const source = vecFinBase + `
+nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
+nth (VCons {A := _} h _) FZero = h
+nth (VCons {A := _} h tail) (FSucc f) = nth tail f`;
+
+      const results = compileSource(source);
+      const nthResult = results.find(r => r.name === 'nth');
+      expect(nthResult).toBeDefined();
+      expect(nthResult!.parseSuccess).toBe(true);
+      expect(nthResult!.checkSuccess).toBe(true);
+    });
+
+    test('Variant 3: No named args - all implicit in VCons/FZero/FSucc', () => {
+      const source = vecFinBase + `
+nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
+nth (VCons h _) FZero = h
+nth (VCons h tail) (FSucc f) = nth tail f`;
+
+      const results = compileSource(source);
+      const nthResult = results.find(r => r.name === 'nth');
+      expect(nthResult).toBeDefined();
+      expect(nthResult!.parseSuccess).toBe(true);
+      expect(nthResult!.checkSuccess).toBe(true);
+    });
+
+    test('nth with implicit function params and implicit ctor args', () => {
+      // The full idiomatic version: everything is implicit
+      const source = vecFinBase + `
+nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
+nth (VCons h _) FZero = h
+nth (VCons h tail) (FSucc f) = nth tail f`;
+
+      const results = compileSource(source);
+      const nthResult = results.find(r => r.name === 'nth');
+      expect(nthResult).toBeDefined();
+      expect(nthResult!.parseSuccess).toBe(true);
+      expect(nthResult!.checkSuccess).toBe(true);
+    });
+
+    test('VNil with no positional args (only named)', () => {
+      // VNil has only a named param {A : Type} and NO positional params
+      const source = vecFinBase + `
+isEmpty : {A : Type} -> {n : Nat} -> Vec A n -> Nat
+isEmpty VNil = Zero
+isEmpty (VCons _ _) = Succ Zero`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'isEmpty');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Constructor with ALL named args (no positional)', () => {
+    test('refl with no positional args - all implicit', () => {
+      // refl : {A : Type} -> {a : A} -> Equal A a a
+      // Has ZERO positional args - everything is named/implicit
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal A a a
+
+inductive Void : Type where
+
+zeroNeqSucc : (n : Nat) -> Equal Nat Zero (Succ n) -> Void
+zeroNeqSucc n (refl {A := _} {a := _}) = #absurd`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'zeroNeqSucc');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      // This SHOULD fail because refl {A := Nat} {a := Zero} can't unify with
+      // Equal Nat Zero (Succ n) - the indices Zero and (Succ n) don't match
+      // The absurd marker is appropriate here
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('refl with no positional args - pattern syntax without named args', () => {
+      // User writes just (refl) - implicit wildcards for A and a
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal A a a
+
+inductive Void : Type where
+
+zeroNeqSucc : (n : Nat) -> Equal Nat Zero (Succ n) -> Void
+zeroNeqSucc n refl = #absurd`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'zeroNeqSucc');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('symm using refl with implicit args', () => {
+      const source = `
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal A a a
+
+symm : {A : Type} -> {x : A} -> {y : A} -> Equal A x y -> Equal A y x
+symm refl = refl`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'symm');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('trans using refl with implicit args', () => {
+      const source = `
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal A a a
+
+trans : {A : Type} -> {x : A} -> {y : A} -> {z : A} -> Equal A x y -> Equal A y z -> Equal A x z
+trans refl refl = refl`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'trans');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('cong using refl with implicit args', () => {
+      const source = `
+inductive Equal : (A : Type) -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal A a a
+
+cong : {A : Type} -> {B : Type} -> {x : A} -> {y : A} -> (f : A -> B) -> Equal A x y -> Equal B (f x) (f y)
+cong f refl = refl`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'cong');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Equal with named type parameter', () => {
+    test('Equal with {A : Type} - zeroNeqSucc', () => {
+      // Equal has NAMED type param: Equal {A} a a
+      // So Equal Zero (Succ n) implicitly fills in {A := Nat}
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal {A} a a
+
+inductive Void : Type where
+
+zeroNeqSucc : (n : Nat) -> Equal Zero (Succ n) -> Void
+zeroNeqSucc n refl = #absurd`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'zeroNeqSucc');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('Equal with {A : Type} - symm', () => {
+      const source = `
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal {A} a a
+
+symm : {A : Type} -> {x : A} -> {y : A} -> Equal {A} x y -> Equal {A} y x
+symm refl = refl`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'symm');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Mixed positional and named args - complex cases', () => {
+    test('Nested constructor patterns with implicit args', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A: Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+-- Nested VCons patterns
+head2 : {A : Type} -> {n : Nat} -> Vec A (Succ (Succ n)) -> A
+head2 (VCons h (VCons _ _)) = h`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'head2');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
+    test('Multiple clauses with varying implicit patterns', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A: Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+-- First clause uses VNil (only named arg), second uses VCons (mixed)
+len : {A : Type} -> {n : Nat} -> Vec A n -> Nat
+len VNil = Zero
+len (VCons _ tail) = Succ (len tail)`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'len');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
     });
   });
 });

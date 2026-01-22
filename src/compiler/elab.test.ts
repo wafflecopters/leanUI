@@ -278,7 +278,7 @@ describe('countParameters', () => {
 
 describe('elabToKernelWithNamedArgs', () => {
   // Create a simple lookup function for testing
-  const createLookup = (maps: Record<string, NamedArgMap>): NamedArgMapLookup => {
+  const createLookup = (maps: Record<string, { namedMap: NamedArgMap; totalArity: number }>): NamedArgMapLookup => {
     return (name: string) => maps[name];
   };
 
@@ -308,7 +308,7 @@ describe('elabToKernelWithNamedArgs', () => {
     );
 
     const fMap: NamedArgMap = new Map([['A', 0]]);
-    const lookup = createLookup({ f: fMap });
+    const lookup = createLookup({ f: { namedMap: fMap, totalArity: 1 } });
     const kernel = elabToKernelWithNamedArgs(term, lookup);
 
     // Should become: f Nat
@@ -341,7 +341,7 @@ describe('elabToKernelWithNamedArgs', () => {
     );
 
     const fMap: NamedArgMap = new Map([['A', 0], ['B', 1]]);
-    const lookup = createLookup({ f: fMap });
+    const lookup = createLookup({ f: { namedMap: fMap, totalArity: 2 } });
     const kernel = elabToKernelWithNamedArgs(term, lookup);
 
     // Should be: App(App(f, Nat), Bool)
@@ -379,7 +379,7 @@ describe('elabToKernelWithNamedArgs', () => {
     );
 
     const fMap: NamedArgMap = new Map([['B', 1]]);
-    const lookup = createLookup({ f: fMap });
+    const lookup = createLookup({ f: { namedMap: fMap, totalArity: 2 } });
     const kernel = elabToKernelWithNamedArgs(term, lookup);
 
     // Should be: App(App(f, x), Bool)
@@ -413,7 +413,7 @@ describe('elabToKernelWithNamedArgs', () => {
     );
 
     const fMap: NamedArgMap = new Map([['A', 0]]);
-    const lookup = createLookup({ f: fMap });
+    const lookup = createLookup({ f: { namedMap: fMap, totalArity: 2 } });
     const kernel = elabToKernelWithNamedArgs(term, lookup);
 
     // Should be: App(App(f, Nat), x)
@@ -440,7 +440,7 @@ describe('elabToKernelWithNamedArgs', () => {
     );
 
     const fMap: NamedArgMap = new Map([['A', 0]]);
-    const lookup = createLookup({ f: fMap });
+    const lookup = createLookup({ f: { namedMap: fMap, totalArity: 1 } });
 
     expect(() => elabToKernelWithNamedArgs(term, lookup)).toThrow(NamedArgElabError);
     expect(() => elabToKernelWithNamedArgs(term, lookup)).toThrow('Unknown named argument');
@@ -472,7 +472,7 @@ describe('elabToKernelWithNamedArgs', () => {
     // We don't support named args on non-const heads, so this should work
     // as long as the inner app is handled correctly
     const fMap: NamedArgMap = new Map([['A', 0]]);
-    const lookup = createLookup({ f: fMap });
+    const lookup = createLookup({ f: { namedMap: fMap, totalArity: 1 } });
     const kernel = elabToKernelWithNamedArgs(innerTerm, lookup);
 
     expect(kernel.tag).toBe('App');
