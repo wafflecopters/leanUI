@@ -129,10 +129,19 @@ export type BinderKind =
  *   _              → PWild
  *   x              → PVar("x")
  */
+/**
+ * A named pattern argument: { Name := pattern }
+ * Used in constructor patterns to specify which parameter receives which pattern.
+ */
+export interface TNamedPatternArg {
+  name: string;
+  pattern: TPattern;
+}
+
 export type TPattern =
   | { tag: 'PVar'; name: string; named?: boolean }    // Named variable pattern (binds), named for {A} syntax
   | { tag: 'PWild'; named?: boolean }                 // Wildcard pattern (binds but name generated in elab), named for {_} syntax
-  | { tag: 'PCtor'; name: string; args: TPattern[] } // Constructor pattern
+  | { tag: 'PCtor'; name: string; args: TPattern[]; namedArgs?: TNamedPatternArg[] } // Constructor pattern with optional named args
 
 /**
  * A clause in pattern matching.
@@ -153,7 +162,8 @@ export type TPattern =
  * depth-first through the pattern tree, and accessible via De Bruijn indices.
  */
 export interface TClause {
-  patterns: TPattern[];  // Patterns to match (one per argument)
+  patterns: TPattern[];  // Positional patterns to match (one per positional argument)
+  namedPatterns?: TNamedPatternArg[];  // Named patterns: {name := pattern} at clause level
   rhs: TTerm;            // Right-hand side (body) when matched
 }
 

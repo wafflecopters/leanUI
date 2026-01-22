@@ -33,6 +33,20 @@ function getFunctionName(fn: TTKTerm, env: TCEnv<unknown>): string {
 }
 
 /**
+ * Count the number of Pi binders in a type and extract their names.
+ * Used to provide better error messages for under-applied functions.
+ */
+function countPiBindersWithNames(type: TTKTerm): { count: number; names: string[] } {
+  const names: string[] = [];
+  let current = type;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    names.push(current.name);
+    current = current.body;
+  }
+  return { count: names.length, names };
+}
+
+/**
  * Get a short description of a term for error messages.
  */
 function getTermDescription(term: TTKTerm, env: TCEnv<unknown>): string {
@@ -312,6 +326,21 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       const termDesc = getTermDescription(env.value, env);
       const inferredType = env.prettyPrint(inferredEnv.value);
       const expected = env.prettyPrint(expectedType);
+
+      // Check if this is an under-application: inferred type is a Pi but expected type is not
+      const inferredIsPi = inferredEnv.value.tag === 'Binder' && inferredEnv.value.binderKind.tag === 'BPi';
+      const expectedIsPi = expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi';
+
+      if (inferredIsPi && !expectedIsPi) {
+        // Count how many arguments are still needed
+        const { count, names } = countPiBindersWithNames(inferredEnv.value);
+        const argList = names.map(n => `'${n}'`).join(', ');
+        throw e.wrappedBy(
+          `${termDesc} is missing required argument${count > 1 ? 's' : ''}: ${argList}. ` +
+          `Expected ${expected} but got a function type.`
+        );
+      }
+
       throw e.wrappedBy(`${termDesc} has type ${inferredType} but expected ${expected}`);
     }
     throw e;

@@ -974,19 +974,27 @@ export class Parser {
 
     // Parse patterns until we hit '='
     // Each pattern is atomic (no constructor application without parens)
+    // Patterns can be positional or named: {name := pattern}
     const patterns: TPattern[] = [];
+    const namedPatterns: Array<{ name: string; pattern: TPattern }> = [];
 
+    let argIndex = 0;
     while (this.canStartPattern(this.current())) {
-      const patternIndex = patterns.length;
       const patternPath: IndexPath = [
         ...clausePath,
         { kind: 'field', name: 'patterns' },
-        { kind: 'array', index: patternIndex }
+        { kind: 'array', index: argIndex }
       ];
-      patterns.push(this.parsePatternAtomWithSource(patternPath));
+      const result = this.parsePatternAtomWithSourceInternal(patternPath);
+      if (result.kind === 'namedArg') {
+        namedPatterns.push({ name: result.name, pattern: result.pattern });
+      } else {
+        patterns.push(result.pattern);
+      }
+      argIndex++;
     }
 
-    if (patterns.length === 0) {
+    if (patterns.length === 0 && namedPatterns.length === 0) {
       throw new ParseError(
         `Expected at least one pattern in pattern clause for '${funcName}'`,
         this.current().line,
@@ -1008,7 +1016,10 @@ export class Parser {
     // Pattern vars are collected left-to-right, depth-first. But in De Bruijn,
     // index 0 is the most recently bound variable (the last one collected).
     // So we reverse the list to match the type-checker's context ordering.
-    const patternVars = patterns.flatMap(p => this.collectPatternVars(p));
+    // Note: Named patterns come after positional in the surface order
+    const positionalVars = patterns.flatMap(p => this.collectPatternVars(p));
+    const namedVars = namedPatterns.flatMap(np => this.collectPatternVars(np.pattern));
+    const patternVars = [...positionalVars, ...namedVars];
     const rhsCtx = [...patternVars].reverse();
 
     // Track source positions with path value.clauses[0].rhs
@@ -1033,6 +1044,7 @@ export class Parser {
         scrutinee: mkHoleTT('_scrutinee', mkHoleTT('_scrutinee_type', mkPropTT())),
         clauses: [{
           patterns,
+          namedPatterns: namedPatterns.length > 0 ? namedPatterns : undefined,
           rhs
         }]
       }
@@ -2039,9 +2051,23 @@ export class Parser {
    * Records the source range in the source map at the given path.
    */
   private parsePatternAtomWithSource(path: IndexPath): TPattern {
+    const result = this.parsePatternAtomWithSourceInternal(path);
+    if (result.kind === 'namedArg') {
+      throw new ParseError(
+        `Named pattern argument {${result.name} := ...} can only appear as argument to a constructor pattern`,
+        this.current().line,
+        this.current().col
+      );
+    }
+    return result.pattern;
+  }
+
+  private parsePatternAtomWithSourceInternal(path: IndexPath):
+    | { kind: 'pattern'; pattern: TPattern }
+    | { kind: 'namedArg'; name: string; pattern: TPattern } {
     const startToken = this.current();
 
-    // Named pattern: {name} or {_}
+    // Named pattern: {name}, {_}, or {name := pattern}
     if (startToken.type === 'LBRACE') {
       // Record open brace position
       const openBracePath = [...path, { kind: 'field' as const, name: 'openBrace' }];
@@ -2052,13 +2078,30 @@ export class Parser {
       if (innerToken.type === 'IDENT') {
         const name = innerToken.value;
         this.advance();
+
+        // Check for {name := pattern} syntax
+        if (this.current().type === 'ASSIGN') {
+          this.advance(); // skip :=
+          // Parse the pattern after :=
+          const patternPath = [...path, { kind: 'field' as const, name: 'pattern' }];
+          const innerPattern = this.parsePatternWithSource(patternPath);
+          const endToken = this.current();
+          // Record close brace position
+          const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
+          this.recordRange(closeBracePath, endToken, endToken);
+          this.expect('RBRACE');
+          this.recordRange(path, startToken, endToken);
+          return { kind: 'namedArg', name, pattern: innerPattern };
+        }
+
+        // Just {name} - named variable pattern
         const endToken = this.current();
         // Record close brace position
         const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
         this.recordRange(closeBracePath, endToken, endToken);
         this.expect('RBRACE');
         this.recordRange(path, startToken, endToken);
-        return { tag: 'PVar', name, named: true };
+        return { kind: 'pattern', pattern: { tag: 'PVar', name, named: true } };
       } else if (innerToken.type === 'UNDERSCORE') {
         this.advance();
         const endToken = this.current();
@@ -2067,7 +2110,7 @@ export class Parser {
         this.recordRange(closeBracePath, endToken, endToken);
         this.expect('RBRACE');
         this.recordRange(path, startToken, endToken);
-        return { tag: 'PWild', named: true };
+        return { kind: 'pattern', pattern: { tag: 'PWild', named: true } };
       } else {
         throw new ParseError(
           'Expected identifier or _ in named pattern',
@@ -2080,7 +2123,7 @@ export class Parser {
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
       this.recordRange(path, startToken, startToken);
-      return { tag: 'PWild' };
+      return { kind: 'pattern', pattern: { tag: 'PWild' } };
     }
 
     if (startToken.type === 'IDENT') {
@@ -2090,7 +2133,7 @@ export class Parser {
       // All identifiers are parsed uniformly - elaboration will resolve
       // whether it's a constructor or variable based on context lookup
       this.recordRange(path, startToken, startToken);
-      return { tag: 'PCtor', name, args: [] };
+      return { kind: 'pattern', pattern: { tag: 'PCtor', name, args: [] } };
     }
 
     if (startToken.type === 'LPAREN') {
@@ -2100,7 +2143,7 @@ export class Parser {
       this.expect('RPAREN');
       // Record from '(' to ')' inclusive
       this.recordRange(path, startToken, endToken);
-      return pattern;
+      return { kind: 'pattern', pattern };
     }
 
     throw new ParseError(
@@ -2151,20 +2194,29 @@ export class Parser {
 
       // Check if followed by pattern arguments (either parenthesized or bare)
       // This handles: "Ctor (arg1) arg2", "Ctor arg1 arg2", "Ctor (arg1) (arg2)", etc.
+      // Also handles named args: "Ctor {A := x} y"
       if (this.canStartPattern(this.current())) {
         // Record the constructor name itself at path.name
         const namePath: IndexPath = [...path, { kind: 'field', name: 'name' }];
         this.recordRange(namePath, startToken, startToken);
 
-        // Parse all arguments (mixing parenthesized and bare is allowed)
+        // Parse all arguments (mixing parenthesized, bare, and named is allowed)
         const args: TPattern[] = [];
+        const namedArgs: Array<{ name: string; pattern: TPattern }> = [];
+        let argIndex = 0;
         while (this.canStartPattern(this.current())) {
-          const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: args.length }];
-          args.push(this.parsePatternAtomWithSource(argPath));
+          const argPath: IndexPath = [...path, { kind: 'field', name: 'args' }, { kind: 'array', index: argIndex }];
+          const result = this.parsePatternAtomWithSourceInternal(argPath);
+          if (result.kind === 'namedArg') {
+            namedArgs.push({ name: result.name, pattern: result.pattern });
+          } else {
+            args.push(result.pattern);
+          }
+          argIndex++;
         }
         const endToken = this.tokens[this.pos - 1];
         this.recordRange(path, startToken, endToken);
-        return { tag: 'PCtor', name, args };
+        return { tag: 'PCtor', name, args, namedArgs: namedArgs.length > 0 ? namedArgs : undefined };
       }
 
       // All identifiers are parsed uniformly - elaboration will resolve
@@ -2321,15 +2373,16 @@ export class Parser {
         // Wildcards bind a variable too (for De Bruijn indexing)
         // Use "_" as placeholder; real names generated in elaboration
         return ['_'];
-      case 'PCtor':
+      case 'PCtor': {
         // With uniform identifier parsing, all identifiers become PCtor nodes.
         // We need to determine which are variables (should be bound) vs constructors.
         //
-        // Heuristic for no-arg PCtor:
+        // Heuristic for no-arg PCtor (and no namedArgs):
         // - Lowercase first letter: variable (e.g., 'a', 'b', 'default')
         // - Single uppercase letter: type variable (e.g., 'A', 'T')
         // - Multi-character starting with uppercase: constructor (e.g., 'Zero', 'Succ')
-        if (pattern.args.length === 0) {
+        const hasArgs = pattern.args.length > 0 || (pattern.namedArgs && pattern.namedArgs.length > 0);
+        if (!hasArgs) {
           const name = pattern.name;
           const firstChar = name[0];
           const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
@@ -2341,7 +2394,13 @@ export class Parser {
           return [];
         }
         // For constructors with arguments, collect from all arguments left to right
-        return pattern.args.flatMap(arg => this.collectPatternVars(arg));
+        // First collect from positional args, then from named args
+        const positionalVars = pattern.args.flatMap(arg => this.collectPatternVars(arg));
+        const namedVars = pattern.namedArgs
+          ? pattern.namedArgs.flatMap(na => this.collectPatternVars(na.pattern))
+          : [];
+        return [...positionalVars, ...namedVars];
+      }
     }
   }
 

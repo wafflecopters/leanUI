@@ -58,7 +58,12 @@ function resolvePatternsInTerm(
           ...clause,
           patterns: clause.patterns.map(pattern =>
             resolvePattern(pattern, symbolContext)
-          )
+          ),
+          // Also resolve patterns in clause-level namedPatterns
+          namedPatterns: clause.namedPatterns?.map(np => ({
+            ...np,
+            pattern: resolvePattern(np.pattern, symbolContext)
+          }))
         }))
       };
 
@@ -85,31 +90,41 @@ function resolvePattern(
       // Wildcards are already resolved
       return pattern;
 
-    case 'PCtor':
+    case 'PCtor': {
       // Check if this is actually a known constructor
       const isConstructor = symbolContext.has(pattern.name);
+      const hasArgs = pattern.args.length > 0 || (pattern.namedArgs && pattern.namedArgs.length > 0);
 
       if (isConstructor) {
         // It's a known constructor - keep it as PCtor
-        // Recursively resolve arguments
+        // Recursively resolve arguments (both positional and named)
         return {
           ...pattern,
-          args: pattern.args.map(arg => resolvePattern(arg, symbolContext))
+          args: pattern.args.map(arg => resolvePattern(arg, symbolContext)),
+          namedArgs: pattern.namedArgs?.map(na => ({
+            ...na,
+            pattern: resolvePattern(na.pattern, symbolContext)
+          }))
         };
       } else {
         // Not a known constructor - this is a variable binding
-        // Convert to PVar (only if it has no args)
-        if (pattern.args.length === 0) {
+        // Convert to PVar (only if it has no args and no namedArgs)
+        if (!hasArgs) {
           return { tag: 'PVar', name: pattern.name };
         } else {
           // Constructor with args but not in context - this is an error
           // that will be caught during type checking. Keep as PCtor for now.
           return {
             ...pattern,
-            args: pattern.args.map(arg => resolvePattern(arg, symbolContext))
+            args: pattern.args.map(arg => resolvePattern(arg, symbolContext)),
+            namedArgs: pattern.namedArgs?.map(na => ({
+              ...na,
+              pattern: resolvePattern(na.pattern, symbolContext)
+            }))
           };
         }
       }
+    }
   }
 }
 

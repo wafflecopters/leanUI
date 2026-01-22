@@ -648,6 +648,23 @@ function reorderArgs(
   // Check if we have leftover positional arguments (they would have gone into named positions)
   if (posIdx < positional.length) {
     const extraCount = positional.length - posIdx;
+    // Find which named params were not provided
+    const providedNamedParams = new Set(named.map(n => n.name));
+    const missingNamedParams: string[] = [];
+    for (const [name] of namedMap) {
+      if (!providedNamedParams.has(name)) {
+        missingNamedParams.push(name);
+      }
+    }
+
+    if (missingNamedParams.length > 0) {
+      const missingList = missingNamedParams.map(n => `'${n}'`).join(', ');
+      return {
+        error: `Missing required named argument${missingNamedParams.length > 1 ? 's' : ''}: ${missingList}. ` +
+          `Named arguments must be provided with {name := value} syntax, not positionally.`
+      };
+    }
+
     return { error: `Too many positional arguments: ${extraCount} extra argument(s) cannot fill named parameter positions` };
   }
 
@@ -704,19 +721,24 @@ export function hasNamedPatterns(patterns: TPattern[]): boolean {
  */
 type PatternArg =
   | { kind: 'positional'; pattern: TPattern }
-  | { kind: 'named'; name: string; pattern: TPattern };
+  | { kind: 'named'; name: string; pattern: TPattern }
+  | { kind: 'namedWildcard'; pattern: TPattern };  // {_} syntax - can fill any named position
 
 /**
  * Collect pattern information for reordering.
- * Named wildcards ({_}) are treated as positional - they indicate "named position but I don't care about the value".
+ * - `{name}` patterns go to their specific named position
+ * - `{_}` patterns (named wildcards) can fill any unfilled named position
+ * - Other patterns are positional and can only fill non-named positions
  */
 function collectPatternArgs(patterns: TPattern[]): PatternArg[] {
   return patterns.map(p => {
     if (p.tag === 'PVar' && p.named) {
       return { kind: 'named', name: p.name, pattern: p };
+    } else if (p.tag === 'PWild' && p.named) {
+      // Named wildcard {_} - can fill any named position
+      return { kind: 'namedWildcard', pattern: p };
     } else {
-      // PWild (even with named: true) and PCtor are positional
-      // Named wildcards {_} don't need a name lookup - they're just positional patterns
+      // Regular positional patterns - can only fill non-named positions
       return { kind: 'positional', pattern: p };
     }
   });
@@ -810,6 +832,7 @@ function applyVarPermutation(term: TTerm, permutation: number[], depth: number =
  *
  * @param patterns - Mixed list of positional and named patterns
  * @param namedMap - Map from name to position index
+ * @param clauseNamedPatterns - Optional clause-level named patterns from {name := pattern} syntax
  * @returns Ordered list of positional patterns and de Bruijn permutation, or error message
  *
  * The varIndexPermutation maps old de Bruijn indices to new ones.
@@ -817,24 +840,37 @@ function applyVarPermutation(term: TTerm, permutation: number[], depth: number =
  */
 export function reorderPatterns(
   patterns: TPattern[],
-  namedMap: NamedArgMap
+  namedMap: NamedArgMap,
+  clauseNamedPatterns?: Array<{ name: string; pattern: TPattern }>
 ): { ordered: TPattern[]; varIndexPermutation: number[]; error?: undefined } | { ordered?: undefined; varIndexPermutation?: undefined; error: string } {
   const args = collectPatternArgs(patterns);
 
-  // Separate named and positional patterns
+  // Separate named, namedWildcard, and positional patterns
   const named: Array<{ name: string; pattern: TPattern; originalIndex: number }> = [];
+  const namedWildcards: Array<{ pattern: TPattern; originalIndex: number }> = [];
   const positional: Array<{ pattern: TPattern; originalIndex: number }> = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg.kind === 'named') {
       named.push({ name: arg.name, pattern: arg.pattern, originalIndex: i });
+    } else if (arg.kind === 'namedWildcard') {
+      namedWildcards.push({ pattern: arg.pattern, originalIndex: i });
     } else {
       positional.push({ pattern: arg.pattern, originalIndex: i });
     }
   }
 
-  // Find indices for all named patterns
+  // Add clause-level named patterns ({name := pattern} syntax)
+  // These come after the positional patterns in the original order
+  if (clauseNamedPatterns) {
+    for (let i = 0; i < clauseNamedPatterns.length; i++) {
+      const np = clauseNamedPatterns[i];
+      named.push({ name: np.name, pattern: np.pattern, originalIndex: patterns.length + i });
+    }
+  }
+
+  // Find indices for all explicitly named patterns
   const namedIndices: Array<{ idx: number; pattern: TPattern; originalIndex: number }> = [];
   for (const n of named) {
     const idx = namedMap.get(n.name);
@@ -851,10 +887,14 @@ export function reorderPatterns(
 
   // Result array - we fill named patterns at their positions, then fill positional in gaps
   // Also track the original index for permutation computation
-  const resultSize = Math.max(maxNamedIdx + 1, positional.length + named.length);
+  const resultSize = Math.max(maxNamedIdx + 1, positional.length + named.length + namedWildcards.length);
   const result: ({ pattern: TPattern; originalIndex: number } | null)[] = new Array(resultSize).fill(null);
 
-  // Place named patterns at their positions
+  // CRITICAL: Get set of all named parameter positions.
+  // Positional patterns can ONLY fill non-named positions.
+  const namedPositions = new Set(namedMap.values());
+
+  // Place explicitly named patterns at their positions
   for (const ni of namedIndices) {
     if (result[ni.idx] !== null) {
       return { error: `Duplicate pattern at position ${ni.idx}` };
@@ -862,12 +902,69 @@ export function reorderPatterns(
     result[ni.idx] = { pattern: ni.pattern, originalIndex: ni.originalIndex };
   }
 
-  // Fill positional patterns in gaps from left to right
+  // Fill named wildcards ({_}) in unfilled named positions (in order)
+  let wildcardIdx = 0;
+  for (const pos of Array.from(namedPositions).sort((a, b) => a - b)) {
+    if (wildcardIdx >= namedWildcards.length) break;
+    if (result[pos] === null) {
+      result[pos] = namedWildcards[wildcardIdx++];
+    }
+  }
+
+  // Check for leftover named wildcards
+  if (wildcardIdx < namedWildcards.length) {
+    return { error: `Too many named wildcard patterns ({_}): ${namedWildcards.length - wildcardIdx} extra wildcard(s)` };
+  }
+
+  // Fill positional patterns ONLY in non-named positions (from left to right)
   let posIdx = 0;
   for (let i = 0; i < result.length && posIdx < positional.length; i++) {
+    // Skip this position if it's a named parameter position
+    if (namedPositions.has(i)) {
+      continue;
+    }
     if (result[i] === null) {
       result[i] = positional[posIdx++];
     }
+  }
+
+  // Check if we have leftover positional patterns (they would have gone into named positions)
+  if (posIdx < positional.length) {
+    const extraCount = positional.length - posIdx;
+    // Find which named params were not provided
+    const providedNamedParams = new Set(named.map(n => n.name));
+    const missingNamedParams: string[] = [];
+    for (const [name] of namedMap) {
+      if (!providedNamedParams.has(name)) {
+        missingNamedParams.push(name);
+      }
+    }
+
+    if (missingNamedParams.length > 0) {
+      const missingList = missingNamedParams.map(n => `'${n}'`).join(', ');
+      return {
+        error: `Missing required named pattern${missingNamedParams.length > 1 ? 's' : ''}: ${missingList}. ` +
+          `Named parameters must be provided with {name := pattern} syntax, not positionally.`
+      };
+    }
+
+    return { error: `Too many positional patterns: ${extraCount} extra pattern(s) cannot fill named parameter positions` };
+  }
+
+  // Check that all required named parameters are provided
+  // Named positions that are NOT filled by named patterns are errors (until we implement implicits)
+  const missingNamedParams: string[] = [];
+  for (const [name, pos] of namedMap) {
+    if (result[pos] === null) {
+      missingNamedParams.push(name);
+    }
+  }
+  if (missingNamedParams.length > 0) {
+    const missingList = missingNamedParams.map(n => `'${n}'`).join(', ');
+    return {
+      error: `Missing required named pattern${missingNamedParams.length > 1 ? 's' : ''}: ${missingList}. ` +
+        `Named parameters must be matched with {name := pattern} syntax.`
+    };
   }
 
   // Check for unfilled gaps that precede filled positions
@@ -894,7 +991,13 @@ export function reorderPatterns(
   // Index 0 is the innermost (rightmost pattern's last var)
 
   // Step 1: Count vars per pattern position in original order
+  // Include both positional patterns and clause-level named patterns
   const origVarCounts = patterns.map(p => countPatternVars(p));
+  if (clauseNamedPatterns) {
+    for (const np of clauseNamedPatterns) {
+      origVarCounts.push(countPatternVars(np.pattern));
+    }
+  }
   const totalVars = origVarCounts.reduce((a, b) => a + b, 0);
 
   // Step 2: For each original pattern position, compute the de Bruijn index range
@@ -903,7 +1006,7 @@ export function reorderPatterns(
   // - First pattern's vars get highest indices
   const origPatternStartIndex: number[] = [];
   let idx = totalVars - 1;
-  for (let i = 0; i < patterns.length; i++) {
+  for (let i = 0; i < origVarCounts.length; i++) {
     origPatternStartIndex.push(idx - origVarCounts[i] + 1);
     idx -= origVarCounts[i];
   }
@@ -1416,7 +1519,7 @@ export function elabPatternToKernel(pattern: TPattern): TTKPattern {
       // Look up the constructor's parameter names
       const paramNames = globalConstructorParamNames.get(pattern.name);
 
-      // Elaborate each argument with the appropriate parameter context
+      // Elaborate each positional argument with the appropriate parameter context
       const elabArgs: TTKPattern[] = [];
       for (let i = 0; i < pattern.args.length; i++) {
         // Save current context
@@ -1437,10 +1540,20 @@ export function elabPatternToKernel(pattern: TPattern): TTKPattern {
         currentCtorParamIndex = savedParamIndex;
       }
 
+      // Elaborate named args if present (reordering happens in pattern checker)
+      let elabNamedArgs: Array<{ name: string; pattern: TTKPattern }> | undefined;
+      if (pattern.namedArgs && pattern.namedArgs.length > 0) {
+        elabNamedArgs = pattern.namedArgs.map(na => ({
+          name: na.name,
+          pattern: elabPatternToKernel(na.pattern)
+        }));
+      }
+
       return {
         tag: 'PCtor',
         name: pattern.name,
-        args: elabArgs
+        args: elabArgs,
+        namedArgs: elabNamedArgs
       };
     }
   }
@@ -1479,6 +1592,7 @@ export function elabBindingToKernel(binding: TBinding): TTKContext[number] {
  * @param kernelPath - Current path in the kernel AST
  * @param patternNamedArgMap - Optional map for reordering named patterns in Match clauses
  * @param appNamedArgLookup - Optional lookup for named arg maps of functions (for named arg applications)
+ * @param patternTotalArity - Optional total arity for validating clause pattern count
  * @returns The elaborated kernel term
  */
 export function elabToKernelWithMap(
@@ -1487,7 +1601,8 @@ export function elabToKernelWithMap(
   surfacePath: IndexPath = [],
   kernelPath: IndexPath = [],
   patternNamedArgMap?: NamedArgMap,
-  appNamedArgLookup?: NamedArgMapLookup
+  appNamedArgLookup?: NamedArgMapLookup,
+  patternTotalArity?: number
 ): TTKTerm {
   // Record the correspondence between kernel and surface paths
   const kernelKey = serializeIndexPath(kernelPath);
@@ -1706,17 +1821,44 @@ export function elabToKernelWithMap(
           // Reset term param index for each clause
           currentTermParamIndex = 0;
 
-          // Reorder patterns if we have named patterns and a namedArgMap
+          // Validate clause pattern count against function arity
+          // If the function has named parameters, we need to validate that
+          // the user isn't providing too many positional patterns
+          const hasClauseNamedPatterns = clause.namedPatterns && clause.namedPatterns.length > 0;
+          if (patternNamedArgMap && patternNamedArgMap.size > 0 && patternTotalArity !== undefined) {
+            const positionalArity = patternTotalArity - patternNamedArgMap.size;
+            // Count positional patterns (patterns without `named: true` flag)
+            const positionalPatternCount = clause.patterns.filter(p => !(p.tag === 'PVar' && p.named) && !(p.tag === 'PWild' && p.named)).length;
+
+            if (positionalPatternCount > positionalArity) {
+              const namedNames = Array.from(patternNamedArgMap.keys()).join(', ');
+              throw new NamedArgElabError(
+                `Too many positional patterns: expected at most ${positionalArity} but got ${positionalPatternCount}. ` +
+                `The function has ${patternNamedArgMap.size} named parameter${patternNamedArgMap.size === 1 ? '' : 's'} (${namedNames}) ` +
+                `that must be matched with {name := pattern} syntax or omitted.`,
+                clauseSurfacePath
+              );
+            }
+          }
+
+          // Reorder and validate patterns if we have a namedArgMap
+          // This is needed to:
+          // 1. Reorder patterns when using {name} or {name := pattern} syntax
+          // 2. Validate that required named parameters are provided
+          // We call this whenever the TYPE has named params, even if the clause doesn't provide any
           let patternsToElab = clause.patterns;
           let rhsToElab = clause.rhs;
-          if (patternNamedArgMap && patternNamedArgMap.size > 0 && hasNamedPatterns(clause.patterns)) {
-            const reorderResult = reorderPatterns(clause.patterns, patternNamedArgMap);
+          if (patternNamedArgMap && patternNamedArgMap.size > 0) {
+            const reorderResult = reorderPatterns(clause.patterns, patternNamedArgMap, clause.namedPatterns);
             if ('error' in reorderResult && reorderResult.error !== undefined) {
               throw new NamedArgElabError(reorderResult.error, clauseSurfacePath);
             }
             patternsToElab = reorderResult.ordered!;
             // Apply the permutation to de Bruijn indices in the RHS
-            rhsToElab = applyVarPermutation(clause.rhs, reorderResult.varIndexPermutation!);
+            // (no-op if no reordering happened)
+            if (hasNamedPatterns(clause.patterns) || hasClauseNamedPatterns) {
+              rhsToElab = applyVarPermutation(clause.rhs, reorderResult.varIndexPermutation!);
+            }
           }
 
           return {
@@ -1826,7 +1968,7 @@ function elabPatternToKernelWithMap(
       // Look up the constructor's parameter names
       const paramNames = globalConstructorParamNames.get(pattern.name);
 
-      // Elaborate each argument with the appropriate parameter context
+      // Elaborate each positional argument with the appropriate parameter context
       const elabArgs: TTKPattern[] = [];
       for (let argIndex = 0; argIndex < pattern.args.length; argIndex++) {
         // Save current context
@@ -1848,10 +1990,24 @@ function elabPatternToKernelWithMap(
         currentCtorParamIndex = savedParamIndex;
       }
 
+      // Elaborate named args if present (reordering happens in pattern checker)
+      let elabNamedArgs: Array<{ name: string; pattern: TTKPattern }> | undefined;
+      if (pattern.namedArgs && pattern.namedArgs.length > 0) {
+        elabNamedArgs = pattern.namedArgs.map((na, naIndex) => {
+          const naSurfacePath = appendPath(surfacePath, fieldSeg('namedArgs'), arraySeg(naIndex));
+          const naKernelPath = appendPath(kernelPath, fieldSeg('namedArgs'), arraySeg(naIndex));
+          return {
+            name: na.name,
+            pattern: elabPatternToKernelWithMap(na.pattern, elabMap, naSurfacePath, naKernelPath)
+          };
+        });
+      }
+
       return {
         tag: 'PCtor',
         name: pattern.name,
-        args: elabArgs
+        args: elabArgs,
+        namedArgs: elabNamedArgs
       };
     }
   }

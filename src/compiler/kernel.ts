@@ -207,13 +207,23 @@ export type TTKTermConst = { tag: 'Const'; name: string }
  * from user-named variables. This enables proper pretty-printing (show `_` for
  * wildcards) and IDE features like inlay hints showing the generated names.
  */
+/**
+ * A named pattern argument: { Name := pattern }
+ * Used in constructor patterns to specify which parameter receives which pattern.
+ */
+export interface TTKNamedPatternArg {
+  name: string;
+  pattern: TTKPattern;
+}
+
 export type TTKPattern =
   | { tag: 'PVar'; name: string }
   | { tag: 'PWild'; name: string }
-  | { tag: 'PCtor'; name: string; args: TTKPattern[] };
+  | { tag: 'PCtor'; name: string; args: TTKPattern[]; namedArgs?: TTKNamedPatternArg[] };
 
 export type TTKClause = {
-  patterns: TTKPattern[];
+  patterns: TTKPattern[];  // Positional patterns
+  namedPatterns?: TTKNamedPatternArg[];  // Named patterns: {name := pattern} at clause level
   rhs: TTKTerm;
   /** Elaborated arguments from LHS unification - shows the solved values for pattern positions */
   elabArgs?: TTKTerm[];

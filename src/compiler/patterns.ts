@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -41,17 +41,117 @@ function logInfo(fn: () => (string | unknown[])) {
 // ============================================================================
 
 /**
- * Look up a constructor by name and return its expected arity (number of arguments).
+ * Constructor arity info: total arguments vs positional (non-named) arguments.
  */
-function getConstructorArity(definitions: DefinitionsMap, ctorName: string): number | undefined {
+interface ConstructorArityInfo {
+  totalArity: number;
+  positionalArity: number;  // totalArity - namedArgs
+  namedArgMap?: NamedArgMap;
+}
+
+/**
+ * Look up a constructor by name and return its arity info.
+ * Returns both total arity and positional arity (excluding named parameters).
+ */
+function getConstructorArityInfo(definitions: DefinitionsMap, ctorName: string): ConstructorArityInfo | undefined {
   for (const inductive of definitions.inductiveTypes.values()) {
     for (const ctor of inductive.constructors) {
       if (ctor.name === ctorName) {
-        return countPiBinders(ctor.type);
+        const totalArity = countPiBinders(ctor.type);
+        const namedCount = ctor.namedArgMap?.size ?? 0;
+        return {
+          totalArity,
+          positionalArity: totalArity - namedCount,
+          namedArgMap: ctor.namedArgMap
+        };
       }
     }
   }
   return undefined;
+}
+
+/**
+ * Pad a PCtor pattern with implicit wildcards for named parameters.
+ * Named parameters are at specific positions (from namedArgMap), and positional args fill the remaining slots.
+ *
+ * Example: Constructor VNil : {A: Type} -> List A
+ * - namedArgMap: {A: 0}
+ * - totalArity: 1, positionalArity: 0
+ * - User writes: VNil (no args)
+ * - Padded: VNil _ (wildcard at position 0 for named param A)
+ *
+ * Example: Constructor VCons : {A: Type} -> A -> List A -> List A
+ * - namedArgMap: {A: 0}
+ * - totalArity: 3, positionalArity: 2
+ * - User writes: VCons x xs
+ * - Padded: VCons _ x xs (wildcard at position 0 for named param A)
+ */
+function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: DefinitionsMap): TTKPattern {
+  if (pattern.tag !== 'PCtor') {
+    return pattern;
+  }
+
+  const arityInfo = getConstructorArityInfo(definitions, pattern.name);
+  if (!arityInfo || !arityInfo.namedArgMap || arityInfo.namedArgMap.size === 0) {
+    // No named parameters - recursively pad sub-patterns only
+    return {
+      ...pattern,
+      args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions)),
+      namedArgs: undefined // Clear namedArgs after processing
+    };
+  }
+
+  // Build the padded args array:
+  // - Named patterns from {A := pattern} syntax go at their positions
+  // - Positional patterns fill the remaining (non-named) positions
+  // - Unfilled named positions get wildcards
+  const paddedArgs: TTKPattern[] = new Array(arityInfo.totalArity);
+  const namedPositions = new Set(arityInfo.namedArgMap.values());
+
+  // First, place named args at their positions
+  if (pattern.namedArgs) {
+    for (const na of pattern.namedArgs) {
+      const idx = arityInfo.namedArgMap.get(na.name);
+      if (idx !== undefined) {
+        paddedArgs[idx] = padPCtorPatternWithNamedWildcards(na.pattern, definitions);
+      }
+    }
+  }
+
+  // Fill remaining named positions with wildcards
+  for (const pos of namedPositions) {
+    if (paddedArgs[pos] === undefined) {
+      paddedArgs[pos] = { tag: 'PWild', name: '_' };
+    }
+  }
+
+  // Then, fill positional patterns into remaining (non-named) slots
+  let positionalIndex = 0;
+  for (let i = 0; i < arityInfo.totalArity; i++) {
+    if (!namedPositions.has(i)) {
+      if (positionalIndex < pattern.args.length) {
+        paddedArgs[i] = padPCtorPatternWithNamedWildcards(pattern.args[positionalIndex], definitions);
+      } else {
+        // Missing positional pattern - this will be caught by arity check
+        paddedArgs[i] = { tag: 'PWild', name: '_' };
+      }
+      positionalIndex++;
+    }
+  }
+
+  return {
+    tag: 'PCtor',
+    name: pattern.name,
+    args: paddedArgs
+    // namedArgs is not included - it's been processed into args
+  };
+}
+
+/**
+ * Pad all patterns in a clause with implicit wildcards for named constructor parameters.
+ */
+function padPatternsWithNamedWildcards(patterns: TTKPattern[], definitions: DefinitionsMap): TTKPattern[] {
+  return patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions));
 }
 
 /**
@@ -70,12 +170,44 @@ function assertMatchClauseLhsPatternsFullyApplied(env: TCEnv<TTKPattern[]>): voi
         break;
 
       case 'PCtor': {
-        const expectedArity = getConstructorArity(env.definitions, pattern.name);
-        if (expectedArity !== undefined && pattern.args.length !== expectedArity) {
-          errors.push(TCEnvError.create(
-            `Constructor '${pattern.name}' expects ${expectedArity} argument${expectedArity === 1 ? '' : 's'}, but got ${pattern.args.length}`,
-            env.atIndexPath([...env.indexPath, ...path])
-          ));
+        const arityInfo = getConstructorArityInfo(env.definitions, pattern.name);
+        if (arityInfo !== undefined) {
+          // Constructor patterns can only use positional arguments for non-named parameters.
+          // Named parameters must be provided via {Name := pattern} syntax or omitted (inferred).
+          const expectedPositional = arityInfo.positionalArity;
+
+          // Check positional args count
+          if (pattern.args.length !== expectedPositional) {
+            // Build a helpful error message
+            let message: string;
+            if (arityInfo.namedArgMap && arityInfo.namedArgMap.size > 0) {
+              const namedNames = Array.from(arityInfo.namedArgMap.keys()).join(', ');
+              if (pattern.args.length > expectedPositional) {
+                // User provided too many args - they're probably trying to match named params positionally
+                message = `Constructor '${pattern.name}' has ${arityInfo.namedArgMap.size} named parameter${arityInfo.namedArgMap.size === 1 ? '' : 's'} (${namedNames}) that cannot be matched positionally. ` +
+                  `Expected ${expectedPositional} positional argument${expectedPositional === 1 ? '' : 's'}, but got ${pattern.args.length}. ` +
+                  `Named parameters can be omitted (inferred from context) or matched with explicit syntax like {${Array.from(arityInfo.namedArgMap.keys())[0]} := _}`;
+              } else {
+                message = `Constructor '${pattern.name}' expects ${expectedPositional} positional argument${expectedPositional === 1 ? '' : 's'}, but got ${pattern.args.length}`;
+              }
+            } else {
+              message = `Constructor '${pattern.name}' expects ${expectedPositional} argument${expectedPositional === 1 ? '' : 's'}, but got ${pattern.args.length}`;
+            }
+            errors.push(TCEnvError.create(message, env.atIndexPath([...env.indexPath, ...path])));
+          }
+
+          // Validate named args if present
+          if (pattern.namedArgs) {
+            for (const na of pattern.namedArgs) {
+              const idx = arityInfo.namedArgMap?.get(na.name);
+              if (idx === undefined) {
+                errors.push(TCEnvError.create(
+                  `Unknown named pattern argument '${na.name}' for constructor '${pattern.name}'`,
+                  env.atIndexPath([...env.indexPath, ...path])
+                ));
+              }
+            }
+          }
         }
 
         // Recursively check sub-patterns
@@ -264,6 +396,12 @@ function countPatternVarsInPattern(pattern: TTKPattern): number {
       let count = 0;
       for (const arg of pattern.args) {
         count += countPatternVarsInPattern(arg);
+      }
+      // Also count variables in namedArgs
+      if (pattern.namedArgs) {
+        for (const na of pattern.namedArgs) {
+          count += countPatternVarsInPattern(na.pattern);
+        }
       }
       return count;
   }
@@ -626,19 +764,58 @@ export function checkMatchClause(
   env: TCEnv<TTKClause>,
   type: TTKTerm,
 ): TCEnv<TTKClause> {
+  // First check arity (with helpful error messages for named param violations)
   assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns())
 
-  // Get the original RHS and convert to levels representation
-  // The RHS was parsed with de Bruijn indices based on ALL pattern variables
+  // Get the original RHS and patterns
   const originalRhs = env.value.rhs;
-  const patterns = env.value.patterns;
-  const originalContextLength = countPatternVars(patterns);
+  const originalPatterns = env.value.patterns;
 
-  // Convert RHS from de Bruijn indices to "levels" (same representation as elabStack)
-  const rhsInLevels = deBruijnToLevels(originalRhs, originalContextLength);
+  // Pad patterns with implicit wildcards for named constructor parameters
+  // This is needed because constructor types may have named Pi binders that need patterns
+  const paddedPatterns = padPatternsWithNamedWildcards(originalPatterns, env.definitions);
 
-  // Run LHS unification, which will transform the RHS alongside elabStack
-  const result = unifyMatchClauseLhs(termName, env.inMatchClausePatterns().withCheckingMode('pattern'), type, rhsInLevels);
+  // The RHS was parsed with de Bruijn indices based on the ORIGINAL patterns.
+  // When we pad patterns with wildcards for named params, we need to adjust RHS indices.
+  // The shift depends on WHERE the wildcards are inserted in the context.
+  //
+  // Key insight: wildcards are inserted at the BEGINNING of each PCtor's args
+  // (because named params come first). For each PCtor that gets wildcards:
+  // - Variables bound BEFORE that PCtor in traversal order need to be shifted
+  // - Variables bound BY or AFTER that PCtor don't shift
+  //
+  // We compute a series of shifts, one for each PCtor with named params.
+  let shiftedRhs = originalRhs;
+
+  // Compute shifts for each top-level pattern
+  let varsAfterCurrent = 0;
+  for (let i = originalPatterns.length - 1; i >= 0; i--) {
+    const originalPattern = originalPatterns[i];
+    const paddedPattern = paddedPatterns[i];
+
+    const originalVars = countPatternVarsInPattern(originalPattern);
+    const paddedVars = countPatternVarsInPattern(paddedPattern);
+    const wildcardCount = paddedVars - originalVars;
+
+    if (wildcardCount > 0) {
+      // This pattern got wildcards. Variables bound BEFORE this pattern need to shift.
+      // The cutoff is: variables in this pattern's original sub-patterns + variables after this pattern
+      const cutoff = originalVars + varsAfterCurrent;
+      shiftedRhs = shiftTerm(shiftedRhs, wildcardCount, cutoff);
+    }
+
+    varsAfterCurrent += paddedVars;
+  }
+
+  const paddedContextLength = countPatternVars(paddedPatterns);
+  const rhsInLevels = deBruijnToLevels(shiftedRhs, paddedContextLength);
+
+  // Create env with padded patterns for unification
+  const paddedClause: TTKClause = { ...env.value, patterns: paddedPatterns };
+  const paddedEnv = env.withValue(paddedClause);
+
+  // Run LHS unification with padded patterns
+  const result = unifyMatchClauseLhs(termName, paddedEnv.inMatchClausePatterns().withCheckingMode('pattern'), type, rhsInLevels);
   result.assertNoConstraints();
 
   const { returnType, elabStack, rhsInLevels: transformedRhsInLevels } = result.value;

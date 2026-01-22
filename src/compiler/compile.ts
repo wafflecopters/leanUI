@@ -7,17 +7,18 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, ConstructorParamNames, ParamInfo, NamedArgMap, NamedArgElabError } from './elab';
+import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
+import { arraySeg, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
 import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
+import { checkStructuralRecursion } from './recursion';
 export type { TotalityResult, CaseTree };
 
 // ============================================================================
@@ -1024,9 +1025,10 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
         // Elaborate value (only if elabValues is true)
         if (elabValues && decl.value) {
           const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-          // Extract namedArgMap from type for pattern reordering
+          // Extract namedArgMap and totalArity from type for pattern validation and reordering
           const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
-          kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap);
+          const totalArity = decl.type ? countParameters(decl.type) : undefined;
+          kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
         }
 
         // Elaborate constructors
@@ -1047,9 +1049,12 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
               { kind: 'array', index: ctorIndex },
               { kind: 'field', name: 'type' }
             ];
+            // Extract namedArgMap from the constructor's surface type
+            const ctorNamedArgMap = extractNamedArgMap(ctor.type);
             return {
               name: ctor.name,
-              type: elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath, undefined, ctorAppLookup)
+              type: elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath, undefined, ctorAppLookup),
+              namedArgMap: ctorNamedArgMap.size > 0 ? ctorNamedArgMap : undefined
             };
           });
         }
@@ -1210,9 +1215,10 @@ export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResul
         }
 
         const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-        // Extract namedArgMap from type for pattern reordering
+        // Extract namedArgMap and totalArity from type for pattern validation and reordering
         const namedArgMap = elabDecl.surfaceType ? extractNamedArgMap(elabDecl.surfaceType) : undefined;
-        const kernelValue = elabToKernelWithMap(resolvedDecl.value, elabMap, valuePath, valuePath, namedArgMap, appNamedArgLookup);
+        const totalArity = elabDecl.surfaceType ? countParameters(elabDecl.surfaceType) : undefined;
+        const kernelValue = elabToKernelWithMap(resolvedDecl.value, elabMap, valuePath, valuePath, namedArgMap, appNamedArgLookup, totalArity);
 
         // Clear term param names after elaboration
         setCurrentTermParamNames(null);
@@ -1981,7 +1987,26 @@ function checkTermValue(
     clauses: checkedClauses
   };
 
-  // TODO: structural recursion check
+  // Structural recursion check
+  if (name) {
+    const recursionResult = checkStructuralRecursion(name, checkedClauses);
+    if (!recursionResult.isValid) {
+      const recursionErrors = recursionResult.errors.map(({ clauseIndex, error }) => {
+        // Navigate to the call site using TCEnv
+        let callSiteEnv: TCEnv<unknown> = clausesEnv.inMatchClause(clauseIndex).inMatchClauseRhs();
+        for (const seg of error.rhsPath) {
+          const term = callSiteEnv.value as TTKTerm;
+          if (seg.kind === 'field' && seg.name === 'fn' && term?.tag === 'App') {
+            callSiteEnv = (callSiteEnv as TCEnv<TTKTerm & { tag: 'App' }>).inAppFn();
+          } else if (seg.kind === 'field' && seg.name === 'arg' && term?.tag === 'App') {
+            callSiteEnv = (callSiteEnv as TCEnv<TTKTerm & { tag: 'App' }>).inAppArg();
+          }
+        }
+        return TCEnvError.create(error.message, callSiteEnv);
+      });
+      return { success: false, errors: recursionErrors };
+    }
+  }
 
   // Create absurdity checker that uses pattern LHS unification
   // Enhanced with Agda-style recursive splitting on remaining arguments

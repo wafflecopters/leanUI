@@ -1,4 +1,4 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
 import { TTKTerm, levelsEqual } from "./kernel";
 import { inferType } from "./checker";
 
@@ -47,7 +47,7 @@ function runAndAccumulateErrors<S, T>(
 export function checkInductiveDeclaration(
   name: string,
   type: TTKTerm,
-  constructors: Array<{ name: string; type: TTKTerm }>,
+  constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>,
   definitions: DefinitionsMap,
 ): {
   success: false,

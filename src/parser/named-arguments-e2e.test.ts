@@ -472,6 +472,116 @@ goodVec = Vec { A := Nat } Zero`;
       expect(goodVecResult!.parseSuccess).toBe(true);
       expect(goodVecResult!.checkSuccess).toBe(true);
     });
+
+    test('Missing named argument in recursive call - should have clear error', () => {
+      // plus requires {a := ...} but recursive call omits it
+      // Error should mention missing 'a', not be a confusing type mismatch
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : {a : Nat} -> Nat -> Nat
+plus {a := Zero} b = b
+plus {a := Succ a} b = Succ (plus b)`;
+
+      const results = compileSource(source);
+      const plusResult = results.find(r => r.name === 'plus');
+      expect(plusResult).toBeDefined();
+      expect(plusResult!.parseSuccess).toBe(true);
+      // Should FAIL because plus b is missing required {a := ...}
+      expect(plusResult!.checkSuccess).toBe(false);
+      // Error should mention missing named argument
+      expect(plusResult!.checkErrors.some(e =>
+        e.message.toLowerCase().includes('missing') && e.message.includes('a')
+      )).toBe(true);
+    });
+
+    test('Missing named argument - function with only named param', () => {
+      // Function has only named param, no positional. Called with wrong positional.
+      const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+neg : {a : Bool} -> Bool
+neg {a := True} = False
+neg {a := False} = True
+
+-- BAD: passing b positionally when a is the only named param
+bad : Bool -> Bool
+bad b = neg b`;
+
+      const results = compileSource(source);
+      const badResult = results.find(r => r.name === 'bad');
+      expect(badResult).toBeDefined();
+      expect(badResult!.parseSuccess).toBe(true);
+      // Should FAIL because neg expects no positional args, just {a := ...}
+      expect(badResult!.checkSuccess).toBe(false);
+      // Error should mention missing named argument 'a'
+      expect(badResult!.checkErrors.some(e =>
+        e.message.toLowerCase().includes('missing') && e.message.includes('a')
+      )).toBe(true);
+    });
+
+    test('Missing named pattern in clause - should fail LHS validation', () => {
+      // plus has {a : Bool} (named) and Nat (positional)
+      // Clause provides only positional pattern b, missing {a := ...}
+      // This should fail during LHS validation, not with confusing RHS type error
+      const source = `
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : {a : Bool} -> Nat -> Nat
+plus b = Zero`;
+
+      const results = compileSource(source);
+      const plusResult = results.find(r => r.name === 'plus');
+      expect(plusResult).toBeDefined();
+      expect(plusResult!.parseSuccess).toBe(true);
+      // Should FAIL because named parameter 'a' is not provided
+      expect(plusResult!.checkSuccess).toBe(false);
+      // Error should mention missing named pattern 'a'
+      expect(plusResult!.checkErrors.some(e =>
+        e.message.toLowerCase().includes('missing') && e.message.includes('a')
+      )).toBe(true);
+    });
+
+    test('Missing named argument - all named params function', () => {
+      // Function with all named params, caller provides nothing
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : {a : Nat} -> {b : Nat} -> Nat
+add {a := Zero} {b := n} = n
+add {a := Succ m} {b := n} = Succ (add {a := m} {b := n})
+
+-- BAD: calling add without any named args
+bad : Nat
+bad = add`;
+
+      const results = compileSource(source);
+      const badResult = results.find(r => r.name === 'bad');
+      expect(badResult).toBeDefined();
+      expect(badResult!.parseSuccess).toBe(true);
+      // Should FAIL because add expects {a := ...} and {b := ...}
+      expect(badResult!.checkSuccess).toBe(false);
+      // Error should mention missing named arguments
+      expect(badResult!.checkErrors.some(e =>
+        e.message.toLowerCase().includes('missing')
+      )).toBe(true);
+    });
   });
 
   describe('Complex Scenarios', () => {
@@ -515,6 +625,348 @@ fstNat {_} x y = x`;
       expect(results[0].checkSuccess).toBe(true);
       expect(results[1].parseSuccess).toBe(true);
       expect(results[1].checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Named Arguments in Constructor Patterns', () => {
+    test('Constructor with named param - positional pattern should FAIL', () => {
+      // VNil has {A: Type} as a NAMED parameter
+      // Using (VNil _) treats _ as positional, which should fail
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : {A: Type} -> List A
+  Cons : (A : Type) -> A -> List A -> List A
+
+-- BAD: Using positional _ for named parameter A
+len : (A : Type) -> List A -> Nat
+len A (Nil _) = Zero
+len A (Cons _ _ tail) = Succ (len _ tail)`;
+
+      const results = compileSource(source);
+      const lenResult = results.find(r => r.name === 'len');
+      expect(lenResult).toBeDefined();
+      expect(lenResult!.parseSuccess).toBe(true);
+      // Should FAIL because Nil _ uses positional for named param
+      expect(lenResult!.checkSuccess).toBe(false);
+    });
+
+    test('Constructor with named param - named pattern syntax should SUCCEED', () => {
+      // Now with parser support for {Name := pattern} syntax
+      // Using {A := _} syntax to explicitly bind the named parameter
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : {A: Type} -> List A
+  Cons : (A : Type) -> A -> List A -> List A
+
+-- GOOD: Using named syntax {A := _} for named parameter
+len : (A : Type) -> List A -> Nat
+len A (Nil {A := _}) = Zero
+len A (Cons _ _ tail) = Succ (len _ tail)`;
+
+      const results = compileSource(source);
+      const lenResult = results.find(r => r.name === 'len');
+      expect(lenResult).toBeDefined();
+      expect(lenResult!.parseSuccess).toBe(true);
+      expect(lenResult!.checkSuccess).toBe(true);
+    });
+
+    test('Constructor with named param - omitting named arg should SUCCEED', () => {
+      // Named args in patterns can be omitted (inferred from context)
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : {A: Type} -> List A
+  Cons : (A : Type) -> A -> List A -> List A
+
+-- GOOD: Named param A is inferred from context
+len : (A : Type) -> List A -> Nat
+len A Nil = Zero
+len A (Cons _ _ tail) = Succ (len _ tail)`;
+
+      const results = compileSource(source);
+      const lenResult = results.find(r => r.name === 'len');
+      expect(lenResult).toBeDefined();
+      expect(lenResult!.parseSuccess).toBe(true);
+      expect(lenResult!.checkSuccess).toBe(true);
+    });
+
+    test('Multiple constructors with named params - positional should FAIL', () => {
+      // Both Nil and Cons have named params
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : {A: Type} -> List A
+  Cons : {A: Type} -> A -> List A -> List A
+
+-- BAD: Using positional for named params in both constructors
+bad : (A : Type) -> List A -> Nat
+bad A (Nil _) = Zero
+bad A (Cons _ x xs) = Succ (bad _ xs)`;
+
+      const results = compileSource(source);
+      const badResult = results.find(r => r.name === 'bad');
+      expect(badResult).toBeDefined();
+      expect(badResult!.parseSuccess).toBe(true);
+      expect(badResult!.checkSuccess).toBe(false);
+    });
+
+    test('Constructor with mixed named/positional params', () => {
+      // VCons has named {A} followed by positional params
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : {A: Type} -> List A
+  Cons : {A: Type} -> A -> List A -> List A
+
+-- GOOD: Named param omitted, positional params matched
+len : (A : Type) -> List A -> Nat
+len A Nil = Zero
+len A (Cons x xs) = Succ (len _ xs)`;
+
+      const results = compileSource(source);
+      const lenResult = results.find(r => r.name === 'len');
+      expect(lenResult).toBeDefined();
+      expect(lenResult!.parseSuccess).toBe(true);
+      expect(lenResult!.checkSuccess).toBe(true);
+    });
+
+    test('User exact scenario - should fail with positional pattern for named arg', () => {
+      // This is the user's exact failing scenario
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  VNil : {A: Type} -> List A
+  VCons : (A : Type) -> A -> List A -> List A
+
+listLen : (A : Type) -> List A -> Nat
+listLen A (VNil _) = Zero
+listLen A (VCons _ _ tail) = Succ (listLen _ tail)`;
+
+      const results = compileSource(source);
+      const listLenResult = results.find(r => r.name === 'listLen');
+      expect(listLenResult).toBeDefined();
+      expect(listLenResult!.parseSuccess).toBe(true);
+      // Should FAIL because VNil _ uses positional for named param
+      expect(listLenResult!.checkSuccess).toBe(false);
+    });
+
+    test('Correct version of user scenario - with named syntax', () => {
+      // Now with parser support for {Name := pattern} syntax
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  VNil : {A: Type} -> List A
+  VCons : (A : Type) -> A -> List A -> List A
+
+listLen : (A : Type) -> List A -> Nat
+listLen A (VNil {A := _}) = Zero
+listLen A (VCons _ _ tail) = Succ (listLen _ tail)`;
+
+      const results = compileSource(source);
+      const listLenResult = results.find(r => r.name === 'listLen');
+      expect(listLenResult).toBeDefined();
+      expect(listLenResult!.parseSuccess).toBe(true);
+      expect(listLenResult!.checkSuccess).toBe(true);
+    });
+
+    test('Correct version of user scenario - omitting named arg', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  VNil : {A: Type} -> List A
+  VCons : (A : Type) -> A -> List A -> List A
+
+listLen : (A : Type) -> List A -> Nat
+listLen A VNil = Zero
+listLen A (VCons _ _ tail) = Succ (listLen _ tail)`;
+
+      const results = compileSource(source);
+      const listLenResult = results.find(r => r.name === 'listLen');
+      expect(listLenResult).toBeDefined();
+      expect(listLenResult!.parseSuccess).toBe(true);
+      expect(listLenResult!.checkSuccess).toBe(true);
+    });
+
+    test('Named pattern arg binding a variable (not just wildcard)', () => {
+      // This test verifies that {A := varName} actually binds the variable
+      // If reordering isn't implemented, this would fail
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  VNil : {A: Type} -> List A
+  VCons : (A : Type) -> A -> List A -> List A
+
+-- Capture the type parameter with a named pattern and return it
+getType : (A : Type) -> List A -> Type
+getType _ (VNil {A := T}) = T
+getType _ (VCons T _ _) = T`;
+
+      const results = compileSource(source);
+      const getTypeResult = results.find(r => r.name === 'getType');
+      expect(getTypeResult).toBeDefined();
+      expect(getTypeResult!.parseSuccess).toBe(true);
+      expect(getTypeResult!.checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Named Arguments in Function Clause Patterns', () => {
+    test('Function with named parameter - clause-level named pattern syntax', () => {
+      // Function with named/implicit parameter matched at clause level
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : {a : Nat} -> Nat -> Nat
+plus {a := Zero} b = b
+plus {a := Succ a} b = Succ (plus {a := a} b)`;
+
+      const results = compileSource(source);
+      const plusResult = results.find(r => r.name === 'plus');
+      expect(plusResult).toBeDefined();
+      expect(plusResult!.parseSuccess).toBe(true);
+      expect(plusResult!.checkSuccess).toBe(true);
+    });
+
+    test('Function with named parameter - mixed named and positional patterns', () => {
+      // First pattern is named, second is positional
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+myFunc : {x : Nat} -> Nat -> Nat
+myFunc {x := Zero} y = y
+myFunc {x := Succ n} y = Succ (myFunc {x := n} y)`;
+
+      const results = compileSource(source);
+      const myFuncResult = results.find(r => r.name === 'myFunc');
+      expect(myFuncResult).toBeDefined();
+      expect(myFuncResult!.parseSuccess).toBe(true);
+      expect(myFuncResult!.checkSuccess).toBe(true);
+    });
+
+    test('Function with multiple named parameters', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add2 : {a : Nat} -> {b : Nat} -> Nat
+add2 {a := Zero} {b := n} = n
+add2 {a := Succ m} {b := n} = Succ (add2 {a := m} {b := n})`;
+
+      const results = compileSource(source);
+      const add2Result = results.find(r => r.name === 'add2');
+      expect(add2Result).toBeDefined();
+      expect(add2Result!.parseSuccess).toBe(true);
+      expect(add2Result!.checkSuccess).toBe(true);
+    });
+
+    test('Function with named parameter - omitting named pattern should work', () => {
+      // Named parameter can be omitted at clause level (inferred)
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+double : {n : Nat} -> Nat
+double {n := Zero} = Zero
+double {n := Succ m} = Succ (Succ (double {n := m}))`;
+
+      const results = compileSource(source);
+      const doubleResult = results.find(r => r.name === 'double');
+      expect(doubleResult).toBeDefined();
+      expect(doubleResult!.parseSuccess).toBe(true);
+      expect(doubleResult!.checkSuccess).toBe(true);
+    });
+
+    test('Too many positional patterns for function with named param - should FAIL', () => {
+      // Function has {a : Nat} (named) and Nat (positional), so positionalArity = 1
+      // But clause provides 2 positional patterns - should fail
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : {a : Nat} -> Nat -> Nat
+plus a b = b
+plus (Succ a) b = Succ (plus {a := a} b)`;
+
+      const results = compileSource(source);
+      const plusResult = results.find(r => r.name === 'plus');
+      expect(plusResult).toBeDefined();
+      expect(plusResult!.parseSuccess).toBe(true);
+      // Should FAIL: 2 positional patterns but function only has 1 positional parameter
+      expect(plusResult!.checkSuccess).toBe(false);
+    });
+
+    test('Correct number of positional patterns for function with named param - should SUCCEED', () => {
+      // Function has {a : Nat} (named) and Nat (positional), so positionalArity = 1
+      // Clause provides 1 positional pattern and 1 named pattern - should succeed
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : {a : Nat} -> Nat -> Nat
+plus {a := Zero} b = b
+plus {a := Succ n} b = Succ (plus {a := n} b)`;
+
+      const results = compileSource(source);
+      const plusResult = results.find(r => r.name === 'plus');
+      expect(plusResult).toBeDefined();
+      expect(plusResult!.parseSuccess).toBe(true);
+      expect(plusResult!.checkSuccess).toBe(true);
+    });
+
+    test('Function with all named params - no positional patterns allowed', () => {
+      // Function has {a : Nat} and {b : Nat}, so positionalArity = 0
+      // Any positional pattern should fail
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : {a : Nat} -> {b : Nat} -> Nat
+add Zero n = n
+add (Succ m) n = Succ (add {a := m} {b := n})`;
+
+      const results = compileSource(source);
+      const addResult = results.find(r => r.name === 'add');
+      expect(addResult).toBeDefined();
+      expect(addResult!.parseSuccess).toBe(true);
+      // Should FAIL: positionalArity is 0, but 2 positional patterns provided
+      expect(addResult!.checkSuccess).toBe(false);
     });
   });
 });

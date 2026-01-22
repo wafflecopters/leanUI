@@ -78,7 +78,7 @@ function mapErrorPathToSourceRange(
   errorPath: IndexPath,
   elabMap: ElabMap | undefined,
   sourceMap: SourceMap | undefined,
-  blockStartLine: number
+  _blockStartLine: number  // Note: unused - sourceMap already has absolute positions
 ): SourceRange | null {
   if (!elabMap || !sourceMap) return null;
 
@@ -96,10 +96,8 @@ function mapErrorPathToSourceRange(
       if (shorterSurfacePath) {
         const range = sourceMap.get(shorterSurfacePath);
         if (range) {
-          return {
-            start: { ...range.start, line: range.start.line + blockStartLine - 1 },
-            end: { ...range.end, line: range.end.line + blockStartLine - 1 }
-          };
+          // sourceMap already has absolute positions (adjusted in compile.ts)
+          return range;
         }
       }
     }
@@ -110,11 +108,8 @@ function mapErrorPathToSourceRange(
   const range = sourceMap.get(surfacePathStr);
   if (!range) return null;
 
-  // Adjust line numbers to account for block offset
-  return {
-    start: { ...range.start, line: range.start.line + blockStartLine - 1 },
-    end: { ...range.end, line: range.end.line + blockStartLine - 1 }
-  };
+  // sourceMap already has absolute positions (adjusted in compile.ts)
+  return range;
 }
 
 /**
