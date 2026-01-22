@@ -1388,7 +1388,7 @@ export class Parser {
   }
 
   /**
-   * Look ahead to determine if { ... } is a named argument ({ name := value })
+   * Look ahead to determine if { ... } is a named argument ({ name := value } or shorthand {name})
    * or a named binder ({ name : Type } ->).
    * Returns 'named-arg' or 'named-binder'.
    */
@@ -1399,14 +1399,27 @@ export class Parser {
     // Skip past '{'
     this.advance();
 
-    // Skip identifiers (could be multiple for multi-binder)
+    // Count identifiers
+    let identCount = 0;
     while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
       this.advance();
+      identCount++;
     }
 
     // Check what follows the identifier(s)
     const nextToken = this.current();
-    const result = nextToken.type === 'ASSIGN' ? 'named-arg' : 'named-binder';
+    let result: 'named-arg' | 'named-binder';
+
+    if (nextToken.type === 'ASSIGN') {
+      // { name := value } - explicit named arg
+      result = 'named-arg';
+    } else if (nextToken.type === 'RBRACE' && identCount === 1) {
+      // { name } - shorthand for { name := name }
+      result = 'named-arg';
+    } else {
+      // { name : Type } -> ... - named binder
+      result = 'named-binder';
+    }
 
     // Restore position
     this.pos = savedPos;
@@ -1414,10 +1427,11 @@ export class Parser {
   }
 
   /**
-   * Parse a named argument: { name := value }
+   * Parse a named argument: { name := value } or shorthand { name }
+   * Shorthand { name } expands to { name := name } (variable reference with same name).
    * Assumes we're positioned at the opening brace.
    */
-  private parseNamedArgument(ctx: NameContext, path: IndexPath): { name: string; value: TTerm } {
+  private parseNamedArgument(ctx: NameContext, path: IndexPath): { name: string; value: TTerm; usedShorthand?: boolean } {
     // Record open brace position for syntax highlighting
     const openBraceToken = this.current();
     this.expect('LBRACE');
@@ -1436,9 +1450,25 @@ export class Parser {
     const name = nameToken.value;
     this.advance();
 
-    this.expect('ASSIGN'); // ':='
+    let value: TTerm;
+    let usedShorthand = false;
 
-    const value = this.expr(0, ctx, argPath);
+    if (this.current().type === 'ASSIGN') {
+      // Full syntax: { name := value }
+      this.advance(); // consume ':='
+      value = this.expr(0, ctx, argPath);
+    } else {
+      // Shorthand syntax: { name } expands to { name := name }
+      usedShorthand = true;
+      // Look up the variable name in context to create the reference
+      const idx = ctx.indexOf(name);
+      if (idx >= 0) {
+        value = { tag: 'Var', index: idx };
+      } else {
+        // Not in context - treat as constant (same as parseIdent)
+        value = { tag: 'Const', name };
+      }
+    }
 
     // Record close brace position for syntax highlighting
     const closeBraceToken = this.current();
@@ -1446,7 +1476,7 @@ export class Parser {
     const closeBracePath = [...argPath, { kind: 'field' as const, name: 'closeBrace' }];
     this.recordRange(closeBracePath, closeBraceToken, closeBraceToken);
 
-    return { name, value };
+    return { name, value, usedShorthand };
   }
 
   /**
@@ -2094,14 +2124,15 @@ export class Parser {
           return { kind: 'namedArg', name, pattern: innerPattern };
         }
 
-        // Just {name} - named variable pattern
+        // Shorthand {name} - expands to {name := name} (namedArg with PVar pattern)
         const endToken = this.current();
         // Record close brace position
         const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
         this.recordRange(closeBracePath, endToken, endToken);
         this.expect('RBRACE');
         this.recordRange(path, startToken, endToken);
-        return { kind: 'pattern', pattern: { tag: 'PVar', name, named: true } };
+        // This is shorthand for {name := name}, so return as namedArg
+        return { kind: 'namedArg', name, pattern: { tag: 'PVar', name } };
       } else if (innerToken.type === 'UNDERSCORE') {
         this.advance();
         const endToken = this.current();

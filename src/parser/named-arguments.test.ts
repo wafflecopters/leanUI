@@ -341,8 +341,14 @@ describe('Named Arguments in Applications', () => {
     expect(term.fn.fn.name).toBe('id');
   });
 
-  test('Error: named argument without value', () => {
-    expect(() => parseExpr('f { A }')).toThrow();
+  test('Shorthand: {name} expands to {name := name}', () => {
+    // {A} is shorthand for {A := A} - now valid syntax!
+    const term = parseExpr('f {A}');
+    assertApp(term);
+    expect(term.argName).toBe('A');
+    // The argument is a Const 'A' (since A is not in context, treated as constant)
+    assertConst(term.arg);
+    expect(term.arg.name).toBe('A');
   });
 
   test('Error: named argument without closing brace', () => {
@@ -444,6 +450,8 @@ function assertPCtor(p: TPattern): asserts p is Extract<TPattern, { tag: 'PCtor'
 }
 
 describe('Named Patterns in Definitions', () => {
+  // Note: {name} is shorthand for {name := name}, so it goes to namedPatterns
+
   test('Parse single named pattern: foo {A} x = x', () => {
     const decls = parseDeclarations('foo {A} x = x');
     expect(decls.length).toBe(1);
@@ -453,17 +461,19 @@ describe('Named Patterns in Definitions', () => {
     expect(value.tag).toBe('Match');
     if (value.tag === 'Match') {
       expect(value.clauses.length).toBe(1);
-      const patterns = value.clauses[0].patterns;
-      expect(patterns.length).toBe(2);
+      const clause = value.clauses[0];
 
-      // First pattern: {A} - named variable
-      assertPVar(patterns[0]);
-      expect(patterns[0].name).toBe('A');
-      expect(patterns[0].named).toBe(true);
+      // Only x is a positional pattern
+      expect(clause.patterns.length).toBe(1);
+      assertPCtor(clause.patterns[0]);
+      expect(clause.patterns[0].name).toBe('x');
 
-      // Second pattern: x - positional (parsed as PCtor, resolved in elaboration)
-      assertPCtor(patterns[1]);
-      expect(patterns[1].name).toBe('x');
+      // {A} shorthand goes to namedPatterns as {A := A}
+      expect(clause.namedPatterns).toBeDefined();
+      expect(clause.namedPatterns!.length).toBe(1);
+      expect(clause.namedPatterns![0].name).toBe('A');
+      assertPVar(clause.namedPatterns![0].pattern);
+      expect(clause.namedPatterns![0].pattern.name).toBe('A');
     }
   });
 
@@ -474,7 +484,7 @@ describe('Named Patterns in Definitions', () => {
     const value = decls[0].value!;
     if (value.tag === 'Match') {
       const patterns = value.clauses[0].patterns;
-      // First pattern: {_} - named wildcard
+      // {_} is a named wildcard - stays in patterns array
       assertPWild(patterns[0]);
       expect(patterns[0].named).toBe(true);
     }
@@ -486,19 +496,18 @@ describe('Named Patterns in Definitions', () => {
 
     const value = decls[0].value!;
     if (value.tag === 'Match') {
-      const patterns = value.clauses[0].patterns;
-      expect(patterns.length).toBe(3);
+      const clause = value.clauses[0];
 
-      assertPVar(patterns[0]);
-      expect(patterns[0].name).toBe('A');
-      expect(patterns[0].named).toBe(true);
+      // Only x is a positional pattern
+      expect(clause.patterns.length).toBe(1);
+      assertPCtor(clause.patterns[0]);
+      expect(clause.patterns[0].name).toBe('x');
 
-      assertPVar(patterns[1]);
-      expect(patterns[1].name).toBe('B');
-      expect(patterns[1].named).toBe(true);
-
-      assertPCtor(patterns[2]);
-      expect(patterns[2].name).toBe('x');
+      // {A} and {B} are in namedPatterns
+      expect(clause.namedPatterns).toBeDefined();
+      expect(clause.namedPatterns!.length).toBe(2);
+      expect(clause.namedPatterns![0].name).toBe('A');
+      expect(clause.namedPatterns![1].name).toBe('B');
     }
   });
 
@@ -508,26 +517,20 @@ describe('Named Patterns in Definitions', () => {
 
     const value = decls[0].value!;
     if (value.tag === 'Match') {
-      const patterns = value.clauses[0].patterns;
-      expect(patterns.length).toBe(4);
+      const clause = value.clauses[0];
 
-      // x - positional
-      assertPCtor(patterns[0]);
-      expect(patterns[0].name).toBe('x');
+      // x and y are positional patterns
+      expect(clause.patterns.length).toBe(2);
+      assertPCtor(clause.patterns[0]);
+      expect(clause.patterns[0].name).toBe('x');
+      assertPCtor(clause.patterns[1]);
+      expect(clause.patterns[1].name).toBe('y');
 
-      // {A} - named
-      assertPVar(patterns[1]);
-      expect(patterns[1].name).toBe('A');
-      expect(patterns[1].named).toBe(true);
-
-      // y - positional
-      assertPCtor(patterns[2]);
-      expect(patterns[2].name).toBe('y');
-
-      // {B} - named
-      assertPVar(patterns[3]);
-      expect(patterns[3].name).toBe('B');
-      expect(patterns[3].named).toBe(true);
+      // {A} and {B} are in namedPatterns
+      expect(clause.namedPatterns).toBeDefined();
+      expect(clause.namedPatterns!.length).toBe(2);
+      expect(clause.namedPatterns![0].name).toBe('A');
+      expect(clause.namedPatterns![1].name).toBe('B');
     }
   });
 
@@ -537,17 +540,18 @@ describe('Named Patterns in Definitions', () => {
 
     const value = decls[0].value!;
     if (value.tag === 'Match') {
-      const patterns = value.clauses[0].patterns;
-      expect(patterns.length).toBe(2);
+      const clause = value.clauses[0];
 
-      // {A} - named variable
-      assertPVar(patterns[0]);
-      expect(patterns[0].named).toBe(true);
+      // Only (Succ n) is a positional pattern
+      expect(clause.patterns.length).toBe(1);
+      assertPCtor(clause.patterns[0]);
+      expect(clause.patterns[0].name).toBe('Succ');
+      expect(clause.patterns[0].args.length).toBe(1);
 
-      // (Succ n) - constructor pattern (positional)
-      assertPCtor(patterns[1]);
-      expect(patterns[1].name).toBe('Succ');
-      expect(patterns[1].args.length).toBe(1);
+      // {A} is in namedPatterns
+      expect(clause.namedPatterns).toBeDefined();
+      expect(clause.namedPatterns!.length).toBe(1);
+      expect(clause.namedPatterns![0].name).toBe('A');
     }
   });
 
@@ -570,10 +574,13 @@ describe('Named Patterns in Definitions', () => {
 
     const value = decls[0].value!;
     if (value.tag === 'Match') {
-      const pattern = value.clauses[0].patterns[0];
-      assertPVar(pattern);
-      expect(pattern.name).toBe('α');
-      expect(pattern.named).toBe(true);
+      const clause = value.clauses[0];
+      // {α} is in namedPatterns
+      expect(clause.namedPatterns).toBeDefined();
+      expect(clause.namedPatterns!.length).toBe(1);
+      expect(clause.namedPatterns![0].name).toBe('α');
+      assertPVar(clause.namedPatterns![0].pattern);
+      expect(clause.namedPatterns![0].pattern.name).toBe('α');
     }
   });
 
@@ -592,24 +599,30 @@ describe('Named Patterns in Definitions', () => {
 
 describe('Named Patterns: Edge Cases', () => {
   test('Named pattern followed by constructor application', () => {
+    // {A} is shorthand for {A := A}, so it goes to namedPatterns
     const decls = parseDeclarations('foo {A} Zero = A');
     expect(decls.length).toBe(1);
 
     const value = decls[0].value!;
     if (value.tag === 'Match') {
-      const patterns = value.clauses[0].patterns;
-      expect(patterns.length).toBe(2);
+      const clause = value.clauses[0];
+      // {A} is now in namedPatterns, Zero is the only positional pattern
+      expect(clause.patterns.length).toBe(1);
+      assertPCtor(clause.patterns[0]);
+      expect(clause.patterns[0].name).toBe('Zero');
 
-      assertPVar(patterns[0]);
-      expect(patterns[0].named).toBe(true);
-
-      assertPCtor(patterns[1]);
-      expect(patterns[1].name).toBe('Zero');
+      // {A} shorthand expands to {A := A}
+      expect(clause.namedPatterns).toBeDefined();
+      expect(clause.namedPatterns!.length).toBe(1);
+      expect(clause.namedPatterns![0].name).toBe('A');
+      assertPVar(clause.namedPatterns![0].pattern);
+      expect(clause.namedPatterns![0].pattern.name).toBe('A');
     }
   });
 
   test('Named pattern as constructor argument', () => {
     // This is a nested scenario: Pair {A} x
+    // Inside a constructor pattern, {A} becomes a namedArg
     const decls = parseDeclarations('foo (Pair {A} x) = x');
     expect(decls.length).toBe(1);
 
@@ -618,16 +631,16 @@ describe('Named Patterns: Edge Cases', () => {
       const pattern = value.clauses[0].patterns[0];
       assertPCtor(pattern);
       expect(pattern.name).toBe('Pair');
-      expect(pattern.args.length).toBe(2);
+      // Only x is a positional arg
+      expect(pattern.args.length).toBe(1);
+      assertPCtor(pattern.args[0]);
+      expect(pattern.args[0].name).toBe('x');
 
-      // First arg: {A} - named
-      assertPVar(pattern.args[0]);
-      expect(pattern.args[0].name).toBe('A');
-      expect(pattern.args[0].named).toBe(true);
-
-      // Second arg: x - positional
-      assertPCtor(pattern.args[1]);
-      expect(pattern.args[1].name).toBe('x');
+      // {A} is in namedArgs
+      expect(pattern.namedArgs).toBeDefined();
+      expect(pattern.namedArgs!.length).toBe(1);
+      expect(pattern.namedArgs![0].name).toBe('A');
+      assertPVar(pattern.namedArgs![0].pattern);
     }
   });
 
@@ -639,6 +652,7 @@ describe('Named Patterns: Edge Cases', () => {
     if (value.tag === 'Match') {
       const pattern = value.clauses[0].patterns[0];
       assertPCtor(pattern);
+      // {_} is a named wildcard - still goes to args but with named: true
       expect(pattern.args.length).toBe(1);
 
       assertPWild(pattern.args[0]);
@@ -647,6 +661,7 @@ describe('Named Patterns: Edge Cases', () => {
   });
 
   test('Multiple clauses with named patterns', () => {
+    // {A} is shorthand for {A := A}
     const decls = parseDeclarations(`
       foo {A} Zero = A
       foo {A} (Succ n) = n
@@ -657,11 +672,13 @@ describe('Named Patterns: Edge Cases', () => {
     if (value.tag === 'Match') {
       expect(value.clauses.length).toBe(2);
 
-      // Both clauses should have {A} as first pattern
+      // Both clauses should have {A} in namedPatterns
       for (const clause of value.clauses) {
-        assertPVar(clause.patterns[0]);
-        expect(clause.patterns[0].name).toBe('A');
-        expect(clause.patterns[0].named).toBe(true);
+        expect(clause.namedPatterns).toBeDefined();
+        expect(clause.namedPatterns!.length).toBe(1);
+        expect(clause.namedPatterns![0].name).toBe('A');
+        assertPVar(clause.namedPatterns![0].pattern);
+        expect(clause.namedPatterns![0].pattern.name).toBe('A');
       }
     }
   });
