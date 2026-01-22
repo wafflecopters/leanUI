@@ -169,6 +169,7 @@ type PrefixParselet = (parser: Parser, token: Token, ctx: NameContext, path: Ind
  */
 const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
   'LPAREN': (p, _t, ctx, path) => p['parseParenExpr'](ctx, path),
+  'LBRACE': (p, _t, ctx, path) => p['parseBraceExpr'](ctx, path),
   'LAMBDA': (p, _t, ctx, path) => p['parseLambda'](ctx, path),
   'LET': (p, _t, ctx, path) => p['parseLet'](ctx, path),
   'CASE': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
@@ -1194,6 +1195,24 @@ export class Parser {
         continue;
       }
 
+      // Check for named argument application: { name := value }
+      if (token.type === 'LBRACE') {
+        const lookAhead = this.peekNamedArgOrBinder();
+        if (lookAhead === 'named-arg') {
+          if (APPLICATION_PRECEDENCE < minPrec) break;
+
+          if (path.length > 0 && this.pos > 0) {
+            const prevToken = this.tokens[this.pos - 1];
+            this.recordRange(path, startToken, prevToken);
+          }
+          this.prefixSourceMapPaths(path, { kind: 'field', name: 'fn' });
+
+          const { name: argName, value: argValue } = this.parseNamedArgument(ctx, path);
+          left = mkAppTT(left, argValue, argName);
+          continue;
+        }
+      }
+
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
@@ -1292,6 +1311,30 @@ export class Parser {
         continue;
       }
 
+      // Check for named argument application: { name := value }
+      if (token.type === 'LBRACE') {
+        // Look ahead to distinguish { name := value } from { name : Type } ->
+        const lookAhead = this.peekNamedArgOrBinder();
+        if (lookAhead === 'named-arg') {
+          if (APPLICATION_PRECEDENCE < minPrec) break;
+          didInfixWork = true;
+
+          // Record range before modifying paths
+          if (path.length > 0 && this.pos > 0) {
+            const prevToken = this.tokens[this.pos - 1];
+            this.recordRange(path, startToken, prevToken);
+          }
+          this.prefixSourceMapPaths(path, { kind: 'field', name: 'fn' });
+
+          // Parse { name := value }
+          const { name: argName, value: argValue } = this.parseNamedArgument(ctx, path);
+          left = mkAppTT(left, argValue, argName);
+          continue;
+        }
+        // If it's a named binder, fall through to application handling
+        // which will fail appropriately (can't apply to a Pi type)
+      }
+
       // Check for application (juxtaposition)
       if (this.canStartAtom(token)) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
@@ -1330,6 +1373,60 @@ export class Parser {
     }
 
     return left;
+  }
+
+  /**
+   * Look ahead to determine if { ... } is a named argument ({ name := value })
+   * or a named binder ({ name : Type } ->).
+   * Returns 'named-arg' or 'named-binder'.
+   */
+  private peekNamedArgOrBinder(): 'named-arg' | 'named-binder' {
+    // Save position
+    const savedPos = this.pos;
+
+    // Skip past '{'
+    this.advance();
+
+    // Skip identifiers (could be multiple for multi-binder)
+    while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
+      this.advance();
+    }
+
+    // Check what follows the identifier(s)
+    const nextToken = this.current();
+    const result = nextToken.type === 'ASSIGN' ? 'named-arg' : 'named-binder';
+
+    // Restore position
+    this.pos = savedPos;
+    return result;
+  }
+
+  /**
+   * Parse a named argument: { name := value }
+   * Assumes we're positioned at the opening brace.
+   */
+  private parseNamedArgument(ctx: NameContext, path: IndexPath): { name: string; value: TTerm } {
+    this.expect('LBRACE');
+
+    const nameToken = this.current();
+    if (nameToken.type !== 'IDENT') {
+      throw new ParseError(
+        'Expected identifier in named argument',
+        nameToken.line,
+        nameToken.col
+      );
+    }
+    const name = nameToken.value;
+    this.advance();
+
+    this.expect('ASSIGN'); // ':='
+
+    const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
+    const value = this.expr(0, ctx, argPath);
+
+    this.expect('RBRACE');
+
+    return { name, value };
   }
 
   /**
@@ -1463,6 +1560,76 @@ export class Parser {
 
     this.expect('RPAREN');
     return expr;
+  }
+
+  /**
+   * Parse brace expression for named binders:
+   *   { A : Type } -> B       -- named single binder
+   *   { A B : Type } -> B     -- named multi-binder
+   *
+   * Named binders are used for named arguments that can be passed by name at call sites.
+   */
+  private parseBraceExpr(ctx: NameContext, path: IndexPath = []): TTerm {
+    this.expect('LBRACE');
+
+    // Collect all names (space-separated) until we see ':'
+    const nameTokens: Token[] = [];
+    while (this.current().type === 'IDENT' || this.current().type === 'UNDERSCORE') {
+      nameTokens.push(this.current());
+      this.advance();
+    }
+
+    if (nameTokens.length === 0) {
+      throw new ParseError(
+        'Expected at least one name in named binder',
+        this.current().line,
+        this.current().col
+      );
+    }
+
+    this.expect('COLON');
+    const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+    const type = this.expr(0, ctx, domainPath);
+    this.expect('RBRACE');
+
+    // Named binders must be followed by '->'
+    if (this.current().type !== 'ARROW') {
+      throw new ParseError(
+        'Named binder { ... } must be followed by ->',
+        this.current().line,
+        this.current().col
+      );
+    }
+    this.advance(); // consume '->'
+
+    const names = nameTokens.map(t => t.type === 'UNDERSCORE' ? '_' : t.value);
+
+    // Extend context with all names
+    let newCtx = ctx;
+    for (const name of names) {
+      newCtx = [name, ...newCtx];
+    }
+
+    // Parse the body
+    const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
+    const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
+
+    if (names.length === 1) {
+      // Single name - use regular Binder with named: true
+      const namePath = [...path, { kind: 'field' as const, name: 'name' }];
+      this.recordRange(namePath, nameTokens[0], nameTokens[0]);
+      return mkPiTT(type, body, names[0], /* named */ true);
+    } else {
+      // Multiple names - use MultiBinder with named: true
+      return {
+        tag: 'MultiBinder',
+        names,
+        binderKind: { tag: 'BPiTT' },
+        domain: type,
+        body,
+        named: true
+      };
+    }
   }
 
   /**
@@ -1799,6 +1966,29 @@ export class Parser {
   private parsePatternAtom(): TPattern {
     const token = this.current();
 
+    // Named pattern: {name} or {_}
+    if (token.type === 'LBRACE') {
+      this.advance();
+      const innerToken = this.current();
+
+      if (innerToken.type === 'IDENT') {
+        const name = innerToken.value;
+        this.advance();
+        this.expect('RBRACE');
+        return { tag: 'PVar', name, named: true };
+      } else if (innerToken.type === 'UNDERSCORE') {
+        this.advance();
+        this.expect('RBRACE');
+        return { tag: 'PWild', named: true };
+      } else {
+        throw new ParseError(
+          'Expected identifier or _ in named pattern',
+          innerToken.line,
+          innerToken.col
+        );
+      }
+    }
+
     if (token.type === 'UNDERSCORE') {
       this.advance();
       return { tag: 'PWild' };
@@ -1833,6 +2023,33 @@ export class Parser {
    */
   private parsePatternAtomWithSource(path: IndexPath): TPattern {
     const startToken = this.current();
+
+    // Named pattern: {name} or {_}
+    if (startToken.type === 'LBRACE') {
+      this.advance();
+      const innerToken = this.current();
+
+      if (innerToken.type === 'IDENT') {
+        const name = innerToken.value;
+        this.advance();
+        const endToken = this.current();
+        this.expect('RBRACE');
+        this.recordRange(path, startToken, endToken);
+        return { tag: 'PVar', name, named: true };
+      } else if (innerToken.type === 'UNDERSCORE') {
+        this.advance();
+        const endToken = this.current();
+        this.expect('RBRACE');
+        this.recordRange(path, startToken, endToken);
+        return { tag: 'PWild', named: true };
+      } else {
+        throw new ParseError(
+          'Expected identifier or _ in named pattern',
+          innerToken.line,
+          innerToken.col
+        );
+      }
+    }
 
     if (startToken.type === 'UNDERSCORE') {
       this.advance();
@@ -1953,7 +2170,8 @@ export class Parser {
   private canStartPattern(token: Token): boolean {
     return token.type === 'IDENT' ||
       token.type === 'UNDERSCORE' ||
-      token.type === 'LPAREN';
+      token.type === 'LPAREN' ||
+      token.type === 'LBRACE';  // Named patterns: {name} or {_}
   }
 
   /**

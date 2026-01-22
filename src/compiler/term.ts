@@ -121,17 +121,29 @@ export function addMetaVarInTCEnv<T>(env: TCEnv<T>, type: TTKTerm): { env: TCEnv
   return { env: updateMetaVarsInTCEnv(env, (m) => m.set(name, { ctx: env.context, type })), name };
 }
 
+/**
+ * Map from named argument label to its 0-based position index.
+ * Stored with definitions to support named argument resolution.
+ */
+export type NamedArgMap = Map<string, number>;
+
 export type InductiveDefinition = {
   name: string,
   type: TTKTerm,
-  constructors: Array<{ name: string; type: TTKTerm }>,
+  constructors: Array<{
+    name: string;
+    type: TTKTerm;
+    namedArgMap?: NamedArgMap;  // Named args for this constructor
+  }>,
   indexPositions: number[],
+  namedArgMap?: NamedArgMap,  // Named args for the inductive type itself
 }
 
 export type TermDefinition = {
   name: string,
   type: TTKTerm,
   value?: TTKTerm,
+  namedArgMap?: NamedArgMap,  // Named args from the type signature
 }
 
 export type DefinitionsMap = {
@@ -146,12 +158,49 @@ export function createDefinitionsMap(): DefinitionsMap {
   };
 }
 
-export function addDefinition(definitions: DefinitionsMap, name: string, type: TTKTerm, value?: TTKTerm): DefinitionsMap {
+export function addDefinition(
+  definitions: DefinitionsMap,
+  name: string,
+  type: TTKTerm,
+  value?: TTKTerm,
+  namedArgMap?: NamedArgMap
+): DefinitionsMap {
   const newMap = new Map<string, TermDefinition>(definitions.terms);
-  newMap.set(name, { name, type, value });
+  newMap.set(name, { name, type, value, namedArgMap });
   return {
     ...definitions,
     terms: newMap,
+  };
+}
+
+/**
+ * Create a NamedArgMapLookup function from a definitions map.
+ * This is used during elaboration to resolve named arguments.
+ */
+export function createNamedArgLookup(definitions: DefinitionsMap): (name: string) => NamedArgMap | undefined {
+  return (name: string) => {
+    // Check term definitions
+    const termDef = definitions.terms.get(name);
+    if (termDef?.namedArgMap) {
+      return termDef.namedArgMap;
+    }
+
+    // Check inductive types
+    const inductiveDef = definitions.inductiveTypes.get(name);
+    if (inductiveDef?.namedArgMap) {
+      return inductiveDef.namedArgMap;
+    }
+
+    // Check constructors
+    for (const [, inductive] of definitions.inductiveTypes) {
+      for (const ctor of inductive.constructors) {
+        if (ctor.name === name && ctor.namedArgMap) {
+          return ctor.namedArgMap;
+        }
+      }
+    }
+
+    return undefined;
   };
 }
 
@@ -166,9 +215,16 @@ export function setDefinitionValue(definitions: DefinitionsMap, name: string, va
   return { ...definitions, terms: newMap };
 }
 
-export function addInductiveDefinition(definitions: DefinitionsMap, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm }>, indexPositions: number[]): DefinitionsMap {
+export function addInductiveDefinition(
+  definitions: DefinitionsMap,
+  name: string,
+  type: TTKTerm,
+  constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>,
+  indexPositions: number[],
+  namedArgMap?: NamedArgMap
+): DefinitionsMap {
   const newMap = new Map<string, InductiveDefinition>(definitions.inductiveTypes);
-  newMap.set(name, { name, type, constructors, indexPositions: indexPositions ?? [] });
+  newMap.set(name, { name, type, constructors, indexPositions: indexPositions ?? [], namedArgMap });
   return { ...definitions, inductiveTypes: newMap };
 }
 

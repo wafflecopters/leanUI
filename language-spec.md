@@ -144,6 +144,85 @@ When multiple parameters share the same type, they can be grouped:
 
 This applies to both Pi types and lambda expressions.
 
+## Named Arguments
+
+Named arguments allow parameters to be specified by name rather than position. This is useful for functions with multiple type parameters where the caller wants to be explicit about which type is being provided.
+
+### Named Binders in Pi Types
+
+Use curly braces `{}` to declare named parameters:
+
+```
+{ A : Type } -> A -> A                    -- Single named parameter
+{ A : Type } -> { B : Type } -> A -> B    -- Multiple named parameters
+{ A B : Type } -> A -> B -> A             -- Multi-parameter named binder
+```
+
+Named binders differ from positional binders `(x : T)` in that they can be matched by name at call sites and in pattern definitions.
+
+### Named Patterns in Function Definitions
+
+When defining a function with named parameters, patterns can be specified by name using curly braces:
+
+```
+-- Named pattern at standard position
+id : { A : Type } -> A -> A
+id {A} x = x
+
+-- Named patterns can be written in any order
+fst : { A : Type } -> { B : Type } -> A -> B -> A
+fst {B} {A} a b = a                       -- B and A are reordered to match positions
+
+-- Mixed named and positional patterns, reordered
+first : { A : Type } -> { B : Type } -> A -> B -> A
+first x y {B} {A} = x                     -- All patterns reordered correctly
+```
+
+Named patterns are matched to their positions in the type signature by name, then reordered to the canonical order for type checking.
+
+### Named Wildcard Patterns
+
+Use `{_}` to indicate a named parameter position without binding its value:
+
+```
+isZero : { A : Type } -> Nat -> Bool
+isZero {_} Zero = True
+isZero {_} (Succ n) = False
+```
+
+### Named Arguments in Applications
+
+When calling a function with named parameters, arguments can be specified by name using the `:=` syntax:
+
+```
+id : { A : Type } -> A -> A
+id {A} x = x
+
+test : Type -> Type
+test T = id { A := T } T                  -- Explicitly provide A
+
+-- Named arguments can be given in any order
+const : { A : Type } -> { B : Type } -> A -> B -> A
+const {A} {B} a b = a
+
+test2 : Type
+test2 = const { B := Type } { A := Type } Type Type
+```
+
+**Note:** Named argument application reordering is a work in progress.
+
+### Comparison: Named vs Positional
+
+| Syntax | In Type | In Pattern | In Application |
+|--------|---------|------------|----------------|
+| Positional | `(A : Type) ->` | `A` | `f Type` |
+| Named | `{ A : Type } ->` | `{A}` or `{_}` | `f { A := Type }` |
+
+Named parameters:
+- Must be matched by exact name (or wildcard `{_}`)
+- Can be provided in any order (reordered automatically)
+- Useful for polymorphic functions with multiple type parameters
+
 ## Precedence and Associativity
 
 - Application is left-associative: `f x y` = `(f x) y`

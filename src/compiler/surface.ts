@@ -130,8 +130,8 @@ export type BinderKind =
  *   x              → PVar("x")
  */
 export type TPattern =
-  | { tag: 'PVar'; name: string }                    // Named variable pattern (binds)
-  | { tag: 'PWild' }                                 // Wildcard pattern (binds but name generated in elab)
+  | { tag: 'PVar'; name: string; named?: boolean }    // Named variable pattern (binds), named for {A} syntax
+  | { tag: 'PWild'; named?: boolean }                 // Wildcard pattern (binds but name generated in elab), named for {_} syntax
   | { tag: 'PCtor'; name: string; args: TPattern[] } // Constructor pattern
 
 /**
@@ -177,16 +177,16 @@ export interface TClause {
  * Which reads as: (a: R) → (b: R) → K
  */
 
-export type TTermApp = { tag: 'App'; fn: TTerm; arg: TTerm }
+export type TTermApp = { tag: 'App'; fn: TTerm; arg: TTerm; argName?: string }  // argName for named arguments: f { A := x }
 export type TTermConst = { tag: 'Const'; name: string; }
 
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: TLevel }                         // Type_i, Prop = Type_0 (now with TLevel)
   | { tag: 'ULevel' }                                      // The type of universe levels
-  | { tag: 'Binder'; name: string; binderKind: BinderKind; domain?: TTerm; body: TTerm }  // Unified binder (domain optional for let without type annotation)
-  | { tag: 'MultiBinder'; names: string[]; binderKind: BinderKind; domain: TTerm; body: TTerm }  // Multi-name binder: (a b c : T) -> body
-  | TTermApp   // Function application (f a)
+  | { tag: 'Binder'; name: string; binderKind: BinderKind; domain?: TTerm; body: TTerm; named?: boolean }  // Unified binder (domain optional for let without type annotation, named for { A : Type } ->)
+  | { tag: 'MultiBinder'; names: string[]; binderKind: BinderKind; domain: TTerm; body: TTerm; named?: boolean }  // Multi-name binder: (a b c : T) -> body, named for { a b : T } ->
+  | TTermApp   // Function application (f a), with optional argName for named args
   | TTermConst // Named constant (nat_elim, eq, etc.)
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
@@ -331,15 +331,20 @@ export function mkVarTT(index: number): TTerm {
 /**
  * Create a Pi type (dependent function type)
  * If no name is provided, generates a default name
+ * If named is true, this is a named parameter: { A : Type } ->
  */
-export function mkPiTT(domain: TTerm, codomain: TTerm, name: string = 'x'): TTerm {
-  return {
+export function mkPiTT(domain: TTerm, codomain: TTerm, name: string = 'x', named?: boolean): TTerm {
+  const result: TTerm = {
     tag: 'Binder',
     name,
     binderKind: { tag: 'BPiTT' },
     domain,
     body: codomain
   };
+  if (named) {
+    (result as any).named = true;
+  }
+  return result;
 }
 
 /**
@@ -373,9 +378,14 @@ export function mkLetTT(name: string, defType: TTerm | undefined, defVal: TTerm,
 
 /**
  * Create a function application
+ * If argName is provided, this is a named argument: f { A := x }
  */
-export function mkAppTT(fn: TTerm, arg: TTerm): TTerm {
-  return { tag: 'App', fn, arg };
+export function mkAppTT(fn: TTerm, arg: TTerm, argName?: string): TTerm {
+  const result: TTermApp = { tag: 'App', fn, arg };
+  if (argName) {
+    result.argName = argName;
+  }
+  return result;
 }
 
 export function mkAppSpineTT(fn: TTerm, args: TTerm[]): TTerm {

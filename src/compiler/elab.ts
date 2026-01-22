@@ -157,6 +157,487 @@ export function buildConstructorParamNames(
 }
 
 // ============================================================================
+// Named Argument Maps
+// ============================================================================
+
+/**
+ * Map from named argument label to its 0-based position index.
+ * Used during elaboration to reorder named arguments to positional.
+ *
+ * For example, for the type:
+ *   { A : Type } -> Nat -> { B : Type } -> A -> B
+ * The NamedArgMap would be:
+ *   Map { "A" => 0, "B" => 2 }
+ */
+export type NamedArgMap = Map<string, number>;
+
+/**
+ * Extract a map of named argument positions from a surface type.
+ * Walks the Pi chain and records positions of binders with `named: true`.
+ *
+ * @param surfaceType - The surface-level type (TTerm) to extract from
+ * @returns Map from argument name to position index
+ */
+export function extractNamedArgMap(surfaceType: TTerm): NamedArgMap {
+  const map: NamedArgMap = new Map();
+  let index = 0;
+  let current: TTerm = surfaceType;
+
+  while (true) {
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      // Check if this is a named binder
+      if (current.named && current.name !== '_') {
+        map.set(current.name, index);
+      }
+      index++;
+      current = current.body;
+    } else if (current.tag === 'MultiBinder' && current.binderKind.tag === 'BPiTT') {
+      // Handle MultiBinder - each name gets its own index
+      if (current.named) {
+        for (const name of current.names) {
+          if (name !== '_') {
+            map.set(name, index);
+          }
+          index++;
+        }
+      } else {
+        index += current.names.length;
+      }
+      current = current.body;
+    } else {
+      // Not a Pi binder, stop walking
+      break;
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Count the total number of parameters in a type.
+ * Walks the Pi chain and counts all binders.
+ */
+export function countParameters(surfaceType: TTerm): number {
+  let count = 0;
+  let current: TTerm = surfaceType;
+
+  while (true) {
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      count++;
+      current = current.body;
+    } else if (current.tag === 'MultiBinder' && current.binderKind.tag === 'BPiTT') {
+      count += current.names.length;
+      current = current.body;
+    } else {
+      break;
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Lookup function for getting a definition's named argument map.
+ * Returns undefined if the definition doesn't exist or has no named args.
+ */
+export type NamedArgMapLookup = (name: string) => NamedArgMap | undefined;
+
+/**
+ * Represents an argument in an application spine.
+ */
+type SpineArg =
+  | { kind: 'positional'; term: TTerm }
+  | { kind: 'named'; name: string; term: TTerm };
+
+/**
+ * Collect an application spine from nested Apps.
+ * Returns the function head and list of arguments (in application order, left to right).
+ */
+function collectAppSpine(term: TTerm): { head: TTerm; args: SpineArg[] } {
+  const args: SpineArg[] = [];
+  let current = term;
+
+  while (current.tag === 'App') {
+    const app = current as { tag: 'App'; fn: TTerm; arg: TTerm; argName?: string };
+    if (app.argName) {
+      args.unshift({ kind: 'named', name: app.argName, term: app.arg });
+    } else {
+      args.unshift({ kind: 'positional', term: app.arg });
+    }
+    current = app.fn;
+  }
+
+  return { head: current, args };
+}
+
+/**
+ * Check if an application spine has any named arguments.
+ */
+function hasNamedArgs(term: TTerm): boolean {
+  let current = term;
+  while (current.tag === 'App') {
+    const app = current as { tag: 'App'; fn: TTerm; arg: TTerm; argName?: string };
+    if (app.argName) return true;
+    current = app.fn;
+  }
+  return false;
+}
+
+/**
+ * Reorder application arguments, placing named args at their correct positions.
+ *
+ * @param args - Mixed list of positional and named arguments
+ * @param namedMap - Map from name to position index
+ * @returns Ordered list of positional arguments, or error message
+ */
+function reorderArgs(
+  args: SpineArg[],
+  namedMap: NamedArgMap
+): { ordered: TTerm[]; error?: undefined } | { ordered?: undefined; error: string } {
+  // Separate named and positional arguments
+  const named: Array<{ name: string; term: TTerm }> = [];
+  const positional: TTerm[] = [];
+
+  for (const arg of args) {
+    if (arg.kind === 'named') {
+      named.push({ name: arg.name, term: arg.term });
+    } else {
+      positional.push(arg.term);
+    }
+  }
+
+  // Find indices for all named arguments
+  const namedIndices: Array<{ idx: number; term: TTerm }> = [];
+  for (const n of named) {
+    const idx = namedMap.get(n.name);
+    if (idx === undefined) {
+      return { error: `Unknown named argument: ${n.name}` };
+    }
+    namedIndices.push({ idx, term: n.term });
+  }
+
+  // CRITICAL: Get set of all named parameter positions.
+  // Positional arguments can ONLY fill non-named positions.
+  const namedPositions = new Set(namedMap.values());
+
+  // Determine result size
+  const maxNamedIdx = namedIndices.length > 0
+    ? Math.max(...namedIndices.map(ni => ni.idx))
+    : -1;
+
+  // Result array - we fill named args at their positions, then fill positional in gaps
+  const resultSize = Math.max(maxNamedIdx + 1, positional.length + named.length);
+  const result: (TTerm | null)[] = new Array(resultSize).fill(null);
+
+  // Place named arguments at their positions
+  for (const ni of namedIndices) {
+    if (result[ni.idx] !== null) {
+      return { error: `Duplicate argument at position ${ni.idx}` };
+    }
+    result[ni.idx] = ni.term;
+  }
+
+  // Fill positional arguments ONLY in non-named positions (from left to right)
+  let posIdx = 0;
+  for (let i = 0; i < result.length && posIdx < positional.length; i++) {
+    // Skip this position if it's a named parameter position
+    if (namedPositions.has(i)) {
+      continue;
+    }
+    if (result[i] === null) {
+      result[i] = positional[posIdx++];
+    }
+  }
+
+  // Check if we have leftover positional arguments (they would have gone into named positions)
+  if (posIdx < positional.length) {
+    const extraCount = positional.length - posIdx;
+    return { error: `Too many positional arguments: ${extraCount} extra argument(s) cannot fill named parameter positions` };
+  }
+
+  // Check for unfilled gaps that precede filled positions
+  let lastFilled = -1;
+  for (let i = result.length - 1; i >= 0; i--) {
+    if (result[i] !== null) {
+      lastFilled = i;
+      break;
+    }
+  }
+
+  for (let i = 0; i < lastFilled; i++) {
+    if (result[i] === null && !namedPositions.has(i)) {
+      // Only error for unfilled NON-named positions
+      return { error: `Missing argument at position ${i}` };
+    }
+  }
+
+  // Trailing nulls are OK (partial application) - trim them
+  const ordered = result.slice(0, lastFilled + 1).filter((t): t is TTerm => t !== null);
+  return { ordered };
+}
+
+/**
+ * Error thrown during elaboration with named arguments.
+ * Includes an optional surfacePath for source location mapping.
+ */
+export class NamedArgElabError extends Error {
+  public readonly surfacePath?: IndexPath;
+
+  constructor(message: string, surfacePath?: IndexPath) {
+    super(message);
+    this.name = 'NamedArgElabError';
+    this.surfacePath = surfacePath;
+  }
+}
+
+// ============================================================================
+// Pattern Reordering for Named Patterns
+// ============================================================================
+
+/**
+ * Check if a pattern list has any named patterns.
+ */
+export function hasNamedPatterns(patterns: TPattern[]): boolean {
+  return patterns.some(p =>
+    (p.tag === 'PVar' && p.named) || (p.tag === 'PWild' && p.named)
+  );
+}
+
+/**
+ * Represents a pattern in the reordering process.
+ */
+type PatternArg =
+  | { kind: 'positional'; pattern: TPattern }
+  | { kind: 'named'; name: string; pattern: TPattern };
+
+/**
+ * Collect pattern information for reordering.
+ * Named wildcards ({_}) are treated as positional - they indicate "named position but I don't care about the value".
+ */
+function collectPatternArgs(patterns: TPattern[]): PatternArg[] {
+  return patterns.map(p => {
+    if (p.tag === 'PVar' && p.named) {
+      return { kind: 'named', name: p.name, pattern: p };
+    } else {
+      // PWild (even with named: true) and PCtor are positional
+      // Named wildcards {_} don't need a name lookup - they're just positional patterns
+      return { kind: 'positional', pattern: p };
+    }
+  });
+}
+
+/**
+ * Count pattern variables in a pattern (for de Bruijn index calculation).
+ */
+function countPatternVars(pattern: TPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+      return 1;
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      return pattern.args.reduce((sum, p) => sum + countPatternVars(p), 0);
+  }
+}
+
+/**
+ * Apply a permutation to de Bruijn indices in a surface term.
+ * Only affects Var nodes within the permutation range (pattern variables).
+ *
+ * @param term - The term to transform
+ * @param permutation - Maps old indices to new indices
+ * @param depth - Current binding depth (for adjusting which indices to transform)
+ */
+function applyVarPermutation(term: TTerm, permutation: number[], depth: number = 0): TTerm {
+  switch (term.tag) {
+    case 'Var': {
+      // Only apply permutation to pattern variables (indices within the permutation range)
+      // adjusted for current depth
+      const adjustedIndex = term.index - depth;
+      if (adjustedIndex >= 0 && adjustedIndex < permutation.length) {
+        return { tag: 'Var', index: permutation[adjustedIndex] + depth };
+      }
+      return term;
+    }
+
+    case 'Const':
+    case 'Sort':
+    case 'ULevel':
+    case 'Hole':
+    case 'AbsurdMarker':
+      return term;
+
+    case 'Binder':
+      return {
+        ...term,
+        domain: term.domain ? applyVarPermutation(term.domain, permutation, depth) : undefined,
+        body: applyVarPermutation(term.body, permutation, depth + 1)
+      };
+
+    case 'MultiBinder':
+      return {
+        ...term,
+        domain: applyVarPermutation(term.domain, permutation, depth),
+        body: applyVarPermutation(term.body, permutation, depth + term.names.length)
+      };
+
+    case 'App':
+      return {
+        ...term,
+        fn: applyVarPermutation(term.fn, permutation, depth),
+        arg: applyVarPermutation(term.arg, permutation, depth)
+      };
+
+    case 'Annot':
+      return {
+        ...term,
+        term: applyVarPermutation(term.term, permutation, depth),
+        type: applyVarPermutation(term.type, permutation, depth)
+      };
+
+    case 'Match':
+      return {
+        ...term,
+        scrutinee: applyVarPermutation(term.scrutinee, permutation, depth),
+        clauses: term.clauses.map(c => ({
+          ...c,
+          // Patterns bind new variables, so increase depth by the number of pattern vars
+          rhs: applyVarPermutation(c.rhs, permutation, depth + c.patterns.reduce((sum, p) => sum + countPatternVars(p), 0))
+        }))
+      };
+  }
+}
+
+/**
+ * Reorder clause patterns, placing named patterns at their correct positions.
+ * Also computes a permutation for de Bruijn index transformation.
+ *
+ * @param patterns - Mixed list of positional and named patterns
+ * @param namedMap - Map from name to position index
+ * @returns Ordered list of positional patterns and de Bruijn permutation, or error message
+ *
+ * The varIndexPermutation maps old de Bruijn indices to new ones.
+ * This is needed because pattern reordering changes the binding order.
+ */
+export function reorderPatterns(
+  patterns: TPattern[],
+  namedMap: NamedArgMap
+): { ordered: TPattern[]; varIndexPermutation: number[]; error?: undefined } | { ordered?: undefined; varIndexPermutation?: undefined; error: string } {
+  const args = collectPatternArgs(patterns);
+
+  // Separate named and positional patterns
+  const named: Array<{ name: string; pattern: TPattern; originalIndex: number }> = [];
+  const positional: Array<{ pattern: TPattern; originalIndex: number }> = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.kind === 'named') {
+      named.push({ name: arg.name, pattern: arg.pattern, originalIndex: i });
+    } else {
+      positional.push({ pattern: arg.pattern, originalIndex: i });
+    }
+  }
+
+  // Find indices for all named patterns
+  const namedIndices: Array<{ idx: number; pattern: TPattern; originalIndex: number }> = [];
+  for (const n of named) {
+    const idx = namedMap.get(n.name);
+    if (idx === undefined) {
+      return { error: `Unknown named pattern: ${n.name}` };
+    }
+    namedIndices.push({ idx, pattern: n.pattern, originalIndex: n.originalIndex });
+  }
+
+  // Determine result size
+  const maxNamedIdx = namedIndices.length > 0
+    ? Math.max(...namedIndices.map(ni => ni.idx))
+    : -1;
+
+  // Result array - we fill named patterns at their positions, then fill positional in gaps
+  // Also track the original index for permutation computation
+  const resultSize = Math.max(maxNamedIdx + 1, positional.length + named.length);
+  const result: ({ pattern: TPattern; originalIndex: number } | null)[] = new Array(resultSize).fill(null);
+
+  // Place named patterns at their positions
+  for (const ni of namedIndices) {
+    if (result[ni.idx] !== null) {
+      return { error: `Duplicate pattern at position ${ni.idx}` };
+    }
+    result[ni.idx] = { pattern: ni.pattern, originalIndex: ni.originalIndex };
+  }
+
+  // Fill positional patterns in gaps from left to right
+  let posIdx = 0;
+  for (let i = 0; i < result.length && posIdx < positional.length; i++) {
+    if (result[i] === null) {
+      result[i] = positional[posIdx++];
+    }
+  }
+
+  // Check for unfilled gaps that precede filled positions
+  let lastFilled = -1;
+  for (let i = result.length - 1; i >= 0; i--) {
+    if (result[i] !== null) {
+      lastFilled = i;
+      break;
+    }
+  }
+
+  for (let i = 0; i < lastFilled; i++) {
+    if (result[i] === null) {
+      return { error: `Missing pattern at position ${i}` };
+    }
+  }
+
+  // Trailing nulls are OK (partial patterns) - trim them
+  const finalResult = result.slice(0, lastFilled + 1).filter((t): t is { pattern: TPattern; originalIndex: number } => t !== null);
+  const ordered = finalResult.map(r => r.pattern);
+
+  // Compute de Bruijn index permutation
+  // Pattern variables are collected left-to-right, then reversed for the context
+  // Index 0 is the innermost (rightmost pattern's last var)
+
+  // Step 1: Count vars per pattern position in original order
+  const origVarCounts = patterns.map(p => countPatternVars(p));
+  const totalVars = origVarCounts.reduce((a, b) => a + b, 0);
+
+  // Step 2: For each original pattern position, compute the de Bruijn index range
+  // Pattern vars are collected left-to-right, reversed, so:
+  // - Last pattern's vars get indices 0, 1, ...
+  // - First pattern's vars get highest indices
+  const origPatternStartIndex: number[] = [];
+  let idx = totalVars - 1;
+  for (let i = 0; i < patterns.length; i++) {
+    origPatternStartIndex.push(idx - origVarCounts[i] + 1);
+    idx -= origVarCounts[i];
+  }
+
+  // Step 3: For reordered patterns, compute new de Bruijn index range
+  const newVarCounts = ordered.map(p => countPatternVars(p));
+  const newPatternStartIndex: number[] = [];
+  idx = totalVars - 1;
+  for (let i = 0; i < ordered.length; i++) {
+    newPatternStartIndex.push(idx - newVarCounts[i] + 1);
+    idx -= newVarCounts[i];
+  }
+
+  // Step 4: Build the permutation
+  // varIndexPermutation[oldIndex] = newIndex
+  const varIndexPermutation: number[] = new Array(totalVars);
+  for (let newPos = 0; newPos < finalResult.length; newPos++) {
+    const origPos = finalResult[newPos].originalIndex;
+    const varCount = origVarCounts[origPos];
+    for (let v = 0; v < varCount; v++) {
+      const oldIdx = origPatternStartIndex[origPos] + v;
+      const newIdx = newPatternStartIndex[newPos] + v;
+      varIndexPermutation[oldIdx] = newIdx;
+    }
+  }
+
+  return { ordered, varIndexPermutation };
+}
+
+// ============================================================================
 // Wildcard Name Generation
 // ============================================================================
 
@@ -445,6 +926,183 @@ export function elabToKernel(term: TTerm): TTKTerm {
 }
 
 /**
+ * Elaborate a surface term (TT) to a kernel term (TTK) with named argument resolution.
+ *
+ * This version handles named arguments in applications by:
+ * 1. Collecting the entire app spine when named args are present
+ * 2. Looking up the function's named arg map
+ * 3. Reordering arguments to their correct positions
+ *
+ * @param term - Surface term (TT)
+ * @param lookup - Function to look up named arg maps for definitions
+ * @returns Kernel term (TTK) with named args resolved to positional
+ * @throws NamedArgElabError if named arg resolution fails
+ */
+export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgMapLookup): TTKTerm {
+  // Helper to recursively elaborate with named arg support
+  function elab(t: TTerm): TTKTerm {
+    switch (t.tag) {
+      case 'Var':
+        return { tag: 'Var', index: t.index };
+
+      case 'Sort':
+        return { tag: 'Sort', level: elabLevelToKernel(t.level) };
+
+      case 'ULevel':
+        return { tag: 'ULevel' };
+
+      case 'AbsurdMarker':
+        throw new Error('AbsurdMarker should not be elaborated directly');
+
+      case 'Const':
+        return { tag: 'Const', name: t.name };
+
+      case 'Binder': {
+        const body = elab(t.body);
+        let binderKind: TTKBinderKind;
+        let domain: TTKTerm;
+
+        switch (t.binderKind.tag) {
+          case 'BPiTT':
+            binderKind = { tag: 'BPi' };
+            domain = elab(t.domain!);
+            break;
+          case 'BLamTT':
+            binderKind = { tag: 'BLam' };
+            domain = elab(t.domain!);
+            break;
+          case 'BLetTT':
+            binderKind = { tag: 'BLet', defVal: elab(t.binderKind.defVal) };
+            domain = t.domain !== undefined
+              ? elab(t.domain)
+              : freshImplicitLetTypeMeta(t.name);
+            break;
+        }
+
+        return {
+          tag: 'Binder',
+          name: t.name,
+          binderKind,
+          domain,
+          body
+        };
+      }
+
+      case 'App': {
+        // Collect the entire spine to check for named arguments
+        const { head, args } = collectAppSpine(t);
+        const hasNamed = hasNamedArgs(t);
+
+        // Try to get the named arg map for the function
+        let namedMap: NamedArgMap | undefined;
+        if (head.tag === 'Const') {
+          namedMap = lookup(head.name);
+        }
+
+        // If the application has named args, the function MUST have a named arg map
+        if (hasNamed && (!namedMap || namedMap.size === 0)) {
+          const funcName = head.tag === 'Const' ? head.name : '<expression>';
+          throw new NamedArgElabError(
+            `Cannot use named arguments: '${funcName}' has no named parameters`
+          );
+        }
+
+        // If the function has named parameters, we MUST validate that positional
+        // arguments don't overflow into named parameter positions
+        if (namedMap && namedMap.size > 0) {
+          // Reorder and validate arguments
+          const reorderResult = reorderArgs(args, namedMap);
+          if ('error' in reorderResult && reorderResult.error !== undefined) {
+            throw new NamedArgElabError(reorderResult.error);
+          }
+
+          // Build the elaborated application spine
+          const orderedArgs = reorderResult.ordered!;
+          let result = elab(head);
+          for (const arg of orderedArgs) {
+            result = {
+              tag: 'App',
+              fn: result,
+              arg: elab(arg)
+            };
+          }
+          return result;
+        }
+
+        // No named params on function - simple elaboration
+        return {
+          tag: 'App',
+          fn: elab(t.fn),
+          arg: elab(t.arg)
+        };
+      }
+
+      case 'Hole':
+        return { tag: 'Hole', id: t.id };
+
+      case 'Annot':
+        return {
+          tag: 'Annot',
+          term: elab(t.term),
+          type: elab(t.type)
+        };
+
+      case 'Match':
+        return {
+          tag: 'Match',
+          scrutinee: elab(t.scrutinee),
+          clauses: t.clauses
+            .filter(c => c.rhs.tag !== 'AbsurdMarker')
+            .map(c => {
+              wildcardCounter = 0;
+              currentTermParamIndex = 0;
+              return {
+                patterns: c.patterns.map(p => {
+                  const result = elabPatternToKernel(p);
+                  currentTermParamIndex++;
+                  return result;
+                }),
+                rhs: elab(c.rhs)
+              };
+            })
+        };
+
+      case 'MultiBinder': {
+        const domain = elab(t.domain);
+        let body = elab(t.body);
+
+        let binderKindFactory: () => TTKBinderKind;
+        if (t.binderKind.tag === 'BPiTT') {
+          binderKindFactory = () => ({ tag: 'BPi' });
+        } else if (t.binderKind.tag === 'BLamTT') {
+          binderKindFactory = () => ({ tag: 'BLam' });
+        } else {
+          const letDefVal = elab(t.binderKind.defVal);
+          binderKindFactory = () => ({
+            tag: 'BLet',
+            defVal: letDefVal
+          });
+        }
+
+        for (let i = t.names.length - 1; i >= 0; i--) {
+          body = {
+            tag: 'Binder',
+            name: t.names[i],
+            binderKind: binderKindFactory(),
+            domain,
+            body
+          };
+        }
+
+        return body;
+      }
+    }
+  }
+
+  return elab(term);
+}
+
+/**
  * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern).
  *
  * Surface PWild patterns become kernel PWild with generated unique names.
@@ -523,13 +1181,17 @@ export function elabBindingToKernel(binding: TBinding): TTKContext[number] {
  * @param elabMap - Map to populate with kernel→surface path mappings
  * @param surfacePath - Current path in the surface AST
  * @param kernelPath - Current path in the kernel AST
+ * @param patternNamedArgMap - Optional map for reordering named patterns in Match clauses
+ * @param appNamedArgLookup - Optional lookup for named arg maps of functions (for named arg applications)
  * @returns The elaborated kernel term
  */
 export function elabToKernelWithMap(
   term: TTerm,
   elabMap: ElabMap,
   surfacePath: IndexPath = [],
-  kernelPath: IndexPath = []
+  kernelPath: IndexPath = [],
+  patternNamedArgMap?: NamedArgMap,
+  appNamedArgLookup?: NamedArgMapLookup
 ): TTKTerm {
   // Record the correspondence between kernel and surface paths
   const kernelKey = serializeIndexPath(kernelPath);
@@ -562,7 +1224,9 @@ export function elabToKernelWithMap(
         term.body,
         elabMap,
         appendPath(surfacePath, fieldSeg('body')),
-        appendPath(kernelPath, fieldSeg('body'))
+        appendPath(kernelPath, fieldSeg('body')),
+        patternNamedArgMap,
+        appNamedArgLookup
       );
 
       let binderKind: TTKBinderKind;
@@ -576,7 +1240,9 @@ export function elabToKernelWithMap(
             term.domain!,
             elabMap,
             appendPath(surfacePath, fieldSeg('domain')),
-            appendPath(kernelPath, fieldSeg('domain'))
+            appendPath(kernelPath, fieldSeg('domain')),
+            patternNamedArgMap,
+            appNamedArgLookup
           );
           break;
         case 'BLamTT':
@@ -586,7 +1252,9 @@ export function elabToKernelWithMap(
             term.domain!,
             elabMap,
             appendPath(surfacePath, fieldSeg('domain')),
-            appendPath(kernelPath, fieldSeg('domain'))
+            appendPath(kernelPath, fieldSeg('domain')),
+            patternNamedArgMap,
+            appNamedArgLookup
           );
           break;
         case 'BLetTT':
@@ -596,7 +1264,9 @@ export function elabToKernelWithMap(
               term.binderKind.defVal,
               elabMap,
               appendPath(surfacePath, fieldSeg('binderKind'), fieldSeg('defVal')),
-              appendPath(kernelPath, fieldSeg('binderKind'), fieldSeg('defVal'))
+              appendPath(kernelPath, fieldSeg('binderKind'), fieldSeg('defVal')),
+              patternNamedArgMap,
+              appNamedArgLookup
             )
           };
           // Let binders may have an implicit type (domain undefined in surface)
@@ -605,7 +1275,9 @@ export function elabToKernelWithMap(
                 term.domain,
                 elabMap,
                 appendPath(surfacePath, fieldSeg('domain')),
-                appendPath(kernelPath, fieldSeg('domain'))
+                appendPath(kernelPath, fieldSeg('domain')),
+                patternNamedArgMap,
+                appNamedArgLookup
               )
             : freshImplicitLetTypeMeta(term.name);
           break;
@@ -620,22 +1292,69 @@ export function elabToKernelWithMap(
       };
     }
 
-    case 'App':
+    case 'App': {
+      // Collect the entire spine to check for named arguments
+      const { head, args } = collectAppSpine(term);
+      const hasNamed = hasNamedArgs(term);
+
+      // Try to get the named arg map for the function
+      let namedMap: NamedArgMap | undefined;
+      if (appNamedArgLookup && head.tag === 'Const') {
+        namedMap = appNamedArgLookup(head.name);
+      }
+
+      // If the application has named args, the function MUST have a named arg map
+      if (hasNamed && (!namedMap || namedMap.size === 0)) {
+        const funcName = head.tag === 'Const' ? head.name : '<expression>';
+        throw new NamedArgElabError(
+          `Cannot use named arguments: '${funcName}' has no named parameters`,
+          surfacePath
+        );
+      }
+
+      // If the function has named parameters, we MUST validate that positional
+      // arguments don't overflow into named parameter positions
+      if (namedMap && namedMap.size > 0) {
+        // Reorder and validate arguments
+        const reorderResult = reorderArgs(args, namedMap);
+        if ('error' in reorderResult && reorderResult.error !== undefined) {
+          throw new NamedArgElabError(reorderResult.error, surfacePath);
+        }
+
+        // Build the elaborated application spine
+        const orderedArgs = reorderResult.ordered!;
+        let result = elabToKernelWithMap(head, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup);
+        for (const arg of orderedArgs) {
+          result = {
+            tag: 'App',
+            fn: result,
+            arg: elabToKernelWithMap(arg, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup)
+          };
+        }
+        return result;
+      }
+
+      // No named params on function - simple elaboration
       return {
         tag: 'App',
         fn: elabToKernelWithMap(
           term.fn,
           elabMap,
           appendPath(surfacePath, fieldSeg('fn')),
-          appendPath(kernelPath, fieldSeg('fn'))
+          appendPath(kernelPath, fieldSeg('fn')),
+          patternNamedArgMap,
+          appNamedArgLookup
         ),
         arg: elabToKernelWithMap(
           term.arg,
           elabMap,
           appendPath(surfacePath, fieldSeg('arg')),
-          appendPath(kernelPath, fieldSeg('arg'))
+          appendPath(kernelPath, fieldSeg('arg')),
+          patternNamedArgMap,
+          appNamedArgLookup
         )
       };
+    }
 
     case 'Hole':
       // Kernel holes are simple - type/context info from surface is discarded
@@ -648,13 +1367,17 @@ export function elabToKernelWithMap(
           term.term,
           elabMap,
           appendPath(surfacePath, fieldSeg('term')),
-          appendPath(kernelPath, fieldSeg('term'))
+          appendPath(kernelPath, fieldSeg('term')),
+          patternNamedArgMap,
+          appNamedArgLookup
         ),
         type: elabToKernelWithMap(
           term.type,
           elabMap,
           appendPath(surfacePath, fieldSeg('type')),
-          appendPath(kernelPath, fieldSeg('type'))
+          appendPath(kernelPath, fieldSeg('type')),
+          patternNamedArgMap,
+          appNamedArgLookup
         )
       };
 
@@ -671,7 +1394,9 @@ export function elabToKernelWithMap(
           term.scrutinee,
           elabMap,
           appendPath(surfacePath, fieldSeg('scrutinee')),
-          appendPath(kernelPath, fieldSeg('scrutinee'))
+          appendPath(kernelPath, fieldSeg('scrutinee')),
+          patternNamedArgMap,
+          appNamedArgLookup
         ),
         clauses: nonAbsurdClauses.map(({ clause, surfaceIndex }, kernelIndex) => {
           const clauseSurfacePath = appendPath(surfacePath, fieldSeg('clauses'), arraySeg(surfaceIndex));
@@ -685,8 +1410,21 @@ export function elabToKernelWithMap(
           // Reset term param index for each clause
           currentTermParamIndex = 0;
 
+          // Reorder patterns if we have named patterns and a namedArgMap
+          let patternsToElab = clause.patterns;
+          let rhsToElab = clause.rhs;
+          if (patternNamedArgMap && patternNamedArgMap.size > 0 && hasNamedPatterns(clause.patterns)) {
+            const reorderResult = reorderPatterns(clause.patterns, patternNamedArgMap);
+            if ('error' in reorderResult && reorderResult.error !== undefined) {
+              throw new NamedArgElabError(reorderResult.error, clauseSurfacePath);
+            }
+            patternsToElab = reorderResult.ordered!;
+            // Apply the permutation to de Bruijn indices in the RHS
+            rhsToElab = applyVarPermutation(clause.rhs, reorderResult.varIndexPermutation!);
+          }
+
           return {
-            patterns: clause.patterns.map((pattern, patternIndex) => {
+            patterns: patternsToElab.map((pattern, patternIndex) => {
               const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
               const patternKernelPath = appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(patternIndex));
               const result = elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
@@ -695,10 +1433,12 @@ export function elabToKernelWithMap(
               return result;
             }),
             rhs: elabToKernelWithMap(
-              clause.rhs,
+              rhsToElab,
               elabMap,
               appendPath(clauseSurfacePath, fieldSeg('rhs')),
-              appendPath(clauseKernelPath, fieldSeg('rhs'))
+              appendPath(clauseKernelPath, fieldSeg('rhs')),
+              patternNamedArgMap,
+              appNamedArgLookup
             )
           };
         })
@@ -714,7 +1454,9 @@ export function elabToKernelWithMap(
         term.domain,
         elabMap,
         appendPath(surfacePath, fieldSeg('domain')),
-        appendPath(kernelPath, fieldSeg('domain'))
+        appendPath(kernelPath, fieldSeg('domain')),
+        patternNamedArgMap,
+        appNamedArgLookup
       );
 
       // Build the path to the innermost body - it will be nested under n-1 'body' segments
@@ -727,7 +1469,9 @@ export function elabToKernelWithMap(
         term.body,
         elabMap,
         appendPath(surfacePath, fieldSeg('body')),
-        innerBodyKernelPath
+        innerBodyKernelPath,
+        patternNamedArgMap,
+        appNamedArgLookup
       );
 
       // Convert surface binder kind to kernel binder kind

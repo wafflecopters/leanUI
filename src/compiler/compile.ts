@@ -7,14 +7,14 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, ConstructorParamNames, ParamInfo } from './elab';
+import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, ConstructorParamNames, ParamInfo, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap } from '../types/source-position'
+import { arraySeg, ElabMap, fieldSeg, IndexPath, SourceMap, serializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -71,6 +71,10 @@ export interface ElabDeclaration {
   elabMap?: ElabMap;
   /** Maps surface paths to source ranges (for error mapping) */
   sourceMap?: SourceMap;
+  /** Error that occurred during elaboration (e.g., named argument errors) */
+  elabError?: string;
+  /** Serialized surface path where elaboration error occurred */
+  elabErrorPath?: string;
 }
 
 /**
@@ -127,6 +131,9 @@ export interface CompiledDeclaration {
   // Source mapping for error locations
   elabMap?: ElabMap;
   sourceMap?: SourceMap;
+
+  // Elaboration error source path (for locating errors in source)
+  elabErrorPath?: string;
 }
 
 /**
@@ -950,11 +957,23 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
         // Elaborate value (only if elabValues is true)
         if (elabValues && decl.value) {
           const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-          kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath);
+          // Extract namedArgMap from type for pattern reordering
+          const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+          kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap);
         }
 
         // Elaborate constructors
         if (decl.constructors) {
+          // Extract the inductive type's named arg map so constructor types
+          // can reference the inductive type with named arguments
+          const inductiveNamedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+
+          // Create a lookup that includes this inductive type's named arg map
+          // This is needed because the inductive type isn't registered in definitions yet
+          const ctorAppLookup = decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0
+            ? (name: string) => name === decl.name ? inductiveNamedArgMap : undefined
+            : undefined;
+
           kernelConstructors = decl.constructors.map((ctor, ctorIndex) => {
             const ctorTypePath: IndexPath = [
               { kind: 'field', name: 'constructors' },
@@ -963,7 +982,7 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
             ];
             return {
               name: ctor.name,
-              type: elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath)
+              type: elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath, undefined, ctorAppLookup)
             };
           });
         }
@@ -983,8 +1002,23 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           sourceMap
         });
       } catch (e) {
-        // Elaboration error - skip this declaration
-        console.error('Elaboration error:', e);
+        // Elaboration error - record the error for later reporting
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        // Extract surfacePath if this is a NamedArgElabError
+        const elabErrorPath = e instanceof NamedArgElabError && e.surfacePath
+          ? serializeIndexPath(e.surfacePath)
+          : undefined;
+        elabDeclarations.push({
+          name: decl.name,
+          kind: decl.kind === 'inductive' ? 'inductive' : 'term',
+          surfaceType: decl.type,
+          surfaceValue: decl.value,
+          surfaceConstructors: decl.constructors,
+          elabMap,
+          sourceMap,
+          elabError: errorMessage,
+          elabErrorPath,
+        });
       }
     }
 
@@ -1051,6 +1085,32 @@ export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResul
 
   const newBlocks: ElabBlock[] = [];
 
+  // Build a lookup for named arg maps from all elaborated declarations
+  // This is used to resolve named arguments in function applications
+  const namedArgMapCache = new Map<string, NamedArgMap>();
+  for (const block of elabResult.blocks) {
+    if (block.kind === 'declarations') {
+      for (const decl of block.declarations) {
+        if (decl.name && decl.surfaceType) {
+          const map = extractNamedArgMap(decl.surfaceType);
+          if (map.size > 0) {
+            namedArgMapCache.set(decl.name, map);
+          }
+        }
+        // Also check constructor types for inductive types
+        if (decl.kind === 'inductive' && decl.surfaceConstructors) {
+          for (const ctor of decl.surfaceConstructors) {
+            const ctorMap = extractNamedArgMap(ctor.type);
+            if (ctorMap.size > 0) {
+              namedArgMapCache.set(ctor.name, ctorMap);
+            }
+          }
+        }
+      }
+    }
+  }
+  const appNamedArgLookup = (name: string) => namedArgMapCache.get(name);
+
   for (const block of elabResult.blocks) {
     if (block.kind !== 'declarations') {
       newBlocks.push(block);
@@ -1083,7 +1143,9 @@ export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResul
         }
 
         const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-        const kernelValue = elabToKernelWithMap(resolvedDecl.value, elabMap, valuePath, valuePath);
+        // Extract namedArgMap from type for pattern reordering
+        const namedArgMap = elabDecl.surfaceType ? extractNamedArgMap(elabDecl.surfaceType) : undefined;
+        const kernelValue = elabToKernelWithMap(resolvedDecl.value, elabMap, valuePath, valuePath, namedArgMap, appNamedArgLookup);
 
         // Clear term param names after elaboration
         setCurrentTermParamNames(null);
@@ -1095,9 +1157,18 @@ export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResul
           elabMap,
         });
       } catch (e) {
-        console.error('Value elaboration error:', e);
         setCurrentTermParamNames(null);
-        newDeclarations.push(elabDecl);
+        // Capture elaboration error for later reporting
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        // Extract surfacePath if this is a NamedArgElabError
+        const elabErrorPath = e instanceof NamedArgElabError && e.surfacePath
+          ? serializeIndexPath(e.surfacePath)
+          : undefined;
+        newDeclarations.push({
+          ...elabDecl,
+          elabError: errorMessage,
+          elabErrorPath,
+        });
       }
     }
 
@@ -1161,7 +1232,13 @@ function checkDeclaration(
   let totalityResult: TotalityResult | undefined;
   let checkedValue: TTKTerm | undefined;
 
-  if (decl.kind === 'inductive') {
+  // Check for elaboration errors first (e.g., named argument errors)
+  if (decl.elabError) {
+    checkSuccess = false;
+    const error = TCEnvError.create(decl.elabError, createTCEnv({ definitions, options: { mode: 'check' } }));
+    checkErrors.push(error);
+    errorCount = 1;
+  } else if (decl.kind === 'inductive') {
     const result = checkInductiveTypeDeclaration(decl, definitions);
     if (result.success) {
       newDefinitions = result.definitions;
@@ -1216,7 +1293,8 @@ function checkDeclaration(
     checkErrors,
     totalityResult,
     elabMap: decl.elabMap,
-    sourceMap: decl.sourceMap
+    sourceMap: decl.sourceMap,
+    elabErrorPath: decl.elabErrorPath
   };
 
   return { compiled, newDefinitions, errorCount };
