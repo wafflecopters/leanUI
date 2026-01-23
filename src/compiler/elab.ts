@@ -23,6 +23,8 @@ import type {
   TLevel,
 } from './surface';
 
+import { mkHoleTT, mkPropTT } from './surface';
+
 import type {
   TTKTerm,
   TTKContext,
@@ -50,6 +52,8 @@ import {
   arraySeg,
   serializeIndexPath
 } from '../types/source-position';
+
+import type { DefinitionsMap } from './term';
 
 // Re-export TTKRecordDef for consumers
 export type { TTKRecordDef };
@@ -539,6 +543,20 @@ export function countParameters(surfaceType: TTerm): number {
 export type NamedArgMapLookup = (name: string) => NamedArgMap | undefined;
 
 /**
+ * Info about named arguments and arity for a definition.
+ */
+export interface NamedArgInfo {
+  namedArgMap: NamedArgMap;
+  totalArity?: number;
+}
+
+/**
+ * Lookup function for getting a definition's named argument info (map + arity).
+ * Returns undefined if the definition doesn't exist or has no named args.
+ */
+export type NamedArgInfoLookup = (name: string) => NamedArgInfo | undefined;
+
+/**
  * Represents an argument in an application spine.
  */
 type SpineArg =
@@ -581,14 +599,17 @@ function hasNamedArgs(term: TTerm): boolean {
 
 /**
  * Reorder application arguments, placing named args at their correct positions.
+ * Missing implicit (named) arguments are filled with Holes for type inference.
  *
  * @param args - Mixed list of positional and named arguments
  * @param namedMap - Map from name to position index
+ * @param totalArity - Total number of parameters the function expects (optional)
  * @returns Ordered list of positional arguments, or error message
  */
 function reorderArgs(
   args: SpineArg[],
-  namedMap: NamedArgMap
+  namedMap: NamedArgMap,
+  totalArity?: number
 ): { ordered: TTerm[]; error?: undefined } | { ordered?: undefined; error: string } {
   // Separate named and positional arguments
   const named: Array<{ name: string; term: TTerm }> = [];
@@ -622,7 +643,9 @@ function reorderArgs(
     : -1;
 
   // Result array - we fill named args at their positions, then fill positional in gaps
-  const resultSize = Math.max(maxNamedIdx + 1, positional.length + named.length);
+  // If totalArity is provided, use it to ensure we have room for all arguments
+  const estimatedSize = Math.max(maxNamedIdx + 1, positional.length + named.length);
+  const resultSize = totalArity !== undefined ? Math.max(totalArity, estimatedSize) : estimatedSize;
   const result: (TTerm | null)[] = new Array(resultSize).fill(null);
 
   // Place named arguments at their positions
@@ -648,23 +671,6 @@ function reorderArgs(
   // Check if we have leftover positional arguments (they would have gone into named positions)
   if (posIdx < positional.length) {
     const extraCount = positional.length - posIdx;
-    // Find which named params were not provided
-    const providedNamedParams = new Set(named.map(n => n.name));
-    const missingNamedParams: string[] = [];
-    for (const [name] of namedMap) {
-      if (!providedNamedParams.has(name)) {
-        missingNamedParams.push(name);
-      }
-    }
-
-    if (missingNamedParams.length > 0) {
-      const missingList = missingNamedParams.map(n => `'${n}'`).join(', ');
-      return {
-        error: `Missing required named argument${missingNamedParams.length > 1 ? 's' : ''}: ${missingList}. ` +
-          `Named arguments must be provided with {name := value} syntax, not positionally.`
-      };
-    }
-
     return { error: `Too many positional arguments: ${extraCount} extra argument(s) cannot fill named parameter positions` };
   }
 
@@ -681,6 +687,16 @@ function reorderArgs(
     if (result[i] === null && !namedPositions.has(i)) {
       // Only error for unfilled NON-named positions
       return { error: `Missing argument at position ${i}` };
+    }
+  }
+
+  // Fill missing named positions with Holes (implicit argument inference)
+  // These will be resolved during type checking via unification
+  let holeCounter = 0;
+  for (let i = 0; i <= lastFilled; i++) {
+    if (result[i] === null && namedPositions.has(i)) {
+      // Create a hole with a placeholder type - will be inferred during type checking
+      result[i] = mkHoleTT(`_implicit${holeCounter++}`, mkHoleTT('_implicit_type', mkPropTT()));
     }
   }
 
@@ -701,6 +717,197 @@ export class NamedArgElabError extends Error {
     this.name = 'NamedArgElabError';
     this.surfacePath = surfacePath;
   }
+}
+
+// ============================================================================
+// Constructor Pattern Detection and RHS Fixing
+// ============================================================================
+
+/**
+ * Check if a name is a constructor in the given definitions.
+ */
+function isConstructorName(name: string, definitions: DefinitionsMap): boolean {
+  for (const inductive of definitions.inductiveTypes.values()) {
+    for (const ctor of inductive.constructors) {
+      if (ctor.name === name) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Fix RHS de Bruijn indices for patterns that the parser thought were variables
+ * but are actually constructors.
+ *
+ * The parser uses a heuristic: lowercase no-arg patterns are treated as variable bindings.
+ * This is wrong for lowercase constructors like 'refl'. This function:
+ * 1. Identifies such patterns by checking if they're constructors in definitions
+ * 2. For each constructor pattern, replaces Var references in the RHS with Const
+ * 3. Adjusts remaining Var indices to account for the removed bindings
+ *
+ * @param patterns - The clause patterns (surface syntax)
+ * @param rhs - The clause RHS (surface syntax)
+ * @param definitions - The definitions map to check for constructors
+ * @returns The transformed RHS with constructor patterns properly handled
+ */
+export function fixRhsForConstructorPatterns(
+  patterns: TPattern[],
+  rhs: TTerm,
+  definitions: DefinitionsMap
+): TTerm {
+  // Find patterns that the parser thought were variables but are actually constructors
+  // These are PCtor patterns with no args and lowercase first letter
+  const constructorPatternIndices: { index: number; name: string }[] = [];
+
+  // Count pattern variables left-to-right (same order as parser's collectPatternVars)
+  let varIndex = 0;
+  for (const pattern of patterns) {
+    if (pattern.tag === 'PCtor' && pattern.args.length === 0 &&
+        (!pattern.namedArgs || pattern.namedArgs.length === 0)) {
+      const firstChar = pattern.name[0];
+      const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
+      const isSingleUppercase = pattern.name.length === 1 && firstChar === firstChar.toUpperCase();
+
+      if (isLowercase || isSingleUppercase) {
+        // Parser would have bound this as a variable
+        // Check if it's actually a constructor
+        if (isConstructorName(pattern.name, definitions)) {
+          constructorPatternIndices.push({ index: varIndex, name: pattern.name });
+        }
+        varIndex++;
+      }
+    } else if (pattern.tag === 'PWild') {
+      varIndex++;
+    } else if (pattern.tag === 'PVar') {
+      varIndex++;
+    } else if (pattern.tag === 'PCtor') {
+      // PCtor with args - count vars from sub-patterns
+      varIndex += countPatternVars(pattern);
+    }
+  }
+
+  if (constructorPatternIndices.length === 0) {
+    // No constructor patterns that need fixing
+    return rhs;
+  }
+
+  // The parser uses reversed context for de Bruijn indices
+  // So index 0 = rightmost variable, index (total-1) = leftmost variable
+  const totalVars = varIndex;
+
+  // Convert to de Bruijn indices (reverse the order)
+  // In de Bruijn, index 0 is the last-bound (rightmost) variable
+  const constructorDeBruijnIndices = constructorPatternIndices.map(({ index, name }) => ({
+    deBruijnIndex: totalVars - 1 - index,
+    name
+  })).sort((a, b) => b.deBruijnIndex - a.deBruijnIndex); // Sort descending for proper shifting
+
+  // Transform the RHS
+  return transformRhsForConstructorPatterns(rhs, constructorDeBruijnIndices);
+}
+
+/**
+ * Transform RHS by replacing Var references to constructor patterns with Const,
+ * and adjusting remaining Var indices.
+ */
+function transformRhsForConstructorPatterns(
+  term: TTerm,
+  constructorIndices: { deBruijnIndex: number; name: string }[]
+): TTerm {
+  function transform(t: TTerm, depth: number): TTerm {
+    switch (t.tag) {
+      case 'Var': {
+        const adjustedIndex = t.index - depth;
+
+        // Check if this Var refers to a constructor pattern
+        const ctorMatch = constructorIndices.find(c => c.deBruijnIndex === adjustedIndex);
+        if (ctorMatch) {
+          // Replace with Const
+          return { tag: 'Const', name: ctorMatch.name };
+        }
+
+        // Adjust index for removed bindings
+        // Count how many constructor indices are below this one
+        let shift = 0;
+        for (const c of constructorIndices) {
+          if (c.deBruijnIndex < adjustedIndex) {
+            shift++;
+          }
+        }
+
+        if (shift > 0) {
+          return { tag: 'Var', index: t.index - shift };
+        }
+        return t;
+      }
+
+      case 'App':
+        return {
+          tag: 'App',
+          fn: transform(t.fn, depth),
+          arg: transform(t.arg, depth),
+          ...(t.argName ? { argName: t.argName } : {})
+        };
+
+      case 'Binder':
+        return {
+          tag: 'Binder',
+          name: t.name,
+          binderKind: t.binderKind,
+          domain: t.domain ? transform(t.domain, depth) : undefined,
+          body: transform(t.body, depth + 1),
+          ...(t.named !== undefined ? { named: t.named } : {})
+        };
+
+      case 'MultiBinder':
+        return {
+          tag: 'MultiBinder',
+          names: t.names,
+          binderKind: t.binderKind,
+          domain: transform(t.domain, depth),
+          body: transform(t.body, depth + t.names.length),
+          ...(t.named !== undefined ? { named: t.named } : {})
+        };
+
+      case 'Match':
+        return {
+          tag: 'Match',
+          scrutinee: transform(t.scrutinee, depth),
+          clauses: t.clauses.map(c => ({
+            ...c,
+            rhs: transform(c.rhs, depth + countClausePatternVars(c.patterns))
+          }))
+        };
+
+      case 'Annot':
+        return {
+          tag: 'Annot',
+          term: transform(t.term, depth),
+          type: transform(t.type, depth)
+        };
+
+      // Leaf nodes that don't contain Vars
+      case 'Const':
+      case 'Sort':
+      case 'Hole':
+      case 'ULevel':
+        return t;
+
+      default:
+        return t;
+    }
+  }
+
+  return transform(term, 0);
+}
+
+/**
+ * Count the number of variables bound by a list of patterns.
+ */
+function countClausePatternVars(patterns: TPattern[]): number {
+  return patterns.reduce((acc, p) => acc + countPatternVars(p), 0);
 }
 
 // ============================================================================
@@ -766,7 +973,7 @@ function countPatternVars(pattern: TPattern): number {
  * @param permutation - Maps old indices to new indices
  * @param depth - Current binding depth (for adjusting which indices to transform)
  */
-function applyVarPermutation(term: TTerm, permutation: number[], depth: number = 0): TTerm {
+export function applyVarPermutation(term: TTerm, permutation: number[], depth: number = 0): TTerm {
   switch (term.tag) {
     case 'Var': {
       // Only apply permutation to pattern variables (indices within the permutation range)
@@ -1009,9 +1216,11 @@ export function reorderPatterns(
   }
 
   // Step 3: For reordered patterns, compute new de Bruijn index range
+  // NOTE: Use newTotalVars, not totalVars, because synthetic wildcards add new vars
   const newVarCounts = ordered.map(p => countPatternVars(p));
+  const newTotalVars = newVarCounts.reduce((a, b) => a + b, 0);
   const newPatternStartIndex: number[] = [];
-  idx = totalVars - 1;
+  idx = newTotalVars - 1;
   for (let i = 0; i < ordered.length; i++) {
     newPatternStartIndex.push(idx - newVarCounts[i] + 1);
     idx -= newVarCounts[i];
@@ -1334,7 +1543,7 @@ export function elabToKernel(term: TTerm): TTKTerm {
  * @returns Kernel term (TTK) with named args resolved to positional
  * @throws NamedArgElabError if named arg resolution fails
  */
-export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgMapLookup): TTKTerm {
+export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLookup): TTKTerm {
   // Helper to recursively elaborate with named arg support
   function elab(t: TTerm): TTKTerm {
     switch (t.tag) {
@@ -1389,10 +1598,15 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgMapLookup
         const { head, args } = collectAppSpine(t);
         const hasNamed = hasNamedArgs(t);
 
-        // Try to get the named arg map for the function
+        // Try to get the named arg info for the function
         let namedMap: NamedArgMap | undefined;
+        let totalArity: number | undefined;
         if (head.tag === 'Const') {
-          namedMap = lookup(head.name);
+          const info = lookup(head.name);
+          if (info) {
+            namedMap = info.namedArgMap;
+            totalArity = info.totalArity;
+          }
         }
 
         // If the application has named args, the function MUST have a named arg map
@@ -1407,7 +1621,7 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgMapLookup
         // arguments don't overflow into named parameter positions
         if (namedMap && namedMap.size > 0) {
           // Reorder and validate arguments
-          const reorderResult = reorderArgs(args, namedMap);
+          const reorderResult = reorderArgs(args, namedMap, totalArity);
           if ('error' in reorderResult && reorderResult.error !== undefined) {
             throw new NamedArgElabError(reorderResult.error);
           }
@@ -1598,7 +1812,7 @@ export function elabToKernelWithMap(
   surfacePath: IndexPath = [],
   kernelPath: IndexPath = [],
   patternNamedArgMap?: NamedArgMap,
-  appNamedArgLookup?: NamedArgMapLookup,
+  appNamedArgLookup?: NamedArgInfoLookup,
   patternTotalArity?: number
 ): TTKTerm {
   // Record the correspondence between kernel and surface paths
@@ -1705,11 +1919,13 @@ export function elabToKernelWithMap(
       const { head, args } = collectAppSpine(term);
       const hasNamed = hasNamedArgs(term);
 
-      // Try to get the named arg map for the function
-      let namedMap: NamedArgMap | undefined;
+      // Try to get the named arg info for the function
+      let namedArgInfo: NamedArgInfo | undefined;
       if (appNamedArgLookup && head.tag === 'Const') {
-        namedMap = appNamedArgLookup(head.name);
+        namedArgInfo = appNamedArgLookup(head.name);
       }
+      const namedMap = namedArgInfo?.namedArgMap;
+      const totalArity = namedArgInfo?.totalArity;
 
       // If the application has named args, the function MUST have a named arg map
       if (hasNamed && (!namedMap || namedMap.size === 0)) {
@@ -1723,8 +1939,8 @@ export function elabToKernelWithMap(
       // If the function has named parameters, we MUST validate that positional
       // arguments don't overflow into named parameter positions
       if (namedMap && namedMap.size > 0) {
-        // Reorder and validate arguments
-        const reorderResult = reorderArgs(args, namedMap);
+        // Reorder and validate arguments, passing totalArity for proper sizing
+        const reorderResult = reorderArgs(args, namedMap, totalArity);
         if ('error' in reorderResult && reorderResult.error !== undefined) {
           throw new NamedArgElabError(reorderResult.error, surfacePath);
         }
@@ -1944,7 +2160,7 @@ export function elabToKernelWithMap(
  * Elaborate a surface pattern (TPattern) to a kernel pattern (TTKPattern)
  * while tracking path correspondence in the elabMap.
  */
-function elabPatternToKernelWithMap(
+export function elabPatternToKernelWithMap(
   pattern: TPattern,
   elabMap: ElabMap,
   surfacePath: IndexPath,

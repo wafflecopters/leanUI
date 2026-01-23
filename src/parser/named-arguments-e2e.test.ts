@@ -1354,6 +1354,9 @@ nth (VCons h tail) (FSucc f) = nth tail f`;
       const nthResult = results.find(r => r.name === 'nth');
       expect(nthResult).toBeDefined();
       expect(nthResult!.parseSuccess).toBe(true);
+      if (!nthResult!.checkSuccess) {
+        console.log('VARIANT 3 Check errors:', nthResult!.checkErrors);
+      }
       expect(nthResult!.checkSuccess).toBe(true);
     });
 

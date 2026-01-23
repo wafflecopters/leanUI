@@ -7,8 +7,7 @@
  * - LHS unification for match clauses
  */
 
-import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
-import type { TTerm, TClause } from './surface';
+import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
 import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap } from './term';
 import { unifyTerms } from './unify';
@@ -69,6 +68,52 @@ function getConstructorArityInfo(definitions: DefinitionsMap, ctorName: string):
     }
   }
   return undefined;
+}
+
+/**
+ * Count how many wildcards would be added to a pattern (and its sub-patterns)
+ * during constructor padding. This is used to compute RHS index shifts.
+ *
+ * For a PCtor pattern, this counts:
+ * 1. Wildcards added for missing named args of this constructor
+ * 2. Recursively, wildcards added to sub-patterns
+ */
+function countWildcardsAddedToPattern(pattern: TTKPattern, definitions: DefinitionsMap): number {
+  if (pattern.tag !== 'PCtor') {
+    return 0;
+  }
+
+  const arityInfo = getConstructorArityInfo(definitions, pattern.name);
+  let count = 0;
+
+  if (arityInfo && arityInfo.namedArgMap && arityInfo.namedArgMap.size > 0) {
+    // Count wildcards that will be added for missing named args
+    const namedPositions = new Set(arityInfo.namedArgMap.values());
+    const providedNamedPositions = new Set<number>();
+
+    if (pattern.namedArgs) {
+      for (const na of pattern.namedArgs) {
+        const idx = arityInfo.namedArgMap.get(na.name);
+        if (idx !== undefined) {
+          providedNamedPositions.add(idx);
+        }
+      }
+    }
+
+    // Wildcards for unfilled named positions
+    for (const pos of namedPositions) {
+      if (!providedNamedPositions.has(pos)) {
+        count++;
+      }
+    }
+  }
+
+  // Recursively count wildcards in sub-patterns
+  for (const arg of pattern.args) {
+    count += countWildcardsAddedToPattern(arg, definitions);
+  }
+
+  return count;
 }
 
 /**
@@ -149,10 +194,71 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
 }
 
 /**
- * Pad all patterns in a clause with implicit wildcards for named constructor parameters.
+ * Pad patterns for missing named arguments at both levels:
+ * 1. TOP-LEVEL: Insert wildcards for missing implicit (named) function parameters
+ * 2. CONSTRUCTOR-LEVEL: Insert wildcards for missing named constructor arguments (recursive)
+ *
+ * This function should be called BEFORE arity checking and LHS unification.
+ *
+ * Example:
+ *   listLen : {A : Type} -> List A -> Nat
+ *   listLen Nil = Zero
+ *
+ *   Input patterns: [Nil]
+ *   Output patterns: [_, (Nil _)]
+ *
+ *   - Top-level: {A : Type} is implicit, user provided 1 pattern but type expects 2.
+ *     Insert wildcard at position 0.
+ *   - Constructor-level: Nil : {A : Type} -> List A has implicit A.
+ *     Insert wildcard for A inside Nil.
+ *
+ * @param patterns The original kernel patterns from the clause
+ * @param namedArgMap Map of named parameter names to their positions (from function signature)
+ * @param totalArity Total number of parameters in the function signature
+ * @param definitions The definitions map (used for constructor lookup)
+ * @returns Padded patterns with wildcards for all missing named arguments
  */
-function padPatternsWithNamedWildcards(patterns: TTKPattern[], definitions: DefinitionsMap): TTKPattern[] {
-  return patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions));
+export function padPatternsForMissingNamedArgs(
+  patterns: TTKPattern[],
+  namedArgMap: NamedArgMap | undefined,
+  totalArity: number | undefined,
+  definitions: DefinitionsMap
+): TTKPattern[] {
+  // Step 1: Pad constructor patterns recursively (this always happens)
+  const paddedConstructorPatterns = patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions));
+
+  // Step 2: Determine how many top-level implicit params are missing
+  if (!namedArgMap || namedArgMap.size === 0 || totalArity === undefined) {
+    // No named params at top level, just return constructor-padded patterns
+    return paddedConstructorPatterns;
+  }
+
+  // Get named parameter positions and sort them
+  const namedPositions = new Set(namedArgMap.values());
+
+  // Count consecutive leading named positions (positions 0, 1, 2, ... that are named)
+  let leadingNamedCount = 0;
+  for (let i = 0; i < totalArity; i++) {
+    if (namedPositions.has(i)) {
+      leadingNamedCount++;
+    } else {
+      break; // Stop at first non-named position
+    }
+  }
+
+  // Calculate how many wildcards to insert
+  // If user provided fewer patterns than expected (totalArity), and some leading
+  // positions are named, we insert wildcards for the missing leading named params
+  const missingCount = totalArity - paddedConstructorPatterns.length;
+  const wildcardCountToInsert = Math.max(0, Math.min(leadingNamedCount, missingCount));
+
+  // Step 3: Insert leading wildcards for missing named params
+  const leadingWildcards: TTKPattern[] = [];
+  for (let i = 0; i < wildcardCountToInsert; i++) {
+    leadingWildcards.push({ tag: 'PWild', name: '_' });
+  }
+
+  return [...leadingWildcards, ...paddedConstructorPatterns];
 }
 
 /**
@@ -759,54 +865,104 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
 /**
  * Check a match clause by validating patterns and unifying the LHS.
  * Returns the checked clause with the solved/reified RHS.
+ *
+ * @param termName Name of the function being defined
+ * @param env Environment containing the clause
+ * @param type The function type
+ * @param namedArgMap Map of named parameter names to positions (from function signature)
+ * @param totalArity Total number of parameters in the function signature
  */
 export function checkMatchClause(
   termName: string,
   env: TCEnv<TTKClause>,
   type: TTKTerm,
+  namedArgMap?: NamedArgMap,
+  totalArity?: number,
 ): TCEnv<TTKClause> {
-  // First check arity (with helpful error messages for named param violations)
-  assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns())
-
   // Get the original RHS and patterns
   const originalRhs = env.value.rhs;
   const originalPatterns = env.value.patterns;
 
-  // Pad patterns with implicit wildcards for named constructor parameters
-  // This is needed because constructor types may have named Pi binders that need patterns
-  const paddedPatterns = padPatternsWithNamedWildcards(originalPatterns, env.definitions);
+  // FIRST: Check arity on ORIGINAL patterns - before padding
+  // This catches user errors like trying to pass positional args for named params
+  assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns());
+
+  // THEN: Pad patterns with implicit wildcards for missing named arguments
+  // This handles both:
+  // 1. Top-level: missing named function parameters
+  // 2. Constructor-level: missing named constructor arguments (recursive)
+  const paddedPatterns = padPatternsForMissingNamedArgs(originalPatterns, namedArgMap, totalArity, env.definitions);
 
   // The RHS was parsed with de Bruijn indices based on the ORIGINAL patterns.
   // When we pad patterns with wildcards for named params, we need to adjust RHS indices.
-  // The shift depends on WHERE the wildcards are inserted in the context.
   //
-  // Key insight: wildcards are inserted at the BEGINNING of each PCtor's args
-  // (because named params come first). For each PCtor that gets wildcards:
-  // - Variables bound BEFORE that PCtor in traversal order need to be shifted
-  // - Variables bound BY or AFTER that PCtor don't shift
+  // Two types of padding can occur:
+  // 1. TOP-LEVEL: wildcards prepended for missing named function parameters
+  // 2. CONSTRUCTOR-LEVEL: wildcards inserted at the beginning of PCtor args
   //
-  // We compute a series of shifts, one for each PCtor with named params.
-  let shiftedRhs = originalRhs;
+  // TOP-LEVEL wildcards are PREPENDED, so they get the HIGHEST de Bruijn indices.
+  // They don't shift existing pattern variable indices.
+  //
+  // CONSTRUCTOR-LEVEL wildcards within a pattern are also prepended (at positions 0, 1, ...),
+  // so they also get higher indices than the positional args within that same pattern.
+  // HOWEVER, wildcards in LATER patterns DO shift variables from EARLIER patterns.
+  //
+  // Example: nth (VCons h _) FZero = h
+  //   - VCons binds h at index 1, _ at index 0
+  //   - FZero gets 1 wildcard for {n}
+  //   - This wildcard is processed AFTER VCons, so it gets de Bruijn index 0
+  //   - This shifts h from 1 to 2, and _ from 0 to 1
+  //
+  // We compute the shift for each pattern position as the sum of wildcards added
+  // to all LATER patterns, then apply that shift to the RHS variables.
 
-  // Compute shifts for each top-level pattern
-  let varsAfterCurrent = 0;
+  // Compute wildcards added to each pattern
+  const wildcardsPerPattern: number[] = originalPatterns.map(p => countWildcardsAddedToPattern(p, env.definitions));
+
+  // Compute the shift for each original de Bruijn index.
+  // Variables in pattern i need to shift by the sum of wildcards in patterns i+1, i+2, ...
+  // First, compute cumulative sums from right to left
+  const shiftPerPattern: number[] = new Array(originalPatterns.length).fill(0);
+  let cumulativeWildcards = 0;
   for (let i = originalPatterns.length - 1; i >= 0; i--) {
-    const originalPattern = originalPatterns[i];
-    const paddedPattern = paddedPatterns[i];
-
-    const originalVars = countPatternVarsInPattern(originalPattern);
-    const paddedVars = countPatternVarsInPattern(paddedPattern);
-    const wildcardCount = paddedVars - originalVars;
-
-    if (wildcardCount > 0) {
-      // This pattern got wildcards. Variables bound BEFORE this pattern need to shift.
-      // The cutoff is: variables in this pattern's original sub-patterns + variables after this pattern
-      const cutoff = originalVars + varsAfterCurrent;
-      shiftedRhs = shiftTerm(shiftedRhs, wildcardCount, cutoff);
-    }
-
-    varsAfterCurrent += paddedVars;
+    shiftPerPattern[i] = cumulativeWildcards;
+    cumulativeWildcards += wildcardsPerPattern[i];
   }
+
+  // Map de Bruijn indices to pattern positions
+  // First compute how many vars each pattern binds
+  const varsPerPattern: number[] = originalPatterns.map(countPatternVarsInPattern);
+
+  // Build a lookup: for de Bruijn index k, find which pattern it belongs to and get shift
+  // De Bruijn indices count from rightmost binding (index 0 = last pattern's last var)
+  // Traverse patterns right to left, accumulating index ranges
+  if (loggingEnabled) {
+    console.log('\n[RHS SHIFT] originalPatterns:', originalPatterns.length);
+    console.log('[RHS SHIFT] varsPerPattern:', varsPerPattern);
+    console.log('[RHS SHIFT] wildcardsPerPattern:', wildcardsPerPattern);
+    console.log('[RHS SHIFT] shiftPerPattern:', shiftPerPattern);
+    console.log('[RHS SHIFT] originalRhs:', prettyPrintTTK(originalRhs));
+    console.log('[RHS SHIFT] originalRhs JSON:', JSON.stringify(originalRhs, null, 2).slice(0, 2000));
+  }
+  const shiftedRhs = transformVarsInTerm(originalRhs, (index) => {
+    // Find which pattern this index belongs to
+    let accum = 0;
+    for (let i = originalPatterns.length - 1; i >= 0; i--) {
+      if (index < accum + varsPerPattern[i]) {
+        // Index belongs to pattern i
+        if (loggingEnabled) {
+          console.log(`[RHS SHIFT] index ${index} -> pattern ${i}, shift ${shiftPerPattern[i]} -> ${index + shiftPerPattern[i]}`);
+        }
+        return mkVar(index + shiftPerPattern[i]);
+      }
+      accum += varsPerPattern[i];
+    }
+    // Index is beyond our patterns (shouldn't happen, but return as-is)
+    if (loggingEnabled) {
+      console.log(`[RHS SHIFT] index ${index} -> beyond patterns, no shift`);
+    }
+    return mkVar(index);
+  });
 
   const paddedContextLength = countPatternVars(paddedPatterns);
   const rhsInLevels = deBruijnToLevels(shiftedRhs, paddedContextLength);
@@ -840,8 +996,9 @@ export function checkMatchClause(
   const contextNames = result.context.map(entry => entry.name).reverse();
 
   // Return the checked clause with the solved RHS, elaborated arguments, and meta solutions
+  // Use PADDED patterns so that the totality checker sees the full constructor arities
   const checkedClause: TTKClause = {
-    patterns: env.value.patterns,
+    patterns: paddedPatterns,
     rhs: solvedEnv.value,
     elabArgs,
     contextNames,

@@ -2412,6 +2412,10 @@ export class Parser {
         // - Lowercase first letter: variable (e.g., 'a', 'b', 'default')
         // - Single uppercase letter: type variable (e.g., 'A', 'T')
         // - Multi-character starting with uppercase: constructor (e.g., 'Zero', 'Succ')
+        //
+        // NOTE: This heuristic can be wrong for lowercase constructors (like 'refl').
+        // In such cases, elaboration must resolve the ambiguity by checking if a
+        // pattern name is actually a constructor, and adjusting the RHS accordingly.
         const hasArgs = pattern.args.length > 0 || (pattern.namedArgs && pattern.namedArgs.length > 0);
         if (!hasArgs) {
           const name = pattern.name;

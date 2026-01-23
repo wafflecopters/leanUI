@@ -2,7 +2,21 @@
 
 import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint } from "./kernel";
 import { subst } from "./subst";
-import { assertIsPi, TCEnv, TCEnvError } from "./term";
+import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap } from "./term";
+
+/**
+ * Get the namedArgMap for a constructor by searching all inductive types.
+ */
+function getConstructorNamedArgMap(definitions: DefinitionsMap, ctorName: string): NamedArgMap | undefined {
+  for (const inductive of definitions.inductiveTypes.values()) {
+    for (const ctor of inductive.constructors) {
+      if (ctor.name === ctorName) {
+        return ctor.namedArgMap;
+      }
+    }
+  }
+  return undefined;
+}
 
 /**
  * Get a readable name for a function being applied.
@@ -305,22 +319,67 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   }
 
   // ────────────────────────────────────────────────────────────────
-  // (CONV) - Type conversion
+  // (CONV) - Type conversion with implicit argument insertion
   //
   //   Γ ⊢ t ⇒ T
   //   T ≃ T′
   //   ─────────────
   //   Γ ⊢ t ⇐ T′
+  //
+  // Additionally, if T = Π{x:A}.B (implicit/named Pi) and T′ is not a Pi,
+  // we insert a meta for the implicit argument:
+  //   Γ ⊢ t ?m ⇐ T′   where ?m : A
   // ────────────────────────────────────────────────────────────────
-  const inferredEnv = inferType(env);
+  let inferredEnv = inferType(env);
   // inferredEnv.value is the INFERRED TYPE, not the term
   // inferredEnv.elaboratedTerm is the ELABORATED TERM (if set)
-  // We unify the inferred type with the expected type
+  let currentTerm = inferredEnv.elaboratedTerm ?? env.value;
+
+  // Insert implicit arguments while needed
+  // When inferred type is a Pi and we have namedArgMap info indicating the position is implicit,
+  // and expected type is not a Pi, we insert metavariables for the implicit arguments
+  // Get namedArgMap from the term if it's a Const
+  const namedArgMap = env.value.tag === 'Const'
+    ? getTermDefinition(env.definitions, env.value.name)?.namedArgMap ??
+      getConstructorNamedArgMap(env.definitions, env.value.name)
+    : undefined;
+
+  let argPosition = 0;
+  while (true) {
+    const inferredIsPi = inferredEnv.value.tag === 'Binder' && inferredEnv.value.binderKind.tag === 'BPi';
+    const expectedIsPi = expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi';
+
+    if (!inferredIsPi || expectedIsPi) {
+      // No more implicit insertion needed
+      break;
+    }
+
+    // Check if this position is implicit (in the namedArgMap)
+    const piBinder = inferredEnv.value as TTKTerm & { tag: 'Binder'; binderKind: { tag: 'BPi' } };
+    const isImplicit = namedArgMap && Array.from(namedArgMap.values()).includes(argPosition);
+
+    if (!isImplicit) {
+      // This is an explicit argument - don't auto-insert
+      break;
+    }
+
+    // Insert an implicit argument: create a meta for the domain type
+    const { env: envWithMeta, metaTerm } = inferredEnv.createMetaWithType(piBinder.domain);
+
+    // Apply the current term to the meta
+    currentTerm = { tag: 'App', fn: currentTerm, arg: metaTerm };
+
+    // New inferred type is the body with the meta substituted
+    const newInferredType = subst(0, metaTerm, piBinder.body);
+    inferredEnv = envWithMeta.withValue(newInferredType);
+    argPosition++;
+  }
+
+  // Now try to unify the inferred type with the expected type
   try {
     const unifiedEnv = inferredEnv.unifyTerms(inferredEnv.value, expectedType);
-    // Return with the elaborated term (if available), otherwise the original term
-    const elaboratedTerm = inferredEnv.elaboratedTerm ?? env.value;
-    return unifiedEnv.withValue(elaboratedTerm);
+    // Return with the elaborated term (with implicit args inserted)
+    return unifiedEnv.withValue(currentTerm);
   } catch (e) {
     if (e instanceof TCEnvError) {
       const termDesc = getTermDescription(env.value, env);
@@ -332,7 +391,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       const expectedIsPi = expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi';
 
       if (inferredIsPi && !expectedIsPi) {
-        // Count how many arguments are still needed
+        // Count how many arguments are still needed (these are explicit args, not implicit)
         const { count, names } = countPiBindersWithNames(inferredEnv.value);
         const argList = names.map(n => `'${n}'`).join(', ');
         throw e.wrappedBy(

@@ -89,16 +89,16 @@ export function updateDefinitionsInTCEnv<T>(env: TCEnv<T>, fn: (d: DefinitionsMa
   );
 }
 
-export function addDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm): TCEnv<T> {
-  return updateDefinitionsInTCEnv(env, (d) => addDefinition(d, name, type));
+export function addDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, namedArgMap?: NamedArgMap): TCEnv<T> {
+  return updateDefinitionsInTCEnv(env, (d) => addDefinition(d, name, type, undefined, namedArgMap));
 }
 
 export function setDefinitionValueInTCEnv<T>(env: TCEnv<T>, name: string, value: TTKTerm): TCEnv<T> {
   return updateDefinitionsInTCEnv(env, (d) => setDefinitionValue(d, name, value));
 }
 
-export function addInductiveDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm }>, indexPositions: number[]): TCEnv<T> {
-  return updateDefinitionsInTCEnv(env, (d) => addInductiveDefinition(d, name, type, constructors, indexPositions));
+export function addInductiveDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>, indexPositions: number[], namedArgMap?: NamedArgMap): TCEnv<T> {
+  return updateDefinitionsInTCEnv(env, (d) => addInductiveDefinition(d, name, type, constructors, indexPositions, namedArgMap));
 }
 
 export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, MetaVar>) => Map<string, MetaVar>): TCEnv<T> {
@@ -196,6 +196,54 @@ export function createNamedArgLookup(definitions: DefinitionsMap): (name: string
       for (const ctor of inductive.constructors) {
         if (ctor.name === name && ctor.namedArgMap) {
           return ctor.namedArgMap;
+        }
+      }
+    }
+
+    return undefined;
+  };
+}
+
+/**
+ * Info about named arguments and arity for a definition.
+ */
+export interface NamedArgInfo {
+  namedArgMap: NamedArgMap;
+  totalArity: number;
+}
+
+/**
+ * Create a lookup function that returns both namedArgMap and totalArity.
+ * This is used during elaboration to properly handle implicit argument insertion.
+ */
+export function createNamedArgInfoLookup(definitions: DefinitionsMap): (name: string) => NamedArgInfo | undefined {
+  return (name: string) => {
+    // Check term definitions
+    const termDef = definitions.terms.get(name);
+    if (termDef?.namedArgMap && termDef.type) {
+      return {
+        namedArgMap: termDef.namedArgMap,
+        totalArity: countPiBinders(termDef.type)
+      };
+    }
+
+    // Check inductive types
+    const inductiveDef = definitions.inductiveTypes.get(name);
+    if (inductiveDef?.namedArgMap) {
+      return {
+        namedArgMap: inductiveDef.namedArgMap,
+        totalArity: countPiBinders(inductiveDef.type)
+      };
+    }
+
+    // Check constructors
+    for (const [, inductive] of definitions.inductiveTypes) {
+      for (const ctor of inductive.constructors) {
+        if (ctor.name === name && ctor.namedArgMap) {
+          return {
+            namedArgMap: ctor.namedArgMap,
+            totalArity: countPiBinders(ctor.type)
+          };
         }
       }
     }
@@ -733,6 +781,33 @@ export class TCEnv<T> {
       envWithLevel.value,
       envWithLevel.levelMetas,
       envWithLevel.options
+    );
+
+    return { env, metaTerm };
+  }
+
+  /**
+   * Create a fresh meta variable with a given type.
+   * Used for inserting implicit arguments during type checking.
+   * Returns the updated env and the meta term.
+   */
+  createMetaWithType<S>(this: TCEnv<S>, metaType: TTKTerm): { env: TCEnv<S>, metaTerm: TTKTerm } {
+    const name = `?m${this.metaVars.size}`;
+    const newMetaVars = new Map(this.metaVars);
+    newMetaVars.set(name, { ctx: this.context, type: metaType });
+
+    const metaTerm: TTKTerm = { tag: 'Meta', id: name };
+
+    const env = new TCEnv(
+      this.context,
+      this.definitions,
+      newMetaVars,
+      this.constraints,
+      this.indexPath,
+      this.valueStack,
+      this.value,
+      this.levelMetas,
+      this.options
     );
 
     return { env, metaTerm };

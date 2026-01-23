@@ -7,14 +7,14 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, elabPatternToKernel, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
+import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
-import { arraySeg, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
+import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -67,7 +67,7 @@ export interface ElabDeclaration {
   // Elaborated kernel terms
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
-  kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
+  kernelConstructors?: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>;
   /** Maps kernel paths to surface paths (for error mapping) */
   elabMap?: ElabMap;
   /** Maps surface paths to source ranges (for error mapping) */
@@ -112,7 +112,7 @@ export interface CompiledDeclaration {
   // Elaborated kernel terms
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
-  kernelConstructors?: Array<{ name: string; type: TTKTerm }>;
+  kernelConstructors?: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>;
 
   // For inductive types: positions that are indices (not parameters)
   indexPositions?: number[];
@@ -1013,7 +1013,7 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 
       let kernelType: TTKTerm | undefined;
       let kernelValue: TTKTerm | undefined;
-      let kernelConstructors: Array<{ name: string; type: TTKTerm }> | undefined;
+      let kernelConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined;
 
       try {
         // Elaborate type
@@ -1033,14 +1033,15 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 
         // Elaborate constructors
         if (decl.constructors) {
-          // Extract the inductive type's named arg map so constructor types
+          // Extract the inductive type's named arg map and arity so constructor types
           // can reference the inductive type with named arguments
           const inductiveNamedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+          const inductiveTotalArity = decl.type ? countParameters(decl.type) : undefined;
 
-          // Create a lookup that includes this inductive type's named arg map
+          // Create a lookup that includes this inductive type's named arg info
           // This is needed because the inductive type isn't registered in definitions yet
           const ctorAppLookup = decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0
-            ? (name: string) => name === decl.name ? inductiveNamedArgMap : undefined
+            ? (name: string) => name === decl.name ? { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity } : undefined
             : undefined;
 
           kernelConstructors = decl.constructors.map((ctor, ctorIndex) => {
@@ -1240,11 +1241,15 @@ function checkInductiveTypeDeclaration(
     return failCheck('Inductive type declaration is ill-formed', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
 
+  // Extract namedArgMap from the surface type for the inductive type itself
+  const inductiveNamedArgMap = decl.surfaceType ? extractNamedArgMap(decl.surfaceType) : undefined;
+
   const result = checkInductiveDeclaration(
     decl.name || 'anonymous',
     decl.kernelType,
     decl.kernelConstructors,
-    definitions
+    definitions,
+    inductiveNamedArgMap && inductiveNamedArgMap.size > 0 ? inductiveNamedArgMap : undefined
   );
   if (!result.success) {
     return result
@@ -1283,8 +1288,9 @@ function checkTermDeclaration(
   }
 
   try {
-    // If no value is provided, treat as a term with zero clauses (e.g., absurd : Void -> A)
-    const kernelValue: TTKTerm = decl.kernelValue ?? {
+    // Create a placeholder kernel value - actual clause elaboration happens in checkTermValue
+    // following the flow: for each clause, elaborate LHS, unify, then elaborate RHS
+    const placeholderValue: TTKTerm = {
       tag: 'Match',
       scrutinee: { tag: 'Hole', id: '_scrutinee' },
       clauses: []
@@ -1293,7 +1299,7 @@ function checkTermDeclaration(
     let termEnv = env.withValue<TermDefinition>({
       name: decl.name,
       type: decl.kernelType,
-      value: kernelValue,
+      value: placeholderValue,
     });
 
     // Check for duplicate names
@@ -1308,9 +1314,13 @@ function checkTermDeclaration(
       }
     }
 
-    // Add to context for subsequent declarations
+    // Extract named arg info from type for use in definition and pattern elaboration
+    const namedArgMap = decl.surfaceType ? extractNamedArgMap(decl.surfaceType) : undefined;
+    const totalArity = decl.surfaceType ? countParameters(decl.surfaceType) : undefined;
+
+    // Add to context for subsequent declarations, including namedArgMap for lookup
     if (decl.name) {
-      termEnv = addDefinitionInTCEnv(termEnv, decl.name, decl.kernelType);
+      termEnv = addDefinitionInTCEnv(termEnv, decl.name, decl.kernelType, namedArgMap);
     }
 
     // Handle #absurd clauses from surface value
@@ -1359,12 +1369,48 @@ function checkTermDeclaration(
       return { success: false, errors: absurdClauseErrors };
     }
 
-    const termValueEnv = termEnv.inTermValue()
-    if (!termValueEnv.hasDefinedValue()) {
-      return failCheck('Term declaration is ill-formed (missing value)', termValueEnv)
+    // Handle non-Match values (simple definitions like `test = True`)
+    // These don't involve pattern matching, so we elaborate and check directly
+    if (decl.surfaceValue && decl.surfaceValue.tag !== 'Match') {
+      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+      const appNamedArgLookup = createNamedArgInfoLookup(termEnv.definitions);
+      const kernelValue = elabToKernelWithMap(
+        decl.surfaceValue,
+        decl.elabMap ?? new Map(),
+        valuePath,
+        valuePath,
+        namedArgMap,
+        appNamedArgLookup
+      );
+
+      try {
+        const valueEnv = termEnv.withValue(kernelValue);
+        const result = checkType(valueEnv, decl.kernelType);
+        const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, result.value);
+        return { success: true, definitions: resultEnv.definitions, checkedValue: result.value };
+      } catch (e) {
+        if (e instanceof TCEnvError) {
+          return { success: false, errors: [e] };
+        }
+        return { success: false, errors: [TCEnvError.create(String(e), termEnv)] };
+      }
     }
 
-    const result = checkTermValue(decl.name, termValueEnv, decl.kernelType, annotatedAbsurdClauses);
+    // Get surface clauses for incremental elaboration (pattern matching case)
+    const surfaceClauses = decl.surfaceValue?.tag === 'Match'
+      ? decl.surfaceValue.clauses.filter(c => c.rhs.tag !== 'AbsurdMarker')
+      : [];
+
+    const result = checkTermValue(
+      decl.name,
+      termEnv,
+      decl.kernelType,
+      surfaceClauses,
+      decl.elabMap ?? new Map(),
+      namedArgMap,
+      totalArity,
+      annotatedAbsurdClauses
+    );
     if (!result.success) {
       return { success: false, errors: result.errors, totalityResult: result.totalityResult }
     }
@@ -1599,7 +1645,7 @@ function createCompiledDeclaration(
   decl: ParsedDeclaration,
   kernelType: TTKTerm | undefined,
   kernelValue: TTKTerm | undefined,
-  kernelConstructors: Array<{ name: string; type: TTKTerm }> | undefined,
+  kernelConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined,
   elabMap: ElabMap,
   sourceMap: SourceMap,
   checkSuccess: boolean,
@@ -1690,14 +1736,15 @@ function processInductiveDeclaration(
     }
   }
 
-  // Extract inductive's named arg map for constructor elaboration
+  // Extract inductive's named arg map and arity for constructor elaboration
   const inductiveNamedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+  const inductiveTotalArity = decl.type ? countParameters(decl.type) : undefined;
   const ctorAppLookup = decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0
-    ? (name: string) => name === decl.name ? inductiveNamedArgMap : undefined
+    ? (name: string) => name === decl.name ? { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity } : undefined
     : undefined;
 
   // Elaborate constructors
-  let kernelConstructors: Array<{ name: string; type: TTKTerm }> | undefined;
+  let kernelConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined;
   if (decl.constructors) {
     kernelConstructors = [];
     for (let ctorIndex = 0; ctorIndex < decl.constructors.length; ctorIndex++) {
@@ -1709,7 +1756,13 @@ function processInductiveDeclaration(
           { kind: 'field', name: 'type' }
         ];
         const ctorKernelType = elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath, undefined, ctorAppLookup);
-        kernelConstructors.push({ name: ctor.name, type: ctorKernelType });
+        // Extract namedArgMap from the constructor's surface type
+        const ctorNamedArgMap = extractNamedArgMap(ctor.type);
+        kernelConstructors.push({
+          name: ctor.name,
+          type: ctorKernelType,
+          namedArgMap: ctorNamedArgMap.size > 0 ? ctorNamedArgMap : undefined
+        });
       } catch (e) {
         return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
       }
@@ -1737,7 +1790,8 @@ function processInductiveDeclaration(
     decl.name || 'anonymous',
     kernelType,
     kernelConstructors,
-    definitions
+    definitions,
+    inductiveNamedArgMap
   );
 
   if (!result.success) {
@@ -1788,24 +1842,17 @@ function processTermDeclaration(
   if (decl.type) {
     try {
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
-      kernelType = elabToKernelWithMap(decl.type, elabMap, typePath, typePath);
+      // Pass appNamedArgLookup so named arguments in the type signature can be resolved
+      const appNamedArgLookup = createNamedArgInfoLookup(definitions);
+      kernelType = elabToKernelWithMap(decl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
     } catch (e) {
       return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
     }
   }
 
-  // Elaborate value (will be checked clause-by-clause in checkTermDeclaration)
-  let kernelValue: TTKTerm | undefined;
-  if (decl.value) {
-    try {
-      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-      const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
-      const totalArity = decl.type ? countParameters(decl.type) : undefined;
-      kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
-    } catch (e) {
-      return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
-    }
-  }
+  // NOTE: We do NOT elaborate the value here. Per step (b) above, clause elaboration
+  // happens incrementally in checkTermDeclaration: for each clause, we elaborate
+  // LHS patterns, unify & solve, THEN elaborate RHS under the resulting context.
 
   // Create ElabDeclaration for checkTermDeclaration
   const elabDecl: ElabDeclaration = {
@@ -1814,7 +1861,7 @@ function processTermDeclaration(
     surfaceType: decl.type,
     surfaceValue: decl.value,
     kernelType,
-    kernelValue,
+    // kernelValue is NOT set here - elaboration happens clause-by-clause in checkTermDeclaration
     elabMap,
     sourceMap
   };
@@ -1828,7 +1875,7 @@ function processTermDeclaration(
     return {
       success: false,
       compiled: createCompiledDeclaration(
-        decl, kernelType, kernelValue, undefined, elabMap, sourceMap,
+        decl, kernelType, undefined, undefined, elabMap, sourceMap,
         false, result.errors, result.totalityResult
       ),
       newDefinitions: definitions,
@@ -2117,56 +2164,161 @@ function tryCaseSplitsInSearchOfAbsurdity(
 // Term Value Checking
 // ============================================================================
 
-function checkTermValue(
-  name: string | undefined,
-  env: TCEnv<TTKTerm>,
+/**
+ * Check a match clause from surface syntax, following the proper order:
+ * 1. Elaborate LHS patterns (surface -> kernel)
+ * 2. Run LHS unification & constraint solving
+ * 3. Elaborate RHS (surface -> kernel) - can use context from LHS in future
+ * 4. Check RHS against refined return type
+ *
+ * This ensures RHS elaboration happens AFTER LHS unification, allowing
+ * future type-directed RHS elaboration if needed.
+ */
+function checkMatchClauseFromSurface(
+  termName: string,
+  surfaceClause: TClause,
   type: TTKTerm,
-  annotatedAbsurdClauses: number[] = [],
-): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
-  if (!env.isMatchTerm()) {
-    try {
-      const result = checkType(env, type);
-      return { success: true, checkedValue: result.value };
-    } catch (e) {
-      if (e instanceof TCEnvError) {
-        return { success: false, errors: [e] };
-      } else {
-        return { success: false, errors: [TCEnvError.create(String(e), env)] };
-      }
+  termEnv: TCEnv<TermDefinition>,
+  elabMap: ElabMap,
+  clauseIndex: number,
+  namedArgMap: NamedArgMap | undefined,
+  totalArity: number | undefined,
+): TTKClause {
+  const clauseSurfacePath: IndexPath = [
+    { kind: 'field', name: 'value' },
+    { kind: 'field', name: 'clauses' },
+    { kind: 'array', index: clauseIndex }
+  ];
+  const clauseKernelPath: IndexPath = [
+    { kind: 'field', name: 'value' },
+    { kind: 'field', name: 'clauses' },
+    { kind: 'array', index: clauseIndex }
+  ];
+
+  // Step 1: Elaborate LHS patterns (surface -> kernel)
+  // This includes reordering for named arguments
+  let patternsToElab = surfaceClause.patterns;
+  let rhsToElab = surfaceClause.rhs;
+  const hasClauseNamedPatterns = surfaceClause.namedPatterns && surfaceClause.namedPatterns.length > 0;
+
+  if (namedArgMap && namedArgMap.size > 0) {
+    const reorderResult = reorderPatterns(surfaceClause.patterns, namedArgMap, surfaceClause.namedPatterns, totalArity);
+    if ('error' in reorderResult && reorderResult.error !== undefined) {
+      throw TCEnvError.create(reorderResult.error, termEnv);
+    }
+    patternsToElab = reorderResult.ordered!;
+
+    // Apply RHS adjustment for pattern reordering
+    // When user explicitly uses named patterns, apply the computed permutation
+    // When wildcards are inserted for missing named params (at front positions),
+    // no RHS adjustment is needed - they get highest de Bruijn indices and don't affect user vars
+    if (hasNamedPatterns(surfaceClause.patterns) || hasClauseNamedPatterns) {
+      rhsToElab = applyVarPermutation(surfaceClause.rhs, reorderResult.varIndexPermutation!);
     }
   }
 
-  const clausesEnv = env.inMatchClauses();
+  // Fix RHS for constructor patterns that the parser mistakenly treated as variables
+  // (e.g., lowercase constructors like 'refl' that the parser thought were variable bindings)
+  rhsToElab = fixRhsForConstructorPatterns(patternsToElab, rhsToElab, termEnv.definitions);
+
+  // Elaborate patterns to kernel form
+  const kernelPatterns: TTKPattern[] = patternsToElab.map((pattern, patternIndex) => {
+    const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
+    const patternKernelPath = appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(patternIndex));
+    return elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
+  });
+
+  // Record the clause mapping
+  elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
+
+  // Step 2: Elaborate RHS (surface -> kernel) AFTER LHS patterns are elaborated
+  // This is the key change - RHS elaboration happens after LHS elaboration
+  const rhsSurfacePath = appendPath(clauseSurfacePath, fieldSeg('rhs'));
+  const rhsKernelPath = appendPath(clauseKernelPath, fieldSeg('rhs'));
+
+  // Create lookup for named args of other definitions being applied in RHS
+  // Include the current function for recursive calls
+  const baseNamedArgLookup = createNamedArgInfoLookup(termEnv.definitions);
+  const appNamedArgLookup = (name: string) => {
+    // For recursive calls, use the current function's named arg info
+    if (name === termName && namedArgMap && namedArgMap.size > 0) {
+      return { namedArgMap, totalArity };
+    }
+    return baseNamedArgLookup(name);
+  };
+
+  const kernelRhs: TTKTerm = elabToKernelWithMap(
+    rhsToElab,
+    elabMap,
+    rhsSurfacePath,
+    rhsKernelPath,
+    namedArgMap,
+    appNamedArgLookup
+  );
+
+  // Now create the full kernel clause and check it
+  const fullKernelClause: TTKClause = {
+    patterns: kernelPatterns,
+    rhs: kernelRhs
+  };
+
+  // Step 4: Check the clause (unify LHS, check RHS)
+  // NOTE: Don't pass namedArgMap/totalArity here - reorderPatterns already handled wildcard insertion
+  // for missing named arguments. Passing them would cause double-padding.
+  const clauseEnv = termEnv.withValue(fullKernelClause);
+  const checkedClauseEnv = checkMatchClause(termName, clauseEnv, type);
+  return checkedClauseEnv.value;
+}
+
+function checkTermValue(
+  name: string | undefined,
+  termEnv: TCEnv<TermDefinition>,
+  type: TTKTerm,
+  surfaceClauses: TClause[],
+  elabMap: ElabMap,
+  namedArgMap: NamedArgMap | undefined,
+  totalArity: number | undefined,
+  annotatedAbsurdClauses: number[] = [],
+): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   const errors: TCEnvError[] = [];
   const checkedClauses: TTKClause[] = [];
 
   // Handle zero-clause case (e.g., absurd : Void -> A)
-  // Skip clause checking, go directly to totality check
-  const hasNoClauses = clausesEnv.value.length === 0;
+  const hasNoClauses = surfaceClauses.length === 0;
 
-  const firstClauseRootPatternsCount = hasNoClauses ? 0 : clausesEnv.value[0].patterns.length;
+  const firstClauseRootPatternsCount = hasNoClauses ? 0 : surfaceClauses[0].patterns.length;
   const maxAllowedPatternsCount = countPiBinders(type);
 
-  // Note: #absurd clauses are validated in checkTermDeclaration and filtered during elaboration
+  // Note: #absurd clauses are validated in checkTermDeclaration and filtered before reaching here
   // The annotatedAbsurdClauses parameter contains their surface indices
 
-  for (let clauseIndex = 0; clauseIndex < clausesEnv.value.length; clauseIndex++) {
-    const clauseEnv = clausesEnv.inMatchClause(clauseIndex);
-    const rootPatternsCount = clauseEnv.value.patterns.length;
+  for (let clauseIndex = 0; clauseIndex < surfaceClauses.length; clauseIndex++) {
+    const surfaceClause = surfaceClauses[clauseIndex];
+    const rootPatternsCount = surfaceClause.patterns.length;
 
     if (rootPatternsCount !== firstClauseRootPatternsCount) {
-      errors.push(TCEnvError.create(`Mismatch in pattern count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected ${firstClauseRootPatternsCount}.`, clauseEnv));
+      errors.push(TCEnvError.create(`Mismatch in pattern count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected ${firstClauseRootPatternsCount}.`, termEnv));
     } else if (rootPatternsCount > maxAllowedPatternsCount) {
-      errors.push(TCEnvError.create(`Pattern count exceeds type binders count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected <= ${maxAllowedPatternsCount}.`, clauseEnv));
+      errors.push(TCEnvError.create(`Pattern count exceeds type binders count: clause ${clauseIndex + 1} has ${rootPatternsCount} patterns, expected <= ${maxAllowedPatternsCount}.`, termEnv));
     } else {
       try {
-        const checkedClauseEnv = checkMatchClause(name ?? '???', clauseEnv, type);
-        checkedClauses.push(checkedClauseEnv.value);
+        // Following the flow: elaborate LHS, unify & solve, then elaborate and check RHS
+        const checkedClause = checkMatchClauseFromSurface(
+          name ?? '???',
+          surfaceClause,
+          type,
+          termEnv,
+          elabMap,
+          clauseIndex,
+          namedArgMap,
+          totalArity
+        );
+        checkedClauses.push(checkedClause);
       } catch (e) {
         if (e instanceof TCEnvError) {
           errors.push(e);
         } else {
-          errors.push(TCEnvError.create(String(e), clausesEnv.inMatchClause(clauseIndex)));
+          errors.push(TCEnvError.create(String(e), termEnv));
         }
       }
     }
@@ -2179,7 +2331,7 @@ function checkTermValue(
   // Build the checked Match term with solved/reified RHS terms
   const checkedValue: TTKTerm = {
     tag: 'Match',
-    scrutinee: env.value.scrutinee,
+    scrutinee: { tag: 'Hole', id: '_scrutinee' },
     clauses: checkedClauses
   };
 
@@ -2187,18 +2339,9 @@ function checkTermValue(
   if (name) {
     const recursionResult = checkStructuralRecursion(name, checkedClauses);
     if (!recursionResult.isValid) {
-      const recursionErrors = recursionResult.errors.map(({ clauseIndex, error }) => {
-        // Navigate to the call site using TCEnv
-        let callSiteEnv: TCEnv<unknown> = clausesEnv.inMatchClause(clauseIndex).inMatchClauseRhs();
-        for (const seg of error.rhsPath) {
-          const term = callSiteEnv.value as TTKTerm;
-          if (seg.kind === 'field' && seg.name === 'fn' && term?.tag === 'App') {
-            callSiteEnv = (callSiteEnv as TCEnv<TTKTerm & { tag: 'App' }>).inAppFn();
-          } else if (seg.kind === 'field' && seg.name === 'arg' && term?.tag === 'App') {
-            callSiteEnv = (callSiteEnv as TCEnv<TTKTerm & { tag: 'App' }>).inAppArg();
-          }
-        }
-        return TCEnvError.create(error.message, callSiteEnv);
+      const recursionErrors = recursionResult.errors.map(({ error }) => {
+        // Create error with the term env (clause-level navigation not available with new flow)
+        return TCEnvError.create(error.message, termEnv);
       });
       return { success: false, errors: recursionErrors };
     }
@@ -2217,26 +2360,25 @@ function checkTermValue(
     }
 
     // Basic absurdity check with padded patterns
-    const patternEnv = env.withValue(paddedPatterns);
+    const patternEnv = termEnv.withValue(paddedPatterns);
     if (arePatternsAbsurd(termName, patternEnv, type)) {
       return true;
     }
 
     // Try Agda-style recursive splitting on remaining arguments
-    return tryCaseSplitsInSearchOfAbsurdity(termName, patterns, type, env.definitions, env);
+    return tryCaseSplitsInSearchOfAbsurdity(termName, patterns, type, termEnv.definitions, termEnv);
   };
 
   // Run totality checking (builds case tree and checks coverage)
-  const totalityResult = checkTotality(name ?? '???', checkedClauses, env.definitions, absurdityChecker);
+  const totalityResult = checkTotality(name ?? '???', checkedClauses, termEnv.definitions, absurdityChecker);
 
   // Convert totality issues to errors
   const totalityErrors: TCEnvError[] = [];
-  for (const clauseIdx of totalityResult.unreachableClauses) {
-    const clauseEnv = clausesEnv.inMatchClause(clauseIdx);
-    totalityErrors.push(TCEnvError.create(`Unreachable clause`, clauseEnv));
+  for (const _clauseIdx of totalityResult.unreachableClauses) {
+    totalityErrors.push(TCEnvError.create(`Unreachable clause`, termEnv));
   }
   if (!totalityResult.isExhaustive) {
-    totalityErrors.push(TCEnvError.create(`Non-exhaustive patterns`, env));
+    totalityErrors.push(TCEnvError.create(`Non-exhaustive patterns`, termEnv));
   }
 
   // Add annotatedAbsurdClauses to the totality result

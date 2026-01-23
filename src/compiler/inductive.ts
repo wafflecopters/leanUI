@@ -10,10 +10,12 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
       // Valid
     } else if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
       // Valid
+    } else if (term.tag === 'Hole') {
+      // Holes are allowed - they will be resolved during type checking.
+      // If they remain unresolved, the "unsolved metas" check will catch them.
     } else {
       const msg = {
         Annot: 'Explicit annotation',
-        Hole: 'Inferred type',
         Meta: 'Metavariable',
         Match: 'Pattern matching',
         Binder: undefined,
@@ -49,6 +51,7 @@ export function checkInductiveDeclaration(
   type: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>,
   definitions: DefinitionsMap,
+  namedArgMap?: NamedArgMap,
 ): {
   success: false,
   errors: TCEnvError[]
@@ -137,7 +140,7 @@ export function checkInductiveDeclaration(
   // Compute index positions on the validated TTK terms (after positivity check)
   const indexPositions = inferParameterIndicesK({ name, type, constructors });
 
-  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions);
+  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions, namedArgMap);
 
   return {
     success: true,
