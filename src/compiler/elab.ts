@@ -36,6 +36,7 @@ import type {
 } from './kernel';
 
 import { mkLevelNum, mkMeta, mkLParam, mkLSucc, mkLMax, mkLIMax, Level } from './kernel';
+import { shiftTerm } from './subst';
 
 // Counter for generating unique meta IDs for implicit let types
 let implicitLetTypeCounter = 0;
@@ -1499,7 +1500,12 @@ export function elabToKernel(term: TTerm): TTKTerm {
     case 'MultiBinder': {
       // Expand MultiBinder into nested single Binder terms
       // (a b c : T) -> B  becomes  (a : T) -> (b : T) -> (c : T) -> B
-      const domain = elabToKernel(term.domain);
+      //
+      // IMPORTANT: The domain expression's de Bruijn indices refer to the context
+      // BEFORE any of the MultiBinder's names are introduced. When we create
+      // nested binders, each binder at position i has i binders above it,
+      // so the domain needs to be shifted by i.
+      const baseDomain = elabToKernel(term.domain);
       let body = elabToKernel(term.body);
 
       // Convert surface binder kind to kernel binder kind
@@ -1520,11 +1526,13 @@ export function elabToKernel(term: TTerm): TTKTerm {
 
       // Build nested binders from inside out (reverse order)
       for (let i = term.names.length - 1; i >= 0; i--) {
+        // Shift the domain by i to account for the i binders above position i
+        const shiftedDomain = i > 0 ? shiftTerm(baseDomain, i, 0) : baseDomain;
         body = {
           tag: 'Binder',
           name: term.names[i],
           binderKind: binderKindFactory(),
-          domain,
+          domain: shiftedDomain,
           body
         };
       }
@@ -1682,7 +1690,10 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
         };
 
       case 'MultiBinder': {
-        const domain = elab(t.domain);
+        // Expand MultiBinder into nested single Binder terms
+        // (a b c : T) -> B  becomes  (a : T) -> (b : T') -> (c : T'') -> B
+        // where T' = shift(T, 1), T'' = shift(T, 2), etc.
+        const baseDomain = elab(t.domain);
         let body = elab(t.body);
 
         let binderKindFactory: () => TTKBinderKind;
@@ -1699,11 +1710,13 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
         }
 
         for (let i = t.names.length - 1; i >= 0; i--) {
+          // Shift the domain by i to account for the i binders above position i
+          const shiftedDomain = i > 0 ? shiftTerm(baseDomain, i, 0) : baseDomain;
           body = {
             tag: 'Binder',
             name: t.names[i],
             binderKind: binderKindFactory(),
-            domain,
+            domain: shiftedDomain,
             body
           };
         }
@@ -2102,10 +2115,16 @@ export function elabToKernelWithMap(
 
     case 'MultiBinder': {
       // Expand MultiBinder into nested single Binder terms
-      // (a b c : T) -> B  becomes  (a : T) -> (b : T) -> (c : T) -> B
+      // (a b c : T) -> B  becomes  (a : T) -> (b : T') -> (c : T'') -> B
+      // where T' = shift(T, 1), T'' = shift(T, 2), etc.
+      //
+      // The domain T is in the context BEFORE any of the MultiBinder's names.
+      // When we create nested binders, binder at position i has i binders above it,
+      // so the domain needs to be shifted by i.
+      //
       // For path tracking, the domain maps to the first binder's domain
       // and the body maps to the innermost binder's body
-      const domain = elabToKernelWithMap(
+      const baseDomain = elabToKernelWithMap(
         term.domain,
         elabMap,
         appendPath(surfacePath, fieldSeg('domain')),
@@ -2146,11 +2165,13 @@ export function elabToKernelWithMap(
 
       // Build nested binders from inside out (reverse order)
       for (let i = term.names.length - 1; i >= 0; i--) {
+        // Shift the domain by i to account for the i binders above position i
+        const shiftedDomain = i > 0 ? shiftTerm(baseDomain, i, 0) : baseDomain;
         body = {
           tag: 'Binder',
           name: term.names[i],
           binderKind: binderKindFactory(),
-          domain,
+          domain: shiftedDomain,
           body
         };
       }

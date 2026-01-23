@@ -1302,6 +1302,145 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 }
 
 // ============================================================================
+// MultiBinder Expansion
+// ============================================================================
+
+/**
+ * Expand all MultiBinders in a surface term into nested single Binders.
+ *
+ * This is a pre-pass that simplifies the surface term before elaboration.
+ * For example: `{u v : A} -> B` becomes `{u : A} -> {v : A'} -> B`
+ * where A' has de Bruijn indices shifted by 1 to account for `u` being in scope.
+ *
+ * This eliminates the need for special MultiBinder handling in elaboration.
+ */
+export function expandMultiBinders(term: TTerm): TTerm {
+  switch (term.tag) {
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+    case 'ULevel':
+    case 'AbsurdMarker':
+      return term;
+
+    case 'Binder': {
+      const newDomain = term.domain !== undefined ? expandMultiBinders(term.domain) : undefined;
+      const newBody = expandMultiBinders(term.body);
+
+      let newBinderKind: BinderKind;
+      if (term.binderKind.tag === 'BLetTT') {
+        const newDefVal = expandMultiBinders(term.binderKind.defVal);
+        newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
+      } else {
+        newBinderKind = term.binderKind;
+      }
+
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: newBinderKind,
+        domain: newDomain,
+        body: newBody,
+        named: term.named
+      };
+    }
+
+    case 'MultiBinder': {
+      // Expand MultiBinder into nested single Binders
+      // (a b c : T) -> B  becomes  (a : T) -> (b : T') -> (c : T'') -> B
+      // where T' = shift(T, 1, 0), T'' = shift(T, 2, 0), etc.
+      //
+      // The domain T is in the context BEFORE any of the MultiBinder's names.
+      // When we create nested binders, binder at position i has i binders above it,
+      // so the domain needs to be shifted by i.
+      const baseDomain = expandMultiBinders(term.domain);
+      let body = expandMultiBinders(term.body);
+
+      // Build nested binders from inside out (reverse order)
+      for (let i = term.names.length - 1; i >= 0; i--) {
+        // Shift the domain by i to account for the i binders above position i
+        const shiftedDomain = i > 0 ? shift(i, baseDomain, 0) : baseDomain;
+
+        let binderKind: BinderKind;
+        if (term.binderKind.tag === 'BLetTT') {
+          // Shift the let value too
+          const shiftedDefVal = i > 0 ? shift(i, term.binderKind.defVal, 0) : term.binderKind.defVal;
+          binderKind = { tag: 'BLetTT', defVal: expandMultiBinders(shiftedDefVal) };
+        } else {
+          binderKind = term.binderKind;
+        }
+
+        body = {
+          tag: 'Binder',
+          name: term.names[i],
+          binderKind,
+          domain: shiftedDomain,
+          body,
+          named: term.named
+        };
+      }
+
+      return body;
+    }
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: expandMultiBinders(term.fn),
+        arg: expandMultiBinders(term.arg),
+        argName: (term as TTermApp).argName
+      };
+
+    case 'Hole':
+      return {
+        tag: 'Hole',
+        id: term.id,
+        type: expandMultiBinders(term.type),
+        context: term.context
+      };
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: expandMultiBinders(term.term),
+        type: expandMultiBinders(term.type)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: expandMultiBinders(term.scrutinee),
+        clauses: term.clauses.map(c => ({
+          patterns: c.patterns.map(expandMultiBindersInPattern),
+          rhs: expandMultiBinders(c.rhs),
+          namedPatterns: c.namedPatterns
+        }))
+      };
+  }
+}
+
+/**
+ * Expand MultiBinders in patterns (if any exist in pattern types).
+ */
+function expandMultiBindersInPattern(pattern: TPattern): TPattern {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return pattern;
+
+    case 'PCtor':
+      return {
+        ...pattern,
+        args: pattern.args.map(expandMultiBindersInPattern),
+        namedArgs: pattern.namedArgs?.map(na => ({
+          name: na.name,
+          pattern: expandMultiBindersInPattern(na.pattern)
+        }))
+      };
+  }
+}
+
+// ============================================================================
 // Pretty Printing (De Bruijn to Named Variables)
 // ============================================================================
 
