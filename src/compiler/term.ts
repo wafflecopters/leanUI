@@ -734,6 +734,10 @@ export class TCEnv<T> {
     return this.value.tag === 'Hole';
   }
 
+  isULevelTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'ULevel' }> {
+    return this.value.tag === 'ULevel';
+  }
+
   /**
    * Create a fresh meta variable for a hole during type checking.
    * The meta gets the expected type and current context.

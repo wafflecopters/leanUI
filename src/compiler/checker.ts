@@ -1,6 +1,6 @@
 // INFERENCE
 
-import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint } from "./kernel";
+import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum } from "./kernel";
 import { subst } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap } from "./term";
 
@@ -269,6 +269,16 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     const annotationType = env.value.type;  // Use the original annotation type
     const termEnv = checkType(typeEnv.atValueAndPathOfEnv(env).inAnnotTerm(), annotationType);
     return termEnv.withValue(annotationType);
+  }
+
+  if (env.isULevelTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (ULEVEL) - Universe level
+    //
+    //   ─────────────────
+    //   Γ ⊢ ULevel ⇒ ULevel
+    // ────────────────────────────────────────────────────────────────
+    return env.withValue({ tag: 'Sort', level: mkLevelNum(1) });
   }
 
   debugger
