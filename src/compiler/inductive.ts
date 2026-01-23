@@ -112,12 +112,16 @@ export function checkInductiveDeclaration(
       ctorsEnv.inInductiveDefinitionConstructor(index).inInductiveDefinitionConstructorType(),
       e => {
         const result = inferType(e)
-        if (result.metaVars.size > 0) {
+        // Solve meta constraints before checking for unsolved metas
+        const solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        // Check for UNSOLVED metas (solved metas have a 'solution' property)
+        const unsolvedMetas = Array.from(solvedResult.metaVars.values()).filter(m => !m.solution);
+        if (unsolvedMetas.length > 0) {
           errors.push(TCEnvError.create('Checking the constructor signature produced unsolved metas.', e));
         } else {
           ctorsEnv = addDefinitionInTCEnv(ctorsEnv, ctor.name, ctor.type);
         }
-        return result
+        return solvedResult
       },
       errors
     )
