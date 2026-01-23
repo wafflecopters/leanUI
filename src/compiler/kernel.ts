@@ -134,6 +134,27 @@ export function simplifyLevel(level: Level): Level {
   }
 }
 
+/**
+ * Check if a level contains any level parameters (LParam).
+ * Used to detect when a Pi type needs level ω because its
+ * codomain level depends on a bound level variable.
+ */
+export function levelContainsParam(level: Level): boolean {
+  switch (level.tag) {
+    case 'LZero':
+    case 'LMVar':
+    case 'LOmega':
+      return false;
+    case 'LParam':
+      return true;
+    case 'LSucc':
+      return levelContainsParam(level.pred);
+    case 'LMax':
+    case 'LIMax':
+      return levelContainsParam(level.left) || levelContainsParam(level.right);
+  }
+}
+
 // Check if two levels are structurally equal
 export function levelsEqual(l1: Level, l2: Level): boolean {
   if (l1.tag !== l2.tag) return false;
@@ -491,15 +512,22 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
       return `#${term.index}`;
 
     case 'Sort': {
-      // Sort 0 = Prop, Sort 1 = Type, Sort (n+1) = Type n
+      // Sort 0 = Prop, Sort (l+1) = Type l
       // Following Lean's convention where Type = Sort 1, Type 1 = Sort 2, etc.
-      const levelNum = levelToNumber(term.level);
-      if (levelNum !== undefined) {
-        if (levelNum === 0) return 'Prop';
-        const typeLevel = levelNum - 1;
-        return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+      if (term.level.tag === 'LZero') {
+        return 'Prop';
       }
-      // Level contains variables/metas, show as Sort l
+      if (term.level.tag === 'LSucc') {
+        // Sort (l+1) = Type l
+        const innerLevel = term.level.pred;
+        const innerNum = levelToNumber(innerLevel);
+        if (innerNum !== undefined) {
+          return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
+        }
+        // Non-numeric inner level (contains ω, variables, metas)
+        return `Type ${prettyPrintLevel(innerLevel)}`;
+      }
+      // Fallback for other level forms (shouldn't happen in well-formed terms)
       return `Sort ${prettyPrintLevel(term.level)}`;
     }
 
@@ -637,11 +665,17 @@ export function prettyPrintFormatted(
       return `#${term.index}`;
 
     case 'Sort': {
-      const levelNum = levelToNumber(term.level);
-      if (levelNum !== undefined) {
-        if (levelNum === 0) return 'Prop';
-        const typeLevel = levelNum - 1;
-        return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+      // Sort 0 = Prop, Sort (l+1) = Type l
+      if (term.level.tag === 'LZero') {
+        return 'Prop';
+      }
+      if (term.level.tag === 'LSucc') {
+        const innerLevel = term.level.pred;
+        const innerNum = levelToNumber(innerLevel);
+        if (innerNum !== undefined) {
+          return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
+        }
+        return `Type ${prettyPrintLevel(innerLevel)}`;
       }
       return `Sort ${prettyPrintLevel(term.level)}`;
     }
@@ -857,14 +891,18 @@ export function prettyPrintLatex(
       return `\\#${term.index}`;
 
     case 'Sort': {
-      // Sort 0 = Prop, Sort 1 = Type, Sort (n+1) = Type n
-      const levelNum = levelToNumber(term.level);
-      if (levelNum !== undefined) {
-        if (levelNum === 0) return '\\text{Prop}';
-        const typeLevel = levelNum - 1;
-        return typeLevel === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevel}}`;
+      // Sort 0 = Prop, Sort (l+1) = Type l
+      if (term.level.tag === 'LZero') {
+        return '\\text{Prop}';
       }
-      // Level contains variables/metas
+      if (term.level.tag === 'LSucc') {
+        const innerLevel = term.level.pred;
+        const innerNum = levelToNumber(innerLevel);
+        if (innerNum !== undefined) {
+          return innerNum === 0 ? '\\text{Type}' : `\\text{Type}_{${innerNum}}`;
+        }
+        return `\\text{Type}_{${prettyPrintLevel(innerLevel)}}`;
+      }
       return `\\text{Sort}\\; ${prettyPrintLevel(term.level)}`;
     }
 

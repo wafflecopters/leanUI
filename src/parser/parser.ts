@@ -2475,16 +2475,20 @@ export class Parser {
       this.advance();
       result = mkTypeTT(level + 1);  // Type n = Sort(n+1)
     } else if (this.current().type === 'IDENT') {
-      // Type U - level variable
+      // Type U - level variable or omega
       const name = this.current().value;
       this.advance();
-      result = mkSortTT(mkLNameTT(name));
+      if (name === 'ω') {
+        result = mkSortTT(mkLSuccTT(mkLOmegaTT())); // Type ω = Sort(ω+1)
+      } else {
+        result = mkSortTT(mkLSuccTT(mkLNameTT(name))); // Type U = Sort(U+1)
+      }
     } else if (this.current().type === 'LPAREN') {
       // Type (level-expr) - parenthesized level expression
       this.advance(); // consume '('
       const level = this.parseLevelExpr();
       this.expect('RPAREN');
-      result = mkSortTT(level);
+      result = mkSortTT(mkLSuccTT(level)); // Type l = Sort(l+1)
     } else {
       // Just "Type" means Sort(1)
       result = mkTypeTT(1);

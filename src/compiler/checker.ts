@@ -1,6 +1,6 @@
 // INFERENCE
 
-import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum } from "./kernel";
+import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega } from "./kernel";
 import { subst } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap } from "./term";
 
@@ -113,9 +113,18 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     const bodyEnv = checkType(envForBody.atValueAndPathOfEnv(env).inBinderPiBody(), bodySort);
 
     // Result is Sort(max(l_i, l_j)) where the levels come from the fresh metas
+    // However, if the level contains a level parameter (LParam), this means
+    // the codomain level depends on a bound variable of type ULevel.
+    // In that case, the Pi type must live in Type ω.
+    // Example: (U : ULevel) -> Type U has type Type ω
+    const rawLevel = simplifyLevel(mkLMax(domainSort.level, bodySort.level));
+    // Substitute any solved level metas before checking for LParam
+    const substitutedLevel = bodyEnv.substituteLevelMetasInLevel(rawLevel);
+    const simplifiedLevel = simplifyLevel(substitutedLevel);
+    const resultLevel = levelContainsParam(simplifiedLevel) ? mkLSucc(mkLOmega()) : simplifiedLevel;
     const resultSort: TTKTerm = {
       tag: 'Sort',
-      level: simplifyLevel(mkLMax(domainSort.level, bodySort.level))
+      level: resultLevel
     };
     return bodyEnv.withValue(resultSort);
   }

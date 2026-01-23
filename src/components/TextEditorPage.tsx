@@ -891,8 +891,8 @@ export function TextEditorPage() {
           [/\{-/, 'comment', '@comment'],
           [/--.*$/, 'comment'],
 
-          // Type keywords (Type, Prop, ULevel)
-          [/\b(Type|Prop|ULevel)\b/, 'type.identifier'],
+          // Type keywords (Type, Prop, ULevel, USucc, UMax, UIMax)
+          [/\b(Type|Prop|ULevel|USucc|UMax|UIMax)\b/, 'type.identifier'],
 
           // Keywords
           [/\b(inductive|where|let|in|fun)\b/, 'keyword'],

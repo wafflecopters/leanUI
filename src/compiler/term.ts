@@ -1018,6 +1018,13 @@ export class TCEnv<T> {
     return substituteLevelMetasInTerm(term, this.levelMetas);
   }
 
+  /**
+   * Substitute solved level metas into a level expression.
+   */
+  substituteLevelMetasInLevel(level: Level): Level {
+    return substituteLevelMetas(level, this.levelMetas);
+  }
+
   isConstTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Const' }> {
     return this.value.tag === 'Const';
   }

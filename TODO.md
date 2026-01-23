@@ -26,6 +26,12 @@
   - Re-elaboration of hoisted patterns
   - (BIG PROJECT)
 
+- [ ] **Prop deep dive**
+  - Separate Prop as its own AST node instead of just Sort 0
+  - Ensure universe inference handles Prop correctly
+  - Implement large elimination restrictions (can't match on Prop-valued inductive to produce Type-valued result, unless singleton)
+  - Review impredicativity rules for Prop
+
 ## Exploration
 
 - [ ] Tactics exploration
