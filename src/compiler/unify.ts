@@ -505,6 +505,15 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // ULEVEL - Universe level type
+  //
+  // ULevel is a singleton type - there's only one ULevel, so they always unify.
+  // ─────────────────────────────────────────────────────────────────────────
+  if (a.tag === 'ULevel' && b.tag === 'ULevel') {
+    return emptySuccess;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // CONST - Named constant
   //
   // Constants are equal iff they have the same name.

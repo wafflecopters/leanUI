@@ -2,7 +2,6 @@
 
 ## Upcoming
 
-- [ ] Stress test type-level inference (e.g., Type omega and level polymorphism)
 - [ ] Add inference/checking for `let` expressions
 - [ ] Add multi-let syntax (`let x := a, y := b in ...`)
 - [ ] Add infix operator syntax (user-defined operators with precedence)

@@ -1367,19 +1367,23 @@ export function resetWildcardCounter(): void {
  * @param level - Surface level expression
  * @returns Kernel level
  */
-export function elabLevelToKernel(level: TLevel): Level {
+export function elabLevelToKernel(level: TLevel, levelNamesInScope?: Set<string>): Level {
   switch (level.tag) {
     case 'LNum':
       return mkLevelNum(level.n);
     case 'LName':
       // Level variable - use LParam in kernel
+      // If we're tracking scope and the name is not in scope, it's an error
+      if (levelNamesInScope && !levelNamesInScope.has(level.name)) {
+        throw new Error(`Undefined level variable '${level.name}'`);
+      }
       return mkLParam(level.name);
     case 'LSucc':
-      return mkLSucc(elabLevelToKernel(level.pred));
+      return mkLSucc(elabLevelToKernel(level.pred, levelNamesInScope));
     case 'LMax':
-      return mkLMax(elabLevelToKernel(level.left), elabLevelToKernel(level.right));
+      return mkLMax(elabLevelToKernel(level.left, levelNamesInScope), elabLevelToKernel(level.right, levelNamesInScope));
     case 'LIMax':
-      return mkLIMax(elabLevelToKernel(level.left), elabLevelToKernel(level.right));
+      return mkLIMax(elabLevelToKernel(level.left, levelNamesInScope), elabLevelToKernel(level.right, levelNamesInScope));
     case 'LOmega':
       return mkLOmega();
   }
@@ -1399,12 +1403,20 @@ export function elabLevelToKernel(level: TLevel): Level {
  * @returns Kernel term (TTK)
  */
 export function elabToKernel(term: TTerm): TTKTerm {
+  return elabToKernelWithScope(term, new Set());
+}
+
+/**
+ * Internal helper that tracks level names in scope.
+ * When a binder has domain ULevel, its name becomes a valid level name in the body.
+ */
+function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTKTerm {
   switch (term.tag) {
     case 'Var':
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: elabLevelToKernel(term.level) };
+      return { tag: 'Sort', level: elabLevelToKernel(term.level, levelNamesInScope) };
 
     case 'ULevel':
       return { tag: 'ULevel' };
@@ -1420,8 +1432,6 @@ export function elabToKernel(term: TTerm): TTKTerm {
       };
 
     case 'Binder': {
-      const body = elabToKernel(term.body);
-
       let binderKind: TTKBinderKind;
       let domain: TTKTerm;
 
@@ -1429,22 +1439,29 @@ export function elabToKernel(term: TTerm): TTKTerm {
         case 'BPiTT':
           binderKind = { tag: 'BPi' };
           // Pi binders must have a domain
-          domain = elabToKernel(term.domain!);
+          domain = elabToKernelWithScope(term.domain!, levelNamesInScope);
           break;
         case 'BLamTT':
           binderKind = { tag: 'BLam' };
           // Lambda binders must have a domain
-          domain = elabToKernel(term.domain!);
+          domain = elabToKernelWithScope(term.domain!, levelNamesInScope);
           break;
         case 'BLetTT':
-          binderKind = { tag: 'BLet', defVal: elabToKernel(term.binderKind.defVal) };
+          binderKind = { tag: 'BLet', defVal: elabToKernelWithScope(term.binderKind.defVal, levelNamesInScope) };
           // Let binders may have an implicit type (domain undefined in surface)
           // In this case, create a fresh meta for type inference
           domain = term.domain !== undefined
-            ? elabToKernel(term.domain)
+            ? elabToKernelWithScope(term.domain, levelNamesInScope)
             : freshImplicitLetTypeMeta(term.name);
           break;
       }
+
+      // If the domain is ULevel, the binder name becomes a valid level name in the body
+      const bodyScope = domain.tag === 'ULevel'
+        ? new Set([...levelNamesInScope, term.name])
+        : levelNamesInScope;
+
+      const body = elabToKernelWithScope(term.body, bodyScope);
 
       return {
         tag: 'Binder',
@@ -1458,8 +1475,8 @@ export function elabToKernel(term: TTerm): TTKTerm {
     case 'App':
       return {
         tag: 'App',
-        fn: elabToKernel(term.fn),
-        arg: elabToKernel(term.arg)
+        fn: elabToKernelWithScope(term.fn, levelNamesInScope),
+        arg: elabToKernelWithScope(term.arg, levelNamesInScope)
       };
 
     case 'Hole':
@@ -1470,8 +1487,8 @@ export function elabToKernel(term: TTerm): TTKTerm {
     case 'Annot':
       return {
         tag: 'Annot',
-        term: elabToKernel(term.term),
-        type: elabToKernel(term.type)
+        term: elabToKernelWithScope(term.term, levelNamesInScope),
+        type: elabToKernelWithScope(term.type, levelNamesInScope)
       };
 
     case 'Match':
@@ -1479,7 +1496,7 @@ export function elabToKernel(term: TTerm): TTKTerm {
       // and validated separately during type checking
       return {
         tag: 'Match',
-        scrutinee: elabToKernel(term.scrutinee),
+        scrutinee: elabToKernelWithScope(term.scrutinee, levelNamesInScope),
         clauses: term.clauses
           .filter(c => c.rhs.tag !== 'AbsurdMarker')
           .map(c => {
@@ -1494,7 +1511,7 @@ export function elabToKernel(term: TTerm): TTKTerm {
                 currentTermParamIndex++;
                 return result;
               }),
-              rhs: elabToKernel(c.rhs)
+              rhs: elabToKernelWithScope(c.rhs, levelNamesInScope)
             };
           })
       };
@@ -1507,8 +1524,14 @@ export function elabToKernel(term: TTerm): TTKTerm {
       // BEFORE any of the MultiBinder's names are introduced. When we create
       // nested binders, each binder at position i has i binders above it,
       // so the domain needs to be shifted by i.
-      const baseDomain = elabToKernel(term.domain);
-      let body = elabToKernel(term.body);
+      const baseDomain = elabToKernelWithScope(term.domain, levelNamesInScope);
+
+      // If the domain is ULevel, all names become valid level names in the body
+      const bodyScope = baseDomain.tag === 'ULevel'
+        ? new Set([...levelNamesInScope, ...term.names])
+        : levelNamesInScope;
+
+      let body = elabToKernelWithScope(term.body, bodyScope);
 
       // Convert surface binder kind to kernel binder kind
       let binderKindFactory: () => TTKBinderKind;
@@ -1519,7 +1542,7 @@ export function elabToKernel(term: TTerm): TTKTerm {
       } else {
         // BLetTT - MultiBinder with BLet doesn't really make sense semantically
         // but we handle it anyway
-        const letDefVal = elabToKernel(term.binderKind.defVal);
+        const letDefVal = elabToKernelWithScope(term.binderKind.defVal, levelNamesInScope);
         binderKindFactory = () => ({
           tag: 'BLet',
           defVal: letDefVal
@@ -1832,7 +1855,8 @@ export function elabToKernelWithMap(
   kernelPath: IndexPath = [],
   patternNamedArgMap?: NamedArgMap,
   appNamedArgLookup?: NamedArgInfoLookup,
-  patternTotalArity?: number
+  patternTotalArity?: number,
+  levelNamesInScope: Set<string> = new Set()
 ): TTKTerm {
   // Record the correspondence between kernel and surface paths
   const kernelKey = serializeIndexPath(kernelPath);
@@ -1845,7 +1869,7 @@ export function elabToKernelWithMap(
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: elabLevelToKernel(term.level) };
+      return { tag: 'Sort', level: elabLevelToKernel(term.level, levelNamesInScope) };
 
     case 'ULevel':
       return { tag: 'ULevel' };
@@ -1861,18 +1885,10 @@ export function elabToKernelWithMap(
       };
 
     case 'Binder': {
-      const body = elabToKernelWithMap(
-        term.body,
-        elabMap,
-        appendPath(surfacePath, fieldSeg('body')),
-        appendPath(kernelPath, fieldSeg('body')),
-        patternNamedArgMap,
-        appNamedArgLookup
-      );
-
       let binderKind: TTKBinderKind;
       let domain: TTKTerm;
 
+      // Elaborate domain FIRST so we can check if it's ULevel
       switch (term.binderKind.tag) {
         case 'BPiTT':
           binderKind = { tag: 'BPi' };
@@ -1883,7 +1899,9 @@ export function elabToKernelWithMap(
             appendPath(surfacePath, fieldSeg('domain')),
             appendPath(kernelPath, fieldSeg('domain')),
             patternNamedArgMap,
-            appNamedArgLookup
+            appNamedArgLookup,
+            undefined,
+            levelNamesInScope
           );
           break;
         case 'BLamTT':
@@ -1895,7 +1913,9 @@ export function elabToKernelWithMap(
             appendPath(surfacePath, fieldSeg('domain')),
             appendPath(kernelPath, fieldSeg('domain')),
             patternNamedArgMap,
-            appNamedArgLookup
+            appNamedArgLookup,
+            undefined,
+            levelNamesInScope
           );
           break;
         case 'BLetTT':
@@ -1907,7 +1927,9 @@ export function elabToKernelWithMap(
               appendPath(surfacePath, fieldSeg('binderKind'), fieldSeg('defVal')),
               appendPath(kernelPath, fieldSeg('binderKind'), fieldSeg('defVal')),
               patternNamedArgMap,
-              appNamedArgLookup
+              appNamedArgLookup,
+              undefined,
+              levelNamesInScope
             )
           };
           // Let binders may have an implicit type (domain undefined in surface)
@@ -1918,11 +1940,29 @@ export function elabToKernelWithMap(
               appendPath(surfacePath, fieldSeg('domain')),
               appendPath(kernelPath, fieldSeg('domain')),
               patternNamedArgMap,
-              appNamedArgLookup
+              appNamedArgLookup,
+              undefined,
+              levelNamesInScope
             )
             : freshImplicitLetTypeMeta(term.name);
           break;
       }
+
+      // If the domain is ULevel, the binder name becomes a valid level name in the body
+      const bodyScope = domain.tag === 'ULevel'
+        ? new Set([...levelNamesInScope, term.name])
+        : levelNamesInScope;
+
+      const body = elabToKernelWithMap(
+        term.body,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('body')),
+        appendPath(kernelPath, fieldSeg('body')),
+        patternNamedArgMap,
+        appNamedArgLookup,
+        undefined,
+        bodyScope
+      );
 
       return {
         tag: 'Binder',
