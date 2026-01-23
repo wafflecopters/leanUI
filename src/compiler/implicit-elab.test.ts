@@ -3,7 +3,7 @@
  * Verifies that pattern padding and RHS de Bruijn indices are correct
  */
 
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect } from 'vitest';
 import { parseDeclarations } from '../parser/parser';
 import { elabToKernelWithMap, extractNamedArgMap, countParameters } from './elab';
 import { prettyPrintPattern } from './kernel';

@@ -2,7 +2,7 @@
  * Unit tests for elaboratePatternsToPositionalArguments
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach } from 'vitest';
 import {
   elaboratePatternsToPositionalArguments,
   adjustRhsWithMapping,

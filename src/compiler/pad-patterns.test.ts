@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import { padPatternsForMissingNamedArgs } from './patterns';
 import { TTKPattern } from './kernel';
 import { DefinitionsMap, createDefinitionsMap, NamedArgMap } from './term';

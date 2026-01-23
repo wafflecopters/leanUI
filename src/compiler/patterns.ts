@@ -71,6 +71,170 @@ function getConstructorArityInfo(definitions: DefinitionsMap, ctorName: string):
 }
 
 /**
+ * Compute the complete var index mapping for a pattern, accounting for:
+ * 1. namedArgs reordering (moving from end to specific positions)
+ * 2. Nested wildcards (wildcards added to sub-patterns)
+ *
+ * This function returns a mapping array where mapping[oldIndex] = newIndex.
+ * Returns undefined if no transformation is needed.
+ *
+ * The algorithm:
+ * 1. Enumerate vars in original traversal order (positional args, then namedArgs)
+ * 2. Enumerate vars in final traversal order (after padding)
+ * 3. Match up original vars to their final positions
+ */
+function computePatternVarIndexMapping(pattern: TTKPattern, definitions: DefinitionsMap): number[] | undefined {
+  // Collect original vars in traversal order
+  const originalVars: { path: string }[] = [];
+  collectVarsInTraversalOrder(pattern, '', originalVars);
+
+  // Pad the pattern
+  const paddedPattern = padPCtorPatternWithNamedWildcards(pattern, definitions);
+
+  // Collect final vars in traversal order
+  const finalVars: { path: string }[] = [];
+  collectVarsInTraversalOrder(paddedPattern, '', finalVars);
+
+  // If no change in var count and no namedArgs, no mapping needed
+  if (originalVars.length === finalVars.length &&
+      (pattern.tag !== 'PCtor' || !pattern.namedArgs || pattern.namedArgs.length === 0)) {
+    // Still need to check for nested wildcards
+    const wildcardCount = countWildcardsAddedToPattern(pattern, definitions);
+    if (wildcardCount === 0) {
+      return undefined;
+    }
+  }
+
+  // Build a map from path to final index
+  const pathToFinalIndex = new Map<string, number>();
+  for (let i = 0; i < finalVars.length; i++) {
+    const finalIndex = finalVars.length - 1 - i;  // rightmost = 0
+    pathToFinalIndex.set(finalVars[i].path, finalIndex);
+  }
+
+  // Build the mapping from original index to final index
+  const mapping: number[] = new Array(originalVars.length);
+  for (let i = 0; i < originalVars.length; i++) {
+    const originalIndex = originalVars.length - 1 - i;  // rightmost = 0
+    const path = originalVars[i].path;
+
+    // Find matching path in final vars
+    // Need to adjust path for namedArgs that moved
+    const adjustedPath = adjustPathForPadding(path, pattern, definitions);
+    const finalIndex = pathToFinalIndex.get(adjustedPath);
+
+    if (finalIndex !== undefined) {
+      mapping[originalIndex] = finalIndex;
+    } else {
+      // Fallback: use same index (shouldn't happen for well-formed patterns)
+      mapping[originalIndex] = originalIndex;
+    }
+  }
+
+  // Check if mapping is identity
+  let isIdentity = true;
+  for (let i = 0; i < mapping.length; i++) {
+    if (mapping[i] !== i) {
+      isIdentity = false;
+      break;
+    }
+  }
+
+  return isIdentity ? undefined : mapping;
+}
+
+/**
+ * Collect variables from a pattern in traversal order.
+ * Each var gets a "path" string identifying its position in the pattern tree.
+ */
+function collectVarsInTraversalOrder(
+  pattern: TTKPattern,
+  pathPrefix: string,
+  result: { path: string }[]
+): void {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      result.push({ path: pathPrefix });
+      break;
+    case 'PCtor':
+      // First traverse positional args
+      for (let i = 0; i < pattern.args.length; i++) {
+        collectVarsInTraversalOrder(pattern.args[i], `${pathPrefix}/args[${i}]`, result);
+      }
+      // Then traverse namedArgs (if any)
+      if (pattern.namedArgs) {
+        for (let i = 0; i < pattern.namedArgs.length; i++) {
+          const na = pattern.namedArgs[i];
+          collectVarsInTraversalOrder(na.pattern, `${pathPrefix}/namedArgs[${na.name}]`, result);
+        }
+      }
+      break;
+  }
+}
+
+/**
+ * Adjust a path from original pattern structure to padded pattern structure.
+ */
+function adjustPathForPadding(
+  originalPath: string,
+  pattern: TTKPattern,
+  definitions: DefinitionsMap
+): string {
+  // This handles the transformation from original paths to padded paths
+  // For simple cases (no namedArgs), we just need to adjust indices
+  // For namedArgs, we need to translate namedArgs paths to args paths
+
+  const parts = originalPath.split('/').filter(p => p !== '');
+
+  function adjustRecursive(p: TTKPattern, partIndex: number, currentPath: string): string {
+    if (partIndex >= parts.length) {
+      return currentPath;
+    }
+
+    const part = parts[partIndex];
+
+    if (p.tag !== 'PCtor') {
+      // Not a constructor, path continues as-is
+      return currentPath + '/' + parts.slice(partIndex).join('/');
+    }
+
+    const arityInfo = getConstructorArityInfo(definitions, p.name);
+    const namedPositions = arityInfo?.namedArgMap ? new Set(arityInfo.namedArgMap.values()) : new Set<number>();
+    const namedCount = namedPositions.size;
+
+    if (part.startsWith('args[')) {
+      // Positional arg - need to shift by number of named positions
+      const match = part.match(/args\[(\d+)\]/);
+      if (match) {
+        const origIndex = parseInt(match[1], 10);
+        const newIndex = origIndex + namedCount;
+        const subPattern = p.args[origIndex];
+        return adjustRecursive(subPattern, partIndex + 1, `${currentPath}/args[${newIndex}]`);
+      }
+    } else if (part.startsWith('namedArgs[')) {
+      // Named arg - need to find its position in the padded args
+      const match = part.match(/namedArgs\[([^\]]+)\]/);
+      if (match && arityInfo?.namedArgMap) {
+        const namedArgName = match[1];
+        const position = arityInfo.namedArgMap.get(namedArgName);
+        if (position !== undefined) {
+          const namedArg = p.namedArgs?.find(na => na.name === namedArgName);
+          if (namedArg) {
+            return adjustRecursive(namedArg.pattern, partIndex + 1, `${currentPath}/args[${position}]`);
+          }
+        }
+      }
+    }
+
+    // Fallback: continue as-is
+    return currentPath + '/' + parts.slice(partIndex).join('/');
+  }
+
+  return adjustRecursive(pattern, 0, '');
+}
+
+/**
  * Count how many wildcards would be added to a pattern (and its sub-patterns)
  * during constructor padding. This is used to compute RHS index shifts.
  *
@@ -919,6 +1083,9 @@ export function checkMatchClause(
   // Compute wildcards added to each pattern
   const wildcardsPerPattern: number[] = originalPatterns.map(p => countWildcardsAddedToPattern(p, env.definitions));
 
+  // Compute var index mappings for patterns (handles namedArgs reordering and nested wildcards)
+  const indexMappingsPerPattern: (number[] | undefined)[] = originalPatterns.map(p => computePatternVarIndexMapping(p, env.definitions));
+
   // Compute the shift for each original de Bruijn index.
   // Variables in pattern i need to shift by the sum of wildcards in patterns i+1, i+2, ...
   // First, compute cumulative sums from right to left
@@ -941,6 +1108,7 @@ export function checkMatchClause(
     console.log('[RHS SHIFT] varsPerPattern:', varsPerPattern);
     console.log('[RHS SHIFT] wildcardsPerPattern:', wildcardsPerPattern);
     console.log('[RHS SHIFT] shiftPerPattern:', shiftPerPattern);
+    console.log('[RHS SHIFT] indexMappingsPerPattern:', indexMappingsPerPattern);
     console.log('[RHS SHIFT] originalRhs:', prettyPrintTTK(originalRhs));
     console.log('[RHS SHIFT] originalRhs JSON:', JSON.stringify(originalRhs, null, 2).slice(0, 2000));
   }
@@ -950,10 +1118,27 @@ export function checkMatchClause(
     for (let i = originalPatterns.length - 1; i >= 0; i--) {
       if (index < accum + varsPerPattern[i]) {
         // Index belongs to pattern i
-        if (loggingEnabled) {
-          console.log(`[RHS SHIFT] index ${index} -> pattern ${i}, shift ${shiftPerPattern[i]} -> ${index + shiftPerPattern[i]}`);
+        const localIndex = index - accum;  // Index within this pattern (0 = rightmost var in pattern)
+        const indexMapping = indexMappingsPerPattern[i];
+
+        let newIndex: number;
+        if (indexMapping && localIndex < indexMapping.length) {
+          // Apply index mapping for namedArgs reordering and nested wildcards
+          // The mapping converts local indices, then we add accum and shift
+          const newLocalIndex = indexMapping[localIndex];
+          newIndex = accum + newLocalIndex + shiftPerPattern[i];
+          if (loggingEnabled) {
+            console.log(`[RHS SHIFT] index ${index} -> pattern ${i}, local ${localIndex} -> ${newLocalIndex}, accum ${accum}, shift ${shiftPerPattern[i]} -> ${newIndex}`);
+          }
+        } else {
+          // No permutation needed, just apply the shift
+          newIndex = index + shiftPerPattern[i];
+          if (loggingEnabled) {
+            console.log(`[RHS SHIFT] index ${index} -> pattern ${i}, shift ${shiftPerPattern[i]} -> ${newIndex}`);
+          }
         }
-        return mkVar(index + shiftPerPattern[i]);
+
+        return mkVar(newIndex);
       }
       accum += varsPerPattern[i];
     }

@@ -231,20 +231,20 @@ function elaboratePatternWithVars(
       }
 
       // Handle named arguments within constructor patterns
-      // These need to be placed into the constructor's parameter slots
+      // Preserve them in namedArgs so padPCtorPatternWithNamedWildcards can place them correctly
+      let elabNamedArgs: { name: string; pattern: TTKPattern }[] | undefined;
       if (pattern.namedArgs && pattern.namedArgs.length > 0) {
-        // For now, we handle named args by appending them after positional args
-        // TODO: Proper slot-based placement for constructor named args
+        elabNamedArgs = [];
         for (const namedArg of pattern.namedArgs) {
           const result = elaboratePatternWithVars(namedArg.pattern, constructorNames, boundNames);
           if ('error' in result) {
             return result;
           }
-          elabArgs.push(result.pattern);
+          elabNamedArgs.push({ name: namedArg.name, pattern: result.pattern });
         }
       }
 
-      return { pattern: { tag: 'PCtor', name: pattern.name, args: elabArgs } };
+      return { pattern: { tag: 'PCtor', name: pattern.name, args: elabArgs, namedArgs: elabNamedArgs } };
     }
   }
 }
