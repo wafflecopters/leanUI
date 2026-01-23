@@ -8,6 +8,90 @@ import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHi
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
 
+// Unicode abbreviations map (Lean-style)
+// Add new abbreviations here - they will be auto-replaced when followed by space/punctuation
+const UNICODE_ABBREVIATIONS: Record<string, string> = {
+  // Greek letters
+  '\\alpha': 'α',
+  '\\beta': 'β',
+  '\\gamma': 'γ',
+  '\\delta': 'δ',
+  '\\epsilon': 'ε',
+  '\\zeta': 'ζ',
+  '\\eta': 'η',
+  '\\theta': 'θ',
+  '\\iota': 'ι',
+  '\\kappa': 'κ',
+  '\\lambda': 'λ',
+  '\\mu': 'μ',
+  '\\nu': 'ν',
+  '\\xi': 'ξ',
+  '\\pi': 'π',
+  '\\rho': 'ρ',
+  '\\sigma': 'σ',
+  '\\tau': 'τ',
+  '\\upsilon': 'υ',
+  '\\phi': 'φ',
+  '\\chi': 'χ',
+  '\\psi': 'ψ',
+  '\\omega': 'ω',
+  // Capital Greek
+  '\\Gamma': 'Γ',
+  '\\Delta': 'Δ',
+  '\\Theta': 'Θ',
+  '\\Lambda': 'Λ',
+  '\\Xi': 'Ξ',
+  '\\Pi': 'Π',
+  '\\Sigma': 'Σ',
+  '\\Phi': 'Φ',
+  '\\Psi': 'Ψ',
+  '\\Omega': 'Ω',
+  // Common math symbols
+  '\\to': '→',
+  '\\rightarrow': '→',
+  '\\leftarrow': '←',
+  '\\Rightarrow': '⇒',
+  '\\Leftarrow': '⇐',
+  '\\forall': '∀',
+  '\\exists': '∃',
+  '\\neg': '¬',
+  '\\and': '∧',
+  '\\or': '∨',
+  '\\times': '×',
+  '\\cdot': '·',
+  '\\circ': '∘',
+  '\\le': '≤',
+  '\\ge': '≥',
+  '\\ne': '≠',
+  '\\equiv': '≡',
+  '\\approx': '≈',
+  '\\infty': '∞',
+  '\\nat': 'ℕ',
+  '\\int': 'ℤ',
+  '\\rat': 'ℚ',
+  '\\real': 'ℝ',
+  '\\complex': 'ℂ',
+  // Subscripts and superscripts
+  '\\0': '₀',
+  '\\1': '₁',
+  '\\2': '₂',
+  '\\3': '₃',
+  '\\4': '₄',
+  '\\5': '₅',
+  '\\6': '₆',
+  '\\7': '₇',
+  '\\8': '₈',
+  '\\9': '₉',
+};
+
+// Build a regex pattern to match any abbreviation at end of text
+const ABBREV_PATTERN = new RegExp(
+  '(' + Object.keys(UNICODE_ABBREVIATIONS)
+    .map(k => k.replace(/\\/g, '\\\\'))
+    .sort((a, b) => b.length - a.length) // Match longer abbreviations first
+    .join('|') + ')$'
+);
+
 // Color palette for syntax highlighting (matches TextEditorPage)
 const SYNTAX_COLORS = {
   keyword: '569cd6',        // Blue - for inductive, where, def, etc.
@@ -930,6 +1014,60 @@ export function TextEditorPage() {
         };
       },
       releaseDocumentSemanticTokens: () => { }
+    });
+
+    // Unicode abbreviation replacement (Lean-style)
+    // Replace abbreviations immediately when typed (no space required)
+    // Undo restores the abbreviation without re-converting (so you can type \omega literally if needed)
+    editor.onDidChangeModelContent((e) => {
+      // Skip if this is an undo/redo operation - allows escaping via undo
+      if (e.isUndoing || e.isRedoing) return;
+
+      // Only process single-character insertions (typing)
+      if (e.changes.length !== 1) return;
+      const change = e.changes[0];
+      if (change.text.length !== 1) return;
+
+      const model = editor.getModel();
+      if (!model) return;
+
+      const position = editor.getPosition();
+      if (!position) return;
+
+      // Get the text up to and including the cursor
+      const lineContent = model.getLineContent(position.lineNumber);
+      const textUpToCursor = lineContent.substring(0, position.column - 1);
+
+      // Check if the text ends with an abbreviation
+      const match = textUpToCursor.match(ABBREV_PATTERN);
+      if (!match) return;
+
+      const abbrev = match[1];
+      const replacement = UNICODE_ABBREVIATIONS[abbrev];
+      if (!replacement) return;
+
+      // Calculate the range to replace
+      const abbrevStartCol = position.column - abbrev.length;
+      const abbrevEndCol = position.column;
+
+      const range = {
+        startLineNumber: position.lineNumber,
+        startColumn: abbrevStartCol,
+        endLineNumber: position.lineNumber,
+        endColumn: abbrevEndCol
+      };
+
+      // Use a timeout to avoid recursion and ensure the edit happens after current processing
+      setTimeout(() => {
+        // Push an undo stop so the replacement is a separate undo operation
+        // This way: undo goes ω → \omega, not ω → \ome
+        editor.pushUndoStop();
+        editor.executeEdits('unicode-abbrev', [{
+          range,
+          text: replacement,
+          forceMoveMarkers: true
+        }]);
+      }, 0);
     });
   };
 
