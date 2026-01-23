@@ -202,16 +202,26 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
         // Try to infer the argument's type to show what was actually provided
         let actualType: string | undefined;
+        let innerError: TCEnvError | undefined;
         try {
           const argTypeEnv = inferType(env.inAppArg());
           actualType = env.prettyPrint(argTypeEnv.value);
-        } catch {
-          // Couldn't infer argument type - that's fine, we'll show a simpler message
+        } catch (e) {
+          if (e instanceof TCEnvError) {
+            innerError = e;
+          } else {
+            throw e;
+          }
         }
 
         const msg = actualType
           ? `${fnName} expects ${expectedType} but was applied to ${actualType}`
           : `${fnName} expects ${expectedType}`;
+
+        if (innerError) {
+          throw innerError
+        }
+
         throw e.wrappedBy(msg);
       }
       throw e;
@@ -223,7 +233,6 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     const resultType = subst(0, elaboratedArg, fnTypeEnv.value.body);
 
     // Construct the elaborated App with the elaborated function and argument
-    // The function's elaborated form is in fnTypeEnv.elaboratedTerm (if set)
     const elaboratedFn = fnTypeEnv.elaboratedTerm ?? env.value.fn;
     const elaboratedApp: TTKTerm = { tag: 'App', fn: elaboratedFn, arg: elaboratedArg };
 
@@ -341,7 +350,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   // Get namedArgMap from the term if it's a Const
   const namedArgMap = env.value.tag === 'Const'
     ? getTermDefinition(env.definitions, env.value.name)?.namedArgMap ??
-      getConstructorNamedArgMap(env.definitions, env.value.name)
+    getConstructorNamedArgMap(env.definitions, env.value.name)
     : undefined;
 
   let argPosition = 0;

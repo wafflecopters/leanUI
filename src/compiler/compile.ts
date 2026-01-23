@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -1306,7 +1306,10 @@ function checkTermDeclaration(
     validateTermNameNotDefined(termEnv);
 
     const sigResult = inferType(termEnv.inTermType());
-    if (sigResult.metaVars.size > 0) {
+    // Solve meta constraints before checking for unsolved metas
+    const solvedSigResult = sigResult.solveMetasAndConstraints({ liftMetasToFullContext: false });
+    const unsolvedSigMetas = Array.from(solvedSigResult.metaVars.values()).filter(m => !m.solution);
+    if (unsolvedSigMetas.length > 0) {
       return {
         success: false, errors: [
           TCEnvError.create('Checking the signature produced unsolved metas.', env)
@@ -1386,8 +1389,19 @@ function checkTermDeclaration(
       try {
         const valueEnv = termEnv.withValue(kernelValue);
         const result = checkType(valueEnv, decl.kernelType);
-        const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, result.value);
-        return { success: true, definitions: resultEnv.definitions, checkedValue: result.value };
+        // Solve meta constraints before checking for unsolved metas
+        const solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        // Check for UNSOLVED metas in the value (solved metas have a 'solution' property)
+        const unsolvedMetas = Array.from(solvedResult.metaVars.values()).filter(m => !m.solution);
+        if (unsolvedMetas.length > 0) {
+          return {
+            success: false, errors: [
+              TCEnvError.create('Checking the value produced unsolved metas.', termEnv)
+            ]
+          };
+        }
+        const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, solvedResult.value);
+        return { success: true, definitions: resultEnv.definitions, checkedValue: solvedResult.value };
       } catch (e) {
         if (e instanceof TCEnvError) {
           return { success: false, errors: [e] };
@@ -2265,7 +2279,7 @@ function checkMatchClauseFromSurface(
   // Step 4: Check the clause (unify LHS, check RHS)
   // NOTE: Don't pass namedArgMap/totalArity here - reorderPatterns already handled wildcard insertion
   // for missing named arguments. Passing them would cause double-padding.
-  const clauseEnv = termEnv.withValue(fullKernelClause);
+  const clauseEnv = termEnv.atIndexPathAndValue([...termEnv.indexPath, MatchPartIndex.Clauses, arraySeg(clauseIndex)], fullKernelClause);
   const checkedClauseEnv = checkMatchClause(termName, clauseEnv, type);
   return checkedClauseEnv.value;
 }
@@ -2339,9 +2353,18 @@ function checkTermValue(
   if (name) {
     const recursionResult = checkStructuralRecursion(name, checkedClauses);
     if (!recursionResult.isValid) {
-      const recursionErrors = recursionResult.errors.map(({ error }) => {
-        // Create error with the term env (clause-level navigation not available with new flow)
-        return TCEnvError.create(error.message, termEnv);
+      const recursionErrors = recursionResult.errors.map(({ clauseIndex, error }) => {
+        // Construct the full path to the recursive call:
+        // value.clauses[clauseIndex].rhs + rhsPath
+        const errorPath: IndexPath = [
+          fieldSeg('value'),
+          fieldSeg('clauses'),
+          arraySeg(clauseIndex),
+          fieldSeg('rhs'),
+          ...error.rhsPath
+        ];
+        const errorEnv = termEnv.atIndexPath(errorPath);
+        return TCEnvError.create(error.message, errorEnv);
       });
       return { success: false, errors: recursionErrors };
     }

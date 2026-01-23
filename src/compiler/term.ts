@@ -678,6 +678,10 @@ export class TCEnv<T> {
     return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined, this.levelMetas, this.options);
   }
 
+  atIndexPathAndValue<S>(indexPath: IndexPath, value: S): TCEnv<S> {
+    return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [value], value, this.levelMetas, this.options);
+  }
+
   // Terms
 
   extendTTKContext(name: string, type: TTKTerm, value?: TTKTerm): TCEnv<T> {

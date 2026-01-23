@@ -2170,10 +2170,9 @@ export class Parser {
     if (startToken.type === 'LPAREN') {
       this.advance();
       const pattern = this.parsePatternWithSource(path);
-      const endToken = this.current();
       this.expect('RPAREN');
-      // Record from '(' to ')' inclusive
-      this.recordRange(path, startToken, endToken);
+      // Don't overwrite the inner pattern's range - parens are just grouping
+      // The inner pattern already recorded its own range at `path`
       return { kind: 'pattern', pattern };
     }
 

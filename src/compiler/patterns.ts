@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -97,7 +97,7 @@ function computePatternVarIndexMapping(pattern: TTKPattern, definitions: Definit
 
   // If no change in var count and no namedArgs, no mapping needed
   if (originalVars.length === finalVars.length &&
-      (pattern.tag !== 'PCtor' || !pattern.namedArgs || pattern.namedArgs.length === 0)) {
+    (pattern.tag !== 'PCtor' || !pattern.namedArgs || pattern.namedArgs.length === 0)) {
     // Still need to check for nested wildcards
     const wildcardCount = countWildcardsAddedToPattern(pattern, definitions);
     if (wildcardCount === 0) {
@@ -744,7 +744,6 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const unifyRight = shiftTerm(nextCheckType.domain, workEnv.context.length - nextCheckTypeEntry.ctxLength, 0)
 
   logInfo(() => `  Unifying: ${workEnv.prettyPrint(unifyLeft)} = ${workEnv.prettyPrint(unifyRight)}`)
-  debugger
 
   // Pattern-local bindings (from constructor sub-patterns like wildcards) are at
   // de Bruijn indices 0 to (numPatternLocalBindings - 1). These should be flexible.
@@ -1170,7 +1169,9 @@ export function checkMatchClause(
   const elabArgs = elabStack.map(term => levelsToDeBruijn(term, finalContextLength));
 
   // Type check the transformed RHS
-  const checkEnv = result.withValue(transformedRhs).withCheckingMode('check');
+  const checkEnv = result
+    .atIndexPathAndValue([...paddedEnv.indexPath, ClausePartIndex.Rhs], transformedRhs)
+    .withCheckingMode('check');
   const checkedEnv = checkType(checkEnv, returnType);
 
   // Solve any constraints from RHS checking to populate meta solutions
@@ -1189,7 +1190,7 @@ export function checkMatchClause(
     contextNames,
     metaVars: solvedEnv.metaVars
   };
-  return result.withValue(checkedClause);
+  return result.atIndexPathAndValue(paddedEnv.indexPath, checkedClause);
 }
 
 /**
