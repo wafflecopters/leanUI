@@ -41,6 +41,7 @@ export type TLevel =
   | { tag: 'LSucc'; pred: TLevel }                 // USucc(l)
   | { tag: 'LMax'; left: TLevel; right: TLevel }   // UMax(l1, l2)
   | { tag: 'LIMax'; left: TLevel; right: TLevel }  // UIMax(l1, l2)
+  | { tag: 'LOmega' }                              // ω - the first infinite ordinal level
 
 // TLevel constructors
 export const mkLNumTT = (n: number): TLevel => ({ tag: 'LNum', n });
@@ -48,6 +49,7 @@ export const mkLNameTT = (name: string): TLevel => ({ tag: 'LName', name });
 export const mkLSuccTT = (pred: TLevel): TLevel => ({ tag: 'LSucc', pred });
 export const mkLMaxTT = (left: TLevel, right: TLevel): TLevel => ({ tag: 'LMax', left, right });
 export const mkLIMaxTT = (left: TLevel, right: TLevel): TLevel => ({ tag: 'LIMax', left, right });
+export const mkLOmegaTT = (): TLevel => ({ tag: 'LOmega' });
 
 /**
  * Extract numeric value from a TLevel if it's a simple LNum.
@@ -76,6 +78,8 @@ export function tlevelsEqual(l1: TLevel, l2: TLevel): boolean {
     case 'LIMax':
       return tlevelsEqual(l1.left, (l2 as typeof l1).left) &&
              tlevelsEqual(l1.right, (l2 as typeof l1).right);
+    case 'LOmega':
+      return true; // Both are omega, so equal
   }
 }
 
@@ -94,6 +98,8 @@ export function prettyPrintTLevel(level: TLevel): string {
       return `(UMax ${prettyPrintTLevel(level.left)} ${prettyPrintTLevel(level.right)})`;
     case 'LIMax':
       return `(UIMax ${prettyPrintTLevel(level.left)} ${prettyPrintTLevel(level.right)})`;
+    case 'LOmega':
+      return 'ω';
   }
 }
 
@@ -1493,6 +1499,8 @@ function prettyPrintTLevelLatex(level: TLevel): string {
       return `\\text{UMax}(${prettyPrintTLevelLatex(level.left)}, ${prettyPrintTLevelLatex(level.right)})`;
     case 'LIMax':
       return `\\text{UIMax}(${prettyPrintTLevelLatex(level.left)}, ${prettyPrintTLevelLatex(level.right)})`;
+    case 'LOmega':
+      return '\\omega';
   }
 }
 

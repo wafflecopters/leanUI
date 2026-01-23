@@ -57,6 +57,7 @@ function levelMVarOccursIn(lmvarId: string, level: Level): boolean {
   switch (level.tag) {
     case 'LZero':
     case 'LParam':
+    case 'LOmega':
       return false;
 
     case 'LMVar':

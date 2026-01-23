@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLevel, mkLNumTT, mkLNameTT, mkLSuccTT, mkLMaxTT, mkLIMaxTT } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLevel, mkLNumTT, mkLNameTT, mkLSuccTT, mkLMaxTT, mkLIMaxTT, mkLOmegaTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -2521,6 +2521,11 @@ export class Parser {
 
     if (current.type === 'IDENT') {
       const name = current.value;
+      // Check for omega (ω or 'omega')
+      if (name === 'ω') {
+        this.advance();
+        return mkLOmegaTT();
+      }
       this.advance();
       return mkLNameTT(name);
     }
@@ -2574,6 +2579,11 @@ export class Parser {
 
     if (current.type === 'IDENT') {
       const name = current.value;
+      // Check for omega (ω or 'omega')
+      if (name === 'ω') {
+        this.advance();
+        return mkLOmegaTT();
+      }
       this.advance();
       return mkLNameTT(name);
     }

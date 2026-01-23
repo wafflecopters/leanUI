@@ -35,7 +35,7 @@ import type {
   TTKRecordParam,
 } from './kernel';
 
-import { mkLevelNum, mkMeta, mkLParam, mkLSucc, mkLMax, mkLIMax, Level } from './kernel';
+import { mkLevelNum, mkMeta, mkLParam, mkLSucc, mkLMax, mkLIMax, mkLOmega, Level } from './kernel';
 import { shiftTerm } from './subst';
 
 // Counter for generating unique meta IDs for implicit let types
@@ -1380,6 +1380,8 @@ export function elabLevelToKernel(level: TLevel): Level {
       return mkLMax(elabLevelToKernel(level.left), elabLevelToKernel(level.right));
     case 'LIMax':
       return mkLIMax(elabLevelToKernel(level.left), elabLevelToKernel(level.right));
+    case 'LOmega':
+      return mkLOmega();
   }
 }
 

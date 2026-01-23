@@ -36,6 +36,7 @@ export type Level =
   | { tag: 'LIMax'; left: Level; right: Level }
   | { tag: 'LParam'; name: string }
   | { tag: 'LMVar'; id: string }
+  | { tag: 'LOmega' }  // ω - the first infinite ordinal level
 
 // Level constructors
 export const mkLZero = (): Level => ({ tag: 'LZero' });
@@ -44,6 +45,7 @@ export const mkLMax = (left: Level, right: Level): Level => ({ tag: 'LMax', left
 export const mkLIMax = (left: Level, right: Level): Level => ({ tag: 'LIMax', left, right });
 export const mkLParam = (name: string): Level => ({ tag: 'LParam', name });
 export const mkLMVar = (id: string): Level => ({ tag: 'LMVar', id });
+export const mkLOmega = (): Level => ({ tag: 'LOmega' });
 
 // Convenience: create a concrete level from a number
 export function mkLevelNum(n: number): Level {
@@ -76,7 +78,8 @@ export function levelToNumber(level: Level): number | undefined {
     }
     case 'LParam':
     case 'LMVar':
-      return undefined;
+    case 'LOmega':
+      return undefined;  // LOmega is infinite, not a finite number
   }
 }
 
@@ -86,6 +89,7 @@ export function simplifyLevel(level: Level): Level {
     case 'LZero':
     case 'LParam':
     case 'LMVar':
+    case 'LOmega':
       return level;
 
     case 'LSucc':
@@ -147,6 +151,8 @@ export function levelsEqual(l1: Level, l2: Level): boolean {
       return l1.name === (l2 as typeof l1).name;
     case 'LMVar':
       return l1.id === (l2 as typeof l1).id;
+    case 'LOmega':
+      return true;  // Both are omega, so equal
   }
 }
 
@@ -171,6 +177,8 @@ export function prettyPrintLevel(level: Level): string {
       return level.name;
     case 'LMVar':
       return `?${level.id}`;
+    case 'LOmega':
+      return 'ω';
   }
 }
 

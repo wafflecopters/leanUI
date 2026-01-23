@@ -891,8 +891,8 @@ export function TextEditorPage() {
           [/\{-/, 'comment', '@comment'],
           [/--.*$/, 'comment'],
 
-          // Type keywords (Type, Prop)
-          [/\b(Type|Prop)\b/, 'type.identifier'],
+          // Type keywords (Type, Prop, ULevel)
+          [/\b(Type|Prop|ULevel)\b/, 'type.identifier'],
 
           // Keywords
           [/\b(inductive|where|let|in|fun)\b/, 'keyword'],
@@ -903,11 +903,12 @@ export function TextEditorPage() {
           // Wildcards (will be solved during elaboration)
           [/_/, 'variable.wildcard'],
 
+          // Numbers (including ω for universe levels)
+          [/\d+/, 'number'],
+          [/ω/, 'number'],
+
           // Identifiers - semantic tokens will override with proper classification
           [/[a-zA-Z_][a-zA-Z0-9_']*/, 'identifier'],
-
-          // Numbers
-          [/\d+/, 'number'],
 
           // Operators
           [/->|=>/, 'keyword.operator'],

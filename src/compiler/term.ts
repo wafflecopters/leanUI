@@ -521,6 +521,7 @@ function substituteLevelMetas(level: Level, levelMetas: Map<string, LevelMeta>):
         right: substituteLevelMetas(level.right, levelMetas)
       };
     case 'LParam':
+    case 'LOmega':
       return level;
     case 'LMVar': {
       const solution = levelMetas.get(level.id);
@@ -529,10 +530,6 @@ function substituteLevelMetas(level: Level, levelMetas: Map<string, LevelMeta>):
         return substituteLevelMetas(solution, levelMetas);
       }
       return level;
-    }
-    default: {
-      const _exhaustive: never = level;
-      throw new Error(`Unknown level tag: ${(_exhaustive as Level).tag}`);
     }
   }
 }
