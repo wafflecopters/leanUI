@@ -8,6 +8,7 @@
  */
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkType, mkAppSpine } from './kernel';
+import type { TTerm, TClause } from './surface';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
 import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap } from './term';
 import { unifyTerms } from './unify';

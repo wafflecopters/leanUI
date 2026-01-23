@@ -1106,157 +1106,6 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 }
 
 /**
- * Elaborate term values for declarations that were elaborated without values in phase 1.
- * This is phase 2 of elaboration, after constructor param names are available.
- *
- * @param parseResult - Original parse result (needed for source values)
- * @param elabResult - Result from phase 1 elaboration (has types but no values)
- * @returns ElabResult with values filled in
- */
-export function elabTTValuesOnly(parseResult: ParseResult, elabResult: ElabResult): ElabResult {
-  // Build a map from declaration name to parsed declaration for value lookup
-  const parsedDeclMap = new Map<string, { decl: ParsedDeclaration; sourceMap: SourceMap }>();
-  for (const block of parseResult.blocks) {
-    if (block.kind === 'declarations') {
-      for (let i = 0; i < block.declarations.length; i++) {
-        const decl = block.declarations[i];
-        if (decl.name) {
-          parsedDeclMap.set(decl.name, { decl, sourceMap: block.sourceMaps[i] });
-        }
-      }
-    }
-  }
-
-  // Collect all parsed declarations for pattern resolution (need resolved patterns)
-  let allDeclarations: ParsedDeclaration[] = [];
-  for (const block of parseResult.blocks) {
-    if (block.kind === 'declarations') {
-      allDeclarations = [...allDeclarations, ...block.declarations];
-    }
-  }
-
-  // Name resolution
-  let symbolContext: SymbolContext = emptySymbolContext();
-  for (const decl of allDeclarations) {
-    const result = validateDeclarations([decl], symbolContext);
-    if (result.success) {
-      symbolContext = result.value;
-    }
-  }
-
-  // Pattern resolution
-  allDeclarations = resolvePatternsInDeclarations(allDeclarations, symbolContext);
-
-  // Build resolved map
-  const resolvedDeclMap = new Map<string, ParsedDeclaration>();
-  for (const decl of allDeclarations) {
-    if (decl.name) {
-      resolvedDeclMap.set(decl.name, decl);
-    }
-  }
-
-  const newBlocks: ElabBlock[] = [];
-
-  // Build a lookup for named arg maps from all elaborated declarations
-  // This is used to resolve named arguments in function applications
-  const namedArgMapCache = new Map<string, NamedArgMap>();
-  for (const block of elabResult.blocks) {
-    if (block.kind === 'declarations') {
-      for (const decl of block.declarations) {
-        if (decl.name && decl.surfaceType) {
-          const map = extractNamedArgMap(decl.surfaceType);
-          if (map.size > 0) {
-            namedArgMapCache.set(decl.name, map);
-          }
-        }
-        // Also check constructor types for inductive types
-        if (decl.kind === 'inductive' && decl.surfaceConstructors) {
-          for (const ctor of decl.surfaceConstructors) {
-            const ctorMap = extractNamedArgMap(ctor.type);
-            if (ctorMap.size > 0) {
-              namedArgMapCache.set(ctor.name, ctorMap);
-            }
-          }
-        }
-      }
-    }
-  }
-  const appNamedArgLookup = (name: string) => namedArgMapCache.get(name);
-
-  for (const block of elabResult.blocks) {
-    if (block.kind !== 'declarations') {
-      newBlocks.push(block);
-      continue;
-    }
-
-    const newDeclarations: ElabDeclaration[] = [];
-
-    for (const elabDecl of block.declarations) {
-      // Skip inductive types - they don't have values
-      if (elabDecl.kind === 'inductive' || !elabDecl.name) {
-        newDeclarations.push(elabDecl);
-        continue;
-      }
-
-      // Get the resolved parsed declaration
-      const resolvedDecl = resolvedDeclMap.get(elabDecl.name);
-      if (!resolvedDecl || !resolvedDecl.value) {
-        newDeclarations.push(elabDecl);
-        continue;
-      }
-
-      // Elaborate the value with constructor param context available
-      const elabMap: ElabMap = elabDecl.elabMap ?? new Map();
-      try {
-        // Extract param names from the term's type signature for top-level pattern naming
-        if (elabDecl.kernelType) {
-          const termParamNames = extractConstructorParamNames(elabDecl.kernelType);
-          setCurrentTermParamNames(termParamNames);
-        }
-
-        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-        // Extract namedArgMap and totalArity from type for pattern validation and reordering
-        const namedArgMap = elabDecl.surfaceType ? extractNamedArgMap(elabDecl.surfaceType) : undefined;
-        const totalArity = elabDecl.surfaceType ? countParameters(elabDecl.surfaceType) : undefined;
-        const kernelValue = elabToKernelWithMap(resolvedDecl.value, elabMap, valuePath, valuePath, namedArgMap, appNamedArgLookup, totalArity);
-
-        // Clear term param names after elaboration
-        setCurrentTermParamNames(null);
-
-        newDeclarations.push({
-          ...elabDecl,
-          surfaceValue: resolvedDecl.value,
-          kernelValue,
-          elabMap,
-        });
-      } catch (e) {
-        setCurrentTermParamNames(null);
-        // Capture elaboration error for later reporting
-        const errorMessage = e instanceof Error ? e.message : String(e);
-        // Extract surfacePath if this is a NamedArgElabError
-        const elabErrorPath = e instanceof NamedArgElabError && e.surfacePath
-          ? serializeIndexPath(e.surfacePath)
-          : undefined;
-        newDeclarations.push({
-          ...elabDecl,
-          elabError: errorMessage,
-          elabErrorPath,
-        });
-      }
-    }
-
-    newBlocks.push({
-      kind: 'declarations',
-      declarations: newDeclarations,
-      sourceLines: block.sourceLines,
-      startLine: block.startLine,
-    });
-  }
-
-  return { blocks: newBlocks };
-}
-
-/**
  * Collect constructor param names from checked inductive declarations.
  * This should be called after phase 1 type checking.
  */
@@ -1644,6 +1493,7 @@ interface CheckOptions {
  * Check all elaborated blocks and return compiled blocks with type check results.
  */
 function checkBlocks(
+  _parseResult: ParseResult,
   elabResult: ElabResult,
   initialDefinitions: DefinitionsMap = createDefinitionsMap(),
   options: CheckOptions = {},
@@ -1733,15 +1583,281 @@ function checkBlocks(
 // ============================================================================
 
 /**
+ * Result of processing a single declaration
+ */
+interface ProcessDeclarationResult {
+  success: boolean;
+  compiled: CompiledDeclaration;
+  newDefinitions: DefinitionsMap;
+  errorCount: number;
+}
+
+/**
+ * Create a CompiledDeclaration from the given components
+ */
+function createCompiledDeclaration(
+  decl: ParsedDeclaration,
+  kernelType: TTKTerm | undefined,
+  kernelValue: TTKTerm | undefined,
+  kernelConstructors: Array<{ name: string; type: TTKTerm }> | undefined,
+  elabMap: ElabMap,
+  sourceMap: SourceMap,
+  checkSuccess: boolean,
+  checkErrors: TCEnvError[],
+  totalityResult?: TotalityResult,
+  indexPositions?: number[],
+  elabErrorPath?: string,
+): CompiledDeclaration {
+  return {
+    name: decl.name,
+    kind: decl.kind === 'inductive' ? 'inductive' : 'term',
+    surfaceType: decl.type,
+    surfaceValue: decl.value,
+    surfaceConstructors: decl.constructors,
+    kernelType,
+    kernelValue,
+    kernelConstructors,
+    indexPositions,
+    prettyType: kernelType ? prettyPrintTTK(kernelType) : undefined,
+    prettyValue: kernelValue ? prettyPrintFormatted(kernelValue) : undefined,
+    prettyConstructors: kernelConstructors?.map(c => ({
+      name: c.name,
+      prettyType: prettyPrintTTK(c.type)
+    })),
+    checkSuccess,
+    checkErrors,
+    totalityResult,
+    elabMap,
+    sourceMap,
+    elabErrorPath,
+  };
+}
+
+/**
+ * Create an error result from an elaboration error
+ */
+function createElabErrorResult(
+  e: unknown,
+  decl: ParsedDeclaration,
+  sourceMap: SourceMap,
+  elabMap: ElabMap,
+  definitions: DefinitionsMap,
+): ProcessDeclarationResult {
+  const errorMessage = e instanceof Error ? e.message : String(e);
+  const elabErrorPath = e instanceof NamedArgElabError && e.surfacePath
+    ? serializeIndexPath(e.surfacePath)
+    : undefined;
+  const errorPath = elabErrorPath ? deserializeIndexPath(elabErrorPath) : [];
+  const env = createTCEnv({ definitions, indexPath: errorPath, options: { mode: 'check' } });
+  const error = TCEnvError.create(errorMessage, env);
+
+  return {
+    success: false,
+    compiled: createCompiledDeclaration(
+      decl, undefined, undefined, undefined, elabMap, sourceMap,
+      false, [error], undefined, undefined, elabErrorPath
+    ),
+    newDefinitions: definitions,
+    errorCount: 1
+  };
+}
+
+/**
+ * Process a single inductive declaration: elaborate and check.
+ *
+ * Following the flow:
+ * 1. Elaborate & check signature. Add name+sig to context.
+ * 2. Elab+Check each constructor in that extended context.
+ * 3. Add all constructors to the context.
+ * 4. Check sizing rules on indices and check for positive definiteness in ctors.
+ *    (Return original context if any failure, along with errors)
+ */
+function processInductiveDeclaration(
+  decl: ParsedDeclaration,
+  sourceMap: SourceMap,
+  definitions: DefinitionsMap,
+): ProcessDeclarationResult {
+  const elabMap: ElabMap = new Map();
+
+  // Elaborate signature
+  let kernelType: TTKTerm | undefined;
+  if (decl.type) {
+    try {
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      kernelType = elabToKernelWithMap(decl.type, elabMap, typePath, typePath);
+    } catch (e) {
+      return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+    }
+  }
+
+  // Extract inductive's named arg map for constructor elaboration
+  const inductiveNamedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+  const ctorAppLookup = decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0
+    ? (name: string) => name === decl.name ? inductiveNamedArgMap : undefined
+    : undefined;
+
+  // Elaborate constructors
+  let kernelConstructors: Array<{ name: string; type: TTKTerm }> | undefined;
+  if (decl.constructors) {
+    kernelConstructors = [];
+    for (let ctorIndex = 0; ctorIndex < decl.constructors.length; ctorIndex++) {
+      const ctor = decl.constructors[ctorIndex];
+      try {
+        const ctorTypePath: IndexPath = [
+          { kind: 'field', name: 'constructors' },
+          { kind: 'array', index: ctorIndex },
+          { kind: 'field', name: 'type' }
+        ];
+        const ctorKernelType = elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath, undefined, ctorAppLookup);
+        kernelConstructors.push({ name: ctor.name, type: ctorKernelType });
+      } catch (e) {
+        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+      }
+    }
+  }
+
+  // Validate we have required components
+  if (!kernelType || !kernelConstructors) {
+    const env = createTCEnv({ definitions, options: { mode: 'check' } });
+    const error = TCEnvError.create('Inductive type declaration is ill-formed', env);
+    return {
+      success: false,
+      compiled: createCompiledDeclaration(
+        decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
+        false, [error]
+      ),
+      newDefinitions: definitions,
+      errorCount: 1
+    };
+  }
+
+  // Check the inductive declaration
+  // (This handles: signature check, add to context, constructor checks, sizing, positivity)
+  const result = checkInductiveDeclaration(
+    decl.name || 'anonymous',
+    kernelType,
+    kernelConstructors,
+    definitions
+  );
+
+  if (!result.success) {
+    // Return original context on failure
+    return {
+      success: false,
+      compiled: createCompiledDeclaration(
+        decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
+        false, result.errors
+      ),
+      newDefinitions: definitions,
+      errorCount: result.errors.length
+    };
+  }
+
+  return {
+    success: true,
+    compiled: createCompiledDeclaration(
+      decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
+      true, [], undefined, result.indexPositions
+    ),
+    newDefinitions: result.newDefinitions,
+    errorCount: 0
+  };
+}
+
+/**
+ * Process a single term declaration: elaborate and check.
+ *
+ * Following the flow:
+ * a. Elaborate, check, and solve metas in signature.
+ * b. For each clause: elaborate the LHS args, unify the LHS args & constraints solve,
+ *    then elaborate the RHS under the context created from LHS elab, and check RHS
+ *    under refined return type (from LHS unification).
+ * c. Run totality checker on checked clauses.
+ * d. Run safe recursion checker on checked clauses.
+ * e. Add to context if no errors.
+ */
+function processTermDeclaration(
+  decl: ParsedDeclaration,
+  sourceMap: SourceMap,
+  definitions: DefinitionsMap,
+): ProcessDeclarationResult {
+  const elabMap: ElabMap = new Map();
+
+  // a. Elaborate signature
+  let kernelType: TTKTerm | undefined;
+  if (decl.type) {
+    try {
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      kernelType = elabToKernelWithMap(decl.type, elabMap, typePath, typePath);
+    } catch (e) {
+      return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+    }
+  }
+
+  // Elaborate value (will be checked clause-by-clause in checkTermDeclaration)
+  let kernelValue: TTKTerm | undefined;
+  if (decl.value) {
+    try {
+      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+      const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+      const totalArity = decl.type ? countParameters(decl.type) : undefined;
+      kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
+    } catch (e) {
+      return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+    }
+  }
+
+  // Create ElabDeclaration for checkTermDeclaration
+  const elabDecl: ElabDeclaration = {
+    name: decl.name,
+    kind: 'term',
+    surfaceType: decl.type,
+    surfaceValue: decl.value,
+    kernelType,
+    kernelValue,
+    elabMap,
+    sourceMap
+  };
+
+  // Check the term declaration
+  // (This handles: signature check & meta solving, clause checking with LHS/RHS,
+  //  totality, recursion, and adds to context if no errors)
+  const result = checkTermDeclaration(elabDecl, definitions);
+
+  if (!result.success) {
+    return {
+      success: false,
+      compiled: createCompiledDeclaration(
+        decl, kernelType, kernelValue, undefined, elabMap, sourceMap,
+        false, result.errors, result.totalityResult
+      ),
+      newDefinitions: definitions,
+      errorCount: result.errors.length
+    };
+  }
+
+  return {
+    success: true,
+    compiled: createCompiledDeclaration(
+      decl, kernelType, result.checkedValue, undefined, elabMap, sourceMap,
+      true, [], result.totalityResult
+    ),
+    newDefinitions: result.definitions,
+    errorCount: 0
+  };
+}
+
+/**
  * Compile TT source code to elaborated kernel terms.
  *
- * Pipeline (phased for constructor-aware wildcard naming):
- * 1. Parse source (grouping, parsing)
- * 2. Phase 1 elaboration: elaborate types and constructors (no term values)
- * 3. Phase 1 type check: check inductive types only
- * 4. Build constructor param names from checked inductives
- * 5. Phase 2 elaboration: elaborate term values (with constructor context)
- * 6. Phase 2 type check: check term declarations
+ * Pipeline:
+ * 1. Parse the source file
+ * 2. For each block, for each definition...
+ * 3. If it is an inductive type def: elaborate & check signature, add name+sig to context,
+ *    elab+check each constructor, add all constructors to context, check sizing/positivity
+ * 4. If it is a term: elaborate & check signature with meta solving, for each clause
+ *    elaborate LHS, unify, elaborate RHS under LHS context, check RHS, then run
+ *    totality and recursion checkers, add to context if no errors
  *
  * @param source - The full source code
  * @returns CompileResult with elaborated declarations
@@ -1750,34 +1866,114 @@ export function compileTTFromText(source: string): CompileResult {
   // Reset wildcard counter for fresh compilation
   resetWildcardCounter();
 
+  // 1. Parse the source file
   const parseResult = parseTTSource(source);
 
-  // Phase 1: Elaborate types and constructors only (no term values)
-  const elabResultPhase1 = elabTT(parseResult, [], { elabValues: false });
+  // 2. For each block, for each definition...
+  // We build context incrementally as we process declarations
+  let definitions = createDefinitionsMap();
+  let constructorParamNames: ConstructorParamNames = new Map();
+  let symbolContext: SymbolContext = emptySymbolContext();
+  const compiledBlocks: CompiledBlock[] = [];
+  let totalCheckErrors = 0;
 
-  // Phase 1: Type check inductive types only
-  const checkResultPhase1 = checkBlocks(elabResultPhase1, createDefinitionsMap(), {
-    onlyKind: 'inductive'
-  });
+  for (let blockIndex = 0; blockIndex < parseResult.blocks.length; blockIndex++) {
+    const block = parseResult.blocks[blockIndex];
 
-  // Build constructor param names from checked inductives
-  const constructorParamNames = collectConstructorParamNames(checkResultPhase1.blocks);
-  setConstructorParamNames(constructorParamNames);
+    // Handle comment blocks
+    if (block.kind === 'comment') {
+      compiledBlocks.push({
+        blockIndex,
+        sourceLines: block.sourceLines,
+        startLine: block.startLine,
+        parseSuccess: true,
+        parseErrors: [],
+        nameResolutionSuccess: true,
+        nameResolutionErrors: [],
+        declarations: [],
+        isComment: true
+      });
+      continue;
+    }
 
-  // Phase 2: Elaborate term values (now with constructor context)
-  const elabResultPhase2 = elabTTValuesOnly(parseResult, elabResultPhase1);
+    // Handle parse error blocks
+    if (block.kind === 'error') {
+      compiledBlocks.push({
+        blockIndex,
+        sourceLines: block.sourceLines,
+        startLine: block.startLine,
+        parseSuccess: false,
+        parseErrors: block.errors,
+        nameResolutionSuccess: true,
+        nameResolutionErrors: [],
+        declarations: [],
+        isComment: false
+      });
+      continue;
+    }
 
-  // Phase 2: Type check term declarations
-  const checkResultPhase2 = checkBlocks(elabResultPhase2, checkResultPhase1.finalDefinitions, {
-    onlyKind: 'term',
-    existingBlocks: checkResultPhase1.blocks
-  });
+    // Process declarations in this block
+    const compiledDecls: CompiledDeclaration[] = [];
 
-  const totalCheckErrors = checkResultPhase1.totalCheckErrors + checkResultPhase2.totalCheckErrors;
+    for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
+      const origDecl = block.declarations[declIndex];
+      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine);
+
+      // Name resolution for this declaration (using current symbol context)
+      const nameResult = validateDeclarations([origDecl], symbolContext);
+      if (nameResult.success) {
+        symbolContext = nameResult.value;
+      }
+
+      // Pattern resolution for this declaration (using current symbol context)
+      const [resolvedDecl] = resolvePatternsInDeclarations([origDecl], symbolContext);
+      const decl = resolvedDecl;
+
+      if (decl.kind === 'inductive') {
+        // 3. If it is an inductive type def...
+        const result = processInductiveDeclaration(decl, sourceMap, definitions);
+        compiledDecls.push(result.compiled);
+
+        if (result.success) {
+          definitions = result.newDefinitions;
+          // Update constructor param names for subsequent term elaboration
+          if (result.compiled.kernelConstructors) {
+            const newCtorParamNames = buildConstructorParamNames(result.compiled.kernelConstructors);
+            for (const [ctorName, paramInfo] of newCtorParamNames) {
+              constructorParamNames.set(ctorName, paramInfo);
+            }
+            setConstructorParamNames(constructorParamNames);
+          }
+        }
+        totalCheckErrors += result.errorCount;
+      } else {
+        // 4. If we are looking at a term...
+        const result = processTermDeclaration(decl, sourceMap, definitions);
+        compiledDecls.push(result.compiled);
+
+        if (result.success) {
+          definitions = result.newDefinitions;
+        }
+        totalCheckErrors += result.errorCount;
+      }
+    }
+
+    compiledBlocks.push({
+      blockIndex,
+      sourceLines: block.sourceLines,
+      startLine: block.startLine,
+      parseSuccess: true,
+      parseErrors: [],
+      nameResolutionSuccess: true,
+      nameResolutionErrors: [],
+      declarations: compiledDecls,
+      isComment: false
+    });
+  }
 
   return {
     success: parseResult.totalErrors === 0 && totalCheckErrors === 0,
-    blocks: checkResultPhase2.blocks,
+    blocks: compiledBlocks,
     totalParseErrors: parseResult.totalErrors,
     totalNameErrors: 0,
     totalCheckErrors

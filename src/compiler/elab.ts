@@ -83,7 +83,7 @@ export class ElabEnv<T = TTerm> {
     public readonly appNamedArgLookup: NamedArgMapLookup | undefined,
     /** The current surface term being elaborated */
     public readonly value: T
-  ) {}
+  ) { }
 
   /**
    * Record the current kernel→surface path mapping in elabMap.
@@ -841,7 +841,8 @@ function applyVarPermutation(term: TTerm, permutation: number[], depth: number =
 export function reorderPatterns(
   patterns: TPattern[],
   namedMap: NamedArgMap,
-  clauseNamedPatterns?: Array<{ name: string; pattern: TPattern }>
+  clauseNamedPatterns?: Array<{ name: string; pattern: TPattern }>,
+  totalArity?: number
 ): { ordered: TPattern[]; varIndexPermutation: number[]; error?: undefined } | { ordered?: undefined; varIndexPermutation?: undefined; error: string } {
   const args = collectPatternArgs(patterns);
 
@@ -881,13 +882,15 @@ export function reorderPatterns(
   }
 
   // Determine result size
+  // If totalArity is provided, use it; otherwise estimate from patterns
   const maxNamedIdx = namedIndices.length > 0
     ? Math.max(...namedIndices.map(ni => ni.idx))
     : -1;
 
   // Result array - we fill named patterns at their positions, then fill positional in gaps
   // Also track the original index for permutation computation
-  const resultSize = Math.max(maxNamedIdx + 1, positional.length + named.length + namedWildcards.length);
+  const estimatedSize = Math.max(maxNamedIdx + 1, positional.length + named.length + namedWildcards.length);
+  const resultSize = totalArity !== undefined ? totalArity : estimatedSize;
   const result: ({ pattern: TPattern; originalIndex: number } | null)[] = new Array(resultSize).fill(null);
 
   // CRITICAL: Get set of all named parameter positions.
@@ -951,20 +954,14 @@ export function reorderPatterns(
     return { error: `Too many positional patterns: ${extraCount} extra pattern(s) cannot fill named parameter positions` };
   }
 
-  // Check that all required named parameters are provided
-  // Named positions that are NOT filled by named patterns are errors (until we implement implicits)
-  const missingNamedParams: string[] = [];
-  for (const [name, pos] of namedMap) {
+  // Fill missing named parameters with wildcards (implicit patterns)
+  // Named positions that are NOT filled get a synthetic wildcard
+  let syntheticWildcardIndex = patterns.length + (clauseNamedPatterns?.length ?? 0);
+  for (const [_name, pos] of namedMap) {
     if (result[pos] === null) {
-      missingNamedParams.push(name);
+      // Insert a wildcard pattern for the missing named parameter
+      result[pos] = { pattern: { tag: 'PWild' }, originalIndex: syntheticWildcardIndex++ };
     }
-  }
-  if (missingNamedParams.length > 0) {
-    const missingList = missingNamedParams.map(n => `'${n}'`).join(', ');
-    return {
-      error: `Missing required named pattern${missingNamedParams.length > 1 ? 's' : ''}: ${missingList}. ` +
-        `Named parameters must be matched with {name := pattern} syntax.`
-    };
   }
 
   // Check for unfilled gaps that precede filled positions
@@ -1683,13 +1680,13 @@ export function elabToKernelWithMap(
           // Let binders may have an implicit type (domain undefined in surface)
           domain = term.domain !== undefined
             ? elabToKernelWithMap(
-                term.domain,
-                elabMap,
-                appendPath(surfacePath, fieldSeg('domain')),
-                appendPath(kernelPath, fieldSeg('domain')),
-                patternNamedArgMap,
-                appNamedArgLookup
-              )
+              term.domain,
+              elabMap,
+              appendPath(surfacePath, fieldSeg('domain')),
+              appendPath(kernelPath, fieldSeg('domain')),
+              patternNamedArgMap,
+              appNamedArgLookup
+            )
             : freshImplicitLetTypeMeta(term.name);
           break;
       }
@@ -1849,7 +1846,7 @@ export function elabToKernelWithMap(
           let patternsToElab = clause.patterns;
           let rhsToElab = clause.rhs;
           if (patternNamedArgMap && patternNamedArgMap.size > 0) {
-            const reorderResult = reorderPatterns(clause.patterns, patternNamedArgMap, clause.namedPatterns);
+            const reorderResult = reorderPatterns(clause.patterns, patternNamedArgMap, clause.namedPatterns, patternTotalArity);
             if ('error' in reorderResult && reorderResult.error !== undefined) {
               throw new NamedArgElabError(reorderResult.error, clauseSurfacePath);
             }
