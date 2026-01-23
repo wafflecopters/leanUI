@@ -1050,7 +1050,7 @@ export function reorderPatterns(
   namedMap: NamedArgMap,
   clauseNamedPatterns?: Array<{ name: string; pattern: TPattern }>,
   totalArity?: number
-): { ordered: TPattern[]; varIndexPermutation: number[]; error?: undefined } | { ordered?: undefined; varIndexPermutation?: undefined; error: string } {
+): { ordered: TPattern[]; varIndexPermutation: number[]; sourceIndexMap: (number | null)[]; error?: undefined } | { ordered?: undefined; varIndexPermutation?: undefined; sourceIndexMap?: undefined; error: string } {
   const args = collectPatternArgs(patterns);
 
   // Separate named, namedWildcard, and positional patterns
@@ -1190,6 +1190,10 @@ export function reorderPatterns(
   const finalResult = result.slice(0, lastFilled + 1).filter((t): t is { pattern: TPattern; originalIndex: number } => t !== null);
   const ordered = finalResult.map(r => r.pattern);
 
+  // Build source index map: for each position in `ordered`, what's the original source index?
+  // null means the pattern was synthetic (inserted wildcard for implicit param)
+  const sourceIndexMap = finalResult.map(r => r.originalIndex < patterns.length ? r.originalIndex : null);
+
   // Compute de Bruijn index permutation
   // Pattern variables are collected left-to-right, then reversed for the context
   // Index 0 is the innermost (rightmost pattern's last var)
@@ -1239,7 +1243,7 @@ export function reorderPatterns(
     }
   }
 
-  return { ordered, varIndexPermutation };
+  return { ordered, varIndexPermutation, sourceIndexMap };
 }
 
 // ============================================================================

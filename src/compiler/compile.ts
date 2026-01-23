@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -2214,6 +2214,8 @@ function checkMatchClauseFromSurface(
   let patternsToElab = surfaceClause.patterns;
   let rhsToElab = surfaceClause.rhs;
   const hasClauseNamedPatterns = surfaceClause.namedPatterns && surfaceClause.namedPatterns.length > 0;
+  // sourceIndexMap[kernelIndex] = sourceIndex (or null for synthetic wildcards)
+  let sourceIndexMap: (number | null)[] | undefined;
 
   if (namedArgMap && namedArgMap.size > 0) {
     const reorderResult = reorderPatterns(surfaceClause.patterns, namedArgMap, surfaceClause.namedPatterns, totalArity);
@@ -2221,6 +2223,7 @@ function checkMatchClauseFromSurface(
       throw TCEnvError.create(reorderResult.error, termEnv);
     }
     patternsToElab = reorderResult.ordered!;
+    sourceIndexMap = reorderResult.sourceIndexMap;
 
     // Apply RHS adjustment for pattern reordering
     // When user explicitly uses named patterns, apply the computed permutation
@@ -2237,7 +2240,12 @@ function checkMatchClauseFromSurface(
 
   // Elaborate patterns to kernel form
   const kernelPatterns: TTKPattern[] = patternsToElab.map((pattern, patternIndex) => {
-    const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(patternIndex));
+    // Use sourceIndexMap to find the original source pattern index
+    // sourceIndexMap[kernelIndex] = sourceIndex (or null for synthetic patterns)
+    const sourcePatternIndex = sourceIndexMap?.[patternIndex] ?? patternIndex;
+    // For synthetic patterns (null), use the kernel index as a fallback (no real source)
+    const effectiveSourceIndex = sourcePatternIndex ?? patternIndex;
+    const patternSurfacePath = appendPath(clauseSurfacePath, fieldSeg('patterns'), arraySeg(effectiveSourceIndex));
     const patternKernelPath = appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(patternIndex));
     return elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
   });
@@ -2279,7 +2287,7 @@ function checkMatchClauseFromSurface(
   // Step 4: Check the clause (unify LHS, check RHS)
   // NOTE: Don't pass namedArgMap/totalArity here - reorderPatterns already handled wildcard insertion
   // for missing named arguments. Passing them would cause double-padding.
-  const clauseEnv = termEnv.atIndexPathAndValue([...termEnv.indexPath, MatchPartIndex.Clauses, arraySeg(clauseIndex)], fullKernelClause);
+  const clauseEnv = termEnv.atIndexPathAndValue([...termEnv.indexPath, TermDefinitionPartIndex.Value, MatchPartIndex.Clauses, arraySeg(clauseIndex)], fullKernelClause);
   const checkedClauseEnv = checkMatchClause(termName, clauseEnv, type);
   return checkedClauseEnv.value;
 }
