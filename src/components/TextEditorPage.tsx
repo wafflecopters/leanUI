@@ -22,7 +22,7 @@ const SYNTAX_COLORS = {
   patternVar: '9cdcfe',     // Light blue - for pattern variables (x, n, h)
   delimiter: 'e5c995',      // Light tan/gold - for (, ), etc.
   namedBrace: '6e7681',     // Dark grey - for { } in named arguments/binders
-  hole: 'f85149',           // Red for holes (unfinished code)
+  hole: 'e5c07b',           // Yellow for holes (unfinished code)
   absurd: '4fc1ff',         // Bright cyan - for #absurd marker
 };
 
@@ -65,7 +65,7 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     'editorIndentGuide.activeBackground': '#30363d',
     'editorBracketMatch.background': '#2d333b',
     'editorBracketMatch.border': '#58a6ff',
-    // Warning squiggle color matches hole color (bright cyan)
+    // Warning squiggle color matches hole color (yellow)
     'editorWarning.foreground': '#' + SYNTAX_COLORS.hole,
   },
 };
@@ -163,20 +163,20 @@ plus Zero b = b
 plus (Succ a) b = Succ (plus a b)
 
 inductive Vec : Type -> Nat -> Type where
-  VNil : (A: Type) -> Vec A Zero
-  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+  VNil : {A: Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
 
 inductive Fin : Nat -> Type where
-  FZero : (n : Nat) -> Fin (Succ n)
-  FSucc : (n : Nat) -> Fin n -> Fin (Succ n)
+  FZero : {n : Nat} -> Fin (Succ n)
+  FSucc : {n : Nat} -> Fin n -> Fin (Succ n)
 
-nth : (A : Type) -> (n : Nat) -> Vec A n -> Fin n -> A
-nth A _ (VCons _ _ h _) (FZero _) = h
-nth A _ (VCons _ (Succ _) h tail) (FSucc _ f) = nth _ _ tail f
+nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
+nth (VCons h _) FZero = h
+nth (VCons {n := (Succ _)} h tail) (FSucc f) = nth tail f
 
 inductive Void : Type where
 
-absurd : (A : Type) -> Void -> A
+absurd : {A : Type} -> Void -> A
 
 inductive Equal : (A : Type) -> A -> A -> Type where
   refl : (A : Type) -> (a : A) -> Equal A a a
@@ -187,8 +187,8 @@ zeroNeqSucc Z (refl _ _) = #absurd
 double : Nat -> Nat
 double n = ?sorry
 
-right : (A : Type) -> (B : Type) -> B -> A -> B
-right A B b = \\(x: A) => b
+right : {A : Type} -> {B : Type} -> B -> A -> B
+right {A} b = \\(x: A) => b
 
 qux : Type
 qux = Nat
@@ -196,11 +196,11 @@ qux = Nat
 qux' : Nat -> Type
 qux' n = Nat
 
-const : (A : Type) -> (B : Type) -> A -> B -> A
-const _ _ a = \\ _ => a
+const : {A : Type} -> {B : Type} -> A -> B -> A
+const a = \\ _ => a
 
-swap : (A : Type) -> (B : Type) -> (C : Type) -> (f : A -> B -> C) -> B -> A -> C
-swap _ _ _ f = \\ x y => f y x
+swap : {A B C : Type} -> (f : A -> B -> C) -> B -> A -> C
+swap f = \\ x y => f y x
 
 {-
 vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
@@ -211,12 +211,11 @@ vecConcat A (Succ p) _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat A p _ tail 
 {-
 vecConcat' : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat' _ _ _ (VNil _) v = v
-vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\ d x => x) Zero p) _ tail v) h
+vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\ d x => x) Zero p) _ tail v) h
 -}
 
-sym : (A : Type) -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
-sym A u _ (refl _ _) = refl _ _
-
+sym : {A : Type} -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
+sym u _ (refl _ _) = refl _ _
 `;
 
 // Styles

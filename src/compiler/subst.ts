@@ -622,7 +622,6 @@ export function applySubstitutionToMetaVars(
         const minFreeVar = minFreeVarIndex(value);
         const contextBoundary = mainSigLength - m;
         if (minFreeVar < contextBoundary) {
-          debugger
           throw new Error(
             `Escaping variable in substitution for metavar ${name}: ` +
             `value references Var(${minFreeVar}) but metavar context only has ` +

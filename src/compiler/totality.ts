@@ -17,6 +17,16 @@ import { TTKPattern } from './kernel';
 import { DefinitionsMap } from './term';
 
 // ============================================================================
+// Logging
+// ============================================================================
+
+let loggingEnabled = false;
+
+export function setTotalityLoggingEnabled(enabled: boolean): void {
+  loggingEnabled = enabled;
+}
+
+// ============================================================================
 // Exported Case Tree Types (for visualization)
 // ============================================================================
 
@@ -454,13 +464,15 @@ export function checkTotality(
   const isExhaustive = isTreeExhaustive(caseTree);
 
   // Debug logging
-  console.log(`\n[Totality] Case tree for '${termName}':`);
-  console.log(printCaseTree(caseTree));
-  if (unreachableClauses.length > 0) {
-    console.log(`[Totality] Unreachable clauses: ${unreachableClauses.join(', ')}`);
-  }
-  if (!isExhaustive) {
-    console.log(`[Totality] WARNING: Patterns are not exhaustive`);
+  if (loggingEnabled) {
+    console.log(`\n[Totality] Case tree for '${termName}':`);
+    console.log(printCaseTree(caseTree));
+    if (unreachableClauses.length > 0) {
+      console.log(`[Totality] Unreachable clauses: ${unreachableClauses.join(', ')}`);
+    }
+    if (!isExhaustive) {
+      console.log(`[Totality] WARNING: Patterns are not exhaustive`);
+    }
   }
 
   return { caseTree, unreachableClauses, isExhaustive };

@@ -835,20 +835,7 @@ bad n = bad n`;
 
     // Get the error path from the TCEnvError
     const errorPath = badDecl!.checkErrors[0].env.indexPath;
-
-    // Debug: print the error path
     const errorPathStr = serializeIndexPath(errorPath);
-    console.log('Error path:', errorPathStr);
-
-    // Debug: print elabMap entries
-    console.log('ElabMap entries:');
-    for (const [key, value] of badDecl!.elabMap!) {
-      console.log(`  ${key} -> ${value}`);
-    }
-
-    // Debug: check if error path exists in elabMap
-    const surfacePath = badDecl!.elabMap!.get(errorPathStr);
-    console.log('Surface path for error:', surfacePath);
 
     // Try progressively shorter paths like mapErrorPathToSourceRange does
     let currentPath = errorPath;
@@ -857,10 +844,8 @@ bad n = bad n`;
       const pathStr = serializeIndexPath(currentPath);
       const surfPath = badDecl!.elabMap!.get(pathStr);
       if (surfPath) {
-        console.log(`Found mapping at path: ${pathStr} -> ${surfPath}`);
         const range = badDecl!.sourceMap!.get(surfPath);
-        console.log(`Source range: ${JSON.stringify(range)}`);
-        foundMapping = true;
+        if (range) foundMapping = true;
       }
       currentPath = currentPath.slice(0, -1);
     }
@@ -903,7 +888,6 @@ bad n = bad n`;
     // In source (1-indexed): line 6
     // Note: sourceMap uses 1-indexed lines relative to block start
     expect(range).toBeDefined();
-    console.log('Error range:', JSON.stringify(range));
 
     // The error should NOT be at the very end of the file
     const lines = source.split('\n');

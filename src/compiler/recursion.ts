@@ -16,6 +16,16 @@ import { TTKPattern, TTKTerm, TTKClause, prettyPrint } from './kernel';
 import { IndexPath, fieldSeg, arraySeg } from '../types/source-position';
 
 // ============================================================================
+// Logging
+// ============================================================================
+
+let loggingEnabled = false;
+
+export function setRecursionLoggingEnabled(enabled: boolean): void {
+  loggingEnabled = enabled;
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -489,7 +499,7 @@ export function checkStructuralRecursion(
   const isValid = allErrors.length === 0;
 
   // Log results
-  if (allErrors.length > 0) {
+  if (loggingEnabled && allErrors.length > 0) {
     console.log(`\n[Recursion] Structural recursion check for '${functionName}':`);
     for (const { clauseIndex, error } of allErrors) {
       console.log(`  ERROR: Clause ${clauseIndex}: ${error.message}`);
