@@ -406,4 +406,36 @@ isZero (Succ n) = Zero`;
       expect(results[1].checkSuccess).toBe(true);
     });
   });
+
+  describe('Type-level inference', () => {
+    test('Type is Type 1', () => {
+      const source = `foo : Type 1
+foo = Type`;
+
+      const results = compileSource(source);
+
+      expect(results.length).toBe(1);
+      expect(results[0].checkSuccess).toBe(true);
+    });
+
+    test('Type -> Type is Type 1', () => {
+      const source = `foo : Type 1
+foo = Type -> Type`;
+
+      const results = compileSource(source);
+
+      expect(results.length).toBe(1);
+      expect(results[0].checkSuccess).toBe(true);
+    });
+
+    test('lambda returning Type has type Type -> Type 1', () => {
+      const source = `foo : Type -> Type 1
+foo = \\ _ => Type`;
+
+      const results = compileSource(source);
+
+      expect(results.length).toBe(1);
+      expect(results[0].checkSuccess).toBe(true);
+    });
+  });
 });

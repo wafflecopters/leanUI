@@ -1,5 +1,5 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkLZero, Level, mkLMVar } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkLZero, Level, mkLMVar, simplifyLevel } from "./kernel";
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
 import { solveConstraints } from "./meta";
@@ -499,6 +499,115 @@ export function printCollectionFancy(items: string[], openBracket: string, close
  */
 export type LevelMeta = Level | undefined;
 
+/**
+ * Substitute solved level metas into a level expression.
+ */
+function substituteLevelMetas(level: Level, levelMetas: Map<string, LevelMeta>): Level {
+  switch (level.tag) {
+    case 'LZero':
+      return level;
+    case 'LSucc':
+      return { tag: 'LSucc', pred: substituteLevelMetas(level.pred, levelMetas) };
+    case 'LMax':
+      return {
+        tag: 'LMax',
+        left: substituteLevelMetas(level.left, levelMetas),
+        right: substituteLevelMetas(level.right, levelMetas)
+      };
+    case 'LIMax':
+      return {
+        tag: 'LIMax',
+        left: substituteLevelMetas(level.left, levelMetas),
+        right: substituteLevelMetas(level.right, levelMetas)
+      };
+    case 'LParam':
+      return level;
+    case 'LMVar': {
+      const solution = levelMetas.get(level.id);
+      if (solution !== undefined) {
+        // Recursively substitute in case the solution contains other metas
+        return substituteLevelMetas(solution, levelMetas);
+      }
+      return level;
+    }
+    default: {
+      const _exhaustive: never = level;
+      throw new Error(`Unknown level tag: ${(_exhaustive as Level).tag}`);
+    }
+  }
+}
+
+/**
+ * Substitute solved level metas into a term (recursively in all levels).
+ */
+function substituteLevelMetasInTerm(term: TTKTerm, levelMetas: Map<string, LevelMeta>): TTKTerm {
+  switch (term.tag) {
+    case 'Var':
+    case 'Const':
+    case 'Hole':
+    case 'Meta':
+    case 'ULevel':
+      return term;
+
+    case 'Sort':
+      // After substitution, simplify the level (e.g., max(2, 2) -> 2)
+      return { tag: 'Sort', level: simplifyLevel(substituteLevelMetas(term.level, levelMetas)) };
+
+    case 'App':
+      return {
+        tag: 'App',
+        fn: substituteLevelMetasInTerm(term.fn, levelMetas),
+        arg: substituteLevelMetasInTerm(term.arg, levelMetas)
+      };
+
+    case 'Binder': {
+      const newDomain = substituteLevelMetasInTerm(term.domain, levelMetas);
+      const newBody = substituteLevelMetasInTerm(term.body, levelMetas);
+      if (term.binderKind.tag === 'BLet') {
+        return {
+          tag: 'Binder',
+          name: term.name,
+          binderKind: {
+            tag: 'BLet',
+            defVal: substituteLevelMetasInTerm(term.binderKind.defVal, levelMetas)
+          },
+          domain: newDomain,
+          body: newBody
+        };
+      }
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: term.binderKind,
+        domain: newDomain,
+        body: newBody
+      };
+    }
+
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: substituteLevelMetasInTerm(term.term, levelMetas),
+        type: substituteLevelMetasInTerm(term.type, levelMetas)
+      };
+
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: substituteLevelMetasInTerm(term.scrutinee, levelMetas),
+        clauses: term.clauses.map(c => ({
+          ...c,
+          rhs: substituteLevelMetasInTerm(c.rhs, levelMetas)
+        }))
+      };
+
+    default: {
+      const _exhaustive: never = term;
+      throw new Error(`Unknown term tag: ${(_exhaustive as TTKTerm).tag}`);
+    }
+  }
+}
+
 export class TCEnv<T> {
   constructor(
     public readonly context: TTKContext,
@@ -633,6 +742,11 @@ export class TCEnv<T> {
     // Add any meta constraints from unification
     for (const metaConstraint of result.metaConstraints) {
       env = env.withConstraint(metaConstraint);
+    }
+
+    // Solve level constraints
+    for (const levelConstraint of result.levelConstraints) {
+      env = env.solveLevelMeta(levelConstraint.lmvar, levelConstraint.rhs);
     }
 
     return env;
@@ -871,6 +985,40 @@ export class TCEnv<T> {
     );
 
     return { env, level };
+  }
+
+  /**
+   * Solve a level metavariable by assigning it a value.
+   * The value is substituted into all other level metas.
+   */
+  solveLevelMeta<S>(this: TCEnv<S>, id: string, value: Level): TCEnv<S> {
+    const newLevelMetas = new Map(this.levelMetas);
+
+    // Substitute any existing level meta solutions into the value
+    const substitutedValue = substituteLevelMetas(value, this.levelMetas);
+
+    // Set the solution
+    newLevelMetas.set(id, substitutedValue);
+
+    return new TCEnv(
+      this.context,
+      this.definitions,
+      this.metaVars,
+      this.constraints,
+      this.indexPath,
+      this.valueStack,
+      this.value,
+      newLevelMetas,
+      this.options
+    );
+  }
+
+  /**
+   * Substitute solved level metas into a term.
+   * This is needed before unification to ensure level metas are resolved.
+   */
+  substituteLevelMetasInTerm(term: TTKTerm): TTKTerm {
+    return substituteLevelMetasInTerm(term, this.levelMetas);
   }
 
   isConstTerm(this: TCEnv<TTKTerm>): this is TCEnv<TTKTerm & { tag: 'Const' }> {

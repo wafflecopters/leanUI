@@ -395,8 +395,12 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   }
 
   // Now try to unify the inferred type with the expected type
+  // First, substitute any solved level metas in both types
+  const inferredTypeWithLevels = inferredEnv.substituteLevelMetasInTerm(inferredEnv.value);
+  const expectedTypeWithLevels = inferredEnv.substituteLevelMetasInTerm(expectedType);
+
   try {
-    const unifiedEnv = inferredEnv.unifyTerms(inferredEnv.value, expectedType);
+    const unifiedEnv = inferredEnv.unifyTerms(inferredTypeWithLevels, expectedTypeWithLevels);
     // Return with the elaborated term (with implicit args inserted)
     return unifiedEnv.withValue(currentTerm);
   } catch (e) {
