@@ -325,7 +325,7 @@ export function matchUSucc(term: TTKTerm): TTKTerm | undefined {
  */
 export function matchUMax(term: TTKTerm): [TTKTerm, TTKTerm] | undefined {
   if (term.tag === 'App' && term.fn.tag === 'App' &&
-      term.fn.fn.tag === 'Const' && term.fn.fn.name === 'UMax') {
+    term.fn.fn.tag === 'Const' && term.fn.fn.name === 'UMax') {
     return [term.fn.arg, term.arg];
   }
   return undefined;
@@ -337,7 +337,7 @@ export function matchUMax(term: TTKTerm): [TTKTerm, TTKTerm] | undefined {
  */
 export function matchUIMax(term: TTKTerm): [TTKTerm, TTKTerm] | undefined {
   if (term.tag === 'App' && term.fn.tag === 'App' &&
-      term.fn.fn.tag === 'Const' && term.fn.fn.name === 'UIMax') {
+    term.fn.fn.tag === 'Const' && term.fn.fn.name === 'UIMax') {
     return [term.fn.arg, term.arg];
   }
   return undefined;

@@ -8,6 +8,7 @@ function createTestEnv(term: TTKTerm, context: { name: string; type: TTKTerm }[]
   const definitions: DefinitionsMap = {
     terms: new Map(),
     inductiveTypes: new Map(),
+    inductiveNameOfConstructor: new Map(),
   };
 
   // Add Nat type for testing

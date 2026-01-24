@@ -766,7 +766,7 @@ export function fixRhsForConstructorPatterns(
   let varIndex = 0;
   for (const pattern of patterns) {
     if (pattern.tag === 'PCtor' && pattern.args.length === 0 &&
-        (!pattern.namedArgs || pattern.namedArgs.length === 0)) {
+      (!pattern.namedArgs || pattern.namedArgs.length === 0)) {
       const firstChar = pattern.name[0];
       const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
       const isSingleUppercase = pattern.name.length === 1 && firstChar === firstChar.toUpperCase();

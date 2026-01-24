@@ -1182,8 +1182,12 @@ export function checkMatchClause(
   // TTKContext has oldest at index 0 (appended), but we need most recent at index 0
   const contextNames = result.context.map(entry => entry.name).reverse();
 
-  // Return the checked clause with the solved RHS, elaborated arguments, and meta solutions
-  // Use PADDED patterns so that the totality checker sees the full constructor arities
+  // Return the checked clause with paddedPatterns and the solved RHS.
+  // NOTE: We use paddedPatterns (not elaborated patterns) because:
+  // 1. Elaborated patterns can have different nesting depths due to forced values
+  //    (e.g., (Succ ?x) vs (Succ (Succ y))) which causes shape misalignment
+  //    in the totality checker's DFS flattening
+  // 2. The elabArgs field preserves the elaborated terms for other uses
   const checkedClause: TTKClause = {
     patterns: paddedPatterns,
     rhs: solvedEnv.value,

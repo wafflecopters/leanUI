@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, extractPiSpine, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -1055,7 +1055,7 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
             return {
               name: ctor.name,
               type: elabToKernelWithMap(ctor.type, elabMap, ctorTypePath, ctorTypePath, undefined, ctorAppLookup),
-              namedArgMap: ctorNamedArgMap.size > 0 ? ctorNamedArgMap : undefined
+              namedArgMap: ctorNamedArgMap.size > 0 ? ctorNamedArgMap : undefined,
             };
           });
         }
@@ -2299,6 +2299,7 @@ function checkMatchClauseFromSurface(
   // for missing named arguments. Passing them would cause double-padding.
   const clauseEnv = termEnv.atIndexPathAndValue([...termEnv.indexPath, TermDefinitionPartIndex.Value, MatchPartIndex.Clauses, arraySeg(clauseIndex)], fullKernelClause);
   const checkedClauseEnv = checkMatchClause(termName, clauseEnv, type);
+
   return checkedClauseEnv.value;
 }
 

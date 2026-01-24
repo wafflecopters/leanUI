@@ -779,3 +779,88 @@ export function applySubstitutionToConstraints(
     }
   });
 }
+
+/**
+ * Convert a term to a pattern.
+ *
+ * This is used to convert elaborated LHS terms (from elabArgs) back to patterns
+ * for the totality checker. During LHS unification, wildcards may be forced to
+ * specific constructor values (e.g., `_` becomes `Zero` when matching `VNil`).
+ * The elabArgs contain these forced values as terms, and we need to convert
+ * them back to patterns.
+ *
+ * @param term The elaborated term
+ * @param contextNames Names of variables in the context (de Bruijn order: index 0 first)
+ * @param metaVars Optional map of meta-variables with their solutions
+ * @returns The corresponding pattern
+ */
+export function termToPattern(
+  term: TTKTerm,
+  contextNames: string[] = [],
+  metaVars?: Map<string, MetaVar>
+): TTKPattern {
+  switch (term.tag) {
+    case 'Var': {
+      // Variable - convert to PVar with the name from context
+      const name = term.index < contextNames.length ? contextNames[term.index] : `_${term.index}`;
+      return { tag: 'PVar', name };
+    }
+
+    case 'Const': {
+      // Constant with no arguments - could be a nullary constructor
+      return { tag: 'PCtor', name: term.name, args: [] };
+    }
+
+    case 'App': {
+      // Application - collect the spine and convert
+      const args: TTKTerm[] = [];
+      let current: TTKTerm = term;
+      while (current.tag === 'App') {
+        args.unshift(current.arg);
+        current = current.fn;
+      }
+
+      if (current.tag === 'Const') {
+        // Constructor application
+        return {
+          tag: 'PCtor',
+          name: current.name,
+          args: args.map(arg => termToPattern(arg, contextNames, metaVars))
+        };
+      }
+
+      // Check if head is a meta with a solution
+      if (current.tag === 'Meta' && metaVars) {
+        const meta = metaVars.get(current.id);
+        if (meta?.solution) {
+          // Substitute meta solution and try again
+          const expandedTerm = args.reduce<TTKTerm>(
+            (fn, arg) => ({ tag: 'App', fn, arg }),
+            meta.solution
+          );
+          return termToPattern(expandedTerm, contextNames, metaVars);
+        }
+      }
+
+      // Non-constructor application - treat as a variable pattern
+      // This shouldn't happen in well-formed elaborated patterns
+      return { tag: 'PVar', name: '_app' };
+    }
+
+    case 'Meta': {
+      // Meta-variable - look up its solution
+      if (metaVars) {
+        const meta = metaVars.get(term.id);
+        if (meta?.solution) {
+          return termToPattern(meta.solution, contextNames, metaVars);
+        }
+      }
+      // Unsolved meta - treat as wildcard
+      return { tag: 'PWild', name: '_' };
+    }
+
+    default:
+      // For other term types (Hole, etc.), treat as wildcard
+      return { tag: 'PWild', name: '_' };
+  }
+}

@@ -148,13 +148,15 @@ export type TermDefinition = {
 
 export type DefinitionsMap = {
   terms: Map<string, TermDefinition>,
-  inductiveTypes: Map<string, InductiveDefinition>
+  inductiveTypes: Map<string, InductiveDefinition>,
+  inductiveNameOfConstructor: Map<string, string>,
 }
 
 export function createDefinitionsMap(): DefinitionsMap {
   return {
     terms: new Map<string, TermDefinition>(),
     inductiveTypes: new Map<string, InductiveDefinition>(),
+    inductiveNameOfConstructor: new Map<string, string>(),
   };
 }
 
@@ -273,7 +275,12 @@ export function addInductiveDefinition(
 ): DefinitionsMap {
   const newMap = new Map<string, InductiveDefinition>(definitions.inductiveTypes);
   newMap.set(name, { name, type, constructors, indexPositions: indexPositions ?? [], namedArgMap });
-  return { ...definitions, inductiveTypes: newMap };
+
+  const newCtroMap = new Map<string, string>(definitions.inductiveNameOfConstructor);
+  for (const ctor of constructors) {
+    newCtroMap.set(ctor.name, name);
+  }
+  return { ...definitions, inductiveTypes: newMap, inductiveNameOfConstructor: newCtroMap };
 }
 
 export function getTypeDefinition(definitions: DefinitionsMap, name: string) {
