@@ -1,4 +1,5 @@
 import { levelsEqual, mkVar, TTKTerm } from "./kernel";
+import { DefinitionsMap } from "./term";
 import { whnf } from "./whnf";
 
 // ============================================================================
@@ -20,7 +21,8 @@ import { whnf } from "./whnf";
 export type UnifyOptions = {
   flexibleVars?: boolean;
   rigidVarsAtOrAbove?: number;
-  mode: 'pattern' | 'check'
+  mode: 'pattern' | 'check';
+  definitions?: DefinitionsMap;
 }
 
 // ============================================================================
@@ -317,8 +319,9 @@ function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResu
  */
 export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): UnifyResult {
   // Reduce both to weak head normal form
-  const a = whnf(lhs);
-  const b = whnf(rhs);
+  const whnfCtx = options.definitions ? { definitions: options.definitions } : undefined;
+  const a = whnf(lhs, whnfCtx);
+  const b = whnf(rhs, whnfCtx);
 
   // ─────────────────────────────────────────────────────────────────────────
   // META - Metavariable

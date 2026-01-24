@@ -158,4 +158,95 @@ vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)`;
       // The important thing is that we're not failing due to unresolved plus_type
     }
   });
+
+  // ============================================================================
+  // Test 4: Debug test for plus reduction
+  // ============================================================================
+
+  test('plus function value is available during vecConcat type checking', () => {
+    // This test verifies that when checking vecConcat, the definitions
+    // have plus's value available for δ-reduction.
+    // Debug output in whnf.ts will show if 'plus' is being looked up.
+
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A: Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ _ _ (VNil _) v = v
+vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)`;
+
+    const results = compileSource(source);
+
+    // Check vecConcat
+    const vecConcatBlock = results.find(r => r.name === 'vecConcat');
+    expect(vecConcatBlock).toBeDefined();
+
+    // Look at the errors - if "plus" appears in debug output, definitions are being passed
+    if (!vecConcatBlock!.checkSuccess) {
+      console.log('vecConcat errors:', vecConcatBlock!.checkErrors.map(e => e.message));
+    }
+
+    // For now, just verify plus check succeeded
+    const plusBlock = results.find(r => r.name === 'plus');
+    expect(plusBlock!.checkSuccess).toBe(true);
+  });
+
+  // ============================================================================
+  // Test 5: After δ/ι reduction implementation - full type checking
+  // ============================================================================
+
+  test('vecConcat fully type-checks with δ/ι reduction support', () => {
+    // With δ-reduction (unfold definitions) and ι-reduction (pattern matching),
+    // vecConcat should now fully type-check. The key insight is that:
+    //
+    // In clause 1: vecConcat _ _ _ (VNil _) v = v
+    //   - LHS has pattern (VNil _), so a = Zero
+    //   - Return type is Vec A (plus Zero b)
+    //   - With ι-reduction, plus Zero b → b
+    //   - So return type becomes Vec A b, which matches type of v
+    //
+    // In clause 2: vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)
+    //   - LHS has pattern (VCons _ _ h tail), so a = Succ n for some n
+    //   - Return type is Vec A (plus (Succ n) b)
+    //   - With ι-reduction, plus (Succ n) b → Succ (plus n b)
+    //   - The RHS type is Vec A (Succ (plus n b))
+    //   - These should unify after reduction
+
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A: Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat _ _ _ (VNil _) v = v
+vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)`;
+
+    const results = compileSource(source);
+
+    // All definitions should type-check
+    const vecConcatBlock = results.find(r => r.name === 'vecConcat');
+    expect(vecConcatBlock).toBeDefined();
+
+    // With δ/ι reduction, vecConcat should now fully type-check
+    if (!vecConcatBlock!.checkSuccess) {
+      console.log('vecConcat errors:', vecConcatBlock!.checkErrors.map(e => e.message));
+    }
+    expect(vecConcatBlock!.checkSuccess).toBe(true);
+  });
 });

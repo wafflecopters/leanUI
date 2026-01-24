@@ -754,7 +754,8 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   const unifyResult = unifyTerms(unifyLeft, unifyRight, {
     flexibleVars: true,
     rigidVarsAtOrAbove: numPatternLocalBindings,
-    mode: 'pattern'
+    mode: 'pattern',
+    definitions: workEnv.definitions
   })
 
   if (!unifyResult.success) {

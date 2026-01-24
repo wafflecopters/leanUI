@@ -1,5 +1,26 @@
-import { mkVar, TTKBinderKind, TTKTerm } from "./kernel";
+import { mkVar, TTKBinderKind, TTKPattern, TTKTerm } from "./kernel";
 import { Constraint, MetaVar, TTKContext, transformVarsInTerm } from "./term";
+
+/**
+ * Count the number of pattern variables (PVar and PWild) in a pattern.
+ * This determines how many bindings the pattern introduces.
+ */
+function countPatternVars(pattern: TTKPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      return pattern.args.reduce((sum, p) => sum + countPatternVars(p), 0);
+  }
+}
+
+/**
+ * Count total pattern variables across all patterns in a clause.
+ */
+function countClausePatternVars(patterns: TTKPattern[]): number {
+  return patterns.reduce((sum, p) => sum + countPatternVars(p), 0);
+}
 
 /**
  * Substitute term s for variable with index n in term t
@@ -71,10 +92,15 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
       return {
         tag: 'Match',
         scrutinee: substHelper(targetIndex, replacement, term.scrutinee, depth),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          rhs: substHelper(targetIndex, replacement, c.rhs, depth)
-        }))
+        clauses: term.clauses.map(c => {
+          // Pattern variables act as binders in the RHS, so we need to
+          // increase depth by the number of pattern variables
+          const patternVarCount = countClausePatternVars(c.patterns);
+          return {
+            patterns: c.patterns,
+            rhs: substHelper(targetIndex, replacement, c.rhs, depth + patternVarCount)
+          };
+        })
       };
 
     case 'ULevel':
@@ -143,10 +169,14 @@ function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
       return {
         tag: 'Match',
         scrutinee: shift(amount, term.scrutinee, cutoff),
-        clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          rhs: shift(amount, c.rhs, cutoff)
-        }))
+        clauses: term.clauses.map(c => {
+          // Pattern variables act as binders in the RHS
+          const patternVarCount = countClausePatternVars(c.patterns);
+          return {
+            patterns: c.patterns,
+            rhs: shift(amount, c.rhs, cutoff + patternVarCount)
+          };
+        })
       };
 
     case 'ULevel':

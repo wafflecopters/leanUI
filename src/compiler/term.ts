@@ -729,7 +729,8 @@ export class TCEnv<T> {
    */
   unifyTerms<S extends TTKTerm>(this: TCEnv<S>, lhs: TTKTerm, rhs: TTKTerm): TCEnv<S> {
     const result = unifyTerms(lhs, rhs, {
-      mode: this.options.mode
+      mode: this.options.mode,
+      definitions: this.definitions
     });
 
     if (!result.success) {
@@ -1521,14 +1522,14 @@ export class TCEnv<T> {
 
   // Error Checkors
   assertTermsAreDefinitionallyEqual(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
-    if (!areTypesDefEq(lhs, rhs)) {
+    if (!areTypesDefEq(lhs, rhs, this.definitions)) {
       throw this.expectedTermsToBeDefinitionallyEqualError(lhs, rhs, message);
     }
     return this;
   }
 
   assertValueIsDefinitionallyEqual(this: TCEnv<TTKTerm>, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
-    if (!areTypesDefEq(this.value, rhs)) {
+    if (!areTypesDefEq(this.value, rhs, this.definitions)) {
       throw this.expectedTermsToBeDefinitionallyEqualError(this.value, rhs, message);
     }
     return this;
