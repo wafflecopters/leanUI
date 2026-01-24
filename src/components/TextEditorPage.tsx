@@ -290,14 +290,21 @@ vecConcat : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat VNil v = v
 vecConcat (VCons h tail) v = VCons h (vecConcat tail v)
 
-{-
 vecConcat' : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
 vecConcat' _ _ _ (VNil _) v = v
-vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\ d x => x) Zero p) _ tail v) h
--}
+vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\\ d x => x) Zero p) _ tail v) h
 
 sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
 sym refl = refl
+
+trans : {A : Type} -> {u v w : A} -> Equal u v -> Equal v w -> Equal u w
+trans refl refl = refl
+
+cong : {A B : Type} -> {u v : A} -> {f : A -> B} -> Equal u v -> Equal (f u) (f v)
+cong refl = refl
+
+replace : {A B : Type} -> {x y : A} -> {f : A -> B} -> Equal x y -> f x -> f y
+replace refl fx = fx
 `;
 
 // Styles
