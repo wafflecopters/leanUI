@@ -439,6 +439,8 @@ export function adjustRhsWithMapping(
       case 'Const':
       case 'Sort':
       case 'ULevel':
+      case 'ULit':
+      case 'UOmega':
       case 'Hole':
       case 'AbsurdMarker':
         return term;

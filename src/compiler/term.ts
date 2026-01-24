@@ -1,5 +1,5 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkLZero, Level, mkLMVar, simplifyLevel } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkULit, mkMeta, simplifyLevel } from "./kernel";
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
 import { solveConstraints } from "./meta";
@@ -347,6 +347,10 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
     return { tag: 'Match', scrutinee: transformVarsInTermAcc(term.scrutinee, transform, context), clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: transformVarsInTermAcc(c.rhs, transform, context) })) };
   } else if (term.tag === 'ULevel') {
     return { tag: 'ULevel' };
+  } else if (term.tag === 'ULit') {
+    return { tag: 'ULit', n: term.n };
+  } else if (term.tag === 'UOmega') {
+    return { tag: 'UOmega' };
   }
 
   const _never: never = term
@@ -386,6 +390,8 @@ function replaceHolesWithMetasInTerm<S>(env: TCEnv<S>, term: TTKTerm): { env: TC
     case 'Sort':
     case 'Meta':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return { env, term };
 
     case 'Binder': {
@@ -494,36 +500,26 @@ export function printCollectionFancy(items: string[], openBracket: string, close
 
 /**
  * Level metavariable tracking.
+ * Now that levels are terms, level metas are just TTKTerm values.
  * - undefined means unsolved
- * - Level value means solved to that level
+ * - TTKTerm value means solved to that level term
  */
-export type LevelMeta = Level | undefined;
+export type LevelMeta = TTKTerm | undefined;
 
 /**
- * Substitute solved level metas into a level expression.
+ * Substitute solved level metas into a level term.
+ * Level terms are: ULit, UOmega, Var (for level variables), Meta (for level metas),
+ * or App of USucc/UMax/UIMax.
  */
-function substituteLevelMetas(level: Level, levelMetas: Map<string, LevelMeta>): Level {
+function substituteLevelMetas(level: TTKTerm, levelMetas: Map<string, LevelMeta>): TTKTerm {
   switch (level.tag) {
-    case 'LZero':
+    case 'ULit':
+    case 'UOmega':
+    case 'Var':
+    case 'ULevel':
+    case 'Const':
       return level;
-    case 'LSucc':
-      return { tag: 'LSucc', pred: substituteLevelMetas(level.pred, levelMetas) };
-    case 'LMax':
-      return {
-        tag: 'LMax',
-        left: substituteLevelMetas(level.left, levelMetas),
-        right: substituteLevelMetas(level.right, levelMetas)
-      };
-    case 'LIMax':
-      return {
-        tag: 'LIMax',
-        left: substituteLevelMetas(level.left, levelMetas),
-        right: substituteLevelMetas(level.right, levelMetas)
-      };
-    case 'LParam':
-    case 'LOmega':
-      return level;
-    case 'LMVar': {
+    case 'Meta': {
       const solution = levelMetas.get(level.id);
       if (solution !== undefined) {
         // Recursively substitute in case the solution contains other metas
@@ -531,6 +527,16 @@ function substituteLevelMetas(level: Level, levelMetas: Map<string, LevelMeta>):
       }
       return level;
     }
+    case 'App':
+      return {
+        tag: 'App',
+        fn: substituteLevelMetas(level.fn, levelMetas),
+        arg: substituteLevelMetas(level.arg, levelMetas)
+      };
+    default:
+      // For other term types (Sort, Binder, etc.), just return as-is
+      // These shouldn't appear as level terms in normal usage
+      return level;
   }
 }
 
@@ -544,6 +550,8 @@ function substituteLevelMetasInTerm(term: TTKTerm, levelMetas: Map<string, Level
     case 'Hole':
     case 'Meta':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
 
     case 'Sort':
@@ -960,14 +968,15 @@ export class TCEnv<T> {
 
   /**
    * Create a fresh level metavariable for universe inference.
-   * Returns the updated env and the level meta.
+   * Returns the updated env and the level meta term.
+   * Now that levels are terms, level metas are just Meta terms with special IDs.
    */
-  freshLevelMeta<S>(this: TCEnv<S>): { env: TCEnv<S>, level: Level } {
+  freshLevelMeta<S>(this: TCEnv<S>): { env: TCEnv<S>, level: TTKTerm } {
     const id = `l${this.levelMetas.size}`;
     const newLevelMetas = new Map(this.levelMetas);
     newLevelMetas.set(id, undefined);  // unsolved
 
-    const level: Level = mkLMVar(id);
+    const level: TTKTerm = mkMeta(id);
 
     const env = new TCEnv(
       this.context,
@@ -988,7 +997,7 @@ export class TCEnv<T> {
    * Solve a level metavariable by assigning it a value.
    * The value is substituted into all other level metas.
    */
-  solveLevelMeta<S>(this: TCEnv<S>, id: string, value: Level): TCEnv<S> {
+  solveLevelMeta<S>(this: TCEnv<S>, id: string, value: TTKTerm): TCEnv<S> {
     const newLevelMetas = new Map(this.levelMetas);
 
     // Substitute any existing level meta solutions into the value
@@ -1019,9 +1028,9 @@ export class TCEnv<T> {
   }
 
   /**
-   * Substitute solved level metas into a level expression.
+   * Substitute solved level metas into a level term.
    */
-  substituteLevelMetasInLevel(level: Level): Level {
+  substituteLevelMetasInLevel(level: TTKTerm): TTKTerm {
     return substituteLevelMetas(level, this.levelMetas);
   }
 
@@ -1626,7 +1635,7 @@ export class TCEnv<T> {
    * polymorphism isn't needed.
    */
   typeSort(): TTKTerm & { tag: 'Sort' } {
-    return { tag: 'Sort', level: mkLZero() };
+    return { tag: 'Sort', level: mkULit(0) };
   }
 
   // ERRORS

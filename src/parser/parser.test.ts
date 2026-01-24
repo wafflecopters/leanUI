@@ -20,7 +20,7 @@ import {
   OperatorInfo,
 } from './parser';
 
-import { prettyPrintTT, TTerm, tlevelToNumber } from '../compiler/surface';
+import { prettyPrintTT, TTerm, levelTermToNumber } from '../compiler/surface';
 
 // ============================================================================
 // Test Helper
@@ -196,7 +196,7 @@ describe('Parser: Basic Expressions', () => {
     const term = parseExpr('Type');
     assertTermShape(term, 'Sort');
     if (term.tag === 'Sort') {
-      expect(tlevelToNumber(term.level)).toBe(1); // Type = Sort(1)
+      expect(levelTermToNumber(term.level)).toBe(1); // Type = Sort(1)
     }
   });
 
@@ -205,21 +205,21 @@ describe('Parser: Basic Expressions', () => {
     const t0 = parseExpr('Type 0');
     assertTermShape(t0, 'Sort');
     if (t0.tag === 'Sort') {
-      expect(tlevelToNumber(t0.level)).toBe(1); // Type 0 = Sort(1)
+      expect(levelTermToNumber(t0.level)).toBe(1); // Type 0 = Sort(1)
     }
 
     // Type 1 = Sort(2)
     const t1 = parseExpr('Type 1');
     assertTermShape(t1, 'Sort');
     if (t1.tag === 'Sort') {
-      expect(tlevelToNumber(t1.level)).toBe(2); // Type 1 = Sort(2)
+      expect(levelTermToNumber(t1.level)).toBe(2); // Type 1 = Sort(2)
     }
 
     // Type 2 = Sort(3)
     const t2 = parseExpr('Type 2');
     assertTermShape(t2, 'Sort');
     if (t2.tag === 'Sort') {
-      expect(tlevelToNumber(t2.level)).toBe(3); // Type 2 = Sort(3)
+      expect(levelTermToNumber(t2.level)).toBe(3); // Type 2 = Sort(3)
     }
   });
 
@@ -228,21 +228,21 @@ describe('Parser: Basic Expressions', () => {
     const t0 = parseExpr('Type_0');
     assertTermShape(t0, 'Sort');
     if (t0.tag === 'Sort') {
-      expect(tlevelToNumber(t0.level)).toBe(1); // Type_0 = Sort(1)
+      expect(levelTermToNumber(t0.level)).toBe(1); // Type_0 = Sort(1)
     }
 
     // Type_1 = Sort(2)
     const t1 = parseExpr('Type_1');
     assertTermShape(t1, 'Sort');
     if (t1.tag === 'Sort') {
-      expect(tlevelToNumber(t1.level)).toBe(2); // Type_1 = Sort(2)
+      expect(levelTermToNumber(t1.level)).toBe(2); // Type_1 = Sort(2)
     }
 
     // Type_42 = Sort(43)
     const t42 = parseExpr('Type_42');
     assertTermShape(t42, 'Sort');
     if (t42.tag === 'Sort') {
-      expect(tlevelToNumber(t42.level)).toBe(43); // Type_42 = Sort(43)
+      expect(levelTermToNumber(t42.level)).toBe(43); // Type_42 = Sort(43)
     }
   });
 
@@ -254,7 +254,7 @@ describe('Parser: Basic Expressions', () => {
       // Domain should be Sort(1) - Pi binders always have domain
       assertTermShape(term.domain!, 'Sort');
       if (term.domain!.tag === 'Sort') {
-        expect(tlevelToNumber(term.domain!.level)).toBe(1);
+        expect(levelTermToNumber(term.domain!.level)).toBe(1);
       }
     }
   });
@@ -267,7 +267,7 @@ describe('Parser: Basic Expressions', () => {
       // Domain should be Sort(2) - Pi binders always have domain
       assertTermShape(term.domain!, 'Sort');
       if (term.domain!.tag === 'Sort') {
-        expect(tlevelToNumber(term.domain!.level)).toBe(2);
+        expect(levelTermToNumber(term.domain!.level)).toBe(2);
       }
     }
   });
@@ -276,7 +276,7 @@ describe('Parser: Basic Expressions', () => {
     const term = parseExpr('Prop');
     assertTermShape(term, 'Sort');
     if (term.tag === 'Sort') {
-      expect(tlevelToNumber(term.level)).toBe(0); // Prop = Type_0
+      expect(levelTermToNumber(term.level)).toBe(0); // Prop = Type_0
     }
   });
 
@@ -1766,7 +1766,7 @@ describe('PREFIX_PARSELETS Table Dispatch', () => {
     const term = parseExpr('Type');
     assertTermShape(term, 'Sort');
     if (term.tag === 'Sort') {
-      expect(tlevelToNumber(term.level)).toBe(1);
+      expect(levelTermToNumber(term.level)).toBe(1);
     }
   });
 
@@ -1782,7 +1782,7 @@ describe('PREFIX_PARSELETS Table Dispatch', () => {
     const term = parseExpr('Prop');
     assertTermShape(term, 'Sort');
     if (term.tag === 'Sort') {
-      expect(tlevelToNumber(term.level)).toBe(0);
+      expect(levelTermToNumber(term.level)).toBe(0);
     }
   });
 

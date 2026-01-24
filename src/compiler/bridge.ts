@@ -702,6 +702,12 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
     case 'ULevel':
       return b.tag === 'ULevel';
 
+    case 'ULit':
+      return b.tag === 'ULit' && a.n === b.n;
+
+    case 'UOmega':
+      return b.tag === 'UOmega';
+
     case 'MultiBinder':
       if (b.tag !== 'MultiBinder') return false;
       if (a.names.length !== b.names.length) return false;

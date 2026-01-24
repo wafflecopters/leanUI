@@ -5,7 +5,7 @@
  * A TermFocusPath is a sequence of steps that navigate into a term.
  */
 
-import { TTerm } from '../compiler/surface';
+import { TTerm, prettyPrintLevelTermTT } from '../compiler/surface';
 
 /**
  * A path into a TTerm structure.
@@ -203,7 +203,13 @@ export function prettyPrintTerm(term: TTerm): string {
       return `@${term.index}`;
 
     case 'Sort':
-      return `Type_${term.level}`;
+      return `Type_${prettyPrintLevelTermTT(term.level)}`;
+
+    case 'ULit':
+      return term.n.toString();
+
+    case 'UOmega':
+      return 'ω';
 
     case 'Binder':
       if (term.binderKind.tag === 'BPiTT') {

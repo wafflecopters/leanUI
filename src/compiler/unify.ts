@@ -1,4 +1,4 @@
-import { Level, levelsEqual, mkVar, TTKTerm } from "./kernel";
+import { levelsEqual, mkVar, TTKTerm } from "./kernel";
 import { whnf } from "./whnf";
 
 // ============================================================================
@@ -32,8 +32,8 @@ export type Substitutions = [number, TTKTerm][]
 /** Constraint: metavariable ?m should equal rhs */
 export type MetaConstraint = { meta: string; rhs: TTKTerm }
 
-/** Constraint: level metavariable ?l should equal rhs */
-export type LevelConstraint = { lmvar: string; rhs: Level }
+/** Constraint: level metavariable ?l should equal rhs (now a term) */
+export type LevelConstraint = { lmvar: string; rhs: TTKTerm }
 
 export type UnifyResult = {
   success: true;
@@ -50,26 +50,28 @@ export type UnifyResult = {
 // ============================================================================
 
 /**
- * Check if a level metavariable occurs in a level.
+ * Check if a level metavariable (now a Meta term) occurs in a level term.
  * Used for the occurs check to prevent cyclic level constraints.
  */
-function levelMVarOccursIn(lmvarId: string, level: Level): boolean {
+function levelMVarOccursIn(lmvarId: string, level: TTKTerm): boolean {
   switch (level.tag) {
-    case 'LZero':
-    case 'LParam':
-    case 'LOmega':
+    case 'ULit':
+    case 'UOmega':
+    case 'Var':
+    case 'ULevel':
+    case 'Const':
       return false;
 
-    case 'LMVar':
+    case 'Meta':
       return level.id === lmvarId;
 
-    case 'LSucc':
-      return levelMVarOccursIn(lmvarId, level.pred);
+    case 'App':
+      return levelMVarOccursIn(lmvarId, level.fn) ||
+        levelMVarOccursIn(lmvarId, level.arg);
 
-    case 'LMax':
-    case 'LIMax':
-      return levelMVarOccursIn(lmvarId, level.left) ||
-        levelMVarOccursIn(lmvarId, level.right);
+    default:
+      // For other term types, conservatively check recursively
+      return false;
   }
 }
 
@@ -86,6 +88,9 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
     case 'Const':
     case 'Hole':
     case 'Meta':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return false;
 
     case 'App':
@@ -109,9 +114,6 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
         // Conservative: patterns bind variables, shifting indices in RHS
         if (varOccursIn(varIndex, clause.rhs)) return true;
       }
-      return false;
-
-    case 'ULevel':
       return false;
   }
 }
@@ -197,24 +199,25 @@ function applyNonShiftingSubstitutionToTerm(varIndex: number, value: TTKTerm, te
 // ============================================================================
 
 /**
- * Unify two universe levels.
+ * Unify two universe level terms.
  *
- * Handles:
- * - Concrete levels (LZero, LSucc chains)
- * - Level metavariables (LMVar) → generates constraints
- * - Level parameters (LParam) → must match exactly
- * - Max/IMax → structural unification
+ * Now that levels are terms, this handles:
+ * - ULit (numeric literals)
+ * - UOmega (ω)
+ * - Var (level variables via de Bruijn)
+ * - Meta (level metavariables) → generates constraints
+ * - App of USucc/UMax/UIMax → structural unification
  */
-function unifyLevels(l1: Level, l2: Level, options: UnifyOptions): UnifyResult {
+function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResult {
   // Quick structural equality check first
   if (levelsEqual(l1, l2)) {
     return emptySuccess;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // LMVAR - Level metavariable: generate constraint
+  // META - Level metavariable: generate constraint
   // ─────────────────────────────────────────────────────────────────────────
-  if (l1.tag === 'LMVar') {
+  if (l1.tag === 'Meta') {
     if (levelMVarOccursIn(l1.id, l2)) {
       return { success: false, reason: 'cycle' };
     }
@@ -226,7 +229,7 @@ function unifyLevels(l1: Level, l2: Level, options: UnifyOptions): UnifyResult {
     };
   }
 
-  if (l2.tag === 'LMVar') {
+  if (l2.tag === 'Meta') {
     if (levelMVarOccursIn(l2.id, l1)) {
       return { success: false, reason: 'cycle' };
     }
@@ -239,47 +242,46 @@ function unifyLevels(l1: Level, l2: Level, options: UnifyOptions): UnifyResult {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // LZERO - Both zero
+  // ULIT - Numeric level literals
   // ─────────────────────────────────────────────────────────────────────────
-  if (l1.tag === 'LZero' && l2.tag === 'LZero') {
+  if (l1.tag === 'ULit' && l2.tag === 'ULit') {
+    if (l1.n === l2.n) {
+      return emptySuccess;
+    }
+    return { success: false, reason: 'conflict' };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // UOMEGA - Both omega
+  // ─────────────────────────────────────────────────────────────────────────
+  if (l1.tag === 'UOmega' && l2.tag === 'UOmega') {
     return emptySuccess;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // LSUCC - Successor: unify predecessors
+  // VAR - Level variable (de Bruijn)
   // ─────────────────────────────────────────────────────────────────────────
-  if (l1.tag === 'LSucc' && l2.tag === 'LSucc') {
-    return unifyLevels(l1.pred, l2.pred, options);
+  if (l1.tag === 'Var' && l2.tag === 'Var') {
+    if (l1.index === l2.index) {
+      return emptySuccess;
+    }
+    return { success: false, reason: 'conflict' };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // LMAX - Maximum: structural unification
-  //
-  // Note: max is not injective (max(1,2) = max(2,1) = 2), but for
-  // unification we do structural matching. Full level solving would
-  // need constraint solving.
+  // APP - Level operations (USucc, UMax, UIMax as applications)
   // ─────────────────────────────────────────────────────────────────────────
-  if (l1.tag === 'LMax' && l2.tag === 'LMax') {
-    const leftResult = unifyLevels(l1.left, l2.left, options);
-    if (!leftResult.success) return leftResult;
-    const rightResult = unifyLevels(l1.right, l2.right, options);
-    return combineUnificationResults(leftResult, rightResult, options);
+  if (l1.tag === 'App' && l2.tag === 'App') {
+    const fnResult = unifyLevels(l1.fn, l2.fn, options);
+    if (!fnResult.success) return fnResult;
+    const argResult = unifyLevels(l1.arg, l2.arg, options);
+    return combineUnificationResults(fnResult, argResult, options);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // LIMAX - Impredicative max: structural unification
+  // CONST - Level operation names (USucc, UMax, UIMax)
   // ─────────────────────────────────────────────────────────────────────────
-  if (l1.tag === 'LIMax' && l2.tag === 'LIMax') {
-    const leftResult = unifyLevels(l1.left, l2.left, options);
-    if (!leftResult.success) return leftResult;
-    const rightResult = unifyLevels(l1.right, l2.right, options);
-    return combineUnificationResults(leftResult, rightResult, options);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // LPARAM - Level parameter: must have same name
-  // ─────────────────────────────────────────────────────────────────────────
-  if (l1.tag === 'LParam' && l2.tag === 'LParam') {
+  if (l1.tag === 'Const' && l2.tag === 'Const') {
     if (l1.name === l2.name) {
       return emptySuccess;
     }

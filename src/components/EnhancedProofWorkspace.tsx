@@ -237,7 +237,7 @@ function piBinderToAssumption([name, type]: [string, TTerm], id: string): Assump
   } else if (type.tag === 'Const') {
     typeStr = type.name;
   } else if (type.tag === 'Sort') {
-    typeStr = type.level.tag === 'LNum' && type.level.n === 0 ? 'Prop' : 'Type';
+    typeStr = type.level.tag === 'ULit' && type.level.n === 0 ? 'Prop' : 'Type';
   } else if (type.tag === 'ULevel') {
     typeStr = 'ULevel';
   } else {

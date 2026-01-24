@@ -22,28 +22,41 @@
  */
 
 // ============================================================================
-// Universe Levels (Surface Syntax)
+// Universe Levels (Term-based representation)
 // ============================================================================
 
 /**
- * Surface-level universe level expressions.
- * These are converted to kernel Level types during elaboration.
+ * Universe levels are now represented as terms (TTerm).
  *
- * Examples:
- * - Type 0        → LNum(0)
- * - Type U        → LName("U")
- * - Type (USucc U) → LSucc(LName("U"))
- * - Type (UMax U V) → LMax(LName("U"), LName("V"))
+ * Level expressions:
+ * - ULit(n): Numeric literal level (0, 1, 2, ...)
+ * - UOmega: The first infinite ordinal ω
+ * - Var(index): Level variable (de Bruijn index, bound by Pi with ULevel domain)
+ * - App(Const("USucc"), l): Successor level (l + 1)
+ * - App(App(Const("UMax"), l1), l2): Maximum of two levels
+ * - App(App(Const("UIMax"), l1), l2): Impredicative max
+ *
+ * This representation unifies level expressions with the term language.
+ */
+
+// Level term constructors are defined below with TTerm
+
+// ============================================================================
+// Legacy TLevel type (deprecated, kept for backwards compatibility during migration)
+// ============================================================================
+
+/**
+ * @deprecated Use TTerm-based level expressions instead
  */
 export type TLevel =
-  | { tag: 'LNum'; n: number }                     // Concrete number (e.g., Type_0 → LNum(0))
-  | { tag: 'LName'; name: string }                 // Level variable reference (e.g., Type U)
-  | { tag: 'LSucc'; pred: TLevel }                 // USucc(l)
-  | { tag: 'LMax'; left: TLevel; right: TLevel }   // UMax(l1, l2)
-  | { tag: 'LIMax'; left: TLevel; right: TLevel }  // UIMax(l1, l2)
-  | { tag: 'LOmega' }                              // ω - the first infinite ordinal level
+  | { tag: 'LNum'; n: number }
+  | { tag: 'LName'; name: string }
+  | { tag: 'LSucc'; pred: TLevel }
+  | { tag: 'LMax'; left: TLevel; right: TLevel }
+  | { tag: 'LIMax'; left: TLevel; right: TLevel }
+  | { tag: 'LOmega' }
 
-// TLevel constructors
+// Legacy TLevel constructors (deprecated)
 export const mkLNumTT = (n: number): TLevel => ({ tag: 'LNum', n });
 export const mkLNameTT = (name: string): TLevel => ({ tag: 'LName', name });
 export const mkLSuccTT = (pred: TLevel): TLevel => ({ tag: 'LSucc', pred });
@@ -51,10 +64,6 @@ export const mkLMaxTT = (left: TLevel, right: TLevel): TLevel => ({ tag: 'LMax',
 export const mkLIMaxTT = (left: TLevel, right: TLevel): TLevel => ({ tag: 'LIMax', left, right });
 export const mkLOmegaTT = (): TLevel => ({ tag: 'LOmega' });
 
-/**
- * Extract numeric value from a TLevel if it's a simple LNum.
- * Returns undefined for complex level expressions.
- */
 export function tlevelToNumber(level: TLevel): number | undefined {
   if (level.tag === 'LNum') {
     return level.n;
@@ -62,9 +71,6 @@ export function tlevelToNumber(level: TLevel): number | undefined {
   return undefined;
 }
 
-/**
- * Check if two TLevel expressions are equal.
- */
 export function tlevelsEqual(l1: TLevel, l2: TLevel): boolean {
   if (l1.tag !== l2.tag) return false;
   switch (l1.tag) {
@@ -79,13 +85,10 @@ export function tlevelsEqual(l1: TLevel, l2: TLevel): boolean {
       return tlevelsEqual(l1.left, (l2 as typeof l1).left) &&
              tlevelsEqual(l1.right, (l2 as typeof l1).right);
     case 'LOmega':
-      return true; // Both are omega, so equal
+      return true;
   }
 }
 
-/**
- * Pretty-print a TLevel expression.
- */
 export function prettyPrintTLevel(level: TLevel): string {
   switch (level.tag) {
     case 'LNum':
@@ -101,6 +104,66 @@ export function prettyPrintTLevel(level: TLevel): string {
     case 'LOmega':
       return 'ω';
   }
+}
+
+// ============================================================================
+// Level Term Constructors (TTerm-based)
+// ============================================================================
+
+/**
+ * Create a numeric level literal (TTerm)
+ */
+export function mkULitTT(n: number): TTerm {
+  return { tag: 'ULit', n };
+}
+
+/**
+ * Create omega level (TTerm)
+ */
+export function mkUOmegaTT(): TTerm {
+  return { tag: 'UOmega' };
+}
+
+/**
+ * Create USucc application (TTerm)
+ */
+export function mkUSuccAppTT(level: TTerm): TTerm {
+  return { tag: 'App', fn: { tag: 'Const', name: 'USucc' }, arg: level };
+}
+
+/**
+ * Create UMax application (TTerm)
+ */
+export function mkUMaxAppTT(left: TTerm, right: TTerm): TTerm {
+  return { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'UMax' }, arg: left }, arg: right };
+}
+
+/**
+ * Create UIMax application (TTerm)
+ */
+export function mkUIMaxAppTT(left: TTerm, right: TTerm): TTerm {
+  return { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'UIMax' }, arg: left }, arg: right };
+}
+
+/**
+ * Create Sort with numeric level (convenience)
+ */
+export function mkSortTT(level: TTerm): TTerm {
+  return { tag: 'Sort', level };
+}
+
+/**
+ * Create Prop (Sort 0)
+ */
+export function mkPropTT(): TTerm {
+  return mkSortTT(mkULitTT(0));
+}
+
+/**
+ * Create Type n (Sort (n+1))
+ */
+export function mkTypeTT(n: number = 0): TTerm {
+  return mkSortTT(mkUSuccAppTT(mkULitTT(n)));
 }
 
 // ============================================================================
@@ -198,12 +261,14 @@ export type TTermConst = { tag: 'Const'; name: string; }
 
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
-  | { tag: 'Sort'; level: TLevel }                         // Type_i, Prop = Type_0 (now with TLevel)
+  | { tag: 'Sort'; level: TTerm }                          // Type_i, Prop = Type_0 (level is now a term)
   | { tag: 'ULevel' }                                      // The type of universe levels
+  | { tag: 'ULit'; n: number }                             // Numeric level literal (0, 1, 2, ...)
+  | { tag: 'UOmega' }                                      // The first infinite ordinal ω
   | { tag: 'Binder'; name: string; binderKind: BinderKind; domain?: TTerm; body: TTerm; named?: boolean }  // Unified binder (domain optional for let without type annotation, named for { A : Type } ->)
   | { tag: 'MultiBinder'; names: string[]; binderKind: BinderKind; domain: TTerm; body: TTerm; named?: boolean }  // Multi-name binder: (a b c : T) -> body, named for { a b : T } ->
   | TTermApp   // Function application (f a), with optional argName for named args
-  | TTermConst // Named constant (nat_elim, eq, etc.)
+  | TTermConst // Named constant (nat_elim, eq, etc.) - includes USucc, UMax, UIMax for levels
   | { tag: 'Hole'; id: string; type: TTerm; context: TContext }  // Metavariable (unproven goal)
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
   | { tag: 'Match'; scrutinee: TTerm; clauses: TClause[] } // Pattern matching (case/match)
@@ -267,7 +332,7 @@ export const TT_CONSTANTS = {
   // Equality type
   // eq : Π (A : Type), A → A → Prop
   Eq: (() => {
-    const sort0 = { tag: 'Sort', level: mkLNumTT(0) } as TTerm;
+    const sort0 = mkPropTT();
     const A = { tag: 'Var', index: 0 } as TTerm;
     // Build: Π (A : Type), A → A → Prop
     const type = mkPiTT(
@@ -301,7 +366,7 @@ export function ttconstInfo(term: TTermConst): TTConstantInfo | undefined {
  * This is sufficient for testing and will be expanded to the full dependent version later.
  */
 export function createNatElimType(): TTerm {
-  const prop: TTerm = { tag: 'Sort', level: mkLNumTT(0) };
+  const prop: TTerm = mkPropTT();
   const nat = TT_CONSTANTS.Nat;
 
   // Simplified nat_elim for testing:
@@ -423,27 +488,6 @@ export function mkHoleTT(id: string, type: TTerm, context: TContext = []): TTerm
 }
 
 /**
- * Create Prop (Type_0)
- */
-export function mkPropTT(): TTerm {
-  return { tag: 'Sort', level: mkLNumTT(0) };
-}
-
-/**
- * Create Type_i (with numeric level)
- */
-export function mkTypeTT(level: number): TTerm {
-  return { tag: 'Sort', level: mkLNumTT(level) };
-}
-
-/**
- * Create Sort with a TLevel expression
- */
-export function mkSortTT(level: TLevel): TTerm {
-  return { tag: 'Sort', level };
-}
-
-/**
  * Create ULevel (the type of universe levels)
  */
 export function mkULevelTT(): TTerm {
@@ -471,6 +515,8 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return term;
 
@@ -550,6 +596,8 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return null;
 
@@ -621,6 +669,8 @@ export function fillHoleWithTT(
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return term;
 
@@ -704,10 +754,17 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
       return term2.tag === 'Var' && term1.index === term2.index;
 
     case 'Sort':
-      return term2.tag === 'Sort' && tlevelsEqual(term1.level, term2.level);
+      // Level is now a TTerm, so recursively check equality
+      return term2.tag === 'Sort' && isDefinitionallyEqualTT(term1.level, term2.level);
 
     case 'ULevel':
       return term2.tag === 'ULevel';
+
+    case 'ULit':
+      return term2.tag === 'ULit' && term1.n === term2.n;
+
+    case 'UOmega':
+      return term2.tag === 'UOmega';
 
     case 'Const':
       return term2.tag === 'Const' && term1.name === term2.name;
@@ -804,6 +861,8 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'Const':
     case 'Hole':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       // Leaf nodes have no children
       return null;
@@ -865,6 +924,8 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
     case 'Const':
     case 'Hole':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       // Leaf nodes have no children
       return null;
@@ -1055,6 +1116,8 @@ export function isNameUsed(name: string, term: TTerm): boolean {
 
     case 'Sort':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       // No names to check
       return false;
@@ -1136,8 +1199,13 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
       return term;
 
     case 'Sort':
+      // Level is now a term, so substitute in the level
+      return { tag: 'Sort', level: substHelperTT(targetIndex, replacement, term.level, depth) };
+
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return term;
 
@@ -1231,8 +1299,13 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
         : term;
 
     case 'Sort':
+      // Level is now a term, so shift variables in the level
+      return { tag: 'Sort', level: shift(amount, term.level, cutoff) };
+
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return term;
 
@@ -1326,6 +1399,8 @@ export function expandMultiBinders(term: TTerm): TTerm {
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return term;
 
@@ -1451,57 +1526,120 @@ function expandMultiBindersInPattern(pattern: TPattern): TPattern {
 // ============================================================================
 
 /**
- * Helper to pretty-print a Sort with a TLevel.
- * Sort(LNum(0)) = Prop
- * Sort(LNum(1)) = Type (or Type 0)
- * Sort(LNum(n+1)) = Type n
- * Sort(level) = Sort level (for complex level expressions)
+ * Pretty-print a level term (TTerm used as a level).
  */
-function prettyPrintSortTT(level: TLevel): string {
-  if (level.tag === 'LNum') {
-    if (level.n === 0) {
-      return 'Prop';
-    }
-    const typeLevel = level.n - 1;
-    return typeLevel === 0 ? 'Type' : `Type ${typeLevel}`;
+export function prettyPrintLevelTermTT(level: TTerm, context: string[] = []): string {
+  if (level.tag === 'ULit') {
+    return level.n.toString();
   }
-  // For non-numeric levels, use "Type <level>" syntax
-  return `Type ${prettyPrintTLevel(level)}`;
+  if (level.tag === 'UOmega') {
+    return 'ω';
+  }
+  if (level.tag === 'Var') {
+    return level.index < context.length ? context[level.index] : `#${level.index}`;
+  }
+  if (level.tag === 'App' && level.fn.tag === 'Const' && level.fn.name === 'USucc') {
+    return `(${prettyPrintLevelTermTT(level.arg, context)} + 1)`;
+  }
+  if (level.tag === 'App' && level.fn.tag === 'App' &&
+      level.fn.fn.tag === 'Const' && level.fn.fn.name === 'UMax') {
+    return `max(${prettyPrintLevelTermTT(level.fn.arg, context)}, ${prettyPrintLevelTermTT(level.arg, context)})`;
+  }
+  if (level.tag === 'App' && level.fn.tag === 'App' &&
+      level.fn.fn.tag === 'Const' && level.fn.fn.name === 'UIMax') {
+    return `imax(${prettyPrintLevelTermTT(level.fn.arg, context)}, ${prettyPrintLevelTermTT(level.arg, context)})`;
+  }
+  // Fallback
+  return `<level:${level.tag}>`;
 }
 
 /**
- * Helper to pretty-print a Sort with a TLevel in LaTeX format.
+ * Try to get numeric value from a level term.
  */
-function prettyPrintSortLatexTT(level: TLevel): string {
-  if (level.tag === 'LNum') {
-    if (level.n === 0) {
-      return '\\text{Prop}';
-    }
-    const typeLevel = level.n - 1;
-    return typeLevel === 0 ? '\\text{Type}' : `\\text{Type}_{${typeLevel}}`;
+export function levelTermToNumber(level: TTerm): number | undefined {
+  if (level.tag === 'ULit') return level.n;
+  if (level.tag === 'App' && level.fn.tag === 'Const' && level.fn.name === 'USucc') {
+    const pred = levelTermToNumber(level.arg);
+    return pred !== undefined ? pred + 1 : undefined;
   }
-  // For non-numeric levels, use "Type <level>" syntax
-  return `\\text{Type}_{${prettyPrintTLevelLatex(level)}}`;
+  return undefined;
 }
 
 /**
- * Pretty-print a TLevel expression in LaTeX format.
+ * Match USucc pattern: returns the argument if USucc, undefined otherwise.
  */
-function prettyPrintTLevelLatex(level: TLevel): string {
-  switch (level.tag) {
-    case 'LNum':
-      return level.n.toString();
-    case 'LName':
-      return level.name;
-    case 'LSucc':
-      return `\\text{USucc}(${prettyPrintTLevelLatex(level.pred)})`;
-    case 'LMax':
-      return `\\text{UMax}(${prettyPrintTLevelLatex(level.left)}, ${prettyPrintTLevelLatex(level.right)})`;
-    case 'LIMax':
-      return `\\text{UIMax}(${prettyPrintTLevelLatex(level.left)}, ${prettyPrintTLevelLatex(level.right)})`;
-    case 'LOmega':
-      return '\\omega';
+function matchUSuccTT(level: TTerm): TTerm | undefined {
+  if (level.tag === 'App' && level.fn.tag === 'Const' && level.fn.name === 'USucc') {
+    return level.arg;
   }
+  return undefined;
+}
+
+/**
+ * Helper to pretty-print a Sort with a TTerm-based level.
+ * Sort(ULit(0)) = Prop
+ * Sort(USucc(ULit(0))) = Type
+ * Sort(USucc(ULit(n))) = Type n
+ */
+function prettyPrintSortTT(level: TTerm, context: string[] = []): string {
+  if (level.tag === 'ULit' && level.n === 0) {
+    return 'Prop';
+  }
+  const succArg = matchUSuccTT(level);
+  if (succArg !== undefined) {
+    const innerNum = levelTermToNumber(succArg);
+    if (innerNum !== undefined) {
+      return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
+    }
+    return `Type ${prettyPrintLevelTermTT(succArg, context)}`;
+  }
+  return `Sort ${prettyPrintLevelTermTT(level, context)}`;
+}
+
+/**
+ * Pretty-print a level term in LaTeX format.
+ */
+function prettyPrintLevelTermLatexTT(level: TTerm, context: string[] = []): string {
+  if (level.tag === 'ULit') {
+    return level.n.toString();
+  }
+  if (level.tag === 'UOmega') {
+    return '\\omega';
+  }
+  if (level.tag === 'Var') {
+    return level.index < context.length ? context[level.index] : `\\#${level.index}`;
+  }
+  const succArg = matchUSuccTT(level);
+  if (succArg !== undefined) {
+    return `\\text{USucc}(${prettyPrintLevelTermLatexTT(succArg, context)})`;
+  }
+  if (level.tag === 'App' && level.fn.tag === 'App' &&
+      level.fn.fn.tag === 'Const' && level.fn.fn.name === 'UMax') {
+    return `\\text{UMax}(${prettyPrintLevelTermLatexTT(level.fn.arg, context)}, ${prettyPrintLevelTermLatexTT(level.arg, context)})`;
+  }
+  if (level.tag === 'App' && level.fn.tag === 'App' &&
+      level.fn.fn.tag === 'Const' && level.fn.fn.name === 'UIMax') {
+    return `\\text{UIMax}(${prettyPrintLevelTermLatexTT(level.fn.arg, context)}, ${prettyPrintLevelTermLatexTT(level.arg, context)})`;
+  }
+  return `<level:${level.tag}>`;
+}
+
+/**
+ * Helper to pretty-print a Sort with a TTerm-based level in LaTeX format.
+ */
+function prettyPrintSortLatexTT(level: TTerm, context: string[] = []): string {
+  if (level.tag === 'ULit' && level.n === 0) {
+    return '\\text{Prop}';
+  }
+  const succArg = matchUSuccTT(level);
+  if (succArg !== undefined) {
+    const innerNum = levelTermToNumber(succArg);
+    if (innerNum !== undefined) {
+      return innerNum === 0 ? '\\text{Type}' : `\\text{Type}_{${innerNum}}`;
+    }
+    return `\\text{Type}_{${prettyPrintLevelTermLatexTT(succArg, context)}}`;
+  }
+  return `\\text{Sort}\\; ${prettyPrintLevelTermLatexTT(level, context)}`;
 }
 
 /**
@@ -1518,11 +1656,17 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
       return `_${term.index}`;
 
     case 'Sort':
-      // Pretty print Sort with TLevel
-      return prettyPrintSortTT(term.level);
+      // Pretty print Sort with TTerm-based level
+      return prettyPrintSortTT(term.level, context);
 
     case 'ULevel':
       return 'ULevel';
+
+    case 'ULit':
+      return `${term.n}`;
+
+    case 'UOmega':
+      return 'ω';
 
     case 'Const':
       // Try to extract just the meaningful name from verbose strings
@@ -1652,11 +1796,17 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
       return `#${term.index}`;  // Free variable
 
     case 'Sort':
-      // Pretty print Sort with TLevel
-      return prettyPrintSortTT(term.level);
+      // Pretty print Sort with TTerm-based level
+      return prettyPrintSortTT(term.level, context);
 
     case 'ULevel':
       return 'ULevel';
+
+    case 'ULit':
+      return `${term.n}`;
+
+    case 'UOmega':
+      return 'ω';
 
     case 'Const':
       return term.name;
@@ -1832,11 +1982,17 @@ export function prettyPrintLatexTT(
       return `\\#${term.index}`;
 
     case 'Sort':
-      // Pretty print Sort with TLevel in LaTeX
-      return prettyPrintSortLatexTT(term.level);
+      // Pretty print Sort with TTerm-based level in LaTeX
+      return prettyPrintSortLatexTT(term.level, context);
 
     case 'ULevel':
       return '\\text{ULevel}';
+
+    case 'ULit':
+      return `${term.n}`;
+
+    case 'UOmega':
+      return '\\omega';
 
     case 'Const':
       // Escape special LaTeX characters in names
@@ -2216,6 +2372,8 @@ function fillHoleWithLet(
     case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return term;
 
@@ -2410,8 +2568,12 @@ export function occursInTT(index: number, term: TTerm): boolean {
     case 'Var':
       return term.index === index;
     case 'Sort':
+      // Level is now a term, so check if variable occurs in level
+      return occursInTT(index, term.level);
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'AbsurdMarker':
       return false;
     case 'Binder': {

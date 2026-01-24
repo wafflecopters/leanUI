@@ -25,8 +25,8 @@ describe('padPatternsForMissingNamedArgs', () => {
         tag: 'Binder',
         name: 'A',
         binderKind: { tag: 'BPi' },
-        domain: { tag: 'Sort', level: { tag: 'LSucc', pred: { tag: 'LZero' } } },
-        body: { tag: 'Sort', level: { tag: 'LSucc', pred: { tag: 'LZero' } } }
+        domain: { tag: 'Sort', level: { tag: 'ULit', n: 1 } },
+        body: { tag: 'Sort', level: { tag: 'ULit', n: 1 } }
       },
       constructors: [
         {
@@ -35,7 +35,7 @@ describe('padPatternsForMissingNamedArgs', () => {
             tag: 'Binder',
             name: 'A',
             binderKind: { tag: 'BPi' },
-            domain: { tag: 'Sort', level: { tag: 'LSucc', pred: { tag: 'LZero' } } },
+            domain: { tag: 'Sort', level: { tag: 'ULit', n: 1 } },
             body: { tag: 'App', fn: { tag: 'Const', name: 'List' }, arg: { tag: 'Var', index: 0 } }
           },
           namedArgMap: nilNamedArgMap  // A is a named parameter
@@ -46,7 +46,7 @@ describe('padPatternsForMissingNamedArgs', () => {
             tag: 'Binder',
             name: 'A',
             binderKind: { tag: 'BPi' },
-            domain: { tag: 'Sort', level: { tag: 'LSucc', pred: { tag: 'LZero' } } },
+            domain: { tag: 'Sort', level: { tag: 'ULit', n: 1 } },
             body: {
               tag: 'Binder',
               name: 'head',

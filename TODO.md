@@ -3,11 +3,14 @@
 ## Upcoming
 
 - [ ] Add inference/checking for `let` expressions
+- [ ] Change parser to parse out a general `identifier` instead of var/const/pctor/pvar so that we can disambiguate during elaboration
 - [ ] Add multi-let syntax (`let x := a, y := b in ...`)
 - [ ] Add infix operator syntax (user-defined operators with precedence)
 - [ ] Add custom syntax support (maybe?)
+- [ ] Think about namespaces
+- [ ] Auto-binder creation - e.g. `Type u -> ...` elaborating to `{u : Level} -> Type u -> ...` if `u` not in scope, or `List A -> ...` elaborating to `{A : Type} -> List A -> ...` if `A` not in scope.
 
-## UI/Editor
+## UI/Text Editor
 
 - [ ] Keyboard shortcut in text editor to comment/uncomment code
 - [ ] Keyboard shortcut to toggle binder at cursor between `()` vs `{}`
@@ -16,8 +19,8 @@
 
 - [ ] **Records**
   - Parser for record definitions
-  - Elaboration + checking for definitions
-  - Elaboration + checking for call sites (construction, projection)
+  - Elaboration + checking for record definitions
+  - Elaboration + checking for record call sites (construction, projection)
   - `extends` and elab-inlining
 
 - [ ] **Case-of behavior**
@@ -34,3 +37,4 @@
 ## Exploration
 
 - [ ] Tactics exploration
+- [ ] Explore ways to make TCEnv more monadic / more ergonomic

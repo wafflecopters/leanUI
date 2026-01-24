@@ -12,7 +12,7 @@
  * separate from the UI representation.
  */
 
-import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrintTT, TTermApp, prettyPrintTLevel, mkLNumTT } from '../compiler/surface';
+import { TTerm, TContext, mapTTerm, TermDefinition, prettyPrintTT, TTermApp, prettyPrintLevelTermTT, mkULitTT } from '../compiler/surface';
 
 // Helper to convert TTerm to plain text string
 function ttermToString(term: TTerm): string {
@@ -274,8 +274,10 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
         const binding = context[term.index];
         return <span>{binding ? binding.name : `Var-${term.index}`}</span>;
       },
-      Sort: (term) => <span>Sort<sub>{prettyPrintTLevel(term.level)}</sub></span>,
+      Sort: (term) => <span>Sort<sub>{prettyPrintLevelTermTT(term.level)}</sub></span>,
       ULevel: () => <span>ULevel</span>,
+      ULit: (term) => <span>{term.n}</span>,
+      UOmega: () => <span>ω</span>,
       Binder: (term) => <PrintedBinderTerm binderTerm={term} context={context} />,
       App: (term) => <PrintedAppTerm term={term} context={context} />,
       Const: (term) => <span>{term.name}</span>,
@@ -324,7 +326,7 @@ function PrintedAppTerm({ term, context = [] }: { term: TTermApp; context?: TCon
 function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm, { tag: "Binder" }>; context: TContext }) {
   // Extend context with this binding for the body
   // For let bindings without type annotation, use a placeholder type
-  const bindingType = binderTerm.domain ?? { tag: 'Hole' as const, id: '_', type: { tag: 'Sort' as const, level: mkLNumTT(0) }, context: [] };
+  const bindingType = binderTerm.domain ?? { tag: 'Hole' as const, id: '_', type: { tag: 'Sort' as const, level: mkULitTT(0) }, context: [] };
   const extendedContext: TContext = [{ name: binderTerm.name, type: bindingType }, ...context];
 
   if (binderTerm.binderKind.tag === 'BLetTT') {

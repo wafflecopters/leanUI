@@ -35,7 +35,7 @@ import type {
   TTKRecordParam,
 } from './kernel';
 
-import { mkLevelNum, mkMeta, mkLParam, mkLSucc, mkLMax, mkLIMax, mkLOmega, Level } from './kernel';
+import { mkLevelNum, mkMeta, mkLSucc, mkLMax, mkLIMax, mkULit, mkUOmega, mkSort, mkVar } from './kernel';
 import { shiftTerm } from './subst';
 
 // Counter for generating unique meta IDs for implicit let types
@@ -989,6 +989,8 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
     case 'Const':
     case 'Sort':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
     case 'Hole':
     case 'AbsurdMarker':
       return term;
@@ -1358,34 +1360,44 @@ export function resetWildcardCounter(): void {
 }
 
 // ============================================================================
-// Level Elaboration: TLevel → Level
+// Level Elaboration: TLevel → TTKTerm (Legacy - for backward compatibility)
 // ============================================================================
 
 /**
- * Elaborate a surface-level level expression (TLevel) to a kernel level (Level).
+ * Elaborate a surface-level level expression (TLevel) to a kernel term.
  *
- * @param level - Surface level expression
- * @returns Kernel level
+ * NOTE: With the new term-based level representation, this function is mostly
+ * deprecated. Prefer using TTerm-based levels in surface syntax and regular
+ * term elaboration. This function exists for backward compatibility with
+ * code that still uses the old TLevel type.
+ *
+ * @deprecated Use TTerm-based levels instead
+ * @param level - Surface level expression (TLevel)
+ * @param levelNameToIndex - Map from level variable names to de Bruijn indices
+ * @returns Kernel level term (TTKTerm)
  */
-export function elabLevelToKernel(level: TLevel, levelNamesInScope?: Set<string>): Level {
+export function elabLevelToKernel(level: TLevel, levelNameToIndex?: Map<string, number>): TTKTerm {
   switch (level.tag) {
     case 'LNum':
-      return mkLevelNum(level.n);
+      return mkULit(level.n);
     case 'LName':
-      // Level variable - use LParam in kernel
-      // If we're tracking scope and the name is not in scope, it's an error
-      if (levelNamesInScope && !levelNamesInScope.has(level.name)) {
-        throw new Error(`Undefined level variable '${level.name}'`);
+      // Level variable - look up de Bruijn index
+      if (levelNameToIndex) {
+        const index = levelNameToIndex.get(level.name);
+        if (index !== undefined) {
+          return mkVar(index);
+        }
       }
-      return mkLParam(level.name);
+      // If no index found, this is an error (undefined level variable)
+      throw new Error(`Undefined level variable '${level.name}'`);
     case 'LSucc':
-      return mkLSucc(elabLevelToKernel(level.pred, levelNamesInScope));
+      return mkLSucc(elabLevelToKernel(level.pred, levelNameToIndex));
     case 'LMax':
-      return mkLMax(elabLevelToKernel(level.left, levelNamesInScope), elabLevelToKernel(level.right, levelNamesInScope));
+      return mkLMax(elabLevelToKernel(level.left, levelNameToIndex), elabLevelToKernel(level.right, levelNameToIndex));
     case 'LIMax':
-      return mkLIMax(elabLevelToKernel(level.left, levelNamesInScope), elabLevelToKernel(level.right, levelNamesInScope));
+      return mkLIMax(elabLevelToKernel(level.left, levelNameToIndex), elabLevelToKernel(level.right, levelNameToIndex));
     case 'LOmega':
-      return mkLOmega();
+      return mkUOmega();
   }
 }
 
@@ -1416,10 +1428,17 @@ function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTK
       return { tag: 'Var', index: term.index };
 
     case 'Sort':
-      return { tag: 'Sort', level: elabLevelToKernel(term.level, levelNamesInScope) };
+      // Level is now a term, elaborate it recursively
+      return { tag: 'Sort', level: elabToKernelWithScope(term.level, levelNamesInScope) };
 
     case 'ULevel':
       return { tag: 'ULevel' };
+
+    case 'ULit':
+      return { tag: 'ULit', n: term.n };
+
+    case 'UOmega':
+      return { tag: 'UOmega' };
 
     case 'AbsurdMarker':
       // AbsurdMarker should only appear as clause RHS and is filtered out at the Match level
@@ -1588,10 +1607,17 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
         return { tag: 'Var', index: t.index };
 
       case 'Sort':
-        return { tag: 'Sort', level: elabLevelToKernel(t.level) };
+        // Level is now a term, elaborate it recursively
+        return { tag: 'Sort', level: elab(t.level) };
 
       case 'ULevel':
         return { tag: 'ULevel' };
+
+      case 'ULit':
+        return { tag: 'ULit', n: t.n };
+
+      case 'UOmega':
+        return { tag: 'UOmega' };
 
       case 'AbsurdMarker':
         throw new Error('AbsurdMarker should not be elaborated directly');
@@ -1868,11 +1894,29 @@ export function elabToKernelWithMap(
     case 'Var':
       return { tag: 'Var', index: term.index };
 
-    case 'Sort':
-      return { tag: 'Sort', level: elabLevelToKernel(term.level, levelNamesInScope) };
+    case 'Sort': {
+      // Level is now a term - recursively elaborate it
+      const elaboratedLevel = elabToKernelWithMap(
+        term.level,
+        elabMap,
+        appendPath(surfacePath, fieldSeg('level')),
+        appendPath(kernelPath, fieldSeg('level')),
+        patternNamedArgMap,
+        appNamedArgLookup,
+        patternTotalArity,
+        levelNamesInScope
+      );
+      return { tag: 'Sort', level: elaboratedLevel };
+    }
 
     case 'ULevel':
       return { tag: 'ULevel' };
+
+    case 'ULit':
+      return { tag: 'ULit', n: term.n };
+
+    case 'UOmega':
+      return { tag: 'UOmega' };
 
     case 'AbsurdMarker':
       // AbsurdMarker should only appear as clause RHS and is filtered out at the Match level

@@ -16,192 +16,26 @@
  */
 
 // ============================================================================
-// Universe Levels
+// Universe Levels (Term-based representation)
 // ============================================================================
 
 /**
- * Universe levels for the type hierarchy.
+ * Universe levels are now represented as terms.
  *
- * - LZero: The zero level (Prop)
- * - LSucc: Successor level (l + 1)
- * - LMax: Maximum of two levels (for Pi types)
- * - LIMax: Impredicative max - max(l1, l2) but 0 if l2 = 0 (for Prop)
- * - LParam: Level parameter (for universe-polymorphic definitions)
- * - LMVar: Level metavariable (for inference)
+ * Level expressions:
+ * - ULit(n): Numeric literal level (0, 1, 2, ...)
+ * - UOmega: The first infinite ordinal ω
+ * - Var(n): Level variable (de Bruijn index, bound by Pi with ULevel domain)
+ * - Meta(id): Level metavariable (for inference)
+ * - App(USucc, l): Successor level (l + 1)
+ * - App(App(UMax, l1), l2): Maximum of two levels
+ * - App(App(UIMax, l1), l2): Impredicative max (0 if l2 = 0)
+ *
+ * This representation unifies level expressions with the term language,
+ * enabling automatic de Bruijn scoping for level variables.
  */
-export type Level =
-  | { tag: 'LZero' }
-  | { tag: 'LSucc'; pred: Level }
-  | { tag: 'LMax'; left: Level; right: Level }
-  | { tag: 'LIMax'; left: Level; right: Level }
-  | { tag: 'LParam'; name: string }
-  | { tag: 'LMVar'; id: string }
-  | { tag: 'LOmega' }  // ω - the first infinite ordinal level
 
-// Level constructors
-export const mkLZero = (): Level => ({ tag: 'LZero' });
-export const mkLSucc = (pred: Level): Level => ({ tag: 'LSucc', pred });
-export const mkLMax = (left: Level, right: Level): Level => ({ tag: 'LMax', left, right });
-export const mkLIMax = (left: Level, right: Level): Level => ({ tag: 'LIMax', left, right });
-export const mkLParam = (name: string): Level => ({ tag: 'LParam', name });
-export const mkLMVar = (id: string): Level => ({ tag: 'LMVar', id });
-export const mkLOmega = (): Level => ({ tag: 'LOmega' });
-
-// Convenience: create a concrete level from a number
-export function mkLevelNum(n: number): Level {
-  let level: Level = mkLZero();
-  for (let i = 0; i < n; i++) {
-    level = mkLSucc(level);
-  }
-  return level;
-}
-
-// Try to convert a level to a concrete number, returns undefined if it contains variables/metas
-export function levelToNumber(level: Level): number | undefined {
-  switch (level.tag) {
-    case 'LZero':
-      return 0;
-    case 'LSucc': {
-      const pred = levelToNumber(level.pred);
-      return pred !== undefined ? pred + 1 : undefined;
-    }
-    case 'LMax': {
-      const left = levelToNumber(level.left);
-      const right = levelToNumber(level.right);
-      return left !== undefined && right !== undefined ? Math.max(left, right) : undefined;
-    }
-    case 'LIMax': {
-      const left = levelToNumber(level.left);
-      const right = levelToNumber(level.right);
-      if (right === 0) return 0;  // imax(_, 0) = 0
-      return left !== undefined && right !== undefined ? Math.max(left, right) : undefined;
-    }
-    case 'LParam':
-    case 'LMVar':
-    case 'LOmega':
-      return undefined;  // LOmega is infinite, not a finite number
-  }
-}
-
-// Simplify a level (basic simplifications)
-export function simplifyLevel(level: Level): Level {
-  switch (level.tag) {
-    case 'LZero':
-    case 'LParam':
-    case 'LMVar':
-    case 'LOmega':
-      return level;
-
-    case 'LSucc':
-      return mkLSucc(simplifyLevel(level.pred));
-
-    case 'LMax': {
-      const left = simplifyLevel(level.left);
-      const right = simplifyLevel(level.right);
-
-      // max(0, l) = l, max(l, 0) = l
-      if (left.tag === 'LZero') return right;
-      if (right.tag === 'LZero') return left;
-
-      // max(l, l) = l
-      if (levelsEqual(left, right)) return left;
-
-      // If both are concrete, compute the max
-      const leftNum = levelToNumber(left);
-      const rightNum = levelToNumber(right);
-      if (leftNum !== undefined && rightNum !== undefined) {
-        return mkLevelNum(Math.max(leftNum, rightNum));
-      }
-
-      return mkLMax(left, right);
-    }
-
-    case 'LIMax': {
-      const left = simplifyLevel(level.left);
-      const right = simplifyLevel(level.right);
-
-      // imax(_, 0) = 0
-      if (right.tag === 'LZero') return mkLZero();
-
-      // If right is definitely not zero, imax = max
-      const rightNum = levelToNumber(right);
-      if (rightNum !== undefined && rightNum > 0) {
-        return simplifyLevel(mkLMax(left, right));
-      }
-
-      return mkLIMax(left, right);
-    }
-  }
-}
-
-/**
- * Check if a level contains any level parameters (LParam).
- * Used to detect when a Pi type needs level ω because its
- * codomain level depends on a bound level variable.
- */
-export function levelContainsParam(level: Level): boolean {
-  switch (level.tag) {
-    case 'LZero':
-    case 'LMVar':
-    case 'LOmega':
-      return false;
-    case 'LParam':
-      return true;
-    case 'LSucc':
-      return levelContainsParam(level.pred);
-    case 'LMax':
-    case 'LIMax':
-      return levelContainsParam(level.left) || levelContainsParam(level.right);
-  }
-}
-
-// Check if two levels are structurally equal
-export function levelsEqual(l1: Level, l2: Level): boolean {
-  if (l1.tag !== l2.tag) return false;
-
-  switch (l1.tag) {
-    case 'LZero':
-      return true;
-    case 'LSucc':
-      return levelsEqual(l1.pred, (l2 as typeof l1).pred);
-    case 'LMax':
-    case 'LIMax':
-      return levelsEqual(l1.left, (l2 as typeof l1).left) &&
-             levelsEqual(l1.right, (l2 as typeof l1).right);
-    case 'LParam':
-      return l1.name === (l2 as typeof l1).name;
-    case 'LMVar':
-      return l1.id === (l2 as typeof l1).id;
-    case 'LOmega':
-      return true;  // Both are omega, so equal
-  }
-}
-
-// Pretty print a level
-export function prettyPrintLevel(level: Level): string {
-  // Try to get a concrete number first
-  const num = levelToNumber(level);
-  if (num !== undefined) {
-    return num.toString();
-  }
-
-  switch (level.tag) {
-    case 'LZero':
-      return '0';
-    case 'LSucc':
-      return `(${prettyPrintLevel(level.pred)} + 1)`;
-    case 'LMax':
-      return `max(${prettyPrintLevel(level.left)}, ${prettyPrintLevel(level.right)})`;
-    case 'LIMax':
-      return `imax(${prettyPrintLevel(level.left)}, ${prettyPrintLevel(level.right)})`;
-    case 'LParam':
-      return level.name;
-    case 'LMVar':
-      return `?${level.id}`;
-    case 'LOmega':
-      return 'ω';
-  }
-}
+// Level term constructors are defined below with TTKTerm
 
 // ============================================================================
 // Core Kernel Term Language
@@ -264,11 +98,13 @@ export type TTKClause = {
 
 export type TTKTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
-  | { tag: 'Sort'; level: Level }                          // Sort l (Type l, Prop = Sort 0)
+  | { tag: 'Sort'; level: TTKTerm }                        // Sort l (Type l, Prop = Sort 0) - level is now a term
   | { tag: 'ULevel' }                                      // The type of universe levels
+  | { tag: 'ULit'; n: number }                             // Numeric level literal (0, 1, 2, ...)
+  | { tag: 'UOmega' }                                      // The first infinite ordinal ω
   | { tag: 'Binder'; name: string; binderKind: TTKBinderKind; domain: TTKTerm; body: TTKTerm }  // Unified binder
   | TTKTermApp   // Function application (f a)
-  | TTKTermConst // Named constant (nat_elim, eq, etc.)
+  | TTKTermConst // Named constant (nat_elim, eq, etc.) - includes USucc, UMax, UIMax for levels
   | { tag: 'Hole'; id: string }                            // Unelaborated hole (becomes Meta during type checking)
   | { tag: 'Meta'; id: string }                            // Metavariable (instantiated during type checking)
   | { tag: 'Annot'; term: TTKTerm; type: TTKTerm }          // Type annotation
@@ -387,11 +223,61 @@ export function mkMeta(id: string): TTKTerm {
   return { tag: 'Meta', id };
 }
 
+// ============================================================================
+// Level Term Constructors
+// ============================================================================
+
+/**
+ * Create a numeric level literal
+ */
+export function mkULit(n: number): TTKTerm {
+  return { tag: 'ULit', n };
+}
+
+/**
+ * Create the omega level (first infinite ordinal)
+ */
+export function mkUOmega(): TTKTerm {
+  return { tag: 'UOmega' };
+}
+
+/**
+ * Create a level successor: USucc l
+ */
+export function mkLSucc(level: TTKTerm): TTKTerm {
+  return mkApp(mkConst('USucc'), level);
+}
+
+/**
+ * Create level max: UMax l1 l2
+ */
+export function mkLMax(left: TTKTerm, right: TTKTerm): TTKTerm {
+  return mkApp(mkApp(mkConst('UMax'), left), right);
+}
+
+/**
+ * Create level imax (impredicative max): UIMax l1 l2
+ */
+export function mkLIMax(left: TTKTerm, right: TTKTerm): TTKTerm {
+  return mkApp(mkApp(mkConst('UIMax'), left), right);
+}
+
+// Backwards compatibility aliases
+export const mkLZero = () => mkULit(0);
+export const mkLOmega = mkUOmega;
+
+/**
+ * Create a level from a number (convenience)
+ */
+export function mkLevelNum(n: number): TTKTerm {
+  return mkULit(n);
+}
+
 /**
  * Create Prop (Sort 0)
  */
 export function mkProp(): TTKTerm {
-  return { tag: 'Sort', level: mkLZero() };
+  return { tag: 'Sort', level: mkULit(0) };
 }
 
 /**
@@ -401,13 +287,13 @@ export function mkProp(): TTKTerm {
  * etc.
  */
 export function mkType(n: number = 0): TTKTerm {
-  return { tag: 'Sort', level: mkLSucc(mkLevelNum(n)) };
+  return { tag: 'Sort', level: mkLSucc(mkULit(n)) };
 }
 
 /**
- * Create Sort with explicit level
+ * Create Sort with explicit level (level is now a TTKTerm)
  */
-export function mkSort(level: Level): TTKTerm {
+export function mkSort(level: TTKTerm): TTKTerm {
   return { tag: 'Sort', level };
 }
 
@@ -416,6 +302,235 @@ export function mkSort(level: Level): TTKTerm {
  */
 export function mkULevel(): TTKTerm {
   return { tag: 'ULevel' };
+}
+
+// ============================================================================
+// Level Term Utilities
+// ============================================================================
+
+/**
+ * Check if a term is the USucc constant applied to an argument.
+ * Returns the argument if so, undefined otherwise.
+ */
+export function matchUSucc(term: TTKTerm): TTKTerm | undefined {
+  if (term.tag === 'App' && term.fn.tag === 'Const' && term.fn.name === 'USucc') {
+    return term.arg;
+  }
+  return undefined;
+}
+
+/**
+ * Check if a term is UMax applied to two arguments.
+ * Returns [left, right] if so, undefined otherwise.
+ */
+export function matchUMax(term: TTKTerm): [TTKTerm, TTKTerm] | undefined {
+  if (term.tag === 'App' && term.fn.tag === 'App' &&
+      term.fn.fn.tag === 'Const' && term.fn.fn.name === 'UMax') {
+    return [term.fn.arg, term.arg];
+  }
+  return undefined;
+}
+
+/**
+ * Check if a term is UIMax applied to two arguments.
+ * Returns [left, right] if so, undefined otherwise.
+ */
+export function matchUIMax(term: TTKTerm): [TTKTerm, TTKTerm] | undefined {
+  if (term.tag === 'App' && term.fn.tag === 'App' &&
+      term.fn.fn.tag === 'Const' && term.fn.fn.name === 'UIMax') {
+    return [term.fn.arg, term.arg];
+  }
+  return undefined;
+}
+
+/**
+ * Try to convert a level term to a concrete number.
+ * Returns undefined if the level contains variables, metas, or omega.
+ */
+export function levelToNumber(level: TTKTerm): number | undefined {
+  if (level.tag === 'ULit') {
+    return level.n;
+  }
+  if (level.tag === 'UOmega') {
+    return undefined;  // ω is infinite, not a finite number
+  }
+  const succArg = matchUSucc(level);
+  if (succArg !== undefined) {
+    const pred = levelToNumber(succArg);
+    return pred !== undefined ? pred + 1 : undefined;
+  }
+  const maxArgs = matchUMax(level);
+  if (maxArgs !== undefined) {
+    const left = levelToNumber(maxArgs[0]);
+    const right = levelToNumber(maxArgs[1]);
+    return left !== undefined && right !== undefined ? Math.max(left, right) : undefined;
+  }
+  const imaxArgs = matchUIMax(level);
+  if (imaxArgs !== undefined) {
+    const left = levelToNumber(imaxArgs[0]);
+    const right = levelToNumber(imaxArgs[1]);
+    if (right === 0) return 0;  // imax(_, 0) = 0
+    return left !== undefined && right !== undefined ? Math.max(left, right) : undefined;
+  }
+  return undefined;  // Var, Meta, or other terms
+}
+
+/**
+ * Check if two level terms are structurally equal.
+ * This is just structural term equality.
+ */
+export function levelsEqual(l1: TTKTerm, l2: TTKTerm): boolean {
+  // First try to compare as concrete numbers (handles USucc(ULit(1)) == USucc(USucc(ULit(0))))
+  const n1 = levelToNumber(l1);
+  const n2 = levelToNumber(l2);
+  if (n1 !== undefined && n2 !== undefined) {
+    return n1 === n2;
+  }
+
+  // If not both concrete, simplify and compare structurally
+  const s1 = simplifyLevel(l1);
+  const s2 = simplifyLevel(l2);
+  return levelsEqualStructural(s1, s2);
+}
+
+/**
+ * Structural equality check for level terms (after simplification).
+ */
+function levelsEqualStructural(l1: TTKTerm, l2: TTKTerm): boolean {
+  if (l1.tag !== l2.tag) return false;
+  switch (l1.tag) {
+    case 'ULit':
+      return l2.tag === 'ULit' && l1.n === l2.n;
+    case 'UOmega':
+      return l2.tag === 'UOmega';
+    case 'Var':
+      return l2.tag === 'Var' && l1.index === l2.index;
+    case 'Meta':
+      return l2.tag === 'Meta' && l1.id === l2.id;
+    case 'App':
+      return l2.tag === 'App' && levelsEqualStructural(l1.fn, l2.fn) && levelsEqualStructural(l1.arg, l2.arg);
+    case 'Const':
+      return l2.tag === 'Const' && l1.name === l2.name;
+    default:
+      // For other term types (Sort, Binder, etc.), which shouldn't appear in levels
+      return false;
+  }
+}
+
+/**
+ * Simplify a level term (basic simplifications).
+ */
+export function simplifyLevel(level: TTKTerm): TTKTerm {
+  if (level.tag === 'ULit' || level.tag === 'UOmega' || level.tag === 'Var' || level.tag === 'Meta') {
+    return level;
+  }
+
+  const succArg = matchUSucc(level);
+  if (succArg !== undefined) {
+    return mkLSucc(simplifyLevel(succArg));
+  }
+
+  const maxArgs = matchUMax(level);
+  if (maxArgs !== undefined) {
+    const left = simplifyLevel(maxArgs[0]);
+    const right = simplifyLevel(maxArgs[1]);
+
+    // max(0, l) = l, max(l, 0) = l
+    if (left.tag === 'ULit' && left.n === 0) return right;
+    if (right.tag === 'ULit' && right.n === 0) return left;
+
+    // max(l, l) = l
+    if (levelsEqual(left, right)) return left;
+
+    // If both are concrete, compute the max
+    const leftNum = levelToNumber(left);
+    const rightNum = levelToNumber(right);
+    if (leftNum !== undefined && rightNum !== undefined) {
+      return mkULit(Math.max(leftNum, rightNum));
+    }
+
+    return mkLMax(left, right);
+  }
+
+  const imaxArgs = matchUIMax(level);
+  if (imaxArgs !== undefined) {
+    const left = simplifyLevel(imaxArgs[0]);
+    const right = simplifyLevel(imaxArgs[1]);
+
+    // imax(_, 0) = 0
+    if (right.tag === 'ULit' && right.n === 0) return mkULit(0);
+
+    // If right is definitely not zero, imax = max
+    const rightNum = levelToNumber(right);
+    if (rightNum !== undefined && rightNum > 0) {
+      return simplifyLevel(mkLMax(left, right));
+    }
+
+    return mkLIMax(left, right);
+  }
+
+  return level;
+}
+
+/**
+ * Check if a level term contains any level variables (Var nodes).
+ * Used to detect when a Pi type needs level ω because its
+ * codomain level depends on a bound level variable.
+ */
+export function levelContainsVar(level: TTKTerm): boolean {
+  if (level.tag === 'Var') return true;
+  if (level.tag === 'ULit' || level.tag === 'UOmega' || level.tag === 'Meta' || level.tag === 'Const') {
+    return false;
+  }
+  if (level.tag === 'App') {
+    return levelContainsVar(level.fn) || levelContainsVar(level.arg);
+  }
+  return false;
+}
+
+// Alias for backwards compatibility
+export const levelContainsParam = levelContainsVar;
+
+/**
+ * Pretty print a level term.
+ */
+export function prettyPrintLevel(level: TTKTerm): string {
+  // Try to get a concrete number first
+  const num = levelToNumber(level);
+  if (num !== undefined) {
+    return num.toString();
+  }
+
+  if (level.tag === 'ULit') {
+    return level.n.toString();
+  }
+  if (level.tag === 'UOmega') {
+    return 'ω';
+  }
+  if (level.tag === 'Var') {
+    return `#${level.index}`;
+  }
+  if (level.tag === 'Meta') {
+    return `?${level.id}`;
+  }
+
+  const succArg = matchUSucc(level);
+  if (succArg !== undefined) {
+    return `(${prettyPrintLevel(succArg)} + 1)`;
+  }
+
+  const maxArgs = matchUMax(level);
+  if (maxArgs !== undefined) {
+    return `max(${prettyPrintLevel(maxArgs[0])}, ${prettyPrintLevel(maxArgs[1])})`;
+  }
+
+  const imaxArgs = matchUIMax(level);
+  if (imaxArgs !== undefined) {
+    return `imax(${prettyPrintLevel(imaxArgs[0])}, ${prettyPrintLevel(imaxArgs[1])})`;
+  }
+
+  // Fallback for unknown level term structures
+  return `<level:${level.tag}>`;
 }
 
 // ============================================================================
@@ -480,6 +595,12 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
       }
       return true;
     }
+
+    case 'ULit':
+      return term2.tag === 'ULit' && term1.n === term2.n;
+
+    case 'UOmega':
+      return term2.tag === 'UOmega';
   }
 }
 
@@ -514,22 +635,29 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
     case 'Sort': {
       // Sort 0 = Prop, Sort (l+1) = Type l
       // Following Lean's convention where Type = Sort 1, Type 1 = Sort 2, etc.
-      if (term.level.tag === 'LZero') {
+      if (term.level.tag === 'ULit' && term.level.n === 0) {
         return 'Prop';
       }
-      if (term.level.tag === 'LSucc') {
+      // Check for USucc pattern
+      const succArg = matchUSucc(term.level);
+      if (succArg !== undefined) {
         // Sort (l+1) = Type l
-        const innerLevel = term.level.pred;
-        const innerNum = levelToNumber(innerLevel);
+        const innerNum = levelToNumber(succArg);
         if (innerNum !== undefined) {
           return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
         }
         // Non-numeric inner level (contains ω, variables, metas)
-        return `Type ${prettyPrintLevel(innerLevel)}`;
+        return `Type ${prettyPrintLevel(succArg)}`;
       }
       // Fallback for other level forms (shouldn't happen in well-formed terms)
       return `Sort ${prettyPrintLevel(term.level)}`;
     }
+
+    case 'ULit':
+      return `${term.n}`;
+
+    case 'UOmega':
+      return 'ω';
 
     case 'ULevel':
       return 'ULevel';
@@ -666,22 +794,28 @@ export function prettyPrintFormatted(
 
     case 'Sort': {
       // Sort 0 = Prop, Sort (l+1) = Type l
-      if (term.level.tag === 'LZero') {
+      if (term.level.tag === 'ULit' && term.level.n === 0) {
         return 'Prop';
       }
-      if (term.level.tag === 'LSucc') {
-        const innerLevel = term.level.pred;
-        const innerNum = levelToNumber(innerLevel);
+      const succArg = matchUSucc(term.level);
+      if (succArg !== undefined) {
+        const innerNum = levelToNumber(succArg);
         if (innerNum !== undefined) {
           return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
         }
-        return `Type ${prettyPrintLevel(innerLevel)}`;
+        return `Type ${prettyPrintLevel(succArg)}`;
       }
       return `Sort ${prettyPrintLevel(term.level)}`;
     }
 
     case 'ULevel':
       return 'ULevel';
+
+    case 'ULit':
+      return `${term.n}`;
+
+    case 'UOmega':
+      return 'ω';
 
     case 'Const':
       return term.name;
@@ -892,19 +1026,25 @@ export function prettyPrintLatex(
 
     case 'Sort': {
       // Sort 0 = Prop, Sort (l+1) = Type l
-      if (term.level.tag === 'LZero') {
+      if (term.level.tag === 'ULit' && term.level.n === 0) {
         return '\\text{Prop}';
       }
-      if (term.level.tag === 'LSucc') {
-        const innerLevel = term.level.pred;
-        const innerNum = levelToNumber(innerLevel);
+      const succArg = matchUSucc(term.level);
+      if (succArg !== undefined) {
+        const innerNum = levelToNumber(succArg);
         if (innerNum !== undefined) {
           return innerNum === 0 ? '\\text{Type}' : `\\text{Type}_{${innerNum}}`;
         }
-        return `\\text{Type}_{${prettyPrintLevel(innerLevel)}}`;
+        return `\\text{Type}_{${prettyPrintLevel(succArg)}}`;
       }
       return `\\text{Sort}\\; ${prettyPrintLevel(term.level)}`;
     }
+
+    case 'ULit':
+      return `${term.n}`;
+
+    case 'UOmega':
+      return '\\omega';
 
     case 'Const':
       // Escape special LaTeX characters in names
@@ -1003,7 +1143,11 @@ export function occursIn(index: number, term: TTKTerm): boolean {
     case 'Var':
       return term.index === index;
     case 'Sort':
+      // Level is now a term, so check if the variable occurs in the level
+      return occursIn(index, term.level);
     case 'Const':
+    case 'ULit':
+    case 'UOmega':
       return false;
     case 'Binder': {
       const inDomain = occursIn(index, term.domain);
@@ -1117,10 +1261,15 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
 
     case 'Meta':
     case 'Var':
-    case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return null;
+
+    case 'Sort':
+      // Level is now a term, so search in the level
+      return findHole(term.level, holeId);
 
     case 'Binder': {
       const inDomain = findHole(term.domain, holeId);
@@ -1155,9 +1304,6 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
       }
       return null;
     }
-
-    case 'ULevel':
-      return null;
   }
 }
 
@@ -1171,10 +1317,15 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
 
     case 'Meta':
     case 'Var':
-    case 'Sort':
     case 'Const':
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
+
+    case 'Sort':
+      // Level is now a term, so fill holes in the level
+      return { tag: 'Sort', level: fillHole(term.level, holeId, proofTerm) };
 
     case 'Binder': {
       const newDomain = fillHole(term.domain, holeId, proofTerm);
@@ -1218,9 +1369,6 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
           rhs: fillHole(c.rhs, holeId, proofTerm)
         }))
       };
-
-    case 'ULevel':
-      return term;
   }
 }
 

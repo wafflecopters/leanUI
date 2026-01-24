@@ -78,6 +78,8 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
       };
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
   }
 }
@@ -148,6 +150,8 @@ function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
       };
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
   }
 }
@@ -247,6 +251,8 @@ function substPatternBindingsHelper(bindings: TTKTerm[], term: TTKTerm, depth: n
       };
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
   }
 }
@@ -322,7 +328,9 @@ function freeVarIndicesHelper(term: TTKTerm, depth: number, indices: Set<number>
       break;
 
     case 'ULevel':
-      // No free variables in ULevel
+    case 'ULit':
+    case 'UOmega':
+      // No free variables in these
       break;
   }
 }
@@ -354,6 +362,8 @@ function containsVarIndexHelper(term: TTKTerm, targetIndex: number, depth: numbe
       return term.clauses.some(c => containsVarIndexHelper(c.rhs, targetIndex, depth));
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return false;
   }
 }
@@ -401,7 +411,9 @@ function minFreeVarIndexHelper(term: TTKTerm, depth: number): number {
     }
 
     case 'ULevel':
-      return Infinity; // No free variables in ULevel
+    case 'ULit':
+    case 'UOmega':
+      return Infinity; // No free variables in these
   }
 }
 
@@ -478,6 +490,8 @@ function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: 
       };
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
   }
 }

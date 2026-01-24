@@ -33,6 +33,8 @@ function isFreeIn(index: number, term: TTKTerm): boolean {
       return false;
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return false;
   }
 }
@@ -130,6 +132,12 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm): boolean {
 
     case 'ULevel':
       return n2.tag === 'ULevel';
+
+    case 'ULit':
+      return n2.tag === 'ULit' && n1.n === n2.n;
+
+    case 'UOmega':
+      return n2.tag === 'UOmega';
   }
 }
 

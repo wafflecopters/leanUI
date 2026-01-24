@@ -20,6 +20,8 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
         Match: 'Pattern matching',
         Binder: undefined,
         ULevel: 'ULevel type',
+        ULit: 'Universe literal',
+        UOmega: 'Universe omega',
       }[term.tag] ?? (
           term.tag === 'Binder' ? term.binderKind.tag === 'BLam' ? 'Lambda Expression' : 'Let Expression' : undefined
         ) ?? 'Other syntax'
@@ -576,6 +578,12 @@ function termsEqualK(t1: TTKTerm, t2: TTKTerm): boolean {
 
     case 'ULevel':
       return t2.tag === 'ULevel';
+
+    case 'ULit':
+      return t2.tag === 'ULit' && t1.n === t2.n;
+
+    case 'UOmega':
+      return t2.tag === 'UOmega';
 
     case 'Const':
       return t2.tag === 'Const' && t1.name === t2.name;

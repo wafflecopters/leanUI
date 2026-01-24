@@ -73,6 +73,8 @@ export function normalize(term: TTKTerm): TTKTerm {
     }
 
     case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
       return term;
   }
 }
