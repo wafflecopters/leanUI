@@ -256,17 +256,17 @@ inductive Fin : Nat -> Type where
 
 nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
 nth (VCons h _) FZero = h
-nth (VCons {n := (Succ _)} h tail) (FSucc f) = nth tail f
+nth (VCons  h tail) (FSucc f) = nth tail f
 
 inductive Void : Type where
 
 absurd : {A : Type} -> Void -> A
 
-inductive Equal : (A : Type) -> A -> A -> Type where
-  refl : (A : Type) -> (a : A) -> Equal A a a
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
 
-zeroNeqSucc : (n : Nat) -> Equal Nat Zero (Succ n) -> Void
-zeroNeqSucc Z (refl _ _) = #absurd
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
 
 double : Nat -> Nat
 double n = ?sorry
@@ -286,11 +286,9 @@ const a = \\ _ => a
 swap : {A B C : Type} -> (f : A -> B -> C) -> B -> A -> C
 swap f = \\ x y => f y x
 
-{-
-vecConcat : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
-vecConcat _ _ _ (VNil _) v = v
-vecConcat A (Succ p) _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat A p _ tail v)
--}
+vecConcat : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat VNil v = v
+vecConcat (VCons h tail) v = VCons h (vecConcat tail v)
 
 {-
 vecConcat' : (A : Type) -> (a : Nat) -> (b : Nat) -> Vec A a -> Vec A b -> Vec A (plus a b)
@@ -298,8 +296,8 @@ vecConcat' _ _ _ (VNil _) v = v
 vecConcat' A (Succ p) _ (VCons _ _ h tail) v = (swap _ (VCons _ _)) (vecConcat' A ((\ d x => x) Zero p) _ tail v) h
 -}
 
-sym : {A : Type} -> (u : A) -> (v : A) -> Equal A u v -> Equal A v u
-sym u _ (refl _ _) = refl _ _
+sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
+sym refl = refl
 `;
 
 // Styles

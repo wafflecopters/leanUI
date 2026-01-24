@@ -1335,6 +1335,16 @@ function checkTermDeclaration(
       for (let i = 0; i < decl.surfaceValue.clauses.length; i++) {
         const clause = decl.surfaceValue.clauses[i];
         if (clause.rhs.tag === 'AbsurdMarker') {
+          // First validate pattern structure - check for positional patterns in implicit positions
+          // This is the same validation done in checkTermClause via reorderPatterns
+          if (namedArgMap && namedArgMap.size > 0) {
+            const reorderResult = reorderPatterns(clause.patterns, namedArgMap, clause.namedPatterns, totalArity);
+            if ('error' in reorderResult && reorderResult.error !== undefined) {
+              absurdClauseErrors.push(TCEnvError.create(reorderResult.error, termEnv));
+              continue; // Skip absurdity check if pattern structure is invalid
+            }
+          }
+
           // Elaborate the patterns to TTKPattern for validation
           const kernelPatterns = clause.patterns.map(p => elabPatternToKernel(p));
           const patternsEnv = termEnv.withValue(kernelPatterns);
