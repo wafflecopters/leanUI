@@ -8,7 +8,7 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern } from './kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList } from './kernel';
 import { TTerm, TPattern, TClause } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
@@ -2416,11 +2416,14 @@ function checkTermValue(
 
   // Convert totality issues to errors
   const totalityErrors: TCEnvError[] = [];
-  for (const _clauseIdx of totalityResult.unreachableClauses) {
-    totalityErrors.push(TCEnvError.create(`Unreachable clause`, termEnv));
+  for (const { clauseIndex, patterns } of totalityResult.unreachableClauses) {
+    totalityErrors.push(TCEnvError.create(`Redundant clause: ${name ? `${name} ` : ''}${prettyPrintPatternList(patterns)}`, termEnv.atIndexPath(
+      appendPath(termEnv.indexPath, fieldSeg('value'), fieldSeg('clauses'), arraySeg(clauseIndex))
+    )));
   }
   if (!totalityResult.isExhaustive) {
-    totalityErrors.push(TCEnvError.create(`Non-exhaustive patterns`, termEnv));
+    totalityErrors.push(TCEnvError.create(`Function ${name ? `${name} ` : ''}is non-total. Missing clause${totalityResult.missingValidClauses.length === 1 ? '' : 's'
+      }:\n${prettyPrintPatternList(totalityResult.missingValidClauses.map(c => c.patterns).flat())}`, termEnv));
   }
 
   // Add annotatedAbsurdClauses to the totality result

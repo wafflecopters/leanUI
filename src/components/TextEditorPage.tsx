@@ -499,7 +499,7 @@ const caseTreeStyles = {
   },
   treeNode: {
     paddingLeft: '16px',
-    borderLeft: '1px solid #30363d',
+    //borderLeft: '1px solid #30363d',
     marginLeft: '4px',
   },
   splitLabel: {
@@ -513,7 +513,7 @@ const caseTreeStyles = {
   },
   ctorName: {
     color: '#ffa657',
-    minWidth: '80px',
+    //minWidth: '80px',
   },
   leafClause: {
     color: '#7ee787',
@@ -555,8 +555,14 @@ function CaseTreeNode({ tree, depth = 0 }: { tree: CaseTree; depth?: number }): 
   }
 
   if (tree.tag === 'NoSplit') {
-    throw new Error('NoSplit case should not be present in the tree');
-    // return <div style={{ color: '#8b949e', fontStyle: 'italic' as const }}>No split</div>;
+    return (
+      <div style={depth > 0 ? caseTreeStyles.treeNode : undefined}>
+        <div style={caseTreeStyles.branchRow}>
+          <span style={caseTreeStyles.ctorName}>_</span>
+          <CaseTreeNode tree={tree.branch} depth={depth + 1} />
+        </div>
+      </div>
+    )
   }
 
   // Split node - all constructors are enumerated
@@ -566,7 +572,7 @@ function CaseTreeNode({ tree, depth = 0 }: { tree: CaseTree; depth?: number }): 
     <div style={depth > 0 ? caseTreeStyles.treeNode : undefined}>
       {branches.map(([ctorName, subTree]) => (
         <div key={ctorName} style={caseTreeStyles.branchRow}>
-          <span style={caseTreeStyles.ctorName}>{ctorName}:</span>
+          <span style={caseTreeStyles.ctorName}>{ctorName}</span>
           <CaseTreeNode tree={subTree} depth={depth + 1} />
         </div>
       ))}
@@ -593,14 +599,45 @@ function TotalityResultView({ result }: { result: TotalityResult }): JSX.Element
           {result.isExhaustive ? 'Exhaustive' : 'Non-exhaustive'}
         </span>
       </div>
-      <CaseTreeNode tree={result.caseTree} />
+      <table>
+        <tbody>
+          {...caseTreeRows(result.caseTree)}
+        </tbody>
+      </table>
       {result.unreachableClauses.length > 0 && (
         <div style={caseTreeStyles.unreachableWarning}>
-          Warning: Unreachable clause(s): {result.unreachableClauses.map(i => i + 1).join(', ')}
+          Warning: Unreachable clause(s): {result.unreachableClauses.map(i => i.clauseIndex + 1).join(', ')}
         </div>
       )}
     </div>
   );
+}
+
+function caseTreeRows(tree: CaseTree): JSX.Element[] {
+  if (tree.tag === 'Split') {
+    return Array.from(tree.branches.entries()).map(([ctorName, subTree]) => (
+      <tr key={ctorName}>
+        <td><span style={caseTreeStyles.ctorName}>{ctorName}</span></td>
+        <td>{caseTreeRows(subTree)}</td>
+      </tr>
+    ));
+  } else if (tree.tag === 'NoSplit') {
+    return [
+      <tr key={tree.debugLabel}>
+        <td><span style={caseTreeStyles.ctorName}>{tree.debugLabel}</span></td>
+        <td>{caseTreeRows(tree.branch)}</td>
+      </tr>
+    ];
+  } else if (tree.tag === 'Leaf') {
+    return [
+      <tr key={tree.clauseIndex}>
+        <td><span style={caseTreeStyles.leafClause}>→ clause {tree.clauseIndex}</span></td>
+      </tr>
+    ];
+  } else if (tree.tag === 'Uncovered') {
+  }
+
+  return [];
 }
 
 // Block renderer component

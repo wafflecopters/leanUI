@@ -120,7 +120,8 @@ export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] =
     }
     case 'PWild':
       // Display wildcards with their generated name visible
-      return `_[${pattern.name}]`;
+      const usefulPatternName = pattern.name && pattern.name !== '_';
+      return usefulPatternName ? pattern.name : '_';
     case 'PCtor': {
       const name = updatedName ?? pattern.name;
       if (pattern.args.length === 0) {
@@ -129,6 +130,10 @@ export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] =
       return `(${name} ${pattern.args.map(p => prettyPrintPattern(p, rest)).join(' ')})`;
     }
   }
+}
+
+export function prettyPrintPatternList(patterns: TTKPattern[]): string {
+  return patterns.map(p => prettyPrintPattern(p)).join(' ');
 }
 
 /**

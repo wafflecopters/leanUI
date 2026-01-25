@@ -45,7 +45,7 @@ export type CaseTree =
  */
 export interface TotalityResult {
   caseTree: CaseTree | null;
-  unreachableClauses: number[];
+  unreachableClauses: { clauseIndex: number, patterns: TTKPattern[] }[];
   isExhaustive: boolean;
   /** Clauses that were annotated with #absurd and successfully validated as absurd */
   annotatedAbsurdClauses?: number[];
@@ -93,26 +93,22 @@ export function printCaseTree(tree: CaseTree, indent: number = 0): string {
 let debugging = false
 
 export function checkTotality(
-  termName: string,
+  _termName: string,
   clauses: { patterns: TTKPattern[] }[],
   definitions: DefinitionsMap,
-  _absurdityChecker?: AbsurdityChecker
+  absurdityChecker: AbsurdityChecker
 ): TotalityResult {
-  debugging = termName === 'glob' //'vecConcat\'';
+  // debugging = termName === 'glob' //'vecConcat\'';
 
-  const unreachableClauses: number[] = [];
+  const unreachableClauses: { clauseIndex: number, patterns: TTKPattern[] }[] = [];
   const annotatedAbsurdClauses: number[] = [];
 
   let caseTree: CaseTree = { tag: 'Uncovered' };
 
-  if (debugging) {
-    //   debugger;
-  }
-
   for (let i = 0; i < clauses.length; i++) {
     const newCaseTree = caseTreeWithClauseAdded(caseTree, i, clauses[i], definitions);
     if (newCaseTree === undefined) {
-      unreachableClauses.push(i);
+      unreachableClauses.push({ clauseIndex: i, patterns: clauses[i].patterns });
     } else {
       caseTree = newCaseTree;
     }
@@ -122,24 +118,22 @@ export function checkTotality(
   const missingAbsurdClauses: { patterns: TTKPattern[] }[] = [];
 
   for (const uncoveredPattern of uncoveredPatternsInCaseTree(caseTree, definitions)) {
-    debugger
+    const isAbsurd = absurdityChecker(uncoveredPattern.patterns)
 
-    const unifies = /* todo */ false as boolean
-
-    if (unifies) {
-      missingValidClauses.push(uncoveredPattern);
-    } else {
+    if (isAbsurd) {
       missingAbsurdClauses.push(uncoveredPattern);
+    } else {
+      missingValidClauses.push(uncoveredPattern);
     }
   }
 
   return {
-    caseTree: null,
-    unreachableClauses: [], // TODO
-    isExhaustive: true, // TODO
+    caseTree,
+    unreachableClauses,
+    isExhaustive: missingValidClauses.length === 0,
     annotatedAbsurdClauses,
-    missingValidClauses: [],
-    missingAbsurdClauses: [],
+    missingValidClauses,
+    missingAbsurdClauses,
   }
 }
 
@@ -354,8 +348,7 @@ function* uncoveredPatternsInCaseTree(caseTree: CaseTree, definitions: Definitio
     }
     return
   } else if (caseTree.tag === 'Uncovered') {
-    debugger
-    return
+    yield { patterns: [{ tag: 'PWild', name: '_' }] }
   } else if (caseTree.tag === 'Absurd') {
     debugger
     return
