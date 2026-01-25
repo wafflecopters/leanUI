@@ -613,14 +613,39 @@ function TotalityResultView({ result }: { result: TotalityResult }): JSX.Element
   );
 }
 
+// Helper to collect labels from the first N NoSplit nodes, returning [labels, remainingTree]
+function collectNoSplitLabels(tree: CaseTree, count: number): [string[], CaseTree] {
+  const labels: string[] = [];
+  let current = tree;
+  for (let i = 0; i < count; i++) {
+    if (current.tag === 'NoSplit') {
+      labels.push(current.debugLabel);
+      current = current.branch;
+    } else {
+      // If we hit something other than NoSplit, fill remaining with '_'
+      labels.push('_');
+    }
+  }
+  return [labels, current];
+}
+
 function caseTreeRows(tree: CaseTree): JSX.Element[] {
   if (tree.tag === 'Split') {
-    return Array.from(tree.branches.entries()).map(([ctorName, subTree]) => (
-      <tr key={ctorName}>
-        <td><span style={caseTreeStyles.ctorName}>{ctorName}</span></td>
-        <td>{caseTreeRows(subTree)}</td>
-      </tr>
-    ));
+    return Array.from(tree.branches.entries()).map(([ctorName, subTree]) => {
+      const arity = tree.ctorArities.get(ctorName) ?? 0;
+      // Collect argument labels from child NoSplit nodes
+      const [argLabels, remainingTree] = collectNoSplitLabels(subTree, arity);
+      // Render constructor with its arguments: (Succ a) for arity 1, (VCons h t) for arity 2, etc.
+      const ctorDisplay = arity === 0
+        ? ctorName
+        : `(${ctorName} ${argLabels.join(' ')})`;
+      return (
+        <tr key={ctorName}>
+          <td><span style={caseTreeStyles.ctorName}>{ctorDisplay}</span></td>
+          <td>{caseTreeRows(remainingTree)}</td>
+        </tr>
+      );
+    });
   } else if (tree.tag === 'NoSplit') {
     return [
       <tr key={tree.debugLabel}>

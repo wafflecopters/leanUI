@@ -35,7 +35,7 @@ export function setTotalityLoggingEnabled(enabled: boolean): void {
  */
 export type CaseTree =
   | { tag: 'Leaf'; clauseIndex: number }
-  | { tag: 'Split'; typeName: string; branches: Map<string, CaseTree>, remainingPatternsAfterContructorCount: number, missingCtorArities: Map<string, number> }
+  | { tag: 'Split'; typeName: string; branches: Map<string, CaseTree>, remainingPatternsAfterContructorCount: number, ctorArities: Map<string, number>, missingCtors: Set<string> }
   | { tag: 'Uncovered' }
   | { tag: 'Absurd' }
   | { tag: 'NoSplit'; branch: CaseTree, debugLabel: string };
@@ -207,7 +207,8 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
       const newBranches = new Map<string, CaseTree>();
       let didUpdateBranch = false
 
-      for (const [ctorName, arity] of caseTree.missingCtorArities.entries()) {
+      for (const ctorName of caseTree.missingCtors) {
+        const arity = caseTree.ctorArities.get(ctorName)!;
         const patternArgs = Array(arity).fill({ tag: 'PWild', name: '_' })
         const allPatterns = [...patternArgs, ...remainingPatterns]
         const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, definitions)
@@ -228,7 +229,8 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         typeName: caseTree.typeName,
         branches: newBranches,
         remainingPatternsAfterContructorCount: caseTree.remainingPatternsAfterContructorCount,
-        missingCtorArities: new Map()
+        ctorArities: caseTree.ctorArities,
+        missingCtors: new Set()
       };
     } else if (caseTree.tag === 'Leaf') {
       return undefined;
@@ -257,14 +259,16 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         branch
       );
 
-      const missingCtorArities = new Map<string, number>();
+      const ctorArities = new Map<string, number>();
+      const missingCtors = new Set<string>();
       for (const ctor of definitions.inductiveTypes.get(typeName)!.constructors) {
+        ctorArities.set(ctor.name, countPiBinders(ctor.type));
         if (ctor.name !== pattern.name) {
-          missingCtorArities.set(ctor.name, countPiBinders(ctor.type));
+          missingCtors.add(ctor.name);
         }
       }
 
-      return { tag: 'Split', typeName, branches, remainingPatternsAfterContructorCount, missingCtorArities };
+      return { tag: 'Split', typeName, branches, remainingPatternsAfterContructorCount, ctorArities, missingCtors };
     } else if (caseTree.tag === 'Split') {
       const ctorTree = caseTree.branches.get(pattern.name);
       if (ctorTree) {
@@ -274,10 +278,10 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
           return undefined;
         }
         const newBranches = new Map<string, CaseTree>(caseTree.branches);
-        const missingCtorArities = new Map<string, number>(caseTree.missingCtorArities);
-        missingCtorArities.delete(pattern.name);
+        const missingCtors = new Set<string>(caseTree.missingCtors);
+        missingCtors.delete(pattern.name);
         newBranches.set(pattern.name, branch);
-        return { tag: 'Split', typeName, branches: newBranches, remainingPatternsAfterContructorCount, missingCtorArities };
+        return { tag: 'Split', typeName, branches: newBranches, remainingPatternsAfterContructorCount, ctorArities: caseTree.ctorArities, missingCtors };
       } else {
         const newBranches = new Map<string, CaseTree>(caseTree.branches);
         const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, definitions)
@@ -291,15 +295,17 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
           branch
         );
 
-        const missingCtorArities = new Map<string, number>(caseTree.missingCtorArities);
-        missingCtorArities.delete(pattern.name);
-        return { tag: 'Split', typeName, branches: newBranches, remainingPatternsAfterContructorCount, missingCtorArities };
+        const missingCtors = new Set<string>(caseTree.missingCtors);
+        missingCtors.delete(pattern.name);
+        return { tag: 'Split', typeName, branches: newBranches, remainingPatternsAfterContructorCount, ctorArities: caseTree.ctorArities, missingCtors };
       }
     } else if (caseTree.tag === 'NoSplit') {
       const branches = new Map<string, CaseTree>();
+      const ctorArities = new Map<string, number>();
       for (const ctor of definitions.inductiveTypes.get(typeName)!.constructors) {
+        const arity = countPiBinders(ctor.type);
+        ctorArities.set(ctor.name, arity);
         if (ctor.name !== pattern.name) {
-          const arity = countPiBinders(ctor.type)
           let branch = caseTree.branch
           for (let i = 0; i < arity; i++) {
             branch = { tag: 'NoSplit', debugLabel: `_::${i}`, branch }
@@ -321,7 +327,8 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         typeName,
         branches,
         remainingPatternsAfterContructorCount,
-        missingCtorArities: new Map(),
+        ctorArities,
+        missingCtors: new Set(),
       }
     } else {
       debugger
@@ -336,15 +343,15 @@ function* uncoveredPatternsInCaseTree(caseTree: CaseTree, definitions: Definitio
   if (caseTree.tag === 'Leaf') {
     return
   } else if (caseTree.tag === 'Split') {
-    const inductiveDefinition = definitions.inductiveTypes.get(caseTree.typeName);
     for (const [ctorName, branch] of caseTree.branches) {
       for (const tail of uncoveredPatternsInCaseTree(branch, definitions)) {
-        const ctorArity = countPiBinders(inductiveDefinition?.constructors.find(ctor => ctor.name === ctorName)!.type!)
+        const ctorArity = caseTree.ctorArities.get(ctorName)!;
         yield { patterns: [{ tag: 'PCtor', name: ctorName, args: tail.patterns.slice(0, ctorArity) }, ...tail.patterns.slice(ctorArity)] }
       }
-      for (const [ctorName, arity] of caseTree.missingCtorArities) {
-        yield { patterns: [{ tag: 'PCtor', name: ctorName, args: Array(arity).fill({ tag: 'PWild', name: '_' }) }] }
-      }
+    }
+    for (const ctorName of caseTree.missingCtors) {
+      const arity = caseTree.ctorArities.get(ctorName)!;
+      yield { patterns: [{ tag: 'PCtor', name: ctorName, args: Array(arity).fill({ tag: 'PWild', name: '_' }) }] }
     }
     return
   } else if (caseTree.tag === 'Uncovered') {

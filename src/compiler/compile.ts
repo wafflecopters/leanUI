@@ -2164,6 +2164,107 @@ function tryCaseSplitsInSearchOfAbsurdity(
     return allConstructorsFail;
   };
 
+  // Helper to replace pattern at a path within the pattern list
+  const replacePatternAtPath = (
+    pats: TTKPattern[],
+    path: number[],
+    newPattern: TTKPattern
+  ): TTKPattern[] => {
+    if (path.length === 0) return pats;
+
+    const [first, ...rest] = path;
+    return pats.map((p, i) => {
+      if (i !== first) return p;
+      if (rest.length === 0) return newPattern;
+
+      // Recurse into PCtor args
+      if (p.tag === 'PCtor') {
+        return { ...p, args: replacePatternAtPath(p.args, rest, newPattern) };
+      }
+      return p;
+    });
+  };
+
+  // Helper to try splitting at a path within a constructor pattern
+  // path = [topPos, arg1, arg2, ...] represents patterns[topPos].args[arg1].args[arg2]...
+  const trySplitAtPath = (path: number[], argType: TTKTerm): boolean => {
+    const typeName = extractInductiveTypeName(argType, definitions);
+    if (!typeName) return false;
+
+    const inductiveDef = definitions.inductiveTypes.get(typeName);
+    if (!inductiveDef) return false;
+
+    // A type with zero constructors is uninhabited - absurd
+    if (inductiveDef.constructors.length === 0) {
+      return true;
+    }
+
+    let allConstructorsFail = true;
+    for (const ctor of inductiveDef.constructors) {
+      const ctorArity = countPiBinders(ctor.type);
+      const ctorPattern: TTKPattern = {
+        tag: 'PCtor',
+        name: ctor.name,
+        args: Array(ctorArity).fill(null).map(() => ({ tag: 'PWild' as const, name: '_' }))
+      };
+
+      // Build padded patterns first
+      const paddedPatterns: TTKPattern[] = [];
+      for (let j = 0; j < expectedArgCount; j++) {
+        if (j < patterns.length) {
+          paddedPatterns.push(patterns[j]);
+        } else {
+          paddedPatterns.push({ tag: 'PWild', name: '_' });
+        }
+      }
+
+      // Replace the pattern at the given path
+      const newPatterns = replacePatternAtPath(paddedPatterns, path, ctorPattern);
+
+      const newEnv = env.withValue(newPatterns);
+      if (!arePatternsAbsurd(termName, newEnv, type)) {
+        allConstructorsFail = false;
+        break;
+      }
+    }
+
+    return allConstructorsFail;
+  };
+
+  // Collect all wildcard paths and their types from constructor patterns
+  // Returns array of { path, ctorName, argIndex }
+  const collectWildcardPaths = (
+    pattern: TTKPattern,
+    basePath: number[]
+  ): { path: number[], ctorName: string, argIndex: number }[] => {
+    const results: { path: number[], ctorName: string, argIndex: number }[] = [];
+
+    if (pattern.tag === 'PCtor') {
+      for (let i = 0; i < pattern.args.length; i++) {
+        const arg = pattern.args[i];
+        const argPath = [...basePath, i];
+
+        if (arg.tag === 'PWild' || arg.tag === 'PVar') {
+          results.push({ path: argPath, ctorName: pattern.name, argIndex: i });
+        } else if (arg.tag === 'PCtor') {
+          results.push(...collectWildcardPaths(arg, argPath));
+        }
+      }
+    }
+
+    return results;
+  };
+
+  // Helper to get constructor type from definitions
+  const getConstructorType = (ctorName: string): TTKTerm | undefined => {
+    const inductiveName = definitions.inductiveNameOfConstructor.get(ctorName);
+    if (!inductiveName) return undefined;
+    const inductiveDef = definitions.inductiveTypes.get(inductiveName);
+    if (!inductiveDef) return undefined;
+    const ctor = inductiveDef.constructors.find(c => c.name === ctorName);
+    return ctor?.type;
+  };
+
   // Try splitting on existing wildcard positions (PVar or PWild)
   for (let pos = 0; pos < patterns.length; pos++) {
     const pattern = patterns[pos];
@@ -2178,6 +2279,27 @@ function tryCaseSplitsInSearchOfAbsurdity(
   for (let pos = patterns.length; pos < expectedArgCount; pos++) {
     if (trySplitAtPosition(pos)) {
       return true;
+    }
+  }
+
+  // Try splitting on wildcards nested inside constructor patterns
+  for (let pos = 0; pos < patterns.length; pos++) {
+    const pattern = patterns[pos];
+    if (pattern.tag === 'PCtor') {
+      const wildcardPaths = collectWildcardPaths(pattern, [pos]);
+
+      for (const { path, ctorName, argIndex } of wildcardPaths) {
+        // Get the constructor's type to find the arg type at argIndex
+        const ctorType = getConstructorType(ctorName);
+        if (!ctorType) continue;
+
+        const argType = getNthPiArgType(ctorType, argIndex);
+        if (!argType) continue;
+
+        if (trySplitAtPath(path, argType)) {
+          return true;
+        }
+      }
     }
   }
 
@@ -2414,6 +2536,35 @@ function checkTermValue(
   // Run totality checking (builds case tree and checks coverage)
   const totalityResult = checkTotality(name ?? '???', checkedClauses, termEnv.definitions, absurdityChecker);
 
+  // Helper to format missing patterns with padding and named args
+  const formatMissingPatterns = (patterns: TTKPattern[]): string => {
+    const expectedArgCount = countPiBinders(type);
+
+    // Pad patterns with wildcards if needed
+    const paddedPatterns = [...patterns];
+    while (paddedPatterns.length < expectedArgCount) {
+      paddedPatterns.push({ tag: 'PWild', name: '_' });
+    }
+
+    // Build position -> name map from namedArgMap (which is name -> position)
+    const positionToName = new Map<number, string>();
+    if (namedArgMap) {
+      for (const [argName, position] of namedArgMap) {
+        positionToName.set(position, argName);
+      }
+    }
+
+    // Format each pattern, using named arg syntax for named positions
+    return paddedPatterns.map((p, i) => {
+      const argName = positionToName.get(i);
+      const patternStr = prettyPrintPattern(p);
+      if (argName) {
+        return `{${argName}:=${patternStr}}`;
+      }
+      return patternStr;
+    }).join(' ');
+  };
+
   // Convert totality issues to errors
   const totalityErrors: TCEnvError[] = [];
   for (const { clauseIndex, patterns } of totalityResult.unreachableClauses) {
@@ -2422,8 +2573,9 @@ function checkTermValue(
     )));
   }
   if (!totalityResult.isExhaustive) {
+    const formattedClauses = totalityResult.missingValidClauses.map(c => formatMissingPatterns(c.patterns)).join('\n');
     totalityErrors.push(TCEnvError.create(`Function ${name ? `${name} ` : ''}is non-total. Missing clause${totalityResult.missingValidClauses.length === 1 ? '' : 's'
-      }:\n${prettyPrintPatternList(totalityResult.missingValidClauses.map(c => c.patterns).flat())}`, termEnv));
+      }:\n${formattedClauses}`, termEnv));
   }
 
   // Add annotatedAbsurdClauses to the totality result
