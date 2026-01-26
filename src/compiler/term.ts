@@ -865,41 +865,6 @@ export class TCEnv<T> {
         // This is a level meta - solve it directly
         env = env.solveLevelMeta(metaConstraint.meta, metaConstraint.rhs);
       } else {
-        // For term metas, also unify the meta's type with the RHS's type
-        // This generates level constraints when e.g. ?m : Type u is solved to a : Type 0
-        if (metaVar && metaConstraint.rhs.tag === 'Var') {
-          const varIndex = metaConstraint.rhs.index;
-          const ctxIndex = env.context.length - 1 - varIndex;
-          const rhsTypeRaw = env.context[ctxIndex]?.type;
-          if (rhsTypeRaw) {
-            // The type stored in context uses de Bruijn indices relative to when it was added.
-            // When an entry is stored at ctxIndex, the context had ctxIndex entries (0..ctxIndex-1).
-            // Now there are env.context.length entries, so shift by the difference.
-            // Example: A stored at ctxIndex=1 with type "Type (Var 0)" (u is Var 0)
-            // Now context.length=3, so u is Var 2. Shift = 3 - 1 = 2.
-            const shiftAmount = env.context.length - ctxIndex;
-            const rhsType = shiftAmount > 0 ? shiftTerm(rhsTypeRaw, shiftAmount, 0) : rhsTypeRaw;
-
-            // Unify type(?m) with type(rhs) to generate level constraints
-            const typeUnifyResult = unifyTerms(metaVar.type, rhsType, {
-              mode: 'check',
-              definitions: env.definitions,
-            });
-            if (typeUnifyResult.success) {
-              // Apply any level constraints from type unification
-              for (const levelConstraint of typeUnifyResult.levelConstraints) {
-                env = env.solveLevelMeta(levelConstraint.lmvar, levelConstraint.rhs);
-              }
-              for (const mc of typeUnifyResult.metaConstraints) {
-                const mcMeta = env.metaVars.get(mc.meta);
-                const mcIsLevel = env.levelMetas.has(mc.meta) || (mcMeta?.type.tag === 'ULevel');
-                if (mcIsLevel) {
-                  env = env.solveLevelMeta(mc.meta, mc.rhs);
-                }
-              }
-            }
-          }
-        }
         // Just add the constraint - conflict detection happens during solving
         env = env.withConstraint(metaConstraint);
       }

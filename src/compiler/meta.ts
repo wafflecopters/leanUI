@@ -1,92 +1,5 @@
 import { TTKTerm, levelsEqual } from "./kernel";
-import { Constraint, MetaVar, TTKContext, TCEnv } from "./term";
-
-/**
- * Get the type of a Var term from the context.
- */
-function getVarTypeFromContext(varIndex: number, ctx: TTKContext): TTKTerm | undefined {
-  // de Bruijn index: 0 is most recent binding
-  // Context is stored with most recent at the END
-  const ctxIndex = ctx.length - 1 - varIndex;
-  if (ctxIndex >= 0 && ctxIndex < ctx.length) {
-    return ctx[ctxIndex].type;
-  }
-  return undefined;
-}
-
-/**
- * Check if a level term contains only concrete values (ULit, or USucc/UMax applied to concrete values).
- */
-function levelIsConcrete(level: TTKTerm): boolean {
-  switch (level.tag) {
-    case 'ULit':
-    case 'UOmega':
-      return true;
-    case 'App':
-      // Check if this is USucc or UMax applied to concrete levels
-      if (level.fn.tag === 'Const') {
-        return levelIsConcrete(level.arg);
-      }
-      if (level.fn.tag === 'App') {
-        // Binary operation like UMax
-        return levelIsConcrete(level.fn) && levelIsConcrete(level.arg);
-      }
-      return false;
-    default:
-      return false;
-  }
-}
-
-/**
- * Check if a level term contains a Var (is polymorphic).
- */
-function levelContainsVar(level: TTKTerm): boolean {
-  switch (level.tag) {
-    case 'Var':
-      return true;
-    case 'ULit':
-    case 'UOmega':
-    case 'Meta':
-    case 'Const':
-      return false;
-    case 'App':
-      return levelContainsVar(level.fn) || levelContainsVar(level.arg);
-    default:
-      return false;
-  }
-}
-
-/**
- * Check if two types are compatible for constraint solving.
- * This is specifically checking that when we solve ?M = t, the type of t
- * is compatible with the expected type of ?M.
- *
- * Returns true if compatible, false if definitely incompatible.
- *
- * This is a conservative check that only fails for clear incompatibilities:
- * - Type 0 (concrete) vs Type u (polymorphic) - concrete level vs polymorphic level
- */
-function areTypesCompatibleForConstraint(metaType: TTKTerm, rhsType: TTKTerm): boolean {
-  // If both are Sort (Type/universe), check for definite incompatibility
-  if (metaType.tag === 'Sort' && rhsType.tag === 'Sort') {
-    const metaLevel = metaType.level;
-    const rhsLevel = rhsType.level;
-
-    // One is concrete (like 0 or Succ(0)), the other contains a Var (like u or Succ(u))
-    // This is incompatible: we can't unify a concrete level with a polymorphic one
-    const metaConcrete = levelIsConcrete(metaLevel);
-    const rhsContainsVar = levelContainsVar(rhsLevel);
-    const rhsConcrete = levelIsConcrete(rhsLevel);
-    const metaContainsVar = levelContainsVar(metaLevel);
-
-    if ((metaConcrete && rhsContainsVar) || (rhsConcrete && metaContainsVar)) {
-      return false;
-    }
-  }
-
-  // For other cases, be conservative and allow (might be compatible)
-  return true;
-}
+import { Constraint, MetaVar, TTKContext } from "./term";
 
 /**
  * Checks if two terms are DEFINITELY incompatible (cannot possibly be unified).
@@ -126,6 +39,113 @@ function getHead(term: TTKTerm): TTKTerm {
   return term;
 }
 
+/**
+ * Check if a level contains a bound level variable (de Bruijn Var).
+ * Returns true if the level contains any Var (bound level variable).
+ */
+function levelContainsBoundVar(level: TTKTerm): boolean {
+  switch (level.tag) {
+    case 'ULit':
+    case 'UOmega':
+    case 'ULevel':
+    case 'Const':
+    case 'Meta':
+    case 'Hole':
+      return false;
+    case 'Var':
+      return true;
+    case 'App':
+      return levelContainsBoundVar(level.fn) || levelContainsBoundVar(level.arg);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Check if a level contains a solvable meta or hole.
+ * Returns true if the level contains any Meta or Hole (which can be solved).
+ */
+function levelContainsMeta(level: TTKTerm): boolean {
+  switch (level.tag) {
+    case 'ULit':
+    case 'UOmega':
+    case 'ULevel':
+    case 'Const':
+    case 'Var':
+      return false;
+    case 'Meta':
+    case 'Hole':
+      return true;
+    case 'App':
+      return levelContainsMeta(level.fn) || levelContainsMeta(level.arg);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Check type compatibility when solving a constraint ?m = t.
+ *
+ * When the meta has type Sort(l1) and the rhs has type Sort(l2),
+ * we need to ensure the levels are compatible:
+ * - If meta's level is concrete (no metas) and rhs's level has a bound Var, REJECT
+ * - If meta's level has a solvable meta, it can be unified with any level
+ *
+ * This catches the case where an inductive has {A : Type} but a constructor
+ * has {A : Type u} with u being a bound level variable - these are incompatible.
+ *
+ * Returns null if types are compatible, or an error message if not.
+ */
+function checkTypeCompatibility(
+  metaType: TTKTerm,
+  rhsType: TTKTerm
+): string | null {
+  // Both must be Sorts for this check to apply
+  if (metaType.tag !== 'Sort' || rhsType.tag !== 'Sort') {
+    return null;  // Not a Sort type mismatch - let other checks handle it
+  }
+
+  const metaLevel = metaType.level;
+  const rhsLevel = rhsType.level;
+
+  // If levels are equal, types are compatible
+  if (levelsEqual(metaLevel, rhsLevel)) {
+    return null;
+  }
+
+  // If meta's level contains a solvable meta/hole, it can be unified with anything
+  // The level unification will handle ensuring consistency
+  if (levelContainsMeta(metaLevel)) {
+    return null;
+  }
+
+  // If meta's level contains a bound var, be permissive
+  // The bound vars might refer to the same binding with different de Bruijn indices
+  // due to context depth differences
+  if (levelContainsBoundVar(metaLevel)) {
+    return null;
+  }
+
+  // Meta's level is concrete (no metas, no bound vars)
+  // If rhs's level has a bound Var, they're incompatible:
+  // the concrete level cannot be unified with a bound level variable
+  if (levelContainsBoundVar(rhsLevel)) {
+    return `type level mismatch: expected concrete level but got bound level variable`;
+  }
+
+  // Both levels are fully concrete but different
+  return `type level mismatch: different concrete levels`;
+}
+
+/**
+ * Get the type of a variable from the context.
+ * Returns undefined if the index is out of bounds.
+ */
+function getVarTypeFromContext(ctx: TTKContext, varIndex: number): TTKTerm | undefined {
+  const binding = ctx[ctx.length - 1 - varIndex];
+  return binding?.type;
+}
+
 export function solveConstraints(
   metaVars: Map<string, MetaVar>,
   constraints: Constraint[],
@@ -160,12 +180,16 @@ export function solveConstraints(
     // that weren't in scope when the meta was created, but are in the current context.
     const effectiveContext = liftContext ?? meta.ctx;
     if (canSolveMetaInContext(constraint.rhs, effectiveContext.length)) {
-      // Type compatibility check: if RHS is a Var, verify its type matches meta's expected type
-      // This catches cases like Type 0 vs Type u (concrete level vs polymorphic level)
+      // Type compatibility check: if rhs is a Var, check that its type is compatible
+      // with the meta's type. This catches cases where an inductive has {A : Type}
+      // but a constructor has {A : Type u} with a bound level variable.
       if (constraint.rhs.tag === 'Var') {
-        const rhsType = getVarTypeFromContext(constraint.rhs.index, constraint.ctx);
-        if (rhsType && !areTypesCompatibleForConstraint(meta.type, rhsType)) {
-          throw new Error(`Type mismatch for meta ${constraint.meta}: expected type and actual type are incompatible`);
+        const rhsType = getVarTypeFromContext(constraint.ctx, constraint.rhs.index);
+        if (rhsType) {
+          const typeError = checkTypeCompatibility(meta.type, rhsType);
+          if (typeError) {
+            throw new Error(`Type mismatch for meta ${constraint.meta}: ${typeError}`);
+          }
         }
       }
       newMetaVars.set(constraint.meta, { ...meta, solution: constraint.rhs, ctx: effectiveContext });
