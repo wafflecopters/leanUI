@@ -1427,8 +1427,10 @@ function checkTermDeclaration(
             ]
           };
         }
-        const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, solvedResult.value);
-        return { success: true, definitions: resultEnv.definitions, checkedValue: solvedResult.value };
+        // Zonk the value to substitute solved metas with their solutions
+        const zonkedValue = solvedResult.zonkTerm(solvedResult.value);
+        const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, zonkedValue);
+        return { success: true, definitions: resultEnv.definitions, checkedValue: zonkedValue };
       } catch (e) {
         if (e instanceof TCEnvError) {
           return { success: false, errors: [e] };

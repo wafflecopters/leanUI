@@ -796,14 +796,19 @@ export class TCEnv<T> {
           fn: this.zonkTermHelper(term.fn),
           arg: this.zonkTermHelper(term.arg)
         };
-      case 'Binder':
+      case 'Binder': {
+        // Need to zonk the defVal if this is a BLet binder
+        const zonkedBinderKind = term.binderKind.tag === 'BLet'
+          ? { tag: 'BLet' as const, defVal: this.zonkTermHelper(term.binderKind.defVal) }
+          : term.binderKind;
         return {
           tag: 'Binder',
           name: term.name,
-          binderKind: term.binderKind,
+          binderKind: zonkedBinderKind,
           domain: this.zonkTermHelper(term.domain),
           body: this.zonkTermHelper(term.body)
         };
+      }
       case 'Annot':
         return {
           tag: 'Annot',
@@ -1026,7 +1031,8 @@ export class TCEnv<T> {
       this.valueStack,
       metaTerm,
       this.levelMetas,
-      this.options
+      this.options,
+      metaTerm  // Set elaboratedTerm to the Meta for consistency with other checkType results
     );
   }
 
@@ -1468,6 +1474,24 @@ export class TCEnv<T> {
   inBinderLambdaBody(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }>): TCEnv<TTKTerm> {
     return new TCEnv(
       [...this.context, { name: this.value.name, type: this.value.domain }],
+      this.definitions,
+      this.metaVars,
+      this.constraints,
+      [...this.indexPath, BinderPartSegment.Body],
+      [...this.valueStack, this.value],
+      this.value.body,
+      this.levelMetas,
+      this.options
+    );
+  }
+
+  /**
+   * Like inBinderLambdaBody, but uses the provided domain type for context extension.
+   * This is needed when the original domain is a Hole that was elaborated to a Meta.
+   */
+  inBinderLambdaBodyWithDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLam' } }>, domain: TTKTerm): TCEnv<TTKTerm> {
+    return new TCEnv(
+      [...this.context, { name: this.value.name, type: domain }],
       this.definitions,
       this.metaVars,
       this.constraints,

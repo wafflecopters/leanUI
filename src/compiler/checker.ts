@@ -158,20 +158,22 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     //   ─────────────────────────────
     //   Γ ⊢ λ x : A => t ⇒ Π x : A, B
     // ────────────────────────────────────────────────────────────────
-    // Note: This requires the lambda to have a domain annotation.
-    // If unannotated, we can't infer — must use checkType instead.
-    if (env.lambdaDomainIsHole()) {
-      throw TCEnvError.create('Cannot infer type of unannotated lambda', env);
-    }
+    // Note: If domain is a Hole (unannotated lambda), checkType will
+    // create a meta for it, which can be inferred from usage.
     const { env: env1, sort: domainSort } = env.typeSortFresh();
     const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderLambdaDomain(), domainSort);
-    const bodyEnv = inferType(domEnv.atValueAndPathOfEnv(env).inBinderLambdaBody());
-    // Build Π(x : A). B where A is the domain and B is the inferred body type
-    const piType = mkPi(env.value.domain, bodyEnv.value, env.value.name);
+
+    // Use elaborated domain (Meta if it was a Hole) for both context extension and Pi type
+    const elaboratedDomain = domEnv.elaboratedTerm ?? env.value.domain;
+
+    // Infer body type with context extended by the ELABORATED domain (not the original Hole)
+    const bodyEnv = inferType(domEnv.atValueAndPathOfEnv(env).inBinderLambdaBodyWithDomain(elaboratedDomain));
+
+    // Build Π(x : A). B where A is the elaborated domain and B is the inferred body type
+    const piType = mkPi(elaboratedDomain, bodyEnv.value, env.value.name);
     return bodyEnv.withValue(piType);
   }
 
-  debugger
   throw TCEnvError.create(`Inference not implemented for binder type ${env.value.binderKind.tag}`, env)
 }
 
