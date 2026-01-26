@@ -155,6 +155,28 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
 };
 
 /**
+ * Walk up a path trying to find a source range, either directly or via a mapper.
+ */
+function findRangeByWalkingPath(
+  path: IndexPath,
+  sourceMap: SourceMap,
+  mapper?: (pathStr: string) => string | undefined
+): SourceRange | null {
+  let currentPath = path;
+  while (currentPath.length >= 0) {
+    const pathStr = serializeIndexPath(currentPath);
+    const lookupKey = mapper ? mapper(pathStr) : pathStr;
+    if (lookupKey) {
+      const range = sourceMap.get(lookupKey);
+      if (range) return range;
+    }
+    if (currentPath.length === 0) break;
+    currentPath = currentPath.slice(0, -1);
+  }
+  return null;
+}
+
+/**
  * Map an error path to a source range using the elab and source maps.
  * Returns null if mapping fails.
  */
@@ -164,36 +186,19 @@ function mapErrorPathToSourceRange(
   sourceMap: SourceMap | undefined,
   _blockStartLine: number  // Note: unused - sourceMap already has absolute positions
 ): SourceRange | null {
-  if (!elabMap || !sourceMap) return null;
+  if (!sourceMap) return null;
 
-  const kernelPathStr = serializeIndexPath(errorPath);
+  // Try direct lookup in sourceMap (for elaboration errors where path is already a surface path)
+  const directRange = findRangeByWalkingPath(errorPath, sourceMap);
+  if (directRange) return directRange;
 
-  // Look up the surface path via elabMap
-  const surfacePathStr = elabMap.get(kernelPathStr);
-  if (!surfacePathStr) {
-    // Try progressively shorter paths (walk up the tree)
-    let currentPath = errorPath;
-    while (currentPath.length > 0) {
-      currentPath = currentPath.slice(0, -1);
-      const shorterPathStr = serializeIndexPath(currentPath);
-      const shorterSurfacePath = elabMap.get(shorterPathStr);
-      if (shorterSurfacePath) {
-        const range = sourceMap.get(shorterSurfacePath);
-        if (range) {
-          // sourceMap already has absolute positions (adjusted in compile.ts)
-          return range;
-        }
-      }
-    }
-    return null;
+  // Try kernel → surface mapping via elabMap
+  if (elabMap) {
+    const mappedRange = findRangeByWalkingPath(errorPath, sourceMap, p => elabMap.get(p));
+    if (mappedRange) return mappedRange;
   }
 
-  // Look up the source range via sourceMap
-  const range = sourceMap.get(surfacePathStr);
-  if (!range) return null;
-
-  // sourceMap already has absolute positions (adjusted in compile.ts)
-  return range;
+  return null;
 }
 
 /**
@@ -262,8 +267,8 @@ inductive Void : Type where
 
 absurd : {A : Type} -> Void -> A
 
-inductive Equal : {A : Type} -> A -> A -> Type where
-  refl : {A : Type} -> {a : A} -> Equal a a
+inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
+  refl : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal a a
 
 zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
 zeroNeqSucc refl = #absurd
@@ -312,8 +317,8 @@ trans refl refl = refl
 cong : {A B : Type} -> {u v : A} -> {f : A -> B} -> Equal u v -> Equal (f u) (f v)
 cong refl = refl
 
---replace : {A B : Type} -> {x y : A} -> {f : A -> B} -> Equal x y -> f x -> f y
---replace refl fx = fx
+replace : {x y : Type} -> {f : Type -> Type} -> Equal x y -> f x -> f y
+replace refl fx = fx
 `;
 
 // Styles
@@ -639,18 +644,28 @@ function caseTreeRows(tree: CaseTree): JSX.Element[] {
       const ctorDisplay = arity === 0
         ? ctorName
         : `(${ctorName} ${argLabels.join(' ')})`;
+      const childRows = caseTreeRows(remainingTree);
       return (
         <tr key={ctorName}>
           <td><span style={caseTreeStyles.ctorName}>{ctorDisplay}</span></td>
-          <td>{caseTreeRows(remainingTree)}</td>
+          <td>
+            {childRows.length > 0 && (
+              <table style={{ borderCollapse: 'collapse' }}><tbody>{childRows}</tbody></table>
+            )}
+          </td>
         </tr>
       );
     });
   } else if (tree.tag === 'NoSplit') {
+    const childRows = caseTreeRows(tree.branch);
     return [
       <tr key={tree.debugLabel}>
         <td><span style={caseTreeStyles.ctorName}>{tree.debugLabel}</span></td>
-        <td>{caseTreeRows(tree.branch)}</td>
+        <td>
+          {childRows.length > 0 && (
+            <table style={{ borderCollapse: 'collapse' }}><tbody>{childRows}</tbody></table>
+          )}
+        </td>
       </tr>
     ];
   } else if (tree.tag === 'Leaf') {
@@ -660,6 +675,11 @@ function caseTreeRows(tree: CaseTree): JSX.Element[] {
       </tr>
     ];
   } else if (tree.tag === 'Uncovered') {
+    return [
+      <tr key="uncovered">
+        <td><span style={caseTreeStyles.uncovered}>⚠ uncovered</span></td>
+      </tr>
+    ];
   }
 
   return [];
@@ -689,7 +709,7 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
   if (!block.nameResolutionSuccess) {
     blockHeaderContent = <span style={{ ...styles.blockBadge, ...styles.blockBadgeError }}>Name Error</span>;
     blockBodyContent = block.nameResolutionErrors.map((err, i) => (
-      <div key={i} style={styles.errorText}>{err}</div>
+      <div key={i} style={styles.errorText}>{err.message}</div>
     ));
   }
 
@@ -897,6 +917,44 @@ export function TextEditorPage() {
           endColumn: endCol,
           source: 'TT Parser',
         });
+      }
+
+      // Name resolution errors
+      for (const err of block.nameResolutionErrors) {
+        let sourceRange: SourceRange | null = null;
+
+        // Try to look up the source range using the path and declaration's sourceMap
+        if (err.path && err.declarationIndex !== undefined) {
+          const decl = block.declarations[err.declarationIndex];
+          if (decl?.sourceMap) {
+            // Name resolution path is already a surface path, look it up directly
+            sourceRange = decl.sourceMap.get(err.path) ?? null;
+          }
+        }
+
+        if (sourceRange) {
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: err.message,
+            startLineNumber: sourceRange.start.line,
+            startColumn: sourceRange.start.col,
+            endLineNumber: sourceRange.end.line,
+            endColumn: sourceRange.end.col,
+            source: 'TT Name Resolution',
+          });
+        } else {
+          // Fallback: mark the first line of the block
+          const firstLine = block.startLine;
+          markers.push({
+            severity: monaco.MarkerSeverity.Error,
+            message: err.message,
+            startLineNumber: firstLine,
+            startColumn: 1,
+            endLineNumber: firstLine,
+            endColumn: model.getLineContent(firstLine).length + 1,
+            source: 'TT Name Resolution',
+          });
+        }
       }
 
       // Type check errors from declarations

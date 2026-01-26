@@ -249,4 +249,97 @@ vecConcat _ _ _ (VCons _ _ h tail) v = VCons _ _ h (vecConcat _ _ _ tail v)`;
     }
     expect(vecConcatBlock!.checkSuccess).toBe(true);
   });
+
+  test('swap with polymorphic function - explicit implicits', () => {
+    // Test swap with a concrete instantiation of VCons
+    const source = `
+inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  | VNil : {A : Type} -> Vec A Zero
+  | VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+swap : {A : Type} -> {B : Type} -> {C : Type} -> (f : A -> B -> C) -> (B -> A -> C)
+swap f b a = f a b
+
+-- Use swap with concrete types (not polymorphic)
+testSwapVCons : Vec Nat Zero -> Nat -> Vec Nat (Succ Zero)
+testSwapVCons v a = swap (VCons {A := Nat} {n := Zero}) v a
+`;
+
+    const results = compileSource(source);
+
+    const testBlock = results.find(r => r.name === "testSwapVCons");
+    expect(testBlock).toBeDefined();
+
+    if (!testBlock!.checkSuccess) {
+      console.log("testSwapVCons errors:", testBlock!.checkErrors.map(e => e.message));
+    }
+    expect(testBlock!.checkSuccess).toBe(true);
+  });
+
+  test('replace (transport) function using Equal', () => {
+    // This tests dependent pattern matching on equality proofs.
+    // When we match on `refl`, we learn that x = y, so P x and P y become the same type.
+    // Note: P must be a TYPE family (A -> Type), not a term-level function (A -> B).
+    const source = `
+inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  | refl : {A : Type} -> {x : A} -> Equal x x
+
+-- transport/replace: given a proof that x = y, convert P x to P y
+replace : {A : Type} -> {P : A -> Type} -> {x y : A} -> Equal x y -> P x -> P y
+replace refl px = px
+`;
+
+    const results = compileSource(source);
+
+    const replaceBlock = results.find(r => r.name === "replace");
+    expect(replaceBlock).toBeDefined();
+
+    if (!replaceBlock!.checkSuccess) {
+      console.log("replace errors:", replaceBlock!.checkErrors.map(e => e.message));
+    }
+    expect(replaceBlock!.checkSuccess).toBe(true);
+  });
+
+  test('vecConcat using swap VCons - the original motivating example', () => {
+    // This is the EXACT example that kicked off the swap/vecConcat investigation.
+    // It uses swap to flip VCons arguments so the recursive call comes first.
+    const source = `
+inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  | VNil : {A : Type} -> Vec A Zero
+  | VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+swap : {A : Type} -> {B : Type} -> {C : Type} -> (f : A -> B -> C) -> (B -> A -> C)
+swap f b a = f a b
+
+vecConcat'' : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat'' VNil v = v
+vecConcat'' {a := Succ p} (VCons h tail) v = swap VCons (vecConcat'' {a := p} tail v) h
+`;
+
+    const results = compileSource(source);
+
+    const vecConcatBlock = results.find(r => r.name === "vecConcat''");
+    expect(vecConcatBlock).toBeDefined();
+
+    if (!vecConcatBlock!.checkSuccess) {
+      console.log("vecConcat'' errors:", vecConcatBlock!.checkErrors.map(e => e.message));
+    }
+    expect(vecConcatBlock!.checkSuccess).toBe(true);
+  });
 });

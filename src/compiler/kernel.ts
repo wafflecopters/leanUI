@@ -498,8 +498,10 @@ export const levelContainsParam = levelContainsVar;
 
 /**
  * Pretty print a level term.
+ * @param level - The level term to print
+ * @param context - Optional context for looking up variable names (index 0 = innermost binder)
  */
-export function prettyPrintLevel(level: TTKTerm): string {
+export function prettyPrintLevel(level: TTKTerm, context: string[] = []): string {
   // Try to get a concrete number first
   const num = levelToNumber(level);
   if (num !== undefined) {
@@ -513,6 +515,10 @@ export function prettyPrintLevel(level: TTKTerm): string {
     return 'ω';
   }
   if (level.tag === 'Var') {
+    // Look up the name from context if available
+    if (level.index < context.length) {
+      return context[level.index];
+    }
     return `#${level.index}`;
   }
   if (level.tag === 'Meta') {
@@ -521,17 +527,17 @@ export function prettyPrintLevel(level: TTKTerm): string {
 
   const succArg = matchUSucc(level);
   if (succArg !== undefined) {
-    return `(${prettyPrintLevel(succArg)} + 1)`;
+    return `(${prettyPrintLevel(succArg, context)} + 1)`;
   }
 
   const maxArgs = matchUMax(level);
   if (maxArgs !== undefined) {
-    return `max(${prettyPrintLevel(maxArgs[0])}, ${prettyPrintLevel(maxArgs[1])})`;
+    return `max(${prettyPrintLevel(maxArgs[0], context)}, ${prettyPrintLevel(maxArgs[1], context)})`;
   }
 
   const imaxArgs = matchUIMax(level);
   if (imaxArgs !== undefined) {
-    return `imax(${prettyPrintLevel(imaxArgs[0])}, ${prettyPrintLevel(imaxArgs[1])})`;
+    return `imax(${prettyPrintLevel(imaxArgs[0], context)}, ${prettyPrintLevel(imaxArgs[1], context)})`;
   }
 
   // Fallback for unknown level term structures
@@ -652,10 +658,10 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
           return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
         }
         // Non-numeric inner level (contains ω, variables, metas)
-        return `Type ${prettyPrintLevel(succArg)}`;
+        return `Type ${prettyPrintLevel(succArg, context)}`;
       }
       // Fallback for other level forms (shouldn't happen in well-formed terms)
-      return `Sort ${prettyPrintLevel(term.level)}`;
+      return `Sort ${prettyPrintLevel(term.level, context)}`;
     }
 
     case 'ULit':

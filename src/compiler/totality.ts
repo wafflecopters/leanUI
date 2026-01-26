@@ -13,8 +13,8 @@
  * 5. After building, walk tree to find Uncovered leaves and check absurdity
  */
 
-import { TTKPattern } from './kernel';
-import { countPiBinders, DefinitionsMap } from './term';
+import { TTKPattern, TTKTerm, prettyPrint as prettyPrintTTK } from './kernel';
+import { countPiBinders, DefinitionsMap, extractAppSpine } from './term';
 
 // ============================================================================
 // Logging
@@ -81,7 +81,7 @@ export function printCaseTree(tree: CaseTree, indent: number = 0): string {
       return lines.join('\n');
     }
     case 'NoSplit':
-      throw new Error('NoSplit case should not be present in the tree');
+      return `${pad}${tree.debugLabel}\n${printCaseTree(tree.branch, indent)}`;
   }
 }
 
@@ -92,9 +92,21 @@ export function printCaseTree(tree: CaseTree, indent: number = 0): string {
 
 let debugging = false
 
+/**
+ * A clause for totality checking.
+ * - patterns: structural patterns for coverage analysis
+ * - elabArgs: optional zonked elaborated args for case tree display
+ * - contextNames: optional context names for pretty-printing elabArgs
+ */
+export interface TotalityClause {
+  patterns: TTKPattern[];
+  elabArgs?: TTKTerm[];
+  contextNames?: string[];
+}
+
 export function checkTotality(
   _termName: string,
-  clauses: { patterns: TTKPattern[] }[],
+  clauses: TotalityClause[],
   definitions: DefinitionsMap,
   absurdityChecker: AbsurdityChecker
 ): TotalityResult {
@@ -161,7 +173,7 @@ function logCaseTree(caseTree: CaseTree): void {
   console.log(printCaseTreeAsString(caseTree, 0));
 }
 
-function caseTreeWithClauseAdded(caseTree: CaseTree, clauseIndex: number, clause: { patterns: TTKPattern[] }, definitions: DefinitionsMap): CaseTree | undefined {
+function caseTreeWithClauseAdded(caseTree: CaseTree, clauseIndex: number, clause: TotalityClause, definitions: DefinitionsMap): CaseTree | undefined {
   if (clause.patterns.length === 0) {
     debugger
     throw new Error('Zero-pattern clauses are not supported');
@@ -171,12 +183,32 @@ function caseTreeWithClauseAdded(caseTree: CaseTree, clauseIndex: number, clause
   //   debugger;
   // }
 
-  const _x = caseTreeWithPatternsAdded(caseTree, clauseIndex, clause.patterns, definitions);
+  const _x = caseTreeWithPatternsAdded(caseTree, clauseIndex, clause.patterns, clause.elabArgs, clause.contextNames, definitions);
 
   return _x;
 }
 
-function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patterns: TTKPattern[], definitions: DefinitionsMap): CaseTree | undefined {
+/**
+ * Pretty-print a TTKTerm for display in the case tree.
+ */
+function termToLabel(term: TTKTerm | undefined, contextNames: string[] | undefined, pattern: TTKPattern): string {
+  if (!term) {
+    return pattern.name;
+  }
+  const context = contextNames ? [...contextNames] : [];
+  return prettyPrintTTK(term, context);
+}
+
+/**
+ * Extract the arguments from an application spine (e.g., (Ctor arg1 arg2) -> [arg1, arg2])
+ */
+function extractElabArgsFromTerm(term: TTKTerm | undefined): TTKTerm[] | undefined {
+  if (!term) return undefined;
+  const { args } = extractAppSpine(term);
+  return args.length > 0 ? args : undefined;
+}
+
+function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patterns: TTKPattern[], elabArgs: TTKTerm[] | undefined, contextNames: string[] | undefined, definitions: DefinitionsMap): CaseTree | undefined {
   if (patterns.length === 0) {
     if (caseTree.tag === 'Uncovered') {
       return { tag: 'Leaf', clauseIndex };
@@ -187,20 +219,23 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
 
   const pattern = patterns[0];
   const remainingPatterns = patterns.slice(1);
+  const remainingElabArgs = elabArgs?.slice(1);
+  // Compute display label from elabArg if available, otherwise fall back to pattern name
+  const label = termToLabel(elabArgs?.[0], contextNames, pattern);
 
   if (pattern.tag === 'PWild' || pattern.tag === 'PVar') {
     if (caseTree.tag === 'Uncovered') {
-      const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, remainingPatterns, definitions)
+      const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, remainingPatterns, remainingElabArgs, contextNames, definitions)
       return branch ? {
         tag: 'NoSplit',
-        debugLabel: pattern.name,
+        debugLabel: label,
         branch
       } : undefined;
     } else if (caseTree.tag === 'NoSplit') {
-      const branch = caseTreeWithPatternsAdded(caseTree.branch, clauseIndex, patterns.slice(1), definitions)
+      const branch = caseTreeWithPatternsAdded(caseTree.branch, clauseIndex, patterns.slice(1), remainingElabArgs, contextNames, definitions)
       return branch ? {
         tag: 'NoSplit',
-        debugLabel: pattern.name,
+        debugLabel: label,
         branch
       } : undefined;
     } else if (caseTree.tag === 'Split') {
@@ -211,7 +246,7 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         const arity = caseTree.ctorArities.get(ctorName)!;
         const patternArgs = Array(arity).fill({ tag: 'PWild', name: '_' })
         const allPatterns = [...patternArgs, ...remainingPatterns]
-        const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, definitions)
+        const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, undefined, undefined, definitions)
         if (!branch) {
           throw new Error(`Failed to create branch for ${ctorName} with arity ${arity}`)
         }
@@ -219,7 +254,7 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
       }
 
       for (const [ctorName, branch] of caseTree.branches) {
-        const newBranch = caseTreeWithPatternsAdded(branch, clauseIndex, patterns, definitions)
+        const newBranch = caseTreeWithPatternsAdded(branch, clauseIndex, patterns, elabArgs, contextNames, definitions)
         newBranches.set(ctorName, newBranch ?? branch)
         didUpdateBranch ||= newBranch !== undefined
       }
@@ -244,10 +279,15 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
     }
 
     const allPatterns = [...pattern.args, ...remainingPatterns];
+    // For constructor patterns, extract the sub-elabArgs from the current elabArg's app spine
+    const ctorElabArgs = extractElabArgsFromTerm(elabArgs?.[0]);
+    const allElabArgs = ctorElabArgs && remainingElabArgs
+      ? [...ctorElabArgs, ...remainingElabArgs]
+      : ctorElabArgs || remainingElabArgs;
     const remainingPatternsAfterContructorCount = Math.max(0, allPatterns.length - pattern.args.length);
 
     if (caseTree.tag === 'Uncovered') {
-      const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, definitions)
+      const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, allElabArgs, contextNames, definitions)
 
       if (!branch) {
         return undefined;
@@ -273,7 +313,7 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
       const ctorTree = caseTree.branches.get(pattern.name);
       if (ctorTree) {
         const allPatterns = [...pattern.args, ...remainingPatterns]
-        const branch = caseTreeWithPatternsAdded(ctorTree, clauseIndex, allPatterns, definitions)
+        const branch = caseTreeWithPatternsAdded(ctorTree, clauseIndex, allPatterns, allElabArgs, contextNames, definitions)
         if (!branch) {
           return undefined;
         }
@@ -284,7 +324,7 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         return { tag: 'Split', typeName, branches: newBranches, remainingPatternsAfterContructorCount, ctorArities: caseTree.ctorArities, missingCtors };
       } else {
         const newBranches = new Map<string, CaseTree>(caseTree.branches);
-        const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, definitions)
+        const branch = caseTreeWithPatternsAdded({ tag: 'Uncovered' }, clauseIndex, allPatterns, allElabArgs, contextNames, definitions)
 
         if (!branch) {
           return undefined;
@@ -313,7 +353,7 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
           branches.set(ctor.name, branch)
         } else {
           const branch = caseTreeWithPatternsAdded(
-            caseTree.branch, clauseIndex, allPatterns, definitions
+            caseTree.branch, clauseIndex, allPatterns, allElabArgs, contextNames, definitions
           )
           if (!branch) {
             return undefined;

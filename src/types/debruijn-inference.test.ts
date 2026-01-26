@@ -162,14 +162,14 @@ wrongSwap A = \\f => \\(x: A) (y: A) => f x y
       expectSuccess(source);
     });
 
-    // TODO: This test exposes a real bug - rigid type variables A and B are being
-    // incorrectly unified. Skip until the unification bug is fixed.
-    test.skip('identity with wrong type annotation', () => {
+    test('identity with wrong type annotation', () => {
       const source = `
 wrongId : (A : Type) -> (B : Type) -> A -> B
 wrongId A B = \\(x: A) => x
 `;
-      expectError(source, 'Type error');
+      // Should fail because x : A cannot be returned as type B
+      // when A and B are different rigid type variables
+      expectError(source, 'expected B');
     });
   });
 

@@ -43,7 +43,13 @@ function substHelper(targetIndex: number, replacement: TTKTerm, term: TTKTerm, d
       }
       return term;
 
-    case 'Sort':
+    case 'Sort': {
+      // Now that levels are terms, we need to substitute inside the level too
+      const newLevel = substHelper(targetIndex, replacement, term.level, depth);
+      if (newLevel === term.level) return term;
+      return { tag: 'Sort', level: newLevel };
+    }
+
     case 'Const':
       return term;
 
@@ -120,7 +126,12 @@ function shift(amount: number, term: TTKTerm, cutoff: number): TTKTerm {
         ? { tag: 'Var', index: term.index + amount }
         : term;
 
-    case 'Sort':
+    case 'Sort': {
+      const newLevel = shift(amount, term.level, cutoff);
+      if (newLevel === term.level) return term;
+      return { tag: 'Sort', level: newLevel };
+    }
+
     case 'Const':
       return term;
 
@@ -225,7 +236,12 @@ function substPatternBindingsHelper(bindings: TTKTerm[], term: TTKTerm, depth: n
       return term;
     }
 
-    case 'Sort':
+    case 'Sort': {
+      const newLevel = substPatternBindingsHelper(bindings, term.level, depth);
+      if (newLevel === term.level) return term;
+      return { tag: 'Sort', level: newLevel };
+    }
+
     case 'Const':
       return term;
 
@@ -329,6 +345,8 @@ function freeVarIndicesHelper(term: TTKTerm, depth: number, indices: Set<number>
       }
       break;
     case 'Sort':
+      freeVarIndicesHelper(term.level, depth, indices);
+      break;
     case 'Const':
       break;
     case 'Binder':
@@ -370,6 +388,7 @@ function containsVarIndexHelper(term: TTKTerm, targetIndex: number, depth: numbe
     case 'Var':
       return term.index === targetIndex + depth;
     case 'Sort':
+      return containsVarIndexHelper(term.level, targetIndex, depth);
     case 'Const':
       return false;
     case 'Binder':
@@ -405,6 +424,8 @@ function minFreeVarIndexHelper(term: TTKTerm, depth: number): number {
       return term.index >= depth ? term.index - depth : Infinity;
 
     case 'Sort':
+      return minFreeVarIndexHelper(term.level, depth);
+
     case 'Const':
       return Infinity;
 
@@ -471,7 +492,12 @@ function replaceVarsHelper(mapping: Map<number, TTKTerm>, term: TTKTerm, depth: 
       return term;
     }
 
-    case 'Sort':
+    case 'Sort': {
+      const newLevel = replaceVarsHelper(mapping, term.level, depth);
+      if (newLevel === term.level) return term;
+      return { tag: 'Sort', level: newLevel };
+    }
+
     case 'Const':
       return term;
 
@@ -717,12 +743,14 @@ export function applySubstitutionToMetaVars(
  * @param mainSigLength - Length of the main signature BEFORE the substitution
  * @param varIndex - De Bruijn index (from tail) of variable being removed in main signature
  * @param value - The value to substitute (in main signature's context)
+ * @param options - Options for substitution behavior
  */
 export function applySubstitutionToConstraints(
   constraints: Constraint[],
   mainSigLength: number,
   varIndex: number,
-  value: TTKTerm
+  value: TTKTerm,
+  options?: { allowEscapingVars?: boolean }
 ): Constraint[] {
   return constraints.map(constraint => {
     const m = constraint.ctx.length;
@@ -749,14 +777,18 @@ export function applySubstitutionToConstraints(
       if (rhsNeedsValue || ctxNeedsValue) {
         // Check for escaping variables: value must not reference variables
         // outside the constraint's scope (indices < mainSigLength - m)
-        const minFreeVar = minFreeVarIndex(value);
-        const contextBoundary = mainSigLength - m;
-        if (minFreeVar < contextBoundary) {
-          throw new Error(
-            `Escaping variable in substitution for constraint (meta ${constraint.meta}): ` +
-            `value references Var(${minFreeVar}) but constraint context only has ` +
-            `variables with index >= ${contextBoundary}`
-          );
+        // In pattern matching, escaping is allowed because pattern variables
+        // from outer scopes are legitimately in scope.
+        if (!options?.allowEscapingVars) {
+          const minFreeVar = minFreeVarIndex(value);
+          const contextBoundary = mainSigLength - m;
+          if (minFreeVar < contextBoundary) {
+            throw new Error(
+              `Escaping variable in substitution for constraint (meta ${constraint.meta}): ` +
+              `value references Var(${minFreeVar}) but constraint context only has ` +
+              `variables with index >= ${contextBoundary}`
+            );
+          }
         }
       }
 

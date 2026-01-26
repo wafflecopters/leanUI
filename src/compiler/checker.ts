@@ -19,6 +19,14 @@ function getConstructorNamedArgMap(definitions: DefinitionsMap, ctorName: string
 }
 
 /**
+ * Get the namedArgMap for an inductive type itself.
+ */
+function getInductiveNamedArgMap(definitions: DefinitionsMap, typeName: string): NamedArgMap | undefined {
+  const inductive = definitions.inductiveTypes.get(typeName);
+  return inductive?.namedArgMap;
+}
+
+/**
  * Get a readable name for a function being applied.
  * Used to provide helpful error context like "while checking argument to 'Succ'".
  */
@@ -126,7 +134,19 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
       tag: 'Sort',
       level: resultLevel
     };
-    return bodyEnv.withValue(resultSort);
+
+    // Build elaborated Pi term if domain or body was elaborated (Holes->Metas)
+    // This allows zonking to substitute solved metas in the constructor type.
+    const elaboratedDomain = domEnv.elaboratedTerm ?? env.value.domain;
+    const elaboratedBody = bodyEnv.elaboratedTerm ?? env.value.body;
+    const elaboratedPi: TTKTerm = {
+      tag: 'Binder',
+      name: env.value.name,
+      binderKind: env.value.binderKind,
+      domain: elaboratedDomain,
+      body: elaboratedBody
+    };
+    return bodyEnv.withValue(resultSort).withElaboratedTerm(elaboratedPi);
   }
 
   if (env.isBinderLambdaTerm()) {
@@ -190,14 +210,26 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
   if (env.isAppTerm()) {
     // ────────────────────────────────────────────────────────────────
-    // (APP) - Application
+    // (APP) - Application with implicit argument insertion
     //
     //   Γ ⊢ f ⇒ Π x : A, B
+    //   (insert metas for implicit args if needed)
     //   Γ ⊢ e ⇐ A
     //   ─────────────────────────
     //   Γ ⊢ f e ⇒ B[x := e]
     // ────────────────────────────────────────────────────────────────
-    const fnTypeEnv = inferType(env.inAppFn()).ensurePi();
+
+    // NOTE: Implicit argument insertion is handled by elaboration (elab.ts).
+    // When a function has named parameters (namedArgMap), elaboration:
+    // 1. Reorders named arguments to their correct positions
+    // 2. Fills missing implicit positions with Holes
+    // The checker's job is to convert those Holes to Metas with proper types.
+    // We do NOT do implicit insertion here to avoid double-inserting.
+
+    // Infer function type
+    const fnInferredEnv = inferType(env.inAppFn());
+    let fnTypeEnv = fnInferredEnv.ensurePi();
+    let currentFnTerm = fnTypeEnv.elaboratedTerm ?? env.value.fn;
 
     // Check the argument against the expected domain type
     let argEnv: TCEnv<TTKTerm>;
@@ -238,12 +270,11 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
     // Result type is B[x := e] where B is the body and e is the argument
     // Use the ELABORATED argument for substitution (in case it was a Hole->Meta)
-    const elaboratedArg = argEnv.value;
+    const elaboratedArg = argEnv.elaboratedTerm ?? argEnv.value;
     const resultType = subst(0, elaboratedArg, fnTypeEnv.value.body);
 
-    // Construct the elaborated App with the elaborated function and argument
-    const elaboratedFn = fnTypeEnv.elaboratedTerm ?? env.value.fn;
-    const elaboratedApp: TTKTerm = { tag: 'App', fn: elaboratedFn, arg: elaboratedArg };
+    // Construct the elaborated App with the elaborated function (with implicits) and argument
+    const elaboratedApp: TTKTerm = { tag: 'App', fn: currentFnTerm, arg: elaboratedArg };
 
     return argEnv.withValue(resultType).withElaboratedTerm(elaboratedApp);
   }
@@ -369,30 +400,42 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   // Get namedArgMap from the term if it's a Const
   const namedArgMap = env.value.tag === 'Const'
     ? getTermDefinition(env.definitions, env.value.name)?.namedArgMap ??
-    getConstructorNamedArgMap(env.definitions, env.value.name)
+      getConstructorNamedArgMap(env.definitions, env.value.name) ??
+      getInductiveNamedArgMap(env.definitions, env.value.name)
     : undefined;
 
-  let argPosition = 0;
   while (true) {
     const inferredIsPi = inferredEnv.value.tag === 'Binder' && inferredEnv.value.binderKind.tag === 'BPi';
-    const expectedIsPi = expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi';
 
-    if (!inferredIsPi || expectedIsPi) {
-      // No more implicit insertion needed
+    if (!inferredIsPi) {
+      // Inferred type is not a Pi - stop
       break;
     }
 
-    // Check if this position is implicit (in the namedArgMap)
+    // Check if this binder is implicit (its name is in namedArgMap)
     const piBinder = inferredEnv.value as TTKTerm & { tag: 'Binder'; binderKind: { tag: 'BPi' } };
-    const isImplicit = namedArgMap && Array.from(namedArgMap.values()).includes(argPosition);
+    const binderName = piBinder.name;
+    const isImplicit = namedArgMap && namedArgMap.has(binderName);
 
     if (!isImplicit) {
-      // This is an explicit argument - don't auto-insert
+      // This is an explicit argument - stop inserting implicits
       break;
     }
 
     // Insert an implicit argument: create a meta for the domain type
-    const { env: envWithMeta, metaTerm } = inferredEnv.createMetaWithType(piBinder.domain);
+    // Special case: if domain is ULevel, create a level meta so it can participate
+    // in level unification when the level appears inside Sort terms.
+    let envWithMeta: typeof inferredEnv;
+    let metaTerm: TTKTerm;
+    if (piBinder.domain.tag === 'ULevel') {
+      const result = inferredEnv.freshLevelMeta();
+      envWithMeta = result.env;
+      metaTerm = result.level;
+    } else {
+      const result = inferredEnv.createMetaWithType(piBinder.domain);
+      envWithMeta = result.env;
+      metaTerm = result.metaTerm;
+    }
 
     // Apply the current term to the meta
     currentTerm = { tag: 'App', fn: currentTerm, arg: metaTerm };
@@ -400,7 +443,6 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     // New inferred type is the body with the meta substituted
     const newInferredType = subst(0, metaTerm, piBinder.body);
     inferredEnv = envWithMeta.withValue(newInferredType);
-    argPosition++;
   }
 
   // Now try to unify the inferred type with the expected type
@@ -411,7 +453,8 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   try {
     const unifiedEnv = inferredEnv.unifyTerms(inferredTypeWithLevels, expectedTypeWithLevels);
     // Return with the elaborated term (with implicit args inserted)
-    return unifiedEnv.withValue(currentTerm);
+    // Set both value and elaboratedTerm to currentTerm since it has all elaboration applied
+    return unifiedEnv.withValue(currentTerm).withElaboratedTerm(currentTerm);
   } catch (e) {
     if (e instanceof TCEnvError) {
       const termDesc = getTermDescription(env.value, env);
@@ -429,6 +472,19 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
         throw e.wrappedBy(
           `${termDesc} is missing required argument${count > 1 ? 's' : ''}: ${argList}. ` +
           `Expected ${expected} but got a function type.`
+        );
+      }
+
+      // Check if a term is being used where a type is expected
+      const expectedIsSort = expectedType.tag === 'Sort' ||
+        (expectedType.tag === 'Meta') ||  // Meta could be a Sort
+        (expectedType.tag === 'Hole');    // Hole could be a Sort
+      const inferredIsSort = inferredEnv.value.tag === 'Sort';
+
+      if (expectedIsSort && !inferredIsSort && expectedType.tag === 'Sort') {
+        throw e.wrappedBy(
+          `${termDesc} is a term of type ${inferredType}, but a type was expected here. ` +
+          `Only types (values of sort Type) can appear in type position.`
         );
       }
 

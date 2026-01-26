@@ -7,7 +7,7 @@
  * - LHS unification for match clauses
  */
 
-import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine } from './kernel';
+import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
 import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex } from './term';
 import { unifyTerms } from './unify';
@@ -34,6 +34,31 @@ function logInfo(fn: () => (string | unknown[])) {
       console.log(r);
     }
   }
+}
+
+// ============================================================================
+// Padding Wildcard Names
+// ============================================================================
+
+/**
+ * Counter for generating unique wildcard names during pattern padding.
+ * These wildcards are inserted for missing implicit/named constructor args.
+ */
+let paddingWildcardCounter = 0;
+
+/**
+ * Generate a fresh name for a padding wildcard.
+ * Uses a different prefix than elab.ts wildcards to distinguish them.
+ */
+function freshPaddingWildcardName(): string {
+  return `_pad${paddingWildcardCounter++}`;
+}
+
+/**
+ * Reset the padding wildcard counter (useful for testing).
+ */
+export function resetPaddingWildcardCounter(): void {
+  paddingWildcardCounter = 0;
 }
 
 // ============================================================================
@@ -331,7 +356,7 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
   // Fill remaining named positions with wildcards
   for (const pos of namedPositions) {
     if (paddedArgs[pos] === undefined) {
-      paddedArgs[pos] = { tag: 'PWild', name: '_' };
+      paddedArgs[pos] = { tag: 'PWild', name: freshPaddingWildcardName() };
     }
   }
 
@@ -343,7 +368,7 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
         paddedArgs[i] = padPCtorPatternWithNamedWildcards(pattern.args[positionalIndex], definitions);
       } else {
         // Missing positional pattern - this will be caught by arity check
-        paddedArgs[i] = { tag: 'PWild', name: '_' };
+        paddedArgs[i] = { tag: 'PWild', name: freshPaddingWildcardName() };
       }
       positionalIndex++;
     }
@@ -419,7 +444,7 @@ export function padPatternsForMissingNamedArgs(
   // Step 3: Insert leading wildcards for missing named params
   const leadingWildcards: TTKPattern[] = [];
   for (let i = 0; i < wildcardCountToInsert; i++) {
-    leadingWildcards.push({ tag: 'PWild', name: '_' });
+    leadingWildcards.push({ tag: 'PWild', name: freshPaddingWildcardName() });
   }
 
   return [...leadingWildcards, ...paddedConstructorPatterns];
@@ -732,7 +757,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   assertDefined(nextCheckTypeEntry, 'No next check type')
 
   const checkType = checkTypeEntry.type
-  const nextCheckType = nextCheckTypeEntry.type
+  let nextCheckType = nextCheckTypeEntry.type
 
   logInfo(() => `  Pop T -> ${prettyPrintInTTKContext(checkType, workEnv.context.slice(0, checkTypeEntry.ctxLength))}`)
   logInfo(() => `  Peek T -> ${prettyPrintInTTKContext(nextCheckType, workEnv.context.slice(0, nextCheckTypeEntry.ctxLength))}`)
@@ -767,10 +792,31 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     )
   }
 
-  if (unifyResult.metaConstraints.length > 0) {
-    debugger
-    throw new Error('Meta constraints should not be emitted in clause lhs elaboration')
+  // Handle meta constraints from hole inference (implicit argument instantiation)
+  // Constraints with IDs like "hole:_implicit0" tell us how to fill in implicit args
+  for (const mc of unifyResult.metaConstraints) {
+    if (mc.meta.startsWith('hole:')) {
+      const holeId = mc.meta.slice(5); // Remove "hole:" prefix
+      // Fill the hole in check stack entries
+      for (const entry of checkStack) {
+        entry.type = fillHole(entry.type, holeId, mc.rhs);
+      }
+      // Fill the hole in elab stack
+      for (let i = 0; i < elabStack.length; i++) {
+        elabStack[i] = fillHole(elabStack[i], holeId, mc.rhs);
+      }
+      // Fill the hole in the next check type (already popped but we still use its body)
+      nextCheckType = fillHole(nextCheckType, holeId, mc.rhs);
+      // Fill the hole in RHS
+      rhsContainer.rhsInLevels = fillHole(rhsContainer.rhsInLevels, holeId, mc.rhs);
+    } else {
+      // Non-hole meta constraints are unexpected in pattern elaboration
+      throw new Error(`Unexpected meta constraint in clause lhs elaboration: ${mc.meta}`)
+    }
   }
+
+  // Re-assert after fillHole mutations (fillHole preserves structure, so it's still a Pi)
+  assertIsPi(nextCheckType, 'Next check type must still be a Pi after hole filling')
 
   const elabHead = mkConst(pattern.name)
   let elabTerm = elabHead
@@ -1182,7 +1228,12 @@ export function checkMatchClause(
   // TTKContext has oldest at index 0 (appended), but we need most recent at index 0
   const contextNames = result.context.map(entry => entry.name).reverse();
 
-  // Return the checked clause with paddedPatterns and the solved RHS.
+  // Zonk the RHS and elabArgs to substitute solved metas with their solutions
+  // This is called "zonking" in GHC terminology - we apply all meta solutions
+  const zonkedRhs = solvedEnv.zonkTerm(solvedEnv.value);
+  const zonkedElabArgs = elabArgs.map(arg => solvedEnv.zonkTerm(arg));
+
+  // Return the checked clause with paddedPatterns and the zonked RHS.
   // NOTE: We use paddedPatterns (not elaborated patterns) because:
   // 1. Elaborated patterns can have different nesting depths due to forced values
   //    (e.g., (Succ ?x) vs (Succ (Succ y))) which causes shape misalignment
@@ -1190,8 +1241,8 @@ export function checkMatchClause(
   // 2. The elabArgs field preserves the elaborated terms for other uses
   const checkedClause: TTKClause = {
     patterns: paddedPatterns,
-    rhs: solvedEnv.value,
-    elabArgs,
+    rhs: zonkedRhs,
+    elabArgs: zonkedElabArgs,
     contextNames,
     metaVars: solvedEnv.metaVars
   };

@@ -360,19 +360,28 @@ triple a b = add {a} {b}`;
   });
 
   describe('Named Arguments with Inductive Types', () => {
-    test.skip('Inductive type with named parameters in constructor', () => {
-      // TODO: Named args in constructor applications need more work
+    test('Inductive type with named parameters in constructor', () => {
       const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
 inductive Vec : { A : Type } -> Nat -> Type where
   VNil : { A : Type } -> Vec { A := A } Zero
   VCons : { A : Type } -> { n : Nat } -> A -> Vec { A := A } n -> Vec { A := A } (Succ n)
-
-inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Nat`;
+`;
 
       const results = compileSource(source);
       expect(results.length).toBe(2);
+
+      // Check if both declarations type-check
+      for (const r of results) {
+        if (!r.checkSuccess) {
+          console.log(`${r.name} errors:`, r.checkErrors.map(e => e.message));
+        }
+      }
+      expect(results[0].checkSuccess).toBe(true);
+      expect(results[1].checkSuccess).toBe(true);
     });
 
     test('Function on inductive type with named wildcard patterns', () => {

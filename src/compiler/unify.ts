@@ -1,4 +1,4 @@
-import { levelsEqual, mkVar, TTKTerm } from "./kernel";
+import { levelsEqual, mkVar, prettyPrint, TTKTerm, isDefinitionallyEqual } from "./kernel";
 import { DefinitionsMap } from "./term";
 import { whnf } from "./whnf";
 
@@ -23,7 +23,10 @@ export type UnifyOptions = {
   rigidVarsAtOrAbove?: number;
   mode: 'pattern' | 'check';
   definitions?: DefinitionsMap;
+  fuel?: number;  // Fuel for whnf reduction to prevent infinite loops
 }
+
+const DEFAULT_UNIFY_FUEL = 1000;
 
 // ============================================================================
 // Unification Result Types
@@ -135,8 +138,24 @@ function combineUnificationResults(r1: UnifyResult, r2: UnifyResult, options: Un
   if (!r1.success) return r1;
   if (!r2.success) return r2;
 
-  if (r1.substitutions.length === 0) return r2;
-  if (r2.substitutions.length === 0) return r1;
+  // Early return only if both have empty substitutions, metaConstraints, and levelConstraints
+  // Otherwise we must combine to preserve all constraints
+  if (r1.substitutions.length === 0 && r1.metaConstraints.length === 0 && r1.levelConstraints.length === 0) {
+    return r2;
+  }
+  if (r2.substitutions.length === 0 && r2.metaConstraints.length === 0 && r2.levelConstraints.length === 0) {
+    return r1;
+  }
+
+  // If only substitutions are empty but we have constraints, combine them
+  if (r1.substitutions.length === 0 && r2.substitutions.length === 0) {
+    return {
+      success: true,
+      substitutions: [],
+      metaConstraints: [...r1.metaConstraints, ...r2.metaConstraints],
+      levelConstraints: [...r1.levelConstraints, ...r2.levelConstraints],
+    };
+  }
 
   let adjustedSubstitutions: [number, TTKTerm][] = [];
   let derivedEquations: [number, TTKTerm][] = [];
@@ -218,6 +237,10 @@ function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResu
 
   // ─────────────────────────────────────────────────────────────────────────
   // META - Level metavariable: generate constraint
+  //
+  // Meta terms in level position are term metas with type ULevel, so we
+  // generate metaConstraints (not levelConstraints) to ensure they get
+  // solved alongside other term metas.
   // ─────────────────────────────────────────────────────────────────────────
   if (l1.tag === 'Meta') {
     if (levelMVarOccursIn(l1.id, l2)) {
@@ -226,8 +249,8 @@ function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResu
     return {
       success: true,
       substitutions: [],
-      metaConstraints: [],
-      levelConstraints: [{ lmvar: l1.id, rhs: l2 }],
+      metaConstraints: [{ meta: l1.id, rhs: l2 }],
+      levelConstraints: [],
     };
   }
 
@@ -238,8 +261,8 @@ function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResu
     return {
       success: true,
       substitutions: [],
-      metaConstraints: [],
-      levelConstraints: [{ lmvar: l2.id, rhs: l1 }],
+      metaConstraints: [{ meta: l2.id, rhs: l1 }],
+      levelConstraints: [],
     };
   }
 
@@ -318,8 +341,22 @@ function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResu
  * - levelConstraints: Deferred ?l = level constraints
  */
 export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): UnifyResult {
-  // Reduce both to weak head normal form
-  const whnfCtx = options.definitions ? { definitions: options.definitions } : undefined;
+  // OPTIMIZATION: If terms are structurally identical, they unify immediately.
+  // This avoids expensive whnf reduction for identical terms like matching Match
+  // expressions containing recursive function calls.
+  if (isDefinitionallyEqual(lhs, rhs)) {
+    return emptySuccess;
+  }
+
+  // Check fuel to prevent infinite recursion
+  const fuel = options.fuel ?? DEFAULT_UNIFY_FUEL;
+  if (fuel <= 0) {
+    return { success: false, reason: 'conflict' };
+  }
+  const nextOptions: UnifyOptions = { ...options, fuel: fuel - 1 };
+
+  // Reduce both to weak head normal form, sharing fuel with unification
+  const whnfCtx = { definitions: options.definitions, fuel };
   const a = whnf(lhs, whnfCtx);
   const b = whnf(rhs, whnfCtx);
 
@@ -328,21 +365,28 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   //
   // We can't solve ?m = t without knowing ?m's typing context, so we
   // defer these as constraints to be solved later.
+  //
+  // IMPORTANT: Store the ORIGINAL term (before whnf) as the constraint RHS
+  // to avoid exponential term expansion. When whnf expands definitions like
+  // `plus n b` → `(match ...) n b`, storing the expanded form causes blowup
+  // because nested definitions get expanded repeatedly.
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Meta') {
+    // a = whnf(lhs) is a Meta. Store the ORIGINAL rhs (before whnf) to avoid expansion.
     return {
       success: true,
       substitutions: [],
-      metaConstraints: [{ meta: a.id, rhs: b }],
+      metaConstraints: [{ meta: a.id, rhs: rhs }],
       levelConstraints: [],
     };
   }
 
   if (b.tag === 'Meta') {
+    // b = whnf(rhs) is a Meta. Store the ORIGINAL lhs (before whnf) to avoid expansion.
     return {
       success: true,
       substitutions: [],
-      metaConstraints: [{ meta: b.id, rhs: a }],
+      metaConstraints: [{ meta: b.id, rhs: lhs }],
       levelConstraints: [],
     };
   }
@@ -506,7 +550,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // Sort l1 vs Sort l2: unify the levels
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Sort' && b.tag === 'Sort') {
-    return unifyLevels(a.level, b.level, options);
+    return unifyLevels(a.level, b.level, nextOptions);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -537,11 +581,11 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // (f a) vs (g b): unify f with g, then a with b
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'App' && b.tag === 'App') {
-    const fnResult = unifyTerms(a.fn, b.fn, options);
+    const fnResult = unifyTerms(a.fn, b.fn, nextOptions);
     if (!fnResult.success) return fnResult;
 
-    const argResult = unifyTerms(a.arg, b.arg, options);
-    return combineUnificationResults(fnResult, argResult, options);
+    const argResult = unifyTerms(a.arg, b.arg, nextOptions);
+    return combineUnificationResults(fnResult, argResult, nextOptions);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -561,19 +605,19 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
     }
 
     // Unify domains
-    const domResult = unifyTerms(a.domain, b.domain, options);
+    const domResult = unifyTerms(a.domain, b.domain, nextOptions);
     if (!domResult.success) return domResult;
 
     // Unify bodies (both are under a binder, so indices align)
-    const bodyResult = unifyTerms(a.body, b.body, options);
+    const bodyResult = unifyTerms(a.body, b.body, nextOptions);
     if (!bodyResult.success) return bodyResult;
 
-    let result = combineUnificationResults(domResult, bodyResult, options);
+    let result = combineUnificationResults(domResult, bodyResult, nextOptions);
 
     // For Let, also unify the definition values
     if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {
-      const valResult = unifyTerms(a.binderKind.defVal, b.binderKind.defVal, options);
-      result = combineUnificationResults(result, valResult, options);
+      const valResult = unifyTerms(a.binderKind.defVal, b.binderKind.defVal, nextOptions);
+      result = combineUnificationResults(result, valResult, nextOptions);
     }
 
     return result;
@@ -586,11 +630,11 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // term, stripping the annotation.
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Annot') {
-    return unifyTerms(a.term, b, options);
+    return unifyTerms(a.term, b, nextOptions);
   }
 
   if (b.tag === 'Annot') {
-    return unifyTerms(a, b.term, options);
+    return unifyTerms(a, b.term, nextOptions);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -604,7 +648,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'Match' && b.tag === 'Match') {
     // Unify scrutinees
-    const scrutResult = unifyTerms(a.scrutinee, b.scrutinee, options);
+    const scrutResult = unifyTerms(a.scrutinee, b.scrutinee, nextOptions);
     if (!scrutResult.success) return scrutResult;
 
     // Must have same number of clauses
@@ -624,9 +668,9 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
       }
 
       // Unify RHS (under pattern bindings - indices align if patterns match)
-      const rhsResult = unifyTerms(clauseA.rhs, clauseB.rhs, options);
+      const rhsResult = unifyTerms(clauseA.rhs, clauseB.rhs, nextOptions);
       if (!rhsResult.success) return rhsResult;
-      result = combineUnificationResults(result, rhsResult, options);
+      result = combineUnificationResults(result, rhsResult, nextOptions);
     }
 
     return result;

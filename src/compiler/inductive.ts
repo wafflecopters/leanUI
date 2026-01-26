@@ -1,5 +1,5 @@
 import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
-import { TTKTerm, levelsEqual } from "./kernel";
+import { TTKTerm, levelsEqual, mkULit } from "./kernel";
 import { inferType } from "./checker";
 
 function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError[] {
@@ -13,15 +13,14 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
     } else if (term.tag === 'Hole') {
       // Holes are allowed - they will be resolved during type checking.
       // If they remain unresolved, the "unsolved metas" check will catch them.
+    } else if (term.tag === 'ULevel' || term.tag === 'ULit' || term.tag === 'UOmega') {
+      // Universe-related terms are valid - they appear inside Sort levels for universe polymorphism
     } else {
       const msg = {
         Annot: 'Explicit annotation',
         Meta: 'Metavariable',
         Match: 'Pattern matching',
         Binder: undefined,
-        ULevel: 'ULevel type',
-        ULit: 'Universe literal',
-        UOmega: 'Universe omega',
       }[term.tag] ?? (
           term.tag === 'Binder' ? term.binderKind.tag === 'BLam' ? 'Lambda Expression' : 'Let Expression' : undefined
         ) ?? 'Other syntax'
@@ -60,7 +59,8 @@ export function checkInductiveDeclaration(
 } | {
   success: true,
   newDefinitions: DefinitionsMap,
-  indexPositions: number[]
+  indexPositions: number[],
+  zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>
 } {
   // We'll compute indexPositions after validation, so use empty array initially
   const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions: [] };
@@ -107,7 +107,10 @@ export function checkInductiveDeclaration(
     return { success: false, errors };
   }
 
-  let ctorsEnv = addDefinitionInTCEnv(defEnv, name, type).inInductiveDefinitionConstructors();
+  let ctorsEnv = addDefinitionInTCEnv(defEnv, name, type, namedArgMap).inInductiveDefinitionConstructors();
+
+  // Collect zonked constructor types to use in the final inductive definition
+  const zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> = [];
 
   constructors.forEach((ctor, index) => {
     runAndAccumulateErrors(
@@ -115,13 +118,27 @@ export function checkInductiveDeclaration(
       e => {
         const result = inferType(e)
         // Solve meta constraints before checking for unsolved metas
-        const solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
-        // Check for UNSOLVED metas (solved metas have a 'solution' property)
-        const unsolvedMetas = Array.from(solvedResult.metaVars.values()).filter(m => !m.solution);
+        let solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+        // Default unsolved level metas to 0
+        // This handles cases like {u : ULevel} where u is not constrained by the constructor
+        const unsolvedLevelMetas = Array.from(solvedResult.levelMetas.entries()).filter(([_, v]) => v === undefined);
+        for (const [id, _] of unsolvedLevelMetas) {
+          solvedResult = solvedResult.solveLevelMeta(id, mkULit(0));
+        }
+
+        // Check for UNSOLVED term metas (solved metas have a 'solution' property)
+        const unsolvedMetas = Array.from(solvedResult.metaVars.entries()).filter(([_, m]) => !m.solution);
         if (unsolvedMetas.length > 0) {
-          errors.push(TCEnvError.create('Checking the constructor signature produced unsolved metas.', e));
+          const metaInfo = unsolvedMetas.map(([id, m]) => `${id}: ${solvedResult.prettyPrint(m.type)}`);
+          errors.push(TCEnvError.create(`Checking the constructor signature produced unsolved metas: [${metaInfo.join(', ')}]`, e));
         } else {
-          ctorsEnv = addDefinitionInTCEnv(ctorsEnv, ctor.name, ctor.type);
+          // Zonk the constructor type to substitute solved metas (both level and term).
+          // ctor.type has Holes for implicit args, and zonkTerm substitutes these using
+          // the Hole ID to look up solutions in both levelMetas and metaVars.
+          const zonkedType = solvedResult.zonkTerm(ctor.type);
+          zonkedConstructors.push({ name: ctor.name, type: zonkedType, namedArgMap: ctor.namedArgMap });
+          ctorsEnv = addDefinitionInTCEnv(ctorsEnv, ctor.name, zonkedType, ctor.namedArgMap);
         }
         return solvedResult
       },
@@ -144,14 +161,16 @@ export function checkInductiveDeclaration(
   }
 
   // Compute index positions on the validated TTK terms (after positivity check)
-  const indexPositions = inferParameterIndicesK({ name, type, constructors });
+  // Use zonked constructors so that metas are substituted with their solutions
+  const indexPositions = inferParameterIndicesK({ name, type, constructors: zonkedConstructors });
 
-  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, constructors, indexPositions, namedArgMap);
+  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, zonkedConstructors, indexPositions, namedArgMap);
 
   return {
     success: true,
     newDefinitions: newEnv.definitions,
-    indexPositions
+    indexPositions,
+    zonkedConstructors
   }
 }
 
@@ -212,8 +231,9 @@ function checkDomainPositivity(
   env: TCEnv<TTKTerm>,
   errors: TCEnvError[]
 ): void {
-  if (env.isConstTerm() || env.isVarTerm() || env.isSortTerm() || env.isHoleTerm()) {
-    // Direct occurrences of constants/vars are fine
+  if (env.isConstTerm() || env.isVarTerm() || env.isSortTerm() || env.isHoleTerm() ||
+      env.value.tag === 'ULevel' || env.value.tag === 'ULit' || env.value.tag === 'UOmega') {
+    // Direct occurrences of constants/vars/sorts/level-terms are fine
     // Even if it's the inductive type, this is strictly positive
   } else if (env.isAppTerm()) {
     checkDomainPositivity(inductiveName, ctorName, env.inAppFn(), errors);
@@ -253,8 +273,9 @@ function checkNestedPiForNegativeOccurrences(
   polarity: Polarity,
   errors: TCEnvError[]
 ): void {
-  if (env.isVarTerm() || env.isSortTerm()) {
-    // Valid
+  if (env.isVarTerm() || env.isSortTerm() ||
+      env.value.tag === 'ULevel' || env.value.tag === 'ULit' || env.value.tag === 'UOmega') {
+    // Valid - vars, sorts, and level-terms don't contain occurrences of the inductive type
   } else if (env.isConstTerm()) {
     if (env.value.name === inductiveName) {
       const msg = polarity === 'negative' ? 'negative' : '(non-strict) positive';

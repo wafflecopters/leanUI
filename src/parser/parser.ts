@@ -174,7 +174,7 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
   'LET': (p, _t, ctx, path) => p['parseLet'](ctx, path),
   'CASE': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
   'MATCH': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
-  'TYPE': (p, _t, _ctx, path) => p['parseType'](path),
+  'TYPE': (p, _t, ctx, path) => p['parseType'](ctx, path),
   'IDENT': (p, _t, ctx, path) => p['parseIdent'](ctx, path),
 
   // Simple tokens that don't need helper methods
@@ -2453,7 +2453,7 @@ export class Parser {
    * Note: Type_n syntax is handled in the lexer, which recognizes
    * Type_0, Type_1, etc. as TYPE tokens with level information.
    */
-  private parseType(path: IndexPath = []): TTerm {
+  private parseType(ctx: NameContext, path: IndexPath = []): TTerm {
     const startToken = this.current();
     const typeToken = this.expect('TYPE');
 
@@ -2476,12 +2476,19 @@ export class Parser {
       result = mkTypeTT(level);  // Type n = Sort(n+1), mkTypeTT adds the +1
     } else if (this.current().type === 'IDENT') {
       // Type U - level variable or omega
-      const name = this.current().value;
+      const identToken = this.current();
+      const name = identToken.value;
       this.advance();
       if (name === 'ω') {
         result = mkSortTT(mkUSuccAppTT(mkUOmegaTT())); // Type ω = Sort(ω+1)
       } else {
-        result = mkSortTT(mkUSuccAppTT(mkConstTT(name))); // Type U = Sort(U+1)
+        // Check if this is a bound variable (e.g., from {u : ULevel} ->)
+        const idx = ctx.indexOf(name);
+        if (idx >= 0) {
+          result = mkSortTT(mkUSuccAppTT(mkVarTT(idx))); // Type u where u is bound = Sort(u+1)
+        } else {
+          result = mkSortTT(mkUSuccAppTT(mkConstTT(name))); // Type U where U is a constant = Sort(U+1)
+        }
       }
     } else if (this.current().type === 'LPAREN') {
       // Type (level-expr) - parenthesized level expression

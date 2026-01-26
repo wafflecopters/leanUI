@@ -26,23 +26,20 @@ describe('solveConstraints', () => {
     expect(solvedMeta?.solution).toEqual(mkConst('Nat'));
   });
 
-  test('does not solve if meta already has a solution', () => {
+  test('throws error for conflicting constraint with different Const', () => {
     // Create a meta that already has a solution
     const existingSolution = mkConst('Bool');
     const metaVars = new Map<string, MetaVar>([
       ['?m0', { ctx: [{ name: 'x', type: mkType() }], type: mkType(), solution: existingSolution }]
     ]);
 
-    // Try to give it a different solution
+    // Try to give it a conflicting solution (different Const name)
     const constraints: Constraint[] = [
       { ctx: [], meta: '?m0', rhs: mkConst('Nat') }
     ];
 
-    const result = solveConstraints(metaVars, constraints);
-
-    // The solution should remain unchanged (Bool, not Nat)
-    const solvedMeta = result.metaVars.get('?m0');
-    expect(solvedMeta?.solution).toEqual(existingSolution);
+    // Should throw an error because Bool != Nat
+    expect(() => solveConstraints(metaVars, constraints)).toThrow('Conflicting constraints');
   });
 
   test('constraint with out-of-scope variable goes to stillStuck', () => {

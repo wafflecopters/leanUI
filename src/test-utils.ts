@@ -67,10 +67,10 @@ function blockToTestResult(block: CompiledBlock): TestBlockResult {
   // Get name from first declaration
   const name = block.declarations[0]?.name;
 
-  // Convert name resolution errors
-  const nameResolutionErrors = block.nameResolutionErrors.map(msg => ({
-    symbolName: extractSymbolName(msg),
-    message: msg
+  // Name resolution errors already have symbolName and message
+  const nameResolutionErrors = block.nameResolutionErrors.map(err => ({
+    symbolName: err.symbolName,
+    message: err.message
   }));
 
   // Get index positions from first inductive declaration

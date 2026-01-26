@@ -138,6 +138,18 @@ export interface CompiledDeclaration {
 }
 
 /**
+ * Name resolution error with source range for squiggly display
+ */
+export interface NameResolutionErrorWithRange {
+  message: string;
+  symbolName: string;
+  /** Serialized IndexPath for looking up source range */
+  path?: string;
+  /** Index of the declaration this error belongs to (for sourceMap lookup) */
+  declarationIndex?: number;
+}
+
+/**
  * Result of compiling a block of source code
  */
 export interface CompiledBlock {
@@ -151,7 +163,7 @@ export interface CompiledBlock {
 
   // Name resolution
   nameResolutionSuccess: boolean;
-  nameResolutionErrors: string[];
+  nameResolutionErrors: NameResolutionErrorWithRange[];
 
   // Elaborated declarations
   declarations: CompiledDeclaration[];
@@ -1154,6 +1166,7 @@ function checkDeclaration(
   let indexPositions: number[] | undefined;
   let totalityResult: TotalityResult | undefined;
   let checkedValue: TTKTerm | undefined;
+  let zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined;
 
   // Check for elaboration errors first (e.g., named argument errors)
   if (decl.elabError) {
@@ -1169,6 +1182,7 @@ function checkDeclaration(
     if (result.success) {
       newDefinitions = result.definitions;
       indexPositions = result.indexPositions;
+      zonkedConstructors = result.zonkedConstructors;
     } else {
       checkSuccess = false;
       checkErrors.push(...result.errors);
@@ -1195,6 +1209,8 @@ function checkDeclaration(
   }
 
   // Build compiled declaration with pretty-printed versions
+  // Use zonkedConstructors (with solved metas) if available, otherwise fall back to elaborated kernelConstructors
+  const effectiveConstructors = zonkedConstructors ?? decl.kernelConstructors;
   const compiled: CompiledDeclaration = {
     name: decl.name,
     kind: decl.kind,
@@ -1205,13 +1221,13 @@ function checkDeclaration(
     // Kernel terms
     kernelType: decl.kernelType,
     kernelValue: decl.kernelValue,
-    kernelConstructors: decl.kernelConstructors,
+    kernelConstructors: effectiveConstructors,
     indexPositions,
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
     // Use checkedValue (with solutions) if available, otherwise fall back to elaborated kernelValue
     // Use formatted pretty print for better readability of match/let expressions
     prettyValue: (checkedValue ?? decl.kernelValue) ? prettyPrintFormatted(checkedValue ?? decl.kernelValue!) : undefined,
-    prettyConstructors: decl.kernelConstructors?.map(c => ({
+    prettyConstructors: effectiveConstructors?.map(c => ({
       name: c.name,
       prettyType: prettyPrintTTK(c.type)
     })),
@@ -1229,7 +1245,7 @@ function checkDeclaration(
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[] } {
+): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[], zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> } {
   if (decl.kind !== 'inductive') {
     return failCheck('Declaration is not an inductive type', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
@@ -1258,6 +1274,7 @@ function checkInductiveTypeDeclaration(
       success: true,
       definitions: result.newDefinitions,
       indexPositions: result.indexPositions,
+      zonkedConstructors: result.zonkedConstructors,
     }
   }
 }
@@ -1834,7 +1851,8 @@ function processInductiveDeclaration(
   return {
     success: true,
     compiled: createCompiledDeclaration(
-      decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
+      // Use zonkedConstructors (with solved metas) instead of the original kernelConstructors
+      decl, kernelType, undefined, result.zonkedConstructors, elabMap, sourceMap,
       true, [], undefined, result.indexPositions
     ),
     newDefinitions: result.newDefinitions,
@@ -1947,6 +1965,7 @@ export function compileTTFromText(source: string): CompileResult {
   let symbolContext: SymbolContext = emptySymbolContext();
   const compiledBlocks: CompiledBlock[] = [];
   let totalCheckErrors = 0;
+  let totalNameErrors = 0;
 
   for (let blockIndex = 0; blockIndex < parseResult.blocks.length; blockIndex++) {
     const block = parseResult.blocks[blockIndex];
@@ -1985,6 +2004,7 @@ export function compileTTFromText(source: string): CompileResult {
 
     // Process declarations in this block
     const compiledDecls: CompiledDeclaration[] = [];
+    const blockNameErrors: NameResolutionErrorWithRange[] = [];
 
     for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
       const origDecl = block.declarations[declIndex];
@@ -1994,6 +2014,17 @@ export function compileTTFromText(source: string): CompileResult {
       const nameResult = validateDeclarations([origDecl], symbolContext);
       if (nameResult.success) {
         symbolContext = nameResult.value;
+      } else {
+        // Collect name resolution errors with paths for source range lookup
+        for (const err of nameResult.errors) {
+          blockNameErrors.push({
+            message: err.message,
+            symbolName: err.symbolName,
+            path: serializeIndexPath(err.path),
+            declarationIndex: declIndex
+          });
+          totalNameErrors++;
+        }
       }
 
       // Pattern resolution for this declaration (using current symbol context)
@@ -2035,18 +2066,18 @@ export function compileTTFromText(source: string): CompileResult {
       startLine: block.startLine,
       parseSuccess: true,
       parseErrors: [],
-      nameResolutionSuccess: true,
-      nameResolutionErrors: [],
+      nameResolutionSuccess: blockNameErrors.length === 0,
+      nameResolutionErrors: blockNameErrors,
       declarations: compiledDecls,
       isComment: false
     });
   }
 
   return {
-    success: parseResult.totalErrors === 0 && totalCheckErrors === 0,
+    success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
     blocks: compiledBlocks,
     totalParseErrors: parseResult.totalErrors,
-    totalNameErrors: 0,
+    totalNameErrors,
     totalCheckErrors
   };
 }
@@ -2534,7 +2565,13 @@ function checkTermValue(
   };
 
   // Run totality checking (builds case tree and checks coverage)
-  const totalityResult = checkTotality(name ?? '???', checkedClauses, termEnv.definitions, absurdityChecker);
+  // Pass zonked elabArgs and contextNames for case tree display
+  const totalityClauses = checkedClauses.map(c => ({
+    patterns: c.patterns,
+    elabArgs: c.elabArgs,
+    contextNames: c.contextNames
+  }));
+  const totalityResult = checkTotality(name ?? '???', totalityClauses, termEnv.definitions, absurdityChecker);
 
   // Helper to format missing patterns with padding and named args
   const formatMissingPatterns = (patterns: TTKPattern[]): string => {

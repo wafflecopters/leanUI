@@ -8,9 +8,11 @@ import { DefinitionsMap, getTermDefinition } from "./term";
 export type WhnfContext = {
   definitions?: DefinitionsMap;
   fuel?: number;  // Prevent infinite reduction, default 1000
+  deltaDepth?: number;  // Limit depth of δ-reduction (definition unfolding)
 }
 
 const DEFAULT_FUEL = 1000;
+const DEFAULT_DELTA_DEPTH = 100;  // Limit definition unfolding depth
 
 /**
  * Check if a variable index is free in a term.
@@ -241,7 +243,8 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
   if (fuel <= 0) {
     return term;
   }
-  const nextCtx: WhnfContext = { ...ctx, fuel: fuel - 1 };
+  const deltaDepth = ctx?.deltaDepth ?? DEFAULT_DELTA_DEPTH;
+  const nextCtx: WhnfContext = { ...ctx, fuel: fuel - 1, deltaDepth };
 
   switch (term.tag) {
     case 'App': {
@@ -251,7 +254,8 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
         return whnf(subst(0, term.arg, fn.body), nextCtx);
       }
       // δ-reduction: If fn is a Const with a Match definition, try ι-reduction
-      if (fn.tag === 'Const' && ctx?.definitions) {
+      // Check deltaDepth to limit unfolding
+      if (fn.tag === 'Const' && ctx?.definitions && deltaDepth > 0) {
         const def = getTermDefinition(ctx.definitions, fn.name);
         if (def?.value?.tag === 'Match') {
           // We have `f a` where f is defined by pattern matching
@@ -261,7 +265,7 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
             tag: 'App',
             fn: matchTerm,
             arg: term.arg
-          }, nextCtx);
+          }, { ...nextCtx, deltaDepth: deltaDepth - 1 });
         }
       }
       // Build the full application and check if head is a Match term
@@ -305,10 +309,11 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
 
     case 'Const': {
       // δ-reduction: unfold named constants
-      if (ctx?.definitions) {
+      // Check deltaDepth to limit unfolding and prevent exponential expansion
+      if (ctx?.definitions && deltaDepth > 0) {
         const def = getTermDefinition(ctx.definitions, term.name);
         if (def?.value) {
-          return whnf(def.value, nextCtx);
+          return whnf(def.value, { ...nextCtx, deltaDepth: deltaDepth - 1 });
         }
       }
       return term;

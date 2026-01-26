@@ -1406,6 +1406,49 @@ export function elabLevelToKernel(level: TLevel, levelNameToIndex?: Map<string, 
 // ============================================================================
 
 /**
+ * Reserved level operation names that are valid in level contexts.
+ * These are built-in operations, not user-defined level variables.
+ */
+const RESERVED_LEVEL_OPS = new Set(['USucc', 'UMax', 'UIMax']);
+
+/**
+ * Validate that all Const nodes in a level term are valid level names in scope.
+ * Throws NamedArgElabError if an undefined level variable is found.
+ *
+ * @param level - The elaborated level term to validate
+ * @param levelNamesInScope - Set of valid level variable names
+ * @param surfacePath - Path for error reporting (tracks position in the term)
+ */
+function validateLevelTerm(
+  level: TTKTerm,
+  levelNamesInScope: Set<string>,
+  surfacePath: IndexPath
+): void {
+  switch (level.tag) {
+    case 'Const':
+      // Check if this is a valid level name in scope or a reserved level operation
+      if (!levelNamesInScope.has(level.name) && !RESERVED_LEVEL_OPS.has(level.name)) {
+        throw new NamedArgElabError(`Undefined level variable '${level.name}'`, surfacePath);
+      }
+      break;
+    case 'App':
+      // Recursively validate function and argument, tracking the path
+      validateLevelTerm(level.fn, levelNamesInScope, appendPath(surfacePath, fieldSeg('fn')));
+      validateLevelTerm(level.arg, levelNamesInScope, appendPath(surfacePath, fieldSeg('arg')));
+      break;
+    case 'ULit':
+    case 'ULevel':
+    case 'UOmega':
+    case 'Var':
+      // These are valid level terms
+      break;
+    default:
+      // Other term types in a level are unusual but we don't error here
+      break;
+  }
+}
+
+/**
  * Elaborate a surface term (TT) to a kernel term (TTK).
  *
  * Currently this is a structural copy since TT and TTK are identical.
@@ -1896,16 +1939,19 @@ export function elabToKernelWithMap(
 
     case 'Sort': {
       // Level is now a term - recursively elaborate it
+      const levelSurfacePath = appendPath(surfacePath, fieldSeg('level'));
       const elaboratedLevel = elabToKernelWithMap(
         term.level,
         elabMap,
-        appendPath(surfacePath, fieldSeg('level')),
+        levelSurfacePath,
         appendPath(kernelPath, fieldSeg('level')),
         patternNamedArgMap,
         appNamedArgLookup,
         patternTotalArity,
         levelNamesInScope
       );
+      // Validate that any Const in the level is a valid level name in scope
+      validateLevelTerm(elaboratedLevel, levelNamesInScope, levelSurfacePath);
       return { tag: 'Sort', level: elaboratedLevel };
     }
 

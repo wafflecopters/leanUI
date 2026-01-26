@@ -115,15 +115,20 @@ export function validateTerm(
   function walk(t: TTerm, p: IndexPath): void {
     switch (t.tag) {
       case 'Var':
-      case 'Sort':
       case 'Hole':
       case 'ULevel':
+      case 'ULit':
+      case 'UOmega':
         // These don't reference symbols
         break;
 
+      case 'Sort':
+        // Levels are validated during elaboration, not name resolution
+        break;
+
       case 'Const':
-        // Check if constant is defined
-        if (!isSymbolDefined(ctx, t.name)) {
+        // Check if constant is defined (skip reserved names - they're built-ins)
+        if (!isReservedName(t.name) && !isSymbolDefined(ctx, t.name)) {
           errors.push({
             message: `Undefined symbol '${t.name}'`,
             symbolName: t.name,

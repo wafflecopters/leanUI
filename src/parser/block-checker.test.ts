@@ -347,9 +347,7 @@ plus (Succ a) b = Succ (plus a b)`;
       expect(results[1].checkSuccess).toBe(true);
     });
 
-    // TODO: Structural recursion checking is not yet implemented.
-    // These tests document the expected behavior once it's added.
-    test.skip('unsafe recursion - same argument', () => {
+    test('unsafe recursion - same argument', () => {
       const source = `inductive Nat : Type where
   | Zero : Nat
   | Succ : Nat -> Nat
@@ -372,8 +370,7 @@ plus (Succ a) b = Succ (plus (Succ a) b)`;
       ).toBe(true);
     });
 
-    // TODO: Structural recursion checking is not yet implemented.
-    test.skip('unsafe recursion - non-decreasing argument', () => {
+    test('unsafe recursion - non-decreasing argument', () => {
       const source = `inductive Nat : Type where
   | Zero : Nat
   | Succ : Nat -> Nat

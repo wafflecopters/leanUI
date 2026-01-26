@@ -1,9 +1,19 @@
-import { describe, it, expect } from 'vitest';
-import { padPatternsForMissingNamedArgs } from './patterns';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { padPatternsForMissingNamedArgs, resetPaddingWildcardCounter } from './patterns';
 import { TTKPattern } from './kernel';
 import { DefinitionsMap, createDefinitionsMap, NamedArgMap } from './term';
 
+// Helper to check if a pattern is a padding wildcard (name starts with _pad)
+function isPaddingWildcard(pattern: TTKPattern): boolean {
+  return pattern.tag === 'PWild' && pattern.name.startsWith('_pad');
+}
+
 describe('padPatternsForMissingNamedArgs', () => {
+  // Reset counter before each test for deterministic naming
+  beforeEach(() => {
+    resetPaddingWildcardCounter();
+  });
+
   // Helper to create a simple definitions map with some constructors
   function createTestDefinitions(): DefinitionsMap {
     const defs = createDefinitionsMap();
@@ -92,12 +102,12 @@ describe('padPatternsForMissingNamedArgs', () => {
       const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
 
       expect(result.length).toBe(2);
-      expect(result[0]).toEqual({ tag: 'PWild', name: '_' });
+      expect(isPaddingWildcard(result[0])).toBe(true);
       expect(result[1].tag).toBe('PCtor');
       if (result[1].tag === 'PCtor') {
         expect(result[1].name).toBe('Nil');
         expect(result[1].args.length).toBe(1);
-        expect(result[1].args[0]).toEqual({ tag: 'PWild', name: '_' });
+        expect(isPaddingWildcard(result[1].args[0])).toBe(true);
       }
     });
 
@@ -153,13 +163,13 @@ describe('padPatternsForMissingNamedArgs', () => {
 
       const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
 
-      // Should become: [(Cons _ x xs)]
+      // Should become: [(Cons _pad0 x xs)]
       expect(result.length).toBe(1);
       expect(result[0].tag).toBe('PCtor');
       if (result[0].tag === 'PCtor') {
         expect(result[0].name).toBe('Cons');
         expect(result[0].args.length).toBe(3);
-        expect(result[0].args[0]).toEqual({ tag: 'PWild', name: '_' });
+        expect(isPaddingWildcard(result[0].args[0])).toBe(true);
         expect(result[0].args[1]).toEqual({ tag: 'PVar', name: 'x' });
         expect(result[0].args[2]).toEqual({ tag: 'PVar', name: 'xs' });
       }
@@ -188,20 +198,20 @@ describe('padPatternsForMissingNamedArgs', () => {
 
       const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
 
-      // Should become: [(Cons _ (Nil _) xs)]
+      // Should become: [(Cons _pad0 (Nil _pad1) xs)]
       expect(result.length).toBe(1);
       expect(result[0].tag).toBe('PCtor');
       if (result[0].tag === 'PCtor') {
         expect(result[0].name).toBe('Cons');
         expect(result[0].args.length).toBe(3);
-        expect(result[0].args[0]).toEqual({ tag: 'PWild', name: '_' });
+        expect(isPaddingWildcard(result[0].args[0])).toBe(true);
         // Nested Nil should also be padded
         const nilArg = result[0].args[1];
         expect(nilArg.tag).toBe('PCtor');
         if (nilArg.tag === 'PCtor') {
           expect(nilArg.name).toBe('Nil');
           expect(nilArg.args.length).toBe(1);
-          expect(nilArg.args[0]).toEqual({ tag: 'PWild', name: '_' });
+          expect(isPaddingWildcard(nilArg.args[0])).toBe(true);
         }
       }
     });
@@ -230,14 +240,14 @@ describe('padPatternsForMissingNamedArgs', () => {
 
       const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
 
-      // Should become: [_, (Cons _ x xs)]
+      // Should become: [_pad0, (Cons _pad1 x xs)]
       expect(result.length).toBe(2);
-      expect(result[0]).toEqual({ tag: 'PWild', name: '_' });
+      expect(isPaddingWildcard(result[0])).toBe(true);
       expect(result[1].tag).toBe('PCtor');
       if (result[1].tag === 'PCtor') {
         expect(result[1].name).toBe('Cons');
         expect(result[1].args.length).toBe(3);
-        expect(result[1].args[0]).toEqual({ tag: 'PWild', name: '_' });
+        expect(isPaddingWildcard(result[1].args[0])).toBe(true);
       }
     });
   });

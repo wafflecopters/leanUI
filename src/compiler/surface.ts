@@ -2432,9 +2432,6 @@ function fillHoleWithLet(
           rhs: fillHoleWithLet(c.rhs, holeId, letName, letType, letValue)
         }))
       };
-
-    case 'ULevel':
-      return term;
   }
 }
 

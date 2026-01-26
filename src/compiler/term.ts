@@ -21,6 +21,7 @@ export type Constraint = {
   ctx: TTKContext,
   meta: string,
   rhs: TTKTerm,
+  rhsType?: TTKTerm,  // Optional: the type of rhs for well-typed constraint checking
 }
 
 export type MetaVar = {
@@ -554,12 +555,21 @@ function substituteLevelMetasInTerm(term: TTKTerm, levelMetas: Map<string, Level
   switch (term.tag) {
     case 'Var':
     case 'Const':
-    case 'Hole':
     case 'Meta':
     case 'ULevel':
     case 'ULit':
     case 'UOmega':
       return term;
+
+    case 'Hole': {
+      // Check if this Hole corresponds to a solved level meta
+      // (Holes get converted to level metas using their ID in createMetaForHole)
+      const solution = levelMetas.get(term.id);
+      if (solution !== undefined) {
+        return substituteLevelMetasInTerm(solution, levelMetas);
+      }
+      return term;
+    }
 
     case 'Sort':
       // After substitution, simplify the level (e.g., max(2, 2) -> 2)
@@ -686,7 +696,14 @@ export class TCEnv<T> {
   applySubstitutionToContextMetasAndConstraints(varIndex: number, value: TTKTerm): TCEnv<T> {
     const newTTKContext = applySubstitutionToContext(this.context, varIndex, value);
     const newMetaVars = applySubstitutionToMetaVars(this.metaVars, this.context.length, varIndex, value);
-    const newConstraints = applySubstitutionToConstraints(this.constraints, this.context.length, varIndex, value);
+    // In pattern mode, allow escaping variables since pattern vars from outer scopes are legitimate
+    const newConstraints = applySubstitutionToConstraints(
+      this.constraints,
+      this.context.length,
+      varIndex,
+      value,
+      { allowEscapingVars: this.options?.mode === 'pattern' }
+    );
 
     return new TCEnv(
       newTTKContext,
@@ -721,7 +738,92 @@ export class TCEnv<T> {
       this.value,
       this.levelMetas,
       this.options
+      // NOTE: elaboratedTerm is intentionally NOT preserved here for now
+      // Preserving it breaks pattern elaboration (replace test).
+      // TODO: investigate why and fix properly.
     );
+  }
+
+  /**
+   * Substitute solved metas with their solutions in the given term.
+   * This is called "zonking" in GHC terminology.
+   *
+   * Recursively traverses the term, replacing any Meta that has a solution
+   * in metaVars with that solution (and continuing to zonk the result).
+   */
+  zonkTerm(term: TTKTerm): TTKTerm {
+    return this.zonkTermHelper(term);
+  }
+
+  private zonkTermHelper(term: TTKTerm): TTKTerm {
+    switch (term.tag) {
+      case 'Meta': {
+        const metaVar = this.metaVars.get(term.id);
+        if (metaVar?.solution) {
+          // Substitute and continue zonking
+          return this.zonkTermHelper(metaVar.solution);
+        }
+        // Also check levelMetas for level metas
+        const levelSolution = this.levelMetas.get(term.id);
+        if (levelSolution !== undefined) {
+          return this.zonkTermHelper(levelSolution);
+        }
+        return term;
+      }
+      case 'Hole': {
+        // Holes are converted to Metas during elaboration, using the Hole's ID.
+        // Look up the solution in both levelMetas and metaVars.
+        const levelSolution = this.levelMetas.get(term.id);
+        if (levelSolution !== undefined) {
+          return this.zonkTermHelper(levelSolution);
+        }
+        const metaVar = this.metaVars.get(term.id);
+        if (metaVar?.solution) {
+          return this.zonkTermHelper(metaVar.solution);
+        }
+        return term;
+      }
+      case 'Var':
+      case 'Const':
+      case 'Sort':
+      case 'ULevel':
+      case 'ULit':
+      case 'UOmega':
+        return term;
+      case 'App':
+        return {
+          tag: 'App',
+          fn: this.zonkTermHelper(term.fn),
+          arg: this.zonkTermHelper(term.arg)
+        };
+      case 'Binder':
+        return {
+          tag: 'Binder',
+          name: term.name,
+          binderKind: term.binderKind,
+          domain: this.zonkTermHelper(term.domain),
+          body: this.zonkTermHelper(term.body)
+        };
+      case 'Annot':
+        return {
+          tag: 'Annot',
+          term: this.zonkTermHelper(term.term),
+          type: this.zonkTermHelper(term.type)
+        };
+      case 'Match':
+        return {
+          tag: 'Match',
+          scrutinee: this.zonkTermHelper(term.scrutinee),
+          clauses: term.clauses.map(c => ({
+            ...c,
+            patterns: c.patterns, // Patterns don't contain terms to zonk
+            rhs: this.zonkTermHelper(c.rhs)
+          }))
+        };
+      default:
+        // This should cover all cases, but in case we miss one, return as-is
+        return term;
+    }
   }
 
   /**
@@ -753,11 +855,57 @@ export class TCEnv<T> {
     }
 
     // Add any meta constraints from unification
+    // If a constraint is for a level meta (id is in levelMetas) or a meta of type ULevel,
+    // solve it directly as a level meta
     for (const metaConstraint of result.metaConstraints) {
-      env = env.withConstraint(metaConstraint);
+      const metaVar = env.metaVars.get(metaConstraint.meta);
+      const isLevelMeta = env.levelMetas.has(metaConstraint.meta) ||
+        (metaVar?.type.tag === 'ULevel');
+      if (isLevelMeta) {
+        // This is a level meta - solve it directly
+        env = env.solveLevelMeta(metaConstraint.meta, metaConstraint.rhs);
+      } else {
+        // For term metas, also unify the meta's type with the RHS's type
+        // This generates level constraints when e.g. ?m : Type u is solved to a : Type 0
+        if (metaVar && metaConstraint.rhs.tag === 'Var') {
+          const varIndex = metaConstraint.rhs.index;
+          const ctxIndex = env.context.length - 1 - varIndex;
+          const rhsTypeRaw = env.context[ctxIndex]?.type;
+          if (rhsTypeRaw) {
+            // The type stored in context uses de Bruijn indices relative to when it was added.
+            // When an entry is stored at ctxIndex, the context had ctxIndex entries (0..ctxIndex-1).
+            // Now there are env.context.length entries, so shift by the difference.
+            // Example: A stored at ctxIndex=1 with type "Type (Var 0)" (u is Var 0)
+            // Now context.length=3, so u is Var 2. Shift = 3 - 1 = 2.
+            const shiftAmount = env.context.length - ctxIndex;
+            const rhsType = shiftAmount > 0 ? shiftTerm(rhsTypeRaw, shiftAmount, 0) : rhsTypeRaw;
+
+            // Unify type(?m) with type(rhs) to generate level constraints
+            const typeUnifyResult = unifyTerms(metaVar.type, rhsType, {
+              mode: 'check',
+              definitions: env.definitions,
+            });
+            if (typeUnifyResult.success) {
+              // Apply any level constraints from type unification
+              for (const levelConstraint of typeUnifyResult.levelConstraints) {
+                env = env.solveLevelMeta(levelConstraint.lmvar, levelConstraint.rhs);
+              }
+              for (const mc of typeUnifyResult.metaConstraints) {
+                const mcMeta = env.metaVars.get(mc.meta);
+                const mcIsLevel = env.levelMetas.has(mc.meta) || (mcMeta?.type.tag === 'ULevel');
+                if (mcIsLevel) {
+                  env = env.solveLevelMeta(mc.meta, mc.rhs);
+                }
+              }
+            }
+          }
+        }
+        // Just add the constraint - conflict detection happens during solving
+        env = env.withConstraint(metaConstraint);
+      }
     }
 
-    // Solve level constraints
+    // Solve level constraints (from legacy levelConstraints)
     for (const levelConstraint of result.levelConstraints) {
       env = env.solveLevelMeta(levelConstraint.lmvar, levelConstraint.rhs);
     }
@@ -869,14 +1017,40 @@ export class TCEnv<T> {
    * Create a fresh meta variable for a hole during type checking.
    * The meta gets the expected type and current context.
    * The hole is replaced with a Meta term in the returned env's value.
+   *
+   * Special case: if expectedType is ULevel, creates a level meta instead
+   * so it can participate in level unification when appearing inside Sort terms.
    */
   createMetaForHole(this: TCEnv<TTKTerm & { tag: 'Hole' }>, expectedType: TTKTerm, _message?: string): TCEnv<TTKTerm> {
-    const name = `?m${this.metaVars.size}`;
+    // Special case: for ULevel holes, create a level meta using the Hole's ID
+    // This allows zonkTerm to substitute Holes with their solutions
+    if (expectedType.tag === 'ULevel') {
+      const holeId = this.value.id;
+      const newLevelMetas = new Map(this.levelMetas);
+      newLevelMetas.set(holeId, undefined);  // unsolved, using Hole's ID as the key
+
+      const level: TTKTerm = mkMeta(holeId);
+
+      return new TCEnv(
+        this.context,
+        this.definitions,
+        this.metaVars,
+        this.constraints,
+        this.indexPath,
+        this.valueStack,
+        level,  // The level meta term becomes the value
+        newLevelMetas,
+        this.options
+      );
+    }
+
+    // Use the Hole's ID as the Meta ID to enable substitution of Holes in the original term
+    const holeId = this.value.id;
     const newMetaVars = new Map(this.metaVars);
-    newMetaVars.set(name, { ctx: this.context, type: expectedType });
+    newMetaVars.set(holeId, { ctx: this.context, type: expectedType });
 
     // Replace the Hole with a Meta term (elaboration: Hole -> Meta)
-    const metaTerm: TTKTerm = { tag: 'Meta', id: name };
+    const metaTerm: TTKTerm = { tag: 'Meta', id: holeId };
 
     return new TCEnv(
       this.context,
@@ -1011,13 +1185,21 @@ export class TCEnv<T> {
     // Substitute any existing level meta solutions into the value
     const substitutedValue = substituteLevelMetas(value, this.levelMetas);
 
-    // Set the solution
+    // Set the solution in levelMetas
     newLevelMetas.set(id, substitutedValue);
+
+    // Also update metaVars if the meta exists there (for metas of type ULevel)
+    let newMetaVars = this.metaVars;
+    if (this.metaVars.has(id)) {
+      newMetaVars = new Map(this.metaVars);
+      const existing = newMetaVars.get(id)!;
+      newMetaVars.set(id, { ...existing, solution: substitutedValue });
+    }
 
     return new TCEnv(
       this.context,
       this.definitions,
-      this.metaVars,
+      newMetaVars,
       this.constraints,
       this.indexPath,
       this.valueStack,
@@ -1034,6 +1216,7 @@ export class TCEnv<T> {
   substituteLevelMetasInTerm(term: TTKTerm): TTKTerm {
     return substituteLevelMetasInTerm(term, this.levelMetas);
   }
+
 
   /**
    * Substitute solved level metas into a level term.
@@ -1993,6 +2176,8 @@ export function postOrderTraverseTerm(term: TTKTerm, fn: (term: TTKTerm, indexPa
     // No children
   } else if (term.tag === 'Var') {
     // No children
+  } else if (term.tag === 'ULevel' || term.tag === 'ULit' || term.tag === 'UOmega') {
+    // Universe level terms - no children to traverse
   } else {
     const _never: never = term as never;
     throw new Error(`Unhandled term type: ${(_never as { tag: string }).tag}`);

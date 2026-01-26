@@ -10,6 +10,43 @@
 - [ ] Think about namespaces
 - [ ] Auto-binder creation - e.g. `Type u -> ...` elaborating to `{u : Level} -> Type u -> ...` if `u` not in scope, or `List A -> ...` elaborating to `{A : Type} -> List A -> ...` if `A` not in scope.
 
+## Improve Wildcard/Meta Naming in Pattern Matching
+
+Currently, wildcards for implicit function parameters get generic names like `?0`, `?1` instead of meaningful names like `A` or `n`. This makes pretty-printed output confusing (looks like unresolved metas).
+
+**The Problem:**
+```
+nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
+nth (VCons h _) FZero = h
+```
+Pretty-prints as:
+```
+(match ?_scrutinee
+  | ?0 (Succ _) (VCons ?0 _ h n2) (FZero _) => h
+  ...)
+```
+Where `?0` is actually the `A` parameter, not an unresolved meta.
+
+**Root Cause:**
+- `freshWildcardName()` in [elab.ts:1318-1349](src/compiler/elab.ts#L1318-L1349) generates `?N` when no parameter info is available
+- `setCurrentTermParamNames()` exists but is **never called** anywhere
+- So top-level implicit params like `{A : Type}` get `?0` names instead of `A0`
+
+**Fix Approach:**
+1. Before elaborating patterns in `checkMatchClauseFromSurface`, extract param names from the function type
+2. Call `setCurrentTermParamNames(paramNames)` before `elabPatternToKernelWithMap`
+3. Call `setCurrentTermParamNames(null)` after to reset state
+
+**Implementation Details:**
+- Use `extractConstructorParamNames()` as reference - similar logic for function types
+- The `ParamInfo` type already has `name` and `typePrefix` fields
+- For `{A : Type}`, should yield `ParamInfo { name: 'A', typePrefix: null }`
+- Wildcards would then be named `A0` instead of `?0`
+
+**Files to modify:**
+- `src/compiler/compile.ts` - call `setCurrentTermParamNames` around pattern elaboration
+- Possibly `src/compiler/elab.ts` - add helper to extract param names from function type
+
 ## UI/Text Editor
 
 - [ ] Keyboard shortcut in text editor to comment/uncomment code
