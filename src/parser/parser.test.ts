@@ -2700,15 +2700,16 @@ record Pair (A : Type) (B : Type) where
   snd : B
 `);
       const decl = decls[0];
-      // Parser context is built left-to-right: ['A', 'B']
-      // So A is at index 0, B is at index 1
+      // De Bruijn convention: most recent binding = index 0
+      // For fst: context is [B, A] (params reversed), so A is at index 1
+      // For snd: context is [fst, B, A], so B is at index 1
       expect(decl.fields?.[0].type.tag).toBe('Var');
       if (decl.fields?.[0].type.tag === 'Var') {
-        expect(decl.fields?.[0].type.index).toBe(0); // A
+        expect(decl.fields?.[0].type.index).toBe(1); // A (second in [B, A])
       }
       expect(decl.fields?.[1].type.tag).toBe('Var');
       if (decl.fields?.[1].type.tag === 'Var') {
-        expect(decl.fields?.[1].type.index).toBe(1); // B
+        expect(decl.fields?.[1].type.index).toBe(1); // B (second in [fst, B, A])
       }
     });
 
@@ -2719,20 +2720,21 @@ record Sigma (A : Type) (B : A -> Type) where
   snd : B fst
 `);
       const decl = decls[0];
-      // Parser context when parsing snd is ['A', 'B', 'fst']
-      // So A is at 0, B is at 1, fst is at 2
+      // De Bruijn convention: most recent binding = index 0
+      // For snd: context is [fst, B, A] (prev fields reversed, then params reversed)
+      // So fst is at 0, B is at 1, A is at 2
       const sndType = decl.fields?.[1].type;
       expect(sndType?.tag).toBe('App');
       if (sndType?.tag === 'App') {
         // The function should be B at index 1
         expect(sndType.fn.tag).toBe('Var');
         if (sndType.fn.tag === 'Var') {
-          expect(sndType.fn.index).toBe(1); // B
+          expect(sndType.fn.index).toBe(1); // B (second in [fst, B, A])
         }
-        // The argument should be fst at index 2
+        // The argument should be fst at index 0
         expect(sndType.arg.tag).toBe('Var');
         if (sndType.arg.tag === 'Var') {
-          expect(sndType.arg.index).toBe(2); // fst
+          expect(sndType.arg.index).toBe(0); // fst (first in [fst, B, A])
         }
       }
     });
@@ -2745,12 +2747,22 @@ record Triple (A : Type) where
   third : A
 `);
       const decl = decls[0];
-      // All fields have type A which is at index 0 in param context
-      for (const field of decl.fields || []) {
-        expect(field.type.tag).toBe('Var');
-        if (field.type.tag === 'Var') {
-          expect(field.type.index).toBe(0);
-        }
+      // De Bruijn convention: most recent binding = index 0
+      // For first: context is [A], so A is at index 0
+      // For second: context is [first, A], so A is at index 1
+      // For third: context is [second, first, A], so A is at index 2
+      const fields = decl.fields || [];
+      expect(fields[0].type.tag).toBe('Var');
+      if (fields[0].type.tag === 'Var') {
+        expect(fields[0].type.index).toBe(0); // A in [A]
+      }
+      expect(fields[1].type.tag).toBe('Var');
+      if (fields[1].type.tag === 'Var') {
+        expect(fields[1].type.index).toBe(1); // A in [first, A]
+      }
+      expect(fields[2].type.tag).toBe('Var');
+      if (fields[2].type.tag === 'Var') {
+        expect(fields[2].type.index).toBe(2); // A in [second, first, A]
       }
     });
   });

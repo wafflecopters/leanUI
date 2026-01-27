@@ -1254,7 +1254,8 @@ export class Parser {
 
       // Parse parameter type (shared by all names in this group)
       // Type is in scope of all previous parameters
-      const paramCtx = params.map(p => p.name);
+      // Context is built with most recent first (like lambda), so reverse the order
+      const paramCtx = [...params].reverse().map(p => p.name);
       const paramTypePath: IndexPath = [
         { kind: 'field', name: 'params' },
         { kind: 'array', index: paramIndex },
@@ -1294,7 +1295,8 @@ export class Parser {
       this.advance(); // consume ':'
 
       // Parse the record type expression in the context of all parameters
-      const typeCtx = params.map(p => p.name);
+      // Context is built with most recent first (like lambda)
+      const typeCtx = [...params].reverse().map(p => p.name);
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
       recordType = this.expr(0, typeCtx, typePath);
     }
@@ -1310,7 +1312,8 @@ export class Parser {
 
       // Parse comma-separated list of parent expressions
       // Each can be a simple name (Pred) or an application (Pred α)
-      const extendsCtx = params.map(p => p.name);
+      // Context is built with most recent first (like lambda)
+      const extendsCtx = [...params].reverse().map(p => p.name);
       let extendsIndex = 0;
       do {
         const extendsPath: IndexPath = [
@@ -1387,7 +1390,8 @@ export class Parser {
     let fieldIndex = 0;
 
     // Build context with all parameters for field type parsing
-    const fieldCtx = params.map(p => p.name);
+    // Context is built with most recent first (like lambda)
+    const fieldCtx = [...params].reverse().map(p => p.name);
 
     while (this.current().type !== 'EOF') {
       const current = this.current();
@@ -1437,8 +1441,9 @@ export class Parser {
         { kind: 'array', index: fieldIndex },
         { kind: 'field', name: 'type' }
       ];
-      // Add previous field names to context for dependent fields
-      const currentFieldCtx = [...fieldCtx, ...fields.map(f => f.name)];
+      // Field types are parsed in context of params AND previous fields (for dependent records)
+      // Most recent binding first: [prev_fields_reversed..., params_reversed...]
+      const currentFieldCtx = [...[...fields].reverse().map(f => f.name), ...fieldCtx];
       const fieldType = this.expr(0, currentFieldCtx, fieldTypePath);
 
       if (implicit) {

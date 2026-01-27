@@ -146,7 +146,7 @@ record Point : Type where
       expect(pointDecl?.checkSuccess).toBe(true);
     });
 
-    test('record with Prop annotation parses', () => {
+    test('record with Prop annotation has Prop type', () => {
       const source = `
 record TrueProof : Prop where
 `;
@@ -156,9 +156,22 @@ record TrueProof : Prop where
       const decl = findDecl(result, 'TrueProof');
       expect(decl).toBeDefined();
       expect(decl?.checkSuccess).toBe(true);
+
+      // Verify the kernel type is actually Prop (Sort with level 0), not Type
+      // The record type should be: Prop (= Sort 0)
+      const kernelType = decl?.kernelType;
+      expect(kernelType?.tag).toBe('Sort');
+      if (kernelType?.tag === 'Sort') {
+        // Prop = Sort 0, Type n = Sort (n+1)
+        // Check it's universe level 0 (Prop)
+        expect(kernelType.level.tag).toBe('ULit');
+        if (kernelType.level.tag === 'ULit') {
+          expect(kernelType.level.n).toBe(0);
+        }
+      }
     });
 
-    test('parameterized record with type annotation parses', () => {
+    test('parameterized record with Type annotation has Type type', () => {
       const source = `
 record Box (A : Type) : Type where
   contents : A
@@ -169,6 +182,23 @@ record Box (A : Type) : Type where
       const boxDecl = findDecl(result, 'Box');
       expect(boxDecl).toBeDefined();
       expect(boxDecl?.checkSuccess).toBe(true);
+
+      // Verify the kernel type ends in Type (not Prop)
+      // Box : (A : Type) → Type
+      // Find the result sort by traversing through the Pi binders
+      let currentType = boxDecl?.kernelType;
+      while (currentType?.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        currentType = currentType.body;
+      }
+      // Now currentType should be the result sort: Type = Sort (some level > 0)
+      expect(currentType?.tag).toBe('Sort');
+      if (currentType?.tag === 'Sort') {
+        // Type has level > 0 (not ULit 0 which is Prop)
+        // It's represented as App(Const("USucc"), ULit(0)) or similar
+        // Just verify it's not the Prop level
+        const isNotProp = !(currentType.level.tag === 'ULit' && currentType.level.n === 0);
+        expect(isNotProp).toBe(true);
+      }
     });
 
     test('record with universe level in type annotation parses', () => {

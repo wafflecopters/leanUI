@@ -8,7 +8,7 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkSort, mkULit } from './kernel';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkType } from './kernel';
 import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
@@ -1979,10 +1979,22 @@ function processRecordDeclaration(
     }
   }
 
-  // Build the record type: params → Type
-  // For now, we assume records always have type Type_0
-  // TODO: Infer universe level from fields
-  const recordType = buildRecordTypeFromParams(kernelParams);
+  // Elaborate the record result sort (the type annotation after params)
+  // If provided (e.g., `: Type` or `: Prop`), use it; otherwise default to Type_0
+  let resultSort: TTKTerm;
+  if (decl.type) {
+    try {
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      resultSort = elabToKernelWithMap(decl.type, elabMap, typePath, typePath);
+    } catch (e) {
+      return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+    }
+  } else {
+    resultSort = mkType(0); // Type = Sort(1)
+  }
+
+  // Build the record type: params → resultSort
+  const recordType = buildRecordTypeFromParams(kernelParams, resultSort);
 
   // Build TTKRecordDef
   const recordName = decl.name || 'anonymous';
@@ -2065,12 +2077,13 @@ function processRecordDeclaration(
 }
 
 /**
- * Build the kernel record type from parameters.
- * record R (A : Type) (B : Type) has type (A : Type) → (B : Type) → Type
+ * Build the kernel record type from parameters and result sort.
+ * record R (A : Type) (B : Type) : Type has type (A : Type) → (B : Type) → Type
+ * record R (A : Type) : Prop has type (A : Type) → Prop
  */
-function buildRecordTypeFromParams(params: TTKRecordParam[]): TTKTerm {
+function buildRecordTypeFromParams(params: TTKRecordParam[], resultSort: TTKTerm): TTKTerm {
   // Build from right to left
-  let result: TTKTerm = mkSort(mkULit(0)); // Type_0
+  let result: TTKTerm = resultSort;
   for (let i = params.length - 1; i >= 0; i--) {
     result = mkPi(params[i].type, result, params[i].name);
   }

@@ -164,3 +164,65 @@ replace0 refl0 fx = fx
     expect(replace0Result?.checkSuccess).toBe(true);
   });
 });
+
+describe('inductive constructor universe level constraints', () => {
+  test('constructor storing Type 1 value in Type result should FAIL', () => {
+    // BadList takes A : Type 1 but returns Type (= Type 0)
+    // BCons stores a value of type A, which requires universe level 2
+    // But the result type BadList A is only at level 1
+    // This violates: stored data must be at level ≤ result level
+    const source = `
+inductive BadList : Type 1 -> Type where
+  BNil : {A : Type 1} -> BadList A
+  BCons : {A : Type 1} -> A -> BadList A -> BadList A
+`;
+    const results = compileSource(source);
+
+    if (results[0]?.checkSuccess) {
+      console.log('BadList should have failed but passed!');
+    }
+
+    expect(results[0]?.checkSuccess).toBe(false);
+    // The error should mention universe level violation
+    const errors = results[0]?.checkErrors ?? [];
+    expect(errors.some(e =>
+      e.message.includes('universe') ||
+      e.message.includes('level')
+    )).toBe(true);
+  });
+
+  test('constructor NOT storing the Type 1 value should PASS', () => {
+    // BNil just passes A through to BadList A without storing anything of type A
+    // This is valid because we're not actually storing a Type 1 value
+    const source = `
+inductive OkList : Type 1 -> Type where
+  ONil : {A : Type 1} -> OkList A
+`;
+    const results = compileSource(source);
+
+    if (!results[0]?.checkSuccess) {
+      console.log('OkList errors:', results[0]?.checkErrors?.map(e => e.message));
+    }
+
+    expect(results[0]?.checkSuccess).toBe(true);
+  });
+
+  test('constructor storing Type 0 value in Type result should PASS', () => {
+    // GoodList takes A : Type (= Type 0) and returns Type (= Type 0)
+    // GCons stores a value of type A, which requires universe level 1
+    // The result type GoodList A is at level 1 (Type = Type 0, values at level 1)
+    // This is valid: 1 ≤ 1
+    const source = `
+inductive GoodList : Type -> Type where
+  GNil : {A : Type} -> GoodList A
+  GCons : {A : Type} -> A -> GoodList A -> GoodList A
+`;
+    const results = compileSource(source);
+
+    if (!results[0]?.checkSuccess) {
+      console.log('GoodList errors:', results[0]?.checkErrors?.map(e => e.message));
+    }
+
+    expect(results[0]?.checkSuccess).toBe(true);
+  });
+});

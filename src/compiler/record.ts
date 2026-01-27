@@ -78,19 +78,15 @@ export function buildRecordConstructorType(
   }
 
   // Add field types as inner binders
-  // Field types in the input are in param context (param[0] at index 0)
-  // In the constructor type, we need to shift them:
-  //   - Each field adds a binder, so previous fields shift
-  //   - Params are outermost, so they shift by numFields
+  // Field types in the input are already in the right context:
+  // the parser includes previous fields (most recent first), so field i's type
+  // has indices that account for fields 0..i-1 and all params.
+  // No shifting needed.
   let result = returnType;
   for (let i = fields.length - 1; i >= 0; i--) {
     const field = fields[i];
-    // Shift field type: it was in context with just params,
-    // now it needs to account for fields 0..i-1 and all params
-    const shiftAmount = i; // fields before this one
-    const shiftedType = shiftTerm(field.type, shiftAmount, 0);
     // Note: implicit fields are tracked in recordInfo.implicitFields, not in the Pi type
-    result = mkPi(shiftedType, result, field.name);
+    result = mkPi(field.type, result, field.name);
   }
 
   // Add param types as outer binders

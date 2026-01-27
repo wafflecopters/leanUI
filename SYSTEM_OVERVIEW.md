@@ -10,15 +10,16 @@ This document provides a comprehensive overview of the LeanUI type checker, from
 4. [Parsing](#parsing)
 5. [Elaboration (TT → TTK)](#elaboration-tt--ttk)
 6. [Type Checking](#type-checking)
-7. [Pattern Matching](#pattern-matching)
-8. [Metas and Constraint Solving](#metas-and-constraint-solving)
-9. [Unification](#unification)
-10. [Substitution and De Bruijn Indices](#substitution-and-de-bruijn-indices)
-11. [WHNF Normalization](#whnf-normalization)
-12. [Totality Checking](#totality-checking)
-13. [Structural Recursion Checking](#structural-recursion-checking)
-14. [Key Invariants](#key-invariants)
-15. [Ideas for Hardening / Refactoring / Improving](#ideas-for-hardening--refactoring--improving)
+7. [Inductive Type Checking](#inductive-type-checking)
+8. [Pattern Matching](#pattern-matching)
+9. [Metas and Constraint Solving](#metas-and-constraint-solving)
+10. [Unification](#unification)
+11. [Substitution and De Bruijn Indices](#substitution-and-de-bruijn-indices)
+12. [WHNF Normalization](#whnf-normalization)
+13. [Totality Checking](#totality-checking)
+14. [Structural Recursion Checking](#structural-recursion-checking)
+15. [Key Invariants](#key-invariants)
+16. [Ideas for Hardening / Refactoring / Improving](#ideas-for-hardening--refactoring--improving)
 
 ---
 
@@ -328,6 +329,96 @@ class TCEnv<T> {
 
 ---
 
+## Inductive Type Checking
+
+**Location**: `src/compiler/inductive.ts`
+
+### Entry Point
+
+```typescript
+checkInductiveDeclaration(
+  name: string,
+  type: TTKTerm,
+  constructors: Array<{ name: string; type: TTKTerm }>,
+  definitions: DefinitionsMap
+): { success: true, newDefinitions, indexPositions, zonkedConstructors }
+ | { success: false, errors }
+```
+
+### Validation Phases
+
+1. **Syntax validation**: No lambdas, let-bindings, or pattern matching in inductive/constructor types
+2. **Type inference**: Infer types of inductive signature and constructors
+3. **Strict positivity**: The inductive type must not appear in negative positions
+4. **Universe level constraints**: Constructor arguments must fit in the result universe
+5. **Parameter/index inference**: Determine which positions are parameters vs indices
+
+### Strict Positivity
+
+The inductive type must only appear in **strictly positive** positions in constructor arguments. A position is strictly positive if it's not to the left of any function arrow.
+
+**Valid** (strictly positive):
+```
+Nat → Nat           -- Nat appears as direct argument ✓
+List Nat            -- Nat appears as type parameter ✓
+```
+
+**Invalid** (negative occurrence):
+```
+(Nat → A) → Bad     -- Nat is left of arrow, inside argument ✗
+```
+
+### Universe Level Constraints (Predicativity)
+
+For an inductive `I : ... → Sort n`, each constructor's data-storing arguments must have types at universe level ≤ n.
+
+**The Rule**: Strip type parameters from the constructor, then the type of what remains must be ≤ the inductive's result level.
+
+Type parameters that are skipped:
+- Sorts like `A : Type` or `A : Type 1`
+- Type families like `P : A → Type`
+
+**Example - Invalid**:
+```
+inductive BadList : Type 1 → Type where
+  BCons : {A : Type 1} → A → BadList A → BadList A
+```
+
+Analysis of `BCons`:
+- Strip type parameter `{A : Type 1}`
+- Remaining: `A → BadList A → BadList A`
+- Type of remaining: `Sort max(2, 1, 1) = Sort 2`
+- Result level: `Type = Sort 1`
+- Check: `2 ≤ 1`? **NO → reject**
+
+The argument `A` where `A : Type 1` stores values at level 2, but `BadList A : Type` can only hold level-1 data.
+
+**Example - Valid**:
+```
+inductive GoodList : Type → Type where
+  GCons : {A : Type} → A → GoodList A → GoodList A
+```
+
+Here `A : Type = Sort 1`, so the data is at level 1, which fits in `GoodList A : Type`.
+
+**Type Classes and Higher Universes**:
+
+Type classes with polymorphic fields need higher universe levels:
+
+```
+-- INVALID: field has type Sort 2, but record is at Sort 1
+record Functor (F : Type → Type) where
+  map : {A B : Type} → (A → B) → F A → F B
+
+-- VALID: record at Type 1 = Sort 2 can hold the polymorphic field
+record Functor (F : Type → Type) : Type 1 where
+  map : {A B : Type} → (A → B) → F A → F B
+```
+
+The `{A B : Type}` in the field type contributes `Sort 2`, requiring the record to be at `Type 1`.
+
+---
+
 ## Pattern Matching
 
 **Location**: `src/compiler/patterns.ts`
@@ -605,6 +696,7 @@ type CaseTree =
   | { tag: 'Split'; typeName: string; branches: Map<string, CaseTree>; ... }
   | { tag: 'Uncovered' }
   | { tag: 'Absurd' }
+  | { tag: 'NoSplit'; branch: CaseTree }
 ```
 
 ### Algorithm
@@ -614,6 +706,39 @@ type CaseTree =
 3. **Detect uncovered** leaves (no matching clause)
 4. **Check absurdity** (can contradictory patterns exist?)
 5. **Detect unreachable** clauses
+6. **Replace Uncovered with Absurd** when all missing patterns are absurd
+
+### Absurd Case Handling
+
+When all uncovered patterns are provably impossible (absurd), the case tree uses `{ tag: 'Absurd' }` instead of `{ tag: 'Uncovered' }`:
+
+**Zero-clause functions with uninhabited types**:
+```
+inductive Void : Type where
+-- (no constructors)
+
+absurd : {A : Type} → Void → A
+-- No clauses needed! Case tree is Absurd.
+```
+
+Since `Void` has no constructors, there's no value to match against. The function is total despite having zero clauses.
+
+**Impossible pattern refinement**:
+```
+zeroNeqSucc : {n : Nat} → Equal Zero (Succ n) → Void
+zeroNeqSucc refl = #absurd
+```
+
+The pattern `refl` requires `Zero = Succ n`, which is impossible by constructor disjointness. The clause is absurd, and since it's the only clause, the case tree is `Absurd`.
+
+**Mixed absurd and valid clauses**:
+```
+head : (A : Type) → (n : Nat) → Vec A (Succ n) → A
+head A n (nil _) = #absurd    -- impossible: nil has index Zero, not Succ n
+head A n (cons _ _ x _) = x   -- valid clause
+```
+
+The `nil` case is filtered as absurd, leaving only the valid `cons` clause. The function is exhaustive.
 
 ### Result
 
@@ -626,6 +751,8 @@ interface TotalityResult {
   missingAbsurdClauses: { patterns: TTKPattern[] }[];
 }
 ```
+
+A function is **exhaustive** when `missingValidClauses` is empty. Missing absurd clauses don't affect exhaustiveness since they represent impossible inputs.
 
 ---
 

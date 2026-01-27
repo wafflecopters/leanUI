@@ -1,5 +1,5 @@
 import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
-import { TTKTerm, levelsEqual, mkULit } from "./kernel";
+import { TTKTerm, levelsEqual, mkULit, levelToNumber } from "./kernel";
 import { inferType } from "./checker";
 
 function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError[] {
@@ -154,8 +154,11 @@ export function checkInductiveDeclaration(
     }
   }
 
-  // TODO: ensure indices fit within the type
+  // Check strict positivity
   constructors.forEach((_, i) => checkStrictPositivity(name, ctorsEnv.inInductiveDefinitionConstructor(i), errors));
+
+  // Check universe level constraints: constructor argument types must fit in result universe
+  checkConstructorUniverseLevels(name, type, zonkedConstructors, ctorsEnv, errors);
 
   if (errors.length > 0) {
     return { success: false, errors };
@@ -308,6 +311,96 @@ function flipPolarity(p: Polarity): Polarity {
       return 'negative';
     case 'negative':
       return 'positive';
+  }
+}
+
+/**
+ * Check if a term is a "type-level" parameter (Sort or function returning Sort).
+ * Type parameters like `A : Type` or `P : A -> Type` don't store data, they
+ * parameterize types, so they should be skipped in universe level checks.
+ */
+function isTypeLevelDomain(domain: TTKTerm): boolean {
+  if (domain.tag === 'Sort') return true;
+  // Pi types that return Sorts are type families (like A -> Type)
+  if (domain.tag === 'Binder' && domain.binderKind.tag === 'BPi') {
+    return isTypeLevelDomain(domain.body);
+  }
+  return false;
+}
+
+/**
+ * Check that constructor argument types fit within the inductive's result universe.
+ *
+ * The approach: strip type parameters (binders with type-level domains), then infer
+ * the type of what remains. That level must be ≤ the inductive's result level.
+ *
+ * Type parameters include:
+ * - Sorts like `A : Type` or `A : Type 1`
+ * - Type families like `P : A -> Type`
+ *
+ * Example violation:
+ *   inductive BadList : Type 1 -> Type where
+ *     BCons : {A : Type 1} -> A -> BadList A -> BadList A
+ *
+ * After stripping {A : Type 1}, we have `A -> BadList A -> BadList A`.
+ * Its type is Sort max(2, 1, 1) = Sort 2. But BadList's result is Type = Sort 1.
+ * Since 2 > 1, this is invalid.
+ *
+ * For BNil : {A : Type 1} -> BadList A, after stripping we have just `BadList A`
+ * with type Sort 1. Since 1 <= 1, this is valid.
+ */
+function checkConstructorUniverseLevels(
+  inductiveName: string,
+  inductiveType: TTKTerm,
+  constructors: Array<{ name: string; type: TTKTerm }>,
+  env: TCEnv<unknown>,
+  errors: TCEnvError[]
+): void {
+  // Extract the result type of the inductive (skip all Pi binders)
+  const { body: resultType } = extractPiSpine(inductiveType);
+
+  // The result should be a Sort - extract its level
+  if (resultType.tag !== 'Sort') {
+    return;
+  }
+  const resultLevel = levelToNumber(resultType.level);
+  if (resultLevel === undefined) {
+    // Universe polymorphic - can't easily check statically
+    return;
+  }
+
+  // Check each constructor
+  for (const ctor of constructors) {
+    // Strip type parameter binders (domains that are type-level: Sorts or type families)
+    let current = ctor.type;
+    let currentEnv = env;
+
+    while (current.tag === 'Binder' && current.binderKind.tag === 'BPi' && isTypeLevelDomain(current.domain)) {
+      currentEnv = currentEnv.extendTTKContext(current.name, current.domain);
+      current = current.body;
+    }
+
+    // Now `current` is the constructor body with type parameters stripped.
+    // Infer its type - this gives us the level that includes all stored data.
+    try {
+      const bodyEnv = currentEnv.withValue(current);
+      const typeResult = inferType(bodyEnv);
+      const bodyType = typeResult.value;
+
+      if (bodyType.tag === 'Sort') {
+        const ctorLevel = levelToNumber(bodyType.level);
+        if (ctorLevel !== undefined && ctorLevel > resultLevel) {
+          errors.push(TCEnvError.create(
+            `Universe level violation in constructor '${ctor.name}': ` +
+            `constructor body has type Sort ${ctorLevel} but '${inductiveName}' ` +
+            `result type is Sort ${resultLevel}`,
+            bodyEnv
+          ));
+        }
+      }
+    } catch {
+      // If type inference fails, skip this check (other errors will be reported)
+    }
   }
 }
 
