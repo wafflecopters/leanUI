@@ -322,6 +322,14 @@ record Pair (A B : Type) : Type where
   constructor MkPair
   fst: A
   snd: B
+
+inductive DPairInd : {u v : ULevel} -> (A : Type u) -> (B : A -> Type v) -> Type (UMax u v) where
+  MkDPairInd: {u v : ULevel} -> {A : Type u} -> {B : A -> Type v} -> (a : A) -> B a -> DPairInd A B
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  dfst: A
+  dsnd: B dfst
 `;
 
 // Styles
@@ -788,6 +796,18 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
                         <span style={styles.ctorName}>{ctor.name}</span>
                         <span style={{ color: '#8b949e' }}> : </span>
                         <span style={styles.typeValue}>{ctor.prettyType}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {decl.prettyProjections && decl.prettyProjections.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    <div style={{ ...styles.typeLabel, marginBottom: '4px' }}>Projections:</div>
+                    {decl.prettyProjections.map((proj, j) => (
+                      <div key={j} style={styles.ctorRow}>
+                        <span style={{ color: '#58a6ff' }}>{proj.name}</span>
+                        <span style={{ color: '#8b949e' }}> : </span>
+                        <span style={styles.typeValue}>{proj.prettyType}</span>
                       </div>
                     ))}
                   </div>

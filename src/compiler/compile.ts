@@ -129,6 +129,9 @@ export interface CompiledDeclaration {
   prettyValue?: string;
   prettyConstructors?: Array<{ name: string; prettyType: string }>;
 
+  // Record-specific: generated projection signatures
+  prettyProjections?: Array<{ name: string; prettyType: string }>;
+
   // Type checking results
   checkSuccess: boolean;
   checkErrors: TCEnvError[];
@@ -1752,6 +1755,7 @@ function createCompiledDeclaration(
   elabErrorPath?: string,
   isRecord?: boolean,
   surfaceFields?: Array<{ name: string; type: TTerm }>,
+  prettyProjections?: Array<{ name: string; prettyType: string }>,
 ): CompiledDeclaration {
   return {
     name: decl.name,
@@ -1771,6 +1775,7 @@ function createCompiledDeclaration(
       name: c.name,
       prettyType: prettyPrintTTK(c.type)
     })),
+    prettyProjections,
     checkSuccess,
     checkErrors,
     totalityResult,
@@ -2069,12 +2074,18 @@ function processRecordDeclaration(
     finalDefinitions = addDefinition(finalDefinitions, proj.name, proj.type, proj.value);
   }
 
+  // Build pretty-printed projections for display
+  const prettyProjections = projections.map(proj => ({
+    name: proj.name,
+    prettyType: prettyPrintTTK(proj.type)
+  }));
+
   return {
     success: true,
     compiled: createCompiledDeclaration(
       syntheticDecl, inductiveDef.type, undefined, result.zonkedConstructors, elabMap, sourceMap,
       true, [], undefined, result.indexPositions, undefined,
-      true, decl.fields  // isRecord, surfaceFields
+      true, decl.fields, prettyProjections  // isRecord, surfaceFields, prettyProjections
     ),
     newDefinitions: finalDefinitions,
     errorCount: 0

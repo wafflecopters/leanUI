@@ -809,7 +809,18 @@ record Preorder (A : Type) where
     expectSuccess(result, 'Preorder');
   });
 
-  // FUTURE: Self-referential fields (field type references earlier field)
+  // Self-referential fields (field type references earlier field)
+  test('DPair (dependent pair / Sigma type)', () => {
+    const source = `
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  dfst: A
+  dsnd: B dfst
+`;
+    const result = compileTTFromText(source);
+    expectSuccess(result, 'DPair');
+  });
+
   test.todo('Category record (Hom depends on Obj)', () => {
     const source = `
 record Category where
