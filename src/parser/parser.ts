@@ -1227,7 +1227,7 @@ export class Parser {
     const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
     this.recordRange(namePath, nameToken, nameToken);
 
-    // Parse parameters: (A : Type) or {A : Type}, can be multiple
+    // Parse parameters: (A : Type) or {A : Type} or (A B : Type), can be multiple
     const params: ParsedRecordParam[] = [];
     let paramIndex = 0;
 
@@ -1235,28 +1235,31 @@ export class Parser {
       const implicit = this.current().type === 'LBRACE';
       this.advance(); // consume ( or {
 
-      // Parse parameter name
-      const paramNameToken = this.expect('IDENT');
-      const paramName = paramNameToken.value;
+      // Collect all names (space-separated) until we see ':'
+      const nameTokens: Token[] = [];
+      while (this.current().type === 'IDENT') {
+        nameTokens.push(this.current());
+        this.advance();
+      }
 
-      // Record source range for parameter name
-      const paramNamePath: IndexPath = [
-        { kind: 'field', name: 'params' },
-        { kind: 'array', index: paramIndex },
-        { kind: 'field', name: 'name' }
-      ];
-      this.recordRange(paramNamePath, paramNameToken, paramNameToken);
+      if (nameTokens.length === 0) {
+        throw new ParseError(
+          'Expected at least one parameter name',
+          this.current().line,
+          this.current().col
+        );
+      }
 
       this.expect('COLON');
 
-      // Parse parameter type
+      // Parse parameter type (shared by all names in this group)
+      // Type is in scope of all previous parameters
+      const paramCtx = params.map(p => p.name);
       const paramTypePath: IndexPath = [
         { kind: 'field', name: 'params' },
         { kind: 'array', index: paramIndex },
         { kind: 'field', name: 'type' }
       ];
-      // Parameter type is in scope of previous parameters
-      const paramCtx = params.map(p => p.name);
       const paramType = this.expr(0, paramCtx, paramTypePath);
 
       // Expect closing bracket
@@ -1266,20 +1269,87 @@ export class Parser {
         this.expect('RPAREN');
       }
 
-      params.push({ name: paramName, type: paramType, implicit: implicit || undefined });
-      paramIndex++;
+      // Create a param for each name, all sharing the same type
+      // The type is parsed once and reused - elaboration handles the context/indices
+      for (const nameToken of nameTokens) {
+        const paramName = nameToken.value;
+
+        // Record source range for parameter name
+        const paramNamePath: IndexPath = [
+          { kind: 'field', name: 'params' },
+          { kind: 'array', index: paramIndex },
+          { kind: 'field', name: 'name' }
+        ];
+        this.recordRange(paramNamePath, nameToken, nameToken);
+
+        params.push({ name: paramName, type: paramType, implicit: implicit || undefined });
+        paramIndex++;
+      }
+    }
+
+    // Parse optional type annotation: : Type or : Type u or : Prop
+    // e.g., record Box (A : Type) : Type where ...
+    let recordType: TTerm | undefined;
+    if (this.current().type === 'COLON') {
+      this.advance(); // consume ':'
+
+      // Parse the record type expression in the context of all parameters
+      const typeCtx = params.map(p => p.name);
+      const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+      recordType = this.expr(0, typeCtx, typePath);
     }
 
     // Parse optional extends clause: extends Parent1, Parent2
+    // Note: extends can reference bound parameters, e.g., extends Pred α
     let extendsNames: string[] | undefined;
+    let extendsExprs: TTerm[] | undefined;
     if (this.current().type === 'EXTENDS') {
       this.advance(); // consume 'extends'
       extendsNames = [];
+      extendsExprs = [];
 
-      // Parse comma-separated list of record names
+      // Parse comma-separated list of parent expressions
+      // Each can be a simple name (Pred) or an application (Pred α)
+      const extendsCtx = params.map(p => p.name);
+      let extendsIndex = 0;
       do {
-        const parentNameToken = this.expect('IDENT');
-        extendsNames.push(parentNameToken.value);
+        const extendsPath: IndexPath = [
+          { kind: 'field', name: 'extends' },
+          { kind: 'array', index: extendsIndex }
+        ];
+        // Parse as an expression to allow applications like "Pred α"
+        const parentExpr = this.expr(0, extendsCtx, extendsPath);
+
+        // Extract the base name for backwards compatibility
+        let baseName: string;
+        if (parentExpr.tag === 'Const') {
+          baseName = parentExpr.name;
+        } else if (parentExpr.tag === 'App') {
+          // Walk to the leftmost function to get the base name
+          let fn = parentExpr.fn;
+          while (fn.tag === 'App') {
+            fn = fn.fn;
+          }
+          if (fn.tag === 'Const') {
+            baseName = fn.name;
+          } else {
+            throw new ParseError(
+              'Expected record name in extends clause',
+              this.current().line,
+              this.current().col
+            );
+          }
+        } else {
+          throw new ParseError(
+            'Expected record name in extends clause',
+            this.current().line,
+            this.current().col
+          );
+        }
+
+        extendsNames.push(baseName);
+        extendsExprs.push(parentExpr);
+        extendsIndex++;
 
         // Check for comma to continue
         if (this.current().type !== 'COMMA') {
@@ -1385,6 +1455,7 @@ export class Parser {
     return {
       kind: 'record',
       name: nameToken.value,
+      type: recordType,
       params,
       fields,
       constructorName,

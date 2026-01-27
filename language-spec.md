@@ -160,6 +160,17 @@ record Container {A : Type} where
   value : A
 ```
 
+**With multi-variable binders (multiple names sharing one type):**
+```
+record Pair (A B : Type) where
+  fst : A
+  snd : B
+
+record Foo (A B : Type) {C D : Type} where
+  x : A
+  y : C
+```
+
 **With custom constructor name:**
 ```
 record Point where

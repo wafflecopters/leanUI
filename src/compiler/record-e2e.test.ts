@@ -93,6 +93,130 @@ record Pair (A : Type) (B : Type) where
       expect(pairDecl).toBeDefined();
       expect(pairDecl?.checkSuccess).toBe(true);
     });
+
+    test('record with multi-var binder compiles', () => {
+      const source = `
+record Pair (A B : Type) where
+  fst : A
+  snd : B
+`;
+      const result = compileTTFromText(source);
+      expect(result.success).toBe(true);
+
+      const pairDecl = findDecl(result, 'Pair');
+      expect(pairDecl).toBeDefined();
+      expect(pairDecl?.checkSuccess).toBe(true);
+    });
+
+    test('record with mixed explicit and implicit multi-var binders compiles', () => {
+      const source = `
+record Foo (A B : Type) {C D : Type} where
+  x : A
+  y : C
+`;
+      const result = compileTTFromText(source);
+      if (!result.success) {
+        console.log('Parse errors:', result.blocks.flatMap(b => b.parseErrors.map(e => e.message || e)));
+        console.log('Check errors:', result.blocks.flatMap(b => b.declarations.flatMap(d => d.checkErrors?.map(e => e.message) || [])));
+      }
+      expect(result.success).toBe(true);
+
+      const fooDecl = findDecl(result, 'Foo');
+      expect(fooDecl).toBeDefined();
+      expect(fooDecl?.checkSuccess).toBe(true);
+    });
+  });
+
+  describe('Record type annotations', () => {
+    test('record with explicit Type annotation parses', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+record Point : Type where
+  x : Nat
+  y : Nat
+`;
+      const result = compileTTFromText(source);
+      expect(result.success).toBe(true);
+
+      const pointDecl = findDecl(result, 'Point');
+      expect(pointDecl).toBeDefined();
+      expect(pointDecl?.checkSuccess).toBe(true);
+    });
+
+    test('record with Prop annotation parses', () => {
+      const source = `
+record TrueProof : Prop where
+`;
+      const result = compileTTFromText(source);
+      expect(result.success).toBe(true);
+
+      const decl = findDecl(result, 'TrueProof');
+      expect(decl).toBeDefined();
+      expect(decl?.checkSuccess).toBe(true);
+    });
+
+    test('parameterized record with type annotation parses', () => {
+      const source = `
+record Box (A : Type) : Type where
+  contents : A
+`;
+      const result = compileTTFromText(source);
+      expect(result.success).toBe(true);
+
+      const boxDecl = findDecl(result, 'Box');
+      expect(boxDecl).toBeDefined();
+      expect(boxDecl?.checkSuccess).toBe(true);
+    });
+
+    test('record with universe level in type annotation parses', () => {
+      const source = `
+record Box {u : ULevel} (A : Type u) : Type (USucc u) where
+  unbox : A
+`;
+      const result = compileTTFromText(source);
+      // Note: Full type checking of universe-polymorphic records is not yet implemented.
+      // This test just verifies that the parser handles the syntax correctly.
+      expect(result.blocks[0].parseErrors).toHaveLength(0);
+
+      const boxDecl = findDecl(result, 'Box');
+      expect(boxDecl).toBeDefined();
+    });
+
+    test('record type annotation with extends parses', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+record Base : Type where
+  x : Nat
+
+record Extended : Type extends Base where
+  y : Nat
+`;
+      const result = compileTTFromText(source);
+      // Note: extends is not fully implemented yet, so we just check parsing works
+      // The extends clause may cause check errors until fully implemented
+      expect(result.blocks[0].parseErrors).toHaveLength(0);
+    });
+  });
+
+  describe('Extends clause with parameters', () => {
+    test('extends with applied type parameter parses', () => {
+      const source = `
+record Pred (alpha : Type) : Prop where
+  p : alpha
+
+record DecPred (alpha : Type) extends Pred alpha where
+  extra : alpha
+`;
+      const result = compileTTFromText(source);
+      // Just verify parsing works - full extends implementation is separate
+      expect(result.blocks[0].parseErrors).toHaveLength(0);
+    });
   });
 
   describe('Custom constructor names', () => {

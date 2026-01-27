@@ -317,6 +317,11 @@ cong refl = refl
 
 replace : {x y : Type} -> {f : Type -> Type} -> Equal x y -> f x -> f y
 replace refl fx = fx
+
+record Pair (A B : Type) : Type where
+  constructor MkPair
+  fst: A
+  snd: B
 `;
 
 // Styles
@@ -1032,7 +1037,7 @@ export function TextEditorPage() {
           [/\b(Type|Prop|ULevel|USucc|UMax|UIMax)\b/, 'type.identifier'],
 
           // Keywords
-          [/\b(inductive|where|let|in|fun)\b/, 'keyword'],
+          [/\b(inductive|record|constructor|extends|where|let|in|fun)\b/, 'keyword'],
 
           // Holes (unfinished code that needs attention)
           [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],

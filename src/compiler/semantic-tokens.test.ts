@@ -66,6 +66,32 @@ describe('Semantic Token Extraction', () => {
       expect(tokens.length).toBeGreaterThanOrEqual(3);
     });
 
+    test('record type', () => {
+      const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+record Point where
+  constructor MkPoint
+  x : Nat
+  y : Nat`;
+      const result = compileTTFromText(source);
+      const tokens = extractSemanticTokens(result);
+
+      validateSemanticTokens(source, tokens);
+
+      // Check for record-specific tokens
+      // Constructor name (MkPoint) should be constName
+      const mkPointToken = tokens.find(t => t.type === 'constName' && t.line === 6);
+      expect(mkPointToken).toBeDefined();
+
+      // Field names (x, y) should be termName
+      const xFieldToken = tokens.find(t => t.type === 'termName' && t.line === 7);
+      const yFieldToken = tokens.find(t => t.type === 'termName' && t.line === 8);
+      expect(xFieldToken).toBeDefined();
+      expect(yFieldToken).toBeDefined();
+    });
+
     test('function with named parameter', () => {
       const source = `id : { A : Type } -> A -> A
 id {A} x = x`;

@@ -112,6 +112,10 @@ export interface CompiledDeclaration {
   surfaceValue?: TTerm;
   surfaceConstructors?: Array<{ name: string; type: TTerm }>;
 
+  // Record-specific surface info for syntax highlighting
+  isRecord?: boolean;
+  surfaceFields?: Array<{ name: string; type: TTerm }>;
+
   // Elaborated kernel terms
   kernelType?: TTKTerm;
   kernelValue?: TTKTerm;
@@ -346,6 +350,27 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
             ['constructors', i, 'type'],
             tokens
           );
+        }
+      }
+
+      // Process record-specific tokens
+      if (decl.isRecord) {
+        // Record constructor name (e.g., "MkPoint" in "constructor MkPoint")
+        addSemanticTokenDirect(['constructorName'], decl.sourceMap, block.startLine, 'constName', tokens);
+
+        // Record field names at definition site (e.g., "x" and "y" in "x : Nat" and "y : Nat")
+        if (decl.surfaceFields) {
+          for (let i = 0; i < decl.surfaceFields.length; i++) {
+            addSemanticTokenDirect(['fields', i, 'name'], decl.sourceMap, block.startLine, 'termName', tokens);
+            // Also process the field type
+            collectSemanticTokensFromSurfaceTerm(
+              decl.surfaceFields[i].type,
+              decl.sourceMap,
+              block.startLine,
+              ['fields', i, 'type'],
+              tokens
+            );
+          }
         }
       }
     }
@@ -1725,6 +1750,8 @@ function createCompiledDeclaration(
   totalityResult?: TotalityResult,
   indexPositions?: number[],
   elabErrorPath?: string,
+  isRecord?: boolean,
+  surfaceFields?: Array<{ name: string; type: TTerm }>,
 ): CompiledDeclaration {
   return {
     name: decl.name,
@@ -1732,6 +1759,8 @@ function createCompiledDeclaration(
     surfaceType: decl.type,
     surfaceValue: decl.value,
     surfaceConstructors: decl.constructors,
+    isRecord,
+    surfaceFields,
     kernelType,
     kernelValue,
     kernelConstructors,
@@ -1995,7 +2024,8 @@ function processRecordDeclaration(
       success: false,
       compiled: createCompiledDeclaration(
         syntheticDecl, inductiveDef.type, undefined, inductiveDef.constructors, elabMap, sourceMap,
-        false, result.errors
+        false, result.errors, undefined, undefined, undefined,
+        true, decl.fields  // isRecord, surfaceFields
       ),
       newDefinitions: definitions,
       errorCount: result.errors.length
@@ -2026,7 +2056,8 @@ function processRecordDeclaration(
     success: true,
     compiled: createCompiledDeclaration(
       syntheticDecl, inductiveDef.type, undefined, result.zonkedConstructors, elabMap, sourceMap,
-      true, [], undefined, result.indexPositions
+      true, [], undefined, result.indexPositions, undefined,
+      true, decl.fields  // isRecord, surfaceFields
     ),
     newDefinitions: finalDefinitions,
     errorCount: 0
