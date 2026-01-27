@@ -2011,6 +2011,11 @@ function processRecordDeclaration(
   // Convert to InductiveDefinition
   const inductiveDef = recordToInductiveDefinition(ttkRecord);
 
+  // Add elabMap entries to map constructor type positions back to original field/param positions.
+  // The constructor type is: (P1 : T1) → ... → (Pn : Tn) → (F1 : FT1) → ... → (Fm : FTm) → R P1...Pn
+  // We need to map paths like "constructors[0].type.body.body.domain" to "fields[0].type"
+  addRecordCtorTypeElabMappings(elabMap, kernelParams.length, kernelFields.length);
+
   // Check using inductive checking infrastructure
   const result = checkInductiveDeclaration(
     inductiveDef.name,
@@ -2129,6 +2134,48 @@ function buildSurfaceConstructorType(
   }
 
   return result;
+}
+
+/**
+ * Add elabMap entries to map constructor type positions to original param/field positions.
+ *
+ * For a record with n params and m fields, the constructor type is:
+ *   (P1 : T1) → (P2 : T2) → ... → (Pn : Tn) → (F1 : FT1) → ... → (Fm : FTm) → R P1...Pn
+ *
+ * The kernel paths are:
+ *   - constructors[0].type.domain → params[0].type
+ *   - constructors[0].type.body.domain → params[1].type
+ *   - ...
+ *   - constructors[0].type.body^n.domain → fields[0].type
+ *   - constructors[0].type.body^(n+1).domain → fields[1].type
+ *   - ...
+ */
+function addRecordCtorTypeElabMappings(
+  elabMap: ElabMap,
+  numParams: number,
+  numFields: number
+): void {
+  const totalBinders = numParams + numFields;
+
+  for (let i = 0; i < totalBinders; i++) {
+    // Build the kernel path: constructors[0].type.body.body...domain
+    // Each position has i levels of .body before .domain
+    let kernelPath = 'constructors[0].type';
+    for (let j = 0; j < i; j++) {
+      kernelPath += '.body';
+    }
+    kernelPath += '.domain';
+
+    // Build the surface path: params[i].type or fields[i-numParams].type
+    let surfacePath: string;
+    if (i < numParams) {
+      surfacePath = `params[${i}].type`;
+    } else {
+      surfacePath = `fields[${i - numParams}].type`;
+    }
+
+    elabMap.set(kernelPath, surfacePath);
+  }
 }
 
 /**
