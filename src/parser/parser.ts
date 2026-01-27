@@ -1432,12 +1432,11 @@ export class Parser {
    * Assumes we're positioned at the opening brace.
    */
   private parseNamedArgument(ctx: NameContext, path: IndexPath): { name: string; value: TTerm; usedShorthand?: boolean } {
-    // Record open brace position for syntax highlighting
+    // Save open brace token - we'll record its position AFTER parsing the value
+    // to avoid it being modified by prefixSourceMapPaths during application parsing
     const openBraceToken = this.current();
     this.expect('LBRACE');
     const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
-    const openBracePath = [...argPath, { kind: 'field' as const, name: 'openBrace' }];
-    this.recordRange(openBracePath, openBraceToken, openBraceToken);
 
     const nameToken = this.current();
     if (nameToken.type !== 'IDENT') {
@@ -1473,6 +1472,12 @@ export class Parser {
     // Record close brace position for syntax highlighting
     const closeBraceToken = this.current();
     this.expect('RBRACE');
+
+    // Record brace positions AFTER parsing the value expression.
+    // This is important because expr() may call prefixSourceMapPaths() which would
+    // modify any paths we recorded earlier (e.g., for applications like "(\x=>x) m").
+    const openBracePath = [...argPath, { kind: 'field' as const, name: 'openBrace' }];
+    this.recordRange(openBracePath, openBraceToken, openBraceToken);
     const closeBracePath = [...argPath, { kind: 'field' as const, name: 'closeBrace' }];
     this.recordRange(closeBracePath, closeBraceToken, closeBraceToken);
 

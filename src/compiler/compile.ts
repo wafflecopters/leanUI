@@ -424,15 +424,41 @@ function collectSemanticTokensFromSurfaceTerm(
       collectSemanticTokensFromSurfaceTerm(term.scrutinee, sourceMap, blockStartLine, [...path, 'scrutinee'], tokens);
       for (let i = 0; i < term.clauses.length; i++) {
         const clause = term.clauses[i];
-        // Collect from patterns
+        // The parser records ALL patterns (both positional and named) under
+        // patterns[0], patterns[1], etc. in parsing order. But the data structure
+        // separates them into clause.patterns (positional) and clause.namedPatterns.
+        // To extract brace tokens for named patterns, we need to iterate through
+        // ALL parsing indices and look for braces.
+        const totalPatternCount = clause.patterns.length + (clause.namedPatterns?.length || 0);
+        for (let j = 0; j < totalPatternCount; j++) {
+          // Try to add brace tokens (only exist for named patterns)
+          addSemanticTokenDirect([...path, 'clauses', i, 'patterns', j, 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+          addSemanticTokenDirect([...path, 'clauses', i, 'patterns', j, 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+        }
+        // Collect from positional patterns. Named patterns come first in the source,
+        // so positional patterns have source map indices offset by namedPatterns.length.
+        const namedPatternCount = clause.namedPatterns?.length || 0;
         for (let j = 0; j < clause.patterns.length; j++) {
+          const sourceMapIndex = j + namedPatternCount;
           collectSemanticTokensFromSurfacePattern(
             clause.patterns[j],
             sourceMap,
             blockStartLine,
-            [...path, 'clauses', i, 'patterns', j],
+            [...path, 'clauses', i, 'patterns', sourceMapIndex],
             tokens
           );
+        }
+        // Collect from named patterns (they are at indices 0..namedPatternCount-1 in source map)
+        if (clause.namedPatterns) {
+          for (let j = 0; j < clause.namedPatterns.length; j++) {
+            collectSemanticTokensFromSurfacePattern(
+              clause.namedPatterns[j].pattern,
+              sourceMap,
+              blockStartLine,
+              [...path, 'clauses', i, 'patterns', j, 'pattern'],
+              tokens
+            );
+          }
         }
         // Collect from RHS
         collectSemanticTokensFromSurfaceTerm(

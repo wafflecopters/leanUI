@@ -234,9 +234,12 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     let currentFnTerm = fnTypeEnv.elaboratedTerm ?? env.value.fn;
 
     // Check the argument against the expected domain type
+    // IMPORTANT: Use env's context (the original context), not fnTypeEnv's context.
+    // When inferring the type of a lambda, the context is extended with the lambda parameter,
+    // but the argument should be checked in the original context (without the lambda parameter).
     let argEnv: TCEnv<TTKTerm>;
     try {
-      argEnv = checkType(fnTypeEnv.atValueAndPathOfEnv(env).inAppArg(), fnTypeEnv.value.domain);
+      argEnv = checkType(env.withMetasConstraintsLevelMetasFrom(fnTypeEnv).inAppArg(), fnTypeEnv.value.domain);
     } catch (e) {
       if (e instanceof TCEnvError) {
         // Provide semantic error: what function, what it expects, what it got

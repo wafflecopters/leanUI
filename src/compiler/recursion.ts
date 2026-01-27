@@ -14,6 +14,7 @@
 
 import { TTKPattern, TTKTerm, TTKClause, prettyPrint } from './kernel';
 import { IndexPath, fieldSeg, arraySeg } from '../types/source-position';
+import { whnf } from './whnf';
 
 // ============================================================================
 // Logging
@@ -384,9 +385,13 @@ export function checkRecursiveCallSite(
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
 
-    // Currently we only check for direct Var references
-    if (arg.tag === 'Var') {
-      const varIndex = arg.index;
+    // β-reduce the argument to whnf before checking
+    // This handles cases like `(\x => x) m` which should reduce to `m`
+    const reducedArg = whnf(arg);
+
+    // Check if the reduced argument is a Var
+    if (reducedArg.tag === 'Var') {
+      const varIndex = reducedArg.index;
       const smallerThanPos = smallerMap.get(varIndex);
 
       // If this variable is smaller than position i, the call is valid
