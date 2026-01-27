@@ -1,7 +1,7 @@
 // INFERENCE
 
 import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega } from "./kernel";
-import { subst } from "./subst";
+import { subst, shiftTerm, minFreeVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap } from "./term";
 
 /**
@@ -174,6 +174,70 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     return bodyEnv.withValue(piType);
   }
 
+  if (env.isBinderLetTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (LET) - Let binding with optional type inference (no generalisation)
+    //
+    //   Γ ⊢ A ⇐ Type_i            (type annotation, or Hole→Meta)
+    //   Γ ⊢ v ⇐ A                 (value checked against A; solves Meta if inferred)
+    //   Γ, x : A ⊢ body ⇒ B'      (infer body type in extended context)
+    //   B = [x := v]B'            (substitute v for x if B' references x, else shift)
+    //   ─────────────────────────────────────────────────────────────────
+    //   Γ ⊢ let x : A := v in body ⇒ B
+    //
+    // When A is a Hole, checkType creates a Meta. Checking v against
+    // that Meta infers v's type and solves the Meta. No generalisation.
+    // ────────────────────────────────────────────────────────────────
+
+    // 1. Check type annotation against Sort (Hole → Meta for inference)
+    const { env: env1, sort: domainSort } = env.typeSortFresh();
+    const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderLetDomain(), domainSort);
+    const elaboratedDomain = domEnv.elaboratedTerm ?? env.value.domain;
+
+    // 2. Check value against the (possibly meta) type — this creates constraints
+    const valEnv = checkType(domEnv.atValueAndPathOfEnv(env).inBinderLetValue(), elaboratedDomain);
+    const elaboratedValue = valEnv.elaboratedTerm ?? env.value.binderKind.defVal;
+
+    // 3. Solve constraints to resolve the domain type before entering the body
+    //    This is crucial when the domain was a Hole — checking the value creates
+    //    constraints that solve the meta, but we need those solutions available
+    //    for the body (e.g., when applying a let-bound function).
+    const solvedEnv = valEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+    const solvedDomain = solvedEnv.zonkTerm(elaboratedDomain);
+
+    // 4. Infer body type with x : solvedDomain in context
+    const bodyEnv = inferType(solvedEnv.atValueAndPathOfEnv(env).inBinderLetBodyWithDomain(solvedDomain));
+
+    // 5. Build elaborated let term with solved domain
+    const elaboratedLet: TTKTerm = {
+      tag: 'Binder',
+      name: env.value.name,
+      binderKind: { tag: 'BLet', defVal: elaboratedValue },
+      domain: solvedDomain,
+      body: bodyEnv.elaboratedTerm ?? env.value.body
+    };
+
+    // 6. Strengthen the body type by removing the let binding from scope
+    //    The body type was inferred in context Γ,x. We need to convert it to context Γ.
+    //    If the body type references x (index 0), we substitute the let value.
+    //    Otherwise, we just shift by -1.
+    const bodyType = bodyEnv.value;
+    const minFreeVar = minFreeVarIndex(bodyType);
+    let strengthenedBodyType: TTKTerm;
+    if (minFreeVar === 0) {
+      // Body type references the let-bound variable
+      // Substitute the let value (elaboratedValue) for index 0 in the body type
+      // Note: subst(0, v, t) replaces index 0 with v and shifts down
+      strengthenedBodyType = subst(0, elaboratedValue, bodyType);
+    } else {
+      // Body type doesn't reference the let variable, just shift by -1
+      strengthenedBodyType = shiftTerm(bodyType, -1, 0);
+    }
+
+    // Return strengthened body type (the type of the whole let expression)
+    return bodyEnv.withValue(strengthenedBodyType).withElaboratedTerm(elaboratedLet);
+  }
+
   throw TCEnvError.create(`Inference not implemented for binder type ${env.value.binderKind.tag}`, env)
 }
 
@@ -326,6 +390,21 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     return env.withValue({ tag: 'Sort', level: mkLevelNum(1) });
   }
 
+  if (env.value.tag === 'Meta') {
+    // ────────────────────────────────────────────────────────────────
+    // (META) - Metavariable
+    //
+    // Look up the meta's type from metaVars. Metas are created during
+    // elaboration with a known type.
+    // ────────────────────────────────────────────────────────────────
+    const meta = env.metaVars.get(env.value.id);
+    if (meta) {
+      return env.withValue(meta.type);
+    }
+    // If meta not found, this is an internal error
+    throw TCEnvError.create(`Unknown metavariable: ${env.value.id}`, env);
+  }
+
   debugger
   throw TCEnvError.create(`Inference not implemented for term type ${env.value.tag}`, env)
 }
@@ -333,7 +412,11 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 // CHECKING
 
 export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
-  if (env.isBinderLambdaTerm()) {
+  // Only use the Lambda-specific rule when expectedType is a Pi.
+  // If expectedType is a Meta or something else, fall through to CONV rule
+  // which infers the lambda's type and unifies.
+  const expectedIsPi = expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi';
+  if (env.isBinderLambdaTerm() && expectedIsPi) {
     // ────────────────────────────────────────────────────────────────
     // (LAM) - Lambda abstraction
     //

@@ -35,14 +35,17 @@ import type {
   TTKRecordParam,
 } from './kernel';
 
-import { mkLevelNum, mkMeta, mkLSucc, mkLMax, mkLIMax, mkULit, mkUOmega, mkSort, mkVar } from './kernel';
+import { mkLevelNum, mkMeta, mkHole, mkLSucc, mkLMax, mkLIMax, mkULit, mkUOmega, mkSort, mkVar } from './kernel';
 import { shiftTerm } from './subst';
 
 // Counter for generating unique meta IDs for implicit let types
 let implicitLetTypeCounter = 0;
 
-function freshImplicitLetTypeMeta(letName: string): TTKTerm {
-  return mkMeta(`${letName}_type_${implicitLetTypeCounter++}`);
+function freshImplicitLetTypeHole(letName: string): TTKTerm {
+  // Use a Hole (not a Meta) for implicit let types.
+  // The type checker will convert this to a properly registered Meta
+  // with type inference during checkType.
+  return mkHole(`${letName}_type_${implicitLetTypeCounter++}`);
 }
 
 import {
@@ -1514,7 +1517,7 @@ function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTK
           // In this case, create a fresh meta for type inference
           domain = term.domain !== undefined
             ? elabToKernelWithScope(term.domain, levelNamesInScope)
-            : freshImplicitLetTypeMeta(term.name);
+            : freshImplicitLetTypeHole(term.name);
           break;
       }
 
@@ -1686,7 +1689,7 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
             binderKind = { tag: 'BLet', defVal: elab(t.binderKind.defVal) };
             domain = t.domain !== undefined
               ? elab(t.domain)
-              : freshImplicitLetTypeMeta(t.name);
+              : freshImplicitLetTypeHole(t.name);
             break;
         }
 
@@ -2034,7 +2037,7 @@ export function elabToKernelWithMap(
               undefined,
               levelNamesInScope
             )
-            : freshImplicitLetTypeMeta(term.name);
+            : freshImplicitLetTypeHole(term.name);
           break;
       }
 

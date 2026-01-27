@@ -1560,6 +1560,20 @@ export class TCEnv<T> {
     );
   }
 
+  inBinderLetBodyWithDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>, domain: TTKTerm): TCEnv<TTKTerm> {
+    return new TCEnv(
+      [...this.context, { name: this.value.name, type: domain }],
+      this.definitions,
+      this.metaVars,
+      this.constraints,
+      [...this.indexPath, BinderPartSegment.Body],
+      [...this.valueStack, this.value],
+      this.value.body,
+      this.levelMetas,
+      this.options
+    );
+  }
+
   // Inductive Definition
   inInductiveDefinitionName(this: TCEnv<InductiveDefinition>): TCEnv<string> {
     return new TCEnv(
