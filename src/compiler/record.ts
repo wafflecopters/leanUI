@@ -130,15 +130,12 @@ export function recordToInductiveDefinition(record: TTKRecordDef): InductiveDefi
   const typeNamedArgMap: NamedArgMap = new Map();
 
   // Build record info
-  // Note: projection names use underscores (e.g., Point_x) because the parser
-  // doesn't support dotted identifiers. In the future, we may add qualified name
-  // support to the parser and switch to dot notation (e.g., Point.x).
   const recordInfo: RecordInfo = {
     fieldNames: record.fields.map(f => f.name),
     implicitFields: record.fields
       .map((f, i) => f.implicit ? i : -1)
       .filter(i => i >= 0),
-    projections: record.fields.map(f => `${record.name}_${f.name}`),
+    projections: record.fields.map(f => `${record.name}.${f.name}`),
     isEtaExpandable: true,
   };
 
@@ -208,8 +205,7 @@ export function generateProjections(record: TTKRecordDef): ProjectionDefinition[
 
   for (let fieldIdx = 0; fieldIdx < numFields; fieldIdx++) {
     const field = record.fields[fieldIdx];
-    // Use underscore instead of dot since parser doesn't support qualified names
-    const projName = `${record.name}_${field.name}`;
+    const projName = `${record.name}.${field.name}`;
 
     // Build the projection type:
     // (P1 : T1) → ... → (Pn : Tn) → R P1 ... Pn → Fi[shifted]

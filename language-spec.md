@@ -9,7 +9,12 @@ This document describes the surface syntax of the LeanUI language.
 ```
 x               -- Variable (resolved to De Bruijn index)
 Nat             -- Constant (looked up in environment)
+Point.x         -- Qualified identifier (e.g., record projection)
+Foo.Bar.baz     -- Multi-level qualified identifier
 ```
+
+Qualified identifiers use dot notation to access namespaced definitions.
+Currently used for record projections (e.g., `Point.x` to project field `x` from record `Point`).
 
 ### Universes (Sorts)
 

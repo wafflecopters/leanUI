@@ -202,7 +202,7 @@ record Point where
   y : Nat
 
 getX : Point -> Nat
-getX p = Point_x p
+getX p = Point.x p
 `;
       const result = compileTTFromText(source);
       if (!result.success) {
@@ -229,7 +229,7 @@ record Pair (A : Type) (B : Type) where
   snd : B
 
 getFst : Pair Nat Nat -> Nat
-getFst p = Pair_fst Nat Nat p
+getFst p = Pair.fst Nat Nat p
 `;
       const result = compileTTFromText(source);
       if (!result.success) {

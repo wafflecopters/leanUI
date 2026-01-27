@@ -152,7 +152,7 @@ describe('Record to Inductive Conversion', () => {
       expect(inductive.indexPositions).toEqual([]);
       expect(inductive.recordInfo).toBeDefined();
       expect(inductive.recordInfo?.fieldNames).toEqual(['x', 'y']);
-      expect(inductive.recordInfo?.projections).toEqual(['Point_x', 'Point_y']);
+      expect(inductive.recordInfo?.projections).toEqual(['Point.x', 'Point.y']);
       expect(inductive.recordInfo?.isEtaExpandable).toBe(true);
     });
 
@@ -184,7 +184,7 @@ describe('Record to Inductive Conversion', () => {
 
       // Check record info
       expect(inductive.recordInfo?.fieldNames).toEqual(['fst', 'snd']);
-      expect(inductive.recordInfo?.projections).toEqual(['Pair_fst', 'Pair_snd']);
+      expect(inductive.recordInfo?.projections).toEqual(['Pair.fst', 'Pair.snd']);
     });
 
     test('record with implicit field', () => {
@@ -254,7 +254,7 @@ describe('Record to Inductive Conversion', () => {
 
       expect(inductive.recordInfo?.fieldNames).toEqual(['a', 'b', 'c', 'd']);
       expect(inductive.recordInfo?.projections).toEqual([
-        'Many_a', 'Many_b', 'Many_c', 'Many_d'
+        'Many.a', 'Many.b', 'Many.c', 'Many.d'
       ]);
     });
 
@@ -452,8 +452,8 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
 
       expect(projections).toHaveLength(2);
-      expect(projections[0].name).toBe('Point_x');
-      expect(projections[1].name).toBe('Point_y');
+      expect(projections[0].name).toBe('Point.x');
+      expect(projections[1].name).toBe('Point.y');
     });
 
     test('projection type for simple record is correct', () => {
@@ -471,7 +471,7 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
       const xProj = projections[0];
 
-      // Point_x : Point → Nat
+      // Point.x : Point → Nat
       // Should be: (r : Point) → Nat
       expect(xProj.type.tag).toBe('Binder');
       if (xProj.type.tag === 'Binder') {
@@ -505,7 +505,7 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
       const xProj = projections[0];
 
-      // Point_x = λ r. match r with { MkPoint x y => x }
+      // Point.x = λ r. match r with { MkPoint x y => x }
       expect(xProj.value.tag).toBe('Binder');
       if (xProj.value.tag === 'Binder') {
         expect(xProj.value.binderKind.tag).toBe('BLam');
@@ -543,7 +543,7 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
       const yProj = projections[1];
 
-      // Point_y should return Var(0) for y (second field, index = numFields - 1 - 1 = 0)
+      // Point.y should return Var(0) for y (second field, index = numFields - 1 - 1 = 0)
       expect(yProj.value.tag).toBe('Binder');
       if (yProj.value.tag === 'Binder' && yProj.value.body.tag === 'Match') {
         const clause = yProj.value.body.clauses[0];
@@ -572,8 +572,8 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
 
       expect(projections).toHaveLength(2);
-      expect(projections[0].name).toBe('Pair_fst');
-      expect(projections[1].name).toBe('Pair_snd');
+      expect(projections[0].name).toBe('Pair.fst');
+      expect(projections[1].name).toBe('Pair.snd');
     });
 
     test('parameterized projection type has param binders', () => {
@@ -594,7 +594,7 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
       const fstProj = projections[0];
 
-      // Pair_fst : (A : Type) → (B : Type) → Pair A B → A
+      // Pair.fst : (A : Type) → (B : Type) → Pair A B → A
       // Count the Pi binders
       let piCount = 0;
       let current: any = fstProj.type;
@@ -626,7 +626,7 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
       const fstProj = projections[0];
 
-      // Pair_fst = λ A. λ B. λ p. match p with { MkPair a b f s => f }
+      // Pair.fst = λ A. λ B. λ p. match p with { MkPair a b f s => f }
       // Count the lambda binders
       let lamCount = 0;
       let current: any = fstProj.value;

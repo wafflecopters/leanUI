@@ -87,6 +87,37 @@ describe('Lexer', () => {
     expect(tokens[1].value).toBe('bar');
   });
 
+  test('Tokenize qualified identifiers', () => {
+    const tokens = tokenize('Point.x');
+    expect(tokens.length).toBe(2); // IDENT + EOF
+    expect(tokens[0].type).toBe('IDENT');
+    expect(tokens[0].value).toBe('Point.x');
+  });
+
+  test('Tokenize multi-level qualified identifiers', () => {
+    const tokens = tokenize('Foo.Bar.baz');
+    expect(tokens.length).toBe(2);
+    expect(tokens[0].type).toBe('IDENT');
+    expect(tokens[0].value).toBe('Foo.Bar.baz');
+  });
+
+  test('Qualified identifier followed by application', () => {
+    const tokens = tokenize('Point.x p');
+    expect(tokens.length).toBe(3); // IDENT, IDENT, EOF
+    expect(tokens[0].type).toBe('IDENT');
+    expect(tokens[0].value).toBe('Point.x');
+    expect(tokens[1].type).toBe('IDENT');
+    expect(tokens[1].value).toBe('p');
+  });
+
+  test('Dot not consumed if not followed by identifier', () => {
+    // This shouldn't happen in practice but tests edge cases
+    const tokens = tokenize('foo.');
+    expect(tokens[0].type).toBe('IDENT');
+    expect(tokens[0].value).toBe('foo');
+    // The trailing dot would cause an error or be treated as unknown
+  });
+
   test('Tokenize operators', () => {
     const tokens = tokenize('+ - * / = < > ∧ ∨');
     const types = tokens.filter(t => t.type === 'OPERATOR').map(t => t.value);

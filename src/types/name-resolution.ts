@@ -315,6 +315,10 @@ export function validateDeclarations(
     type?: TTerm;
     value?: TTerm;
     constructors?: Array<{ name: string; type: TTerm }>;
+    // Record-specific properties
+    kind?: string;
+    constructorName?: string;
+    fields?: Array<{ name: string; type?: TTerm }>;
   }>,
   initialCtx: SymbolContext = emptySymbolContext()
 ): NameResolutionResult<SymbolContext> {
@@ -351,10 +355,10 @@ export function validateDeclarations(
       const ctorName = decl.constructorName ?? defaultRecordConstructorName(decl.name);
       ctx = addSymbol(ctx, ctorName);
 
-      // Add projection names for each field (e.g., Point_x, Point_y)
+      // Add projection names for each field (e.g., Point.x, Point.y)
       if (decl.fields) {
         for (const field of decl.fields) {
-          const projName = `${decl.name}_${field.name}`;
+          const projName = `${decl.name}.${field.name}`;
           ctx = addSymbol(ctx, projName);
         }
       }

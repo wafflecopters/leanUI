@@ -51,25 +51,32 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
 
 - [ ] Keyboard shortcut in text editor to comment/uncomment code
 - [ ] Keyboard shortcut to toggle binder at cursor between `()` vs `{}`
+- [ ] Implement type-at in the editor (show type of expression under cursor)
 
 ## Big Projects
 
-- [ ] **Records**
-  - Parser for record definitions
-  - Elaboration + checking for record definitions
-  - Elaboration + checking for record call sites (construction, projection)
-  - `extends` and elab-inlining
-
-- [ ] **Case-of behavior**
-  - Nested casing support
-  - Re-elaboration of hoisted patterns
-  - (BIG PROJECT)
+- [x] **Records** ✅
+  - [x] Parser for record definitions
+  - [x] Elaboration + checking for record definitions
+  - [x] Projection generation
+  - [ ] Elaboration + checking for record call sites (construction, projection via dot notation)
+  - [ ] `extends` and elab-inlining
 
 - [ ] **Prop deep dive**
-  - Separate Prop as its own AST node instead of just Sort 0
-  - Ensure universe inference handles Prop correctly
-  - Implement large elimination restrictions (can't match on Prop-valued inductive to produce Type-valued result, unless singleton)
-  - Review impredicativity rules for Prop
+  - [ ] Split out Prop to be independent AST-wise instead of being level 0
+  - [ ] Implement all the rules around prop inference and case splitting
+  - [ ] Implement large elimination restrictions (can't match on Prop-valued inductive to produce Type-valued result, unless singleton)
+  - [ ] Review impredicativity rules for Prop
+
+- [ ] **Case-of and Pattern Refinement**
+  - [ ] Implement case-of expression syntax
+  - [ ] Nested casing support
+  - [ ] Re-elaboration of hoisted patterns
+  - [ ] Pattern refinement (dependent pattern matching)
+
+- [ ] **Pattern Matching without K**
+  - [ ] Implement axiom K prevention (no deletion rule)
+  - [ ] Prevent self-unification to avoid weakK
 
 ## Exploration
 

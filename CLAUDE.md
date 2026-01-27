@@ -278,6 +278,26 @@ try {
 
 ---
 
+## Smoke Testing: Verify Before Claiming Complete
+
+**CRITICAL**: Before claiming any task is complete, ALWAYS verify the build works:
+
+```bash
+# Run both TypeScript compilation AND tests
+npx tsc --noEmit && npm test
+```
+
+**Why both?**
+- `npm test` runs tests but may not catch all TypeScript errors (tests run via ts-node/vitest which can be more lenient)
+- `npx tsc --noEmit` performs full TypeScript type checking without emitting files
+- A task is NOT done if either command fails
+
+**Common mistake**: Adding code that passes tests but has TypeScript errors (e.g., accessing properties that don't exist on a type). The tests might pass because the runtime behavior is correct, but the build will fail.
+
+**Never claim "done" without seeing both commands succeed.**
+
+---
+
 ## File Creation: Use Write Tool, Not Bash
 
 **IMPORTANT**: When creating new files, always use the `Write` tool directly instead of `cat` heredocs or `echo` redirection via `Bash`. The `Write` tool:

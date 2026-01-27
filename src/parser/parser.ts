@@ -444,54 +444,77 @@ export class Lexer {
 
     // Identifiers and keywords
     if (this.isIdentStart(ch)) {
-      const ident = this.readWhile(c => this.isIdentChar(c));
+      let ident = this.readWhile(c => this.isIdentChar(c));
 
-      // Check for keywords
-      switch (ident) {
-        case 'fun':
-          return { type: 'LAMBDA', value: 'fun', pos: startPos, line: startLine, col: startCol };
-        // Removed 'forall' - use (x : T) -> ... syntax instead
-        case 'let':
-          return { type: 'LET', value: 'let', pos: startPos, line: startLine, col: startCol };
-        case 'in':
-          return { type: 'IN', value: 'in', pos: startPos, line: startLine, col: startCol };
-        case 'Type':
-          return { type: 'TYPE', value: 'Type', pos: startPos, line: startLine, col: startCol };
-        case 'Prop':
-          return { type: 'PROP', value: 'Prop', pos: startPos, line: startLine, col: startCol };
-        case 'ULevel':
-          return { type: 'ULEVEL', value: 'ULevel', pos: startPos, line: startLine, col: startCol };
-        case 'USucc':
-          return { type: 'USUCC', value: 'USucc', pos: startPos, line: startLine, col: startCol };
-        case 'UMax':
-          return { type: 'UMAX', value: 'UMax', pos: startPos, line: startLine, col: startCol };
-        case 'UIMax':
-          return { type: 'UIMAX', value: 'UIMax', pos: startPos, line: startLine, col: startCol };
-        case 'inductive':
-          return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
-        case 'record':
-          return { type: 'RECORD', value: 'record', pos: startPos, line: startLine, col: startCol };
-        case 'constructor':
-          return { type: 'CONSTRUCTOR', value: 'constructor', pos: startPos, line: startLine, col: startCol };
-        case 'extends':
-          return { type: 'EXTENDS', value: 'extends', pos: startPos, line: startLine, col: startCol };
-        case 'where':
-          return { type: 'WHERE', value: 'where', pos: startPos, line: startLine, col: startCol };
-        case 'case':
-          return { type: 'CASE', value: 'case', pos: startPos, line: startLine, col: startCol };
-        case 'match':
-          return { type: 'MATCH', value: 'match', pos: startPos, line: startLine, col: startCol };
-        default:
-          // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
-          if (ident.startsWith('Type_')) {
-            const suffix = ident.substring(5);
-            // Verify suffix is all digits
-            if (/^\d+$/.test(suffix)) {
-              return { type: 'TYPE', value: ident, pos: startPos, line: startLine, col: startCol };
-            }
-          }
-          return { type: 'IDENT', value: ident, pos: startPos, line: startLine, col: startCol };
+      // Check for qualified identifiers (e.g., Point.x, Pair.fst)
+      // A qualified identifier is: ident.ident.ident...
+      while (this.pos < this.input.length && this.input[this.pos] === '.') {
+        // Peek ahead to see if there's an identifier after the dot
+        const nextPos = this.pos + 1;
+        if (nextPos < this.input.length && this.isIdentStart(this.input[nextPos])) {
+          // Consume the dot
+          this.pos++;
+          this.col++;
+          // Consume the next identifier part
+          const nextPart = this.readWhile(c => this.isIdentChar(c));
+          ident = ident + '.' + nextPart;
+        } else {
+          // Dot not followed by identifier, don't consume it
+          break;
+        }
       }
+
+      // Check for keywords (only for non-qualified identifiers)
+      if (!ident.includes('.')) {
+        switch (ident) {
+          case 'fun':
+            return { type: 'LAMBDA', value: 'fun', pos: startPos, line: startLine, col: startCol };
+          // Removed 'forall' - use (x : T) -> ... syntax instead
+          case 'let':
+            return { type: 'LET', value: 'let', pos: startPos, line: startLine, col: startCol };
+          case 'in':
+            return { type: 'IN', value: 'in', pos: startPos, line: startLine, col: startCol };
+          case 'Type':
+            return { type: 'TYPE', value: 'Type', pos: startPos, line: startLine, col: startCol };
+          case 'Prop':
+            return { type: 'PROP', value: 'Prop', pos: startPos, line: startLine, col: startCol };
+          case 'ULevel':
+            return { type: 'ULEVEL', value: 'ULevel', pos: startPos, line: startLine, col: startCol };
+          case 'USucc':
+            return { type: 'USUCC', value: 'USucc', pos: startPos, line: startLine, col: startCol };
+          case 'UMax':
+            return { type: 'UMAX', value: 'UMax', pos: startPos, line: startLine, col: startCol };
+          case 'UIMax':
+            return { type: 'UIMAX', value: 'UIMax', pos: startPos, line: startLine, col: startCol };
+          case 'inductive':
+            return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
+          case 'record':
+            return { type: 'RECORD', value: 'record', pos: startPos, line: startLine, col: startCol };
+          case 'constructor':
+            return { type: 'CONSTRUCTOR', value: 'constructor', pos: startPos, line: startLine, col: startCol };
+          case 'extends':
+            return { type: 'EXTENDS', value: 'extends', pos: startPos, line: startLine, col: startCol };
+          case 'where':
+            return { type: 'WHERE', value: 'where', pos: startPos, line: startLine, col: startCol };
+          case 'case':
+            return { type: 'CASE', value: 'case', pos: startPos, line: startLine, col: startCol };
+          case 'match':
+            return { type: 'MATCH', value: 'match', pos: startPos, line: startLine, col: startCol };
+          default:
+            // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
+            if (ident.startsWith('Type_')) {
+              const suffix = ident.substring(5);
+              // Verify suffix is all digits
+              if (/^\d+$/.test(suffix)) {
+                return { type: 'TYPE', value: ident, pos: startPos, line: startLine, col: startCol };
+              }
+            }
+            return { type: 'IDENT', value: ident, pos: startPos, line: startLine, col: startCol };
+        }
+      }
+
+      // Qualified identifier (contains dots) - return as IDENT
+      return { type: 'IDENT', value: ident, pos: startPos, line: startLine, col: startCol };
     }
 
     // Check for multi-character operators (must come before single char operator check)
