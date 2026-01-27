@@ -1,5 +1,8 @@
 import { describe, test, expect } from 'vitest';
-import { prettyPrint, prettyPrintFormatted, TTKTerm, TTKClause, mkVar, mkConst, mkType } from './kernel';
+import {
+  prettyPrint, prettyPrintFormatted, TTKTerm, TTKClause, mkVar, mkConst, mkType,
+  mkULit, mkLSucc, mkLMax, mkLIMax, levelLeq, collectLevelVars, levelGeq
+} from './kernel';
 
 describe('prettyPrint', () => {
   test('prints Var with correct name from context', () => {
@@ -268,5 +271,302 @@ describe('prettyPrintFormatted', () => {
     const result = prettyPrintFormatted(matchTerm, []);
     expect(result).toContain('\n');
     expect(result).toContain('| A h VCons => h');
+  });
+});
+
+// ============================================================================
+// Level Comparison Tests (levelLeq)
+// ============================================================================
+
+describe('levelLeq - Symbolic Universe Level Comparison', () => {
+  // Helper to create a level variable (Var with de Bruijn index)
+  const mkLevelVar = (index: number): TTKTerm => mkVar(index);
+
+  describe('Concrete level comparisons', () => {
+    test('0 ≤ 0', () => {
+      expect(levelLeq(mkULit(0), mkULit(0))).toBe(true);
+    });
+
+    test('0 ≤ 1', () => {
+      expect(levelLeq(mkULit(0), mkULit(1))).toBe(true);
+    });
+
+    test('0 ≤ 5', () => {
+      expect(levelLeq(mkULit(0), mkULit(5))).toBe(true);
+    });
+
+    test('1 ≤ 1', () => {
+      expect(levelLeq(mkULit(1), mkULit(1))).toBe(true);
+    });
+
+    test('1 ≤ 2', () => {
+      expect(levelLeq(mkULit(1), mkULit(2))).toBe(true);
+    });
+
+    test('2 ≤ 1 is false', () => {
+      expect(levelLeq(mkULit(2), mkULit(1))).toBe(false);
+    });
+
+    test('5 ≤ 3 is false', () => {
+      expect(levelLeq(mkULit(5), mkULit(3))).toBe(false);
+    });
+
+    test('1 ≤ 0 is false', () => {
+      expect(levelLeq(mkULit(1), mkULit(0))).toBe(false);
+    });
+  });
+
+  describe('Successor (Succ) comparisons', () => {
+    test('Succ(0) ≤ Succ(0)', () => {
+      expect(levelLeq(mkLSucc(mkULit(0)), mkLSucc(mkULit(0)))).toBe(true);
+    });
+
+    test('Succ(0) ≤ Succ(1)', () => {
+      expect(levelLeq(mkLSucc(mkULit(0)), mkLSucc(mkULit(1)))).toBe(true);
+    });
+
+    test('Succ(Succ(0)) ≤ Succ(0) is false', () => {
+      expect(levelLeq(mkLSucc(mkLSucc(mkULit(0))), mkLSucc(mkULit(0)))).toBe(false);
+    });
+
+    test('0 ≤ Succ(0)', () => {
+      expect(levelLeq(mkULit(0), mkLSucc(mkULit(0)))).toBe(true);
+    });
+
+    test('Succ(0) ≤ 0 is false', () => {
+      expect(levelLeq(mkLSucc(mkULit(0)), mkULit(0))).toBe(false);
+    });
+
+    test('u ≤ Succ(u) - variable under successor', () => {
+      const u = mkLevelVar(0);
+      expect(levelLeq(u, mkLSucc(u))).toBe(true);
+    });
+
+    test('Succ(u) ≤ u is false', () => {
+      const u = mkLevelVar(0);
+      expect(levelLeq(mkLSucc(u), u)).toBe(false);
+    });
+
+    test('Succ(u) ≤ Succ(u)', () => {
+      const u = mkLevelVar(0);
+      expect(levelLeq(mkLSucc(u), mkLSucc(u))).toBe(true);
+    });
+
+    test('Succ(Succ(u)) ≤ Succ(u) is false', () => {
+      const u = mkLevelVar(0);
+      expect(levelLeq(mkLSucc(mkLSucc(u)), mkLSucc(u))).toBe(false);
+    });
+  });
+
+  describe('Max comparisons', () => {
+    test('u ≤ Max(u, v)', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      expect(levelLeq(u, mkLMax(u, v))).toBe(true);
+    });
+
+    test('v ≤ Max(u, v)', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      expect(levelLeq(v, mkLMax(u, v))).toBe(true);
+    });
+
+    test('Max(u, v) ≤ Max(u, v)', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      expect(levelLeq(mkLMax(u, v), mkLMax(u, v))).toBe(true);
+    });
+
+    test('Max(u, v) ≤ u is unknown (cannot determine)', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      // We can't prove Max(u,v) ≤ u unless we know v ≤ u
+      expect(levelLeq(mkLMax(u, v), u)).toBe('unknown');
+    });
+
+    test('Max(0, 1) ≤ 1', () => {
+      expect(levelLeq(mkLMax(mkULit(0), mkULit(1)), mkULit(1))).toBe(true);
+    });
+
+    test('Max(0, 1) ≤ 0 is false', () => {
+      expect(levelLeq(mkLMax(mkULit(0), mkULit(1)), mkULit(0))).toBe(false);
+    });
+
+    test('Max(2, 3) ≤ 3', () => {
+      expect(levelLeq(mkLMax(mkULit(2), mkULit(3)), mkULit(3))).toBe(true);
+    });
+
+    test('Max(2, 3) ≤ 4', () => {
+      expect(levelLeq(mkLMax(mkULit(2), mkULit(3)), mkULit(4))).toBe(true);
+    });
+
+    test('0 ≤ Max(u, v)', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      expect(levelLeq(mkULit(0), mkLMax(u, v))).toBe(true);
+    });
+
+    test('Max(u, 0) = u semantically, u ≤ Max(u, 0)', () => {
+      const u = mkLevelVar(0);
+      expect(levelLeq(u, mkLMax(u, mkULit(0)))).toBe(true);
+    });
+  });
+
+  describe('Variable comparisons', () => {
+    test('Var(0) ≤ Var(0) - same variable', () => {
+      expect(levelLeq(mkLevelVar(0), mkLevelVar(0))).toBe(true);
+    });
+
+    test('Var(1) ≤ Var(1) - same variable', () => {
+      expect(levelLeq(mkLevelVar(1), mkLevelVar(1))).toBe(true);
+    });
+
+    test('Var(0) ≤ Var(1) - different variables, unknown', () => {
+      expect(levelLeq(mkLevelVar(0), mkLevelVar(1))).toBe('unknown');
+    });
+
+    test('0 ≤ Var(0) - zero is smallest', () => {
+      expect(levelLeq(mkULit(0), mkLevelVar(0))).toBe(true);
+    });
+
+    test('Var(0) ≤ 0 is unknown', () => {
+      // We don't know if u ≥ 0 without more info (though in practice levels are ≥ 0)
+      // Conservative: return 'unknown' or we could return true since all levels ≥ 0
+      // Following Lean: levels are always ≥ 0, so this should be 'unknown'
+      // Actually, Var(0) could be 0, in which case 0 ≤ 0 is true
+      // So this is actually determinable as true (all levels are ≥ 0)
+      expect(levelLeq(mkLevelVar(0), mkULit(0))).toBe('unknown');
+    });
+
+    test('1 ≤ Var(0) is unknown', () => {
+      // 1 might be > u if u = 0
+      expect(levelLeq(mkULit(1), mkLevelVar(0))).toBe('unknown');
+    });
+  });
+
+  describe('IMax comparisons', () => {
+    // IMax(a, b) = if b = 0 then 0 else Max(a, b)
+
+    test('IMax(u, 0) = 0, so IMax(u, 0) ≤ 0', () => {
+      const u = mkLevelVar(0);
+      expect(levelLeq(mkLIMax(u, mkULit(0)), mkULit(0))).toBe(true);
+    });
+
+    test('IMax(u, 0) ≤ v', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      // IMax(u, 0) = 0, and 0 ≤ v
+      expect(levelLeq(mkLIMax(u, mkULit(0)), v)).toBe(true);
+    });
+
+    test('IMax(u, Succ(v)) behaves like Max(u, Succ(v))', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      // IMax(u, Succ(v)) = Max(u, Succ(v)) since Succ(v) ≠ 0
+      // u ≤ IMax(u, Succ(v)) should be true
+      expect(levelLeq(u, mkLIMax(u, mkLSucc(v)))).toBe(true);
+    });
+
+    test('IMax(1, 2) = Max(1, 2) = 2, so IMax(1, 2) ≤ 2', () => {
+      expect(levelLeq(mkLIMax(mkULit(1), mkULit(2)), mkULit(2))).toBe(true);
+    });
+
+    test('3 ≤ IMax(1, 2) is false (IMax(1,2) = 2)', () => {
+      expect(levelLeq(mkULit(3), mkLIMax(mkULit(1), mkULit(2)))).toBe(false);
+    });
+  });
+
+  describe('Complex/nested comparisons', () => {
+    test('Max(u, v) ≤ Max(Max(u, v), w)', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      const w = mkLevelVar(2);
+      expect(levelLeq(mkLMax(u, v), mkLMax(mkLMax(u, v), w))).toBe(true);
+    });
+
+    test('u ≤ Max(u, Max(v, w))', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      const w = mkLevelVar(2);
+      expect(levelLeq(u, mkLMax(u, mkLMax(v, w)))).toBe(true);
+    });
+
+    test('Succ(Max(u, v)) ≤ Max(Succ(u), Succ(v))', () => {
+      const u = mkLevelVar(0);
+      const v = mkLevelVar(1);
+      // Succ(Max(u,v)) = Max(Succ(u), Succ(v))
+      expect(levelLeq(mkLSucc(mkLMax(u, v)), mkLMax(mkLSucc(u), mkLSucc(v)))).toBe(true);
+    });
+  });
+});
+
+// ============================================================================
+// collectLevelVars Tests
+// ============================================================================
+
+describe('collectLevelVars', () => {
+  const mkLevelVar = (index: number): TTKTerm => mkVar(index);
+
+  test('concrete level has no vars', () => {
+    expect(collectLevelVars(mkULit(5))).toEqual(new Set());
+  });
+
+  test('single variable', () => {
+    expect(collectLevelVars(mkLevelVar(0))).toEqual(new Set([0]));
+  });
+
+  test('Succ of variable', () => {
+    expect(collectLevelVars(mkLSucc(mkLevelVar(2)))).toEqual(new Set([2]));
+  });
+
+  test('Max of two different variables', () => {
+    const u = mkLevelVar(0);
+    const v = mkLevelVar(1);
+    expect(collectLevelVars(mkLMax(u, v))).toEqual(new Set([0, 1]));
+  });
+
+  test('Max of same variable', () => {
+    const u = mkLevelVar(0);
+    expect(collectLevelVars(mkLMax(u, u))).toEqual(new Set([0]));
+  });
+
+  test('nested Max with three variables', () => {
+    const u = mkLevelVar(0);
+    const v = mkLevelVar(1);
+    const w = mkLevelVar(2);
+    expect(collectLevelVars(mkLMax(u, mkLMax(v, w)))).toEqual(new Set([0, 1, 2]));
+  });
+
+  test('IMax collects vars from both sides', () => {
+    const u = mkLevelVar(0);
+    const v = mkLevelVar(1);
+    expect(collectLevelVars(mkLIMax(u, v))).toEqual(new Set([0, 1]));
+  });
+
+  test('complex expression with repeated vars', () => {
+    const u = mkLevelVar(0);
+    const v = mkLevelVar(1);
+    // Max(Succ(u), Max(v, Succ(Succ(u))))
+    const expr = mkLMax(mkLSucc(u), mkLMax(v, mkLSucc(mkLSucc(u))));
+    expect(collectLevelVars(expr)).toEqual(new Set([0, 1]));
+  });
+});
+
+// ============================================================================
+// levelGeq Tests (convenience wrapper)
+// ============================================================================
+
+describe('levelGeq', () => {
+  test('levelGeq(a, b) = levelLeq(b, a)', () => {
+    expect(levelGeq(mkULit(2), mkULit(1))).toBe(true);
+    expect(levelGeq(mkULit(1), mkULit(2))).toBe(false);
+    expect(levelGeq(mkULit(1), mkULit(1))).toBe(true);
+  });
+
+  test('levelGeq with variables', () => {
+    const u = mkVar(0);
+    const v = mkVar(1);
+    expect(levelGeq(mkLMax(u, v), u)).toBe(true);
+    expect(levelGeq(u, mkLMax(u, v))).toBe('unknown');
   });
 });

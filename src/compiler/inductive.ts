@@ -1,6 +1,7 @@
 import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
-import { TTKTerm, levelsEqual, mkULit, levelToNumber } from "./kernel";
+import { TTKTerm, levelsEqual, mkULit, levelLeq, collectLevelVars, levelVarContainedIn, prettyPrintLevel } from "./kernel";
 import { inferType } from "./checker";
+import { shiftTerm } from "./subst";
 
 function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError[] {
   const errors: TCEnvError[] = [];
@@ -321,6 +322,8 @@ function flipPolarity(p: Polarity): Polarity {
  */
 function isTypeLevelDomain(domain: TTKTerm): boolean {
   if (domain.tag === 'Sort') return true;
+  // ULevel is the type of universe level variables - these are parameters, not data
+  if (domain.tag === 'ULevel') return true;
   // Pi types that return Sorts are type families (like A -> Type)
   if (domain.tag === 'Binder' && domain.binderKind.tag === 'BPi') {
     return isTypeLevelDomain(domain.body);
@@ -363,44 +366,129 @@ function checkConstructorUniverseLevels(
   if (resultType.tag !== 'Sort') {
     return;
   }
-  const resultLevel = levelToNumber(resultType.level);
-  if (resultLevel === undefined) {
-    // Universe polymorphic - can't easily check statically
-    return;
-  }
+  const resultLevel = resultType.level;
 
   // Check each constructor
   for (const ctor of constructors) {
-    // Strip type parameter binders (domains that are type-level: Sorts or type families)
+    // First, extract the constructor's return type and count binders
+    const ctorSpine = extractPiSpine(ctor.type);
+    const ctorReturnType = ctorSpine.body;
+    const binderCount = ctorSpine.binders.length;
+
+    // Iterate through each argument in the constructor type
+    // For each STORED DATA argument (not a type/level parameter or index), check its universe level
     let current = ctor.type;
     let currentEnv = env;
+    let binderIndex = 0; // Track position from outer to inner
+    let dataBindersProcessed = 0; // Track how many data (non-type-level) binders we've passed
 
-    while (current.tag === 'Binder' && current.binderKind.tag === 'BPi' && isTypeLevelDomain(current.domain)) {
-      currentEnv = currentEnv.extendTTKContext(current.name, current.domain);
-      current = current.body;
-    }
+    while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+      const domain = current.domain;
 
-    // Now `current` is the constructor body with type parameters stripped.
-    // Infer its type - this gives us the level that includes all stored data.
-    try {
-      const bodyEnv = currentEnv.withValue(current);
-      const typeResult = inferType(bodyEnv);
-      const bodyType = typeResult.value;
+      // Skip type-level domains (these are parameters, not data)
+      if (!isTypeLevelDomain(domain)) {
+        // Calculate the de Bruijn index for this binder in the return type
+        // The return type is under (binderCount) binders, and this is binder #binderIndex
+        // So its de Bruijn index in the return type is (binderCount - 1 - binderIndex)
+        const deBruijnInReturn = binderCount - 1 - binderIndex;
 
-      if (bodyType.tag === 'Sort') {
-        const ctorLevel = levelToNumber(bodyType.level);
-        if (ctorLevel !== undefined && ctorLevel > resultLevel) {
-          errors.push(TCEnvError.create(
-            `Universe level violation in constructor '${ctor.name}': ` +
-            `constructor body has type Sort ${ctorLevel} but '${inductiveName}' ` +
-            `result type is Sort ${resultLevel}`,
-            bodyEnv
-          ));
+        // Check if this argument is used in the return type (making it an INDEX, not stored data)
+        // If it's an index, we don't need to check its universe level
+        const isIndex = usesVariable(ctorReturnType, deBruijnInReturn);
+
+        if (!isIndex) {
+          // This is STORED DATA - check its type's universe level
+          // The domain is some type T. We need to find the sort of T.
+          try {
+            const domainEnv = currentEnv.withValue(domain);
+            const typeResult = inferType(domainEnv);
+            const domainType = typeResult.value;
+
+            // If the domain type is a Sort, its level tells us the universe of the data
+            if (domainType.tag === 'Sort') {
+              const dataLevel = domainType.level;
+
+              // The resultLevel has de Bruijn indices relative to the INDUCTIVE type's context.
+              // We need to shift it by the number of DATA binders we've already processed,
+              // since those are the extra binders beyond what the inductive type has.
+              const shiftedResultLevel = shiftTerm(resultLevel, dataBindersProcessed, 0);
+
+              // Use symbolic level comparison: dataLevel ≤ shiftedResultLevel
+              const leqResult = levelLeq(dataLevel, shiftedResultLevel);
+
+              if (leqResult === false) {
+                // Definite violation
+                errors.push(TCEnvError.create(
+                  `Universe level violation in constructor '${ctor.name}': ` +
+                  `argument type has sort ${prettyPrintLevel(dataLevel)} but '${inductiveName}' ` +
+                  `result type is Sort ${prettyPrintLevel(shiftedResultLevel)}`,
+                  domainEnv
+                ));
+              } else if (leqResult === 'unknown') {
+                // Check if the result level properly "contains" all data level variables
+                const dataVars = collectLevelVars(dataLevel);
+
+                for (const varIndex of dataVars) {
+                  if (!levelVarContainedIn(varIndex, shiftedResultLevel)) {
+                    errors.push(TCEnvError.create(
+                      `Universe level violation in constructor '${ctor.name}': ` +
+                      `argument uses level variable not covered by result level ` +
+                      `(argument at Sort ${prettyPrintLevel(dataLevel)}, result at Sort ${prettyPrintLevel(shiftedResultLevel)})`,
+                      domainEnv
+                    ));
+                    break;
+                  }
+                }
+              }
+              // If leqResult === true, the constraint is satisfied
+            }
+          } catch {
+            // If type inference fails, skip this check (other errors will be reported)
+          }
         }
+
+        // Track that we've processed a data binder (affects de Bruijn index shifting)
+        dataBindersProcessed++;
       }
-    } catch {
-      // If type inference fails, skip this check (other errors will be reported)
+
+      // Extend context and continue to next binder
+      currentEnv = currentEnv.extendTTKContext(current.name, domain);
+      current = current.body;
+      binderIndex++;
     }
+  }
+}
+
+/**
+ * Check if a term uses a variable at the given de Bruijn index.
+ */
+function usesVariable(term: TTKTerm, index: number): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return term.index === index;
+    case 'Binder':
+      // In binder body, the index is shifted by 1
+      return usesVariable(term.domain, index) || usesVariable(term.body, index + 1);
+    case 'App':
+      return usesVariable(term.fn, index) || usesVariable(term.arg, index);
+    case 'Annot':
+      return usesVariable(term.term, index) || usesVariable(term.type, index);
+    case 'Match':
+      if (usesVariable(term.scrutinee, index)) return true;
+      // Patterns bind variables, which makes precise tracking complex.
+      // For now, conservatively return true if there are any clauses.
+      if (term.clauses.length > 0) return true;
+      return false;
+    case 'Sort':
+    case 'Const':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+    case 'Hole':
+    case 'Meta':
+      return false;
+    default:
+      return false;
   }
 }
 

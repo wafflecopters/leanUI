@@ -399,30 +399,6 @@ export function levelsEqual(l1: TTKTerm, l2: TTKTerm): boolean {
 }
 
 /**
- * Structural equality check for level terms (after simplification).
- */
-function levelsEqualStructural(l1: TTKTerm, l2: TTKTerm): boolean {
-  if (l1.tag !== l2.tag) return false;
-  switch (l1.tag) {
-    case 'ULit':
-      return l2.tag === 'ULit' && l1.n === l2.n;
-    case 'UOmega':
-      return l2.tag === 'UOmega';
-    case 'Var':
-      return l2.tag === 'Var' && l1.index === l2.index;
-    case 'Meta':
-      return l2.tag === 'Meta' && l1.id === l2.id;
-    case 'App':
-      return l2.tag === 'App' && levelsEqualStructural(l1.fn, l2.fn) && levelsEqualStructural(l1.arg, l2.arg);
-    case 'Const':
-      return l2.tag === 'Const' && l1.name === l2.name;
-    default:
-      // For other term types (Sort, Binder, etc.), which shouldn't appear in levels
-      return false;
-  }
-}
-
-/**
  * Simplify a level term (basic simplifications).
  */
 export function simplifyLevel(level: TTKTerm): TTKTerm {
@@ -495,6 +471,286 @@ export function levelContainsVar(level: TTKTerm): boolean {
 
 // Alias for backwards compatibility
 export const levelContainsParam = levelContainsVar;
+
+// ============================================================================
+// Symbolic Level Comparison
+// ============================================================================
+
+/**
+ * Collect all level variables (Var indices) in a level term.
+ * Used to check if a result universe covers all constructor argument universes.
+ */
+export function collectLevelVars(level: TTKTerm): Set<number> {
+  const vars = new Set<number>();
+  collectLevelVarsHelper(level, vars);
+  return vars;
+}
+
+function collectLevelVarsHelper(level: TTKTerm, vars: Set<number>): void {
+  switch (level.tag) {
+    case 'Var':
+      vars.add(level.index);
+      return;
+    case 'ULit':
+    case 'UOmega':
+    case 'Meta':
+    case 'Const':
+      return;
+    case 'App':
+      collectLevelVarsHelper(level.fn, vars);
+      collectLevelVarsHelper(level.arg, vars);
+      return;
+    default:
+      return;
+  }
+}
+
+/**
+ * Check if l1 ≤ l2 symbolically.
+ *
+ * Returns:
+ * - true: l1 is definitely ≤ l2
+ * - false: l1 is definitely > l2
+ * - 'unknown': cannot determine (e.g., comparing unrelated variables)
+ *
+ * Based on Lean's level comparison algorithm.
+ */
+export function levelLeq(l1: TTKTerm, l2: TTKTerm): boolean | 'unknown' {
+  return levelLeqWithOffset(l1, l2, 0);
+}
+
+/**
+ * Check if l1 ≥ l2 (convenience wrapper for levelLeq(l2, l1)).
+ */
+export function levelGeq(l1: TTKTerm, l2: TTKTerm): boolean | 'unknown' {
+  return levelLeq(l2, l1);
+}
+
+/**
+ * Internal helper for level comparison with an offset.
+ * offset > 0 means we're checking l1 ≤ l2 + offset
+ * offset < 0 means we're checking l1 + |offset| ≤ l2
+ */
+function levelLeqWithOffset(l1: TTKTerm, l2: TTKTerm, offset: number): boolean | 'unknown' {
+  // Simplify both levels first
+  const s1 = simplifyLevel(l1);
+  const s2 = simplifyLevel(l2);
+
+  // If both are concrete numbers, compare directly
+  const n1 = levelToNumber(s1);
+  const n2 = levelToNumber(s2);
+  if (n1 !== undefined && n2 !== undefined) {
+    return n1 <= n2 + offset;
+  }
+
+  // Zero is the smallest level
+  if (s1.tag === 'ULit' && s1.n === 0 && offset >= 0) {
+    return true;
+  }
+
+  // If l1 = l2 structurally and offset >= 0, then l1 ≤ l2 + offset
+  if (offset >= 0 && levelsEqualStructural(s1, s2)) {
+    return true;
+  }
+
+  // Handle Succ on left: Succ(a) ≤ b iff a ≤ b with offset-1
+  const succArg1 = matchUSucc(s1);
+  if (succArg1 !== undefined) {
+    return levelLeqWithOffset(succArg1, s2, offset - 1);
+  }
+
+  // Handle Succ on right: a ≤ Succ(b) iff a ≤ b with offset+1
+  const succArg2 = matchUSucc(s2);
+  if (succArg2 !== undefined) {
+    return levelLeqWithOffset(s1, succArg2, offset + 1);
+  }
+
+  // Handle Max on left: Max(a, b) ≤ c iff a ≤ c AND b ≤ c
+  const maxArgs1 = matchUMax(s1);
+  if (maxArgs1 !== undefined) {
+    const leftResult = levelLeqWithOffset(maxArgs1[0], s2, offset);
+    const rightResult = levelLeqWithOffset(maxArgs1[1], s2, offset);
+
+    if (leftResult === false || rightResult === false) {
+      return false;
+    }
+    if (leftResult === true && rightResult === true) {
+      return true;
+    }
+    return 'unknown';
+  }
+
+  // Handle Max on right: a ≤ Max(b, c) iff a ≤ b OR a ≤ c
+  const maxArgs2 = matchUMax(s2);
+  if (maxArgs2 !== undefined) {
+    const leftResult = levelLeqWithOffset(s1, maxArgs2[0], offset);
+    const rightResult = levelLeqWithOffset(s1, maxArgs2[1], offset);
+
+    if (leftResult === true || rightResult === true) {
+      return true;
+    }
+    if (leftResult === false && rightResult === false) {
+      return false;
+    }
+    return 'unknown';
+  }
+
+  // Handle IMax on left: IMax(a, b) ≤ c
+  // IMax(a, b) = 0 if b = 0, else Max(a, b)
+  const imaxArgs1 = matchUIMax(s1);
+  if (imaxArgs1 !== undefined) {
+    const [a, b] = imaxArgs1;
+    const bNum = levelToNumber(b);
+
+    // If b is concretely 0, IMax(a, b) = 0
+    if (bNum === 0) {
+      return levelLeqWithOffset(mkULit(0), s2, offset);
+    }
+
+    // If b is concretely > 0, IMax(a, b) = Max(a, b)
+    if (bNum !== undefined && bNum > 0) {
+      return levelLeqWithOffset(mkLMax(a, b), s2, offset);
+    }
+
+    // If b = Succ(something), b is definitively non-zero, so IMax(a, b) = Max(a, b)
+    const bSuccArg = matchUSucc(b);
+    if (bSuccArg !== undefined) {
+      return levelLeqWithOffset(mkLMax(a, b), s2, offset);
+    }
+
+    // b is a variable - need to check both cases
+    // Case 1: b = 0 => IMax(a, b) = 0, check 0 ≤ c
+    // Case 2: b > 0 => IMax(a, b) = Max(a, b), check Max(a, b) ≤ c
+    const case0 = levelLeqWithOffset(mkULit(0), s2, offset);
+    const caseSucc = levelLeqWithOffset(mkLMax(a, b), s2, offset);
+
+    // Both cases must hold (we don't know which b is)
+    if (case0 === true && caseSucc === true) {
+      return true;
+    }
+    // If either case is definitely false, we can't prove the constraint
+    // But actually, if b ends up being the right value, it might be true
+    // So we return 'unknown' unless both are true
+    return 'unknown';
+  }
+
+  // Handle IMax on right: a ≤ IMax(b, c)
+  const imaxArgs2 = matchUIMax(s2);
+  if (imaxArgs2 !== undefined) {
+    const [b, c] = imaxArgs2;
+    const cNum = levelToNumber(c);
+
+    // If c is concretely 0, IMax(b, c) = 0
+    if (cNum === 0) {
+      return levelLeqWithOffset(s1, mkULit(0), offset);
+    }
+
+    // If c is concretely > 0, IMax(b, c) = Max(b, c)
+    if (cNum !== undefined && cNum > 0) {
+      return levelLeqWithOffset(s1, mkLMax(b, c), offset);
+    }
+
+    // If c = Succ(something), c is definitively non-zero, so IMax(b, c) = Max(b, c)
+    const cSuccArg = matchUSucc(c);
+    if (cSuccArg !== undefined) {
+      return levelLeqWithOffset(s1, mkLMax(b, c), offset);
+    }
+
+    // c is a variable - in the worst case c = 0, so IMax(b, c) = 0
+    // We need a ≤ IMax(b, c) to hold for all possible c values
+    // This is tricky - return 'unknown' to be conservative
+    return 'unknown';
+  }
+
+  // Both are variables or complex expressions we can't simplify further
+  // Check if they're the same variable
+  if (s1.tag === 'Var' && s2.tag === 'Var') {
+    if (s1.index === s2.index) {
+      return offset >= 0;
+    }
+    // Different variables - can't determine
+    return 'unknown';
+  }
+
+  // Concrete vs variable
+  if (n1 !== undefined && s2.tag === 'Var') {
+    // n1 ≤ Var(i) + offset ?
+    // If n1 = 0 and offset >= 0, true (0 is smallest)
+    if (n1 === 0 && offset >= 0) {
+      return true;
+    }
+    // Otherwise unknown
+    return 'unknown';
+  }
+
+  if (s1.tag === 'Var' && n2 !== undefined) {
+    // Var(i) ≤ n2 + offset ?
+    // We don't know the value of Var(i), so unknown
+    // (unless n2 + offset is very large, but we don't have a max level)
+    return 'unknown';
+  }
+
+  // Can't determine
+  return 'unknown';
+}
+
+/**
+ * Check if a level variable is "contained" in another level.
+ * A variable v is contained in level l if:
+ * - l is exactly v
+ * - l is Max(a, b) and v is contained in a or b
+ * - l is IMax(a, b) and v is contained in a or b (conservative)
+ * - l is Succ(a) and v is contained in a
+ *
+ * This is used to check if a result universe covers all argument variables.
+ */
+export function levelVarContainedIn(varIndex: number, level: TTKTerm): boolean {
+  const s = simplifyLevel(level);
+
+  if (s.tag === 'Var') {
+    return s.index === varIndex;
+  }
+
+  const succArg = matchUSucc(s);
+  if (succArg !== undefined) {
+    return levelVarContainedIn(varIndex, succArg);
+  }
+
+  const maxArgs = matchUMax(s);
+  if (maxArgs !== undefined) {
+    return levelVarContainedIn(varIndex, maxArgs[0]) || levelVarContainedIn(varIndex, maxArgs[1]);
+  }
+
+  const imaxArgs = matchUIMax(s);
+  if (imaxArgs !== undefined) {
+    return levelVarContainedIn(varIndex, imaxArgs[0]) || levelVarContainedIn(varIndex, imaxArgs[1]);
+  }
+
+  return false;
+}
+
+/**
+ * Structural equality check for level terms (after simplification).
+ */
+function levelsEqualStructural(l1: TTKTerm, l2: TTKTerm): boolean {
+  if (l1.tag !== l2.tag) return false;
+  switch (l1.tag) {
+    case 'ULit':
+      return l2.tag === 'ULit' && l1.n === l2.n;
+    case 'UOmega':
+      return l2.tag === 'UOmega';
+    case 'Var':
+      return l2.tag === 'Var' && l1.index === l2.index;
+    case 'Meta':
+      return l2.tag === 'Meta' && l1.id === l2.id;
+    case 'App':
+      return l2.tag === 'App' && levelsEqualStructural(l1.fn, l2.fn) && levelsEqualStructural(l1.arg, l2.arg);
+    case 'Const':
+      return l2.tag === 'Const' && l1.name === l2.name;
+    default:
+      return false;
+  }
+}
 
 /**
  * Pretty print a level term.

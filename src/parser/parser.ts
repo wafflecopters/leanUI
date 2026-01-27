@@ -2871,7 +2871,7 @@ export class Parser {
     } else if (this.current().type === 'LPAREN') {
       // Type (level-expr) - parenthesized level expression
       this.advance(); // consume '('
-      const level = this.parseLevelExpr();
+      const level = this.parseLevelExpr(ctx);
       this.expect('RPAREN');
       result = mkSortTT(mkUSuccAppTT(level)); // Type l = Sort(l+1)
     } else {
@@ -2893,13 +2893,15 @@ export class Parser {
    *
    * Syntax:
    * - n           → LNum(n) for numeric literal
-   * - U           → LName("U") for identifier
+   * - U           → Var(idx) if U is bound, Const("U") otherwise
    * - USucc e     → LSucc(e)
    * - UMax e1 e2  → LMax(e1, e2)
    * - UIMax e1 e2 → LIMax(e1, e2)
    * - (expr)      → parenthesized level expression
+   *
+   * @param ctx - Name context for resolving bound level variables
    */
-  private parseLevelExpr(): TTerm {
+  private parseLevelExpr(ctx: NameContext): TTerm {
     const current = this.current();
 
     if (current.type === 'NUMBER') {
@@ -2916,32 +2918,37 @@ export class Parser {
         return mkUOmegaTT();
       }
       this.advance();
-      return mkConstTT(name); // Level variable as Const, resolved during elaboration
+      // Check if this is a bound variable (e.g., from {u : ULevel} ->)
+      const idx = ctx.indexOf(name);
+      if (idx >= 0) {
+        return mkVarTT(idx); // Bound level variable
+      }
+      return mkConstTT(name); // Unbound - resolved during elaboration
     }
 
     if (current.type === 'USUCC') {
       this.advance(); // consume 'USucc'
-      const pred = this.parseLevelAtom();
+      const pred = this.parseLevelAtom(ctx);
       return mkUSuccAppTT(pred);
     }
 
     if (current.type === 'UMAX') {
       this.advance(); // consume 'UMax'
-      const left = this.parseLevelAtom();
-      const right = this.parseLevelAtom();
+      const left = this.parseLevelAtom(ctx);
+      const right = this.parseLevelAtom(ctx);
       return mkUMaxAppTT(left, right);
     }
 
     if (current.type === 'UIMAX') {
       this.advance(); // consume 'UIMax'
-      const left = this.parseLevelAtom();
-      const right = this.parseLevelAtom();
+      const left = this.parseLevelAtom(ctx);
+      const right = this.parseLevelAtom(ctx);
       return mkUIMaxAppTT(left, right);
     }
 
     if (current.type === 'LPAREN') {
       this.advance(); // consume '('
-      const level = this.parseLevelExpr();
+      const level = this.parseLevelExpr(ctx);
       this.expect('RPAREN');
       return level;
     }
@@ -2956,8 +2963,10 @@ export class Parser {
   /**
    * Parse an atomic level expression (for use as argument to USucc, UMax, UIMax).
    * This is either a number, identifier, or parenthesized expression.
+   *
+   * @param ctx - Name context for resolving bound level variables
    */
-  private parseLevelAtom(): TTerm {
+  private parseLevelAtom(ctx: NameContext): TTerm {
     const current = this.current();
 
     if (current.type === 'NUMBER') {
@@ -2974,12 +2983,17 @@ export class Parser {
         return mkUOmegaTT();
       }
       this.advance();
-      return mkConstTT(name); // Level variable as Const, resolved during elaboration
+      // Check if this is a bound variable (e.g., from {u : ULevel} ->)
+      const idx = ctx.indexOf(name);
+      if (idx >= 0) {
+        return mkVarTT(idx); // Bound level variable
+      }
+      return mkConstTT(name); // Unbound - resolved during elaboration
     }
 
     if (current.type === 'LPAREN') {
       this.advance(); // consume '('
-      const level = this.parseLevelExpr();
+      const level = this.parseLevelExpr(ctx);
       this.expect('RPAREN');
       return level;
     }
