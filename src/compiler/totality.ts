@@ -395,7 +395,10 @@ function* uncoveredPatternsInCaseTree(caseTree: CaseTree, definitions: Definitio
     }
     return
   } else if (caseTree.tag === 'Uncovered') {
-    yield { patterns: [{ tag: 'PWild', name: '_' }] }
+    // Yield empty patterns - the absurdity checker will pad to expected arity.
+    // This ensures zero-argument functions correctly report missing clauses
+    // rather than being incorrectly treated as absurd.
+    yield { patterns: [] }
   } else if (caseTree.tag === 'Absurd') {
     debugger
     return
