@@ -259,6 +259,9 @@ export interface TClause {
 export type TTermApp = { tag: 'App'; fn: TTerm; arg: TTerm; argName?: string }  // argName for named arguments: f { A := x }
 export type TTermConst = { tag: 'Const'; name: string; }
 
+/** A single binding in a multi-let (used internally by parser, expanded immediately) */
+export type TLetBinding = { name: string; type?: TTerm; value: TTerm };
+
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: TTerm }                          // Type_i, Prop = Type_0 (level is now a term)
@@ -455,6 +458,21 @@ export function mkLetTT(name: string, defType: TTerm | undefined, defVal: TTerm,
     domain: defType,
     body
   };
+}
+
+/**
+ * Create a multi-let expression: let a = X, b = Y, c = Z in body
+ * Each binding can reference previous bindings.
+ * Immediately expands to nested single lets (right-to-left) so MultiLet never exists as a term.
+ */
+export function mkMultiLetTT(bindings: TLetBinding[], body: TTerm): TTerm {
+  // Expand right-to-left: let a = X, b = Y in body  =>  let a = X in let b = Y in body
+  let result = body;
+  for (let i = bindings.length - 1; i >= 0; i--) {
+    const b = bindings[i];
+    result = mkLetTT(b.name, b.type, b.value, result);
+  }
+  return result;
 }
 
 /**

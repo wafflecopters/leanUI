@@ -53,6 +53,36 @@ let x : T = val in body         -- With type annotation
 let (x : T) = val in body       -- Parenthesized type annotation
 ```
 
+**Note:** Arrow types in annotations need parentheses to avoid ambiguity with `=`:
+```
+let f : (A -> B) = val in body    -- Correct: parens around arrow type
+let f : A -> B = val in body      -- Incorrect: parser sees A -> (B = val ...)
+```
+
+### Multi-Let Expressions
+
+Multiple bindings can be specified in a single `let` using commas:
+
+```
+let a = X, b = Y in body           -- Two bindings
+let a = X, b = Y, c = Z in body    -- Three bindings
+let a : T = X, b = Y in body       -- First binding typed, second untyped
+```
+
+Each binding can reference previous bindings:
+
+```
+let a = Zero, b = Succ a, c = Succ b in c   -- b uses a, c uses b
+```
+
+Multi-let is expanded to nested single-let expressions during elaboration:
+
+```
+let a = X, b = Y in body
+-- Elaborates to:
+let a = X in let b = Y in body
+```
+
 ### Applications
 
 ```

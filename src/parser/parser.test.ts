@@ -510,6 +510,379 @@ describe('Parser: Pi/Arrow', () => {
 });
 
 // ============================================================================
+// Parser: Multi-Binder Tests
+// ============================================================================
+
+describe('Parser: Multi-Binder', () => {
+  describe('Multi-Parameter Pi Types', () => {
+    test('Parse multi-name Pi: (a b : Nat) -> T produces MultiBinder', () => {
+      const term = parseExpr('(a b : Nat) -> T');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b']);
+        expect(term.binderKind.tag).toBe('BPiTT');
+        assertTermShape(term.domain, 'Const');
+        if (term.domain.tag === 'Const') {
+          expect(term.domain.name).toBe('Nat');
+        }
+      }
+    });
+
+    test('Parse multi-name Pi with many names: (a b c d e : T) -> R', () => {
+      const term = parseExpr('(a b c d e : T) -> R');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b', 'c', 'd', 'e']);
+        expect(term.binderKind.tag).toBe('BPiTT');
+      }
+    });
+
+    test('Parse chained multi-name Pi: (a b : A) -> (c d : B) -> T', () => {
+      const term = parseExpr('(a b : A) -> (c d : B) -> T');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b']);
+        // Body should be another MultiBinder
+        assertTermShape(term.body, 'MultiBinder');
+        if (term.body.tag === 'MultiBinder') {
+          expect(term.body.names).toEqual(['c', 'd']);
+        }
+      }
+    });
+
+    test('Parse multi-name Pi followed by single-name Pi', () => {
+      const term = parseExpr('(a b : A) -> (c : B) -> T');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b']);
+        // Body should be single Binder
+        assertTermShape(term.body, 'Binder');
+        if (term.body.tag === 'Binder') {
+          expect(term.body.name).toBe('c');
+        }
+      }
+    });
+
+    test('Parse multi-name Pi with complex domain type', () => {
+      const term = parseExpr('(f g : A -> B) -> T');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['f', 'g']);
+        // Domain should be A -> B (a Pi type)
+        assertTermShape(term.domain, 'Binder');
+      }
+    });
+  });
+
+  describe('Multi-Parameter Lambda', () => {
+    test('Parse multi-name lambda: \\(x y : A) => body produces MultiBinder', () => {
+      const term = parseExpr('\\(x y : A) => x');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['x', 'y']);
+        expect(term.binderKind.tag).toBe('BLamTT');
+        assertTermShape(term.domain, 'Const');
+      }
+    });
+
+    test('Parse multi-name lambda with many names: \\(a b c d : T) => a', () => {
+      const term = parseExpr('\\(a b c d : T) => a');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b', 'c', 'd']);
+        expect(term.binderKind.tag).toBe('BLamTT');
+        // Body references 'a' which is at index 3 (d=0, c=1, b=2, a=3)
+        assertTermShape(term.body, 'Var');
+        if (term.body.tag === 'Var') {
+          expect(term.body.index).toBe(3);
+        }
+      }
+    });
+
+    test('Parse chained multi-name lambda: \\(x y : A) (z w : B) => x', () => {
+      const term = parseExpr('\\(x y : A) (z w : B) => x');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['x', 'y']);
+        assertTermShape(term.body, 'MultiBinder');
+        if (term.body.tag === 'MultiBinder') {
+          expect(term.body.names).toEqual(['z', 'w']);
+        }
+      }
+    });
+
+    test('Parse multi-name lambda with body using last name', () => {
+      const term = parseExpr('\\(a b c : T) => c');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        // Body references 'c' which is at index 0 (most recent)
+        assertTermShape(term.body, 'Var');
+        if (term.body.tag === 'Var') {
+          expect(term.body.index).toBe(0);
+        }
+      }
+    });
+  });
+
+  describe('Named Multi-Binders (Implicit)', () => {
+    test('Parse named multi-name Pi: {a b : Type} -> T', () => {
+      const term = parseExpr('{a b : Type} -> T');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b']);
+        expect(term.binderKind.tag).toBe('BPiTT');
+        expect(term.named).toBe(true);
+      }
+    });
+
+    // Note: Named lambda binders like \{x y : A} => x are NOT supported.
+    // Only Pi types can have named (implicit) binders.
+
+    test('Parse mixed named and positional multi-binders', () => {
+      const term = parseExpr('{A B : Type} -> (a b : A) -> T');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['A', 'B']);
+        expect(term.named).toBe(true);
+        // Body is positional multi-binder
+        assertTermShape(term.body, 'MultiBinder');
+        if (term.body.tag === 'MultiBinder') {
+          expect(term.body.names).toEqual(['a', 'b']);
+          expect(term.body.named).toBeUndefined();
+        }
+      }
+    });
+  });
+});
+
+// ============================================================================
+// Parser: Mixed Binder Tests (Let + Lambda + Pi combinations)
+// ============================================================================
+
+describe('Parser: Mixed Binders', () => {
+  describe('Let inside Lambda', () => {
+    test('Parse lambda with let body: \\x => let y = x in y', () => {
+      const term = parseExpr('\\x => let y = x in y');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder') {
+        expect(term.binderKind.tag).toBe('BLamTT');
+        expect(term.name).toBe('x');
+        // Body is a let
+        assertTermShape(term.body, 'Binder');
+        if (term.body.tag === 'Binder') {
+          expect(term.body.binderKind.tag).toBe('BLetTT');
+          expect(term.body.name).toBe('y');
+        }
+      }
+    });
+
+    test('Parse multi-lambda with multi-let body', () => {
+      const term = parseExpr('\\(a b : T) => let x = a, y = b in x');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b']);
+        // Body is first let (nested lets from multi-let)
+        assertTermShape(term.body, 'Binder');
+        if (term.body.tag === 'Binder') {
+          expect(term.body.binderKind.tag).toBe('BLetTT');
+          expect(term.body.name).toBe('x');
+        }
+      }
+    });
+  });
+
+  describe('Lambda inside Let', () => {
+    test('Parse let binding a lambda: let f = \\x => x in f', () => {
+      const term = parseExpr('let f = \\x => x in f');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+        expect(term.name).toBe('f');
+        // Value is a lambda
+        assertTermShape(term.binderKind.defVal, 'Binder');
+        if (term.binderKind.defVal.tag === 'Binder') {
+          expect(term.binderKind.defVal.binderKind.tag).toBe('BLamTT');
+        }
+      }
+    });
+
+    test('Parse let binding multi-param lambda: let f = \\(x y : A) => x in f', () => {
+      const term = parseExpr('let f = \\(x y : A) => x in f');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+        // Value is a MultiBinder
+        assertTermShape(term.binderKind.defVal, 'MultiBinder');
+        if (term.binderKind.defVal.tag === 'MultiBinder') {
+          expect(term.binderKind.defVal.names).toEqual(['x', 'y']);
+        }
+      }
+    });
+
+    test('Parse multi-let binding multiple lambdas', () => {
+      const term = parseExpr('let f = \\x => x, g = \\y => f y in g');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+        expect(term.name).toBe('f');
+        // First value is lambda
+        assertTermShape(term.binderKind.defVal, 'Binder');
+        // Body is another let
+        if (term.body.tag === 'Binder' && term.body.binderKind.tag === 'BLetTT') {
+          expect(term.body.name).toBe('g');
+          // g's value is also a lambda
+          assertTermShape(term.body.binderKind.defVal, 'Binder');
+        }
+      }
+    });
+  });
+
+  describe('Complex Nested Combinations', () => {
+    test('Parse deeply nested: let f = \\(a b : T) => let x = a in x in f', () => {
+      const term = parseExpr('let f = \\(a b : T) => let x = a in x in f');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+        expect(term.name).toBe('f');
+        // Value is multi-binder lambda
+        assertTermShape(term.binderKind.defVal, 'MultiBinder');
+        if (term.binderKind.defVal.tag === 'MultiBinder') {
+          expect(term.binderKind.defVal.names).toEqual(['a', 'b']);
+          // Lambda body is a let
+          assertTermShape(term.binderKind.defVal.body, 'Binder');
+        }
+      }
+    });
+
+    test('Parse Pi type with let in the body type', () => {
+      // (x : A) -> let y = x in B (note: this is unusual but should parse)
+      const term = parseExpr('(x : A) -> let y = x in B');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder') {
+        expect(term.binderKind.tag).toBe('BPiTT');
+        // Body is a let
+        assertTermShape(term.body, 'Binder');
+        if (term.body.tag === 'Binder') {
+          expect(term.body.binderKind.tag).toBe('BLetTT');
+        }
+      }
+    });
+
+    test('Parse multi-let with type annotations using Pi types', () => {
+      // Arrow types in let annotations need parentheses to avoid ambiguity with '='
+      const term = parseExpr('let f : (A -> B) = \\x => x, g : (B -> C) = \\y => y in g');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder') {
+        expect(term.name).toBe('f');
+        // Type annotation is A -> B (a Pi)
+        assertTermShape(term.domain!, 'Binder');
+        if (term.domain?.tag === 'Binder') {
+          expect(term.domain.binderKind.tag).toBe('BPiTT');
+        }
+      }
+    });
+
+    test('Parse lambda returning lambda: \\x => \\y => x', () => {
+      const term = parseExpr('\\x => \\y => x');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder') {
+        expect(term.name).toBe('x');
+        assertTermShape(term.body, 'Binder');
+        if (term.body.tag === 'Binder') {
+          expect(term.body.name).toBe('y');
+          // Body references x which is now at index 1
+          assertTermShape(term.body.body, 'Var');
+          if (term.body.body.tag === 'Var') {
+            expect(term.body.body.index).toBe(1);
+          }
+        }
+      }
+    });
+
+    test('Parse multi-param lambda returning multi-param lambda', () => {
+      const term = parseExpr('\\(a b : A) => \\(c d : B) => a');
+      assertTermShape(term, 'MultiBinder');
+      if (term.tag === 'MultiBinder') {
+        expect(term.names).toEqual(['a', 'b']);
+        assertTermShape(term.body, 'MultiBinder');
+        if (term.body.tag === 'MultiBinder') {
+          expect(term.body.names).toEqual(['c', 'd']);
+          // 'a' is at index 3 (d=0, c=1, b=2, a=3)
+          assertTermShape(term.body.body, 'Var');
+          if (term.body.body.tag === 'Var') {
+            expect(term.body.body.index).toBe(3);
+          }
+        }
+      }
+    });
+
+    test('Parse let with lambda type and multi-let body lambda', () => {
+      // Arrow types in let annotations need outer parentheses to avoid ambiguity
+      const term = parseExpr('let compose : ((B -> C) -> (A -> B) -> A -> C) = \\f g x => f (g x) in compose');
+      assertTermShape(term, 'Binder');
+      if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+        expect(term.name).toBe('compose');
+        // Type should be a chain of Pis
+        assertTermShape(term.domain!, 'Binder');
+        // Value should be a chain of lambdas
+        assertTermShape(term.binderKind.defVal, 'Binder');
+      }
+    });
+  });
+
+  describe('De Bruijn Index Verification', () => {
+    test('Multi-binder indices: \\(a b c : T) => (a, b, c) pattern', () => {
+      // Testing that a=2, b=1, c=0 in a multi-binder
+      const termA = parseExpr('\\(a b c : T) => a');
+      const termB = parseExpr('\\(a b c : T) => b');
+      const termC = parseExpr('\\(a b c : T) => c');
+
+      if (termA.tag === 'MultiBinder' && termA.body.tag === 'Var') {
+        expect(termA.body.index).toBe(2); // a is outermost
+      }
+      if (termB.tag === 'MultiBinder' && termB.body.tag === 'Var') {
+        expect(termB.body.index).toBe(1); // b is middle
+      }
+      if (termC.tag === 'MultiBinder' && termC.body.tag === 'Var') {
+        expect(termC.body.index).toBe(0); // c is innermost
+      }
+    });
+
+    test('Nested multi-binders with overlapping scope', () => {
+      // \\(a b : T) => \\(c d : T) => a should have a at index 3
+      const term = parseExpr('\\(a b : T) => \\(c d : T) => a');
+      if (term.tag === 'MultiBinder' && term.body.tag === 'MultiBinder') {
+        if (term.body.body.tag === 'Var') {
+          // a is: past d(0), c(1), b(2), then a(3)
+          expect(term.body.body.index).toBe(3);
+        }
+      }
+    });
+
+    test('Let + multi-binder index interaction', () => {
+      // let x = Z in \\(a b : T) => x should have x at index 2
+      const term = parseExpr('let x = Z in \\(a b : T) => x');
+      if (term.tag === 'Binder' && term.body.tag === 'MultiBinder') {
+        if (term.body.body.tag === 'Var') {
+          // x is: past b(0), a(1), then x(2)
+          expect(term.body.body.index).toBe(2);
+        }
+      }
+    });
+
+    test('Multi-let + lambda index interaction', () => {
+      // let x = A, y = B in \\z => x should have x at index 2
+      const term = parseExpr('let x = A, y = B in \\z => x');
+      if (term.tag === 'Binder' && term.body.tag === 'Binder') {
+        // Navigate through the nested lets to the lambda
+        if (term.body.body.tag === 'Binder') {
+          if (term.body.body.body.tag === 'Var') {
+            // x is: past z(0), y(1), then x(2)
+            expect(term.body.body.body.index).toBe(2);
+          }
+        }
+      }
+    });
+  });
+});
+
+// ============================================================================
 // Parser: Let Tests
 // ============================================================================
 
@@ -713,6 +1086,180 @@ describe('Parser: Let', () => {
       const term = parseExpr('let x = a in\n  let y = b in\n  y');
       assertTermShape(term, 'Binder');
     });
+  });
+});
+
+// ============================================================================
+// Parser: Multi-Let Tests
+// Multi-let is immediately expanded to nested single lets during parsing,
+// so these tests verify the expanded structure.
+// ============================================================================
+
+describe('Parser: Multi-Let', () => {
+  test('Parse multi-let with two bindings expands to nested lets', () => {
+    // let a = X, b = Y in k  =>  let a = X in let b = Y in k
+    const term = parseExpr('let a = X, b = Y in k');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      expect(term.binderKind.tag).toBe('BLetTT');
+      expect(term.name).toBe('a');
+      // Inner let
+      assertTermShape(term.body, 'Binder');
+      if (term.body.tag === 'Binder') {
+        expect(term.body.binderKind.tag).toBe('BLetTT');
+        expect(term.body.name).toBe('b');
+        // Body k
+        assertTermShape(term.body.body, 'Const');
+      }
+    }
+  });
+
+  test('Parse multi-let with three bindings expands to nested lets', () => {
+    // let a = X, b = Y, c = Z in k  =>  let a = X in let b = Y in let c = Z in k
+    const term = parseExpr('let a = X, b = Y, c = Z in k');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      expect(term.name).toBe('a');
+      assertTermShape(term.body, 'Binder');
+      if (term.body.tag === 'Binder') {
+        expect(term.body.name).toBe('b');
+        assertTermShape(term.body.body, 'Binder');
+        if (term.body.body.tag === 'Binder') {
+          expect(term.body.body.name).toBe('c');
+        }
+      }
+    }
+  });
+
+  test('Parse multi-let where later binding references earlier', () => {
+    // let a = X, b = a in b
+    // Expands to: let a = X in let b = a in b
+    // In inner let: 'a' is Var(0)
+    // In body: 'b' is Var(0)
+    const term = parseExpr('let a = X, b = a in b');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder' && term.body.tag === 'Binder') {
+      // Inner let's value (b = a): 'a' should be Var(0)
+      if (term.body.binderKind.tag === 'BLetTT') {
+        assertTermShape(term.body.binderKind.defVal, 'Var');
+        if (term.body.binderKind.defVal.tag === 'Var') {
+          expect(term.body.binderKind.defVal.index).toBe(0);
+        }
+      }
+      // Innermost body 'b' should be Var(0)
+      assertTermShape(term.body.body, 'Var');
+      if (term.body.body.tag === 'Var') {
+        expect(term.body.body.index).toBe(0);
+      }
+    }
+  });
+
+  test('Parse multi-let with type annotations', () => {
+    // let a : T = X, b = a in b
+    const term = parseExpr('let a : T = X, b = a in b');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      expect(term.name).toBe('a');
+      // First binding has type annotation
+      assertTermShape(term.domain!, 'Const');
+      if (term.domain?.tag === 'Const') {
+        expect(term.domain.name).toBe('T');
+      }
+      // Second binding has no type annotation
+      if (term.body.tag === 'Binder') {
+        expect(term.body.domain).toBeUndefined();
+      }
+    }
+  });
+
+  test('Parse multi-let with parenthesized type annotation', () => {
+    const term = parseExpr('let (a : T) = X, b = Y in k');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      assertTermShape(term.domain!, 'Const');
+    }
+  });
+
+  test('Single binding without comma produces single Binder', () => {
+    const term = parseExpr('let a = X in k');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      expect(term.binderKind.tag).toBe('BLetTT');
+      expect(term.name).toBe('a');
+      // Body is directly k, not another let
+      assertTermShape(term.body, 'Const');
+    }
+  });
+
+  test('Parse multi-let with complex values', () => {
+    const term = parseExpr('let f = \\x => x, y = f Z in y');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder' && term.binderKind.tag === 'BLetTT') {
+      // f is a lambda
+      assertTermShape(term.binderKind.defVal, 'Binder');
+      // Inner let
+      if (term.body.tag === 'Binder' && term.body.binderKind.tag === 'BLetTT') {
+        // y = f Z is an application
+        assertTermShape(term.body.binderKind.defVal, 'App');
+      }
+    }
+  });
+
+  test('Parse multi-let with multiline body (indented)', () => {
+    const term = parseExpr('let a = X, b = Y in\n  b');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder' && term.body.tag === 'Binder') {
+      // Innermost body is Var
+      assertTermShape(term.body.body, 'Var');
+    }
+  });
+
+  test('Parse multi-let referencing third binding in body', () => {
+    // let a = X, b = a, c = b in c
+    // c in body is Var(0)
+    const term = parseExpr('let a = X, b = a, c = b in c');
+    assertTermShape(term, 'Binder');
+    // Navigate to innermost body
+    if (term.tag === 'Binder' && term.body.tag === 'Binder' && term.body.body.tag === 'Binder') {
+      assertTermShape(term.body.body.body, 'Var');
+      if (term.body.body.body.tag === 'Var') {
+        expect(term.body.body.body.index).toBe(0);
+      }
+    }
+  });
+
+  test('Parse multi-let referencing first binding in body', () => {
+    // let a = X, b = Y, c = Z in a
+    // 'a' in innermost body is Var(2) since c=0, b=1, a=2
+    const term = parseExpr('let a = X, b = Y, c = Z in a');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder' && term.body.tag === 'Binder' && term.body.body.tag === 'Binder') {
+      assertTermShape(term.body.body.body, 'Var');
+      if (term.body.body.body.tag === 'Var') {
+        expect(term.body.body.body.index).toBe(2);
+      }
+    }
+  });
+
+  test('Parse nested multi-let', () => {
+    // let a = X, b = Y in let c = a, d = b in c
+    // Outer multi-let expands to: let a = X in let b = Y in (...)
+    // Inner multi-let expands to: let c = a in let d = b in c
+    const term = parseExpr('let a = X, b = Y in let c = a, d = b in c');
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      expect(term.name).toBe('a');
+      if (term.body.tag === 'Binder') {
+        expect(term.body.name).toBe('b');
+        // Inner multi-let starts here
+        if (term.body.body.tag === 'Binder') {
+          expect(term.body.body.name).toBe('c');
+          if (term.body.body.body.tag === 'Binder') {
+            expect(term.body.body.body.name).toBe('d');
+          }
+        }
+      }
+    }
   });
 });
 

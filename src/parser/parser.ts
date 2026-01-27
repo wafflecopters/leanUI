@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -1857,43 +1857,31 @@ export class Parser {
   // parsePi removed - use (x : T) -> ... syntax instead
 
   /**
-   * Parse let expression.
-   *
-   * Syntax variants:
-   *   let x = val in body           -- no type annotation
-   *   let x : T = val in body       -- with type annotation
-   *   let (x : T) = val in body     -- parenthesized type annotation
-   *   let (x : _) = val in body     -- explicit hole type
-   *   let x : _ = val in body       -- explicit hole type
-   *
-   * When the body follows 'in' on a new line, it must be indented beyond 'let'.
+   * Parse a single let binding (name, optional type, value).
+   * Returns the binding info and updates ctx with the new name.
    */
-  private parseLet(ctx: NameContext, path: IndexPath = []): TTerm {
-    const startToken = this.current();
-    // Track the starting column of the line containing 'let' for indentation checking
-    // This handles cases like: plus (Succ a) b = let x = ... in\n  x
-    // where the body just needs to be more indented than the line start, not the 'let' keyword
-    const letLineStartCol = this.getLineStartCol(startToken.line);
-    this.expect('LET');
-
+  private parseLetBinding(ctx: NameContext, path: IndexPath, bindingIndex: number): { binding: TLetBinding; nameToken: Token } {
     let name: string;
     let nameToken: Token;
     let type: TTerm | undefined = undefined;
 
+    // For multi-let, path segments go into bindings array
+    const bindingPath = [...path, { kind: 'field' as const, name: 'bindings' }, { kind: 'array' as const, index: bindingIndex }];
+
     if (this.current().type === 'LPAREN') {
-      // Parenthesized form: let (x : T) = val in body
+      // Parenthesized form: (x : T)
       this.advance();
       nameToken = this.current();
       name = nameToken.type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
       if (nameToken.type === 'UNDERSCORE') this.advance();
 
       this.expect('COLON');
-      const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+      const domainPath = [...bindingPath, { kind: 'field' as const, name: 'type' }];
       // Inside parens, can parse full expression including = operator
       type = this.expr(0, ctx, domainPath);
       this.expect('RPAREN');
     } else {
-      // Non-parenthesized: let x = val or let x : T = val
+      // Non-parenthesized: x or x : T
       nameToken = this.current();
       name = nameToken.type === 'UNDERSCORE' ? '_' : this.expect('IDENT').value;
       if (nameToken.type === 'UNDERSCORE') this.advance();
@@ -1901,42 +1889,99 @@ export class Parser {
       // Optional type annotation
       if (this.current().type === 'COLON') {
         this.advance();
-        const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
+        const domainPath = [...bindingPath, { kind: 'field' as const, name: 'type' }];
         // Parse type with precedence > 50 to stop before '=' operator (precedence 50)
-        // This way 'let x : Nat = 5 in x' parses type as 'Nat', not 'Nat = 5'
         type = this.expr(51, ctx, domainPath);
       }
     }
 
     // Record the binder name's source range
-    const namePath = [...path, { kind: 'field' as const, name: 'name' }];
+    const namePath = [...bindingPath, { kind: 'field' as const, name: 'name' }];
     this.recordRange(namePath, nameToken, nameToken);
 
-    // Expect '=' (as OPERATOR token with value '=')
+    // Expect '='
     if (this.current().type !== 'OPERATOR' || this.current().value !== '=') {
       throw new ParseError(
-        `Expected '=' in let expression, got '${this.current().type === 'OPERATOR' ? this.current().value : this.current().type}'`,
+        `Expected '=' in let binding, got '${this.current().type === 'OPERATOR' ? this.current().value : this.current().type}'`,
         this.current().line,
         this.current().col
       );
     }
     this.advance();
 
-    // Parse the value being bound
-    const defValPath = [...path, { kind: 'field' as const, name: 'binderKind' }, { kind: 'field' as const, name: 'defVal' }];
-    const value = this.expr(0, ctx, defValPath);
+    // Parse the value - each binding can reference previous bindings
+    const valuePath = [...bindingPath, { kind: 'field' as const, name: 'value' }];
+    const value = this.expr(0, ctx, valuePath);
+
+    return { binding: { name, type, value }, nameToken };
+  }
+
+  /**
+   * Parse let expression.
+   *
+   * Syntax variants:
+   *   let x = val in body                     -- single binding, no type
+   *   let x : T = val in body                 -- single binding with type
+   *   let (x : T) = val in body               -- parenthesized type
+   *   let a = X, b = Y, c = Z in body         -- multi-let (comma-separated)
+   *   let a = X,
+   *       b = Y in body                       -- multi-let with newlines
+   *
+   * Multi-let expands to nested single lets during elaboration.
+   * Each binding can reference previous bindings: let a = 1, b = a + 1 in b
+   */
+  private parseLet(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
+    const letLineStartCol = this.getLineStartCol(startToken.line);
+    this.expect('LET');
+
+    // Collect all bindings
+    const bindings: TLetBinding[] = [];
+    const nameTokens: Token[] = [];
+    let currentCtx = ctx;
+    let bindingIndex = 0;
+
+    // Parse first binding
+    const first = this.parseLetBinding(currentCtx, path, bindingIndex);
+    bindings.push(first.binding);
+    nameTokens.push(first.nameToken);
+    currentCtx = [first.binding.name, ...currentCtx];
+    bindingIndex++;
+
+    // Parse additional comma-separated bindings
+    while (this.current().type === 'COMMA') {
+      this.advance(); // consume comma
+
+      // Skip newlines after comma (allow multi-line let)
+      while (this.current().type === 'NEWLINE') {
+        this.advance();
+      }
+
+      // Check indentation for continuation bindings
+      if (this.current().col <= letLineStartCol) {
+        throw new ParseError(
+          `Let binding continuation must be indented beyond 'let' (column ${letLineStartCol}), found at column ${this.current().col}`,
+          this.current().line,
+          this.current().col
+        );
+      }
+
+      const next = this.parseLetBinding(currentCtx, path, bindingIndex);
+      bindings.push(next.binding);
+      nameTokens.push(next.nameToken);
+      currentCtx = [next.binding.name, ...currentCtx];
+      bindingIndex++;
+    }
 
     // Expect 'in'
     this.expect('IN');
 
     // Handle indentation: if there's a newline after 'in', body must be indented
     if (this.current().type === 'NEWLINE') {
-      this.advance(); // consume the newline
-      // Skip any additional newlines
+      this.advance();
       while (this.current().type === 'NEWLINE') {
         this.advance();
       }
-      // The body must be indented beyond the start of the line containing 'let'
       if (this.current().col <= letLineStartCol) {
         throw new ParseError(
           `Body of let expression must be indented beyond line start (column ${letLineStartCol}), found at column ${this.current().col}`,
@@ -1946,10 +1991,9 @@ export class Parser {
       }
     }
 
-    // Parse body with name in context
-    const newCtx = [name, ...ctx];
+    // Parse body with all names in context
     const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
-    const body = this.expr(0, newCtx, bodyPath);
+    const body = this.expr(0, currentCtx, bodyPath);
 
     // Record full let expression
     if (path.length > 0) {
@@ -1957,7 +2001,15 @@ export class Parser {
       this.recordRange(path, startToken, endToken);
     }
 
-    return mkLetTT(name, type, value, body);
+    // If single binding, return regular let for backwards compatibility
+    if (bindings.length === 1) {
+      // For single let, also record name at the original path location
+      const singleNamePath = [...path, { kind: 'field' as const, name: 'name' }];
+      this.recordRange(singleNamePath, nameTokens[0], nameTokens[0]);
+      return mkLetTT(bindings[0].name, bindings[0].type, bindings[0].value, body);
+    }
+
+    return mkMultiLetTT(bindings, body);
   }
 
   /**
