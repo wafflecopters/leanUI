@@ -139,6 +139,12 @@ export function checkTotality(
     }
   }
 
+  // If ALL uncovered patterns are absurd (none are valid), update the case tree
+  // to replace Uncovered nodes with Absurd nodes
+  if (missingValidClauses.length === 0 && missingAbsurdClauses.length > 0) {
+    caseTree = replaceUncoveredWithAbsurd(caseTree);
+  }
+
   return {
     caseTree,
     unreachableClauses,
@@ -146,6 +152,29 @@ export function checkTotality(
     annotatedAbsurdClauses,
     missingValidClauses,
     missingAbsurdClauses,
+  }
+}
+
+/**
+ * Recursively replace all Uncovered nodes with Absurd nodes in a case tree.
+ * This is called when all uncovered patterns have been determined to be absurd.
+ */
+function replaceUncoveredWithAbsurd(tree: CaseTree): CaseTree {
+  switch (tree.tag) {
+    case 'Leaf':
+    case 'Absurd':
+      return tree;
+    case 'Uncovered':
+      return { tag: 'Absurd' };
+    case 'NoSplit':
+      return { tag: 'NoSplit', debugLabel: tree.debugLabel, branch: replaceUncoveredWithAbsurd(tree.branch) };
+    case 'Split': {
+      const newBranches = new Map<string, CaseTree>();
+      for (const [ctorName, branch] of tree.branches) {
+        newBranches.set(ctorName, replaceUncoveredWithAbsurd(branch));
+      }
+      return { ...tree, branches: newBranches };
+    }
   }
 }
 
