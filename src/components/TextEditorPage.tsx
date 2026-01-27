@@ -592,6 +592,8 @@ function CaseTreeNode({ tree, depth = 0 }: { tree: CaseTree; depth?: number }): 
  * Render totality checking results with case tree visualization
  */
 function TotalityResultView({ result }: { result: TotalityResult }): JSX.Element | null {
+  debugger
+
   if (!result.caseTree) {
     return null;
   }
@@ -733,7 +735,7 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
         return (
           <BlockCard
             key={i}
-            initiallyExpanded={decl.kind === 'term'}
+            initiallyExpanded={decl.checkSuccess === false}
             header={
               <>
                 <span style={{
