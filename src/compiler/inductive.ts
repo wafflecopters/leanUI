@@ -1,4 +1,4 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, contextToNamesStack, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
 import { TTKTerm, levelsEqual, mkULit, levelLeq, collectLevelVars, levelVarContainedIn, prettyPrintLevel } from "./kernel";
 import { inferType } from "./checker";
 import { shiftTerm } from "./subst";
@@ -418,10 +418,11 @@ function checkConstructorUniverseLevels(
 
               if (leqResult === false) {
                 // Definite violation
+                const levelContext = contextToNamesStack(currentEnv.context);
                 errors.push(TCEnvError.create(
                   `Universe level violation in constructor '${ctor.name}': ` +
-                  `argument type has sort ${prettyPrintLevel(dataLevel)} but '${inductiveName}' ` +
-                  `result type is Sort ${prettyPrintLevel(shiftedResultLevel)}`,
+                  `argument type has sort ${prettyPrintLevel(dataLevel, levelContext)} but '${inductiveName}' ` +
+                  `result type is Sort ${prettyPrintLevel(shiftedResultLevel, levelContext)}`,
                   domainEnv
                 ));
               } else if (leqResult === 'unknown') {
@@ -430,10 +431,11 @@ function checkConstructorUniverseLevels(
 
                 for (const varIndex of dataVars) {
                   if (!levelVarContainedIn(varIndex, shiftedResultLevel)) {
+                    const levelContext = contextToNamesStack(currentEnv.context);
                     errors.push(TCEnvError.create(
                       `Universe level violation in constructor '${ctor.name}': ` +
                       `argument uses level variable not covered by result level ` +
-                      `(argument at Sort ${prettyPrintLevel(dataLevel)}, result at Sort ${prettyPrintLevel(shiftedResultLevel)})`,
+                      `(argument at Sort ${prettyPrintLevel(dataLevel, levelContext)}, result at Sort ${prettyPrintLevel(shiftedResultLevel, levelContext)})`,
                       domainEnv
                     ));
                     break;
