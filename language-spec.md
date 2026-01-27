@@ -131,6 +131,63 @@ inductive Nat : Type where
 | Succ : Nat -> Nat
 ```
 
+### Record Types (Structures)
+
+Records are single-constructor inductive types with named fields and automatic projection functions.
+
+**Basic syntax:**
+```
+record Point where
+  x : Nat
+  y : Nat
+```
+
+**With parameters:**
+```
+record Pair (A : Type) (B : Type) where
+  fst : A
+  snd : B
+```
+
+**With implicit parameters:**
+```
+record Container {A : Type} where
+  value : A
+```
+
+**With custom constructor name:**
+```
+record Point where
+  constructor MkPoint
+  x : Nat
+  y : Nat
+```
+
+**With inheritance (extends):**
+```
+record ColoredPoint extends Point where
+  color : Color
+
+record Combined extends A, B, C where
+  extra : Nat
+```
+
+**With implicit fields:**
+```
+record ImplicitField where
+  {hidden : Type}
+  visible : hidden
+```
+
+**Dependent fields** (fields can reference previous fields):
+```
+record Sigma (A : Type) (B : A -> Type) where
+  fst : A
+  snd : B fst
+```
+
+**Default constructor name:** If not specified, the constructor is named `Mk#RecordName`.
+
 ### Pattern Matching in Definitions
 
 ```

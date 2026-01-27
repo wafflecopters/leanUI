@@ -1207,6 +1207,7 @@ export interface TTKRecordParam {
 export interface TTKRecordField {
   name: string;
   type: TTKTerm;
+  implicit?: boolean;  // true for implicit fields
 }
 
 /**
@@ -1218,6 +1219,7 @@ export interface TTKRecordField {
  */
 export interface TTKRecordDef {
   name: string;
+  constructorName: string;  // Constructor name (defaults to Mk#${name})
   type: TTKTerm;
   params: TTKRecordParam[];
   fields: TTKRecordField[];

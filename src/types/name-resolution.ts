@@ -14,6 +14,7 @@
 
 import { TTerm } from '../compiler/surface';
 import { IndexPath } from './source-position';
+import { defaultRecordConstructorName } from '../compiler/elab';
 
 // ============================================================================
 // Reserved Names
@@ -342,6 +343,20 @@ export function validateDeclarations(
         decl.constructors.forEach(ctor => {
           ctx = addSymbol(ctx, ctor.name);
         });
+      }
+    }
+
+    // For record declarations, also add the constructor name and projection names
+    if (decl.kind === 'record' && decl.name) {
+      const ctorName = decl.constructorName ?? defaultRecordConstructorName(decl.name);
+      ctx = addSymbol(ctx, ctorName);
+
+      // Add projection names for each field (e.g., Point_x, Point_y)
+      if (decl.fields) {
+        for (const field of decl.fields) {
+          const projName = `${decl.name}_${field.name}`;
+          ctx = addSymbol(ctx, projName);
+        }
       }
     }
   }

@@ -3123,6 +3123,7 @@ export function updateAtPath(term: TTerm, path: TermPath, newTerm: TTerm): TTerm
 export interface RecordField {
   name: string;
   type: TTerm;
+  implicit?: boolean;  // true for implicit fields {name : Type}
 }
 
 /**
@@ -3165,6 +3166,7 @@ export interface RecordParam {
 
 export interface RecordDef {
   name: string;
+  constructorName?: string;  // Optional custom constructor name (defaults to Mk#${name})
   type: TTerm;           // The kind of the record type (e.g., Type_0 → Type_0)
   params: RecordParam[]; // Parameters that scope over all fields
   fields: RecordField[]; // Named fields (types are in param context)

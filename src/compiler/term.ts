@@ -98,8 +98,8 @@ export function setDefinitionValueInTCEnv<T>(env: TCEnv<T>, name: string, value:
   return updateDefinitionsInTCEnv(env, (d) => setDefinitionValue(d, name, value));
 }
 
-export function addInductiveDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>, indexPositions: number[], namedArgMap?: NamedArgMap): TCEnv<T> {
-  return updateDefinitionsInTCEnv(env, (d) => addInductiveDefinition(d, name, type, constructors, indexPositions, namedArgMap));
+export function addInductiveDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>, indexPositions: number[], namedArgMap?: NamedArgMap, recordInfo?: RecordInfo): TCEnv<T> {
+  return updateDefinitionsInTCEnv(env, (d) => addInductiveDefinition(d, name, type, constructors, indexPositions, namedArgMap, recordInfo));
 }
 
 export function updateMetaVarsInTCEnv<T>(env: TCEnv<T>, fn: (m: Map<string, MetaVar>) => Map<string, MetaVar>): TCEnv<T> {
@@ -128,6 +128,21 @@ export function addMetaVarInTCEnv<T>(env: TCEnv<T>, type: TTKTerm): { env: TCEnv
  */
 export type NamedArgMap = Map<string, number>;
 
+/**
+ * Extra metadata for records stored as inductives.
+ * Records are single-constructor inductives with named fields and projections.
+ */
+export type RecordInfo = {
+  /** Names of record fields in order */
+  fieldNames: string[];
+  /** Which fields are implicit (indices into fieldNames) */
+  implicitFields: number[];
+  /** Names of generated projection functions (e.g., ['Point.x', 'Point.y']) */
+  projections: string[];
+  /** Whether eta rule applies (record values equal if all fields equal) */
+  isEtaExpandable: boolean;
+}
+
 export type InductiveDefinition = {
   name: string,
   type: TTKTerm,
@@ -138,6 +153,8 @@ export type InductiveDefinition = {
   }>,
   indexPositions: number[],
   namedArgMap?: NamedArgMap,  // Named args for the inductive type itself
+  /** If present, this inductive is actually a record with extra features */
+  recordInfo?: RecordInfo,
 }
 
 export type TermDefinition = {
@@ -272,10 +289,11 @@ export function addInductiveDefinition(
   type: TTKTerm,
   constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>,
   indexPositions: number[],
-  namedArgMap?: NamedArgMap
+  namedArgMap?: NamedArgMap,
+  recordInfo?: RecordInfo
 ): DefinitionsMap {
   const newMap = new Map<string, InductiveDefinition>(definitions.inductiveTypes);
-  newMap.set(name, { name, type, constructors, indexPositions: indexPositions ?? [], namedArgMap });
+  newMap.set(name, { name, type, constructors, indexPositions: indexPositions ?? [], namedArgMap, recordInfo });
 
   const newCtroMap = new Map<string, string>(definitions.inductiveNameOfConstructor);
   for (const ctor of constructors) {

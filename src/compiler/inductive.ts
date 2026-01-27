@@ -1,4 +1,4 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
 import { TTKTerm, levelsEqual, mkULit } from "./kernel";
 import { inferType } from "./checker";
 
@@ -53,6 +53,7 @@ export function checkInductiveDeclaration(
   constructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>,
   definitions: DefinitionsMap,
   namedArgMap?: NamedArgMap,
+  recordInfo?: RecordInfo,
 ): {
   success: false,
   errors: TCEnvError[]
@@ -164,7 +165,7 @@ export function checkInductiveDeclaration(
   // Use zonked constructors so that metas are substituted with their solutions
   const indexPositions = inferParameterIndicesK({ name, type, constructors: zonkedConstructors });
 
-  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, zonkedConstructors, indexPositions, namedArgMap);
+  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, zonkedConstructors, indexPositions, namedArgMap, recordInfo);
 
   return {
     success: true,

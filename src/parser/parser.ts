@@ -71,6 +71,9 @@ export type TokenType =
   | 'NEWLINE'      // newline (for separating declarations)
   | 'SEMICOLON'    // ;
   | 'INDUCTIVE'    // inductive keyword
+  | 'RECORD'       // record keyword
+  | 'CONSTRUCTOR'  // constructor keyword (for records)
+  | 'EXTENDS'      // extends keyword (for records)
   | 'WHERE'        // where keyword
   | 'PIPE'         // |
   | 'CASE'         // case keyword
@@ -466,6 +469,12 @@ export class Lexer {
           return { type: 'UIMAX', value: 'UIMax', pos: startPos, line: startLine, col: startCol };
         case 'inductive':
           return { type: 'INDUCTIVE', value: 'inductive', pos: startPos, line: startLine, col: startCol };
+        case 'record':
+          return { type: 'RECORD', value: 'record', pos: startPos, line: startLine, col: startCol };
+        case 'constructor':
+          return { type: 'CONSTRUCTOR', value: 'constructor', pos: startPos, line: startLine, col: startCol };
+        case 'extends':
+          return { type: 'EXTENDS', value: 'extends', pos: startPos, line: startLine, col: startCol };
         case 'where':
           return { type: 'WHERE', value: 'where', pos: startPos, line: startLine, col: startCol };
         case 'case':
@@ -564,14 +573,38 @@ export class ParseErrors extends Error {
 type NameContext = string[];
 
 /**
+ * A parsed record field (name and type).
+ */
+export interface ParsedRecordField {
+  name: string;
+  type: TTerm;
+  implicit?: boolean;  // true for implicit fields {name : Type}
+}
+
+/**
+ * A parsed record parameter (name and type).
+ */
+export interface ParsedRecordParam {
+  name: string;
+  type: TTerm;
+  implicit?: boolean;  // true for implicit parameters {A : Type}
+}
+
+/**
  * Result of parsing a top-level declaration.
  */
 export interface ParsedDeclaration {
-  kind: 'def' | 'expr' | 'inductive';
+  kind: 'def' | 'expr' | 'inductive' | 'record';
   name?: string;
   type?: TTerm;
   value?: TTerm;
+  // For inductive types
   constructors?: Array<{ name: string; type: TTerm }>;
+  // For records
+  params?: ParsedRecordParam[];
+  fields?: ParsedRecordField[];
+  constructorName?: string;  // Optional custom constructor name
+  extends?: string[];        // Names of records to extend
 }
 
 /**
@@ -864,6 +897,11 @@ export class Parser {
       return this.parseInductiveDeclaration();
     }
 
+    // Record: record Name (params) [extends ...] where fields
+    if (current.type === 'RECORD') {
+      return this.parseRecordDeclaration();
+    }
+
     // Named declaration: name : type  or  name = impl
     if (current.type === 'IDENT') {
       return this.parseNamedDeclaration(prevDeclarations);
@@ -1144,6 +1182,190 @@ export class Parser {
       name: nameToken.value,
       type,
       constructors
+    };
+  }
+
+  /**
+   * Parse a record declaration:
+   *
+   * record Name (params) [extends Parent1, Parent2] where
+   *   [constructor CtorName]
+   *   field1 : Type1
+   *   field2 : Type2
+   *
+   * Parameters can be explicit (A : Type) or implicit {A : Type}.
+   * Fields are always explicit in the current syntax.
+   */
+  private parseRecordDeclaration(): ParsedDeclaration {
+    this.expect('RECORD');
+    const nameToken = this.expect('IDENT');
+
+    // Record source range for the record type name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
+    // Parse parameters: (A : Type) or {A : Type}, can be multiple
+    const params: ParsedRecordParam[] = [];
+    let paramIndex = 0;
+
+    while (this.current().type === 'LPAREN' || this.current().type === 'LBRACE') {
+      const implicit = this.current().type === 'LBRACE';
+      this.advance(); // consume ( or {
+
+      // Parse parameter name
+      const paramNameToken = this.expect('IDENT');
+      const paramName = paramNameToken.value;
+
+      // Record source range for parameter name
+      const paramNamePath: IndexPath = [
+        { kind: 'field', name: 'params' },
+        { kind: 'array', index: paramIndex },
+        { kind: 'field', name: 'name' }
+      ];
+      this.recordRange(paramNamePath, paramNameToken, paramNameToken);
+
+      this.expect('COLON');
+
+      // Parse parameter type
+      const paramTypePath: IndexPath = [
+        { kind: 'field', name: 'params' },
+        { kind: 'array', index: paramIndex },
+        { kind: 'field', name: 'type' }
+      ];
+      // Parameter type is in scope of previous parameters
+      const paramCtx = params.map(p => p.name);
+      const paramType = this.expr(0, paramCtx, paramTypePath);
+
+      // Expect closing bracket
+      if (implicit) {
+        this.expect('RBRACE');
+      } else {
+        this.expect('RPAREN');
+      }
+
+      params.push({ name: paramName, type: paramType, implicit: implicit || undefined });
+      paramIndex++;
+    }
+
+    // Parse optional extends clause: extends Parent1, Parent2
+    let extendsNames: string[] | undefined;
+    if (this.current().type === 'EXTENDS') {
+      this.advance(); // consume 'extends'
+      extendsNames = [];
+
+      // Parse comma-separated list of record names
+      do {
+        const parentNameToken = this.expect('IDENT');
+        extendsNames.push(parentNameToken.value);
+
+        // Check for comma to continue
+        if (this.current().type !== 'COMMA') {
+          break;
+        }
+        this.advance(); // consume ','
+      } while (true);
+    }
+
+    // Skip newlines before 'where'
+    this.skipNewlines();
+
+    // Expect 'where' keyword
+    this.expect('WHERE');
+
+    // Skip newlines after 'where'
+    this.skipNewlines();
+
+    // Parse optional constructor declaration: constructor CtorName
+    let constructorName: string | undefined;
+    if (this.current().type === 'CONSTRUCTOR') {
+      this.advance(); // consume 'constructor'
+      const ctorNameToken = this.expect('IDENT');
+      constructorName = ctorNameToken.value;
+
+      // Record source range for constructor name
+      const ctorNamePath: IndexPath = [{ kind: 'field', name: 'constructorName' }];
+      this.recordRange(ctorNamePath, ctorNameToken, ctorNameToken);
+
+      this.skipNewlines();
+    }
+
+    // Parse fields: name : type
+    const fields: ParsedRecordField[] = [];
+    let fieldIndex = 0;
+
+    // Build context with all parameters for field type parsing
+    const fieldCtx = params.map(p => p.name);
+
+    while (this.current().type !== 'EOF') {
+      const current = this.current();
+
+      // Stop if we hit something that's not a field
+      // Fields start with IDENT (for explicit) or LBRACE (for implicit)
+      if (current.type !== 'IDENT' && current.type !== 'LBRACE') {
+        break;
+      }
+
+      // Check for implicit field: {name : Type}
+      const implicit = current.type === 'LBRACE';
+      if (implicit) {
+        this.advance(); // consume '{'
+      }
+
+      // Parse field name
+      if (this.current().type !== 'IDENT') {
+        break; // No more fields
+      }
+
+      // Lookahead: check if IDENT is followed by COLON (field) or something else (not a field)
+      // This allows record parsing to stop when we hit a different declaration like `id = ...`
+      if (!implicit) {
+        const nextToken = this.tokens[this.pos + 1];
+        if (!nextToken || nextToken.type !== 'COLON') {
+          break; // Not a field definition, stop parsing fields
+        }
+      }
+
+      const fieldNameToken = this.expect('IDENT');
+      const fieldName = fieldNameToken.value;
+
+      // Record source range for field name
+      const fieldNamePath: IndexPath = [
+        { kind: 'field', name: 'fields' },
+        { kind: 'array', index: fieldIndex },
+        { kind: 'field', name: 'name' }
+      ];
+      this.recordRange(fieldNamePath, fieldNameToken, fieldNameToken);
+
+      this.expect('COLON');
+
+      // Parse field type - in context of parameters AND previous fields
+      const fieldTypePath: IndexPath = [
+        { kind: 'field', name: 'fields' },
+        { kind: 'array', index: fieldIndex },
+        { kind: 'field', name: 'type' }
+      ];
+      // Add previous field names to context for dependent fields
+      const currentFieldCtx = [...fieldCtx, ...fields.map(f => f.name)];
+      const fieldType = this.expr(0, currentFieldCtx, fieldTypePath);
+
+      if (implicit) {
+        this.expect('RBRACE');
+      }
+
+      fields.push({ name: fieldName, type: fieldType, implicit: implicit || undefined });
+      fieldIndex++;
+
+      // Skip newlines between fields
+      this.skipNewlines();
+    }
+
+    return {
+      kind: 'record',
+      name: nameToken.value,
+      params,
+      fields,
+      constructorName,
+      extends: extendsNames
     };
   }
 

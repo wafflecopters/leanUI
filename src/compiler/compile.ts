@@ -8,14 +8,17 @@
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
-import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList } from './kernel';
-import { TTerm, TPattern, TClause } from './surface';
+import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkSort, mkULit } from './kernel';
+import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, extractPiSpine, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, extractPiSpine, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
+import { recordToInductiveDefinition, generateProjections } from './record';
+import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
+import { elabToKernel, defaultRecordConstructorName } from './elab';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
@@ -1889,6 +1892,202 @@ function processInductiveDeclaration(
 }
 
 /**
+ * Process a record declaration: elaborate, convert to inductive, and check.
+ *
+ * Records are converted to single-constructor inductives with extra metadata.
+ * The flow is:
+ * 1. Elaborate record params and fields to kernel terms
+ * 2. Build TTKRecordDef
+ * 3. Convert to InductiveDefinition via recordToInductiveDefinition
+ * 4. Check using the same infrastructure as inductives
+ */
+function processRecordDeclaration(
+  decl: ParsedDeclaration,
+  sourceMap: SourceMap,
+  definitions: DefinitionsMap,
+): ProcessDeclarationResult {
+  const elabMap: ElabMap = new Map();
+
+  // Elaborate record parameters
+  const kernelParams: TTKRecordParam[] = [];
+  if (decl.params) {
+    for (let i = 0; i < decl.params.length; i++) {
+      const param = decl.params[i];
+      try {
+        const paramTypePath: IndexPath = [
+          { kind: 'field', name: 'params' },
+          { kind: 'array', index: i },
+          { kind: 'field', name: 'type' }
+        ];
+        const kernelType = elabToKernelWithMap(param.type, elabMap, paramTypePath, paramTypePath);
+        kernelParams.push({ name: param.name, type: kernelType });
+      } catch (e) {
+        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+      }
+    }
+  }
+
+  // Elaborate record fields
+  const kernelFields: TTKRecordField[] = [];
+  if (decl.fields) {
+    for (let i = 0; i < decl.fields.length; i++) {
+      const field = decl.fields[i];
+      try {
+        const fieldTypePath: IndexPath = [
+          { kind: 'field', name: 'fields' },
+          { kind: 'array', index: i },
+          { kind: 'field', name: 'type' }
+        ];
+        const kernelType = elabToKernelWithMap(field.type, elabMap, fieldTypePath, fieldTypePath);
+        kernelFields.push({
+          name: field.name,
+          type: kernelType,
+          implicit: field.implicit
+        });
+      } catch (e) {
+        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+      }
+    }
+  }
+
+  // Build the record type: params → Type
+  // For now, we assume records always have type Type_0
+  // TODO: Infer universe level from fields
+  const recordType = buildRecordTypeFromParams(kernelParams);
+
+  // Build TTKRecordDef
+  const recordName = decl.name || 'anonymous';
+  const constructorName = decl.constructorName ?? defaultRecordConstructorName(recordName);
+
+  const ttkRecord: TTKRecordDef = {
+    name: recordName,
+    constructorName,
+    type: recordType,
+    params: kernelParams,
+    fields: kernelFields
+  };
+
+  // Convert to InductiveDefinition
+  const inductiveDef = recordToInductiveDefinition(ttkRecord);
+
+  // Check using inductive checking infrastructure
+  const result = checkInductiveDeclaration(
+    inductiveDef.name,
+    inductiveDef.type,
+    inductiveDef.constructors,
+    definitions,
+    inductiveDef.namedArgMap,
+    inductiveDef.recordInfo  // Pass record info for special handling
+  );
+
+  if (!result.success) {
+    // Create a synthetic parsed declaration for error reporting
+    const syntheticDecl: ParsedDeclaration = {
+      kind: 'inductive',
+      name: recordName,
+      type: decl.params ? buildSurfaceRecordType(decl.params) : undefined,
+      constructors: [{
+        name: constructorName,
+        type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName)
+      }]
+    };
+    return {
+      success: false,
+      compiled: createCompiledDeclaration(
+        syntheticDecl, inductiveDef.type, undefined, inductiveDef.constructors, elabMap, sourceMap,
+        false, result.errors
+      ),
+      newDefinitions: definitions,
+      errorCount: result.errors.length
+    };
+  }
+
+  // Create a synthetic parsed declaration for the compiled output
+  const syntheticDecl: ParsedDeclaration = {
+    kind: 'inductive',
+    name: recordName,
+    type: decl.params ? buildSurfaceRecordType(decl.params) : undefined,
+    constructors: [{
+      name: constructorName,
+      type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName)
+    }]
+  };
+
+  // Generate projections for record fields
+  const projections = generateProjections(ttkRecord);
+
+  // Add projections to definitions
+  let finalDefinitions = result.newDefinitions;
+  for (const proj of projections) {
+    finalDefinitions = addDefinition(finalDefinitions, proj.name, proj.type, proj.value);
+  }
+
+  return {
+    success: true,
+    compiled: createCompiledDeclaration(
+      syntheticDecl, inductiveDef.type, undefined, result.zonkedConstructors, elabMap, sourceMap,
+      true, [], undefined, result.indexPositions
+    ),
+    newDefinitions: finalDefinitions,
+    errorCount: 0
+  };
+}
+
+/**
+ * Build the kernel record type from parameters.
+ * record R (A : Type) (B : Type) has type (A : Type) → (B : Type) → Type
+ */
+function buildRecordTypeFromParams(params: TTKRecordParam[]): TTKTerm {
+  // Build from right to left
+  let result: TTKTerm = mkSort(mkULit(0)); // Type_0
+  for (let i = params.length - 1; i >= 0; i--) {
+    result = mkPi(params[i].type, result, params[i].name);
+  }
+  return result;
+}
+
+/**
+ * Build a surface record type term for display purposes.
+ */
+function buildSurfaceRecordType(params: Array<{ name: string; type: TTerm }>): TTerm {
+  let result: TTerm = mkTypeTT(0);
+  for (let i = params.length - 1; i >= 0; i--) {
+    result = mkPiTT(params[i].type, result, params[i].name);
+  }
+  return result;
+}
+
+/**
+ * Build a surface constructor type term for display purposes.
+ */
+function buildSurfaceConstructorType(
+  params: Array<{ name: string; type: TTerm }>,
+  fields: Array<{ name: string; type: TTerm }>,
+  recordName: string
+): TTerm {
+  // Build return type: Record applied to all params
+  let returnType: TTerm = mkConstTT(recordName);
+  for (let i = 0; i < params.length; i++) {
+    // Params are at indices counting from the innermost
+    const paramIndex = fields.length + params.length - 1 - i;
+    returnType = mkAppTT(returnType, mkVarTT(paramIndex));
+  }
+
+  // Add field types
+  let result = returnType;
+  for (let i = fields.length - 1; i >= 0; i--) {
+    result = mkPiTT(fields[i].type, result, fields[i].name);
+  }
+
+  // Add param types
+  for (let i = params.length - 1; i >= 0; i--) {
+    result = mkPiTT(params[i].type, result, params[i].name);
+  }
+
+  return result;
+}
+
+/**
  * Process a single term declaration: elaborate and check.
  *
  * Following the flow:
@@ -2062,6 +2261,23 @@ export function compileTTFromText(source: string): CompileResult {
       if (decl.kind === 'inductive') {
         // 3. If it is an inductive type def...
         const result = processInductiveDeclaration(decl, sourceMap, definitions);
+        compiledDecls.push(result.compiled);
+
+        if (result.success) {
+          definitions = result.newDefinitions;
+          // Update constructor param names for subsequent term elaboration
+          if (result.compiled.kernelConstructors) {
+            const newCtorParamNames = buildConstructorParamNames(result.compiled.kernelConstructors);
+            for (const [ctorName, paramInfo] of newCtorParamNames) {
+              constructorParamNames.set(ctorName, paramInfo);
+            }
+            setConstructorParamNames(constructorParamNames);
+          }
+        }
+        totalCheckErrors += result.errorCount;
+      } else if (decl.kind === 'record') {
+        // 3b. If it is a record definition...
+        const result = processRecordDeclaration(decl, sourceMap, definitions);
         compiledDecls.push(result.compiled);
 
         if (result.success) {

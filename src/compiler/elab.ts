@@ -2524,7 +2524,8 @@ export function inlineExtension(
 export function elabRecordFieldToKernel(field: RecordField): TTKRecordField {
   return {
     name: field.name,
-    type: elabToKernel(field.type)
+    type: elabToKernel(field.type),
+    implicit: field.implicit,
   };
 }
 
@@ -2536,6 +2537,14 @@ function elabRecordParamToKernel(param: RecordParam): TTKRecordParam {
     name: param.name,
     type: elabToKernel(param.type),
   };
+}
+
+/**
+ * Get the default constructor name for a record.
+ * Uses Mk#${name} to avoid collision with user-defined names.
+ */
+export function defaultRecordConstructorName(recordName: string): string {
+  return `Mk#${recordName}`;
 }
 
 /**
@@ -2552,6 +2561,7 @@ export function elabRecordToKernel(record: RecordDef): TTKRecordDef {
 
   return {
     name: record.name,
+    constructorName: record.constructorName ?? defaultRecordConstructorName(record.name),
     type: elabToKernel(record.type),
     params: record.params.map(elabRecordParamToKernel),
     fields: record.fields.map(elabRecordFieldToKernel),

@@ -2373,3 +2373,447 @@ describe('PREFIX_PARSELETS Table Dispatch', () => {
     }
   });
 });
+
+// ============================================================================
+// Parser: Record Declaration Tests
+// ============================================================================
+
+describe('Parser: Record Declarations', () => {
+  describe('Basic Records', () => {
+    test('Parse simple record with no parameters', () => {
+      const decls = parseDeclarations(`
+record Point where
+  x : Nat
+  y : Nat
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.name).toBe('Point');
+      expect(decl.params).toEqual([]);
+      expect(decl.fields?.length).toBe(2);
+      expect(decl.fields?.[0].name).toBe('x');
+      expect(decl.fields?.[1].name).toBe('y');
+      expect(decl.constructorName).toBeUndefined();
+      expect(decl.extends).toBeUndefined();
+    });
+
+    test('Parse record with single parameter', () => {
+      const decls = parseDeclarations(`
+record Container (A : Type) where
+  value : A
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.name).toBe('Container');
+      expect(decl.params?.length).toBe(1);
+      expect(decl.params?.[0].name).toBe('A');
+      expect(decl.params?.[0].implicit).toBeUndefined();
+      expect(decl.fields?.length).toBe(1);
+      expect(decl.fields?.[0].name).toBe('value');
+    });
+
+    test('Parse record with multiple parameters', () => {
+      const decls = parseDeclarations(`
+record Pair (A : Type) (B : Type) where
+  fst : A
+  snd : B
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.params?.length).toBe(2);
+      expect(decl.params?.[0].name).toBe('A');
+      expect(decl.params?.[1].name).toBe('B');
+      expect(decl.fields?.length).toBe(2);
+    });
+
+    test('Parse record with implicit parameter', () => {
+      const decls = parseDeclarations(`
+record Wrapper {A : Type} where
+  unwrap : A
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.params?.length).toBe(1);
+      expect(decl.params?.[0].name).toBe('A');
+      expect(decl.params?.[0].implicit).toBe(true);
+    });
+
+    test('Parse record with mixed explicit and implicit parameters', () => {
+      const decls = parseDeclarations(`
+record Mixed {A : Type} (x : A) where
+  value : A
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.params?.length).toBe(2);
+      expect(decl.params?.[0].name).toBe('A');
+      expect(decl.params?.[0].implicit).toBe(true);
+      expect(decl.params?.[1].name).toBe('x');
+      expect(decl.params?.[1].implicit).toBeUndefined();
+    });
+  });
+
+  describe('Constructor Declaration', () => {
+    test('Parse record with custom constructor name', () => {
+      const decls = parseDeclarations(`
+record Point where
+  constructor MkPoint
+  x : Nat
+  y : Nat
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.constructorName).toBe('MkPoint');
+      expect(decl.fields?.length).toBe(2);
+    });
+
+    test('Parse record with constructor on same line as where', () => {
+      const decls = parseDeclarations(`
+record Unit where
+  constructor MkUnit
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.constructorName).toBe('MkUnit');
+      expect(decl.fields?.length).toBe(0);
+    });
+  });
+
+  describe('Extends Clause', () => {
+    test('Parse record extending single parent', () => {
+      const decls = parseDeclarations(`
+record ColoredPoint extends Point where
+  color : Color
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.name).toBe('ColoredPoint');
+      expect(decl.extends).toEqual(['Point']);
+      expect(decl.fields?.length).toBe(1);
+      expect(decl.fields?.[0].name).toBe('color');
+    });
+
+    test('Parse record extending multiple parents', () => {
+      const decls = parseDeclarations(`
+record Combined extends A, B, C where
+  extra : Nat
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.extends).toEqual(['A', 'B', 'C']);
+    });
+
+    test('Parse record with parameters and extends', () => {
+      const decls = parseDeclarations(`
+record ColoredPair (A : Type) extends Pair where
+  color : Color
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.params?.length).toBe(1);
+      expect(decl.extends).toEqual(['Pair']);
+    });
+  });
+
+  describe('Dependent Fields', () => {
+    test('Parse record with dependent field type', () => {
+      const decls = parseDeclarations(`
+record Sigma (A : Type) (B : A -> Type) where
+  fst : A
+  snd : B fst
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.fields?.length).toBe(2);
+      expect(decl.fields?.[0].name).toBe('fst');
+      expect(decl.fields?.[1].name).toBe('snd');
+      // The 'snd' field type should reference 'fst'
+      // fst is in scope when parsing snd's type
+      const sndType = decl.fields?.[1].type;
+      expect(sndType?.tag).toBe('App');
+    });
+  });
+
+  describe('Implicit Fields', () => {
+    test('Parse record with implicit field', () => {
+      const decls = parseDeclarations(`
+record ImplicitField where
+  {hidden : Type}
+  visible : hidden
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.fields?.length).toBe(2);
+      expect(decl.fields?.[0].name).toBe('hidden');
+      expect(decl.fields?.[0].implicit).toBe(true);
+      expect(decl.fields?.[1].name).toBe('visible');
+      expect(decl.fields?.[1].implicit).toBeUndefined();
+    });
+  });
+
+  describe('Complete Examples', () => {
+    test('Parse Sigma type record', () => {
+      const decls = parseDeclarations(`
+record Sigma (A : Type) (B : A -> Type) where
+  constructor MkSigma
+  fst : A
+  snd : B fst
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.name).toBe('Sigma');
+      expect(decl.constructorName).toBe('MkSigma');
+      expect(decl.params?.length).toBe(2);
+      expect(decl.fields?.length).toBe(2);
+    });
+
+    test('Parse Magma algebraic structure', () => {
+      const decls = parseDeclarations(`
+record Magma (A : Type) where
+  op : A -> A -> A
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.name).toBe('Magma');
+      expect(decl.params?.length).toBe(1);
+      expect(decl.fields?.length).toBe(1);
+      expect(decl.fields?.[0].name).toBe('op');
+    });
+  });
+
+  describe('Empty and Edge Cases', () => {
+    test('Parse empty record (no fields)', () => {
+      const decls = parseDeclarations(`
+record Empty where
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.name).toBe('Empty');
+      expect(decl.params).toEqual([]);
+      expect(decl.fields).toEqual([]);
+    });
+
+    test('Parse record with only constructor', () => {
+      const decls = parseDeclarations(`
+record Unit where
+  constructor MkUnit
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].constructorName).toBe('MkUnit');
+      expect(decls[0].fields).toEqual([]);
+    });
+
+    test('Parse record with many parameters', () => {
+      const decls = parseDeclarations(`
+record Multi (A : Type) (B : Type) (C : Type) (D : Type) where
+  combine : A -> B -> C -> D
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].params?.length).toBe(4);
+      expect(decls[0].params?.[0].name).toBe('A');
+      expect(decls[0].params?.[3].name).toBe('D');
+    });
+
+    test('Parse record with many fields', () => {
+      const decls = parseDeclarations(`
+record Vector3D where
+  x : Nat
+  y : Nat
+  z : Nat
+  w : Nat
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].fields?.length).toBe(4);
+      expect(decls[0].fields?.[0].name).toBe('x');
+      expect(decls[0].fields?.[3].name).toBe('w');
+    });
+
+    test('Parse record with complex field types', () => {
+      const decls = parseDeclarations(`
+record Complex (A : Type) where
+  identity : A -> A
+  compose : (A -> A) -> (A -> A) -> A -> A
+  fold : (A -> A -> A) -> A -> A
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].fields?.length).toBe(3);
+    });
+  });
+
+  describe('De Bruijn Indices', () => {
+    test('Field referencing first parameter', () => {
+      const decls = parseDeclarations(`
+record Box (A : Type) where
+  value : A
+`);
+      const decl = decls[0];
+      // A is at index 0 in the param context
+      // Field 'value' type should be Var(0)
+      expect(decl.fields?.[0].type.tag).toBe('Var');
+      if (decl.fields?.[0].type.tag === 'Var') {
+        expect(decl.fields?.[0].type.index).toBe(0);
+      }
+    });
+
+    test('Field referencing second parameter', () => {
+      const decls = parseDeclarations(`
+record Pair (A : Type) (B : Type) where
+  fst : A
+  snd : B
+`);
+      const decl = decls[0];
+      // Parser context is built left-to-right: ['A', 'B']
+      // So A is at index 0, B is at index 1
+      expect(decl.fields?.[0].type.tag).toBe('Var');
+      if (decl.fields?.[0].type.tag === 'Var') {
+        expect(decl.fields?.[0].type.index).toBe(0); // A
+      }
+      expect(decl.fields?.[1].type.tag).toBe('Var');
+      if (decl.fields?.[1].type.tag === 'Var') {
+        expect(decl.fields?.[1].type.index).toBe(1); // B
+      }
+    });
+
+    test('Dependent field referencing previous field', () => {
+      const decls = parseDeclarations(`
+record Sigma (A : Type) (B : A -> Type) where
+  fst : A
+  snd : B fst
+`);
+      const decl = decls[0];
+      // Parser context when parsing snd is ['A', 'B', 'fst']
+      // So A is at 0, B is at 1, fst is at 2
+      const sndType = decl.fields?.[1].type;
+      expect(sndType?.tag).toBe('App');
+      if (sndType?.tag === 'App') {
+        // The function should be B at index 1
+        expect(sndType.fn.tag).toBe('Var');
+        if (sndType.fn.tag === 'Var') {
+          expect(sndType.fn.index).toBe(1); // B
+        }
+        // The argument should be fst at index 2
+        expect(sndType.arg.tag).toBe('Var');
+        if (sndType.arg.tag === 'Var') {
+          expect(sndType.arg.index).toBe(2); // fst
+        }
+      }
+    });
+
+    test('Multiple dependent fields', () => {
+      const decls = parseDeclarations(`
+record Triple (A : Type) where
+  first : A
+  second : A
+  third : A
+`);
+      const decl = decls[0];
+      // All fields have type A which is at index 0 in param context
+      for (const field of decl.fields || []) {
+        expect(field.type.tag).toBe('Var');
+        if (field.type.tag === 'Var') {
+          expect(field.type.index).toBe(0);
+        }
+      }
+    });
+  });
+
+  describe('All Features Combined', () => {
+    test('Record with everything: params, extends, constructor, implicit fields', () => {
+      const decls = parseDeclarations(`
+record FullRecord {A : Type} (B : Type) extends Parent where
+  constructor MkFull
+  {implicit : A}
+  explicit : B
+  dependent : A -> B
+`);
+      expect(decls.length).toBe(1);
+      const decl = decls[0];
+      expect(decl.kind).toBe('record');
+      expect(decl.name).toBe('FullRecord');
+      expect(decl.constructorName).toBe('MkFull');
+      expect(decl.extends).toEqual(['Parent']);
+      expect(decl.params?.length).toBe(2);
+      expect(decl.params?.[0].implicit).toBe(true);
+      expect(decl.params?.[1].implicit).toBeUndefined();
+      expect(decl.fields?.length).toBe(3);
+      expect(decl.fields?.[0].implicit).toBe(true);
+      expect(decl.fields?.[1].implicit).toBeUndefined();
+    });
+
+    test('Monoid algebraic structure', () => {
+      const decls = parseDeclarations(`
+record Monoid (A : Type) where
+  empty : A
+  append : A -> A -> A
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].name).toBe('Monoid');
+      expect(decls[0].fields?.length).toBe(2);
+      expect(decls[0].fields?.[0].name).toBe('empty');
+      expect(decls[0].fields?.[1].name).toBe('append');
+    });
+
+    test('Category theory structure', () => {
+      const decls = parseDeclarations(`
+record Category where
+  Obj : Type
+  Hom : Obj -> Obj -> Type
+  id : (a : Obj) -> Hom a a
+  comp : (a : Obj) -> (b : Obj) -> (c : Obj) -> Hom b c -> Hom a b -> Hom a c
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].fields?.length).toBe(4);
+    });
+  });
+
+  describe('Multiple Records', () => {
+    test('Parse multiple record declarations', () => {
+      const decls = parseDeclarations(`
+record First where
+  x : Nat
+
+record Second where
+  y : Nat
+`);
+      expect(decls.length).toBe(2);
+      expect(decls[0].name).toBe('First');
+      expect(decls[1].name).toBe('Second');
+    });
+
+    test('Parse record followed by other declaration types', () => {
+      const decls = parseDeclarations(`
+record Point where
+  x : Nat
+  y : Nat
+
+id : (A : Type) -> A -> A
+id = \\(A : Type) (a : A) => a
+`);
+      expect(decls.length).toBe(2);
+      expect(decls[0].kind).toBe('record');
+      expect(decls[1].kind).toBe('def');
+    });
+
+    test('Parse inductive followed by record', () => {
+      const decls = parseDeclarations(`
+inductive Nat : Type where
+| Zero : Nat
+| Succ : Nat -> Nat
+
+record Point where
+  x : Nat
+  y : Nat
+`);
+      expect(decls.length).toBe(2);
+      expect(decls[0].kind).toBe('inductive');
+      expect(decls[1].kind).toBe('record');
+    });
+  });
+});
