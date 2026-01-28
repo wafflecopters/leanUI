@@ -1,5 +1,76 @@
 # Claude Code Guidelines for LeanUI
 
+## IMPORTANT: Read This First
+
+**This is a dependent type theory implementation.** Before making ANY changes, you MUST understand the context:
+
+### 1. Read the Documentation
+
+The following files provide essential context. Read them BEFORE diving into code:
+
+| File | Purpose |
+|------|---------|
+| `SYSTEM_OVERVIEW.md` | **START HERE.** Comprehensive guide to the architecture, type checking rules, and key algorithms |
+| `language-spec.md` | Surface syntax specification for the language |
+| `TODO.md` | Current project status and what's already implemented |
+| `RECORDS.md` | Design document for record types |
+| `IMPLICITS-DESIGN.md` | Design for implicit argument handling |
+| `ALGORITHMS/*.md` | Detailed algorithm documentation (pattern matching, totality, etc.) |
+
+**Do NOT start coding until you understand:**
+- The TT → TTK elaboration pipeline
+- How type checking works (bidirectional, with metas and constraints)
+- The de Bruijn index convention used throughout
+- What has already been implemented vs. what's planned
+
+### 2. This is Type Theory - Favor Proven Algorithms
+
+This project implements a dependently-typed language similar to Lean, Idris, and Agda. **Type theory has 50+ years of research behind it.** When implementing features:
+
+**DO:**
+- Research how Lean/Idris/Agda/Coq solve the same problem
+- Look up the relevant type theory papers (e.g., "Elaboration in Dependent Type Theory", "A Tutorial Implementation of a Dependently Typed Lambda Calculus")
+- Use established algorithms: bidirectional type checking, pattern unification, structural recursion checking
+- Understand WHY the algorithms work, not just WHAT they do
+
+**DON'T:**
+- Invent ad-hoc solutions for well-studied problems
+- Assume "this seems reasonable" - type theory has many subtle interactions
+- Skip the research phase because you think you understand the problem
+
+**Example - Record Eta:**
+The eta rule `MkR (R.f1 r) ... (R.fN r) ≃ r` isn't arbitrary - it's a standard definitional equality in type theory. The implementation checks this BEFORE whnf normalization because projections unfold during δ-reduction. This is how Lean/Agda do it.
+
+### 3. When in Doubt, Research First
+
+If you're unsure about:
+- **How to implement a feature**: Check how Lean or Idris does it
+- **Whether an approach is sound**: Look for type theory literature
+- **Why existing code does something a certain way**: Ask, or read the git history/comments
+
+Common research resources:
+- The Lean 4 source code (especially the type checker)
+- "Elaboration in Dependent Type Theory" (thesis)
+- "Typing Haskell in Haskell" (for basic inference concepts)
+- Agda's documentation and source
+
+### 4. Understand the Big Picture
+
+This codebase has clear architectural layers. Respect them:
+
+```
+Source Text → Parser → TT (surface) → Elaboration → TTK (kernel) → Type Checker
+```
+
+- **All verification happens on TTK, never TT**
+- **Elaboration converts named vars to de Bruijn indices**
+- **Metas and constraints track unknowns during type checking**
+- **WHNF normalization handles β, δ, ι, ζ reductions**
+
+If you don't understand what layer you're working in, STOP and read `SYSTEM_OVERVIEW.md`.
+
+---
+
 ## Language Specification
 
 The file `language-spec.md` documents the surface syntax of the LeanUI language. **When making changes to the parser or surface syntax, update `language-spec.md` to reflect those changes.**

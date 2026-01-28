@@ -223,6 +223,24 @@ record Sigma (A : Type) (B : A -> Type) where
 
 **Default constructor name:** If not specified, the constructor is named `Mk#RecordName`.
 
+**Record η-conversion:** Records support eta expansion/contraction for definitional equality. A record value constructed from all of its projections is definitionally equal to the original value:
+
+```
+-- For any record R with fields f1, f2, ..., fN:
+MkR (R.f1 r) (R.f2 r) ... (R.fN r) ≃ r
+
+-- Example: Point with fields x and y
+MkPoint (Point.x p) (Point.y p) ≃ p
+```
+
+This allows functions that reconstruct a record from its projections to type check correctly:
+
+```
+-- This type checks because the RHS is definitionally equal to p
+idPoint : Point -> Point
+idPoint p = MkPoint (Point.x p) (Point.y p)
+```
+
 ### Pattern Matching in Definitions
 
 ```

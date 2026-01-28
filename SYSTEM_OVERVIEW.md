@@ -665,12 +665,23 @@ Recursively reduces all redexes everywhere (for pretty printing).
 ### Definitional Equality
 
 ```typescript
-areTypesDefEq(t1: TTKTerm, t2: TTKTerm, env: TCEnv): boolean
+areTypesDefEq(t1: TTKTerm, t2: TTKTerm, definitions?: DefinitionsMap): boolean
 ```
 
-1. Reduce both to WHNF
-2. Compare heads structurally
-3. Recurse through structure
+Checks if two terms are definitionally equal, implementing:
+
+1. **Record η-conversion** (checked before WHNF normalization):
+   - `MkR (R.f1 r) (R.f2 r) ... (R.fN r) ≃ r`
+   - A record constructed from all projections of a term equals that term
+
+2. **WHNF reduction** of both terms
+
+3. **Lambda η-conversion**:
+   - `λx. f x ≃ f` (when x not free in f)
+
+4. **Structural comparison** of heads and recursive comparison of subterms
+
+**Note**: Record η is checked *before* WHNF normalization because projections unfold during δ-reduction, which would destroy the pattern we're looking for.
 
 ---
 
