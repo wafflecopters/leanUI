@@ -452,13 +452,18 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     const bodyEnv = lambdaEnv.inBinderLambdaBody()
     const checkedBodyEnv = checkType(bodyEnv, expectedType.body)
 
-    // Reconstruct the Lambda with the elaborated body
+    // Reconstruct the Lambda with the elaborated domain and body
+    // Use expectedType.domain instead of env.value.domain because:
+    // 1. If env.value.domain was a Hole (unannotated lambda), unification succeeded
+    //    so expectedType.domain is the actual inferred type
+    // 2. If env.value.domain was concrete, unification verified it matches expectedType.domain
+    // Either way, using expectedType.domain gives us the concrete type, not a Hole
     const elaboratedLambda: TTKTerm = {
       tag: 'Binder',
       name: env.value.name,
       binderKind: env.value.binderKind,
-      domain: env.value.domain,
-      body: checkedBodyEnv.value  // Use the elaborated body
+      domain: expectedType.domain,  // Use expected type's domain (concrete, not a Hole)
+      body: checkedBodyEnv.value
     };
     return checkedBodyEnv.withValue(elaboratedLambda);
   }

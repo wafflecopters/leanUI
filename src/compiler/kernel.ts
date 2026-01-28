@@ -1033,6 +1033,18 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
 }
 
 /**
+ * NamedArgMap maps parameter names to their positions.
+ * Used to identify which arguments are implicit/named.
+ */
+export type NamedArgMap = Map<string, number>;
+
+/**
+ * Lookup function to get named arg info for a function/constructor.
+ * Returns a map of parameter name -> position index.
+ */
+export type NamedArgLookup = (name: string) => NamedArgMap | undefined;
+
+/**
  * Pretty print options for formatted output
  */
 export interface PrettyPrintOptions {
@@ -1040,6 +1052,8 @@ export interface PrettyPrintOptions {
   indent?: number;
   /** Number of spaces per indentation level */
   indentSize?: number;
+  /** Optional lookup function to get named argument info for functions/constructors */
+  namedArgLookup?: NamedArgLookup;
 }
 
 /**
@@ -1135,14 +1149,42 @@ export function prettyPrintFormatted(
     }
 
     case 'App': {
-      const parts: string[] = [];
+      // Collect all arguments from nested applications: ((f a) b) c -> fn=f, args=[a, b, c]
+      const args: TTKTerm[] = [];
       let current: TTKTerm = term;
       while (current.tag === 'App') {
-        parts.unshift(prettyPrintFormatted(current.arg, context, metaVars, options));
+        args.unshift(current.arg);
         current = current.fn;
       }
-      parts.unshift(prettyPrintFormatted(current, context, metaVars, options));
-      return `(${parts.join(' ')})`;
+      const fn = current;
+
+      // Try to get named arg info if the function is a Const
+      let namedArgMap: NamedArgMap | undefined;
+      if (fn.tag === 'Const' && options.namedArgLookup) {
+        namedArgMap = options.namedArgLookup(fn.name);
+      }
+
+      // Build position -> name map for implicit args
+      const positionToName = new Map<number, string>();
+      if (namedArgMap) {
+        for (const [name, pos] of namedArgMap) {
+          positionToName.set(pos, name);
+        }
+      }
+
+      // Format each argument, adding labels for named positions
+      const fnStr = prettyPrintFormatted(fn, context, metaVars, options);
+      const argStrs = args.map((arg, idx) => {
+        const argStr = prettyPrintFormatted(arg, context, metaVars, options);
+        const paramName = positionToName.get(idx);
+        if (paramName) {
+          // This is a named/implicit argument - print with label
+          return `{${paramName}:=${argStr}}`;
+        }
+        return argStr;
+      });
+
+      return `(${[fnStr, ...argStrs].join(' ')})`;
     }
 
     case 'Hole':

@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createTCEnv, DefinitionsMap, extractPiSpine, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -1285,7 +1285,13 @@ function checkDeclaration(
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
     // Use checkedValue (with solutions) if available, otherwise fall back to elaborated kernelValue
     // Use formatted pretty print for better readability of match/let expressions
-    prettyValue: (checkedValue ?? decl.kernelValue) ? prettyPrintFormatted(checkedValue ?? decl.kernelValue!) : undefined,
+    // Pass namedArgLookup to show implicit args with their labels
+    prettyValue: (checkedValue ?? decl.kernelValue) ? prettyPrintFormatted(
+      checkedValue ?? decl.kernelValue!,
+      [],
+      undefined,
+      { namedArgLookup: createNamedArgLookup(newDefinitions) }
+    ) : undefined,
     prettyConstructors: effectiveConstructors?.map(c => ({
       name: c.name,
       prettyType: prettyPrintTTK(c.type)
@@ -1348,7 +1354,7 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
+): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult } {
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
@@ -1397,9 +1403,12 @@ function checkTermDeclaration(
     const namedArgMap = decl.surfaceType ? extractNamedArgMap(decl.surfaceType) : undefined;
     const totalArity = decl.surfaceType ? countParameters(decl.surfaceType) : undefined;
 
+    // Zonk the kernel type to substitute any solved metas (e.g., implicit params inferred from arguments)
+    const zonkedKernelType = solvedSigResult.zonkTerm(decl.kernelType);
+
     // Add to context for subsequent declarations, including namedArgMap for lookup
     if (decl.name) {
-      termEnv = addDefinitionInTCEnv(termEnv, decl.name, decl.kernelType, namedArgMap);
+      termEnv = addDefinitionInTCEnv(termEnv, decl.name, zonkedKernelType, namedArgMap);
     }
 
     // Handle #absurd clauses from surface value
@@ -1426,7 +1435,7 @@ function checkTermDeclaration(
           const patternsEnv = termEnv.withValue(kernelPatterns);
 
           // First try basic absurdity check
-          let isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, decl.kernelType);
+          let isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, zonkedKernelType);
 
           // If basic check passes (not absurd), try Agda-style recursive splitting
           // This handles cases like Fin Zero where the type is uninhabited
@@ -1434,7 +1443,7 @@ function checkTermDeclaration(
             isAbsurd = tryCaseSplitsInSearchOfAbsurdity(
               decl.name,
               kernelPatterns,
-              decl.kernelType,
+              zonkedKernelType,
               termEnv.definitions,
               termEnv
             );
@@ -1474,7 +1483,8 @@ function checkTermDeclaration(
 
       try {
         const valueEnv = termEnv.withValue(kernelValue);
-        const result = checkType(valueEnv, decl.kernelType);
+        const result = checkType(valueEnv, zonkedKernelType);
+
         // Solve meta constraints before checking for unsolved metas
         const solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
         // Check for UNSOLVED metas in the value (solved metas have a 'solution' property)
@@ -1488,8 +1498,9 @@ function checkTermDeclaration(
         }
         // Zonk the value to substitute solved metas with their solutions
         const zonkedValue = solvedResult.zonkTerm(solvedResult.value);
+
         const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, zonkedValue);
-        return { success: true, definitions: resultEnv.definitions, checkedValue: zonkedValue };
+        return { success: true, definitions: resultEnv.definitions, checkedValue: zonkedValue, zonkedType: zonkedKernelType };
       } catch (e) {
         if (e instanceof TCEnvError) {
           return { success: false, errors: [e] };
@@ -1518,7 +1529,7 @@ function checkTermDeclaration(
     }
 
     const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, result.checkedValue);
-    return { success: true, definitions: resultEnv.definitions, checkedValue: result.checkedValue, totalityResult: result.totalityResult }
+    return { success: true, definitions: resultEnv.definitions, checkedValue: result.checkedValue, zonkedType: zonkedKernelType, totalityResult: result.totalityResult }
   } catch (e) {
     if (e instanceof TCEnvError) {
       return {
@@ -1752,6 +1763,7 @@ function createCompiledDeclaration(
   sourceMap: SourceMap,
   checkSuccess: boolean,
   checkErrors: TCEnvError[],
+  definitions?: DefinitionsMap,
   totalityResult?: TotalityResult,
   indexPositions?: number[],
   elabErrorPath?: string,
@@ -1759,6 +1771,10 @@ function createCompiledDeclaration(
   surfaceFields?: Array<{ name: string; type: TTerm }>,
   prettyProjections?: Array<{ name: string; prettyType: string }>,
 ): CompiledDeclaration {
+  // Create namedArgLookup for pretty printing implicit args with labels
+  const namedArgLookup = definitions ? createNamedArgLookup(definitions) : undefined;
+  const prettyPrintOptions = namedArgLookup ? { namedArgLookup } : {};
+
   return {
     name: decl.name,
     kind: decl.kind === 'inductive' ? 'inductive' : 'term',
@@ -1771,8 +1787,8 @@ function createCompiledDeclaration(
     kernelValue,
     kernelConstructors,
     indexPositions,
-    prettyType: kernelType ? prettyPrintTTK(kernelType) : undefined,
-    prettyValue: kernelValue ? prettyPrintFormatted(kernelValue) : undefined,
+    prettyType: kernelType ? prettyPrintFormatted(kernelType, [], undefined, prettyPrintOptions) : undefined,
+    prettyValue: kernelValue ? prettyPrintFormatted(kernelValue, [], undefined, prettyPrintOptions) : undefined,
     prettyConstructors: kernelConstructors?.map(c => ({
       name: c.name,
       prettyType: prettyPrintTTK(c.type)
@@ -1809,7 +1825,7 @@ function createElabErrorResult(
     success: false,
     compiled: createCompiledDeclaration(
       decl, undefined, undefined, undefined, elabMap, sourceMap,
-      false, [error], undefined, undefined, elabErrorPath
+      false, [error], definitions, undefined, undefined, elabErrorPath
     ),
     newDefinitions: definitions,
     errorCount: 1
@@ -1930,7 +1946,7 @@ function processInductiveDeclaration(
     compiled: createCompiledDeclaration(
       // Use zonkedConstructors (with solved metas) instead of the original kernelConstructors
       decl, kernelType, undefined, result.zonkedConstructors, elabMap, sourceMap,
-      true, [], undefined, result.indexPositions
+      true, [], result.newDefinitions, undefined, result.indexPositions
     ),
     newDefinitions: result.newDefinitions,
     errorCount: 0
@@ -2363,7 +2379,7 @@ function processRecordDeclaration(
       success: false,
       compiled: createCompiledDeclaration(
         syntheticDecl, inductiveDef.type, undefined, inductiveDef.constructors, elabMap, sourceMap,
-        false, result.errors, undefined, undefined, undefined,
+        false, result.errors, definitions, undefined, undefined, undefined,
         true, decl.fields  // isRecord, surfaceFields
       ),
       newDefinitions: definitions,
@@ -2416,7 +2432,7 @@ function processRecordDeclaration(
     success: true,
     compiled: createCompiledDeclaration(
       syntheticDecl, inductiveDef.type, undefined, result.zonkedConstructors, elabMap, sourceMap,
-      true, [], undefined, result.indexPositions, undefined,
+      true, [], finalDefinitions, undefined, result.indexPositions, undefined,
       true, decl.fields, prettyProjections  // isRecord, surfaceFields, prettyProjections
     ),
     newDefinitions: finalDefinitions,
@@ -2624,7 +2640,7 @@ function processTermDeclaration(
       success: false,
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, undefined, elabMap, sourceMap,
-        false, result.errors, result.totalityResult
+        false, result.errors, definitions, result.totalityResult
       ),
       newDefinitions: definitions,
       errorCount: result.errors.length
@@ -2634,8 +2650,8 @@ function processTermDeclaration(
   return {
     success: true,
     compiled: createCompiledDeclaration(
-      decl, kernelType, result.checkedValue, undefined, elabMap, sourceMap,
-      true, [], result.totalityResult
+      decl, result.zonkedType, result.checkedValue, undefined, elabMap, sourceMap,
+      true, [], result.definitions, result.totalityResult
     ),
     newDefinitions: result.definitions,
     errorCount: 0

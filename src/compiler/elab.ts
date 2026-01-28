@@ -687,7 +687,14 @@ function reorderArgs(
     }
   }
 
-  for (let i = 0; i < lastFilled; i++) {
+  // When named arguments are used, we need to consider ALL named positions
+  // as potentially needing to be filled, not just those up to lastFilled.
+  // This handles cases like `refl {A:=Nat}` where A is at position 0 but
+  // `a` at position 1 still needs a hole for inference.
+  const maxNamedPosition = namedPositions.size > 0 ? Math.max(...namedPositions) : -1;
+  const fillUpTo = Math.max(lastFilled, maxNamedPosition);
+
+  for (let i = 0; i < fillUpTo; i++) {
     if (result[i] === null && !namedPositions.has(i)) {
       // Only error for unfilled NON-named positions
       return { error: `Missing argument at position ${i}` };
@@ -699,7 +706,7 @@ function reorderArgs(
   // IMPORTANT: Use global counter to ensure hole IDs are unique across all elaborations.
   // Different elaborations (e.g., function type vs RHS) may create holes that get unified
   // during pattern matching. If they share IDs, fillHole will incorrectly replace all of them.
-  for (let i = 0; i <= lastFilled; i++) {
+  for (let i = 0; i <= fillUpTo; i++) {
     if (result[i] === null && namedPositions.has(i)) {
       // Create a hole with a placeholder type - will be inferred during type checking
       result[i] = mkHoleTT(`_implicit${globalImplicitHoleCounter++}`, mkHoleTT('_implicit_type', mkPropTT()));
@@ -707,7 +714,7 @@ function reorderArgs(
   }
 
   // Trailing nulls are OK (partial application) - trim them
-  const ordered = result.slice(0, lastFilled + 1).filter((t): t is TTerm => t !== null);
+  const ordered = result.slice(0, fillUpTo + 1).filter((t): t is TTerm => t !== null);
   return { ordered };
 }
 
@@ -1363,10 +1370,11 @@ function freshWildcardName(): string {
 }
 
 /**
- * Reset the wildcard counter (useful for testing).
+ * Reset the wildcard counter and other global elaboration state (useful for testing).
  */
 export function resetWildcardCounter(): void {
   wildcardCounter = 0;
+  globalImplicitHoleCounter = 0;
   currentCtorParamNames = null;
   currentCtorParamIndex = 0;
   currentTermParamNames = null;

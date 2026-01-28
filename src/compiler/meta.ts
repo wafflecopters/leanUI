@@ -8,17 +8,21 @@ import { Constraint, MetaVar, TTKContext } from "./term";
  * This is conservative: returns false (not definitely different) for cases like:
  * - Different Var indices (might be unified via pattern matching)
  * - Metas/Holes (might be solved to the same value)
+ * - Function applications (might reduce to the same value)
  *
- * Returns true only for clear conflicts like different Const names.
+ * Returns true only for clear conflicts like different Const names with no applications.
  */
 function areTermsDefinitelyDifferent(a: TTKTerm, b: TTKTerm): boolean {
-  // Get the head of each term (unwrap Apps)
-  const headA = getHead(a);
-  const headB = getHead(b);
+  // If either term is an application, it might reduce, so we can't say they're
+  // definitely different. E.g., `plus Zero Zero` might reduce to `Zero`.
+  if (a.tag === 'App' || b.tag === 'App') {
+    return false;
+  }
 
-  // If heads are different Consts, they're definitely different
-  if (headA.tag === 'Const' && headB.tag === 'Const') {
-    return headA.name !== headB.name;
+  // Both terms are not applications - compare directly
+  // If both are Consts with different names, they're definitely different
+  if (a.tag === 'Const' && b.tag === 'Const') {
+    return a.name !== b.name;
   }
 
   // If one is a Const and the other is a Var, we can't say they're definitely different

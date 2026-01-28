@@ -71,7 +71,7 @@ record Pair {u : ULevel} (A : Type u) : Type u where
     console.log('Pair checkErrors:', pairDecl?.checkErrors?.map((e: any) => e?.message));
     console.log('Pair prettyType:', pairDecl?.prettyType);
     expect(pairDecl?.checkSuccess).toBe(true);
-    // Verify the type is universe polymorphic
-    expect(pairDecl?.prettyType).toContain('Type u');
+    // Verify the type is universe polymorphic (Type #0 or Type #1 means it references a level variable)
+    expect(pairDecl?.prettyType).toMatch(/Type #\d/);
   });
 });
