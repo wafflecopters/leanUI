@@ -22,6 +22,7 @@ import { elabToKernel, defaultRecordConstructorName } from './elab';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
+import { desugarWithClauses } from './with-desugar';
 export type { TotalityResult, CaseTree };
 
 // ============================================================================
@@ -2198,8 +2199,10 @@ function processRecordDeclaration(
 
   // ============================================================================
   // Step 2: Elaborate record parameters
+  // Track ULevel params to build levelNamesInScope for field type elaboration.
   // ============================================================================
   const kernelParams: TTKRecordParam[] = [];
+  const levelNamesInScope: Set<string> = new Set();
   if (decl.params) {
     for (let i = 0; i < decl.params.length; i++) {
       const param = decl.params[i];
@@ -2209,8 +2212,13 @@ function processRecordDeclaration(
           { kind: 'array', index: i },
           { kind: 'field', name: 'type' }
         ];
-        const kernelType = elabToKernelWithMap(param.type, elabMap, paramTypePath, paramTypePath, undefined, appNamedArgLookup);
+        // Pass current levelNamesInScope (built from earlier params)
+        const kernelType = elabToKernelWithMap(param.type, elabMap, paramTypePath, paramTypePath, undefined, appNamedArgLookup, undefined, levelNamesInScope);
         kernelParams.push({ name: param.name, type: kernelType, implicit: param.implicit });
+        // If this param is a ULevel, add its name to scope for subsequent params/fields
+        if (kernelType.tag === 'ULevel') {
+          levelNamesInScope.add(param.name);
+        }
       } catch (e) {
         return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
       }
@@ -2234,7 +2242,8 @@ function processRecordDeclaration(
         ];
         // Substitute inherited field references (Const → Var) in the surface term
         const substitutedType = substituteInheritedFieldRefs(field.type, inheritedFieldNames, i);
-        const kernelType = elabToKernelWithMap(substitutedType, elabMap, fieldTypePath, fieldTypePath, undefined, appNamedArgLookup);
+        // Pass levelNamesInScope so ULevel params (like u) are recognized in field types
+        const kernelType = elabToKernelWithMap(substitutedType, elabMap, fieldTypePath, fieldTypePath, undefined, appNamedArgLookup, undefined, levelNamesInScope);
         kernelFields.push({
           name: field.name,
           type: kernelType,
@@ -2726,11 +2735,52 @@ export function compileTTFromText(source: string): CompileResult {
 
       // Pattern resolution for this declaration (using current symbol context)
       const [resolvedDecl] = resolvePatternsInDeclarations([origDecl], symbolContext);
-      const decl = resolvedDecl;
 
-      if (decl.kind === 'inductive') {
+      // Desugar with-clauses (may produce auxiliary declarations)
+      const desugaredDecls = desugarWithClauses([resolvedDecl]);
+
+      // Separate main declaration from auxiliaries
+      // Auxiliaries must be processed FIRST because the main declaration references them
+      const mainDecl = desugaredDecls[0];
+      const auxiliaryDecls = desugaredDecls.slice(1);
+
+      // First: register all auxiliary declarations in symbol context
+      for (const auxDecl of auxiliaryDecls) {
+        const auxNameResult = validateDeclarations([auxDecl], symbolContext);
+        if (auxNameResult.success) {
+          symbolContext = auxNameResult.value;
+        }
+      }
+
+      // Pre-register the main function's type signature if there are auxiliaries
+      // This allows auxiliaries to make recursive calls to the main function
+      if (auxiliaryDecls.length > 0 && mainDecl.kind === 'def' && mainDecl.type && mainDecl.name) {
+        try {
+          const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+          const appNamedArgLookup = createNamedArgInfoLookup(definitions);
+          const elabMap: ElabMap = new Map();
+          const mainKernelType = elabToKernelWithMap(mainDecl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
+          definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined);
+        } catch (_e) {
+          // If type elaboration fails, continue - the error will be caught when we process the main decl
+        }
+      }
+
+      // Process auxiliary declarations FIRST (so their types are available)
+      // Note: auxiliary declarations are always term definitions (kind === 'def')
+      for (const auxDecl of auxiliaryDecls) {
+        const result = processTermDeclaration(auxDecl, sourceMap, definitions);
+        compiledDecls.push(result.compiled);
+        if (result.success) {
+          definitions = result.newDefinitions;
+        }
+        totalCheckErrors += result.errorCount;
+      }
+
+      // Now process the main declaration
+      if (mainDecl.kind === 'inductive') {
         // 3. If it is an inductive type def...
-        const result = processInductiveDeclaration(decl, sourceMap, definitions);
+        const result = processInductiveDeclaration(mainDecl, sourceMap, definitions);
         compiledDecls.push(result.compiled);
 
         if (result.success) {
@@ -2745,9 +2795,9 @@ export function compileTTFromText(source: string): CompileResult {
           }
         }
         totalCheckErrors += result.errorCount;
-      } else if (decl.kind === 'record') {
+      } else if (mainDecl.kind === 'record') {
         // 3b. If it is a record definition...
-        const result = processRecordDeclaration(decl, sourceMap, definitions);
+        const result = processRecordDeclaration(mainDecl, sourceMap, definitions);
         compiledDecls.push(result.compiled);
 
         if (result.success) {
@@ -2764,7 +2814,7 @@ export function compileTTFromText(source: string): CompileResult {
         totalCheckErrors += result.errorCount;
       } else {
         // 4. If we are looking at a term...
-        const result = processTermDeclaration(decl, sourceMap, definitions);
+        const result = processTermDeclaration(mainDecl, sourceMap, definitions);
         compiledDecls.push(result.compiled);
 
         if (result.success) {
@@ -2772,7 +2822,7 @@ export function compileTTFromText(source: string): CompileResult {
         }
         totalCheckErrors += result.errorCount;
       }
-    }
+    } // end for (let declIndex = 0; ...)
 
     compiledBlocks.push({
       blockIndex,

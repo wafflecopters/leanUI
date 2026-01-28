@@ -2138,6 +2138,62 @@ twice n = plus n n`;
     const value = decls[0].value!;
     assertTermShape(value, 'Match');
   });
+
+  test('Parse pattern clause with let on same line (inline)', () => {
+    // This should be accepted: let on same line as =
+    const source = `plusZeroRight : Nat -> Nat
+plusZeroRight n = let rec = plusZeroRight n in cong rec`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('plusZeroRight');
+
+    const value = decls[0].value!;
+    assertTermShape(value, 'Match');
+    if (value.tag === 'Match') {
+      // RHS should be a Let
+      const rhs = value.clauses[0].rhs;
+      assertTermShape(rhs, 'Binder');
+      if (rhs.tag === 'Binder') {
+        expect(rhs.binderKind.tag).toBe('BLetTT');
+      }
+    }
+  });
+
+  test('Parse pattern clause with let on newline, body indented past let', () => {
+    // This should be accepted: let on newline after =, with body indented
+    const source = `plusZeroRight : Nat -> Nat
+plusZeroRight n =
+  let rec = plusZeroRight n in
+    cong rec`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('plusZeroRight');
+
+    const value = decls[0].value!;
+    assertTermShape(value, 'Match');
+    if (value.tag === 'Match') {
+      // RHS should be a Let
+      const rhs = value.clauses[0].rhs;
+      assertTermShape(rhs, 'Binder');
+      if (rhs.tag === 'Binder') {
+        expect(rhs.binderKind.tag).toBe('BLetTT');
+      }
+    }
+  });
+
+  test('Parse pattern clause with let on newline, body at same indent as let - should FAIL', () => {
+    // This should be rejected: let body at same indent as let
+    const source = `plusZeroRight : Nat -> Nat
+plusZeroRight n =
+  let rec = plusZeroRight n in
+  cong rec`;
+
+    // This should throw because 'cong rec' is at the same indent as 'let'
+    // which means it's not properly indented as the body of the let
+    assertThrows(() => parseDeclarations(source));
+  });
 });
 
 // ============================================================================

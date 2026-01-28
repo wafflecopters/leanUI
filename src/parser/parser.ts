@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -79,6 +79,8 @@ export type TokenType =
   | 'PIPE'         // |
   | 'CASE'         // case keyword
   | 'MATCH'        // match keyword
+  | 'WITH'         // with keyword (for with-abstraction)
+  | 'ELLIPSIS'     // ... (for repeating parent patterns in with clauses)
   | 'ABSURD';      // #absurd marker for absurd cases
 
 export interface Token {
@@ -372,6 +374,11 @@ export class Lexer {
         this.pos++; this.col++;
         return { type: 'COMMA', value: ',', pos: startPos, line: startLine, col: startCol };
       case '.':
+        // Check for ... (ellipsis) first
+        if (this.input[this.pos + 1] === '.' && this.input[this.pos + 2] === '.') {
+          this.pos += 3; this.col += 3;
+          return { type: 'ELLIPSIS', value: '...', pos: startPos, line: startLine, col: startCol };
+        }
         this.pos++; this.col++;
         return { type: 'DOT', value: '.', pos: startPos, line: startLine, col: startCol };
       case ';':
@@ -508,6 +515,8 @@ export class Lexer {
             return { type: 'CASE', value: 'case', pos: startPos, line: startLine, col: startCol };
           case 'match':
             return { type: 'MATCH', value: 'match', pos: startPos, line: startLine, col: startCol };
+          case 'with':
+            return { type: 'WITH', value: 'with', pos: startPos, line: startLine, col: startCol };
           default:
             // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
             if (ident.startsWith('Type_')) {
@@ -636,6 +645,7 @@ export interface ParsedDeclaration {
   fields?: ParsedRecordField[];
   constructorName?: string;  // Optional custom constructor name
   extends?: string[];        // Names of records to extend
+  extendsExprs?: TTerm[];    // Full expressions for extends (e.g., Semigroup A)
 }
 
 /**
@@ -1071,15 +1081,22 @@ export class Parser {
       );
     }
 
+    // Check for 'with' or '='
+    if (this.current().type === 'WITH') {
+      // Parse with-abstraction: funcName patterns with scrutinee | pat => rhs | pat => rhs ...
+      return this.parseWithClause(funcName, patterns, namedPatterns, clausePath, clauseStartPos);
+    }
+
     // Expect '='
     if (this.current().type !== 'OPERATOR' || this.current().value !== '=') {
       throw new ParseError(
-        `Expected '=' in pattern clause, got ${this.current().type} '${this.current().value}'`,
+        `Expected '=' or 'with' in pattern clause, got ${this.current().type} '${this.current().value}'`,
         this.current().line,
         this.current().col
       );
     }
     this.advance(); // consume '='
+    this.skipNewlines(); // Allow RHS to start on next line (e.g., let on newline)
 
     // Parse RHS with pattern variables bound
     // Pattern vars are collected left-to-right, depth-first. But in De Bruijn,
@@ -1117,6 +1134,124 @@ export class Parser {
           rhs
         }]
       }
+    };
+  }
+
+  /**
+   * Parse with-abstraction clause:
+   * funcName patterns with scrutinee
+   *   | withPat1 => rhs1
+   *   | withPat2 => rhs2
+   *
+   * Following Agda's approach, this will be desugared to an auxiliary function.
+   */
+  private parseWithClause(
+    funcName: string,
+    patterns: TPattern[],
+    namedPatterns: TNamedPatternArg[],
+    clausePath: IndexPath,
+    clauseStartPos: SourcePos
+  ): ParsedDeclaration {
+    this.advance(); // consume 'with'
+
+    // Collect pattern variables for context
+    const positionalVars = patterns.flatMap(p => this.collectPatternVars(p));
+    const namedVars = namedPatterns.flatMap(np => this.collectPatternVars(np.pattern));
+    const patternVars = [...positionalVars, ...namedVars];
+    const ctx = [...patternVars].reverse();
+
+    // Parse scrutinee expression(s) - can be comma-separated
+    const scrutinees: TTerm[] = [];
+    const scrutineePath: IndexPath = [...clausePath, { kind: 'field', name: 'scrutinee' }];
+    scrutinees.push(this.expr(0, ctx, scrutineePath));
+
+    while (this.current().type === 'COMMA') {
+      this.advance(); // consume ','
+      scrutinees.push(this.expr(0, ctx, scrutineePath));
+    }
+
+    // Skip newlines before with-clauses
+    this.skipNewlines();
+
+    // Parse with-clauses: | pattern => rhs
+    const withClauses: TClause[] = [];
+    let clauseIndex = 0;
+
+    while (this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS') {
+      const withClausePath: IndexPath = [
+        ...clausePath,
+        { kind: 'field', name: 'withClauses' },
+        { kind: 'array', index: clauseIndex }
+      ];
+
+      // Check for ellipsis (... | pattern => rhs)
+      let hasEllipsis = false;
+      if (this.current().type === 'ELLIPSIS') {
+        hasEllipsis = true;
+        this.advance(); // consume '...'
+      }
+
+      // Expect and consume '|'
+      if (this.current().type === 'PIPE') {
+        this.advance();
+      } else if (!hasEllipsis) {
+        // If no ellipsis and no pipe, we're done with with-clauses
+        break;
+      }
+
+      // Parse pattern(s) for this with-clause
+      // For multiple scrutinees, patterns are comma-separated
+      const withPatterns: TPattern[] = [];
+      const withPatternPath: IndexPath = [...withClausePath, { kind: 'field', name: 'patterns' }];
+
+      if (this.canStartPattern(this.current())) {
+        const firstPat = this.parsePatternWithSource([...withPatternPath, { kind: 'array', index: 0 }]);
+        withPatterns.push(firstPat);
+
+        let patIdx = 1;
+        while (this.current().type === 'COMMA' && patIdx < scrutinees.length) {
+          this.advance(); // consume ','
+          const pat = this.parsePatternWithSource([...withPatternPath, { kind: 'array', index: patIdx }]);
+          withPatterns.push(pat);
+          patIdx++;
+        }
+      }
+
+      // Expect '=>'
+      this.expect('FATARROW');
+
+      // Parse RHS with pattern variables from both function patterns and with-patterns
+      const withPatternVars = withPatterns.flatMap(p => this.collectPatternVars(p));
+      const rhsCtx = [...withPatternVars.reverse(), ...ctx];
+      const rhsPath: IndexPath = [...withClausePath, { kind: 'field', name: 'rhs' }];
+      const rhs = this.expr(0, rhsCtx, rhsPath);
+
+      withClauses.push({
+        patterns: withPatterns,
+        rhs
+      });
+
+      clauseIndex++;
+      this.skipNewlines();
+    }
+
+    // Track the clause in source map
+    const clauseEndPos = this.getPrevEndPos();
+    const clauseKey = serializeIndexPath(clausePath);
+    this.currentSourceMap.set(clauseKey, createSourceRange(clauseStartPos, clauseEndPos));
+
+    // Create a WithClause expression
+    // This will be desugared to an auxiliary function during elaboration
+    return {
+      kind: 'def',
+      name: funcName,
+      value: {
+        tag: 'WithClause',
+        functionPatterns: patterns,
+        functionNamedPatterns: namedPatterns.length > 0 ? namedPatterns : undefined,
+        scrutinees,
+        clauses: withClauses
+      } as TTerm  // Type assertion needed since WithClause is a new tag
     };
   }
 
@@ -1472,7 +1607,8 @@ export class Parser {
       params,
       fields,
       constructorName,
-      extends: extendsNames
+      extends: extendsNames,
+      extendsExprs
     };
   }
 

@@ -330,6 +330,26 @@ record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) whe
   constructor MkDPair
   dfst: A
   dsnd: B dfst
+
+record Semigroup {u : ULevel} (A : Type u) where
+  op : A -> A -> A
+  assoc : (a b c : A) -> Equal (op (op a b) c) (op a (op b c))
+
+record Monoid {u : ULevel} (A : Type u) : Type u extends Semigroup {u} A where
+  e : A
+  identLeft : (a : A) -> Equal (op e a) a
+  identRight : (a : A) -> Equal (op a e) a
+
+record Group {u : ULevel} (A : Type u) : Type u extends Monoid A where
+  inv : A -> A
+  invLeft : (a : A) -> Equal (op (inv a) a) e
+  invRight : (a : A) -> Equal (op a (inv a)) e
+
+plusZeroRight : {n : Nat} -> Equal n (plus n Zero)
+plusZeroRight {n:=Zero} = refl {A:=Nat} {a:=Zero}
+plusZeroRight {n:=Succ n} = let rec = plusZeroRight {n} in
+  cong rec
+
 `;
 
 // Styles
@@ -600,8 +620,6 @@ function CaseTreeNode({ tree, depth = 0 }: { tree: CaseTree; depth?: number }): 
  * Render totality checking results with case tree visualization
  */
 function TotalityResultView({ result }: { result: TotalityResult }): JSX.Element | null {
-  debugger
-
   if (!result.caseTree) {
     return null;
   }

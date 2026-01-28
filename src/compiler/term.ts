@@ -1,5 +1,5 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
-import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkULit, mkMeta, simplifyLevel } from "./kernel";
+import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkULit, mkMeta, simplifyLevel, isDefinitionallyEqual } from "./kernel";
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
 import { solveConstraints } from "./meta";
@@ -892,6 +892,26 @@ export class TCEnv<T> {
       } else {
         // Just add the constraint - conflict detection happens during solving
         env = env.withConstraint(metaConstraint);
+
+        // TYPE-LEVEL UNIFICATION: When solving a meta of type Sort(?levelMeta) to a var of type Sort(concreteLevel),
+        // we need to propagate the level constraint to solve the level meta.
+        // This is critical for universe polymorphism: when Equal's implicit {A : Type u} is unified
+        // with a variable of type (Type u), the level meta in Equal must be solved to u.
+        if (metaVar && metaVar.type.tag === 'Sort' && metaConstraint.rhs.tag === 'Var') {
+          // Get the type of the rhs variable from the current context
+          const rhsVarIndex = metaConstraint.rhs.index;
+          const rhsBinding = env.context[env.context.length - 1 - rhsVarIndex];
+          if (rhsBinding && rhsBinding.type.tag === 'Sort') {
+            // Both meta and rhs have Sort types - check if we can propagate the level
+            const metaLevel = metaVar.type.level;
+            const rhsLevel = rhsBinding.type.level;
+
+            // If meta's level is a level meta and rhs's level is different, solve it
+            if (metaLevel.tag === 'Meta' && !isDefinitionallyEqual(metaLevel, rhsLevel)) {
+              env = env.solveLevelMeta(metaLevel.id, rhsLevel);
+            }
+          }
+        }
       }
     }
 
@@ -2108,11 +2128,22 @@ export function getExistingDefinitionKind(definitions: DefinitionsMap, name: str
 
 /**
  * Validate that a term name is not already defined.
+ * Exception: A term that was pre-registered (has type but no value) can be updated.
+ * This is needed for recursive functions with with-clauses where the main function
+ * is pre-registered before the auxiliary is compiled, to allow recursive calls.
  */
 export function validateTermNameNotDefined(env: TCEnv<TermDefinition>): void {
   const nameEnv = env.inTermName();
   const existingKind = getExistingDefinitionKind(env.definitions, nameEnv.value);
   if (existingKind) {
+    // Allow updating a pre-registered term (one without a value)
+    if (existingKind === 'term') {
+      const existingDef = env.definitions.terms.get(nameEnv.value);
+      if (existingDef && existingDef.value === undefined) {
+        // This is a pre-registered definition, allow the update
+        return;
+      }
+    }
     throw nameEnv.nameAlreadyDefinedError(existingKind);
   }
 }

@@ -67,8 +67,31 @@ function resolvePatternsInTerm(
         }))
       };
 
+    case 'WithClause':
+      // Resolve patterns in function patterns, named patterns, and with-clauses
+      return {
+        ...term,
+        functionPatterns: term.functionPatterns.map(pattern =>
+          resolvePattern(pattern, symbolContext)
+        ),
+        functionNamedPatterns: term.functionNamedPatterns?.map(np => ({
+          ...np,
+          pattern: resolvePattern(np.pattern, symbolContext)
+        })),
+        clauses: term.clauses.map(clause => ({
+          ...clause,
+          patterns: clause.patterns.map(pattern =>
+            resolvePattern(pattern, symbolContext)
+          ),
+          namedPatterns: clause.namedPatterns?.map(np => ({
+            ...np,
+            pattern: resolvePattern(np.pattern, symbolContext)
+          }))
+        }))
+      };
+
     // For other term types, we don't need to resolve patterns
-    // (patterns only appear in Match expressions)
+    // (patterns only appear in Match and WithClause expressions)
     default:
       return term;
   }

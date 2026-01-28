@@ -998,6 +998,7 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
     case 'UOmega':
     case 'Hole':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Binder':
@@ -1500,6 +1501,10 @@ function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTK
       // AbsurdMarker should only appear as clause RHS and is filtered out at the Match level
       throw new Error('AbsurdMarker should not be elaborated directly - it should be filtered at the clause level');
 
+    case 'WithClause':
+      // WithClause should be desugared to auxiliary functions before elaboration
+      throw new Error('WithClause should be desugared before elaboration');
+
     case 'Const':
       return {
         tag: 'Const',
@@ -1677,6 +1682,9 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
 
       case 'AbsurdMarker':
         throw new Error('AbsurdMarker should not be elaborated directly');
+
+      case 'WithClause':
+        throw new Error('WithClause should be desugared before elaboration');
 
       case 'Const':
         return { tag: 'Const', name: t.name };
@@ -1980,6 +1988,10 @@ export function elabToKernelWithMap(
     case 'AbsurdMarker':
       // AbsurdMarker should only appear as clause RHS and is filtered out at the Match level
       throw new Error('AbsurdMarker should not be elaborated directly - it should be filtered at the clause level');
+
+    case 'WithClause':
+      // WithClause should be desugared to auxiliary functions before elaboration
+      throw new Error('WithClause should be desugared before elaboration');
 
     case 'Const':
       return {

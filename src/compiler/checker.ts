@@ -1,6 +1,6 @@
 // INFERENCE
 
-import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega } from "./kernel";
+import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual } from "./kernel";
 import { subst, shiftTerm, minFreeVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap } from "./term";
 
@@ -566,7 +566,62 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
   const expectedTypeWithLevels = inferredEnv.substituteLevelMetasInTerm(expectedType);
 
   try {
-    const unifiedEnv = inferredEnv.unifyTerms(inferredTypeWithLevels, expectedTypeWithLevels);
+    let unifiedEnv = inferredEnv.unifyTerms(inferredTypeWithLevels, expectedTypeWithLevels);
+
+    // TYPE-LEVEL UNIFICATION: When we unify an inferred type with an expected type that's a Meta,
+    // we need to also propagate level constraints.
+    // If expectedType is Meta(?A) with type Sort(?levelMeta), and inferredType has type Sort(concreteLevel),
+    // we need to solve ?levelMeta := concreteLevel.
+    //
+    // This is critical for universe polymorphism: when Equal's implicit {A : Type u} is
+    // inferred as some concrete type like `carrier_A : Type u`, we need to propagate that
+    // carrier_A's level (u) to Equal's level parameter.
+    if (expectedTypeWithLevels.tag === 'Meta') {
+      const metaVar = unifiedEnv.metaVars.get(expectedTypeWithLevels.id);
+      if (metaVar && metaVar.type.tag === 'Sort') {
+        // Extract level meta from the meta's type level
+        // The level could be:
+        // - Meta(?levelMeta) directly
+        // - App(USucc, Meta(?levelMeta)) for Type at level (Type ?levelMeta = Sort (USucc ?levelMeta))
+        const metaTypeLevel = metaVar.type.level;
+        let levelMetaId: string | undefined;
+
+        if (metaTypeLevel.tag === 'Meta') {
+          levelMetaId = metaTypeLevel.id;
+        } else if (metaTypeLevel.tag === 'App' &&
+                   metaTypeLevel.fn.tag === 'Const' && metaTypeLevel.fn.name === 'USucc' &&
+                   metaTypeLevel.arg.tag === 'Meta') {
+          // Level is (USucc ?levelMeta) - extract the meta from the arg
+          levelMetaId = metaTypeLevel.arg.id;
+        }
+
+        if (levelMetaId) {
+          // The meta has type Sort(?levelMeta) or Sort(USucc ?levelMeta) - we need to find the level of the inferred type
+          // The inferred type should also be a type, so we infer its type to get the Sort
+          try {
+            const inferredTypeTypeEnv = inferType(unifiedEnv.withValue(inferredTypeWithLevels));
+            if (inferredTypeTypeEnv.value.tag === 'Sort') {
+              // Extract the base level from the inferred type
+              // If inferred type's type is Sort(USucc u), the base level is u
+              let inferredBaseLevel = inferredTypeTypeEnv.value.level;
+              if (inferredBaseLevel.tag === 'App' &&
+                  inferredBaseLevel.fn.tag === 'Const' && inferredBaseLevel.fn.name === 'USucc') {
+                inferredBaseLevel = inferredBaseLevel.arg;
+              }
+
+              // Solve the level meta if it's not already solved to the same value
+              const existingSolution = unifiedEnv.levelMetas.get(levelMetaId);
+              if (existingSolution === undefined || !isDefinitionallyEqual(existingSolution, inferredBaseLevel)) {
+                unifiedEnv = unifiedEnv.solveLevelMeta(levelMetaId, inferredBaseLevel);
+              }
+            }
+          } catch (_) {
+            // If we can't infer the type, just continue - level will remain unsolved
+          }
+        }
+      }
+    }
+
     // Return with the elaborated term (with implicit args inserted)
     // Set both value and elaboratedTerm to currentTerm since it has all elaboration applied
     return unifiedEnv.withValue(currentTerm).withElaboratedTerm(currentTerm);

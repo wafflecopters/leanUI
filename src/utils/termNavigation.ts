@@ -291,6 +291,9 @@ export function prettyPrintTerm(term: TTerm): string {
 
     case 'AbsurdMarker':
       return '#absurd';
+
+    case 'WithClause':
+      return '#with';
   }
 }
 

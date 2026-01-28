@@ -216,7 +216,7 @@ function extractProjectionTarget(
   term: TTKTerm,
   projName: string,
   numTypeArgs: number,
-  definitions: DefinitionsMap
+  _definitions: DefinitionsMap
 ): TTKTerm | null {
   // Collect application spine
   const { fn: head, args } = extractAppSpine(term);

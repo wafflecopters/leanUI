@@ -443,6 +443,7 @@ export function adjustRhsWithMapping(
       case 'UOmega':
       case 'Hole':
       case 'AbsurdMarker':
+      case 'WithClause':
         return term;
 
       case 'Binder':

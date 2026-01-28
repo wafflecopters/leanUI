@@ -720,5 +720,8 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
 
     case 'AbsurdMarker':
       return b.tag === 'AbsurdMarker';
+
+    case 'WithClause':
+      return b.tag === 'WithClause';
   }
 }

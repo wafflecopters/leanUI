@@ -349,6 +349,87 @@ try {
 
 ---
 
+## Debugging Strategy: Prove Each Layer Before Going Deeper
+
+**CRITICAL**: When debugging issues in this codebase, **prove each layer is correct before diving deeper**.
+
+### The Pipeline Has Distinct Layers
+
+```
+Source → Parser → TT → Elaboration → TTK → Type Checker → Result
+```
+
+Each layer can have bugs. When something fails end-to-end, **don't immediately dive into the deepest layer**.
+
+### The Anti-Pattern: Deep End-to-End Debugging
+
+**BAD**: "The type checker says 'unsolved metas' so let me add complex level inference logic to the type checker."
+
+This approach:
+- Assumes the problem is in the type checker
+- May be fixing symptoms, not causes
+- Can introduce unnecessary complexity
+- May mask earlier bugs
+
+### The Correct Pattern: Layer-by-Layer Verification
+
+**GOOD**: "Let me first verify the elaborated structure is correct. If elaboration is correct, THEN I'll look at type checking."
+
+For example, with record types:
+1. **First**: Write tests that verify the ELABORATED constructor type has correct:
+   - Field order
+   - De Bruijn indices
+   - Level references
+2. **Then**: If elaboration is proven correct, examine type checking
+3. **Only then**: Look at meta solving, constraint propagation, etc.
+
+### Practical Example: Record Extends with ULevel
+
+When `record Monoid {u : ULevel} (A : Type u) extends Semigroup A` fails:
+
+**Step 1**: Verify elaboration produces the correct inductive type
+```typescript
+// Test the STRUCTURE, not checkSuccess
+const ctorType = monoidDecl?.kernelConstructors?.[0]?.type;
+expect(countPiBinders(ctorType)).toBe(7);  // u, A, op, assoc, e, identLeft, identRight
+```
+
+**Step 2**: If structure is correct, check specific field types
+```typescript
+// At op's position, is A referenced correctly?
+expect(opDomain.domain.tag).toBe('Var');
+expect((opDomain.domain as any).index).toBe(0);  // A should be at index 0
+```
+
+**Step 3**: Only if elaboration is correct, debug type checking
+- Now you know: "Elaboration is correct, so the bug is in how level metas get solved"
+
+### Why This Matters
+
+Records elaborate to inductives. If elaboration produces the right inductive, the type checker should "just work" - it's the same type checking code used for all inductives.
+
+If you find yourself adding special cases to the type checker for records, **STOP** and ask: "Is this really a type checker bug, or did elaboration produce the wrong structure?"
+
+### Test Structure for Layer Verification
+
+```typescript
+// Good: Tests that verify elaboration structure
+describe('Record elaboration structure', () => {
+  test('constructor has correct fields', () => {
+    // Examine kernelConstructors, not checkSuccess
+  });
+});
+
+// Separate: Tests for end-to-end behavior
+describe('Record type checking', () => {
+  test('record type checks successfully', () => {
+    expect(decl.checkSuccess).toBe(true);
+  });
+});
+```
+
+---
+
 ## Smoke Testing: Verify Before Claiming Complete
 
 **CRITICAL**: Before claiming any task is complete, ALWAYS verify the build works:

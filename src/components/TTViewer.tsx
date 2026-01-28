@@ -292,7 +292,8 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
       Annot: () => <div>ANNOT</div>,
       Match: (term) => <div>MATCH({term.clauses.length} clauses)</div>,
       MultiBinder: (term) => <span>({term.names.join(' ')} : <PrintedTerm term={term.domain} context={context} />) {term.binderKind.tag === 'BPiTT' ? '→' : '=>'} <PrintedTerm term={term.body} context={context} /></span>,
-      AbsurdMarker: () => <span style={{ color: '#888', fontStyle: 'italic' }}>#absurd</span>
+      AbsurdMarker: () => <span style={{ color: '#888', fontStyle: 'italic' }}>#absurd</span>,
+      WithClause: () => <span style={{ color: '#888', fontStyle: 'italic' }}>#with</span>
     })}
     </div>
   )

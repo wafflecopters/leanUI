@@ -276,6 +276,24 @@ export type TTerm =
   | { tag: 'Annot'; term: TTerm; type: TTerm }            // Type annotation
   | { tag: 'Match'; scrutinee: TTerm; clauses: TClause[] } // Pattern matching (case/match)
   | { tag: 'AbsurdMarker' }                               // #absurd marker for absurd cases
+  | TWithClause                                           // With-clause (desugared before elaboration)
+
+/**
+ * With-clause for pattern matching on intermediate expressions.
+ * Following Agda's approach, this is desugared to auxiliary functions before elaboration.
+ *
+ * Example:
+ *   filter p (Cons x xs) with p x
+ *     | True => Cons x (filter p xs)
+ *     | False => filter p xs
+ */
+export interface TWithClause {
+  tag: 'WithClause';
+  functionPatterns: TPattern[];          // Patterns from the enclosing clause
+  functionNamedPatterns?: TNamedPatternArg[];  // Named patterns from enclosing clause
+  scrutinees: TTerm[];                   // The with-expressions to match on
+  clauses: TClause[];                    // The | pattern => rhs branches
+}
 
 export function mapTTerm<R>(
   term: TTerm,
@@ -536,6 +554,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Hole':
@@ -617,6 +636,7 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return null;
 
     case 'Binder': {
@@ -690,6 +710,7 @@ export function fillHoleWithTT(
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Binder': {
@@ -790,6 +811,9 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
     case 'AbsurdMarker':
       return term2.tag === 'AbsurdMarker';
 
+    case 'WithClause':
+      return term2.tag === 'WithClause';
+
     case 'Hole':
       // Holes are only equal if they have the same ID
       return term2.tag === 'Hole' && term1.id === term2.id;
@@ -882,6 +906,7 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       // Leaf nodes have no children
       return null;
 
@@ -945,6 +970,7 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       // Leaf nodes have no children
       return null;
 
@@ -1137,6 +1163,7 @@ export function isNameUsed(name: string, term: TTerm): boolean {
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       // No names to check
       return false;
 
@@ -1225,6 +1252,7 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Binder': {
@@ -1325,6 +1353,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Binder': {
@@ -1420,6 +1449,7 @@ export function expandMultiBinders(term: TTerm): TTerm {
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Binder': {
@@ -1693,6 +1723,9 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
     case 'AbsurdMarker':
       return '#absurd';
 
+    case 'WithClause':
+      return '#with';
+
     case 'Binder': {
       const newContext = [term.name, ...context];
       const body = prettyPrintTerseTT(term.body, newContext);
@@ -1831,6 +1864,9 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
 
     case 'AbsurdMarker':
       return '#absurd';
+
+    case 'WithClause':
+      return '#with';
 
     case 'Binder': {
       const newContext = [term.name, ...context];
@@ -2018,6 +2054,9 @@ export function prettyPrintLatexTT(
 
     case 'AbsurdMarker':
       return '\\text{\\#absurd}';
+
+    case 'WithClause':
+      return '\\text{\\#with}';
 
     case 'Binder': {
       const domain = term.domain !== undefined ? prettyPrintLatexTT(term.domain, context, opts) : undefined;
@@ -2393,6 +2432,7 @@ function fillHoleWithLet(
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return term;
 
     case 'Binder': {
@@ -2590,6 +2630,7 @@ export function occursInTT(index: number, term: TTerm): boolean {
     case 'ULit':
     case 'UOmega':
     case 'AbsurdMarker':
+    case 'WithClause':
       return false;
     case 'Binder': {
       // Check in domain (if present) and body (going under binder for body)
