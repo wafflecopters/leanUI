@@ -2118,6 +2118,18 @@ function processRecordDeclaration(
   // Build the record type: params → resultSort
   const recordType = buildRecordTypeFromParams(kernelParams, resultSort);
 
+  // Build namedArgMap for the record type from implicit params
+  // This allows named argument syntax like `DPair {u:=UZero} Nat (\n => Nat)`
+  const recordNamedArgMap: NamedArgMap = new Map();
+  if (decl.params) {
+    for (let i = 0; i < decl.params.length; i++) {
+      const param = decl.params[i];
+      if (param.implicit) {
+        recordNamedArgMap.set(param.name, i);
+      }
+    }
+  }
+
   // Build TTKRecordDef
   const recordName = decl.name || 'anonymous';
   const constructorName = decl.constructorName ?? defaultRecordConstructorName(recordName);
@@ -2132,6 +2144,11 @@ function processRecordDeclaration(
 
   // Convert to InductiveDefinition
   const inductiveDef = recordToInductiveDefinition(ttkRecord);
+
+  // Override namedArgMap with the one we built from record params
+  if (recordNamedArgMap.size > 0) {
+    inductiveDef.namedArgMap = recordNamedArgMap;
+  }
 
   // Add elabMap entries to map constructor type positions back to original field/param positions.
   // The constructor type is: (P1 : T1) → ... → (Pn : Tn) → (F1 : FT1) → ... → (Fm : FTm) → R P1...Pn

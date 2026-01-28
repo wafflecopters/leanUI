@@ -382,12 +382,22 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
   if (env.isULevelTerm()) {
     // ────────────────────────────────────────────────────────────────
-    // (ULEVEL) - Universe level
+    // (ULEVEL) - Universe level type
     //
     //   ─────────────────
-    //   Γ ⊢ ULevel ⇒ ULevel
+    //   Γ ⊢ ULevel ⇒ Type 1
     // ────────────────────────────────────────────────────────────────
     return env.withValue({ tag: 'Sort', level: mkLevelNum(1) });
+  }
+
+  if (env.value.tag === 'ULit') {
+    // ────────────────────────────────────────────────────────────────
+    // (ULIT) - Universe level literal
+    //
+    //   ─────────────────
+    //   Γ ⊢ n ⇒ ULevel    (where n is a numeric level like 0, 1, 2, ...)
+    // ────────────────────────────────────────────────────────────────
+    return env.withValue({ tag: 'ULevel' });
   }
 
   if (env.value.tag === 'Meta') {
