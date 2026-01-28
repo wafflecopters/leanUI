@@ -944,7 +944,11 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
           let ctx = context;
           while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
             const currentAnon = current.name === '_' || current.name === '';
-            const domain = stripOuterParens(prettyPrint(current.domain, ctx, metaVars));
+            const domainStr = prettyPrint(current.domain, ctx, metaVars);
+            // Don't strip parens for function type domains - they indicate grouping
+            const domain = current.domain.tag === 'Binder' && current.domain.binderKind.tag === 'BPi'
+              ? domainStr
+              : stripOuterParens(domainStr);
             if (currentAnon) {
               parts.push(domain);
             } else {

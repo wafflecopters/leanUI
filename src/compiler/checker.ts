@@ -510,6 +510,23 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       break;
     }
 
+    // IMPORTANT: If both types are Pis AND the expected type has a NAMED (non-anonymous)
+    // binder, we should let unification match them instead of inserting metas.
+    // This is crucial for higher-order functions like type class instances where
+    // a polymorphic function is expected (e.g., passing mapMaybe to Functor.map).
+    // However, if the expected type has an ANONYMOUS binder (like `A -> B -> C` where
+    // the binder names are `_`), we should insert metas because those represent
+    // explicit function arguments, not implicit type parameters.
+    const expectedIsPi = expectedType.tag === 'Binder' && expectedType.binderKind.tag === 'BPi';
+    if (expectedIsPi) {
+      const expectedPi = expectedType as TTKTerm & { tag: 'Binder'; binderKind: { tag: 'BPi' } };
+      const expectedBinderIsNamed = expectedPi.name !== '_' && expectedPi.name !== '';
+      if (expectedBinderIsNamed) {
+        // Both types have named Pi binders - let unification handle the matching
+        break;
+      }
+    }
+
     // Insert an implicit argument: create a meta for the domain type
     // Special case: if domain is ULevel, create a level meta so it can participate
     // in level unification when the level appears inside Sort terms.

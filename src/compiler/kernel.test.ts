@@ -106,6 +106,43 @@ describe('prettyPrint', () => {
     // elabArgs[0] = Var(2) = A, elabArgs[1] = Var(0) = h, elabArgs[2] = Var(1) = n
     expect(result).toContain('A h n => result');
   });
+
+  test('preserves parentheses for function type domains', () => {
+    // Type: ((A : Type) -> A -> A) -> Nat -> Nat
+    // The domain is itself a function type, so parens must be preserved
+    const innerPi: TTKTerm = {
+      tag: 'Binder',
+      binderKind: { tag: 'BPi' },
+      name: 'A',
+      domain: mkType(0), // Type 0
+      body: {
+        tag: 'Binder',
+        binderKind: { tag: 'BPi' },
+        name: '_',
+        domain: mkVar(0), // A
+        body: mkVar(1), // A (shifted)
+      },
+    };
+
+    const outerPi: TTKTerm = {
+      tag: 'Binder',
+      binderKind: { tag: 'BPi' },
+      name: 'f',
+      domain: innerPi,
+      body: {
+        tag: 'Binder',
+        binderKind: { tag: 'BPi' },
+        name: '_',
+        domain: mkConst('Nat'),
+        body: mkConst('Nat'),
+      },
+    };
+
+    const result = prettyPrint(outerPi, []);
+    // Should keep parentheses around the function type domain
+    // Not flatten to "(A : Type) -> A -> A -> Nat -> Nat"
+    expect(result).toContain('((A : Type) -> A -> A)');
+  });
 });
 
 describe('prettyPrintFormatted', () => {

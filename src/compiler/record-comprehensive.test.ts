@@ -60,24 +60,26 @@ inductive Bool : Type where
 `;
 
 // Common prelude for List
+// Note: Parser doesn't support `inductive Name (A : Type)` syntax yet,
+// so we use indices with explicit constructors
 const LIST_PRELUDE = `
-inductive List (A : Type) : Type where
-  Nil : List A
-  Cons : A -> List A -> List A
+inductive List : Type -> Type where
+  Nil : {A : Type} -> List A
+  Cons : {A : Type} -> A -> List A -> List A
 `;
 
 // Common prelude for Maybe
 const MAYBE_PRELUDE = `
-inductive Maybe (A : Type) : Type where
-  Nothing : Maybe A
-  Just : A -> Maybe A
+inductive Maybe : Type -> Type where
+  Nothing : {A : Type} -> Maybe A
+  Just : {A : Type} -> A -> Maybe A
 `;
 
 // Common prelude for Vec (indexed type)
 const VEC_PRELUDE = NAT_PRELUDE + `
-inductive Vec (A : Type) : Nat -> Type where
-  VNil : Vec A Zero
-  VCons : {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A : Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
 `;
 
 // ============================================================================
@@ -220,8 +222,8 @@ record Box (A : Type) : Type where
     expectSuccess(result, 'Box');
   });
 
-  // FUTURE: Dependent parameters - needs implementation
-  test.todo('DPair - dependent pair (Sigma type)', () => {
+  // Dependent parameters - field type references earlier field
+  test('DPair - dependent pair (Sigma type)', () => {
     const source = `
 record DPair (A : Type) (B : A -> Type) where
   fst : A
@@ -231,8 +233,8 @@ record DPair (A : Type) (B : A -> Type) where
     expectSuccess(result, 'DPair');
   });
 
-  // FUTURE: Fields depending on earlier fields
-  test.todo('record field depending on previous field (SizedVec)', () => {
+  // Fields depending on earlier fields
+  test('record field depending on previous field (SizedVec)', () => {
     const source = VEC_PRELUDE + `
 record SizedVec (A : Type) where
   size : Nat
@@ -736,8 +738,8 @@ record Traversable (T : Type -> Type) : Type 1 where
     expectSuccess(result, 'Traversable');
   });
 
-  // FUTURE: Creating instances with pattern match on parameterized types
-  test.todo('create Maybe Functor instance', () => {
+  // Creating instances with pattern match on parameterized types - now works!
+  test('create Maybe Functor instance', () => {
     const source = MAYBE_PRELUDE + `
 record Functor (F : Type -> Type) : Type 1 where
   constructor MkFunctor
@@ -821,7 +823,7 @@ record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) whe
     expectSuccess(result, 'DPair');
   });
 
-  test.todo('Category record (Hom depends on Obj)', () => {
+  test('Category record (Hom depends on Obj)', () => {
     const source = `
 record Category where
   Obj : Type
@@ -1097,8 +1099,8 @@ record Box {u : ULevel} (A : Type u) : Type (USucc u) where
     expect(result.blocks[0].parseErrors).toHaveLength(0);
   });
 
-  // FUTURE: Full universe polymorphism
-  test.todo('universe polymorphic record fully checks', () => {
+  // Universe polymorphic record with level variable
+  test('universe polymorphic record fully checks', () => {
     const source = `
 record Box {u : ULevel} (A : Type u) : Type (USucc u) where
   unbox : A

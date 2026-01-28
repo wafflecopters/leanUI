@@ -2,9 +2,9 @@
 
 ## Upcoming
 
-- [ ] Add inference/checking for `let` expressions
+- [x] Add inference/checking for `let` expressions ✅
 - [ ] Change parser to parse out a general `identifier` instead of var/const/pctor/pvar so that we can disambiguate during elaboration
-- [ ] Add multi-let syntax (`let x := a, y := b in ...`)
+- [x] Add multi-let syntax (`let x := a, y := b in ...`) ✅
 - [ ] Add infix operator syntax (user-defined operators with precedence)
 - [ ] Add custom syntax support (maybe?)
 - [ ] Think about namespaces
@@ -55,18 +55,35 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
 
 ## Big Projects
 
-- [x] **Records** ✅
-  - [x] Parser for record definitions
+- [ ] **Records** (mostly complete - 78/81 tests passing)
+  - [x] Parser for record definitions (including `extends` syntax)
   - [x] Elaboration + checking for record definitions
   - [x] Projection generation
-  - [ ] Elaboration + checking for record call sites (construction, projection via dot notation)
-  - [ ] `extends` and elab-inlining
+  - [x] Type class instance creation (e.g., `maybeFunctor = MkFunctor Maybe mapMaybe`)
+  - [ ] **`extends` field inlining** - `inlineExtension()` exists in [elab.ts:2461](src/compiler/elab.ts#L2461) but is NOT called in compile.ts!
+    - Parser correctly parses `extends Parent1, Parent2`
+    - Need to call `inlineExtension()` in `processRecordDeclaration()` before building TTKRecordDef
+    - This will prepend parent fields to child record
+  - [ ] Dot notation for projections (e.g., `point.x` instead of `Point.x point`)
+  - [ ] Record construction via field names (e.g., `{ x := 1, y := 2 }`)
+  - [ ] Eta expansion rule: `MkRecord (proj1 r) (proj2 r) = r`
+  - [ ] Pattern match on parameterized records with implicit type args
 
 - [ ] **Prop deep dive**
-  - [ ] Split out Prop to be independent AST-wise instead of being level 0
-  - [ ] Implement all the rules around prop inference and case splitting
-  - [ ] Implement large elimination restrictions (can't match on Prop-valued inductive to produce Type-valued result, unless singleton)
+  - [ ] Split out Prop to be independent AST-wise instead of being `Sort 0`
+    - Currently Prop = Type at level 0, but they should be distinct
+    - Prop is impredicative, Type is predicative
+  - [ ] Implement proof irrelevance
+    - Two proofs of the same Prop are definitionally equal
+  - [ ] Implement large elimination restrictions
+    - Can't match on Prop-valued inductive to produce Type-valued result
+    - Exception: singleton elimination (like Eq with only `refl`, or Empty with no constructors)
+  - [ ] Implement subsingleton elimination
+    - Prop-valued inductives with at most one constructor allow elimination into Type
   - [ ] Review impredicativity rules for Prop
+    - `(A : Type) -> Prop` should be in Prop, not Type
+  - [ ] Prop inference for propositions
+    - Infer that `Equal x y` should be Prop, not Type
 
 - [ ] **Case-of and Pattern Refinement**
   - [ ] Implement case-of expression syntax
