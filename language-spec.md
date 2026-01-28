@@ -23,7 +23,26 @@ Type            -- Type_0 (alias for Type 0)
 Type 0          -- Type at level 0
 Type 1          -- Type at level 1
 Type_3          -- Type at level 3 (underscore notation)
+Type u          -- Type at level u (where u is a level variable)
 Prop            -- Propositions (Type 0)
+```
+
+### Universe Levels
+
+```
+ULevel          -- The type of universe levels
+UZero           -- The zero level (equivalent to 0)
+0, 1, 2, ...    -- Numeric level literals
+USucc u         -- Successor of level u
+UMax u v        -- Maximum of levels u and v
+UIMax u v       -- Impredicative max (0 if v=0, else max(u,v))
+```
+
+Universe level variables are bound with `{u : ULevel}` binders:
+
+```
+id : {u : ULevel} -> {A : Type u} -> A -> A
+id x = x
 ```
 
 ### Pi Types (Function Types)

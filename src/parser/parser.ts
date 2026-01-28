@@ -62,6 +62,7 @@ export type TokenType =
   | 'TYPE'         // Type
   | 'PROP'         // Prop
   | 'ULEVEL'       // ULevel - the type of universe levels
+  | 'UZERO'        // UZero - the zero universe level
   | 'USUCC'        // USucc - successor of universe level
   | 'UMAX'         // UMax - maximum of two universe levels
   | 'UIMAX'        // UIMax - impredicative max of two universe levels
@@ -189,6 +190,11 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
   'ULEVEL': (p) => {
     p['advance']();
     return mkULevelTT();
+  },
+  // UZero is the zero universe level
+  'UZERO': (p) => {
+    p['advance']();
+    return mkULitTT(0);
   },
   'HOLE': (p, t, _ctx, path) => {
     p['advance']();
@@ -480,6 +486,8 @@ export class Lexer {
             return { type: 'PROP', value: 'Prop', pos: startPos, line: startLine, col: startCol };
           case 'ULevel':
             return { type: 'ULEVEL', value: 'ULevel', pos: startPos, line: startLine, col: startCol };
+          case 'UZero':
+            return { type: 'UZERO', value: 'UZero', pos: startPos, line: startLine, col: startCol };
           case 'USucc':
             return { type: 'USUCC', value: 'USucc', pos: startPos, line: startLine, col: startCol };
           case 'UMax':
@@ -2910,6 +2918,12 @@ export class Parser {
       return mkULitTT(n);
     }
 
+    // UZero is the zero universe level
+    if (current.type === 'UZERO') {
+      this.advance();
+      return mkULitTT(0);
+    }
+
     if (current.type === 'IDENT') {
       const name = current.value;
       // Check for omega (ω or 'omega')
@@ -2973,6 +2987,12 @@ export class Parser {
       const n = parseInt(current.value, 10);
       this.advance();
       return mkULitTT(n);
+    }
+
+    // UZero is the zero universe level
+    if (current.type === 'UZERO') {
+      this.advance();
+      return mkULitTT(0);
     }
 
     if (current.type === 'IDENT') {
