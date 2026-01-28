@@ -476,8 +476,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     //   Γ ⊢ ?m : T
     //   ─────────────
     //   Γ ⊢ _ ⇐ T
-    // ────────────────────────────────────────────────────────────────
-    return env.createMetaForHole(expectedType, 'Hole type mismatch')
+    return env.createMetaForHole(expectedType, 'Hole type mismatch');
   }
 
   // ────────────────────────────────────────────────────────────────

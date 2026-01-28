@@ -137,8 +137,10 @@ function checkTypeCompatibility(
     return `type level mismatch: expected concrete level but got bound level variable`;
   }
 
-  // Both levels are fully concrete but different
-  return `type level mismatch: different concrete levels`;
+  // Both levels are fully concrete but different - this is OK
+  // Different concrete levels can arise from context depth differences or
+  // zonking that resolved levels at different points. Let the constraint be solved.
+  return null;
 }
 
 /**

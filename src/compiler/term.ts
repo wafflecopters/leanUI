@@ -319,6 +319,93 @@ export function contextToNamesStack(context: TTKContext): string[] {
   return context.map(n => n.name).reverse()
 }
 
+/**
+ * Register all Holes in a term as Metas in the TCEnv.
+ * This is needed when a term (like an expected type) contains Holes that need to
+ * be resolved during type checking. Without registration, zonking won't be able
+ * to substitute these Holes with their solutions.
+ */
+export function registerHolesInTermAsMetas<T>(env: TCEnv<T>, term: TTKTerm): TCEnv<T> {
+  const holes = collectHolesInTerm(term);
+  let result = env;
+  for (const holeId of holes) {
+    // Register with both the plain ID (for direct Hole lookup in zonkTerm)
+    // and the "hole:" prefixed ID (for constraint solving, since unify.ts uses that format)
+    const plainId = holeId;
+    const prefixedId = `hole:${holeId}`;
+
+    const newMetaVars = new Map(result.metaVars);
+    const metaEntry = { ctx: result.context, type: { tag: 'Hole' as const, id: `${holeId}_type` } };
+
+    // Register both IDs if not already present
+    if (!newMetaVars.has(plainId)) {
+      newMetaVars.set(plainId, metaEntry);
+    }
+    if (!newMetaVars.has(prefixedId)) {
+      newMetaVars.set(prefixedId, metaEntry);
+    }
+
+    result = new TCEnv(
+      result.context,
+      result.definitions,
+      newMetaVars,
+      result.constraints,
+      result.indexPath,
+      result.valueStack,
+      result.value,
+      result.levelMetas,
+      result.options
+    );
+  }
+  return result;
+}
+
+/** Collect all Hole IDs in a term */
+function collectHolesInTerm(term: TTKTerm): string[] {
+  const holes: string[] = [];
+  collectHolesHelper(term, holes);
+  return holes;
+}
+
+function collectHolesHelper(term: TTKTerm, holes: string[]): void {
+  switch (term.tag) {
+    case 'Hole':
+      holes.push(term.id);
+      return;
+    case 'Var':
+    case 'Const':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+    case 'Meta':
+      return;
+    case 'Sort':
+      collectHolesHelper(term.level, holes);
+      return;
+    case 'App':
+      collectHolesHelper(term.fn, holes);
+      collectHolesHelper(term.arg, holes);
+      return;
+    case 'Binder':
+      collectHolesHelper(term.domain, holes);
+      collectHolesHelper(term.body, holes);
+      if (term.binderKind.tag === 'BLet') {
+        collectHolesHelper(term.binderKind.defVal, holes);
+      }
+      return;
+    case 'Annot':
+      collectHolesHelper(term.term, holes);
+      collectHolesHelper(term.type, holes);
+      return;
+    case 'Match':
+      collectHolesHelper(term.scrutinee, holes);
+      for (const clause of term.clauses) {
+        collectHolesHelper(clause.rhs, holes);
+      }
+      return;
+  }
+}
+
 export function countPiBinders(term: TTKTerm): number {
   let count = 0;
   let current = term;
@@ -805,11 +892,16 @@ export class TCEnv<T> {
       }
       case 'Var':
       case 'Const':
-      case 'Sort':
       case 'ULevel':
       case 'ULit':
       case 'UOmega':
         return term;
+      case 'Sort': {
+        // Zonk the level inside the Sort (it might contain Metas/Holes)
+        const zonkedLevel = this.zonkTermHelper(term.level);
+        if (zonkedLevel === term.level) return term;
+        return { tag: 'Sort', level: zonkedLevel };
+      }
       case 'App':
         return {
           tag: 'App',
@@ -958,6 +1050,7 @@ export class TCEnv<T> {
   withMetasConstraintsLevelMetasFrom<S>(otherEnv: TCEnv<S>): TCEnv<T> {
     return new TCEnv(this.context, this.definitions, otherEnv.metaVars, otherEnv.constraints, this.indexPath, this.valueStack, this.value, otherEnv.levelMetas, this.options);
   }
+
 
   atIndexPath(indexPath: IndexPath): TCEnv<void> {
     return new TCEnv(this.context, this.definitions, this.metaVars, this.constraints, indexPath, [], undefined, this.levelMetas, this.options);

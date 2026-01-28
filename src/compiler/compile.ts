@@ -1517,7 +1517,7 @@ function checkTermDeclaration(
     const result = checkTermValue(
       decl.name,
       termEnv,
-      decl.kernelType,
+      zonkedKernelType,  // Use zonked type - Holes from signature elaboration are resolved
       surfaceClauses,
       decl.elabMap ?? new Map(),
       namedArgMap,

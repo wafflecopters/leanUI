@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -1244,7 +1244,12 @@ export function checkMatchClause(
   const result = unifyMatchClauseLhs(termName, paddedEnv.inMatchClausePatterns().withCheckingMode('pattern'), type, rhsInLevels);
   result.assertNoConstraints();
 
-  const { returnType, elabStack, rhsInLevels: transformedRhsInLevels } = result.value;
+  const { returnType: rawReturnType, elabStack, rhsInLevels: transformedRhsInLevels } = result.value;
+
+  // Zonk the return type to resolve any Holes that were solved during LHS unification
+  // This is important because the return type may contain Holes from type elaboration
+  // (e.g., Equal {A:=_implicit2} v u) that got unified with actual types during pattern matching
+  const returnType = result.zonkTerm(rawReturnType);
 
   // Convert the transformed RHS back to de Bruijn indices using the final context length
   const finalContextLength = result.context.length;
@@ -1254,9 +1259,13 @@ export function checkMatchClause(
   const elabArgs = elabStack.map(term => levelsToDeBruijn(term, finalContextLength));
 
   // Type check the transformed RHS
-  const checkEnv = result
+  const baseEnv = result
     .atIndexPathAndValue([...paddedEnv.indexPath, ClausePartIndex.Rhs], transformedRhs)
     .withCheckingMode('check');
+  // Register any remaining Holes in returnType as Metas (in case zonking didn't resolve them all)
+  const checkEnv = registerHolesInTermAsMetas(baseEnv, returnType);
+
+  // Type check the transformed RHS
   const checkedEnv = checkType(checkEnv, returnType);
 
   // Solve any constraints from RHS checking to populate meta solutions
