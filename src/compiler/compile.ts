@@ -1846,9 +1846,19 @@ function processInductiveDeclaration(
   // Extract inductive's named arg map and arity for constructor elaboration
   const inductiveNamedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
   const inductiveTotalArity = decl.type ? countParameters(decl.type) : undefined;
-  const ctorAppLookup = decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0
-    ? (name: string) => name === decl.name ? { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity } : undefined
-    : undefined;
+
+  // Create a combined lookup that checks both:
+  // 1. The current inductive type being defined (not yet in definitions)
+  // 2. Other types already in definitions (e.g., Equal from a previous declaration)
+  const baseAppLookup = createNamedArgInfoLookup(definitions);
+  const ctorAppLookup = (name: string) => {
+    // First check if it's the current inductive type
+    if (decl.name && name === decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0) {
+      return { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity };
+    }
+    // Otherwise check existing definitions
+    return baseAppLookup(name);
+  };
 
   // Elaborate constructors
   let kernelConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined;
@@ -1985,6 +1995,143 @@ function extractParentRecordFields(
 }
 
 /**
+ * Substitute inherited field references in a surface term and shift param refs.
+ *
+ * When a child record extends a parent, local field types may reference
+ * inherited fields by name. The parser doesn't know about inherited fields,
+ * so these references are parsed as Const. This function:
+ * 1. Shifts param refs (Var indices >= localFieldIndex) by numInherited
+ * 2. Substitutes inherited field Const → Var at the correct indices
+ *
+ * Example for Monoid extending Semigroup:
+ * - Semigroup has fields [op, assoc]
+ * - Monoid has local fields [e, identLeft, identRight]
+ * - For identLeft (localFieldIndex=1), the original context was [e, A]
+ * - After transformation, context is [e, assoc, op, A]
+ *   - e stays at index 0
+ *   - A shifts from index 1 to index 3
+ *   - op is substituted to index 2
+ *   - assoc is substituted to index 1
+ *
+ * @param term - The surface term to transform
+ * @param inheritedFieldNames - Names of inherited fields, in order
+ * @param localFieldIndex - Index of the current local field (0-based)
+ * @returns The transformed term
+ */
+function substituteInheritedFieldRefs(
+  term: TTerm,
+  inheritedFieldNames: string[],
+  localFieldIndex: number
+): TTerm {
+  if (inheritedFieldNames.length === 0) {
+    return term; // No inherited fields, nothing to transform
+  }
+
+  const numInherited = inheritedFieldNames.length;
+
+  function transform(t: TTerm, depth: number): TTerm {
+    switch (t.tag) {
+      case 'Const': {
+        // Check if this Const refers to an inherited field
+        const inheritedIdx = inheritedFieldNames.indexOf(t.name);
+        if (inheritedIdx >= 0) {
+          // Convert to Var with correct de Bruijn index
+          // In the combined context, inherited fields are at indices:
+          //   [localFieldIndex, localFieldIndex + numInherited)
+          // First inherited field (idx 0) is FURTHEST, so has highest index
+          // Last inherited field is closest, so has lowest index
+          // Formula: localFieldIndex + (numInherited - 1 - inheritedIdx) + depth
+          const varIndex = localFieldIndex + (numInherited - 1 - inheritedIdx) + depth;
+          return { tag: 'Var', index: varIndex };
+        }
+        return t;
+      }
+      case 'Var': {
+        // Shift param refs: indices >= localFieldIndex + depth need to shift by numInherited
+        // (depth accounts for local binders in the term itself)
+        const adjustedCutoff = localFieldIndex + depth;
+        if (t.index >= adjustedCutoff) {
+          return { tag: 'Var', index: t.index + numInherited };
+        }
+        return t;
+      }
+      case 'Sort':
+        return { tag: 'Sort', level: transform(t.level, depth) };
+      case 'ULevel':
+      case 'ULit':
+      case 'UOmega':
+      case 'Hole':
+      case 'AbsurdMarker':
+        return t;
+      case 'App': {
+        const newFn = transform(t.fn, depth);
+        const newArg = transform(t.arg, depth);
+        if (newFn === t.fn && newArg === t.arg) return t;
+        return { tag: 'App', fn: newFn, arg: newArg, argName: t.argName };
+      }
+      case 'Binder': {
+        const newDomain = t.domain ? transform(t.domain, depth) : undefined;
+        const newBody = transform(t.body, depth + 1);
+        if (newDomain === t.domain && newBody === t.body) return t;
+        return { ...t, domain: newDomain, body: newBody };
+      }
+      case 'MultiBinder': {
+        const newDomain = transform(t.domain, depth);
+        const numNames = t.names.length;
+        const newBody = transform(t.body, depth + numNames);
+        if (newDomain === t.domain && newBody === t.body) return t;
+        return { ...t, domain: newDomain, body: newBody };
+      }
+      case 'Match': {
+        const newScrutinee = transform(t.scrutinee, depth);
+        const newClauses = t.clauses.map(c => ({
+          ...c,
+          rhs: transform(c.rhs, depth + countPatternBinders(c.patterns))
+        }));
+        return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
+      }
+      case 'Annot':
+        return { tag: 'Annot', term: transform(t.term, depth), type: transform(t.type, depth) };
+      case 'WithClause':
+        // WithClause is parsed separately, shouldn't appear in field types
+        return t;
+      default: {
+        const _exhaustive: never = t;
+        return _exhaustive;
+      }
+    }
+  }
+
+  return transform(term, 0);
+}
+
+/**
+ * Count the number of binders introduced by a list of patterns.
+ */
+function countPatternBinders(patterns: TPattern[]): number {
+  let count = 0;
+  for (const p of patterns) {
+    count += countSinglePatternBinders(p);
+  }
+  return count;
+}
+
+function countSinglePatternBinders(p: TPattern): number {
+  switch (p.tag) {
+    case 'PVar':
+      return 1;
+    case 'PWild':
+      return 1; // Wildcards also bind
+    case 'PCtor':
+      return p.args.reduce((acc, arg) => acc + countSinglePatternBinders(arg), 0);
+    default: {
+      const _exhaustive: never = p;
+      return 0;
+    }
+  }
+}
+
+/**
  * Process a record declaration: elaborate, convert to inductive, and check.
  *
  * Records are converted to single-constructor inductives with extra metadata.
@@ -2001,50 +2148,16 @@ function processRecordDeclaration(
 ): ProcessDeclarationResult {
   const elabMap: ElabMap = new Map();
 
-  // Elaborate record parameters
-  const kernelParams: TTKRecordParam[] = [];
-  if (decl.params) {
-    for (let i = 0; i < decl.params.length; i++) {
-      const param = decl.params[i];
-      try {
-        const paramTypePath: IndexPath = [
-          { kind: 'field', name: 'params' },
-          { kind: 'array', index: i },
-          { kind: 'field', name: 'type' }
-        ];
-        const kernelType = elabToKernelWithMap(param.type, elabMap, paramTypePath, paramTypePath);
-        kernelParams.push({ name: param.name, type: kernelType, implicit: param.implicit });
-      } catch (e) {
-        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
-      }
-    }
-  }
+  // Create lookup for named arguments in field/param types (e.g., Equal {A} ...)
+  const appNamedArgLookup = createNamedArgInfoLookup(definitions);
 
-  // Elaborate record fields
-  const kernelFields: TTKRecordField[] = [];
-  if (decl.fields) {
-    for (let i = 0; i < decl.fields.length; i++) {
-      const field = decl.fields[i];
-      try {
-        const fieldTypePath: IndexPath = [
-          { kind: 'field', name: 'fields' },
-          { kind: 'array', index: i },
-          { kind: 'field', name: 'type' }
-        ];
-        const kernelType = elabToKernelWithMap(field.type, elabMap, fieldTypePath, fieldTypePath);
-        kernelFields.push({
-          name: field.name,
-          type: kernelType,
-          implicit: field.implicit
-        });
-      } catch (e) {
-        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
-      }
-    }
-  }
-
-  // Handle extends - prepend parent fields to kernelFields
+  // ============================================================================
+  // Step 1: Process extends FIRST to get inherited field names
+  // This must happen before elaborating local fields so we can substitute
+  // inherited field references from Const to Var.
+  // ============================================================================
   const inheritedFields: TTKRecordField[] = [];
+  const inheritedFieldNames: string[] = [];
   if (decl.extends && decl.extends.length > 0) {
     for (const parentName of decl.extends) {
       const parentFields = extractParentRecordFields(parentName, definitions);
@@ -2078,28 +2191,88 @@ function processRecordDeclaration(
           };
         }
         inheritedFields.push(field);
-      }
-    }
-    // Check for clashes with local fields
-    for (const localField of kernelFields) {
-      const clash = inheritedFields.find(f => f.name === localField.name);
-      if (clash) {
-        const env = createTCEnv({ definitions, options: { mode: 'check' } });
-        const error = TCEnvError.create(`Field "${localField.name}" clashes with inherited field from parent record`, env);
-        return {
-          success: false,
-          compiled: createCompiledDeclaration(
-            decl, mkType(0), undefined, undefined, elabMap, sourceMap,
-            false, [error], undefined, undefined, undefined
-          ),
-          newDefinitions: definitions,
-          errorCount: 1
-        };
+        inheritedFieldNames.push(field.name);
       }
     }
   }
 
-  // Combine inherited + local fields
+  // ============================================================================
+  // Step 2: Elaborate record parameters
+  // ============================================================================
+  const kernelParams: TTKRecordParam[] = [];
+  if (decl.params) {
+    for (let i = 0; i < decl.params.length; i++) {
+      const param = decl.params[i];
+      try {
+        const paramTypePath: IndexPath = [
+          { kind: 'field', name: 'params' },
+          { kind: 'array', index: i },
+          { kind: 'field', name: 'type' }
+        ];
+        const kernelType = elabToKernelWithMap(param.type, elabMap, paramTypePath, paramTypePath, undefined, appNamedArgLookup);
+        kernelParams.push({ name: param.name, type: kernelType, implicit: param.implicit });
+      } catch (e) {
+        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+      }
+    }
+  }
+
+  // ============================================================================
+  // Step 3: Elaborate record fields with inherited field substitution
+  // Before elaborating each local field type, substitute Const references to
+  // inherited fields with the correct Var indices.
+  // ============================================================================
+  const kernelFields: TTKRecordField[] = [];
+  if (decl.fields) {
+    for (let i = 0; i < decl.fields.length; i++) {
+      const field = decl.fields[i];
+      try {
+        const fieldTypePath: IndexPath = [
+          { kind: 'field', name: 'fields' },
+          { kind: 'array', index: i },
+          { kind: 'field', name: 'type' }
+        ];
+        // Substitute inherited field references (Const → Var) in the surface term
+        const substitutedType = substituteInheritedFieldRefs(field.type, inheritedFieldNames, i);
+        const kernelType = elabToKernelWithMap(substitutedType, elabMap, fieldTypePath, fieldTypePath, undefined, appNamedArgLookup);
+        kernelFields.push({
+          name: field.name,
+          type: kernelType,
+          implicit: field.implicit
+        });
+      } catch (e) {
+        return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
+      }
+    }
+  }
+
+  // ============================================================================
+  // Step 4: Check for clashes between local and inherited fields
+  // ============================================================================
+  for (const localField of kernelFields) {
+    const clash = inheritedFields.find(f => f.name === localField.name);
+    if (clash) {
+      const env = createTCEnv({ definitions, options: { mode: 'check' } });
+      const error = TCEnvError.create(`Field "${localField.name}" clashes with inherited field from parent record`, env);
+      return {
+        success: false,
+        compiled: createCompiledDeclaration(
+          decl, mkType(0), undefined, undefined, elabMap, sourceMap,
+          false, [error], undefined, undefined, undefined
+        ),
+        newDefinitions: definitions,
+        errorCount: 1
+      };
+    }
+  }
+
+  // ============================================================================
+  // Step 5: Combine inherited + local fields
+  // ============================================================================
+  // The substituteInheritedFieldRefs function already handled:
+  // 1. Shifting param refs to make room for inherited fields
+  // 2. Substituting inherited field Const → Var
+  // So we just need to combine the fields here.
   const allFields = [...inheritedFields, ...kernelFields];
 
   // Elaborate the record result sort (the type annotation after params)
@@ -2200,8 +2373,16 @@ function processRecordDeclaration(
     }]
   };
 
-  // Generate projections for record fields
-  const projections = generateProjections(ttkRecord);
+  // Generate projections for record fields using ZONKED field types
+  // Extract zonked field types from the zonked constructor type to ensure
+  // all implicit args (like {A} in Equal {A} ...) are properly resolved.
+  const zonkedCtorType = result.zonkedConstructors[0].type;
+  const zonkedFields = extractZonkedFieldTypes(zonkedCtorType, kernelParams.length, allFields);
+  const zonkedRecord: TTKRecordDef = {
+    ...ttkRecord,
+    fields: zonkedFields
+  };
+  const projections = generateProjections(zonkedRecord);
 
   // Build namedArgMap for projections: all record params are implicit
   // (they're inferred from the record argument)
@@ -2232,6 +2413,51 @@ function processRecordDeclaration(
     newDefinitions: finalDefinitions,
     errorCount: 0
   };
+}
+
+/**
+ * Extract zonked field types from a zonked constructor type.
+ *
+ * The constructor type is: (P1 : T1) → ... → (Pn : Tn) → (F1 : FT1) → ... → (Fm : FTm) → R P1...Pn
+ * We skip the first numParams binders (params) and extract the next numFields binders (fields).
+ *
+ * @param ctorType - The zonked constructor type
+ * @param numParams - Number of param binders to skip
+ * @param origFields - Original field info for names and implicit flags
+ * @returns Array of TTKRecordField with zonked types
+ */
+function extractZonkedFieldTypes(
+  ctorType: TTKTerm,
+  numParams: number,
+  origFields: TTKRecordField[]
+): TTKRecordField[] {
+  let current = ctorType;
+
+  // Skip param binders
+  for (let i = 0; i < numParams; i++) {
+    if (current.tag !== 'Binder') {
+      // Unexpected structure, return original fields
+      return origFields;
+    }
+    current = current.body;
+  }
+
+  // Extract field binders
+  const zonkedFields: TTKRecordField[] = [];
+  for (let i = 0; i < origFields.length; i++) {
+    if (current.tag !== 'Binder') {
+      // Unexpected structure, return what we have so far
+      break;
+    }
+    zonkedFields.push({
+      name: origFields[i].name,
+      type: current.domain,
+      implicit: origFields[i].implicit
+    });
+    current = current.body;
+  }
+
+  return zonkedFields.length === origFields.length ? zonkedFields : origFields;
 }
 
 /**

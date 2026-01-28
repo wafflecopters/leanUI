@@ -12,6 +12,127 @@ import { TTKRecordDef, TTKTerm, TTKRecordField, TTKRecordParam, mkPi, mkVar, mkC
 import { InductiveDefinition, RecordInfo, NamedArgMap } from './term';
 import { shiftTerm } from './subst';
 
+/**
+ * Substitute field references with projection calls in a term.
+ *
+ * In the original field type context [prev_fields..., params...]:
+ * - Field refs are at indices 0 to fieldIdx-1
+ * - Param refs are at indices fieldIdx to fieldIdx+numParams-1
+ *
+ * In the projection type context [r, params...]:
+ * - r is at index 0
+ * - Params are at indices 1 to numParams
+ *
+ * For a field ref at index j (where j < fieldIdx), we substitute with:
+ *   Record.field_j param_0 ... param_{n-1} r
+ * Which in de Bruijn: App(...App(Const(projName), Var(numParams))..., Var(1)), Var(0))
+ * At depth d: App(...App(Const(projName), Var(d+numParams))..., Var(d+1)), Var(d))
+ *
+ * The field index j maps to prevFieldNames[fieldIdx - 1 - j] since fields are
+ * stored in the opposite order (most recent first in de Bruijn).
+ */
+function substituteFieldRefsWithProjections(
+  term: TTKTerm,
+  recordName: string,
+  prevFieldNames: string[],  // Names of fields 0 to fieldIdx-1, in order
+  numParams: number,
+  fieldIdx: number  // Number of previous fields (= cutoff for field refs)
+): TTKTerm {
+  function subst(t: TTKTerm, depth: number): TTKTerm {
+    switch (t.tag) {
+      case 'Var': {
+        // Adjust for depth to get original context index
+        const adjustedIdx = t.index - depth;
+        if (adjustedIdx >= 0 && adjustedIdx < fieldIdx) {
+          // This is a field reference - substitute with projection call
+          // Field at adjustedIdx (in original context) is prevFieldNames[fieldIdx - 1 - adjustedIdx]
+          const fieldName = prevFieldNames[fieldIdx - 1 - adjustedIdx];
+          const projName = `${recordName}.${fieldName}`;
+
+          // Build: projName param_{n-1} ... param_0 r
+          // In the projection context at depth d:
+          // - params are at indices d+numParams, d+numParams-1, ..., d+1
+          // - r is at index d
+          let result: TTKTerm = mkConst(projName);
+          // Add params in order (first param first)
+          for (let i = 0; i < numParams; i++) {
+            result = mkApp(result, mkVar(depth + numParams - i));
+          }
+          // Add record argument r
+          result = mkApp(result, mkVar(depth));
+          return result;
+        }
+        // Param ref or local binder ref
+        // Param refs (adjustedIdx >= fieldIdx) need to be shifted
+        // Original context: [field_{idx-1}, ..., field_0, params...]
+        //   - params at indices fieldIdx to fieldIdx+numParams-1
+        // Projection context: [r, params...]
+        //   - params at indices 1 to numParams
+        // Shift amount: 1 - fieldIdx
+        if (adjustedIdx >= fieldIdx) {
+          const shiftAmount = 1 - fieldIdx;
+          if (shiftAmount !== 0) {
+            return mkVar(t.index + shiftAmount);
+          }
+        }
+        // Local binder ref (adjustedIdx < 0) or no shift needed - keep as-is
+        return t;
+      }
+
+      case 'Const':
+      case 'Sort':
+      case 'ULevel':
+      case 'ULit':
+      case 'UOmega':
+      case 'Hole':
+        return t;
+
+      case 'App': {
+        const newFn = subst(t.fn, depth);
+        const newArg = subst(t.arg, depth);
+        if (newFn === t.fn && newArg === t.arg) return t;
+        return mkApp(newFn, newArg);
+      }
+
+      case 'Binder': {
+        const newDomain = subst(t.domain, depth);
+        const newBody = subst(t.body, depth + 1);
+        if (newDomain === t.domain && newBody === t.body) return t;
+        return { ...t, domain: newDomain, body: newBody };
+      }
+
+      case 'Match': {
+        // Count pattern binders to adjust depth
+        const patternBinderCount = t.clauses.reduce((acc, c) =>
+          Math.max(acc, c.patterns.reduce((a, p) => a + countPatternBinders(p), 0)), 0);
+        const newScrutinee = subst(t.scrutinee, depth);
+        const newClauses = t.clauses.map(c => ({
+          ...c,
+          rhs: subst(c.rhs, depth + patternBinderCount)
+        }));
+        return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
+      }
+
+      default:
+        return t;
+    }
+  }
+
+  return subst(term, 0);
+}
+
+function countPatternBinders(p: import('./kernel').TTKPattern): number {
+  switch (p.tag) {
+    case 'PVar':
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      return p.args.reduce((acc, arg) => acc + countPatternBinders(arg), 0);
+    default:
+      return 0;
+  }
+}
+
 // ============================================================================
 // Record → Inductive Conversion
 // ============================================================================
@@ -250,10 +371,17 @@ function buildProjectionType(record: TTKRecordDef, fieldIdx: number): TTKTerm {
     recordApp = mkApp(recordApp, mkVar(paramIdx));
   }
 
-  // The return type is the field type, shifted by 1 (for the record argument r)
-  // Original field type is in param context (P1=numParams-1, ..., Pn=0)
-  // After adding the record binder, params shift up by 1
-  const returnType = shiftTerm(field.type, 1, 0);
+  // The return type is the field type with field refs substituted.
+  // Original field type is in context [prev_fields..., params...]:
+  //   - Param refs (indices >= fieldIdx) are at same positions in projection context
+  //   - Field refs (indices < fieldIdx) should become projection calls: Record.field params... r
+  const returnType = substituteFieldRefsWithProjections(
+    field.type,
+    record.name,
+    record.fields.slice(0, fieldIdx).map(f => f.name),  // Previous field names
+    numParams,
+    fieldIdx
+  );
 
   // Build the innermost Pi: (r : R P1...Pn) → Fi[shifted]
   let result: TTKTerm = mkPi(recordApp, returnType, 'r');

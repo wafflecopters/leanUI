@@ -278,9 +278,10 @@ function checkNestedPiForNegativeOccurrences(
   polarity: Polarity,
   errors: TCEnvError[]
 ): void {
-  if (env.isVarTerm() || env.isSortTerm() ||
+  if (env.isVarTerm() || env.isSortTerm() || env.isHoleTerm() ||
       env.value.tag === 'ULevel' || env.value.tag === 'ULit' || env.value.tag === 'UOmega') {
-    // Valid - vars, sorts, and level-terms don't contain occurrences of the inductive type
+    // Valid - vars, sorts, holes, and level-terms don't contain occurrences of the inductive type
+    // Holes may appear when type inference creates unresolved metas - they're safe to skip
   } else if (env.isConstTerm()) {
     if (env.value.name === inductiveName) {
       const msg = polarity === 'negative' ? 'negative' : '(non-strict) positive';

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { compileTTFromText, compileBlocksTT } from './compile';
+import { compileTTFromText } from './compile';
 import { prettyPrint as prettyPrintTTK, prettyPrintPattern } from './kernel';
 
 describe('Record pattern matching', () => {
