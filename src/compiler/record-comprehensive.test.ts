@@ -878,8 +878,8 @@ record DecPred (alpha : Type) extends Pred alpha where
     expect(result.blocks[0].parseErrors).toHaveLength(0);
   });
 
-  // FUTURE: Full extends implementation
-  test.todo('extended record includes parent fields', () => {
+  // Extends inlining implementation
+  test('extended record includes parent fields', () => {
     const source = NAT_PRELUDE + `
 record Base where
   constructor MkBase

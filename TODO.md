@@ -55,15 +55,15 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
 
 ## Big Projects
 
-- [ ] **Records** (mostly complete - 78/81 tests passing)
+- [ ] **Records** (mostly complete - 79/81 tests passing)
   - [x] Parser for record definitions (including `extends` syntax)
   - [x] Elaboration + checking for record definitions
   - [x] Projection generation
   - [x] Type class instance creation (e.g., `maybeFunctor = MkFunctor Maybe mapMaybe`)
-  - [ ] **`extends` field inlining** - `inlineExtension()` exists in [elab.ts:2461](src/compiler/elab.ts#L2461) but is NOT called in compile.ts!
-    - Parser correctly parses `extends Parent1, Parent2`
-    - Need to call `inlineExtension()` in `processRecordDeclaration()` before building TTKRecordDef
-    - This will prepend parent fields to child record
+  - [x] **`extends` field inlining** - implemented in `processRecordDeclaration()` in [compile.ts](src/compiler/compile.ts)
+    - Parent fields are prepended to child record fields
+    - Field name clash detection for inherited vs local fields
+    - Note: parameterized parent records not yet tested
   - [ ] Dot notation for projections (e.g., `point.x` instead of `Point.x point`)
   - [ ] Record construction via field names (e.g., `{ x := 1, y := 2 }`)
   - [ ] Eta expansion rule: `MkRecord (proj1 r) (proj2 r) = r`

@@ -1926,6 +1926,64 @@ function processInductiveDeclaration(
 }
 
 /**
+ * Extract fields from a parent record's compiled form.
+ *
+ * The parent record is stored as an inductive with a single constructor.
+ * Constructor type is: (P1 : T1) → ... → (F1 : FT1) → ... → RecName P1...
+ *
+ * We need to extract the field binders from the constructor type, skipping params.
+ */
+function extractParentRecordFields(
+  parentName: string,
+  definitions: DefinitionsMap
+): TTKRecordField[] | { error: string } {
+  const parentInductive = definitions.inductiveTypes.get(parentName);
+  if (!parentInductive) {
+    return { error: `Parent record "${parentName}" not found` };
+  }
+
+  const recordInfo = parentInductive.recordInfo;
+  if (!recordInfo) {
+    return { error: `"${parentName}" is not a record (no recordInfo)` };
+  }
+
+  // Get the constructor type (records have exactly one constructor)
+  if (parentInductive.constructors.length !== 1) {
+    return { error: `"${parentName}" has ${parentInductive.constructors.length} constructors, expected 1` };
+  }
+  const ctorType = parentInductive.constructors[0].type;
+
+  // Count total Pi binders in constructor type
+  // Constructor type: (P1 : T1) → ... → (Pn : Tn) → (F1 : FT1) → ... → (Fm : FTm) → RecName P1 ... Pn
+  // countPiBinders counts all Pi binders (params + fields)
+  const totalBinders = countPiBinders(ctorType);
+  const fieldCount = recordInfo.fieldNames.length;
+  const paramCount = totalBinders - fieldCount;
+
+  // Traverse the constructor type, skipping params, collecting fields
+  const fields: TTKRecordField[] = [];
+  let current: TTKTerm = ctorType;
+  let binderIndex = 0;
+
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    if (binderIndex >= paramCount) {
+      // This is a field binder
+      const fieldIdx = binderIndex - paramCount;
+      const isImplicit = recordInfo.implicitFields.includes(fieldIdx);
+      fields.push({
+        name: current.name,
+        type: current.domain,
+        implicit: isImplicit
+      });
+    }
+    current = current.body;
+    binderIndex++;
+  }
+
+  return fields;
+}
+
+/**
  * Process a record declaration: elaborate, convert to inductive, and check.
  *
  * Records are converted to single-constructor inductives with extra metadata.
@@ -1984,6 +2042,65 @@ function processRecordDeclaration(
     }
   }
 
+  // Handle extends - prepend parent fields to kernelFields
+  const inheritedFields: TTKRecordField[] = [];
+  if (decl.extends && decl.extends.length > 0) {
+    for (const parentName of decl.extends) {
+      const parentFields = extractParentRecordFields(parentName, definitions);
+      if ('error' in parentFields) {
+        const env = createTCEnv({ definitions, options: { mode: 'check' } });
+        const error = TCEnvError.create(parentFields.error, env);
+        return {
+          success: false,
+          compiled: createCompiledDeclaration(
+            decl, mkType(0), undefined, undefined, elabMap, sourceMap,
+            false, [error], undefined, undefined, undefined
+          ),
+          newDefinitions: definitions,
+          errorCount: 1
+        };
+      }
+      // Check for field name clashes with already inherited fields
+      for (const field of parentFields) {
+        const clash = inheritedFields.find(f => f.name === field.name);
+        if (clash) {
+          const env = createTCEnv({ definitions, options: { mode: 'check' } });
+          const error = TCEnvError.create(`Field "${field.name}" is inherited from multiple parent records`, env);
+          return {
+            success: false,
+            compiled: createCompiledDeclaration(
+              decl, mkType(0), undefined, undefined, elabMap, sourceMap,
+              false, [error], undefined, undefined, undefined
+            ),
+            newDefinitions: definitions,
+            errorCount: 1
+          };
+        }
+        inheritedFields.push(field);
+      }
+    }
+    // Check for clashes with local fields
+    for (const localField of kernelFields) {
+      const clash = inheritedFields.find(f => f.name === localField.name);
+      if (clash) {
+        const env = createTCEnv({ definitions, options: { mode: 'check' } });
+        const error = TCEnvError.create(`Field "${localField.name}" clashes with inherited field from parent record`, env);
+        return {
+          success: false,
+          compiled: createCompiledDeclaration(
+            decl, mkType(0), undefined, undefined, elabMap, sourceMap,
+            false, [error], undefined, undefined, undefined
+          ),
+          newDefinitions: definitions,
+          errorCount: 1
+        };
+      }
+    }
+  }
+
+  // Combine inherited + local fields
+  const allFields = [...inheritedFields, ...kernelFields];
+
   // Elaborate the record result sort (the type annotation after params)
   // If provided (e.g., `: Type` or `: Prop`), use it; otherwise default to Type_0
   let resultSort: TTKTerm;
@@ -2010,7 +2127,7 @@ function processRecordDeclaration(
     constructorName,
     type: recordType,
     params: kernelParams,
-    fields: kernelFields
+    fields: allFields  // includes inherited + local fields
   };
 
   // Convert to InductiveDefinition
