@@ -37,28 +37,32 @@ function logInfo(fn: () => (string | unknown[])) {
 }
 
 // ============================================================================
-// Padding Wildcard Names
+// Padding Context
 // ============================================================================
 
 /**
- * Counter for generating unique wildcard names during pattern padding.
- * These wildcards are inserted for missing implicit/named constructor args.
+ * Context for pattern padding operations.
+ * Contains a mutable counter for generating unique wildcard names.
+ * This avoids global state by creating a fresh context per clause check.
  */
-let paddingWildcardCounter = 0;
+export interface PadContext {
+  /** Counter for generating unique padding wildcard names */
+  padCounter: number;
+}
+
+/**
+ * Create a fresh padding context.
+ */
+export function createPadContext(): PadContext {
+  return { padCounter: 0 };
+}
 
 /**
  * Generate a fresh name for a padding wildcard.
  * Uses a different prefix than elab.ts wildcards to distinguish them.
  */
-function freshPaddingWildcardName(): string {
-  return `_pad${paddingWildcardCounter++}`;
-}
-
-/**
- * Reset the padding wildcard counter (useful for testing).
- */
-export function resetPaddingWildcardCounter(): void {
-  paddingWildcardCounter = 0;
+function freshPaddingWildcardName(ctx: PadContext): string {
+  return `_pad${ctx.padCounter++}`;
 }
 
 // ============================================================================
@@ -132,8 +136,9 @@ function computePatternVarIndexMapping(pattern: TTKPattern, definitions: Definit
   const originalVars: { path: string }[] = [];
   collectVarsInTraversalOrder(pattern, '', originalVars);
 
-  // Pad the pattern
-  const paddedPattern = padPCtorPatternWithNamedWildcards(pattern, definitions);
+  // Pad the pattern (use a fresh context since we're just computing mappings)
+  const tempCtx = createPadContext();
+  const paddedPattern = padPCtorPatternWithNamedWildcards(pattern, definitions, tempCtx);
 
   // Collect final vars in traversal order
   const finalVars: { path: string }[] = [];
@@ -340,7 +345,7 @@ function countWildcardsAddedToPattern(pattern: TTKPattern, definitions: Definiti
  * - User writes: VCons x xs
  * - Padded: VCons _ x xs (wildcard at position 0 for named param A)
  */
-function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: DefinitionsMap): TTKPattern {
+function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: DefinitionsMap, ctx: PadContext): TTKPattern {
   if (pattern.tag !== 'PCtor') {
     return pattern;
   }
@@ -350,7 +355,7 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
     // Unknown constructor - just recursively pad sub-patterns
     return {
       ...pattern,
-      args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions)),
+      args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions, ctx)),
       namedArgs: undefined
     };
   }
@@ -369,7 +374,7 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
     // No implicit parameters - recursively pad sub-patterns only
     return {
       ...pattern,
-      args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions)),
+      args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions, ctx)),
       namedArgs: undefined
     };
   }
@@ -385,7 +390,7 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
     for (const na of pattern.namedArgs) {
       const idx = ctor.namedArgMap.get(na.name);
       if (idx !== undefined) {
-        paddedArgs[idx] = padPCtorPatternWithNamedWildcards(na.pattern, definitions);
+        paddedArgs[idx] = padPCtorPatternWithNamedWildcards(na.pattern, definitions, ctx);
       }
     }
   }
@@ -393,7 +398,7 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
   // Fill remaining implicit positions with wildcards
   for (const pos of implicitPositions) {
     if (paddedArgs[pos] === undefined) {
-      paddedArgs[pos] = { tag: 'PWild', name: freshPaddingWildcardName() };
+      paddedArgs[pos] = { tag: 'PWild', name: freshPaddingWildcardName(ctx) };
     }
   }
 
@@ -402,10 +407,10 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
   for (let i = 0; i < totalArity; i++) {
     if (!implicitPositions.has(i)) {
       if (positionalIndex < pattern.args.length) {
-        paddedArgs[i] = padPCtorPatternWithNamedWildcards(pattern.args[positionalIndex], definitions);
+        paddedArgs[i] = padPCtorPatternWithNamedWildcards(pattern.args[positionalIndex], definitions, ctx);
       } else {
         // Missing positional pattern - this will be caught by arity check
-        paddedArgs[i] = { tag: 'PWild', name: freshPaddingWildcardName() };
+        paddedArgs[i] = { tag: 'PWild', name: freshPaddingWildcardName(ctx) };
       }
       positionalIndex++;
     }
@@ -448,10 +453,11 @@ export function padPatternsForMissingNamedArgs(
   patterns: TTKPattern[],
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
-  definitions: DefinitionsMap
+  definitions: DefinitionsMap,
+  ctx: PadContext
 ): TTKPattern[] {
   // Step 1: Pad constructor patterns recursively (this always happens)
-  const paddedConstructorPatterns = patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions));
+  const paddedConstructorPatterns = patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions, ctx));
 
   // Step 2: Determine how many top-level implicit params are missing
   if (!namedArgMap || namedArgMap.size === 0 || totalArity === undefined) {
@@ -481,7 +487,7 @@ export function padPatternsForMissingNamedArgs(
   // Step 3: Insert leading wildcards for missing named params
   const leadingWildcards: TTKPattern[] = [];
   for (let i = 0; i < wildcardCountToInsert; i++) {
-    leadingWildcards.push({ tag: 'PWild', name: freshPaddingWildcardName() });
+    leadingWildcards.push({ tag: 'PWild', name: freshPaddingWildcardName(ctx) });
   }
 
   return [...leadingWildcards, ...paddedConstructorPatterns];
@@ -1135,11 +1141,14 @@ export function checkMatchClause(
   // This catches user errors like trying to pass positional args for named params
   assertMatchClauseLhsPatternsFullyApplied(env.inMatchClausePatterns());
 
+  // Create a fresh padding context for this clause
+  const padCtx = createPadContext();
+
   // THEN: Pad patterns with implicit wildcards for missing named arguments
   // This handles both:
   // 1. Top-level: missing named function parameters
   // 2. Constructor-level: missing named constructor arguments (recursive)
-  const paddedPatterns = padPatternsForMissingNamedArgs(originalPatterns, namedArgMap, totalArity, env.definitions);
+  const paddedPatterns = padPatternsForMissingNamedArgs(originalPatterns, namedArgMap, totalArity, env.definitions, padCtx);
 
   // The RHS was parsed with de Bruijn indices based on the ORIGINAL patterns.
   // When we pad patterns with wildcards for named params, we need to adjust RHS indices.

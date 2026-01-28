@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { padPatternsForMissingNamedArgs, resetPaddingWildcardCounter } from './patterns';
+import { describe, it, expect } from 'vitest';
+import { padPatternsForMissingNamedArgs, createPadContext } from './patterns';
 import { TTKPattern } from './kernel';
 import { DefinitionsMap, createDefinitionsMap, NamedArgMap } from './term';
 
@@ -9,10 +9,6 @@ function isPaddingWildcard(pattern: TTKPattern): boolean {
 }
 
 describe('padPatternsForMissingNamedArgs', () => {
-  // Reset counter before each test for deterministic naming
-  beforeEach(() => {
-    resetPaddingWildcardCounter();
-  });
 
   // Helper to create a simple definitions map with some constructors
   function createTestDefinitions(): DefinitionsMap {
@@ -99,7 +95,7 @@ describe('padPatternsForMissingNamedArgs', () => {
       // Expected: [_, (Nil _)]
       // - Insert wildcard for {A : Type} at position 0
       // - Nil gets a wildcard for its named A param
-      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       expect(result.length).toBe(2);
       expect(isPaddingWildcard(result[0])).toBe(true);
@@ -124,7 +120,7 @@ describe('padPatternsForMissingNamedArgs', () => {
         { tag: 'PCtor', name: 'Nil', args: [] }
       ];
 
-      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       // Top level should stay [_, (Nil _)] - no change to count
       // But Nil still gets padded for its named param
@@ -161,7 +157,7 @@ describe('padPatternsForMissingNamedArgs', () => {
         }
       ];
 
-      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       // Should become: [(Cons _pad0 x xs)]
       expect(result.length).toBe(1);
@@ -196,7 +192,7 @@ describe('padPatternsForMissingNamedArgs', () => {
         }
       ];
 
-      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       // Should become: [(Cons _pad0 (Nil _pad1) xs)]
       expect(result.length).toBe(1);
@@ -238,7 +234,7 @@ describe('padPatternsForMissingNamedArgs', () => {
         }
       ];
 
-      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       // Should become: [_pad0, (Cons _pad1 x xs)]
       expect(result.length).toBe(2);
@@ -264,7 +260,7 @@ describe('padPatternsForMissingNamedArgs', () => {
         { tag: 'PVar', name: 'n' }
       ];
 
-      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       expect(result.length).toBe(1);
       expect(result[0]).toEqual({ tag: 'PVar', name: 'n' });
@@ -277,7 +273,7 @@ describe('padPatternsForMissingNamedArgs', () => {
         { tag: 'PVar', name: 'n' }
       ];
 
-      const result = padPatternsForMissingNamedArgs(inputPatterns, undefined, undefined, definitions);
+      const result = padPatternsForMissingNamedArgs(inputPatterns, undefined, undefined, definitions, createPadContext());
 
       expect(result.length).toBe(1);
       expect(result[0]).toEqual({ tag: 'PVar', name: 'n' });
