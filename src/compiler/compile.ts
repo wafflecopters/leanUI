@@ -191,6 +191,7 @@ export interface CompileResult {
   totalParseErrors: number;
   totalNameErrors: number;
   totalCheckErrors: number;
+  definitions: DefinitionsMap;  // For debugging/testing
 }
 
 // ============================================================================
@@ -2012,7 +2013,7 @@ function processRecordDeclaration(
           { kind: 'field', name: 'type' }
         ];
         const kernelType = elabToKernelWithMap(param.type, elabMap, paramTypePath, paramTypePath);
-        kernelParams.push({ name: param.name, type: kernelType });
+        kernelParams.push({ name: param.name, type: kernelType, implicit: param.implicit });
       } catch (e) {
         return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
       }
@@ -2202,10 +2203,17 @@ function processRecordDeclaration(
   // Generate projections for record fields
   const projections = generateProjections(ttkRecord);
 
-  // Add projections to definitions
+  // Build namedArgMap for projections: all record params are implicit
+  // (they're inferred from the record argument)
+  const projectionNamedArgMap: NamedArgMap = new Map();
+  for (let i = 0; i < ttkRecord.params.length; i++) {
+    projectionNamedArgMap.set(ttkRecord.params[i].name, i);
+  }
+
+  // Add projections to definitions with namedArgMap
   let finalDefinitions = result.newDefinitions;
   for (const proj of projections) {
-    finalDefinitions = addDefinition(finalDefinitions, proj.name, proj.type, proj.value);
+    finalDefinitions = addDefinition(finalDefinitions, proj.name, proj.type, proj.value, projectionNamedArgMap);
   }
 
   // Build pretty-printed projections for display
@@ -2558,7 +2566,8 @@ export function compileTTFromText(source: string): CompileResult {
     blocks: compiledBlocks,
     totalParseErrors: parseResult.totalErrors,
     totalNameErrors,
-    totalCheckErrors
+    totalCheckErrors,
+    definitions
   };
 }
 

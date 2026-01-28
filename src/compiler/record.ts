@@ -113,12 +113,17 @@ export function recordToInductiveDefinition(record: TTKRecordDef): InductiveDefi
     record.fields
   );
 
-  // For now, we DON'T set up namedArgMap for record constructors.
-  // This allows all arguments (params and fields) to be passed positionally.
-  // Named argument syntax for records (like {fst := ..., snd := ...}) will be
-  // handled separately as record literals in the future.
+  // Set up namedArgMap for ALL record params in the constructor.
+  // For record constructors, all type params are inferrable from the return type,
+  // so they all get holes auto-inserted in applications like `MkPair b a`.
+  // This is how Lean/Idris handle record constructors - you don't need to provide
+  // the type params explicitly, they're inferred from context.
+  // Pattern matching uses recordInfo.paramCount to insert wildcards for ALL params.
   const ctorNamedArgMap: NamedArgMap = new Map();
-  const numParams = record.params.length;
+  for (let i = 0; i < record.params.length; i++) {
+    const param = record.params[i];
+    ctorNamedArgMap.set(param.name, i);
+  }
 
   // For now, we DON'T set up namedArgMap for the record type.
   // This allows type parameters to be passed positionally (e.g., Pair Nat Nat).
@@ -133,6 +138,7 @@ export function recordToInductiveDefinition(record: TTKRecordDef): InductiveDefi
       .filter(i => i >= 0),
     projections: record.fields.map(f => `${record.name}.${f.name}`),
     isEtaExpandable: true,
+    paramCount: record.params.length,
   };
 
   return {

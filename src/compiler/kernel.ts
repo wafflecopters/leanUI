@@ -1458,6 +1458,7 @@ export function occursIn(index: number, term: TTKTerm): boolean {
 export interface TTKRecordParam {
   name: string;
   type: TTKTerm;
+  implicit?: boolean;  // true for implicit parameters {A : Type}
 }
 
 /**

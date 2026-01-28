@@ -316,7 +316,7 @@ record Pair (A : Type) (B : Type) where
   snd : B
 
 pair12 : Pair Nat Nat
-pair12 = MkPair Nat Nat (Succ Zero) (Succ (Succ Zero))
+pair12 = MkPair (Succ Zero) (Succ (Succ Zero))
 `;
       const result = compileTTFromText(source);
       if (!result.success) {
@@ -383,7 +383,7 @@ record Pair (A : Type) (B : Type) where
   snd : B
 
 getFst : Pair Nat Nat -> Nat
-getFst p = Pair.fst Nat Nat p
+getFst p = Pair.fst p
 `;
       const result = compileTTFromText(source);
       if (!result.success) {

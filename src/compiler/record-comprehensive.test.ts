@@ -321,7 +321,7 @@ origin = MkPoint Zero Zero
     expectSuccess(result, 'origin');
   });
 
-  test('construct record with explicit type params', () => {
+  test('construct record with inferred type params', () => {
     const source = NAT_PRELUDE + `
 record Pair (A B : Type) where
   constructor MkPair
@@ -329,7 +329,7 @@ record Pair (A B : Type) where
   snd : B
 
 pair : Pair Nat Nat
-pair = MkPair Nat Nat Zero (Succ Zero)
+pair = MkPair Zero (Succ Zero)
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'pair');
@@ -361,7 +361,7 @@ record Box (A : Type) where
   contents : A
 
 natBox : Box Nat
-natBox = MkBox Nat (Succ Zero)
+natBox = MkBox (Succ Zero)
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'natBox');
@@ -374,7 +374,7 @@ record Box (A : Type) where
   contents : A
 
 boolBox : Box Bool
-boolBox = MkBox Bool True
+boolBox = MkBox True
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'boolBox');
@@ -436,10 +436,10 @@ record Pair (A B : Type) where
   snd : B
 
 getFst : Pair Nat Nat -> Nat
-getFst p = Pair.fst Nat Nat p
+getFst p = Pair.fst p
 
 getSnd : Pair Nat Nat -> Nat
-getSnd p = Pair.snd Nat Nat p
+getSnd p = Pair.snd p
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'getFst');
@@ -600,7 +600,7 @@ add Zero n = n
 add (Succ m) n = Succ (add m n)
 
 natAddMonoid : Monoid Nat
-natAddMonoid = MkMonoid Nat Zero add
+natAddMonoid = MkMonoid Zero add
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'natAddMonoid');
@@ -618,7 +618,7 @@ mul Zero n = Zero
 mul (Succ m) n = n
 
 natMulMonoid : Monoid Nat
-natMulMonoid = MkMonoid Nat (Succ Zero) mul
+natMulMonoid = MkMonoid (Succ Zero) mul
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'natMulMonoid');
@@ -750,7 +750,7 @@ mapMaybe f Nothing = Nothing
 mapMaybe f (Just x) = Just (f x)
 
 maybeFunctor : Functor Maybe
-maybeFunctor = MkFunctor Maybe mapMaybe
+maybeFunctor = MkFunctor mapMaybe
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'maybeFunctor');
@@ -1165,7 +1165,7 @@ record Box (A : Type) where
   contents : A
 
 pointBox : Box Point
-pointBox = MkBox Point (MkPoint Zero Zero)
+pointBox = MkBox (MkPoint Zero Zero)
 `;
     const result = compileTTFromText(source);
     expectSuccess(result, 'pointBox');

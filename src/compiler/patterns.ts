@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
 import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -75,24 +75,43 @@ interface ConstructorArityInfo {
 }
 
 /**
- * Look up a constructor by name and return its arity info.
- * Returns both total arity and positional arity (excluding named parameters).
+ * Look up a constructor by name and return its inductive definition.
  */
-function getConstructorArityInfo(definitions: DefinitionsMap, ctorName: string): ConstructorArityInfo | undefined {
+function getConstructorInductive(definitions: DefinitionsMap, ctorName: string): { inductive: InductiveDefinition; ctor: { name: string; type: TTKTerm; namedArgMap?: NamedArgMap } } | undefined {
   for (const inductive of definitions.inductiveTypes.values()) {
     for (const ctor of inductive.constructors) {
       if (ctor.name === ctorName) {
-        const totalArity = countPiBinders(ctor.type);
-        const namedCount = ctor.namedArgMap?.size ?? 0;
-        return {
-          totalArity,
-          positionalArity: totalArity - namedCount,
-          namedArgMap: ctor.namedArgMap
-        };
+        return { inductive, ctor };
       }
     }
   }
   return undefined;
+}
+
+/**
+ * Look up a constructor by name and return its arity info.
+ * Returns both total arity and positional rity (excluding named parameters).
+ *
+ * For records, ALL params become implicit in patterns (determined by scrutinee type),
+ * so positionalArity = totalArity - paramCount (using recordInfo.paramCount).
+ * For regular inductives, only params in namedArgMap are implicit.
+ */
+function getConstructorArityInfo(definitions: DefinitionsMap, ctorName: string): ConstructorArityInfo | undefined {
+  const result = getConstructorInductive(definitions, ctorName);
+  if (!result) return undefined;
+
+  const { inductive, ctor } = result;
+  const totalArity = countPiBinders(ctor.type);
+  // For records, all params are implicit in patterns (use paramCount)
+  // For regular inductives, use namedArgMap.size
+  const implicitCount = inductive.recordInfo
+    ? inductive.recordInfo.paramCount
+    : (ctor.namedArgMap?.size ?? 0);
+  return {
+    totalArity,
+    positionalArity: totalArity - implicitCount,
+    namedArgMap: ctor.namedArgMap
+  };
 }
 
 /**
@@ -326,44 +345,62 @@ function padPCtorPatternWithNamedWildcards(pattern: TTKPattern, definitions: Def
     return pattern;
   }
 
-  const arityInfo = getConstructorArityInfo(definitions, pattern.name);
-  if (!arityInfo || !arityInfo.namedArgMap || arityInfo.namedArgMap.size === 0) {
-    // No named parameters - recursively pad sub-patterns only
+  const result = getConstructorInductive(definitions, pattern.name);
+  if (!result) {
+    // Unknown constructor - just recursively pad sub-patterns
     return {
       ...pattern,
       args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions)),
-      namedArgs: undefined // Clear namedArgs after processing
+      namedArgs: undefined
+    };
+  }
+
+  const { inductive, ctor } = result;
+  const totalArity = countPiBinders(ctor.type);
+
+  // For records, ALL param positions (0 to paramCount-1) are implicit in patterns.
+  // For regular inductives, only namedArgMap positions are implicit.
+  let implicitPositions: Set<number>;
+  if (inductive.recordInfo) {
+    implicitPositions = new Set(Array.from({ length: inductive.recordInfo.paramCount }, (_, i) => i));
+  } else if (ctor.namedArgMap && ctor.namedArgMap.size > 0) {
+    implicitPositions = new Set(ctor.namedArgMap.values());
+  } else {
+    // No implicit parameters - recursively pad sub-patterns only
+    return {
+      ...pattern,
+      args: pattern.args.map(arg => padPCtorPatternWithNamedWildcards(arg, definitions)),
+      namedArgs: undefined
     };
   }
 
   // Build the padded args array:
   // - Named patterns from {A := pattern} syntax go at their positions
-  // - Positional patterns fill the remaining (non-named) positions
-  // - Unfilled named positions get wildcards
-  const paddedArgs: TTKPattern[] = new Array(arityInfo.totalArity);
-  const namedPositions = new Set(arityInfo.namedArgMap.values());
+  // - Positional patterns fill the remaining (non-implicit) positions
+  // - Unfilled implicit positions get wildcards
+  const paddedArgs: TTKPattern[] = new Array(totalArity);
 
-  // First, place named args at their positions
-  if (pattern.namedArgs) {
+  // First, place named args at their positions (if the namedArgMap exists)
+  if (pattern.namedArgs && ctor.namedArgMap) {
     for (const na of pattern.namedArgs) {
-      const idx = arityInfo.namedArgMap.get(na.name);
+      const idx = ctor.namedArgMap.get(na.name);
       if (idx !== undefined) {
         paddedArgs[idx] = padPCtorPatternWithNamedWildcards(na.pattern, definitions);
       }
     }
   }
 
-  // Fill remaining named positions with wildcards
-  for (const pos of namedPositions) {
+  // Fill remaining implicit positions with wildcards
+  for (const pos of implicitPositions) {
     if (paddedArgs[pos] === undefined) {
       paddedArgs[pos] = { tag: 'PWild', name: freshPaddingWildcardName() };
     }
   }
 
-  // Then, fill positional patterns into remaining (non-named) slots
+  // Then, fill positional patterns into remaining (non-implicit) slots
   let positionalIndex = 0;
-  for (let i = 0; i < arityInfo.totalArity; i++) {
-    if (!namedPositions.has(i)) {
+  for (let i = 0; i < totalArity; i++) {
+    if (!implicitPositions.has(i)) {
       if (positionalIndex < pattern.args.length) {
         paddedArgs[i] = padPCtorPatternWithNamedWildcards(pattern.args[positionalIndex], definitions);
       } else {
@@ -985,7 +1022,8 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
       patternStack.push({ tag: 'pattern', pattern: pattern.args[i] })
     }
 
-    checkStack.push({ type: env.getTypeDefinitionAssert(pattern.name).value, ctxLength: env.context.length })
+    const ctorType = env.getTypeDefinitionAssert(pattern.name).value;
+    checkStack.push({ type: ctorType, ctxLength: env.context.length })
   }
 
   return env

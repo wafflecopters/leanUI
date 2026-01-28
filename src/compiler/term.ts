@@ -141,6 +141,8 @@ export type RecordInfo = {
   projections: string[];
   /** Whether eta rule applies (record values equal if all fields equal) */
   isEtaExpandable: boolean;
+  /** Number of record params (all params become implicit in constructor patterns) */
+  paramCount: number;
 }
 
 export type InductiveDefinition = {

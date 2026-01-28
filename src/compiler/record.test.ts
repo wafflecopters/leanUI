@@ -177,10 +177,12 @@ describe('Record to Inductive Conversion', () => {
       expect(inductive.constructors.length).toBe(1);
       expect(inductive.constructors[0].name).toBe('MkPair');
 
-      // namedArgMap is NOT set for records - all arguments can be passed positionally
-      // (Named argument syntax for records will be handled separately as record literals in the future)
+      // namedArgMap is NOT set for the record TYPE - all arguments can be passed positionally
       expect(inductive.namedArgMap).toBeUndefined();
-      expect(inductive.constructors[0].namedArgMap).toBeUndefined();
+
+      // namedArgMap IS set for the constructor - all params get auto-inserted holes in applications
+      // This is because record params are always inferrable from context/return type
+      expect(inductive.constructors[0].namedArgMap).toEqual(new Map([['A', 0], ['B', 1]]));
 
       // Check record info
       expect(inductive.recordInfo?.fieldNames).toEqual(['fst', 'snd']);
@@ -401,7 +403,7 @@ describe('Record to Inductive Conversion', () => {
       expect(inductive.namedArgMap).toBeUndefined();
     });
 
-    test('namedArgMap not set for constructor (allows positional fields)', () => {
+    test('namedArgMap set for constructor params (but fields are positional)', () => {
       const record: TTKRecordDef = {
         name: 'Test',
         constructorName: 'Mk#Test',
@@ -416,8 +418,9 @@ describe('Record to Inductive Conversion', () => {
 
       const inductive = recordToInductiveDefinition(record);
 
-      // namedArgMap is undefined, allowing all constructor args to be passed positionally
-      expect(inductive.constructors[0].namedArgMap).toBeUndefined();
+      // namedArgMap includes all params - they get auto-inserted holes in applications
+      // Fields are still positional (not in namedArgMap)
+      expect(inductive.constructors[0].namedArgMap).toEqual(new Map([['A', 0]]));
     });
 
     test('no named arg map when no params or fields', () => {

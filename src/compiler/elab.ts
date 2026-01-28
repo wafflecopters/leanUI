@@ -696,11 +696,13 @@ function reorderArgs(
 
   // Fill missing named positions with Holes (implicit argument inference)
   // These will be resolved during type checking via unification
-  let holeCounter = 0;
+  // IMPORTANT: Use global counter to ensure hole IDs are unique across all elaborations.
+  // Different elaborations (e.g., function type vs RHS) may create holes that get unified
+  // during pattern matching. If they share IDs, fillHole will incorrectly replace all of them.
   for (let i = 0; i <= lastFilled; i++) {
     if (result[i] === null && namedPositions.has(i)) {
       // Create a hole with a placeholder type - will be inferred during type checking
-      result[i] = mkHoleTT(`_implicit${holeCounter++}`, mkHoleTT('_implicit_type', mkPropTT()));
+      result[i] = mkHoleTT(`_implicit${globalImplicitHoleCounter++}`, mkHoleTT('_implicit_type', mkPropTT()));
     }
   }
 
@@ -1262,6 +1264,14 @@ export function reorderPatterns(
  * wildcard in each clause.
  */
 let wildcardCounter = 0;
+
+/**
+ * Global counter for generating unique implicit hole IDs during elaboration.
+ * Unlike wildcardCounter, this is NEVER reset because holes from different
+ * elaborations (e.g., function type vs RHS) may be unified during pattern
+ * matching. If they share IDs, fillHole will incorrectly replace all of them.
+ */
+let globalImplicitHoleCounter = 0;
 
 /**
  * Current constructor parameter info context.
@@ -2541,10 +2551,10 @@ function elabRecordParamToKernel(param: RecordParam): TTKRecordParam {
 
 /**
  * Get the default constructor name for a record.
- * Uses Mk#${name} to avoid collision with user-defined names.
+ * Uses Mk${name} following standard conventions (like Lean's MkPoint, MkPair, etc.)
  */
 export function defaultRecordConstructorName(recordName: string): string {
-  return `Mk#${recordName}`;
+  return `Mk${recordName}`;
 }
 
 /**
