@@ -1,6 +1,6 @@
 import { TTKTerm, TTKPattern, isDefinitionallyEqual, levelsEqual } from "./kernel";
 import { subst, substPatternBindings } from "./subst";
-import { DefinitionsMap, getTermDefinition } from "./term";
+import { DefinitionsMap, getTermDefinition, RecordInfo, extractAppSpine } from "./term";
 
 /**
  * Context for weak head normal form reduction.
@@ -118,6 +118,123 @@ function matchPatterns(patterns: TTKPattern[], terms: TTKTerm[], ctx?: WhnfConte
 }
 
 // ============================================================================
+// Record Eta Helpers
+// ============================================================================
+
+/**
+ * Get record info for a constructor name.
+ * Returns the inductive definition with recordInfo if the constructor belongs to a record.
+ */
+function getRecordInfoForConstructor(ctorName: string, definitions?: DefinitionsMap): {
+  inductiveName: string;
+  recordInfo: RecordInfo;
+  ctorName: string;
+} | null {
+  if (!definitions) return null;
+
+  const inductiveName = definitions.inductiveNameOfConstructor.get(ctorName);
+  if (!inductiveName) return null;
+
+  const inductive = definitions.inductiveTypes.get(inductiveName);
+  if (!inductive?.recordInfo) return null;
+
+  return {
+    inductiveName,
+    recordInfo: inductive.recordInfo,
+    ctorName,
+  };
+}
+
+/**
+ * Try to extract the eta target from a record constructor application.
+ *
+ * For a term like `MkPoint (Point.x p) (Point.y p)`, extracts `p`.
+ *
+ * The record eta rule: MkR (R.f1 r) (R.f2 r) ... (R.fN r) ≃ r
+ *
+ * Returns the common eta target term if the pattern matches, null otherwise.
+ */
+function tryRecordEtaContract(term: TTKTerm, definitions?: DefinitionsMap): TTKTerm | null {
+  if (!definitions) return null;
+
+  // Collect application spine
+  const { fn: head, args } = extractAppSpine(term);
+
+  // Head must be a constructor constant
+  if (head.tag !== 'Const') return null;
+
+  // Look up if this constructor belongs to a record
+  const recordData = getRecordInfoForConstructor(head.name, definitions);
+  if (!recordData) return null;
+
+  const { recordInfo } = recordData;
+  const { projections, paramCount } = recordInfo;
+
+  // The constructor takes paramCount type arguments + numFields field arguments
+  const numFields = projections.length;
+  const expectedArgCount = paramCount + numFields;
+
+  if (args.length !== expectedArgCount) return null;
+
+  // Skip type arguments, check field arguments
+  const fieldArgs = args.slice(paramCount);
+
+  // Each field arg should be a projection applied to the same common term
+  let commonTarget: TTKTerm | null = null;
+
+  for (let i = 0; i < numFields; i++) {
+    const fieldArg = fieldArgs[i];
+    const expectedProjName = projections[i];
+
+    // Extract the target from projection application
+    const target = extractProjectionTarget(fieldArg, expectedProjName, paramCount, definitions);
+    if (target === null) return null;
+
+    if (commonTarget === null) {
+      commonTarget = target;
+    } else {
+      // All fields must project from the same target
+      if (!isDefinitionallyEqual(commonTarget, target)) return null;
+    }
+  }
+
+  return commonTarget;
+}
+
+/**
+ * Check if a term is a projection application and extract the target.
+ *
+ * For `Point.x p`, returns `p`.
+ * For `Pair.fst A B p`, returns `p`.
+ *
+ * @param term - The term to check
+ * @param projName - Expected projection name (e.g., "Point.x")
+ * @param numTypeArgs - Number of type arguments the projection takes before the record arg
+ * @param definitions - Definitions map to look up projection arity
+ */
+function extractProjectionTarget(
+  term: TTKTerm,
+  projName: string,
+  numTypeArgs: number,
+  definitions: DefinitionsMap
+): TTKTerm | null {
+  // Collect application spine
+  const { fn: head, args } = extractAppSpine(term);
+
+  // Head must be the expected projection constant
+  if (head.tag !== 'Const' || head.name !== projName) return null;
+
+  // Projection has signature: (type args...) -> R ... -> field_type
+  // So it takes numTypeArgs type arguments plus 1 record argument
+  const expectedArgCount = numTypeArgs + 1;
+
+  if (args.length !== expectedArgCount) return null;
+
+  // The last argument is the record target
+  return args[args.length - 1];
+}
+
+// ============================================================================
 // Definitional Equality
 // ============================================================================
 
@@ -128,10 +245,27 @@ function matchPatterns(patterns: TTKPattern[], terms: TTKTerm[], ctx?: WhnfConte
  * - β-reduction: (λx. e) a ≃ e[a/x]
  * - ζ-reduction: let x := t; u ≃ u[t/x]
  * - η-conversion: λx. f x ≃ f (when x not free in f)
+ * - record η: MkR (R.f1 r) ... (R.fN r) ≃ r
  * - δ-reduction: unfold definitions
  * - ι-reduction: pattern matching on constructors
  */
 export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm, definitions?: DefinitionsMap): boolean {
+  // Check record eta BEFORE normalization (projections get unfolded by whnf)
+  // Record eta: MkR (R.f1 r) ... (R.fN r) ≃ r
+  const eta1 = tryRecordEtaContract(t1, definitions);
+  if (eta1 !== null) {
+    if (areTypesDefEq(eta1, t2, definitions)) {
+      return true;
+    }
+  }
+
+  const eta2 = tryRecordEtaContract(t2, definitions);
+  if (eta2 !== null) {
+    if (areTypesDefEq(t1, eta2, definitions)) {
+      return true;
+    }
+  }
+
   const ctx: WhnfContext = { definitions };
   // Normalize both terms
   const n1 = whnf(t1, ctx);

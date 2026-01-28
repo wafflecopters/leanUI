@@ -55,7 +55,7 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
 
 ## Big Projects
 
-- [ ] **Records** (mostly complete - 79/81 tests passing)
+- [ ] **Records** (mostly complete)
   - [x] Parser for record definitions (including `extends` syntax)
   - [x] Elaboration + checking for record definitions
   - [x] Projection generation
@@ -64,10 +64,10 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
     - Parent fields are prepended to child record fields
     - Field name clash detection for inherited vs local fields
     - Note: parameterized parent records not yet tested
+  - [x] Eta expansion rule: `MkRecord (proj1 r) (proj2 r) = r` - implemented in [whnf.ts](src/compiler/whnf.ts)
+  - [x] Pattern match on parameterized records with implicit type args
   - [ ] Dot notation for projections (e.g., `point.x` instead of `Point.x point`)
   - [ ] Record construction via field names (e.g., `{ x := 1, y := 2 }`)
-  - [ ] Eta expansion rule: `MkRecord (proj1 r) (proj2 r) = r`
-  - [ ] Pattern match on parameterized records with implicit type args
 
 - [ ] **Prop deep dive**
   - [ ] Split out Prop to be independent AST-wise instead of being `Sort 0`
