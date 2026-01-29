@@ -51,6 +51,10 @@ export interface TotalityResult {
   annotatedAbsurdClauses?: number[];
   missingValidClauses: { patterns: TTKPattern[] }[];
   missingAbsurdClauses: { patterns: TTKPattern[] }[];
+  /** Number of frozen (context) positions at the start of the case tree.
+   *  For with-clause auxiliaries, these are inherited function-pattern positions
+   *  that should be rendered in a muted style. */
+  frozenPositionCount?: number;
 }
 
 /**

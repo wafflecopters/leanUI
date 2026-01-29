@@ -929,6 +929,29 @@ The test suite is good but could use more tests for:
 
 **Recommendation**: Add property-based testing with generated terms.
 
+#### 12b. Auto-Bound Implicit Variables via `variable` Blocks
+
+Allow users to declare frequently-used implicit variables in `variable` blocks (similar to Lean 4 / Agda), scoped to `section` boundaries. When a declared variable name appears free in a type signature, the system automatically prepends an implicit binder `{name : type} ->` at the **top** of the pi chain.
+
+Example:
+```
+section
+variable (u : ULevel) (A : Type u)
+
+-- Automatically elaborated to: foo : {u : ULevel} -> {A : Type u} -> A -> A
+foo : A -> A
+foo x = x
+end
+```
+
+**Design decisions**:
+- Scoped to `section` / `end` blocks (like Lean 4 sections)
+- Inserted binders prepended at the outermost level of the pi chain
+- Parser pre-populates name context from `variable` declarations
+- Purely syntactic transformation during parsing/elaboration (no kernel changes)
+
+**Status**: Wishlist / future enhancement.
+
 ### Code Quality
 
 #### 13. Reduce File Sizes

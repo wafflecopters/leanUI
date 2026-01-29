@@ -565,6 +565,10 @@ const caseTreeStyles = {
     color: '#ffa657',
     //minWidth: '80px',
   },
+  frozenCtorName: {
+    color: '#6e7681',
+    fontStyle: 'italic' as const,
+  },
   leafClause: {
     color: '#7ee787',
   },
@@ -651,7 +655,7 @@ function TotalityResultView({ result }: { result: TotalityResult }): JSX.Element
       </div>
       <table>
         <tbody>
-          {...caseTreeRows(result.caseTree)}
+          {...caseTreeRows(result.caseTree, result.frozenPositionCount ?? 0)}
         </tbody>
       </table>
       {result.unreachableClauses.length > 0 && (
@@ -679,7 +683,7 @@ function collectNoSplitLabels(tree: CaseTree, count: number): [string[], CaseTre
   return [labels, current];
 }
 
-function caseTreeRows(tree: CaseTree): JSX.Element[] {
+function caseTreeRows(tree: CaseTree, frozenRemaining: number = 0): JSX.Element[] {
   if (tree.tag === 'Split') {
     return Array.from(tree.branches.entries()).map(([ctorName, subTree]) => {
       const arity = tree.ctorArities.get(ctorName) ?? 0;
@@ -689,7 +693,7 @@ function caseTreeRows(tree: CaseTree): JSX.Element[] {
       const ctorDisplay = arity === 0
         ? ctorName
         : `(${ctorName} ${argLabels.join(' ')})`;
-      const childRows = caseTreeRows(remainingTree);
+      const childRows = caseTreeRows(remainingTree, frozenRemaining);
       return (
         <tr key={ctorName}>
           <td><span style={caseTreeStyles.ctorName}>{ctorDisplay}</span></td>
@@ -702,10 +706,12 @@ function caseTreeRows(tree: CaseTree): JSX.Element[] {
       );
     });
   } else if (tree.tag === 'NoSplit') {
-    const childRows = caseTreeRows(tree.branch);
+    const isFrozen = frozenRemaining > 0;
+    const childRows = caseTreeRows(tree.branch, frozenRemaining > 0 ? frozenRemaining - 1 : 0);
+    const style = isFrozen ? caseTreeStyles.frozenCtorName : caseTreeStyles.ctorName;
     return [
       <tr key={tree.debugLabel}>
-        <td><span style={caseTreeStyles.ctorName}>{tree.debugLabel}</span></td>
+        <td><span style={style}>{tree.debugLabel}</span></td>
         <td>
           {childRows.length > 0 && (
             <table style={{ borderCollapse: 'collapse' }}><tbody>{childRows}</tbody></table>

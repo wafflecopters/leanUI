@@ -3436,6 +3436,15 @@ function checkTermValue(
 
   const totalityResult = checkTotality(name ?? '???', totalityClauses, termEnv.definitions, absurdityChecker);
 
+  // Annotate frozen position count for with-clause auxiliary case tree rendering
+  if (options?.withScrutineeCount && options.withScrutineeCount > 0 && totalityClauses.length > 0) {
+    const totalPatterns = totalityClauses[0].patterns.length;
+    const frozenCount = totalPatterns - options.withScrutineeCount;
+    if (frozenCount > 0) {
+      totalityResult.frozenPositionCount = frozenCount;
+    }
+  }
+
   // Helper to format missing patterns with padding and named args
   const formatMissingPatterns = (patterns: TTKPattern[]): string => {
     const expectedArgCount = countPiBinders(type);
