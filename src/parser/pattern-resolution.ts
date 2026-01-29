@@ -51,7 +51,7 @@ function resolvePatternsInTerm(
 ): TTerm {
   switch (term.tag) {
     case 'Match':
-      // Resolve patterns in all clauses
+      // Resolve patterns in all clauses, including any nested WithClause in the RHS
       return {
         ...term,
         clauses: term.clauses.map(clause => ({
@@ -63,7 +63,9 @@ function resolvePatternsInTerm(
           namedPatterns: clause.namedPatterns?.map(np => ({
             ...np,
             pattern: resolvePattern(np.pattern, symbolContext)
-          }))
+          })),
+          // Recurse into RHS to resolve patterns in nested WithClauses
+          rhs: resolvePatternsInTerm(clause.rhs, symbolContext),
         }))
       };
 
@@ -86,7 +88,9 @@ function resolvePatternsInTerm(
           namedPatterns: clause.namedPatterns?.map(np => ({
             ...np,
             pattern: resolvePattern(np.pattern, symbolContext)
-          }))
+          })),
+          // Recurse into RHS to resolve patterns in nested WithClauses
+          rhs: resolvePatternsInTerm(clause.rhs, symbolContext),
         }))
       };
 

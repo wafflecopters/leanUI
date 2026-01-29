@@ -1354,6 +1354,7 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult } {
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
@@ -1391,7 +1392,7 @@ function checkTermDeclaration(
     // Solve meta constraints before checking for unsolved metas
     const solvedSigResult = sigResult.solveMetasAndConstraints({ liftMetasToFullContext: false });
     const unsolvedSigMetas = Array.from(solvedSigResult.metaVars.values()).filter(m => !m.solution);
-    if (unsolvedSigMetas.length > 0) {
+    if (unsolvedSigMetas.length > 0 && !options?.allowUnsolvedSigMetas) {
       return {
         success: false, errors: [
           TCEnvError.create('Checking the signature produced unsolved metas.', env)
@@ -1522,7 +1523,8 @@ function checkTermDeclaration(
       decl.elabMap ?? new Map(),
       namedArgMap,
       totalArity,
-      annotatedAbsurdClauses
+      annotatedAbsurdClauses,
+      { skipTotality: options?.skipTotality }
     );
     if (!result.success) {
       return { success: false, errors: result.errors, totalityResult: result.totalityResult }
@@ -2598,6 +2600,7 @@ function processTermDeclaration(
   decl: ParsedDeclaration,
   sourceMap: SourceMap,
   definitions: DefinitionsMap,
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean },
 ): ProcessDeclarationResult {
   const elabMap: ElabMap = new Map();
 
@@ -2633,7 +2636,7 @@ function processTermDeclaration(
   // Check the term declaration
   // (This handles: signature check & meta solving, clause checking with LHS/RHS,
   //  totality, recursion, and adds to context if no errors)
-  const result = checkTermDeclaration(elabDecl, definitions);
+  const result = checkTermDeclaration(elabDecl, definitions, options);
 
   if (!result.success) {
     return {
@@ -2776,7 +2779,9 @@ export function compileTTFromText(source: string): CompileResult {
           const appNamedArgLookup = createNamedArgInfoLookup(definitions);
           const elabMap: ElabMap = new Map();
           const mainKernelType = elabToKernelWithMap(mainDecl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
-          definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined);
+          // Extract namedArgMap so implicit args are recognized when auxiliaries call the main function
+          const mainNamedArgMap = extractNamedArgMap(mainDecl.type);
+          definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined, mainNamedArgMap.size > 0 ? mainNamedArgMap : undefined);
         } catch (_e) {
           // If type elaboration fails, continue - the error will be caught when we process the main decl
         }
@@ -2785,7 +2790,7 @@ export function compileTTFromText(source: string): CompileResult {
       // Process auxiliary declarations FIRST (so their types are available)
       // Note: auxiliary declarations are always term definitions (kind === 'def')
       for (const auxDecl of auxiliaryDecls) {
-        const result = processTermDeclaration(auxDecl, sourceMap, definitions);
+        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, skipTotality: true });
         compiledDecls.push(result.compiled);
         if (result.success) {
           definitions = result.newDefinitions;
@@ -3246,6 +3251,7 @@ function checkTermValue(
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
   annotatedAbsurdClauses: number[] = [],
+  options?: { skipTotality?: boolean },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   const errors: TCEnvError[] = [];
   const checkedClauses: TTKClause[] = [];
@@ -3383,17 +3389,19 @@ function checkTermValue(
     }).join(' ');
   };
 
-  // Convert totality issues to errors
+  // Convert totality issues to errors (skip for auxiliary with-functions)
   const totalityErrors: TCEnvError[] = [];
-  for (const { clauseIndex, patterns } of totalityResult.unreachableClauses) {
-    totalityErrors.push(TCEnvError.create(`Redundant clause: ${name ? `${name} ` : ''}${prettyPrintPatternList(patterns)}`, termEnv.atIndexPath(
-      appendPath(termEnv.indexPath, fieldSeg('value'), fieldSeg('clauses'), arraySeg(clauseIndex))
-    )));
-  }
-  if (!totalityResult.isExhaustive) {
-    const formattedClauses = totalityResult.missingValidClauses.map(c => formatMissingPatterns(c.patterns)).join('\n');
-    totalityErrors.push(TCEnvError.create(`Function ${name ? `${name} ` : ''}is non-total. Missing clause${totalityResult.missingValidClauses.length === 1 ? '' : 's'
-      }:\n${formattedClauses}`, termEnv));
+  if (!options?.skipTotality) {
+    for (const { clauseIndex, patterns } of totalityResult.unreachableClauses) {
+      totalityErrors.push(TCEnvError.create(`Redundant clause: ${name ? `${name} ` : ''}${prettyPrintPatternList(patterns)}`, termEnv.atIndexPath(
+        appendPath(termEnv.indexPath, fieldSeg('value'), fieldSeg('clauses'), arraySeg(clauseIndex))
+      )));
+    }
+    if (!totalityResult.isExhaustive) {
+      const formattedClauses = totalityResult.missingValidClauses.map(c => formatMissingPatterns(c.patterns)).join('\n');
+      totalityErrors.push(TCEnvError.create(`Function ${name ? `${name} ` : ''}is non-total. Missing clause${totalityResult.missingValidClauses.length === 1 ? '' : 's'
+        }:\n${formattedClauses}`, termEnv));
+    }
   }
 
   // Add annotatedAbsurdClauses to the totality result

@@ -249,6 +249,107 @@ def plus : Nat -> Nat -> Nat
 | Succ m, n => Succ (plus m n)
 ```
 
+### With Clauses
+
+With clauses provide Agda-style pattern matching on an expression within a function definition. They desugar to auxiliary functions.
+
+**Basic with** — match on a function argument:
+
+```
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+```
+
+**With on a computed expression** — match on the result of a function call:
+
+```
+isZeroSafe : Nat -> Bool
+isZeroSafe n with isZero n
+  | True => True
+  | False => False
+```
+
+**Multiple scrutinees** — match on several expressions at once:
+
+```
+compare : Nat -> Nat -> Ordering
+compare m n with m, n
+  | Zero, Zero => EQ
+  | Zero, Succ _ => LT
+  | Succ _, Zero => GT
+  | Succ a, Succ b => compare a b
+```
+
+**Mixed clauses** — combine regular pattern matching with `with`:
+
+```
+isOne : Nat -> Bool
+isOne Zero = False
+isOne n with n
+  | Succ Zero => True
+  | Succ (Succ _) => False
+```
+
+**Multiple with clauses** — different clauses of the same function can each use `with`:
+
+```
+classify : Nat -> Nat -> Nat
+classify Zero n with n
+  | Zero => Zero
+  | Succ _ => Succ Zero
+classify (Succ m) n with n
+  | Zero => Succ (Succ Zero)
+  | Succ _ => Succ (Succ (Succ Zero))
+```
+
+**With on generic types** — works with implicit type parameters:
+
+```
+headOr : {A : Type} -> A -> List A -> A
+headOr def xs with xs
+  | Nil => def
+  | Cons x _ => x
+```
+
+**Desugaring**: Each `with` clause compiles to an auxiliary function. For example, `isZero n with n | Zero => True | Succ _ => False` becomes:
+
+```
+isZero n = isZero-with-1 n n
+isZero-with-1 : Nat -> Nat -> Bool
+isZero-with-1 n Zero = True
+isZero-with-1 n (Succ _) = False
+```
+
+**Nested with** — use `with` inside a with-branch to match on another expression:
+
+```
+classify : Nat -> Nat -> Bool
+classify m n with m
+  | Zero with n
+    | Zero => True
+    | Succ _ => False
+  | Succ _ => True
+```
+
+Nested withs can appear in any branch and can be nested to arbitrary depth:
+
+```
+deep : Nat -> Nat -> Nat -> Bool
+deep a b c with a
+  | Zero with b
+    | Zero with c
+      | Zero => True
+      | Succ _ => False
+    | Succ _ => False
+  | Succ _ => False
+```
+
+Each level of nesting generates an additional auxiliary function. The inner `|` pipes are distinguished from outer ones by indentation (inner pipes must be indented further than outer pipes).
+
+With branches must be exhaustive (all constructor cases covered).
+
 ## Comments
 
 ```

@@ -63,6 +63,8 @@ export function desugarWithClauses(decls: ParsedDeclaration[]): ParsedDeclaratio
 
   for (const decl of decls) {
     const desugared = desugarDeclaration(decl);
+    // Main decl first, auxiliaries after. The caller (compile.ts) handles
+    // the correct processing order (pre-register main type, process auxiliaries first)
     result.push(desugared.mainDecl);
     result.push(...desugared.auxiliaries);
   }
@@ -203,6 +205,9 @@ function desugarWithClause(
 
   // Create auxiliary function clauses
   // Each with-clause becomes: auxName functionPatterns... withPattern... = rhs
+  // Note: function patterns may include constructors (e.g., Zero) from the parent
+  // clause. This makes the auxiliary "partial" in that it only handles the specific
+  // constructor case from the parent. Totality checking is skipped for auxiliaries.
   const auxClauses: TClause[] = withClause.clauses.map(clause => ({
     patterns: [...functionPatterns, ...clause.patterns],
     rhs: clause.rhs,
@@ -210,7 +215,7 @@ function desugarWithClause(
   }));
 
   // Compute the auxiliary function type from the main declaration's type
-  // The auxiliary takes: (1) function pattern args, (2) scrutinee args
+  // The auxiliary takes: (1) bound variable args, (2) scrutinee args
   // and returns the main function's return type
   const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees);
 
@@ -226,27 +231,33 @@ function desugarWithClause(
     },
   };
 
-  auxiliaries.push(auxDecl);
+  // Recursively desugar nested WithClauses in the auxiliary's clause RHS values.
+  // This handles arbitrary nesting depth (with inside with inside with...).
+  if (containsWithClause(auxDecl.value!)) {
+    const nestedResult = desugarDeclaration(auxDecl);
+    // Push nested auxiliaries FIRST so they are processed before callers
+    auxiliaries.push(...nestedResult.auxiliaries);
+    auxiliaries.push(nestedResult.mainDecl);
+  } else {
+    auxiliaries.push(auxDecl);
+  }
 
   // Create the call to the auxiliary function
-  // auxName arg1 arg2 ... scrutinee1 scrutinee2 ...
+  // auxName patternArg1 patternArg2 ... scrutinee1 scrutinee2 ...
   //
-  // The arguments are:
-  // 1. Variables bound by functionPatterns (in de Bruijn order)
-  // 2. The scrutinee expressions
-  //
-  // For pattern variables, we need to build Var references.
-  // The functionPatterns bind variables that are in scope.
-  // We need to pass these as arguments to the auxiliary.
+  // Each function pattern is converted back to a term:
+  //   PVar(n) → Var(index)
+  //   PCtor("Zero", []) → Const("Zero")
+  //   PCtor("Succ", [PVar(m)]) → App(Const("Succ"), Var(index))
+  //   PWild → Var(index)
   let call: TTerm = mkConstTT(auxName);
 
-  // Count variables bound by function patterns
+  // Convert function patterns to terms for the call arguments
   const numPatternVars = countPatternVars(functionPatterns);
-
-  // Add pattern variable arguments (in reverse de Bruijn order: highest index first)
-  // Actually, we pass them in declaration order, which means index numPatternVars-1 down to 0
-  for (let i = numPatternVars - 1; i >= 0; i--) {
-    call = mkAppTT(call, mkVarTT(i));
+  let varIndex = numPatternVars; // Start from highest, counting down
+  const patternArgs = patternsToTerms(functionPatterns, varIndex);
+  for (const arg of patternArgs) {
+    call = mkAppTT(call, arg);
   }
 
   // Add scrutinee arguments
@@ -254,19 +265,56 @@ function desugarWithClause(
     call = mkAppTT(call, scrutinee);
   }
 
-  // Wrap the call in a Match to preserve the pattern bindings for the main function
-  // This is essential because the patterns introduce variable bindings that the call uses
-  const mainMatch: TTerm = {
-    tag: 'Match',
-    scrutinee: mkHoleTT('_scrutinee', mkHoleTT('_scrutinee_type', mkPropTT())),
-    clauses: [{
-      patterns: functionPatterns,
-      namedPatterns: withClause.functionNamedPatterns,
-      rhs: call
-    }]
-  };
+  // Return the call directly. The WithClause is always nested inside a Match clause
+  // (the parser wraps it), so the outer clause already provides pattern bindings.
+  // The Var indices in `call` reference those same bindings.
+  return call;
+}
 
-  return mainMatch;
+/**
+ * Convert a list of patterns to a list of terms.
+ * Used to generate arguments for the auxiliary function call.
+ *
+ * Variables are assigned de Bruijn indices counting down from `nextIndex`.
+ * Constructor patterns become constructor applications.
+ *
+ * Returns the list of terms (one per top-level pattern position).
+ */
+function patternsToTerms(patterns: TPattern[], nextIndex: number): TTerm[] {
+  const result: TTerm[] = [];
+  // We need to assign de Bruijn indices to bound variables in left-to-right,
+  // depth-first order. The first variable gets the highest index.
+  let idx = nextIndex;
+  for (const p of patterns) {
+    const { term, newIdx } = patternToTerm(p, idx);
+    result.push(term);
+    idx = newIdx;
+  }
+  return result;
+}
+
+function patternToTerm(pattern: TPattern, nextIndex: number): { term: TTerm; newIdx: number } {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild': {
+      // Variables are assigned de Bruijn indices counting down
+      const idx = nextIndex - 1;
+      return { term: mkVarTT(idx), newIdx: idx };
+    }
+    case 'PCtor': {
+      // Constructor pattern: build App(App(Const(name), arg1), arg2) ...
+      let term: TTerm = mkConstTT(pattern.name);
+      let idx = nextIndex;
+      for (const arg of pattern.args) {
+        const { term: argTerm, newIdx } = patternToTerm(arg, idx);
+        term = mkAppTT(term, argTerm);
+        idx = newIdx;
+      }
+      return { term, newIdx: idx };
+    }
+    default:
+      return { term: mkConstTT('_unknown'), newIdx: nextIndex };
+  }
 }
 
 /**
@@ -296,18 +344,19 @@ function countSinglePatternVars(p: TPattern): number {
 /**
  * Compute the type for an auxiliary with-function.
  *
- * Given a main function type like `(n : Nat) -> Bool` and scrutinees,
- * compute the auxiliary function's type.
+ * Uses a splice approach: walks the original type tree to find the splice point
+ * (after consuming enough explicit args for the function patterns), then inserts
+ * scrutinee types before the return type. This preserves all de Bruijn indices
+ * in the prefix because we reuse the original type tree nodes.
+ *
+ * For variable scrutinees, we copy the type of the corresponding binder,
+ * shifted to account for the binder depth difference.
  *
  * Example:
- *   Main type: Nat -> Bool
- *   Function patterns: [n]
- *   Scrutinees: [n]
- *   Result: Nat -> Nat -> Bool
- *
- * The auxiliary takes:
- * 1. The function pattern arguments (extracted from main type)
- * 2. The scrutinee arguments (their types are looked up from pattern arg types)
+ *   Main type: {A : Type} -> List A -> Nat
+ *   Function patterns: [xs] (1 explicit arg)
+ *   Scrutinees: [xs]
+ *   Result: {A : Type} -> List A -> List A -> Nat
  */
 function computeAuxiliaryType(
   declType: TTerm | undefined,
@@ -318,82 +367,191 @@ function computeAuxiliaryType(
     return undefined;
   }
 
-  // Extract argument types and return type from the main function type
-  const { argTypes, returnType } = extractFunctionType(declType);
-
-  // Count how many variables are bound by the function patterns
+  // Use the number of PATTERNS (not bound vars) to determine how many
+  // explicit type args to consume, since the auxiliary function takes
+  // ALL function pattern args (including constructor patterns).
+  const numPatterns = functionPatterns.length;
   const numPatternVars = countPatternVars(functionPatterns);
 
-  // We need at least as many argument types as pattern variables
-  if (argTypes.length < numPatternVars) {
-    return undefined;
-  }
-
-  // The function pattern argument types (first numPatternVars args)
-  const patternArgTypes = argTypes.slice(0, numPatternVars);
+  // First, collect info about binders by walking the type
+  const binderInfo = collectBinderInfo(declType, numPatterns);
 
   // Compute scrutinee types
-  // If a scrutinee is a Var referencing a pattern-bound variable, use that variable's type
-  const scrutineeTypes: { name: string; type: TTerm }[] = [];
+  const scrutineeTypes: TTerm[] = [];
   for (let i = 0; i < scrutinees.length; i++) {
     const scrut = scrutinees[i];
-    let scrutType: TTerm;
-
     if (scrut.tag === 'Var') {
-      // Look up the type from the pattern argument types
-      // scrut.index is relative to the current scope (pattern variables)
-      // index 0 = most recently bound (last pattern var)
-      // We need to map this to patternArgTypes which are in declaration order
+      // Look up the type from the explicit argument binders
+      // scrut.index counts from most recently bound (0 = last pattern var)
       const patternVarIndex = numPatternVars - 1 - scrut.index;
-      if (patternVarIndex >= 0 && patternVarIndex < patternArgTypes.length) {
-        scrutType = patternArgTypes[patternVarIndex].type;
+      if (patternVarIndex >= 0 && patternVarIndex < binderInfo.explicitDomains.length) {
+        const { domain, depth } = binderInfo.explicitDomains[patternVarIndex];
+        // Shift the domain type to account for the binders between its
+        // original position and the splice point (after all prefix binders)
+        const shift = binderInfo.totalPrefixDepth - depth;
+        scrutineeTypes.push(shiftVars(domain, shift));
       } else {
-        // Fallback: use a hole for unknown type
-        scrutType = mkHoleTT(`_scrut${i}_type`, mkPropTT());
+        scrutineeTypes.push(mkHoleTT(`_scrut${i}_type`, mkPropTT()));
       }
     } else {
-      // For non-variable scrutinees, use a hole (will be inferred)
-      scrutType = mkHoleTT(`_scrut${i}_type`, mkPropTT());
+      scrutineeTypes.push(mkHoleTT(`_scrut${i}_type`, mkPropTT()));
     }
-
-    scrutineeTypes.push({ name: `_scrut${i}`, type: scrutType });
   }
 
-  // Build the auxiliary function type:
-  // patternArg1 -> ... -> patternArgN -> scrutinee1 -> ... -> scrutineeM -> returnType
-  let auxType = returnType;
-
-  // Add scrutinee types (in reverse order since we're building from the end)
-  for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
-    auxType = mkPiTT(scrutineeTypes[i].type, auxType, scrutineeTypes[i].name);
-  }
-
-  // Add pattern argument types (in reverse order)
-  for (let i = patternArgTypes.length - 1; i >= 0; i--) {
-    auxType = mkPiTT(patternArgTypes[i].type, auxType, patternArgTypes[i].name);
-  }
-
-  return auxType;
+  // Splice scrutinee types into the original type at the splice point
+  return spliceScrutineesIntoType(declType, numPatterns, scrutineeTypes);
 }
 
 /**
- * Extract argument types and return type from a function type.
- * Returns { argTypes, returnType } where argTypes is a list of { name, type } pairs.
+ * Collect information about binders in a Pi-type chain.
+ * Returns the domains of explicit binders along with their depth,
+ * plus the total depth of the prefix (all binders consumed).
  */
-function extractFunctionType(type: TTerm): {
-  argTypes: { name: string; type: TTerm }[];
-  returnType: TTerm;
+function collectBinderInfo(type: TTerm, numExplicitNeeded: number): {
+  explicitDomains: { domain: TTerm; depth: number }[];
+  totalPrefixDepth: number;
 } {
-  const argTypes: { name: string; type: TTerm }[] = [];
-
+  const explicitDomains: { domain: TTerm; depth: number }[] = [];
   let current = type;
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
-    argTypes.push({
-      name: current.name || '_',
-      type: current.domain!,
-    });
-    current = current.body;
+  let depth = 0;
+  let explicitCount = 0;
+
+  while (explicitCount < numExplicitNeeded) {
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      const isNamed = !!(current as any).named;
+      if (!isNamed) {
+        explicitDomains.push({ domain: current.domain!, depth });
+        explicitCount++;
+      }
+      depth++;
+      current = current.body;
+    } else if (current.tag === 'MultiBinder' && current.binderKind.tag === 'BPiTT') {
+      const isNamed = !!(current as any).named;
+      for (const _name of current.names) {
+        if (!isNamed) {
+          explicitDomains.push({ domain: current.domain, depth });
+          explicitCount++;
+        }
+        depth++;
+      }
+      current = current.body;
+    } else {
+      break;
+    }
   }
 
-  return { argTypes, returnType: current };
+  return { explicitDomains, totalPrefixDepth: depth };
+}
+
+/**
+ * Shift all free Var indices in a TTerm by the given amount.
+ * Variables with index >= cutoff are shifted; those below cutoff are bound.
+ */
+function shiftVars(term: TTerm, amount: number, cutoff: number = 0): TTerm {
+  if (amount === 0) return term;
+
+  switch (term.tag) {
+    case 'Var':
+      if (term.index >= cutoff) {
+        return { ...term, index: term.index + amount };
+      }
+      return term;
+
+    case 'App': {
+      const newFn = shiftVars(term.fn, amount, cutoff);
+      const newArg = shiftVars(term.arg, amount, cutoff);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+
+    case 'Binder': {
+      const newDomain = term.domain ? shiftVars(term.domain, amount, cutoff) : undefined;
+      const newBody = shiftVars(term.body, amount, cutoff + 1);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    case 'MultiBinder': {
+      const newDomain = shiftVars(term.domain, amount, cutoff);
+      const newBody = shiftVars(term.body, amount, cutoff + term.names.length);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    case 'Match': {
+      const newScrutinee = shiftVars(term.scrutinee, amount, cutoff);
+      const newClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: shiftVars(c.rhs, amount, cutoff + countPatternVars(c.patterns)),
+      }));
+      return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
+    }
+
+    case 'Annot': {
+      const newTerm = shiftVars(term.term, amount, cutoff);
+      const newType = shiftVars(term.type, amount, cutoff);
+      if (newTerm === term.term && newType === term.type) return term;
+      return { tag: 'Annot', term: newTerm, type: newType };
+    }
+
+    case 'Hole': {
+      const newType = shiftVars(term.type, amount, cutoff);
+      if (newType === term.type) return term;
+      return { ...term, type: newType };
+    }
+
+    default:
+      // Const, Prop, ULevelLit, etc. have no variables
+      return term;
+  }
+}
+
+/**
+ * Walk a Pi-type chain, counting explicit (non-implicit) binders consumed.
+ * After consuming `numExplicit` explicit binders, splice in the given
+ * scrutinee types as new Pi binders before the remaining return type.
+ *
+ * This preserves de Bruijn indices in the prefix because we reuse the
+ * original type nodes - we only modify the "tail" of the Pi chain.
+ */
+function spliceScrutineesIntoType(
+  type: TTerm,
+  numExplicit: number,
+  scrutineeTypes: TTerm[]
+): TTerm {
+  // Base case: we've consumed all required explicit args, splice here
+  if (numExplicit <= 0) {
+    // Shift free variables in the return type to account for the new scrutinee binders
+    let result = shiftVars(type, scrutineeTypes.length);
+    // Add in reverse so they appear in order
+    for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
+      result = mkPiTT(scrutineeTypes[i], result, `_scrut${i}`);
+    }
+    return result;
+  }
+
+  // Recursive case: walk through Pi binders
+  if (type.tag === 'Binder' && type.binderKind.tag === 'BPiTT') {
+    const isNamed = !!(type as any).named;
+    const consumed = isNamed ? 0 : 1;
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes);
+    if (newBody === type.body) return type;
+    return { ...type, body: newBody };
+  }
+
+  if (type.tag === 'MultiBinder' && type.binderKind.tag === 'BPiTT') {
+    const isNamed = !!(type as any).named;
+    const consumed = isNamed ? 0 : type.names.length;
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes);
+    if (newBody === type.body) return type;
+    return { ...type, body: newBody };
+  }
+
+  // If we run out of Pi binders before consuming enough explicit args,
+  // just splice here (best effort)
+  let result = shiftVars(type, scrutineeTypes.length);
+  for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
+    result = mkPiTT(scrutineeTypes[i], result, `_scrut${i}`);
+  }
+  return result;
 }

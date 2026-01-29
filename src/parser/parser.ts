@@ -1192,6 +1192,7 @@ export class Parser {
       }
 
       // Expect and consume '|'
+      const pipeCol = this.current().col;
       if (this.current().type === 'PIPE') {
         this.advance();
       } else if (!hasEllipsis) {
@@ -1217,14 +1218,21 @@ export class Parser {
         }
       }
 
-      // Expect '=>'
-      this.expect('FATARROW');
-
-      // Parse RHS with pattern variables from both function patterns and with-patterns
+      // Parse RHS: either '=> expr' (normal) or 'with scrutinee | ...' (nested with)
       const withPatternVars = withPatterns.flatMap(p => this.collectPatternVars(p));
       const rhsCtx = [...withPatternVars.reverse(), ...ctx];
       const rhsPath: IndexPath = [...withClausePath, { kind: 'field', name: 'rhs' }];
-      const rhs = this.expr(0, rhsCtx, rhsPath);
+
+      let rhs: TTerm;
+      if (this.current().type === 'WITH') {
+        // Nested with: parse as a new WithClause whose functionPatterns
+        // include all accumulated patterns (outer function + this with-pattern)
+        const nestedFunctionPatterns = [...patterns, ...withPatterns];
+        rhs = this.parseNestedWith(nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
+      } else {
+        this.expect('FATARROW');
+        rhs = this.expr(0, rhsCtx, rhsPath);
+      }
 
       withClauses.push({
         patterns: withPatterns,
@@ -1240,19 +1248,103 @@ export class Parser {
     const clauseKey = serializeIndexPath(clausePath);
     this.currentSourceMap.set(clauseKey, createSourceRange(clauseStartPos, clauseEndPos));
 
-    // Create a WithClause expression
-    // This will be desugared to an auxiliary function during elaboration
+    // Wrap the WithClause inside a Match so that the parser's clause-merging logic
+    // can combine it with other clauses of the same function (regular or with).
+    // The desugarer will find the WithClause in the clause RHS and transform it.
+    const withClauseExpr: TTerm = {
+      tag: 'WithClause',
+      functionPatterns: patterns,
+      functionNamedPatterns: namedPatterns.length > 0 ? namedPatterns : undefined,
+      scrutinees,
+      clauses: withClauses
+    } as TTerm;
+
     return {
       kind: 'def',
       name: funcName,
       value: {
-        tag: 'WithClause',
-        functionPatterns: patterns,
-        functionNamedPatterns: namedPatterns.length > 0 ? namedPatterns : undefined,
-        scrutinees,
-        clauses: withClauses
-      } as TTerm  // Type assertion needed since WithClause is a new tag
+        tag: 'Match',
+        scrutinee: mkHoleTT('_scrutinee', mkHoleTT('_scrutinee_type', mkPropTT())),
+        clauses: [{
+          patterns,
+          namedPatterns: namedPatterns.length > 0 ? namedPatterns : undefined,
+          rhs: withClauseExpr,
+        }],
+      },
     };
+  }
+
+  /**
+   * Parse a nested with expression inside a with-branch.
+   * Instead of '| pattern => rhs', the branch has '| pattern with scrutinee | ... => ...'
+   *
+   * Returns a WithClause TTerm whose functionPatterns include ALL accumulated patterns
+   * from the enclosing with chain.
+   */
+  private parseNestedWith(
+    functionPatterns: TPattern[],
+    namedPatterns: TNamedPatternArg[],
+    ctx: string[],
+    _path: IndexPath,
+    outerPipeCol: number,
+  ): TTerm {
+    this.advance(); // consume 'with'
+
+    // Parse scrutinee(s) in the current context
+    const scrutinees: TTerm[] = [];
+    scrutinees.push(this.expr(0, ctx, _path));
+    while (this.current().type === 'COMMA') {
+      this.advance();
+      scrutinees.push(this.expr(0, ctx, _path));
+    }
+
+    this.skipNewlines();
+
+    // Parse nested with-clauses: | pattern => rhs (or further nested with)
+    // Stop when we see a '|' at or left of the outer pipe column (belongs to parent)
+    const nestedClauses: TClause[] = [];
+
+    while (this.current().type === 'PIPE' && this.current().col > outerPipeCol) {
+      const pipeCol = this.current().col;
+      this.advance(); // consume '|'
+
+      // Parse pattern(s)
+      const withPatterns: TPattern[] = [];
+      if (this.canStartPattern(this.current())) {
+        withPatterns.push(this.parsePatternWithSource(_path));
+        let patIdx = 1;
+        while (this.current().type === 'COMMA' && patIdx < scrutinees.length) {
+          this.advance();
+          withPatterns.push(this.parsePatternWithSource(_path));
+          patIdx++;
+        }
+      }
+
+      // Parse RHS: either '=> expr' or nested 'with ...'
+      const withPatternVars = withPatterns.flatMap(p => this.collectPatternVars(p));
+      const rhsCtx = [...withPatternVars.reverse(), ...ctx];
+
+      let rhs: TTerm;
+      if (this.current().type === 'WITH') {
+        // Further nesting
+        const nestedFunctionPatterns = [...functionPatterns, ...withPatterns];
+        rhs = this.parseNestedWith(nestedFunctionPatterns, namedPatterns, rhsCtx, _path, pipeCol);
+      } else {
+        this.expect('FATARROW');
+        rhs = this.expr(0, rhsCtx, _path);
+      }
+
+      nestedClauses.push({ patterns: withPatterns, rhs });
+      this.skipNewlines();
+    }
+
+    return {
+      tag: 'WithClause',
+      functionPatterns,
+      functionNamedPatterns: namedPatterns.length > 0 ? namedPatterns : undefined,
+      scrutinees,
+      clauses: nestedClauses,
+    } as TTerm;
   }
 
   /**
