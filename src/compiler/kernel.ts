@@ -1054,6 +1054,16 @@ export interface PrettyPrintOptions {
   indentSize?: number;
   /** Optional lookup function to get named argument info for functions/constructors */
   namedArgLookup?: NamedArgLookup;
+  /**
+   * Show implicit/named args with labels like {A:=Nat}.
+   * Default: true. When false, all args rendered as positional.
+   */
+  showNamedArgsWithLabels?: boolean;
+  /**
+   * Named arg map for the current signature being rendered.
+   * When provided, params at positions in this map are rendered with {braces} instead of (parens).
+   */
+  signatureNamedArgMap?: NamedArgMap;
 }
 
 /**
@@ -1114,16 +1124,31 @@ export function prettyPrintFormatted(
           const parts: string[] = [];
           let current: TTKTerm = term;
           let ctx = context;
+          let positionIndex = 0;
+
+          // Build position -> name map from signatureNamedArgMap if provided
+          const namedPositions = new Set<number>();
+          if (options.signatureNamedArgMap) {
+            for (const [, pos] of options.signatureNamedArgMap) {
+              namedPositions.add(pos);
+            }
+          }
+
           while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
             const currentAnon = current.name === '_' || current.name === '';
             const domain = stripOuterParens(prettyPrintFormatted(current.domain, ctx, metaVars, options));
+            const isNamedParam = namedPositions.has(positionIndex);
             if (currentAnon) {
               parts.push(domain);
+            } else if (isNamedParam) {
+              // Use braces for named/implicit parameters
+              parts.push(`{${current.name} : ${domain}}`);
             } else {
               parts.push(`(${current.name} : ${domain})`);
             }
             ctx = [current.name, ...ctx];
             current = current.body;
+            positionIndex++;
           }
           parts.push(prettyPrintFormatted(current, ctx, metaVars, options));
           return `(${parts.join(' -> ')})`;
@@ -1172,12 +1197,13 @@ export function prettyPrintFormatted(
         }
       }
 
-      // Format each argument, adding labels for named positions
+      // Format each argument, adding labels for named positions if enabled
       const fnStr = prettyPrintFormatted(fn, context, metaVars, options);
+      const showLabels = options.showNamedArgsWithLabels !== false; // Default true
       const argStrs = args.map((arg, idx) => {
         const argStr = prettyPrintFormatted(arg, context, metaVars, options);
         const paramName = positionToName.get(idx);
-        if (paramName) {
+        if (paramName && showLabels) {
           // This is a named/implicit argument - print with label
           return `{${paramName}:=${argStr}}`;
         }

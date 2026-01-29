@@ -4,9 +4,10 @@
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, HoleLocation, CaseTree, TotalityResult } from '../compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
-import { TTKTerm, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
+import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
+import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 
 // Unicode abbreviations map (Lean-style)
 // Add new abbreviations here - they will be auto-replaced when followed by space/punctuation
@@ -717,7 +718,37 @@ function caseTreeRows(tree: CaseTree): JSX.Element[] {
 }
 
 // Block renderer component
-function BlockRenderer({ block }: { block: CompiledBlock }) {
+interface RenderOptions {
+  showNamedArgsWithLabels: boolean;
+  showNamedParamsWithBraces: boolean;
+  definitions: DefinitionsMap;
+}
+
+function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderOptions: RenderOptions }) {
+  const { showNamedArgsWithLabels, showNamedParamsWithBraces, definitions } = renderOptions;
+  const namedArgLookup = useMemo(() => createNamedArgLookup(definitions), [definitions]);
+
+  // Helper to generate pretty type string with options
+  const getPrettyType = useCallback((kernelType: TTKTerm | undefined, namedArgMap?: NamedArgMap): string | undefined => {
+    if (!kernelType) return undefined;
+    const options: PrettyPrintOptions = {
+      namedArgLookup,
+      showNamedArgsWithLabels,
+      signatureNamedArgMap: showNamedParamsWithBraces ? namedArgMap : undefined,
+    };
+    return prettyPrintFormatted(kernelType, [], undefined, options);
+  }, [namedArgLookup, showNamedArgsWithLabels, showNamedParamsWithBraces]);
+
+  // Helper to generate pretty value string with options
+  const getPrettyValue = useCallback((kernelValue: TTKTerm | undefined): string | undefined => {
+    if (!kernelValue) return undefined;
+    const options: PrettyPrintOptions = {
+      namedArgLookup,
+      showNamedArgsWithLabels,
+    };
+    return prettyPrintFormatted(kernelValue, [], undefined, options);
+  }, [namedArgLookup, showNamedArgsWithLabels]);
+
   let blockHeaderContent: React.ReactNode = null;
   let blockBodyContent: React.ReactNode = null;
 
@@ -794,26 +825,28 @@ function BlockRenderer({ block }: { block: CompiledBlock }) {
             }
             body={
               <>
-                {decl.prettyType && (
+                {decl.kernelType && (
                   <div style={styles.typeRow}>
                     <span style={styles.typeLabel}>Type:</span>
-                    <span style={styles.typeValue}>{decl.prettyType}</span>
+                    <span style={styles.typeValue}>
+                      {getPrettyType(decl.kernelType, decl.name ? namedArgLookup(decl.name) : undefined)}
+                    </span>
                   </div>
                 )}
-                {decl.prettyValue && (
+                {decl.kernelValue && (
                   <div style={styles.typeRow}>
                     <span style={styles.typeLabel}>Value:</span>
-                    <span style={styles.valueValue}>{decl.prettyValue}</span>
+                    <span style={styles.valueValue}>{getPrettyValue(decl.kernelValue)}</span>
                   </div>
                 )}
-                {decl.prettyConstructors && decl.prettyConstructors.length > 0 && (
+                {decl.kernelConstructors && decl.kernelConstructors.length > 0 && (
                   <div>
                     <div style={{ ...styles.typeLabel, marginBottom: '4px' }}>Constructors:</div>
-                    {decl.prettyConstructors.map((ctor, j) => (
+                    {decl.kernelConstructors.map((ctor, j) => (
                       <div key={j} style={styles.ctorRow}>
                         <span style={styles.ctorName}>{ctor.name}</span>
                         <span style={{ color: '#8b949e' }}> : </span>
-                        <span style={styles.typeValue}>{ctor.prettyType}</span>
+                        <span style={styles.typeValue}>{getPrettyType(ctor.type, ctor.namedArgMap)}</span>
                       </div>
                     ))}
                   </div>
@@ -868,6 +901,9 @@ export function TextEditorPage() {
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
   const [editorReady, setEditorReady] = useState(false);
+  // Rendering options for pretty-printed output
+  const [showNamedArgsWithLabels, setShowNamedArgsWithLabels] = useState(true);
+  const [showNamedParamsWithBraces, setShowNamedParamsWithBraces] = useState(false);
   // Ref to store current wildcard hints (updated from compileResult)
   const wildcardHintsRef = useRef<WildcardInlayHint[]>([]);
   // Ref to store current semantic tokens (updated from compileResult)
@@ -1291,16 +1327,46 @@ export function TextEditorPage() {
         {/* Compile Results - Bottom Half */}
         <div style={styles.resultsSection}>
           <div style={styles.sectionHeader}>
-            Compile Results
-            {!compileResult.success && (
-              <span style={{ marginLeft: '8px', color: '#f85149' }}>
-                ({compileResult.totalParseErrors + compileResult.totalNameErrors + compileResult.totalCheckErrors} errors)
-              </span>
-            )}
+            <span>
+              Compile Results
+              {!compileResult.success && (
+                <span style={{ marginLeft: '8px', color: '#f85149' }}>
+                  ({compileResult.totalParseErrors + compileResult.totalNameErrors + compileResult.totalCheckErrors} errors)
+                </span>
+              )}
+            </span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', fontSize: '11px', color: '#8b949e' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showNamedArgsWithLabels}
+                  onChange={(e) => setShowNamedArgsWithLabels(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                Show named args as {'{A:=...}'}
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={showNamedParamsWithBraces}
+                  onChange={(e) => setShowNamedParamsWithBraces(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+                Show named params as {'{A : Type}'}
+              </label>
+            </span>
           </div>
           <div style={styles.resultsContent}>
             {compileResult.blocks.map((block, i) => (
-              <BlockRenderer key={i} block={block} />
+              <BlockRenderer
+                key={i}
+                block={block}
+                renderOptions={{
+                  showNamedArgsWithLabels,
+                  showNamedParamsWithBraces,
+                  definitions: compileResult.definitions,
+                }}
+              />
             ))}
           </div>
         </div>
