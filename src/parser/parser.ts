@@ -681,6 +681,26 @@ export class Parser {
    * For example, when parsing `Na -> Nat`, we parse `Na` at path `p`, then discover
    * it's the domain of a Pi, so we need to update it to `p.domain`.
    */
+  /**
+   * Remap source map entries from one prefix to another.
+   * All entries starting with oldPrefix are moved to start with newPrefix instead.
+   */
+  private remapSourceMapPaths(oldPrefix: string, newPrefix: string): void {
+    const toAdd: Array<[string, SourceRange]> = [];
+    const toDelete: string[] = [];
+    for (const [pathStr, range] of this.currentSourceMap) {
+      if (pathStr === oldPrefix) {
+        toDelete.push(pathStr);
+        toAdd.push([newPrefix, range]);
+      } else if (pathStr.startsWith(oldPrefix + '.') || pathStr.startsWith(oldPrefix + '[')) {
+        toDelete.push(pathStr);
+        toAdd.push([newPrefix + pathStr.substring(oldPrefix.length), range]);
+      }
+    }
+    for (const key of toDelete) this.currentSourceMap.delete(key);
+    for (const [key, value] of toAdd) this.currentSourceMap.set(key, value);
+  }
+
   private prefixSourceMapPaths(basePath: IndexPath, suffix: IndexPathSegment): void {
     const basePathStr = serializeIndexPath(basePath);
     const newEntries = new Map<string, SourceRange>();
@@ -1291,17 +1311,18 @@ export class Parser {
     functionPatterns: TPattern[],
     namedPatterns: TNamedPatternArg[],
     ctx: string[],
-    _path: IndexPath,
+    parentPath: IndexPath,
     outerPipeCol: number,
   ): TTerm {
     this.advance(); // consume 'with'
 
     // Parse scrutinee(s) in the current context
     const scrutinees: TTerm[] = [];
-    scrutinees.push(this.expr(0, ctx, _path));
+    const scrutineePath: IndexPath = [...parentPath, { kind: 'field', name: 'scrutinee' }];
+    scrutinees.push(this.expr(0, ctx, scrutineePath));
     while (this.current().type === 'COMMA') {
       this.advance();
-      scrutinees.push(this.expr(0, ctx, _path));
+      scrutinees.push(this.expr(0, ctx, scrutineePath));
     }
 
     this.skipNewlines();
@@ -1309,8 +1330,15 @@ export class Parser {
     // Parse nested with-clauses: | pattern => rhs (or further nested with)
     // Stop when we see a '|' at or left of the outer pipe column (belongs to parent)
     const nestedClauses: TClause[] = [];
+    let clauseIndex = 0;
 
     while ((this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS') && this.current().col > outerPipeCol) {
+      const withClausePath: IndexPath = [
+        ...parentPath,
+        { kind: 'field', name: 'withClauses' },
+        { kind: 'array', index: clauseIndex },
+      ];
+
       // Handle ellipsis (...) — syntactic sugar for "repeat parent patterns unchanged"
       if (this.current().type === 'ELLIPSIS') {
         this.advance(); // consume '...'
@@ -1323,12 +1351,13 @@ export class Parser {
 
       // Parse pattern(s)
       const withPatterns: TPattern[] = [];
+      const withPatternPath: IndexPath = [...withClausePath, { kind: 'field', name: 'patterns' }];
       if (this.canStartPattern(this.current())) {
-        withPatterns.push(this.parsePatternWithSource(_path));
+        withPatterns.push(this.parsePatternWithSource([...withPatternPath, { kind: 'array', index: 0 }]));
         let patIdx = 1;
         while (this.current().type === 'COMMA' && patIdx < scrutinees.length) {
           this.advance();
-          withPatterns.push(this.parsePatternWithSource(_path));
+          withPatterns.push(this.parsePatternWithSource([...withPatternPath, { kind: 'array', index: patIdx }]));
           patIdx++;
         }
       }
@@ -1336,18 +1365,20 @@ export class Parser {
       // Parse RHS: either '=> expr' or nested 'with ...'
       const withPatternVars = withPatterns.flatMap(p => this.collectPatternVars(p));
       const rhsCtx = [...withPatternVars.reverse(), ...ctx];
+      const rhsPath: IndexPath = [...withClausePath, { kind: 'field', name: 'rhs' }];
 
       let rhs: TTerm;
       if (this.current().type === 'WITH') {
         // Further nesting
         const nestedFunctionPatterns = [...functionPatterns, ...withPatterns];
-        rhs = this.parseNestedWith(nestedFunctionPatterns, namedPatterns, rhsCtx, _path, pipeCol);
+        rhs = this.parseNestedWith(nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
       } else {
         this.expect('FATARROW');
-        rhs = this.expr(0, rhsCtx, _path);
+        rhs = this.expr(0, rhsCtx, rhsPath);
       }
 
       nestedClauses.push({ patterns: withPatterns, rhs });
+      clauseIndex++;
       this.skipNewlines();
     }
 
@@ -2019,6 +2050,10 @@ export class Parser {
     const name = nameToken.value;
     this.advance();
 
+    // Record source range for the named argument name (e.g., "a" in {a := expr})
+    const argNamePath = [...argPath, { kind: 'field' as const, name: 'name' }];
+    this.recordRange(argNamePath, nameToken, nameToken);
+
     let value: TTerm;
     let usedShorthand = false;
 
@@ -2121,6 +2156,11 @@ export class Parser {
             const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
 
             // Multiple names - use MultiBinder
+            // Record source ranges for each name
+            for (let ni = 0; ni < nameTokens.length; ni++) {
+              const niPath: IndexPath = [...path, { kind: 'field' as const, name: 'names' }, { kind: 'array' as const, index: ni }];
+              this.recordRange(niPath, nameTokens[ni], nameTokens[ni]);
+            }
             return {
               tag: 'MultiBinder',
               names,
@@ -2255,6 +2295,11 @@ export class Parser {
       return mkPiTT(type, body, names[0], /* named */ true);
     } else {
       // Multiple names - use MultiBinder with named: true
+      // Record source ranges for each name
+      for (let ni = 0; ni < nameTokens.length; ni++) {
+        const niPath: IndexPath = [...path, { kind: 'field' as const, name: 'names' }, { kind: 'array' as const, index: ni }];
+        this.recordRange(niPath, nameTokens[ni], nameTokens[ni]);
+      }
       return {
         tag: 'MultiBinder',
         names,
@@ -2313,8 +2358,10 @@ export class Parser {
         }
 
         this.expect('COLON');
-        // Parse type
-        const type = this.expr(0, ctx);
+        // Parse type at a temporary path so we can remap it to the correct
+        // binder path during the right-to-left building phase
+        const tempDomainPath: IndexPath = [{ kind: 'field' as const, name: '_ld' }, { kind: 'array' as const, index: groups.length }];
+        const type = this.expr(0, ctx, tempDomainPath);
         this.expect('RPAREN');
 
         const names = nameTokens.map(t => t.type === 'UNDERSCORE' ? '_' : t.value);
@@ -2398,6 +2445,10 @@ export class Parser {
         const binderPath = currentPath.length > 0 ? currentPath : path;
         const namePath = [...binderPath, { kind: 'field' as const, name: 'name' }];
         this.recordRange(namePath, group.nameToken, group.nameToken);
+        // Remap domain type source map entries from temp path to final path
+        const tempPrefix = serializeIndexPath([{ kind: 'field', name: '_ld' }, { kind: 'array', index: i }]);
+        const finalDomainPath = serializeIndexPath([...binderPath, { kind: 'field', name: 'domain' }]);
+        this.remapSourceMapPaths(tempPrefix, finalDomainPath);
       } else {
         // Multi-name group - produce MultiBinder
         result = {
@@ -2412,6 +2463,17 @@ export class Parser {
         for (let j = 0; j < group.names.length; j++) {
           currentPath = currentPath.slice(0, -1);
         }
+
+        // Record source ranges for each name in the MultiBinder
+        const multiBinderPath = currentPath.length > 0 ? currentPath : path;
+        for (let ni = 0; ni < group.nameTokens.length; ni++) {
+          const niPath: IndexPath = [...multiBinderPath, { kind: 'field' as const, name: 'names' }, { kind: 'array' as const, index: ni }];
+          this.recordRange(niPath, group.nameTokens[ni], group.nameTokens[ni]);
+        }
+        // Remap domain type source map entries from temp path to final path
+        const tempPrefix = serializeIndexPath([{ kind: 'field', name: '_ld' }, { kind: 'array', index: i }]);
+        const finalDomainPath = serializeIndexPath([...multiBinderPath, { kind: 'field', name: 'domain' }]);
+        this.remapSourceMapPaths(tempPrefix, finalDomainPath);
       }
     }
 
@@ -2735,6 +2797,10 @@ export class Parser {
       if (innerToken.type === 'IDENT') {
         const name = innerToken.value;
         this.advance();
+
+        // Record source range for the named argument name (e.g., "a" in {a:=Succ p})
+        const argNamePath = [...path, { kind: 'field' as const, name: 'name' }];
+        this.recordRange(argNamePath, innerToken, innerToken);
 
         // Check for {name := pattern} syntax
         if (this.current().type === 'ASSIGN') {
@@ -3116,6 +3182,10 @@ export class Parser {
         } else {
           result = mkSortTT(mkUSuccAppTT(mkConstTT(name))); // Type U where U is a constant = Sort(U+1)
         }
+        // Record source range for the level identifier (e.g., "u" in "Type u")
+        // The term structure is Sort(App(USucc, Var/Const)), so the level var is at path.level.arg
+        const levelArgPath = [...path, { kind: 'field' as const, name: 'level' }, { kind: 'field' as const, name: 'arg' }];
+        this.recordRange(levelArgPath, identToken, identToken);
       }
     } else if (this.current().type === 'LPAREN') {
       // Type (level-expr) - parenthesized level expression

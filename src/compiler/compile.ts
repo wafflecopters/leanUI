@@ -23,6 +23,7 @@ import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
 import { desugarWithClauses } from './with-desugar';
+import type { TypeInfoMap } from './type-info';
 export type { TotalityResult, CaseTree };
 
 // ============================================================================
@@ -115,7 +116,9 @@ export interface CompiledDeclaration {
 
   // Record-specific surface info for syntax highlighting
   isRecord?: boolean;
+  surfaceParams?: Array<{ name: string; type: TTerm }>;
   surfaceFields?: Array<{ name: string; type: TTerm }>;
+  surfaceExtendsExprs?: TTerm[];
 
   // Elaborated kernel terms
   kernelType?: TTKTerm;
@@ -146,6 +149,9 @@ export interface CompiledDeclaration {
 
   // Elaboration error source path (for locating errors in source)
   elabErrorPath?: string;
+
+  // Type info map for type-at-cursor feature
+  typeInfoMap?: TypeInfoMap;
 }
 
 /**
@@ -339,6 +345,16 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
               tokens
             );
           }
+        } else {
+          // Simple definitions (e.g., "fox = expr") also have defName recorded
+          // when merged with a type signature line
+          addSemanticTokenDirect(
+            ['value', 'clauses', 0, 'defName'],
+            decl.sourceMap,
+            block.startLine,
+            'termName',
+            tokens
+          );
         }
       }
 
@@ -363,6 +379,20 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
         // Record constructor name (e.g., "MkPoint" in "constructor MkPoint")
         addSemanticTokenDirect(['constructorName'], decl.sourceMap, block.startLine, 'constName', tokens);
 
+        // Record parameter names and types (e.g., "u" and "A" in "{u : ULevel} (A : Type u)")
+        if (decl.surfaceParams) {
+          for (let i = 0; i < decl.surfaceParams.length; i++) {
+            addSemanticTokenDirect(['params', i, 'name'], decl.sourceMap, block.startLine, 'boundVar', tokens);
+            collectSemanticTokensFromSurfaceTerm(
+              decl.surfaceParams[i].type,
+              decl.sourceMap,
+              block.startLine,
+              ['params', i, 'type'],
+              tokens
+            );
+          }
+        }
+
         // Record field names at definition site (e.g., "x" and "y" in "x : Nat" and "y : Nat")
         if (decl.surfaceFields) {
           for (let i = 0; i < decl.surfaceFields.length; i++) {
@@ -373,6 +403,19 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
               decl.sourceMap,
               block.startLine,
               ['fields', i, 'type'],
+              tokens
+            );
+          }
+        }
+
+        // Process record extends expressions (e.g., "Monoid A" in "extends Monoid A")
+        if (decl.surfaceExtendsExprs) {
+          for (let i = 0; i < decl.surfaceExtendsExprs.length; i++) {
+            collectSemanticTokensFromSurfaceTerm(
+              decl.surfaceExtendsExprs[i],
+              decl.sourceMap,
+              block.startLine,
+              ['extends', i],
               tokens
             );
           }
@@ -412,7 +455,8 @@ function collectSemanticTokensFromSurfaceTerm(
       break;
 
     case 'Sort':
-      // Type/Prop keywords - skip for now
+      // Recurse into level (e.g., the "u" in "Type u")
+      collectSemanticTokensFromSurfaceTerm(term.level, sourceMap, blockStartLine, [...path, 'level'], tokens);
       break;
 
     case 'Hole':
@@ -433,16 +477,18 @@ function collectSemanticTokensFromSurfaceTerm(
       }
       collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
       // Handle let binding value
+      // Note: parser records let value at path bindings[0].value, not binderKind.defVal
       if (term.binderKind.tag === 'BLetTT') {
-        collectSemanticTokensFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], tokens);
+        collectSemanticTokensFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'bindings', 0, 'value'], tokens);
       }
       break;
 
     case 'App':
       collectSemanticTokensFromSurfaceTerm(term.fn, sourceMap, blockStartLine, [...path, 'fn'], tokens);
       collectSemanticTokensFromSurfaceTerm(term.arg, sourceMap, blockStartLine, [...path, 'arg'], tokens);
-      // If named argument (e.g., f { A := x }), emit tokens for braces
+      // If named argument (e.g., f { A := x }), emit tokens for braces and name
       if (term.argName) {
+        addSemanticTokenDirect([...path, 'arg', 'name'], sourceMap, blockStartLine, 'boundVar', tokens);
         addSemanticTokenDirect([...path, 'arg', 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
         addSemanticTokenDirect([...path, 'arg', 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
       }
@@ -484,6 +530,8 @@ function collectSemanticTokensFromSurfaceTerm(
         // Collect from named patterns (they are at indices 0..namedPatternCount-1 in source map)
         if (clause.namedPatterns) {
           for (let j = 0; j < clause.namedPatterns.length; j++) {
+            // Emit token for the named argument name (e.g., "a" in {a:=Succ p})
+            addSemanticTokenDirect([...path, 'clauses', i, 'patterns', j, 'name'], sourceMap, blockStartLine, 'boundVar', tokens);
             collectSemanticTokensFromSurfacePattern(
               clause.namedPatterns[j].pattern,
               sourceMap,
@@ -734,7 +782,7 @@ function collectHolesFromSurfaceTerm(
       }
       collectHolesFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], holes);
       if (term.binderKind.tag === 'BLetTT') {
-        collectHolesFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'binderKind', 'defVal'], holes);
+        collectHolesFromSurfaceTerm(term.binderKind.defVal, sourceMap, blockStartLine, [...path, 'bindings', 0, 'value'], holes);
       }
       break;
 
@@ -748,19 +796,37 @@ function collectHolesFromSurfaceTerm(
       collectHolesFromSurfaceTerm(term.type, sourceMap, blockStartLine, [...path, 'type'], holes);
       break;
 
-    case 'Match':
-      collectHolesFromSurfaceTerm(term.scrutinee, sourceMap, blockStartLine, [...path, 'scrutinee'], holes);
-      for (let i = 0; i < term.clauses.length; i++) {
-        const clause = term.clauses[i];
-        collectHolesFromSurfaceTerm(
-          clause.rhs,
-          sourceMap,
-          blockStartLine,
-          [...path, 'clauses', i, 'rhs'],
-          holes
-        );
+    case 'WithClause':
+    case 'Match': {
+      if (term.tag === 'Match') {
+        collectHolesFromSurfaceTerm(term.scrutinee, sourceMap, blockStartLine, [...path, 'scrutinee'], holes);
+      }
+      // For WithClause, term.clauses are the with-branches; for Match, term.clauses are match clauses.
+      // WithClause also has scrutinees to walk.
+      const isWith = term.tag === 'WithClause';
+      const clauses = (term as any).clauses as { rhs: TTerm; patterns: any[] }[];
+      if (isWith) {
+        const wc = term as any;
+        for (let si = 0; si < wc.scrutinees.length; si++) {
+          collectHolesFromSurfaceTerm(wc.scrutinees[si], sourceMap, blockStartLine, [...path, 'scrutinee'], holes);
+        }
+      }
+      for (let i = 0; i < clauses.length; i++) {
+        const clause = clauses[i];
+        if (isWith) {
+          // Walking with-clause branches: path uses 'withClauses' convention
+          const wcPath = [...path, 'withClauses', i];
+          collectHolesFromSurfaceTerm(clause.rhs, sourceMap, blockStartLine, [...wcPath, 'rhs'], holes);
+        } else if (clause.rhs.tag === 'WithClause') {
+          // Match clause whose RHS is a WithClause: recurse with clausePath context
+          const clausePath = [...path, 'clauses', i];
+          collectHolesFromSurfaceTerm(clause.rhs, sourceMap, blockStartLine, clausePath, holes);
+        } else {
+          collectHolesFromSurfaceTerm(clause.rhs, sourceMap, blockStartLine, [...path, 'clauses', i, 'rhs'], holes);
+        }
       }
       break;
+    }
   }
 }
 
@@ -1272,6 +1338,7 @@ function checkDeclaration(
   let totalityResult: TotalityResult | undefined;
   let checkedValue: TTKTerm | undefined;
   let zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined;
+  const typeInfoMap: TypeInfoMap = new Map();
 
   // Check for elaboration errors first (e.g., named argument errors)
   if (decl.elabError) {
@@ -1283,7 +1350,7 @@ function checkDeclaration(
     checkErrors.push(error);
     errorCount = 1;
   } else if (decl.kind === 'inductive') {
-    const result = checkInductiveTypeDeclaration(decl, definitions);
+    const result = checkInductiveTypeDeclaration(decl, definitions, typeInfoMap);
     if (result.success) {
       newDefinitions = result.definitions;
       indexPositions = result.indexPositions;
@@ -1294,7 +1361,7 @@ function checkDeclaration(
       errorCount = result.errors.length;
     }
   } else if (decl.kind === 'term') {
-    const result = checkTermDeclaration(decl, definitions);
+    const result = checkTermDeclaration(decl, definitions, { typeInfoCollector: typeInfoMap });
     if (result.success) {
       newDefinitions = result.definitions;
       totalityResult = result.totalityResult;
@@ -1347,7 +1414,8 @@ function checkDeclaration(
     totalityResult,
     elabMap: decl.elabMap,
     sourceMap: decl.sourceMap,
-    elabErrorPath: decl.elabErrorPath
+    elabErrorPath: decl.elabErrorPath,
+    typeInfoMap: typeInfoMap.size > 0 ? typeInfoMap : undefined,
   };
 
   return { compiled, newDefinitions, errorCount };
@@ -1356,6 +1424,7 @@ function checkDeclaration(
 function checkInductiveTypeDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
+  typeInfoCollector?: TypeInfoMap,
 ): { success: false, errors: TCEnvError[] } | { success: true, definitions: DefinitionsMap, indexPositions: number[], zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> } {
   if (decl.kind !== 'inductive') {
     return failCheck('Declaration is not an inductive type', createTCEnv({ definitions, options: { mode: 'check' } }))
@@ -1376,7 +1445,9 @@ function checkInductiveTypeDeclaration(
     decl.kernelType,
     decl.kernelConstructors,
     definitions,
-    inductiveNamedArgMap && inductiveNamedArgMap.size > 0 ? inductiveNamedArgMap : undefined
+    inductiveNamedArgMap && inductiveNamedArgMap.size > 0 ? inductiveNamedArgMap : undefined,
+    undefined,  // recordInfo
+    typeInfoCollector,
   );
   if (!result.success) {
     return result
@@ -1400,13 +1471,13 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult } {
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
 
-  let env = createTCEnv({ definitions, options: { mode: 'check' } })
+  let env = createTCEnv({ definitions, options: { mode: 'check' }, typeInfoCollector: options?.typeInfoCollector })
 
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', env)
@@ -1816,8 +1887,11 @@ function createCompiledDeclaration(
   indexPositions?: number[],
   elabErrorPath?: string,
   isRecord?: boolean,
+  surfaceParams?: Array<{ name: string; type: TTerm }>,
   surfaceFields?: Array<{ name: string; type: TTerm }>,
+  surfaceExtendsExprs?: TTerm[],
   prettyProjections?: Array<{ name: string; prettyType: string }>,
+  typeInfoMap?: TypeInfoMap,
 ): CompiledDeclaration {
   // Create namedArgLookup for pretty printing implicit args with labels
   const namedArgLookup = definitions ? createNamedArgLookup(definitions) : undefined;
@@ -1830,7 +1904,9 @@ function createCompiledDeclaration(
     surfaceValue: decl.originalSurfaceValue ?? decl.value,
     surfaceConstructors: decl.constructors,
     isRecord,
+    surfaceParams,
     surfaceFields,
+    surfaceExtendsExprs,
     kernelType,
     kernelValue,
     kernelConstructors,
@@ -1848,6 +1924,7 @@ function createCompiledDeclaration(
     elabMap,
     sourceMap,
     elabErrorPath,
+    typeInfoMap,
   };
 }
 
@@ -1896,6 +1973,7 @@ function processInductiveDeclaration(
   definitions: DefinitionsMap,
 ): ProcessDeclarationResult {
   const elabMap: ElabMap = new Map();
+  const typeInfoMap: TypeInfoMap = new Map();
 
   // Elaborate signature
   let kernelType: TTKTerm | undefined;
@@ -1973,8 +2051,11 @@ function processInductiveDeclaration(
     kernelType,
     kernelConstructors,
     definitions,
-    inductiveNamedArgMap
+    inductiveNamedArgMap,
+    undefined,  // recordInfo
+    typeInfoMap,
   );
+  const finalTypeInfoMap = typeInfoMap.size > 0 ? typeInfoMap : undefined;
 
   if (!result.success) {
     // Return original context on failure
@@ -1982,7 +2063,7 @@ function processInductiveDeclaration(
       success: false,
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
-        false, result.errors
+        false, result.errors, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
       ),
       newDefinitions: definitions,
       errorCount: result.errors.length
@@ -1994,7 +2075,8 @@ function processInductiveDeclaration(
     compiled: createCompiledDeclaration(
       // Use zonkedConstructors (with solved metas) instead of the original kernelConstructors
       decl, kernelType, undefined, result.zonkedConstructors, elabMap, sourceMap,
-      true, [], result.newDefinitions, undefined, result.indexPositions
+      true, [], result.newDefinitions, undefined, result.indexPositions,
+      undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
     ),
     newDefinitions: result.newDefinitions,
     errorCount: 0
@@ -2481,7 +2563,7 @@ function processRecordDeclaration(
     compiled: createCompiledDeclaration(
       syntheticDecl, inductiveDef.type, undefined, result.zonkedConstructors, elabMap, sourceMap,
       true, [], finalDefinitions, undefined, result.indexPositions, undefined,
-      true, decl.fields, prettyProjections  // isRecord, surfaceFields, prettyProjections
+      true, decl.params, decl.fields, decl.extendsExprs, prettyProjections  // isRecord, surfaceParams, surfaceFields, surfaceExtendsExprs, prettyProjections
     ),
     newDefinitions: finalDefinitions,
     errorCount: 0
@@ -2649,6 +2731,7 @@ function processTermDeclaration(
   options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number },
 ): ProcessDeclarationResult {
   const elabMap: ElabMap = new Map();
+  const typeInfoMap: TypeInfoMap = new Map();
 
   // a. Elaborate signature
   let kernelType: TTKTerm | undefined;
@@ -2682,14 +2765,16 @@ function processTermDeclaration(
   // Check the term declaration
   // (This handles: signature check & meta solving, clause checking with LHS/RHS,
   //  totality, recursion, and adds to context if no errors)
-  const result = checkTermDeclaration(elabDecl, definitions, options);
+  const result = checkTermDeclaration(elabDecl, definitions, { ...options, typeInfoCollector: typeInfoMap });
+  const finalTypeInfoMap = typeInfoMap.size > 0 ? typeInfoMap : undefined;
 
   if (!result.success) {
     return {
       success: false,
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, undefined, elabMap, sourceMap,
-        false, result.errors, definitions, result.totalityResult
+        false, result.errors, definitions, result.totalityResult,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
       ),
       newDefinitions: definitions,
       errorCount: result.errors.length
@@ -2700,7 +2785,8 @@ function processTermDeclaration(
     success: true,
     compiled: createCompiledDeclaration(
       decl, result.zonkedType, result.checkedValue, undefined, elabMap, sourceMap,
-      true, [], result.definitions, result.totalityResult
+      true, [], result.definitions, result.totalityResult,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
     ),
     newDefinitions: result.definitions,
     errorCount: 0
@@ -3344,10 +3430,14 @@ function checkTermValue(
         );
         checkedClauses.push(checkedClause);
       } catch (e) {
+        // Anchor the error to the specific clause, not the whole function
+        const clauseEnv = termEnv.atIndexPath(
+          appendPath(termEnv.indexPath, fieldSeg('value'), fieldSeg('clauses'), arraySeg(clauseIndex))
+        );
         if (e instanceof TCEnvError) {
           errors.push(e);
         } else {
-          errors.push(TCEnvError.create(String(e), termEnv));
+          errors.push(TCEnvError.create(String(e), clauseEnv));
         }
       }
     }
