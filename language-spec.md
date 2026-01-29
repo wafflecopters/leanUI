@@ -348,6 +348,25 @@ deep a b c with a
 
 Each level of nesting generates an additional auxiliary function. The inner `|` pipes are distinguished from outer ones by indentation (inner pipes must be indented further than outer pipes).
 
+**Ellipsis syntax** — `...` can optionally precede `|` in with-branches, following Agda convention. It means "repeat the parent function patterns unchanged":
+
+```
+filter p Nil = Nil
+filter p (Cons x rest) with p x
+  ... | True => Cons x (filter p rest)
+  ... | False => filter p rest
+```
+
+The `...` is purely syntactic sugar — our with-branches already inherit the parent function patterns implicitly. It works in both top-level and nested with-branches.
+
+**`#absurd` in with branches** — mark impossible cases:
+
+```
+absurdEqual : Equal Zero (Succ Zero) -> Void
+absurdEqual eq with eq
+  | refl => #absurd
+```
+
 With branches must be exhaustive (all constructor cases covered).
 
 ## Comments

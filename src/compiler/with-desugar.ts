@@ -229,6 +229,7 @@ function desugarWithClause(
       scrutinee: mkHoleTT('_scrutinee', mkHoleTT('_scrutinee_type', mkPropTT())),
       clauses: auxClauses,
     },
+    withScrutineeCount: scrutinees.length,
   };
 
   // Recursively desugar nested WithClauses in the auxiliary's clause RHS values.

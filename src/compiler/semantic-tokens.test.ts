@@ -181,6 +181,64 @@ compose {A} {B} {C} g f x = g (f x)`;
       validateSemanticTokens(source, tokens);
     });
 
+    test('with-clause semantic tokens', () => {
+      const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False`;
+      const result = compileTTFromText(source);
+      const tokens = extractSemanticTokens(result);
+
+      validateSemanticTokens(source, tokens);
+
+      // Should have tokens on the with-clause lines (9, 10, 11)
+      const tokensOnLine9 = tokens.filter(t => t.line === 9);
+      const tokensOnLine10 = tokens.filter(t => t.line === 10);
+      const tokensOnLine11 = tokens.filter(t => t.line === 11);
+
+      // Line 9 (isZero n with n): should have termName for 'isZero', patternVar for 'n'
+      expect(tokensOnLine9.length).toBeGreaterThan(0);
+
+      // Line 10 (| Zero => True): should have constName for 'Zero' and 'True'
+      const line10ConstTokens = tokensOnLine10.filter(t => t.type === 'constName');
+      expect(line10ConstTokens.length).toBeGreaterThanOrEqual(1); // at least Zero or True
+
+      // Line 11 (| Succ _ => False): should have constName for 'Succ' and 'False'
+      const line11ConstTokens = tokensOnLine11.filter(t => t.type === 'constName');
+      expect(line11ConstTokens.length).toBeGreaterThanOrEqual(1); // at least Succ or False
+    });
+
+    test('nested with-clause semantic tokens', () => {
+      const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+classify : Nat -> Nat -> Bool
+classify m n with m
+  | Zero with n
+    | Zero => True
+    | Succ _ => False
+  | Succ _ => True`;
+      const result = compileTTFromText(source);
+      const tokens = extractSemanticTokens(result);
+
+      validateSemanticTokens(source, tokens);
+
+      // Lines 10-13 are in with-clauses — should have some tokens
+      const withLineTokens = tokens.filter(t => t.line >= 10 && t.line <= 13);
+      expect(withLineTokens.length).toBeGreaterThan(0);
+    });
+
     test('blank lines before inductive with named binders', () => {
       // This is the user's exact scenario - blank lines at the start
       // should not cause semantic token positions to be wrong

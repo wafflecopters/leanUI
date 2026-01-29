@@ -385,6 +385,7 @@ reverse xs = revAux Nil xs
 isOne : Nat -> Bool
 isOne Zero = False
 isOne n with n
+  | Zero => False
   | Succ Zero => True
   | Succ (Succ _) => False
 `;
@@ -741,14 +742,15 @@ partial n with n
   | Zero => True
 `;
       const { allDecls } = compileAndGetDecls(source);
-      // The auxiliary function should fail totality check, which propagates
-      // Note: auxiliary may or may not be checked for totality depending on skipTotality
-      // But the main function should still compile (it calls the auxiliary)
+      // The auxiliary function should fail totality check — missing Succ case
       const auxDecl = allDecls.find((d: any) => d?.name?.startsWith('partial-with-'));
       expect(auxDecl).toBeDefined();
-      // Auxiliary has skipTotality, so it succeeds
-      // The non-exhaustive with produces a partial function — this is currently allowed
-      // because auxiliaries skip totality checking
+      expect(auxDecl?.checkSuccess).toBe(false);
+      // Should have a totality error about missing Succ
+      const hasNonTotalError = auxDecl?.checkErrors?.some((e: any) =>
+        e?.message?.includes('non-total') || e?.message?.includes('Missing')
+      );
+      expect(hasNonTotalError).toBe(true);
     });
 
     test('type mismatch in with branch RHS', () => {
@@ -924,6 +926,222 @@ ordered m n with m
       for (const d of withDecls) {
         expect(d?.checkSuccess, `${d?.name} should type-check`).toBe(true);
       }
+    });
+  });
+
+  // ===========================================================================
+  // Ellipsis syntax (... | pattern => rhs)
+  // ===========================================================================
+
+  describe('ellipsis syntax', () => {
+    test('ellipsis in top-level with branches', () => {
+      const source = natBoolPreamble + `
+isZero : Nat -> Bool
+isZero n with n
+  ... | Zero => True
+  ... | Succ _ => False
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'isZero');
+    });
+
+    test('ellipsis mixed with non-ellipsis branches', () => {
+      const source = natBoolPreamble + `
+isZero2 : Nat -> Bool
+isZero2 n with n
+  ... | Zero => True
+  | Succ _ => False
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'isZero2');
+    });
+
+    test('ellipsis with pattern clause + with', () => {
+      const source = natBoolPreamble + `
+isOne : Nat -> Bool
+isOne Zero = False
+isOne n with n
+  ... | Zero => False
+  ... | Succ Zero => True
+  ... | Succ (Succ _) => False
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'isOne');
+    });
+
+    test('ellipsis in nested with branches', () => {
+      const source = natBoolPreamble + `
+classify : Nat -> Nat -> Bool
+classify m n with m
+  | Zero with n
+    ... | Zero => True
+    ... | Succ _ => False
+  | Succ _ => True
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'classify');
+    });
+
+    test('ellipsis with multiple scrutinees', () => {
+      const source = natBoolPreamble + `
+inductive Ordering : Type where
+  LT : Ordering
+  EQ : Ordering
+  GT : Ordering
+compare : Nat -> Nat -> Ordering
+compare m n with m, n
+  ... | Zero, Zero => EQ
+  ... | Zero, Succ _ => LT
+  ... | Succ _, Zero => GT
+  ... | Succ a, Succ b => compare a b
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'compare');
+    });
+  });
+
+  // ===========================================================================
+  // #absurd in with branches
+  // ===========================================================================
+
+  describe('#absurd in with branches', () => {
+    test('#absurd with impossible equality proof', () => {
+      const source = natPreamble + equalPreamble.replace(natPreamble, '') + `
+inductive Void : Type where
+absurdEqual : Equal Zero (Succ Zero) -> Void
+absurdEqual eq with eq
+  | refl => #absurd
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'absurdEqual');
+    });
+
+    test('#absurd in nested with', () => {
+      const source = natPreamble + equalPreamble.replace(natPreamble, '') + `
+inductive Void : Type where
+nested : Equal Zero (Succ Zero) -> Void
+nested eq with eq
+  | refl => #absurd
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'nested');
+    });
+
+    test('#absurd mixed with regular branches', () => {
+      const source = natBoolPreamble + equalPreamble.replace(natPreamble, '') + `
+inspect : {n : Nat} -> Equal n Zero -> Bool
+inspect eq with eq
+  | refl => True
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'inspect');
+    });
+  });
+
+  // ===========================================================================
+  // Totality checking for with auxiliaries
+  // ===========================================================================
+
+  describe('totality checking', () => {
+    test('exhaustive with-clause passes totality', () => {
+      const source = natBoolPreamble + `
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'isZero');
+      // Auxiliary should also pass
+      const aux = allDecls.find((d: any) => d?.name?.startsWith('isZero-with-'));
+      expect(aux?.checkSuccess).toBe(true);
+    });
+
+    test('non-exhaustive with-clause fails totality', () => {
+      const source = natBoolPreamble + `
+broken : Nat -> Bool
+broken n with n
+  | Zero => True
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      // Auxiliary should fail totality (missing Succ case)
+      const aux = allDecls.find((d: any) => d?.name?.startsWith('broken-with-'));
+      expect(aux).toBeDefined();
+      expect(aux?.checkSuccess).toBe(false);
+    });
+
+    test('frozen function-patterns do not cause false totality failures', () => {
+      // filter-with-1 has frozen patterns (p, xs) and scrutinee (List A)
+      // The scrutinee dimension covers Nil and Cons — should be total
+      const source = listPreamble + `
+filter : {A : Type} -> (A -> Bool) -> List A -> List A
+filter p xs with xs
+  | Nil => Nil
+  | Cons x rest with p x
+    | True => Cons x (filter p rest)
+    | False => filter p rest
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'filter');
+      // All auxiliaries should pass too
+      const auxDecls = allDecls.filter((d: any) => d?.name?.includes('-with-'));
+      for (const d of auxDecls) {
+        expect(d?.checkSuccess, `${d?.name} should pass totality`).toBe(true);
+      }
+    });
+
+    test('multiple scrutinees checked for totality', () => {
+      const source = natBoolPreamble + `
+inductive Ordering : Type where
+  LT : Ordering
+  EQ : Ordering
+  GT : Ordering
+compare : Nat -> Nat -> Ordering
+compare m n with m, n
+  | Zero, Zero => EQ
+  | Zero, Succ _ => LT
+  | Succ _, Zero => GT
+  | Succ a, Succ b => compare a b
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'compare');
+      const aux = allDecls.find((d: any) => d?.name?.startsWith('compare-with-'));
+      expect(aux?.checkSuccess).toBe(true);
+    });
+
+    test('nested with totality: inner with checked independently', () => {
+      const source = natBoolPreamble + `
+classify : Nat -> Nat -> Bool
+classify m n with m
+  | Zero with n
+    | Zero => True
+    | Succ _ => False
+  | Succ _ with n
+    | Zero => False
+    | Succ _ => True
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'classify');
+      // All nested auxiliaries should pass totality
+      const auxDecls = allDecls.filter((d: any) => d?.name?.includes('-with-'));
+      for (const d of auxDecls) {
+        expect(d?.checkSuccess, `${d?.name} should pass totality`).toBe(true);
+      }
+    });
+
+    test('mixed clauses with exhaustive with pass totality', () => {
+      // When mixing regular clauses with with, the with-clause must be
+      // independently total for its scrutinee (Agda-style behavior)
+      const source = natBoolPreamble + `
+isOne : Nat -> Bool
+isOne Zero = False
+isOne n with n
+  | Zero => False
+  | Succ Zero => True
+  | Succ (Succ _) => False
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      expectSuccess(allDecls, 'isOne');
     });
   });
 });

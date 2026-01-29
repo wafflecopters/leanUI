@@ -646,6 +646,12 @@ export interface ParsedDeclaration {
   constructorName?: string;  // Optional custom constructor name
   extends?: string[];        // Names of records to extend
   extendsExprs?: TTerm[];    // Full expressions for extends (e.g., Semigroup A)
+  // For with-clause auxiliary functions: number of scrutinee pattern positions.
+  // Used by totality checker to skip frozen function-pattern positions.
+  withScrutineeCount?: number;
+  // Original surface value before with-clause desugaring.
+  // Used for semantic token extraction (the desugared value loses WithClause structure).
+  originalSurfaceValue?: TTerm;
 }
 
 /**
@@ -1304,9 +1310,16 @@ export class Parser {
     // Stop when we see a '|' at or left of the outer pipe column (belongs to parent)
     const nestedClauses: TClause[] = [];
 
-    while (this.current().type === 'PIPE' && this.current().col > outerPipeCol) {
+    while ((this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS') && this.current().col > outerPipeCol) {
+      // Handle ellipsis (...) — syntactic sugar for "repeat parent patterns unchanged"
+      if (this.current().type === 'ELLIPSIS') {
+        this.advance(); // consume '...'
+      }
+
       const pipeCol = this.current().col;
-      this.advance(); // consume '|'
+      if (this.current().type === 'PIPE') {
+        this.advance(); // consume '|'
+      }
 
       // Parse pattern(s)
       const withPatterns: TPattern[] = [];

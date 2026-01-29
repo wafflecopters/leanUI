@@ -494,13 +494,59 @@ function collectSemanticTokensFromSurfaceTerm(
           }
         }
         // Collect from RHS
-        collectSemanticTokensFromSurfaceTerm(
-          clause.rhs,
-          sourceMap,
-          blockStartLine,
-          [...path, 'clauses', i, 'rhs'],
-          tokens
-        );
+        if (clause.rhs.tag === 'WithClause') {
+          // With-clause RHS: the parser records with-clause sub-paths under
+          // 'withClauses' relative to the Match clause, not under 'rhs.clauses'.
+          const wc = clause.rhs as any;
+          const clausePath = [...path, 'clauses', i];
+          // Process scrutinees (recorded at clause.scrutinee by parser)
+          for (let si = 0; si < wc.scrutinees.length; si++) {
+            collectSemanticTokensFromSurfaceTerm(wc.scrutinees[si], sourceMap, blockStartLine, [...clausePath, 'scrutinee'], tokens);
+          }
+          // Process with-clauses
+          for (let wi = 0; wi < wc.clauses.length; wi++) {
+            const wcClause = wc.clauses[wi];
+            const wcPath = [...clausePath, 'withClauses', wi];
+            // Process patterns
+            for (let pj = 0; pj < wcClause.patterns.length; pj++) {
+              collectSemanticTokensFromSurfacePattern(
+                wcClause.patterns[pj],
+                sourceMap,
+                blockStartLine,
+                [...wcPath, 'patterns', pj],
+                tokens
+              );
+            }
+            // Process RHS (could be nested WithClause or a normal term)
+            if (wcClause.rhs.tag === 'WithClause') {
+              // Nested with: the parser records nested with RHS expressions at
+              // the same 'rhs' path, so we can still extract tokens from them.
+              collectSemanticTokensFromSurfaceTerm(
+                wcClause.rhs,
+                sourceMap,
+                blockStartLine,
+                [...wcPath, 'rhs'],
+                tokens
+              );
+            } else {
+              collectSemanticTokensFromSurfaceTerm(
+                wcClause.rhs,
+                sourceMap,
+                blockStartLine,
+                [...wcPath, 'rhs'],
+                tokens
+              );
+            }
+          }
+        } else {
+          collectSemanticTokensFromSurfaceTerm(
+            clause.rhs,
+            sourceMap,
+            blockStartLine,
+            [...path, 'clauses', i, 'rhs'],
+            tokens
+          );
+        }
       }
       break;
 
@@ -1354,7 +1400,7 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult } {
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
@@ -1524,7 +1570,7 @@ function checkTermDeclaration(
       namedArgMap,
       totalArity,
       annotatedAbsurdClauses,
-      { skipTotality: options?.skipTotality }
+      { skipTotality: options?.skipTotality, withScrutineeCount: options?.withScrutineeCount }
     );
     if (!result.success) {
       return { success: false, errors: result.errors, totalityResult: result.totalityResult }
@@ -1781,7 +1827,7 @@ function createCompiledDeclaration(
     name: decl.name,
     kind: decl.kind === 'inductive' ? 'inductive' : 'term',
     surfaceType: decl.type,
-    surfaceValue: decl.value,
+    surfaceValue: decl.originalSurfaceValue ?? decl.value,
     surfaceConstructors: decl.constructors,
     isRecord,
     surfaceFields,
@@ -2600,7 +2646,7 @@ function processTermDeclaration(
   decl: ParsedDeclaration,
   sourceMap: SourceMap,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number },
 ): ProcessDeclarationResult {
   const elabMap: ElabMap = new Map();
 
@@ -2755,6 +2801,11 @@ export function compileTTFromText(source: string): CompileResult {
       // Pattern resolution for this declaration (using current symbol context)
       const [resolvedDecl] = resolvePatternsInDeclarations([origDecl], symbolContext);
 
+      // Save original surface value before desugaring (for semantic highlighting)
+      // After desugaring, WithClause is replaced by a call to the auxiliary function,
+      // losing the original source structure needed for syntax highlighting.
+      const originalSurfaceValue = resolvedDecl.value;
+
       // Desugar with-clauses (may produce auxiliary declarations)
       const desugaredDecls = desugarWithClauses([resolvedDecl]);
 
@@ -2762,6 +2813,11 @@ export function compileTTFromText(source: string): CompileResult {
       // Auxiliaries must be processed FIRST because the main declaration references them
       const mainDecl = desugaredDecls[0];
       const auxiliaryDecls = desugaredDecls.slice(1);
+
+      // Preserve original surface value on main declaration for semantic token extraction
+      if (auxiliaryDecls.length > 0 && originalSurfaceValue) {
+        mainDecl.originalSurfaceValue = originalSurfaceValue;
+      }
 
       // First: register all auxiliary declarations in symbol context
       for (const auxDecl of auxiliaryDecls) {
@@ -2790,7 +2846,7 @@ export function compileTTFromText(source: string): CompileResult {
       // Process auxiliary declarations FIRST (so their types are available)
       // Note: auxiliary declarations are always term definitions (kind === 'def')
       for (const auxDecl of auxiliaryDecls) {
-        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, skipTotality: true });
+        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount });
         compiledDecls.push(result.compiled);
         if (result.success) {
           definitions = result.newDefinitions;
@@ -3251,7 +3307,7 @@ function checkTermValue(
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
   annotatedAbsurdClauses: number[] = [],
-  options?: { skipTotality?: boolean },
+  options?: { skipTotality?: boolean; withScrutineeCount?: number },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   const errors: TCEnvError[] = [];
   const checkedClauses: TTKClause[] = [];
@@ -3353,11 +3409,31 @@ function checkTermValue(
 
   // Run totality checking (builds case tree and checks coverage)
   // Pass zonked elabArgs and contextNames for case tree display
-  const totalityClauses = checkedClauses.map(c => ({
+  let totalityClauses = checkedClauses.map(c => ({
     patterns: c.patterns,
     elabArgs: c.elabArgs,
     contextNames: c.contextNames
   }));
+
+  // For with-clause auxiliaries: replace frozen function-pattern positions with PVar
+  // so the totality checker only checks exhaustiveness over the scrutinee dimensions.
+  // The frozen positions are guaranteed to be covered by construction (the caller
+  // always passes specific constructor patterns from the parent clause context).
+  if (options?.withScrutineeCount && options.withScrutineeCount > 0 && totalityClauses.length > 0) {
+    const totalPatterns = totalityClauses[0].patterns.length;
+    const frozenCount = totalPatterns - options.withScrutineeCount;
+    if (frozenCount > 0) {
+      totalityClauses = totalityClauses.map(c => ({
+        ...c,
+        patterns: [
+          ...c.patterns.slice(0, frozenCount).map((_p, i) =>
+            ({ tag: 'PVar' as const, name: `_ctxt${i}` })),
+          ...c.patterns.slice(frozenCount),
+        ],
+      }));
+    }
+  }
+
   const totalityResult = checkTotality(name ?? '???', totalityClauses, termEnv.definitions, absurdityChecker);
 
   // Helper to format missing patterns with padding and named args

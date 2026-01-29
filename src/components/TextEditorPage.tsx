@@ -351,6 +351,19 @@ plusZeroRight {n:=Zero} = refl {A:=Nat} {a:=Zero}
 plusZeroRight {n:=Succ n} = let rec = plusZeroRight {n} in
   cong rec
 
+inductive List : Type -> Type where
+  Nil : {A : Type} -> List A
+  Cons : {A : Type} -> A -> List A -> List A
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+filter : {A : Type} -> (A -> Bool) -> List A -> List A
+filter f Nil = Nil
+filter f (Cons x xs) with f x
+  | True => Cons x (filter f xs)
+  | False => filter f xs
 `;
 
 // Styles
@@ -1113,7 +1126,13 @@ export function TextEditorPage() {
           [/\b(Type|Prop|ULevel|USucc|UMax|UIMax)\b/, 'type.identifier'],
 
           // Keywords
-          [/\b(inductive|record|constructor|extends|where|let|in|fun)\b/, 'keyword'],
+          [/\b(inductive|record|constructor|extends|where|let|in|fun|with)\b/, 'keyword'],
+
+          // Absurd marker
+          [/#absurd\b/, 'keyword'],
+
+          // Ellipsis (with-clause parent pattern repetition)
+          [/\.\.\./, 'keyword.operator'],
 
           // Holes (unfinished code that needs attention)
           [/\?[a-zA-Z_][a-zA-Z0-9_']*/, 'variable.predefined'],
