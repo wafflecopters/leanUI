@@ -1,0 +1,12 @@
+-- @test success
+-- @name "record with ULevel param and universe-polymorphic Equal"
+-- @import preambles/equality.tt
+
+record Semigroup {u : ULevel} (A : Type u) : Type u where
+  op : A -> A -> A
+  assoc : (a b c : A) -> Equal (op (op a b) c) (op a (op b c))
+
+record Monoid {u : ULevel} (A : Type u) : Type u extends Semigroup A where
+  e : A
+  identLeft : (a : A) -> Equal (op e a) a
+  identRight : (a : A) -> Equal (op a e) a

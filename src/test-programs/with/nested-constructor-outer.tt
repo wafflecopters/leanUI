@@ -1,0 +1,10 @@
+-- @test success
+-- @name "nested with with constructor patterns in outer"
+-- @import preambles/nat.tt
+
+add : Nat -> Nat -> Nat
+add m n with m
+  | Zero => n
+  | Succ k with n
+    | Zero => Succ k
+    | Succ j => Succ (Succ (add k j))

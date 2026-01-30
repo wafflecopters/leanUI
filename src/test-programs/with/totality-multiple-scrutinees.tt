@@ -1,0 +1,16 @@
+-- @test success
+-- @name "multiple scrutinees checked for totality"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+inductive Ordering : Type where
+  LT : Ordering
+  EQ : Ordering
+  GT : Ordering
+
+compare : Nat -> Nat -> Ordering
+compare m n with m, n
+  | Zero, Zero => EQ
+  | Zero, Succ _ => LT
+  | Succ _, Zero => GT
+  | Succ a, Succ b => compare a b

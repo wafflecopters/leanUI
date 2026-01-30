@@ -1,0 +1,10 @@
+-- @test success
+-- @name "isEmpty using with"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @import preambles/list.tt
+
+isEmpty : {A : Type} -> List A -> Bool
+isEmpty xs with xs
+  | Nil => True
+  | Cons _ _ => False

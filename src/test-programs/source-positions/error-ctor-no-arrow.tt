@@ -1,0 +1,5 @@
+-- @test failure
+-- @name "Error in constructor with no arrow type is detected"
+
+inductive Unit : Type where
+  MkUnit : Wrong

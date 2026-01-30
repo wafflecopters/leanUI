@@ -1,0 +1,12 @@
+-- @test success
+-- @name "replace (transport) function using Equal"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+replace : {A : Type} -> {P : A -> Type} -> {x y : A} -> Equal x y -> P x -> P y
+replace refl px = px

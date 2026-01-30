@@ -1,0 +1,4 @@
+-- @test failure
+-- @name "Error in chained application is detected"
+
+x = f g h wrong

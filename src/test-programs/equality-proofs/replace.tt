@@ -1,0 +1,6 @@
+-- @test success
+-- @name "replace: Equal x y -> f x -> f y"
+-- @import preambles/equality.tt
+
+replace : {x y : Type} -> {f : Type -> Type} -> Equal x y -> f x -> f y
+replace refl fx = fx

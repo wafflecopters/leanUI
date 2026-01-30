@@ -1,0 +1,5 @@
+-- @test failure
+-- @name "Type mismatch: inductive has Type, constructor has Type u"
+
+inductive Equal_ : {u : ULevel} -> {A : Type} -> A -> A -> Type where
+  refl_ : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal_ {u} a a

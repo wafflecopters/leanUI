@@ -1,0 +1,9 @@
+-- @test success
+-- @name "named argument with USucc"
+-- @import preambles/nat.tt
+
+record Box {u : ULevel} (A : Type u) : Type (USucc u) where
+  unbox : A
+
+TypeBox : Type 1
+TypeBox = Box {u:=UZero} Nat

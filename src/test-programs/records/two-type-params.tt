@@ -1,0 +1,6 @@
+-- @test success
+-- @name "Pair record with two type parameters compiles"
+
+record Pair (A : Type) (B : Type) where
+  fst : A
+  snd : B

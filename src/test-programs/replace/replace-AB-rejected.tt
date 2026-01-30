@@ -1,0 +1,9 @@
+-- @test failure
+-- @name "replace with f : A -> B is rejected (f x is a term)"
+-- @error "is a term of type B"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+replace : {A B : Type} -> {x y : A} -> {f : A -> B} -> Equal x y -> f x -> f y
+replace refl fx = fx

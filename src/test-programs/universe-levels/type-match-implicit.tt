@@ -1,0 +1,5 @@
+-- @test success
+-- @name "Type match with implicit u"
+
+inductive Equal2 : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
+  refl2 : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal2 a a

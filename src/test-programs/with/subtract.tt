@@ -1,0 +1,9 @@
+-- @test success
+-- @name "subtract: nested patterns and recursion"
+-- @import preambles/nat.tt
+
+sub : Nat -> Nat -> Nat
+sub m n with m, n
+  | Zero, _ => Zero
+  | m2, Zero => m2
+  | Succ m2, Succ n2 => sub m2 n2

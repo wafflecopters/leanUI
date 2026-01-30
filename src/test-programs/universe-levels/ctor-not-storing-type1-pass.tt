@@ -1,0 +1,5 @@
+-- @test success
+-- @name "constructor NOT storing the Type 1 value should PASS"
+
+inductive OkList : Type 1 -> Type where
+  ONil : {A : Type 1} -> OkList A

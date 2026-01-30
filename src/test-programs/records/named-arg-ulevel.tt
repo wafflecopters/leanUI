@@ -1,0 +1,11 @@
+-- @test success
+-- @name "named argument for record type parameter"
+-- @import preambles/nat.tt
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  dfst: A
+  dsnd: B dfst
+
+SimplePair : Type
+SimplePair = DPair {u:=UZero} {v:=UZero} Nat (\_ => Nat)

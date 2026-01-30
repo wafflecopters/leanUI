@@ -1,0 +1,12 @@
+-- @test success
+-- @name "refl with just {a:=Zero} (A inferred)"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+test : Equal Zero Zero
+test = refl {a:=Zero}

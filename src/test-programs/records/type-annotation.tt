@@ -1,0 +1,7 @@
+-- @test success
+-- @name "record with explicit Type annotation parses"
+-- @import preambles/nat.tt
+
+record Point : Type where
+  x : Nat
+  y : Nat

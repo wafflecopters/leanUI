@@ -1,0 +1,5 @@
+-- @test success
+-- @name "record with type parameter compiles"
+
+record Box (A : Type) where
+  contents : A

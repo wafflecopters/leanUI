@@ -1,0 +1,11 @@
+-- @test success
+-- @name "nested constructor patterns in with branches"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+isTwo : Nat -> Bool
+isTwo n with n
+  | Zero => False
+  | Succ Zero => False
+  | Succ (Succ Zero) => True
+  | Succ (Succ (Succ _)) => False

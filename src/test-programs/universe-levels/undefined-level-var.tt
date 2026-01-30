@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "Type uhoh should be rejected - undefined level identifier"
+-- @error "Undefined level variable 'uhoh'"
+
+inductive Equal : {A : Type uhoh} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a

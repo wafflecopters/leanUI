@@ -1,0 +1,23 @@
+-- @test failure
+-- @name "soundness: conflicting implicit args must be rejected"
+-- @import preambles/equality.tt
+-- @error "Implicit argument conflict"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
+
+decEqNat : (m : Nat) -> (n : Nat) -> DecEq m n
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ n) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No zeroNeqSucc
+decEqNat (Succ x) (Succ y) = Yes refl

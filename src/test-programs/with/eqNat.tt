@@ -1,0 +1,10 @@
+-- @test success
+-- @name "equal using with and recursion"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+eqNat : Nat -> Nat -> Bool
+eqNat m n with m, n
+  | Zero, Zero => True
+  | Succ m2, Succ n2 => eqNat m2 n2
+  | _, _ => False

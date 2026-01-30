@@ -1,0 +1,6 @@
+-- @test success
+-- @name "Bool: boolean type"
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool

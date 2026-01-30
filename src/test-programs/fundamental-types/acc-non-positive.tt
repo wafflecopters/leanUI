@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "Acc: rejected due to non-strict positivity"
+-- @error "positive"
+
+inductive Acc : (A : Type) -> (A -> A -> Type) -> A -> Type where
+  AccIntro : (A : Type) -> (R : A -> A -> Type) -> (x : A) -> ((y : A) -> R y x -> Acc A R y) -> Acc A R x

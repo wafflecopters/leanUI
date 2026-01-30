@@ -1,0 +1,11 @@
+-- @test success
+-- @name "can construct parameterized record value"
+-- @import preambles/nat.tt
+
+record Pair (A : Type) (B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+pair12 : Pair Nat Nat
+pair12 = MkPair (Succ Zero) (Succ (Succ Zero))

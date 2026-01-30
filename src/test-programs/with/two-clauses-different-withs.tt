@@ -1,0 +1,12 @@
+-- @test success
+-- @name "two separate function clauses with different withs"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+classify : Nat -> Nat -> Nat
+classify Zero n with n
+  | Zero => Zero
+  | Succ _ => Succ Zero
+classify (Succ m) n with n
+  | Zero => Succ (Succ Zero)
+  | Succ _ => Succ (Succ (Succ Zero))

@@ -1,0 +1,9 @@
+-- @test success
+-- @name "isZero: matching on a variable with with-clause"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ m => False

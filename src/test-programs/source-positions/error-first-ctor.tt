@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "Error in first constructor type is detected"
+
+inductive List : Type where
+  Nil : Wrong
+  Cons : Nat -> List

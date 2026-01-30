@@ -1,0 +1,7 @@
+-- @test failure
+-- @name "Error in type signature is detected"
+-- @import preambles/nat.tt
+
+plus : Nat -> Nat -> Na
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)

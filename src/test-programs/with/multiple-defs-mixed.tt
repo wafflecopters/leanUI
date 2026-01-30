@@ -1,0 +1,18 @@
+-- @test success
+-- @name "multiple definitions, some with with some without"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+double : Nat -> Nat
+double Zero = Zero
+double (Succ n) = Succ (Succ (double n))
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+
+pred : Nat -> Nat
+pred n with n
+  | Zero => Zero
+  | Succ m => m

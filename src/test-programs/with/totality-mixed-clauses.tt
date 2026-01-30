@@ -1,0 +1,11 @@
+-- @test success
+-- @name "mixed clauses with exhaustive with pass totality"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+isOne : Nat -> Bool
+isOne Zero = False
+isOne n with n
+  | Zero => False
+  | Succ Zero => True
+  | Succ (Succ _) => False

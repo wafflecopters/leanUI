@@ -1,0 +1,13 @@
+-- @test failure
+-- @name "swap should reject wrong argument order"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+swap : {A : Type} -> {B : Type} -> {C : Type} -> (f : A -> B -> C) -> (B -> A -> C)
+swap f b a = f a b
+
+myFunc : Nat -> Bool -> Bool
+myFunc n b = b
+
+test : Nat -> Bool
+test n = swap myFunc n True

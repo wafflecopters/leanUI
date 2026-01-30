@@ -1,0 +1,11 @@
+-- @test success
+-- @name "ellipsis with pattern clause + with"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+isOne : Nat -> Bool
+isOne Zero = False
+isOne n with n
+  ... | Zero => False
+  ... | Succ Zero => True
+  ... | Succ (Succ _) => False

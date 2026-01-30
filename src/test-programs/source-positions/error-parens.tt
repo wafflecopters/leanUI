@@ -1,0 +1,4 @@
+-- @test failure
+-- @name "Error inside parenthesized expression is detected"
+
+x = (wrong)

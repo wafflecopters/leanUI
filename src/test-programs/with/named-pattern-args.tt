@@ -1,0 +1,11 @@
+-- @test success
+-- @name "with on function with named pattern args"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+id : {A : Type} -> A -> A
+id x = x
+
+apply : {A B : Type} -> (A -> B) -> A -> B
+apply f x with f x
+  | result => result

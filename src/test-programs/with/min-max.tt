@@ -1,0 +1,19 @@
+-- @test success
+-- @name "min and max using with"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+leq : Nat -> Nat -> Bool
+leq Zero _ = True
+leq (Succ _) Zero = False
+leq (Succ m) (Succ n) = leq m n
+
+min : Nat -> Nat -> Nat
+min m n with leq m n
+  | True => m
+  | False => n
+
+max : Nat -> Nat -> Nat
+max m n with leq m n
+  | True => n
+  | False => m

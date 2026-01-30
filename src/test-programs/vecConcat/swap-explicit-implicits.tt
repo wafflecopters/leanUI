@@ -1,0 +1,16 @@
+-- @test success
+-- @name "swap with polymorphic function - explicit implicits"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A : Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+swap : {A : Type} -> {B : Type} -> {C : Type} -> (f : A -> B -> C) -> (B -> A -> C)
+swap f b a = f a b
+
+testSwapVCons : Vec Nat Zero -> Nat -> Vec Nat (Succ Zero)
+testSwapVCons v a = swap (VCons {A := Nat} {n := Zero}) v a

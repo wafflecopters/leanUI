@@ -1,0 +1,10 @@
+-- @test failure
+-- @name "appNat: f x in return position is rejected with clear error"
+-- @error "but a type was expected"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+appNat : (f : Nat -> Nat) -> (x : Nat) -> f x
+appNat f x = f x

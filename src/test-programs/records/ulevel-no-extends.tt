@@ -1,0 +1,8 @@
+-- @test success
+-- @name "record with op field and Equal reference (no extends)"
+-- @import preambles/equality.tt
+
+record MonoidNoExtends {u : ULevel} (A : Type u) : Type u where
+  op : A -> A -> A
+  e : A
+  identLeft : (a : A) -> Equal (op e a) a

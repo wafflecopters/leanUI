@@ -1,0 +1,6 @@
+-- @test success
+-- @name "record with single field compiles"
+-- @import preambles/nat.tt
+
+record Wrapper where
+  value : Nat

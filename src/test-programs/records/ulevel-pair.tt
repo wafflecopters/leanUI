@@ -1,0 +1,6 @@
+-- @test success
+-- @name "simple record with ULevel param needs explicit result sort"
+
+record Pair {u : ULevel} (A : Type u) : Type u where
+  fst : A
+  snd : A

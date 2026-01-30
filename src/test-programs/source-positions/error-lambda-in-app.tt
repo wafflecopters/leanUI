@@ -1,0 +1,5 @@
+-- @test failure
+-- @name "Error in lambda inside application is detected"
+-- @import preambles/nat.tt
+
+x = Nat (fun y => wrong y)

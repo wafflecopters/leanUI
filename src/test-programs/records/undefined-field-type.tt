@@ -1,0 +1,5 @@
+-- @test failure
+-- @name "record with undefined type in field reports error"
+
+record Bad where
+  x : UndefinedType

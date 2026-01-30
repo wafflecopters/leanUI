@@ -1,0 +1,4 @@
+-- @test success
+-- @name "empty record compiles"
+
+record Unit where

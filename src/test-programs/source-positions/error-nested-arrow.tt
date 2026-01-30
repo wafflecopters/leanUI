@@ -1,0 +1,4 @@
+-- @test failure
+-- @name "Error in nested arrow type is detected"
+
+f : Na -> Nat -> Nat

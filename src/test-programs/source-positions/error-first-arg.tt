@@ -1,0 +1,4 @@
+-- @test failure
+-- @name "Error in first argument of type signature is detected"
+
+plus : Na -> Nat -> Nat

@@ -1,0 +1,8 @@
+-- @test success
+-- @name "with clause returning constant"
+-- @import preambles/nat.tt
+
+alwaysZero : Nat -> Nat
+alwaysZero n with n
+  | Zero => Zero
+  | Succ _ => Zero

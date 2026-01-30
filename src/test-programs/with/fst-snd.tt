@@ -1,0 +1,12 @@
+-- @test success
+-- @name "fst and snd using with"
+-- @import preambles/nat.tt
+-- @import preambles/pair.tt
+
+fst : {A B : Type} -> Pair A B -> A
+fst p with p
+  | MkPair a _ => a
+
+snd : {A B : Type} -> Pair A B -> B
+snd p with p
+  | MkPair _ b => b

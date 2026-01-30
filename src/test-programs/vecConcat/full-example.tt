@@ -1,0 +1,21 @@
+-- @test success
+-- @name "vecConcat using swap VCons - the original motivating example"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A : Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+swap : {A : Type} -> {B : Type} -> {C : Type} -> (f : A -> B -> C) -> (B -> A -> C)
+swap f b a = f a b
+
+vecConcat : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
+vecConcat VNil v = v
+vecConcat {a := Succ p} (VCons h tail) v = swap VCons (vecConcat {a := p} tail v) h

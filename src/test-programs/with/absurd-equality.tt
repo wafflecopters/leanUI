@@ -1,0 +1,10 @@
+-- @test success
+-- @name "#absurd with impossible equality proof"
+-- @import preambles/nat.tt
+-- @import preambles/equal-simple.tt
+
+inductive Void : Type where
+
+absurdEqual : Equal Zero (Succ Zero) -> Void
+absurdEqual eq with eq
+  | refl => #absurd

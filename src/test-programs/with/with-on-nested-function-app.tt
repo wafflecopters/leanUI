@@ -1,0 +1,19 @@
+-- @test success
+-- @name "with on nested function application"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+not : Bool -> Bool
+not b with b
+  | True => False
+  | False => True
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+
+isNonZero : Nat -> Bool
+isNonZero n with not (isZero n)
+  | True => True
+  | False => False

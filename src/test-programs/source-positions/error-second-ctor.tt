@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "Error in second constructor type is detected"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Wrong -> Nat

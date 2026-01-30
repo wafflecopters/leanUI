@@ -1,0 +1,4 @@
+-- @test failure
+-- @name "Error in long chain of arrows is detected"
+
+f : A -> B -> C -> D -> Wrong -> F

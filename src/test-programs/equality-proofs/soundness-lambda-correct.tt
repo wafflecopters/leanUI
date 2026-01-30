@@ -1,0 +1,25 @@
+-- @test success
+-- @name "soundness: lambda-wrapped correct proof is accepted"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
+
+succNeqZero : {n : Nat} -> Equal (Succ n) Zero -> Void
+succNeqZero refl = #absurd
+
+partialDecEq : (m : Nat) -> (n : Nat) -> DecEq m n
+partialDecEq Zero Zero = Yes refl
+partialDecEq Zero (Succ n) = No (\eq => zeroNeqSucc eq)
+partialDecEq (Succ x) Zero = No (\eq => succNeqZero eq)
+partialDecEq (Succ x) (Succ y) = ?todo

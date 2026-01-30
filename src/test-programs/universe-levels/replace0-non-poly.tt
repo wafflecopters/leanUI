@@ -1,0 +1,8 @@
+-- @test success
+-- @name "replace0 using Equal0 without universe polymorphism"
+
+inductive Equal0 : {A : Type} -> A -> A -> Type where
+  refl0 : {A : Type} -> {x : A} -> Equal0 x x
+
+replace0 : {x y : Type} -> {f : Type -> Type} -> Equal0 x y -> f x -> f y
+replace0 refl0 fx = fx

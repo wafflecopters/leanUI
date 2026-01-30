@@ -1,0 +1,8 @@
+-- @test failure
+-- @name "Error in third pattern clause is detected"
+-- @import preambles/nat.tt
+
+f : Nat -> Nat
+f Zero = Zero
+f (Succ Zero) = Zero
+f (Succ (Succ n)) = wrong n

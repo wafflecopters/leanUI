@@ -1,0 +1,9 @@
+-- @test success
+-- @name "bindMaybe using with"
+-- @import preambles/nat.tt
+-- @import preambles/maybe.tt
+
+bindMaybe : {A B : Type} -> Maybe A -> (A -> Maybe B) -> Maybe B
+bindMaybe mx f with mx
+  | Nothing => Nothing
+  | Just x => f x

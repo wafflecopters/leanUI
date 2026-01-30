@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "Error in inductive type signature is detected"
+-- @import preambles/nat.tt
+
+inductive Vec : Na -> Type where
+  VNil : Vec Zero

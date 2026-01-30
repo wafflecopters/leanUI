@@ -1,0 +1,6 @@
+-- @test success
+-- @name "List: polymorphic list definition"
+
+inductive List : Type -> Type where
+  Nil : (A : Type) -> List A
+  Cons : (A : Type) -> A -> List A -> List A

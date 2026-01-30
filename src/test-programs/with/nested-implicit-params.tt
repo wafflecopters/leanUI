@@ -1,0 +1,12 @@
+-- @test success
+-- @name "nested with with implicit type parameters"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @import preambles/list.tt
+
+filter : {A : Type} -> (A -> Bool) -> List A -> List A
+filter p xs with xs
+  | Nil => Nil
+  | Cons x rest with p x
+    | True => Cons x (filter p rest)
+    | False => filter p rest

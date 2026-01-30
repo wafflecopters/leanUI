@@ -18,7 +18,6 @@
 
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
-import { resetWildcardCounter } from './elab';
 
 // Standard preamble for all tests
 const preamble = `
@@ -38,30 +37,6 @@ cong f refl = refl
 `;
 
 describe('Implicit argument inference', () => {
-  test('refl with all named args explicit: {A:=Nat} {a:=Zero}', () => {
-    const source = preamble + `
-test : Equal Zero Zero
-test = refl {A:=Nat} {a:=Zero}
-`;
-    const result = compileTTFromText(source);
-    const allDecls = result.blocks.flatMap(b => (b as any).declarations ?? []);
-    const testDecl = allDecls.find((d: any) => d?.name === 'test');
-
-    console.log('test checkSuccess:', testDecl?.checkSuccess);
-    console.log('test checkErrors:', testDecl?.checkErrors?.map((e: any) => e?.message));
-    console.log('test prettyValue:', testDecl?.prettyValue);
-
-    expect(testDecl?.checkSuccess).toBe(true);
-
-    // Check for unsolved metas in the pretty-printed output (zonking issue)
-    const prettyValue = testDecl?.prettyValue || '';
-    const hasUnsolvedMeta = prettyValue.includes('?_implicit') || prettyValue.includes('?m');
-    if (hasUnsolvedMeta) {
-      console.log('ZONKING BUG: Unsolved metas in prettyValue:', prettyValue);
-    }
-    expect(hasUnsolvedMeta).toBe(false);
-  });
-
   test('refl with just {A:=Nat} (a inferred)', () => {
     const source = preamble + `
 test : Equal Zero Zero
@@ -75,44 +50,6 @@ test = refl {A:=Nat}
     console.log('test (A only) checkErrors:', testDecl?.checkErrors?.map((e: any) => e?.message));
     console.log('test (A only) prettyValue:', testDecl?.prettyValue);
 
-    expect(testDecl?.checkSuccess).toBe(true);
-  });
-
-  test('ISSUE 1: refl with just {a:=Zero} (A inferred) - should work but may fail', () => {
-    const source = preamble + `
-test : Equal Zero Zero
-test = refl {a:=Zero}
-`;
-    const result = compileTTFromText(source);
-    const allDecls = result.blocks.flatMap(b => (b as any).declarations ?? []);
-    const testDecl = allDecls.find((d: any) => d?.name === 'test');
-
-    console.log('test (a only) checkSuccess:', testDecl?.checkSuccess);
-    console.log('test (a only) checkErrors:', testDecl?.checkErrors?.map((e: any) => e?.message));
-    console.log('test (a only) prettyValue:', testDecl?.prettyValue);
-
-    // This SHOULD work - A should be inferred from a's type
-    expect(testDecl?.checkSuccess).toBe(true);
-  });
-
-  test('ISSUE 2: refl with no named args (both inferred) - should work but may fail', () => {
-    resetWildcardCounter(); // Reset counter for clean test
-
-    const source = preamble + `
-test : Equal Zero Zero
-test = refl
-`;
-    const result = compileTTFromText(source);
-    const allDecls = result.blocks.flatMap(b => (b as any).declarations ?? []);
-    const testDecl = allDecls.find((d: any) => d?.name === 'test');
-
-    console.log('test (no args) checkSuccess:', testDecl?.checkSuccess);
-    console.log('test (no args) checkErrors:', testDecl?.checkErrors?.map((e: any) => e?.message));
-    console.log('test (no args) prettyValue:', testDecl?.prettyValue);
-    console.log('test (no args) kernelValue tag:', testDecl?.kernelValue?.tag);
-    console.log('test (no args) surfaceValue tag:', testDecl?.surfaceValue?.tag);
-
-    // This SHOULD work - both A and a should be inferred from expected type
     expect(testDecl?.checkSuccess).toBe(true);
   });
 });
@@ -249,35 +186,6 @@ test = refl
 });
 
 describe('Named implicit arg matching', () => {
-  test('named args should match by name, not position', () => {
-    // When we write refl {a:=Zero}, it should match the 'a' parameter
-    // regardless of whether A was specified
-    const source = preamble + `
--- refl has: {A : Type} -> {a : A} -> Equal a a
--- If we provide {a:=Zero}, A should be inferred as Nat
-
-test1 : Equal Zero Zero
-test1 = refl {a:=Zero}
-
-test2 : Equal (Succ Zero) (Succ Zero)
-test2 = refl {a:=Succ Zero}
-`;
-    const result = compileTTFromText(source);
-    const allDecls = result.blocks.flatMap(b => (b as any).declarations ?? []);
-
-    const test1Decl = allDecls.find((d: any) => d?.name === 'test1');
-    const test2Decl = allDecls.find((d: any) => d?.name === 'test2');
-
-    console.log('test1 checkSuccess:', test1Decl?.checkSuccess);
-    console.log('test1 checkErrors:', test1Decl?.checkErrors?.map((e: any) => e?.message));
-
-    console.log('test2 checkSuccess:', test2Decl?.checkSuccess);
-    console.log('test2 checkErrors:', test2Decl?.checkErrors?.map((e: any) => e?.message));
-
-    expect(test1Decl?.checkSuccess).toBe(true);
-    expect(test2Decl?.checkSuccess).toBe(true);
-  });
-
   test('out-of-order named args should work', () => {
     // If we have f : {A : Type} -> {B : Type} -> {a : A} -> ...
     // Then f {a:=x} {A:=T} should work (B inferred, a and A in any order)

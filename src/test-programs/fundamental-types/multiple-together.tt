@@ -1,0 +1,14 @@
+-- @test success
+-- @name "Multiple fundamental types together"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive List : Type -> Type where
+  Nil : (A : Type) -> List A
+  Cons : (A : Type) -> A -> List A -> List A

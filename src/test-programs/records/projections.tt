@@ -1,0 +1,11 @@
+-- @test success
+-- @name "projection functions are generated and usable"
+-- @import preambles/nat.tt
+
+record Point where
+  constructor MkPoint
+  x : Nat
+  y : Nat
+
+getX : Point -> Nat
+getX p = Point.x p

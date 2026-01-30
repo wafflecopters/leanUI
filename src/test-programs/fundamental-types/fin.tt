@@ -1,0 +1,10 @@
+-- @test success
+-- @name "Fin: bounded natural numbers"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Fin : Nat -> Type where
+  FZero : (n : Nat) -> Fin (Succ n)
+  FSucc : (n : Nat) -> Fin n -> Fin (Succ n)

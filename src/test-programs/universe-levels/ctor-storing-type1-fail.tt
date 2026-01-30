@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "constructor storing Type 1 value in Type result should FAIL"
+
+inductive BadList : Type 1 -> Type where
+  BNil : {A : Type 1} -> BadList A
+  BCons : {A : Type 1} -> A -> BadList A -> BadList A

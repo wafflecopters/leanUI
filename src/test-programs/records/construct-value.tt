@@ -1,0 +1,11 @@
+-- @test success
+-- @name "can construct a record value"
+-- @import preambles/nat.tt
+
+record Point where
+  constructor MkPoint
+  x : Nat
+  y : Nat
+
+origin : Point
+origin = MkPoint Zero Zero

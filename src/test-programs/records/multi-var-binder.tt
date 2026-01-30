@@ -1,0 +1,6 @@
+-- @test success
+-- @name "record with multi-var binder compiles"
+
+record Pair (A B : Type) where
+  fst : A
+  snd : B

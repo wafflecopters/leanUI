@@ -1,0 +1,14 @@
+-- @test success
+-- @name "with on a function application"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+
+doubleIsZero : Nat -> Bool
+doubleIsZero n with isZero n
+  | True => True
+  | False => False

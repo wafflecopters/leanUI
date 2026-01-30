@@ -1,0 +1,9 @@
+-- @test success
+-- @name "#absurd mixed with regular branches"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @import preambles/equal-simple.tt
+
+inspect : {n : Nat} -> Equal n Zero -> Bool
+inspect eq with eq
+  | refl => True

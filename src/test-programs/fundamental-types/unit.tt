@@ -1,0 +1,5 @@
+-- @test success
+-- @name "Unit: trivial type"
+
+inductive Unit : Type where
+  unit : Unit

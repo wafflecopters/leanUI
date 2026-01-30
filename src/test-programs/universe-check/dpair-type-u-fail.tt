@@ -1,0 +1,5 @@
+-- @test failure
+-- @name "DPair with Type u result should fail (second arg is at level v)"
+
+inductive DPair4 : {u v : ULevel} -> (A : Type u) -> (B : A -> Type v) -> Type u where
+  MkDPair4: {u v : ULevel} -> {A : Type u} -> {B : A -> Type v} -> (a : A) -> B a -> DPair4 A B

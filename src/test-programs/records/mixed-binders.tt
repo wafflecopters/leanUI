@@ -1,0 +1,6 @@
+-- @test success
+-- @name "record with mixed explicit and implicit multi-var binders compiles"
+
+record Foo (A B : Type) {C D : Type} where
+  x : A
+  y : C

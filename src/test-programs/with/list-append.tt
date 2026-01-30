@@ -1,0 +1,10 @@
+-- @test success
+-- @name "append using with"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @import preambles/list.tt
+
+append : {A : Type} -> List A -> List A -> List A
+append xs ys with xs
+  | Nil => ys
+  | Cons x rest => Cons x (append rest ys)

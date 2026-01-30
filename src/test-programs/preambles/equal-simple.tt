@@ -1,0 +1,2 @@
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a

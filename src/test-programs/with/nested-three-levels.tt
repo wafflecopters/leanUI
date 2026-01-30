@@ -1,0 +1,13 @@
+-- @test success
+-- @name "three levels of nesting"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+deep : Nat -> Nat -> Nat -> Bool
+deep a b c with a
+  | Zero with b
+    | Zero with c
+      | Zero => True
+      | Succ _ => False
+    | Succ _ => False
+  | Succ _ => False

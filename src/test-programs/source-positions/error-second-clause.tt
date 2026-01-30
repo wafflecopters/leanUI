@@ -1,0 +1,7 @@
+-- @test failure
+-- @name "Error in second pattern clause is detected"
+-- @import preambles/nat.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = wrong a b

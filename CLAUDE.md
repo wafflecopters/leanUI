@@ -69,6 +69,15 @@ Source Text → Parser → TT (surface) → Elaboration → TTK (kernel) → Typ
 
 If you don't understand what layer you're working in, STOP and read `SYSTEM_OVERVIEW.md`.
 
+### 5. Immutability
+
+**All major data structures are immutable**, except the parser (which uses mutable state for tokenization and source map building). In particular:
+
+- **`TCEnv`** is immutable. Every method (e.g., `withValue`, `extendTTKContext`, `inAppFn`) returns a **new** `TCEnv` instance. Never mutate a `TCEnv`.
+- **`TTKTerm`** and **`TTerm`** are immutable. Term transformations produce new terms.
+- **`TTKContext`** is an immutable array. Extending it creates a new array.
+- The only mutable maps are explicitly shared ones (e.g., `TypeInfoMap`, which is a shared collector passed through immutable envs via constructor parameter).
+
 ---
 
 ## Language Specification
@@ -430,6 +439,33 @@ describe('Record type checking', () => {
 
 ---
 
+## Fix With Unit Tests, Not Whack-a-Mole
+
+**Always write focused unit tests first when debugging or fixing bugs.** Don't make a change and then run the full suite hoping it works — that's whack-a-mole debugging.
+
+### The Process
+
+1. **Write a unit test** that reproduces the bug at the lowest possible level (e.g., test `solveConstraints` directly, not the full compiler pipeline)
+2. **Verify the test fails** before the fix
+3. **Make the fix**
+4. **Verify the unit test passes**
+5. **Run the full suite** to check for regressions
+
+### Why?
+
+- Unit tests catch the exact bug and prevent it from recurring
+- They run in milliseconds, giving fast feedback
+- They document the bug for future developers
+- If the full suite regresses, you know the unit test is right and can investigate why the regression occurs
+
+### Example
+
+**Bad**: "The type checker accepts wrong code. Let me tweak `areTermsDefinitelyDifferent` and run all 1200 tests to see what happens."
+
+**Good**: "Let me write a test in `meta.test.ts` that verifies `solveConstraints` throws on conflicting constraints `?m := Zero` then `?m := Succ x`. Then I'll fix the function and verify just that test. Then run the full suite."
+
+---
+
 ## Smoke Testing: Verify Before Claiming Complete
 
 **CRITICAL**: Before claiming any task is complete, ALWAYS verify the build works:
@@ -447,6 +483,102 @@ npx tsc --noEmit && npm test
 **Common mistake**: Adding code that passes tests but has TypeScript errors (e.g., accessing properties that don't exist on a type). The tests might pass because the runtime behavior is correct, but the build will fail.
 
 **Never claim "done" without seeing both commands succeed.**
+
+---
+
+## Prefer `.tt` File Tests for Compile-and-Check
+
+When testing whether source code compiles successfully or produces expected errors, **prefer `.tt` file tests** over inline string tests in TypeScript.
+
+### The `.tt` Test System
+
+Test programs live in `src/test-programs/` as `.tt` files with header directives:
+
+```
+-- @test success
+-- @name "sym: Equal u v -> Equal v u"
+-- @import preambles/equality.tt
+
+sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
+sym refl = refl
+```
+
+The runner (`src/test-programs/tt-runner.test.ts`) discovers these files, resolves imports, compiles, and asserts.
+
+### Running a Single `.tt` Test
+
+To run one test by name (useful for debugging):
+
+```bash
+npx vitest run src/test-programs/tt-runner.test.ts -t "sym: Equal u v"
+```
+
+The `-t` flag matches test names by substring, so you don't need the full name. To run all tests in a directory group:
+
+```bash
+npx vitest run src/test-programs/tt-runner.test.ts -t "tt-programs/with"
+```
+
+### Directives
+
+| Directive | Required | Description |
+|-----------|----------|-------------|
+| `@test success\|failure` | Yes | What to assert |
+| `@name "..."` | Yes | Test name shown in vitest output |
+| `@import path.tt` | No | Prepend contents of another `.tt` file (relative to `test-programs/`) |
+| `@error "substring"` | No | Assert error message contains this substring |
+
+### When to Use `.tt` Files
+
+- **Any test that compiles source and checks success/failure** — put it in a `.tt` file
+- **Exploratory debugging** — if you write `compileTTFromText(\`...\`)` to test something, keep it as a `.tt` file instead of throwing it away
+- **Regression tests** — when a bug is found, add a `.tt` file that reproduces it
+
+### When NOT to Use `.tt` Files
+
+- Tests that inspect internal structure (kernel terms, de Bruijn indices, elaboration output)
+- Tests that call individual functions directly (unit tests for `whnf`, `solveConstraints`, etc.)
+- Tests that need to manipulate state between steps
+
+### Shared Preambles
+
+Common type definitions live in `src/test-programs/preambles/`:
+- `nat.tt` — Nat (Zero, Succ)
+- `bool.tt` — Bool (True, False)
+- `equality.tt` — Universe-polymorphic Equal with refl
+- `equal-simple.tt` — Non-polymorphic Equal
+- `list.tt` — List (Nil, Cons)
+- `maybe.tt` — Maybe (Nothing, Just)
+- `either.tt` — Either (Left, Right)
+- `pair.tt` — Pair (MkPair)
+
+### Keep Explorations as Tests
+
+When debugging or exploring (e.g., "let me try compiling this to see what happens"), **don't throw away the source code**. Save it as a `.tt` file instead. Every `compileTTFromText(\`...\`)` one-off you'd write in a scratch file or REPL should become a permanent `.tt` test. These explorations often catch regressions later.
+
+This applies to **any** temporary experiment:
+- "Let me check if this type-checks" → save as a `.tt` file
+- "Does this pattern match compile?" → save as a `.tt` file
+- "I wonder if this edge case works" → save as a `.tt` file
+- Debugging a user report → save the minimal repro as a `.tt` file
+
+```
+-- @test success
+-- @name "nested with on equality proof (debug exploration)"
+-- @import preambles/nat.tt
+-- @import preambles/equal-simple.tt
+
+-- Found while debugging issue #42
+myProof : ...
+```
+
+Then run it in isolation while debugging:
+
+```bash
+npx vitest run src/test-programs/tt-runner.test.ts -t "nested with on equality"
+```
+
+Once the bug is fixed, the `.tt` file stays as a regression test — zero extra effort.
 
 ---
 

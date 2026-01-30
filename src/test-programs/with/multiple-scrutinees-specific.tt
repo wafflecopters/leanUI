@@ -1,0 +1,11 @@
+-- @test success
+-- @name "multiple scrutinees with more specific patterns"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+compare : Nat -> Nat -> Nat
+compare m n with m, n
+  | Zero, Zero => Zero
+  | Zero, Succ _ => Zero
+  | Succ _, Zero => Succ Zero
+  | Succ m2, Succ n2 => compare m2 n2

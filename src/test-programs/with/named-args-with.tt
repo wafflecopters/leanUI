@@ -1,0 +1,12 @@
+-- @test success
+-- @name "function with named args uses with"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+
+constFn : {A : Type} -> A -> A
+constFn {A:=A} x = x
+
+test : Nat -> Nat
+test n with n
+  | Zero => Zero
+  | Succ m => constFn m

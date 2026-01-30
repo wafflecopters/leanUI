@@ -1,0 +1,10 @@
+-- @test success
+-- @name "#absurd in nested with"
+-- @import preambles/nat.tt
+-- @import preambles/equal-simple.tt
+
+inductive Void : Type where
+
+nested : Equal Zero (Succ Zero) -> Void
+nested eq with eq
+  | refl => #absurd

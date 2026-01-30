@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "concrete level violation is caught"
+
+inductive BadList : Type -> Prop where
+  BNil : {A : Type} -> BadList A
+  BCons : {A : Type} -> A -> BadList A -> BadList A

@@ -1,0 +1,8 @@
+-- @test success
+-- @name "swap pair using with"
+-- @import preambles/nat.tt
+-- @import preambles/pair.tt
+
+swap : {A B : Type} -> Pair A B -> Pair B A
+swap p with p
+  | MkPair a b => MkPair b a

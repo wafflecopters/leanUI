@@ -1,0 +1,6 @@
+-- @test failure
+-- @name "Error on domain of arrow type is detected"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Na -> Nat

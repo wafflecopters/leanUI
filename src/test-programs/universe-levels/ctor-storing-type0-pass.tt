@@ -1,0 +1,6 @@
+-- @test success
+-- @name "constructor storing Type 0 value in Type result should PASS"
+
+inductive GoodList : Type -> Type where
+  GNil : {A : Type} -> GoodList A
+  GCons : {A : Type} -> A -> GoodList A -> GoodList A

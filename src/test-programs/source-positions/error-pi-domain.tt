@@ -1,0 +1,4 @@
+-- @test failure
+-- @name "Error in Pi type domain is detected"
+
+f : (x : Wrong) -> Nat

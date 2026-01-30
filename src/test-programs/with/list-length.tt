@@ -1,0 +1,10 @@
+-- @test success
+-- @name "length using with"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @import preambles/list.tt
+
+length : {A : Type} -> List A -> Nat
+length xs with xs
+  | Nil => Zero
+  | Cons _ rest => Succ (length rest)

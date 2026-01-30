@@ -1,0 +1,23 @@
+-- @test failure
+-- @name "soundness: lambda-wrapped conflicting proof must be rejected"
+-- @import preambles/equality.tt
+-- @error "Implicit argument conflict"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
+
+decEqBad : (x y : Nat) -> DecEq x y
+decEqBad Zero Zero = Yes refl
+decEqBad Zero (Succ y) = No zeroNeqSucc
+decEqBad (Succ x) Zero = No (\eq => zeroNeqSucc eq)
+decEqBad (Succ x) (Succ y) = ?todo

@@ -1,0 +1,15 @@
+-- @test success
+-- @name "named args should match by name, not position"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+test1 : Equal Zero Zero
+test1 = refl {a:=Zero}
+
+test2 : Equal (Succ Zero) (Succ Zero)
+test2 = refl {a:=Succ Zero}

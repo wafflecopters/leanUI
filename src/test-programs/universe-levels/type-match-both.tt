@@ -1,0 +1,5 @@
+-- @test success
+-- @name "Type match: both have Type u"
+
+inductive Equal_ : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
+  refl_ : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal_ {u} a a

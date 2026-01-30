@@ -1,0 +1,20 @@
+-- @test success
+-- @name "filter: with on computed Bool value"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @import preambles/list.tt
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+
+decrement : Nat -> Nat
+decrement n with n
+  | Zero => Zero
+  | Succ m => m
+
+applyIf : {A : Type} -> Bool -> (A -> A) -> A -> A
+applyIf b f x with b
+  | True => f x
+  | False => x
