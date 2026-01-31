@@ -3,7 +3,7 @@ import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc,
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
 import { solveConstraints } from "./meta";
-import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, shiftTerm } from "./subst";
+import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, minFreeVarIndex, shiftTerm } from "./subst";
 import { unifyTerms } from "./unify";
 import { areTypesDefEq } from "./whnf";
 import type { TypeInfoMap } from "./type-info";
@@ -852,13 +852,27 @@ export class TCEnv<T> {
   zonkTypeInfoEntries(): void {
     if (!_typeInfoCollector) return;
     for (const [key, entry] of _typeInfoCollector) {
-      const zonkedType = this.zonkTerm(entry.type);
-      const zonkedExpected = entry.expectedType ? this.zonkTerm(entry.expectedType) : undefined;
-      if (zonkedType !== entry.type || zonkedExpected !== entry.expectedType) {
+      // Use depth-aware zonking: meta solutions may have de Bruijn indices
+      // relative to a different context depth than the entry's context.
+      // Adjust indices when substituting to match the entry's depth.
+      const entryDepth = entry.context.length;
+      const zonk = (term: TTKTerm): TTKTerm => this.zonkTermAtDepth(term, entryDepth);
+
+      const zonkedType = zonk(entry.type);
+      const zonkedExpected = entry.expectedType ? zonk(entry.expectedType) : undefined;
+      // Also zonk context entry types so unsolved metas in context are resolved.
+      // Each context entry's type is valid at the depth of entries before it.
+      const zonkedContext = entry.context.map((c, i) => {
+        const zonkedCType = this.zonkTermAtDepth(c.type, i);
+        return zonkedCType !== c.type ? { ...c, type: zonkedCType } : c;
+      });
+      const contextChanged = zonkedContext.some((c, i) => c !== entry.context[i]);
+      if (zonkedType !== entry.type || zonkedExpected !== entry.expectedType || contextChanged) {
         _typeInfoCollector.set(key, {
           ...entry,
           type: zonkedType,
           expectedType: zonkedExpected,
+          context: contextChanged ? zonkedContext : entry.context,
         });
       }
     }
@@ -969,6 +983,109 @@ export class TCEnv<T> {
    */
   zonkTerm(term: TTKTerm): TTKTerm {
     return this.zonkTermHelper(term);
+  }
+
+  /**
+   * Zonk a term with depth-aware meta substitution.
+   * When a meta was solved at a different context depth than `targetDepth`,
+   * the solution's de Bruijn indices are adjusted to match `targetDepth`.
+   * This is critical for type info entries where the recorded context depth
+   * may differ from the depth at which metas were solved.
+   */
+  zonkTermAtDepth(term: TTKTerm, targetDepth: number): TTKTerm {
+    return this.zonkAtDepthHelper(term, targetDepth);
+  }
+
+  private zonkAtDepthHelper(term: TTKTerm, targetDepth: number): TTKTerm {
+    switch (term.tag) {
+      case 'Meta': {
+        const metaVar = this.metaVars.get(term.id);
+        if (metaVar?.solution) {
+          const depthDiff = metaVar.ctx.length - targetDepth;
+          let solution = metaVar.solution;
+          if (depthDiff > 0) {
+            // Solution was set at a deeper context — shift indices down
+            const minIdx = minFreeVarIndex(solution);
+            if (minIdx >= depthDiff) {
+              solution = shiftTerm(solution, -depthDiff, 0);
+            }
+          } else if (depthDiff < 0) {
+            // Solution was set at a shallower context — shift indices up
+            solution = shiftTerm(solution, -depthDiff, 0);
+          }
+          return this.zonkAtDepthHelper(solution, targetDepth);
+        }
+        const levelSolution = this.levelMetas.get(term.id);
+        if (levelSolution !== undefined) {
+          return this.zonkAtDepthHelper(levelSolution, targetDepth);
+        }
+        return term;
+      }
+      case 'Hole': {
+        const levelSolution = this.levelMetas.get(term.id);
+        if (levelSolution !== undefined) {
+          return this.zonkAtDepthHelper(levelSolution, targetDepth);
+        }
+        const metaVar = this.metaVars.get(term.id);
+        if (metaVar?.solution) {
+          const depthDiff = metaVar.ctx.length - targetDepth;
+          let solution = metaVar.solution;
+          if (depthDiff > 0) {
+            const minIdx = minFreeVarIndex(solution);
+            if (minIdx >= depthDiff) {
+              solution = shiftTerm(solution, -depthDiff, 0);
+            }
+          } else if (depthDiff < 0) {
+            solution = shiftTerm(solution, -depthDiff, 0);
+          }
+          return this.zonkAtDepthHelper(solution, targetDepth);
+        }
+        return term;
+      }
+      case 'Var':
+      case 'Const':
+      case 'ULevel':
+      case 'ULit':
+      case 'UOmega':
+        return term;
+      case 'Sort': {
+        const zonkedLevel = this.zonkAtDepthHelper(term.level, targetDepth);
+        if (zonkedLevel === term.level) return term;
+        return { tag: 'Sort', level: zonkedLevel };
+      }
+      case 'App': {
+        const fn = this.zonkAtDepthHelper(term.fn, targetDepth);
+        const arg = this.zonkAtDepthHelper(term.arg, targetDepth);
+        return fn === term.fn && arg === term.arg ? term : { tag: 'App', fn, arg };
+      }
+      case 'Binder': {
+        const zonkedBinderKind = term.binderKind.tag === 'BLet'
+          ? { tag: 'BLet' as const, defVal: this.zonkAtDepthHelper(term.binderKind.defVal, targetDepth) }
+          : term.binderKind;
+        const domain = this.zonkAtDepthHelper(term.domain, targetDepth);
+        // Inside the binder body, depth increases by 1
+        const body = this.zonkAtDepthHelper(term.body, targetDepth + 1);
+        return { tag: 'Binder', name: term.name, binderKind: zonkedBinderKind, domain, body };
+      }
+      case 'Annot':
+        return {
+          tag: 'Annot',
+          term: this.zonkAtDepthHelper(term.term, targetDepth),
+          type: this.zonkAtDepthHelper(term.type, targetDepth)
+        };
+      case 'Match':
+        return {
+          tag: 'Match',
+          scrutinee: this.zonkAtDepthHelper(term.scrutinee, targetDepth),
+          clauses: term.clauses.map(c => ({
+            ...c,
+            patterns: c.patterns,
+            rhs: this.zonkAtDepthHelper(c.rhs, targetDepth)
+          }))
+        };
+      default:
+        return term;
+    }
   }
 
   private zonkTermHelper(term: TTKTerm): TTKTerm {

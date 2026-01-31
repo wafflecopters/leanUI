@@ -690,7 +690,9 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     // Return with the elaborated term (with implicit args inserted)
     // Set both value and elaboratedTerm to currentTerm since it has all elaboration applied
     // Use unifiedEnv for recordTypeInfo so zonking has access to solved metas
-    unifiedEnv.recordTypeInfo(inferredEnv.value, expectedType);
+    // IMPORTANT: Record at env.indexPath (the original expression path), not unifiedEnv's
+    // indexPath which may have drifted (e.g., inferType for App returns with arg's path).
+    unifiedEnv.atIndexPath(env.indexPath).recordTypeInfo(inferredEnv.value, expectedType);
     return unifiedEnv.withValue(currentTerm).withElaboratedTerm(currentTerm);
   } catch (e) {
     if (e instanceof TCEnvError) {
