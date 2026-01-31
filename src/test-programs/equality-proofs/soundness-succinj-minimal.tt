@@ -1,0 +1,13 @@
+-- @test failure
+-- @name "soundness: succInj gives Equal y x but used where Equal x y expected"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+succInj : {p q : Nat} -> Equal (Succ p) (Succ q) -> Equal q p
+succInj refl = refl
+
+wrong : {x y : Nat} -> Equal (Succ x) (Succ y) -> Equal x y
+wrong eq = succInj eq

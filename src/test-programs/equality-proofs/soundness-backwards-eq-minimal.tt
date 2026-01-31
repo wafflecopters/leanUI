@@ -1,0 +1,21 @@
+-- @test failure
+-- @name "soundness: backwards Equal in with-clause lambda should be rejected"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+flip : {A : Type} -> {a b : A} -> Equal a b -> Equal b a
+flip refl = refl
+
+test : (x y : Nat) -> DecEq x y
+test x y with test x y
+  | No neq => No (\eq => neq (flip eq))
+  | Yes eq => ?todo

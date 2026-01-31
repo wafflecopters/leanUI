@@ -298,6 +298,51 @@ export function solveConstraints(
           const metaTypeStr = prettyPrint(meta.type, solNames);
           throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, solNames)} but required to be ${prettyPrint(resolvedRhs, rhsNames)}`);
         }
+        // Var-vs-Var conflict detection.
+        // When both solution and rhs are Vars, they might represent different
+        // variables. We check both same-depth (different indices) and cross-depth
+        // (same index but different binding names) cases.
+        //
+        // Guards:
+        // - Meta type must not be an unsolved Meta (too early to check)
+        // - Meta type must not be Sort (Type-valued metas frequently get
+        //   conflicting Var constraints from pattern variable duplication in
+        //   with-clause auxiliaries — these are not real conflicts)
+        // - Both Vars' types must match the meta's type (prevents false positives
+        //   from imprecise constraint propagation through decomposition)
+        if (meta.solution.tag === 'Var' && resolvedRhs.tag === 'Var'
+          && meta.type.tag !== 'Meta' && meta.type.tag !== 'Sort') {
+          // Verify both Vars have types compatible with the meta type
+          const solType = getVarTypeFromContext(meta.ctx, meta.solution.index);
+          const rhsType = getVarTypeFromContext(constraint.ctx, resolvedRhs.index);
+          const metaIsConst = meta.type.tag === 'Const';
+          const solTypeMatches = !metaIsConst || !solType || (solType.tag === 'Const' && solType.name === (meta.type as any).name);
+          const rhsTypeMatches = !metaIsConst || !rhsType || (rhsType.tag === 'Const' && rhsType.name === (meta.type as any).name);
+
+          if (solTypeMatches && rhsTypeMatches) {
+            let isConflict = false;
+            if (meta.ctx.length === constraint.ctx.length) {
+              // Same depth: different indices mean genuinely different variables
+              if (meta.solution.index !== resolvedRhs.index) {
+                isConflict = true;
+              }
+            } else {
+              // Cross-depth: same index can refer to different variables.
+              // Look up binding names to distinguish.
+              const bindingSol = meta.ctx[meta.ctx.length - 1 - meta.solution.index];
+              const bindingRhs = constraint.ctx[constraint.ctx.length - 1 - resolvedRhs.index];
+              if (bindingSol && bindingRhs && bindingSol.name !== bindingRhs.name) {
+                isConflict = true;
+              }
+            }
+            if (isConflict) {
+              const solNames = meta.ctx.map(c => c.name).reverse();
+              const rhsNames = constraint.ctx.map(c => c.name).reverse();
+              const metaTypeStr = prettyPrint(meta.type, solNames);
+              throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, solNames)} but required to be ${prettyPrint(resolvedRhs, rhsNames)}`);
+            }
+          }
+        }
         // Use pattern mode unification for meta decomposition and propagation.
         // E.g., if solution is Succ(?m) and rhs is Succ(x), this creates ?m := x.
         // Pattern mode with flexibleVars is permissive about Var-Var differences,

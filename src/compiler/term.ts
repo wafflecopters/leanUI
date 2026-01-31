@@ -1208,8 +1208,10 @@ export class TCEnv<T> {
         // This is a level meta - solve it directly
         env = env.solveLevelMeta(metaConstraint.meta, metaConstraint.rhs);
       } else {
-        // Just add the constraint - conflict detection happens during solving
+        // Always add constraint for later conflict detection in solveConstraints
         env = env.withConstraint(metaConstraint);
+
+        // Note: no eager solving. All conflict detection happens in solveConstraints.
 
         // TYPE-LEVEL UNIFICATION: When solving a meta of type Sort(?levelMeta) to a var of type Sort(concreteLevel),
         // we need to propagate the level constraint to solve the level meta.

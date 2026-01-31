@@ -1,0 +1,15 @@
+-- @test failure
+-- @name "soundness: succInj backwards used standalone should be rejected"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+succInj : {p q : Nat} -> Equal (Succ p) (Succ q) -> Equal q p
+succInj refl = refl
+
+wrongLam : {x y : Nat} -> (Equal x y -> Void) -> Equal (Succ x) (Succ y) -> Void
+wrongLam neq eq = neq (succInj eq)
