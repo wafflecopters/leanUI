@@ -1,0 +1,11 @@
+-- @test failure
+-- @name "soundness: nested constructor conflict Succ Zero vs Succ (Succ x)"
+-- @import preambles/equality.tt
+-- @error "Implicit argument conflict"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+bad : (x : Nat) -> Equal (Succ Zero) (Succ (Succ x))
+bad x = refl

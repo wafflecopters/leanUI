@@ -1,0 +1,5 @@
+-- @test failure
+-- @name "duplicate parameter name in inductive type is rejected"
+-- @error "Duplicate parameter name"
+
+inductive Ruh : (A : Type) -> (A : Type) -> Type where

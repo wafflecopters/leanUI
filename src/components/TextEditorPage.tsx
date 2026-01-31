@@ -4,7 +4,8 @@
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
+import { getTypeAtCursor, getTypeAtSelection, TypeAtCursorResult } from '../compiler/type-info';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
 import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
@@ -178,6 +179,46 @@ function findRangeByWalkingPath(
 }
 
 /**
+ * Walk up a kernel path to find a prefix in the elabMap, then append the
+ * remaining suffix to the mapped surface path and look up in sourceMap.
+ *
+ * This preserves path precision: if the error path is
+ *   kernel: type.body.body.body.domain.fn.arg.arg
+ * and the elabMap maps:
+ *   type.body.body.body.domain.fn → type.body.body.domain.fn
+ * we reconstitute:
+ *   type.body.body.domain.fn.arg.arg
+ * and look that up in the sourceMap, finding the precise source range.
+ *
+ * Falls back to findRangeByWalkingPath (without suffix preservation) if
+ * the reconstituted path doesn't match in the sourceMap.
+ */
+function findRangeViaElabMapWithSuffix(
+  errorPath: IndexPath,
+  elabMap: ElabMap,
+  sourceMap: SourceMap
+): SourceRange | null {
+  // Try progressively shorter prefixes of the error path
+  for (let prefixLen = errorPath.length; prefixLen >= 0; prefixLen--) {
+    const prefix = errorPath.slice(0, prefixLen);
+    const suffix = errorPath.slice(prefixLen);
+    const prefixStr = serializeIndexPath(prefix);
+    const mappedPrefix = elabMap.get(prefixStr);
+    if (mappedPrefix !== undefined) {
+      // Reconstitute: mapped prefix + remaining suffix
+      const suffixStr = serializeIndexPath(suffix);
+      const fullSurfacePath = mappedPrefix + (suffixStr ? '.' + suffixStr : '');
+      // Try the reconstituted path directly
+      const range = sourceMap.get(fullSurfacePath);
+      if (range) return range;
+      // Also try walking up from the reconstituted path
+      // (the sourceMap might have a parent of this path)
+    }
+  }
+  return null;
+}
+
+/**
  * Map an error path to a source range using the elab and source maps.
  * Returns null if mapping fails.
  */
@@ -189,15 +230,22 @@ function mapErrorPathToSourceRange(
 ): SourceRange | null {
   if (!sourceMap) return null;
 
+  // Try elabMap-based lookup FIRST (more precise for kernel errors).
+  // The elabMap maps kernel paths to surface paths. By preserving the suffix
+  // after the mapped prefix, we get precise source locations even when the
+  // kernel has more binder levels than the surface (e.g., {x y : Nat} expands
+  // to two kernel binders but is one surface binder).
+  if (elabMap) {
+    const mappedRange = findRangeViaElabMapWithSuffix(errorPath, elabMap, sourceMap);
+    if (mappedRange) return mappedRange;
+    // Fallback: elabMap lookup without suffix preservation
+    const fallbackRange = findRangeByWalkingPath(errorPath, sourceMap, p => elabMap.get(p));
+    if (fallbackRange) return fallbackRange;
+  }
+
   // Try direct lookup in sourceMap (for elaboration errors where path is already a surface path)
   const directRange = findRangeByWalkingPath(errorPath, sourceMap);
   if (directRange) return directRange;
-
-  // Try kernel → surface mapping via elabMap
-  if (elabMap) {
-    const mappedRange = findRangeByWalkingPath(errorPath, sourceMap, p => elabMap.get(p));
-    if (mappedRange) return mappedRange;
-  }
 
   return null;
 }
@@ -364,6 +412,18 @@ filter f Nil = Nil
 filter f (Cons x xs) with f x
   | True => Cons x (filter f xs)
   | False => filter f xs
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+decEqNat : (x y : Nat) -> DecEq x y
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ y) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
+decEqNat (Succ x) (Succ y) with decEqNat x y
+  | Yes eq => ?todo
+  | No neq => No (\\eq => neq eq)
 `;
 
 // Styles
@@ -400,10 +460,44 @@ const styles = {
     overflow: 'hidden',
   },
   editorSection: {
-    height: '50%',
+    flex: 1,
+    minHeight: 0,
     borderBottom: '1px solid #30363d',
     display: 'flex',
     flexDirection: 'column' as const,
+  },
+  typeInfoPanel: {
+    height: '120px',
+    flexShrink: 0,
+    borderBottom: '1px solid #30363d',
+    backgroundColor: '#161b22',
+    padding: '8px 16px',
+    fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+    fontSize: '12px',
+    color: '#c9d1d9',
+    overflow: 'auto',
+  },
+  typeInfoLabel: {
+    color: '#8b949e',
+    fontSize: '10px',
+    fontWeight: 600 as const,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.5px',
+    marginBottom: '2px',
+  },
+  typeInfoValue: {
+    color: '#79c0ff',
+    marginBottom: '6px',
+  },
+  typeInfoContext: {
+    color: '#c9d1d9',
+    marginBottom: '2px',
+  },
+  typeInfoContextName: {
+    color: '#d2a8ff',
+  },
+  typeInfoContextType: {
+    color: '#79c0ff',
   },
   sectionHeader: {
     padding: '8px 16px',
@@ -420,7 +514,8 @@ const styles = {
     overflow: 'hidden',
   },
   resultsSection: {
-    height: '50%',
+    flex: 1,
+    minHeight: 0,
     display: 'flex',
     flexDirection: 'column' as const,
     overflow: 'hidden',
@@ -802,7 +897,7 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
 
   return (
     <div style={styles.blockCard}>
-      {block.declarations.map((decl, i) => {
+      {block.declarations.filter(d => !d.isWithAuxiliary).map((decl, i) => {
         // Extract param/index info for inductive types
         const paramIndexInfo = decl.kind === 'inductive'
           ? extractParamIndexInfo(decl.kernelType, decl.indexPositions)
@@ -889,6 +984,13 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
                     ))}
                   </div>
                 )}
+                {decl.withClauseErrors && decl.withClauseErrors.length > 0 && (
+                  <div style={{ marginTop: '8px' }}>
+                    {decl.withClauseErrors.map((err, j) => (
+                      <div key={`with-${j}`} style={styles.errorText}>{err.message}</div>
+                    ))}
+                  </div>
+                )}
                 {decl.totalityResult && (
                   <TotalityResultView result={decl.totalityResult} />
                 )}</>
@@ -923,6 +1025,15 @@ export function TextEditorPage() {
   // Rendering options for pretty-printed output
   const [showNamedArgsWithLabels, setShowNamedArgsWithLabels] = useState(true);
   const [showNamedParamsWithBraces, setShowNamedParamsWithBraces] = useState(false);
+  // Cursor position for type-at-cursor panel
+  // Cursor/selection position for type-at-cursor panel
+  const [cursorInfo, setCursorInfo] = useState<{
+    lineNumber: number; column: number;
+    selStartLine?: number; selStartCol?: number;
+    selEndLine?: number; selEndCol?: number;
+  } | null>(null);
+  // Ref to store current compile result (for hover provider)
+  const compileResultRef = useRef<CompileResult | null>(null);
   // Ref to store current wildcard hints (updated from compileResult)
   const wildcardHintsRef = useRef<WildcardInlayHint[]>([]);
   // Ref to store current semantic tokens (updated from compileResult)
@@ -970,8 +1081,93 @@ export function TextEditorPage() {
     return extractHoleLocations(compileResult);
   }, [compileResult]);
 
+  // Compute type info at cursor position or selection
+  const typeInfoAtCursor = useMemo<{ result: TypeAtCursorResult; expression: string } | undefined>(() => {
+    if (!cursorInfo) return undefined;
+
+    const hasSelection = cursorInfo.selStartLine !== undefined &&
+      cursorInfo.selEndLine !== undefined &&
+      (cursorInfo.selStartLine !== cursorInfo.selEndLine || cursorInfo.selStartCol !== cursorInfo.selEndCol);
+
+    // Find which block the cursor is in
+    const cursorLine = cursorInfo.lineNumber;
+    let targetBlock: CompiledBlock | undefined;
+    let targetDecl: CompiledDeclaration | undefined;
+
+    for (const block of compileResult.blocks) {
+      const blockEndLine = block.startLine + block.sourceLines.length - 1;
+      if (cursorLine >= block.startLine && cursorLine <= blockEndLine) {
+        targetBlock = block;
+        for (const decl of block.declarations) {
+          if (decl.sourceMap && decl.typeInfoMap) {
+            targetDecl = decl;
+            for (const [, range] of decl.sourceMap) {
+              if (range.start.line <= cursorLine && cursorLine <= range.end.line) {
+                targetDecl = decl;
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
+    }
+
+    if (!targetBlock || !targetDecl || !targetDecl.sourceMap || !targetDecl.typeInfoMap) {
+      return undefined;
+    }
+
+    const lines = code.split('\n');
+
+    // Helper: convert file-absolute line/col to file-absolute character offset
+    // (sourceMap pos values are file-absolute)
+    const toFileOffset = (line: number, col: number) => {
+      let offset = 0;
+      for (let i = 0; i < line - 1; i++) {
+        offset += lines[i].length + 1;
+      }
+      offset += col - 1;
+      return offset;
+    };
+
+    let result: TypeAtCursorResult | undefined;
+    if (hasSelection) {
+      const startOffset = toFileOffset(cursorInfo.selStartLine!, cursorInfo.selStartCol!);
+      const endOffset = toFileOffset(cursorInfo.selEndLine!, cursorInfo.selEndCol!);
+      result = getTypeAtSelection(startOffset, endOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap);
+    }
+    if (!result) {
+      const cursorOffset = toFileOffset(cursorInfo.lineNumber, cursorInfo.column);
+      result = getTypeAtCursor(cursorOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap);
+    }
+    if (!result) return undefined;
+
+    // Extract source expression text from the sourceRange
+    let expression = '';
+    if (result.sourceRange) {
+      const sr = result.sourceRange;
+      if (sr.start.line === sr.end.line) {
+        expression = lines[sr.start.line - 1].substring(sr.start.col - 1, sr.end.col - 1);
+      } else {
+        const parts: string[] = [];
+        parts.push(lines[sr.start.line - 1].substring(sr.start.col - 1));
+        for (let i = sr.start.line; i < sr.end.line - 1; i++) {
+          parts.push(lines[i]);
+        }
+        parts.push(lines[sr.end.line - 1].substring(0, sr.end.col - 1));
+        expression = parts.join(' ');
+      }
+    }
+
+    return { result, expression };
+  }, [cursorInfo, compileResult, code]);
+
   // Keep the refs in sync with the latest data
   // Monaco's providers will read from these refs when they need to render
+  useEffect(() => {
+    compileResultRef.current = compileResult;
+  }, [compileResult]);
+
   useEffect(() => {
     wildcardHintsRef.current = wildcardHints;
   }, [wildcardHints]);
@@ -1057,6 +1253,9 @@ export function TextEditorPage() {
 
       // Type check errors from declarations
       for (const decl of block.declarations) {
+        // Skip auxiliary declarations — their errors are promoted to the main declaration
+        if (decl.isWithAuxiliary) continue;
+
         if (decl.checkErrors && decl.checkErrors.length > 0) {
           for (const err of decl.checkErrors) {
             // Try to map error path to precise source location
@@ -1069,6 +1268,42 @@ export function TextEditorPage() {
 
             if (sourceRange) {
               // Use the mapped source range
+              markers.push({
+                severity: monaco.MarkerSeverity.Error,
+                message: err.message,
+                startLineNumber: sourceRange.start.line,
+                startColumn: sourceRange.start.col,
+                endLineNumber: sourceRange.end.line,
+                endColumn: sourceRange.end.col,
+                source: 'TT Type Checker',
+              });
+            } else {
+              // Fallback: mark the first line of the block
+              const firstLine = block.startLine;
+              markers.push({
+                severity: monaco.MarkerSeverity.Error,
+                message: err.message,
+                startLineNumber: firstLine,
+                startColumn: 1,
+                endLineNumber: firstLine,
+                endColumn: model.getLineContent(firstLine).length + 1,
+                source: 'TT Type Checker',
+              });
+            }
+          }
+        }
+
+        // Also create markers for promoted with-clause errors
+        if (decl.withClauseErrors && decl.withClauseErrors.length > 0) {
+          for (const err of decl.withClauseErrors) {
+            // With-clause error paths are in auxiliary kernel space — must map through
+            // withClauseElabMap first. Skip direct sourceMap lookup (it would match wrong
+            // entries since the auxiliary's clause indices differ from the main declaration's).
+            const sourceRange = (decl.withClauseElabMap && decl.sourceMap)
+              ? findRangeByWalkingPath(err.env.indexPath, decl.sourceMap, p => decl.withClauseElabMap!.get(p))
+              : null;
+
+            if (sourceRange) {
               markers.push({
                 severity: monaco.MarkerSeverity.Error,
                 message: err.message,
@@ -1204,6 +1439,24 @@ export function TextEditorPage() {
 
         return { hints: inlayHints, dispose: () => { } };
       }
+    });
+
+    // Track cursor position and selection for the type info panel (debounced via rAF)
+    let cursorRafId: number | null = null;
+    editor.onDidChangeCursorSelection((e) => {
+      if (cursorRafId !== null) cancelAnimationFrame(cursorRafId);
+      cursorRafId = requestAnimationFrame(() => {
+        cursorRafId = null;
+        const sel = e.selection;
+        setCursorInfo({
+          lineNumber: sel.positionLineNumber,
+          column: sel.positionColumn,
+          selStartLine: sel.startLineNumber,
+          selStartCol: sel.startColumn,
+          selEndLine: sel.endLineNumber,
+          selEndCol: sel.endColumn,
+        });
+      });
     });
 
     // Register semantic tokens provider for precise highlighting
@@ -1347,6 +1600,42 @@ export function TextEditorPage() {
               }}
             />
           </div>
+        </div>
+
+        {/* Type Info Panel */}
+        <div style={styles.typeInfoPanel}>
+          {typeInfoAtCursor ? (
+            <>
+              <div>
+                <span style={styles.typeInfoValue}>
+                  {typeInfoAtCursor.expression
+                    ? `${typeInfoAtCursor.expression} : ${typeInfoAtCursor.result.prettyType}`
+                    : typeInfoAtCursor.result.prettyType}
+                </span>
+              </div>
+              {typeInfoAtCursor.result.expectedType &&
+                typeInfoAtCursor.result.surfacePath.includes('clauses[') && (
+                  <div>
+                    <span style={styles.typeInfoLabel}>Expected </span>
+                    <span style={styles.typeInfoValue}>{typeInfoAtCursor.result.expectedType}</span>
+                  </div>
+                )}
+              {typeInfoAtCursor.result.context.length > 0 && (
+                <div>
+                  <div style={styles.typeInfoLabel}>Context</div>
+                  {typeInfoAtCursor.result.context.map((entry: { name: string; type: string }, i: number) => (
+                    <div key={i} style={styles.typeInfoContext}>
+                      <span style={styles.typeInfoContextName}>{entry.name}</span>
+                      <span style={{ color: '#8b949e' }}> : </span>
+                      <span style={styles.typeInfoContextType}>{entry.type}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <span style={{ color: '#484f58' }}>Move cursor over an expression to see its type</span>
+          )}
         </div>
 
         {/* Compile Results - Bottom Half */}

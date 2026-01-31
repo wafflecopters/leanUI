@@ -8,8 +8,8 @@
  */
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
-import { arraySeg, fieldSeg, IndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas } from './term';
+import { arraySeg, fieldSeg, IndexPath, serializeIndexPath } from '../types/source-position';
+import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -793,7 +793,7 @@ function prettyPrintInTTKContext(term: TTKTerm, signature: TTKContext): string {
   return prettyPrintTTK(term, signature.map(s => s.name).reverse())
 }
 
-function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: CheckStackEntry, checkStack: CheckStackEntry[], elabStack: TTKTerm[], rhsContainer: { rhsInLevels: TTKTerm }, workEnv: TCEnv<unknown>) {
+function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: CheckStackEntry, checkStack: CheckStackEntry[], elabStack: TTKTerm[], rhsContainer: { rhsInLevels: TTKTerm }, workEnv: TCEnv<unknown>, holeSolutions?: Map<string, TTKTerm>) {
   logInfo(() => `STEP DONE(${prettyPrintPattern(pattern)}, ${arity})`);
 
   const nextCheckTypeEntry = checkStack.pop() as CheckStackEntry
@@ -840,6 +840,10 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   for (const mc of unifyResult.metaConstraints) {
     if (mc.meta.startsWith('hole:')) {
       const holeId = mc.meta.slice(5); // Remove "hole:" prefix
+      // Track hole solutions for type info recording
+      if (holeSolutions) {
+        holeSolutions.set(holeId, mc.rhs);
+      }
       // Fill the hole in check stack entries
       for (const entry of checkStack) {
         entry.type = fillHole(entry.type, holeId, mc.rhs);
@@ -1059,7 +1063,7 @@ function logResultState(workEnv: TCEnv<unknown>, patternStack: PatternStackEntry
 // Main LHS Unification
 // ============================================================================
 
-function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm, rhsInLevels: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[], rhsInLevels: TTKTerm }> {
+function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: TTKTerm, rhsInLevels: TTKTerm): TCEnv<{ returnType: TTKTerm, elabStack: TTKTerm[], rhsInLevels: TTKTerm, holeSolutions: Map<string, TTKTerm> }> {
   env.assertCheckingMode('pattern')
 
   logInfo(() => `\n\nLHS: ${prettyPrintPattern({ tag: 'PCtor', name: termName, args: env.value })}`);
@@ -1068,6 +1072,8 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
   const elabStack: TTKTerm[] = []
   // Container for RHS so it can be mutated during substitution application
   const rhsContainer = { rhsInLevels }
+  // Track hole solutions from constructorDone (for type info recording)
+  const holeSolutions: Map<string, TTKTerm> = new Map();
 
   let workEnv: TCEnv<unknown> = env
 
@@ -1091,7 +1097,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
     }
 
     if (patternEntry.tag === 'done') {
-      workEnv = constructorDone(patternEntry.pattern, patternEntry.arity, checkTypeEntry, checkStack, elabStack, rhsContainer, workEnv)
+      workEnv = constructorDone(patternEntry.pattern, patternEntry.arity, checkTypeEntry, checkStack, elabStack, rhsContainer, workEnv, holeSolutions)
     } else {
       workEnv = processPattern(patternEntry.pattern, checkTypeEntry, patternStack, checkStack, elabStack, workEnv)
     }
@@ -1109,7 +1115,7 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
 
   workEnv = workEnv.solveMetasAndConstraints({ liftMetasToFullContext: true })
 
-  return workEnv.withValue({ returnType: checkStack[0].type, elabStack, rhsInLevels: rhsContainer.rhsInLevels })
+  return workEnv.withValue({ returnType: checkStack[0].type, elabStack, rhsInLevels: rhsContainer.rhsInLevels, holeSolutions })
 }
 
 // ============================================================================
@@ -1205,33 +1211,46 @@ export function checkMatchClause(
     console.log('[RHS SHIFT] originalRhs:', prettyPrintTTK(originalRhs));
     console.log('[RHS SHIFT] originalRhs JSON:', JSON.stringify(originalRhs, null, 2).slice(0, 2000));
   }
-  const shiftedRhs = transformVarsInTerm(originalRhs, (index) => {
+  const shiftedRhs = transformVarsInTerm(originalRhs, (index, context) => {
+    // Account for binder depth: variables inside lambdas/lets have indices
+    // offset by the number of enclosing binders. We only remap pattern variables,
+    // not locally-bound variables (lambda params, let bindings, etc.).
+    const binderDepth = context.length;
+    if (index < binderDepth) {
+      // Locally-bound variable (e.g., lambda parameter) — don't remap
+      return mkVar(index);
+    }
+
+    // Adjust index to refer to pattern variables (subtract binder depth)
+    const patternIndex = index - binderDepth;
+
     // Find which pattern this index belongs to
     let accum = 0;
     for (let i = originalPatterns.length - 1; i >= 0; i--) {
-      if (index < accum + varsPerPattern[i]) {
+      if (patternIndex < accum + varsPerPattern[i]) {
         // Index belongs to pattern i
-        const localIndex = index - accum;  // Index within this pattern (0 = rightmost var in pattern)
+        const localIndex = patternIndex - accum;  // Index within this pattern (0 = rightmost var in pattern)
         const indexMapping = indexMappingsPerPattern[i];
 
-        let newIndex: number;
+        let newPatternIndex: number;
         if (indexMapping && localIndex < indexMapping.length) {
           // Apply index mapping for namedArgs reordering and nested wildcards
           // The mapping converts local indices, then we add accum and shift
           const newLocalIndex = indexMapping[localIndex];
-          newIndex = accum + newLocalIndex + shiftPerPattern[i];
+          newPatternIndex = accum + newLocalIndex + shiftPerPattern[i];
           if (loggingEnabled) {
-            console.log(`[RHS SHIFT] index ${index} -> pattern ${i}, local ${localIndex} -> ${newLocalIndex}, accum ${accum}, shift ${shiftPerPattern[i]} -> ${newIndex}`);
+            console.log(`[RHS SHIFT] index ${index} (binderDepth=${binderDepth}, patIdx=${patternIndex}) -> pattern ${i}, local ${localIndex} -> ${newLocalIndex}, accum ${accum}, shift ${shiftPerPattern[i]} -> ${newPatternIndex + binderDepth}`);
           }
         } else {
           // No permutation needed, just apply the shift
-          newIndex = index + shiftPerPattern[i];
+          newPatternIndex = patternIndex + shiftPerPattern[i];
           if (loggingEnabled) {
-            console.log(`[RHS SHIFT] index ${index} -> pattern ${i}, shift ${shiftPerPattern[i]} -> ${newIndex}`);
+            console.log(`[RHS SHIFT] index ${index} (binderDepth=${binderDepth}, patIdx=${patternIndex}) -> pattern ${i}, shift ${shiftPerPattern[i]} -> ${newPatternIndex + binderDepth}`);
           }
         }
 
-        return mkVar(newIndex);
+        // Add binder depth back to get the actual de Bruijn index
+        return mkVar(newPatternIndex + binderDepth);
       }
       accum += varsPerPattern[i];
     }
@@ -1253,7 +1272,7 @@ export function checkMatchClause(
   const result = unifyMatchClauseLhs(termName, paddedEnv.inMatchClausePatterns().withCheckingMode('pattern'), type, rhsInLevels);
   result.assertNoConstraints();
 
-  const { returnType: rawReturnType, elabStack, rhsInLevels: transformedRhsInLevels } = result.value;
+  const { returnType: rawReturnType, elabStack, rhsInLevels: transformedRhsInLevels, holeSolutions } = result.value;
 
   // Zonk the return type to resolve any Holes that were solved during LHS unification
   // This is important because the return type may contain Holes from type elaboration
@@ -1278,7 +1297,111 @@ export function checkMatchClause(
   const checkedEnv = checkType(checkEnv, returnType);
 
   // Solve any constraints from RHS checking to populate meta solutions
-  const solvedEnv = checkedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+  let solvedEnv: typeof checkedEnv;
+  try {
+    solvedEnv = checkedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+  } catch (e) {
+    // Convert plain Errors (e.g. from meta constraint solving) to TCEnvErrors
+    // so they carry the RHS-level indexPath for accurate error location.
+    if (e instanceof Error && !(e instanceof TCEnvError)) {
+      throw TCEnvError.create(e.message, checkedEnv);
+    }
+    throw e;
+  }
+
+
+  // Record type info for each pattern position.
+  // Walk the function type spine, applying hole solutions and zonking to resolve types.
+  // Use incremental context (not solvedEnv's post-RHS context) so pattern types
+  // are pretty-printed with the correct variable names in scope at each pattern.
+  // patContext is hoisted so it can be used to fix context names for RHS entries below.
+  let patContext = paddedEnv.context; // Base context before patterns
+  {
+    // Apply hole solutions (from constructorDone) to the type before walking
+    let filledType = type;
+    for (const [holeId, solution] of holeSolutions) {
+      filledType = fillHole(filledType, holeId, solution);
+    }
+    let patType = filledType;
+    for (let i = 0; i < paddedPatterns.length; i++) {
+      if (patType.tag === 'Binder' && patType.binderKind.tag === 'BPi') {
+        const patPath: IndexPath = [...paddedEnv.indexPath, { kind: 'field', name: 'patterns' }, { kind: 'array', index: i }];
+        const zonkedDomain = solvedEnv.zonkTerm(patType.domain);
+        solvedEnv.atIndexPath(patPath).recordTypeInfoWithContext(zonkedDomain, patContext);
+        // Also record at the .name sub-path so hovering on a pattern variable name
+        // shows the variable's type (e.g., "n : Nat") rather than walking up to the parent
+        const namePath: IndexPath = [...patPath, { kind: 'field', name: 'name' }];
+        solvedEnv.atIndexPath(namePath).recordTypeInfoWithContext(zonkedDomain, patContext);
+
+        // For PCtor patterns, record type info for each constructor argument
+        // so that hovering on "neq" in (No neq) shows "Equal m n -> Void" not "DecEq a b".
+        // Also record the constructor's full type at the .name sub-path so hovering on
+        // "No" shows the constructor type, not the matched type.
+        const pat = paddedPatterns[i];
+        if (pat.tag === 'PCtor' && pat.args.length > 0) {
+          const ctorDef = getTypeDefinition(solvedEnv.definitions, pat.name);
+          if (ctorDef) {
+            // Find the implicit positions for this constructor (padded wildcards)
+            const ctorResult = getConstructorInductive(solvedEnv.definitions, pat.name);
+            const implicitPositions = new Set<number>();
+            if (ctorResult) {
+              const { inductive, ctor } = ctorResult;
+              if (inductive.recordInfo) {
+                for (let p = 0; p < inductive.recordInfo.paramCount; p++) implicitPositions.add(p);
+              } else if (ctor.namedArgMap && ctor.namedArgMap.size > 0) {
+                for (const pos of ctor.namedArgMap.values()) implicitPositions.add(pos);
+              }
+            }
+
+            // Walk the constructor's Pi type, recording at SURFACE arg indices.
+            // After padding, kernel args include implicit wildcards (e.g., {m} {n} neq),
+            // but the sourceMap uses surface indices (e.g., args[0] = neq).
+            // The elabMap maps surface args[0] -> kernel args[0] (pre-padding index),
+            // which is wrong after padding. So we record directly at surface-indexed keys
+            // that match what the sourceMap produces.
+            const kernelPatKey = serializeIndexPath(patPath);
+            let ctorType = ctorDef;
+            let ctorArgContext = patContext;
+            let surfaceArgIdx = 0;
+            for (let argIdx = 0; argIdx < pat.args.length; argIdx++) {
+              if (ctorType.tag !== 'Binder' || ctorType.binderKind.tag !== 'BPi') break;
+              const argDomain = solvedEnv.zonkTerm(ctorType.domain);
+
+              if (!implicitPositions.has(argIdx)) {
+                // Record at surface-indexed path (matches what sourceMap produces)
+                solvedEnv.recordTypeInfoAtKey(
+                  `${kernelPatKey}.args[${surfaceArgIdx}]`, argDomain, ctorArgContext);
+                solvedEnv.recordTypeInfoAtKey(
+                  `${kernelPatKey}.args[${surfaceArgIdx}].name`, argDomain, ctorArgContext);
+                surfaceArgIdx++;
+              }
+
+              ctorArgContext = [...ctorArgContext, { name: ctorType.name, type: ctorType.domain }];
+              ctorType = ctorType.body;
+            }
+
+            // Record the constructor's full type at the .name sub-path of the PCtor
+            const ctorFullType = solvedEnv.zonkTerm(ctorDef);
+            solvedEnv.atIndexPath(namePath).recordTypeInfoWithContext(ctorFullType, patContext);
+          }
+        }
+
+        // Extend context for next pattern
+        patContext = [...patContext, { name: patType.name, type: patType.domain }];
+        patType = patType.body;
+      }
+    }
+  }
+
+  // Re-zonk all typeInfoMap entries now that all metas are solved.
+  // Entries recorded mid-checking may have unsolved metas from implicit arg insertion
+  // that were only solved later during argument checking/unification.
+  solvedEnv.zonkTypeInfoEntries();
+
+  // Fix context names for entries in this clause.
+  // Synthetic wildcard patterns (from reorderPatterns) may have generated names like "?0"
+  // instead of the Pi binder name (e.g., "B"). Replace with correct names from the Pi type.
+  paddedEnv.fixTypeInfoContextNames(patContext);
 
   // Extract context names for pretty printing (de Bruijn order: index 0 = most recent)
   // TTKContext has oldest at index 0 (appended), but we need most recent at index 0

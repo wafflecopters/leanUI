@@ -1,4 +1,4 @@
-import { arraySeg, fieldSeg, IndexPath, IndexPathSegment } from "../types/source-position";
+import { arraySeg, fieldSeg, IndexPath, IndexPathSegment, serializeIndexPath } from "../types/source-position";
 import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkULit, mkMeta, simplifyLevel, isDefinitionallyEqual } from "./kernel";
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
@@ -6,6 +6,7 @@ import { solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, shiftTerm } from "./subst";
 import { unifyTerms } from "./unify";
 import { areTypesDefEq } from "./whnf";
+import type { TypeInfoMap } from "./type-info";
 
 export interface CheckError {
   message: string;
@@ -27,11 +28,22 @@ export type Constraint = {
 export type MetaVar = {
   ctx: TTKContext,
   type: TTKTerm,
-  solution?: TTKTerm
+  solution?: TTKTerm,
+  /** True if this meta was created from an explicit user hole (e.g., ?sorry) */
+  isHole?: boolean
 }
 
 export type TCEnvOptions = {
   mode: 'pattern' | 'check'
+  /** Skip duplicate Pi parameter name check (for synthesized auxiliary declarations) */
+  allowDuplicatePiNames?: boolean
+}
+
+// Module-level type info collector. Safe because type checking is synchronous.
+let _typeInfoCollector: TypeInfoMap | undefined;
+
+export function setTypeInfoCollector(collector: TypeInfoMap | undefined): void {
+  _typeInfoCollector = collector;
 }
 
 export function createTCEnv(data: {
@@ -43,8 +55,12 @@ export function createTCEnv(data: {
   valueStack?: unknown[],
   value?: null,
   levelMetas?: Map<string, LevelMeta>,
-  options: TCEnvOptions
+  options: TCEnvOptions,
+  typeInfoCollector?: TypeInfoMap,
 }): TCEnv<null> {
+  if (data.typeInfoCollector !== undefined) {
+    _typeInfoCollector = data.typeInfoCollector;
+  }
   return new TCEnv(
     data.context ?? [],
     data.definitions ?? createDefinitionsMap(),
@@ -756,6 +772,98 @@ export class TCEnv<T> {
   ) {
   }
 
+  /**
+   * Record type information for the current sub-expression.
+   * Uses the module-level _typeInfoCollector (set via createTCEnv or setTypeInfoCollector).
+   */
+  recordTypeInfo(type: TTKTerm, expectedType?: TTKTerm): void {
+    if (!_typeInfoCollector) return;
+    const key = serializeIndexPath(this.indexPath);
+    _typeInfoCollector.set(key, {
+      type: this.zonkTerm(type),
+      context: this.context,
+      expectedType: expectedType ? this.zonkTerm(expectedType) : undefined,
+      kernelPath: key,
+    });
+  }
+
+  /**
+   * Record type information with an explicit context override.
+   * Used when the env's context doesn't match the correct scope for the type
+   * (e.g., pattern types should use the pattern-level context, not the post-RHS context).
+   */
+  recordTypeInfoWithContext(type: TTKTerm, context: TTKContext, expectedType?: TTKTerm): void {
+    if (!_typeInfoCollector) return;
+    const key = serializeIndexPath(this.indexPath);
+    _typeInfoCollector.set(key, {
+      type: this.zonkTerm(type),
+      context,
+      expectedType: expectedType ? this.zonkTerm(expectedType) : undefined,
+      kernelPath: key,
+    });
+  }
+
+  /**
+   * Record type information at an explicit string key (bypassing indexPath serialization).
+   * Used when the key doesn't correspond to the current env's indexPath, e.g.,
+   * recording constructor pattern arg types at surface-indexed paths.
+   */
+  recordTypeInfoAtKey(key: string, type: TTKTerm, context: TTKContext, expectedType?: TTKTerm): void {
+    if (!_typeInfoCollector) return;
+    _typeInfoCollector.set(key, {
+      type: this.zonkTerm(type),
+      context,
+      expectedType: expectedType ? this.zonkTerm(expectedType) : undefined,
+      kernelPath: key,
+    });
+  }
+
+  /**
+   * Fix context names in typeInfoMap entries for a clause.
+   * Synthetic wildcard patterns may have generated names (e.g., "?0") instead of
+   * the Pi binder name (e.g., "B"). Replace the context prefix with the correct names.
+   * Only affects entries whose kernelPath starts with the clause's indexPath prefix.
+   */
+  fixTypeInfoContextNames(correctContext: TTKContext): void {
+    if (!_typeInfoCollector) return;
+    const clausePrefix = serializeIndexPath(this.indexPath);
+    for (const [key, entry] of _typeInfoCollector) {
+      if (!key.startsWith(clausePrefix)) continue;
+      if (entry.context.length < correctContext.length) continue;
+      let needsFix = false;
+      for (let i = 0; i < correctContext.length; i++) {
+        if (entry.context[i].name !== correctContext[i].name) {
+          needsFix = true;
+          break;
+        }
+      }
+      if (needsFix) {
+        const fixedContext: TTKContext = [...correctContext, ...entry.context.slice(correctContext.length)];
+        _typeInfoCollector.set(key, { ...entry, context: fixedContext });
+      }
+    }
+  }
+
+  /**
+   * Re-zonk all entries in the typeInfoMap using this env's metaVars.
+   * Called after clause checking completes when all metas are solved,
+   * to fix entries that were recorded mid-checking with unsolved metas.
+   */
+  zonkTypeInfoEntries(): void {
+    if (!_typeInfoCollector) return;
+    for (const [key, entry] of _typeInfoCollector) {
+      const zonkedType = this.zonkTerm(entry.type);
+      const zonkedExpected = entry.expectedType ? this.zonkTerm(entry.expectedType) : undefined;
+      if (zonkedType !== entry.type || zonkedExpected !== entry.expectedType) {
+        _typeInfoCollector.set(key, {
+          ...entry,
+          type: zonkedType,
+          expectedType: zonkedExpected,
+        });
+      }
+    }
+  }
+
   then<S>(fn: (env: TCEnv<T>) => S): S {
     return fn(this);
   }
@@ -833,7 +941,8 @@ export class TCEnv<T> {
     const { constraints, metaVars } = solveConstraints(
       this.metaVars,
       this.constraints,
-      options.liftMetasToFullContext ? this.context : undefined
+      options.liftMetasToFullContext ? this.context : undefined,
+      this.definitions
     );
     return new TCEnv(
       this.context,
@@ -1150,7 +1259,7 @@ export class TCEnv<T> {
     // Use the Hole's ID as the Meta ID to enable substitution of Holes in the original term
     const holeId = this.value.id;
     const newMetaVars = new Map(this.metaVars);
-    newMetaVars.set(holeId, { ctx: this.context, type: expectedType });
+    newMetaVars.set(holeId, { ctx: this.context, type: expectedType, isHole: true });
 
     // Replace the Hole with a Meta term (elaboration: Hole -> Meta)
     const metaTerm: TTKTerm = { tag: 'Meta', id: holeId };

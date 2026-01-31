@@ -649,6 +649,10 @@ export interface ParsedDeclaration {
   // For with-clause auxiliary functions: number of scrutinee pattern positions.
   // Used by totality checker to skip frozen function-pattern positions.
   withScrutineeCount?: number;
+  // For with-clause auxiliary functions: the original scrutinee expressions.
+  // Used by compile.ts to compute the actual scrutinee types (replacing holes
+  // in the auxiliary type signature) before checking clauses.
+  withScrutineeExprs?: TTerm[];
   // Original surface value before with-clause desugaring.
   // Used for semantic token extraction (the desugared value loses WithClause structure).
   originalSurfaceValue?: TTerm;

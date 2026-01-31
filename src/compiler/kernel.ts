@@ -1136,7 +1136,11 @@ export function prettyPrintFormatted(
 
           while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
             const currentAnon = current.name === '_' || current.name === '';
-            const domain = stripOuterParens(prettyPrintFormatted(current.domain, ctx, metaVars, options));
+            const domainStr = prettyPrintFormatted(current.domain, ctx, metaVars, options);
+            // Don't strip parens for function type domains - they indicate grouping
+            const domain = current.domain.tag === 'Binder' && current.domain.binderKind.tag === 'BPi'
+              ? domainStr
+              : stripOuterParens(domainStr);
             const isNamedParam = namedPositions.has(positionIndex);
             if (currentAnon) {
               parts.push(domain);

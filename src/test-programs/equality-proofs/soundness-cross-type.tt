@@ -1,0 +1,14 @@
+-- @test failure
+-- @name "soundness: Equal Zero True cross-type must be rejected"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+bad : Equal Zero True
+bad = refl

@@ -193,6 +193,41 @@ function desugarTerm(
  *
  * Returns call: isZero-with-1 n n
  */
+/**
+ * Check if all function patterns are "simple" for Agda-style desugaring:
+ * each pattern is either a PVar/PWild, or a PCtor with exactly one PVar/PWild arg.
+ * This ensures the number of inner vars equals the number of patterns (no binder count change).
+ */
+function hasOnlySimplePatterns(patterns: TPattern[]): boolean {
+  return patterns.every(p =>
+    p.tag === 'PVar' || p.tag === 'PWild' ||
+    (p.tag === 'PCtor' && p.args.length === 1 &&
+      (p.args[0].tag === 'PVar' || p.args[0].tag === 'PWild'))
+  );
+}
+
+/**
+ * Check if any function pattern is a constructor (not just a variable).
+ */
+function hasConstructorPatterns(patterns: TPattern[]): boolean {
+  return patterns.some(p => p.tag === 'PCtor');
+}
+
+/**
+ * Extract inner variable patterns from function patterns.
+ * For PVar/PWild: returns the pattern as-is.
+ * For PCtor with 1 arg: returns the inner PVar/PWild.
+ * Only valid when hasOnlySimplePatterns is true.
+ */
+function extractInnerPatterns(patterns: TPattern[]): TPattern[] {
+  return patterns.map(p => {
+    if (p.tag === 'PCtor' && p.args.length === 1) {
+      return p.args[0];
+    }
+    return p;
+  });
+}
+
 function desugarWithClause(
   withClause: TWithClause,
   baseName: string,
@@ -203,21 +238,29 @@ function desugarWithClause(
   const functionPatterns = withClause.functionPatterns;
   const scrutinees = withClause.scrutinees;
 
+  // Determine if we should use Agda-style desugaring for constructor function patterns.
+  // When function patterns contain constructors (like Succ x) and the return type may
+  // be dependent, we need to:
+  // 1. Pass inner vars (x, y) instead of constructor-wrapped terms (Succ x, Succ y)
+  // 2. Use PVar clause patterns instead of constructor patterns
+  // 3. Substitute pattern reconstructions into the return type
+  // This avoids a type mismatch between scrutinee type and auxiliary instantiation.
+  const useAgdaStyle = hasConstructorPatterns(functionPatterns) && hasOnlySimplePatterns(functionPatterns);
+  const effectiveClausePatterns = useAgdaStyle
+    ? extractInnerPatterns(functionPatterns)
+    : functionPatterns;
+
   // Create auxiliary function clauses
-  // Each with-clause becomes: auxName functionPatterns... withPattern... = rhs
-  // Note: function patterns may include constructors (e.g., Zero) from the parent
-  // clause. This makes the auxiliary "partial" in that it only handles the specific
-  // constructor case from the parent. Totality checking is skipped for auxiliaries.
   const auxClauses: TClause[] = withClause.clauses.map(clause => ({
-    patterns: [...functionPatterns, ...clause.patterns],
+    patterns: [...effectiveClausePatterns, ...clause.patterns],
     rhs: clause.rhs,
     namedPatterns: withClause.functionNamedPatterns,
   }));
 
   // Compute the auxiliary function type from the main declaration's type
   // The auxiliary takes: (1) bound variable args, (2) scrutinee args
-  // and returns the main function's return type
-  const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees);
+  // and returns the main function's return type (with pattern reconstructions substituted)
+  const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees, useAgdaStyle);
 
   // Create the auxiliary function definition
   const auxDecl: ParsedDeclaration = {
@@ -230,6 +273,7 @@ function desugarWithClause(
       clauses: auxClauses,
     },
     withScrutineeCount: scrutinees.length,
+    withScrutineeExprs: scrutinees,
   };
 
   // Recursively desugar nested WithClauses in the auxiliary's clause RHS values.
@@ -244,21 +288,28 @@ function desugarWithClause(
   }
 
   // Create the call to the auxiliary function
-  // auxName patternArg1 patternArg2 ... scrutinee1 scrutinee2 ...
-  //
-  // Each function pattern is converted back to a term:
-  //   PVar(n) → Var(index)
-  //   PCtor("Zero", []) → Const("Zero")
-  //   PCtor("Succ", [PVar(m)]) → App(Const("Succ"), Var(index))
-  //   PWild → Var(index)
   let call: TTerm = mkConstTT(auxName);
 
-  // Convert function patterns to terms for the call arguments
   const numPatternVars = countPatternVars(functionPatterns);
-  let varIndex = numPatternVars; // Start from highest, counting down
-  const patternArgs = patternsToTerms(functionPatterns, varIndex);
-  for (const arg of patternArgs) {
-    call = mkAppTT(call, arg);
+  let varIndex = numPatternVars;
+
+  if (useAgdaStyle) {
+    // Agda-style: pass inner vars directly, not constructor-wrapped terms.
+    // For PVar: same as before (just the var).
+    // For PCtor("Succ", [PVar x]): pass x (the inner var), not Succ(x).
+    // Since hasOnlySimplePatterns guarantees each pattern has exactly 1 inner var,
+    // the var index assignment is the same as for PVar patterns.
+    for (const _pat of functionPatterns) {
+      const idx = varIndex - 1;
+      call = mkAppTT(call, mkVarTT(idx));
+      varIndex = idx;
+    }
+  } else {
+    // Original style: pass reconstructed pattern terms
+    const patternArgs = patternsToTerms(functionPatterns, varIndex);
+    for (const arg of patternArgs) {
+      call = mkAppTT(call, arg);
+    }
   }
 
   // Add scrutinee arguments
@@ -362,7 +413,8 @@ function countSinglePatternVars(p: TPattern): number {
 function computeAuxiliaryType(
   declType: TTerm | undefined,
   functionPatterns: TPattern[],
-  scrutinees: TTerm[]
+  scrutinees: TTerm[],
+  useAgdaStyle: boolean = false
 ): TTerm | undefined {
   if (!declType) {
     return undefined;
@@ -399,8 +451,50 @@ function computeAuxiliaryType(
     }
   }
 
+  // Build reconstruction map for Agda-style: maps de Bruijn index in return type
+  // to the reconstruction term (e.g., Var 1 → App(Const("Succ"), Var 1))
+  const reconstructionMap: Map<number, TTerm> | undefined = useAgdaStyle
+    ? buildReconstructionMap(functionPatterns, binderInfo)
+    : undefined;
+
   // Splice scrutinee types into the original type at the splice point
-  return spliceScrutineesIntoType(declType, numPatterns, scrutineeTypes);
+  return spliceScrutineesIntoType(declType, numPatterns, scrutineeTypes, reconstructionMap);
+}
+
+/**
+ * Build a map from de Bruijn index (in the return type context) to reconstruction term.
+ * Only creates entries for constructor patterns (PVar patterns are identity).
+ *
+ * For example, with patterns [Succ(PVar x), Succ(PVar y)] and totalPrefixDepth=2:
+ *   Var 1 (first binder) → App(Const("Succ"), Var 1)
+ *   Var 0 (second binder) → App(Const("Succ"), Var 0)
+ */
+function buildReconstructionMap(
+  functionPatterns: TPattern[],
+  binderInfo: { explicitDomains: { domain: TTerm; depth: number }[]; totalPrefixDepth: number }
+): Map<number, TTerm> {
+  const map = new Map<number, TTerm>();
+  let explicitIdx = 0;
+
+  for (const pattern of functionPatterns) {
+    if (explicitIdx >= binderInfo.explicitDomains.length) break;
+    const { depth } = binderInfo.explicitDomains[explicitIdx];
+    // De Bruijn index of this binder from the return type perspective
+    const varIdx = binderInfo.totalPrefixDepth - 1 - depth;
+
+    if (pattern.tag === 'PCtor' && pattern.args.length === 1) {
+      // Reconstruction: wrap the inner var in the constructor
+      // The inner var has the same de Bruijn index (since binder count is preserved)
+      let term: TTerm = mkConstTT(pattern.name);
+      term = mkAppTT(term, mkVarTT(varIdx));
+      map.set(varIdx, term);
+    }
+    // PVar/PWild: identity mapping, no entry needed
+
+    explicitIdx++;
+  }
+
+  return map;
 }
 
 /**
@@ -518,12 +612,22 @@ function shiftVars(term: TTerm, amount: number, cutoff: number = 0): TTerm {
 function spliceScrutineesIntoType(
   type: TTerm,
   numExplicit: number,
-  scrutineeTypes: TTerm[]
+  scrutineeTypes: TTerm[],
+  reconstructionMap?: Map<number, TTerm>
 ): TTerm {
   // Base case: we've consumed all required explicit args, splice here
   if (numExplicit <= 0) {
+    let result = type;
+
+    // Apply pattern reconstruction substitution for Agda-style desugaring.
+    // This transforms the return type to use constructor-wrapped references
+    // e.g., DecEq (Var 1) (Var 0) → DecEq (Succ (Var 1)) (Succ (Var 0))
+    if (reconstructionMap && reconstructionMap.size > 0) {
+      result = applySimultaneousSubst(result, reconstructionMap);
+    }
+
     // Shift free variables in the return type to account for the new scrutinee binders
-    let result = shiftVars(type, scrutineeTypes.length);
+    result = shiftVars(result, scrutineeTypes.length);
     // Add in reverse so they appear in order
     for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
       result = mkPiTT(scrutineeTypes[i], result, `_scrut${i}`);
@@ -535,7 +639,7 @@ function spliceScrutineesIntoType(
   if (type.tag === 'Binder' && type.binderKind.tag === 'BPiTT') {
     const isNamed = !!(type as any).named;
     const consumed = isNamed ? 0 : 1;
-    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes);
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, reconstructionMap);
     if (newBody === type.body) return type;
     return { ...type, body: newBody };
   }
@@ -543,16 +647,90 @@ function spliceScrutineesIntoType(
   if (type.tag === 'MultiBinder' && type.binderKind.tag === 'BPiTT') {
     const isNamed = !!(type as any).named;
     const consumed = isNamed ? 0 : type.names.length;
-    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes);
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, reconstructionMap);
     if (newBody === type.body) return type;
     return { ...type, body: newBody };
   }
 
   // If we run out of Pi binders before consuming enough explicit args,
   // just splice here (best effort)
-  let result = shiftVars(type, scrutineeTypes.length);
+  let result = type;
+  if (reconstructionMap && reconstructionMap.size > 0) {
+    result = applySimultaneousSubst(result, reconstructionMap);
+  }
+  result = shiftVars(result, scrutineeTypes.length);
   for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
     result = mkPiTT(scrutineeTypes[i], result, `_scrut${i}`);
   }
   return result;
+}
+
+/**
+ * Apply a simultaneous substitution to a surface term.
+ * The substMap maps de Bruijn indices to replacement terms.
+ * Only substitutes exact Var matches; the replacement terms are NOT recursively substituted.
+ */
+function applySimultaneousSubst(
+  term: TTerm,
+  substMap: Map<number, TTerm>,
+  cutoff: number = 0
+): TTerm {
+  switch (term.tag) {
+    case 'Var': {
+      if (term.index >= cutoff) {
+        const replacement = substMap.get(term.index - cutoff);
+        if (replacement !== undefined) {
+          return shiftVars(replacement, cutoff);
+        }
+      }
+      return term;
+    }
+
+    case 'App': {
+      const newFn = applySimultaneousSubst(term.fn, substMap, cutoff);
+      const newArg = applySimultaneousSubst(term.arg, substMap, cutoff);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+
+    case 'Binder': {
+      const newDomain = term.domain ? applySimultaneousSubst(term.domain, substMap, cutoff) : undefined;
+      const newBody = applySimultaneousSubst(term.body, substMap, cutoff + 1);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    case 'MultiBinder': {
+      const newDomain = applySimultaneousSubst(term.domain, substMap, cutoff);
+      const newBody = applySimultaneousSubst(term.body, substMap, cutoff + term.names.length);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    case 'Annot': {
+      const newTerm = applySimultaneousSubst(term.term, substMap, cutoff);
+      const newType = applySimultaneousSubst(term.type, substMap, cutoff);
+      if (newTerm === term.term && newType === term.type) return term;
+      return { tag: 'Annot', term: newTerm, type: newType };
+    }
+
+    case 'Hole': {
+      const newType = applySimultaneousSubst(term.type, substMap, cutoff);
+      if (newType === term.type) return term;
+      return { ...term, type: newType };
+    }
+
+    case 'Match': {
+      const newScrutinee = applySimultaneousSubst(term.scrutinee, substMap, cutoff);
+      const newClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: applySimultaneousSubst(c.rhs, substMap, cutoff + countPatternVars(c.patterns)),
+      }));
+      return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
+    }
+
+    default:
+      // Const, Prop, ULevelLit, etc.
+      return term;
+  }
 }

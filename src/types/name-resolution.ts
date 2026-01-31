@@ -153,6 +153,15 @@ export function validateTerm(
         walk(t.body, [...p, { kind: 'field', name: 'body' }]);
         break;
 
+      case 'MultiBinder':
+        // Multi-name binder: {x y : Nat} -> body or (a b : T) -> body
+        // Validate domain and body (same structure as Binder)
+        if (t.domain !== undefined) {
+          walk(t.domain, [...p, { kind: 'field', name: 'domain' }]);
+        }
+        walk(t.body, [...p, { kind: 'field', name: 'body' }]);
+        break;
+
       case 'App':
         walk(t.fn, [...p, { kind: 'field', name: 'fn' }]);
         walk(t.arg, [...p, { kind: 'field', name: 'arg' }]);
@@ -172,6 +181,21 @@ export function validateTerm(
           const clausePath: IndexPath = [...p, { kind: 'field' as const, name: 'clauses' }, { kind: 'array' as const, index: i }];
           walk(clause.rhs, [...clausePath, { kind: 'field' as const, name: 'rhs' }]);
         });
+        break;
+
+      case 'WithClause':
+        // With-clauses contain scrutinees and clause RHSes that may reference symbols
+        for (const scrutinee of t.scrutinees) {
+          walk(scrutinee, p);  // Path isn't precise but catches errors
+        }
+        t.clauses.forEach((clause, i) => {
+          const clausePath: IndexPath = [...p, { kind: 'field' as const, name: 'clauses' }, { kind: 'array' as const, index: i }];
+          walk(clause.rhs, [...clausePath, { kind: 'field' as const, name: 'rhs' }]);
+        });
+        break;
+
+      case 'AbsurdMarker':
+        // No symbol references to validate
         break;
     }
   }

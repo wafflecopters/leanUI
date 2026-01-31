@@ -1,0 +1,10 @@
+-- @test success
+-- @name "soundness: Equal (Succ x) (Succ x) with refl is valid"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+good : (x : Nat) -> Equal (Succ x) (Succ x)
+good x = refl

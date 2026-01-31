@@ -1,0 +1,17 @@
+-- @test failure
+-- @name "soundness: Yes refl for DecEq (Succ x) (Succ y) must be rejected"
+-- @import preambles/equality.tt
+-- @error "conflict"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+bad : (x y : Nat) -> DecEq (Succ x) (Succ y)
+bad x y = Yes refl

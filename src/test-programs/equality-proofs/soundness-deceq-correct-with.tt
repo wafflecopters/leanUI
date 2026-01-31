@@ -1,0 +1,28 @@
+-- @test failure
+-- @name "soundness: decEqNat with-clause rejects unsound Yes eq / No neq passthrough"
+-- @import preambles/equality.tt
+-- @error "inferred x but required to be (Succ x)"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
+
+sym : {A : Type} -> {a b : A} -> Equal a b -> Equal b a
+sym refl = refl
+
+decEqNat : (x y : Nat) -> DecEq x y
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ y) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No (\eq => zeroNeqSucc (sym eq))
+decEqNat (Succ x) (Succ y) with decEqNat x y
+  | Yes eq => Yes eq
+  | No neq => No neq

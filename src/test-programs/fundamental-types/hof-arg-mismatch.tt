@@ -1,0 +1,8 @@
+-- @test failure
+-- @name "higher-order function applied to wrong argument type is rejected"
+-- @import preambles/nat.tt
+-- @import preambles/bool.tt
+-- @error "expects Nat but was applied to Bool"
+
+blah : (Nat -> Bool) -> (Bool -> Bool)
+blah fn = \n => fn n

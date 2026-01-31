@@ -1,0 +1,7 @@
+-- @test failure
+-- @name "duplicate parameter name in type signature is rejected"
+-- @import preambles/nat.tt
+-- @error "Duplicate parameter name"
+
+shadow : {x y : Nat} -> (y : Nat) -> Nat
+shadow y = y

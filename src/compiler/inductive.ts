@@ -1,7 +1,8 @@
-import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, contextToNamesStack, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
+import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, contextToNamesStack, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, setTypeInfoCollector, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
 import { TTKTerm, levelsEqual, mkULit, levelLeq, collectLevelVars, levelVarContainedIn, prettyPrintLevel } from "./kernel";
 import { inferType } from "./checker";
 import { shiftTerm } from "./subst";
+import type { TypeInfoMap } from "./type-info";
 
 function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError[] {
   const errors: TCEnvError[] = [];
@@ -55,6 +56,7 @@ export function checkInductiveDeclaration(
   definitions: DefinitionsMap,
   namedArgMap?: NamedArgMap,
   recordInfo?: RecordInfo,
+  typeInfoCollector?: TypeInfoMap,
 ): {
   success: false,
   errors: TCEnvError[]
@@ -64,6 +66,10 @@ export function checkInductiveDeclaration(
   indexPositions: number[],
   zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>
 } {
+  if (typeInfoCollector) {
+    setTypeInfoCollector(typeInfoCollector);
+  }
+
   // We'll compute indexPositions after validation, so use empty array initially
   const inductiveDefinition: InductiveDefinition = { name, type, constructors, indexPositions: [] };
   const defEnv = createTCEnv({ definitions, options: { mode: 'check' } }).withValue(inductiveDefinition);

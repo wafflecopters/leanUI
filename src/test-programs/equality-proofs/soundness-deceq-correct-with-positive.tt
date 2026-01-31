@@ -1,0 +1,36 @@
+-- @test success
+-- @name "soundness: decEqNat with correct cong proof succeeds"
+-- @import preambles/equality.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+cong : {A B : Type} -> {a b : A} -> (f : A -> B) -> Equal a b -> Equal (f a) (f b)
+cong f refl = refl
+
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
+
+succNeqZero : {n : Nat} -> Equal (Succ n) Zero -> Void
+succNeqZero refl = #absurd
+
+succInjective : {m n : Nat} -> Equal (Succ m) (Succ n) -> Equal m n
+succInjective refl = refl
+
+sym : {A : Type} -> {a b : A} -> Equal a b -> Equal b a
+sym refl = refl
+
+decEqNat : (x y : Nat) -> DecEq x y
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ y) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No succNeqZero
+decEqNat (Succ x) (Succ y) with decEqNat x y
+  | Yes eq => Yes (cong Succ eq)
+  | No neq => No (\eq => neq (succInjective eq))

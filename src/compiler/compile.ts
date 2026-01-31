@@ -9,7 +9,7 @@ import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkType } from './kernel';
-import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT } from './surface';
+import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT, mkPropTT, mkHoleTT } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
@@ -23,6 +23,7 @@ import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
 import { desugarWithClauses } from './with-desugar';
+import { subst } from './subst';
 import type { TypeInfoMap } from './type-info';
 export type { TotalityResult, CaseTree };
 
@@ -43,9 +44,9 @@ export const SHOW_WILDCARD_INLAY_HINTS = false;
  * A single parsed block - either declarations, a comment, or an error
  */
 export type ParsedBlock =
-  | { kind: 'declarations'; declarations: ParsedDeclaration[]; sourceMaps: SourceMap[]; sourceLines: string[]; startLine: number }
-  | { kind: 'comment'; sourceLines: string[]; startLine: number }
-  | { kind: 'error'; errors: ParseError[]; sourceLines: string[]; startLine: number };
+  | { kind: 'declarations'; declarations: ParsedDeclaration[]; sourceMaps: SourceMap[]; sourceLines: string[]; startLine: number; posOffset: number }
+  | { kind: 'comment'; sourceLines: string[]; startLine: number; posOffset: number }
+  | { kind: 'error'; errors: ParseError[]; sourceLines: string[]; startLine: number; posOffset: number };
 
 /**
  * Result of parsing source text
@@ -150,6 +151,15 @@ export interface CompiledDeclaration {
   // Elaboration error source path (for locating errors in source)
   elabErrorPath?: string;
 
+  // Whether this declaration is a with-clause auxiliary
+  isWithAuxiliary?: boolean;
+
+  // Errors promoted from failed with-clause auxiliaries (displayed on the main declaration)
+  withClauseErrors?: TCEnvError[];
+
+  // ElabMap from failed auxiliaries, for mapping withClauseErrors to source ranges
+  withClauseElabMap?: ElabMap;
+
   // Type info map for type-at-cursor feature
   typeInfoMap?: TypeInfoMap;
 }
@@ -213,31 +223,45 @@ export interface CompileResult {
  * @param blockStartLine - 1-based line number where the block starts in the file
  * @returns New sourceMap with file-absolute positions
  */
-function adjustSourceMapToAbsolute(sourceMap: SourceMap, blockStartLine: number): SourceMap {
-  if (blockStartLine === 1) {
+function adjustSourceMapToAbsolute(sourceMap: SourceMap, blockStartLine: number, posOffset: number): SourceMap {
+  if (blockStartLine === 1 && posOffset === 0) {
     // No adjustment needed for first block
     return sourceMap;
   }
 
-  const offset = blockStartLine - 1;
+  const lineOffset = blockStartLine - 1;
   const adjusted = new Map<string, { start: { line: number; col: number; pos: number }; end: { line: number; col: number; pos: number } }>();
 
   for (const [key, range] of sourceMap) {
     adjusted.set(key, {
       start: {
-        line: range.start.line + offset,
+        line: range.start.line + lineOffset,
         col: range.start.col,
-        pos: range.start.pos  // Note: pos is relative to block, not adjusted
+        pos: range.start.pos + posOffset
       },
       end: {
-        line: range.end.line + offset,
+        line: range.end.line + lineOffset,
         col: range.end.col,
-        pos: range.end.pos
+        pos: range.end.pos + posOffset
       }
     });
   }
 
   return adjusted;
+}
+
+/**
+ * Compute the character offset of a 1-based line number in a source string.
+ * Returns the index of the first character of the given line.
+ */
+function lineToCharOffset(source: string, line: number): number {
+  let offset = 0;
+  for (let i = 1; i < line; i++) {
+    const nl = source.indexOf('\n', offset);
+    if (nl < 0) return source.length;
+    offset = nl + 1;
+  }
+  return offset;
 }
 
 /**
@@ -555,15 +579,36 @@ function collectSemanticTokensFromSurfaceTerm(
           for (let wi = 0; wi < wc.clauses.length; wi++) {
             const wcClause = wc.clauses[wi];
             const wcPath = [...clausePath, 'withClauses', wi];
-            // Process patterns
+            const wcNamedPatternCount = wcClause.namedPatterns?.length || 0;
+            const wcTotalPatternCount = wcClause.patterns.length + wcNamedPatternCount;
+            // Emit brace tokens for all pattern indices (named patterns have braces)
+            for (let pj = 0; pj < wcTotalPatternCount; pj++) {
+              addSemanticTokenDirect([...wcPath, 'patterns', pj, 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+              addSemanticTokenDirect([...wcPath, 'patterns', pj, 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+            }
+            // Process positional patterns (offset by namedPatternCount)
             for (let pj = 0; pj < wcClause.patterns.length; pj++) {
+              const sourceMapIndex = pj + wcNamedPatternCount;
               collectSemanticTokensFromSurfacePattern(
                 wcClause.patterns[pj],
                 sourceMap,
                 blockStartLine,
-                [...wcPath, 'patterns', pj],
+                [...wcPath, 'patterns', sourceMapIndex],
                 tokens
               );
+            }
+            // Process named patterns at indices 0..namedPatternCount-1
+            if (wcClause.namedPatterns) {
+              for (let pj = 0; pj < wcClause.namedPatterns.length; pj++) {
+                addSemanticTokenDirect([...wcPath, 'patterns', pj, 'name'], sourceMap, blockStartLine, 'boundVar', tokens);
+                collectSemanticTokensFromSurfacePattern(
+                  wcClause.namedPatterns[pj].pattern,
+                  sourceMap,
+                  blockStartLine,
+                  [...wcPath, 'patterns', pj, 'pattern'],
+                  tokens
+                );
+              }
             }
             // Process RHS (could be nested WithClause or a normal term)
             if (wcClause.rhs.tag === 'WithClause') {
@@ -645,27 +690,55 @@ function collectSemanticTokensFromSurfacePattern(
       }
       break;
 
-    case 'PCtor':
+    case 'PCtor': {
       // Constructor pattern - white for the constructor name
       // For patterns with args, the name is recorded at path.name
       // For zero-arg patterns, the name is recorded at path itself
-      if (pattern.args.length > 0) {
+      const namedArgCount = pattern.namedArgs?.length || 0;
+      if (pattern.args.length > 0 || namedArgCount > 0) {
         addSemanticTokenDirect([...path, 'name'], sourceMap, blockStartLine, 'constName', tokens);
-        // Recurse into args
+
+        // Emit brace tokens for all arg indices (named args have braces in sourceMap)
+        const totalArgCount = pattern.args.length + namedArgCount;
+        for (let i = 0; i < totalArgCount; i++) {
+          addSemanticTokenDirect([...path, 'args', i, 'openBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+          addSemanticTokenDirect([...path, 'args', i, 'closeBrace'], sourceMap, blockStartLine, 'namedBrace', tokens);
+        }
+
+        // Positional args: sourceMap indices are offset by namedArgCount
+        // (named args come first in parser argIndex order)
         for (let i = 0; i < pattern.args.length; i++) {
+          const sourceMapIndex = i + namedArgCount;
           collectSemanticTokensFromSurfacePattern(
             pattern.args[i],
             sourceMap,
             blockStartLine,
-            [...path, 'args', i],
+            [...path, 'args', sourceMapIndex],
             tokens
           );
+        }
+
+        // Named args at indices 0..namedArgCount-1
+        if (pattern.namedArgs) {
+          for (let i = 0; i < pattern.namedArgs.length; i++) {
+            // Emit token for the named arg label (e.g., "m" in {m:=a})
+            addSemanticTokenDirect([...path, 'args', i, 'name'], sourceMap, blockStartLine, 'boundVar', tokens);
+            // Recurse into the inner pattern (e.g., "a" in {m:=a}, or "Succ p" in {m:=Succ p})
+            collectSemanticTokensFromSurfacePattern(
+              pattern.namedArgs[i].pattern,
+              sourceMap,
+              blockStartLine,
+              [...path, 'args', i, 'pattern'],
+              tokens
+            );
+          }
         }
       } else {
         // Zero-arg constructor: the whole pattern range IS the constructor name
         addSemanticTokenDirect(path, sourceMap, blockStartLine, 'constName', tokens);
       }
       break;
+    }
   }
 }
 
@@ -708,6 +781,8 @@ export function extractHoleLocations(result: CompileResult): HoleLocation[] {
   for (const block of result.blocks) {
     for (const decl of block.declarations) {
       if (!decl.sourceMap) continue;
+      // Skip with-clause auxiliaries — their holes are already collected via the main declaration
+      if ((decl as any).isWithAuxiliary) continue;
 
       // Process declaration type (surface)
       if (decl.surfaceType) {
@@ -1041,12 +1116,15 @@ export function parseTTSource(source: string): ParseResult {
   let allPreviousDeclarations: ParsedDeclaration[] = [];
 
   for (const block of sourceBlocks) {
+    const posOffset = lineToCharOffset(source, block.startLine);
+
     // Handle comment blocks
     if (block.isComment) {
       parsedBlocks.push({
         kind: 'comment',
         sourceLines: block.lines,
-        startLine: block.startLine
+        startLine: block.startLine,
+        posOffset
       });
       continue;
     }
@@ -1085,7 +1163,8 @@ export function parseTTSource(source: string): ParseResult {
         kind: 'error',
         errors: parseErrors,
         sourceLines: block.lines,
-        startLine: block.startLine
+        startLine: block.startLine,
+        posOffset
       });
       continue;
     }
@@ -1095,7 +1174,8 @@ export function parseTTSource(source: string): ParseResult {
       declarations,
       sourceMaps,
       sourceLines: block.lines,
-      startLine: block.startLine
+      startLine: block.startLine,
+      posOffset
     });
   }
 
@@ -1189,7 +1269,7 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
     for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
       const origDecl = block.declarations[declIndex];
       // Adjust sourceMap to file-absolute positions
-      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine);
+      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine, block.posOffset);
       // Use resolved declaration if available, otherwise fall back to original
       const decl = (origDecl.name && resolvedDeclMap.get(origDecl.name)) || origDecl;
       const elabMap: ElabMap = new Map();
@@ -1461,6 +1541,206 @@ function checkInductiveTypeDeclaration(
   }
 }
 
+/**
+ * Remap an auxiliary with-function's elabMap to map its kernel clause paths
+ * to the original with-clause surface paths in the block sourceMap.
+ *
+ * The auxiliary has clauses[0..N] which correspond to withClauses[0..N]
+ * in some main clause. The sourceMap records paths like:
+ *   value.clauses[mainIdx].withClauses[i].patterns[j]
+ *   value.clauses[mainIdx].withClauses[i].rhs
+ *
+ * We need elabMap entries so the reverse lookup (surface→kernel) works:
+ *   kernel: value.clauses[i].rhs  →  surface: value.clauses[mainIdx].withClauses[i].rhs
+ */
+function remapWithClauseElabMap(
+  compiled: CompiledDeclaration,
+  sourceMap: SourceMap,
+  withScrutineeCount: number,
+): void {
+  if (!compiled.elabMap) return;
+
+  // Determine the number of function patterns (before with-patterns) in each aux clause.
+  // The kernel clauses have: [funcPat0, funcPat1, ..., withPat0, withPat1, ...]
+  // withScrutineeCount tells us how many with-patterns there are at the end.
+  let numFunctionPatterns = 0;
+  if (compiled.kernelValue?.tag === 'Match' && compiled.kernelValue.clauses.length > 0) {
+    const totalPatterns = compiled.kernelValue.clauses[0].patterns.length;
+    numFunctionPatterns = totalPatterns - withScrutineeCount;
+  } else if (compiled.surfaceValue?.tag === 'Match' && compiled.surfaceValue.clauses.length > 0) {
+    // Fallback to surface value when kernel value is unavailable (e.g., elaboration failed)
+    const totalPatterns = compiled.surfaceValue.clauses[0].patterns.length;
+    numFunctionPatterns = totalPatterns - withScrutineeCount;
+  }
+
+  // Detect nested Match structure: when the auxiliary has a single clause whose
+  // RHS is itself a Match, the with-branches are inside that nested Match
+  // (e.g., value.clauses[0].rhs is a Match with sub-clauses for each with-branch).
+  let hasNestedMatch = false;
+  const surfaceMatch = compiled.surfaceValue?.tag === 'Match' ? compiled.surfaceValue : null;
+  if (surfaceMatch && surfaceMatch.clauses.length === 1) {
+    const rhs = surfaceMatch.clauses[0].rhs;
+    if (rhs.tag === 'Match') {
+      hasNestedMatch = true;
+    }
+  }
+
+  // Find with-clause entries in the sourceMap for this auxiliary
+  // Pattern: value.clauses[N].withClauses[M].*
+  const withClausePattern = /^value\.clauses\[(\d+)\]\.withClauses\[(\d+)\](.*)/;
+
+  for (const [path] of sourceMap) {
+    const match = path.match(withClausePattern);
+    if (!match) continue;
+
+    const withIdx = parseInt(match[2]);
+    const rawSuffix = match[3]; // e.g., '.patterns[0]', '.rhs', '.rhs.fn'
+
+    // Offset pattern indices: with-pattern j → kernel pattern (numFunctionPatterns + j)
+    let suffix = rawSuffix;
+    const patternMatch = suffix.match(/^\.patterns\[(\d+)\](.*)/);
+    if (patternMatch) {
+      const withPatIdx = parseInt(patternMatch[1]);
+      const patSuffix = patternMatch[2];
+      suffix = `.patterns[${numFunctionPatterns + withPatIdx}]${patSuffix}`;
+    }
+
+    const kernelPath = `value.clauses[${withIdx}]${suffix}`;
+    compiled.elabMap.set(kernelPath, path);
+
+    // Also map for nested Match structure: with-branches are sub-clauses
+    // inside value.clauses[0].rhs (a Match term). No pattern offset needed
+    // since the nested Match has its own independent pattern indices.
+    if (hasNestedMatch) {
+      const nestedPath = `value.clauses[0].rhs.clauses[${withIdx}]${rawSuffix}`;
+      compiled.elabMap.set(nestedPath, path);
+    }
+  }
+
+  // For nested Match: map value.clauses[0].rhs (the whole nested Match)
+  // to the parent with-clause entry rather than a specific branch.
+  // This ensures errors about the entire Match point to the with-clause line,
+  // not to one arbitrary branch.
+  if (hasNestedMatch) {
+    const parentWithPattern = /^value\.clauses\[(\d+)\]\.withClauses\[0\]/;
+    for (const [path] of sourceMap) {
+      const m = path.match(parentWithPattern);
+      if (m) {
+        const clauseIdx = m[1];
+        const parentEntry = `value.clauses[${clauseIdx}]`;
+        if (sourceMap.has(parentEntry)) {
+          compiled.elabMap.set('value.clauses[0].rhs', parentEntry);
+          break;
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Remap scrutinee paths from the main declaration's elabMap so type info
+ * is accessible for the scrutinee expression in a with-clause.
+ *
+ * The sourceMap has: value.clauses[N].scrutinee, value.clauses[N].scrutinee.fn, etc.
+ * These need to map into the main declaration's kernel paths.
+ */
+function remapWithScrutineeInMainElabMap(
+  compiled: CompiledDeclaration,
+  sourceMap: SourceMap,
+): void {
+  if (!compiled.elabMap) return;
+
+  // Find scrutinee entries in the sourceMap
+  // Pattern: value.clauses[N].scrutinee*
+  const scrutineePattern = /^value\.clauses\[(\d+)\]\.scrutinee/;
+
+  for (const [path] of sourceMap) {
+    const match = path.match(scrutineePattern);
+    if (match) {
+      // The scrutinee in the main function is desugared into the RHS
+      // (a call to the auxiliary). Map scrutinee paths to the RHS path
+      // so type info can be found.
+      const clauseIdx = parseInt(match[1]);
+      const suffix = path.substring(`value.clauses[${clauseIdx}].scrutinee`.length);
+      // The scrutinee expression appears in the RHS of the main clause
+      // as arguments to the auxiliary function call.
+      // Map it to the corresponding RHS sub-path.
+      const kernelRhsBase = `value.clauses[${clauseIdx}].rhs`;
+      // For the full scrutinee, map to RHS.arg (last argument to aux call)
+      // For scrutinee.fn, map to RHS.arg.fn, etc.
+      if (suffix === '' || suffix === '.fn' || suffix === '.arg') {
+        const kernelPath = suffix === '' ? `${kernelRhsBase}.arg` : `${kernelRhsBase}.arg${suffix}`;
+        compiled.elabMap.set(kernelPath, path);
+      }
+    }
+  }
+}
+
+/**
+ * Merge an auxiliary with-clause declaration's typeInfoMap and elabMap into the
+ * main declaration so that type-at-cursor works for with-clause patterns and RHS.
+ *
+ * The auxiliary's elabMap (after remapWithClauseElabMap) maps auxiliary kernel paths
+ * to the main declaration's surface paths (e.g., value.clauses[1].withClauses[0].rhs.fn).
+ * We store each auxiliary typeInfoMap entry under its surface path so that
+ * resolveTypeInfo's direct surface-path lookup finds them.
+ */
+function mergeAuxTypeInfoIntoMain(
+  mainCompiled: CompiledDeclaration,
+  auxCompiled: CompiledDeclaration,
+): void {
+  if (!auxCompiled.typeInfoMap || !auxCompiled.elabMap) return;
+  if (!mainCompiled.typeInfoMap) {
+    mainCompiled.typeInfoMap = new Map();
+  }
+  if (!mainCompiled.elabMap) {
+    mainCompiled.elabMap = new Map();
+  }
+
+  // Build reverse map: kernel path → surface path (from aux elabMap)
+  const auxReverse = new Map<string, string>();
+  for (const [kernelPath, surfacePath] of auxCompiled.elabMap) {
+    auxReverse.set(kernelPath, surfacePath);
+  }
+
+  // Merge typeInfoMap entries: store under surface path for direct lookup
+  for (const [kernelPath, entry] of auxCompiled.typeInfoMap) {
+    const surfacePath = auxReverse.get(kernelPath);
+    if (surfacePath) {
+      // Store under the surface path so resolveTypeInfo finds it directly
+      mainCompiled.typeInfoMap.set(surfacePath, {
+        ...entry,
+        kernelPath: surfacePath,
+      });
+    } else {
+      // Walk up kernel path to find a mapped ancestor, append suffix
+      let path = kernelPath;
+      while (path !== '') {
+        const mapped = auxReverse.get(path);
+        if (mapped) {
+          const suffix = kernelPath.substring(path.length);
+          const surfaceKey = mapped + suffix;
+          mainCompiled.typeInfoMap.set(surfaceKey, {
+            ...entry,
+            kernelPath: surfaceKey,
+          });
+          break;
+        }
+        const lastDot = path.lastIndexOf('.');
+        const lastBracket = path.lastIndexOf('[');
+        const cutPoint = Math.max(lastDot, lastBracket);
+        if (cutPoint <= 0) break;
+        path = path.substring(0, cutPoint);
+      }
+    }
+  }
+
+  // Note: we intentionally do NOT merge the auxiliary's elabMap entries into the
+  // main's elabMap. The auxiliary's kernel paths (e.g., value.clauses[1].rhs.fn)
+  // conflict with the main's own entries at the same paths. Instead, the typeInfoMap
+  // entries stored under surface paths are found via direct surface-path lookup.
+}
+
 function failCheck(message: string, env: TCEnv<unknown>): { success: false, errors: TCEnvError[] } {
   return {
     success: false,
@@ -1477,7 +1757,7 @@ function checkTermDeclaration(
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
   }
 
-  let env = createTCEnv({ definitions, options: { mode: 'check' }, typeInfoCollector: options?.typeInfoCollector })
+  let env = createTCEnv({ definitions, options: { mode: 'check', allowDuplicatePiNames: options?.allowUnsolvedSigMetas }, typeInfoCollector: options?.typeInfoCollector })
 
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', env)
@@ -1508,7 +1788,7 @@ function checkTermDeclaration(
     const sigResult = inferType(termEnv.inTermType());
     // Solve meta constraints before checking for unsolved metas
     const solvedSigResult = sigResult.solveMetasAndConstraints({ liftMetasToFullContext: false });
-    const unsolvedSigMetas = Array.from(solvedSigResult.metaVars.values()).filter(m => !m.solution);
+    const unsolvedSigMetas = Array.from(solvedSigResult.metaVars.values()).filter(m => !m.solution && !m.isHole);
     if (unsolvedSigMetas.length > 0 && !options?.allowUnsolvedSigMetas) {
       return {
         success: false, errors: [
@@ -1604,9 +1884,20 @@ function checkTermDeclaration(
         const result = checkType(valueEnv, zonkedKernelType);
 
         // Solve meta constraints before checking for unsolved metas
-        const solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        let solvedResult: typeof result;
+        try {
+          solvedResult = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        } catch (e) {
+          // Convert plain Errors (e.g. from meta constraint solving) to TCEnvErrors
+          // so they carry the value-level indexPath for accurate error location.
+          if (e instanceof Error && !(e instanceof TCEnvError)) {
+            throw TCEnvError.create(e.message, result);
+          }
+          throw e;
+        }
         // Check for UNSOLVED metas in the value (solved metas have a 'solution' property)
-        const unsolvedMetas = Array.from(solvedResult.metaVars.values()).filter(m => !m.solution);
+        // Exclude hole metas — those are intentionally unsolved (user wrote ?name)
+        const unsolvedMetas = Array.from(solvedResult.metaVars.values()).filter(m => !m.solution && !m.isHole);
         if (unsolvedMetas.length > 0) {
           return {
             success: false, errors: [
@@ -2865,7 +3156,7 @@ export function compileTTFromText(source: string): CompileResult {
 
     for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
       const origDecl = block.declarations[declIndex];
-      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine);
+      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine, block.posOffset);
 
       // Name resolution for this declaration (using current symbol context)
       const nameResult = validateDeclarations([origDecl], symbolContext);
@@ -2929,13 +3220,47 @@ export function compileTTFromText(source: string): CompileResult {
         }
       }
 
+      // Resolve scrutinee types for auxiliaries with non-variable scrutinees.
+      // This replaces Holes in the auxiliary type signatures with the actual
+      // scrutinee types inferred from the definitions available at this point.
+      // Must happen AFTER pre-registering the main type (so recursive calls work)
+      // and BEFORE processing auxiliaries (so clause checking uses correct types).
+      resolveAuxScrutineeTypes(auxiliaryDecls, definitions);
+
       // Process auxiliary declarations FIRST (so their types are available)
       // Note: auxiliary declarations are always term definitions (kind === 'def')
+      const failedAuxNames = new Set<string>();
+      const auxErrorsForMain: TCEnvError[] = [];
+      const auxElabMapForMain: ElabMap = new Map();
+      const compiledAuxiliaries: CompiledDeclaration[] = [];
+
       for (const auxDecl of auxiliaryDecls) {
         const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount });
+        // Remap elabMap so with-clause surface paths map to aux kernel paths
+        remapWithClauseElabMap(result.compiled, sourceMap, auxDecl.withScrutineeCount ?? 0);
+        result.compiled.isWithAuxiliary = true;
+        compiledAuxiliaries.push(result.compiled);
         compiledDecls.push(result.compiled);
         if (result.success) {
           definitions = result.newDefinitions;
+        } else {
+          // Track failed auxiliaries so we can filter cascading errors on the main declaration
+          if (auxDecl.name) failedAuxNames.add(auxDecl.name);
+          // Promote errors to the main declaration, replacing internal auxiliary name with main name
+          const mainName = mainDecl.name ?? '';
+          for (const err of result.compiled.checkErrors) {
+            if (auxDecl.name && mainName && err.message.includes(auxDecl.name)) {
+              auxErrorsForMain.push(TCEnvError.create(err.message.split(auxDecl.name).join(mainName), err.env));
+            } else {
+              auxErrorsForMain.push(err);
+            }
+          }
+          // Collect auxiliary's elabMap for source range mapping of promoted errors
+          if (result.compiled.elabMap) {
+            for (const [key, value] of result.compiled.elabMap) {
+              auxElabMapForMain.set(key, value);
+            }
+          }
         }
         totalCheckErrors += result.errorCount;
       }
@@ -2978,6 +3303,36 @@ export function compileTTFromText(source: string): CompileResult {
       } else {
         // 4. If we are looking at a term...
         const result = processTermDeclaration(mainDecl, sourceMap, definitions);
+        // For declarations with with-clauses, remap scrutinee paths in elabMap
+        // and merge auxiliary typeInfoMap entries so type-at-cursor works in with-clauses
+        if (auxiliaryDecls.length > 0) {
+          remapWithScrutineeInMainElabMap(result.compiled, sourceMap);
+          for (const auxCompiled of compiledAuxiliaries) {
+            mergeAuxTypeInfoIntoMain(result.compiled, auxCompiled);
+          }
+        }
+
+        // Filter cascading "Type definition not found" errors for failed auxiliaries
+        if (failedAuxNames.size > 0) {
+          const originalCount = result.compiled.checkErrors.length;
+          result.compiled.checkErrors = result.compiled.checkErrors.filter(err => {
+            for (const auxName of failedAuxNames) {
+              if (err.message.includes(`Type definition not found: ${auxName}`)) return false;
+            }
+            return true;
+          });
+          const suppressedCount = originalCount - result.compiled.checkErrors.length;
+          totalCheckErrors -= suppressedCount;
+        }
+
+        // Attach promoted auxiliary errors to the main declaration
+        if (auxErrorsForMain.length > 0) {
+          result.compiled.withClauseErrors = auxErrorsForMain;
+          if (auxElabMapForMain.size > 0) {
+            result.compiled.withClauseElabMap = auxElabMapForMain;
+          }
+        }
+
         compiledDecls.push(result.compiled);
 
         if (result.success) {
@@ -3341,6 +3696,18 @@ function checkMatchClauseFromSurface(
     return elabPatternToKernelWithMap(pattern, elabMap, patternSurfacePath, patternKernelPath);
   });
 
+  // Remove elabMap entries for synthetic patterns (auto-inserted wildcards).
+  // These patterns have no real source counterpart, so their elabMap entries
+  // (which use fallback surface indices) would conflict with real pattern entries.
+  if (sourceIndexMap) {
+    for (let i = 0; i < sourceIndexMap.length; i++) {
+      if (sourceIndexMap[i] === null) {
+        const syntheticPath = serializeIndexPath(appendPath(clauseKernelPath, fieldSeg('patterns'), arraySeg(i)));
+        elabMap.delete(syntheticPath);
+      }
+    }
+  }
+
   // Record the clause mapping
   elabMap.set(serializeIndexPath(clauseKernelPath), serializeIndexPath(clauseSurfacePath));
 
@@ -3590,4 +3957,188 @@ function checkTermValue(
   }
 
   return { success: true, checkedValue, totalityResult: enrichedTotalityResult };
+}
+
+/**
+ * Resolve scrutinee types for with-clause auxiliary declarations.
+ *
+ * When computeAuxiliaryType in with-desugar.ts encounters a non-variable
+ * scrutinee (e.g., `decEqNat x y`), it uses a Hole for the scrutinee
+ * Pi-binder domain because the scrutinee's type isn't available at
+ * desugaring time. This leaves the type free during clause checking,
+ * allowing it to be solved unsoundly (matching the return type after
+ * pattern refinement rather than the actual scrutinee type).
+ *
+ * This function computes the correct scrutinee types by:
+ * 1. Looking up the scrutinee expression's head function type
+ * 2. Walking its Pi chain, substituting the applied arguments
+ * 3. Replacing the Hole in the auxiliary's surface type with the result
+ *
+ * This ensures clause checking uses the correct scrutinee type,
+ * preventing unsound pattern matching in with-clause auxiliaries.
+ */
+function resolveAuxScrutineeTypes(
+  auxiliaryDecls: ParsedDeclaration[],
+  definitions: DefinitionsMap,
+): void {
+  for (const auxDecl of auxiliaryDecls) {
+    if (!auxDecl.withScrutineeExprs || auxDecl.withScrutineeExprs.length === 0) continue;
+    if (!auxDecl.type) continue;
+
+    for (let i = 0; i < auxDecl.withScrutineeExprs.length; i++) {
+      const scrutExpr = auxDecl.withScrutineeExprs[i];
+
+      // Skip variable scrutinees — computeAuxiliaryType already handles them
+      if (scrutExpr.tag === 'Var') continue;
+
+      try {
+        const scrutType = inferScrutineeExprType(scrutExpr, definitions);
+        if (scrutType) {
+          // Convert kernel type to surface term and replace the hole
+          const surfaceScrutType = kernelTypeToSurface(scrutType);
+          auxDecl.type = replaceHoleInSurfaceTerm(auxDecl.type!, `_scrut${i}_type`, surfaceScrutType);
+        }
+      } catch (_e) {
+        // If inference fails, leave the hole as-is (best effort)
+      }
+    }
+  }
+}
+
+/**
+ * Infer the type of a scrutinee expression by walking the head function's
+ * Pi type and substituting applied arguments.
+ *
+ * For `decEqNat x y` where `decEqNat : (x : Nat) -> (y : Nat) -> DecEq x y`:
+ *   1. Head = Const("decEqNat"), args = [Var(1), Var(0)]
+ *   2. Look up type: (x : Nat) -> (y : Nat) -> DecEq x y
+ *   3. Substitute Var(1) for x: (y : Nat) -> DecEq (Var(1)) y
+ *   4. Substitute Var(0) for y: DecEq (Var(1)) (Var(0))
+ *   Result: DecEq (Var(1)) (Var(0))
+ */
+function inferScrutineeExprType(scrutExpr: TTerm, definitions: DefinitionsMap): TTKTerm | undefined {
+  // Flatten the application spine: f a b c → head=f, args=[a, b, c]
+  const args: TTerm[] = [];
+  let head = scrutExpr;
+  while (head.tag === 'App') {
+    args.unshift(head.arg);
+    head = head.fn;
+  }
+
+  if (head.tag !== 'Const') return undefined;
+
+  // Look up the head function's type and namedArgMap from definitions
+  const termDef = definitions.terms.get(head.name);
+  if (!termDef?.type) return undefined;
+  const headType = termDef.type;
+  const namedArgMap = termDef.namedArgMap;
+
+  // Build a set of implicit positions from namedArgMap
+  const implicitPositions = new Set<number>();
+  if (namedArgMap) {
+    for (const pos of namedArgMap.values()) {
+      implicitPositions.add(pos);
+    }
+  }
+
+  // Walk Pi chain, matching explicit args and skipping implicits
+  let type = headType;
+  let argIdx = 0;
+  let piIdx = 0;
+
+  while (type.tag === 'Binder' && type.binderKind.tag === 'BPi') {
+    if (implicitPositions.has(piIdx)) {
+      // Implicit parameter: substitute a Hole (will be resolved during checking)
+      type = subst(0, { tag: 'Hole', id: `_impl_scrut_${piIdx}` }, type.body);
+      piIdx++;
+    } else if (argIdx < args.length) {
+      // Explicit parameter: substitute the corresponding argument
+      const kernelArg = surfaceTermToKernel(args[argIdx]);
+      type = subst(0, kernelArg, type.body);
+      argIdx++;
+      piIdx++;
+    } else {
+      break;
+    }
+  }
+
+  // If we consumed all arguments, `type` is the return type
+  return argIdx === args.length ? type : undefined;
+}
+
+/**
+ * Convert a surface TTerm to a kernel TTKTerm (structural conversion).
+ * Only handles the term forms that commonly appear in scrutinee expressions.
+ */
+function surfaceTermToKernel(t: TTerm): TTKTerm {
+  switch (t.tag) {
+    case 'Var': return { tag: 'Var', index: t.index };
+    case 'Const': return { tag: 'Const', name: t.name };
+    case 'App': return { tag: 'App', fn: surfaceTermToKernel(t.fn), arg: surfaceTermToKernel(t.arg) };
+    case 'Hole': return { tag: 'Hole', id: t.id };
+    case 'Sort': return { tag: 'Sort', level: surfaceTermToKernel(t.level) };
+    case 'ULit': return { tag: 'ULit', n: t.n };
+    default: return { tag: 'Hole', id: `_unsupported_${t.tag}` };
+  }
+}
+
+/**
+ * Convert a kernel TTKTerm to a surface TTerm (structural conversion).
+ * Only handles the type forms that commonly appear as scrutinee types.
+ */
+function kernelTypeToSurface(t: TTKTerm): TTerm {
+  const prop = mkPropTT();
+  switch (t.tag) {
+    case 'Var': return mkVarTT(t.index);
+    case 'Const': return mkConstTT(t.name);
+    case 'App': return mkAppTT(kernelTypeToSurface(t.fn), kernelTypeToSurface(t.arg));
+    case 'Sort': return { tag: 'Sort', level: kernelTypeToSurface(t.level) } as TTerm;
+    case 'ULit': return mkULitTT(t.n);
+    case 'Hole': return mkHoleTT(t.id, prop);
+    case 'Binder': {
+      if (t.binderKind.tag === 'BPi') {
+        return mkPiTT(kernelTypeToSurface(t.domain), kernelTypeToSurface(t.body), t.name);
+      }
+      return mkHoleTT('_unsupported_binder', prop);
+    }
+    default: return mkHoleTT(`_unsupported_${t.tag}`, prop);
+  }
+}
+
+/**
+ * Replace a Hole with a given name in a surface term tree.
+ * Used to substitute computed scrutinee types into auxiliary function types.
+ */
+function replaceHoleInSurfaceTerm(term: TTerm, holeName: string, replacement: TTerm): TTerm {
+  switch (term.tag) {
+    case 'Hole':
+      if (term.id === holeName) return replacement;
+      return term;
+    case 'Binder': {
+      const newDomain = term.domain ? replaceHoleInSurfaceTerm(term.domain, holeName, replacement) : undefined;
+      const newBody = replaceHoleInSurfaceTerm(term.body, holeName, replacement);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+    case 'MultiBinder': {
+      const newDomain = replaceHoleInSurfaceTerm(term.domain, holeName, replacement);
+      const newBody = replaceHoleInSurfaceTerm(term.body, holeName, replacement);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+    case 'App': {
+      const newFn = replaceHoleInSurfaceTerm(term.fn, holeName, replacement);
+      const newArg = replaceHoleInSurfaceTerm(term.arg, holeName, replacement);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+    case 'Annot': {
+      const newTerm = replaceHoleInSurfaceTerm(term.term, holeName, replacement);
+      const newType = replaceHoleInSurfaceTerm(term.type, holeName, replacement);
+      if (newTerm === term.term && newType === term.type) return term;
+      return { tag: 'Annot', term: newTerm, type: newType };
+    }
+    default:
+      return term;
+  }
 }

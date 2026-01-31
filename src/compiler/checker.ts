@@ -2,7 +2,8 @@
 
 import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual } from "./kernel";
 import { subst, shiftTerm, minFreeVarIndex } from "./subst";
-import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap } from "./term";
+import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap, BinderPartSegment } from "./term";
+import { IndexPath } from "../types/source-position";
 
 /**
  * Get the namedArgMap for a constructor by searching all inductive types.
@@ -109,6 +110,19 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     //   Γ ⊢ Π x : A, B ⇒ Type_max(i,j)
     // ────────────────────────────────────────────────────────────────
     // Create fresh level metas for domain and body
+    // Check for duplicate parameter name (shadowing)
+    if (!env.options.allowDuplicatePiNames) {
+      const piName = env.value.name;
+      if (piName !== '_' && piName !== '') {
+        if (env.context.some(entry => entry.name === piName)) {
+          throw TCEnvError.create(
+            `Duplicate parameter name '${piName}' in type signature`,
+            env.atIndexPath([...env.indexPath, BinderPartSegment.Name])
+          );
+        }
+      }
+    }
+
     const { env: env1, sort: domainSort } = env.typeSortFresh();
     const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderPiDomain(), domainSort);
 
@@ -250,7 +264,9 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────
     //   Γ ⊢ x ⇒ T
     // ────────────────────────────────────────────────────────────────
-    return env.getTypeAtIndexInContextAssert(env.value.index)
+    const varResult = env.getTypeAtIndexInContextAssert(env.value.index);
+    env.recordTypeInfo(varResult.value);
+    return varResult;
   }
 
   if (env.isConstTerm()) {
@@ -261,7 +277,9 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────
     //   Γ ⊢ c ⇒ T
     // ────────────────────────────────────────────────────────────────
-    return env.getTypeDefinitionAssert(env.value.name)
+    const constResult = env.getTypeDefinitionAssert(env.value.name);
+    env.recordTypeInfo(constResult.value);
+    return constResult;
   }
 
   if (env.isSortTerm()) {
@@ -271,7 +289,9 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────────
     //   Γ ⊢ Type_i ⇒ Type_(i+1)
     // ────────────────────────────────────────────────────────────────
-    return env.withSortOfSort();
+    const sortResult = env.withSortOfSort();
+    env.recordTypeInfo(sortResult.value);
+    return sortResult;
   }
 
   if (env.isAppTerm()) {
@@ -294,7 +314,17 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
     // Infer function type
     const fnInferredEnv = inferType(env.inAppFn());
-    let fnTypeEnv = fnInferredEnv.ensurePi();
+    let fnTypeEnv: ReturnType<typeof fnInferredEnv.ensurePi>;
+    try {
+      fnTypeEnv = fnInferredEnv.ensurePi();
+    } catch (e) {
+      if (e instanceof TCEnvError) {
+        const fnName = getFunctionName(env.value.fn, env);
+        const fnType = env.prettyPrint(fnInferredEnv.value);
+        throw e.wrappedBy(`${fnName} has type ${fnType} and cannot be applied as a function`);
+      }
+      throw e;
+    }
     let currentFnTerm = fnTypeEnv.elaboratedTerm ?? env.value.fn;
 
     // Check the argument against the expected domain type
@@ -345,11 +375,20 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     // Construct the elaborated App with the elaborated function (with implicits) and argument
     const elaboratedApp: TTKTerm = { tag: 'App', fn: currentFnTerm, arg: elaboratedArg };
 
-    return argEnv.withValue(resultType).withElaboratedTerm(elaboratedApp);
+    const appResult = argEnv.withValue(resultType).withElaboratedTerm(elaboratedApp);
+    // Record at the APP's indexPath (env.indexPath), using argEnv's metaVars for zonking
+    argEnv.atIndexPath(env.indexPath).recordTypeInfo(resultType);
+    return appResult;
   }
 
   if (env.isBinderTerm()) {
-    return inferBinderType(env)
+    const binderResult = inferBinderType(env);
+    env.recordTypeInfo(binderResult.value);
+    // Record the binder variable's type at the .name sub-path
+    // so hovering on the binder name shows the domain type (e.g., "n : Nat").
+    const nameIndexPath: IndexPath = [...env.indexPath, { kind: 'field', name: 'name' }];
+    env.atIndexPath(nameIndexPath).recordTypeInfo(env.value.domain);
+    return binderResult;
   }
 
   if (env.isHoleTerm()) {
@@ -360,7 +399,9 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     // Create a meta for both the type and the term.
     // ────────────────────────────────────────────────────────────────
     const { env: envWithTypeMeta, metaTerm: typeMeta } = env.createMetaForType();
-    return envWithTypeMeta.createMetaForHole(typeMeta);
+    const holeResult = envWithTypeMeta.createMetaForHole(typeMeta);
+    env.recordTypeInfo(typeMeta);
+    return holeResult;
   }
 
   if (env.isAnnotTerm()) {
@@ -377,6 +418,7 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     // The checked type annotation becomes the expected type for the term
     const annotationType = env.value.type;  // Use the original annotation type
     const termEnv = checkType(typeEnv.atValueAndPathOfEnv(env).inAnnotTerm(), annotationType);
+    env.recordTypeInfo(annotationType);
     return termEnv.withValue(annotationType);
   }
 
@@ -387,7 +429,9 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────────
     //   Γ ⊢ ULevel ⇒ Type 1
     // ────────────────────────────────────────────────────────────────
-    return env.withValue({ tag: 'Sort', level: mkLevelNum(1) });
+    const ulevelType: TTKTerm = { tag: 'Sort', level: mkLevelNum(1) };
+    env.recordTypeInfo(ulevelType);
+    return env.withValue(ulevelType);
   }
 
   if (env.value.tag === 'ULit') {
@@ -397,7 +441,9 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────────
     //   Γ ⊢ n ⇒ ULevel    (where n is a numeric level like 0, 1, 2, ...)
     // ────────────────────────────────────────────────────────────────
-    return env.withValue({ tag: 'ULevel' });
+    const ulitType: TTKTerm = { tag: 'ULevel' };
+    env.recordTypeInfo(ulitType);
+    return env.withValue(ulitType);
   }
 
   if (env.value.tag === 'Meta') {
@@ -409,6 +455,7 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     // ────────────────────────────────────────────────────────────────
     const meta = env.metaVars.get(env.value.id);
     if (meta) {
+      env.recordTypeInfo(meta.type);
       return env.withValue(meta.type);
     }
     // If meta not found, this is an internal error
@@ -449,7 +496,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       throw e;
     }
 
-    const bodyEnv = lambdaEnv.inBinderLambdaBody()
+    const bodyEnv = lambdaEnv.inBinderLambdaBodyWithDomain(expectedType.domain)
     const checkedBodyEnv = checkType(bodyEnv, expectedType.body)
 
     // Reconstruct the Lambda with the elaborated domain and body
@@ -465,7 +512,20 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       domain: expectedType.domain,  // Use expected type's domain (concrete, not a Hole)
       body: checkedBodyEnv.value
     };
-    return checkedBodyEnv.withValue(elaboratedLambda);
+    // Record the lambda's Pi type at the lambda's path (env.indexPath), not the body's path.
+    // Use lambdaEnv for correct outer context (without the lambda variable).
+    lambdaEnv.atIndexPath(env.indexPath).recordTypeInfo(expectedType, expectedType);
+    // Also record the lambda parameter's type at the .name sub-path
+    // so hovering on the parameter name shows its type (e.g., "x : A").
+    const nameIndexPath: IndexPath = [...env.indexPath, { kind: 'field', name: 'name' }];
+    lambdaEnv.atIndexPath(nameIndexPath).recordTypeInfo(expectedType.domain);
+    // Return at the OUTER context depth (lambdaEnv), not the body's depth (checkedBodyEnv).
+    // The lambda body extends the context by 1, but after checking the body we leave that scope.
+    // Returning at the outer depth ensures that subsequent type comparisons (e.g., CONV rule
+    // comparing return types) create constraints with correct de Bruijn indices relative to
+    // the outer context. Metas and constraints from the body are preserved via
+    // withMetasConstraintsLevelMetasFrom — body constraints store their own ctx at the inner depth.
+    return lambdaEnv.withMetasConstraintsLevelMetasFrom(checkedBodyEnv).withValue(elaboratedLambda);
   }
 
   if (env.isHoleTerm()) {
@@ -476,6 +536,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     //   Γ ⊢ ?m : T
     //   ─────────────
     //   Γ ⊢ _ ⇐ T
+    env.recordTypeInfo(expectedType, expectedType);
     return env.createMetaForHole(expectedType, 'Hole type mismatch');
   }
 
@@ -628,6 +689,8 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
 
     // Return with the elaborated term (with implicit args inserted)
     // Set both value and elaboratedTerm to currentTerm since it has all elaboration applied
+    // Use unifiedEnv for recordTypeInfo so zonking has access to solved metas
+    unifiedEnv.recordTypeInfo(inferredEnv.value, expectedType);
     return unifiedEnv.withValue(currentTerm).withElaboratedTerm(currentTerm);
   } catch (e) {
     if (e instanceof TCEnvError) {
