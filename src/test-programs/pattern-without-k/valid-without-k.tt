@@ -1,0 +1,13 @@
+-- @test success
+-- @name "Valid pattern match without K: matching refl against Equal a a"
+-- @import preambles/equality.tt
+
+-- This works WITHOUT K because we're matching refl : Equal a a against Equal a a
+-- The indices are syntactically the same variable
+
+subst : {A : Type} -> {a : A} -> (P : A -> Type) -> P a -> Equal a a -> P a
+subst P pa refl = pa
+
+-- This also works - the indices in the pattern and expected type are the same
+cong_refl : {A B : Type} -> (f : A -> B) -> {a : A} -> Equal a a -> Equal (f a) (f a)
+cong_refl f refl = refl

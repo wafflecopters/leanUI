@@ -1,0 +1,10 @@
+-- @test failure
+-- @name "Streicher's K should fail without axiom K"
+-- @import preambles/equality.tt
+-- @error "axiom K"
+
+-- Streicher's K: all equality proofs from a point to itself are equal to refl
+-- This requires pattern matching on arbitrary (e : Equal a a) which needs K
+
+streichersK : (A : Type) -> (a : A) -> (P : Equal a a -> Type) -> (p : P refl) -> (e : Equal a a) -> P e
+streichersK A a P p refl = p

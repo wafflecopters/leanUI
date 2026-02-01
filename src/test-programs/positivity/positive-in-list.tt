@@ -1,0 +1,10 @@
+-- @test success
+-- @name "Positive occurrence through List: List Tree -> Tree is OK"
+
+inductive List : Type -> Type where
+  Nil : (A : Type) -> List A
+  Cons : (A : Type) -> A -> List A -> List A
+
+inductive Tree : Type where
+  Leaf : Tree
+  Node : List Tree -> Tree

@@ -1,0 +1,14 @@
+-- @test failure
+-- @name "Mutual dependency with negative occurrence: Even references Odd negatively"
+-- @error "negative occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Odd : Type where
+  oddSucc : (Odd -> Nat) -> Odd
+
+inductive Even : Type where
+  evenZero : Even
+  evenSucc : Odd -> Even

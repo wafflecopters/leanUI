@@ -11,7 +11,8 @@
 import { TTKTerm, TTKContext, prettyPrint } from "./kernel";
 import { SourceMap, SourceRange, ElabMap, serializeIndexPath, IndexPath } from "../types/source-position";
 import { DefinitionsMap } from "./term";
-import { whnf } from "./whnf";
+import { whnf, WhnfContext } from "./whnf";
+import { subst } from "./subst";
 
 // ============================================================================
 // Layer 1: Type Info Collection (populated during type checking)
@@ -386,9 +387,9 @@ function resolveTypeInfo(
     if (!info) return undefined;
   }
 
-  // Normalize types via WHNF if definitions are available
+  // Normalize types for display if definitions are available
   const norm = (t: TTKTerm): TTKTerm =>
-    definitions ? whnf(t, { definitions }) : t;
+    definitions ? normalizeForDisplay(t, definitions) : t;
 
   // Build pretty-printed context
   const contextNames = info.context.map(c => c.name).reverse();
@@ -414,4 +415,106 @@ function resolveTypeInfo(
     surfacePath,
     kernelPath: kernelPath!,
   };
+}
+
+// ============================================================================
+// Display Normalization (δ/ι/β/ζ with stuck-term awareness)
+// ============================================================================
+
+/**
+ * Collect an application spine: `f a1 a2 a3` → { head: f, args: [a1, a2, a3] }
+ */
+function collectSpine(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+  const args: TTKTerm[] = [];
+  let current = term;
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+  return { head: current, args };
+}
+
+function rebuildApp(head: TTKTerm, args: TTKTerm[]): TTKTerm {
+  let result = head;
+  for (const arg of args) {
+    result = { tag: 'App', fn: result, arg };
+  }
+  return result;
+}
+
+/**
+ * Normalize a term for display, with definition unfolding (δ) and pattern
+ * matching (ι). Unlike raw whnf, this recurses into subterms. Unlike naive
+ * full normalization, it detects stuck applications (where a definition was
+ * unfolded but the resulting Match couldn't reduce) and keeps the original
+ * constant name for readability.
+ */
+function normalizeForDisplay(term: TTKTerm, definitions: DefinitionsMap, fuel: number = 500): TTKTerm {
+  if (fuel <= 0) return term;
+
+  const { head: origHead, args: origArgs } = collectSpine(term);
+
+  // If head is a Const applied to args, try whnf on the full application
+  if (origHead.tag === 'Const' && origArgs.length > 0) {
+    const ctx: WhnfContext = { definitions, fuel };
+    const reduced = whnf(term, ctx);
+    const { head: redHead } = collectSpine(reduced);
+
+    if (redHead.tag !== 'Match') {
+      // Successful reduction (head is now a constructor, Var, etc.) — recurse
+      return normSubterms(reduced, definitions, fuel - 1);
+    }
+    // Stuck match — keep the original Const name, just normalize args
+    const normArgs = origArgs.map(a => normalizeForDisplay(a, definitions, fuel - 1));
+    return rebuildApp(origHead, normArgs);
+  }
+
+  // For non-Const heads or bare Const: whnf then normalize subterms
+  const ctx: WhnfContext = { definitions, fuel };
+  const reduced = whnf(term, ctx);
+  return normSubterms(reduced, definitions, fuel - 1);
+}
+
+function normSubterms(term: TTKTerm, definitions: DefinitionsMap, fuel: number): TTKTerm {
+  if (fuel <= 0) return term;
+  switch (term.tag) {
+    case 'Var':
+    case 'Sort':
+    case 'Const':
+    case 'Hole':
+    case 'Meta':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+      return term;
+
+    case 'App': {
+      // For fn: only normalize subterms (don't re-whnf a stuck Const)
+      const fn = normSubterms(term.fn, definitions, fuel - 1);
+      // For arg: full normalize (may trigger new δ/ι reductions)
+      const arg = normalizeForDisplay(term.arg, definitions, fuel - 1);
+      if (fn.tag === 'Binder' && fn.binderKind.tag === 'BLam') {
+        return normalizeForDisplay(subst(0, arg, fn.body), definitions, fuel - 1);
+      }
+      return { tag: 'App', fn, arg };
+    }
+
+    case 'Binder': {
+      if (term.binderKind.tag === 'BLet') {
+        return normalizeForDisplay(subst(0, term.binderKind.defVal, term.body), definitions, fuel - 1);
+      }
+      const domain = normalizeForDisplay(term.domain, definitions, fuel - 1);
+      const body = normalizeForDisplay(term.body, definitions, fuel - 1);
+      return { tag: 'Binder', name: term.name, binderKind: term.binderKind, domain, body };
+    }
+
+    case 'Annot':
+      return normalizeForDisplay(term.term, definitions, fuel - 1);
+
+    case 'Match': {
+      // Stuck match — only normalize scrutinee, not clause bodies
+      const scrutinee = normalizeForDisplay(term.scrutinee, definitions, fuel - 1);
+      return { tag: 'Match', scrutinee, clauses: term.clauses };
+    }
+  }
 }

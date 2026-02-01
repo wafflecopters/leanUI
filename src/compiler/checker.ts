@@ -543,6 +543,60 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     return lambdaEnv.withMetasConstraintsLevelMetasFrom(checkedBodyEnv).withValue(elaboratedLambda);
   }
 
+  if (env.isBinderLetTerm()) {
+    // ────────────────────────────────────────────────────────────────
+    // (LET-CHECK) - Let binding in checking mode
+    //
+    //   Γ ⊢ A ⇐ Type_i
+    //   Γ ⊢ v ⇐ A
+    //   Γ, x : A ⊢ body ⇐ T        (check body against expected type)
+    //   ─────────────────────────────
+    //   Γ ⊢ let x : A := v in body ⇐ T
+    //
+    // Unlike CONV (which infers then unifies), this propagates the expected
+    // type directly to the body, so holes inside the body know their goal type.
+    // ────────────────────────────────────────────────────────────────
+
+    // 1. Check type annotation
+    const { env: env1, sort: domainSort } = env.typeSortFresh();
+    const domEnv = checkType(env1.atValueAndPathOfEnv(env).inBinderLetDomain(), domainSort);
+    const elaboratedDomain = domEnv.elaboratedTerm ?? env.value.domain;
+
+    // 2. Check value against the domain type
+    const valEnv = checkType(domEnv.atValueAndPathOfEnv(env).inBinderLetValue(), elaboratedDomain);
+    const elaboratedValue = valEnv.elaboratedTerm ?? env.value.binderKind.defVal;
+
+    // 3. Solve metas from value checking before entering body
+    const solvedEnv = valEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+    const solvedDomain = solvedEnv.zonkTerm(elaboratedDomain);
+
+    // 4. Check body against expected type (propagating the goal)
+    // Shift expectedType by +1 because we're entering the let body scope:
+    // Var(0) in the body context refers to the let variable, so all existing
+    // free variables in expectedType need to be bumped up by 1.
+    const shiftedExpectedType = shiftTerm(expectedType, 1, 0);
+    const bodyEnv = checkType(
+      solvedEnv.atValueAndPathOfEnv(env).inBinderLetBodyWithDomain(solvedDomain),
+      shiftedExpectedType
+    );
+
+    // 5. Build elaborated let term
+    const elaboratedLet: TTKTerm = {
+      tag: 'Binder',
+      name: env.value.name,
+      binderKind: { tag: 'BLet', defVal: elaboratedValue },
+      domain: solvedDomain,
+      body: bodyEnv.elaboratedTerm ?? env.value.body
+    };
+
+    // Record type info for the let expression and its name
+    env.recordTypeInfo(expectedType, expectedType);
+    const nameIndexPath: IndexPath = [...env.indexPath, { kind: 'field', name: 'name' }];
+    env.atIndexPath(nameIndexPath).recordTypeInfo(solvedDomain);
+
+    return env.withMetasConstraintsLevelMetasFrom(bodyEnv).withValue(elaboratedLet);
+  }
+
   if (env.isHoleTerm()) {
     // ────────────────────────────────────────────────────────────────
     // (HOLE) - Hole

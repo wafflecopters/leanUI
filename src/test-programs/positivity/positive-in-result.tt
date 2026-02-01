@@ -1,0 +1,10 @@
+-- @test success
+-- @name "Strictly positive: direct occurrence in argument and result"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Tree : Type where
+  Leaf : Nat -> Tree
+  Node : Tree -> Tree -> Tree

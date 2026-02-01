@@ -1,0 +1,8 @@
+-- @test success
+-- @name "UIP should succeed with axiom K"
+-- @import preambles/equality.tt
+-- @assumeK
+
+-- With axiom K enabled, UIP is provable
+uip : {A : Type} -> {x y : A} -> (p q : Equal x y) -> Equal {A:=Equal {A} x y} p q
+uip refl refl = refl

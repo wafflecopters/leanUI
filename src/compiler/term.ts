@@ -37,6 +37,12 @@ export type TCEnvOptions = {
   mode: 'pattern' | 'check'
   /** Skip duplicate Pi parameter name check (for synthesized auxiliary declarations) */
   allowDuplicatePiNames?: boolean
+  /**
+   * Assume axiom K (Uniqueness of Identity Proofs).
+   * When false (default), pattern matching on indexed families requires indices to be definitionally equal (deletion rule).
+   * When true, UIP and other K-dependent proofs are allowed.
+   */
+  assumeK?: boolean
 }
 
 // Module-level type info collector. Safe because type checking is synchronous.
@@ -830,15 +836,31 @@ export class TCEnv<T> {
     for (const [key, entry] of _typeInfoCollector) {
       if (!key.startsWith(clausePrefix)) continue;
       if (entry.context.length < correctContext.length) continue;
+      // Only fix the prefix of context entries that correspond to pattern variables.
+      // Entries inside let/lambda bodies may have extra context bindings that should
+      // not be overwritten. We detect this by matching types: if the entry's context
+      // at position i has a different type than correctContext[i], it's been rebound
+      // (e.g., by a let binding) and we should stop fixing at that point.
+      let fixUpTo = 0;
       let needsFix = false;
       for (let i = 0; i < correctContext.length; i++) {
-        if (entry.context[i].name !== correctContext[i].name) {
-          needsFix = true;
+        // Check if this context position matches the pattern variable
+        // (same type means same de Bruijn variable, just possibly wrong name)
+        if (isDefinitionallyEqual(entry.context[i].type, correctContext[i].type)) {
+          fixUpTo = i + 1;
+          if (entry.context[i].name !== correctContext[i].name) {
+            needsFix = true;
+          }
+        } else {
+          // Different type — this position has been rebound (e.g., let binding)
           break;
         }
       }
       if (needsFix) {
-        const fixedContext: TTKContext = [...correctContext, ...entry.context.slice(correctContext.length)];
+        const fixedContext: TTKContext = [
+          ...correctContext.slice(0, fixUpTo),
+          ...entry.context.slice(fixUpTo),
+        ];
         _typeInfoCollector.set(key, { ...entry, context: fixedContext });
       }
     }

@@ -105,8 +105,11 @@ export function extractBody(source: string): string {
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (trimmed === '' || trimmed.startsWith('--')) {
-      bodyStart = i + 1;
-      continue;
+      // Keep compiler directives like @assumeK in the source
+      if (!trimmed.match(/^--\s*@assumeK/)) {
+        bodyStart = i + 1;
+        continue;
+      }
     }
     break;
   }

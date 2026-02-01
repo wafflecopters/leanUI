@@ -1397,6 +1397,45 @@ function collectConstructorParamNames(compiledBlocks: CompiledBlock[]): Construc
 export interface CompileOptions {
   /** After zonking, re-check zonked terms in a fresh TCEnv with no metas. */
   recheckZonkedTerms?: boolean;
+
+  /**
+   * Assume axiom K (Uniqueness of Identity Proofs).
+   *
+   * When true, pattern matching on indexed families (like Equal) is unrestricted.
+   * When false (default), the deletion rule is enforced: indices must be definitionally equal.
+   *
+   * Without K, proofs like UIP become unprovable, making the system compatible with
+   * HoTT and Cubical Type Theory.
+   *
+   * Can be overridden per-file with @assumeK directive.
+   *
+   * Default: false (no K axiom)
+   */
+  assumeK?: boolean;
+}
+
+/**
+ * Parse @assumeK directive from source code.
+ *
+ * Recognizes:
+ *   -- @assumeK         (equivalent to @assumeK=true)
+ *   -- @assumeK=true
+ *   -- @assumeK=false
+ *
+ * @returns true if @assumeK or @assumeK=true, false if @assumeK=false, undefined if not present
+ */
+function parseAssumeKDirective(source: string): boolean | undefined {
+  const lines = source.split('\n');
+  for (const line of lines) {
+    const match = line.match(/^--\s*@assumeK(?:=(\w+))?/);
+    if (match) {
+      const value = match[1];
+      if (!value || value === 'true') return true;
+      if (value === 'false') return false;
+      throw new Error(`Invalid @assumeK directive: expected 'true' or 'false', got '${value}'`);
+    }
+  }
+  return undefined;
 }
 
 // ============================================================================
@@ -1527,6 +1566,7 @@ interface CheckDeclarationResult {
 function checkDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
+  assumeK?: boolean,
 ): CheckDeclarationResult {
   let checkSuccess = true;
   const checkErrors: TCEnvError[] = [];
@@ -1543,7 +1583,7 @@ function checkDeclaration(
     checkSuccess = false;
     // Create TCEnv with the error path so the error points to the correct source location
     const errorPath = decl.elabErrorPath ? deserializeIndexPath(decl.elabErrorPath) : [];
-    const env = createTCEnv({ definitions, indexPath: errorPath, options: { mode: 'check' } });
+    const env = createTCEnv({ definitions, indexPath: errorPath, options: { mode: 'check', assumeK } });
     const error = TCEnvError.create(decl.elabError, env);
     checkErrors.push(error);
     errorCount = 1;
@@ -1559,7 +1599,7 @@ function checkDeclaration(
       errorCount = result.errors.length;
     }
   } else if (decl.kind === 'term') {
-    const result = checkTermDeclaration(decl, definitions, { typeInfoCollector: typeInfoMap });
+    const result = checkTermDeclaration(decl, definitions, { typeInfoCollector: typeInfoMap, assumeK });
     if (result.success) {
       newDefinitions = result.definitions;
       totalityResult = result.totalityResult;
@@ -1573,7 +1613,7 @@ function checkDeclaration(
     }
   } else {
     checkSuccess = false;
-    const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv({ definitions, options: { mode: 'check' } }));
+    const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv({ definitions, options: { mode: 'check', assumeK } }));
     checkErrors.push(error);
     errorCount = 1;
   }
@@ -1869,13 +1909,14 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap; assumeK?: boolean },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult } {
+
   if (!decl.name) {
-    return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check' } }))
+    return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check', assumeK: options?.assumeK } }))
   }
 
-  let env = createTCEnv({ definitions, options: { mode: 'check', allowDuplicatePiNames: options?.allowUnsolvedSigMetas }, typeInfoCollector: options?.typeInfoCollector })
+  let env = createTCEnv({ definitions, options: { mode: 'check', allowDuplicatePiNames: options?.allowUnsolvedSigMetas, assumeK: options?.assumeK }, typeInfoCollector: options?.typeInfoCollector })
 
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', env)
@@ -2103,6 +2144,7 @@ function checkBlock(
   block: ElabBlock,
   blockIndex: number,
   definitions: DefinitionsMap,
+  assumeK?: boolean,
 ): CheckBlockResult {
   // Handle comment blocks
   if (block.kind === 'comment') {
@@ -2148,7 +2190,7 @@ function checkBlock(
   let totalErrors = 0;
 
   for (const decl of block.declarations) {
-    const result = checkDeclaration(decl, currentDefinitions);
+    const result = checkDeclaration(decl, currentDefinitions, assumeK);
     compiledDeclarations.push(result.compiled);
     currentDefinitions = result.newDefinitions;
     totalErrors += result.errorCount;
@@ -2198,6 +2240,7 @@ function checkBlocks(
   elabResult: ElabResult,
   initialDefinitions: DefinitionsMap = createDefinitionsMap(),
   options: CheckOptions = {},
+  assumeK?: boolean,
 ): CheckBlocksResult {
   const { onlyKind, existingBlocks } = options;
   const compiledBlocks: CompiledBlock[] = [];
@@ -2240,7 +2283,7 @@ function checkBlocks(
         startLine: block.startLine,
       };
 
-      const result = checkBlock(filteredBlock, blockIndex, currentDefinitions);
+      const result = checkBlock(filteredBlock, blockIndex, currentDefinitions, assumeK);
 
       // Merge with existing blocks if provided (for phase 2, merge with phase 1 results)
       if (existingBlocks && existingBlocks[blockIndex]) {
@@ -2265,7 +2308,7 @@ function checkBlocks(
       totalCheckErrors += result.errorCount;
     } else {
       // No filtering - check all declarations
-      const result = checkBlock(block, blockIndex, currentDefinitions);
+      const result = checkBlock(block, blockIndex, currentDefinitions, assumeK);
       compiledBlocks.push(result.compiled);
       currentDefinitions = result.newDefinitions;
       totalCheckErrors += result.errorCount;
@@ -3160,8 +3203,9 @@ function processTermDeclaration(
   decl: ParsedDeclaration,
   sourceMap: SourceMap,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; assumeK?: boolean },
 ): ProcessDeclarationResult {
+
   const elabMap: ElabMap = new Map();
   const typeInfoMap: TypeInfoMap = new Map();
 
@@ -3244,6 +3288,13 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
   // Reset counters for fresh compilation
   resetWildcardCounter();
   resetWithCounter();
+
+  // Parse @assumeK directive from source (overrides options)
+  const sourceAssumeK = parseAssumeKDirective(source);
+  const assumeK = sourceAssumeK ?? options?.assumeK ?? false;
+
+  if (sourceAssumeK !== undefined) {
+  }
 
   // 1. Parse the source file
   const parseResult = parseTTSource(source);
@@ -3377,7 +3428,7 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
       const compiledAuxiliaries: CompiledDeclaration[] = [];
 
       for (const auxDecl of auxiliaryDecls) {
-        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount });
+        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount, assumeK });
         // Remap elabMap so with-clause surface paths map to aux kernel paths
         remapWithClauseElabMap(result.compiled, sourceMap, auxDecl.withScrutineeCount ?? 0);
         result.compiled.isWithAuxiliary = true;
@@ -3468,7 +3519,7 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
         totalCheckErrors += result.errorCount;
       } else {
         // 4. If we are looking at a term...
-        const result = processTermDeclaration(mainDecl, sourceMap, definitions);
+        const result = processTermDeclaration(mainDecl, sourceMap, definitions, { assumeK });
         // For declarations with with-clauses, remap scrutinee paths in elabMap
         // and merge auxiliary typeInfoMap entries so type-at-cursor works in with-clauses
         if (auxiliaryDecls.length > 0) {

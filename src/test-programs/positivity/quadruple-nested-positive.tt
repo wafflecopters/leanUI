@@ -1,0 +1,10 @@
+-- @test failure
+-- @name "Quadruple nested: ((((Good -> Nat) -> Nat) -> Nat) -> Nat) -> Good is non-strictly positive (rejected)"
+-- @error "positive occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Good : Type where
+  good : ((((Good -> Nat) -> Nat) -> Nat) -> Nat) -> Good

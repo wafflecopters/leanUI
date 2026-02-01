@@ -1,0 +1,22 @@
+-- @test success
+-- @name "Strictly positive examples: standard data structures"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : (A : Type) -> List A
+  Cons : (A : Type) -> A -> List A -> List A
+
+inductive BinTree : Type where
+  Tip : BinTree
+  Bin : BinTree -> BinTree -> BinTree
+
+inductive Either : Type -> Type -> Type where
+  Left : (A : Type) -> (B : Type) -> A -> Either A B
+  Right : (A : Type) -> (B : Type) -> B -> Either A B
+
+inductive Maybe : Type -> Type where
+  Nothing : (A : Type) -> Maybe A
+  Just : (A : Type) -> A -> Maybe A

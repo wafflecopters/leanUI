@@ -2915,12 +2915,13 @@ record Point where
       expect(decls[1].kind).toBe('record');
     });
   });
+});
 
-  // ============================================================================
-  // Tactic Parsing Tests
-  // ============================================================================
+// ============================================================================
+// Tactic Parsing Tests
+// ============================================================================
 
-  describe('Tactic Parsing', () => {
+describe('Parser: Tactic Parsing', () => {
     test('Parse simple tactic proof with exact', () => {
       const decls = parseDeclarations(`
 foo : Nat := by
@@ -3034,4 +3035,3 @@ test : Nat -> Nat := by
       expect(tokens[0].value).toBe('by');
     });
   });
-});

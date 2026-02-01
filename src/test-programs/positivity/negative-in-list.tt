@@ -1,0 +1,14 @@
+-- @test failure
+-- @name "Negative occurrence through List: List (Bad -> Nat) -> Bad"
+-- @error "negative occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive List : Type -> Type where
+  Nil : (A : Type) -> List A
+  Cons : (A : Type) -> A -> List A -> List A
+
+inductive Bad : Type where
+  bad : List (Bad -> Nat) -> Bad

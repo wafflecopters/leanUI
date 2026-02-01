@@ -1,0 +1,14 @@
+-- @test failure
+-- @name "Negative occurrence in indexed family"
+-- @error "negative occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : (A : Type) -> Vec A Zero
+  VCons : (A : Type) -> (n : Nat) -> A -> Vec A n -> Vec A (Succ n)
+
+inductive Bad : Nat -> Type where
+  badCtor : (n : Nat) -> (Bad n -> Nat) -> Bad n

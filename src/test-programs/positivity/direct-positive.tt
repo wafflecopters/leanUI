@@ -1,0 +1,6 @@
+-- @test success
+-- @name "Direct positive occurrence: Tree with Tree -> Tree is OK"
+
+inductive Tree : Type where
+  Leaf : Tree
+  Node : Tree -> Tree -> Tree

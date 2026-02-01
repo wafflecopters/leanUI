@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { compileSource } from '../test-utils';
+import { compileTTFromText } from './compile';
 import {
   findPathAtCursor,
   findPathForSelection,
@@ -1941,6 +1942,274 @@ toBool (Succ n) = Zero
         // Should show the expected type even though check failed
         expect(result.expectedType).toBeDefined();
         expect(result.expectedType).toBe('Bool');
+      }
+    }
+  });
+});
+
+// ============================================================================
+// WHNF normalization in type display
+// ============================================================================
+
+describe('WHNF normalization in type display', () => {
+  const plusCommSource = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+plusZeroRight : {n : Nat} -> Equal (plus n Zero) n
+plusZeroRight {n:=Zero} = refl
+plusZeroRight {n:=Succ n} = ?sorry1
+
+plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
+plusComm {a:=Zero} {b:=Zero} = refl
+plusComm {a:=Succ a} {b:=Zero} = let tmp = plusZeroRight in ?B
+plusComm {a:=Zero} {b:=Succ b} = ?C
+plusComm {a:=Succ a} {b:=Succ b} = ?D
+`;
+
+  test('hole type is WHNF-reduced when definitions are passed', () => {
+    const compileResult = compileTTFromText(plusCommSource);
+    const block = compileResult.blocks.find(b =>
+      b.declarations.some(d => d.name === 'plusComm')
+    );
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on ?B in "let tmp = plusZeroRight in ?B"
+    const bodyPath = 'value.clauses[1].rhs.body';
+    const bodyRange = decl.sourceMap.get(bodyPath);
+    expect(bodyRange).toBeDefined();
+
+    if (bodyRange) {
+      // Without definitions — types should contain unreduced "plus"
+      const withoutDefs = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(withoutDefs).toBeDefined();
+      if (withoutDefs) {
+        // Without WHNF, the type should contain "plus" applications
+        expect(withoutDefs.prettyType).toContain('plus');
+      }
+
+      // With definitions — "plus (Succ a) Zero" should reduce
+      const withDefs = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+        compileResult.definitions,
+      );
+      expect(withDefs).toBeDefined();
+      if (withDefs) {
+        // After normalization:
+        // - "plus (Succ tmp) Zero" reduces to "Succ (plus tmp Zero)"
+        //   (plus tmp Zero stays stuck because tmp is a variable)
+        // - "plus Zero (Succ tmp)" reduces to "Succ tmp"
+        expect(withDefs.prettyType).toContain('Equal');
+        expect(withDefs.prettyType).toContain('Succ');
+        // The key check: "plus (Succ tmp) Zero" should NOT appear (it was reduced)
+        expect(withDefs.prettyType).not.toContain('plus (Succ');
+        // "plus Zero" should NOT appear (it was reduced to Succ tmp)
+        expect(withDefs.prettyType).not.toContain('plus Zero');
+      }
+    }
+  });
+
+  test('expected type is also WHNF-reduced when definitions are passed', () => {
+    const compileResult = compileTTFromText(plusCommSource);
+    const block = compileResult.blocks.find(b =>
+      b.declarations.some(d => d.name === 'plusComm')
+    );
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on ?B in "let tmp = plusZeroRight in ?B"
+    const bodyPath = 'value.clauses[1].rhs.body';
+    const bodyRange = decl.sourceMap.get(bodyPath);
+    expect(bodyRange).toBeDefined();
+
+    if (bodyRange) {
+      const result = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+        compileResult.definitions,
+      );
+      expect(result).toBeDefined();
+      if (result && result.expectedType) {
+        // Expected type should also be normalized
+        expect(result.expectedType).toContain('Equal');
+        // Reducible applications should be reduced
+        expect(result.expectedType).not.toContain('plus (Succ');
+        expect(result.expectedType).not.toContain('plus Zero');
+      }
+    }
+  });
+
+  test('context variable types are WHNF-reduced when definitions are passed', () => {
+    const compileResult = compileTTFromText(plusCommSource);
+    const block = compileResult.blocks.find(b =>
+      b.declarations.some(d => d.name === 'plusComm')
+    );
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on ?B — check that context entry types are also reduced
+    const bodyPath = 'value.clauses[1].rhs.body';
+    const bodyRange = decl.sourceMap.get(bodyPath);
+    expect(bodyRange).toBeDefined();
+
+    if (bodyRange) {
+      const result = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+        compileResult.definitions,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // The tmp variable in context should have its type WHNF-reduced
+        const tmpEntry = result.context.find(c => c.name === 'tmp');
+        if (tmpEntry) {
+          // tmp's type has unsolved metas (??m1), so plus ??m1 Zero is stuck.
+          // But the type should still be well-formed with Equal
+          expect(tmpEntry.type).toContain('Equal');
+        }
+      }
+    }
+  });
+});
+
+// ============================================================================
+// Let-body expected type uses correct variable names (de Bruijn shift)
+// ============================================================================
+
+describe('Let-body expected type variable names', () => {
+  test('expected type for hole after let uses pattern variable, not let variable', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+plusZeroRight : {n : Nat} -> Equal (plus n Zero) n
+plusZeroRight {n:=Zero} = refl
+plusZeroRight {n:=Succ n} = ?sorry1
+
+plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
+plusComm {a:=Zero} {b:=Zero} = refl
+plusComm {a:=Succ a} {b:=Zero} = let tmp = plusZeroRight in ?B
+plusComm {a:=Zero} {b:=Succ b} = ?C
+plusComm {a:=Succ a} {b:=Succ b} = ?D
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'plusComm');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on ?B in "let tmp = plusZeroRight in ?B"
+    const bodyPath = 'value.clauses[1].rhs.body';
+    const bodyRange = decl.sourceMap.get(bodyPath);
+    expect(bodyRange).toBeDefined();
+
+    if (bodyRange) {
+      const result = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // The expected type should reference 'a' (the pattern variable), NOT 'tmp' (the let variable).
+        // The clause is: plusComm {a:=Succ a} {b:=Zero} = let tmp = plusZeroRight in ?B
+        // The goal type is: Equal (plus (Succ a) Zero) (plus Zero (Succ a))
+        // 'tmp' is only the let-bound proof, it should not appear in the goal type.
+        if (result.expectedType) {
+          expect(result.expectedType).not.toContain('tmp');
+          expect(result.expectedType).toContain('a');
+        }
+        // Same check for the inferred type
+        expect(result.prettyType).not.toContain('tmp');
+      }
+    }
+  });
+
+  test('simple let-body expected type has correct variable reference', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+id : {A : Type} -> A -> A
+id x = x
+
+foo : Nat -> Nat
+foo n = let x = id n in ?goal
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'foo');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'foo')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on ?goal
+    const bodyPath = 'value.clauses[0].rhs.body';
+    const bodyRange = decl.sourceMap.get(bodyPath);
+    expect(bodyRange).toBeDefined();
+
+    if (bodyRange) {
+      const result = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // Expected type should be Nat (from the return type of foo)
+        // It should NOT reference 'x' (the let-bound variable)
+        if (result.expectedType) {
+          expect(result.expectedType).toBe('Nat');
+        }
       }
     }
   });

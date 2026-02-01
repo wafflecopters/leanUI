@@ -1,0 +1,13 @@
+-- @test failure
+-- @name "Negative occurrence nested in product: Pair (Bad -> Nat) Nat"
+-- @error "negative occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Pair : Type -> Type -> Type where
+  MkPair : (A : Type) -> (B : Type) -> A -> B -> Pair A B
+
+inductive Bad : Type where
+  bad : Pair (Bad -> Nat) Nat -> Bad

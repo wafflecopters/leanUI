@@ -1,0 +1,10 @@
+-- @test failure
+-- @name "Triple nested: (((Bad -> Nat) -> Nat) -> Nat) -> Bad is negative"
+-- @error "negative occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bad : Type where
+  bad : (((Bad -> Nat) -> Nat) -> Nat) -> Bad

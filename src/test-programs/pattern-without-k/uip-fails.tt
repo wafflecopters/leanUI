@@ -1,0 +1,11 @@
+-- @test failure
+-- @name "UIP should fail without axiom K"
+-- @import preambles/equality.tt
+-- @error "axiom K"
+
+-- Uniqueness of Identity Proofs (UIP) should be unprovable without axiom K
+-- This proof requires pattern matching on (refl : Equal x x) against (Equal x y)
+-- which introduces the constraint x = y, needing injectivity of Equal
+
+uip : {A : Type} -> {x y : A} -> (p q : Equal x y) -> Equal {A:=Equal {A} x y} p q
+uip refl refl = refl

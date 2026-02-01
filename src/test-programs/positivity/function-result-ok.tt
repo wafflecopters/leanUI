@@ -1,0 +1,11 @@
+-- @test failure
+-- @name "Occurrence in function result: (Nat -> Tree) -> Tree is non-strictly positive (rejected)"
+-- @error "positive occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Tree : Type where
+  Leaf : Tree
+  Branch : (Nat -> Tree) -> Tree

@@ -1,0 +1,11 @@
+-- @test failure
+-- @name "Multiple constructors where one is negative"
+-- @error "negative occurrence"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bad : Type where
+  GoodCtor : Nat -> Bad
+  BadCtor : (Bad -> Nat) -> Bad
