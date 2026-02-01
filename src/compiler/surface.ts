@@ -262,6 +262,40 @@ export type TTermConst = { tag: 'Const'; name: string; }
 /** A single binding in a multi-let (used internally by parser, expanded immediately) */
 export type TLetBinding = { name: string; type?: TTerm; value: TTerm };
 
+/**
+ * Tactic command: A single tactic with its arguments
+ *
+ * Examples:
+ *   - intro x        → { name: 'intro', args: [Const('x')] }
+ *   - exact (f a)    → { name: 'exact', args: [App(Const('f'), Const('a'))] }
+ *   - apply f        → { name: 'apply', args: [Const('f')] }
+ *   - assumption     → { name: 'assumption', args: [] }
+ */
+export interface TacticCommand {
+  name: string;       // Tactic name: 'intro', 'exact', 'apply', etc.
+  args: TTerm[];      // Arguments (can be identifiers as Const, or full terms)
+}
+
+/**
+ * Tactic block: A sequence of tactics used to construct a proof
+ *
+ * Syntax:
+ *   name : type := by
+ *     tactic1
+ *     tactic2
+ *     ...
+ *
+ * Example:
+ *   modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
+ *     intros A B a f
+ *     apply f
+ *     exact a
+ */
+export type TTacticBlock = {
+  tag: 'TacticBlock';
+  tactics: TacticCommand[];
+};
+
 export type TTerm =
   | { tag: 'Var'; index: number }                          // De Bruijn variable
   | { tag: 'Sort'; level: TTerm }                          // Type_i, Prop = Type_0 (level is now a term)
@@ -277,6 +311,7 @@ export type TTerm =
   | { tag: 'Match'; scrutinee: TTerm; clauses: TClause[] } // Pattern matching (case/match)
   | { tag: 'AbsurdMarker' }                               // #absurd marker for absurd cases
   | TWithClause                                           // With-clause (desugared before elaboration)
+  | TTacticBlock                                          // Tactic block (proof by tactics)
 
 /**
  * With-clause for pattern matching on intermediate expressions.
@@ -530,6 +565,13 @@ export function mkULevelTT(): TTerm {
   return { tag: 'ULevel' };
 }
 
+/**
+ * Create a tactic block with a list of tactic commands
+ */
+export function mkTacticBlockTT(tactics: TacticCommand[]): TTerm {
+  return { tag: 'TacticBlock', tactics };
+}
+
 // ============================================================================
 // Hole Replacement
 // ============================================================================
@@ -615,6 +657,15 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
         clauses: term.clauses.map(c => ({
           patterns: c.patterns,
           rhs: replaceHoleTT(c.rhs, holeId, replacement)
+        }))
+      };
+
+    case 'TacticBlock':
+      return {
+        tag: 'TacticBlock',
+        tactics: term.tactics.map(cmd => ({
+          name: cmd.name,
+          args: cmd.args.map(arg => replaceHoleTT(arg, holeId, replacement))
         }))
       };
   }

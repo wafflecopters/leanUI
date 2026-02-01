@@ -2915,4 +2915,123 @@ record Point where
       expect(decls[1].kind).toBe('record');
     });
   });
+
+  // ============================================================================
+  // Tactic Parsing Tests
+  // ============================================================================
+
+  describe('Tactic Parsing', () => {
+    test('Parse simple tactic proof with exact', () => {
+      const decls = parseDeclarations(`
+foo : Nat := by
+  exact Zero
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].kind).toBe('def');
+      expect(decls[0].name).toBe('foo');
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(1);
+        expect(decls[0].value.tactics[0].name).toBe('exact');
+        expect(decls[0].value.tactics[0].args.length).toBe(1);
+        expect(decls[0].value.tactics[0].args[0].tag).toBe('Const');
+      }
+    });
+
+    test('Parse tactic proof with intros and exact', () => {
+      const decls = parseDeclarations(`
+id : {A : Type} -> A -> A := by
+  intros A x
+  exact x
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(2);
+
+        // First tactic: intros A x
+        expect(decls[0].value.tactics[0].name).toBe('intros');
+        expect(decls[0].value.tactics[0].args.length).toBe(2);
+
+        // Second tactic: exact x
+        expect(decls[0].value.tactics[1].name).toBe('exact');
+        expect(decls[0].value.tactics[1].args.length).toBe(1);
+      }
+    });
+
+    test('Parse tactic proof with apply', () => {
+      const decls = parseDeclarations(`
+modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
+  intros A B a f
+  apply f
+  exact a
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(3);
+
+        expect(decls[0].value.tactics[0].name).toBe('intros');
+        expect(decls[0].value.tactics[1].name).toBe('apply');
+        expect(decls[0].value.tactics[2].name).toBe('exact');
+      }
+    });
+
+    test('Parse tactic with no arguments', () => {
+      const decls = parseDeclarations(`
+refl : {A : Type} -> {x : A} -> Equal x x := by
+  assumption
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(1);
+        expect(decls[0].value.tactics[0].name).toBe('assumption');
+        expect(decls[0].value.tactics[0].args.length).toBe(0);
+      }
+    });
+
+    test('Parse tactic with complex term argument', () => {
+      const decls = parseDeclarations(`
+test : Nat := by
+  exact (Succ Zero)
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(1);
+        expect(decls[0].value.tactics[0].name).toBe('exact');
+        expect(decls[0].value.tactics[0].args.length).toBe(1);
+        // The argument should be an App term: Succ applied to Zero
+        expect(decls[0].value.tactics[0].args[0].tag).toBe('App');
+      }
+    });
+
+    test('Parse intro tactic with single argument', () => {
+      const decls = parseDeclarations(`
+test : Nat -> Nat := by
+  intro n
+  exact n
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(2);
+        expect(decls[0].value.tactics[0].name).toBe('intro');
+        expect(decls[0].value.tactics[0].args.length).toBe(1);
+      }
+    });
+
+    test('Tokenize by keyword', () => {
+      const tokens = tokenize('by');
+      expect(tokens[0].type).toBe('BY');
+      expect(tokens[0].value).toBe('by');
+    });
+  });
 });

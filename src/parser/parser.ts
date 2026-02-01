@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, mkTacticBlockTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -81,7 +81,8 @@ export type TokenType =
   | 'MATCH'        // match keyword
   | 'WITH'         // with keyword (for with-abstraction)
   | 'ELLIPSIS'     // ... (for repeating parent patterns in with clauses)
-  | 'ABSURD';      // #absurd marker for absurd cases
+  | 'ABSURD'       // #absurd marker for absurd cases
+  | 'BY';          // by keyword (for tactic proofs)
 
 export interface Token {
   type: TokenType;
@@ -517,6 +518,8 @@ export class Lexer {
             return { type: 'MATCH', value: 'match', pos: startPos, line: startLine, col: startCol };
           case 'with':
             return { type: 'WITH', value: 'with', pos: startPos, line: startLine, col: startCol };
+          case 'by':
+            return { type: 'BY', value: 'by', pos: startPos, line: startLine, col: startCol };
           default:
             // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
             if (ident.startsWith('Type_')) {
@@ -1014,11 +1017,20 @@ export class Parser {
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
       const type = this.expr(0, [], typePath);
 
-      // Only := works for same-line definition (to avoid ambiguity with = in types)
+      // Check for := or by
       if (this.current().type === 'ASSIGN') {
+        // name : type := value
         this.advance(); // consume ':='
         const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
         const value = this.expr(0, [], valuePath);
+        return { kind: 'def', name, type, value };
+      }
+
+      if (this.current().type === 'BY') {
+        // name : type := by ...tactics...
+        this.advance(); // consume 'by'
+        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+        const value = this.parseTacticBlock([], valuePath);
         return { kind: 'def', name, type, value };
       }
 
@@ -1042,6 +1054,14 @@ export class Parser {
       this.advance(); // consume ':='
       const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
       const value = this.expr(0, [], valuePath);
+      return { kind: 'def', name, value };
+    }
+
+    // name := by ...tactics... (tactic proof without type annotation - unusual but allowed)
+    if (next.type === 'BY') {
+      this.advance(); // consume 'by'
+      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+      const value = this.parseTacticBlock([], valuePath);
       return { kind: 'def', name, value };
     }
 
@@ -3080,6 +3100,245 @@ export class Parser {
   }
 
   /**
+   * Parse tactic block after 'by' keyword
+   *
+   * Syntax:
+   *   by
+   *     tactic1
+   *     tactic2
+   *     ...
+   *
+   * Tactics are indented and one per line.
+   */
+  private parseTacticBlock(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
+
+    // 'by' keyword should already be consumed by caller
+    // Expect newline after 'by'
+    this.expectNewline('Expected newline after \'by\'');
+
+    // Skip any additional newlines
+    this.skipNewlines();
+
+    // Store current indentation level (first tactic's indentation)
+    const baseIndent = this.current().col;
+
+    const tactics: TacticCommand[] = [];
+    let tacticIndex = 0;
+
+    // Parse tactics while at the same or greater indentation
+    while (this.current().type !== 'EOF') {
+      const currentIndent = this.current().col;
+
+      // If we've dedented, we're done with the tactic block
+      if (currentIndent < baseIndent) {
+        break;
+      }
+
+      // Parse single tactic
+      const tacticPath = [...path, { kind: 'field' as const, name: 'tactics' }, { kind: 'array' as const, index: tacticIndex }];
+      const tactic = this.parseTactic(ctx, tacticPath);
+      tactics.push(tactic);
+      tacticIndex++;
+
+      // Expect newline after tactic (or EOF)
+      if (this.current().type === 'NEWLINE') {
+        this.advance();
+        this.skipNewlines();
+      } else if (this.current().type !== 'EOF') {
+        // If not newline and not EOF, check if we've dedented
+        if (this.current().col < baseIndent) {
+          break;
+        }
+        throw new ParseError(
+          'Expected newline after tactic',
+          this.current().line,
+          this.current().col
+        );
+      }
+    }
+
+    if (tactics.length === 0) {
+      throw new ParseError(
+        'Expected at least one tactic after \'by\'',
+        this.current().line,
+        this.current().col
+      );
+    }
+
+    // Record full tactic block
+    if (path.length > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
+    }
+
+    return mkTacticBlockTT(tactics);
+  }
+
+  /**
+   * Parse a single tactic command with its arguments
+   *
+   * Dispatch based on tactic name:
+   * - intro, intros: parse identifier(s)
+   * - exact, apply, refine: parse term
+   * - assumption, constructor, reflexivity: no arguments
+   * - have: parse identifier ':' term ':=' term
+   */
+  private parseTactic(ctx: NameContext, path: IndexPath): TacticCommand {
+    // Tactic name is always an identifier
+    if (this.current().type !== 'IDENT') {
+      throw new ParseError(
+        'Expected tactic name',
+        this.current().line,
+        this.current().col
+      );
+    }
+
+    const tacticName = this.current().value;
+    const tacticToken = this.current();
+    this.advance();
+
+    // Record tactic name
+    const namePath = [...path, { kind: 'field' as const, name: 'name' }];
+    this.recordRange(namePath, tacticToken, tacticToken);
+
+    // Dispatch based on tactic name
+    switch (tacticName) {
+      case 'intro': {
+        // intro <identifier>
+        if (this.current().type !== 'IDENT') {
+          throw new ParseError(
+            'intro expects an identifier argument',
+            this.current().line,
+            this.current().col
+          );
+        }
+        const argName = this.current().value;
+        const argToken = this.current();
+        this.advance();
+
+        const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        this.recordRange(argPath, argToken, argToken);
+
+        return {
+          name: tacticName,
+          args: [mkConstTT(argName)]
+        };
+      }
+
+      case 'intros': {
+        // intros [<identifier>]*
+        const args: TTerm[] = [];
+        let argIndex = 0;
+
+        while (this.current().type === 'IDENT' && this.current().col > tacticToken.col) {
+          const argName = this.current().value;
+          const argToken = this.current();
+          this.advance();
+
+          const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: argIndex }];
+          this.recordRange(argPath, argToken, argToken);
+
+          args.push(mkConstTT(argName));
+          argIndex++;
+        }
+
+        return {
+          name: tacticName,
+          args
+        };
+      }
+
+      case 'exact':
+      case 'apply':
+      case 'refine':
+      case 'rewrite': {
+        // Parse a full term
+        const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        const termArg = this.expr(0, ctx, argPath);
+
+        return {
+          name: tacticName,
+          args: [termArg]
+        };
+      }
+
+      case 'assumption':
+      case 'constructor':
+      case 'reflexivity': {
+        // No arguments
+        return {
+          name: tacticName,
+          args: []
+        };
+      }
+
+      case 'cases':
+      case 'induction': {
+        // cases/induction <identifier>
+        if (this.current().type !== 'IDENT') {
+          throw new ParseError(
+            `${tacticName} expects an identifier argument`,
+            this.current().line,
+            this.current().col
+          );
+        }
+        const argName = this.current().value;
+        const argToken = this.current();
+        this.advance();
+
+        const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        this.recordRange(argPath, argToken, argToken);
+
+        return {
+          name: tacticName,
+          args: [mkConstTT(argName)]
+        };
+      }
+
+      case 'have': {
+        // have <identifier> ':' <term> ':=' <term>
+        if (this.current().type !== 'IDENT') {
+          throw new ParseError(
+            'have expects identifier after \'have\'',
+            this.current().line,
+            this.current().col
+          );
+        }
+
+        const hypName = this.current().value;
+        const hypNameToken = this.current();
+        this.advance();
+
+        this.expect('COLON');
+
+        const hypTypePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 1 }];
+        const hypType = this.expr(0, ctx, hypTypePath);
+
+        this.expect('ASSIGN');
+
+        const hypProofPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 2 }];
+        const hypProof = this.expr(0, ctx, hypProofPath);
+
+        const hypNamePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        this.recordRange(hypNamePath, hypNameToken, hypNameToken);
+
+        return {
+          name: tacticName,
+          args: [mkConstTT(hypName), hypType, hypProof]
+        };
+      }
+
+      default:
+        throw new ParseError(
+          `Unknown tactic: ${tacticName}`,
+          tacticToken.line,
+          tacticToken.col
+        );
+    }
+  }
+
+  /**
    * Collect all variable names bound by a pattern (in left-to-right, depth-first order).
    *
    * IMPORTANT: Wildcards (PWild) also bind variables to ensure De Bruijn indices in
@@ -3406,6 +3665,21 @@ export class Parser {
     if (token.type !== type) {
       throw new ParseError(
         `Expected ${type} but got ${token.type} '${token.value}'`,
+        token.line,
+        token.col
+      );
+    }
+    return this.advance();
+  }
+
+  /**
+   * Expect a newline token with custom error message
+   */
+  private expectNewline(message?: string): Token {
+    const token = this.current();
+    if (token.type !== 'NEWLINE' && token.type !== 'EOF') {
+      throw new ParseError(
+        message || `Expected newline but got ${token.type} '${token.value}'`,
         token.line,
         token.col
       );

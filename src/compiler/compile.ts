@@ -2665,6 +2665,15 @@ function substituteInheritedFieldRefs(
       case 'WithClause':
         // WithClause is parsed separately, shouldn't appear in field types
         return t;
+      case 'TacticBlock':
+        // Transform tactic arguments
+        return {
+          tag: 'TacticBlock',
+          tactics: t.tactics.map(cmd => ({
+            name: cmd.name,
+            args: cmd.args.map(arg => transform(arg, depth))
+          }))
+        };
       default: {
         const _exhaustive: never = t;
         return _exhaustive;
