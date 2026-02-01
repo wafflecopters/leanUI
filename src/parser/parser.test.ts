@@ -2923,20 +2923,28 @@ record Point where
 
 describe('Parser: Tactic Parsing', () => {
     test('Parse simple tactic proof with exact', () => {
-      const decls = parseDeclarations(`
-foo : Nat := by
-  exact Zero
-`);
-      expect(decls.length).toBe(1);
-      expect(decls[0].kind).toBe('def');
-      expect(decls[0].name).toBe('foo');
-      expect(decls[0].value?.tag).toBe('TacticBlock');
+      try {
+        const decls = parseDeclarations(`foo : Nat := by
+  exact Zero`);
+        expect(decls.length).toBe(1);
+        expect(decls[0].kind).toBe('def');
+        expect(decls[0].name).toBe('foo');
+        expect(decls[0].value?.tag).toBe('TacticBlock');
 
-      if (decls[0].value?.tag === 'TacticBlock') {
-        expect(decls[0].value.tactics.length).toBe(1);
-        expect(decls[0].value.tactics[0].name).toBe('exact');
-        expect(decls[0].value.tactics[0].args.length).toBe(1);
-        expect(decls[0].value.tactics[0].args[0].tag).toBe('Const');
+        if (decls[0].value?.tag === 'TacticBlock') {
+          expect(decls[0].value.tactics.length).toBe(1);
+          expect(decls[0].value.tactics[0].name).toBe('exact');
+          expect(decls[0].value.tactics[0].args.length).toBe(1);
+          expect(decls[0].value.tactics[0].args[0].tag).toBe('Const');
+        }
+      } catch (e: any) {
+        if (e.errors) {
+          console.error('Parse errors:');
+          e.errors.forEach((err: any, i: number) => {
+            console.error(`  ${i + 1}. Line ${err.line}, Col ${err.col}: ${err.message}`);
+          });
+        }
+        throw e;
       }
     });
 

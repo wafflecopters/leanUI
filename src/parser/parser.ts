@@ -1017,20 +1017,22 @@ export class Parser {
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
       const type = this.expr(0, [], typePath);
 
-      // Check for := or by
+      // Check for :=
       if (this.current().type === 'ASSIGN') {
-        // name : type := value
         this.advance(); // consume ':='
+
+        // Check if this is a tactic proof (by) or a normal value
+        if (this.current().type === 'BY') {
+          // name : type := by ...tactics...
+          this.advance(); // consume 'by'
+          const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+          const value = this.parseTacticBlock([], valuePath);
+          return { kind: 'def', name, type, value };
+        }
+
+        // name : type := value (normal definition)
         const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
         const value = this.expr(0, [], valuePath);
-        return { kind: 'def', name, type, value };
-      }
-
-      if (this.current().type === 'BY') {
-        // name : type := by ...tactics...
-        this.advance(); // consume 'by'
-        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-        const value = this.parseTacticBlock([], valuePath);
         return { kind: 'def', name, type, value };
       }
 
@@ -1052,16 +1054,19 @@ export class Parser {
     // name := impl (definition without type annotation, using :=)
     if (next.type === 'ASSIGN') {
       this.advance(); // consume ':='
+
+      // Check if this is a tactic proof or normal value
+      if (this.current().type === 'BY') {
+        // name := by ...tactics... (tactic proof without type annotation - unusual but allowed)
+        this.advance(); // consume 'by'
+        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+        const value = this.parseTacticBlock([], valuePath);
+        return { kind: 'def', name, value };
+      }
+
+      // name := value (normal definition)
       const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
       const value = this.expr(0, [], valuePath);
-      return { kind: 'def', name, value };
-    }
-
-    // name := by ...tactics... (tactic proof without type annotation - unusual but allowed)
-    if (next.type === 'BY') {
-      this.advance(); // consume 'by'
-      const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-      const value = this.parseTacticBlock([], valuePath);
       return { kind: 'def', name, value };
     }
 
