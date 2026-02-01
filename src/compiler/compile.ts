@@ -1429,12 +1429,13 @@ function containsSelfReference(term: TTKTerm, name: string): boolean {
 
 function recheckZonkedTerm(
   term: TTKTerm,
-  _definitions: DefinitionsMap,
+  definitions: DefinitionsMap,
   label: string,
-): void {
+): string | undefined {
   // Skip Match values — trusted compilation output
-  if (term.tag === 'Match') return;
+  if (term.tag === 'Match') return undefined;
 
+  // Phase 1: AST walk for leftover metas/holes
   const leftoverMetas: string[] = [];
   const leftoverHoles: string[] = [];
 
@@ -1474,15 +1475,37 @@ function recheckZonkedTerm(
   walk(term);
 
   if (leftoverMetas.length > 0) {
-    throw new Error(
-      `Zonk recheck failed for ${label}: ${leftoverMetas.length} unsolved meta(s) remaining: ${leftoverMetas.join(', ')}`
-    );
+    return `Zonk recheck failed for ${label}: ${leftoverMetas.length} unsolved meta(s) remaining: ${leftoverMetas.join(', ')}`;
   }
   if (leftoverHoles.length > 0) {
-    throw new Error(
-      `Zonk recheck failed for ${label}: ${leftoverHoles.length} unresolved hole(s) remaining: ${leftoverHoles.join(', ')}`
-    );
+    return `Zonk recheck failed for ${label}: ${leftoverHoles.length} unresolved hole(s) remaining: ${leftoverHoles.join(', ')}`;
   }
+
+  // Phase 2: Re-type-check in a fresh environment.
+  // This catches type mismatches, wrong de Bruijn indices, and incorrect
+  // universe levels that the AST walk cannot detect.
+  try {
+    const freshEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+    const resultEnv = inferType(freshEnv.withValue(term));
+
+    // Solve any constraints generated during inference
+    const solvedEnv = resultEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+    // Check that no unsolved metas were generated (zonked terms should be fully explicit)
+    const unsolvedIds: string[] = [];
+    for (const [id, m] of solvedEnv.metaVars) {
+      if (!m.solution && !m.isHole) unsolvedIds.push(id);
+    }
+    if (unsolvedIds.length > 0) {
+      return `Zonk recheck failed for ${label}: re-type-check generated ${unsolvedIds.length} unsolved meta(s): ${unsolvedIds.join(', ')}`;
+    }
+  } catch (e) {
+    const msg = e instanceof TCEnvError ? e.fullMessage
+      : e instanceof Error ? e.message
+      : String(e);
+    return `Zonk recheck (re-type-check) failed for ${label}: ${msg}`;
+  }
+  return undefined;
 }
 
 // ============================================================================
@@ -3394,7 +3417,13 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
           // Recheck zonked constructor types if enabled
           if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
             for (const ctor of result.compiled.kernelConstructors) {
-              recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+              const recheckErr = recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+              if (recheckErr) {
+                const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+                result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+                result.compiled.checkSuccess = false;
+                totalCheckErrors++;
+              }
             }
           }
         }
@@ -3417,7 +3446,13 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
           // Recheck zonked constructor types if enabled
           if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
             for (const ctor of result.compiled.kernelConstructors) {
-              recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+              const recheckErr = recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+              if (recheckErr) {
+                const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+                result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+                result.compiled.checkSuccess = false;
+                totalCheckErrors++;
+              }
             }
           }
         }
@@ -3461,11 +3496,23 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
           definitions = result.newDefinitions;
           // Recheck zonked type signature if enabled
           if (options?.recheckZonkedTerms && result.compiled.kernelType) {
-            recheckZonkedTerm(result.compiled.kernelType, definitions, `${mainDecl.name} type signature`);
+            const recheckErr = recheckZonkedTerm(result.compiled.kernelType, definitions, `${mainDecl.name} type signature`);
+            if (recheckErr) {
+              const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+              result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+              result.compiled.checkSuccess = false;
+              totalCheckErrors++;
+            }
           }
           // Recheck zonked value if enabled (skip Match values)
           if (options?.recheckZonkedTerms && result.compiled.kernelValue) {
-            recheckZonkedTerm(result.compiled.kernelValue, definitions, `${mainDecl.name} value`);
+            const recheckErr = recheckZonkedTerm(result.compiled.kernelValue, definitions, `${mainDecl.name} value`);
+            if (recheckErr) {
+              const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+              result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+              result.compiled.checkSuccess = false;
+              totalCheckErrors++;
+            }
           }
         }
         totalCheckErrors += result.errorCount;

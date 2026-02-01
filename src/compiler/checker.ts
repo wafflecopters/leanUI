@@ -1,6 +1,6 @@
 // INFERENCE
 
-import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual } from "./kernel";
+import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual, mkULevel } from "./kernel";
 import { subst, shiftTerm, minFreeVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap, BinderPartSegment } from "./term";
 import { IndexPath } from "../types/source-position";
@@ -277,7 +277,22 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     //   ─────────────
     //   Γ ⊢ c ⇒ T
     // ────────────────────────────────────────────────────────────────
-    const constResult = env.getTypeDefinitionAssert(env.value.name);
+    const constName = env.value.name;
+
+    // Built-in universe level operations (USucc, UMax, UIMax).
+    // These are represented as Const nodes in TTK but are not user-defined.
+    if (constName === 'USucc') {
+      const resultType = mkPi(mkULevel(), mkULevel(), '_');
+      env.recordTypeInfo(resultType);
+      return env.withValue(resultType);
+    }
+    if (constName === 'UMax' || constName === 'UIMax') {
+      const resultType = mkPi(mkULevel(), mkPi(mkULevel(), mkULevel(), '_'), '_');
+      env.recordTypeInfo(resultType);
+      return env.withValue(resultType);
+    }
+
+    const constResult = env.getTypeDefinitionAssert(constName);
     env.recordTypeInfo(constResult.value);
     return constResult;
   }

@@ -97,27 +97,30 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
 
 ## Constraint Solver Hardening
 
-The soundness work on implicit argument conflict detection revealed several architectural improvements that would make the constraint solver more robust and simpler. Currently, constraints arrive at whatever context depth they were generated, and the solver does ad-hoc `depthDiff` shifting — this is the root cause of most complexity in conflict detection.
+The soundness work on implicit argument conflict detection revealed several architectural improvements that would make the constraint solver more robust and simpler.
 
-- [ ] **Normalize constraints to meta's creation depth before solving** (Priority 1)
-  - All constraints for a given meta should be shifted to the meta's creation depth *before* entering the solver
-  - This eliminates the need for `depthDiff` adjustment inside `solveConstraints`
-  - Same-depth Var-Var conflict detection becomes trivial (just compare indices)
-  - Cross-depth name-based heuristics become unnecessary
-  - Key files: `meta.ts` (solveConstraints), `term.ts` (withConstraint)
+- [x] **Normalize constraints to meta's creation depth before solving** ~~(Priority 1)~~ DONE
+  - `normalizeConstraintDepth` in `meta.ts` shifts all constraints to the meta's context depth before solving
+  - Comprehensive unit tests in `meta.test.ts` (9 tests for normalization + 3 for cross-depth solving)
+  - No more ad-hoc `depthDiff` shifting in `solveConstraints`
+
+- [x] **Post-solving zonk-then-check pass** DONE
+  - `recheckZonkedTerm` in `compile.ts` now does full re-type-check in a fresh environment after zonking
+  - Phase 1: AST walk for leftover Meta/Hole nodes
+  - Phase 2: Re-type-check with `inferType` in a fresh `TCEnv` with current definitions
+  - Catches type mismatches, wrong de Bruijn indices, and incorrect universe levels
+  - Skips Match values (trusted compilation output) and auxiliary declarations
+
+- [x] **Level meta constraint depth normalization** DONE
+  - Fixed bug where level meta constraints from Pi body unification had Var indices at depth+1
+  - `adjustMetaConstraintDepth` in `unify.ts` shifts metaConstraint rhs terms down by 1 when exiting binders
+  - Unit tests in `checker.test.ts` verify correct depth adjustment
 
 - [ ] **Store richer constraint provenance**
   - Constraints currently carry `{ meta, rhs, ctx }` — add a `source` field
   - Sources: `'conv'` (CONV check), `'ctor-arg'` (constructor matching), `'propagated'` (decomposition)
   - The solver can weight constraints differently (propagated constraints are less reliable)
   - Would eliminate the need for Sort-type exclusion heuristic in Var conflict check
-
-- [ ] **Post-solving zonk-then-check pass**
-  - After all constraints are solved, zonk (substitute solved metas) into all constraint RHS values
-  - Then do a final definitional equality check with full reduction
-  - This is the standard Lean/Agda approach and is more principled than incremental checking
-  - Avoids partial-zonking issues since ALL metas are solved first
-  - See also `zonk_checking_plan.md` for related work
 
 - [ ] **Separate pattern-variable contexts from rigid contexts**
   - Track which context bindings came from pattern matching vs. lambdas/pi-binders

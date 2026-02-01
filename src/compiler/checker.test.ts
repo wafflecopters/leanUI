@@ -1,7 +1,8 @@
 import { describe, test, expect } from 'vitest';
 import { inferType, checkType } from './checker';
-import { TTKTerm, mkVar, mkConst, mkType, mkPi, mkLambda, mkApp } from './kernel';
+import { TTKTerm, mkVar, mkConst, mkType, mkPi, mkLambda, mkApp, mkULevel, mkLSucc, mkLMax, mkMeta } from './kernel';
 import { TCEnv, DefinitionsMap } from './term';
+import { unifyTerms, UnifyResult } from './unify';
 
 // Helper to create a minimal TCEnv for testing
 function createTestEnv(term: TTKTerm, context: { name: string; type: TTKTerm }[] = []): TCEnv<TTKTerm> {
@@ -183,5 +184,135 @@ describe('checkType', () => {
 
     // Const stays as Const - no elaboration needed
     expect(result.value).toEqual(mkConst('Zero'));
+  });
+});
+
+describe('inferType: built-in universe level operations', () => {
+  test('USucc has type ULevel -> ULevel', () => {
+    const env = createTestEnv(mkConst('USucc'));
+    const result = inferType(env);
+    // USucc : ULevel -> ULevel
+    expect(result.value.tag).toBe('Binder');
+    if (result.value.tag === 'Binder') {
+      expect(result.value.domain).toEqual(mkULevel());
+      expect(result.value.body).toEqual(mkULevel());
+    }
+  });
+
+  test('UMax has type ULevel -> ULevel -> ULevel', () => {
+    const env = createTestEnv(mkConst('UMax'));
+    const result = inferType(env);
+    // UMax : ULevel -> ULevel -> ULevel
+    expect(result.value.tag).toBe('Binder');
+    if (result.value.tag === 'Binder') {
+      expect(result.value.domain).toEqual(mkULevel());
+      expect(result.value.body.tag).toBe('Binder');
+      if (result.value.body.tag === 'Binder') {
+        expect(result.value.body.domain).toEqual(mkULevel());
+        expect(result.value.body.body).toEqual(mkULevel());
+      }
+    }
+  });
+
+  test('UIMax has type ULevel -> ULevel -> ULevel', () => {
+    const env = createTestEnv(mkConst('UIMax'));
+    const result = inferType(env);
+    expect(result.value.tag).toBe('Binder');
+    if (result.value.tag === 'Binder') {
+      expect(result.value.domain).toEqual(mkULevel());
+      expect(result.value.body.tag).toBe('Binder');
+    }
+  });
+
+  test('USucc applied to ULit(0) type-checks as ULevel', () => {
+    // mkLSucc(ULit(0)) = App(Const('USucc'), ULit(0))
+    const term = mkLSucc({ tag: 'ULit', n: 0 });
+    const env = createTestEnv(term);
+    const result = inferType(env);
+    expect(result.value).toEqual(mkULevel());
+  });
+
+  test('UMax applied to two ULits type-checks as ULevel', () => {
+    // mkLMax(ULit(0), ULit(1)) = App(App(Const('UMax'), ULit(0)), ULit(1))
+    const term = mkLMax({ tag: 'ULit', n: 0 }, { tag: 'ULit', n: 1 });
+    const env = createTestEnv(term);
+    const result = inferType(env);
+    expect(result.value).toEqual(mkULevel());
+  });
+
+  test('Sort containing USucc re-type-checks correctly', () => {
+    // Type 1 = Sort(USucc(ULit(0))) — should infer to Type 2
+    const term: TTKTerm = { tag: 'Sort', level: mkLSucc({ tag: 'ULit', n: 0 }) };
+    const env = createTestEnv(term);
+    const result = inferType(env);
+    // Type 1 : Type 2 = Sort(USucc(USucc(ULit(0))))
+    expect(result.value.tag).toBe('Sort');
+  });
+});
+
+describe('unifyTerms: level meta constraint depth in Pi bodies', () => {
+  const checkOpts = { mode: 'check' as const };
+
+  test('level meta in Pi body gets rhs shifted down correctly', () => {
+    // Simulate the DPair3 bug:
+    // Unifying Pi(Var(1), Sort(Var(3))) ≡ Pi(Var(1), Sort(Meta("?v")))
+    //
+    // This represents:
+    //   inferred: (x : A) -> Type v   where A=Var(1), v=Var(3) at depth 5
+    //   expected: (x : A) -> Type ?v  where A=Var(1), ?v=level meta
+    //
+    // Inside the Pi body (depth+1), Var(3) = v at context [x, B, A, v, u]
+    // Outside the Pi (depth), v = Var(2) at context [B, A, v, u]
+    //
+    // The metaConstraint should have rhs = Var(2), NOT Var(3)
+    const inferred = mkPi(mkVar(1), { tag: 'Sort', level: mkVar(3) }, 'x');
+    const expected = mkPi(mkVar(1), { tag: 'Sort', level: mkMeta('?v') }, 'x');
+
+    const result = unifyTerms(inferred, expected, checkOpts);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Should have a metaConstraint for ?v
+      expect(result.metaConstraints.length).toBe(1);
+      expect(result.metaConstraints[0].meta).toBe('?v');
+      // The rhs should be Var(2) (shifted down from Var(3) in the body)
+      // because the level meta ?v is used at the outer depth
+      expect(result.metaConstraints[0].rhs).toEqual(mkVar(2));
+    }
+  });
+
+  test('level meta in non-Pi position has correct rhs (no shift needed)', () => {
+    // Unifying Sort(Var(2)) ≡ Sort(Meta("?v"))
+    // No Pi body involved, so no shift needed
+    const inferred: TTKTerm = { tag: 'Sort', level: mkVar(2) };
+    const expected: TTKTerm = { tag: 'Sort', level: mkMeta('?v') };
+
+    const result = unifyTerms(inferred, expected, checkOpts);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.metaConstraints.length).toBe(1);
+      expect(result.metaConstraints[0].meta).toBe('?v');
+      // No shift: Var(2) stays Var(2)
+      expect(result.metaConstraints[0].rhs).toEqual(mkVar(2));
+    }
+  });
+
+  test('level meta in doubly-nested Pi body shifts down by 2', () => {
+    // Pi(A, Pi(B, Sort(Var(4)))) ≡ Pi(A, Pi(B, Sort(Meta("?v"))))
+    // Inside double body: Var(4) at depth+2
+    // At outer level: Var(2)
+    const inferred = mkPi(mkType(), mkPi(mkType(), { tag: 'Sort', level: mkVar(4) }, 'y'), 'x');
+    const expected = mkPi(mkType(), mkPi(mkType(), { tag: 'Sort', level: mkMeta('?v') }, 'y'), 'x');
+
+    const result = unifyTerms(inferred, expected, checkOpts);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.metaConstraints.length).toBe(1);
+      expect(result.metaConstraints[0].meta).toBe('?v');
+      // Shifted down by 2 (two Pi body entries): Var(4) → Var(2)
+      expect(result.metaConstraints[0].rhs).toEqual(mkVar(2));
+    }
   });
 });

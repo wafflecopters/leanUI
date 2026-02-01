@@ -1,5 +1,6 @@
 import { levelsEqual, mkVar, prettyPrint, TTKTerm, isDefinitionallyEqual } from "./kernel";
 import { DefinitionsMap } from "./term";
+import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
 
 // ============================================================================
@@ -340,6 +341,35 @@ function unifyLevels(l1: TTKTerm, l2: TTKTerm, options: UnifyOptions): UnifyResu
  * - metaConstraints: Deferred ?m = t constraints
  * - levelConstraints: Deferred ?l = level constraints
  */
+/**
+ * Shift Var indices in metaConstraint rhs terms down by 1 when exiting a binder.
+ *
+ * When unifying Pi bodies, constraints are generated at depth+1 (inside the binder).
+ * Level metas don't track their depth, so Var indices in constraint rhs terms need
+ * to be decremented by 1 to be correct at the outer depth.
+ *
+ * Example: Inside Pi body at context [x, B, A, v, u], Var(3) = v.
+ * At the outer depth [B, A, v, u], v = Var(2). So the rhs must shift from Var(3) to Var(2).
+ *
+ * If the rhs contains Var(0) (referring to the binder variable itself), the constraint
+ * can't be shifted — but this shouldn't happen for well-formed level constraints since
+ * level metas represent universe levels which don't depend on term-level binders.
+ */
+function adjustMetaConstraintDepth(result: UnifyResult): UnifyResult {
+  if (!result.success) return result;
+  if (result.metaConstraints.length === 0) return result;
+
+  const adjusted = result.metaConstraints.map(mc => ({
+    meta: mc.meta,
+    rhs: shiftTerm(mc.rhs, -1, 0),
+  }));
+
+  return {
+    ...result,
+    metaConstraints: adjusted,
+  };
+}
+
 export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): UnifyResult {
   // OPTIMIZATION: If terms are structurally identical, they unify immediately.
   // This avoids expensive whnf reduction for identical terms like matching Match
@@ -612,7 +642,13 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
     const bodyResult = unifyTerms(a.body, b.body, nextOptions);
     if (!bodyResult.success) return bodyResult;
 
-    let result = combineUnificationResults(domResult, bodyResult, nextOptions);
+    // Shift metaConstraint rhs values down by 1 when exiting the binder.
+    // Body unification generates constraints at depth+1 (inside the binder),
+    // but level metas are used at the outer depth. Var indices in constraint
+    // rhs terms need adjustment to refer to the correct binders.
+    const adjustedBodyResult = adjustMetaConstraintDepth(bodyResult);
+
+    let result = combineUnificationResults(domResult, adjustedBodyResult, nextOptions);
 
     // For Let, also unify the definition values
     if (a.binderKind.tag === 'BLet' && b.binderKind.tag === 'BLet') {

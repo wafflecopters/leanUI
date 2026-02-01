@@ -1,5 +1,12 @@
--- @test success
--- @name "replace0 using Equal0 without universe polymorphism"
+-- @test failure
+-- @name "replace0 using Equal0 without universe polymorphism (universe error)"
+-- @error "expects Type but was applied to Type 1"
+--
+-- This is a genuine universe-level error:
+-- Equal0 has {A : Type} which means A : Type 0.
+-- But replace0 has {x y : Type}, so x, y : Type 0.
+-- Equal0 x y requires A := Type 0, but Type 0 : Type 1 (not Type 0).
+-- The universe-polymorphic Equal (with {u : ULevel}) is needed for this.
 
 inductive Equal0 : {A : Type} -> A -> A -> Type where
   refl0 : {A : Type} -> {x : A} -> Equal0 x x
