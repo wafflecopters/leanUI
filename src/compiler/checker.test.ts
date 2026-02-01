@@ -250,6 +250,141 @@ describe('inferType: built-in universe level operations', () => {
   });
 });
 
+describe('createMetaForHole: duplicate hole ID handling', () => {
+  test('single hole with ID "_" creates meta with same ID', () => {
+    const hole: TTKTerm = { tag: 'Hole', id: '_' };
+    const env = createTestEnv(hole);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    // Should create a meta with ID '_'
+    expect(result.value.tag).toBe('Meta');
+    if (result.value.tag === 'Meta') {
+      expect(result.value.id).toBe('_');
+    }
+
+    // Should have one meta registered
+    expect(result.metaVars.size).toBe(1);
+    expect(result.metaVars.has('_')).toBe(true);
+
+    // The meta should have the expected type
+    const metaInfo = result.metaVars.get('_');
+    expect(metaInfo?.type).toEqual(mkConst('Nat'));
+  });
+
+  test('two holes with same ID "_" get distinct meta IDs', () => {
+    // App with two holes: Succ (id _ _)
+    // First _ is the type argument to id, second _ is the value argument
+    const hole1: TTKTerm = { tag: 'Hole', id: '_' };
+    const hole2: TTKTerm = { tag: 'Hole', id: '_' };
+    const term: TTKTerm = mkApp(mkConst('Succ'), mkApp(mkApp(mkConst('id'), hole1), hole2));
+    const env = createTestEnv(term);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    // Should create two distinct metas
+    expect(result.metaVars.size).toBe(2);
+
+    // First hole should get ID '_', second should get '_$1'
+    expect(result.metaVars.has('_')).toBe(true);
+    expect(result.metaVars.has('_$1')).toBe(true);
+
+    // Both metas should have different types (one is Type, one is the value)
+    const meta1 = result.metaVars.get('_');
+    const meta2 = result.metaVars.get('_$1');
+    expect(meta1).toBeDefined();
+    expect(meta2).toBeDefined();
+
+    // They should have different types - one is Type (for id's type param), other is Nat
+    expect(meta1?.type).not.toEqual(meta2?.type);
+  });
+
+  test('three holes with same ID get unique suffixes', () => {
+    // Construct a term with three holes all having ID '_'
+    // id _ (id _ _)
+    const hole1: TTKTerm = { tag: 'Hole', id: '_' };
+    const hole2: TTKTerm = { tag: 'Hole', id: '_' };
+    const hole3: TTKTerm = { tag: 'Hole', id: '_' };
+    const innerApp = mkApp(mkApp(mkConst('id'), hole2), hole3);
+    const term: TTKTerm = mkApp(mkApp(mkConst('id'), hole1), innerApp);
+    const env = createTestEnv(term);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    // Should create three distinct metas
+    expect(result.metaVars.size).toBeGreaterThanOrEqual(3);
+
+    // Should have '_', '_$1', '_$2'
+    expect(result.metaVars.has('_')).toBe(true);
+    expect(result.metaVars.has('_$1')).toBe(true);
+    expect(result.metaVars.has('_$2')).toBe(true);
+  });
+
+  test('holes with different IDs do not collide', () => {
+    // id _a _b where _a and _b are different hole IDs
+    const hole1: TTKTerm = { tag: 'Hole', id: '_a' };
+    const hole2: TTKTerm = { tag: 'Hole', id: '_b' };
+    const term: TTKTerm = mkApp(mkApp(mkConst('id'), hole1), hole2);
+    const env = createTestEnv(term);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    // Should create two metas with their original IDs
+    expect(result.metaVars.size).toBe(2);
+    expect(result.metaVars.has('_a')).toBe(true);
+    expect(result.metaVars.has('_b')).toBe(true);
+
+    // Should NOT create suffixed versions since IDs are different
+    expect(result.metaVars.has('_a$1')).toBe(false);
+    expect(result.metaVars.has('_b$1')).toBe(false);
+  });
+
+  test('mix of same and different hole IDs handled correctly', () => {
+    // id _ _x where first is '_', second is '_x'
+    const hole1: TTKTerm = { tag: 'Hole', id: '_' };
+    const hole2: TTKTerm = { tag: 'Hole', id: '_x' };
+    const hole3: TTKTerm = { tag: 'Hole', id: '_' }; // Another '_'
+
+    // Build: id _ (id _x _)
+    const innerApp = mkApp(mkApp(mkConst('id'), hole2), hole3);
+    const term: TTKTerm = mkApp(mkApp(mkConst('id'), hole1), innerApp);
+    const env = createTestEnv(term);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    // Should create three metas
+    expect(result.metaVars.size).toBeGreaterThanOrEqual(3);
+
+    // Should have '_', '_$N' for the duplicate, and '_x' for the unique one
+    expect(result.metaVars.has('_')).toBe(true);
+    expect(result.metaVars.has('_x')).toBe(true);
+
+    // There should be a suffixed version of '_' since we have two '_' holes
+    const suffixedKeys = Array.from(result.metaVars.keys()).filter(k => k.startsWith('_$'));
+    expect(suffixedKeys.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('each meta has correct context depth', () => {
+    // Lambda with holes at different depths
+    // \(x : Nat) => id _ _
+    const hole1: TTKTerm = { tag: 'Hole', id: '_' };
+    const hole2: TTKTerm = { tag: 'Hole', id: '_' };
+    const bodyTerm = mkApp(mkApp(mkConst('id'), hole1), hole2);
+    const term: TTKTerm = mkLambda(mkConst('Nat'), bodyTerm, 'x');
+    const expectedType = mkPi(mkConst('Nat'), mkConst('Nat'), 'x');
+    const env = createTestEnv(term);
+
+    const result = checkType(env, expectedType);
+
+    // Both holes are inside the lambda body, so they should have context length 1
+    const meta1 = result.metaVars.get('_');
+    const meta2 = result.metaVars.get('_$1');
+
+    expect(meta1?.ctx.length).toBe(1); // Inside lambda with x bound
+    expect(meta2?.ctx.length).toBe(1);
+  });
+});
+
 describe('unifyTerms: level meta constraint depth in Pi bodies', () => {
   const checkOpts = { mode: 'check' as const };
 

@@ -716,7 +716,7 @@ function assertPatternVarsValid(
 // ============================================================================
 
 type PatternStackEntry = { tag: 'pattern', pattern: TTKPattern } | { tag: 'done', pattern: TTKPattern, arity: number }
-type CheckStackEntry = { type: TTKTerm, ctxLength: number }
+export type CheckStackEntry = { type: TTKTerm, ctxLength: number }
 
 // ============================================================================
 // Pattern Variable Counting
@@ -900,7 +900,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   return workEnv.solveMetasAndConstraints({ liftMetasToFullContext: false })
 }
 
-function applySubstitutionToCheckStackInPlace(
+export function applySubstitutionToCheckStackInPlace(
   stack: CheckStackEntry[],
   mainSigLength: number,
   varIndex: number,
@@ -915,7 +915,17 @@ function applySubstitutionToCheckStackInPlace(
       const shiftAmount = m - mainSigLength;
       const shiftedValue = shiftAmount !== 0 ? shiftTerm(value, shiftAmount, 0) : value;
 
-      const newTerm = subst(localVarIndex, shiftedValue, entry.type);
+      // Adjust replacement for removal of localVarIndex from the entry's context.
+      // subst(n, replacement, term) expects `replacement` to be in the context AFTER
+      // removing position n. Var indices > localVarIndex in the replacement must be
+      // decremented by 1 to reflect this removal.
+      // (Compare with applySubstitutionToContext in subst.ts which does the same adjustment.)
+      const adjustedValue = transformVarsInTerm(shiftedValue, (idx) => {
+        if (idx > localVarIndex) return mkVar(idx - 1);
+        return mkVar(idx);
+      });
+
+      const newTerm = subst(localVarIndex, adjustedValue, entry.type);
       // Mutate entry in place
       stack[i] = { type: newTerm, ctxLength: entry.ctxLength - 1 };
     }

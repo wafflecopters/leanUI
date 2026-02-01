@@ -1,0 +1,14 @@
+-- Test that two Maybe patterns work without explicit {A}
+-- FIXED: Positional args now allowed for types with only implicit params
+-- @test success
+-- @name "Two Maybe patterns without explicit {A} work"
+-- @import preambles/nat.tt
+
+inductive Maybe : {A : Type} -> Type where
+  Nothing : {A : Type} -> Maybe {A}
+  Just : {A : Type} -> A -> Maybe {A}
+
+-- Take TWO Maybe values, like UIP takes two Equal proofs
+firstJust : {A : Type} -> Maybe A -> Maybe A -> Maybe A
+firstJust (Just x) _ = Just x
+firstJust Nothing m = m

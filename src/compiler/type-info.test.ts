@@ -1554,3 +1554,394 @@ plus (Succ a) b = Succ (plus a b)
 
   test.todo('cursor on "No" in (No neq) shows constructor type (blocked by clause 0 meta-solving bug)');
 });
+
+// ============================================================================
+// Named pattern sub-expression type info
+// ============================================================================
+
+describe('Named pattern sub-expression type info', () => {
+  const namedPatSource = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
+plusComm {a:=Zero} {b:=Zero} = refl
+plusComm {a:=Succ a} {b:=Zero} = ?B
+plusComm {a:=Zero} {b:=Succ b} = ?C
+plusComm {a:=Succ a} {b:=Succ b} = ?D
+`;
+
+  function getPlusCommDecl() {
+    const results = compileSource(namedPatSource);
+    const block = results.find(r => r.name === 'plusComm');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+    return decl;
+  }
+
+  test('cursor on "b" inside {b:=Succ b} shows Nat (sub-pattern var), not the whole named pattern', () => {
+    const decl = getPlusCommDecl();
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // clause[2]: plusComm {a:=Zero} {b:=Succ b} = ?C
+    // The inner "b" in {b:=Succ b} has surface path: .patterns[1].pattern.args[0]
+    const innerBPath = 'value.clauses[2].patterns[1].pattern.args[0]';
+    const innerBRange = decl.sourceMap.get(innerBPath);
+    expect(innerBRange).toBeDefined();
+
+    if (innerBRange) {
+      const text = namedPatSource.substring(innerBRange.start.pos, innerBRange.end.pos);
+      expect(text).toBe('b');
+
+      const result = getTypeAtCursor(
+        innerBRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // Should show type of "b" (Nat), not the whole {b:=Succ b} pattern
+        expect(result.prettyType).toBe('Nat');
+        // The source range should be just "b", not "{b:=Succ b}"
+        expect(result.sourceRange).toBeDefined();
+        if (result.sourceRange) {
+          const rangeText = namedPatSource.substring(result.sourceRange.start.pos, result.sourceRange.end.pos);
+          expect(rangeText).toBe('b');
+        }
+      }
+    }
+  });
+
+  test('cursor on "Succ" inside {a:=Succ a} shows constructor type (Nat -> Nat), not whole pattern type', () => {
+    const decl = getPlusCommDecl();
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // clause[1]: plusComm {a:=Succ a} {b:=Zero} = ?B
+    // "Succ" in {a:=Succ a} has surface path: .patterns[0].pattern.name
+    const succPath = 'value.clauses[1].patterns[0].pattern.name';
+    const succRange = decl.sourceMap.get(succPath);
+    expect(succRange).toBeDefined();
+
+    if (succRange) {
+      const text = namedPatSource.substring(succRange.start.pos, succRange.end.pos);
+      expect(text).toBe('Succ');
+
+      const result = getTypeAtCursor(
+        succRange.start.pos + 2, // Su|cc
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // Should show Succ's constructor type (Nat -> Nat), not the whole {a:=Succ a} pattern
+        expect(result.prettyType).toBe('(Nat -> Nat)');
+      }
+    }
+  });
+
+  test('cursor on "Succ b" inside {b:=Succ b} shows inner pattern type Nat', () => {
+    const decl = getPlusCommDecl();
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // clause[2]: plusComm {a:=Zero} {b:=Succ b} = ?C
+    // "Succ b" is the inner pattern: .patterns[1].pattern
+    const innerPatPath = 'value.clauses[2].patterns[1].pattern';
+    const innerPatRange = decl.sourceMap.get(innerPatPath);
+    expect(innerPatRange).toBeDefined();
+
+    if (innerPatRange) {
+      const text = namedPatSource.substring(innerPatRange.start.pos, innerPatRange.end.pos);
+      expect(text).toBe('Succ b');
+
+      const result = getTypeAtSelection(
+        innerPatRange.start.pos,
+        innerPatRange.end.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        expect(result.prettyType).toBe('Nat');
+      }
+    }
+  });
+});
+
+// ============================================================================
+// Let-bound variables in hole context
+// ============================================================================
+
+describe('Let-bound variables in hole context', () => {
+  test('?hole after let shows let-bound variable in context (simple case)', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+foo : Nat -> Nat
+foo n = let tmp = n in ?goal
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'foo');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'foo')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Find the ?goal sourceMap entry
+    const goalPath = 'value.clauses[0].rhs.body';
+    const goalRange = decl.sourceMap.get(goalPath);
+    expect(goalRange).toBeDefined();
+
+    if (goalRange) {
+      const result = getTypeAtCursor(
+        goalRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // The context should include 'tmp' from the let binding
+        const contextNames = result.context.map(c => c.name);
+        expect(contextNames).toContain('tmp');
+      }
+    }
+  });
+
+  test('?hole after let shows let-bound variable in context (named pattern case)', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+plusZeroRight : {n : Nat} -> Equal (plus n Zero) n
+plusZeroRight {n:=Zero} = refl
+plusZeroRight {n:=Succ n} = ?sorry1
+
+plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
+plusComm {a:=Zero} {b:=Zero} = refl
+plusComm {a:=Succ a} {b:=Zero} = let tmp = plusZeroRight in ?B
+plusComm {a:=Zero} {b:=Succ b} = ?C
+plusComm {a:=Succ a} {b:=Succ b} = ?D
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'plusComm');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on ?B in: let tmp = plusZeroRight in ?B
+    const bodyPath = 'value.clauses[1].rhs.body';
+    const bodyRange = decl.sourceMap.get(bodyPath);
+    expect(bodyRange).toBeDefined();
+
+    if (bodyRange) {
+      const result = getTypeAtCursor(
+        bodyRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // The context should include 'tmp' from the let binding
+        const contextNames = result.context.map(c => c.name);
+        expect(contextNames).toContain('tmp');
+        // And should NOT contain 'b' (which is matched to Zero, not a variable)
+        expect(contextNames).not.toContain('b');
+      }
+    }
+  });
+});
+
+// ============================================================================
+// Cursor on let-bound value expression
+// ============================================================================
+
+describe('Let value expression type info', () => {
+  test('cursor on let value shows value type, not whole let type (simple)', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+foo : Nat -> Nat
+foo n = let x = n in x
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'foo');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'foo')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on "n" in "let x = n in x"
+    const valuePath = 'value.clauses[0].rhs.bindings[0].value';
+    const valueRange = decl.sourceMap.get(valuePath);
+    expect(valueRange).toBeDefined();
+
+    if (valueRange) {
+      const text = source.substring(valueRange.start.pos, valueRange.end.pos);
+      expect(text).toBe('n');
+
+      const result = getTypeAtCursor(
+        valueRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        expect(result.prettyType).toBe('Nat');
+        // Source range should be just "n", not the whole let expression
+        expect(result.sourceRange).toBeDefined();
+        if (result.sourceRange) {
+          const rangeText = source.substring(result.sourceRange.start.pos, result.sourceRange.end.pos);
+          expect(rangeText).toBe('n');
+        }
+      }
+    }
+  });
+
+  test('cursor on let value shows value type, not whole let type (plusComm)', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {x : A} -> Equal x x
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+plusZeroRight : {n : Nat} -> Equal (plus n Zero) n
+plusZeroRight {n:=Zero} = refl
+plusZeroRight {n:=Succ n} = ?sorry1
+
+plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
+plusComm {a:=Zero} {b:=Zero} = refl
+plusComm {a:=Succ a} {b:=Zero} = let tmp = plusZeroRight in ?B
+plusComm {a:=Zero} {b:=Succ b} = ?C
+plusComm {a:=Succ a} {b:=Succ b} = ?D
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'plusComm');
+    expect(block).toBeDefined();
+    const decl = block!.declarations.find(d => d.name === 'plusComm')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on "plusZeroRight" in "let tmp = plusZeroRight in ?B"
+    const valuePath = 'value.clauses[1].rhs.bindings[0].value';
+    const valueRange = decl.sourceMap.get(valuePath);
+    expect(valueRange).toBeDefined();
+
+    if (valueRange) {
+      const text = source.substring(valueRange.start.pos, valueRange.end.pos);
+      expect(text).toBe('plusZeroRight');
+
+      const result = getTypeAtCursor(
+        valueRange.start.pos + 4, // plus|ZeroRight
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // Should show the type of plusZeroRight, NOT the whole let expression type
+        expect(result.prettyType).toContain('Equal');
+        // Source range should be "plusZeroRight", not the whole let
+        expect(result.sourceRange).toBeDefined();
+        if (result.sourceRange) {
+          const rangeText = source.substring(result.sourceRange.start.pos, result.sourceRange.end.pos);
+          expect(rangeText).not.toContain('let');
+        }
+      }
+    }
+  });
+});
+
+// ============================================================================
+// Expected type shown when RHS type-check fails
+// ============================================================================
+
+describe('Expected type for failing RHS', () => {
+  test('cursor on failing RHS shows expected type from LHS pattern match', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+toBool : Nat -> Bool
+toBool Zero = True
+toBool (Succ n) = Zero
+`;
+    const results = compileSource(source);
+    const block = results.find(r => r.name === 'toBool');
+    expect(block).toBeDefined();
+    // Should fail: Zero : Nat but expected Bool
+    expect(block!.checkSuccess).toBe(false);
+
+    const decl = block!.declarations.find(d => d.name === 'toBool')!;
+    expect(decl.sourceMap).toBeDefined();
+    expect(decl.typeInfoMap).toBeDefined();
+
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    // Cursor on "Zero" in failing clause RHS
+    const rhsPath = 'value.clauses[1].rhs';
+    const rhsRange = decl.sourceMap.get(rhsPath);
+    expect(rhsRange).toBeDefined();
+
+    if (rhsRange) {
+      const result = getTypeAtCursor(
+        rhsRange.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
+      expect(result).toBeDefined();
+      if (result) {
+        // Should show the expected type even though check failed
+        expect(result.expectedType).toBeDefined();
+        expect(result.expectedType).toBe('Bool');
+      }
+    }
+  });
+});

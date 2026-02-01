@@ -310,7 +310,7 @@ inductive Fin : Nat -> Type where
 
 nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
 nth (VCons h _) FZero = h
-nth (VCons  h tail) (FSucc f) = nth tail f
+nth (VCons h tail) (FSucc f) = nth tail f
 
 inductive Void : Type where
 
@@ -399,6 +399,12 @@ plusZeroRight {n:=Zero} = refl {A:=Nat} {a:=Zero}
 plusZeroRight {n:=Succ n} = let rec = plusZeroRight {n} in
   cong rec
 
+plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
+plusComm {a:=Zero}   {b:=Zero}   = refl
+plusComm {a:=Succ a} {b:=Zero}   = let tmp = plusZeroRight in ?B
+plusComm {a:=Zero}   {b:=Succ b} = ?C
+plusComm {a:=Succ a} {b:=Succ b} = ?D
+
 inductive List : Type -> Type where
   Nil : {A : Type} -> List A
   Cons : {A : Type} -> A -> List A -> List A
@@ -417,17 +423,19 @@ inductive DecEq : Nat -> Nat -> Type where
   Yes : {m n : Nat} -> Equal m n -> DecEq m n
   No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
 
-
 succInj : {j k : Nat} -> Equal (Succ j) (Succ k) -> Equal j k
 succInj refl = refl
+
+compose : {u v w : ULevel} -> {A : Type u} -> {B : Type v} -> {C : Type w} -> (B -> C) -> (A -> B) -> (A -> C)
+compose g f = \\a => g (f a)
 
 decEqNat : (x y : Nat) -> DecEq x y
 decEqNat Zero Zero = Yes refl
 decEqNat Zero (Succ y) = No zeroNeqSucc
-decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
+decEqNat (Succ x) Zero = No (compose zeroNeqSucc sym)
 decEqNat (Succ x) (Succ y) with decEqNat x y
   | Yes eq => Yes (cong eq)
-  | No neq => No (\\eq => neq (succInj eq))
+  | No neq => No (compose neq succInj)
 `;
 
 // Styles
@@ -1138,11 +1146,11 @@ export function TextEditorPage() {
     if (hasSelection) {
       const startOffset = toFileOffset(cursorInfo.selStartLine!, cursorInfo.selStartCol!);
       const endOffset = toFileOffset(cursorInfo.selEndLine!, cursorInfo.selEndCol!);
-      result = getTypeAtSelection(startOffset, endOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap);
+      result = getTypeAtSelection(startOffset, endOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, compileResult.definitions);
     }
     if (!result) {
       const cursorOffset = toFileOffset(cursorInfo.lineNumber, cursorInfo.column);
-      result = getTypeAtCursor(cursorOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap);
+      result = getTypeAtCursor(cursorOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, compileResult.definitions);
     }
     if (!result) return undefined;
 

@@ -1375,13 +1375,16 @@ export class TCEnv<T> {
       );
     }
 
-    // Use the Hole's ID as the Meta ID to enable substitution of Holes in the original term
+    // Use a unique Meta ID based on the Hole's ID.
+    // Multiple holes can share the same source ID (e.g., several `_` in `refl _ _`),
+    // so we must ensure each gets its own meta to avoid conflicting constraints.
     const holeId = this.value.id;
+    const metaId = this.metaVars.has(holeId) ? `${holeId}$${this.metaVars.size}` : holeId;
     const newMetaVars = new Map(this.metaVars);
-    newMetaVars.set(holeId, { ctx: this.context, type: expectedType, isHole: true });
+    newMetaVars.set(metaId, { ctx: this.context, type: expectedType, isHole: true });
 
     // Replace the Hole with a Meta term (elaboration: Hole -> Meta)
-    const metaTerm: TTKTerm = { tag: 'Meta', id: holeId };
+    const metaTerm: TTKTerm = { tag: 'Meta', id: metaId };
 
     return new TCEnv(
       this.context,

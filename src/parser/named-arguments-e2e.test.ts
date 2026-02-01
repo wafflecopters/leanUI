@@ -600,7 +600,7 @@ plus {a := Succ a} b = Succ (plus b)`;
       )).toBe(true);
     });
 
-    test('Too many positional args - function with only named param', () => {
+    test('Positional args to all-implicit function - now allowed as sugar', () => {
       // Function has only named param, no positional. Called with wrong positional.
       const source = `
 inductive Bool : Type where
@@ -615,20 +615,17 @@ neg : {a : Bool} -> Bool
 neg {a := True} = False
 neg {a := False} = True
 
--- BAD: passing b positionally when a is the only named param
-bad : Bool -> Bool
-bad b = neg b`;
+-- FIXED: passing b positionally when a is the only implicit param now works (sugar for named syntax)
+ok : Bool -> Bool
+ok b = neg b`;
 
       const results = compileSource(source);
-      const badResult = results.find(r => r.name === 'bad');
-      expect(badResult).toBeDefined();
-      expect(badResult!.parseSuccess).toBe(true);
-      // Should FAIL because neg expects no positional args, just {a := ...}
-      expect(badResult!.checkSuccess).toBe(false);
-      // Error should mention too many positional arguments
-      expect(badResult!.checkErrors.some(e =>
-        e.message.toLowerCase().includes('positional')
-      )).toBe(true);
+      const okResult = results.find(r => r.name === 'ok');
+      expect(okResult).toBeDefined();
+      expect(okResult!.parseSuccess).toBe(true);
+      // Should SUCCEED: positional args to all-implicit functions are sugar for named syntax
+      // `neg b` is equivalent to `neg {a:=b}`
+      expect(okResult!.checkSuccess).toBe(true);
     });
 
     test('Implicit pattern for omitted named param - should succeed', () => {

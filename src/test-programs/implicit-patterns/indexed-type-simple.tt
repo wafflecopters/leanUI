@@ -1,0 +1,12 @@
+-- Test implicit bug with an indexed type (like Equal but simpler)
+-- @test success
+-- @name "Indexed type pattern matching without explicit {A}"
+-- @import preambles/nat.tt
+
+-- Simple indexed type: Tag A x says "x has type A"
+inductive Tag : {A : Type} -> A -> Type where
+  MkTag : (A : Type) -> (x : A) -> Tag {A} x
+
+-- Pattern match without explicit {A}
+unTag : {A : Type} -> {x : A} -> Tag x -> A
+unTag (MkTag _ val) = val

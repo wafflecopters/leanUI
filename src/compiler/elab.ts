@@ -660,19 +660,41 @@ function reorderArgs(
     result[ni.idx] = ni.term;
   }
 
-  // Fill positional arguments ONLY in non-named positions (from left to right)
-  let posIdx = 0;
-  for (let i = 0; i < result.length && posIdx < positional.length; i++) {
-    // Skip this position if it's a named parameter position
-    if (namedPositions.has(i)) {
-      continue;
+  // Determine if we should allow positional args to fill named positions.
+  // This happens when a type/constructor has ONLY implicit/named parameters (e.g., Maybe, Nothing).
+  // In such cases, writing `Maybe Nat` is sugar for `Maybe {A:=Nat}`.
+  const hasAnyExplicitPositions = (() => {
+    for (let i = 0; i < result.length; i++) {
+      if (!namedPositions.has(i)) return true;
     }
-    if (result[i] === null) {
-      result[i] = positional[posIdx++];
+    return false;
+  })();
+
+  let posIdx = 0;
+
+  if (!hasAnyExplicitPositions && positional.length > 0) {
+    // ALL positions are implicit/named, but we have positional args.
+    // Fill them into named positions left-to-right (sugar for named syntax).
+    // Example: `Maybe Nat` becomes `Maybe {A:=Nat}`
+    for (let i = 0; i < result.length && posIdx < positional.length; i++) {
+      if (result[i] === null && namedPositions.has(i)) {
+        result[i] = positional[posIdx++];
+      }
+    }
+  } else {
+    // Normal case: fill positional arguments ONLY in non-named positions (from left to right)
+    for (let i = 0; i < result.length && posIdx < positional.length; i++) {
+      // Skip this position if it's a named parameter position
+      if (namedPositions.has(i)) {
+        continue;
+      }
+      if (result[i] === null) {
+        result[i] = positional[posIdx++];
+      }
     }
   }
 
-  // Check if we have leftover positional arguments (they would have gone into named positions)
+  // Check if we have leftover positional arguments
   if (posIdx < positional.length) {
     const extraCount = positional.length - posIdx;
     return { error: `Too many positional arguments: ${extraCount} extra argument(s) cannot fill named parameter positions` };

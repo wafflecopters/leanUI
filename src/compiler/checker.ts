@@ -710,6 +710,10 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     unifiedEnv.atIndexPath(env.indexPath).recordTypeInfo(inferredEnv.value, expectedType);
     return unifiedEnv.withValue(currentTerm).withElaboratedTerm(currentTerm);
   } catch (e) {
+    // Even when unification fails, record type info so the user can see
+    // both the inferred type and the expected type at the cursor.
+    inferredEnv.atIndexPath(env.indexPath).recordTypeInfo(inferredEnv.value, expectedType);
+
     if (e instanceof TCEnvError) {
       const termDesc = getTermDescription(env.value, env);
       const inferredType = env.prettyPrint(inferredEnv.value);

@@ -10,6 +10,8 @@
 
 import { TTKTerm, TTKContext, prettyPrint } from "./kernel";
 import { SourceMap, SourceRange, ElabMap, serializeIndexPath, IndexPath } from "../types/source-position";
+import { DefinitionsMap } from "./term";
+import { whnf } from "./whnf";
 
 // ============================================================================
 // Layer 1: Type Info Collection (populated during type checking)
@@ -218,6 +220,7 @@ export function getTypeAtCursor(
   sourceMap: SourceMap,
   elabMap: ElabMap | undefined,
   typeInfoMap: TypeInfoMap | undefined,
+  definitions?: DefinitionsMap,
 ): TypeAtCursorResult | undefined {
   if (!typeInfoMap) return undefined;
 
@@ -238,7 +241,7 @@ export function getTypeAtCursor(
 
   if (surfacePath === undefined) return undefined;
 
-  return resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap);
+  return resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap, definitions);
 }
 
 /**
@@ -250,13 +253,14 @@ export function getTypeAtSelection(
   sourceMap: SourceMap,
   elabMap: ElabMap | undefined,
   typeInfoMap: TypeInfoMap | undefined,
+  definitions?: DefinitionsMap,
 ): TypeAtCursorResult | undefined {
   if (!typeInfoMap) return undefined;
 
   const surfacePath = findPathForSelection(startPos, endPos, sourceMap);
   if (surfacePath === undefined) return undefined;
 
-  return resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap);
+  return resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap, definitions);
 }
 
 /**
@@ -267,6 +271,7 @@ function resolveTypeInfo(
   sourceMap: SourceMap,
   elabMap: ElabMap | undefined,
   typeInfoMap: TypeInfoMap,
+  definitions?: DefinitionsMap,
 ): TypeAtCursorResult | undefined {
   // Try multiple strategies to find the kernel path for this surface path.
   // When implicit patterns are auto-inserted, kernel indices shift relative to
@@ -307,6 +312,31 @@ function resolveTypeInfo(
     }
     if (!candidateKernelPaths.includes(surfacePath)) {
       candidateKernelPaths.push(surfacePath);
+    }
+  }
+
+  // Surface paths may differ from kernel paths due to syntactic sugar.
+  // Generate additional candidates by normalizing known surface-to-kernel mismatches:
+  //
+  // 1. Named patterns: {a:=Succ a} produces ".pattern.name" in surface
+  //    but kernel uses just ".name" (no .pattern. segment)
+  //
+  // 2. Let bindings: `let x = v in body` produces ".bindings[0].value" in surface
+  //    but kernel uses ".value" (single-binding let) or nested ".body.value" (multi-let)
+  const extraCandidates: string[] = [];
+  for (const candidate of candidateKernelPaths) {
+    if (candidate.includes('.pattern.')) {
+      extraCandidates.push(candidate.replace(/\.pattern\./g, '.'));
+    }
+    // Strip ".bindings[N]." → "." for let value/name paths
+    const letMatch = candidate.match(/\.bindings\[\d+\]\.(value|name)$/);
+    if (letMatch) {
+      extraCandidates.push(candidate.replace(/\.bindings\[\d+\]\./, '.'));
+    }
+  }
+  for (const extra of extraCandidates) {
+    if (!candidateKernelPaths.includes(extra)) {
+      candidateKernelPaths.push(extra);
     }
   }
 
@@ -356,6 +386,10 @@ function resolveTypeInfo(
     if (!info) return undefined;
   }
 
+  // Normalize types via WHNF if definitions are available
+  const norm = (t: TTKTerm): TTKTerm =>
+    definitions ? whnf(t, { definitions }) : t;
+
   // Build pretty-printed context
   const contextNames = info.context.map(c => c.name).reverse();
   const prettyContext: Array<{ name: string; type: string }> = [];
@@ -365,16 +399,16 @@ function resolveTypeInfo(
     const entryContextNames = info.context.slice(0, i).map(c => c.name).reverse();
     prettyContext.push({
       name: entry.name,
-      type: prettyPrint(entry.type, entryContextNames),
+      type: prettyPrint(norm(entry.type), entryContextNames),
     });
   }
 
   return {
     type: info.type,
-    prettyType: prettyPrint(info.type, contextNames),
+    prettyType: prettyPrint(norm(info.type), contextNames),
     context: prettyContext,
     expectedType: info.expectedType
-      ? prettyPrint(info.expectedType, contextNames)
+      ? prettyPrint(norm(info.expectedType), contextNames)
       : undefined,
     sourceRange: sourceMap.get(surfacePath),
     surfacePath,

@@ -1,0 +1,14 @@
+-- Test that Maybe pattern matching works without explicit {A}
+-- FIXED: Positional args now allowed for types with only implicit params
+-- @test success
+-- @name "Maybe pattern matching without explicit {A} works"
+-- @import preambles/nat.tt
+
+inductive Maybe : {A : Type} -> Type where
+  Nothing : {A : Type} -> Maybe {A}
+  Just : {A : Type} -> A -> Maybe {A}
+
+-- Pattern match on Maybe without explicit {A} in pattern type
+fromMaybe : {A : Type} -> A -> Maybe A -> A
+fromMaybe default Nothing = default
+fromMaybe default (Just x) = x

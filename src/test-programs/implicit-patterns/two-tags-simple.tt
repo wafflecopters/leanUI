@@ -1,0 +1,11 @@
+-- Test if TWO indexed type patterns trigger implicit bug (non-Equal)
+-- @test success
+-- @name "Two Tag patterns without explicit {A}"
+-- @import preambles/nat.tt
+
+inductive Tag : {A : Type} -> A -> Type where
+  MkTag : (A : Type) -> (x : A) -> Tag {A} x
+
+-- Take TWO Tag values like UIP takes two Equal proofs
+firstTag : {A : Type} -> {x y : A} -> Tag x -> Tag y -> Tag x
+firstTag (MkTag _ v1) (MkTag _ v2) = MkTag _ v1

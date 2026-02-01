@@ -1,0 +1,14 @@
+-- Test for implicit argument bug in pattern matching
+-- This fails with "unsolved implicits" rather than "implicit conflict" like UIP
+-- @test failure
+-- @name "Vec tail without explicit {A} in pattern type"
+-- @import preambles/nat.tt
+-- @error "unresolved hole"
+
+inductive Vec : {A : Type} -> Nat -> Type where
+  VNil : {A : Type} -> Vec {A} Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec {A} n -> Vec {A} (Succ n)
+
+-- This version omits {A} from Vec in the pattern position
+tail : {A : Type} -> {n : Nat} -> Vec (Succ n) -> Vec n
+tail (VCons x xs) = xs
