@@ -87,6 +87,27 @@ function areTermsDefinitelyDifferent(
     return false;
   }
 
+  // Var vs constructor conflict: a named (non-wildcard) rigid variable cannot
+  // equal a constructor application. E.g., if a meta is solved to `y` (a named
+  // function parameter) and the constraint says `Succ x`, that's a definite
+  // conflict. However, pattern wildcards (`?0`, `?1`, `_`) CAN match constructors
+  // since they're flexible binding positions.
+  if (definitions) {
+    const isConstructorHead = (head: TTKTerm): boolean =>
+      head.tag === 'Const' && definitions.inductiveNameOfConstructor.has(head.name);
+    const isNamedVar = (head: TTKTerm, ctx?: TTKContext): boolean => {
+      if (head.tag !== 'Var' || !ctx) return false;
+      const binding = ctx[ctx.length - 1 - head.index];
+      if (!binding) return false;
+      // Pattern wildcards start with '?' or '_' — they're flexible and can match anything
+      return !binding.name.startsWith('?') && !binding.name.startsWith('_');
+    };
+    if ((isNamedVar(headA, ctxA) && isConstructorHead(headB))
+      || (isNamedVar(headB, ctxB) && isConstructorHead(headA))) {
+      return true;
+    }
+  }
+
   // Var-Var comparison with context-based name lookup — ONLY inside constructor
   // arguments. At the top level, different Var indices commonly arise from
   // context depth shifts (e.g., a let-binding for a recursive call shifts all
@@ -244,6 +265,37 @@ function getVarTypeFromContext(ctx: TTKContext, varIndex: number): TTKTerm | und
   return binding?.type;
 }
 
+/**
+ * Normalize a constraint's RHS to a target context depth by shifting de Bruijn
+ * indices. This ensures constraints for the same meta use a consistent index
+ * scheme, making Var-vs-Var conflict detection a simple index comparison.
+ *
+ * Returns null if the constraint references inner-scope variables that cannot
+ * be shifted away (the constraint is "stuck" at its current depth).
+ */
+export function normalizeConstraintDepth(
+  constraint: Constraint,
+  targetContext: TTKContext
+): { normalized: Constraint; shifted: boolean } | null {
+  const depthDiff = constraint.ctx.length - targetContext.length;
+  if (depthDiff === 0) {
+    return { normalized: constraint, shifted: false };
+  }
+  if (depthDiff > 0) {
+    // Constraint from deeper context: shift down to target depth.
+    // Only safe if no free variables would go negative after shifting.
+    const minIdx = minFreeVarIndex(constraint.rhs);
+    if (minIdx < depthDiff) return null; // stuck: references inner-scope variables
+    const rhs = shiftTerm(constraint.rhs, -depthDiff, 0);
+    const rhsType = constraint.rhsType ? shiftTerm(constraint.rhsType, -depthDiff, 0) : undefined;
+    return { normalized: { ...constraint, rhs, rhsType, ctx: targetContext }, shifted: true };
+  }
+  // Constraint from shallower context: shift up to target depth.
+  const rhs = shiftTerm(constraint.rhs, -depthDiff, 0);
+  const rhsType = constraint.rhsType ? shiftTerm(constraint.rhsType, -depthDiff, 0) : undefined;
+  return { normalized: { ...constraint, rhs, rhsType, ctx: targetContext }, shifted: true };
+}
+
 export function solveConstraints(
   metaVars: Map<string, MetaVar>,
   constraints: Constraint[],
@@ -266,6 +318,56 @@ export function solveConstraints(
     // (with names like 'hole:f_type') which haven't been converted to Metas yet.
     if (!meta) continue;
 
+    // Determine the effective context for this meta. When liftContext is provided,
+    // it overrides the meta's creation context for scope checking.
+    const effectiveContext = liftContext ?? meta.ctx;
+
+    // Normalize the constraint's RHS to the effective context depth.
+    // This ensures all subsequent code can assume consistent de Bruijn indices.
+    const normResult = normalizeConstraintDepth(constraint, effectiveContext);
+    if (normResult === null) {
+      // Constraint references inner-scope variables that can't be shifted away.
+      // However, if the meta already has a solution, we can still detect structural
+      // conflicts (constructor head mismatches) using the original non-normalized terms,
+      // since constructor heads are depth-independent.
+      if (meta.solution !== undefined && meta.solution.tag !== 'Meta') {
+        // Resolve the constraint RHS through meta chains
+        let resolvedRhs = constraint.rhs;
+        while (resolvedRhs.tag === 'Meta') {
+          const rhsMeta = newMetaVars.get(resolvedRhs.id);
+          if (rhsMeta?.solution) {
+            resolvedRhs = rhsMeta.solution;
+          } else {
+            break;
+          }
+        }
+        // Check structural conflicts using original contexts (safe for constructor heads)
+        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, constraint.ctx)) {
+          const names = effectiveContext.map(c => c.name).reverse();
+          const metaTypeStr = prettyPrint(meta.type, names);
+          throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
+        }
+        // Try unification — may detect conflicts even when normalization can't shift
+        const unifyResult = unifyTerms(meta.solution, resolvedRhs, {
+          mode: 'pattern',
+          flexibleVars: true,
+          definitions,
+        });
+        if (!unifyResult.success) {
+          const names = effectiveContext.map(c => c.name).reverse();
+          const metaTypeStr = prettyPrint(meta.type, names);
+          throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
+        }
+        // Queue propagated sub-constraints from unification
+        for (const mc of unifyResult.metaConstraints) {
+          queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+        }
+      }
+      stillStuck.push(constraint);
+      continue;
+    }
+    const normConstraint = normResult.normalized;
+
     // If meta already has a solution, propagate the constraint through the solution.
     // This handles meta chains (e.g., _10 := Meta(_14), then _10 := Succ x → forward to _14)
     // and structural decomposition (e.g., _14 := Succ _12, then _14 := Succ x → _12 := x).
@@ -273,7 +375,7 @@ export function solveConstraints(
       // Resolve the constraint RHS through meta solutions so we compare concrete
       // terms, not Meta wrappers. E.g., if rhs is Meta(_7) and _7 is solved to Succ y,
       // we need to compare against Succ y, not Meta(_7).
-      let resolvedRhs = constraint.rhs;
+      let resolvedRhs = normConstraint.rhs;
       while (resolvedRhs.tag === 'Meta') {
         const rhsMeta = newMetaVars.get(resolvedRhs.id);
         if (rhsMeta?.solution) {
@@ -285,129 +387,113 @@ export function solveConstraints(
 
       if (meta.solution.tag === 'Meta') {
         // Forward constraint to the meta in the solution
-        queue.push({ ...constraint, meta: meta.solution.id, rhs: resolvedRhs });
+        queue.push({ ...normConstraint, meta: meta.solution.id, rhs: resolvedRhs });
       } else {
         // Check for definite structural conflicts (constructor head mismatches
         // or context-verified Var differences).
-        // Pass both contexts so Var-Var comparisons can use binding name lookup:
-        // meta.ctx is where the solution was assigned, constraint.ctx is where
-        // the new constraint was generated.
-        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, meta.ctx, constraint.ctx)) {
-          const solNames = meta.ctx.map(c => c.name).reverse();
-          const rhsNames = constraint.ctx.map(c => c.name).reverse();
-          const metaTypeStr = prettyPrint(meta.type, solNames);
-          throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, solNames)} but required to be ${prettyPrint(resolvedRhs, rhsNames)}`);
+        // After normalization, both solution and resolvedRhs are at effectiveContext depth.
+        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
+          const names = effectiveContext.map(c => c.name).reverse();
+          const metaTypeStr = prettyPrint(meta.type, names);
+          throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
         }
         // Var-vs-Var conflict detection.
-        // When both solution and rhs are Vars, they might represent different
-        // variables. We check both same-depth (different indices) and cross-depth
-        // (same index but different binding names) cases.
+        // After normalization, both solution and resolvedRhs are at effectiveContext
+        // depth, so different indices mean genuinely different variables — with guards:
         //
-        // Guards:
-        // - Meta type must not be an unsolved Meta (too early to check)
-        // - Meta type must not be Sort (Type-valued metas frequently get
-        //   conflicting Var constraints from pattern variable duplication in
-        //   with-clause auxiliaries — these are not real conflicts)
-        // - Both Vars' types must match the meta's type (prevents false positives
-        //   from imprecise constraint propagation through decomposition)
+        // 1. Both indices must be in-scope (< effectiveContext.length). A free variable
+        //    (index >= context length) references the outer scope and may alias a
+        //    captured variable at a different index.
+        //
+        // 2. The meta's type must not be Sort. In with-clause contexts, Type-valued
+        //    metas often get constraints from pattern wildcards that capture the same
+        //    type variable at different indices. Since these wildcards refer to the same
+        //    type, the index difference is a false positive.
+        //
+        // 3. The meta's type must not be an unsolved Meta (too early to check).
+        //    Resolve through solved metas first — the type might be Meta(?m0) where
+        //    ?m0 has been solved to Nat in this same pass.
+        let resolvedMetaType = meta.type;
+        while (resolvedMetaType.tag === 'Meta') {
+          const typeMeta = newMetaVars.get(resolvedMetaType.id);
+          if (typeMeta?.solution) {
+            resolvedMetaType = typeMeta.solution;
+          } else {
+            break;
+          }
+        }
         if (meta.solution.tag === 'Var' && resolvedRhs.tag === 'Var'
-          && meta.type.tag !== 'Meta' && meta.type.tag !== 'Sort') {
-          // Verify both Vars have types compatible with the meta type
-          const solType = getVarTypeFromContext(meta.ctx, meta.solution.index);
-          const rhsType = getVarTypeFromContext(constraint.ctx, resolvedRhs.index);
-          const metaIsConst = meta.type.tag === 'Const';
-          const solTypeMatches = !metaIsConst || !solType || (solType.tag === 'Const' && solType.name === (meta.type as any).name);
-          const rhsTypeMatches = !metaIsConst || !rhsType || (rhsType.tag === 'Const' && rhsType.name === (meta.type as any).name);
-
-          if (solTypeMatches && rhsTypeMatches) {
-            let isConflict = false;
-            if (meta.ctx.length === constraint.ctx.length) {
-              // Same depth: different indices mean genuinely different variables
-              if (meta.solution.index !== resolvedRhs.index) {
-                isConflict = true;
-              }
-            } else {
-              // Cross-depth: same index can refer to different variables.
-              // Look up binding names to distinguish.
-              const bindingSol = meta.ctx[meta.ctx.length - 1 - meta.solution.index];
-              const bindingRhs = constraint.ctx[constraint.ctx.length - 1 - resolvedRhs.index];
-              if (bindingSol && bindingRhs && bindingSol.name !== bindingRhs.name) {
-                isConflict = true;
-              }
-            }
-            if (isConflict) {
-              const solNames = meta.ctx.map(c => c.name).reverse();
-              const rhsNames = constraint.ctx.map(c => c.name).reverse();
-              const metaTypeStr = prettyPrint(meta.type, solNames);
-              throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, solNames)} but required to be ${prettyPrint(resolvedRhs, rhsNames)}`);
+          && meta.solution.index !== resolvedRhs.index
+          && resolvedMetaType.tag !== 'Meta'
+          && resolvedMetaType.tag !== 'Sort'
+          && meta.solution.index < effectiveContext.length
+          && resolvedRhs.index < effectiveContext.length) {
+          // Both variables must be named (non-wildcard) to be a real conflict.
+          // Pattern wildcards (?0, _x, etc.) are flexible — they represent pattern
+          // variables that may be unified, not rigid program variables.
+          const solBinding = effectiveContext[effectiveContext.length - 1 - meta.solution.index];
+          const rhsBinding = effectiveContext[effectiveContext.length - 1 - resolvedRhs.index];
+          const isWildcard = (name: string) => name.startsWith('?') || name.startsWith('_');
+          const solIsRigid = solBinding && !isWildcard(solBinding.name);
+          const rhsIsRigid = rhsBinding && !isWildcard(rhsBinding.name);
+          if (solIsRigid && rhsIsRigid) {
+            // Type compatibility guard: only flag as a conflict if both Vars have
+            // types that match the meta's type. This prevents false positives from
+            // imprecise constraint propagation where a Var with a mismatched type
+            // (e.g., a Type-valued wildcard) gets propagated as a solution for a
+            // Nat-valued meta.
+            const solType = getVarTypeFromContext(effectiveContext, meta.solution.index);
+            const rhsType = getVarTypeFromContext(effectiveContext, resolvedRhs.index);
+            const metaIsConst = resolvedMetaType.tag === 'Const';
+            const solTypeMatches = !metaIsConst || !solType || (solType.tag === 'Const' && solType.name === (resolvedMetaType as any).name);
+            const rhsTypeMatches = !metaIsConst || !rhsType || (rhsType.tag === 'Const' && rhsType.name === (resolvedMetaType as any).name);
+            if (solTypeMatches && rhsTypeMatches) {
+              const names = effectiveContext.map(c => c.name).reverse();
+              const metaTypeStr = prettyPrint(resolvedMetaType, names);
+              throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
             }
           }
         }
         // Use pattern mode unification for meta decomposition and propagation.
         // E.g., if solution is Succ(?m) and rhs is Succ(x), this creates ?m := x.
-        // Pattern mode with flexibleVars is permissive about Var-Var differences,
-        // which is needed because the same variable may have different de Bruijn
-        // indices in the solution vs RHS due to context depth differences.
+        // Both sides are at effectiveContext depth after normalization.
         const unifyResult = unifyTerms(meta.solution, resolvedRhs, {
           mode: 'pattern',
           flexibleVars: true,
           definitions,
         });
         if (!unifyResult.success) {
-          const solNames = meta.ctx.map(c => c.name).reverse();
-          const rhsNames = constraint.ctx.map(c => c.name).reverse();
-          const metaTypeStr = prettyPrint(meta.type, solNames);
-          throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, solNames)} but required to be ${prettyPrint(resolvedRhs, rhsNames)}`);
+          const names = effectiveContext.map(c => c.name).reverse();
+          const metaTypeStr = prettyPrint(meta.type, names);
+          throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
         }
-        // Queue any new meta constraints from the unification
+        // Queue any new meta constraints from the unification.
+        // These inherit effectiveContext as their ctx — when dequeued, they'll
+        // be re-normalized to the TARGET meta's effective context.
         for (const mc of unifyResult.metaConstraints) {
-          queue.push({ ...constraint, meta: mc.meta, rhs: mc.rhs });
+          queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
         }
       }
       continue;
     }
 
-    // When liftContext is provided, use it for the scope check.
-    // This allows solving constraints where the RHS references variables
-    // that weren't in scope when the meta was created, but are in the current context.
-    const effectiveContext = liftContext ?? meta.ctx;
-
-    if (canSolveMetaInContext(constraint.rhs, effectiveContext.length)) {
-      // Adjust RHS de Bruijn indices when constraint comes from a deeper context
-      // than the meta's context. This happens when constraints are generated inside
-      // lambda bodies (deeper context) for metas created in the outer scope.
-      // The extra inner bindings shift outer variable indices up, so we shift back
-      // down to align with the meta's context. This ensures the stored solution uses
-      // indices consistent with the meta's context, enabling proper occurs-check
-      // detection when later constraints reference the same variables.
-      const depthDiff = constraint.ctx.length - effectiveContext.length;
-      let adjustedRhs = constraint.rhs;
-      if (depthDiff > 0) {
-        // Constraint from deeper context: shift down
-        // Only safe if no free vars would go negative
-        const minIdx = minFreeVarIndex(constraint.rhs);
-        if (minIdx >= depthDiff) {
-          adjustedRhs = shiftTerm(constraint.rhs, -depthDiff, 0);
-        }
-      } else if (depthDiff < 0) {
-        // Constraint from shallower context: shift up
-        adjustedRhs = shiftTerm(constraint.rhs, -depthDiff, 0);
-      }
+    // No solution yet: try to solve
+    if (canSolveMetaInContext(normConstraint.rhs, effectiveContext.length)) {
       // Type compatibility check: if rhs is a Var, check that its type is compatible
       // with the meta's type. This catches cases where an inductive has {A : Type}
       // but a constructor has {A : Type u} with a bound level variable.
-      if (adjustedRhs.tag === 'Var') {
-        const rhsType = getVarTypeFromContext(constraint.ctx, adjustedRhs.index);
+      if (normConstraint.rhs.tag === 'Var') {
+        const rhsType = getVarTypeFromContext(effectiveContext, normConstraint.rhs.index);
         if (rhsType) {
           const typeError = checkTypeCompatibility(meta.type, rhsType);
           if (typeError) {
-            throw new Error(`Type mismatch for meta ${constraint.meta}: ${typeError}`);
+            throw new Error(`Type mismatch for meta ${normConstraint.meta}: ${typeError}`);
           }
         }
       }
-      newMetaVars.set(constraint.meta, { ...meta, solution: adjustedRhs, ctx: effectiveContext });
+      newMetaVars.set(normConstraint.meta, { ...meta, solution: normConstraint.rhs, ctx: effectiveContext });
     } else {
-      stillStuck.push(constraint);
+      stillStuck.push(constraint); // original constraint, retains original ctx for future attempts
     }
   }
 

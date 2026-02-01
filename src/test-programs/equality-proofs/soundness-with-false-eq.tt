@@ -1,0 +1,16 @@
+-- @test failure
+-- @name "soundness: with-clause cannot prove false equality"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- This tries to use a with-clause to construct a false equality
+bad : Equal True False
+bad with True
+  | True => refl

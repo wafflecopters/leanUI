@@ -1,0 +1,17 @@
+-- @test failure
+-- @name "soundness: with-clause must respect scrutinee type"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- Trying to match on a Nat with Bool constructors via with
+bad : Nat -> Nat
+bad n with n
+  | True => Zero
+  | False => Succ Zero

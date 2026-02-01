@@ -1,0 +1,10 @@
+-- @test failure
+-- @name "soundness: refl cannot prove x = y for distinct variables"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+bad : (x y : Nat) -> Equal x y
+bad x y = refl

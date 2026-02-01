@@ -1,0 +1,15 @@
+-- @test failure
+-- @name "soundness: lambda with wrong return type should be rejected"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- A function claiming to produce Bool but returning a Nat
+bad : Nat -> Bool
+bad = \x => x

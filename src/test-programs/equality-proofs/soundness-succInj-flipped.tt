@@ -1,0 +1,13 @@
+-- @test success
+-- @name "soundness: succInj with flipped Equal q p is valid (refl unifies p and q)"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Matching refl on Equal (Succ p) (Succ q) unifies p ~ q,
+-- so Equal q p becomes Equal p p, which refl proves.
+-- This is standard in Agda/Lean.
+succInj : {p q : Nat} -> Equal (Succ p) (Succ q) -> Equal q p
+succInj refl = refl

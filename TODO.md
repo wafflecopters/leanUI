@@ -95,6 +95,41 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
   - [ ] Implement axiom K prevention (no deletion rule)
   - [ ] Prevent self-unification to avoid weakK
 
+## Constraint Solver Hardening
+
+The soundness work on implicit argument conflict detection revealed several architectural improvements that would make the constraint solver more robust and simpler. Currently, constraints arrive at whatever context depth they were generated, and the solver does ad-hoc `depthDiff` shifting — this is the root cause of most complexity in conflict detection.
+
+- [ ] **Normalize constraints to meta's creation depth before solving** (Priority 1)
+  - All constraints for a given meta should be shifted to the meta's creation depth *before* entering the solver
+  - This eliminates the need for `depthDiff` adjustment inside `solveConstraints`
+  - Same-depth Var-Var conflict detection becomes trivial (just compare indices)
+  - Cross-depth name-based heuristics become unnecessary
+  - Key files: `meta.ts` (solveConstraints), `term.ts` (withConstraint)
+
+- [ ] **Store richer constraint provenance**
+  - Constraints currently carry `{ meta, rhs, ctx }` — add a `source` field
+  - Sources: `'conv'` (CONV check), `'ctor-arg'` (constructor matching), `'propagated'` (decomposition)
+  - The solver can weight constraints differently (propagated constraints are less reliable)
+  - Would eliminate the need for Sort-type exclusion heuristic in Var conflict check
+
+- [ ] **Post-solving zonk-then-check pass**
+  - After all constraints are solved, zonk (substitute solved metas) into all constraint RHS values
+  - Then do a final definitional equality check with full reduction
+  - This is the standard Lean/Agda approach and is more principled than incremental checking
+  - Avoids partial-zonking issues since ALL metas are solved first
+  - See also `zonk_checking_plan.md` for related work
+
+- [ ] **Separate pattern-variable contexts from rigid contexts**
+  - Track which context bindings came from pattern matching vs. lambdas/pi-binders
+  - Pattern variables may be substitutable; rigid variables are not
+  - Would prevent false positives in with-clause auxiliaries where pattern vars get duplicated
+
+- [ ] **Unify Var-Var conflict detection into a single function**
+  - Currently split between `areTermsDefinitelyDifferent` (inside constructor args only)
+    and the constraint solver's inline Var check
+  - A single well-tested `areVarsDefinitelyDifferent(varA, ctxA, varB, ctxB)` function
+    would reduce bug surface area
+
 ## Exploration
 
 - [ ] Tactics exploration

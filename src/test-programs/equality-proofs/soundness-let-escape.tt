@@ -1,0 +1,14 @@
+-- @test failure
+-- @name "soundness: let-bound variable should not escape its scope"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- A let-binding should not allow type confusion
+bad : Bool
+bad = let x : Nat = Zero in x

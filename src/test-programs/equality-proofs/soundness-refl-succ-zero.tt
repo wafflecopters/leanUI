@@ -1,0 +1,10 @@
+-- @test failure
+-- @name "soundness: refl cannot prove Succ Zero = Zero"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+bad : Equal (Succ Zero) Zero
+bad = refl

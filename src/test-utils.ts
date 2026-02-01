@@ -3,7 +3,7 @@
  * Provides helper functions for testing the compilation pipeline.
  */
 
-import { compileTTFromText, CompileResult, CompiledBlock, CompiledDeclaration } from './compiler/compile';
+import { compileTTFromText, CompileResult, CompiledBlock, CompiledDeclaration, CompileOptions } from './compiler/compile';
 
 /**
  * Block check result - a simplified view of compilation results for tests.
@@ -29,8 +29,8 @@ export interface TestBlockResult {
  * Compile source code and return test-friendly results.
  * This is a wrapper around compileTTFromText that provides a simpler interface.
  */
-export function compileSource(source: string): TestBlockResult[] {
-  const result = compileTTFromText(source);
+export function compileSource(source: string, options?: CompileOptions): TestBlockResult[] {
+  const result = compileTTFromText(source, options);
   return result.blocks.map(block => blockToTestResult(block));
 }
 

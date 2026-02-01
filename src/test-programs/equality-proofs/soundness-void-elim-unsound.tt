@@ -1,0 +1,12 @@
+-- @test failure
+-- @name "soundness: cannot construct element of Void"
+
+inductive Void : Type where
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Should not be possible to create a Void
+bad : Void
+bad = bad

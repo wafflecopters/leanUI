@@ -1,0 +1,26 @@
+-- @test failure
+-- @name "soundness: transport with wrong equality should be rejected"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive Void : Type where
+
+-- transport should work with matching types
+transport : {A B : Type} -> Equal A B -> A -> B
+transport refl x = x
+
+-- But we should not be able to use transport to turn Nat into Bool
+-- because Equal Nat Bool is uninhabited
+natToBool : Equal Nat Bool -> Nat -> Bool
+natToBool eq n = transport eq n
+
+-- The real test: can we CONSTRUCT Equal Nat Bool?
+bad : Equal Nat Bool
+bad = refl

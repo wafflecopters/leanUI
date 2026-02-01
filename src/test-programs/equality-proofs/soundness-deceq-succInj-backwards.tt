@@ -1,6 +1,7 @@
 -- @test failure
--- @name "soundness: succInj with backwards Equal q p should be rejected"
+-- @name "soundness: decEqNat using flipped succInj gives wrong equality direction"
 -- @import preambles/equality.tt
+-- @error "conflict"
 
 inductive Nat : Type where
   Zero : Nat
@@ -12,9 +13,11 @@ inductive DecEq : Nat -> Nat -> Type where
   Yes : {m n : Nat} -> Equal m n -> DecEq m n
   No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
 
+-- succInj with flipped result is valid on its own...
 succInj : {p q : Nat} -> Equal (Succ p) (Succ q) -> Equal q p
 succInj refl = refl
 
+-- ...but using it here gives Equal y x, while neq expects Equal x y
 decEqNat : (x y : Nat) -> DecEq x y
 decEqNat (Succ x) (Succ y) with decEqNat x y
   | No neq => No (\eq => neq (succInj eq))

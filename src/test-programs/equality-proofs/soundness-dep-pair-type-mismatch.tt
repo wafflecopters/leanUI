@@ -1,0 +1,22 @@
+-- @test failure
+-- @name "soundness: dependent pair with mismatched types should be rejected"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+inductive DPair : (A : Type) -> (B : A -> Type) -> Type where
+  MkDPair : {A : Type} -> {B : A -> Type} -> (a : A) -> B a -> DPair A B
+
+-- isZero should return Bool for a given Nat
+isZero : Nat -> Type
+isZero Zero = Bool
+isZero (Succ _) = Nat
+
+-- This should fail: True is Bool, not Nat, so it doesn't satisfy isZero (Succ Zero) = Nat
+bad : DPair Nat isZero
+bad = MkDPair (Succ Zero) True

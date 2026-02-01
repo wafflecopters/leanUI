@@ -1,0 +1,17 @@
+-- @test failure
+-- @name "soundness: subst with flipped predicate should be rejected"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Standard subst
+subst : {A : Type} -> {a b : A} -> {P : A -> Type} -> Equal a b -> P a -> P b
+subst refl pa = pa
+
+-- Can we use subst to prove something false?
+-- If we have p : P a and eq : Equal a b, we should get P b, not P a
+-- But what if we supply the wrong predicate?
+bad : {A : Type} -> {a b : A} -> Equal a b -> a -> b
+bad eq x = subst eq x

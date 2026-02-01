@@ -1,0 +1,16 @@
+-- @test failure
+-- @name "soundness: congruence with non-matching function should be rejected"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- cong : if a = b then f a = f b (for same f)
+cong : {A B : Type} -> {a b : A} -> (f : A -> B) -> Equal a b -> Equal (f a) (f b)
+cong f refl = refl
+
+-- Trying to use cong to prove Succ Zero = Zero by applying different functions
+-- This should fail because the equality requires f a = f b, not f a = g b
+bad : Equal (Succ Zero) Zero
+bad = cong Succ refl

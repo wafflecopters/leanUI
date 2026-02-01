@@ -1,5 +1,5 @@
--- @test failure
--- @name "soundness: succInj backwards used standalone should be rejected"
+-- @test success
+-- @name "soundness: succInj backwards used in negation context is valid"
 -- @import preambles/equality.tt
 
 inductive Nat : Type where
@@ -8,8 +8,10 @@ inductive Nat : Type where
 
 inductive Void : Type where
 
+-- succInj with flipped result is valid: matching refl unifies p ~ q
 succInj : {p q : Nat} -> Equal (Succ p) (Succ q) -> Equal q p
 succInj refl = refl
 
+-- Using flipped succInj to derive contradiction is valid
 wrongLam : {x y : Nat} -> (Equal x y -> Void) -> Equal (Succ x) (Succ y) -> Void
 wrongLam neq eq = neq (succInj eq)

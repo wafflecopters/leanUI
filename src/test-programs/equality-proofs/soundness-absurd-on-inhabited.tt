@@ -1,0 +1,14 @@
+-- @test failure
+-- @name "soundness: absurd on inhabited type should be rejected"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- Cannot use #absurd when the argument type IS inhabited
+bad : Nat -> Bool
+bad n = #absurd

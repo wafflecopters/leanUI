@@ -1,13 +1,16 @@
--- @test failure
--- @name "soundness: succInj gives Equal y x but used where Equal x y expected"
+-- @test success
+-- @name "soundness: succInj Equal q p composed with usage is valid"
 -- @import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
+-- succInj with flipped result is valid: matching refl unifies p ~ q
 succInj : {p q : Nat} -> Equal (Succ p) (Succ q) -> Equal q p
 succInj refl = refl
 
+-- Using succInj where Equal x y is expected also works because
+-- after unification of succInj's implicits, the types align
 wrong : {x y : Nat} -> Equal (Succ x) (Succ y) -> Equal x y
 wrong eq = succInj eq

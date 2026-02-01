@@ -1,0 +1,15 @@
+-- @test failure
+-- @name "soundness: sym should not produce refl for distinct vars"
+-- @import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Correct sym
+sym : {A : Type} -> {a b : A} -> Equal a b -> Equal b a
+sym refl = refl
+
+-- Attempting to prove x = y from nothing, using sym
+bad : (x y : Nat) -> Equal x y
+bad x y = sym refl

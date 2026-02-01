@@ -22,7 +22,7 @@ import { elabToKernel, defaultRecordConstructorName } from './elab';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
-import { desugarWithClauses } from './with-desugar';
+import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
 import type { TypeInfoMap } from './type-info';
 export type { TotalityResult, CaseTree };
@@ -1391,6 +1391,101 @@ function collectConstructorParamNames(compiledBlocks: CompiledBlock[]): Construc
 }
 
 // ============================================================================
+// Compile Options
+// ============================================================================
+
+export interface CompileOptions {
+  /** After zonking, re-check zonked terms in a fresh TCEnv with no metas. */
+  recheckZonkedTerms?: boolean;
+}
+
+// ============================================================================
+// Zonked Term Rechecking
+// ============================================================================
+
+/**
+ * Check that a zonked term contains no leftover Meta or Hole nodes.
+ * This validates that zonking was complete — all metas were solved and substituted.
+ *
+ * Skips Match nodes (pattern-match compilation output) since Match nodes
+ * are trusted compilation output that may contain internal metas.
+ */
+
+/**
+ * Check if a term contains a reference to the given name (Const node).
+ * Used to detect self-references in simple (non-pattern-matching) definitions.
+ */
+function containsSelfReference(term: TTKTerm, name: string): boolean {
+  switch (term.tag) {
+    case 'Const': return term.name === name;
+    case 'App': return containsSelfReference(term.fn, name) || containsSelfReference(term.arg, name);
+    case 'Binder': return containsSelfReference(term.domain, name) || containsSelfReference(term.body, name);
+    case 'Sort': return containsSelfReference(term.level, name);
+    case 'Annot': return containsSelfReference(term.term, name) || containsSelfReference(term.type, name);
+    case 'Match': return term.clauses.some(c => containsSelfReference(c.rhs, name));
+    default: return false;
+  }
+}
+
+function recheckZonkedTerm(
+  term: TTKTerm,
+  _definitions: DefinitionsMap,
+  label: string,
+): void {
+  // Skip Match values — trusted compilation output
+  if (term.tag === 'Match') return;
+
+  const leftoverMetas: string[] = [];
+  const leftoverHoles: string[] = [];
+
+  function walk(t: TTKTerm): void {
+    switch (t.tag) {
+      case 'Meta':
+        leftoverMetas.push(t.id);
+        break;
+      case 'Hole':
+        // Holes that start with ? are user-written holes (?todo etc) — those are fine
+        if (!t.id.startsWith('?')) {
+          leftoverHoles.push(t.id);
+        }
+        break;
+      case 'App':
+        walk(t.fn);
+        walk(t.arg);
+        break;
+      case 'Binder':
+        walk(t.domain);
+        walk(t.body);
+        break;
+      case 'Sort':
+        walk(t.level);
+        break;
+      case 'Annot':
+        walk(t.term);
+        walk(t.type);
+        break;
+      case 'Match':
+        // Skip Match internals — trusted compilation output
+        break;
+      // Var, Const, ULevel, ULit, UOmega — leaf nodes, nothing to check
+    }
+  }
+
+  walk(term);
+
+  if (leftoverMetas.length > 0) {
+    throw new Error(
+      `Zonk recheck failed for ${label}: ${leftoverMetas.length} unsolved meta(s) remaining: ${leftoverMetas.join(', ')}`
+    );
+  }
+  if (leftoverHoles.length > 0) {
+    throw new Error(
+      `Zonk recheck failed for ${label}: ${leftoverHoles.length} unresolved hole(s) remaining: ${leftoverHoles.join(', ')}`
+    );
+  }
+}
+
+// ============================================================================
 // Type Checking Functions
 // ============================================================================
 
@@ -1907,6 +2002,20 @@ function checkTermDeclaration(
         }
         // Zonk the value to substitute solved metas with their solutions
         const zonkedValue = solvedResult.zonkTerm(solvedResult.value);
+
+        // Check for self-reference in non-pattern-matching definitions.
+        // A simple definition `f = expr` with `f` appearing in `expr` is always
+        // non-terminating since there's no structural decrease without pattern matching.
+        if (decl.name && containsSelfReference(zonkedValue, decl.name)) {
+          return {
+            success: false, errors: [
+              TCEnvError.create(
+                `Definition '${decl.name}' is non-terminating: simple definitions cannot be recursive. Use pattern matching for recursive definitions.`,
+                termEnv
+              )
+            ]
+          };
+        }
 
         const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, zonkedValue);
         return { success: true, definitions: resultEnv.definitions, checkedValue: zonkedValue, zonkedType: zonkedKernelType };
@@ -3099,9 +3208,10 @@ function processTermDeclaration(
  * @param source - The full source code
  * @returns CompileResult with elaborated declarations
  */
-export function compileTTFromText(source: string): CompileResult {
-  // Reset wildcard counter for fresh compilation
+export function compileTTFromText(source: string, options?: CompileOptions): CompileResult {
+  // Reset counters for fresh compilation
   resetWildcardCounter();
+  resetWithCounter();
 
   // 1. Parse the source file
   const parseResult = parseTTSource(source);
@@ -3281,6 +3391,12 @@ export function compileTTFromText(source: string): CompileResult {
             }
             setConstructorParamNames(constructorParamNames);
           }
+          // Recheck zonked constructor types if enabled
+          if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
+            for (const ctor of result.compiled.kernelConstructors) {
+              recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+            }
+          }
         }
         totalCheckErrors += result.errorCount;
       } else if (mainDecl.kind === 'record') {
@@ -3297,6 +3413,12 @@ export function compileTTFromText(source: string): CompileResult {
               constructorParamNames.set(ctorName, paramInfo);
             }
             setConstructorParamNames(constructorParamNames);
+          }
+          // Recheck zonked constructor types if enabled
+          if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
+            for (const ctor of result.compiled.kernelConstructors) {
+              recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+            }
           }
         }
         totalCheckErrors += result.errorCount;
@@ -3337,6 +3459,14 @@ export function compileTTFromText(source: string): CompileResult {
 
         if (result.success) {
           definitions = result.newDefinitions;
+          // Recheck zonked type signature if enabled
+          if (options?.recheckZonkedTerms && result.compiled.kernelType) {
+            recheckZonkedTerm(result.compiled.kernelType, definitions, `${mainDecl.name} type signature`);
+          }
+          // Recheck zonked value if enabled (skip Match values)
+          if (options?.recheckZonkedTerms && result.compiled.kernelValue) {
+            recheckZonkedTerm(result.compiled.kernelValue, definitions, `${mainDecl.name} value`);
+          }
         }
         totalCheckErrors += result.errorCount;
       }

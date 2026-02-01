@@ -417,13 +417,17 @@ inductive DecEq : Nat -> Nat -> Type where
   Yes : {m n : Nat} -> Equal m n -> DecEq m n
   No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
 
+
+succInj : {j k : Nat} -> Equal (Succ j) (Succ k) -> Equal j k
+succInj refl = refl
+
 decEqNat : (x y : Nat) -> DecEq x y
 decEqNat Zero Zero = Yes refl
 decEqNat Zero (Succ y) = No zeroNeqSucc
 decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
 decEqNat (Succ x) (Succ y) with decEqNat x y
-  | Yes eq => ?todo
-  | No neq => No (\\eq => neq eq)
+  | Yes eq => Yes (cong eq)
+  | No neq => No (\\eq => neq (succInj eq))
 `;
 
 // Styles
@@ -897,7 +901,7 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
 
   return (
     <div style={styles.blockCard}>
-      {block.declarations.filter(d => !d.isWithAuxiliary).map((decl, i) => {
+      {block.declarations.map((decl, i) => {
         // Extract param/index info for inductive types
         const paramIndexInfo = decl.kind === 'inductive'
           ? extractParamIndexInfo(decl.kernelType, decl.indexPositions)
