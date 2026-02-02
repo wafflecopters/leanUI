@@ -28,6 +28,11 @@ import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, Tactic } from '../tactics/tactic';
 import { CasesTactic } from '../tactics/cases-tactic';
+import { ReflexivityTactic } from '../tactics/reflexivity-tactic';
+import { InductionTactic } from '../tactics/induction-tactic';
+import { RewriteTactic } from '../tactics/rewrite-tactic';
+import { SymmetryTactic } from '../tactics/symmetry-tactic';
+import { TransitivityTactic } from '../tactics/transitivity-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 export type { TotalityResult, CaseTree };
 
@@ -1304,6 +1309,39 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       // args[0] is a TTKTerm at this point (elaborated by caller)
       return new CasesTactic(cmd.args[0] as TTKTerm);
 
+    case 'induction':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'induction' tactic requires exactly 1 argument, got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new InductionTactic(cmd.args[0] as TTKTerm);
+
+    case 'reflexivity':
+      if (cmd.args.length !== 0) {
+        throw new Error(`'reflexivity' tactic requires no arguments, got ${cmd.args.length}`);
+      }
+      return new ReflexivityTactic();
+
+    case 'rewrite':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'rewrite' tactic requires exactly 1 argument (an equality proof), got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new RewriteTactic(cmd.args[0] as TTKTerm);
+
+    case 'symmetry':
+      if (cmd.args.length !== 0) {
+        throw new Error(`'symmetry' tactic requires no arguments, got ${cmd.args.length}`);
+      }
+      return new SymmetryTactic();
+
+    case 'transitivity':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'transitivity' tactic requires exactly 1 argument (middle term), got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new TransitivityTactic(cmd.args[0] as TTKTerm);
+
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);
   }
@@ -1425,8 +1463,8 @@ function elaborateTacticBlock(
 
     engine = result.newEngine;
 
-    // Handle structured cases: if cmd has caseBranches, apply each branch's tactics to matching goals
-    if (cmd.name === 'cases' && (cmd as any).caseBranches) {
+    // Handle structured cases/induction: if cmd has caseBranches, apply each branch's tactics to matching goals
+    if ((cmd.name === 'cases' || cmd.name === 'induction') && (cmd as any).caseBranches) {
       const caseBranches = (cmd as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
 
       for (const branch of caseBranches) {

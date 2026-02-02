@@ -14,13 +14,6 @@ weakK A a P p refl = p
     const result = compileTTFromText(source, { assumeK: false });
     const weakKDecl = result.blocks.flatMap(b => (b as any).declarations).find((d: any) => d?.name === 'weakK');
 
-    console.log('\n=== WEAKK WITHOUT K ===');
-    console.log('checkSuccess:', weakKDecl?.checkSuccess);
-
-    if (weakKDecl?.checkErrors) {
-      console.log('Errors:', weakKDecl.checkErrors.map((e: any) => e.message));
-    }
-
     // Should fail with deletion rule error
     expect(weakKDecl?.checkSuccess).toBe(false);
     const hasKError = weakKDecl?.checkErrors?.some((e: any) =>

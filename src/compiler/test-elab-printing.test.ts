@@ -19,16 +19,9 @@ inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
     const reflCtor = equalDecl?.kernelConstructors?.find((c: any) => c.name === 'refl');
     const reflKernelType = reflCtor?.type;
 
-    console.log('\n=== ELABORATION PRINTING TEST ===');
-    console.log('kernelType:', JSON.stringify(kernelType, null, 2).slice(0, 500));
-    console.log('reflKernelType:', JSON.stringify(reflKernelType, null, 2).slice(0, 500));
-
     // Now get the pretty-printed strings using prettyPrintFormatted (what the UI uses)
     const elabTypeStr = kernelType ? prettyPrintFormatted(kernelType, []) : '';
     const reflTypeStr = reflKernelType ? prettyPrintFormatted(reflKernelType, []) : '';
-
-    console.log('Type:', elabTypeStr);
-    console.log('refl:', reflTypeStr);
 
     // The type should contain "Type u", not "Type #0"
     expect(elabTypeStr).toContain('Type u');
@@ -57,11 +50,7 @@ inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
     const elabTypeStr = kernelType ? prettyPrintFormatted(kernelType, []) : '';
     const reflTypeStr = reflKernelType ? prettyPrintFormatted(reflKernelType, []) : '';
 
-    console.log('\n=== FORMATTED PRINTING TEST ===');
-    console.log('Type:', elabTypeStr);
-    console.log('refl:', reflTypeStr);
-
-    // Should contain "Type u", not "Type #0" (THIS IS THE BUG)
+    // Should contain "Type u", not "Type #0"
     expect(elabTypeStr).toContain('Type u');
     expect(elabTypeStr).not.toContain('Type #0');
 

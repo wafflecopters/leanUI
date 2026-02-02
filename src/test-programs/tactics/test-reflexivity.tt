@@ -1,0 +1,8 @@
+@test success
+@name "reflexivity tactic proves n = n"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+natRefl : (n : Nat) -> Equal n n := by
+  intro n
+  reflexivity
