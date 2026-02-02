@@ -1,0 +1,16 @@
+@test success
+@name "plusAssoc: (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+-- Associativity: plus (plus n m) p = plus n (plus m p)
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+plusAssoc Zero m p = refl
+plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)

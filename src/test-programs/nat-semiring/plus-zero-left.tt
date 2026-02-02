@@ -1,0 +1,21 @@
+@test success
+@name "plusZeroLeft: (n : Nat) -> Equal (plus Zero n) n"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Define plus (addition) recursively on first argument
+-- plus Zero m = m
+-- plus (Succ n) m = Succ (plus n m)
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Proof 1: plusZeroLeft (trivial by computation)
+-- plus Zero n = n by definition
+plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n := by
+  intro n
+  reflexivity
+
+-- Direct proof term version
+plusZeroLeftDirect : (n : Nat) -> Equal (plus Zero n) n
+plusZeroLeftDirect n = refl

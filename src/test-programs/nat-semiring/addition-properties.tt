@@ -1,0 +1,27 @@
+@test success
+@name "Addition properties: plusZeroLeft, plusZeroRight, plusSuccRight"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Define plus (addition) recursively on first argument
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Helper: congruence for Succ
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+-- Property 1: plus Zero n = n (trivial by definition)
+plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n
+plusZeroLeft n = refl
+
+-- Property 2: plus n Zero = n (requires induction)
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+-- Property 3: plus n (Succ m) = Succ (plus n m) (helper for commutativity)
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)

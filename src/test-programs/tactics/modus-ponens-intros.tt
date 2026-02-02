@@ -1,9 +1,8 @@
-@test failure
-@name "modusPonens with apply (WIP - known bug)"
-@error "Zonk recheck"
+@test success
+@name "modusPonens with apply"
 
--- TODO: Known issue with de Bruijn indexing in dependent contexts
--- Simpler tactics tests work fine (see simple-id.tt and test-apply.tt)
+-- Tests that implicit type arguments work correctly with apply tactic
+-- Previously had de Bruijn indexing issues in dependent contexts, now fixed!
 modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
   intros A B a f
   apply f

@@ -1,0 +1,37 @@
+@test success
+@name "plusComm: (n m : Nat) -> Equal (plus n m) (plus m n)"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
+
+-- Symmetry lemma
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+-- Transitivity lemma
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+-- Commutativity: plus n m = plus m n
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
+plusComm Zero m = sym (plusZeroRight m)
+plusComm (Succ n) m =
+  -- Goal: Equal (Succ (plus n m)) (plus m (Succ n))
+  -- By IH: plus n m = plus m n
+  -- By plusSuccRight: plus m (Succ n) = Succ (plus m n)
+  -- So: Succ (plus n m) = Succ (plus m n) = plus m (Succ n)
+  trans (congSucc (plusComm n m)) (sym (plusSuccRight m n))

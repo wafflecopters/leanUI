@@ -1,0 +1,64 @@
+@test success
+@name "Multiplication properties: mulZeroLeft, mulZeroRight, mulOneLeft, mulOneRight"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Define multiplication recursively on first argument
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+-- Congruence for plus
+congPlusLeft : {n m p : Nat} -> Equal n m -> Equal (plus n p) (plus m p)
+congPlusLeft refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
+
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
+plusComm Zero m = sym (plusZeroRight m)
+plusComm (Succ n) m = trans (congSucc (plusComm n m)) (sym (plusSuccRight m n))
+
+-- mul Zero n = Zero (by definition)
+mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero
+mulZeroLeft n = refl
+
+-- mul n Zero = Zero (by induction)
+mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero
+mulZeroRight Zero = refl
+mulZeroRight (Succ n) = mulZeroRight n
+
+-- Define One as Succ Zero
+one : Nat
+one = Succ Zero
+
+-- mul One n = n
+mulOneLeft : (n : Nat) -> Equal (mul one n) n
+mulOneLeft n = plusZeroRight n
+
+-- mul n One = n (by induction)
+mulOneRight : (n : Nat) -> Equal (mul n one) n
+mulOneRight Zero = refl
+mulOneRight (Succ n) =
+  -- Goal: Equal (plus one (mul n one)) one
+  -- By IH: mul n one = n
+  -- plus one n = Succ n by definition
+  congSucc (mulOneRight n)

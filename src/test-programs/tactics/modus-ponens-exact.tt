@@ -1,9 +1,8 @@
-@test failure
-@name "modusPonens with direct exact (WIP - known bug)"
-@error "Zonk recheck"
+@test success
+@name "modusPonens with direct exact"
 
--- TODO: Same de Bruijn indexing issue with implicit arguments
--- Simpler version without implicits works (see modus-ponens-simple.tt)
+-- Tests that implicit type arguments can be introduced and used correctly in tactics
+-- Previously had de Bruijn indexing issues, now fixed!
 modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
   intros A B a f
   exact (f a)
