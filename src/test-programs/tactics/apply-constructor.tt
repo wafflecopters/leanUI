@@ -1,0 +1,12 @@
+@test success
+@name "apply constructor with implicit args"
+@import preambles/nat.tt
+@import preambles/list.tt
+
+-- Stress test: apply a constructor that has implicit type args
+-- Cons : {A : Type} -> A -> List A -> List A
+singleton : Nat -> List Nat := by
+  intro n
+  apply Cons
+  exact n
+  exact Nil

@@ -46,7 +46,7 @@ weakK P p (refl {A:=x} {a:=y}) = p
     expect(weakKDecl?.checkSuccess).toBe(true);
   });
 
-  test.skip('WeakK WITH explicit universe params (zonk recheck)', () => {
+  test('WeakK WITH explicit universe params (zonk recheck)', () => {
     const source = `@assumeK=true
 
 inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where

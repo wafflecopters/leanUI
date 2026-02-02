@@ -1,0 +1,17 @@
+@test success
+@name "nth on List using tactics with implicits"
+@import preambles/nat.tt
+@import preambles/list.tt
+@import preambles/maybe.tt
+
+-- Key stress test: implementing nth using tactics
+-- This exercises case splits on types with implicit params (List, Maybe)
+-- and building terms with implicit constructors (Just, Nothing)
+nth : List Nat -> Nat -> Maybe Nat := by
+  intros xs n
+  cases xs with
+  | Nil => exact Nothing
+  | Cons x rest =>
+    cases n with
+    | Zero => exact (Just x)
+    | Succ m => exact Nothing

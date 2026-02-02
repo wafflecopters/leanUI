@@ -58,19 +58,25 @@ export class CasesTactic implements Tactic {
         };
       }
 
-      // 5. For each constructor, create a branch meta
+      // 5. For each constructor, create a branch meta and collect pattern info
       const branchMetas: Array<{
         id: string;
         ctor: string;
         meta: MetaVar;
+        explicitParamNames: string[];
       }> = [];
+
+      // Extract type arguments from scrutinee type (e.g., Nat from List Nat)
+      const typeArgs = this.extractTypeArgs(scrutineeTypeWhnf);
 
       for (const ctor of inductiveDef.constructors) {
         // Extend context with constructor parameters
-        const branchCtx = this.extendContextWithCtorParams(
+        const numImplicit = ctor.namedArgMap?.size ?? 0;
+        const { ctx: branchCtx, paramNames } = this.extendContextWithCtorParams(
           goal.ctx,
           ctor.type,
-          this.scrutinee
+          numImplicit,
+          typeArgs
         );
 
         // Create meta for this branch
@@ -82,15 +88,13 @@ export class CasesTactic implements Tactic {
           caseTag: ctor.name // Tag with constructor name for structured cases
         };
 
-        branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta });
+        branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta, explicitParamNames: paramNames });
       }
 
-      // 6. Build eliminator/matcher application
-      // For now, we'll build a simple match expression
-      const elimTerm = this.buildMatchTerm(
-        this.scrutinee,
-        branchMetas.map(b => ({ tag: 'Meta', id: b.id } as TTKTerm))
-      );
+      // 6. Build eliminator term (placeholder: use first branch meta)
+      // TODO: Build proper Match term once type checker supports Match inference
+      const branchTerms = branchMetas.map(b => ({ tag: 'Meta' as const, id: b.id }));
+      const elimTerm = this.buildMatchTerm(this.scrutinee, branchTerms);
 
       // 7. Assign eliminator to current goal
       const newMetaVars = new Map(engine.metaVars);
@@ -156,50 +160,67 @@ export class CasesTactic implements Tactic {
     return null;
   }
 
+  private extractTypeArgs(scrutineeType: TTKTerm): TTKTerm[] {
+    const args: TTKTerm[] = [];
+    let current = scrutineeType;
+    while (current.tag === 'App') {
+      args.unshift(current.arg);
+      current = current.fn;
+    }
+    return args;
+  }
+
   /**
-   * Extend context with constructor parameters
-   *
-   * For a constructor like Succ : Nat -> Nat, we add 'n : Nat' to context.
-   * For a constructor like Zero : Nat, we don't add anything.
+   * Extend context with constructor parameters (explicit only)
+   * Returns the extended context and the names of explicit params.
    */
   private extendContextWithCtorParams(
     baseCtx: TTKContext,
     ctorType: TTKTerm,
-    _scrutinee: TTKTerm
-  ): TTKContext {
+    numImplicit: number,
+    typeArgs: TTKTerm[]
+  ): { ctx: TTKContext; paramNames: string[] } {
     let newCtx = [...baseCtx];
     let currentType = ctorType;
+    const paramNames: string[] = [];
 
-    // Walk through Pi binders in constructor type
+    // Substitute type arguments for implicit params and skip those binders
+    for (let i = 0; i < numImplicit; i++) {
+      if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        const arg = typeArgs[i] || { tag: 'Hole', id: '_implicit_' + i };
+        currentType = subst(0, arg, currentType.body);
+      }
+    }
+
+    // Walk through the remaining (explicit) Pi binders
+    let paramIdx = 0;
     while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
-      // Add parameter to context
-      // Generate name if not present
-      const paramName = currentType.name || 'x';
+      const rawName = currentType.name;
+      const paramName = (rawName && rawName !== '_') ? rawName : ('_arg' + paramIdx);
+      paramIdx++;
       newCtx.push({
         name: paramName,
         type: currentType.domain
       });
+      paramNames.push(paramName);
 
-      // Move to body
       currentType = currentType.body;
     }
 
-    return newCtx;
+    return { ctx: newCtx, paramNames };
   }
 
   /**
-   * Build a match/eliminator term
+   * Build eliminator term from scrutinee and branch terms.
    *
-   * For now, this builds a simple match expression.
-   * Future: Generate proper eliminator application.
+   * Currently returns the first branch as a placeholder since
+   * the type checker doesn't support Match term inference yet.
+   * TODO: Build proper Match term once supported.
    */
-  private buildMatchTerm(_scrutinee: TTKTerm, branches: TTKTerm[]): TTKTerm {
-    // Build: match scrutinee with ?branch1 | ?branch2 | ...
-    // For now, we'll use a Match term (needs to be added to kernel)
-    // Temporary: Just return first branch (this is a placeholder)
-
-    // TODO: Implement proper match/eliminator term construction
-    // For now, return the first branch as a placeholder
+  private buildMatchTerm(
+    _scrutinee: TTKTerm,
+    branches: TTKTerm[]
+  ): TTKTerm {
     return branches[0] || { tag: 'Const', name: 'unit' };
   }
 

@@ -1,0 +1,8 @@
+@test success
+@name "compose with implicits and apply"
+
+-- Stress test: function composition using apply with implicit type args
+compose : {A B C : Type} -> (B -> C) -> (A -> B) -> A -> C := by
+  intros A B C g f a
+  apply g
+  exact (f a)

@@ -1,0 +1,12 @@
+@test success
+@name "cases on Either with two implicit type params"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/either.tt
+
+-- Stress test: case split on Either which has two implicit type params {A B : Type}
+eitherToNat : Either Nat Bool -> Nat := by
+  intro e
+  cases e with
+  | Left n => exact n
+  | Right b => exact Zero

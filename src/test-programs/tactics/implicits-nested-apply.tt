@@ -1,0 +1,9 @@
+@test success
+@name "nested apply with implicits"
+
+-- Stress test: chain of applies, each with implicit args
+doubleApply : {A B C : Type} -> (B -> C) -> (A -> B) -> A -> C := by
+  intros A B C g f a
+  apply g
+  apply f
+  exact a

@@ -1,0 +1,40 @@
+@test success
+@name "mulDistribRight: mul (plus n m) p = plus (mul n p) (mul m p)"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+plusAssoc Zero m p = refl
+plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)
+
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+
+-- mul (plus n m) p = plus (mul n p) (mul m p), induction on n
+-- Base: mul (plus Zero m) p = mul m p, plus (mul Zero p) (mul m p) = plus Zero (mul m p) = mul m p. refl.
+-- Step: mul (plus (Succ n) m) p = mul (Succ (plus n m)) p = plus p (mul (plus n m) p)
+--   By IH: = plus p (plus (mul n p) (mul m p))
+--   RHS: plus (mul (Succ n) p) (mul m p) = plus (plus p (mul n p)) (mul m p)
+--   Need: plus p (plus (mul n p) (mul m p)) = plus (plus p (mul n p)) (mul m p)
+--   This is sym (plusAssoc p (mul n p) (mul m p))
+mulDistribRight : (n m p : Nat) -> Equal (mul (plus n m) p) (plus (mul n p) (mul m p))
+mulDistribRight Zero m p = refl
+mulDistribRight (Succ n) m p = trans (congPlusRight p (mulDistribRight n m p)) (sym (plusAssoc p (mul n p) (mul m p)))

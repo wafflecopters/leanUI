@@ -1,0 +1,62 @@
+@test success
+@name "mulDistribLeft: mul n (plus m p) = plus (mul n m) (mul n p)"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
+
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+plusAssoc Zero m p = refl
+plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)
+
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
+plusComm Zero m = sym (plusZeroRight m)
+plusComm (Succ n) m = trans (congSucc (plusComm n m)) (sym (plusSuccRight m n))
+
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+
+congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
+congPlusLeft p refl = refl
+
+plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
+plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
+
+-- mul n (plus m p) = plus (mul n m) (mul n p), induction on n
+-- Base: Zero = plus Zero Zero = Zero. refl.
+-- Step: mul (Succ n) (plus m p) = plus (plus m p) (mul n (plus m p))
+--   By IH: = plus (plus m p) (plus (mul n m) (mul n p))
+--   Need: = plus (plus m (mul n m)) (plus p (mul n p))
+--   i.e. plus (mul (Succ n) m) (mul (Succ n) p)
+--
+--   Chain: plus (plus m p) (plus nm np)
+--     = plus m (plus p (plus nm np))          by plusAssoc
+--     = plus m (plus nm (plus p np))          by plusLeftComm
+--     = plus (plus m nm) (plus p np)          by sym plusAssoc
+mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul n p))
+mulDistribLeft Zero m p = refl
+mulDistribLeft (Succ n) m p = trans (congPlusRight (plus m p) (mulDistribLeft n m p)) (trans (plusAssoc m p (plus (mul n m) (mul n p))) (trans (congPlusRight m (plusLeftComm p (mul n m) (mul n p))) (sym (plusAssoc m (mul n m) (plus p (mul n p))))))

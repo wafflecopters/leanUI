@@ -4,7 +4,7 @@
 
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
-import { setPatternLoggingEnabled } from './patterns';
+
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -274,9 +274,7 @@ uip refl refl = refl
     expect(uipDecl).toBeDefined();
   });
 
-  test.skip('Test 12: Debug UIP with pattern logging', () => {
-    setPatternLoggingEnabled(true);
-
+  test('Test 12: UIP should succeed with @assumeK', () => {
     const source = `${equalityPreamble}
 
 @assumeK
@@ -285,17 +283,10 @@ uip : {A : Type} -> {x y : A} -> (p q : Equal x y) -> Equal p q
 uip refl refl = refl
 `;
 
-    try {
-      const result = compileTTFromText(source);
-      const uipDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'uip');
+    const result = compileTTFromText(source);
+    const uipDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'uip');
 
-      console.log('\n=== UIP DEBUG (WITH LOGGING) ===');
-      if (uipDecl && !uipDecl.checkSuccess) {
-        console.log('Errors:', uipDecl.checkErrors?.map(e => e.message).join('\n\n'));
-      }
-    } finally {
-      setPatternLoggingEnabled(false);
-    }
+    expect(uipDecl?.checkSuccess).toBe(true);
   });
 
   test('Test 13: Trans DOES work - why? Different indices!', () => {

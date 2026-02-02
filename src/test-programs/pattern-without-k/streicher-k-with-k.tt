@@ -1,9 +1,7 @@
--- TODO: Currently fails with type error - needs fix for implicit argument resolution in pattern matching
-@test failure  
+@test success
 @name "Streicher's K should succeed with axiom K"
 @import preambles/equality.tt
 @assumeK
-@error "has type"
 
 -- With axiom K, Streicher's K is provable
 streichersK : (A : Type) -> (a : A) -> (P : Equal a a -> Type) -> (p : P refl) -> (e : Equal a a) -> P e

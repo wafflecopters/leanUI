@@ -131,7 +131,7 @@ streichK refl = refl
     expect(kDecl?.checkErrors?.[0]?.message).toContain('axiom K');
   });
 
-  test.skip('Streicher K should SUCCEED with @assumeK', () => {
+  test('Streicher K should SUCCEED with @assumeK', () => {
     // TODO: This test fails with an implicit argument conflict, NOT a deletion rule issue:
     // "Implicit argument conflict for ?m7: inferred (refl ?0 ?0) but required to be refl"
     // This is a separate bug in implicit argument resolution when matching proof variables.

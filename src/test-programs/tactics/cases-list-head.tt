@@ -1,0 +1,12 @@
+@test success
+@name "cases on List with implicit type param"
+@import preambles/nat.tt
+@import preambles/list.tt
+
+-- Stress test: case split on List which has implicit A
+-- head with default value
+headOr : Nat -> List Nat -> Nat := by
+  intros default_ xs
+  cases xs with
+  | Nil => exact default_
+  | Cons x rest => exact x

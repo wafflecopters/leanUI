@@ -1,0 +1,12 @@
+@test success
+@name "apply MkPair constructor with implicits"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/pair.tt
+
+-- Stress test: apply a constructor with two implicit type params
+mkNatBool : Nat -> Bool -> Pair Nat Bool := by
+  intros n b
+  apply MkPair
+  exact n
+  exact b

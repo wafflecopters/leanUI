@@ -73,15 +73,21 @@ export class InductionTactic implements Tactic {
         numParams: number;  // Number of constructor parameters
       }> = [];
 
+      // Extract type arguments from scrutinee type (e.g., Nat from List Nat)
+      const typeArgs = this.extractTypeArgs(scrutineeTypeWhnf);
+
       for (const ctor of inductiveDef.constructors) {
         // Extend context with constructor parameters AND induction hypothesis
+        const numImplicit = ctor.namedArgMap?.size ?? 0;
         const { branchCtx, hasRecursiveArg, numParams } = this.extendContextWithCtorParamsAndIH(
           goal.ctx,
           ctor.type,
           this.scrutinee,
           motive,
           inductiveName,
-          engine.definitions
+          engine.definitions,
+          numImplicit,
+          typeArgs
         );
 
         // Compute the branch goal type by applying the motive to the constructor pattern
@@ -229,16 +235,29 @@ export class InductionTactic implements Tactic {
     _scrutinee: TTKTerm,
     motive: TTKTerm,
     inductiveName: string,
-    definitions: DefinitionsMap
+    definitions: DefinitionsMap,
+    numImplicit: number,
+    typeArgs: TTKTerm[]
   ): { branchCtx: TTKContext; hasRecursiveArg: boolean; numParams: number } {
     let newCtx = [...baseCtx];
     let currentType = ctorType;
     let recursiveArgIndex: number | null = null;
     let paramCount = 0;
 
-    // Walk through Pi binders in constructor type
+    // Substitute type arguments for implicit params and skip those binders
+    for (let i = 0; i < numImplicit; i++) {
+      if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        const arg = typeArgs[i] || { tag: 'Hole', id: '_implicit_' + i };
+        currentType = subst(0, arg, currentType.body);
+      }
+    }
+
+    // Walk through the remaining (explicit) Pi binders
+    let paramIdx = 0;
     while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
-      const paramName = currentType.name || 'x';
+      const rawName = currentType.name;
+      const paramName = (rawName && rawName !== '_') ? rawName : ('_arg' + paramIdx);
+      paramIdx++;
       newCtx.push({
         name: paramName,
         type: currentType.domain
@@ -322,6 +341,16 @@ export class InductionTactic implements Tactic {
     }
 
     return null;
+  }
+
+  private extractTypeArgs(scrutineeType: TTKTerm): TTKTerm[] {
+    const args: TTKTerm[] = [];
+    let current = scrutineeType;
+    while (current.tag === 'App') {
+      args.unshift(current.arg);
+      current = current.fn;
+    }
+    return args;
   }
 
   /**

@@ -1818,8 +1818,18 @@ export class TCEnv<T> {
   }
 
   inBinderPiBody(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BPi' } }>): TCEnv<TTKTerm> {
+    // Substitute solved level metas in the domain type BEFORE adding to context.
+    // Level meta solutions contain de Bruijn Var indices relative to the depth where
+    // they were solved. When context types are shifted during lookup (in
+    // lookupTypeAtIndexContext), Holes are NOT shifted — only Vars are. If we store
+    // Holes in the context type and later substitute level metas, the resulting Vars
+    // will have the wrong depth. By substituting now, the concrete Vars in the domain
+    // type will be correctly shifted during subsequent lookups.
+    const resolvedDomain = this.levelMetas.size > 0
+      ? substituteLevelMetasInTerm(this.value.domain, this.levelMetas)
+      : this.value.domain;
     return new TCEnv(
-      [...this.context, { name: this.value.name, type: this.value.domain }],
+      [...this.context, { name: this.value.name, type: resolvedDomain }],
       this.definitions,
       this.metaVars,
       this.constraints,

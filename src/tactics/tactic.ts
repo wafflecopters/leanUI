@@ -6,10 +6,10 @@
  */
 
 import { TTKTerm, TTKContext } from '../compiler/kernel';
-import { MetaVar, TCEnv } from '../compiler/term';
+import { MetaVar, TCEnv, createNamedArgLookup } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { checkType, inferType } from '../compiler/checker';
-import { whnf, areTypesDefEq } from '../compiler/whnf';
+import { whnf } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
 
@@ -89,7 +89,9 @@ export class ExactTactic implements Tactic {
       const solution = checkedEnv.zonkTerm(checkedEnv.elaboratedTerm ?? this.term);
 
       // Assign solution to goal
-      const newMetaVars = new Map(engine.metaVars);
+      // Merge checkedEnv.metaVars to capture any new metas created during type checking
+      // (e.g., implicit argument metas for constructors like Nil : {A : Type} -> List A)
+      const newMetaVars = new Map(checkedEnv.metaVars);
       newMetaVars.set(goalId, { ...goal, solution });
 
       // Remove goal from goal list
@@ -140,20 +142,14 @@ export class AssumptionTactic implements Tactic {
   name = 'assumption';
 
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
-    const goalType = goal.type;
-
     // Search context backwards (most recent first)
+    // Try exact with each variable - the checker handles de Bruijn adjustments
     for (let i = goal.ctx.length - 1; i >= 0; i--) {
-      const hyp = goal.ctx[i];
-
-      // Check if hypothesis type matches goal type (definitionally equal)
-      if (areTypesDefEq(hyp.type, goalType, engine.definitions)) {
-        // Use variable at de Bruijn index (goal.ctx.length - 1 - i)
-        const varIndex = goal.ctx.length - 1 - i;
-        const solution: TTKTerm = { tag: 'Var', index: varIndex };
-
-        // Apply exact with the variable
-        return new ExactTactic(solution).apply(engine, goal, goalId);
+      const varIndex = goal.ctx.length - 1 - i;
+      const solution: TTKTerm = { tag: 'Var', index: varIndex };
+      const result = new ExactTactic(solution).apply(engine, goal, goalId);
+      if (result.success) {
+        return result;
       }
     }
 
@@ -329,13 +325,24 @@ export class ApplyTactic implements Tactic {
       const fnType = inferredEnv.value; // The inferred type
 
       // Collect arguments from Pi type
-      const argMetas: { id: string; meta: MetaVar }[] = [];
+      const argMetas: { id: string; meta: MetaVar; implicit: boolean }[] = [];
       let currentType = whnf(fnType, {
         definitions: engine.definitions
       });
 
+      // Look up which args are implicit
+      let fnName: string | undefined;
+      if (this.fn.tag === 'Const') {
+        fnName = this.fn.name;
+      }
+      const namedArgLookup = createNamedArgLookup(engine.definitions);
+      const namedArgMap = fnName ? namedArgLookup(fnName) : undefined;
+      const numImplicit = namedArgMap?.size ?? 0;
+      let argIndex = 0;
+
       // Unwrap Pi types (Binder with BPi kind) and create metas for each argument
       while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        const isImplicit = argIndex < numImplicit;
         // Create meta for this argument
         const argMetaId = freshMetaName();
         const argMeta: MetaVar = {
@@ -343,13 +350,14 @@ export class ApplyTactic implements Tactic {
           type: currentType.domain,
           solution: undefined
         };
-        argMetas.push({ id: argMetaId, meta: argMeta });
+        argMetas.push({ id: argMetaId, meta: argMeta, implicit: isImplicit });
 
         // Substitute meta into body to get next type
         currentType = subst(0, { tag: 'Meta', id: argMetaId }, currentType.body);
         currentType = whnf(currentType, {
           definitions: engine.definitions
         });
+        argIndex++;
       }
 
       // Unify return type with goal type
@@ -377,7 +385,8 @@ export class ApplyTactic implements Tactic {
       }
 
       // Assign application to goal
-      const newMetaVars = new Map(engine.metaVars);
+      // Merge inferredEnv.metaVars to capture any new metas created during type inference
+      const newMetaVars = new Map(inferredEnv.metaVars);
       newMetaVars.set(goalId, { ...goal, solution: appTerm });
 
       // Add arg metas to metaVars
@@ -397,7 +406,7 @@ export class ApplyTactic implements Tactic {
 
       // Replace current goal with arg metas (subgoals)
       const newGoalIds = argMetas
-        .filter(({ meta }) => meta.solution === undefined)
+        .filter(({ meta, implicit }) => meta.solution === undefined && !implicit)
         .map(({ id }) => id);
 
       const newGoals = [

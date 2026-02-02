@@ -3352,9 +3352,14 @@ export class Parser {
             }
             this.advance(); // consume '=>'
 
-            // Parse tactics for this branch (single tactic on same line)
+            // Parse tactics for this branch (may be on same line or next line)
             const branchTactics: TacticCommand[] = [];
             const branchTacticPath = [...path, { kind: 'field' as const, name: 'caseBranches' }, { kind: 'array' as const, index: caseBranches.length }];
+            // Skip newlines if branch body is on the next line (e.g., nested cases)
+            if (this.current().type === 'NEWLINE') {
+              this.advance();
+              this.skipNewlines();
+            }
             const branchTactic = this.parseTactic(ctx, branchTacticPath);
             branchTactics.push(branchTactic);
 

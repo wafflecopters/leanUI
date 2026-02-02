@@ -1,0 +1,8 @@
+@test success
+@name "assumption finds term with implicit type"
+@import preambles/nat.tt
+
+-- Stress test: assumption should find the right term even with implicit types in context
+useAssumption : {A : Type} -> A -> A := by
+  intros A a
+  assumption

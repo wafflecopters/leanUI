@@ -1,0 +1,12 @@
+@test success
+@name "cases on Maybe with implicit type param"
+@import preambles/nat.tt
+@import preambles/maybe.tt
+
+-- Stress test: case split on Maybe which has implicit A
+-- Tests that cases handles constructor implicits correctly
+fromMaybe : Nat -> Maybe Nat -> Nat := by
+  intros default_ mx
+  cases mx with
+  | Nothing => exact default_
+  | Just x => exact x

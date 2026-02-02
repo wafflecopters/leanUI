@@ -1,0 +1,7 @@
+@test success
+@name "intros with multiple implicit args"
+
+-- Stress test: multiple implicit type parameters introduced and used
+flip : {A B C : Type} -> (A -> B -> C) -> B -> A -> C := by
+  intros A B C f b a
+  exact (f a b)

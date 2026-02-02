@@ -1380,6 +1380,48 @@ function elaborateTacticBlock(
   // Create initial tactic engine
   let engine = createInitialEngine(expectedType, context, definitions);
 
+  // Helper: look up implicit param names for a definition
+  const namedArgLookup = createNamedArgLookup(definitions);
+
+  // Helper: convert a surface App term to kernel, inserting Holes for implicit params.
+  // When the head of an application chain is a Const with implicit params (namedArgMap),
+  // we need to insert Holes so the type checker can create metas for them.
+  // Without this, `Just x` becomes `App(Just, x)` which fails because the type checker
+  // tries to apply `x` to the first (implicit) parameter `{A : Type}`.
+  function insertImplicitHolesForApp(
+    term: TTerm,
+    convertTerm: (t: TTerm, depth: number) => TTKTerm,
+    depth: number
+  ): TTKTerm {
+    // Collect the application spine
+    const args: TTerm[] = [];
+    let head: TTerm = term;
+    while (head.tag === 'App') {
+      args.unshift(head.arg);
+      head = head.fn;
+    }
+
+    // Convert the head
+    let kernelHead = convertTerm(head, depth);
+
+    // If the head is a Const with implicit params, insert Holes for them
+    if (kernelHead.tag === 'Const') {
+      const namedArgs = namedArgLookup(kernelHead.name);
+      if (namedArgs) {
+        for (const [paramName] of namedArgs) {
+          kernelHead = { tag: 'App', fn: kernelHead, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+        }
+      }
+    }
+
+    // Apply the explicit args
+    let result = kernelHead;
+    for (const arg of args) {
+      result = { tag: 'App', fn: result, arg: convertTerm(arg, depth) };
+    }
+    return result;
+  }
+
   // Execute each tactic, elaborating arguments in the current goal's context
   for (const cmd of tacticBlock.tactics) {
     const goal = engine.getFocusedGoal();
@@ -1422,12 +1464,8 @@ function elaborateTacticBlock(
           }
 
           case 'App': {
-            // Recursively elaborate function and argument
-            return {
-              tag: 'App',
-              fn: surfaceToKernel(term.fn, depth),
-              arg: surfaceToKernel(term.arg, depth)
-            };
+            // Insert Holes for implicit params when head is a Const with namedArgMap
+            return insertImplicitHolesForApp(term, surfaceToKernel, depth);
           }
 
           case 'Sort': {
@@ -1535,11 +1573,7 @@ function elaborateTacticBlock(
               }
 
               case 'App':
-                return {
-                  tag: 'App',
-                  fn: branchSurfaceToKernel(term.fn, depth),
-                  arg: branchSurfaceToKernel(term.arg, depth)
-                };
+                return insertImplicitHolesForApp(term, branchSurfaceToKernel, depth);
 
               default:
                 return elabToKernelWithMap(term, elabMap, [], []);
@@ -1561,6 +1595,83 @@ function elaborateTacticBlock(
           }
 
           engine = branchResult.newEngine;
+
+          // Handle nested structured cases/induction: if this branch tactic itself
+          // has caseBranches (e.g., nested `cases n with | Zero => ... | Succ m => ...`),
+          // process them recursively
+          if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && (branchTactic as any).caseBranches) {
+            const nestedBranches = (branchTactic as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
+            for (const nestedBranch of nestedBranches) {
+              const nestedGoalId = engine.goals.find(gid => {
+                const meta = engine.metaVars.get(gid);
+                return meta && meta.caseTag === nestedBranch.constructor;
+              });
+              if (!nestedGoalId) {
+                throw new Error(`Structured cases: no goal found for nested constructor '${nestedBranch.constructor}'`);
+              }
+              const nestedGoalIndex = engine.goals.indexOf(nestedGoalId);
+              engine = engine.withUpdates({ focusIndex: nestedGoalIndex });
+
+              for (const nestedTactic of nestedBranch.tactics) {
+                const nestedGoal = engine.getFocusedGoal();
+                const nestedGoalId2 = engine.getFocusedGoalId();
+                if (!nestedGoal || !nestedGoalId2) {
+                  throw new Error(`Structured cases: no active goal for nested constructor '${nestedBranch.constructor}'`);
+                }
+
+                // Build name context with nested pattern param mapping
+                const nestedNameContext: string[] = nestedGoal.ctx.map(b => b.name);
+                const nestedParamNameMap = new Map<string, string>();
+                // Include parent branch params
+                for (const [k, v] of paramNameMap) {
+                  nestedParamNameMap.set(k, v);
+                }
+                for (let i = 0; i < nestedBranch.params.length; i++) {
+                  const patternParamName = nestedBranch.params[i];
+                  const ctxIndex = nestedNameContext.length - nestedBranch.params.length + i;
+                  if (ctxIndex >= 0 && ctxIndex < nestedNameContext.length) {
+                    nestedParamNameMap.set(patternParamName, nestedNameContext[ctxIndex]);
+                  }
+                }
+
+                function nestedSurfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
+                  switch (term.tag) {
+                    case 'Var':
+                      return { tag: 'Var', index: term.index };
+                    case 'Const': {
+                      const mappedName = nestedParamNameMap.get(term.name);
+                      const lookupName = mappedName || term.name;
+                      for (let i = nestedNameContext.length - 1; i >= 0; i--) {
+                        if (nestedNameContext[i] === lookupName) {
+                          const index = nestedNameContext.length - 1 - i + depth;
+                          return { tag: 'Var', index };
+                        }
+                      }
+                      return { tag: 'Const', name: term.name };
+                    }
+                    case 'App':
+                      return insertImplicitHolesForApp(term, nestedSurfaceToKernel, depth);
+                    default:
+                      return elabToKernelWithMap(term, elabMap, [], []);
+                  }
+                }
+
+                const nestedElabArgs: Array<TTerm | TTKTerm> = nestedTactic.args.map(arg => {
+                  if (nestedTactic.name === 'intro' || nestedTactic.name === 'intros') {
+                    return arg;
+                  }
+                  return nestedSurfaceToKernel(arg);
+                });
+
+                const nestedTacticObj = tacticCommandToTactic({ name: nestedTactic.name, args: nestedElabArgs });
+                const nestedResult = nestedTacticObj.apply(engine, nestedGoal, nestedGoalId2);
+                if (!nestedResult.success) {
+                  throw new Error(`Structured cases (${nestedBranch.constructor}): tactic '${nestedTactic.name}' failed: ${nestedResult.error}`);
+                }
+                engine = nestedResult.newEngine;
+              }
+            }
+          }
         }
       }
     }
@@ -2298,6 +2409,41 @@ function failCheck(message: string, env: TCEnv<unknown>): { success: false, erro
   }
 }
 
+/**
+ * Convert any remaining unsolved Meta nodes in a term to Hole nodes.
+ * Used after zonking the elaborated type from signature checking: the elaborated type
+ * includes implicit argument insertions (Metas from the type checker), and after zonking,
+ * solved Metas are replaced with their solutions. Any remaining Metas are unsolved —
+ * converting them to Holes allows the pattern matcher's hole-filling code to handle them
+ * (e.g., with-clause placeholder Holes like `_scrut0_type` that were converted to Metas
+ * during type checking).
+ */
+function unsolvedMetasToHoles(term: TTKTerm): TTKTerm {
+  switch (term.tag) {
+    case 'Meta':
+      return { tag: 'Hole', id: term.id };
+    case 'App':
+      return { tag: 'App', fn: unsolvedMetasToHoles(term.fn), arg: unsolvedMetasToHoles(term.arg) };
+    case 'Binder': {
+      const bk = term.binderKind.tag === 'BLet'
+        ? { tag: 'BLet' as const, defVal: unsolvedMetasToHoles(term.binderKind.defVal) }
+        : term.binderKind;
+      return { tag: 'Binder', name: term.name, binderKind: bk, domain: unsolvedMetasToHoles(term.domain), body: unsolvedMetasToHoles(term.body) };
+    }
+    case 'Sort': {
+      const level = unsolvedMetasToHoles(term.level);
+      return level === term.level ? term : { tag: 'Sort', level };
+    }
+    case 'Annot':
+      return { tag: 'Annot', term: unsolvedMetasToHoles(term.term), type: unsolvedMetasToHoles(term.type) };
+    case 'Match':
+      return { tag: 'Match', scrutinee: unsolvedMetasToHoles(term.scrutinee), clauses: term.clauses.map(c => ({ ...c, rhs: unsolvedMetasToHoles(c.rhs) })) };
+    default:
+      // Var, Const, Hole, ULevel, ULit, UOmega — no Metas inside
+      return term;
+  }
+}
+
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
@@ -2352,8 +2498,16 @@ function checkTermDeclaration(
     const namedArgMap = decl.surfaceType ? extractNamedArgMap(decl.surfaceType) : undefined;
     const totalArity = decl.surfaceType ? countParameters(decl.surfaceType) : undefined;
 
-    // Zonk the kernel type to substitute any solved metas (e.g., implicit params inferred from arguments)
-    const zonkedKernelType = solvedSigResult.zonkTerm(decl.kernelType);
+    // Zonk the kernel type to substitute any solved metas (e.g., implicit params inferred from arguments).
+    // Use the elaborated term from signature checking if available, because it includes implicit argument
+    // insertions for constructors used as arguments in the type (e.g., bare `refl` in `Equal p refl`
+    // becomes `refl A x` with its implicit args filled). The raw kernelType retains bare Const nodes
+    // that the type checker later wraps with implicit applications — but those wrappings aren't
+    // reflected back into the kernel type. After zonking, any remaining unsolved Metas (e.g., with-clause
+    // placeholder Holes like `_scrut0_type` that became Metas during checking) are converted back to
+    // Holes so the pattern matcher's hole-filling code can handle them.
+    const sigElaboratedType = sigResult.elaboratedTerm ?? decl.kernelType;
+    const zonkedKernelType = unsolvedMetasToHoles(solvedSigResult.zonkTerm(sigElaboratedType));
 
     // Add to context for subsequent declarations, including namedArgMap for lookup
     if (decl.name) {
@@ -2447,6 +2601,16 @@ function checkTermDeclaration(
           namedArgMap,
           appNamedArgLookup
         );
+      }
+
+      // Tactic-produced terms are already validated step-by-step by the tactic engine
+      // (ExactTactic uses checkType, ApplyTactic uses inferType+unify, etc.).
+      // The outer checkType is redundant and fails for Match terms produced by
+      // cases/induction tactics, since the type checker doesn't handle Match inference.
+      // Skip re-checking and trust the tactic engine's validation.
+      if (decl.surfaceValue.tag === 'TacticBlock') {
+        const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, kernelValue);
+        return { success: true, definitions: resultEnv.definitions, checkedValue: kernelValue, zonkedType: zonkedKernelType };
       }
 
       try {
