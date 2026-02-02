@@ -265,4 +265,33 @@ describe('CasesTactic with Bool', () => {
     // Should create 2 subgoals (True and False cases)
     expect(result.newEngine.goals.length).toBe(2);
   });
+
+  test('tags branch goals with constructor names', () => {
+    const definitions = createBoolDefinitions();
+
+    // Context: b : Bool
+    const context = [{ name: 'b', type: { tag: 'Const', name: 'Bool' } as TTKTerm }];
+
+    // Goal: Bool
+    const goalType: TTKTerm = { tag: 'Const', name: 'Bool' };
+    const engine = createInitialEngine(goalType, context, definitions);
+
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // Apply cases on b
+    const tactic = new CasesTactic({ tag: 'Var', index: 0 });
+    const result = tactic.apply(engine, goal, goalId);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // Get the two branch goals
+    const goal1 = result.newEngine.metaVars.get(result.newEngine.goals[0])!;
+    const goal2 = result.newEngine.metaVars.get(result.newEngine.goals[1])!;
+
+    // Check that case tags are set correctly
+    expect(goal1.caseTag).toBe('True');
+    expect(goal2.caseTag).toBe('False');
+  });
 });

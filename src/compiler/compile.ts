@@ -1424,6 +1424,100 @@ function elaborateTacticBlock(
     }
 
     engine = result.newEngine;
+
+    // Handle structured cases: if cmd has caseBranches, apply each branch's tactics to matching goals
+    if (cmd.name === 'cases' && (cmd as any).caseBranches) {
+      const caseBranches = (cmd as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
+
+      for (const branch of caseBranches) {
+        // Find the goal with matching caseTag
+        const branchGoalId = engine.goals.find(gid => {
+          const meta = engine.metaVars.get(gid);
+          return meta && meta.caseTag === branch.constructor;
+        });
+
+        if (!branchGoalId) {
+          throw new Error(`Structured cases: no goal found for constructor '${branch.constructor}'`);
+        }
+
+        // Set focus to this branch goal
+        const branchGoalIndex = engine.goals.indexOf(branchGoalId);
+        engine = engine.withUpdates({ focusIndex: branchGoalIndex });
+
+        // Apply the branch's tactics
+        for (const branchTactic of branch.tactics) {
+          const branchGoal = engine.getFocusedGoal();
+          const branchGoalId2 = engine.getFocusedGoalId();
+
+          if (!branchGoal || !branchGoalId2) {
+            throw new Error(`Structured cases: no active goal for constructor '${branch.constructor}'`);
+          }
+
+          // Build name context with pattern param mapping
+          // The pattern params (e.g., 'm' in 'Succ m') map to the most recent N context entries
+          const branchNameContext: string[] = branchGoal.ctx.map(b => b.name);
+
+          // Create a mapping from pattern param names to actual context names
+          // Pattern params are the N most recent entries in the context
+          const paramNameMap = new Map<string, string>();
+          for (let i = 0; i < branch.params.length; i++) {
+            const patternParamName = branch.params[i];
+            const ctxIndex = branchNameContext.length - branch.params.length + i;
+            if (ctxIndex >= 0 && ctxIndex < branchNameContext.length) {
+              const actualCtxName = branchNameContext[ctxIndex];
+              paramNameMap.set(patternParamName, actualCtxName);
+            }
+          }
+
+          function branchSurfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
+            switch (term.tag) {
+              case 'Var':
+                return { tag: 'Var', index: term.index };
+
+              case 'Const': {
+                // First check if this is a pattern param name
+                const mappedName = paramNameMap.get(term.name);
+                const lookupName = mappedName || term.name;
+
+                for (let i = branchNameContext.length - 1; i >= 0; i--) {
+                  if (branchNameContext[i] === lookupName) {
+                    const index = branchNameContext.length - 1 - i + depth;
+                    return { tag: 'Var', index };
+                  }
+                }
+                return { tag: 'Const', name: term.name };
+              }
+
+              case 'App':
+                return {
+                  tag: 'App',
+                  fn: branchSurfaceToKernel(term.fn, depth),
+                  arg: branchSurfaceToKernel(term.arg, depth)
+                };
+
+              default:
+                return elabToKernelWithMap(term, elabMap, [], []);
+            }
+          }
+
+          const branchElabArgs: Array<TTerm | TTKTerm> = branchTactic.args.map(arg => {
+            if (branchTactic.name === 'intro' || branchTactic.name === 'intros') {
+              return arg;
+            }
+            return branchSurfaceToKernel(arg);
+          });
+
+          const branchTacticObj = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
+          const branchResult = branchTacticObj.apply(engine, branchGoal, branchGoalId2);
+
+          if (!branchResult.success) {
+            throw new Error(`Structured cases (${branch.constructor}): tactic '${branchTactic.name}' failed: ${branchResult.error}`);
+          }
+
+          engine = branchResult.newEngine;
+        }
+      }
+    }
   }
 
   // Check that all goals are solved

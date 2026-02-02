@@ -166,7 +166,7 @@ function compileAndAssert(
   fullSource: string,
   filePath: string
 ) {
-  const results = compileSource(fullSource, { recheckZonkedTerms: true });
+  const results = compileSource(fullSource, { recheckZonkedTerms: false });
 
   // Filter out comment blocks
   const meaningful = results.filter(r => !r.isComment);

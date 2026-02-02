@@ -371,6 +371,29 @@ function adjustMetaConstraintDepth(result: UnifyResult): UnifyResult {
   };
 }
 
+/**
+ * Check if a term contains any variables (recursively).
+ * Used for deletion rule checking: if a term contains variables and is
+ * unified with itself, those are reflexive variable equations requiring K.
+ */
+function containsVars(term: TTKTerm): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return true;
+    case 'App':
+      return containsVars(term.fn) || containsVars(term.arg);
+    case 'Binder':
+      return containsVars(term.domain) || containsVars(term.body);
+    case 'Sort':
+      return containsVars(term.level);
+    case 'Annot':
+      return containsVars(term.term) || containsVars(term.type);
+    default:
+      // Const, Meta, Hole, ULevel, ULit, UOmega, Match - no vars
+      return false;
+  }
+}
+
 export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): UnifyResult {
   // OPTIMIZATION: If terms are structurally identical, they unify immediately.
   // This avoids expensive whnf reduction for identical terms like matching Match
@@ -379,7 +402,10 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // EXCEPTION: Reflexive variable equations (x = x) need deletion rule check
   if (isDefinitionallyEqual(lhs, rhs)) {
     // Check if this is a reflexive variable equation without K
-    if (lhs.tag === 'Var' && rhs.tag === 'Var' && lhs.index === rhs.index && options.assumeK === false) {
+    // This includes:
+    // 1. Direct variable equations: Var(i) = Var(i)
+    // 2. Structurally equal terms containing variables: (f x) = (f x) contains x = x
+    if (options.assumeK === false && containsVars(lhs)) {
       return { success: false, reason: 'deletion-rule' };
     }
     return emptySuccess;

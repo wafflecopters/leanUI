@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, mkTacticBlockTT } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, CaseBranch, mkTacticBlockTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -3295,7 +3295,7 @@ export class Parser {
 
       case 'cases':
       case 'induction': {
-        // cases/induction <identifier>
+        // cases/induction <identifier> [with | ctor params => tactics | ...]
         if (this.current().type !== 'IDENT') {
           throw new ParseError(
             `${tacticName} expects an identifier argument`,
@@ -3310,6 +3310,80 @@ export class Parser {
         const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
         this.recordRange(argPath, argToken, argToken);
 
+        // Check for optional 'with' clause for structured syntax
+        if (this.current().type === 'WITH') {
+          this.advance(); // consume 'with'
+
+          // Expect newline after 'with'
+          this.expectNewline('Expected newline after \'with\'');
+          this.skipNewlines();
+
+          // Parse case branches: | ctor params => tactics
+          const caseBranches: CaseBranch[] = [];
+
+          while (this.current().type === 'PIPE') {
+            this.advance(); // consume '|'
+
+            // Parse constructor name
+            if (this.current().type !== 'IDENT') {
+              throw new ParseError(
+                'Expected constructor name after |',
+                this.current().line,
+                this.current().col
+              );
+            }
+            const ctorName = this.current().value;
+            this.advance();
+
+            // Parse optional parameters
+            const params: string[] = [];
+            while (this.current().type === 'IDENT' && this.current().col > tacticToken.col) {
+              params.push(this.current().value);
+              this.advance();
+            }
+
+            // Expect '=>'
+            if (this.current().type !== 'FATARROW') {
+              throw new ParseError(
+                'Expected => after constructor pattern',
+                this.current().line,
+                this.current().col
+              );
+            }
+            this.advance(); // consume '=>'
+
+            // Parse tactics for this branch (single tactic on same line)
+            const branchTactics: TacticCommand[] = [];
+            const branchTacticPath = [...path, { kind: 'field' as const, name: 'caseBranches' }, { kind: 'array' as const, index: caseBranches.length }];
+            const branchTactic = this.parseTactic(ctx, branchTacticPath);
+            branchTactics.push(branchTactic);
+
+            caseBranches.push({
+              constructor: ctorName,
+              params,
+              tactics: branchTactics
+            });
+
+            // Expect newline after branch (or EOF)
+            if (this.current().type === 'NEWLINE') {
+              this.advance();
+              this.skipNewlines();
+            } else if (this.current().type !== 'EOF' && this.current().type !== 'PIPE') {
+              // If not newline, EOF, or next pipe, check if we've dedented
+              if (this.current().col < tacticToken.col) {
+                break;
+              }
+            }
+          }
+
+          return {
+            name: tacticName,
+            args: [mkConstTT(argName)],
+            caseBranches
+          };
+        }
+
+        // No 'with' clause - simple cases
         return {
           name: tacticName,
           args: [mkConstTT(argName)]

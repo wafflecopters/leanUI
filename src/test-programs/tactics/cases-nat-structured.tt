@@ -1,0 +1,9 @@
+@test success
+@name "cases on Nat with structured syntax"
+@import preambles/nat.tt
+
+natId : (n : Nat) -> Nat := by
+  intro n
+  cases n with
+  | Zero => exact Zero
+  | Succ m => exact (Succ m)

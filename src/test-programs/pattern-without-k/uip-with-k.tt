@@ -1,11 +1,8 @@
--- TODO: Test infrastructure issue - compilation returns block with undefined name
--- UIP DOES work with K when tested programmatically (see axiom-k-soundness.test.ts)
--- but this .tt file test fails with empty error and undefined block name
-@test failure
+-- UIP (Uniqueness of Identity Proofs) is provable with axiom K
+@test success
 @name "UIP should succeed with axiom K"
 @import preambles/equality.tt
 @assumeK=true
-@error ""
 
 uip : {A : Type} -> {x y : A} -> (p q : Equal x y) -> Equal p q
 uip refl refl = refl

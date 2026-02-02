@@ -30,7 +30,9 @@ export type MetaVar = {
   type: TTKTerm,
   solution?: TTKTerm,
   /** True if this meta was created from an explicit user hole (e.g., ?sorry) */
-  isHole?: boolean
+  isHole?: boolean,
+  /** Constructor tag for case branches (e.g., 'Zero', 'Succ') */
+  caseTag?: string
 }
 
 export type TCEnvOptions = {

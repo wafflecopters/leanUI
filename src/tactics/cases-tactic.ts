@@ -78,7 +78,8 @@ export class CasesTactic implements Tactic {
         const branchMeta: MetaVar = {
           ctx: branchCtx,
           type: goal.type, // Same target type as original goal
-          solution: undefined
+          solution: undefined,
+          caseTag: ctor.name // Tag with constructor name for structured cases
         };
 
         branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta });

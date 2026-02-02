@@ -263,6 +263,19 @@ export type TTermConst = { tag: 'Const'; name: string; }
 export type TLetBinding = { name: string; type?: TTerm; value: TTerm };
 
 /**
+ * Case branch for structured cases tactic
+ *
+ * Example:
+ *   | Zero => exact Zero
+ *   | Succ m => exact (Succ m)
+ */
+export interface CaseBranch {
+  constructor: string;    // Constructor name: 'Zero', 'Succ', etc.
+  params: string[];       // Parameter names bound by the pattern
+  tactics: TacticCommand[]; // Tactics to apply for this case
+}
+
+/**
  * Tactic command: A single tactic with its arguments
  *
  * Examples:
@@ -270,10 +283,12 @@ export type TLetBinding = { name: string; type?: TTerm; value: TTerm };
  *   - exact (f a)    → { name: 'exact', args: [App(Const('f'), Const('a'))] }
  *   - apply f        → { name: 'apply', args: [Const('f')] }
  *   - assumption     → { name: 'assumption', args: [] }
+ *   - cases n with | Zero => ... | Succ m => ...  → { name: 'cases', args: [Const('n')], caseBranches: [...] }
  */
 export interface TacticCommand {
   name: string;       // Tactic name: 'intro', 'exact', 'apply', etc.
   args: TTerm[];      // Arguments (can be identifiers as Const, or full terms)
+  caseBranches?: CaseBranch[]; // Optional: for structured cases syntax
 }
 
 /**

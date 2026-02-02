@@ -1,0 +1,9 @@
+@test success
+@name "cases on Bool with structured syntax"
+@import preambles/bool.tt
+
+boolNot : (b : Bool) -> Bool := by
+  intro b
+  cases b with
+  | True => exact False
+  | False => exact True

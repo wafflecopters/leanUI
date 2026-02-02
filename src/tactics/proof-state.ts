@@ -137,7 +137,7 @@ export function extractGoalStates(state: ProofState): GoalState[] {
         type: b.type
       })),
       target: meta.type,
-      caseTag: undefined // Will be used in Phase 4 (cases)
+      caseTag: meta.caseTag // Constructor tag from cases tactic
     };
   });
 }

@@ -1098,9 +1098,9 @@ export function prettyPrintFormatted(
         if (innerNum !== undefined) {
           return innerNum === 0 ? 'Type' : `Type ${innerNum}`;
         }
-        return `Type ${prettyPrintLevel(succArg)}`;
+        return `Type ${prettyPrintLevel(succArg, context)}`;
       }
-      return `Sort ${prettyPrintLevel(term.level)}`;
+      return `Sort ${prettyPrintLevel(term.level, context)}`;
     }
 
     case 'ULevel':

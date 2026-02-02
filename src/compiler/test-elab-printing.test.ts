@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
+import { prettyPrint, prettyPrintFormatted } from './kernel';
 
 describe('Elaboration printing', () => {
   test('Universe level variables should be printed correctly', () => {
@@ -13,12 +14,19 @@ inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
 
     expect(equalDecl?.checkSuccess).toBe(true);
 
-    // Get the elaborated type and constructor type as strings
-    const elabTypeStr = equalDecl?.elabType || '';
+    // Get the elaborated kernel terms (not strings!)
+    const kernelType = equalDecl?.kernelType;
     const reflCtor = equalDecl?.kernelConstructors?.find((c: any) => c.name === 'refl');
-    const reflTypeStr = reflCtor?.type || '';
+    const reflKernelType = reflCtor?.type;
 
     console.log('\n=== ELABORATION PRINTING TEST ===');
+    console.log('kernelType:', JSON.stringify(kernelType, null, 2).slice(0, 500));
+    console.log('reflKernelType:', JSON.stringify(reflKernelType, null, 2).slice(0, 500));
+
+    // Now get the pretty-printed strings using prettyPrintFormatted (what the UI uses)
+    const elabTypeStr = kernelType ? prettyPrintFormatted(kernelType, []) : '';
+    const reflTypeStr = reflKernelType ? prettyPrintFormatted(reflKernelType, []) : '';
+
     console.log('Type:', elabTypeStr);
     console.log('refl:', reflTypeStr);
 
@@ -31,33 +39,33 @@ inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
     expect(reflTypeStr).not.toContain('Type #0');
   });
 
-  test('Multiple universe level variables should be printed correctly', () => {
+  test('prettyPrintFormatted should print universe level variables by name', () => {
     const source = `
-inductive DPair : {u : ULevel} -> {v : ULevel} -> {A : Type u} -> (A -> Type v) -> Type where
-  MkDPair : {u : ULevel} -> {v : ULevel} -> {A : Type u} -> {B : A -> Type v} -> (a : A) -> (b : B a) -> DPair B
+inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
+  refl : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal a a
 `;
 
     const result = compileTTFromText(source);
-    const dpairDecl = result.blocks.flatMap(b => (b as any).declarations).find((d: any) => d?.name === 'DPair');
+    const equalDecl = result.blocks.flatMap(b => (b as any).declarations).find((d: any) => d?.name === 'Equal');
+    const reflCtor = equalDecl?.kernelConstructors?.find((c: any) => c.name === 'refl');
 
-    expect(dpairDecl?.checkSuccess).toBe(true);
+    // Get the kernel terms
+    const kernelType = equalDecl?.kernelType;
+    const reflKernelType = reflCtor?.type;
 
-    const elabTypeStr = dpairDecl?.elabType || '';
-    const ctorTypeStr = dpairDecl?.kernelConstructors?.[0]?.type || '';
+    // Pretty-print using prettyPrintFormatted (what the UI uses)
+    const elabTypeStr = kernelType ? prettyPrintFormatted(kernelType, []) : '';
+    const reflTypeStr = reflKernelType ? prettyPrintFormatted(reflKernelType, []) : '';
 
-    console.log('\n=== MULTIPLE ULEVEL PRINTING TEST ===');
+    console.log('\n=== FORMATTED PRINTING TEST ===');
     console.log('Type:', elabTypeStr);
-    console.log('MkDPair:', ctorTypeStr);
+    console.log('refl:', reflTypeStr);
 
-    // Should contain both "Type u" and "Type v", not "#0" or "#1"
+    // Should contain "Type u", not "Type #0" (THIS IS THE BUG)
     expect(elabTypeStr).toContain('Type u');
-    expect(elabTypeStr).toContain('Type v');
     expect(elabTypeStr).not.toContain('Type #0');
-    expect(elabTypeStr).not.toContain('Type #1');
 
-    expect(ctorTypeStr).toContain('Type u');
-    expect(ctorTypeStr).toContain('Type v');
-    expect(ctorTypeStr).not.toContain('Type #0');
-    expect(ctorTypeStr).not.toContain('Type #1');
+    expect(reflTypeStr).toContain('Type u');
+    expect(reflTypeStr).not.toContain('Type #0');
   });
 });

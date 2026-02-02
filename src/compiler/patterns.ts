@@ -900,17 +900,30 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   // they remain as Holes. For dependent elimination to work correctly, these Holes must be
   // converted to fresh metas so they can be solved during RHS type checking.
   //
+  // IMPORTANT: Multiple occurrences of the same Hole ID must map to the SAME meta to ensure
+  // consistent unification. We track hole-to-meta mappings in a Map.
+  //
   // NOTE: This assumes all unbound implicit arguments are universe levels (ULevel type).
   // This is correct for constructors like `refl : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal a a`
   // where the first implicit argument is always the universe level.
-  function fillRemainingHoles(term: TTKTerm, env: TCEnv<unknown>): { term: TTKTerm, env: TCEnv<unknown> } {
+  function fillRemainingHoles(
+    term: TTKTerm,
+    env: TCEnv<unknown>,
+    holeToMeta: Map<string, TTKTerm>
+  ): { term: TTKTerm, env: TCEnv<unknown> } {
     if (term.tag === 'Hole') {
+      // Check if we've already created a meta for this hole ID
+      const existing = holeToMeta.get(term.id);
+      if (existing) {
+        return { term: existing, env };
+      }
       // Create a fresh meta with ULevel type
       const { env: newEnv, metaTerm } = env.createMetaWithType({ tag: 'ULevel' });
+      holeToMeta.set(term.id, metaTerm);
       return { term: metaTerm, env: newEnv };
     } else if (term.tag === 'App') {
-      const { term: fn, env: env1 } = fillRemainingHoles(term.fn, env);
-      const { term: arg, env: env2 } = fillRemainingHoles(term.arg, env1);
+      const { term: fn, env: env1 } = fillRemainingHoles(term.fn, env, holeToMeta);
+      const { term: arg, env: env2 } = fillRemainingHoles(term.arg, env1, holeToMeta);
       return { term: { tag: 'App', fn, arg }, env: env2 };
     } else {
       return { term, env };
@@ -920,7 +933,8 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   let filledElabTerm = elabTerm;
   let updatedEnv = workEnv;
   if (arity > 0) {
-    const result = fillRemainingHoles(elabTerm, workEnv);
+    const holeToMeta = new Map<string, TTKTerm>();
+    const result = fillRemainingHoles(elabTerm, workEnv, holeToMeta);
     filledElabTerm = result.term;
     updatedEnv = result.env;
   }
