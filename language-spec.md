@@ -380,6 +380,39 @@ With branches must be exhaustive (all constructor cases covered).
 /- Nested /- comments -/ are supported -/
 ```
 
+## Directives
+
+Directives are special annotations that control compiler behavior. They start with `@` and appear at the top of a file or before definitions.
+
+### @assumeK
+
+Controls whether axiom K (the deletion rule) is enabled for pattern matching:
+
+```
+@assumeK=true    -- Enable axiom K (allows UIP, Streicher's K)
+@assumeK=false   -- Disable axiom K (requires --without-K proofs)
+```
+
+**Default:** Axiom K is **enabled** by default (matches Lean's behavior).
+
+**What it affects:**
+- **With K enabled:** Pattern matches that force reflexive equations (`x = x`) are allowed
+- **Without K:** Only proofs using the J eliminator are allowed
+
+**Example:**
+```
+@assumeK=true
+
+inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
+  refl : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal a a
+
+-- UIP requires axiom K
+uip : {A : Type} -> {x y : A} -> (p q : Equal x y) -> Equal p q
+uip refl refl = refl  -- ✓ Allowed with @assumeK=true
+```
+
+**See also:** [AXIOM_K.md](AXIOM_K.md) for detailed explanation of axiom K.
+
 ## Operators
 
 ```

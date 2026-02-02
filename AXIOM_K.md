@@ -205,9 +205,53 @@ if (lhs.tag === 'Const' && rhs.tag === 'Const' && lhs.name === rhs.name) {
 5. **Fix test expectations** - Update test files to expect correct errors
 6. **Re-enable test suite** - Remove `describe.skip` from axiom-k-soundness.test.ts
 
-### The Previous Bug
+### Bug Fix: Structurally Equal Terms (February 2026)
 
-The previous implementation tried to check deletion rule AFTER unification as a post-check in pattern matching. This is **fundamentally wrong**:
+**The Bug:** An early return optimization in `unifyTerms` short-circuited on `isDefinitionallyEqual`, returning success for identical terms WITHOUT checking for reflexive variable equations inside them.
+
+```typescript
+// BUGGY CODE:
+if (isDefinitionallyEqual(lhs, rhs)) {
+  // Direct Var check, but misses nested vars!
+  if (lhs.tag === 'Var' && rhs.tag === 'Var' && lhs.index === rhs.index && !assumeK) {
+    return { success: false, reason: 'deletion-rule' };
+  }
+  return emptySuccess;  // BUG: Returns success for (f x) = (f x) even without K!
+}
+```
+
+**The Problem:** When checking if `refl {A} {a}` is self-unifiable, it's structurally equal to itself, so the function returned success WITHOUT recursively checking that `a = a` violates the deletion rule.
+
+**The Fix:** Added `containsVars()` helper to recursively check if a term contains any variables:
+
+```typescript
+function containsVars(term: TTKTerm): boolean {
+  switch (term.tag) {
+    case 'Var': return true;
+    case 'App': return containsVars(term.fn) || containsVars(term.arg);
+    case 'Binder': return containsVars(term.domain) || containsVars(term.body);
+    // ... other cases
+  }
+}
+
+if (isDefinitionallyEqual(lhs, rhs)) {
+  // Check for ANY variables in structurally equal terms
+  if (!assumeK && containsVars(lhs)) {
+    return { success: false, reason: 'deletion-rule' };
+  }
+  return emptySuccess;
+}
+```
+
+**Why This Works:** Now when checking self-unifiability of `refl {A} {a}`:
+1. `refl {A} {a}` is definitionally equal to itself ✓
+2. `containsVars(refl {A} {a})` checks recursively and finds `a : Var` ✓
+3. Without K: returns `deletion-rule` failure ✓
+4. With K: `assumeK` is true, so it succeeds ✓
+
+### Previous Bugs (Historical)
+
+The original implementation tried to check deletion rule AFTER unification as a post-check in pattern matching. This is **fundamentally wrong**:
 - The deletion rule is part of unification itself, not a separate check
 - Checking after unification is too late - unification already succeeded with deletion
 - The check needs to happen DURING unification when we encounter `x = x`
@@ -220,13 +264,20 @@ The previous implementation tried to check deletion rule AFTER unification as a 
 - [HoTT: Just Kidding](https://homotopytypetheory.org/2011/04/10/just-kidding-understanding-identity-elimination-in-homotopy-type-theory/)
 - [nLab: Axiom K](https://ncatlab.org/nlab/show/axiom+K+(type+theory))
 
-## Implementation TODO
+## Implementation Status
 
-- [ ] Modify `unify.ts` to reject reflexive equations (`x = x`) when K is disabled
-- [ ] Add self-unifiability check before applying injectivity rule
-- [ ] Remove incorrect `checkDeletionRule` function from `patterns.ts`
+### Completed ✅
+
+- [x] Modify `unify.ts` to reject reflexive equations (`x = x`) when K is disabled
+- [x] Add self-unifiability check before applying injectivity rule
+- [x] Fix structurally equal terms bug with `containsVars()` helper (Feb 2026)
+- [x] Update test file expectations (`uip-with-k.tt`, `vec-tail-without-explicit-A.tt`)
+- [x] Axiom K test suite passing (weakK, UIP tests)
+- [x] Good error messages: "Pattern matching on 'refl' requires axiom K (the deletion rule)"
+
+### TODO
+
 - [ ] Create `@withoutK` directive for explicitly disabling K (opposite of `@assumeK`)
-- [ ] Update test file error expectations
-- [ ] Re-enable axiom K test suite
-- [ ] Add better error messages that explain WHY a pattern needs K
 - [ ] Document the relationship between K and Homotopy Type Theory
+- [ ] Add examples showing K-free proofs using J eliminator
+- [ ] Performance: Cache `containsVars` results for common terms

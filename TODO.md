@@ -91,9 +91,14 @@ Where `?0` is actually the `A` parameter, not an unresolved meta.
   - [ ] Re-elaboration of hoisted patterns
   - [ ] Pattern refinement (dependent pattern matching)
 
-- [ ] **Pattern Matching without K**
-  - [ ] Implement axiom K prevention (no deletion rule)
-  - [ ] Prevent self-unification to avoid weakK
+- [x] **Pattern Matching without K** ✅ (February 2026)
+  - [x] Implement axiom K prevention (no deletion rule)
+  - [x] Prevent self-unification to avoid weakK
+  - [x] Fix structurally equal terms bug with `containsVars()` helper
+  - [x] Add `@assumeK` directive (default: enabled)
+  - [x] Comprehensive test suite for K-dependent proofs (UIP, Streicher's K, weakK)
+  - [ ] Add `@withoutK` directive for explicitly disabling K
+  - See [AXIOM_K.md](AXIOM_K.md) for details
 
 ## Constraint Solver Hardening
 
