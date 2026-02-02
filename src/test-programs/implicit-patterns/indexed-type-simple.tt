@@ -1,7 +1,7 @@
 -- Test implicit bug with an indexed type (like Equal but simpler)
--- @test success
--- @name "Indexed type pattern matching without explicit {A}"
--- @import preambles/nat.tt
+@test success
+@name "Indexed type pattern matching without explicit {A}"
+@import preambles/nat.tt
 
 -- Simple indexed type: Tag A x says "x has type A"
 inductive Tag : {A : Type} -> A -> Type where

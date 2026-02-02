@@ -1,6 +1,6 @@
--- @test failure
--- @name "Negative occurrence through List: List (Bad -> Nat) -> Bad"
--- @error "negative occurrence"
+@test failure
+@name "Negative occurrence through List: List (Bad -> Nat) -> Bad"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

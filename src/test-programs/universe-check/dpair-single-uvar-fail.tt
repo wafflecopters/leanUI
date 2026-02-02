@@ -1,5 +1,5 @@
--- @test failure
--- @name "DPair with single universe variable should fail"
+@test failure
+@name "DPair with single universe variable should fail"
 
 inductive DPair1 : {u : ULevel} -> (A : Type u) -> (B : A -> Type) -> Type where
   MkDPair1: {u : ULevel} -> {A : Type u} -> {B : A -> Type} -> (a : A) -> B a -> DPair1 A B

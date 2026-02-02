@@ -1,6 +1,6 @@
--- @test success
--- @name "soundness: Equal (Succ x) (Succ x) with refl is valid"
--- @import preambles/equality.tt
+@test success
+@name "soundness: Equal (Succ x) (Succ x) with refl is valid"
+@import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat

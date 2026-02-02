@@ -1,7 +1,7 @@
--- @test success
--- @name "equal using with and recursion"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "equal using with and recursion"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 eqNat : Nat -> Nat -> Bool
 eqNat m n with m, n

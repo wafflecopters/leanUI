@@ -1,5 +1,5 @@
--- @test failure
--- @name "soundness: absurd on inhabited type should be rejected"
+@test failure
+@name "soundness: absurd on inhabited type should be rejected"
 
 inductive Nat : Type where
   Zero : Nat

@@ -1,6 +1,6 @@
--- @test failure
--- @name "Negative occurrence nested in product: Pair (Bad -> Nat) Nat"
--- @error "negative occurrence"
+@test failure
+@name "Negative occurrence nested in product: Pair (Bad -> Nat) Nat"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

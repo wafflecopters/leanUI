@@ -1,6 +1,6 @@
--- @test success
--- @name "record with multiple fields compiles"
--- @import preambles/nat.tt
+@test success
+@name "record with multiple fields compiles"
+@import preambles/nat.tt
 
 record Point where
   x : Nat

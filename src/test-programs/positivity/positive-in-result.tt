@@ -1,5 +1,5 @@
--- @test success
--- @name "Strictly positive: direct occurrence in argument and result"
+@test success
+@name "Strictly positive: direct occurrence in argument and result"
 
 inductive Nat : Type where
   Zero : Nat

@@ -1,7 +1,7 @@
--- @test failure
--- @name "soundness: decEqNat using flipped succInj gives wrong equality direction"
--- @import preambles/equality.tt
--- @error "conflict"
+@test failure
+@name "soundness: decEqNat using flipped succInj gives wrong equality direction"
+@import preambles/equality.tt
+@error "conflict"
 
 inductive Nat : Type where
   Zero : Nat

@@ -1,7 +1,7 @@
--- @test success
--- @name "mixed clauses with exhaustive with pass totality"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "mixed clauses with exhaustive with pass totality"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isOne : Nat -> Bool
 isOne Zero = False

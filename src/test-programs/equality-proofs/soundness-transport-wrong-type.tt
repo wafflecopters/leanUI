@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: transport with wrong equality should be rejected"
--- @import preambles/equal-simple.tt
+@test failure
+@name "soundness: transport with wrong equality should be rejected"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

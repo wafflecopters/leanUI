@@ -1,6 +1,6 @@
--- @test failure
--- @name "Error in third pattern clause is detected"
--- @import preambles/nat.tt
+@test failure
+@name "Error in third pattern clause is detected"
+@import preambles/nat.tt
 
 f : Nat -> Nat
 f Zero = Zero

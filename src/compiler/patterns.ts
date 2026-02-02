@@ -1170,15 +1170,46 @@ function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, pa
 
   if (pattern.tag === 'PWild') {
     // Wildcard pattern: create a meta variable for the binding
-    const { env: newWorkEnv, name } = addMetaVarInTCEnv(env, binderType)
-    logInfo(() => `  Create meta ${name} : ${env.prettyPrint(binderType)}`);
+    //
+    // IMPORTANT: For padding wildcards (from implicit arguments), use holes instead of variables.
+    // This ensures that when the same constructor appears multiple times in a pattern
+    // (e.g., `uip refl refl = refl`), the implicit arguments get unified to the same values
+    // instead of creating conflicts during RHS type checking.
+    const isPaddingWildcard = pattern.name.startsWith('_pad');
 
-    env = newWorkEnv
-      .extendTTKContext(pattern.name, binderType)
+    if (isPaddingWildcard) {
+      // For padding wildcards (implicit arguments), use a hole that will be filled
+      // during unification. This allows multiple occurrences of the same constructor
+      // to share the same implicit argument values.
+      const holeId = `${pattern.name}_${env.context.length}`;
+      const holeTerm: TTKTerm = { tag: 'Hole', id: holeId };
 
-    env = env.withConstraint({ meta: name, rhs: mkVar(env.context.length - 1) })
-    checkStack.push({ type: binderBody, ctxLength: env.context.length })
-    elabStack.push(mkVar(env.context.length - 1))
+      logInfo(() => `  Create hole ${holeId} : ${env.prettyPrint(binderType)}`);
+
+      // Register the hole as a meta so it can be solved during unification
+      env = registerHolesInTermAsMetas(env, holeTerm);
+
+      // Extend context to keep context lengths correct for subsequent patterns
+      env = env.extendTTKContext(pattern.name, binderType);
+
+      // CRITICAL: Add a constraint linking the hole to the context variable
+      // When the context variable gets unified/substituted, the hole will be solved too
+      env = env.withConstraint({ meta: `hole:${holeId}`, rhs: mkVar(env.context.length - 1) });
+
+      checkStack.push({ type: binderBody, ctxLength: env.context.length })
+      elabStack.push(holeTerm)
+    } else {
+      // For user-written wildcards, create a pattern variable as before
+      const { env: newWorkEnv, name } = addMetaVarInTCEnv(env, binderType)
+      logInfo(() => `  Create meta ${name} : ${env.prettyPrint(binderType)}`);
+
+      env = newWorkEnv
+        .extendTTKContext(pattern.name, binderType)
+
+      env = env.withConstraint({ meta: name, rhs: mkVar(env.context.length - 1) })
+      checkStack.push({ type: binderBody, ctxLength: env.context.length })
+      elabStack.push(mkVar(env.context.length - 1))
+    }
   } else if (pattern.tag === 'PVar') {
     // Named variable pattern: validate and bind the variable
     // Validate pattern variable naming: must be lowercase, cannot shadow term definitions
@@ -1452,8 +1483,12 @@ export function checkMatchClause(
   const finalContextLength = result.context.length;
   const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
 
+  // Zonk the elaborated patterns to resolve any padding wildcard holes that were solved during LHS unification
+  // This is important because padding wildcards create Hole terms that get unified with actual values
+  const zonkedElabStack = elabStack.map(term => result.zonkTerm(term));
+
   // Convert elabStack to de Bruijn indices as well
-  const elabArgs = elabStack.map(term => levelsToDeBruijn(term, finalContextLength));
+  const elabArgs = zonkedElabStack.map(term => levelsToDeBruijn(term, finalContextLength));
 
   // Type check the transformed RHS
   const baseEnv = result
@@ -1568,9 +1603,19 @@ export function checkMatchClause(
   solvedEnv.zonkTypeInfoEntries();
 
   // Fix context names for entries in this clause.
-  // Synthetic wildcard patterns (from reorderPatterns) may have generated names like "?0"
-  // instead of the Pi binder name (e.g., "B"). Replace with correct names from the Pi type.
-  paddedEnv.fixTypeInfoContextNames(patContext);
+  // Merge patContext (Pi binder names) with result.context (elaborated names):
+  // - Pi binder names may be "_" for unnamed params (bad for PVar patterns like "a", "b")
+  // - Elaborated names may be synthetic like "?0" for implicit args the user didn't write
+  // For each position, prefer the elaborated name unless it's synthetic (starts with "?"),
+  // in which case use the Pi binder name (e.g., "B" from {B : Type}).
+  const correctContext = patContext.map((entry, i) => {
+    const elabEntry = result.context[i];
+    if (elabEntry && !elabEntry.name.startsWith('?')) {
+      return { name: elabEntry.name, type: entry.type };
+    }
+    return entry;
+  });
+  paddedEnv.fixTypeInfoContextNames(correctContext);
 
   // Extract context names for pretty printing (de Bruijn order: index 0 = most recent)
   // TTKContext has oldest at index 0 (appended), but we need most recent at index 0

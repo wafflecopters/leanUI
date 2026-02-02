@@ -1,4 +1,4 @@
--- @test failure
--- @name "Error in application inside lambda is detected"
+@test failure
+@name "Error in application inside lambda is detected"
 
 f = fun x => wrong x

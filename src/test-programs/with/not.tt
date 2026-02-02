@@ -1,6 +1,6 @@
--- @test success
--- @name "not: with on Bool"
--- @import preambles/bool.tt
+@test success
+@name "not: with on Bool"
+@import preambles/bool.tt
 
 not : Bool -> Bool
 not b with b

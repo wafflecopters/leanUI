@@ -1,6 +1,6 @@
--- @test success
--- @name "Using defined function in type annotation triggers proper constant resolution"
--- @import preambles/nat.tt
+@test success
+@name "Using defined function in type annotation triggers proper constant resolution"
+@import preambles/nat.tt
 
 plus : Nat -> Nat -> Nat
 plus Zero b = b

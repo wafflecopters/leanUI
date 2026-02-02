@@ -1,5 +1,5 @@
--- @test failure
--- @name "Error in first constructor type is detected"
+@test failure
+@name "Error in first constructor type is detected"
 
 inductive List : Type where
   Nil : Wrong

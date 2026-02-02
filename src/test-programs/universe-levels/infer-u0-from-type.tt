@@ -1,5 +1,5 @@
--- @test success
--- @name "Infer u=0 when constructor has {A : Type} (matching inductive Type 0)"
+@test success
+@name "Infer u=0 when constructor has {A : Type} (matching inductive Type 0)"
 
 inductive Equal4 : {u : ULevel} -> {A : Type} -> A -> A -> Type where
   refl4 : {A : Type} -> {a : A} -> Equal4 a a

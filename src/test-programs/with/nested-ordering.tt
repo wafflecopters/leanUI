@@ -1,7 +1,7 @@
--- @test success
--- @name "nested with generates correct auxiliary ordering"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "nested with generates correct auxiliary ordering"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 ordered : Nat -> Nat -> Bool
 ordered m n with m

@@ -1,6 +1,6 @@
--- @test failure
--- @name "Mutual dependency with negative occurrence: Even references Odd negatively"
--- @error "negative occurrence"
+@test failure
+@name "Mutual dependency with negative occurrence: Even references Odd negatively"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

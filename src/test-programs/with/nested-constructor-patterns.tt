@@ -1,7 +1,7 @@
--- @test success
--- @name "nested constructor patterns in with branches"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "nested constructor patterns in with branches"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isTwo : Nat -> Bool
 isTwo n with n

@@ -1,7 +1,7 @@
--- @test success
--- @name "multiple scrutinees with more specific patterns"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "multiple scrutinees with more specific patterns"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 compare : Nat -> Nat -> Nat
 compare m n with m, n

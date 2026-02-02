@@ -1,6 +1,6 @@
--- @test failure
--- @name "appNat: f x in return position is rejected with clear error"
--- @error "but a type was expected"
+@test failure
+@name "appNat: f x in return position is rejected with clear error"
+@error "but a type was expected"
 
 inductive Nat : Type where
   Zero : Nat

@@ -1,7 +1,7 @@
--- @test success
--- @name "with on function with named pattern args"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "with on function with named pattern args"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 id : {A : Type} -> A -> A
 id x = x

@@ -1,4 +1,4 @@
--- @test failure
--- @name "Error in function position of application is detected"
+@test failure
+@name "Error in function position of application is detected"
 
 x = wrongFn arg

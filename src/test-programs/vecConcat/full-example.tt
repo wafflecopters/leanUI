@@ -1,5 +1,5 @@
--- @test success
--- @name "vecConcat using swap VCons - the original motivating example"
+@test success
+@name "vecConcat using swap VCons - the original motivating example"
 
 inductive Nat : Type where
   Zero : Nat

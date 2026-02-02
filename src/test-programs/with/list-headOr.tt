@@ -1,8 +1,8 @@
--- @test success
--- @name "head with default using with"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
--- @import preambles/list.tt
+@test success
+@name "head with default using with"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/list.tt
 
 headOr : {A : Type} -> A -> List A -> A
 headOr def xs with xs

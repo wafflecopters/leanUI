@@ -1,6 +1,6 @@
--- @test success
--- @name "pred: matching returns a sub-pattern variable"
--- @import preambles/nat.tt
+@test success
+@name "pred: matching returns a sub-pattern variable"
+@import preambles/nat.tt
 
 pred : Nat -> Nat
 pred n with n

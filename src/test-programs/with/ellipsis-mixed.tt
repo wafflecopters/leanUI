@@ -1,7 +1,7 @@
--- @test success
--- @name "ellipsis mixed with non-ellipsis branches"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "ellipsis mixed with non-ellipsis branches"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isZero2 : Nat -> Bool
 isZero2 n with n

@@ -600,7 +600,11 @@ export class ParseError extends Error {
  */
 export class ParseErrors extends Error {
   constructor(public errors: ParseError[]) {
-    super(`${errors.length} parse error${errors.length !== 1 ? 's' : ''}`);
+    const count = errors.length;
+    const summary = `${count} parse error${count !== 1 ? 's' : ''}`;
+    // Include first error's message for better error display
+    const firstErrorMsg = errors[0] ? `: ${errors[0].message}` : '';
+    super(summary + firstErrorMsg);
     this.name = 'ParseErrors';
   }
 }
@@ -3116,6 +3120,7 @@ export class Parser {
    * Tactics are indented and one per line.
    */
   private parseTacticBlock(ctx: NameContext, path: IndexPath = []): TTerm {
+    const byToken = this.tokens[this.pos - 1]; // The 'by' keyword (already consumed by caller)
     const startToken = this.current();
 
     // 'by' keyword should already be consumed by caller
@@ -3166,8 +3171,8 @@ export class Parser {
     if (tactics.length === 0) {
       throw new ParseError(
         'Expected at least one tactic after \'by\'',
-        this.current().line,
-        this.current().col
+        byToken.line,
+        byToken.col
       );
     }
 

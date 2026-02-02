@@ -1,7 +1,7 @@
--- @test success
--- @name "nested with on both branches"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "nested with on both branches"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 classify2 : Nat -> Nat -> Bool
 classify2 m n with m

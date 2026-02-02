@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: lambda with wrong return type should be rejected"
--- @import preambles/equal-simple.tt
+@test failure
+@name "soundness: lambda with wrong return type should be rejected"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

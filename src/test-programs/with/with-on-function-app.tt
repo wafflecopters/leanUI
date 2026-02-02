@@ -1,7 +1,7 @@
--- @test success
--- @name "with on a function application"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "with on a function application"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isZero : Nat -> Bool
 isZero n with n

@@ -1,5 +1,5 @@
--- @test success
--- @name "replace (transport) function using Equal"
+@test success
+@name "replace (transport) function using Equal"
 
 inductive Nat : Type where
   Zero : Nat

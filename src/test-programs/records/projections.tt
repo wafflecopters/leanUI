@@ -1,6 +1,6 @@
--- @test success
--- @name "projection functions are generated and usable"
--- @import preambles/nat.tt
+@test success
+@name "projection functions are generated and usable"
+@import preambles/nat.tt
 
 record Point where
   constructor MkPoint

@@ -1,6 +1,6 @@
--- @test success
--- @name "soundness: decEqNat with correct cong proof succeeds"
--- @import preambles/equality.tt
+@test success
+@name "soundness: decEqNat with correct cong proof succeeds"
+@import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat

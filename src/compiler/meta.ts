@@ -492,6 +492,17 @@ export function solveConstraints(
         }
       }
       newMetaVars.set(normConstraint.meta, { ...meta, solution: normConstraint.rhs, ctx: effectiveContext });
+
+      // If this is a "hole:" prefixed constraint, also copy the solution to the plain ID
+      // This is needed because registerHolesInTermAsMetas creates two meta entries:
+      // one with the plain ID (used by zonking) and one with "hole:" prefix (used by unification)
+      if (normConstraint.meta.startsWith('hole:')) {
+        const plainId = normConstraint.meta.slice(5); // Remove "hole:" prefix
+        const plainMeta = newMetaVars.get(plainId);
+        if (plainMeta && !plainMeta.solution) {
+          newMetaVars.set(plainId, { ...plainMeta, solution: normConstraint.rhs, ctx: effectiveContext });
+        }
+      }
     } else {
       stillStuck.push(constraint); // original constraint, retains original ctx for future attempts
     }

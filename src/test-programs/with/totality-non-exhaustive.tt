@@ -1,7 +1,7 @@
--- @test failure
--- @name "non-exhaustive with-clause fails totality"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test failure
+@name "non-exhaustive with-clause fails totality"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isZero : Nat -> Bool
 isZero n with n

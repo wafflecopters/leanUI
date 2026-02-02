@@ -1,7 +1,7 @@
--- @test failure
--- @name "soundness: Yes refl for DecEq (Succ x) (Succ y) must be rejected"
--- @import preambles/equality.tt
--- @error "conflict"
+@test failure
+@name "soundness: Yes refl for DecEq (Succ x) (Succ y) must be rejected"
+@import preambles/equality.tt
+@error "conflict"
 
 inductive Nat : Type where
   Zero : Nat

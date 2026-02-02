@@ -1,6 +1,6 @@
--- @test success
--- @name "soundness: succInj with flipped Equal q p is valid (refl unifies p and q)"
--- @import preambles/equal-simple.tt
+@test success
+@name "soundness: succInj with flipped Equal q p is valid (refl unifies p and q)"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

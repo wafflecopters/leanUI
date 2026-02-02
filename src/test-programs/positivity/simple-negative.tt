@@ -1,6 +1,6 @@
--- @test failure
--- @name "Simple negative occurrence: Bad : Type where bad : (Bad -> Nat) -> Bad"
--- @error "negative occurrence"
+@test failure
+@name "Simple negative occurrence: Bad : Type where bad : (Bad -> Nat) -> Bad"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

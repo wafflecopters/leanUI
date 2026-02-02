@@ -1,5 +1,5 @@
--- @test success
--- @name "Fin: bounded natural numbers"
+@test success
+@name "Fin: bounded natural numbers"
 
 inductive Nat : Type where
   Zero : Nat

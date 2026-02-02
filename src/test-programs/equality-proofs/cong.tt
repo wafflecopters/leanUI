@@ -1,6 +1,6 @@
--- @test success
--- @name "cong: Equal u v -> Equal (f u) (f v)"
--- @import preambles/equality.tt
+@test success
+@name "cong: Equal u v -> Equal (f u) (f v)"
+@import preambles/equality.tt
 
 cong : {A B : Type} -> {u v : A} -> {f : A -> B} -> Equal u v -> Equal (f u) (f v)
 cong refl = refl

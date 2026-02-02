@@ -1,6 +1,6 @@
--- @test failure
--- @name "Negative occurrence in indexed family"
--- @error "negative occurrence"
+@test failure
+@name "Negative occurrence in indexed family"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

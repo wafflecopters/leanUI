@@ -1,6 +1,6 @@
--- @test failure
--- @name "Deep nesting: (((((Bad -> A) -> A) -> A) -> A) -> A) -> Bad is negative"
--- @error "negative occurrence"
+@test failure
+@name "Deep nesting: (((((Bad -> A) -> A) -> A) -> A) -> A) -> Bad is negative"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

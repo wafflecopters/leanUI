@@ -1,7 +1,7 @@
--- @test success
--- @name "three levels of nesting"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "three levels of nesting"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 deep : Nat -> Nat -> Nat -> Bool
 deep a b c with a

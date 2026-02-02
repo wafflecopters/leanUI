@@ -1,8 +1,8 @@
--- @test success
--- @name "reverse using with and accumulator"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
--- @import preambles/list.tt
+@test success
+@name "reverse using with and accumulator"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/list.tt
 
 revAux : {A : Type} -> List A -> List A -> List A
 revAux acc xs with xs

@@ -1,5 +1,5 @@
--- @test success
--- @name "Exists: sigma type (dependent pair)"
+@test success
+@name "Exists: sigma type (dependent pair)"
 
 inductive Exists : (A : Type) -> (A -> Type) -> Type where
   ExIntro : (A : Type) -> (P : A -> Type) -> (x : A) -> P x -> Exists A P

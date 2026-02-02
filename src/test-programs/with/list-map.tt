@@ -1,8 +1,8 @@
--- @test success
--- @name "map using with"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
--- @import preambles/list.tt
+@test success
+@name "map using with"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/list.tt
 
 map : {A B : Type} -> (A -> B) -> List A -> List B
 map f xs with xs

@@ -1,7 +1,7 @@
--- @test success
--- @name "with on nested function application"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "with on nested function application"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 not : Bool -> Bool
 not b with b

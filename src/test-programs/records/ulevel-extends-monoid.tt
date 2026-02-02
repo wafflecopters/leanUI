@@ -1,6 +1,6 @@
--- @test success
--- @name "record with ULevel param and universe-polymorphic Equal"
--- @import preambles/equality.tt
+@test success
+@name "record with ULevel param and universe-polymorphic Equal"
+@import preambles/equality.tt
 
 record Semigroup {u : ULevel} (A : Type u) : Type u where
   op : A -> A -> A

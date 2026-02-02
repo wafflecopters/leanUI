@@ -1,6 +1,6 @@
--- @test success
--- @name "trans: Equal u v -> Equal v w -> Equal u w"
--- @import preambles/equality.tt
+@test success
+@name "trans: Equal u v -> Equal v w -> Equal u w"
+@import preambles/equality.tt
 
 trans : {A : Type} -> {u v w : A} -> Equal u v -> Equal v w -> Equal u w
 trans refl refl = refl

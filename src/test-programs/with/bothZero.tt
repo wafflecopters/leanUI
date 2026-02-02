@@ -1,7 +1,7 @@
--- @test success
--- @name "bothZero: two Nat scrutinees"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "bothZero: two Nat scrutinees"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 bothZero : Nat -> Nat -> Bool
 bothZero m n with m, n

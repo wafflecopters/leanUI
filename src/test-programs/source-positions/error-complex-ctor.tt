@@ -1,5 +1,5 @@
--- @test failure
--- @name "Error in constructor with complex type is detected"
+@test failure
+@name "Error in constructor with complex type is detected"
 
 inductive Vec : Nat -> Type where
   VCons : (A : Type) -> (n : Nat) -> A -> Vec n -> Vec (Wrong n)

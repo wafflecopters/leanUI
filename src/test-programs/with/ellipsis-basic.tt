@@ -1,7 +1,7 @@
--- @test success
--- @name "ellipsis in top-level with branches"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "ellipsis in top-level with branches"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isZero : Nat -> Bool
 isZero n with n

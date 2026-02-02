@@ -1,4 +1,4 @@
--- @test failure
--- @name "Multiple errors in same expression are detected"
+@test failure
+@name "Multiple errors in same expression are detected"
 
 x = wrong1 wrong2 wrong3

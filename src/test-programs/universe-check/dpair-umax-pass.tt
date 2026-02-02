@@ -1,5 +1,5 @@
--- @test success
--- @name "DPair with UMax should pass"
+@test success
+@name "DPair with UMax should pass"
 
 inductive DPair3 : {u v : ULevel} -> (A : Type u) -> (B : A -> Type v) -> Type (UMax u v) where
   MkDPair3: {u v : ULevel} -> {A : Type u} -> {B : A -> Type v} -> (a : A) -> B a -> DPair3 A B

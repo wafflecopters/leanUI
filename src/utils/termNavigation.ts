@@ -294,6 +294,14 @@ export function prettyPrintTerm(term: TTerm): string {
 
     case 'WithClause':
       return '#with';
+
+    case 'TacticBlock':
+      return '#tactics';
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 

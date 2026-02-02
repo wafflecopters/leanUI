@@ -1,5 +1,5 @@
--- @test success
--- @name "Nat: basic definition"
+@test success
+@name "Nat: basic definition"
 
 inductive Nat : Type where
   Zero : Nat

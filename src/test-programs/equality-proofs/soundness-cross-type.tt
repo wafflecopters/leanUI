@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: Equal Zero True cross-type must be rejected"
--- @import preambles/equality.tt
+@test failure
+@name "soundness: Equal Zero True cross-type must be rejected"
+@import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat

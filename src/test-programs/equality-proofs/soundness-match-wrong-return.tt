@@ -1,5 +1,5 @@
--- @test failure
--- @name "soundness: match clause returning wrong constructor is rejected"
+@test failure
+@name "soundness: match clause returning wrong constructor is rejected"
 
 inductive Nat : Type where
   Zero : Nat

@@ -1,8 +1,8 @@
--- @test failure
--- @name "higher-order function with wrong domain type is rejected"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
--- @error "application of 'fn' has type Nat but expected Bool"
+@test failure
+@name "higher-order function with wrong domain type is rejected"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@error "application of 'fn' has type Nat but expected Bool"
 
 blah : (Bool -> Nat) -> (Bool -> Bool)
 blah fn = \n => fn n

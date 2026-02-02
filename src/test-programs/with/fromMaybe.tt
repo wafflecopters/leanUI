@@ -1,7 +1,7 @@
--- @test success
--- @name "fromMaybe using with"
--- @import preambles/nat.tt
--- @import preambles/maybe.tt
+@test success
+@name "fromMaybe using with"
+@import preambles/nat.tt
+@import preambles/maybe.tt
 
 fromMaybe : {A : Type} -> A -> Maybe A -> A
 fromMaybe def mx with mx

@@ -1,5 +1,5 @@
--- @test success
--- @name "refl with all named args explicit: {A:=Nat} {a:=Zero}"
+@test success
+@name "refl with all named args explicit: {A:=Nat} {a:=Zero}"
 
 inductive Nat : Type where
   Zero : Nat

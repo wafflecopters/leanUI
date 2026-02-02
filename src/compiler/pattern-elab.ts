@@ -484,6 +484,14 @@ export function adjustRhsWithMapping(
             rhs: adjust(c.rhs, depth + countPatternVars(c.patterns))
           }))
         };
+
+      case 'TacticBlock':
+        return term;
+
+      default: {
+        const _never: never = term;
+        throw new Error(`Unreachable code: ${_never}`);
+      }
     }
   }
 

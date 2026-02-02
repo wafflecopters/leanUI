@@ -1,7 +1,7 @@
--- @test success
--- @name "exhaustive with-clause passes totality"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "exhaustive with-clause passes totality"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isZero : Nat -> Bool
 isZero n with n

@@ -1,7 +1,7 @@
--- @test success
--- @name "two separate function clauses with different withs"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "two separate function clauses with different withs"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 classify : Nat -> Nat -> Nat
 classify Zero n with n

@@ -1,7 +1,7 @@
--- @test success
--- @name "nested with totality: inner with checked independently"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "nested with totality: inner with checked independently"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 classify : Nat -> Nat -> Bool
 classify m n with m

@@ -1,6 +1,6 @@
--- @test failure
--- @name "replace with f : A -> B is rejected (f x is a term)"
--- @error "is a term of type B"
+@test failure
+@name "replace with f : A -> B is rejected (f x is a term)"
+@error "is a term of type B"
 
 inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {x : A} -> Equal x x

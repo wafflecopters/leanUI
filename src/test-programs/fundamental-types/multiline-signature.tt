@@ -1,5 +1,5 @@
--- @test success
--- @name "Multiline inductive type signature with where"
+@test success
+@name "Multiline inductive type signature with where"
 
 inductive Foo : Type
   -> Type where

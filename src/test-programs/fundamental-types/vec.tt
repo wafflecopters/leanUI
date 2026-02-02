@@ -1,5 +1,5 @@
--- @test success
--- @name "Vec: length-indexed vectors"
+@test success
+@name "Vec: length-indexed vectors"
 
 inductive Nat : Type where
   Zero : Nat

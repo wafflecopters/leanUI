@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: with-clause cannot prove false equality"
--- @import preambles/equal-simple.tt
+@test failure
+@name "soundness: with-clause cannot prove false equality"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

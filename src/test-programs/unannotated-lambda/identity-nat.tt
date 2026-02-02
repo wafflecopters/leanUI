@@ -1,6 +1,6 @@
--- @test success
--- @name "identity function applied to Zero"
--- @import preambles/nat.tt
+@test success
+@name "identity function applied to Zero"
+@import preambles/nat.tt
 
 fox : Nat
 fox = (\x => x) Zero

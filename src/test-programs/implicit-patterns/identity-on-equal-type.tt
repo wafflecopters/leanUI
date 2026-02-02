@@ -1,9 +1,9 @@
 -- Test that eqEqual (UIP-like structure) fails without explicit {A}
 -- Same bug as UIP: implicit argument conflict
--- @test failure
--- @name "eqEqual (UIP-like) without explicit {A} (bug exists)"
--- @import preambles/nat.tt
--- @error "Implicit argument conflict"
+@test failure
+@name "eqEqual (UIP-like) without explicit {A} (bug exists)"
+@import preambles/nat.tt
+@error "Implicit argument conflict"
 
 inductive Equal : {A: Type} -> A -> A -> Type where
   refl : (A : Type) -> (a : A) -> Equal a a

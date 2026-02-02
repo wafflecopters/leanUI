@@ -1,8 +1,8 @@
 -- Test that two Maybe patterns work without explicit {A}
 -- FIXED: Positional args now allowed for types with only implicit params
--- @test success
--- @name "Two Maybe patterns without explicit {A} work"
--- @import preambles/nat.tt
+@test success
+@name "Two Maybe patterns without explicit {A} work"
+@import preambles/nat.tt
 
 inductive Maybe : {A : Type} -> Type where
   Nothing : {A : Type} -> Maybe {A}

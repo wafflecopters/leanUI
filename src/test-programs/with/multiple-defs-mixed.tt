@@ -1,7 +1,7 @@
--- @test success
--- @name "multiple definitions, some with with some without"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "multiple definitions, some with with some without"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 double : Nat -> Nat
 double Zero = Zero

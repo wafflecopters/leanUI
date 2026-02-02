@@ -279,7 +279,7 @@ export interface WildcardInlayHint {
 /**
  * Semantic token types for syntax highlighting
  */
-export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace';
+export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace' | 'directive';
 
 /**
  * A semantic token for highlighting
@@ -323,8 +323,13 @@ export interface HoleLocation {
  * - PVar/PWild → patternVar (light blue)
  * - PCtor → constName (white)
  */
-export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
+export function extractSemanticTokens(result: CompileResult, source?: string): SemanticToken[] {
   const tokens: SemanticToken[] = [];
+
+  // Extract directive tokens from source if provided
+  if (source) {
+    tokens.push(...extractDirectiveTokens(source));
+  }
 
   for (const block of result.blocks) {
     for (const decl of block.declarations) {
@@ -446,6 +451,37 @@ export function extractSemanticTokens(result: CompileResult): SemanticToken[] {
         }
       }
     }
+  }
+
+  return tokens;
+}
+
+/**
+ * Extract directive tokens from source text for syntax highlighting.
+ * Directives like @test, @name, @import, @error, @assumeK get highlighted.
+ */
+export function extractDirectiveTokens(source: string): SemanticToken[] {
+  const tokens: SemanticToken[] = [];
+  const lines = source.split('\n');
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+
+    // Match directive with or without -- prefix: @directive value or -- @directive value
+    const directiveMatch = line.match(/^(\s*)(?:(--)\s*)?(@\w+)/);
+    if (!directiveMatch) continue;
+
+    const [, leadingWhitespace, commentPrefix, directive] = directiveMatch;
+    // Column is 1-based, so add 1. Calculate where the @ starts.
+    const column = leadingWhitespace.length + (commentPrefix ? commentPrefix.length + 1 : 0) + 1;
+
+    // Add token for the directive name (e.g., @test, @assumeK)
+    tokens.push({
+      line: lineIndex + 1,
+      column,
+      length: directive.length,
+      type: 'directive'
+    });
   }
 
   return tokens;
@@ -1147,8 +1183,10 @@ export function parseTTSource(source: string): ParseResult {
       if (e instanceof Error && 'errors' in e) {
         parseErrors = (e as any).errors as ParseError[];
         parseErrors = parseErrors.map(err => ({
-          ...err,
-          line: err.line + block.startLine - 1
+          name: err.name,
+          message: err.message,
+          line: err.line + block.startLine - 1,
+          col: err.col
         }));
       } else {
         parseErrors = [{
@@ -1417,22 +1455,26 @@ export interface CompileOptions {
 /**
  * Parse @assumeK directive from source code.
  *
- * Recognizes:
- *   -- @assumeK         (equivalent to @assumeK=true)
- *   -- @assumeK=true
- *   -- @assumeK=false
+ * Recognizes (with or without -- prefix):
+ *   @assumeK         (equivalent to @assumeK=true)
+ *   @assumeK=true
+ *   @assumeK=false
  *
  * @returns true if @assumeK or @assumeK=true, false if @assumeK=false, undefined if not present
  */
 function parseAssumeKDirective(source: string): boolean | undefined {
   const lines = source.split('\n');
   for (const line of lines) {
-    const match = line.match(/^--\s*@assumeK(?:=(\w+))?/);
+    const trimmed = line.trim();
+    // Match @assumeK with or without -- prefix
+    const match = trimmed.match(/^(?:--\s*)?@assumeK(?:=(\w+))?/);
     if (match) {
       const value = match[1];
       if (!value || value === 'true') return true;
       if (value === 'false') return false;
-      throw new Error(`Invalid @assumeK directive: expected 'true' or 'false', got '${value}'`);
+      // Warning instead of throw for incomplete/invalid directive
+      console.warn(`Warning: Invalid @assumeK directive value '${value}'. Expected 'true' or 'false'. Treating as 'false'.`);
+      return false;
     }
   }
   return undefined;

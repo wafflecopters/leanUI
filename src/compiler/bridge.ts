@@ -723,5 +723,13 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
 
     case 'WithClause':
       return b.tag === 'WithClause';
+
+    case 'TacticBlock':
+      return b.tag === 'TacticBlock';
+
+    default: {
+      const _never: never = a;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }

@@ -1,4 +1,4 @@
--- @test failure
--- @name "Error in return type of type signature is detected"
+@test failure
+@name "Error in return type of type signature is detected"
 
 plus : Nat -> Nat -> Na

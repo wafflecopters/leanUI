@@ -1,6 +1,6 @@
--- @test failure
--- @name "replace0 using Equal0 without universe polymorphism (universe error)"
--- @error "expects Type but was applied to Type 1"
+@test failure
+@name "replace0 using Equal0 without universe polymorphism (universe error)"
+@error "expects Type but was applied to Type 1"
 --
 -- This is a genuine universe-level error:
 -- Equal0 has {A : Type} which means A : Type 0.

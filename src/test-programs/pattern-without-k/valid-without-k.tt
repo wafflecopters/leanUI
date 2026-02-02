@@ -1,6 +1,6 @@
--- @test success
--- @name "Valid pattern match without K: matching refl against Equal a a"
--- @import preambles/equality.tt
+@test success
+@name "Valid pattern match without K: matching refl against Equal a a"
+@import preambles/equality.tt
 
 -- This works WITHOUT K because we're matching refl : Equal a a against Equal a a
 -- The indices are syntactically the same variable

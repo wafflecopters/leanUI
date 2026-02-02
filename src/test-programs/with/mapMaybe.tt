@@ -1,7 +1,7 @@
--- @test success
--- @name "mapMaybe using with"
--- @import preambles/nat.tt
--- @import preambles/maybe.tt
+@test success
+@name "mapMaybe using with"
+@import preambles/nat.tt
+@import preambles/maybe.tt
 
 mapMaybe : {A B : Type} -> (A -> B) -> Maybe A -> Maybe B
 mapMaybe f mx with mx

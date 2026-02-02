@@ -1,6 +1,6 @@
--- @test failure
--- @name "app: polymorphic version also rejected"
--- @error "is a term of type A"
+@test failure
+@name "app: polymorphic version also rejected"
+@error "is a term of type A"
 
 app : (A B : Type) -> (f : A -> A) -> (x : A) -> f x
 app _ _ f x = f x

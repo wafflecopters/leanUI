@@ -1,7 +1,7 @@
--- @test success
--- @name "#absurd in nested with"
--- @import preambles/nat.tt
--- @import preambles/equal-simple.tt
+@test success
+@name "#absurd in nested with"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
 
 inductive Void : Type where
 

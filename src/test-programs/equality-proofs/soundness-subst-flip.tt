@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: subst with flipped predicate should be rejected"
--- @import preambles/equal-simple.tt
+@test failure
+@name "soundness: subst with flipped predicate should be rejected"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

@@ -1068,6 +1068,14 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
           rhs: applyVarPermutation(c.rhs, permutation, depth + c.patterns.reduce((sum, p) => sum + countPatternVars(p), 0))
         }))
       };
+
+    case 'TacticBlock':
+      return term;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1674,6 +1682,14 @@ function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTK
 
       return body;
     }
+
+    case 'TacticBlock':
+      throw new Error('TacticBlock should be elaborated to a kernel term before reaching elabToKernel');
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1867,6 +1883,14 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
         }
 
         return body;
+      }
+
+      case 'TacticBlock':
+        throw new Error('TacticBlock should be elaborated to a kernel term before reaching elabToKernelWithNamedArgs');
+
+      default: {
+        const _never: never = t;
+        throw new Error(`Unreachable code: ${_never}`);
       }
     }
   }
@@ -2364,6 +2388,14 @@ export function elabToKernelWithMap(
       }
 
       return body;
+    }
+
+    case 'TacticBlock':
+      throw new Error('TacticBlock should be elaborated to a kernel term before reaching elabToKernelWithMap');
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
     }
   }
 }

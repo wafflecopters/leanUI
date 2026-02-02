@@ -1,7 +1,7 @@
--- @test success
--- @name "mapRight using with on Either"
--- @import preambles/nat.tt
--- @import preambles/either.tt
+@test success
+@name "mapRight using with on Either"
+@import preambles/nat.tt
+@import preambles/either.tt
 
 mapRight : {A B C : Type} -> (B -> C) -> Either A B -> Either A C
 mapRight f e with e

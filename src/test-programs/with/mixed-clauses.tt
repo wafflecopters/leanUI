@@ -1,7 +1,7 @@
--- @test success
--- @name "some clauses with patterns, one with with"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "some clauses with patterns, one with with"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isOne : Nat -> Bool
 isOne Zero = False

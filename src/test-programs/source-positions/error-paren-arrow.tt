@@ -1,4 +1,4 @@
--- @test failure
--- @name "Error in parenthesized arrow type is detected"
+@test failure
+@name "Error in parenthesized arrow type is detected"
 
 f : (Wrong -> Nat) -> Nat

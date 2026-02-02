@@ -1,7 +1,7 @@
--- @test success
--- @name "ellipsis with pattern clause + with"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "ellipsis with pattern clause + with"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isOne : Nat -> Bool
 isOne Zero = False

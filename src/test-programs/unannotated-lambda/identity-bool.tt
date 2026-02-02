@@ -1,6 +1,6 @@
--- @test success
--- @name "identity function applied to Bool"
--- @import preambles/bool.tt
+@test success
+@name "identity function applied to Bool"
+@import preambles/bool.tt
 
 bar : Bool
 bar = (\x => x) True

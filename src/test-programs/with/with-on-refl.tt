@@ -1,7 +1,7 @@
--- @test success
--- @name "matching on refl constructor"
--- @import preambles/nat.tt
--- @import preambles/equal-simple.tt
+@test success
+@name "matching on refl constructor"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
 
 sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
 sym e with e

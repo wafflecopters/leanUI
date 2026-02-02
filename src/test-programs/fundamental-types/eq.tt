@@ -1,5 +1,5 @@
--- @test success
--- @name "Eq: propositional equality"
+@test success
+@name "Eq: propositional equality"
 
 inductive Eq : (A : Type) -> A -> A -> Type where
   Refl : (A : Type) -> (x : A) -> Eq A x x

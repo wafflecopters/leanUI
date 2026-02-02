@@ -1,6 +1,6 @@
--- @test success
--- @name "subtract: nested patterns and recursion"
--- @import preambles/nat.tt
+@test success
+@name "subtract: nested patterns and recursion"
+@import preambles/nat.tt
 
 sub : Nat -> Nat -> Nat
 sub m n with m, n

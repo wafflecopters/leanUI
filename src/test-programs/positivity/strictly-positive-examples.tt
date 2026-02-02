@@ -1,5 +1,5 @@
--- @test success
--- @name "Strictly positive examples: standard data structures"
+@test success
+@name "Strictly positive examples: standard data structures"
 
 inductive Nat : Type where
   Zero : Nat

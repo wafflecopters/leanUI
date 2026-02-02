@@ -1,6 +1,6 @@
--- @test failure
--- @name "Error in first pattern clause is detected"
--- @import preambles/nat.tt
+@test failure
+@name "Error in first pattern clause is detected"
+@import preambles/nat.tt
 
 plus : Nat -> Nat -> Nat
 plus Zero b = wrong

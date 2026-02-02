@@ -1,7 +1,7 @@
--- @test success
--- @name "function with named args uses with"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "function with named args uses with"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 constFn : {A : Type} -> A -> A
 constFn {A:=A} x = x

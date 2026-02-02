@@ -1,6 +1,6 @@
--- @test success
--- @name "sym: Equal u v -> Equal v u"
--- @import preambles/equality.tt
+@test success
+@name "sym: Equal u v -> Equal v u"
+@import preambles/equality.tt
 
 sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
 sym refl = refl

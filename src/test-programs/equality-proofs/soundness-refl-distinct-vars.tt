@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: refl cannot prove x = y for distinct variables"
--- @import preambles/equal-simple.tt
+@test failure
+@name "soundness: refl cannot prove x = y for distinct variables"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

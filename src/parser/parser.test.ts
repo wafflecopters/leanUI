@@ -3037,6 +3037,26 @@ test : Nat -> Nat := by
       }
     });
 
+    test('Empty by block throws error with correct message', () => {
+      expect(() => {
+        parseDeclarations(`foo : Nat := by`);
+      }).toThrow(/Expected at least one tactic after 'by'/);
+    });
+
+    test('Empty by block error points to by keyword', () => {
+      try {
+        parseDeclarations(`foo : Nat := by`);
+        expect.fail('Should have thrown');
+      } catch (e: any) {
+        expect(e.message).toContain('Expected at least one tactic after \'by\'');
+        // Check the wrapped error details
+        if (e.errors && e.errors.length > 0) {
+          expect(e.errors[0].line).toBe(1);
+          expect(e.errors[0].col).toBe(14); // Position of 'by' keyword
+        }
+      }
+    });
+
     test('Tokenize by keyword', () => {
       const tokens = tokenize('by');
       expect(tokens[0].type).toBe('BY');

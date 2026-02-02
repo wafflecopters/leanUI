@@ -1,7 +1,7 @@
--- @test success
--- @name "basic nested with: classify m n by matching m then n"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "basic nested with: classify m n by matching m then n"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 classify : Nat -> Nat -> Bool
 classify m n with m

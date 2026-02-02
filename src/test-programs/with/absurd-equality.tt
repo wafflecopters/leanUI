@@ -1,7 +1,7 @@
--- @test success
--- @name "#absurd with impossible equality proof"
--- @import preambles/nat.tt
--- @import preambles/equal-simple.tt
+@test success
+@name "#absurd with impossible equality proof"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
 
 inductive Void : Type where
 

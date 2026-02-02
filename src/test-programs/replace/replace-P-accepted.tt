@@ -1,5 +1,5 @@
--- @test success
--- @name "replace with P : A -> Type works (P x is a type)"
+@test success
+@name "replace with P : A -> Type works (P x is a type)"
 
 inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {x : A} -> Equal x x

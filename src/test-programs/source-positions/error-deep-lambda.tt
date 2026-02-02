@@ -1,4 +1,4 @@
--- @test failure
--- @name "Error in deeply nested lambda is detected"
+@test failure
+@name "Error in deeply nested lambda is detected"
 
 f = fun x => fun y => fun z => wrong x y z

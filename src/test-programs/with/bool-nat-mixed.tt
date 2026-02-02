@@ -1,7 +1,7 @@
--- @test success
--- @name "Bool and Nat scrutinees mixed"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "Bool and Nat scrutinees mixed"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 choose : Bool -> Nat -> Nat -> Nat
 choose b x y with b

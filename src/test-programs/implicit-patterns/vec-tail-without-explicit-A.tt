@@ -1,9 +1,9 @@
 -- Test for implicit argument bug in pattern matching
 -- This fails with "unsolved implicits" rather than "implicit conflict" like UIP
--- @test failure
--- @name "Vec tail without explicit {A} in pattern type"
--- @import preambles/nat.tt
--- @error "unresolved hole"
+@test failure
+@name "Vec tail without explicit {A} in pattern type"
+@import preambles/nat.tt
+@error "unresolved hole"
 
 inductive Vec : {A : Type} -> Nat -> Type where
   VNil : {A : Type} -> Vec {A} Zero

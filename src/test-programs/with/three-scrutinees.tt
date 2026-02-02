@@ -1,7 +1,7 @@
--- @test success
--- @name "three scrutinees"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "three scrutinees"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 threeWay : Nat -> Nat -> Nat -> Bool
 threeWay a b c with a, b, c

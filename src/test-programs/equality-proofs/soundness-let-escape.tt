@@ -1,5 +1,5 @@
--- @test failure
--- @name "soundness: let-bound variable should not escape its scope"
+@test failure
+@name "soundness: let-bound variable should not escape its scope"
 
 inductive Nat : Type where
   Zero : Nat

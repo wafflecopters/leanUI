@@ -1,6 +1,6 @@
--- @test success
--- @name "soundness: succInj Equal q p composed with usage is valid"
--- @import preambles/equality.tt
+@test success
+@name "soundness: succInj Equal q p composed with usage is valid"
+@import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat

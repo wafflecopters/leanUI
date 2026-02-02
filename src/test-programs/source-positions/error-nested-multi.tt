@@ -1,4 +1,4 @@
--- @test failure
--- @name "Error in nested application - multiple levels is detected"
+@test failure
+@name "Error in nested application - multiple levels is detected"
 
 x = f (g (h wrong))

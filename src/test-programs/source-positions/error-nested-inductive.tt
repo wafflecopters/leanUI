@@ -1,5 +1,5 @@
--- @test failure
--- @name "Error in nested inductive type signature is detected"
+@test failure
+@name "Error in nested inductive type signature is detected"
 
 inductive Vec : Nat -> Type -> Wrong where
   VNil : Vec Zero

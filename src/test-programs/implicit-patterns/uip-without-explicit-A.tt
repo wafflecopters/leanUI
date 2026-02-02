@@ -1,9 +1,9 @@
 -- Test the original UIP bug you reported
 -- NOTE: This still fails while eqEqual passes - might be related to name resolution or ordering?
--- @test failure
--- @name "UIP without explicit {A} (bug still exists)"
--- @import preambles/nat.tt
--- @error "Implicit argument conflict"
+@test failure
+@name "UIP without explicit {A} (bug still exists)"
+@import preambles/nat.tt
+@error "Implicit argument conflict"
 
 inductive Equal : {A: Type} -> A -> A -> Type where
   refl : (A : Type) -> (a : A) -> Equal a a

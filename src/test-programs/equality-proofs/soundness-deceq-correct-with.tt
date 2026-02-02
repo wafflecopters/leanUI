@@ -1,7 +1,7 @@
--- @test failure
--- @name "soundness: decEqNat with-clause rejects unsound Yes eq / No neq passthrough"
--- @import preambles/equality.tt
--- @error "inferred x but required to be (Succ x)"
+@test failure
+@name "soundness: decEqNat with-clause rejects unsound Yes eq / No neq passthrough"
+@import preambles/equality.tt
+@error "inferred x but required to be (Succ x)"
 
 inductive Nat : Type where
   Zero : Nat

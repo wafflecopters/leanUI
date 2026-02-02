@@ -1,6 +1,6 @@
--- @test success
--- @name "projection on parameterized record works"
--- @import preambles/nat.tt
+@test success
+@name "projection on parameterized record works"
+@import preambles/nat.tt
 
 record Pair (A : Type) (B : Type) where
   constructor MkPair

@@ -1,8 +1,8 @@
 -- Test that List pattern matching works without explicit {A}
 -- FIXED: Positional args now allowed for types with only implicit params
--- @test success
--- @name "List pattern matching without explicit {A} works"
--- @import preambles/nat.tt
+@test success
+@name "List pattern matching without explicit {A} works"
+@import preambles/nat.tt
 
 inductive List : {A : Type} -> Type where
   Nil : {A : Type} -> List {A}

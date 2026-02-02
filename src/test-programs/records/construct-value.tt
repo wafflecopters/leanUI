@@ -1,6 +1,6 @@
--- @test success
--- @name "can construct a record value"
--- @import preambles/nat.tt
+@test success
+@name "can construct a record value"
+@import preambles/nat.tt
 
 record Point where
   constructor MkPoint

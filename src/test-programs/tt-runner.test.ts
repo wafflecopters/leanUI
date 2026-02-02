@@ -38,16 +38,20 @@ export function parseDirectives(source: string): TTDirectives {
 
   for (const line of lines) {
     const trimmed = line.trim();
-    // Stop parsing directives when we hit a non-comment, non-empty line
-    if (trimmed !== '' && !trimmed.startsWith('--')) break;
+    // Stop parsing directives when we hit a non-comment, non-directive, non-empty line
+    if (trimmed !== '' && !trimmed.startsWith('--') && !trimmed.startsWith('@')) break;
 
-    const directiveMatch = trimmed.match(/^--\s*@(\w+)\s+(.*)/);
+    // Match directives with or without -- prefix: @directive value or -- @directive value
+    const directiveMatch = trimmed.match(/^(?:--\s*)?@(\w+)(?:\s+(.*))?/);
     if (!directiveMatch) continue;
 
     const [, directive, value] = directiveMatch;
 
     switch (directive) {
       case 'test':
+        if (!value) {
+          throw new Error(`@test requires a value. Must be "success" or "failure".`);
+        }
         if (value === 'success' || value === 'failure') {
           testDirective = value;
         } else {
@@ -55,22 +59,32 @@ export function parseDirectives(source: string): TTDirectives {
         }
         break;
       case 'name': {
+        if (!value) {
+          throw new Error(`@name requires a quoted string value.`);
+        }
         const nameMatch = value.match(/^"(.+)"$/);
         if (!nameMatch) throw new Error(`@name value must be quoted: ${value}`);
         name = nameMatch[1];
         break;
       }
       case 'import':
+        if (!value) {
+          throw new Error(`@import requires a file path.`);
+        }
         imports.push(value.trim());
         break;
       case 'error': {
+        if (!value) {
+          throw new Error(`@error requires a quoted string value.`);
+        }
         const errorMatch = value.match(/^"(.+)"$/);
         if (!errorMatch) throw new Error(`@error value must be quoted: ${value}`);
         errors.push(errorMatch[1]);
         break;
       }
       default:
-        throw new Error(`Unknown directive: @${directive}`);
+        // Ignore unknown directives (they may be compiler directives like @assumeK)
+        break;
     }
   }
 
@@ -104,12 +118,14 @@ export function extractBody(source: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
-    if (trimmed === '' || trimmed.startsWith('--')) {
-      // Keep compiler directives like @assumeK in the source
-      if (!trimmed.match(/^--\s*@assumeK/)) {
-        bodyStart = i + 1;
-        continue;
+    // Skip empty lines and test directives (not compiler directives)
+    if (trimmed === '' || trimmed.startsWith('--') || trimmed.startsWith('@')) {
+      // Keep compiler directives like @assumeK in the source (with or without --)
+      if (trimmed.match(/^(?:--\s*)?@assumeK/)) {
+        break; // Start body from here
       }
+      bodyStart = i + 1;
+      continue;
     }
     break;
   }
@@ -264,9 +280,11 @@ broken code`;
     expect(() => parseDirectives('-- @test success\ncode')).toThrow('Missing required @name');
   });
 
-  test('parseDirectives: throws on unknown directive', () => {
-    expect(() => parseDirectives('-- @test success\n-- @name "x"\n-- @bogus y\ncode'))
-      .toThrow('Unknown directive: @bogus');
+  test('parseDirectives: ignores unknown directives (e.g., compiler directives)', () => {
+    // Unknown directives like @bogus or compiler directives like @assumeK are ignored
+    const result = parseDirectives('-- @test success\n-- @name "x"\n-- @bogus y\ncode');
+    expect(result.test).toBe('success');
+    expect(result.name).toBe('x');
   });
 
   test('extractBody: strips directive lines', () => {

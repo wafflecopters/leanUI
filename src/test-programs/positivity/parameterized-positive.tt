@@ -1,5 +1,5 @@
--- @test success
--- @name "Parameterized type with positive occurrence"
+@test success
+@name "Parameterized type with positive occurrence"
 
 inductive List : Type -> Type where
   Nil : (A : Type) -> List A

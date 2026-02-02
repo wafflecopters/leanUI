@@ -1,5 +1,5 @@
--- @test success
--- @name "Option: optional value type"
+@test success
+@name "Option: optional value type"
 
 inductive Option : Type -> Type where
   None : (A : Type) -> Option A

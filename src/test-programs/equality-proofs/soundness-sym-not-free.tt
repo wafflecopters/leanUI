@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: sym should not produce refl for distinct vars"
--- @import preambles/equal-simple.tt
+@test failure
+@name "soundness: sym should not produce refl for distinct vars"
+@import preambles/equal-simple.tt
 
 inductive Nat : Type where
   Zero : Nat

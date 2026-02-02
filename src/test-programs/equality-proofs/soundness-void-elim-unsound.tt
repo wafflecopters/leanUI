@@ -1,5 +1,5 @@
--- @test failure
--- @name "soundness: cannot construct element of Void"
+@test failure
+@name "soundness: cannot construct element of Void"
 
 inductive Void : Type where
 

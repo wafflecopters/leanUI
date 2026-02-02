@@ -1,6 +1,6 @@
--- @test success
--- @name "soundness: lambda-wrapped correct proof is accepted"
--- @import preambles/equality.tt
+@test success
+@name "soundness: lambda-wrapped correct proof is accepted"
+@import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat

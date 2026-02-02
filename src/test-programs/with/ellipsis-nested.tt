@@ -1,7 +1,7 @@
--- @test success
--- @name "ellipsis in nested with branches"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "ellipsis in nested with branches"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 classify : Nat -> Nat -> Bool
 classify m n with m

@@ -110,6 +110,7 @@ const SYNTAX_COLORS = {
   namedBrace: '6e7681',     // Dark grey - for { } in named arguments/binders
   hole: 'e5c07b',           // Yellow for holes (unfinished code)
   absurd: '4fc1ff',         // Bright cyan - for #absurd marker
+  directive: 'ff79c6',      // Pink - for directives (@test, @name, @assumeK, etc.)
 };
 
 // Monaco theme matching TextEditorPage
@@ -138,6 +139,7 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     { token: 'patternVar', foreground: SYNTAX_COLORS.patternVar },
     { token: 'absurd', foreground: SYNTAX_COLORS.absurd },
     { token: 'namedBrace', foreground: SYNTAX_COLORS.namedBrace },
+    { token: 'directive', foreground: SYNTAX_COLORS.directive },
   ],
   colors: {
     'editor.background': '#161b22',
@@ -1085,8 +1087,8 @@ export function TextEditorPage() {
 
   // Extract semantic tokens from compile result
   const semanticTokens = useMemo(() => {
-    return extractSemanticTokens(compileResult);
-  }, [compileResult]);
+    return extractSemanticTokens(compileResult, code);
+  }, [compileResult, code]);
 
   // Extract hole locations from compile result for warning markers
   const holeLocations = useMemo(() => {

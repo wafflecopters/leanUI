@@ -1,5 +1,5 @@
--- @test success
--- @name "Sum: binary sum type"
+@test success
+@name "Sum: binary sum type"
 
 inductive Sum : Type -> Type -> Type where
   Left : (A : Type) -> (B : Type) -> A -> Sum A B

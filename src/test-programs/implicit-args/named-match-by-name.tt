@@ -1,5 +1,5 @@
--- @test success
--- @name "named args should match by name, not position"
+@test success
+@name "named args should match by name, not position"
 
 inductive Nat : Type where
   Zero : Nat

@@ -1,7 +1,7 @@
--- @test success
--- @name "ellipsis with multiple scrutinees"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "ellipsis with multiple scrutinees"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 inductive Ordering : Type where
   LT : Ordering

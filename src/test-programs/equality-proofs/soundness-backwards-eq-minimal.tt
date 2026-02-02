@@ -1,6 +1,6 @@
--- @test failure
--- @name "soundness: backwards Equal in with-clause lambda should be rejected"
--- @import preambles/equality.tt
+@test failure
+@name "soundness: backwards Equal in with-clause lambda should be rejected"
+@import preambles/equality.tt
 
 inductive Nat : Type where
   Zero : Nat

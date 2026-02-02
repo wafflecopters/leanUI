@@ -1,5 +1,5 @@
--- @test success
--- @name "refl with just {a:=Zero} (A inferred)"
+@test success
+@name "refl with just {a:=Zero} (A inferred)"
 
 inductive Nat : Type where
   Zero : Nat

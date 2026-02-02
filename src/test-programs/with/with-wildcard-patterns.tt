@@ -1,7 +1,7 @@
--- @test success
--- @name "with clause using wildcard patterns"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "with clause using wildcard patterns"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 isNonZero : Nat -> Bool
 isNonZero n with n

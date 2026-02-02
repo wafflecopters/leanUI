@@ -1,6 +1,6 @@
--- @test failure
--- @name "Triple nested: (((Bad -> Nat) -> Nat) -> Nat) -> Bad is negative"
--- @error "negative occurrence"
+@test failure
+@name "Triple nested: (((Bad -> Nat) -> Nat) -> Nat) -> Bad is negative"
+@error "negative occurrence"
 
 inductive Nat : Type where
   Zero : Nat

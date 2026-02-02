@@ -1,7 +1,7 @@
--- @test success
--- @name "min and max using with"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+@test success
+@name "min and max using with"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 leq : Nat -> Nat -> Bool
 leq Zero _ = True

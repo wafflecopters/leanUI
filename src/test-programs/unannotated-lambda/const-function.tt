@@ -1,6 +1,6 @@
--- @test success
--- @name "const function with unannotated lambda"
--- @import preambles/nat.tt
+@test success
+@name "const function with unannotated lambda"
+@import preambles/nat.tt
 
 baz : Nat
 baz = (\x => \y => x) Zero (Succ Zero)

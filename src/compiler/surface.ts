@@ -731,6 +731,14 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
       }
       return null;
     }
+
+    case 'TacticBlock':
+      return null;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -815,6 +823,14 @@ export function fillHoleWithTT(
           rhs: fillHoleWithTT(c.rhs, holeId, generator)
         }))
       };
+
+    case 'TacticBlock':
+      return term;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -928,6 +944,14 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
       }
       return true;
     }
+
+    case 'TacticBlock':
+      return term2.tag === 'TacticBlock';
+
+    default: {
+      const _never: never = term1;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -996,6 +1020,14 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
         return getSubtermAtPath(term.clauses[clauseIndex].rhs, rest);
       }
       return null;
+
+    case 'TacticBlock':
+      return null;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1097,6 +1129,14 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
         return { ...term, clauses: newClauses };
       }
       return null;
+    }
+
+    case 'TacticBlock':
+      return null;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
     }
   }
 }
@@ -1259,6 +1299,14 @@ export function isNameUsed(name: string, term: TTerm): boolean {
         if (isNameUsed(name, clause.rhs)) return true;
       }
       return false;
+
+    case 'TacticBlock':
+      return false;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1377,6 +1425,14 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
           rhs: substHelperTT(targetIndex, replacement, c.rhs, depth)
         }))
       };
+
+    case 'TacticBlock':
+      return term;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1475,6 +1531,14 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
           rhs: shift(amount, c.rhs, cutoff)
         }))
       };
+
+    case 'TacticBlock':
+      return term;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1596,6 +1660,14 @@ export function expandMultiBinders(term: TTerm): TTerm {
           namedPatterns: c.namedPatterns
         }))
       };
+
+    case 'TacticBlock':
+      return term;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -1855,6 +1927,14 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
     }
+
+    case 'TacticBlock':
+      return '#tactics';
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -2013,6 +2093,14 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
         return `${patternStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
+    }
+
+    case 'TacticBlock':
+      return '#tactics';
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
     }
   }
 }
@@ -2174,6 +2262,14 @@ export function prettyPrintLatexTT(
         return `${patternStr} \\Rightarrow ${rhsStr}`;
       }).join(' \\mid ');
       return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
+    }
+
+    case 'TacticBlock':
+      return '\\text{\\#tactics}';
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
     }
   }
 }
@@ -2541,6 +2637,14 @@ function fillHoleWithLet(
           rhs: fillHoleWithLet(c.rhs, holeId, letName, letType, letValue)
         }))
       };
+
+    case 'TacticBlock':
+      return term;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
+    }
   }
 }
 
@@ -2715,6 +2819,14 @@ export function occursInTT(index: number, term: TTerm): boolean {
       // Check domain and body (going under names.length binders for body)
       if (occursInTT(index, term.domain)) return true;
       return occursInTT(index + term.names.length, term.body);
+    }
+
+    case 'TacticBlock':
+      return false;
+
+    default: {
+      const _never: never = term;
+      throw new Error(`Unreachable code: ${_never}`);
     }
   }
 }
