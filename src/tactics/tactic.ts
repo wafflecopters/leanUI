@@ -113,9 +113,16 @@ export class ExactTactic implements Tactic {
         }).solveConstraints()
       };
     } catch (e) {
+      // Handle TCEnvError (which is not an Error instance)
+      const errorMsg = e instanceof Error
+        ? e.message
+        : (e && typeof e === 'object' && 'message' in e)
+          ? String((e as any).message)
+          : String(e);
+
       return {
         success: false,
-        error: `exact: ${e instanceof Error ? e.message : String(e)}`,
+        error: `exact: ${errorMsg}`,
         cause: e instanceof Error ? e : undefined
       };
     }
@@ -414,9 +421,16 @@ export class ApplyTactic implements Tactic {
         }).solveConstraints()
       };
     } catch (e) {
+      // Handle TCEnvError (which is not an Error instance)
+      const errorMsg = e instanceof Error
+        ? e.message
+        : (e && typeof e === 'object' && 'message' in e)
+          ? String((e as any).message)
+          : String(e);
+
       return {
         success: false,
-        error: `apply: ${e instanceof Error ? e.message : String(e)}`,
+        error: `apply: ${errorMsg}`,
         cause: e instanceof Error ? e : undefined
       };
     }

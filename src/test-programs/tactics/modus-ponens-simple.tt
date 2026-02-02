@@ -1,0 +1,8 @@
+@test success
+@name "modusPonens without implicits"
+@import preambles/nat.tt
+
+-- Simpler version without implicit type arguments
+modusPonensNat : Nat -> (Nat -> Nat) -> Nat := by
+  intros a f
+  exact (f a)

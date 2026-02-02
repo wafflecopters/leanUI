@@ -3120,7 +3120,6 @@ export class Parser {
    * Tactics are indented and one per line.
    */
   private parseTacticBlock(ctx: NameContext, path: IndexPath = []): TTerm {
-    const byToken = this.tokens[this.pos - 1]; // The 'by' keyword (already consumed by caller)
     const startToken = this.current();
 
     // 'by' keyword should already be consumed by caller
@@ -3168,13 +3167,8 @@ export class Parser {
       }
     }
 
-    if (tactics.length === 0) {
-      throw new ParseError(
-        'Expected at least one tactic after \'by\'',
-        byToken.line,
-        byToken.col
-      );
-    }
+    // Allow empty tactic blocks - they'll fail during elaboration/type-checking
+    // with "unsolved goals" error instead of parse error
 
     // Record full tactic block
     if (path.length > 0) {

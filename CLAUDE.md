@@ -495,9 +495,9 @@ When testing whether source code compiles successfully or produces expected erro
 Test programs live in `src/test-programs/` as `.tt` files with header directives:
 
 ```
--- @test success
--- @name "sym: Equal u v -> Equal v u"
--- @import preambles/equality.tt
+@test success
+@name "sym: Equal u v -> Equal v u"
+@import preambles/equality.tt
 
 sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
 sym refl = refl
@@ -563,10 +563,10 @@ This applies to **any** temporary experiment:
 - Debugging a user report → save the minimal repro as a `.tt` file
 
 ```
--- @test success
--- @name "nested with on equality proof (debug exploration)"
--- @import preambles/nat.tt
--- @import preambles/equal-simple.tt
+@test success
+@name "nested with on equality proof (debug exploration)"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
 
 -- Found while debugging issue #42
 myProof : ...

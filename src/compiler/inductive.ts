@@ -535,7 +535,24 @@ function inferParameterIndicesK(def: InductiveTypeDefK): number[] {
   const afterPromotion = promoteIndicesK(def, numPositions, syntacticParams);
 
   // Phase 2.5: Dependency validation (enforce prefix property)
-  const finalIndices = enforceParameterPrefixK(afterPromotion, numPositions);
+  let finalIndices = enforceParameterPrefixK(afterPromotion, numPositions);
+
+  // WORKAROUND: For equality-like types where all non-parameter positions should be indices,
+  // fix overly aggressive promotion. If we have N positions and M syntactic params,
+  // and only one index was kept, but we should have N-M indices, restore them.
+  // This handles Equal : {A : Type} -> A -> A -> Type where both A values should be indices.
+  const numSyntacticParams = syntacticParams.size;
+  const expectedMinIndices = numPositions - numSyntacticParams;
+  if (finalIndices.length > 0 && finalIndices.length < expectedMinIndices) {
+    // We have too few indices. Restore all non-parameter positions as indices.
+    const restoredIndices: number[] = [];
+    for (let i = 0; i < numPositions; i++) {
+      if (!syntacticParams.has(i)) {
+        restoredIndices.push(i);
+      }
+    }
+    finalIndices = restoredIndices;
+  }
 
   return finalIndices;
 }

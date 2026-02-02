@@ -1381,7 +1381,7 @@ export function TextEditorPage() {
           [/\b(Type|Prop|ULevel|USucc|UMax|UIMax)\b/, 'type.identifier'],
 
           // Keywords
-          [/\b(inductive|record|constructor|extends|where|let|in|fun|with)\b/, 'keyword'],
+          [/\b(inductive|record|constructor|extends|where|let|in|fun|with|by)\b/, 'keyword'],
 
           // Absurd marker
           [/#absurd\b/, 'keyword'],
@@ -1404,7 +1404,7 @@ export function TextEditorPage() {
 
           // Operators
           [/->|=>/, 'keyword.operator'],
-          [/[=:+\-*/\\<>!|]+/, 'delimiter'],
+          [/[=:+\-*/\\<>!|]+/, 'delimiter'],  // Includes := which gets same color as =
 
           // Brackets and delimiters
           [/[()[\]{}]/, 'delimiter.bracket'],

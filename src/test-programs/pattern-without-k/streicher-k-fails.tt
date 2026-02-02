@@ -1,12 +1,11 @@
--- TODO: Currently fails with type error instead of "axiom K" deletion rule error
--- Needs investigation of why implicit argument resolution fails
 @test failure
 @name "Streicher's K should fail without axiom K"
 @import preambles/equality.tt
-@error "has type"
+@assumeK=false
+@error "axiom K"
 
 -- Streicher's K: all equality proofs from a point to itself are equal to refl
--- This requires pattern matching on arbitrary (e : Equal a a) which needs K
+-- This requires pattern matching on (e : Equal a a) where both indices are the same variable
 
 streichersK : (A : Type) -> (a : A) -> (P : Equal a a -> Type) -> (p : P refl) -> (e : Equal a a) -> P e
 streichersK A a P p refl = p

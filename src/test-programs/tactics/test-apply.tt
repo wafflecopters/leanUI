@@ -1,0 +1,8 @@
+@test success
+@name "Test apply with explicit types"
+@import preambles/nat.tt
+
+applySucc : Nat -> Nat := by
+  intro n
+  apply Succ
+  exact n

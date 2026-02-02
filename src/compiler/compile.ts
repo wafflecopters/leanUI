@@ -25,6 +25,9 @@ import { checkStructuralRecursion } from './recursion';
 import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
 import type { TypeInfoMap } from './type-info';
+import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
+import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, Tactic } from '../tactics/tactic';
+import { TacticCommand, TTacticBlock } from './surface';
 export type { TotalityResult, CaseTree };
 
 // ============================================================================
@@ -467,13 +470,13 @@ export function extractDirectiveTokens(source: string): SemanticToken[] {
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex];
 
-    // Match directive with or without -- prefix: @directive value or -- @directive value
-    const directiveMatch = line.match(/^(\s*)(?:(--)\s*)?(@\w+)/);
+    // Match directive: @directive value
+    const directiveMatch = line.match(/^(\s*)(@\w+)/);
     if (!directiveMatch) continue;
 
-    const [, leadingWhitespace, commentPrefix, directive] = directiveMatch;
-    // Column is 1-based, so add 1. Calculate where the @ starts.
-    const column = leadingWhitespace.length + (commentPrefix ? commentPrefix.length + 1 : 0) + 1;
+    const [, leadingWhitespace, directive] = directiveMatch;
+    // Column is 1-based, so add 1.
+    const column = leadingWhitespace.length + 1;
 
     // Add token for the directive name (e.g., @test, @assumeK)
     tokens.push({
@@ -1233,6 +1236,183 @@ export interface ElabOptions {
 }
 
 /**
+ * Convert a tactic command to a Tactic object.
+ * Args can be TTerm (un-elaborated) or TTKTerm (elaborated).
+ */
+function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm> }): Tactic {
+  switch (cmd.name) {
+    case 'exact':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'exact' tactic requires exactly 1 argument, got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new ExactTactic(cmd.args[0] as TTKTerm);
+
+    case 'assumption':
+      if (cmd.args.length !== 0) {
+        throw new Error(`'assumption' tactic requires no arguments, got ${cmd.args.length}`);
+      }
+      return new AssumptionTactic();
+
+    case 'intro':
+      if (cmd.args.length > 1) {
+        throw new Error(`'intro' tactic requires 0 or 1 arguments, got ${cmd.args.length}`);
+      }
+      const introName = cmd.args.length === 1 && cmd.args[0].tag === 'Const'
+        ? (cmd.args[0] as any).name
+        : undefined;
+      return new IntroTactic(introName);
+
+    case 'intros':
+      // Arguments should all be Const nodes (identifiers)
+      const names = cmd.args.map(arg => {
+        if (arg.tag !== 'Const') {
+          throw new Error(`'intros' tactic arguments must be identifiers, got ${arg.tag}`);
+        }
+        return (arg as any).name;
+      });
+      return new IntrosTactic(names.length > 0 ? names : undefined);
+
+    case 'apply':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'apply' tactic requires exactly 1 argument, got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new ApplyTactic(cmd.args[0] as TTKTerm);
+
+    default:
+      throw new Error(`Unknown tactic: ${cmd.name}`);
+  }
+}
+
+/**
+ * Elaborate a TacticBlock to a kernel term by executing the tactics.
+ *
+ * @param tacticBlock - The surface-level tactic block
+ * @param expectedType - The expected type for the proof (kernel term)
+ * @param definitions - Definitions map for type checking
+ * @param elabMap - Elaboration map for elaborating tactic arguments
+ * @param context - Optional typing context (for nested proofs)
+ * @returns The proof term (kernel term)
+ */
+function elaborateTacticBlock(
+  tacticBlock: TTacticBlock,
+  expectedType: TTKTerm,
+  definitions: DefinitionsMap,
+  elabMap: ElabMap,
+  context: TTKContext = []
+): TTKTerm {
+  // Check if empty
+  if (tacticBlock.tactics.length === 0) {
+    throw new Error('Tactic proof has no tactics (unsolved goals)');
+  }
+
+  // Create initial tactic engine
+  let engine = createInitialEngine(expectedType, context, definitions);
+
+  // Execute each tactic, elaborating arguments in the current goal's context
+  for (const cmd of tacticBlock.tactics) {
+    const goal = engine.getFocusedGoal();
+    const goalId = engine.getFocusedGoalId();
+
+    if (!goal || !goalId) {
+      throw new Error('Tactic proof: no active goal');
+    }
+
+    // Elaborate arguments in the CURRENT goal's context
+    const elabArgs: Array<TTerm | TTKTerm> = cmd.args.map(arg => {
+      // For intro/intros, keep names as Const (don't elaborate)
+      if (cmd.name === 'intro' || cmd.name === 'intros') {
+        return arg;
+      }
+
+      // For apply/exact/etc, elaborate in the goal's context
+      // Build a name map from context for de Bruijn conversion
+      const nameContext: string[] = goal.ctx.map(binding => binding.name);
+
+      // Helper to recursively convert Const to Var based on context
+      // This walks the surface term and resolves names to de Bruijn indices
+      function surfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
+        switch (term.tag) {
+          case 'Var':
+            // Already a de Bruijn index (shouldn't happen in surface syntax from parser)
+            return { tag: 'Var', index: term.index };
+
+          case 'Const': {
+            // Look up the name in the context (most recent first)
+            for (let i = nameContext.length - 1; i >= 0; i--) {
+              if (nameContext[i] === term.name) {
+                // Found in local context! Convert to de Bruijn index
+                const index = nameContext.length - 1 - i + depth;
+                return { tag: 'Var', index };
+              }
+            }
+            // Not found in context, keep as Const (global definition)
+            return { tag: 'Const', name: term.name };
+          }
+
+          case 'App': {
+            // Recursively elaborate function and argument
+            return {
+              tag: 'App',
+              fn: surfaceToKernel(term.fn, depth),
+              arg: surfaceToKernel(term.arg, depth)
+            };
+          }
+
+          case 'Sort': {
+            // Elaborate the level
+            return {
+              tag: 'Sort',
+              level: surfaceToKernel(term.level, depth) as any
+            };
+          }
+
+          case 'Hole':
+            return { tag: 'Hole', id: term.id };
+
+          case 'ULevel':
+            return { tag: 'ULevel' };
+
+          case 'ULit':
+            return { tag: 'ULit', n: term.n };
+
+          case 'UOmega':
+            return { tag: 'UOmega' };
+
+          // For complex terms, just use standard elaboration
+          // (Binder, Match, etc. are unlikely in tactic arguments)
+          default:
+            return elabToKernelWithMap(term, elabMap, [], []);
+        }
+      }
+
+      return surfaceToKernel(arg);
+    });
+
+    // Convert command to Tactic object with elaborated args
+    const tactic = tacticCommandToTactic({ name: cmd.name, args: elabArgs });
+
+    const result = tactic.apply(engine, goal, goalId);
+
+    if (!result.success) {
+      throw new Error(`Tactic '${tactic.name}' failed: ${result.error}`);
+    }
+
+    engine = result.newEngine;
+  }
+
+  // Check that all goals are solved
+  const remainingGoals = engine.getUnsolvedGoals();
+  if (remainingGoals.length > 0) {
+    throw new Error(`Tactic proof has unsolved goals: ${remainingGoals.length} remaining`);
+  }
+
+  // Zonk (substitute solved metas) to get the final proof term
+  return engine.zonk();
+}
+
+/**
  * Elaborate parsed TT to kernel terms (TTK).
  *
  * Pipeline:
@@ -1325,11 +1505,17 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 
         // Elaborate value (only if elabValues is true)
         if (elabValues && decl.value) {
-          const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-          // Extract namedArgMap and totalArity from type for pattern validation and reordering
-          const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
-          const totalArity = decl.type ? countParameters(decl.type) : undefined;
-          kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
+          // Check if value is a TacticBlock - skip elaboration here, will be handled during type-checking
+          if (decl.value.tag === 'TacticBlock') {
+            // TacticBlock will be elaborated during type-checking when we have definitions
+            kernelValue = undefined;
+          } else {
+            const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+            // Extract namedArgMap and totalArity from type for pattern validation and reordering
+            const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+            const totalArity = decl.type ? countParameters(decl.type) : undefined;
+            kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
+          }
         }
 
         // Elaborate constructors
@@ -1466,8 +1652,8 @@ function parseAssumeKDirective(source: string): boolean | undefined {
   const lines = source.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
-    // Match @assumeK with or without -- prefix
-    const match = trimmed.match(/^(?:--\s*)?@assumeK(?:=(\w+))?/);
+    // Match @assumeK directive
+    const match = trimmed.match(/^@assumeK(?:=(\w+))?/);
     if (match) {
       const value = match[1];
       if (!value || value === 'true') return true;
@@ -1583,7 +1769,7 @@ function recheckZonkedTerm(
   } catch (e) {
     const msg = e instanceof TCEnvError ? e.fullMessage
       : e instanceof Error ? e.message
-      : String(e);
+        : String(e);
     return `Zonk recheck (re-type-check) failed for ${label}: ${msg}`;
   }
   return undefined;
@@ -2071,14 +2257,33 @@ function checkTermDeclaration(
     if (decl.surfaceValue && decl.surfaceValue.tag !== 'Match') {
       const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
       const appNamedArgLookup = createNamedArgInfoLookup(termEnv.definitions);
-      const kernelValue = elabToKernelWithMap(
-        decl.surfaceValue,
-        decl.elabMap ?? new Map(),
-        valuePath,
-        valuePath,
-        namedArgMap,
-        appNamedArgLookup
-      );
+
+      // Special handling for TacticBlock - elaborate by executing tactics
+      let kernelValue: TTKTerm;
+      if (decl.surfaceValue.tag === 'TacticBlock') {
+        try {
+          kernelValue = elaborateTacticBlock(
+            decl.surfaceValue,
+            zonkedKernelType,
+            termEnv.definitions,
+            decl.elabMap ?? new Map(),
+            [] // Empty context for top-level definitions
+          );
+        } catch (e) {
+          // Convert tactic errors to TCEnvErrors with proper location
+          const errorMsg = e instanceof Error ? e.message : String(e);
+          throw TCEnvError.create(errorMsg, termEnv);
+        }
+      } else {
+        kernelValue = elabToKernelWithMap(
+          decl.surfaceValue,
+          decl.elabMap ?? new Map(),
+          valuePath,
+          valuePath,
+          namedArgMap,
+          appNamedArgLookup
+        );
+      }
 
       try {
         const valueEnv = termEnv.withValue(kernelValue);
@@ -3333,7 +3538,8 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
 
   // Parse @assumeK directive from source (overrides options)
   const sourceAssumeK = parseAssumeKDirective(source);
-  const assumeK = sourceAssumeK ?? options?.assumeK ?? false;
+  // Default to true to match Lean's behavior (K enabled by default)
+  const assumeK = sourceAssumeK ?? options?.assumeK ?? true;
 
   if (sourceAssumeK !== undefined) {
   }

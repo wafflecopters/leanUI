@@ -793,154 +793,6 @@ function prettyPrintInTTKContext(term: TTKTerm, signature: TTKContext): string {
   return prettyPrintTTK(term, signature.map(s => s.name).reverse())
 }
 
-/**
- * Check if a term contains any metas or holes (unresolved variables from implicit inference).
- */
-function containsMetasOrHoles(term: TTKTerm): boolean {
-  if (term.tag === 'Meta' || term.tag === 'Hole') return true;
-
-  switch (term.tag) {
-    case 'Binder':
-      return containsMetasOrHoles(term.domain) || containsMetasOrHoles(term.body);
-    case 'App':
-      return containsMetasOrHoles(term.fn) || containsMetasOrHoles(term.arg);
-    case 'Match':
-      if (containsMetasOrHoles(term.scrutinee)) return true;
-      return term.clauses.some(c => containsMetasOrHoles(c.rhs));
-    case 'Annot':
-      return containsMetasOrHoles(term.term) || containsMetasOrHoles(term.type);
-    case 'Const':
-    case 'ULevel':
-    case 'ULit':
-    case 'UOmega':
-      return false;
-    default:
-      return false;
-  }
-}
-
-/**
- * Check if an inductive type is an indexed family (has indices, not just parameters).
- * @returns The inductive definition if it's an indexed family, otherwise undefined
- */
-function getIndexedFamilyInfo(
-  inductiveName: string,
-  definitions: DefinitionsMap
-): { def: InductiveDefinition; indexCount: number } | undefined {
-  const def = definitions.inductiveTypes.get(inductiveName);
-  if (!def) return undefined;
-
-  if (!def.indexPositions || def.indexPositions.length === 0) return undefined;
-
-  return { def, indexCount: def.indexPositions.length };
-}
-
-/**
- * Extract the indices from an application of an indexed family.
- * For a type like `(Equal A x y)`, this returns `[x, y]` (the last indexCount arguments).
- * @param type - The type application (should be in WHNF or at least fully applied)
- * @param indexCount - Number of indices the family has
- * @returns The index terms, or undefined if the type structure doesn't match
- */
-function extractIndices(type: TTKTerm, indexCount: number): TTKTerm[] | undefined {
-  if (indexCount === 0) return [];
-
-  const spine = extractAppSpine(type);
-  if (!spine) return undefined;
-
-  logInfo(() => `  extractIndices: spine has ${spine.args.length} args, need ${indexCount} indices`);
-  logInfo(() => `  spine.fn: ${prettyPrintTTK(spine.fn)}`);
-  logInfo(() => `  spine.args: [${spine.args.map(t => prettyPrintTTK(t)).join(', ')}]`);
-
-  // Spine.args has all arguments (parameters + indices)
-  // Indices are the last indexCount arguments
-  if (spine.args.length < indexCount) {
-    logInfo(() => `  WARNING: Not enough args (${spine.args.length} < ${indexCount})`);
-    return undefined;
-  }
-
-  const indices = spine.args.slice(spine.args.length - indexCount);
-  return indices;
-}
-
-/**
- * Check the deletion rule for pattern matching on indexed families.
- *
- * The deletion rule (pattern matching without K) requires that when matching on
- * an indexed family constructor, the indices in the constructor's result type must
- * be definitionally equal to the indices in the expected type.
- *
- * For example, matching on `refl : Equal A x x` against expected type `Equal A x y`
- * requires `x ≃ y` definitionally. Without axiom K, this check prevents UIP.
- *
- * @throws TCEnvError if assumeK is false and indices are not definitionally equal
- */
-function checkDeletionRule(
-  constructorResultType: TTKTerm,
-  expectedType: TTKTerm,
-  constructorName: string,
-  env: TCEnv<unknown>
-): void {
-  // If assumeK is true, skip the deletion rule check
-  if (env.options.assumeK) {
-    return;
-  }
-
-  // Extract the inductive type name from the constructor's result type
-  const ctorSpine = extractAppSpine(constructorResultType);
-  if (!ctorSpine || ctorSpine.fn.tag !== 'Const') return;
-
-  const inductiveName = (ctorSpine.fn as { tag: 'Const'; name: string }).name;
-
-  // Check if this is an indexed family
-  const indexedInfo = getIndexedFamilyInfo(inductiveName, env.definitions);
-  if (!indexedInfo) {
-    return; // Not an indexed family, deletion rule doesn't apply
-  }
-
-  // Extract indices from both types
-  const ctorIndices = extractIndices(constructorResultType, indexedInfo.indexCount);
-  const expectedIndices = extractIndices(expectedType, indexedInfo.indexCount);
-
-  if (!ctorIndices || !expectedIndices) {
-    throw TCEnvError.create(
-      `Internal error: Could not extract indices from indexed family '${inductiveName}'`,
-      env
-    );
-  }
-
-  // Check each index pair for definitional equality
-  for (let i = 0; i < indexedInfo.indexCount; i++) {
-    const ctorIndex = ctorIndices[i];
-    const expectedIndex = expectedIndices[i];
-
-    // If either index contains unresolved metas/holes, skip the check for this index
-    if (containsMetasOrHoles(ctorIndex) || containsMetasOrHoles(expectedIndex)) {
-      continue;
-    }
-
-    // Check structural equality first (fast path)
-    const structurallyEqual = JSON.stringify(ctorIndex) === JSON.stringify(expectedIndex);
-    if (structurallyEqual) {
-      continue;
-    }
-
-    // Check definitional equality
-    if (!areWhnfTypesDefEq(ctorIndex, expectedIndex, env.definitions)) {
-      const ctorStr = env.prettyPrint(ctorIndex);
-      const expectedStr = env.prettyPrint(expectedIndex);
-      throw TCEnvError.create(
-        `Pattern matching on '${constructorName}' requires indices to be definitionally equal (needs axiom K).\n` +
-        `Constructor index: ${ctorStr}\n` +
-        `Expected index: ${expectedStr}\n` +
-        `\n` +
-        `Hint: Use @assumeK directive to enable axiom K (allows UIP and non-dependent pattern matching).`,
-        env
-      );
-    }
-  }
-}
-
 function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: CheckStackEntry, checkStack: CheckStackEntry[], elabStack: TTKTerm[], rhsContainer: { rhsInLevels: TTKTerm }, workEnv: TCEnv<unknown>, holeSolutions?: Map<string, TTKTerm>) {
   logInfo(() => `STEP DONE(${prettyPrintPattern(pattern)}, ${arity})`);
 
@@ -973,16 +825,29 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     flexibleVars: true,
     rigidVarsAtOrAbove: numPatternLocalBindings,
     mode: 'pattern',
-    definitions: workEnv.definitions
+    definitions: workEnv.definitions,
+    assumeK: workEnv.options.assumeK
   })
 
+  // Check unification result
   if (!unifyResult.success) {
-    const leftStr = workEnv.prettyPrint(unifyLeft)
-    const rightStr = workEnv.prettyPrint(unifyRight)
-    throw TCEnvError.create(
-      `Constructor '${pattern.name}' has result type ${leftStr} but expected ${rightStr}`,
-      workEnv
-    )
+    if (unifyResult.reason === 'deletion-rule') {
+      // Pattern matching requires the deletion rule (axiom K)
+      throw TCEnvError.create(
+        `Pattern matching on '${pattern.name}' requires axiom K (the deletion rule).\n` +
+        `The pattern match forces a reflexive equation (x = x) which is not allowed without axiom K.\n` +
+        `\n` +
+        `Hint: Add @assumeK directive to enable axiom K, or rewrite the pattern match to avoid this requirement.`,
+        workEnv
+      );
+    } else {
+      const leftStr = workEnv.prettyPrint(unifyLeft)
+      const rightStr = workEnv.prettyPrint(unifyRight)
+      throw TCEnvError.create(
+        `Constructor '${pattern.name}' has result type ${leftStr} but expected ${rightStr}`,
+        workEnv
+      )
+    }
   }
 
   // Will check deletion rule after filling holes
@@ -1049,10 +914,17 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     applySubstitutionToElabStackInPlace(elabStack, workEnv.context.length, varIndex, value)
     // Also apply to RHS (which is in levels form, same as elabStack)
     rhsContainer.rhsInLevels = applySubstitutionToTermInLevels(rhsContainer.rhsInLevels, workEnv.context.length, varIndex, value)
+    // Also apply to types for deletion rule checking
+    ctorTypeAfterHoles = subst(varIndex, value, ctorTypeAfterHoles)
+    expectedTypeAfterHoles = subst(varIndex, value, expectedTypeAfterHoles)
 
     workEnv = workEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
     logResultState(workEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
   }
+
+  // Note: Deletion rule (axiom K) is now checked DURING unification in unify.ts
+  // - Reflexive equations (x = x) fail when assumeK is false
+  // - Self-unifiability is checked before constructor injectivity
 
   // Solve metas and constraints
   return workEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });

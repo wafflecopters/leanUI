@@ -991,8 +991,8 @@ describe('TacticEngine', () => {
 File: `src/test-programs/tactics/modus-ponens.tt`
 
 ```
--- @test success
--- @name "modusPonens via tactics"
+@test success
+@name "modusPonens via tactics"
 
 modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
   intro A
@@ -1006,8 +1006,8 @@ modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
 File: `src/test-programs/tactics/id-via-tactics.tt`
 
 ```
--- @test success
--- @name "id via tactics with intros"
+@test success
+@name "id via tactics with intros"
 
 id : {A : Type} -> A -> A := by
   intros [A, x]
@@ -1017,8 +1017,8 @@ id : {A : Type} -> A -> A := by
 File: `src/test-programs/tactics/const-via-tactics.tt`
 
 ```
--- @test success
--- @name "const via tactics with assumption"
+@test success
+@name "const via tactics with assumption"
 
 const : {A B : Type} -> A -> B -> A := by
   intros [A, B, a, b]

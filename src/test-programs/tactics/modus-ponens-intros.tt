@@ -1,0 +1,10 @@
+@test failure
+@name "modusPonens with apply (WIP - known bug)"
+@error "Zonk recheck"
+
+-- TODO: Known issue with de Bruijn indexing in dependent contexts
+-- Simpler tactics tests work fine (see simple-id.tt and test-apply.tt)
+modusPonens : {A B : Type} -> A -> (A -> B) -> B := by
+  intros A B a f
+  apply f
+  exact a

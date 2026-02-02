@@ -39,8 +39,9 @@ export type TCEnvOptions = {
   allowDuplicatePiNames?: boolean
   /**
    * Assume axiom K (Uniqueness of Identity Proofs).
-   * When false (default), pattern matching on indexed families requires indices to be definitionally equal (deletion rule).
-   * When true, UIP and other K-dependent proofs are allowed.
+   * When true (default, matches Lean), the deletion rule is enabled and UIP/K-dependent proofs are allowed.
+   * When false, the deletion rule is disabled: reflexive equations (x = x) fail during unification,
+   * preventing K-dependent proofs like UIP.
    */
   assumeK?: boolean
 }
@@ -2239,8 +2240,11 @@ export class TCEnv<T> {
     return TCEnvError.create(`Expected terms to be definitionally equal: ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}${message ? `: ${message}` : ''}`, this);
   }
 
-  unificationFailedError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, reason: 'conflict' | 'cycle'): TCEnvError {
-    const reasonMsg = reason === 'conflict' ? 'conflicting heads' : 'occurs check failed (cyclic)';
+  unificationFailedError(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, reason: 'conflict' | 'cycle' | 'deletion-rule'): TCEnvError {
+    const reasonMsg =
+      reason === 'conflict' ? 'conflicting heads' :
+      reason === 'cycle' ? 'occurs check failed (cyclic)' :
+      'deletion rule blocked (axiom K required)';
     return TCEnvError.create(`Unification failed (${reasonMsg}): ${this.prettyPrint(lhs)} vs ${this.prettyPrint(rhs)}`, this);
   }
 

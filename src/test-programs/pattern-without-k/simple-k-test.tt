@@ -1,0 +1,10 @@
+-- Simple test: pattern matching on Equal a a should fail without K
+@test failure
+@name "Pattern matching on Equal a a fails without K"
+@import preambles/equality.tt
+@assumeK=false
+@error "axiom K"
+
+-- This should fail: we're pattern matching on e : Equal a a (same variable)
+testK : {A : Type} -> {a : A} -> (e : Equal a a) -> A
+testK refl = _

@@ -1,5 +1,5 @@
 import { levelsEqual, mkVar, prettyPrint, TTKTerm, isDefinitionallyEqual } from "./kernel";
-import { DefinitionsMap } from "./term";
+import { DefinitionsMap, extractAppSpine } from "./term";
 import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
 
@@ -25,6 +25,7 @@ export type UnifyOptions = {
   mode: 'pattern' | 'check';
   definitions?: DefinitionsMap;
   fuel?: number;  // Fuel for whnf reduction to prevent infinite loops
+  assumeK?: boolean;  // If false, disable deletion rule (reject x=x equations)
 }
 
 const DEFAULT_UNIFY_FUEL = 1000;
@@ -48,7 +49,7 @@ export type UnifyResult = {
   levelConstraints: LevelConstraint[];
 } | {
   success: false;
-  reason: 'conflict' | 'cycle';
+  reason: 'conflict' | 'cycle' | 'deletion-rule';
 }
 
 // ============================================================================
@@ -374,7 +375,13 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // OPTIMIZATION: If terms are structurally identical, they unify immediately.
   // This avoids expensive whnf reduction for identical terms like matching Match
   // expressions containing recursive function calls.
+  //
+  // EXCEPTION: Reflexive variable equations (x = x) need deletion rule check
   if (isDefinitionallyEqual(lhs, rhs)) {
+    // Check if this is a reflexive variable equation without K
+    if (lhs.tag === 'Var' && rhs.tag === 'Var' && lhs.index === rhs.index && options.assumeK === false) {
+      return { success: false, reason: 'deletion-rule' };
+    }
     return emptySuccess;
   }
 
@@ -469,6 +476,12 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
 
   if (a.tag === 'Var' && b.tag === 'Var') {
     if (a.index === b.index) {
+      // Reflexive equation: x = x
+      // WITHOUT K: This is the deletion rule - reject it!
+      if (options.assumeK === false) {
+        return { success: false, reason: 'deletion-rule' };
+      }
+      // WITH K: Deletion rule succeeds (trivially true)
       return emptySuccess;
     }
 
@@ -609,8 +622,52 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // APP - Application
   //
   // (f a) vs (g b): unify f with g, then a with b
+  //
+  // SPECIAL CASE: Constructor injectivity with self-unifiability check
+  // When both sides are applications of the same constructor from an indexed
+  // datatype, check that the indices are self-unifiable before proceeding.
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'App' && b.tag === 'App') {
+    // Extract spines to check if both are constructor applications
+    const spineA = extractAppSpine(a);
+    const spineB = extractAppSpine(b);
+
+    // Check if both heads are the same constructor
+    if (spineA.fn.tag === 'Const' && spineB.fn.tag === 'Const' &&
+        spineA.fn.name === spineB.fn.name && options.definitions) {
+
+      const constructorName = spineA.fn.name;
+
+      // Check if this constructor is from an indexed datatype
+      const inductiveName = options.definitions.inductiveNameOfConstructor.get(constructorName);
+      const inductiveDef = inductiveName ? options.definitions.inductiveTypes.get(inductiveName) : undefined;
+
+      if (inductiveDef && inductiveDef.indexPositions && inductiveDef.indexPositions.length > 0) {
+        // This is a constructor of an indexed family
+        // Check self-unifiability of indices before applying injectivity
+
+        const indexCount = inductiveDef.indexPositions.length;
+
+        // Extract the last N arguments as indices
+        const indicesA = spineA.args.slice(-indexCount);
+        const indicesB = spineB.args.slice(-indexCount);
+
+        // Check if indices are self-unifiable
+        // We unify indicesA with itself to check if reflexive equations arise
+        for (let i = 0; i < indexCount; i++) {
+          const selfUnifyResult = unifyTerms(indicesA[i], indicesA[i], nextOptions);
+          if (!selfUnifyResult.success && selfUnifyResult.reason === 'deletion-rule') {
+            // Indices are not self-unifiable → injectivity blocked
+            return {
+              success: false,
+              reason: 'deletion-rule' // Propagate the deletion-rule failure
+            };
+          }
+        }
+      }
+    }
+
+    // Proceed with normal App unification
     const fnResult = unifyTerms(a.fn, b.fn, nextOptions);
     if (!fnResult.success) return fnResult;
 

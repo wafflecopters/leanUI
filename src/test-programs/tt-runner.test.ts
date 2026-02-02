@@ -4,11 +4,11 @@
  * Discovers all .tt files under src/test-programs/ (excluding preambles/),
  * parses header directives, resolves imports, compiles, and asserts.
  *
- * Header directives (must appear at the top of the file as -- comments):
- *   -- @test success|failure       Required. What to assert.
- *   -- @name "descriptive name"    Required. Test name shown in vitest output.
- *   -- @import preambles/nat.tt    Optional. Prepend contents of another .tt file.
- *   -- @error "substring"          Optional. Assert an error message contains this.
+ * Header directives (must appear at the top of the file):
+ *   @test success|failure       Required. What to assert.
+ *   @name "descriptive name"    Required. Test name shown in vitest output.
+ *   @import preambles/nat.tt    Optional. Prepend contents of another .tt file.
+ *   @error "substring"          Optional. Assert an error message contains this.
  */
 
 import { describe, test, expect } from 'vitest';
@@ -38,11 +38,11 @@ export function parseDirectives(source: string): TTDirectives {
 
   for (const line of lines) {
     const trimmed = line.trim();
-    // Stop parsing directives when we hit a non-comment, non-directive, non-empty line
+    // Stop parsing directives when we hit a non-directive, non-comment, non-empty line
     if (trimmed !== '' && !trimmed.startsWith('--') && !trimmed.startsWith('@')) break;
 
-    // Match directives with or without -- prefix: @directive value or -- @directive value
-    const directiveMatch = trimmed.match(/^(?:--\s*)?@(\w+)(?:\s+(.*))?/);
+    // Match directive: @directive value
+    const directiveMatch = trimmed.match(/^@(\w+)(?:\s+(.*))?/);
     if (!directiveMatch) continue;
 
     const [, directive, value] = directiveMatch;
@@ -77,7 +77,7 @@ export function parseDirectives(source: string): TTDirectives {
         if (!value) {
           throw new Error(`@error requires a quoted string value.`);
         }
-        const errorMatch = value.match(/^"(.+)"$/);
+        const errorMatch = value.match(/^"(.*)"$/);
         if (!errorMatch) throw new Error(`@error value must be quoted: ${value}`);
         errors.push(errorMatch[1]);
         break;
@@ -120,8 +120,8 @@ export function extractBody(source: string): string {
     const trimmed = lines[i].trim();
     // Skip empty lines and test directives (not compiler directives)
     if (trimmed === '' || trimmed.startsWith('--') || trimmed.startsWith('@')) {
-      // Keep compiler directives like @assumeK in the source (with or without --)
-      if (trimmed.match(/^(?:--\s*)?@assumeK/)) {
+      // Keep compiler directives like @assumeK in the source
+      if (trimmed.match(/^@assumeK/)) {
         break; // Start body from here
       }
       bodyStart = i + 1;
@@ -248,10 +248,10 @@ for (const [dir, files] of groups) {
 
 describe('tt-runner infrastructure', () => {
   test('parseDirectives: parses all directive types', () => {
-    const source = `-- @test success
--- @name "my test"
--- @import preambles/nat.tt
--- @import preambles/bool.tt
+    const source = `@test success
+@name "my test"
+@import preambles/nat.tt
+@import preambles/bool.tt
 
 inductive Foo : Type where`;
     const d = parseDirectives(source);
@@ -262,9 +262,9 @@ inductive Foo : Type where`;
   });
 
   test('parseDirectives: failure with error', () => {
-    const source = `-- @test failure
--- @name "bad thing"
--- @error "some error"
+    const source = `@test failure
+@name "bad thing"
+@error "some error"
 
 broken code`;
     const d = parseDirectives(source);
@@ -273,24 +273,24 @@ broken code`;
   });
 
   test('parseDirectives: throws on missing @test', () => {
-    expect(() => parseDirectives('-- @name "x"\ncode')).toThrow('Missing required @test');
+    expect(() => parseDirectives('@name "x"\ncode')).toThrow('Missing required @test');
   });
 
   test('parseDirectives: throws on missing @name', () => {
-    expect(() => parseDirectives('-- @test success\ncode')).toThrow('Missing required @name');
+    expect(() => parseDirectives('@test success\ncode')).toThrow('Missing required @name');
   });
 
   test('parseDirectives: ignores unknown directives (e.g., compiler directives)', () => {
     // Unknown directives like @bogus or compiler directives like @assumeK are ignored
-    const result = parseDirectives('-- @test success\n-- @name "x"\n-- @bogus y\ncode');
+    const result = parseDirectives('@test success\n@name "x"\n@bogus y\ncode');
     expect(result.test).toBe('success');
     expect(result.name).toBe('x');
   });
 
   test('extractBody: strips directive lines', () => {
-    const source = `-- @test success
--- @name "my test"
--- @import preambles/nat.tt
+    const source = `@test success
+@name "my test"
+@import preambles/nat.tt
 
 inductive Foo : Type where
   MkFoo : Foo`;
