@@ -11,12 +11,13 @@
  * - Succ branch: IH : P n' (where P is the goal abstracted over n)
  */
 
-import { TTKTerm, TTKContext } from '../compiler/kernel';
+import { TTKTerm, TTKContext, TTKPattern, TTKClause } from '../compiler/kernel';
 import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
 import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
+import { subst } from '../compiler/subst';
 
 /**
  * InductionTactic: Perform induction with induction hypotheses
@@ -62,18 +63,19 @@ export class InductionTactic implements Tactic {
       // 5. Build the motive P: abstract the goal over the scrutinee
       // If goal is `G[n]` and we're inducting on `n : Nat`,
       // then P = λ (x : Nat). G[x]
-      const motive = this.buildMotive(goal, this.scrutinee);
+      const motive = this.buildMotive(goal, this.scrutinee, scrutineeType);
 
       // 6. For each constructor, create a branch meta (with IH if recursive)
       const branchMetas: Array<{
         id: string;
         ctor: string;
         meta: MetaVar;
+        numParams: number;  // Number of constructor parameters
       }> = [];
 
       for (const ctor of inductiveDef.constructors) {
         // Extend context with constructor parameters AND induction hypothesis
-        const { branchCtx, hasRecursiveArg } = this.extendContextWithCtorParamsAndIH(
+        const { branchCtx, hasRecursiveArg, numParams } = this.extendContextWithCtorParamsAndIH(
           goal.ctx,
           ctor.type,
           this.scrutinee,
@@ -82,22 +84,34 @@ export class InductionTactic implements Tactic {
           engine.definitions
         );
 
+        // Compute the branch goal type by applying the motive to the constructor pattern
+        // For Zero: motive Zero
+        // For Succ n': motive (Succ n') where n' is at index 0 (or IH index if has IH)
+        const branchGoalType = this.computeBranchGoalType(
+          motive,
+          ctor,
+          numParams,
+          hasRecursiveArg
+        );
+
         // Create meta for this branch
         const branchId = freshMetaName();
         const branchMeta: MetaVar = {
           ctx: branchCtx,
-          type: goal.type,
+          type: branchGoalType,
           solution: undefined,
           caseTag: ctor.name
         };
 
-        branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta });
+        branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta, numParams });
       }
 
-      // 7. Build eliminator/matcher application (placeholder for now)
+      // 7. Build eliminator/matcher application
+      const branches = branchMetas.map(b => ({ tag: 'Meta', id: b.id } as TTKTerm));
       const elimTerm = this.buildMatchTerm(
         this.scrutinee,
-        branchMetas.map(b => ({ tag: 'Meta', id: b.id } as TTKTerm))
+        branchMetas,
+        branches
       );
 
       // 8. Assign eliminator to current goal
@@ -142,13 +156,64 @@ export class InductionTactic implements Tactic {
    * If goal is `Equal (plus n m) (plus m n)` and we induct on `n`,
    * motive P = λ (x : Nat). Equal (plus x m) (plus m x)
    *
-   * For now, simplified: just use the goal type as-is
-   * (Proper implementation would substitute scrutinee with a fresh var)
+   * IMPORTANT: After intro, the scrutinee is the most recent variable (index 0).
+   * The motive wraps the goal type in a lambda, so the scrutinee remains at index 0.
    */
-  private buildMotive(goal: MetaVar, _scrutinee: TTKTerm): TTKTerm {
-    // Simplified: return the goal type
-    // TODO: Properly abstract over the scrutinee
-    return goal.type;
+  private buildMotive(goal: MetaVar, _scrutinee: TTKTerm, scrutineeType: TTKTerm): TTKTerm {
+    // Build: λ (x : scrutineeType). goalType
+    // Since scrutinee is at index 0 and the lambda parameter is also at index 0,
+    // the goal type can be used as-is for the lambda body!
+    return {
+      tag: 'Binder',
+      binderKind: { tag: 'BLam' },
+      name: 'x',
+      domain: scrutineeType,
+      body: goal.type
+    };
+  }
+
+  /**
+   * Compute the branch goal type by applying the motive to the constructor pattern
+   *
+   * For Zero: motive Zero
+   * For Succ n': motive (Succ n')
+   */
+  private computeBranchGoalType(
+    motive: TTKTerm,
+    ctor: { name: string; type: TTKTerm },
+    numParams: number,
+    hasRecursiveArg: boolean
+  ): TTKTerm {
+    // Build the constructor pattern: ctor arg1 arg2 ... argN
+    // Arguments are the constructor parameters, referenced by de Bruijn index
+    // In the branch context, the most recent variable is at index 0
+
+    // For Zero: just Zero (no parameters)
+    // For Succ n': Succ n' (one parameter at index 0, or index 1 if there's an IH)
+
+    let ctorPattern: TTKTerm = { tag: 'Const', name: ctor.name };
+
+    // Apply constructor to its parameters
+    // Parameters are at indices [numParams-1, numParams-2, ..., 1, 0] (or shifted if IH exists)
+    // Actually, in the branch context after adding params and IH:
+    // - If no IH: params are at [numParams-1, ..., 0]
+    // - If IH: IH is at 0, params are at [numParams, ..., 1]
+
+    const ihOffset = hasRecursiveArg ? 1 : 0;
+    for (let i = numParams - 1; i >= 0; i--) {
+      ctorPattern = {
+        tag: 'App',
+        fn: ctorPattern,
+        arg: { tag: 'Var', index: i + ihOffset }
+      };
+    }
+
+    // Apply motive to the constructor pattern
+    return {
+      tag: 'App',
+      fn: motive,
+      arg: ctorPattern
+    };
   }
 
   /**
@@ -165,7 +230,7 @@ export class InductionTactic implements Tactic {
     motive: TTKTerm,
     inductiveName: string,
     definitions: DefinitionsMap
-  ): { branchCtx: TTKContext; hasRecursiveArg: boolean } {
+  ): { branchCtx: TTKContext; hasRecursiveArg: boolean; numParams: number } {
     let newCtx = [...baseCtx];
     let currentType = ctorType;
     let recursiveArgIndex: number | null = null;
@@ -211,7 +276,8 @@ export class InductionTactic implements Tactic {
 
     return {
       branchCtx: newCtx,
-      hasRecursiveArg: recursiveArgIndex !== null
+      hasRecursiveArg: recursiveArgIndex !== null,
+      numParams: paramCount
     };
   }
 
@@ -259,11 +325,42 @@ export class InductionTactic implements Tactic {
   }
 
   /**
-   * Build a match/eliminator term (placeholder)
+   * Build a match/eliminator term
+   *
+   * Builds: match scrutinee with
+   *   | ctor1 params1 => branch1
+   *   | ctor2 params2 => branch2
+   *   | ...
+   *
+   * TODO: Currently returns placeholder (first branch) because type checker
+   * doesn't support Match inference yet. Should build proper Match term once
+   * Match inference is implemented.
    */
-  private buildMatchTerm(_scrutinee: TTKTerm, branches: TTKTerm[]): TTKTerm {
-    // TODO: Implement proper eliminator construction
+  private buildMatchTerm(
+    _scrutinee: TTKTerm,
+    _branchMetas: Array<{ id: string; ctor: string; meta: MetaVar; numParams: number }>,
+    branches: TTKTerm[]
+  ): TTKTerm {
+    // TODO: Implement proper match/eliminator term construction
+    // For now, return the first branch as a placeholder
     return branches[0] || { tag: 'Const', name: 'unit' };
+  }
+
+  /**
+   * Build a constructor pattern for a Match clause
+   */
+  private buildCtorPattern(ctorName: string, numParams: number): TTKPattern {
+    // Build PCtor with PVar for each parameter
+    const args: TTKPattern[] = [];
+    for (let i = 0; i < numParams; i++) {
+      args.push({ tag: 'PVar', name: `x${i}` });
+    }
+
+    return {
+      tag: 'PCtor',
+      name: ctorName,
+      args
+    };
   }
 
   /**
