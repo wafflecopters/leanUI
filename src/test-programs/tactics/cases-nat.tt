@@ -1,0 +1,9 @@
+@test success
+@name "cases on Nat creates Zero and Succ branches"
+@import preambles/nat.tt
+
+natId : (n : Nat) -> Nat := by
+  intro n
+  cases n
+  exact Zero
+  exact (Succ n)

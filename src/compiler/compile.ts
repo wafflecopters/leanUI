@@ -27,6 +27,7 @@ import { subst } from './subst';
 import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, Tactic } from '../tactics/tactic';
+import { CasesTactic } from '../tactics/cases-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 export type { TotalityResult, CaseTree };
 
@@ -282,7 +283,7 @@ export interface WildcardInlayHint {
 /**
  * Semantic token types for syntax highlighting
  */
-export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace' | 'directive';
+export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace' | 'directive' | 'directiveValue';
 
 /**
  * A semantic token for highlighting
@@ -470,13 +471,16 @@ export function extractDirectiveTokens(source: string): SemanticToken[] {
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
     const line = lines[lineIndex];
 
-    // Match directive: @directive value
-    const directiveMatch = line.match(/^(\s*)(@\w+)/);
+    // Match directive: @directive=value or @directive value or @directive "value" (with optional -- comment prefix)
+    const directiveMatch = line.match(/^(\s*)(?:--\s*)?(@\w+)(?:=(\w+)|\s+(\w+)|\s+"([^"]*)")?/);
     if (!directiveMatch) continue;
 
-    const [, leadingWhitespace, directive] = directiveMatch;
-    // Column is 1-based, so add 1.
-    const column = leadingWhitespace.length + 1;
+    const [, , directive, equalsValue, spaceValue, quotedValue] = directiveMatch;
+    const value = equalsValue || spaceValue || quotedValue;
+
+    // Calculate column based on where the @ appears in the original line
+    const atIndex = line.indexOf('@');
+    const column = atIndex >= 0 ? atIndex + 1 : 0;
 
     // Add token for the directive name (e.g., @test, @assumeK)
     tokens.push({
@@ -485,6 +489,19 @@ export function extractDirectiveTokens(source: string): SemanticToken[] {
       length: directive.length,
       type: 'directive'
     });
+
+    // Add token for the directive value (e.g., false, true, "test name")
+    if (value) {
+      const valueIndex = line.indexOf(value, atIndex + directive.length);
+      if (valueIndex >= 0) {
+        tokens.push({
+          line: lineIndex + 1,
+          column: valueIndex + 1,
+          length: value.length,
+          type: 'directiveValue'
+        });
+      }
+    }
   }
 
   return tokens;
@@ -1280,6 +1297,13 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       // args[0] is a TTKTerm at this point (elaborated by caller)
       return new ApplyTactic(cmd.args[0] as TTKTerm);
 
+    case 'cases':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'cases' tactic requires exactly 1 argument, got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new CasesTactic(cmd.args[0] as TTKTerm);
+
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);
   }
@@ -1652,8 +1676,8 @@ function parseAssumeKDirective(source: string): boolean | undefined {
   const lines = source.split('\n');
   for (const line of lines) {
     const trimmed = line.trim();
-    // Match @assumeK directive
-    const match = trimmed.match(/^@assumeK(?:=(\w+))?/);
+    // Match @assumeK directive (with optional -- comment prefix)
+    const match = trimmed.match(/^(?:--\s*)?@assumeK(?:=(\w+))?/);
     if (match) {
       const value = match[1];
       if (!value || value === 'true') return true;
@@ -3544,7 +3568,7 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
   if (sourceAssumeK !== undefined) {
   }
 
-  // 1. Parse the source file
+  // 1. Parse the source file (parser skips directive lines)
   const parseResult = parseTTSource(source);
 
   // 2. For each block, for each definition...

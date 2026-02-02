@@ -287,6 +287,22 @@ export class Lexer {
         continue;
       }
 
+      // Skip directive lines (@assumeK, @test, @name, etc.)
+      // Check if we're at start of line (col === 1) or only whitespace before @
+      if (ch === '@') {
+        const lineStart = this.pos - (this.col - 1);
+        const beforeAt = this.input.slice(lineStart, this.pos);
+        const onlyWhitespaceOrCommentBefore = /^(\s|--\s*)*$/.test(beforeAt);
+
+        if (onlyWhitespaceOrCommentBefore) {
+          // Skip to end of line
+          while (this.pos < this.input.length && this.input[this.pos] !== '\n') {
+            this.pos++;
+          }
+          continue;
+        }
+      }
+
       // Skip line comments (-- ...)
       if (ch === '-' && this.input[this.pos + 1] === '-') {
         while (this.pos < this.input.length && this.input[this.pos] !== '\n') {

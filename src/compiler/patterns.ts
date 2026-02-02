@@ -894,32 +894,64 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
     elabStack.length -= arity
     elabTerm = mkAppSpine(elabHead, elabArgs)
   }
+
+  // For dependent elimination, convert any remaining Holes in elabTerm to fresh metas.
+  // When a constructor has implicit arguments not bound in the pattern (e.g., universe levels),
+  // they remain as Holes. For dependent elimination to work correctly, these Holes must be
+  // converted to fresh metas so they can be solved during RHS type checking.
+  //
+  // NOTE: This assumes all unbound implicit arguments are universe levels (ULevel type).
+  // This is correct for constructors like `refl : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal a a`
+  // where the first implicit argument is always the universe level.
+  function fillRemainingHoles(term: TTKTerm, env: TCEnv<unknown>): { term: TTKTerm, env: TCEnv<unknown> } {
+    if (term.tag === 'Hole') {
+      // Create a fresh meta with ULevel type
+      const { env: newEnv, metaTerm } = env.createMetaWithType({ tag: 'ULevel' });
+      return { term: metaTerm, env: newEnv };
+    } else if (term.tag === 'App') {
+      const { term: fn, env: env1 } = fillRemainingHoles(term.fn, env);
+      const { term: arg, env: env2 } = fillRemainingHoles(term.arg, env1);
+      return { term: { tag: 'App', fn, arg }, env: env2 };
+    } else {
+      return { term, env };
+    }
+  }
+
+  let filledElabTerm = elabTerm;
+  let updatedEnv = workEnv;
+  if (arity > 0) {
+    const result = fillRemainingHoles(elabTerm, workEnv);
+    filledElabTerm = result.term;
+    updatedEnv = result.env;
+  }
+
+  // For dependent elimination, use the filled elabTerm (with universe holes converted to metas)
+  const termForDependentElim = filledElabTerm;
+
   elabStack.push(elabTerm)
 
-  // Elab var indices are backwards compared to debruijn indices
-  const adjustedElabTerm = transformVarsInTerm(elabTerm, (index) => {
-    return mkVar(workEnv.context.length - 1 - index)
-  })
+  // Elab var indices are backwards compared to debruijn indices (levels form)
+  const adjustedElabTerm = transformVarsInTerm(termForDependentElim, (index) => mkVar(updatedEnv.context.length - 1 - index))
 
-  const shiftAmount = workEnv.context.length - nextCheckTypeEntry.ctxLength
+  const shiftAmount = updatedEnv.context.length - nextCheckTypeEntry.ctxLength
   const adjustedBody = shiftTerm(nextCheckType.body, shiftAmount, 0)
 
-  checkStack.push({ type: subst(shiftAmount, adjustedElabTerm, adjustedBody), ctxLength: workEnv.context.length })
+  checkStack.push({ type: subst(shiftAmount, adjustedElabTerm, adjustedBody), ctxLength: updatedEnv.context.length })
 
   for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
-    logInfo(() => `    Apply: ${workEnv.prettyPrint(mkVar(varIndex))} -> ${workEnv.prettyPrint(value)}`)
+    logInfo(() => `    Apply: ${updatedEnv.prettyPrint(mkVar(varIndex))} -> ${updatedEnv.prettyPrint(value)}`)
 
     // Update these before the signature
-    applySubstitutionToCheckStackInPlace(checkStack, workEnv.context.length, varIndex, value)
-    applySubstitutionToElabStackInPlace(elabStack, workEnv.context.length, varIndex, value)
+    applySubstitutionToCheckStackInPlace(checkStack, updatedEnv.context.length, varIndex, value)
+    applySubstitutionToElabStackInPlace(elabStack, updatedEnv.context.length, varIndex, value)
     // Also apply to RHS (which is in levels form, same as elabStack)
-    rhsContainer.rhsInLevels = applySubstitutionToTermInLevels(rhsContainer.rhsInLevels, workEnv.context.length, varIndex, value)
+    rhsContainer.rhsInLevels = applySubstitutionToTermInLevels(rhsContainer.rhsInLevels, updatedEnv.context.length, varIndex, value)
     // Also apply to types for deletion rule checking
     ctorTypeAfterHoles = subst(varIndex, value, ctorTypeAfterHoles)
     expectedTypeAfterHoles = subst(varIndex, value, expectedTypeAfterHoles)
 
-    workEnv = workEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
-    logResultState(workEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
+    updatedEnv = updatedEnv.applySubstitutionToContextMetasAndConstraints(varIndex, value)
+    logResultState(updatedEnv, undefined, checkStack, elabStack, '    AFTER APPLYING SUBSTITUTION:')
   }
 
   // Note: Deletion rule (axiom K) is now checked DURING unification in unify.ts
@@ -927,7 +959,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   // - Self-unifiability is checked before constructor injectivity
 
   // Solve metas and constraints
-  return workEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+  return updatedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
 }
 
 export function applySubstitutionToCheckStackInPlace(

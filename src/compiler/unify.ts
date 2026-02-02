@@ -655,7 +655,13 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
         // Check if indices are self-unifiable
         // We unify indicesA with itself to check if reflexive equations arise
         for (let i = 0; i < indexCount; i++) {
-          const selfUnifyResult = unifyTerms(indicesA[i], indicesA[i], nextOptions);
+          const indexA = indicesA[i];
+
+          // Defensive check: if index is undefined, skip self-unifiability check
+          // This can happen with partially applied constructors or during elaboration
+          if (!indexA) continue;
+
+          const selfUnifyResult = unifyTerms(indexA, indexA, nextOptions);
           if (!selfUnifyResult.success && selfUnifyResult.reason === 'deletion-rule') {
             // Indices are not self-unifiable → injectivity blocked
             return {

@@ -111,6 +111,7 @@ const SYNTAX_COLORS = {
   hole: 'e5c07b',           // Yellow for holes (unfinished code)
   absurd: '4fc1ff',         // Bright cyan - for #absurd marker
   directive: 'ff79c6',      // Pink - for directives (@test, @name, @assumeK, etc.)
+  directiveValue: '8b949e', // Grey - for directive values (true, false, "test name")
 };
 
 // Monaco theme matching TextEditorPage
@@ -140,6 +141,7 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     { token: 'absurd', foreground: SYNTAX_COLORS.absurd },
     { token: 'namedBrace', foreground: SYNTAX_COLORS.namedBrace },
     { token: 'directive', foreground: SYNTAX_COLORS.directive },
+    { token: 'directiveValue', foreground: SYNTAX_COLORS.directiveValue },
   ],
   colors: {
     'editor.background': '#161b22',
@@ -1475,7 +1477,7 @@ export function TextEditorPage() {
 
     // Register semantic tokens provider for precise highlighting
     // This overrides lexical highlighting with semantic information from the compiler
-    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd', 'namedBrace'];
+    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd', 'namedBrace', 'directive', 'directiveValue'];
     const tokenModifiers: string[] = [];
 
     // Create an event emitter for signaling token changes

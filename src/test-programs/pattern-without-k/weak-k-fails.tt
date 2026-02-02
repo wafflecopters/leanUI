@@ -1,0 +1,12 @@
+@test failure
+@name "Weak K should fail without axiom K"
+@import preambles/equality.tt
+@assumeK=false
+@error "axiom K"
+
+-- Weak K: proving equality of refl to itself requires axiom K
+-- Pattern matching on (e : Equal (refl {A} {a}) (refl {A} {a}))
+-- The indices are constructor applications (refl), not variables
+
+weakK : (A : Type) -> (a : A) -> (P : Equal (refl {A} {a}) (refl {A} {a}) -> Type) -> (p : P (refl {A:=Equal a a} {a:=refl {A} {a}})) -> (e : Equal (refl {A} {a}) (refl {A} {a})) -> P e
+weakK A a P p refl = p

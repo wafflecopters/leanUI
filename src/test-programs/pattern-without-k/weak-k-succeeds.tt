@@ -1,0 +1,9 @@
+@test success
+@name "Weak K should succeed with axiom K"
+@import preambles/equality.tt
+@assumeK=true
+
+-- Weak K: proving equality of refl to itself should work WITH axiom K
+
+weakK : (A : Type) -> (a : A) -> (P : Equal (refl {A} {a}) (refl {A} {a}) -> Type) -> (p : P (refl {A:=Equal a a} {a:=refl {A} {a}})) -> (e : Equal (refl {A} {a}) (refl {A} {a})) -> P e
+weakK A a P p refl = p
