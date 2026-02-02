@@ -1,4 +1,4 @@
-import { TTKTerm, levelsEqual, prettyPrint } from "./kernel";
+import { TTKTerm, TTKPattern, levelsEqual, prettyPrint, mkLSucc, isDefinitionallyEqual } from "./kernel";
 import { shiftTerm, minFreeVarIndex } from "./subst";
 import { Constraint, DefinitionsMap, MetaVar, TTKContext } from "./term";
 import { unifyTerms } from "./unify";
@@ -491,6 +491,18 @@ export function solveConstraints(
           }
         }
       }
+      // Type check for Sort: if rhs is a Sort, its type is Sort(level+1).
+      // Check that Sort(level+1) matches the meta's type exactly.
+      // This catches cases where we try to solve ?A : Type with Type (which has type Type 1, not Type).
+      // Skip this check if the meta's type contains unsolved metas - we can't determine the correct
+      // universe level until those metas are solved.
+      if (normConstraint.rhs.tag === 'Sort' && !termContainsMeta(meta.type)) {
+        const rhsType: TTKTerm = { tag: 'Sort', level: mkLSucc(normConstraint.rhs.level) };
+        if (!isDefinitionallyEqual(meta.type, rhsType)) {
+          const names = effectiveContext.map(c => c.name).reverse();
+          throw new Error(`Universe level mismatch for meta ${normConstraint.meta} : ${prettyPrint(meta.type, names)}: cannot solve with ${prettyPrint(normConstraint.rhs, names)} which has type ${prettyPrint(rhsType, names)}`);
+        }
+      }
       newMetaVars.set(normConstraint.meta, { ...meta, solution: normConstraint.rhs, ctx: effectiveContext });
 
       // If this is a "hole:" prefixed constraint, also copy the solution to the plain ID
@@ -509,6 +521,43 @@ export function solveConstraints(
   }
 
   return { constraints: stillStuck, metaVars: newMetaVars };
+}
+
+function termContainsMeta(term: TTKTerm): boolean {
+  switch (term.tag) {
+    case 'Meta':
+      return true;
+    case 'Var':
+    case 'Const':
+    case 'Hole':
+      return false;
+    case 'Sort':
+      return termContainsMeta(term.level);
+    case 'App':
+      return termContainsMeta(term.fn) || termContainsMeta(term.arg);
+    case 'Binder':
+      return termContainsMeta(term.domain) || termContainsMeta(term.body) ||
+        (term.binderKind.tag === 'BLet' && termContainsMeta(term.binderKind.defVal));
+    case 'Annot':
+      return termContainsMeta(term.term) || termContainsMeta(term.type);
+    case 'Match':
+      return termContainsMeta(term.scrutinee) ||
+        term.clauses.some(c => c.patterns.some(p => patternContainsMeta(p)) || termContainsMeta(c.rhs));
+    default:
+      return false;
+  }
+}
+
+function patternContainsMeta(pattern: TTKPattern): boolean {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return false;
+    case 'PCtor':
+      return pattern.args.some(a => patternContainsMeta(a));
+    default:
+      return false;
+  }
 }
 
 export function canSolveMeta(meta: MetaVar, rhs: TTKTerm): boolean {

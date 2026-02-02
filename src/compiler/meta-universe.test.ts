@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { solveConstraints } from './meta';
-import { MetaVar, Constraint } from '../types/tt-kernel';
+import { MetaVar, Constraint } from './term';
 import { mkLevelNum } from './kernel';
 
 describe('Meta solving with universe level checking', () => {
@@ -10,7 +10,6 @@ describe('Meta solving with universe level checking', () => {
 
     const metaVars = new Map<string, MetaVar>();
     metaVars.set('?A', {
-      id: '?A',
       type: { tag: 'Sort', level: mkLevelNum(0) }, // ?A : Type 0
       ctx: [],
       isHole: false,
@@ -34,7 +33,6 @@ describe('Meta solving with universe level checking', () => {
 
     const metaVars = new Map<string, MetaVar>();
     metaVars.set('?A', {
-      id: '?A',
       type: { tag: 'Sort', level: mkLevelNum(1) }, // ?A : Type 1
       ctx: [],
       isHole: false,
