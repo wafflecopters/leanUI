@@ -1,0 +1,19 @@
+@test failure
+@name "comments inside exact expression should fail"
+@error "Parse error"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+test : (n : Nat) -> Equal n n := by
+  intro n
+  exact (trans
+    -- comment inside expression
+    refl refl)
