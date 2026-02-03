@@ -1,0 +1,10 @@
+@test success
+@name "with-abstraction: scrutinee is last argument"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Scrutinee is the last argument, appears in return type
+testLastArg : (x y : Nat) -> Equal y y
+testLastArg x y with y
+  | Zero => refl
+  | Succ m => refl

@@ -1,0 +1,79 @@
+@test success
+@name "doubleSum with readable multi-tactic proof"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+
+congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
+congPlusLeft p refl = refl
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
+
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+plusAssoc Zero m p = refl
+plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)
+
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
+plusComm Zero m = sym (plusZeroRight m)
+plusComm (Succ n) m = trans (congSucc (plusComm n m)) (sym (plusSuccRight m n))
+
+plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
+plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
+
+mulSuccRight : (n m : Nat) -> Equal (mul n (Succ m)) (plus n (mul n m))
+mulSuccRight Zero m = refl
+mulSuccRight (Succ n) m = congSucc (trans (congPlusRight m (mulSuccRight n m)) (plusLeftComm m n (mul n m)))
+
+sum : Nat -> Nat
+sum Zero = Zero
+sum (Succ n) = plus (Succ n) (sum n)
+
+-- Readable multi-tactic proof!
+doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH =>
+    apply trans
+    exact (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
+    apply trans
+    apply congPlusRight
+    exact (plusLeftComm (sum n') (Succ n') (sum n'))
+    apply trans
+    apply congPlusRight
+    apply congPlusRight
+    exact IH
+    apply trans
+    apply congSucc
+    exact (plusSuccRight n' (plus n' (mul n' (Succ n'))))
+    apply congPlusRight
+    apply sym
+    exact (mulSuccRight n' (Succ n'))

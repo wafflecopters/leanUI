@@ -1,0 +1,10 @@
+@test success
+@name "with-abstraction: scrutinee in nested type constructor"
+@import preambles/nat.tt
+@import preambles/list.tt
+
+-- Return type has scrutinee nested in List constructor
+testListN : (n : Nat) -> List Nat
+testListN n with n
+  | Zero => Nil
+  | Succ m => Nil

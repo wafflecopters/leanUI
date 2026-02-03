@@ -1,0 +1,10 @@
+@test success
+@name "with-abstraction: scrutinee is first argument"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Scrutinee is the first argument, appears in return type
+testFirstArg : (x y : Nat) -> Equal x x
+testFirstArg x y with x
+  | Zero => refl
+  | Succ m => refl

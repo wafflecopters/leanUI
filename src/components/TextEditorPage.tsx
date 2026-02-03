@@ -769,11 +769,27 @@ sum : Nat -> Nat
 sum Zero = Zero
 sum (Succ n) = plus (Succ n) (sum n)
 
+-- Readable proof with comments explaining each step
 doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
   intro n
   induction n with
   | Zero => exact refl
-  | Succ n' IH => exact (trans (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n'))) (trans (congPlusRight (Succ n') (plusLeftComm (sum n') (Succ n') (sum n'))) (trans (congPlusRight (Succ n') (congPlusRight (Succ n') IH)) (trans (congSucc (plusSuccRight n' (plus n' (mul n' (Succ n'))))) (congPlusRight (Succ (Succ n')) (sym (mulSuccRight n' (Succ n'))))))))
+  | Succ n' IH =>
+    -- Nested trans calls, but now with clear formatting and comments
+    exact (trans
+      -- Step 1: Reassociate to (Succ n' + (sum n' + (Succ n' + sum n')))
+      (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
+      (trans
+        -- Step 2: Commute middle terms to (Succ n' + (Succ n' + (sum n' + sum n')))
+        (congPlusRight (Succ n') (plusLeftComm (sum n') (Succ n') (sum n')))
+        (trans
+          -- Step 3: Apply IH to inner (sum n' + sum n')
+          (congPlusRight (Succ n') (congPlusRight (Succ n') IH))
+          (trans
+            -- Step 4: Simplify Succ (n' + (n' + n' * Succ n'))
+            (congSucc (plusSuccRight n' (plus n' (mul n' (Succ n')))))
+            -- Step 5: Final multiplication lemma
+            (congPlusRight (Succ (Succ n')) (sym (mulSuccRight n' (Succ n'))))))))
 
 ------------------------------------------------------------
 -- Leq: ordering on Nat

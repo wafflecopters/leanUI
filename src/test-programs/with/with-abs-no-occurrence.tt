@@ -1,0 +1,11 @@
+@test success
+@name "with-abstraction: scrutinee not in return type (no-op)"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+-- Scrutinee doesn't appear in return type
+-- With-abstraction should be a no-op (just add binder)
+testNoOccurrence : (n : Nat) -> Bool
+testNoOccurrence n with n
+  | Zero => True
+  | Succ _ => False

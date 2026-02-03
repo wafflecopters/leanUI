@@ -1,0 +1,10 @@
+@test success
+@name "with-abstraction: function with multiple arguments"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Function with 3 arguments, scrutinee in middle, appears in return type
+testMultiArg : (x : Nat) -> (y : Nat) -> (z : Nat) -> Equal y y
+testMultiArg x y z with y
+  | Zero => refl
+  | Succ m => refl
