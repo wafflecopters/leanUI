@@ -290,6 +290,7 @@ export interface TacticCommand {
   name: string;       // Tactic name: 'intro', 'exact', 'apply', etc.
   args: TTerm[];      // Arguments (can be identifiers as Const, or full terms)
   caseBranches?: CaseBranch[]; // Optional: for structured cases syntax
+  focusedTactics?: TacticCommand[]; // Optional: for bullet syntax (subgoal focusing)
 }
 
 /**

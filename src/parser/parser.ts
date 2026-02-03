@@ -82,7 +82,8 @@ export type TokenType =
   | 'WITH'         // with keyword (for with-abstraction)
   | 'ELLIPSIS'     // ... (for repeating parent patterns in with clauses)
   | 'ABSURD'       // #absurd marker for absurd cases
-  | 'BY';          // by keyword (for tactic proofs)
+  | 'BY'           // by keyword (for tactic proofs)
+  | 'BULLET';      // · (middle dot, U+00B7, for tactic subgoal focusing)
 
 export interface Token {
   type: TokenType;
@@ -401,6 +402,9 @@ export class Lexer {
       case ';':
         this.pos++; this.col++;
         return { type: 'SEMICOLON', value: ';', pos: startPos, line: startLine, col: startCol };
+      case '·':  // Middle dot (U+00B7) - bullet for tactic focusing
+        this.pos++; this.col++;
+        return { type: 'BULLET', value: '·', pos: startPos, line: startLine, col: startCol };
       case '|':
         // Check for || operator first
         if (this.input[this.pos + 1] === '|') {
@@ -3352,6 +3356,66 @@ export class Parser {
    * - have: parse identifier ':' term ':=' term
    */
   private parseTactic(ctx: NameContext, path: IndexPath): TacticCommand {
+    // Check for bullet (·) for subgoal focusing
+    if (this.current().type === 'BULLET') {
+      const bulletToken = this.current();
+      this.advance();
+
+      const focusedTactics: TacticCommand[] = [];
+
+      // Check for same-line tactic: · exact foo
+      if (this.current().type === 'IDENT' && this.current().line === bulletToken.line) {
+        const tacticPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: 0 }];
+        const tactic = this.parseTactic(ctx, tacticPath);
+        focusedTactics.push(tactic);
+      } else if (this.current().type === 'NEWLINE') {
+        // Multi-line indented tactics
+        this.advance(); // consume newline
+        this.skipNewlines();
+
+        const bulletIndent = bulletToken.col;
+        const tacticIndent = this.current().col;
+
+        // Tactics should be indented more than the bullet
+        if (tacticIndent <= bulletIndent) {
+          throw new ParseError(
+            'Expected indented tactics after bullet',
+            this.current().line,
+            this.current().col
+          );
+        }
+
+        // Parse indented tactics
+        let tacticIndex = 0;
+        while (this.current().type !== 'EOF' && this.current().col >= tacticIndent) {
+          const tacticPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: tacticIndex }];
+          const tactic = this.parseTactic(ctx, tacticPath);
+          focusedTactics.push(tactic);
+          tacticIndex++;
+
+          // Check for continuation
+          if (this.current().type === 'NEWLINE') {
+            this.advance();
+            this.skipNewlines();
+          } else if (this.current().type === 'SEMICOLON') {
+            this.advance();
+            if (this.current().type === 'NEWLINE') {
+              this.advance();
+              this.skipNewlines();
+            }
+          } else {
+            break;
+          }
+        }
+      }
+
+      return {
+        name: 'focus',
+        args: [],
+        focusedTactics
+      };
+    }
+
     // Tactic name is always an identifier
     if (this.current().type !== 'IDENT') {
       throw new ParseError(

@@ -1,0 +1,17 @@
+@test success
+@name "basic bullet syntax for subgoal focusing"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+-- Test: apply trans creates 2 subgoals, use bullets to solve each
+testFocus : (n : Nat) -> Equal n n := by
+  intro n
+  apply trans
+  · exact refl
+  · exact refl

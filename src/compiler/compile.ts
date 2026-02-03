@@ -35,6 +35,7 @@ import { SymmetryTactic } from '../tactics/symmetry-tactic';
 import { TransitivityTactic } from '../tactics/transitivity-tactic';
 import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
+import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 export type { TotalityResult, CaseTree };
 
@@ -93,6 +94,9 @@ export interface ElabDeclaration {
   elabError?: string;
   /** Serialized surface path where elaboration error occurred */
   elabErrorPath?: string;
+  /** For with-clause auxiliaries: metadata needed for scrutinee type resolution */
+  withScrutineeCount?: number;
+  withScrutineeExprs?: TTerm[];
 }
 
 /**
@@ -137,6 +141,9 @@ export interface CompiledDeclaration {
   kernelValue?: TTKTerm;
   kernelConstructors?: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }>;
 
+  // For term declarations: map from parameter names to positions
+  namedArgMap?: NamedArgMap;
+
   // For inductive types: positions that are indices (not parameters)
   indexPositions?: number[];
 
@@ -164,6 +171,10 @@ export interface CompiledDeclaration {
 
   // Whether this declaration is a with-clause auxiliary
   isWithAuxiliary?: boolean;
+
+  // For with-clause auxiliaries: metadata needed for scrutinee type resolution
+  withScrutineeCount?: number;
+  withScrutineeExprs?: TTerm[];
 
   // Errors promoted from failed with-clause auxiliaries (displayed on the main declaration)
   withClauseErrors?: TCEnvError[];
@@ -1263,8 +1274,14 @@ export interface ElabOptions {
  * Convert a tactic command to a Tactic object.
  * Args can be TTerm (un-elaborated) or TTKTerm (elaborated).
  */
-function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm> }): Tactic {
+function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>; focusedTactics?: Tactic[] }): Tactic {
   switch (cmd.name) {
+    case 'focus':
+      if (!cmd.focusedTactics || cmd.focusedTactics.length === 0) {
+        throw new Error(`'focus' tactic requires nested tactics`);
+      }
+      return new FocusTactic(cmd.focusedTactics);
+
     case 'exact':
       if (cmd.args.length !== 1) {
         throw new Error(`'exact' tactic requires exactly 1 argument, got ${cmd.args.length}`);
@@ -1506,8 +1523,53 @@ function elaborateTacticBlock(
       return surfaceToKernel(arg);
     });
 
+    // Elaborate focused tactics (for bullet syntax)
+    let elabFocusedTactics: Tactic[] | undefined;
+    if (cmd.focusedTactics && cmd.focusedTactics.length > 0) {
+      elabFocusedTactics = cmd.focusedTactics.map(focusedCmd => {
+        // Recursively elaborate each focused tactic
+        const focusedElabArgs: Array<TTerm | TTKTerm> = focusedCmd.args.map(arg => {
+          if (focusedCmd.name === 'intro' || focusedCmd.name === 'intros') {
+            return arg;
+          }
+          const nameContext: string[] = goal.ctx.map(binding => binding.name);
+          function surfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
+            switch (term.tag) {
+              case 'Var':
+                return { tag: 'Var', index: term.index };
+              case 'Const': {
+                for (let i = nameContext.length - 1; i >= 0; i--) {
+                  if (nameContext[i] === term.name) {
+                    const index = nameContext.length - 1 - i + depth;
+                    return { tag: 'Var', index };
+                  }
+                }
+                return { tag: 'Const', name: term.name };
+              }
+              case 'App':
+                return insertImplicitHolesForApp(term, surfaceToKernel, depth);
+              case 'Sort':
+                return { tag: 'Sort', level: surfaceToKernel(term.level, depth) as any };
+              case 'Hole':
+                return { tag: 'Hole', id: term.id };
+              case 'ULevel':
+                return { tag: 'ULevel' };
+              case 'ULit':
+                return { tag: 'ULit', n: term.n };
+              case 'UOmega':
+                return { tag: 'UOmega' };
+              default:
+                return elabToKernelWithMap(term, elabMap, [], []);
+            }
+          }
+          return surfaceToKernel(arg);
+        });
+        return tacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs });
+      });
+    }
+
     // Convert command to Tactic object with elaborated args
-    const tactic = tacticCommandToTactic({ name: cmd.name, args: elabArgs });
+    const tactic = tacticCommandToTactic({ name: cmd.name, args: elabArgs, focusedTactics: elabFocusedTactics });
 
     const result = tactic.apply(engine, goal, goalId);
 
@@ -2178,6 +2240,8 @@ function checkDeclaration(
     elabMap: decl.elabMap,
     sourceMap: decl.sourceMap,
     elabErrorPath: decl.elabErrorPath,
+    withScrutineeCount: decl.withScrutineeCount,
+    withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap: typeInfoMap.size > 0 ? typeInfoMap : undefined,
   };
 
@@ -2968,6 +3032,9 @@ function createCompiledDeclaration(
   const namedArgLookup = definitions ? createNamedArgLookup(definitions) : undefined;
   const prettyPrintOptions = namedArgLookup ? { namedArgLookup } : {};
 
+  // Extract namedArgMap from surfaceType for term declarations
+  const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
+
   return {
     name: decl.name,
     kind: decl.kind === 'inductive' ? 'inductive' : 'term',
@@ -2981,6 +3048,7 @@ function createCompiledDeclaration(
     kernelType,
     kernelValue,
     kernelConstructors,
+    namedArgMap: namedArgMap && namedArgMap.size > 0 ? namedArgMap : undefined,
     indexPositions,
     prettyType: kernelType ? prettyPrintFormatted(kernelType, [], undefined, prettyPrintOptions) : undefined,
     prettyValue: kernelValue ? prettyPrintFormatted(kernelValue, [], undefined, prettyPrintOptions) : undefined,
@@ -2995,6 +3063,8 @@ function createCompiledDeclaration(
     elabMap,
     sourceMap,
     elabErrorPath,
+    withScrutineeCount: decl.withScrutineeCount,
+    withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap,
   };
 }
@@ -3840,7 +3910,9 @@ function processTermDeclaration(
     kernelType,
     // kernelValue is NOT set here - elaboration happens clause-by-clause in checkTermDeclaration
     elabMap,
-    sourceMap
+    sourceMap,
+    withScrutineeCount: decl.withScrutineeCount,
+    withScrutineeExprs: decl.withScrutineeExprs,
   };
 
   // Check the term declaration
@@ -4812,6 +4884,134 @@ function checkTermValue(
 }
 
 /**
+ * Count the number of leading implicit (named) parameters in a type.
+ * Returns the count of parameters before the first explicit parameter.
+ */
+function countLeadingImplicitParams(type: TTerm): number {
+  let count = 0;
+  let current = type;
+
+  while (true) {
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      const isNamed = !!(current as any).named;
+      if (!isNamed) break; // Stop at first explicit parameter
+      count++;
+      current = current.body;
+    } else if (current.tag === 'MultiBinder' && current.binderKind.tag === 'BPiTT') {
+      const isNamed = !!(current as any).named;
+      if (!isNamed) break; // Stop at first explicit parameter
+      count += current.names.length;
+      current = current.body;
+    } else {
+      break;
+    }
+  }
+
+  return count;
+}
+
+/**
+ * Shift all free Var indices in a TTKTerm by the given amount.
+ * This is used to adjust de Bruijn indices when moving a term between contexts.
+ */
+function shiftTTKVars(term: TTKTerm, amount: number, cutoff: number = 0): TTKTerm {
+  if (amount === 0) return term;
+
+  switch (term.tag) {
+    case 'Var':
+      if (term.index >= cutoff) {
+        return { ...term, index: term.index + amount };
+      }
+      return term;
+
+    case 'App': {
+      const newFn = shiftTTKVars(term.fn, amount, cutoff);
+      const newArg = shiftTTKVars(term.arg, amount, cutoff);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+
+    case 'Binder': {
+      const newDomain = shiftTTKVars(term.domain, amount, cutoff);
+      const newBody = shiftTTKVars(term.body, amount, cutoff + 1);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    default:
+      // For other term types, recursively shift (or return as-is for constants)
+      // This is a simplified version - extend as needed
+      return term;
+  }
+}
+
+/**
+ * Resolve Holes in a TTKTerm by inferring their values from variable types.
+ * For example, if we have `Equal {?A} (Var 3) (Var 2)` and we know that
+ * Var 3 has type `Leq a b`, then we can resolve `?A` to `Leq a b`.
+ */
+function resolveImplicitHoles(term: TTKTerm, auxType: TTerm | undefined): TTKTerm {
+  if (!auxType) return term;
+
+  // Build a map of variable indices to their types from the auxiliary's type signature
+  const varTypes: TTKTerm[] = [];
+  let current = auxType;
+  let depth = 0;
+
+  while (current.tag === 'Binder' || current.tag === 'MultiBinder') {
+    if (current.tag === 'Binder') {
+      const kernelDomain = surfaceTermToKernel(current.domain);
+      // Shift to account for the depth of this binder in the context
+      const shiftedDomain = shiftTTKVars(kernelDomain, depth);
+      varTypes.push(shiftedDomain);
+      current = current.body;
+      depth++;
+    } else {
+      // MultiBinder - all names share the same domain, shift by current depth ONCE
+      const kernelDomain = surfaceTermToKernel(current.domain);
+      const shiftedDomain = shiftTTKVars(kernelDomain, depth);
+      for (let i = 0; i < current.names.length; i++) {
+        varTypes.push(shiftedDomain);
+      }
+      depth += current.names.length;
+      current = current.body;
+    }
+  }
+
+  // Now walk the term and resolve Holes by looking at adjacent Vars
+  function resolve(t: TTKTerm): TTKTerm {
+    if (t.tag === 'App') {
+      // Check if this is `Equal {?Hole} (Var n) ...` pattern
+      const resolvedFn = resolve(t.fn);
+      const resolvedArg = resolve(t.arg);
+
+      // If fn is `Equal {?Hole}` and arg is a Var, use Var's type for the Hole
+      if (resolvedFn.tag === 'App' && resolvedFn.fn.tag === 'Const' &&
+          resolvedFn.fn.name === 'Equal' && resolvedFn.arg.tag === 'Hole' &&
+          resolvedArg.tag === 'Var' && resolvedArg.index < varTypes.length) {
+        // Var i refers to the variable bound i positions ago, so we need to
+        // look up varTypes in reverse: varTypes[n - 1 - i]
+        const varTypeIndex = varTypes.length - 1 - resolvedArg.index;
+        const varType = varTypes[varTypeIndex];
+        // Replace the Hole with the variable's type
+        return { ...t, fn: { ...resolvedFn, arg: varType }, arg: resolvedArg };
+      }
+
+      if (resolvedFn === t.fn && resolvedArg === t.arg) return t;
+      return { ...t, fn: resolvedFn, arg: resolvedArg };
+    } else if (t.tag === 'Binder') {
+      const resolvedDomain = resolve(t.domain);
+      const resolvedBody = resolve(t.body);
+      if (resolvedDomain === t.domain && resolvedBody === t.body) return t;
+      return { ...t, domain: resolvedDomain, body: resolvedBody };
+    }
+    return t;
+  }
+
+  return resolve(term);
+}
+
+/**
  * Resolve scrutinee types for with-clause auxiliary declarations.
  *
  * When computeAuxiliaryType in with-desugar.ts encounters a non-variable
@@ -4846,8 +5046,16 @@ function resolveAuxScrutineeTypes(
       try {
         const scrutType = inferScrutineeExprType(scrutExpr, definitions);
         if (scrutType) {
+          // The inferred type's Var indices are from the clause context, which includes
+          // all function parameters (implicit and explicit). The auxiliary has the SAME
+          // context structure (implicit params + explicit params from patterns), so NO
+          // shift is needed. However, we do need to resolve implicit argument Holes.
+
+          // Resolve any implicit argument Holes by looking up variable types
+          const resolvedScrutType = resolveImplicitHoles(scrutType, auxDecl.type);
+
           // Convert kernel type to surface term and replace the hole
-          const surfaceScrutType = kernelTypeToSurface(scrutType);
+          const surfaceScrutType = kernelTypeToSurface(resolvedScrutType);
           auxDecl.type = replaceHoleInSurfaceTerm(auxDecl.type!, `_scrut${i}_type`, surfaceScrutType);
         }
       } catch (_e) {
