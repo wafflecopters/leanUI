@@ -138,7 +138,32 @@ The soundness work on implicit argument conflict detection revealed several arch
   - A single well-tested `areVarsDefinitelyDifferent(varA, ctxA, varB, ctxB)` function
     would reduce bug surface area
 
+## Tactics
+
+See [TACTICS.md](TACTICS.md) for full documentation.
+
+**Integration Milestones:**
+- [x] Nat Semiring — all 12 properties + `Semiring` record instance
+- [ ] Triangle Sum — prove `sum(1..n) = n(n+1)/2` (direct + tactic proofs)
+- [ ] Leq on Nat — define `Leq`, prove reflexivity, transitivity, antisymmetry
+- [ ] `decEqNat` via tactics — decidable equality using nested cases
+
+**Soundness:**
+- [ ] Add Match case to `checkType` so tactic proof terms get end-to-end validation
+- [ ] Fix induction tactic motive construction (currently placeholder)
+
+**New Tactics:**
+- [ ] Multi-tactic branches: `| Succ m => rewrite h; exact refl`
+- [ ] `have` tactic (intermediate lemmas)
+- [ ] `refine` tactic (exact with holes)
+- [ ] `revert` tactic (opposite of intro)
+- [ ] Tactic combinators: `try`, `repeat`, `<;>`, `<|>`
+
+**IDE Integration:**
+- [ ] Syntax highlighting for tactic blocks
+- [ ] Wire InfoTree into hover/cursor system for goal display
+- [ ] Goal display panel in IDE
+
 ## Exploration
 
-- [ ] Tactics exploration
 - [ ] Explore ways to make TCEnv more monadic / more ergonomic

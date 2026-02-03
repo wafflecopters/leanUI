@@ -1528,6 +1528,22 @@ function elaborateTacticBlock(
         const branchGoalIndex = engine.goals.indexOf(branchGoalId);
         engine = engine.withUpdates({ focusIndex: branchGoalIndex });
 
+        // Build paramNameMap once from the initial branch context (before any branch tactics run).
+        // Pattern params (e.g., 'n'' in '| Succ n' IH =>') map to the actual context names
+        // assigned by the cases/induction tactic. This mapping must stay fixed even as later
+        // tactics (like intro) extend the context.
+        {
+          const initialBranchGoal = engine.getFocusedGoal()!;
+          const initialCtx: string[] = initialBranchGoal.ctx.map(b => b.name);
+          const paramNameMap = new Map<string, string>();
+          for (let i = 0; i < branch.params.length; i++) {
+            const patternParamName = branch.params[i];
+            const ctxIndex = initialCtx.length - branch.params.length + i;
+            if (ctxIndex >= 0 && ctxIndex < initialCtx.length) {
+              paramNameMap.set(patternParamName, initialCtx[ctxIndex]);
+            }
+          }
+
         // Apply the branch's tactics
         for (const branchTactic of branch.tactics) {
           const branchGoal = engine.getFocusedGoal();
@@ -1537,21 +1553,8 @@ function elaborateTacticBlock(
             throw new Error(`Structured cases: no active goal for constructor '${branch.constructor}'`);
           }
 
-          // Build name context with pattern param mapping
-          // The pattern params (e.g., 'm' in 'Succ m') map to the most recent N context entries
+          // Rebuild name context from current goal (may have grown via intro)
           const branchNameContext: string[] = branchGoal.ctx.map(b => b.name);
-
-          // Create a mapping from pattern param names to actual context names
-          // Pattern params are the N most recent entries in the context
-          const paramNameMap = new Map<string, string>();
-          for (let i = 0; i < branch.params.length; i++) {
-            const patternParamName = branch.params[i];
-            const ctxIndex = branchNameContext.length - branch.params.length + i;
-            if (ctxIndex >= 0 && ctxIndex < branchNameContext.length) {
-              const actualCtxName = branchNameContext[ctxIndex];
-              paramNameMap.set(patternParamName, actualCtxName);
-            }
-          }
 
           function branchSurfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
             switch (term.tag) {
@@ -1673,6 +1676,7 @@ function elaborateTacticBlock(
             }
           }
         }
+        } // close paramNameMap scope
       }
     }
   }

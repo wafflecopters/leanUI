@@ -1,0 +1,29 @@
+@test success
+@name "Leq: reflexivity, transitivity, antisymmetry"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+-- Less-than-or-equal on Nat
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+-- Reflexivity: a <= a
+leqRefl : (n : Nat) -> Leq n n
+leqRefl Zero = LeqZero
+leqRefl (Succ n) = LeqSucc (leqRefl n)
+
+-- Transitivity: a <= b /\ b <= c => a <= c
+leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c
+leqTrans LeqZero _ = LeqZero
+leqTrans (LeqSucc p) (LeqSucc q) = LeqSucc (leqTrans p q)
+
+-- Antisymmetry: a <= b /\ b <= a => a = b
+leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b
+leqAntisym LeqZero LeqZero = refl
+leqAntisym (LeqSucc p) (LeqSucc q) = congSucc (leqAntisym p q)

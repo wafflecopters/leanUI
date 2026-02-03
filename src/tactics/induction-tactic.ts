@@ -354,25 +354,26 @@ export class InductionTactic implements Tactic {
   }
 
   /**
-   * Build a match/eliminator term
-   *
-   * Builds: match scrutinee with
-   *   | ctor1 params1 => branch1
-   *   | ctor2 params2 => branch2
-   *   | ...
-   *
-   * TODO: Currently returns placeholder (first branch) because type checker
-   * doesn't support Match inference yet. Should build proper Match term once
-   * Match inference is implemented.
+   * Build a proper Match term for induction
    */
   private buildMatchTerm(
-    _scrutinee: TTKTerm,
-    _branchMetas: Array<{ id: string; ctor: string; meta: MetaVar; numParams: number }>,
-    branches: TTKTerm[]
+    scrutinee: TTKTerm,
+    branchMetas: Array<{ id: string; ctor: string; meta: MetaVar; numParams: number }>,
+    _branches: TTKTerm[]
   ): TTKTerm {
-    // TODO: Implement proper match/eliminator term construction
-    // For now, return the first branch as a placeholder
-    return branches[0] || { tag: 'Const', name: 'unit' };
+    const clauses: TTKClause[] = branchMetas.map(({ id, ctor, numParams }) => {
+      const pattern = this.buildCtorPattern(ctor, numParams);
+      return {
+        patterns: [pattern],
+        rhs: { tag: 'Meta' as const, id }
+      };
+    });
+
+    return {
+      tag: 'Match',
+      scrutinee,
+      clauses
+    };
   }
 
   /**

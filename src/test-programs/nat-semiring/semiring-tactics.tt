@@ -1,0 +1,150 @@
+@test success
+@name "nat semiring properties via tactics"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+one : Nat
+one = Succ Zero
+
+-- Utility helpers (pattern matching — these are 1-liners, not interesting proofs)
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+
+congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
+congPlusLeft p refl = refl
+
+-- Addition properties via tactics
+plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n := by
+  intro n
+  exact refl
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH => exact (congSucc IH)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intro m
+    exact refl
+  | Succ n' IH =>
+    intro m
+    exact (congSucc (IH m))
+
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p
+    exact refl
+  | Succ n' IH =>
+    intros m p
+    exact (congSucc (IH m p))
+
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n) := by
+  intro n
+  induction n with
+  | Zero =>
+    intro m
+    exact (sym (plusZeroRight m))
+  | Succ n' IH =>
+    intro m
+    exact (trans (congSucc (IH m)) (sym (plusSuccRight m n')))
+
+plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p)) := by
+  intros m n p
+  exact (trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p)))
+
+-- Multiplication properties via tactics
+mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero := by
+  intro n
+  exact refl
+
+mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH => exact IH
+
+mulOneLeft : (n : Nat) -> Equal (mul one n) n := by
+  intro n
+  exact (plusZeroRight n)
+
+mulOneRight : (n : Nat) -> Equal (mul n one) n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH => exact (congSucc IH)
+
+mulSuccRight : (n m : Nat) -> Equal (mul n (Succ m)) (plus n (mul n m)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intro m
+    exact refl
+  | Succ n' IH =>
+    intro m
+    exact (congSucc (trans (congPlusRight m (IH m)) (plusLeftComm m n' (mul n' m))))
+
+mulComm : (n m : Nat) -> Equal (mul n m) (mul m n) := by
+  intro n
+  induction n with
+  | Zero =>
+    intro m
+    exact (sym (mulZeroRight m))
+  | Succ n' IH =>
+    intro m
+    exact (trans (congPlusRight m (IH m)) (sym (mulSuccRight m n')))
+
+mulDistribRight : (n m p : Nat) -> Equal (mul (plus n m) p) (plus (mul n p) (mul m p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p
+    exact refl
+  | Succ n' IH =>
+    intros m p
+    exact (trans (congPlusRight p (IH m p)) (sym (plusAssoc p (mul n' p) (mul m p))))
+
+mulAssoc : (n m p : Nat) -> Equal (mul (mul n m) p) (mul n (mul m p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p
+    exact refl
+  | Succ n' IH =>
+    intros m p
+    exact (trans (mulDistribRight m (mul n' m) p) (congPlusRight (mul m p) (IH m p)))
+
+mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul n p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p
+    exact refl
+  | Succ n' IH =>
+    intros m p
+    exact (trans (congPlusRight (plus m p) (IH m p)) (trans (plusAssoc m p (plus (mul n' m) (mul n' p))) (trans (congPlusRight m (plusLeftComm p (mul n' m) (mul n' p))) (sym (plusAssoc m (mul n' m) (plus p (mul n' p)))))))

@@ -6,7 +6,7 @@
  * by case analysis.
  */
 
-import { TTKTerm, TTKContext } from '../compiler/kernel';
+import { TTKTerm, TTKContext, TTKPattern, TTKClause } from '../compiler/kernel';
 import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
@@ -91,10 +91,8 @@ export class CasesTactic implements Tactic {
         branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta, explicitParamNames: paramNames });
       }
 
-      // 6. Build eliminator term (placeholder: use first branch meta)
-      // TODO: Build proper Match term once type checker supports Match inference
-      const branchTerms = branchMetas.map(b => ({ tag: 'Meta' as const, id: b.id }));
-      const elimTerm = this.buildMatchTerm(this.scrutinee, branchTerms);
+      // 6. Build a proper Match term
+      const elimTerm = this.buildMatchTerm(this.scrutinee, branchMetas);
 
       // 7. Assign eliminator to current goal
       const newMetaVars = new Map(engine.metaVars);
@@ -211,17 +209,39 @@ export class CasesTactic implements Tactic {
   }
 
   /**
-   * Build eliminator term from scrutinee and branch terms.
+   * Build a proper Match term with clauses for each constructor.
    *
-   * Currently returns the first branch as a placeholder since
-   * the type checker doesn't support Match term inference yet.
-   * TODO: Build proper Match term once supported.
+   * Each clause has a PCtor pattern with PVar args for explicit params.
+   * The pattern checker will automatically pad with wildcards for implicit params.
    */
   private buildMatchTerm(
-    _scrutinee: TTKTerm,
-    branches: TTKTerm[]
+    scrutinee: TTKTerm,
+    branchMetas: Array<{ id: string; ctor: string; explicitParamNames: string[] }>
   ): TTKTerm {
-    return branches[0] || { tag: 'Const', name: 'unit' };
+    const clauses: TTKClause[] = branchMetas.map(({ id, ctor, explicitParamNames }) => {
+      // Build PVar patterns for explicit params only
+      const patternArgs: TTKPattern[] = explicitParamNames.map(name => ({
+        tag: 'PVar' as const,
+        name
+      }));
+
+      const pattern: TTKPattern = {
+        tag: 'PCtor',
+        name: ctor,
+        args: patternArgs
+      };
+
+      return {
+        patterns: [pattern],
+        rhs: { tag: 'Meta' as const, id }
+      };
+    });
+
+    return {
+      tag: 'Match',
+      scrutinee,
+      clauses
+    };
   }
 
   /**
