@@ -3291,17 +3291,26 @@ export class Parser {
       tactics.push(tactic);
       tacticIndex++;
 
-      // Expect newline after tactic (or EOF)
+      // Check for continuation: newline, semicolon, or EOF
       if (this.current().type === 'NEWLINE') {
         this.advance();
         this.skipNewlines();
+      } else if (this.current().type === 'SEMICOLON') {
+        this.advance(); // consume ';'
+        if (this.current().type === 'NEWLINE') {
+          this.advance();
+          this.skipNewlines();
+        } else if (this.current().type === 'EOF') {
+          break;
+        }
+        // If semicolon not followed by newline/EOF, continue to next tactic
       } else if (this.current().type !== 'EOF') {
-        // If not newline and not EOF, check if we've dedented
+        // If not newline, semicolon, and not EOF, check if we've dedented
         if (this.current().col < baseIndent) {
           break;
         }
         throw new ParseError(
-          'Expected newline after tactic',
+          'Expected newline or semicolon after tactic',
           this.current().line,
           this.current().col
         );

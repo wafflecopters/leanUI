@@ -1,0 +1,8 @@
+@test success
+@name "semicolon on same line as tactic name"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Test: intro n; exact refl should work (two tactics on one line)
+identity : (n : Nat) -> Equal n n := by
+  intro n; exact refl

@@ -1,0 +1,17 @@
+@test success
+@name "multiple tactics with semicolons"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Test: semicolons work for chaining multiple tactics
+identity : (n : Nat) -> Equal n n := by
+  intro n; exact refl
+
+-- Test: another simple proof with semicolon
+constProof : (n m : Nat) -> Equal n n := by
+  intro n; intro m; exact refl
+
+-- Test: mix of semicolons and newlines
+testMixed : (n : Nat) -> Equal n n := by
+  intro n
+  exact refl
