@@ -1739,6 +1739,32 @@ export function TextEditorPage() {
     // Register TT language
     monaco.languages.register({ id: 'tt' });
 
+    // Language configuration for editing behaviors (comment toggling, brackets, etc.)
+    monaco.languages.setLanguageConfiguration('tt', {
+      comments: {
+        lineComment: '--',
+        blockComment: ['{-', '-}'],
+      },
+      brackets: [
+        ['{', '}'],
+        ['[', ']'],
+        ['(', ')'],
+      ],
+      autoClosingPairs: [
+        { open: '{', close: '}' },
+        { open: '[', close: ']' },
+        { open: '(', close: ')' },
+        { open: '"', close: '"', notIn: ['string'] },
+        { open: '{-', close: '-}' },
+      ],
+      surroundingPairs: [
+        { open: '{', close: '}' },
+        { open: '[', close: ']' },
+        { open: '(', close: ')' },
+        { open: '"', close: '"' },
+      ],
+    });
+
     // Simplified tokenizer - semantic tokens from parse tree handle identifier classification
     monaco.languages.setMonarchTokensProvider('tt', {
       tokenizer: {
