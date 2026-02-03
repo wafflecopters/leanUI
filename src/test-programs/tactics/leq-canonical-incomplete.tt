@@ -1,0 +1,8 @@
+@test failure
+@name "leqCanonical with missing LeqSucc case should fail totality"
+@import preambles/nat.tt
+@import preambles/leq.tt
+@import preambles/equality.tt
+
+leqCanonical : {a b : Nat} -> (p q : Leq a b) -> Equal p q
+leqCanonical LeqZero q = ?Foo

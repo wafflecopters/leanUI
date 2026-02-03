@@ -1619,7 +1619,14 @@ export function arePatternsAbsurd(
     unifyMatchClauseLhs(termName, env.withCheckingMode('pattern'), type, dummyRhs);
     return false; // Unification succeeded - not absurd
   } catch (e) {
-    // Unification failed - patterns are absurd
+    // Most errors indicate genuine absurdity (type conflicts, assertion failures, etc.).
+    // However, "Escaping variable" errors from meta-solving are internal errors that
+    // occur when tryCaseSplitsInSearchOfAbsurdity creates synthetic pattern combinations
+    // with dependent type interactions the meta-solver can't handle. These should be
+    // treated conservatively as "can't determine absurdity" rather than "is absurd".
+    if (e instanceof Error && e.message.startsWith('Escaping variable')) {
+      return false;
+    }
     return true;
   }
 }
