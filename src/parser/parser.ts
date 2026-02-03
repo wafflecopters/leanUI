@@ -2215,6 +2215,13 @@ export class Parser {
    * Uses the PREFIX_PARSELETS table for dispatch.
    */
   private parsePrefix(ctx: NameContext, path: IndexPath = []): TTerm {
+    // Skip newlines so expressions can continue on the next line after
+    // infix operators like -> or user-defined operators.  This is safe
+    // because the application (juxtaposition) loop in expr/exprUntil
+    // checks canStartAtom BEFORE calling parsePrefix, and NEWLINE is
+    // not an atom starter, so cross-line application is never triggered.
+    this.skipNewlines();
+
     const token = this.current();
     const parselet = PREFIX_PARSELETS[token.type];
 

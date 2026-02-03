@@ -1862,6 +1862,94 @@ describe('Parser: Inductive Types', () => {
 });
 
 // ============================================================================
+// Multi-line Signature Tests
+// ============================================================================
+
+describe('Multi-line signatures', () => {
+  test('Inductive type signature split across lines', () => {
+    const source = `inductive Equal : {A : Type} ->
+  A -> A -> Type where
+  | refl : {A : Type} -> {a : A} -> Equal a a`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].kind).toBe('inductive');
+    expect(decls[0].name).toBe('Equal');
+    expect(decls[0].constructors?.length).toBe(1);
+    expect(decls[0].constructors![0].name).toBe('refl');
+  });
+
+  test('Non-dependent arrow split across lines', () => {
+    const source = `foo : Nat ->
+  Nat -> Nat`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('foo');
+    assertTermShape(decls[0].type!, 'Binder'); // Pi
+  });
+
+  test('Implicit binder body on next line', () => {
+    const source = `id : {A : Type} ->
+  A -> A`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('id');
+    assertTermShape(decls[0].type!, 'Binder');
+  });
+
+  test('Explicit binder body on next line', () => {
+    const source = `id : (A : Type) ->
+  A -> A`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('id');
+    assertTermShape(decls[0].type!, 'Binder');
+  });
+
+  test('Multiple arrows split across lines', () => {
+    const source = `f : Nat ->
+  Nat ->
+  Nat ->
+  Nat`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('f');
+    assertTermShape(decls[0].type!, 'Binder');
+  });
+
+  test('Constructor type split across lines in inductive', () => {
+    const source = `inductive Vec : Type -> Nat -> Type where
+  | Nil : {A : Type} ->
+    Vec A Zero
+  | Cons : {A : Type} ->
+    {n : Nat} ->
+    A -> Vec A n -> Vec A (Succ n)`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].kind).toBe('inductive');
+    expect(decls[0].constructors?.length).toBe(2);
+    expect(decls[0].constructors![0].name).toBe('Nil');
+    expect(decls[0].constructors![1].name).toBe('Cons');
+  });
+
+  test('Newlines do not cause cross-line application', () => {
+    // foo : Nat on one line, bar : Nat on next — these should be two declarations
+    const source = `foo : Nat
+bar : Nat`;
+
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(2);
+    expect(decls[0].name).toBe('foo');
+    expect(decls[1].name).toBe('bar');
+  });
+});
+
+// ============================================================================
 // Pattern Matching Tests
 // ============================================================================
 

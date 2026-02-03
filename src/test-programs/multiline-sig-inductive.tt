@@ -1,0 +1,9 @@
+@test success
+@name "multi-line inductive type signature"
+
+inductive Equal : {A : Type} ->
+  A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl

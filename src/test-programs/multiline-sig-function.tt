@@ -1,0 +1,9 @@
+@test success
+@name "multi-line function type signature"
+@import preambles/nat.tt
+
+add : Nat ->
+  Nat ->
+  Nat
+add Zero n = n
+add (Succ m) n = Succ (add m n)
