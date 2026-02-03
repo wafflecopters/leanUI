@@ -1982,7 +1982,7 @@ export class Parser {
    * @param minPrec Minimum precedence to continue parsing
    * @param ctx Name context for De Bruijn index resolution
    */
-  private expr(minPrec: number, ctx: NameContext, path: IndexPath = []): TTerm {
+  private expr(minPrec: number, ctx: NameContext, path: IndexPath = [], allowMultilineApp: boolean = false): TTerm {
     // Capture start position for recording the full expression range
     const startToken = this.current();
 
@@ -2069,8 +2069,17 @@ export class Parser {
         // which will fail appropriately (can't apply to a Pi type)
       }
 
+      // Skip newlines before checking for application (only if allowed)
+      // This allows multi-line applications inside parentheses:
+      //   (trans
+      //     refl
+      //     refl)
+      if (allowMultilineApp) {
+        this.skipNewlines();
+      }
+
       // Check for application (juxtaposition)
-      if (this.canStartAtom(token)) {
+      if (this.canStartAtom(this.current())) {
         if (APPLICATION_PRECEDENCE < minPrec) break;
 
         didInfixWork = true;
@@ -2267,6 +2276,7 @@ export class Parser {
           this.advance(); // consume ':'
           const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
           const type = this.expr(0, ctx, domainPath);
+          this.skipNewlines();
           this.expect('RPAREN');
 
           if (this.current().type === 'ARROW') {
@@ -2308,6 +2318,7 @@ export class Parser {
           this.advance(); // consume ':'
           const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
           const type = this.expr(0, ctx, domainPath);
+          this.skipNewlines();
           this.expect('RPAREN');
 
           // Check if followed by arrow - then it's a Pi type
@@ -2340,17 +2351,19 @@ export class Parser {
       }
     }
 
-    // Regular parenthesized expression
-    const expr = this.expr(0, ctx, path);
+    // Regular parenthesized expression - allow multiline applications
+    const expr = this.expr(0, ctx, path, true);
 
     // Check for type annotation
     if (this.current().type === 'COLON') {
       this.advance();
-      const type = this.expr(0, ctx, path);
+      const type = this.expr(0, ctx, path, true);
+      this.skipNewlines();
       this.expect('RPAREN');
       return { tag: 'Annot', term: expr, type };
     }
 
+    this.skipNewlines();
     this.expect('RPAREN');
     return expr;
   }

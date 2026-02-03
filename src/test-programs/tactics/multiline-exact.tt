@@ -1,0 +1,35 @@
+@test success
+@name "multiline expressions in exact tactic"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+-- Test: exact with multiline nested trans
+testMultiline : (n : Nat) -> Equal n n := by
+  intro n
+  exact (trans
+    refl
+    refl)
+
+-- Test: multiline in induction proof
+testMultilineInduction : (n : Nat) -> Equal n n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH =>
+    exact (congSucc (trans
+      IH
+      refl))
+
+-- Test: same thing in case branch
+testInBranch : (n : Nat) -> Equal n n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH =>
+    exact (congSucc IH)

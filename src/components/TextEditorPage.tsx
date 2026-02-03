@@ -644,8 +644,7 @@ congPlusLeft p refl = refl
 ------------------------------------------------------------
 
 plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n := by
-  intro n
-  exact refl
+  intro n; exact refl
 
 plusZeroRight : (n : Nat) -> Equal (plus n Zero) n := by
   intro n
@@ -685,15 +684,18 @@ plusComm : (n m : Nat) -> Equal (plus n m) (plus m n) := by
 
 plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p)) := by
   intros m n p
-  exact (trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p)))
+  apply trans
+  exact (sym (plusAssoc m n p))
+  apply trans
+  exact (congPlusLeft p (plusComm m n))
+  exact (plusAssoc n m p)
 
 ------------------------------------------------------------
 -- Multiplication properties via tactics
 ------------------------------------------------------------
 
 mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero := by
-  intro n
-  exact refl
+  intro n; exact refl
 
 mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero := by
   intro n
@@ -702,8 +704,7 @@ mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero := by
   | Succ n' IH => exact IH
 
 mulOneLeft : (n : Nat) -> Equal (mul one n) n := by
-  intro n
-  exact (plusZeroRight n)
+  intro n; exact (plusZeroRight n)
 
 mulOneRight : (n : Nat) -> Equal (mul n one) n := by
   intro n
@@ -755,11 +756,16 @@ mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul 
   intro n
   induction n with
   | Zero =>
-    intros m p
-    exact refl
+    intros m p; exact refl
   | Succ n' IH =>
     intros m p
-    exact (trans (congPlusRight (plus m p) (IH m p)) (trans (plusAssoc m p (plus (mul n' m) (mul n' p))) (trans (congPlusRight m (plusLeftComm p (mul n' m) (mul n' p))) (sym (plusAssoc m (mul n' m) (plus p (mul n' p)))))))
+    apply trans
+    exact (congPlusRight (plus m p) (IH m p))
+    apply trans
+    exact (plusAssoc m p (plus (mul n' m) (mul n' p)))
+    apply trans
+    exact (congPlusRight m (plusLeftComm p (mul n' m) (mul n' p)))
+    exact (sym (plusAssoc m (mul n' m) (plus p (mul n' p))))
 
 ------------------------------------------------------------
 -- Triangle Sum: 2 * sum(1..n) = n * (n + 1)
@@ -769,13 +775,22 @@ sum : Nat -> Nat
 sum Zero = Zero
 sum (Succ n) = plus (Succ n) (sum n)
 
--- NOTE: This proof uses nested trans because subgoal focusing isn't implemented yet.
--- With subgoal focusing (\u00b7), this could be written step-by-step.
+-- Triangle sum proof: 2 * sum(1..n) = n * (n + 1)
+-- 5-step equational chain (formatted for readability)
 doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
   intro n
   induction n with
   | Zero => exact refl
-  | Succ n' IH => exact (trans (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n'))) (trans (congPlusRight (Succ n') (plusLeftComm (sum n') (Succ n') (sum n'))) (trans (congPlusRight (Succ n') (congPlusRight (Succ n') IH)) (trans (congSucc (plusSuccRight n' (plus n' (mul n' (Succ n'))))) (congPlusRight (Succ (Succ n')) (sym (mulSuccRight n' (Succ n'))))))))
+  | Succ n' IH =>
+    exact (trans
+      (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
+      (trans
+        (congPlusRight (Succ n') (plusLeftComm (sum n') (Succ n') (sum n')))
+        (trans
+          (congPlusRight (Succ n') (congPlusRight (Succ n') IH))
+          (trans
+            (congSucc (plusSuccRight n' (plus n' (mul n' (Succ n')))))
+            (congPlusRight (Succ (Succ n')) (sym (mulSuccRight n' (Succ n'))))))))
 
 ------------------------------------------------------------
 -- Leq: ordering on Nat
