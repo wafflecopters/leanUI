@@ -1801,7 +1801,17 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
             // Extract namedArgMap and totalArity from type for pattern validation and reordering
             const namedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
             const totalArity = decl.type ? countParameters(decl.type) : undefined;
-            kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
+            // For with-auxiliary functions and functions that call them, defer elaboration to type-checking
+            // phase when we have definitions. This allows the elaborator to look up namedArgMaps.
+            // With-auxiliaries are marked with withScrutineeCount, and functions calling with-auxiliaries
+            // have names ending with the original function's name (main function references auxiliary).
+            const isWithRelated = decl.withScrutineeCount !== undefined ||
+                                  (decl.name && decl.name.includes('-with-'));
+            if (isWithRelated) {
+              kernelValue = undefined;
+            } else {
+              kernelValue = elabToKernelWithMap(decl.value, elabMap, valuePath, valuePath, namedArgMap, undefined, totalArity);
+            }
           }
         }
 
@@ -2679,15 +2689,23 @@ function checkTermDeclaration(
     }
 
     // Get surface clauses for incremental elaboration (pattern matching case)
-    const surfaceClauses = decl.surfaceValue?.tag === 'Match'
-      ? decl.surfaceValue.clauses.filter(c => c.rhs.tag !== 'AbsurdMarker')
-      : [];
+    // IMPORTANT: Preserve original surface indices when filtering absurd clauses
+    // This ensures the ElabMap correctly maps kernel clause indices to surface clause indices
+    const surfaceClausesWithIndices: Array<{ clause: TClause; originalIndex: number }> =
+      decl.surfaceValue?.tag === 'Match'
+        ? decl.surfaceValue.clauses
+            .map((clause, index) => ({ clause, originalIndex: index }))
+            .filter(({ clause }) => clause.rhs.tag !== 'AbsurdMarker')
+        : [];
+    const surfaceClauses = surfaceClausesWithIndices.map(({ clause }) => clause);
+    const surfaceClauseIndices = surfaceClausesWithIndices.map(({ originalIndex }) => originalIndex);
 
     const result = checkTermValue(
       decl.name,
       termEnv,
       zonkedKernelType,  // Use zonked type - Holes from signature elaboration are resolved
       surfaceClauses,
+      surfaceClauseIndices,
       decl.elabMap ?? new Map(),
       namedArgMap,
       totalArity,
@@ -4466,13 +4484,16 @@ function checkMatchClauseFromSurface(
   termEnv: TCEnv<TermDefinition>,
   elabMap: ElabMap,
   clauseIndex: number,
+  originalSurfaceIndex: number,
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
 ): TTKClause {
+  // Surface path uses the ORIGINAL surface index (before filtering absurd clauses)
+  // Kernel path uses the filtered kernel index (after absurd clauses are removed)
   const clauseSurfacePath: IndexPath = [
     { kind: 'field', name: 'value' },
     { kind: 'field', name: 'clauses' },
-    { kind: 'array', index: clauseIndex }
+    { kind: 'array', index: originalSurfaceIndex }
   ];
   const clauseKernelPath: IndexPath = [
     { kind: 'field', name: 'value' },
@@ -4581,6 +4602,7 @@ function checkTermValue(
   termEnv: TCEnv<TermDefinition>,
   type: TTKTerm,
   surfaceClauses: TClause[],
+  surfaceClauseIndices: number[],
   elabMap: ElabMap,
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
@@ -4601,6 +4623,7 @@ function checkTermValue(
 
   for (let clauseIndex = 0; clauseIndex < surfaceClauses.length; clauseIndex++) {
     const surfaceClause = surfaceClauses[clauseIndex];
+    const originalSurfaceIndex = surfaceClauseIndices[clauseIndex];
     const rootPatternsCount = surfaceClause.patterns.length;
 
     if (rootPatternsCount !== firstClauseRootPatternsCount) {
@@ -4610,6 +4633,8 @@ function checkTermValue(
     } else {
       try {
         // Following the flow: elaborate LHS, unify & solve, then elaborate and check RHS
+        // IMPORTANT: Pass originalSurfaceIndex (not clauseIndex) so ElabMap correctly maps
+        // kernel clause indices to original surface clause indices
         const checkedClause = checkMatchClauseFromSurface(
           name ?? '???',
           surfaceClause,
@@ -4617,14 +4642,16 @@ function checkTermValue(
           termEnv,
           elabMap,
           clauseIndex,
+          originalSurfaceIndex,
           namedArgMap,
           totalArity
         );
         checkedClauses.push(checkedClause);
       } catch (e) {
         // Anchor the error to the specific clause, not the whole function
+        // Use originalSurfaceIndex for error path so it maps correctly via sourceMap
         const clauseEnv = termEnv.atIndexPath(
-          appendPath(termEnv.indexPath, fieldSeg('value'), fieldSeg('clauses'), arraySeg(clauseIndex))
+          appendPath(termEnv.indexPath, fieldSeg('value'), fieldSeg('clauses'), arraySeg(originalSurfaceIndex))
         );
         if (e instanceof TCEnvError) {
           errors.push(e);
