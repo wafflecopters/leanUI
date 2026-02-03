@@ -9,7 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
 import { arraySeg, fieldSeg, IndexPath, serializeIndexPath } from '../types/source-position';
-import { countPiBinders, DefinitionsMap, extractAppSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, extractPiSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq } from './whnf';
@@ -1475,6 +1475,32 @@ export function checkMatchClause(
               }
             }
 
+            // Map implicit constructor binder positions to scrutinee arg names.
+            // Given scrutinee type (e.g., DecEq x y) and constructor return type (DecEq Var(2) Var(1)),
+            // determine which binder position maps to which scrutinee arg, and if that arg is a Var,
+            // use its context name instead of the constructor's binder name (e.g., "x" instead of "m").
+            const implicitArgNames = new Map<number, string>();
+            if (implicitPositions.size > 0) {
+              const scrutineeSpine = extractAppSpine(zonkedDomain);
+              const { binders: ctorBinders, body: ctorBody } = extractPiSpine(ctorDef);
+              const returnSpine = extractAppSpine(ctorBody);
+              const numBinders = ctorBinders.length;
+
+              for (let k = 0; k < Math.min(returnSpine.args.length, scrutineeSpine.args.length); k++) {
+                const retArg = returnSpine.args[k];
+                const scrArg = scrutineeSpine.args[k];
+                if (retArg.tag === 'Var' && scrArg.tag === 'Var') {
+                  const binderPos = numBinders - 1 - retArg.index;
+                  if (binderPos >= 0 && implicitPositions.has(binderPos)) {
+                    const ctxEntry = patContext[patContext.length - 1 - scrArg.index];
+                    if (ctxEntry && ctxEntry.name !== '_') {
+                      implicitArgNames.set(binderPos, ctxEntry.name);
+                    }
+                  }
+                }
+              }
+            }
+
             // Walk the constructor's Pi type, recording at SURFACE arg indices.
             // After padding, kernel args include implicit wildcards (e.g., {m} {n} neq),
             // but the sourceMap uses surface indices (e.g., args[0] = neq).
@@ -1498,7 +1524,8 @@ export function checkMatchClause(
                 surfaceArgIdx++;
               }
 
-              ctorArgContext = [...ctorArgContext, { name: ctorType.name, type: ctorType.domain }];
+              const entryName = implicitArgNames.get(argIdx) ?? ctorType.name;
+              ctorArgContext = [...ctorArgContext, { name: entryName, type: ctorType.domain }];
               ctorType = ctorType.body;
             }
 
