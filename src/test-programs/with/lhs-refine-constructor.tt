@@ -1,0 +1,15 @@
+-- LHS refinement with constructor patterns
+@test success
+@name "LHS refinement: constructor patterns in refined LHS"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+isZeroHelper : Nat -> Bool
+isZeroHelper m with m
+  isZeroHelper Zero | Zero => True
+  isZeroHelper (Succ _) | Succ _ => False
+
+isSuccZero : Nat -> Bool
+isSuccZero n with n
+  isSuccZero Zero | Zero => False
+  isSuccZero (Succ m) | Succ m => isZeroHelper m

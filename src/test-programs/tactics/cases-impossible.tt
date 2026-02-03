@@ -1,0 +1,12 @@
+@test success
+@name "cases on Leq: impossible branch detection"
+@import preambles/nat.tt
+@import preambles/leq.tt
+
+-- Leq (Succ n) Zero is impossible: no constructors can produce this
+-- LeqZero requires first index = Zero, but we have Succ n
+-- LeqSucc requires second index = Succ m, but we have Zero
+-- So cases should produce zero goals
+leqSuccZeroAbsurd : {n : Nat} -> Leq (Succ n) Zero -> Nat := by
+  intros n h
+  cases h

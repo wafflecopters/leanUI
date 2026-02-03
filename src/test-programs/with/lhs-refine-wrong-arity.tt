@@ -1,0 +1,10 @@
+-- Wrong number of refined patterns should fail
+@test failure
+@name "LHS refinement: wrong arity rejected"
+@error "has 1 pattern(s) but expected 2"
+@import preambles/nat.tt
+
+foo : Nat -> Nat -> Nat
+foo x y with x
+  foo a | Zero => a
+  foo a | Succ _ => a

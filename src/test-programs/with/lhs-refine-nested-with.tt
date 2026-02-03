@@ -1,0 +1,11 @@
+-- LHS refinement in a branch that itself has a nested with
+@test success
+@name "LHS refinement: nested with inside refined branch"
+@import preambles/nat.tt
+
+classify3 : Nat -> Nat -> Nat
+classify3 x y with x
+  classify3 Zero y | Zero => y
+  classify3 (Succ k) y | Succ k with y
+    | Zero => k
+    | Succ j => Succ (Succ (classify3 k j))

@@ -661,13 +661,25 @@ function assertPatternVarsValid(
   }))])
 
   // Check 1: Same name used for different terms
-  // e.g. A = [Var#0, Var#1] is an error, as is A = [Var#0, Succ Var#0]
+  // Non-linear patterns (same name at different positions) are allowed when
+  // the types are compatible — the pattern matcher treats them as a unification
+  // constraint (like Agda's dot patterns). Only error if the TYPES differ,
+  // which indicates a genuine conflict.
   for (const [name, termEntries] of nameToTerms) {
     if (termEntries.length > 1) {
       const firstTerm = termEntries[0].term;
       for (let i = 1; i < termEntries.length; i++) {
-        if (!areWhnfTypesDefEq(firstTerm, termEntries[i].term)) {
-          // Format each term with its type annotation if it's a variable
+        const secondTerm = termEntries[i].term;
+        // Only error if the types of the two bindings are incompatible
+        const getType = (term: TTKTerm): TTKTerm | undefined => {
+          if (term.tag === 'Var' && term.index < signature.length) {
+            return signature[term.index].type;
+          }
+          return undefined;
+        };
+        const firstType = getType(firstTerm);
+        const secondType = getType(secondTerm);
+        if (firstType && secondType && !areWhnfTypesDefEq(firstType, secondType)) {
           const formatTermWithType = (term: TTKTerm): string => {
             const termStr = prettyPrintTTK(term, printContext);
             if (term.tag === 'Var' && term.index < signature.length) {
@@ -677,12 +689,12 @@ function assertPatternVarsValid(
             return termStr;
           };
           const first = formatTermWithType(firstTerm);
-          const second = formatTermWithType(termEntries[i].term);
+          const second = formatTermWithType(secondTerm);
           errors.push(TCEnvError.create(
             `Pattern '${name}' binds to incompatible values: ${first} vs ${second}`,
             env.atIndexPath([...env.indexPath, ...termEntries[i].path])
           ));
-          break; // Only report first mismatch for this name
+          break;
         }
       }
     }

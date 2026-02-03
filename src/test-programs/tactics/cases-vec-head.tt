@@ -1,0 +1,10 @@
+@test success
+@name "cases on Vec: mixed params and indices"
+@import preambles/nat.tt
+@import preambles/vec.tt
+
+-- Vec has param A and index n; after cases on Vec A (Succ n), only VCons is possible
+vecHead : {A : Type} -> {n : Nat} -> Vec A (Succ n) -> A := by
+  intros A n v
+  cases v with
+  | VCons x xs => exact x

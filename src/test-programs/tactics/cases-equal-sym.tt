@@ -1,0 +1,10 @@
+@test success
+@name "cases on Equal: sym via tactics"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- After cases on (h : Equal a b), the refl branch knows a = b
+eqSym : {A : Type} -> {a b : A} -> Equal a b -> Equal b a := by
+  intros A a b h
+  cases h with
+  | refl => exact refl

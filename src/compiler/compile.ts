@@ -34,6 +34,7 @@ import { RewriteTactic } from '../tactics/rewrite-tactic';
 import { SymmetryTactic } from '../tactics/symmetry-tactic';
 import { TransitivityTactic } from '../tactics/transitivity-tactic';
 import { CongTactic } from '../tactics/cong-tactic';
+import { SubstTactic } from '../tactics/subst-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 export type { TotalityResult, CaseTree };
 
@@ -1349,6 +1350,13 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       }
       // args[0] is a TTKTerm at this point (elaborated by caller)
       return new CongTactic(cmd.args[0] as TTKTerm);
+
+    case 'subst':
+      if (cmd.args.length !== 1) {
+        throw new Error(`'subst' tactic requires exactly 1 argument (equality proof), got ${cmd.args.length}`);
+      }
+      // args[0] is a TTKTerm at this point (elaborated by caller)
+      return new SubstTactic(cmd.args[0] as TTKTerm);
 
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);

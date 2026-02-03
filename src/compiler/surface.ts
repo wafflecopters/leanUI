@@ -234,6 +234,7 @@ export interface TClause {
   patterns: TPattern[];  // Positional patterns to match (one per positional argument)
   namedPatterns?: TNamedPatternArg[];  // Named patterns: {name := pattern} at clause level
   rhs: TTerm;            // Right-hand side (body) when matched
+  refinedFunctionPatterns?: TPattern[];  // Agda-style LHS pattern refinement in with-clauses
 }
 
 /**

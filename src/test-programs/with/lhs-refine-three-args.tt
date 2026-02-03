@@ -1,0 +1,9 @@
+-- Refined patterns with three function arguments
+@test success
+@name "LHS refinement: three function arguments"
+@import preambles/nat.tt
+
+triAdd : Nat -> Nat -> Nat -> Nat
+triAdd x y z with z
+  triAdd a b c | Zero => a
+  triAdd a b c | Succ _ => Succ (triAdd a b c)

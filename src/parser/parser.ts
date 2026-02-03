@@ -1249,15 +1249,41 @@ export class Parser {
     this.skipNewlines();
 
     // Parse with-clauses: | pattern => rhs
+    // Three branch forms:
+    //   | withPat => rhs                     (bare pipe, inherits function patterns)
+    //   ... | withPat => rhs                 (ellipsis, inherits function patterns)
+    //   funcName refinedPats | withPat => rhs (Agda-style LHS pattern refinement)
     const withClauses: TClause[] = [];
     let clauseIndex = 0;
 
-    while (this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS') {
+    while (this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS' ||
+           this.isRefinedWithBranch(funcName)) {
       const withClausePath: IndexPath = [
         ...clausePath,
         { kind: 'field', name: 'withClauses' },
         { kind: 'array', index: clauseIndex }
       ];
+
+      // Track the column of the first token of this branch (before consuming anything).
+      // This is used as the indentation reference for nested with-clauses.
+      const branchStartCol = this.current().col;
+
+      // Check for Agda-style LHS pattern refinement: funcName patterns | withPat => rhs
+      let refinedFunctionPatterns: TPattern[] | undefined;
+      if (this.current().type === 'IDENT' && this.current().value === funcName) {
+        this.advance(); // consume funcName
+        refinedFunctionPatterns = [];
+        while (this.canStartPattern(this.current()) && this.current().type !== 'PIPE') {
+          refinedFunctionPatterns.push(this.parsePatternAtom());
+        }
+        if (refinedFunctionPatterns.length !== patterns.length) {
+          throw new ParseError(
+            `Refined with-clause for '${funcName}' has ${refinedFunctionPatterns.length} pattern(s) but expected ${patterns.length}`,
+            this.current().line,
+            this.current().col
+          );
+        }
+      }
 
       // Check for ellipsis (... | pattern => rhs)
       let hasEllipsis = false;
@@ -1266,12 +1292,15 @@ export class Parser {
         this.advance(); // consume '...'
       }
 
-      // Expect and consume '|'
-      const pipeCol = this.current().col;
+      // Use branchStartCol as the reference column for nested with indentation.
+      // For bare-pipe branches, branchStartCol equals the pipe column.
+      // For refined branches (funcName pats | ...), branchStartCol is the funcName column,
+      // which correctly represents the indentation level of the branch.
+      const pipeCol = branchStartCol;
       if (this.current().type === 'PIPE') {
         this.advance();
-      } else if (!hasEllipsis) {
-        // If no ellipsis and no pipe, we're done with with-clauses
+      } else if (!hasEllipsis && !refinedFunctionPatterns) {
+        // If no ellipsis, no pipe, and no refined patterns, we're done with with-clauses
         break;
       }
 
@@ -1294,16 +1323,24 @@ export class Parser {
       }
 
       // Parse RHS: either '=> expr' (normal) or 'with scrutinee | ...' (nested with)
+      // For refined branches, the RHS context uses the refined pattern variables
       const withPatternVars = withPatterns.flatMap(p => this.collectPatternVars(p));
-      const rhsCtx = [...withPatternVars.reverse(), ...ctx];
+      let rhsCtx: string[];
+      if (refinedFunctionPatterns) {
+        const refinedVars = refinedFunctionPatterns.flatMap(p => this.collectPatternVars(p));
+        rhsCtx = [...withPatternVars.reverse(), ...refinedVars.reverse()];
+      } else {
+        rhsCtx = [...withPatternVars.reverse(), ...ctx];
+      }
       const rhsPath: IndexPath = [...withClausePath, { kind: 'field', name: 'rhs' }];
 
       let rhs: TTerm;
       if (this.current().type === 'WITH') {
         // Nested with: parse as a new WithClause whose functionPatterns
         // include all accumulated patterns (outer function + this with-pattern)
-        const nestedFunctionPatterns = [...patterns, ...withPatterns];
-        rhs = this.parseNestedWith(nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
+        const effectivePatterns = refinedFunctionPatterns ?? patterns;
+        const nestedFunctionPatterns = [...effectivePatterns, ...withPatterns];
+        rhs = this.parseNestedWith(funcName, nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
       } else {
         this.expect('FATARROW');
         rhs = this.expr(0, rhsCtx, rhsPath);
@@ -1311,7 +1348,8 @@ export class Parser {
 
       withClauses.push({
         patterns: withPatterns,
-        rhs
+        rhs,
+        ...(refinedFunctionPatterns ? { refinedFunctionPatterns } : {}),
       });
 
       clauseIndex++;
@@ -1357,6 +1395,7 @@ export class Parser {
    * from the enclosing with chain.
    */
   private parseNestedWith(
+    funcName: string,
     functionPatterns: TPattern[],
     namedPatterns: TNamedPatternArg[],
     ctx: string[],
@@ -1381,19 +1420,40 @@ export class Parser {
     const nestedClauses: TClause[] = [];
     let clauseIndex = 0;
 
-    while ((this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS') && this.current().col > outerPipeCol) {
+    while (((this.current().type === 'PIPE' || this.current().type === 'ELLIPSIS') && this.current().col > outerPipeCol) ||
+           (this.isRefinedWithBranch(funcName) && this.current().col > outerPipeCol)) {
       const withClausePath: IndexPath = [
         ...parentPath,
         { kind: 'field', name: 'withClauses' },
         { kind: 'array', index: clauseIndex },
       ];
 
+      // Track the column of the first token of this branch (before consuming anything).
+      const branchStartCol = this.current().col;
+
+      // Check for Agda-style LHS pattern refinement
+      let refinedFunctionPatterns: TPattern[] | undefined;
+      if (this.current().type === 'IDENT' && this.current().value === funcName) {
+        this.advance(); // consume funcName
+        refinedFunctionPatterns = [];
+        while (this.canStartPattern(this.current()) && this.current().type !== 'PIPE') {
+          refinedFunctionPatterns.push(this.parsePatternAtom());
+        }
+        if (refinedFunctionPatterns.length !== functionPatterns.length) {
+          throw new ParseError(
+            `Refined with-clause for '${funcName}' has ${refinedFunctionPatterns.length} pattern(s) but expected ${functionPatterns.length}`,
+            this.current().line,
+            this.current().col
+          );
+        }
+      }
+
       // Handle ellipsis (...) — syntactic sugar for "repeat parent patterns unchanged"
       if (this.current().type === 'ELLIPSIS') {
         this.advance(); // consume '...'
       }
 
-      const pipeCol = this.current().col;
+      const pipeCol = branchStartCol;
       if (this.current().type === 'PIPE') {
         this.advance(); // consume '|'
       }
@@ -1412,21 +1472,33 @@ export class Parser {
       }
 
       // Parse RHS: either '=> expr' or nested 'with ...'
+      // For refined branches, the RHS context uses the refined pattern variables
       const withPatternVars = withPatterns.flatMap(p => this.collectPatternVars(p));
-      const rhsCtx = [...withPatternVars.reverse(), ...ctx];
+      let rhsCtx: string[];
+      if (refinedFunctionPatterns) {
+        const refinedVars = refinedFunctionPatterns.flatMap(p => this.collectPatternVars(p));
+        rhsCtx = [...withPatternVars.reverse(), ...refinedVars.reverse()];
+      } else {
+        rhsCtx = [...withPatternVars.reverse(), ...ctx];
+      }
       const rhsPath: IndexPath = [...withClausePath, { kind: 'field', name: 'rhs' }];
 
       let rhs: TTerm;
       if (this.current().type === 'WITH') {
         // Further nesting
-        const nestedFunctionPatterns = [...functionPatterns, ...withPatterns];
-        rhs = this.parseNestedWith(nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
+        const effectivePatterns = refinedFunctionPatterns ?? functionPatterns;
+        const nestedFunctionPatterns = [...effectivePatterns, ...withPatterns];
+        rhs = this.parseNestedWith(funcName, nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
       } else {
         this.expect('FATARROW');
         rhs = this.expr(0, rhsCtx, rhsPath);
       }
 
-      nestedClauses.push({ patterns: withPatterns, rhs });
+      nestedClauses.push({
+        patterns: withPatterns,
+        rhs,
+        ...(refinedFunctionPatterns ? { refinedFunctionPatterns } : {}),
+      });
       clauseIndex++;
       this.skipNewlines();
     }
@@ -3025,6 +3097,52 @@ export class Parser {
   }
 
   /**
+   * Lightweight lookahead to check if the current position starts an Agda-style
+   * refined with-branch: funcName patterns | withPat => rhs
+   *
+   * Does NOT consume any tokens — only peeks ahead.
+   * Returns true if current token is IDENT matching funcName and there's a PIPE
+   * after skipping pattern-like tokens.
+   */
+  private isRefinedWithBranch(funcName: string): boolean {
+    if (this.current().type !== 'IDENT' || this.current().value !== funcName) return false;
+
+    // Lookahead: skip funcName, then skip pattern-like tokens, check for PIPE
+    const savedPos = this.pos;
+    this.pos++; // skip funcName
+
+    // Skip pattern-like tokens (IDENT, UNDERSCORE, balanced parens/braces)
+    while (this.pos < this.tokens.length) {
+      const t = this.tokens[this.pos];
+      if (t.type === 'IDENT' || t.type === 'UNDERSCORE') {
+        this.pos++;
+      } else if (t.type === 'LPAREN') {
+        this.pos++;
+        let depth = 1;
+        while (this.pos < this.tokens.length && depth > 0) {
+          if (this.tokens[this.pos].type === 'LPAREN') depth++;
+          else if (this.tokens[this.pos].type === 'RPAREN') depth--;
+          this.pos++;
+        }
+      } else if (t.type === 'LBRACE') {
+        this.pos++;
+        let depth = 1;
+        while (this.pos < this.tokens.length && depth > 0) {
+          if (this.tokens[this.pos].type === 'LBRACE') depth++;
+          else if (this.tokens[this.pos].type === 'RBRACE') depth--;
+          this.pos++;
+        }
+      } else {
+        break;
+      }
+    }
+
+    const foundPipe = this.pos < this.tokens.length && this.tokens[this.pos].type === 'PIPE';
+    this.pos = savedPos;
+    return foundPipe;
+  }
+
+  /**
    * Parse match/case expression:
    *
    * Syntax 1 (case with where):
@@ -3272,7 +3390,8 @@ export class Parser {
       case 'exact':
       case 'apply':
       case 'refine':
-      case 'rewrite': {
+      case 'rewrite':
+      case 'subst': {
         // Parse a full term
         const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
         const termArg = this.expr(0, ctx, argPath);
@@ -3321,7 +3440,7 @@ export class Parser {
           // Parse case branches: | ctor params => tactics
           const caseBranches: CaseBranch[] = [];
 
-          while (this.current().type === 'PIPE') {
+          while (this.current().type === 'PIPE' && this.current().col >= tacticToken.col) {
             this.advance(); // consume '|'
 
             // Parse constructor name

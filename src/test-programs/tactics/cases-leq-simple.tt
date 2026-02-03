@@ -1,0 +1,11 @@
+@test success
+@name "cases on Leq: basic indexed type"
+@import preambles/nat.tt
+@import preambles/leq.tt
+
+-- After cases on (h : Leq a b), branches should have refined indices
+leqToNat : {a b : Nat} -> Leq a b -> Nat := by
+  intros a b h
+  cases h with
+  | LeqZero => exact Zero
+  | LeqSucc h' => exact Zero

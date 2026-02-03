@@ -1,0 +1,16 @@
+-- Mix refined and unrefined branches in the same with-clause
+@test success
+@name "LHS refinement: mixed refined and unrefined branches"
+@import preambles/nat.tt
+
+-- Use a 3-constructor type so we can show all three branch styles
+inductive Tri : Type where
+  A : Tri
+  B : Tri
+  C : Tri
+
+classify : Nat -> Tri -> Nat
+classify x t with t
+  classify x' t' | A => x'
+  ... | B => Succ x
+  | C => Zero

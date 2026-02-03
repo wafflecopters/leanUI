@@ -1,0 +1,9 @@
+-- LHS refinement where refined patterns are identical to originals (trivial case)
+@test success
+@name "LHS refinement: identity (same patterns as original)"
+@import preambles/nat.tt
+
+pred : Nat -> Nat
+pred n with n
+  pred n | Zero => Zero
+  pred n | Succ k => k

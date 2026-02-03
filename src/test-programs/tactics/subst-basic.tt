@@ -1,0 +1,10 @@
+@test success
+@name "subst: basic forward substitution"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- subst h where h : Equal a b replaces a with b in the goal
+substTest : {a b : Nat} -> Equal a b -> Equal a a -> Equal b b := by
+  intros a b h1 h2
+  subst h1
+  exact h2

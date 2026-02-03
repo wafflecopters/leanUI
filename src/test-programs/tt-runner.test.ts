@@ -189,7 +189,10 @@ function compileAndAssert(
 
     // Check error message substrings if specified
     if (directives.errors.length > 0) {
-      const allErrors = meaningful.flatMap(r => r.checkErrors.map(e => e.message));
+      const allErrors = meaningful.flatMap(r => [
+        ...r.checkErrors.map(e => e.message),
+        ...r.parseErrors.map(e => e.message),
+      ]);
       for (const expectedSubstring of directives.errors) {
         const found = allErrors.some(msg => msg.includes(expectedSubstring));
         if (!found) {

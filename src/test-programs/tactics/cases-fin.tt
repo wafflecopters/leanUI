@@ -1,0 +1,10 @@
+@test success
+@name "cases on Fin: single index type"
+@import preambles/nat.tt
+@import preambles/fin.tt
+
+finToNat : {n : Nat} -> Fin n -> Nat := by
+  intros n f
+  cases f with
+  | FZero => exact Zero
+  | FSucc f' => exact (Succ Zero)

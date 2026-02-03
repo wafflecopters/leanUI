@@ -1,0 +1,9 @@
+-- Verify that the RHS can use the refined pattern variables
+@test success
+@name "LHS refinement: RHS references refined variables"
+@import preambles/nat.tt
+
+add : Nat -> Nat -> Nat
+add x y with x
+  add Zero y | Zero => y
+  add (Succ k) y | Succ k => Succ (Succ (add k y))

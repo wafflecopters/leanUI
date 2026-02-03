@@ -1,0 +1,12 @@
+-- Refined patterns can use parenthesized patterns
+@test success
+@name "LHS refinement: parenthesized patterns in refined LHS"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+isDoubleSucc : Nat -> Bool
+isDoubleSucc n with n
+  isDoubleSucc Zero | Zero => False
+  isDoubleSucc (Succ m) | Succ m2 with m2
+    | Zero => False
+    | Succ _ => True

@@ -1,0 +1,11 @@
+-- LHS refinement with Equal: matching refl forces x=y
+@test success
+@name "LHS refinement: Equal refl unifies variables"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- When we match refl, x and y are unified.
+-- The refined LHS writes (a a refl) to show x=y=a and p=refl.
+bar : (x y : Nat) -> Equal x y -> Nat
+bar x y p with p
+  bar a a refl | refl => a

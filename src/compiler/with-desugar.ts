@@ -238,6 +238,8 @@ function desugarWithClause(
   const functionPatterns = withClause.functionPatterns;
   const scrutinees = withClause.scrutinees;
 
+
+
   // Determine if we should use Agda-style desugaring for constructor function patterns.
   // When function patterns contain constructors (like Succ x) and the return type may
   // be dependent, we need to:
@@ -251,8 +253,10 @@ function desugarWithClause(
     : functionPatterns;
 
   // Create auxiliary function clauses
+  // If a clause has refinedFunctionPatterns (Agda-style LHS refinement), use those
+  // instead of the default effectiveClausePatterns.
   const auxClauses: TClause[] = withClause.clauses.map(clause => ({
-    patterns: [...effectiveClausePatterns, ...clause.patterns],
+    patterns: [...(clause.refinedFunctionPatterns ?? effectiveClausePatterns), ...clause.patterns],
     rhs: clause.rhs,
     namedPatterns: withClause.functionNamedPatterns,
   }));

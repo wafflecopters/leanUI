@@ -89,6 +89,10 @@ function resolvePatternsInTerm(
             ...np,
             pattern: resolvePattern(np.pattern, symbolContext)
           })),
+          // Resolve Agda-style refined function patterns (LHS pattern refinement)
+          refinedFunctionPatterns: clause.refinedFunctionPatterns?.map(pattern =>
+            resolvePattern(pattern, symbolContext)
+          ),
           // Recurse into RHS to resolve patterns in nested WithClauses
           rhs: resolvePatternsInTerm(clause.rhs, symbolContext),
         }))

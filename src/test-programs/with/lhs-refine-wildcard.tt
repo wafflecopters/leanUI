@@ -1,0 +1,10 @@
+-- Refined patterns can use wildcards
+@test success
+@name "LHS refinement: wildcard in refined patterns"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+ignoreFirst : Nat -> Nat -> Bool
+ignoreFirst x y with y
+  ignoreFirst _ y' | Zero => True
+  ignoreFirst _ y' | Succ _ => False

@@ -1,0 +1,16 @@
+-- LHS refinement with DecEq-like type: the motivating example
+@test success
+@name "LHS refinement: DecEq with Yes/No branches"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> DecEq m n
+
+-- Test pattern refinement with DecEq result
+-- When Yes refl matches, x and y are unified to a single variable
+foo : (x y : Nat) -> DecEq x y -> Nat
+foo x y d with d
+  foo a a _ | Yes refl => a
+  ... | No => Zero

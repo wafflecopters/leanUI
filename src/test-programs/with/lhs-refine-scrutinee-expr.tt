@@ -1,0 +1,15 @@
+-- LHS refinement when the scrutinee is a function application (not just a variable)
+@test success
+@name "LHS refinement: scrutinee is function application"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+isZero : Nat -> Bool
+isZero n with n
+  | Zero => True
+  | Succ _ => False
+
+checkBothZero : Nat -> Nat -> Bool
+checkBothZero x y with isZero x
+  checkBothZero a b | True => isZero b
+  checkBothZero a b | False => False

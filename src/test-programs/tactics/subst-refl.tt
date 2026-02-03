@@ -1,0 +1,10 @@
+@test success
+@name "subst: produces refl-solvable goal"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- After subst h, the goal Equal a a becomes Equal b b, solvable by refl
+substRefl : {a b : Nat} -> Equal a b -> Equal a a := by
+  intros a b h
+  subst h
+  exact refl

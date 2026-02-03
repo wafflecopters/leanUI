@@ -1,0 +1,11 @@
+-- LHS refinement with multiple scrutinees
+@test success
+@name "LHS refinement: multiple scrutinees"
+@import preambles/nat.tt
+
+bothZero : Nat -> Nat -> Nat
+bothZero x y with x, y
+  bothZero a b | Zero, Zero => Zero
+  bothZero a b | Zero, Succ _ => Succ Zero
+  bothZero a b | Succ _, Zero => Succ (Succ Zero)
+  bothZero a b | Succ _, Succ _ => Succ (Succ (Succ Zero))

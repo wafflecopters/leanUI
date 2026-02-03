@@ -1,0 +1,17 @@
+-- All three branch styles interleaved: refined, ellipsis, bare-pipe
+@test success
+@name "LHS refinement: all three branch styles interleaved"
+@import preambles/nat.tt
+
+inductive Four : Type where
+  W : Four
+  X : Four
+  Y : Four
+  Z : Four
+
+pick : Nat -> Four -> Nat
+pick n f with f
+  pick n' f' | W => n'
+  ... | X => Succ n
+  | Y => Zero
+  pick m f' | Z => Succ m

@@ -1,0 +1,10 @@
+-- All branches use refined patterns (no ellipsis or bare pipe)
+@test success
+@name "LHS refinement: all branches refined"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+isZero : Nat -> Bool
+isZero n with n
+  isZero a | Zero => True
+  isZero b | Succ _ => False

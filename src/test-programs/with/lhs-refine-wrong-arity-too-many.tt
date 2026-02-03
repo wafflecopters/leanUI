@@ -1,0 +1,10 @@
+-- Too many refined patterns should fail
+@test failure
+@name "LHS refinement: too many patterns rejected"
+@error "has 3 pattern(s) but expected 2"
+@import preambles/nat.tt
+
+bar : Nat -> Nat -> Nat
+bar x y with x
+  bar a b c | Zero => a
+  bar a b c | Succ _ => b

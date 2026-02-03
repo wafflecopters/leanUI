@@ -1,0 +1,11 @@
+-- Refined patterns with nested constructor patterns
+@test success
+@name "LHS refinement: nested constructor in refined LHS"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+-- The refined pattern Succ (Succ k) is a nested constructor
+isGt1 : Nat -> Bool
+isGt1 n with n
+  isGt1 Zero | Zero => False
+  isGt1 (Succ _) | Succ _ => True

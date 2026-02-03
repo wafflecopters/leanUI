@@ -1,0 +1,18 @@
+@test success
+@name "cases on Leq: leqAntisym via nested cases"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+@import preambles/leq.tt
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
+  intros a b hab hba
+  cases hab with
+  | LeqZero =>
+    cases hba with
+    | LeqZero => exact refl
+  | LeqSucc p =>
+    cases hba with
+    | LeqSucc q => exact (congSucc (leqAntisym p q))

@@ -1,0 +1,13 @@
+@test success
+@name "cases on Leq: leqTrans via nested cases"
+@import preambles/nat.tt
+@import preambles/leq.tt
+
+-- The key motivating example: leqTrans needs dependent cases
+leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c := by
+  intros a b c hab hbc
+  cases hab with
+  | LeqZero => exact LeqZero
+  | LeqSucc p =>
+    cases hbc with
+    | LeqSucc q => exact (LeqSucc (leqTrans p q))

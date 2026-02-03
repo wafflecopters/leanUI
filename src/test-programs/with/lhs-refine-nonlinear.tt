@@ -1,0 +1,10 @@
+-- Non-linear patterns: same variable name in refined LHS and with-pattern
+-- The desugared auxiliary gets (Succ k) y (Succ k) — k appears twice
+@test success
+@name "LHS refinement: non-linear patterns (same var in LHS and with)"
+@import preambles/nat.tt
+
+foo : Nat -> Nat -> Nat
+foo x y with x
+  foo Zero y | Zero => y
+  foo (Succ k) y | Succ k => Succ (Succ k)

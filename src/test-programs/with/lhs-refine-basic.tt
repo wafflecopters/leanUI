@@ -1,0 +1,10 @@
+-- Basic Agda-style LHS pattern refinement: rename variables in with-branch
+@test success
+@name "LHS refinement: basic variable renaming"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+isZero : Nat -> Bool
+isZero n with n
+  isZero m | Zero => True
+  isZero m | Succ _ => False
