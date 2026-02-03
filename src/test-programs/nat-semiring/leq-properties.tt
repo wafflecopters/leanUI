@@ -14,16 +14,28 @@ inductive Leq : Nat -> Nat -> Type where
   LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
 
 -- Reflexivity: a <= a
-leqRefl : (n : Nat) -> Leq n n
-leqRefl Zero = LeqZero
-leqRefl (Succ n) = LeqSucc (leqRefl n)
+leqRefl : (n : Nat) -> Leq n n := by
+  intro n
+  induction n with
+  | Zero => exact LeqZero
+  | Succ n' IH => exact (LeqSucc IH)
 
 -- Transitivity: a <= b /\ b <= c => a <= c
-leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c
-leqTrans LeqZero _ = LeqZero
-leqTrans (LeqSucc p) (LeqSucc q) = LeqSucc (leqTrans p q)
+leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c := by
+  intros a b c hab hbc
+  cases hab with
+  | LeqZero => exact LeqZero
+  | LeqSucc p =>
+    cases hbc with
+    | LeqSucc q => exact (LeqSucc (leqTrans p q))
 
 -- Antisymmetry: a <= b /\ b <= a => a = b
-leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b
-leqAntisym LeqZero LeqZero = refl
-leqAntisym (LeqSucc p) (LeqSucc q) = congSucc (leqAntisym p q)
+leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
+  intros a b hab hba
+  cases hab with
+  | LeqZero =>
+    cases hba with
+    | LeqZero => exact refl
+  | LeqSucc p =>
+    cases hba with
+    | LeqSucc q => exact (congSucc (leqAntisym p q))

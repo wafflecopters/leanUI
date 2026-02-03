@@ -462,7 +462,7 @@ function computeAuxiliaryType(
     : undefined;
 
   // Splice scrutinee types into the original type at the splice point
-  return spliceScrutineesIntoType(declType, numPatterns, scrutineeTypes, reconstructionMap);
+  return spliceScrutineesIntoType(declType, numPatterns, scrutineeTypes, scrutinees, reconstructionMap);
 }
 
 /**
@@ -617,6 +617,7 @@ function spliceScrutineesIntoType(
   type: TTerm,
   numExplicit: number,
   scrutineeTypes: TTerm[],
+  scrutinees: TTerm[],
   reconstructionMap?: Map<number, TTerm>
 ): TTerm {
   // Base case: we've consumed all required explicit args, splice here
@@ -630,12 +631,27 @@ function spliceScrutineesIntoType(
       result = applySimultaneousSubst(result, reconstructionMap);
     }
 
-    // Shift free variables in the return type to account for the new scrutinee binders
-    result = shiftVars(result, scrutineeTypes.length);
-    // Add in reverse so they appear in order
+    // WITH-ABSTRACTION: For each scrutinee, replace occurrences in the return type
+    // Process in reverse order so indices remain correct
     for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
-      result = mkPiTT(scrutineeTypes[i], result, `_scrut${i}`);
+      const scrut = scrutinees[i];
+      const scrutType = scrutineeTypes[i];
+
+      // Only abstract over variable scrutinees for now
+      // (Complex expression abstraction is future work)
+      if (scrut.tag === 'Var') {
+        // Replace all occurrences of this variable with Var 0 (the fresh binder)
+        // This also shifts other free variables
+        result = replaceScrutineeInTTerm(result, scrut);
+      } else {
+        // For non-variable scrutinees, just shift free vars (no abstraction)
+        result = shiftVars(result, 1);
+      }
+
+      // Add the scrutinee binder
+      result = mkPiTT(scrutType, result, `_scrut${i}`);
     }
+
     return result;
   }
 
@@ -643,7 +659,7 @@ function spliceScrutineesIntoType(
   if (type.tag === 'Binder' && type.binderKind.tag === 'BPiTT') {
     const isNamed = !!(type as any).named;
     const consumed = isNamed ? 0 : 1;
-    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, reconstructionMap);
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, scrutinees, reconstructionMap);
     if (newBody === type.body) return type;
     return { ...type, body: newBody };
   }
@@ -651,7 +667,7 @@ function spliceScrutineesIntoType(
   if (type.tag === 'MultiBinder' && type.binderKind.tag === 'BPiTT') {
     const isNamed = !!(type as any).named;
     const consumed = isNamed ? 0 : type.names.length;
-    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, reconstructionMap);
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, scrutinees, reconstructionMap);
     if (newBody === type.body) return type;
     return { ...type, body: newBody };
   }
@@ -662,10 +678,21 @@ function spliceScrutineesIntoType(
   if (reconstructionMap && reconstructionMap.size > 0) {
     result = applySimultaneousSubst(result, reconstructionMap);
   }
-  result = shiftVars(result, scrutineeTypes.length);
+
+  // WITH-ABSTRACTION: same logic as base case
   for (let i = scrutineeTypes.length - 1; i >= 0; i--) {
-    result = mkPiTT(scrutineeTypes[i], result, `_scrut${i}`);
+    const scrut = scrutinees[i];
+    const scrutType = scrutineeTypes[i];
+
+    if (scrut.tag === 'Var') {
+      result = replaceScrutineeInTTerm(result, scrut);
+    } else {
+      result = shiftVars(result, 1);
+    }
+
+    result = mkPiTT(scrutType, result, `_scrut${i}`);
   }
+
   return result;
 }
 
@@ -735,6 +762,154 @@ function applySimultaneousSubst(
 
     default:
       // Const, Prop, ULevelLit, etc.
+      return term;
+  }
+}
+
+/**
+ * Check if two TTerms are structurally equal (for with-abstraction).
+ * Used to find occurrences of scrutinee in the return type.
+ */
+function termsEqualTTerm(term1: TTerm, term2: TTerm, depth: number = 0): boolean {
+  if (term1.tag !== term2.tag) return false;
+
+  switch (term1.tag) {
+    case 'Var':
+      return term2.tag === 'Var' && term1.index === term2.index;
+
+    case 'Const':
+      return term2.tag === 'Const' && term1.name === term2.name;
+
+    case 'App':
+      return term2.tag === 'App' &&
+        termsEqualTTerm(term1.fn, term2.fn, depth) &&
+        termsEqualTTerm(term1.arg, term2.arg, depth);
+
+    case 'Binder':
+      if (term2.tag !== 'Binder') return false;
+      // Simplified: just check binderKind tags match
+      if (term1.binderKind.tag !== term2.binderKind.tag) return false;
+      // Domain might be undefined for let without type annotation
+      if (!term1.domain && !term2.domain) {
+        return termsEqualTTerm(term1.body, term2.body, depth + 1);
+      }
+      if (!term1.domain || !term2.domain) {
+        return false;
+      }
+      return termsEqualTTerm(term1.domain, term2.domain, depth) &&
+        termsEqualTTerm(term1.body, term2.body, depth + 1);
+
+    case 'MultiBinder':
+      if (term2.tag !== 'MultiBinder') return false;
+      if (term1.names.length !== term2.names.length) return false;
+      if (term1.binderKind.tag !== term2.binderKind.tag) return false;
+      return termsEqualTTerm(term1.domain, term2.domain, depth) &&
+        termsEqualTTerm(term1.body, term2.body, depth + term1.names.length);
+
+    case 'Sort':
+    case 'ULevel':
+    case 'UOmega':
+      return true;
+
+    case 'Hole':
+      return term2.tag === 'Hole' && term1.id === term2.id;
+
+    case 'Annot':
+      return term2.tag === 'Annot' &&
+        termsEqualTTerm(term1.term, term2.term, depth) &&
+        termsEqualTTerm(term1.type, term2.type, depth);
+
+    case 'Match':
+      // Simplified: just check scrutinee
+      return term2.tag === 'Match' && termsEqualTTerm(term1.scrutinee, term2.scrutinee, depth);
+
+    case 'AbsurdMarker':
+    case 'WithClause':
+    case 'TacticBlock':
+      // These shouldn't appear in return types, but handle them conservatively
+      return false;
+
+    // For other terms, conservatively return false
+    default:
+      return false;
+  }
+}
+
+/**
+ * Replace all occurrences of scrutinee with a fresh variable (Var 0),
+ * and shift other free variables to account for the new binder.
+ *
+ * This implements with-abstraction for TTerm.
+ */
+function replaceScrutineeInTTerm(
+  term: TTerm,
+  scrutinee: TTerm,
+  depth: number = 0
+): TTerm {
+  // Check if this term matches the scrutinee
+  if (termsEqualTTerm(term, scrutinee, depth)) {
+    // Replace with Var 0 (adjusted for depth)
+    return mkVarTT(depth);
+  }
+
+  // Otherwise, recurse and shift free variables
+  switch (term.tag) {
+    case 'Var':
+      // Shift free variables to account for new binder
+      return mkVarTT(term.index + 1);
+
+    case 'Const':
+    case 'Sort':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+    case 'Hole':
+    case 'AbsurdMarker':
+      return term;
+
+    case 'App': {
+      const newFn = replaceScrutineeInTTerm(term.fn, scrutinee, depth);
+      const newArg = replaceScrutineeInTTerm(term.arg, scrutinee, depth);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return mkAppTT(newFn, newArg);
+    }
+
+    case 'Binder': {
+      const newDomain = term.domain ? replaceScrutineeInTTerm(term.domain, scrutinee, depth) : undefined;
+      const newBody = replaceScrutineeInTTerm(term.body, scrutinee, depth + 1);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    case 'MultiBinder': {
+      const newDomain = replaceScrutineeInTTerm(term.domain, scrutinee, depth);
+      const newBody = replaceScrutineeInTTerm(term.body, scrutinee, depth + term.names.length);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+
+    case 'Annot': {
+      const newTerm = replaceScrutineeInTTerm(term.term, scrutinee, depth);
+      const newType = replaceScrutineeInTTerm(term.type, scrutinee, depth);
+      if (newTerm === term.term && newType === term.type) return term;
+      return { tag: 'Annot', term: newTerm, type: newType };
+    }
+
+    case 'Match': {
+      const newScrutinee = replaceScrutineeInTTerm(term.scrutinee, scrutinee, depth);
+      const newClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: replaceScrutineeInTTerm(c.rhs, scrutinee, depth + countPatternVars(c.patterns))
+      }));
+      return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
+    }
+
+    case 'WithClause':
+    case 'TacticBlock':
+      // These shouldn't appear in return types during with-desugaring
+      return term;
+
+    default:
       return term;
   }
 }

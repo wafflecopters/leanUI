@@ -49,8 +49,24 @@ f : Nat -> Nat := by
   | Succ m => exact m
 ```
 
-Branches can span multiple lines:
+### Multi-Tactic Branches
 
+Branches support **multiple tactics** in three ways:
+
+**1. Multi-line (indented):**
+```
+| Succ n' IH =>
+  apply congSucc
+  apply trans
+  exact IH
+```
+
+**2. Semicolon-separated (single line):**
+```
+| Succ n' IH => apply congSucc; exact IH
+```
+
+**3. Nested cases/induction:**
 ```
 f : List Nat -> Nat -> Maybe Nat := by
   intros xs n

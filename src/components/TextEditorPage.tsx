@@ -2,6 +2,7 @@
  * TextEditorPage - A page for editing code and viewing compilation results
  */
 import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileTTFromText, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
@@ -788,16 +789,23 @@ leqRefl : (n : Nat) -> Leq n n := by
   | Zero => exact LeqZero
   | Succ n' IH => exact (LeqSucc IH)
 
--- Note: leqTrans and leqAntisym use pattern matching because
--- cases on indexed types (like Leq) requires dependent elimination,
--- which the tactic system doesn't support yet.
-leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c
-leqTrans LeqZero _ = LeqZero
-leqTrans (LeqSucc p) (LeqSucc q) = LeqSucc (leqTrans p q)
+leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c := by
+  intros a b c hab hbc
+  cases hab with
+  | LeqZero => exact LeqZero
+  | LeqSucc p =>
+    cases hbc with
+    | LeqSucc q => exact (LeqSucc (leqTrans p q))
 
-leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b
-leqAntisym LeqZero LeqZero = refl
-leqAntisym (LeqSucc p) (LeqSucc q) = congSucc (leqAntisym p q)
+leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
+  intros a b hab hba
+  cases hab with
+  | LeqZero =>
+    cases hba with
+    | LeqZero => exact refl
+  | LeqSucc p =>
+    cases hba with
+    | LeqSucc q => exact (congSucc (leqAntisym p q))
 `;
 
 const PRESETS: { name: string; code: string }[] = [
@@ -1401,6 +1409,7 @@ function BlockCard(props: { header: React.ReactNode, body: React.ReactNode, init
 }
 
 export function TextEditorPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(SAMPLE_CODE);
@@ -1427,6 +1436,30 @@ export function TextEditorPage() {
     fire: () => void;
     event: import('monaco-editor').IEvent<void>;
   } | null>(null);
+
+  // Load preset from URL parameter on mount
+  useEffect(() => {
+    const presetParam = searchParams.get('preset');
+    if (presetParam) {
+      const preset = PRESETS.find(p => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') === presetParam);
+      if (preset) {
+        setCode(preset.code);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
+
+  // Helper function to load a preset and update URL
+  const loadPreset = useCallback((presetName: string) => {
+    const preset = PRESETS.find(p => p.name === presetName);
+    if (preset) {
+      setCode(preset.code);
+      // Convert preset name to URL-friendly format: "Nat Math (Tactics)" -> "nat-math-tactics"
+      const urlSafePresetName = preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      setSearchParams({ preset: urlSafePresetName });
+      setPresetMenuOpen(false);
+    }
+  }, [setSearchParams]);
 
   // Inject Monaco widget z-index styles on mount
   useEffect(() => {
@@ -2018,7 +2051,7 @@ export function TextEditorPage() {
               {PRESETS.map((preset) => (
                 <div
                   key={preset.name}
-                  onClick={() => { setCode(preset.code); setPresetMenuOpen(false); }}
+                  onClick={() => loadPreset(preset.name)}
                   style={{
                     padding: '8px 16px',
                     cursor: 'pointer',

@@ -3502,9 +3502,25 @@ export class Parser {
                 }
               }
             } else {
-              // Single-line branch: parse one tactic
-              const bt = this.parseTactic(ctx, branchTacticPath);
-              branchTactics.push(bt);
+              // Single-line branch: parse semicolon-separated tactics
+              while (true) {
+                const bt = this.parseTactic(ctx, branchTacticPath);
+                branchTactics.push(bt);
+
+                // Check for semicolon to continue parsing tactics
+                if (this.current().type === 'SEMICOLON') {
+                  this.advance(); // consume ';'
+                  // If we hit newline or dedent or EOF, stop
+                  if (this.current().type === 'NEWLINE' ||
+                      this.current().type === 'EOF' ||
+                      this.current().type === 'PIPE') {
+                    break;
+                  }
+                } else {
+                  // No semicolon, done with this branch
+                  break;
+                }
+              }
             }
 
             caseBranches.push({

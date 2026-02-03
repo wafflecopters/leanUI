@@ -141,6 +141,11 @@ export function checkInductiveDeclaration(
           const metaInfo = unsolvedMetas.map(([id, m]) => `${id}: ${solvedResult.prettyPrint(m.type)}`);
           errors.push(TCEnvError.create(`Checking the constructor signature produced unsolved metas: [${metaInfo.join(', ')}]`, e));
         } else {
+          // Re-zonk type info entries now that all metas are solved.
+          // Entries recorded mid-checking (e.g., the type of 'Equal' before its
+          // implicit arg meta was solved) still contain unsolved meta names.
+          solvedResult.zonkTypeInfoEntries();
+
           // Zonk the constructor type to substitute solved metas (both level and term).
           // ctor.type has Holes for implicit args, and zonkTerm substitutes these using
           // the Hole ID to look up solutions in both levelMetas and metaVars.

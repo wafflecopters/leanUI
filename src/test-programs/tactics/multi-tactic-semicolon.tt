@@ -1,0 +1,20 @@
+@test success
+@name "multi-tactic: semicolon-separated tactics"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Try semicolon-separated tactics on same line
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH => apply congSucc; exact IH

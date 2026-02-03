@@ -1,0 +1,12 @@
+@test success
+@name "with-abstraction: Equal n n (dependent return type)"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- With-abstraction should handle dependent return types
+-- The auxiliary function type should be: (n : Nat) -> (w : Nat) -> Equal w w
+-- The occurrences of 'n' in the return type should be replaced with the with-variable
+testEqual : (n : Nat) -> Equal n n
+testEqual n with n
+  | Zero => refl
+  | Succ m => refl
