@@ -111,6 +111,7 @@ const SYNTAX_COLORS = {
   namedBrace: '6e7681',     // Dark grey - for { } in named arguments/binders
   hole: 'e5c07b',           // Yellow for holes (unfinished code)
   absurd: '4fc1ff',         // Bright cyan - for #absurd marker
+  tacticName: 'ffb0d8',     // Pale pink - for tactic names (intro, apply, exact, etc.)
   directive: 'ff79c6',      // Pink - for directives (@test, @name, @assumeK, etc.)
   directiveValue: '8b949e', // Grey - for directive values (true, false, "test name")
 };
@@ -141,6 +142,7 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     { token: 'patternVar', foreground: SYNTAX_COLORS.patternVar },
     { token: 'absurd', foreground: SYNTAX_COLORS.absurd },
     { token: 'namedBrace', foreground: SYNTAX_COLORS.namedBrace },
+    { token: 'tacticName', foreground: SYNTAX_COLORS.tacticName },
     { token: 'directive', foreground: SYNTAX_COLORS.directive },
     { token: 'directiveValue', foreground: SYNTAX_COLORS.directiveValue },
   ],
@@ -1921,7 +1923,7 @@ export function TextEditorPage() {
 
     // Register semantic tokens provider for precise highlighting
     // This overrides lexical highlighting with semantic information from the compiler
-    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd', 'namedBrace', 'directive', 'directiveValue'];
+    const tokenTypes = ['termName', 'constName', 'boundVar', 'patternVar', 'absurd', 'namedBrace', 'tacticName', 'directive', 'directiveValue'];
     const tokenModifiers: string[] = [];
 
     // Create an event emitter for signaling token changes
@@ -1937,7 +1939,7 @@ export function TextEditorPage() {
         tokenModifiers
       }),
       onDidChange: emitter.event,
-      provideDocumentSemanticTokens: (_model: MonacoEditor.ITextModel) => {
+      provideDocumentSemanticTokens: (model: MonacoEditor.ITextModel) => {
         const tokens = semanticTokensRef.current;
 
         // Monaco expects delta-encoded tokens:
@@ -1956,10 +1958,20 @@ export function TextEditorPage() {
           const tokenTypeIndex = tokenTypes.indexOf(token.type);
           if (tokenTypeIndex === -1) continue;
 
+          // Validate and clamp token bounds: Monaco rejects tokens where end character exceeds line length
+          const monacoLine = token.line;  // 1-indexed
+          if (monacoLine < 1 || monacoLine > model.getLineCount()) continue;
+          const lineLength = model.getLineLength(monacoLine);
+          const startCol0 = token.column - 1;  // Convert to 0-indexed
+          if (startCol0 < 0 || startCol0 >= lineLength) continue;
+          // Clamp length to line boundary (source map ranges can be slightly over due to
+          // how prefixSourceMapPaths adjusts ranges during application parsing)
+          const clampedLength = Math.min(token.length, lineLength - startCol0);
+
           const deltaLine = token.line - 1 - prevLine;  // Monaco is 0-indexed
           const deltaCol = deltaLine === 0 ? token.column - 1 - prevCol : token.column - 1;
 
-          data.push(deltaLine, deltaCol, token.length, tokenTypeIndex, 0);
+          data.push(deltaLine, deltaCol, clampedLength, tokenTypeIndex, 0);
 
           prevLine = token.line - 1;
           prevCol = token.column - 1;

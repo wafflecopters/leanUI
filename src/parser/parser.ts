@@ -3544,13 +3544,19 @@ export class Parser {
                 this.current().col
               );
             }
+            const ctorToken = this.current();
             const ctorName = this.current().value;
             this.advance();
+
+            const caseBranchPath = [...path, { kind: 'field' as const, name: 'caseBranches' }, { kind: 'array' as const, index: caseBranches.length }];
+            this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'constructor' }], ctorToken, ctorToken);
 
             // Parse optional parameters
             const params: string[] = [];
             while (this.current().type === 'IDENT' && this.current().col > tacticToken.col) {
+              const paramToken = this.current();
               params.push(this.current().value);
+              this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'params' }, { kind: 'array' as const, index: params.length - 1 }], paramToken, paramToken);
               this.advance();
             }
 
@@ -3566,7 +3572,8 @@ export class Parser {
 
             // Parse tactics for this branch (may be on same line or next line)
             const branchTactics: TacticCommand[] = [];
-            const branchTacticPath = [...path, { kind: 'field' as const, name: 'caseBranches' }, { kind: 'array' as const, index: caseBranches.length }];
+            const branchBasePath = [...path, { kind: 'field' as const, name: 'caseBranches' }, { kind: 'array' as const, index: caseBranches.length }];
+            let branchTacticIndex = 0;
 
             if (this.current().type === 'NEWLINE') {
               // Multi-line branch: parse indented tactic sequence
@@ -3577,8 +3584,10 @@ export class Parser {
               while (this.current().type !== 'EOF' &&
                      this.current().type !== 'PIPE' &&
                      this.current().col >= branchBaseIndent) {
-                const bt = this.parseTactic(ctx, branchTacticPath);
+                const tacticPath = [...branchBasePath, { kind: 'field' as const, name: 'tactics' }, { kind: 'array' as const, index: branchTacticIndex }];
+                const bt = this.parseTactic(ctx, tacticPath);
                 branchTactics.push(bt);
+                branchTacticIndex++;
 
                 if (this.current().type === 'SEMICOLON') {
                   this.advance(); // consume ';'
@@ -3597,8 +3606,10 @@ export class Parser {
             } else {
               // Single-line branch: parse semicolon-separated tactics
               while (true) {
-                const bt = this.parseTactic(ctx, branchTacticPath);
+                const tacticPath = [...branchBasePath, { kind: 'field' as const, name: 'tactics' }, { kind: 'array' as const, index: branchTacticIndex }];
+                const bt = this.parseTactic(ctx, tacticPath);
                 branchTactics.push(bt);
+                branchTacticIndex++;
 
                 // Check for semicolon to continue parsing tactics
                 if (this.current().type === 'SEMICOLON') {

@@ -301,7 +301,7 @@ export interface WildcardInlayHint {
 /**
  * Semantic token types for syntax highlighting
  */
-export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace' | 'directive' | 'directiveValue';
+export type SemanticTokenType = 'termName' | 'constName' | 'boundVar' | 'patternVar' | 'absurd' | 'namedBrace' | 'directive' | 'directiveValue' | 'tacticName';
 
 /**
  * A semantic token for highlighting
@@ -739,6 +739,121 @@ function collectSemanticTokensFromSurfaceTerm(
       collectSemanticTokensFromSurfaceTerm(term.domain, sourceMap, blockStartLine, [...path, 'domain'], tokens);
       collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
       break;
+
+    case 'TacticBlock':
+      for (let i = 0; i < term.tactics.length; i++) {
+        collectSemanticTokensFromTactic(
+          term.tactics[i],
+          sourceMap,
+          blockStartLine,
+          [...path, 'tactics', i],
+          tokens
+        );
+      }
+      break;
+  }
+}
+
+/**
+ * Collect semantic tokens from a single tactic command
+ */
+function collectSemanticTokensFromTactic(
+  tactic: TacticCommand,
+  sourceMap: SourceMap,
+  blockStartLine: number,
+  path: (string | number)[],
+  tokens: SemanticToken[]
+): void {
+  // Tactic name (intro, apply, exact, etc.)
+  addSemanticTokenDirect([...path, 'name'], sourceMap, blockStartLine, 'tacticName', tokens);
+
+  switch (tactic.name) {
+    case 'intro':
+    case 'intros':
+      // Arguments are variable names (stored as Const nodes) — highlight as bound vars
+      for (let j = 0; j < tactic.args.length; j++) {
+        addSemanticTokenDirect([...path, 'args', j], sourceMap, blockStartLine, 'boundVar', tokens);
+      }
+      break;
+
+    case 'exact':
+    case 'apply':
+    case 'refine':
+    case 'rewrite':
+    case 'subst':
+      // Argument is a full term expression — recurse for full highlighting
+      if (tactic.args.length > 0) {
+        collectSemanticTokensFromSurfaceTerm(
+          tactic.args[0],
+          sourceMap,
+          blockStartLine,
+          [...path, 'args', 0],
+          tokens
+        );
+      }
+      break;
+
+    case 'cases':
+    case 'induction':
+      // First arg is the variable being cased/inducted on
+      if (tactic.args.length > 0) {
+        addSemanticTokenDirect([...path, 'args', 0], sourceMap, blockStartLine, 'boundVar', tokens);
+      }
+      // Process case branches
+      if (tactic.caseBranches) {
+        for (let j = 0; j < tactic.caseBranches.length; j++) {
+          const branch = tactic.caseBranches[j];
+          const branchPath = [...path, 'caseBranches', j];
+          // Constructor name (e.g., Zero, Succ) — teal
+          addSemanticTokenDirect([...branchPath, 'constructor'], sourceMap, blockStartLine, 'constName', tokens);
+          // Parameter names (e.g., n', IH) — light blue
+          for (let k = 0; k < branch.params.length; k++) {
+            addSemanticTokenDirect([...branchPath, 'params', k], sourceMap, blockStartLine, 'boundVar', tokens);
+          }
+          // Branch tactics — recurse
+          for (let k = 0; k < branch.tactics.length; k++) {
+            collectSemanticTokensFromTactic(
+              branch.tactics[k],
+              sourceMap,
+              blockStartLine,
+              [...branchPath, 'tactics', k],
+              tokens
+            );
+          }
+        }
+      }
+      break;
+
+    case 'have':
+      // have name : type := proof
+      // args[0] = name (bound var), args[1] = type (term), args[2] = proof (term)
+      if (tactic.args.length > 0) {
+        addSemanticTokenDirect([...path, 'args', 0], sourceMap, blockStartLine, 'boundVar', tokens);
+      }
+      if (tactic.args.length > 1) {
+        collectSemanticTokensFromSurfaceTerm(tactic.args[1], sourceMap, blockStartLine, [...path, 'args', 1], tokens);
+      }
+      if (tactic.args.length > 2) {
+        collectSemanticTokensFromSurfaceTerm(tactic.args[2], sourceMap, blockStartLine, [...path, 'args', 2], tokens);
+      }
+      break;
+
+    default:
+      // assumption, constructor, reflexivity, etc. — no args to highlight
+      break;
+  }
+
+  // Process focused (bullet) tactics
+  if (tactic.focusedTactics) {
+    for (let j = 0; j < tactic.focusedTactics.length; j++) {
+      collectSemanticTokensFromTactic(
+        tactic.focusedTactics[j],
+        sourceMap,
+        blockStartLine,
+        [...path, 'focusedTactics', j],
+        tokens
+      );
+    }
   }
 }
 
@@ -834,6 +949,8 @@ function addSemanticTokenDirect(
     const length = range.start.line === range.end.line
       ? range.end.col - range.start.col
       : 1;  // Fallback for multi-line tokens
+    // Skip invalid tokens (negative/zero length can occur with malformed ranges)
+    if (length <= 0) return;
     tokens.push({
       line: range.start.line,
       column: range.start.col,
