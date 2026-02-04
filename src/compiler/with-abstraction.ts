@@ -323,3 +323,136 @@ export function replaceWithFreshVar(
 
   return replace(goal, [], 0);
 }
+
+/**
+ * Result of ill-typed abstraction detection
+ */
+export interface IllTypedAbstractionResult {
+  isIllTyped: boolean;
+  problematicVars: Array<{
+    varIndex: number;
+    varName: string;
+    varType: TTKTerm;
+  }>;
+  errorMessage?: string;
+}
+
+/**
+ * Detect whether abstracting over a scrutinee in a goal would produce an
+ * ill-typed term. This happens when a free variable V appears in the goal
+ * and V's type (from the context) mentions the scrutinee.
+ *
+ * Classic example (dependent pair projection):
+ *   snd_p : B (fst_p)   -- type mentions fst_p
+ *   Goal: H fst_p snd_p
+ *   Abstracting fst_p → w makes snd_p's type B(fst_p) ill-formed (should be B(w))
+ *
+ * @param scrutinee - The term being abstracted (typically a Var)
+ * @param goal - The goal type being abstracted over
+ * @param context - The typing context
+ * @returns Detection result with problematic variables if ill-typed
+ */
+export function detectIllTypedAbstraction(
+  scrutinee: TTKTerm,
+  goal: TTKTerm,
+  context: TTKContext
+): IllTypedAbstractionResult {
+  const n = context.length;
+
+  // Step 1: Collect all free Var indices that appear in the goal (goal-level de Bruijn)
+  const goalVars = new Set<number>();
+  collectFreeVars(goal, goalVars);
+
+  // Step 2: Get the scrutinee's goal-level de Bruijn index and context array position
+  const scrutineeGoalIdx = scrutinee.tag === 'Var' ? scrutinee.index : -1;
+  // Context is [outermost...innermost], goal-level Var(i) = context[n - 1 - i]
+  const scrutineeCtxPos = n - 1 - scrutineeGoalIdx;
+
+  // Step 3: For each variable in the goal (other than the scrutinee),
+  // check if its type (in the context) mentions the scrutinee.
+  // Types in context entries use de Bruijn indices relative to that entry's position:
+  // from context[k], variable context[j] (j < k) has local index (k - 1 - j).
+  const problematicVars: IllTypedAbstractionResult['problematicVars'] = [];
+
+  for (const goalVarIdx of goalVars) {
+    if (goalVarIdx === scrutineeGoalIdx) continue; // Skip the scrutinee itself
+
+    const varCtxPos = n - 1 - goalVarIdx;
+    if (varCtxPos < 0 || varCtxPos >= n) continue;
+
+    const entry = context[varCtxPos];
+
+    // The scrutinee must have been bound BEFORE this variable for its type to reference it
+    if (scrutineeCtxPos >= varCtxPos) continue;
+
+    // From context[varCtxPos]'s type, the scrutinee at context[scrutineeCtxPos]
+    // has local de Bruijn index (varCtxPos - 1 - scrutineeCtxPos)
+    const scrutineeLocalIdx = varCtxPos - 1 - scrutineeCtxPos;
+
+    const typeVars = new Set<number>();
+    collectFreeVars(entry.type, typeVars);
+
+    if (typeVars.has(scrutineeLocalIdx)) {
+      problematicVars.push({
+        varIndex: goalVarIdx,
+        varName: entry.name,
+        varType: entry.type
+      });
+    }
+  }
+
+  const isIllTyped = problematicVars.length > 0;
+  let errorMessage: string | undefined;
+
+  if (isIllTyped) {
+    const scrutineeName = scrutineeCtxPos >= 0 && scrutineeCtxPos < n
+      ? context[scrutineeCtxPos].name
+      : '(scrutinee)';
+    const varNames = problematicVars.map(v => v.varName).join(', ');
+    errorMessage = `Ill-typed with-abstraction: the type of ${varNames} depends on ${scrutineeName}, ` +
+      `which is being abstracted over. Consider abstracting over ${varNames} as well.`;
+  }
+
+  return { isIllTyped, problematicVars, errorMessage };
+}
+
+/**
+ * Collect all free Var indices in a term.
+ */
+function collectFreeVars(term: TTKTerm, vars: Set<number>, depth: number = 0): void {
+  switch (term.tag) {
+    case 'Var':
+      if (term.index >= depth) {
+        vars.add(term.index - depth);
+      }
+      break;
+
+    case 'App':
+      collectFreeVars(term.fn, vars, depth);
+      collectFreeVars(term.arg, vars, depth);
+      break;
+
+    case 'Binder':
+      collectFreeVars(term.domain, vars, depth);
+      collectFreeVars(term.body, vars, depth + 1);
+      break;
+
+    case 'Annot':
+      collectFreeVars(term.term, vars, depth);
+      collectFreeVars(term.type, vars, depth);
+      break;
+
+    case 'Match':
+      collectFreeVars(term.scrutinee, vars, depth);
+      break;
+
+    case 'Const':
+    case 'Sort':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+    case 'Hole':
+    case 'Meta':
+      break;
+  }
+}

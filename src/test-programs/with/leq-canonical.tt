@@ -1,0 +1,18 @@
+@test success
+@name "leqCanonical with implicit params"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+leqCanonical : {a b : Nat} -> (p q : Leq a b) -> Equal p q
+leqCanonical LeqZero LeqZero = refl
+leqCanonical (LeqSucc pleq) (LeqSucc qleq) with leqCanonical pleq qleq
+  | refl => refl

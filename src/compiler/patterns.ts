@@ -700,23 +700,11 @@ function assertPatternVarsValid(
     }
   }
 
-  // Check 2: Different names for the same de Bruijn index
-  // e.g., #0 -> [A, B] is an error, but #0 -> [A, A] is allowed
-  for (const [_varIndex, entries] of varToNames) {
-    if (entries.length > 1) {
-      const uniqueNames = [...new Set(entries.map(e => e.name))];
-      if (uniqueNames.length > 1) {
-        // Different names refer to same variable - conflict error
-        const nameList = uniqueNames.map(n => `'${n}'`).join(' and ');
-        const errorPath = entries[1].path; // Point to second occurrence
-        errors.push(TCEnvError.create(
-          `Pattern variables ${nameList} refer to the same binding; use a single consistent name`,
-          env.atIndexPath([...env.indexPath, ...errorPath])
-        ));
-      }
-      // If uniqueNames.length === 1, that's fine - same name used consistently
-    }
-  }
+  // Note: We do NOT check for different names at the same de Bruijn index.
+  // In dependent pattern matching, constructor patterns (like `refl`) can unify
+  // two previously distinct pattern variables (e.g., `p` and `q` when matching
+  // `refl : Equal a a` against `Equal p q`). Both names become valid aliases
+  // for the same binding — this is standard Agda/Lean behavior.
 
   if (errors.length > 0) {
     throw TCEnvError.group(errors)

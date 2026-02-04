@@ -4091,12 +4091,11 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
         }
       }
 
-      // Resolve scrutinee types for auxiliaries with non-variable scrutinees.
-      // This replaces Holes in the auxiliary type signatures with the actual
-      // scrutinee types inferred from the definitions available at this point.
-      // Must happen AFTER pre-registering the main type (so recursive calls work)
-      // and BEFORE processing auxiliaries (so clause checking uses correct types).
-      resolveAuxScrutineeTypes(auxiliaryDecls, definitions);
+      // NOTE: Non-variable scrutinee types (e.g., `with f x y`) are left as Holes
+      // in the auxiliary type. The type checker solves them during clause checking
+      // via unification with constructor patterns (e.g., pattern `refl` unifies
+      // the Hole with `Equal ? ?`). This avoids a lossy kernel→surface→kernel
+      // round-trip that previously existed in resolveAuxScrutineeTypes.
 
       // Process auxiliary declarations FIRST (so their types are available)
       // Note: auxiliary declarations are always term definitions (kind === 'def')
@@ -4960,10 +4959,15 @@ function resolveImplicitHoles(term: TTKTerm, auxType: TTerm | undefined): TTKTer
 
   while (current.tag === 'Binder' || current.tag === 'MultiBinder') {
     if (current.tag === 'Binder') {
-      const kernelDomain = surfaceTermToKernel(current.domain);
-      // Shift to account for the depth of this binder in the context
-      const shiftedDomain = shiftTTKVars(kernelDomain, depth);
-      varTypes.push(shiftedDomain);
+      if (current.domain) {
+        const kernelDomain = surfaceTermToKernel(current.domain);
+        // Shift to account for the depth of this binder in the context
+        const shiftedDomain = shiftTTKVars(kernelDomain, depth);
+        varTypes.push(shiftedDomain);
+      } else {
+        // Let binding without type annotation - cannot resolve holes for this var
+        varTypes.push({ tag: 'Hole', id: '_untyped' });
+      }
       current = current.body;
       depth++;
     } else {
@@ -5046,16 +5050,12 @@ function resolveAuxScrutineeTypes(
       try {
         const scrutType = inferScrutineeExprType(scrutExpr, definitions);
         if (scrutType) {
-          // The inferred type's Var indices are from the clause context, which includes
-          // all function parameters (implicit and explicit). The auxiliary has the SAME
-          // context structure (implicit params + explicit params from patterns), so NO
-          // shift is needed. However, we do need to resolve implicit argument Holes.
-
           // Resolve any implicit argument Holes by looking up variable types
           const resolvedScrutType = resolveImplicitHoles(scrutType, auxDecl.type);
 
-          // Convert kernel type to surface term and replace the hole
-          const surfaceScrutType = kernelTypeToSurface(resolvedScrutType);
+          // Convert kernel type to surface term and replace the hole.
+          // Pass definitions so implicit args are omitted in surface syntax.
+          const surfaceScrutType = kernelTypeToSurface(resolvedScrutType, definitions);
           auxDecl.type = replaceHoleInSurfaceTerm(auxDecl.type!, `_scrut${i}_type`, surfaceScrutType);
         }
       } catch (_e) {
@@ -5143,21 +5143,83 @@ function surfaceTermToKernel(t: TTerm): TTKTerm {
 }
 
 /**
+ * Look up the namedArgMap for a constant (term, inductive type, or constructor).
+ */
+function lookupNamedArgMap(name: string, definitions: DefinitionsMap): NamedArgMap | undefined {
+  // Check term definitions
+  const termDef = definitions.terms.get(name);
+  if (termDef?.namedArgMap) return termDef.namedArgMap;
+
+  // Check inductive type definitions
+  const indDef = definitions.inductiveTypes.get(name);
+  if (indDef?.namedArgMap) return indDef.namedArgMap;
+
+  // Check constructors
+  const indName = definitions.inductiveNameOfConstructor.get(name);
+  if (indName) {
+    const parentInd = definitions.inductiveTypes.get(indName);
+    if (parentInd) {
+      const ctor = parentInd.constructors.find(c => c.name === name);
+      if (ctor?.namedArgMap) return ctor.namedArgMap;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Collect an application spine: f a1 a2 ... an → { head: f, args: [a1, a2, ..., an] }
+ */
+function collectAppSpine(t: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+  const args: TTKTerm[] = [];
+  let head = t;
+  while (head.tag === 'App') {
+    args.unshift(head.arg);
+    head = head.fn;
+  }
+  return { head, args };
+}
+
+/**
  * Convert a kernel TTKTerm to a surface TTerm (structural conversion).
  * Only handles the type forms that commonly appear as scrutinee types.
+ *
+ * When definitions are provided, implicit arguments in applications are
+ * omitted so the resulting surface term can be re-elaborated correctly.
  */
-function kernelTypeToSurface(t: TTKTerm): TTerm {
+function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): TTerm {
   const prop = mkPropTT();
   switch (t.tag) {
     case 'Var': return mkVarTT(t.index);
     case 'Const': return mkConstTT(t.name);
-    case 'App': return mkAppTT(kernelTypeToSurface(t.fn), kernelTypeToSurface(t.arg));
-    case 'Sort': return { tag: 'Sort', level: kernelTypeToSurface(t.level) } as TTerm;
+    case 'App': {
+      // Check if the head is a Const with implicit args
+      if (definitions) {
+        const { head, args } = collectAppSpine(t);
+        if (head.tag === 'Const') {
+          const namedArgMap = lookupNamedArgMap(head.name, definitions);
+          if (namedArgMap && namedArgMap.size > 0) {
+            // Build a set of implicit positions
+            const implicitPositions = new Set<number>(namedArgMap.values());
+            // Omit implicit args, keep only explicit ones
+            let result: TTerm = mkConstTT(head.name);
+            for (let i = 0; i < args.length; i++) {
+              if (!implicitPositions.has(i)) {
+                result = mkAppTT(result, kernelTypeToSurface(args[i], definitions));
+              }
+            }
+            return result;
+          }
+        }
+      }
+      return mkAppTT(kernelTypeToSurface(t.fn, definitions), kernelTypeToSurface(t.arg, definitions));
+    }
+    case 'Sort': return { tag: 'Sort', level: kernelTypeToSurface(t.level, definitions) } as TTerm;
     case 'ULit': return mkULitTT(t.n);
     case 'Hole': return mkHoleTT(t.id, prop);
     case 'Binder': {
       if (t.binderKind.tag === 'BPi') {
-        return mkPiTT(kernelTypeToSurface(t.domain), kernelTypeToSurface(t.body), t.name);
+        return mkPiTT(kernelTypeToSurface(t.domain, definitions), kernelTypeToSurface(t.body, definitions), t.name);
       }
       return mkHoleTT('_unsupported_binder', prop);
     }

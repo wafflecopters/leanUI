@@ -264,7 +264,7 @@ function desugarWithClause(
   // Compute the auxiliary function type from the main declaration's type
   // The auxiliary takes: (1) bound variable args, (2) scrutinee args
   // and returns the main function's return type (with pattern reconstructions substituted)
-  const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees, useAgdaStyle);
+  const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees, useAgdaStyle, baseName);
 
   // Create the auxiliary function definition
   const auxDecl: ParsedDeclaration = {
@@ -414,11 +414,24 @@ function countSinglePatternVars(p: TPattern): number {
  *   Scrutinees: [xs]
  *   Result: {A : Type} -> List A -> List A -> Nat
  */
+/**
+ * Check if a scrutinee expression is a self-recursive call to the function being defined.
+ * Extracts the head of an application spine and checks if it's Const(declName).
+ */
+function isSelfRecursiveCall(scrut: TTerm, declName: string): boolean {
+  let head = scrut;
+  while (head.tag === 'App') {
+    head = head.fn;
+  }
+  return head.tag === 'Const' && head.name === declName;
+}
+
 function computeAuxiliaryType(
   declType: TTerm | undefined,
   functionPatterns: TPattern[],
   scrutinees: TTerm[],
-  useAgdaStyle: boolean = false
+  useAgdaStyle: boolean = false,
+  declName?: string
 ): TTerm | undefined {
   if (!declType) {
     return undefined;
@@ -450,7 +463,15 @@ function computeAuxiliaryType(
       } else {
         scrutineeTypes.push(mkHoleTT(`_scrut${i}_type`, mkPropTT()));
       }
+    } else if (declName && isSelfRecursiveCall(scrut, declName)) {
+      // For self-recursive calls (e.g., `leqCanonical pleq qleq`), use the
+      // function's own return type. This preserves the connection between the
+      // scrutinee result and the pattern variables, enabling pattern refinement
+      // (e.g., matching `refl` on `Equal p q` unifies p and q).
+      scrutineeTypes.push(binderInfo.returnType);
     } else {
+      // For other expression scrutinees (e.g., `leq x y`, `compare a b`),
+      // use a Hole. The type checker infers the type from with-clause patterns.
       scrutineeTypes.push(mkHoleTT(`_scrut${i}_type`, mkPropTT()));
     }
   }
@@ -509,6 +530,7 @@ function buildReconstructionMap(
 function collectBinderInfo(type: TTerm, numExplicitNeeded: number): {
   explicitDomains: { domain: TTerm; depth: number }[];
   totalPrefixDepth: number;
+  returnType: TTerm;
 } {
   const explicitDomains: { domain: TTerm; depth: number }[] = [];
   let current = type;
@@ -539,7 +561,7 @@ function collectBinderInfo(type: TTerm, numExplicitNeeded: number): {
     }
   }
 
-  return { explicitDomains, totalPrefixDepth: depth };
+  return { explicitDomains, totalPrefixDepth: depth, returnType: current };
 }
 
 /**

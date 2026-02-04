@@ -1,0 +1,15 @@
+@test success
+@name "leqCanonical with implicit params and with-clause"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+leqCanonical : {a b : Nat} -> (p q : Leq a b) -> Equal p q
+leqCanonical LeqZero (LeqSucc leq) = #absurd
+leqCanonical (LeqSucc leq) LeqZero = #absurd
+leqCanonical LeqZero LeqZero = refl
+leqCanonical (LeqSucc pleq) (LeqSucc qleq) with leqCanonical pleq qleq
+  | refl => refl

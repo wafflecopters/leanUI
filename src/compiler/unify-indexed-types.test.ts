@@ -46,7 +46,9 @@ describe('Indexed Type Unification', () => {
   });
 
   describe('Impossible Patterns - Should FAIL', () => {
-    test('REJECT: sym A x y (refl _ _) - impossible pattern with distinct variables', () => {
+    test('ACCEPT: sym A x y (refl _ _) - refl unifies x and y (Agda-style)', () => {
+      // In Agda-style dependent pattern matching, matching on `refl` forces x=y.
+      // Both x and y become aliases for the same binding. This is valid.
       const source = `${EQUAL_DEF}
 
 sym : (A : Type) -> (x : A) -> (y : A) -> Equal A x y -> Equal A y x
@@ -54,7 +56,7 @@ sym A x y (refl _ _) = refl _ _`;
 
       const result = compileAndCheck(source);
 
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
     // This test is about whether pattern matching should implicitly unify indices.

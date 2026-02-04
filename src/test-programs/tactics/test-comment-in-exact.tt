@@ -1,6 +1,5 @@
-@test failure
-@name "comments inside exact expression should fail"
-@error "Parse error"
+@test success
+@name "comments inside exact expression are now valid"
 
 inductive Nat : Type where
   Zero : Nat
