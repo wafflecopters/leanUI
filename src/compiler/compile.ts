@@ -1691,7 +1691,15 @@ function elaborateTacticBlock(
     const result = tactic.apply(engine, goal, goalId);
 
     if (!result.success) {
-      throw new Error(`Tactic '${tactic.name}' failed: ${result.error}`);
+      // Create TCEnvError with tactic's indexPath for accurate error positioning
+      const errorMsg = `Tactic '${tactic.name}' failed: ${result.error}`;
+      if (cmd.indexPath) {
+        // Create a temporary env with the tactic's indexPath for error location
+        const tacticEnv = createTCEnv({ definitions, indexPath: cmd.indexPath, options: { mode: 'check' } });
+        throw TCEnvError.create(errorMsg, tacticEnv);
+      } else {
+        throw new Error(errorMsg);
+      }
     }
 
     engine = result.newEngine;
@@ -1781,7 +1789,13 @@ function elaborateTacticBlock(
           const branchResult = branchTacticObj.apply(engine, branchGoal, branchGoalId2);
 
           if (!branchResult.success) {
-            throw new Error(`Structured cases (${branch.constructor}): tactic '${branchTactic.name}' failed: ${branchResult.error}`);
+            const errorMsg = `Structured cases (${branch.constructor}): tactic '${branchTactic.name}' failed: ${branchResult.error}`;
+            if (branchTactic.indexPath) {
+              const tacticEnv = createTCEnv({ definitions, indexPath: branchTactic.indexPath, options: { mode: 'check' } });
+              throw TCEnvError.create(errorMsg, tacticEnv);
+            } else {
+              throw new Error(errorMsg);
+            }
           }
 
           engine = branchResult.newEngine;
@@ -1856,7 +1870,13 @@ function elaborateTacticBlock(
                 const nestedTacticObj = tacticCommandToTactic({ name: nestedTactic.name, args: nestedElabArgs });
                 const nestedResult = nestedTacticObj.apply(engine, nestedGoal, nestedGoalId2);
                 if (!nestedResult.success) {
-                  throw new Error(`Structured cases (${nestedBranch.constructor}): tactic '${nestedTactic.name}' failed: ${nestedResult.error}`);
+                  const errorMsg = `Structured cases (${nestedBranch.constructor}): tactic '${nestedTactic.name}' failed: ${nestedResult.error}`;
+                  if (nestedTactic.indexPath) {
+                    const tacticEnv = createTCEnv({ definitions, indexPath: nestedTactic.indexPath, options: { mode: 'check' } });
+                    throw TCEnvError.create(errorMsg, tacticEnv);
+                  } else {
+                    throw new Error(errorMsg);
+                  }
                 }
                 engine = nestedResult.newEngine;
               }
@@ -2791,7 +2811,12 @@ function checkTermDeclaration(
             [] // Empty context for top-level definitions
           );
         } catch (e) {
-          // Convert tactic errors to TCEnvErrors with proper location
+          // If error already has proper location info (TCEnvError), re-throw it
+          // This preserves the specific tactic indexPath set by elaborateTacticBlock
+          if (e instanceof TCEnvError) {
+            throw e;
+          }
+          // Otherwise convert generic errors to TCEnvErrors
           const errorMsg = e instanceof Error ? e.message : String(e);
           throw TCEnvError.create(errorMsg, termEnv);
         }

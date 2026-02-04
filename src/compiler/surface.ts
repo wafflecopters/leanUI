@@ -21,6 +21,8 @@
  *     n                                  -- value being inducted on
  */
 
+import type { IndexPath } from '../types/source-position.js';
+
 // ============================================================================
 // Universe Levels (Term-based representation)
 // ============================================================================
@@ -291,6 +293,7 @@ export interface TacticCommand {
   args: TTerm[];      // Arguments (can be identifiers as Const, or full terms)
   caseBranches?: CaseBranch[]; // Optional: for structured cases syntax
   focusedTactics?: TacticCommand[]; // Optional: for bullet syntax (subgoal focusing)
+  indexPath?: IndexPath; // Optional: source position for error reporting
 }
 
 /**

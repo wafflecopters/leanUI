@@ -3412,7 +3412,8 @@ export class Parser {
       return {
         name: 'focus',
         args: [],
-        focusedTactics
+        focusedTactics,
+        indexPath: path
       };
     }
 
@@ -3453,7 +3454,8 @@ export class Parser {
 
         return {
           name: tacticName,
-          args: [mkConstTT(argName)]
+          args: [mkConstTT(argName)],
+          indexPath: path
         };
       }
 
@@ -3476,7 +3478,8 @@ export class Parser {
 
         return {
           name: tacticName,
-          args
+          args,
+          indexPath: path
         };
       }
 
@@ -3491,7 +3494,8 @@ export class Parser {
 
         return {
           name: tacticName,
-          args: [termArg]
+          args: [termArg],
+          indexPath: path
         };
       }
 
@@ -3501,7 +3505,8 @@ export class Parser {
         // No arguments
         return {
           name: tacticName,
-          args: []
+          args: [],
+          indexPath: path
         };
       }
 
@@ -3648,14 +3653,16 @@ export class Parser {
           return {
             name: tacticName,
             args: [mkConstTT(argName)],
-            caseBranches
+            caseBranches,
+            indexPath: path
           };
         }
 
         // No 'with' clause - simple cases
         return {
           name: tacticName,
-          args: [mkConstTT(argName)]
+          args: [mkConstTT(argName)],
+          indexPath: path
         };
       }
 
@@ -3688,7 +3695,8 @@ export class Parser {
 
         return {
           name: tacticName,
-          args: [mkConstTT(hypName), hypType, hypProof]
+          args: [mkConstTT(hypName), hypType, hypProof],
+          indexPath: path
         };
       }
 
