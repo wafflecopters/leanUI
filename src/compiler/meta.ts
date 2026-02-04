@@ -626,8 +626,7 @@ export function solveConstraints(
         // After normalization, both solution and resolvedRhs are at effectiveContext depth.
         // Skip this check if the RHS contains unsolved metas — stuck terms can't be
         // reduced to WHNF, so head comparisons may give false positives.
-        if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)
-            && areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
+        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
           const names = effectiveContext.map(c => c.name).reverse();
           const metaTypeStr = prettyPrint(meta.type, names);
           throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
