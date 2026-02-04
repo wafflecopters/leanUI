@@ -141,7 +141,7 @@ leqCanonical (LeqSucc pleq) (LeqSucc qleq) with leqCanonical pleq qleq
     // Now check if it compiles successfully
     if (!auxDecl.checkSuccess) {
       console.log('\n=== Compilation errors ===');
-      console.log(auxDecl.checkErrors.map(e => e.message).join('\n'));
+      console.log(auxDecl.checkErrors.map((e: any) => e.message).join('\n'));
     }
     expect(auxDecl.checkSuccess).toBe(true);
   });

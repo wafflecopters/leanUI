@@ -1,0 +1,45 @@
+@test success
+@name "plusComm via tactics: trans chains with congSucc and sym"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
+
+-- plusComm n m: plus n m = plus m n
+-- Base: plus Zero m = m = plus m Zero (by sym plusZeroRight)
+-- Step: Succ (plus n m) = Succ (plus m n) = plus m (Succ n)
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n) := by
+  intro n
+  induction n with
+  | Zero =>
+    intro m
+    apply sym
+    exact (plusZeroRight m)
+  | Succ n' IH =>
+    intro m
+    apply trans
+    apply congSucc
+    exact (IH m)
+    apply sym
+    exact (plusSuccRight m n')

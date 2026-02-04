@@ -1,0 +1,21 @@
+@test success
+@name "transitivity chain: a=b -> b=c -> c=d -> a=d"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+-- Pure test of apply with trans: chains three equalities
+transChain : {A : Type} -> {a b c d : A} -> Equal a b -> Equal b c -> Equal c d -> Equal a d := by
+  intros A a b c d ab bc cd
+  apply trans
+  exact ab
+  apply trans
+  exact bc
+  exact cd

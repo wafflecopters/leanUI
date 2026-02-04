@@ -1,0 +1,20 @@
+@test success
+@name "sym+trans: a=b -> c=b -> a=c"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+-- Test combining sym and trans: requires correct implicit instantiation
+symTrans : {A : Type} -> {a b c : A} -> Equal a b -> Equal c b -> Equal a c := by
+  intros A a b c ab cb
+  apply trans
+  exact ab
+  apply sym
+  exact cb

@@ -1,0 +1,26 @@
+@test success
+@name "plusAssoc via tactics: simple induction with congSucc"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- plus (plus n m) p = plus n (plus m p)
+-- Induction on n, intro m p in each branch
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p
+    exact refl
+  | Succ n' IH =>
+    intros m p
+    apply congSucc
+    exact (IH m p)
