@@ -1,5 +1,5 @@
 @test success
-@name "doubleSum with best-practice tactics (readable)"
+@name "doubleSum with best-practice tactics proof"
 @import preambles/nat.tt
 
 inductive Equal : {A : Type} -> A -> A -> Type where
@@ -57,40 +57,28 @@ sum Zero = Zero
 sum (Succ n) = plus (Succ n) (sum n)
 
 -- Theorem: 2 * sum(n) = n * (n + 1)
--- Proof using best-practice tactics with clear structure and comments
+-- Best-practice: use 'apply' for proof combinators, 'exact' for lemmas with args
+-- This is as incremental as we can get without a calc mode or better rewrite
 doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
   intro n
   induction n with
   | Zero =>
-    -- Base case: 2*sum(0) = 0*1 = 0
     exact refl
   | Succ n' IH =>
-    -- Inductive case: prove 2*sum(n'+1) = (n'+1)*(n'+2)
-    -- LHS: 2*sum(n'+1) = 2*((n'+1) + sum(n'))
-    --                   = (n'+1) + sum(n') + (n'+1) + sum(n')
-    -- Step 1: Reassociate to group terms helpfully
-    -- (n'+1) + sum(n') + (n'+1) + sum(n') = (n'+1) + (sum(n') + (n'+1) + sum(n'))
+    -- Goal: (n'+1) + sum(n') + (n'+1) + sum(n') = (n'+1) * (n'+2)
+    -- Strategy: reassociate, commute, apply IH, simplify
     apply trans
     exact (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
-    -- Step 2: Commute inside the parentheses
-    -- sum(n') + (n'+1) + sum(n') = (n'+1) + sum(n') + sum(n')
     apply trans
     apply congPlusRight
     exact (plusLeftComm (sum n') (Succ n') (sum n'))
-    -- Step 3: Apply induction hypothesis to 2*sum(n')
-    -- (n'+1) + (n'+1) + 2*sum(n') = (n'+1) + (n'+1) + n'*(n'+1)
     apply trans
     apply congPlusRight
     apply congPlusRight
     exact IH
-    -- Step 4: Arithmetic simplification
-    -- (n'+1) + (n'+1) + n'*(n'+1) = (n'+2) + (n' + n'*(n'+1))
     apply trans
     apply congSucc
     exact (plusSuccRight n' (plus n' (mul n' (Succ n'))))
-    -- Step 5: Rewrite multiplication to match RHS
-    -- (n'+2) + (n' + n'*(n'+1)) = (n'+2) + n'*(n'+2)
-    -- using: n'*(n'+2) = n' + n'*(n'+1)
     apply congPlusRight
     apply sym
     exact (mulSuccRight n' (Succ n'))

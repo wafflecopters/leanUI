@@ -184,6 +184,97 @@ Requires: `Empty` type, nested cases, and ability to construct contradiction pro
 
 ---
 
+## Best Practices
+
+### Current System Capabilities
+
+The tactics system supports **incremental proof construction** using `apply` for proof combinators and `exact` for lemmas. This is best-practice for readable, maintainable proofs.
+
+### Example: Equational Reasoning
+
+From [semiring-tactics.tt](src/test-programs/nat-semiring/semiring-tactics.tt):
+
+```
+mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul n p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p
+    exact refl
+  | Succ n' IH =>
+    intros m p
+    -- mul (Succ n') (m + p) = (m + p) + mul n' (m + p)
+    --                       = (m + p) + (mul n' m + mul n' p)       [by IH]
+    --                       = m + (p + (mul n' m + mul n' p))       [by plusAssoc]
+    --                       = m + (mul n' m + (p + mul n' p))       [by plusLeftComm]
+    --                       = (m + mul n' m) + (p + mul n' p)       [by plusAssoc]
+    apply trans
+    apply congPlusRight
+    exact (IH m p)
+    apply trans
+    exact (plusAssoc m p (plus (mul n' m) (mul n' p)))
+    apply trans
+    apply congPlusRight
+    exact (plusLeftComm p (mul n' m) (mul n' p))
+    apply sym
+    exact (plusAssoc m (mul n' m) (plus p (mul n' p)))
+```
+
+**Key techniques:**
+- Comments show the mathematical equality chain
+- `apply trans` builds the chain incrementally (creates 2 subgoals each time)
+- `apply congPlusRight` / `apply sym` decompose proof structure
+- `exact (lemma args)` instantiates lemmas with their required arguments
+- No blank lines between tactics in a branch (parser requirement)
+
+### Example: Induction with Equational Steps
+
+From [doublesum-best-practice.tt](src/test-programs/tactics/doublesum-best-practice.tt):
+
+```
+doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
+  intro n
+  induction n with
+  | Zero =>
+    exact refl
+  | Succ n' IH =>
+    -- Goal: (n'+1) + sum(n') + (n'+1) + sum(n') = (n'+1) * (n'+2)
+    -- Strategy: reassociate, commute, apply IH, simplify
+    apply trans
+    exact (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
+    apply trans
+    apply congPlusRight
+    exact (plusLeftComm (sum n') (Succ n') (sum n'))
+    apply trans
+    apply congPlusRight
+    apply congPlusRight
+    exact IH
+    apply trans
+    apply congSucc
+    exact (plusSuccRight n' (plus n' (mul n' (Succ n'))))
+    apply congPlusRight
+    apply sym
+    exact (mulSuccRight n' (Succ n'))
+```
+
+### What Makes This "Best Practice"?
+
+✅ **Each tactic is one logical step** - easy to understand what's happening
+✅ **Comments explain the math** - not just tactic mechanics
+✅ **Incremental construction** - `apply trans` chains equalities step-by-step
+✅ **Clear structure** - if a step fails, you know exactly which one
+✅ **Maintainable** - changes to one step don't affect others
+
+### Limitations of Current System
+
+The `exact (lemma arg1 arg2 ...)` pattern may look like "big terms," but they're just **lemma instantiations** - the smallest possible proof step for that equality. To be more incremental (avoiding arguments in `exact`), we'd need:
+
+1. **`calc` mode** - Lean-style equational reasoning syntax
+2. **Better `rewrite`** - automatic subterm rewriting
+3. **Implicit inference in `apply`** - so `apply plusAssoc` works without args
+
+---
+
 ## Known Issues & Limitations
 
 ### Soundness
@@ -194,11 +285,17 @@ Requires: `Empty` type, nested cases, and ability to construct contradiction pro
 
 ### Implementation Gaps
 
-- **No multiple tactics per branch**: Each `| Ctor => ` branch supports one tactic (which can itself be a nested `cases ... with`). Multi-tactic branches like `| Succ m => rewrite h; exact refl` aren't supported yet.
+- **No `calc` mode**: Equational reasoning requires manual `apply trans` chains. A `calc` block (like Lean 4) would make equality proofs more readable.
+
+- **Limited `rewrite`**: The rewrite tactic exists but needs improvement - can't rewrite in hypotheses, can't chain rewrites, limited subterm matching.
 
 - **No `have` tactic**: Can't introduce intermediate lemmas within a tactic proof.
 
 - **No `refine` tactic**: Can't provide a partial term with holes.
+
+- **No `simp` tactic**: No simplification with a lemma database.
+
+- **Implicit arguments in `apply`**: When using `apply lemma`, you must provide all arguments explicitly. Better unification would allow `apply lemma` to infer arguments from the goal.
 
 - **No tactic combinators**: No `try`, `repeat`, `<;>`, or `<|>` for tactic composition.
 
@@ -218,29 +315,81 @@ Requires: `Empty` type, nested cases, and ability to construct contradiction pro
 
 ## Future Tactics Roadmap
 
-### Near-term
+### Priority 1: Readability (Biggest Impact)
 
-- [ ] Multi-tactic branches: `| Succ m => rewrite h; exact refl`
-- [ ] `have` tactic: introduce intermediate lemmas
-- [ ] `refine` tactic: exact with holes
-- [ ] `revert` tactic: opposite of intro
-- [ ] Add Match case to `checkType` for end-to-end validation
-- [ ] Fix induction tactic motive construction
+These features would make proofs dramatically more readable and are commonly needed:
 
-### Medium-term
+1. **`calc` mode** - Structured equational reasoning (like Lean 4's calc)
+   ```
+   calc a + b + c
+       = a + (b + c)  := plusAssoc a b c
+     _ = (b + c) + a  := plusComm a (b + c)
+     _ = b + (c + a)  := plusAssoc b c a
+   ```
+   **Impact**: Eliminates manual `apply trans` chains, shows equality steps clearly
 
-- [ ] Tactic combinators: `try`, `repeat`, `<;>`, `<|>`
-- [ ] Wire InfoTree into IDE hover/cursor system
-- [ ] Syntax highlighting for tactic blocks
-- [ ] Goal display panel in IDE
-- [ ] Better error messages with goal context
+2. **Better `rewrite` tactic** - Chain rewrites, rewrite in hypotheses
+   ```
+   rewrite h1         -- rewrite using h1
+   rewrite h2 at h3   -- rewrite in hypothesis h3
+   rewrite [h1, h2]   -- chain multiple rewrites
+   ```
+   **Impact**: More direct proof style, less manual transitivity
 
-### Long-term
+3. **`have` tactic** - Introduce intermediate lemmas
+   ```
+   have h : x = y
+     apply lemma1
+     exact proof
+   rewrite h
+   ```
+   **Impact**: Break complex proofs into named steps
 
-- [ ] Tactic macros (user-defined tactics)
-- [ ] Decision procedures (omega/lia)
-- [ ] Auto tactic (simple proof search)
-- [ ] `simp` tactic (simplification with lemma set)
+### Priority 2: Usability
+
+4. **Implicit argument inference in `apply`** - Let tactics infer arguments
+   ```
+   apply plusAssoc  -- instead of: exact (plusAssoc a b c)
+   ```
+   **Impact**: More concise, matches Lean/Coq style
+
+5. **`simp` tactic** - Simplification with lemma database
+   ```
+   simp [plusZero, mulOne, plusComm]
+   ```
+   **Impact**: Automate repetitive simplification steps
+
+6. **Better error messages** - Show goal state when tactics fail
+   **Impact**: Easier debugging
+
+### Priority 3: Soundness & Completeness
+
+7. **Add Match case to `checkType`** - End-to-end validation
+   **Impact**: Close soundness gap, verify tactic-generated proofs
+
+8. **Fix induction tactic motive construction** - Handle complex motives correctly
+   **Impact**: More reliable induction proofs
+
+### Priority 4: Advanced Features
+
+9. **Tactic combinators** - `try`, `repeat`, `<;>`, `<|>`
+   **Impact**: Compose tactics, handle optional steps
+
+10. **Decision procedures** - `omega` for linear arithmetic, `lia` for integer arithmetic
+    **Impact**: Automate numeric proofs
+
+11. **Tactic macros** - User-defined tactics
+    **Impact**: Domain-specific proof automation
+
+12. **Auto tactic** - Simple proof search
+    **Impact**: Automate trivial proofs
+
+### Priority 5: IDE Integration
+
+- Goal display panel in IDE
+- Wire InfoTree into hover/cursor system
+- Syntax highlighting for tactic blocks
+- Live goal state updates as you type
 
 ---
 

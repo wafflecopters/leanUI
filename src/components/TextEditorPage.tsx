@@ -679,10 +679,15 @@ plusComm : (n m : Nat) -> Equal (plus n m) (plus m n) := by
   induction n with
   | Zero =>
     intro m
-    exact (sym (plusZeroRight m))
+    apply sym
+    exact (plusZeroRight m)
   | Succ n' IH =>
     intro m
-    exact (trans (congSucc (IH m)) (sym (plusSuccRight m n')))
+    apply trans
+    apply congSucc
+    exact (IH m)
+    apply sym
+    exact (plusSuccRight m n')
 
 plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p)) := by
   intros m n p
@@ -778,21 +783,28 @@ sum Zero = Zero
 sum (Succ n) = plus (Succ n) (sum n)
 
 -- Triangle sum proof: 2 * sum(1..n) = n * (n + 1)
--- 5-step equational chain (formatted for readability)
+-- Best-practice: incremental proof with apply/exact, not nested terms
 doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
   intro n
   induction n with
   | Zero => exact refl
   | Succ n' IH =>
-    exact (trans
-      (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
-      (trans
-        (congPlusRight (Succ n') (plusLeftComm (sum n') (Succ n') (sum n')))
-        (trans
-          (congPlusRight (Succ n') (congPlusRight (Succ n') IH))
-          (trans
-            (congSucc (plusSuccRight n' (plus n' (mul n' (Succ n')))))
-            (congPlusRight (Succ (Succ n')) (sym (mulSuccRight n' (Succ n'))))))))
+    -- Goal: (n'+1) + sum(n') + (n'+1) + sum(n') = (n'+1) * (n'+2)
+    apply trans
+    exact (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
+    apply trans
+    apply congPlusRight
+    exact (plusLeftComm (sum n') (Succ n') (sum n'))
+    apply trans
+    apply congPlusRight
+    apply congPlusRight
+    exact IH
+    apply trans
+    apply congSucc
+    exact (plusSuccRight n' (plus n' (mul n' (Succ n'))))
+    apply congPlusRight
+    apply sym
+    exact (mulSuccRight n' (Succ n'))
 
 ------------------------------------------------------------
 -- Leq: ordering on Nat
