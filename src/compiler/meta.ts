@@ -1,8 +1,221 @@
 import { TTKTerm, TTKPattern, levelsEqual, prettyPrint, mkLSucc, isDefinitionallyEqual } from "./kernel";
-import { shiftTerm, minFreeVarIndex } from "./subst";
+import { shiftTerm, minFreeVarIndex, subst } from "./subst";
 import { Constraint, DefinitionsMap, MetaVar, TTKContext } from "./term";
 import { unifyTerms } from "./unify";
 import { whnf } from "./whnf";
+
+/**
+ * Check if a term contains any unsolved meta variables.
+ * Used to avoid false "implicit argument conflict" errors when unification
+ * fails because a term is stuck on unsolved metas (e.g., `plus ?m ?n` can't
+ * reduce to WHNF, making it incomparable with `Succ(...)`).
+ */
+function containsUnsolvedMeta(term: TTKTerm, metaVars: Map<string, MetaVar>): boolean {
+  switch (term.tag) {
+    case 'Meta': {
+      const meta = metaVars.get(term.id);
+      if (!meta?.solution) return true;
+      return containsUnsolvedMeta(meta.solution, metaVars);
+    }
+    case 'App':
+      return containsUnsolvedMeta(term.fn, metaVars) || containsUnsolvedMeta(term.arg, metaVars);
+    case 'Binder':
+      return containsUnsolvedMeta(term.domain, metaVars) || containsUnsolvedMeta(term.body, metaVars);
+    case 'Annot':
+      return containsUnsolvedMeta(term.term, metaVars) || containsUnsolvedMeta(term.type, metaVars);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Extract the head constructor name from a term in WHNF.
+ * E.g., App(App(Const("Equal"), Nat), Succ(x)) → head is "Equal" if fully applied,
+ * but App(Const("Succ"), x) → head is "Succ".
+ */
+function getHeadConst(term: TTKTerm): string | null {
+  let t = term;
+  while (t.tag === 'App') t = t.fn;
+  return t.tag === 'Const' ? t.name : null;
+}
+
+/**
+ * Case inversion: when we need `solution = rhs` but unification fails because
+ * rhs is a stuck function application (e.g., `plus ?m ?n`) while solution is
+ * a constructor (e.g., `Succ X`), try to WHNF the rhs and match the stuck
+ * Match's clauses against the solution's constructor.
+ *
+ * E.g., `Succ(?43) = plus(?47, ?45)`:
+ *   1. WHNF `plus(?47, ?45)` → `match ?47 { Zero → ?45; Succ n' → Succ(plus n' ?45) }`
+ *   2. Solution head is "Succ" → find clause with PCtor("Succ", ...)
+ *   3. Clause RHS is `Succ(plus Var(0) ?45)` (Var(0) is pattern-bound n')
+ *   4. Create fresh meta ?k for Var(0), substitute: `Succ(plus ?k ?45)`
+ *   5. Unify `Succ(?43)` with `Succ(plus ?k ?45)` → `?43 := plus ?k ?45`
+ *   6. Assign scrutinee: `?47 := Succ(?k)`
+ *
+ * Returns sub-constraints if successful, null if inversion is not applicable.
+ */
+function tryCaseInversion(
+  solution: TTKTerm,
+  rhs: TTKTerm,
+  definitions: DefinitionsMap | undefined,
+  metaVars: Map<string, MetaVar>,
+  context: TTKContext
+): { constraints: Array<{ meta: string; rhs: TTKTerm }> } | null {
+  if (!definitions) return null;
+
+  // Get the head constructor of the solution
+  const solutionHead = getHeadConst(solution);
+  if (!solutionHead) return null;
+
+  // WHNF the rhs to see if it becomes a stuck Match (possibly under App spine)
+  const rhsWhnf = whnf(rhs, { definitions });
+
+  // Extract the Match node and any extra args applied to it.
+  // WHNF of `plus ?m ?n` may be `App(App(Match(scrutinee, clauses), arg1), arg2)`
+  // because `plus` is defined by matching on its first arg, and the second arg
+  // is passed through as an extra argument to the match result.
+  let matchNode: TTKTerm = rhsWhnf;
+  const extraArgs: TTKTerm[] = [];
+  while (matchNode.tag === 'App') {
+    extraArgs.push(matchNode.arg);
+    matchNode = matchNode.fn;
+  }
+  extraArgs.reverse(); // collected in reverse order
+
+  if (matchNode.tag !== 'Match') return null;
+
+  // Determine the actual scrutinee.
+  // When the Match comes from a function definition, the scrutinee is a Hole placeholder
+  // and the real scrutinee is the first extra arg (e.g., `App(Match(Hole, clauses), arg1)`).
+  let actualScrutinee: TTKTerm;
+  let matchArgs: TTKTerm[]; // extra args to apply to clause RHS after matching
+  if (matchNode.scrutinee.tag === 'Hole' && extraArgs.length > 0) {
+    actualScrutinee = extraArgs[0];
+    matchArgs = extraArgs.slice(1);
+  } else {
+    actualScrutinee = matchNode.scrutinee;
+    matchArgs = extraArgs;
+  }
+
+  // Check if the actual scrutinee is a Meta (stuck)
+  if (actualScrutinee.tag !== 'Meta') return null;
+  const scrutineeMeta = actualScrutinee.id;
+
+  // Check that this meta is unsolved
+  const scrutineeMetaVar = metaVars.get(scrutineeMeta);
+  if (scrutineeMetaVar?.solution) return null;
+
+  // Find the clause whose pattern head matches the solution's constructor.
+  // Clauses may have multiple patterns (e.g., `plus Zero m = m` has patterns
+  // [PCtor("Zero"), PVar("m")]). The first pattern matches the scrutinee; the
+  // remaining patterns match subsequent args from matchArgs.
+  for (const clause of matchNode.clauses) {
+    if (clause.patterns.length < 1) continue;
+    const pat = clause.patterns[0];
+    if (pat.tag !== 'PCtor' || pat.name !== solutionHead) continue;
+
+    // Count ALL pattern-bound variables across all patterns in this clause.
+    const countPatVars = (p: TTKPattern): number => {
+      if (p.tag === 'PVar') return 1;
+      if (p.tag === 'PCtor') return p.args.reduce((sum, a) => sum + countPatVars(a), 0);
+      return 0; // PWild
+    };
+    const totalPatVars = clause.patterns.reduce((sum, p) => sum + countPatVars(p), 0);
+    const scrutineePatVars = countPatVars(pat);
+
+    // Create fresh metas for ALL pattern-bound variables.
+    const freshMetas: string[] = [];
+    const newConstraints: Array<{ meta: string; rhs: TTKTerm }> = [];
+
+    for (let i = 0; i < totalPatVars; i++) {
+      const freshId = `?case_inv_${scrutineeMeta}_${i}`;
+      freshMetas.push(freshId);
+      if (!metaVars.has(freshId)) {
+        metaVars.set(freshId, {
+          ctx: context,
+          type: { tag: 'Hole', id: `${freshId}_type` },
+          solution: undefined
+        });
+      }
+    }
+
+    // Substitute fresh metas for ALL pattern-bound variables in the clause RHS.
+    // Pattern vars are bound at indices 0..totalPatVars-1 (innermost first).
+    let clauseRhs = clause.rhs;
+    for (let i = totalPatVars - 1; i >= 0; i--) {
+      clauseRhs = subst(i, { tag: 'Meta', id: freshMetas[i] }, clauseRhs);
+    }
+
+    // Apply remaining matchArgs (those not consumed by clause patterns) to the RHS.
+    // For multi-pattern clauses, some matchArgs are consumed by patterns 1..N,
+    // and their bindings were already substituted. The remaining are extra args.
+    const consumedByPatterns = clause.patterns.length - 1; // patterns[0] is the scrutinee
+    for (let ai = consumedByPatterns; ai < matchArgs.length; ai++) {
+      let substArg = matchArgs[ai];
+      for (let i = totalPatVars - 1; i >= 0; i--) {
+        substArg = subst(i, { tag: 'Meta', id: freshMetas[i] }, substArg);
+      }
+      clauseRhs = { tag: 'App', fn: clauseRhs, arg: substArg };
+    }
+
+    // For patterns after the first (patterns[1..N]), we need to constrain the
+    // corresponding matchArgs to match those patterns. For PVar patterns, add
+    // a constraint equating the fresh meta with the matchArg.
+    let patVarIdx = scrutineePatVars; // start after scrutinee pattern vars
+    for (let pi = 1; pi < clause.patterns.length && (pi - 1) < matchArgs.length; pi++) {
+      const argPat = clause.patterns[pi];
+      if (argPat.tag === 'PVar') {
+        // This pattern binds a variable — constrain the fresh meta to equal the arg
+        newConstraints.push({ meta: freshMetas[patVarIdx], rhs: matchArgs[pi - 1] });
+        patVarIdx++;
+      } else if (argPat.tag === 'PWild') {
+        // No binding, skip
+      } else {
+        // PCtor in non-scrutinee position — too complex for now
+        return null;
+      }
+    }
+
+    // Unify the substituted clause RHS with the solution
+    const unifyResult = unifyTerms(solution, clauseRhs, {
+      mode: 'pattern',
+      flexibleVars: true,
+      definitions: undefined, // structural first
+    });
+
+    if (!unifyResult.success) {
+      // Try with definitions
+      const unifyResult2 = unifyTerms(solution, clauseRhs, {
+        mode: 'pattern',
+        flexibleVars: true,
+        definitions,
+      });
+      if (!unifyResult2.success) return null;
+      for (const mc of unifyResult2.metaConstraints) {
+        newConstraints.push(mc);
+      }
+    } else {
+      for (const mc of unifyResult.metaConstraints) {
+        newConstraints.push(mc);
+      }
+    }
+
+    // Build the constructor term for the scrutinee: Succ(?k) etc.
+    // Only use the fresh metas for the scrutinee pattern's args (not other patterns' vars).
+    let scrutineeSolution: TTKTerm = { tag: 'Const', name: solutionHead };
+    for (let i = 0; i < scrutineePatVars; i++) {
+      scrutineeSolution = { tag: 'App', fn: scrutineeSolution, arg: { tag: 'Meta', id: freshMetas[i] } };
+    }
+
+    // Add constraint to assign the scrutinee meta
+    newConstraints.push({ meta: scrutineeMeta, rhs: scrutineeSolution });
+
+    return { constraints: newConstraints };
+  }
+
+  return null;
+}
 
 /**
  * Checks if two terms are DEFINITELY incompatible (cannot possibly be unified).
@@ -308,11 +521,15 @@ export function solveConstraints(
 
   // Use a queue so forwarded constraints can be processed in the same pass
   const queue = [...constraints];
-  let fuel = queue.length * 3; // Prevent infinite loops from cyclic meta chains
+  // Fuel prevents infinite loops from cyclic meta chains.
+  // Use a generous multiplier because structural unification decomposition
+  // can generate sub-constraints that need processing in the same pass.
+  let fuel = Math.max(queue.length * 10, 50);
   while (queue.length > 0 && fuel-- > 0) {
     const constraint = queue.shift()!;
     const meta = newMetaVars.get(constraint.meta);
 
+    // DEBUG: trace specific metas
     // Skip constraints for metas that don't exist in the map.
     // This happens when unification creates constraints for unelaborated Holes
     // (with names like 'hole:f_type') which haven't been converted to Metas yet.
@@ -347,20 +564,35 @@ export function solveConstraints(
           const metaTypeStr = prettyPrint(meta.type, names);
           throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
         }
-        // Try unification — may detect conflicts even when normalization can't shift
-        const unifyResult = unifyTerms(meta.solution, resolvedRhs, {
+        // Try unification — may detect conflicts even when normalization can't shift.
+        // Try structural first (no definitions), fall back to full unification.
+        let unifyResult = unifyTerms(meta.solution, resolvedRhs, {
           mode: 'pattern',
           flexibleVars: true,
-          definitions,
+          definitions: undefined,
         });
         if (!unifyResult.success) {
-          const names = effectiveContext.map(c => c.name).reverse();
-          const metaTypeStr = prettyPrint(meta.type, names);
-          throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
+          unifyResult = unifyTerms(meta.solution, resolvedRhs, {
+            mode: 'pattern',
+            flexibleVars: true,
+            definitions,
+          });
         }
-        // Queue propagated sub-constraints from unification
-        for (const mc of unifyResult.metaConstraints) {
-          queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+        if (!unifyResult.success) {
+          // Don't throw if the RHS contains unsolved metas — the term may be stuck
+          // (e.g., `plus ?m ?n` can't reduce to WHNF, making it incomparable with
+          // `Succ(...)` even though `?m = Succ(k)` would make them equal).
+          // Defer the constraint instead.
+          if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)) {
+            const names = effectiveContext.map(c => c.name).reverse();
+            const metaTypeStr = prettyPrint(meta.type, names);
+            throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
+          }
+        } else {
+          // Queue propagated sub-constraints from unification
+          for (const mc of unifyResult.metaConstraints) {
+            queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+          }
         }
       }
       stillStuck.push(constraint);
@@ -392,7 +624,10 @@ export function solveConstraints(
         // Check for definite structural conflicts (constructor head mismatches
         // or context-verified Var differences).
         // After normalization, both solution and resolvedRhs are at effectiveContext depth.
-        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
+        // Skip this check if the RHS contains unsolved metas — stuck terms can't be
+        // reduced to WHNF, so head comparisons may give false positives.
+        if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)
+            && areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
           const names = effectiveContext.map(c => c.name).reverse();
           const metaTypeStr = prettyPrint(meta.type, names);
           throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
@@ -457,21 +692,52 @@ export function solveConstraints(
         // Use pattern mode unification for meta decomposition and propagation.
         // E.g., if solution is Succ(?m) and rhs is Succ(x), this creates ?m := x.
         // Both sides are at effectiveContext depth after normalization.
-        const unifyResult = unifyTerms(meta.solution, resolvedRhs, {
+        //
+        // Try structural unification FIRST (no definitions/WHNF) to handle cases
+        // where both sides have function applications that would become stuck
+        // Match expressions after delta reduction (e.g., `plus X Y` vs `plus ?m ?n`).
+        // Structural matching can decompose these directly.
+        let unifyResult = unifyTerms(meta.solution, resolvedRhs, {
           mode: 'pattern',
           flexibleVars: true,
-          definitions,
+          definitions: undefined,
         });
         if (!unifyResult.success) {
-          const names = effectiveContext.map(c => c.name).reverse();
-          const metaTypeStr = prettyPrint(meta.type, names);
-          throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+          // Fall back to full unification with definitions
+          unifyResult = unifyTerms(meta.solution, resolvedRhs, {
+            mode: 'pattern',
+            flexibleVars: true,
+            definitions,
+          });
         }
-        // Queue any new meta constraints from the unification.
-        // These inherit effectiveContext as their ctx — when dequeued, they'll
-        // be re-normalized to the TARGET meta's effective context.
-        for (const mc of unifyResult.metaConstraints) {
-          queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+        if (!unifyResult.success) {
+          // Try case inversion: if the solution is a constructor application and
+          // the RHS is a stuck function application (e.g., `Succ(X) vs plus(?m, ?n)`),
+          // WHNF the RHS to get a stuck Match and invert through the matching clause.
+          const hasUnsolved = containsUnsolvedMeta(resolvedRhs, newMetaVars);
+          const invResult = hasUnsolved
+            ? tryCaseInversion(meta.solution, resolvedRhs, definitions, newMetaVars, effectiveContext)
+            : null;
+
+          if (invResult) {
+            // Case inversion succeeded — queue the sub-constraints
+            for (const mc of invResult.constraints) {
+              queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+            }
+          } else if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)) {
+            // No unsolved metas and no inversion possible — real conflict
+            const names = effectiveContext.map(c => c.name).reverse();
+            const metaTypeStr = prettyPrint(meta.type, names);
+            throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+          }
+          // else: defer (rhs has unsolved metas, inversion not applicable)
+        } else {
+          // Queue any new meta constraints from the unification.
+          // These inherit effectiveContext as their ctx — when dequeued, they'll
+          // be re-normalized to the TARGET meta's effective context.
+          for (const mc of unifyResult.metaConstraints) {
+            queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+          }
         }
       }
       continue;

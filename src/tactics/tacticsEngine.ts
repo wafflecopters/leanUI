@@ -70,9 +70,16 @@ export class TacticEngine {
   }
 
   /**
-   * Substitute solved metas in term (zonking)
+   * Substitute solved metas in the proof term (zonking)
    */
   zonk(): TTKTerm {
+    return this.zonkTerm(this.term);
+  }
+
+  /**
+   * Substitute solved metas in an arbitrary term (zonking)
+   */
+  zonkTerm(term: TTKTerm): TTKTerm {
     // Create a minimal TCEnv for zonking
     const env = new TCEnv(
       [],  // Empty context
@@ -81,11 +88,11 @@ export class TacticEngine {
       this.constraints,
       [],
       [],
-      this.term,
+      term,
       new Map(),
       { mode: 'check' }
     );
-    return env.zonkTerm(this.term);
+    return env.zonkTerm(term);
   }
 
   // --- State Transformation Methods ---

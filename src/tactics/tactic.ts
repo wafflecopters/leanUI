@@ -360,7 +360,12 @@ export class ApplyTactic implements Tactic {
         argIndex++;
       }
 
-      // Unify return type with goal type
+      // Unify return type with goal type.
+      // Do NOT zonk the goal type first — zonking substitutes meta solutions which
+      // may already be in reduced form (e.g., `Succ(plus n' X)` instead of
+      // `plus (Succ n') X`), making structural matching with the function's return
+      // type impossible. Instead, keep metas in the goal and let unification
+      // produce meta constraints that the solver resolves.
       const unifyResult = unifyTerms(currentType, goal.type, {
         mode: 'check',
         definitions: engine.definitions,
@@ -370,7 +375,7 @@ export class ApplyTactic implements Tactic {
       if (!unifyResult.success) {
         return {
           success: false,
-          error: `apply: return type mismatch (${unifyResult.reason})`
+          error: `apply ${fnName ?? '?'}: return type mismatch (${unifyResult.reason})`
         };
       }
 
@@ -404,30 +409,41 @@ export class ApplyTactic implements Tactic {
         }))
       ];
 
-      // Replace current goal with arg metas (subgoals)
+      // Solve constraints FIRST so that explicit args solvable by unification
+      // (e.g., congPlusRight's `p : Nat` determined by goal structure) get resolved
+      // before we decide which args become subgoals.
+      const solvedEngine = engine.withUpdates({
+        metaVars: newMetaVars,
+        constraints: newConstraints,
+        goals: engine.goals,
+        focusIndex: engine.focusIndex
+      }).solveConstraints();
+
+      // Replace current goal with arg metas that are STILL unsolved after constraint solving
       const newGoalIds = argMetas
-        .filter(({ meta, implicit }) => meta.solution === undefined && !implicit)
+        .filter(({ id, implicit }) => {
+          const meta = solvedEngine.metaVars.get(id);
+          return meta && meta.solution === undefined && !implicit;
+        })
         .map(({ id }) => id);
 
       const newGoals = [
-        ...engine.goals.slice(0, engine.focusIndex),
+        ...solvedEngine.goals.slice(0, solvedEngine.focusIndex),
         ...newGoalIds,
-        ...engine.goals.slice(engine.focusIndex + 1)
+        ...solvedEngine.goals.slice(solvedEngine.focusIndex + 1)
       ];
 
       // Adjust focus to first new subgoal (if any)
       const newFocusIndex = newGoalIds.length > 0
-        ? engine.focusIndex
-        : Math.min(engine.focusIndex, Math.max(0, newGoals.length - 1));
+        ? solvedEngine.focusIndex
+        : Math.min(solvedEngine.focusIndex, Math.max(0, newGoals.length - 1));
 
       return {
         success: true,
-        newEngine: engine.withUpdates({
-          metaVars: newMetaVars,
-          constraints: newConstraints,
+        newEngine: solvedEngine.withUpdates({
           goals: newGoals,
           focusIndex: newFocusIndex
-        }).solveConstraints()
+        })
       };
     } catch (e) {
       // Handle TCEnvError (which is not an Error instance)
