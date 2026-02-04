@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { solveConstraints, normalizeConstraintDepth } from './meta';
-import { mkVar, mkConst, mkApp, mkType } from './kernel';
+import { mkVar, mkConst, mkApp, mkType, TTKTerm } from './kernel';
 import { MetaVar, Constraint, DefinitionsMap, createDefinitionsMap, addInductiveDefinition, addDefinition } from './term';
 
 // Helper: create a definitions map with Nat (Zero, Succ) defined as an inductive

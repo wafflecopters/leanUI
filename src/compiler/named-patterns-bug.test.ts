@@ -27,9 +27,8 @@ simple x with simple x
       console.log('Pattern tags:', clause.patterns.map((p: any) => p.tag));
 
       if (clause.namedPatterns) {
-        console.log('\nnamedPatterns EXISTS with', clause.namedPatterns.size, 'entries');
-        const entries = Array.from(clause.namedPatterns.entries());
-        console.log('Entries:', entries.map(([k, v]) => `${k} -> ${v.tag}`));
+        console.log('\nnamedPatterns EXISTS with', clause.namedPatterns.length, 'entries');
+        console.log('Entries:', clause.namedPatterns.map(np => `${np.name} -> ${np.pattern.tag}`));
 
         // HYPOTHESIS: clause.namedPatterns has an entry for {n},
         // and this is being treated as an additional pattern on top of the 2 positional ones!
@@ -49,9 +48,8 @@ simple x with simple x
       console.log('Patterns count:', clause.patterns.length);
 
       if (clause.namedPatterns) {
-        console.log('Main namedPatterns:', clause.namedPatterns.size, 'entries');
-        const entries = Array.from(clause.namedPatterns.entries());
-        console.log('Entries:', entries.map(([k, v]) => `${k} -> ${v.tag}`));
+        console.log('Main namedPatterns:', clause.namedPatterns.length, 'entries');
+        console.log('Entries:', clause.namedPatterns.map(np => `${np.name} -> ${np.pattern.tag}`));
       }
     }
   });
@@ -95,10 +93,10 @@ simple x with simple x
     if (workingAux?.surfaceValue?.tag === 'Match') {
       const clause = workingAux.surfaceValue.clauses[0];
       console.log('Patterns:', clause.patterns.length);
-      console.log('namedPatterns:', clause.namedPatterns ? `${clause.namedPatterns.size} entries` : 'undefined');
+      console.log('namedPatterns:', clause.namedPatterns ? `${clause.namedPatterns.length} entries` : 'undefined');
 
       if (clause.namedPatterns) {
-        console.log('Named pattern entries:', Array.from(clause.namedPatterns.keys()));
+        console.log('Named pattern entries:', clause.namedPatterns.map(np => np.name));
       }
     }
 
@@ -106,10 +104,10 @@ simple x with simple x
     if (failingAux?.surfaceValue?.tag === 'Match') {
       const clause = failingAux.surfaceValue.clauses[0];
       console.log('Patterns:', clause.patterns.length);
-      console.log('namedPatterns:', clause.namedPatterns ? `${clause.namedPatterns.size} entries` : 'undefined');
+      console.log('namedPatterns:', clause.namedPatterns ? `${clause.namedPatterns.length} entries` : 'undefined');
 
       if (clause.namedPatterns) {
-        console.log('Named pattern entries:', Array.from(clause.namedPatterns.keys()));
+        console.log('Named pattern entries:', clause.namedPatterns.map(np => np.name));
       }
     }
 

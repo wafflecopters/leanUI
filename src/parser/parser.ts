@@ -3580,7 +3580,14 @@ export class Parser {
                 const bt = this.parseTactic(ctx, branchTacticPath);
                 branchTactics.push(bt);
 
-                if (this.current().type === 'NEWLINE') {
+                if (this.current().type === 'SEMICOLON') {
+                  this.advance(); // consume ';'
+                  // After semicolon, continue parsing tactics (may hit newline, EOF, or next tactic)
+                  if (this.current().type === 'NEWLINE') {
+                    this.advance();
+                    this.skipNewlines();
+                  }
+                } else if (this.current().type === 'NEWLINE') {
                   this.advance();
                   this.skipNewlines();
                 } else {

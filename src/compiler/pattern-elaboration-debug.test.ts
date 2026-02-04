@@ -98,8 +98,8 @@ leqCanonical (LeqSucc pleq) (LeqSucc qleq) with leqCanonical pleq qleq
 
       console.log('\n=== Clause namedPatterns ===');
       if (clause.namedPatterns) {
-        console.log('namedPatterns exists with', clause.namedPatterns.size, 'entries');
-        console.log('Entries:', Array.from(clause.namedPatterns.entries()).map(([k, v]) => [k, v.tag]));
+        console.log('namedPatterns exists with', clause.namedPatterns.length, 'entries');
+        console.log('Entries:', clause.namedPatterns.map(np => [np.name, np.pattern.tag]));
       } else {
         console.log('namedPatterns is undefined');
       }

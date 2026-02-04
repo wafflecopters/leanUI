@@ -1,0 +1,67 @@
+@test success
+@name "mulDistribLeft via tactics: deep trans chain with case inversion"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+
+congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
+congPlusLeft p refl = refl
+
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+plusAssoc Zero m p = refl
+plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+
+plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
+
+plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
+plusComm Zero m = sym (plusZeroRight m)
+plusComm (Succ n) m = trans (congSucc (plusComm n m)) (sym (plusSuccRight m n))
+
+plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
+plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
+
+-- Multiplication distributes over addition on the left
+-- This is a serious stress test: 4 chained trans applications with
+-- complex arguments involving case inversion on plus and mul
+mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul n p)) := by
+  intro n
+  induction n with
+  | Zero =>
+    intros m p; exact refl
+  | Succ n' IH =>
+    intros m p
+    apply trans
+    exact (congPlusRight (plus m p) (IH m p))
+    apply trans
+    exact (plusAssoc m p (plus (mul n' m) (mul n' p)))
+    apply trans
+    exact (congPlusRight m (plusLeftComm p (mul n' m) (mul n' p)))
+    exact (sym (plusAssoc m (mul n' m) (plus p (mul n' p))))
