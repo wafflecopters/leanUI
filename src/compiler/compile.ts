@@ -2385,6 +2385,7 @@ function checkDeclaration(
 ): CheckDeclarationResult {
   let checkSuccess = true;
   const checkErrors: TCEnvError[] = [];
+  const warnings: TCEnvError[] = [];
   let newDefinitions = definitions;
   let errorCount = 0;
   let indexPositions: number[] | undefined;
@@ -2415,7 +2416,7 @@ function checkDeclaration(
       errorCount = result.errors.length;
     }
   } else if (decl.kind === 'term') {
-    const result = checkTermDeclaration(decl, definitions, { typeInfoCollector: typeInfoMap, assumeK });
+    const result = checkTermDeclaration(decl, definitions, { typeInfoCollector: typeInfoMap, warningsCollector: warnings, assumeK });
     if (result.success) {
       newDefinitions = result.definitions;
       totalityResult = result.totalityResult;
@@ -2428,6 +2429,8 @@ function checkDeclaration(
       // Still capture totalityResult even on failure (for UI visualization)
       totalityResult = result.totalityResult;
     }
+    // Add warnings to checkErrors (warnings don't fail the check)
+    checkErrors.push(...warnings);
   } else {
     checkSuccess = false;
     const error = TCEnvError.create('Declaration is not an inductive or term', createTCEnv({ definitions, options: { mode: 'check', assumeK } }));
@@ -2764,14 +2767,14 @@ function unsolvedMetasToHoles(term: TTKTerm): TTKTerm {
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap; assumeK?: boolean },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap; warningsCollector?: TCEnvError[]; assumeK?: boolean },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult, tacticInfoTree?: TacticInfoTree } {
 
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check', assumeK: options?.assumeK } }))
   }
 
-  let env = createTCEnv({ definitions, options: { mode: 'check', allowDuplicatePiNames: options?.allowUnsolvedSigMetas, assumeK: options?.assumeK }, typeInfoCollector: options?.typeInfoCollector })
+  let env = createTCEnv({ definitions, options: { mode: 'check', allowDuplicatePiNames: options?.allowUnsolvedSigMetas, assumeK: options?.assumeK }, typeInfoCollector: options?.typeInfoCollector, warningsCollector: options?.warningsCollector })
 
   if (decl.kind !== 'term') {
     return failCheck('Declaration is not a term', env)
@@ -4125,6 +4128,7 @@ function processTermDeclaration(
 
   const elabMap: ElabMap = new Map();
   const typeInfoMap: TypeInfoMap = new Map();
+  const warnings: TCEnvError[] = [];
 
   // a. Elaborate signature
   let kernelType: TTKTerm | undefined;
@@ -4160,7 +4164,7 @@ function processTermDeclaration(
   // Check the term declaration
   // (This handles: signature check & meta solving, clause checking with LHS/RHS,
   //  totality, recursion, and adds to context if no errors)
-  const result = checkTermDeclaration(elabDecl, definitions, { ...options, typeInfoCollector: typeInfoMap });
+  const result = checkTermDeclaration(elabDecl, definitions, { ...options, typeInfoCollector: typeInfoMap, warningsCollector: warnings });
   const finalTypeInfoMap = typeInfoMap.size > 0 ? typeInfoMap : undefined;
 
   if (!result.success) {
@@ -4168,7 +4172,7 @@ function processTermDeclaration(
       success: false,
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, undefined, elabMap, sourceMap,
-        false, result.errors, definitions, result.totalityResult,
+        false, [...result.errors, ...warnings], definitions, result.totalityResult,
         undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap,
         undefined // tacticInfoTree
       ),
@@ -4181,7 +4185,7 @@ function processTermDeclaration(
     success: true,
     compiled: createCompiledDeclaration(
       decl, result.zonkedType, result.checkedValue, undefined, elabMap, sourceMap,
-      true, [], result.definitions, result.totalityResult,
+      true, warnings, result.definitions, result.totalityResult,
       undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap,
       result.tacticInfoTree // tacticInfoTree
     ),

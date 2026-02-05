@@ -6,12 +6,38 @@ import {
   findPathForSelection,
   buildReverseElabMap,
   findKernelPathForSurface,
-  getTypeAtCursor,
-  getTypeAtSelection,
+  getTypeAtCursor as getTypeAtCursorNew,
+  getTypeAtSelection as getTypeAtSelectionNew,
   TypeInfoMap,
+  TypeAtCursorResult,
 } from './type-info';
 import { SourceMap, ElabMap } from '../types/source-position';
 import { prettyPrint } from './kernel';
+import { DefinitionsMap } from './term';
+
+// Backward-compatible wrappers for tests (extract term info from union type)
+function getTypeAtCursor(
+  pos: number,
+  sourceMap: SourceMap,
+  elabMap: ElabMap | undefined,
+  typeInfoMap: TypeInfoMap | undefined,
+  definitions?: DefinitionsMap,
+): TypeAtCursorResult | undefined {
+  const result = getTypeAtCursorNew(pos, sourceMap, elabMap, typeInfoMap, undefined, definitions);
+  return result?.kind === 'term' ? result.info : undefined;
+}
+
+function getTypeAtSelection(
+  startPos: number,
+  endPos: number,
+  sourceMap: SourceMap,
+  elabMap: ElabMap | undefined,
+  typeInfoMap: TypeInfoMap | undefined,
+  definitions?: DefinitionsMap,
+): TypeAtCursorResult | undefined {
+  const result = getTypeAtSelectionNew(startPos, endPos, sourceMap, elabMap, typeInfoMap, undefined, definitions);
+  return result?.kind === 'term' ? result.info : undefined;
+}
 
 // ============================================================================
 // Layer 1: TypeInfoMap collection during type checking

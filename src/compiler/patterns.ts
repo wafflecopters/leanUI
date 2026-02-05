@@ -955,6 +955,24 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
     logInfo(() => `    Apply: ${updatedEnv.prettyPrint(mkVar(varIndex))} -> ${updatedEnv.prettyPrint(value)}`)
 
+    // Check if this substitution binds a function parameter to a concrete value
+    // and emit a warning suggesting the user can make the pattern more specific
+    if (varIndex >= numPatternLocalBindings) {
+      // This is a function parameter (from the user's pattern), not a pattern-local binding
+      const isConcrete = isConcreteValue(value, numPatternLocalBindings);
+      if (isConcrete) {
+        const ctxIndex = updatedEnv.context.length - 1 - varIndex;
+        if (ctxIndex >= 0 && ctxIndex < updatedEnv.context.length) {
+          const varName = updatedEnv.context[ctxIndex]?.name || `?${varIndex}`;
+          const valuePretty = updatedEnv.prettyPrint(value);
+          updatedEnv.addWarning(
+            `Warning: Pattern variable '${varName}' is constrained to be '${valuePretty}' by this constructor.\n` +
+            `Consider replacing '${varName}' with '${valuePretty}' in the pattern for better clarity.`
+          );
+        }
+      }
+    }
+
     // Update these before the signature
     applySubstitutionToCheckStackInPlace(checkStack, updatedEnv.context.length, varIndex, value)
     applySubstitutionToElabStackInPlace(elabStack, updatedEnv.context.length, varIndex, value)
@@ -974,6 +992,52 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   // Solve metas and constraints
   return updatedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+}
+
+/**
+ * Check if a term is a "concrete" value that doesn't depend on flexible variables.
+ * Concrete means: not a Var with index < numPatternLocalBindings, not a Meta,
+ * and recursively, all subterms are also concrete.
+ *
+ * @param term The term to check
+ * @param numPatternLocalBindings The number of pattern-local (flexible) bindings
+ * @returns true if the term is concrete (fully determined)
+ */
+function isConcreteValue(term: TTKTerm, numPatternLocalBindings: number): boolean {
+  switch (term.tag) {
+    case 'Var':
+      // If this variable references a pattern-local binding (flexible), it's not concrete
+      return term.index >= numPatternLocalBindings;
+
+    case 'Meta':
+    case 'Hole':
+      // Metas and holes are not concrete
+      return false;
+
+    case 'Const':
+    case 'Sort':
+    case 'ULevel':
+      // Constants, sorts, and universe levels are concrete
+      return true;
+
+    case 'Binder':
+      // A binder is concrete if its domain and body are concrete
+      return isConcreteValue(term.domain, numPatternLocalBindings) &&
+             isConcreteValue(term.body, numPatternLocalBindings + 1);  // body has one more binding
+
+    case 'App':
+      // An application is concrete if the function (head constructor) is concrete
+      // We don't require arguments to be concrete - `Succ _` is concrete enough to warn about
+      return isConcreteValue(term.fn, numPatternLocalBindings);
+
+    case 'Match':
+      // A match expression is concrete if the scrutinee is concrete
+      // (We don't need to check branches for this purpose)
+      return isConcreteValue(term.scrutinee, numPatternLocalBindings);
+
+    default:
+      return false;
+  }
 }
 
 export function applySubstitutionToCheckStackInPlace(

@@ -50,9 +50,14 @@ export type TCEnvOptions = {
 
 // Module-level type info collector. Safe because type checking is synchronous.
 let _typeInfoCollector: TypeInfoMap | undefined;
+let _warningsCollector: TCEnvError[] | undefined;
 
 export function setTypeInfoCollector(collector: TypeInfoMap | undefined): void {
   _typeInfoCollector = collector;
+}
+
+export function setWarningsCollector(collector: TCEnvError[] | undefined): void {
+  _warningsCollector = collector;
 }
 
 export function createTCEnv(data: {
@@ -66,9 +71,13 @@ export function createTCEnv(data: {
   levelMetas?: Map<string, LevelMeta>,
   options: TCEnvOptions,
   typeInfoCollector?: TypeInfoMap,
+  warningsCollector?: TCEnvError[],
 }): TCEnv<null> {
   if (data.typeInfoCollector !== undefined) {
     _typeInfoCollector = data.typeInfoCollector;
+  }
+  if (data.warningsCollector !== undefined) {
+    _warningsCollector = data.warningsCollector;
   }
   return new TCEnv(
     data.context ?? [],
@@ -810,6 +819,15 @@ export class TCEnv<T> {
       expectedType: expectedType ? this.zonkTerm(expectedType) : undefined,
       kernelPath: key,
     });
+  }
+
+  /**
+   * Add a warning to the warnings collector.
+   * Warnings are non-fatal messages that don't stop compilation.
+   */
+  addWarning(message: string): void {
+    if (!_warningsCollector) return;
+    _warningsCollector.push(TCEnvError.create(message, this));
   }
 
   /**

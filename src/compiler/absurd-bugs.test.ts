@@ -190,12 +190,16 @@ leqCanonical (LeqSucc pleq) (LeqSucc qleq) = ?Bar
       leqCanonicalDecl!.sourceMap!,
       leqCanonicalDecl!.elabMap!,
       leqCanonicalDecl!.typeInfoMap!,
+      undefined, // tacticInfoTree
       result.definitions
     );
 
     // Should successfully find type information
     expect(typeAtCursor).toBeDefined();
-    expect(typeAtCursor!.prettyType).toBeTruthy();
+    expect(typeAtCursor!.kind).toBe('term');
+    if (typeAtCursor && typeAtCursor.kind === 'term') {
+      expect(typeAtCursor.info.prettyType).toBeTruthy();
+    }
   });
 
   test('Error location correctness with absurd clauses', () => {
