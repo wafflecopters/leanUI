@@ -5123,7 +5123,82 @@ function checkTermValue(
     return { success: false, errors: totalityErrors, totalityResult: enrichedTotalityResult };
   }
 
+  // Check for unsolved wildcards in the checked value
+  // Wildcards (written as `_` in source) become Hole nodes with id `_`
+  // If any remain after checking, it means they couldn't be solved
+  const unsolvedWildcards = findUnsolvedWildcards(checkedValue);
+  if (unsolvedWildcards.length > 0) {
+    return {
+      success: false,
+      errors: [
+        TCEnvError.create(
+          `Function ${name ? `'${name}' ` : ''}contains unsolved wildcards. ` +
+          `Wildcards must be uniquely determined by context.`,
+          termEnv
+        )
+      ],
+      totalityResult: enrichedTotalityResult
+    };
+  }
+
   return { success: true, checkedValue, totalityResult: enrichedTotalityResult };
+}
+
+/**
+ * Find all unsolved wildcards (Meta/Hole nodes with id '_') in a term.
+ * Returns the path to each unsolved wildcard.
+ */
+function findUnsolvedWildcards(term: TTKTerm, path: string[] = []): string[][] {
+  const results: string[][] = [];
+
+  switch (term.tag) {
+    case 'Hole':
+      // Wildcards have id '_', user-written holes have other names like 'foo'
+      if (term.id === '_') {
+        results.push([...path, 'Hole._']);
+      }
+      break;
+
+    case 'Meta':
+      // Wildcards become Meta nodes with id '_' after elaboration
+      if (term.id === '_') {
+        results.push([...path, 'Meta._']);
+      }
+      break;
+
+    case 'Var':
+    case 'Const':
+    case 'Sort':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+      // No nested terms
+      break;
+
+    case 'App':
+      results.push(...findUnsolvedWildcards(term.fn, [...path, 'fn']));
+      results.push(...findUnsolvedWildcards(term.arg, [...path, 'arg']));
+      break;
+
+    case 'Binder':
+      results.push(...findUnsolvedWildcards(term.domain, [...path, 'domain']));
+      results.push(...findUnsolvedWildcards(term.body, [...path, 'body']));
+      break;
+
+    case 'Match':
+      results.push(...findUnsolvedWildcards(term.scrutinee, [...path, 'scrutinee']));
+      term.clauses.forEach((clause, i) => {
+        results.push(...findUnsolvedWildcards(clause.rhs, [...path, 'clauses', String(i), 'rhs']));
+      });
+      break;
+
+    case 'Annot':
+      results.push(...findUnsolvedWildcards(term.term, [...path, 'term']));
+      results.push(...findUnsolvedWildcards(term.type, [...path, 'type']));
+      break;
+  }
+
+  return results;
 }
 
 /**
