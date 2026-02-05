@@ -62,11 +62,21 @@ export class TacticInfoTree {
    * along with the goals that are active at that position.
    */
   findGoalsAtPosition(line: number, col: number): GoalState[] | null {
-    // Search through children (actual tactic nodes), not root
+    // First try exact position match (searches recursively)
     for (const child of this.root.children) {
       const node = this.findNodeAtPosition(child, line, col);
       if (node) return node.goalsAfter;
     }
+
+    // Fallback: if cursor is on the same line as any tactic (anywhere in tree), return that tactic's goals
+    // This handles the case where cursor is on tactic arguments/terms after the keyword
+    const allNodes = this.getAllNodes();
+    for (const node of allNodes) {
+      if (node.position.line === line) {
+        return node.goalsAfter;
+      }
+    }
+
     return null;
   }
 

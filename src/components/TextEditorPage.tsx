@@ -6,10 +6,11 @@ import { useSearchParams } from 'react-router-dom';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileTTFromText, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
-import { getTypeAtCursor, getTypeAtSelection, TypeAtCursorResult } from '../compiler/type-info';
+import { getTypeAtCursor, getTypeAtSelection, TypeAtCursorResult, CursorQueryResult } from '../compiler/type-info';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
 import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { GoalState } from '../tactics/proof-state';
 
 // Unicode abbreviations map (Lean-style)
 // Add new abbreviations here - they will be auto-replaced when followed by space/punctuation
@@ -1530,7 +1531,7 @@ export function TextEditorPage() {
   }, [compileResult]);
 
   // Compute type info at cursor position or selection
-  const typeInfoAtCursor = useMemo<{ result: TypeAtCursorResult; expression: string } | undefined>(() => {
+  const typeInfoAtCursor = useMemo<(CursorQueryResult & { expression?: string }) | undefined>(() => {
     if (!cursorInfo) return undefined;
 
     const hasSelection = cursorInfo.selStartLine !== undefined &&
@@ -1547,7 +1548,8 @@ export function TextEditorPage() {
       if (cursorLine >= block.startLine && cursorLine <= blockEndLine) {
         targetBlock = block;
         for (const decl of block.declarations) {
-          if (decl.sourceMap && decl.typeInfoMap) {
+          // Consider declarations with typeInfoMap (for terms) or tacticInfoTree (for tactics)
+          if (decl.sourceMap && (decl.typeInfoMap || decl.tacticInfoTree)) {
             targetDecl = decl;
             for (const [, range] of decl.sourceMap) {
               if (range.start.line <= cursorLine && cursorLine <= range.end.line) {
@@ -1561,7 +1563,11 @@ export function TextEditorPage() {
       }
     }
 
-    if (!targetBlock || !targetDecl || !targetDecl.sourceMap || !targetDecl.typeInfoMap) {
+    // Need either typeInfoMap (for terms) or tacticInfoTree (for tactics)
+    if (!targetBlock || !targetDecl || !targetDecl.sourceMap) {
+      return undefined;
+    }
+    if (!targetDecl.typeInfoMap && !targetDecl.tacticInfoTree) {
       return undefined;
     }
 
@@ -1578,36 +1584,45 @@ export function TextEditorPage() {
       return offset;
     };
 
-    let result: TypeAtCursorResult | undefined;
-    if (hasSelection) {
-      const startOffset = toFileOffset(cursorInfo.selStartLine!, cursorInfo.selStartCol!);
-      const endOffset = toFileOffset(cursorInfo.selEndLine!, cursorInfo.selEndCol!);
-      result = getTypeAtSelection(startOffset, endOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, compileResult.definitions);
-    }
-    if (!result) {
-      const cursorOffset = toFileOffset(cursorInfo.lineNumber, cursorInfo.column);
-      result = getTypeAtCursor(cursorOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, compileResult.definitions);
-    }
-    if (!result) return undefined;
+    let cursorQueryResult: CursorQueryResult | undefined;
+    try {
+      if (hasSelection) {
+        const startOffset = toFileOffset(cursorInfo.selStartLine!, cursorInfo.selStartCol!);
+        const endOffset = toFileOffset(cursorInfo.selEndLine!, cursorInfo.selEndCol!);
+        cursorQueryResult = getTypeAtSelection(startOffset, endOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, targetDecl.tacticInfoTree, compileResult.definitions, code);
+      }
+      if (!cursorQueryResult) {
+        const cursorOffset = toFileOffset(cursorInfo.lineNumber, cursorInfo.column);
+        cursorQueryResult = getTypeAtCursor(cursorOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, targetDecl.tacticInfoTree, compileResult.definitions, code);
+      }
 
-    // Extract source expression text from the sourceRange
+      // Accept both term and tactic results
+      if (!cursorQueryResult) return undefined;
+    } catch (e) {
+      return undefined;
+    }
+
+    // Extract source expression text for term results
     let expression = '';
-    if (result.sourceRange) {
-      const sr = result.sourceRange;
-      if (sr.start.line === sr.end.line) {
-        expression = lines[sr.start.line - 1].substring(sr.start.col - 1, sr.end.col - 1);
-      } else {
-        const parts: string[] = [];
-        parts.push(lines[sr.start.line - 1].substring(sr.start.col - 1));
-        for (let i = sr.start.line; i < sr.end.line - 1; i++) {
-          parts.push(lines[i]);
+    if (cursorQueryResult.kind === 'term') {
+      const result = cursorQueryResult.info;
+      if (result.sourceRange) {
+        const sr = result.sourceRange;
+        if (sr.start.line === sr.end.line) {
+          expression = lines[sr.start.line - 1].substring(sr.start.col - 1, sr.end.col - 1);
+        } else {
+          const parts: string[] = [];
+          parts.push(lines[sr.start.line - 1].substring(sr.start.col - 1));
+          for (let i = sr.start.line; i < sr.end.line - 1; i++) {
+            parts.push(lines[i]);
+          }
+          parts.push(lines[sr.end.line - 1].substring(0, sr.end.col - 1));
+          expression = parts.join(' ');
         }
-        parts.push(lines[sr.end.line - 1].substring(0, sr.end.col - 1));
-        expression = parts.join(' ');
       }
     }
 
-    return { result, expression };
+    return { ...cursorQueryResult, expression };
   }, [cursorInfo, compileResult, code]);
 
   // Keep the refs in sync with the latest data
@@ -2142,35 +2157,91 @@ export function TextEditorPage() {
         <div style={styles.typeInfoPanel}>
           {typeInfoAtCursor ? (
             <>
-              <div>
-                <span style={styles.typeInfoValue}>
-                  {typeInfoAtCursor.expression
-                    ? `${typeInfoAtCursor.expression} : ${typeInfoAtCursor.result.prettyType}`
-                    : typeInfoAtCursor.result.prettyType}
-                </span>
-              </div>
-              {typeInfoAtCursor.result.expectedType &&
-                typeInfoAtCursor.result.surfacePath.includes('clauses[') && (
+              {/* Case 1: Term type info */}
+              {typeInfoAtCursor.kind === 'term' && (
+                <>
                   <div>
-                    <span style={styles.typeInfoLabel}>Expected </span>
-                    <span style={styles.typeInfoValue}>{typeInfoAtCursor.result.expectedType}</span>
+                    <span style={styles.typeInfoValue}>
+                      {typeInfoAtCursor.expression
+                        ? `${typeInfoAtCursor.expression} : ${typeInfoAtCursor.info.prettyType}`
+                        : typeInfoAtCursor.info.prettyType}
+                    </span>
                   </div>
-                )}
-              {typeInfoAtCursor.result.context.length > 0 && (
-                <div>
-                  <div style={styles.typeInfoLabel}>Context</div>
-                  {typeInfoAtCursor.result.context.map((entry: { name: string; type: string }, i: number) => (
-                    <div key={i} style={styles.typeInfoContext}>
-                      <span style={styles.typeInfoContextName}>{entry.name}</span>
-                      <span style={{ color: '#8b949e' }}> : </span>
-                      <span style={styles.typeInfoContextType}>{entry.type}</span>
+                  {typeInfoAtCursor.info.expectedType &&
+                    typeInfoAtCursor.info.surfacePath.includes('clauses[') && (
+                      <div>
+                        <span style={styles.typeInfoLabel}>Expected </span>
+                        <span style={styles.typeInfoValue}>{typeInfoAtCursor.info.expectedType}</span>
+                      </div>
+                    )}
+                  {typeInfoAtCursor.info.context.length > 0 && (
+                    <div>
+                      <div style={styles.typeInfoLabel}>Context</div>
+                      {typeInfoAtCursor.info.context.map((entry: { name: string; type: string }, i: number) => (
+                        <div key={i} style={styles.typeInfoContext}>
+                          <span style={styles.typeInfoContextName}>{entry.name}</span>
+                          <span style={{ color: '#8b949e' }}> : </span>
+                          <span style={styles.typeInfoContextType}>{entry.type}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
+              )}
+
+              {/* Case 2: Tactic goal states */}
+              {typeInfoAtCursor.kind === 'tactic' && (
+                <>
+                  {typeInfoAtCursor.goalStates.length === 0 ? (
+                    <div style={styles.typeInfoValue}>No goals (proof complete)</div>
+                  ) : (
+                    typeInfoAtCursor.goalStates.map((goal: GoalState, idx: number) => {
+                      // Extract context names for better pretty printing
+                      const contextNames = goal.hypotheses.map(h => h.name);
+
+                      return (
+                        <div key={goal.id} style={{ marginBottom: idx < typeInfoAtCursor.goalStates.length - 1 ? '12px' : '0' }}>
+                          {/* Goal header */}
+                          {(typeInfoAtCursor.goalStates.length > 1 || goal.caseTag) && (
+                            <div style={styles.typeInfoLabel}>
+                              {typeInfoAtCursor.goalStates.length > 1 && `Goal ${idx + 1}/${typeInfoAtCursor.goalStates.length}`}
+                              {typeInfoAtCursor.goalStates.length > 1 && goal.caseTag && ' '}
+                              {goal.caseTag && `(${goal.caseTag})`}
+                            </div>
+                          )}
+
+                          {/* Hypotheses (what's in scope) */}
+                          {goal.hypotheses.length > 0 && (
+                            <div style={{ marginTop: (typeInfoAtCursor.goalStates.length > 1 || goal.caseTag) ? '8px' : '0' }}>
+                              <div style={styles.typeInfoLabel}>Hypotheses</div>
+                              {goal.hypotheses.map((hyp, i) => (
+                                <div key={i} style={styles.typeInfoContext}>
+                                  <span style={styles.typeInfoContextName}>{hyp.name}</span>
+                                  <span style={{ color: '#8b949e' }}> : </span>
+                                  <span style={styles.typeInfoContextType}>
+                                    {prettyPrintTTK(hyp.type, contextNames.slice(0, i), new Map())}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Target (goal to prove) */}
+                          <div style={{ marginTop: '8px' }}>
+                            <div style={styles.typeInfoLabel}>Goal</div>
+                            <span style={styles.typeInfoValue}>
+                              {prettyPrintTTK(goal.target, contextNames, new Map())}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </>
               )}
             </>
           ) : (
-            <span style={{ color: '#484f58' }}>Move cursor over an expression to see its type</span>
+            <span style={{ color: '#484f58' }}>Move cursor over an expression or tactic to see info</span>
           )}
         </div>
 

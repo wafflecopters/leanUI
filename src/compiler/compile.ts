@@ -37,6 +37,8 @@ import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
+import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
+import { extractGoalStates, engineToProofState } from '../tactics/proof-state';
 export type { TotalityResult, CaseTree };
 
 // ============================================================================
@@ -184,6 +186,9 @@ export interface CompiledDeclaration {
 
   // Type info map for type-at-cursor feature
   typeInfoMap?: TypeInfoMap;
+
+  // Tactic InfoTree for goal-at-cursor feature
+  tacticInfoTree?: TacticInfoTree;
 }
 
 /**
@@ -1512,15 +1517,51 @@ function elaborateTacticBlock(
   expectedType: TTKTerm,
   definitions: DefinitionsMap,
   elabMap: ElabMap,
+  sourceMap: SourceMap,
   context: TTKContext = []
-): TTKTerm {
+): { term: TTKTerm; infoTree: TacticInfoTree } {
   // Check if empty
   if (tacticBlock.tactics.length === 0) {
     throw new Error('Tactic proof has no tactics (unsolved goals)');
   }
 
+  // Helper: Convert IndexPath to SourcePosition
+  function indexPathToSourcePosition(
+    indexPath: IndexPath | undefined,
+    sourceMap: SourceMap
+  ): SourcePosition {
+    if (!indexPath) return { line: 0, col: 0 };
+
+    const serialized = serializeIndexPath(indexPath);
+    let range = sourceMap.get(serialized);
+
+    // If not found, try the tactic name field (parser records name but not the command itself)
+    if (!range) {
+      const namePathSerialized = serializeIndexPath([...indexPath, { kind: 'field', name: 'name' }]);
+      range = sourceMap.get(namePathSerialized);
+    }
+
+    if (!range) return { line: 0, col: 0 };
+
+    return {
+      line: range.start.line,
+      col: range.start.col,
+      endLine: range.end.line,
+      endCol: range.end.col
+    };
+  }
+
   // Create initial tactic engine
   let engine = createInitialEngine(expectedType, context, definitions);
+
+  // Create InfoTree root
+  const rootNode: TacticInfoNode = {
+    position: { line: 0, col: 0 },
+    goalsBefore: extractGoalStates(engineToProofState(engine)),
+    goalsAfter: extractGoalStates(engineToProofState(engine)),
+    tactic: { tag: 'Intro' } as any, // Dummy
+    children: []
+  };
 
   // Helper: look up implicit param names for a definition
   const namedArgLookup = createNamedArgLookup(definitions);
@@ -1685,12 +1726,27 @@ function elaborateTacticBlock(
       });
     }
 
+    // Record goals before tactic application
+    const goalsBefore = extractGoalStates(engineToProofState(engine));
+    const position = indexPathToSourcePosition(cmd.indexPath, sourceMap);
+
     // Convert command to Tactic object with elaborated args
     const tactic = tacticCommandToTactic({ name: cmd.name, args: elabArgs, focusedTactics: elabFocusedTactics });
 
     const result = tactic.apply(engine, goal, goalId);
 
     if (!result.success) {
+      // Record failed tactic in InfoTree
+      const errorNode: TacticInfoNode = {
+        position,
+        goalsBefore,
+        goalsAfter: goalsBefore,
+        tactic: { tag: cmd.name } as any,
+        error: result.error,
+        children: []
+      };
+      rootNode.children.push(errorNode);
+
       // Create TCEnvError with tactic's indexPath for accurate error positioning
       const errorMsg = `Tactic '${tactic.name}' failed: ${result.error}`;
       if (cmd.indexPath) {
@@ -1703,6 +1759,17 @@ function elaborateTacticBlock(
     }
 
     engine = result.newEngine;
+
+    // Record successful tactic in InfoTree
+    const goalsAfter = extractGoalStates(engineToProofState(engine));
+    const tacticNode: TacticInfoNode = {
+      position,
+      goalsBefore,
+      goalsAfter,
+      tactic: { tag: cmd.name } as any,
+      children: []
+    };
+    rootNode.children.push(tacticNode);
 
     // Handle structured cases/induction: if cmd has caseBranches, apply each branch's tactics to matching goals
     if ((cmd.name === 'cases' || cmd.name === 'induction') && (cmd as any).caseBranches) {
@@ -1785,6 +1852,9 @@ function elaborateTacticBlock(
             return branchSurfaceToKernel(arg);
           });
 
+          // Get goals before applying tactic
+          const branchGoalsBefore = extractGoalStates(engineToProofState(engine));
+
           const branchTacticObj = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
           const branchResult = branchTacticObj.apply(engine, branchGoal, branchGoalId2);
 
@@ -1799,6 +1869,24 @@ function elaborateTacticBlock(
           }
 
           engine = branchResult.newEngine;
+
+          // Get goals after applying tactic
+          const branchGoalsAfter = extractGoalStates(engineToProofState(engine));
+
+          // Get position for this branch tactic
+          const branchPosition = branchTactic.indexPath
+            ? indexPathToSourcePosition(branchTactic.indexPath, sourceMap)
+            : { line: 0, col: 0 };
+
+          // Create InfoTree node for branch tactic and add as child of parent tacticNode
+          const branchTacticNode: TacticInfoNode = {
+            position: branchPosition,
+            goalsBefore: branchGoalsBefore,
+            goalsAfter: branchGoalsAfter,
+            tactic: { tag: branchTactic.name } as any,
+            children: []
+          };
+          tacticNode.children.push(branchTacticNode);
 
           // Handle nested structured cases/induction: if this branch tactic itself
           // has caseBranches (e.g., nested `cases n with | Zero => ... | Succ m => ...`),
@@ -1895,7 +1983,10 @@ function elaborateTacticBlock(
   }
 
   // Zonk (substitute solved metas) to get the final proof term
-  return engine.zonk();
+  return {
+    term: engine.zonk(),
+    infoTree: new TacticInfoTree(rootNode)
+  };
 }
 
 /**
@@ -2301,6 +2392,7 @@ function checkDeclaration(
   let checkedValue: TTKTerm | undefined;
   let zonkedConstructors: Array<{ name: string; type: TTKTerm; namedArgMap?: NamedArgMap }> | undefined;
   const typeInfoMap: TypeInfoMap = new Map();
+  let tacticInfoTree: TacticInfoTree | undefined;
 
   // Check for elaboration errors first (e.g., named argument errors)
   if (decl.elabError) {
@@ -2328,6 +2420,7 @@ function checkDeclaration(
       newDefinitions = result.definitions;
       totalityResult = result.totalityResult;
       checkedValue = result.checkedValue;
+      tacticInfoTree = result.tacticInfoTree;
     } else {
       checkSuccess = false;
       checkErrors.push(...result.errors);
@@ -2380,6 +2473,7 @@ function checkDeclaration(
     withScrutineeCount: decl.withScrutineeCount,
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap: typeInfoMap.size > 0 ? typeInfoMap : undefined,
+    tacticInfoTree: tacticInfoTree,
   };
 
   return { compiled, newDefinitions, errorCount };
@@ -2671,7 +2765,7 @@ function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
   options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap; assumeK?: boolean },
-): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult } {
+): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult, tacticInfoTree?: TacticInfoTree } {
 
   if (!decl.name) {
     return failCheck('Term declaration is ill-formed (no name)', createTCEnv({ definitions, options: { mode: 'check', assumeK: options?.assumeK } }))
@@ -2801,15 +2895,19 @@ function checkTermDeclaration(
 
       // Special handling for TacticBlock - elaborate by executing tactics
       let kernelValue: TTKTerm;
+      let tacticInfoTree: TacticInfoTree | undefined;
       if (decl.surfaceValue.tag === 'TacticBlock') {
         try {
-          kernelValue = elaborateTacticBlock(
+          const tacticResult = elaborateTacticBlock(
             decl.surfaceValue,
             zonkedKernelType,
             termEnv.definitions,
             decl.elabMap ?? new Map(),
+            decl.sourceMap ?? new Map(),
             [] // Empty context for top-level definitions
           );
+          kernelValue = tacticResult.term;
+          tacticInfoTree = tacticResult.infoTree;
         } catch (e) {
           // If error already has proper location info (TCEnvError), re-throw it
           // This preserves the specific tactic indexPath set by elaborateTacticBlock
@@ -2838,7 +2936,7 @@ function checkTermDeclaration(
       // Skip re-checking and trust the tactic engine's validation.
       if (decl.surfaceValue.tag === 'TacticBlock') {
         const resultEnv = setDefinitionValueInTCEnv(termEnv, decl.name, kernelValue);
-        return { success: true, definitions: resultEnv.definitions, checkedValue: kernelValue, zonkedType: zonkedKernelType };
+        return { success: true, definitions: resultEnv.definitions, checkedValue: kernelValue, zonkedType: zonkedKernelType, tacticInfoTree: tacticInfoTree };
       }
 
       try {
@@ -3169,6 +3267,7 @@ function createCompiledDeclaration(
   surfaceExtendsExprs?: TTerm[],
   prettyProjections?: Array<{ name: string; prettyType: string }>,
   typeInfoMap?: TypeInfoMap,
+  tacticInfoTree?: TacticInfoTree,
 ): CompiledDeclaration {
   // Create namedArgLookup for pretty printing implicit args with labels
   const namedArgLookup = definitions ? createNamedArgLookup(definitions) : undefined;
@@ -3208,6 +3307,7 @@ function createCompiledDeclaration(
     withScrutineeCount: decl.withScrutineeCount,
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap,
+    tacticInfoTree,
   };
 }
 
@@ -3234,7 +3334,7 @@ function createElabErrorResult(
     compiled: createCompiledDeclaration(
       decl, undefined, undefined, undefined, elabMap, sourceMap,
       false, [error], definitions, undefined, undefined, elabErrorPath
-    ),
+    , undefined),
     newDefinitions: definitions,
     errorCount: 1
   };
@@ -3321,7 +3421,7 @@ function processInductiveDeclaration(
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
         false, [error]
-      ),
+      , undefined),
       newDefinitions: definitions,
       errorCount: 1
     };
@@ -3347,7 +3447,7 @@ function processInductiveDeclaration(
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, kernelConstructors, elabMap, sourceMap,
         false, result.errors, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
-      ),
+      , undefined),
       newDefinitions: definitions,
       errorCount: result.errors.length
     };
@@ -3360,7 +3460,7 @@ function processInductiveDeclaration(
       decl, kernelType, undefined, result.zonkedConstructors, elabMap, sourceMap,
       true, [], result.newDefinitions, undefined, result.indexPositions,
       undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
-    ),
+    , undefined),
     newDefinitions: result.newDefinitions,
     errorCount: 0
   };
@@ -3608,7 +3708,7 @@ function processRecordDeclaration(
           compiled: createCompiledDeclaration(
             decl, mkType(0), undefined, undefined, elabMap, sourceMap,
             false, [error], undefined, undefined, undefined
-          ),
+          , undefined),
           newDefinitions: definitions,
           errorCount: 1
         };
@@ -3624,7 +3724,7 @@ function processRecordDeclaration(
             compiled: createCompiledDeclaration(
               decl, mkType(0), undefined, undefined, elabMap, sourceMap,
               false, [error], undefined, undefined, undefined
-            ),
+            , undefined),
             newDefinitions: definitions,
             errorCount: 1
           };
@@ -3706,7 +3806,7 @@ function processRecordDeclaration(
         compiled: createCompiledDeclaration(
           decl, mkType(0), undefined, undefined, elabMap, sourceMap,
           false, [error], undefined, undefined, undefined
-        ),
+        , undefined),
         newDefinitions: definitions,
         errorCount: 1
       };
@@ -3803,7 +3903,7 @@ function processRecordDeclaration(
         syntheticDecl, inductiveDef.type, undefined, inductiveDef.constructors, elabMap, sourceMap,
         false, result.errors, definitions, undefined, undefined, undefined,
         true, decl.fields  // isRecord, surfaceFields
-      ),
+      , undefined),
       newDefinitions: definitions,
       errorCount: result.errors.length
     };
@@ -3856,7 +3956,7 @@ function processRecordDeclaration(
       syntheticDecl, inductiveDef.type, undefined, result.zonkedConstructors, elabMap, sourceMap,
       true, [], finalDefinitions, undefined, result.indexPositions, undefined,
       true, decl.params, decl.fields, decl.extendsExprs, prettyProjections  // isRecord, surfaceParams, surfaceFields, surfaceExtendsExprs, prettyProjections
-    ),
+    , undefined),
     newDefinitions: finalDefinitions,
     errorCount: 0
   };
@@ -4069,7 +4169,8 @@ function processTermDeclaration(
       compiled: createCompiledDeclaration(
         decl, kernelType, undefined, undefined, elabMap, sourceMap,
         false, result.errors, definitions, result.totalityResult,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap,
+        undefined // tacticInfoTree
       ),
       newDefinitions: definitions,
       errorCount: result.errors.length
@@ -4081,7 +4182,8 @@ function processTermDeclaration(
     compiled: createCompiledDeclaration(
       decl, result.zonkedType, result.checkedValue, undefined, elabMap, sourceMap,
       true, [], result.definitions, result.totalityResult,
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, finalTypeInfoMap,
+      result.tacticInfoTree // tacticInfoTree
     ),
     newDefinitions: result.definitions,
     errorCount: 0

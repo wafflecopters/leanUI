@@ -13,6 +13,8 @@ import { SourceMap, SourceRange, ElabMap, serializeIndexPath, IndexPath } from "
 import { DefinitionsMap } from "./term";
 import { whnf, WhnfContext } from "./whnf";
 import { subst } from "./subst";
+import { GoalState } from "../tactics/proof-state";
+import { TacticInfoTree } from "../tactics/info-tree";
 
 // ============================================================================
 // Layer 1: Type Info Collection (populated during type checking)
@@ -211,42 +213,143 @@ export interface TypeAtCursorResult {
 }
 
 /**
+ * Result of cursor query: either type info (for terms) or goal states (for tactics)
+ */
+export type CursorQueryResult =
+  | { kind: 'term'; info: TypeAtCursorResult }
+  | { kind: 'tactic'; goalStates: GoalState[]; sourceRange?: SourceRange };
+
+/**
+ * Helper: Convert character offset to line/col.
+ * Returns line/col of the narrowest source range containing the position.
+ */
+function positionToLineCol(
+  pos: number,
+  sourceMap: SourceMap
+): { line: number; col: number } | undefined {
+  let bestRange: SourceRange | undefined;
+  let bestSpan = Infinity;
+
+  for (const [_, range] of sourceMap) {
+    if (range.start.pos <= pos && pos < range.end.pos) {
+      const span = range.end.pos - range.start.pos;
+      if (span < bestSpan) {
+        bestSpan = span;
+        bestRange = range;
+      }
+    }
+  }
+
+  if (!bestRange) return undefined;
+
+  return {
+    line: bestRange.start.line,
+    col: bestRange.start.col
+  };
+}
+
+/**
+ * Convert character offset to line/col (1-indexed) by counting through source
+ */
+function offsetToLineCol(
+  pos: number,
+  source: string
+): { line: number; col: number } {
+  let line = 1;
+  let col = 1;
+  for (let i = 0; i < pos && i < source.length; i++) {
+    if (source[i] === '\n') {
+      line++;
+      col = 1;
+    } else {
+      col++;
+    }
+  }
+  return { line, col };
+}
+
+/**
+ * Query goal state at cursor position inside a tactic block.
+ */
+export function getGoalsAtCursor(
+  pos: number,
+  sourceMap: SourceMap,
+  infoTree: TacticInfoTree | undefined,
+  source?: string  // NEW: pass source text for position conversion
+): GoalState[] | undefined {
+  if (!infoTree) return undefined;
+
+  // Try sourceMap first (more accurate if available)
+  let location = positionToLineCol(pos, sourceMap);
+
+  // Fallback: calculate from source text if sourceMap doesn't have entry
+  if (!location && source) {
+    location = offsetToLineCol(pos, source);
+  }
+
+  if (!location) return undefined;
+
+  // Query InfoTree
+  const goals = infoTree.findGoalsAtPosition(location.line, location.col);
+  return goals ?? undefined;
+}
+
+/**
  * Query type information at a cursor position.
  *
  * Flow: cursor pos → sourceMap lookup (surface path) → reverse elabMap (kernel path)
  *       → typeInfoMap lookup → pretty-printed result
+ *
+ * For tactic blocks: falls back to goal state if no term type info found.
  */
 export function getTypeAtCursor(
   pos: number,
   sourceMap: SourceMap,
   elabMap: ElabMap | undefined,
   typeInfoMap: TypeInfoMap | undefined,
+  tacticInfoTree: TacticInfoTree | undefined,
   definitions?: DefinitionsMap,
-): TypeAtCursorResult | undefined {
-  if (!typeInfoMap) return undefined;
+  source?: string,  // NEW: source text for position conversion
+): CursorQueryResult | undefined {
+  // Try type info first (more specific - for terms inside tactics)
+  if (typeInfoMap) {
+    // Try both pos and pos-1 (end-of-token), pick the smallest span
+    const path1 = findPathAtCursor(pos, sourceMap);
+    const path2 = pos > 0 ? findPathAtCursor(pos - 1, sourceMap) : undefined;
 
-  // Try both pos and pos-1 (end-of-token), pick the smallest span
-  const path1 = findPathAtCursor(pos, sourceMap);
-  const path2 = pos > 0 ? findPathAtCursor(pos - 1, sourceMap) : undefined;
+    let surfacePath: string | undefined;
+    if (path1 !== undefined && path2 !== undefined) {
+      const range1 = sourceMap.get(path1);
+      const range2 = sourceMap.get(path2);
+      const span1 = range1 ? range1.end.pos - range1.start.pos : Infinity;
+      const span2 = range2 ? range2.end.pos - range2.start.pos : Infinity;
+      surfacePath = span2 < span1 ? path2 : path1;
+    } else {
+      surfacePath = path1 ?? path2;
+    }
 
-  let surfacePath: string | undefined;
-  if (path1 !== undefined && path2 !== undefined) {
-    const range1 = sourceMap.get(path1);
-    const range2 = sourceMap.get(path2);
-    const span1 = range1 ? range1.end.pos - range1.start.pos : Infinity;
-    const span2 = range2 ? range2.end.pos - range2.start.pos : Infinity;
-    surfacePath = span2 < span1 ? path2 : path1;
-  } else {
-    surfacePath = path1 ?? path2;
+    if (surfacePath !== undefined) {
+      const typeInfo = resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap, definitions);
+      if (typeInfo) {
+        return { kind: 'term', info: typeInfo };
+      }
+    }
   }
 
-  if (surfacePath === undefined) return undefined;
+  // Fall back to goal state (for tactic keywords and when no term match)
+  const goals = getGoalsAtCursor(pos, sourceMap, tacticInfoTree, source);
+  if (goals !== undefined) {
+    // Return tactic info even if goals.length === 0 (proof complete)
+    return { kind: 'tactic', goalStates: goals };
+  }
 
-  return resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap, definitions);
+  return undefined;
 }
 
 /**
  * Query type information for a text selection range.
+ *
+ * For tactic blocks: falls back to goal state if no term type info found.
  */
 export function getTypeAtSelection(
   startPos: number,
@@ -254,14 +357,29 @@ export function getTypeAtSelection(
   sourceMap: SourceMap,
   elabMap: ElabMap | undefined,
   typeInfoMap: TypeInfoMap | undefined,
+  tacticInfoTree: TacticInfoTree | undefined,
   definitions?: DefinitionsMap,
-): TypeAtCursorResult | undefined {
-  if (!typeInfoMap) return undefined;
+  source?: string,  // NEW: source text for position conversion
+): CursorQueryResult | undefined {
+  // Try type info first
+  if (typeInfoMap) {
+    const surfacePath = findPathForSelection(startPos, endPos, sourceMap);
+    if (surfacePath !== undefined) {
+      const typeInfo = resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap, definitions);
+      if (typeInfo) {
+        return { kind: 'term', info: typeInfo };
+      }
+    }
+  }
 
-  const surfacePath = findPathForSelection(startPos, endPos, sourceMap);
-  if (surfacePath === undefined) return undefined;
+  // Fall back to goal state (use start position)
+  const goals = getGoalsAtCursor(startPos, sourceMap, tacticInfoTree, source);
+  if (goals !== undefined) {
+    // Return even if goals.length === 0 (proof complete)
+    return { kind: 'tactic', goalStates: goals };
+  }
 
-  return resolveTypeInfo(surfacePath, sourceMap, elabMap, typeInfoMap, definitions);
+  return undefined;
 }
 
 /**
