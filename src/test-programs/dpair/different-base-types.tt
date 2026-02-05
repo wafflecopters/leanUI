@@ -1,0 +1,22 @@
+@test success
+@name "DPair: different base types"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- Bool as base type
+boolPair : DPair Bool (\b => Equal b b)
+boolPair = MkDPair True refl
+
+-- Bool with different values
+boolPair2 : DPair Bool (\b => Equal b b)
+boolPair2 = MkDPair False refl
+
+-- Nat with larger value
+natPair : DPair Nat (\n => Equal n n)
+natPair = MkDPair (Succ (Succ (Succ Zero))) refl

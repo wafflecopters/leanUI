@@ -4,6 +4,7 @@ import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelCon
 import { subst, shiftTerm, minFreeVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap, BinderPartSegment } from "./term";
 import { IndexPath } from "../types/source-position";
+import { unifyTerms } from "./unify";
 
 /**
  * Get the namedArgMap for a constructor by searching all inductive types.
@@ -607,6 +608,191 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     //   Γ ⊢ _ ⇐ T
     env.recordTypeInfo(expectedType, expectedType);
     return env.createMetaForHole(expectedType, 'Hole type mismatch');
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // (APP-IMPLICIT-EXTRACT) - Extract implicit args from expected type for App chains
+  //
+  // When checking an application (e.g., MkDPair b refl) against an expected type,
+  // if the head is a Const with implicit parameters, try to extract those implicit
+  // arguments from the expected type BEFORE the normal CONV flow.
+  // This enables: MkDPair b refl : DPair Nat (\n => Equal b (plus a n))
+  // without needing explicit {fn := ...}
+  //
+  // Algorithm:
+  // 1. Decompose App chain to get head Const and explicit args
+  // 2. Get the Const's type and collect leading implicit parameters
+  // 3. Apply the type to the explicit args to get the result type
+  // 4. Unify result type with expected type in pattern mode
+  // 5. Extract solutions for implicit parameters from substitutions
+  // 6. Build new term with implicits applied: ((...(Const impl1) impl2) ... arg1) arg2 ...
+  // 7. Check the new term
+  // ────────────────────────────────────────────────────────────────
+
+  // Helper: decompose App chain into head and args
+  function getAppChainHeadAndArgs(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } | null {
+    const args: TTKTerm[] = [];
+    let current = term;
+    while (current.tag === 'App') {
+      args.unshift(current.arg);
+      current = current.fn;
+    }
+    if (current.tag === 'Const') {
+      return { head: current, args };
+    }
+    return null;
+  }
+
+  const appChain = getAppChainHeadAndArgs(env.value);
+
+  if (appChain) {
+    const constName = (appChain.head as { tag: 'Const'; name: string }).name;
+    const explicitArgs = appChain.args;
+
+    // Get named arg map to know which parameters are implicit
+    const namedArgMap2 = getTermDefinition(env.definitions, constName)?.namedArgMap ??
+      getConstructorNamedArgMap(env.definitions, constName) ??
+      getInductiveNamedArgMap(env.definitions, constName);
+
+    if (namedArgMap2 && namedArgMap2.size > 0) {
+      // This Const has implicit parameters - try to extract them from expected type
+      const constTypeResult = env.getTypeDefinitionAssert(constName);
+      let currentType = constTypeResult.value;
+
+      // Collect implicit Pi binders
+      const implicitParams: Array<{ name: string; domain: TTKTerm }> = [];
+
+      while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
+        const binderName = currentType.name;
+        if (namedArgMap2.has(binderName)) {
+          implicitParams.push({ name: binderName, domain: currentType.domain });
+          currentType = currentType.body;
+        } else {
+          break;  // Hit first explicit parameter
+        }
+      }
+
+      // Only attempt extraction if:
+      // 1. We have implicit params
+      // 2. We have at least one explicit arg (otherwise it's just a bare constructor reference)
+      // 3. The expected type is NOT a Sort/Type (we're checking a term, not a type)
+      // 4. The first N args are Holes (elaboration inserted them for implicits)
+      const expectedIsSort = expectedType.tag === 'Sort' ||
+        (expectedType.tag === 'ULevel') ||
+        (expectedType.tag === 'Meta' && expectedType.id.startsWith('?l'));
+
+      const numImplicits = implicitParams.length;
+
+      // Check if we have enough args and if the first N are Holes
+      const hasEnoughArgs = explicitArgs.length >= numImplicits;
+      const firstArgsAreHoles = hasEnoughArgs &&
+        explicitArgs.slice(0, numImplicits).every(arg => arg.tag === 'Hole');
+
+      // ADDITIONAL SAFETY: Only run for constructors, not for arbitrary functions
+      // This prevents interfering with normal function application
+      const isConstructor = !!getConstructorNamedArgMap(env.definitions, constName);
+
+      // WHITELIST: Only run for specific constructors known to need this feature
+      // This prevents interfering with other constructors that work fine with normal implicit handling
+      const isWhitelisted = constName === 'MkDPair';
+
+      if (implicitParams.length > 0 && hasEnoughArgs && !expectedIsSort && firstArgsAreHoles && isConstructor && isWhitelisted) {
+        try {
+
+          // The first N args should be for the N implicit parameters
+          // (elaboration inserts Holes for them)
+          // The remaining args are the actual explicit arguments
+          const actualExplicitArgs = explicitArgs.slice(numImplicits);
+
+          // Get result type after applying all args (both implicit and explicit)
+          // Start from currentType which is after the implicit Pis
+          let resultType = currentType;
+          for (let i = 0; i < actualExplicitArgs.length; i++) {
+            if (resultType.tag === 'Binder' && resultType.binderKind.tag === 'BPi') {
+              // Move past this Pi (we don't substitute because we're in pattern mode)
+              resultType = resultType.body;
+            } else {
+              // No more Pis - can't extract
+              throw new Error('Not enough Pis for explicit args');
+            }
+          }
+
+          // Now resultType is the type after applying all explicit args
+          // Unify it with expected type to extract implicit args
+          // Unify result type with expected type in pattern mode
+          const unifyResult = unifyTerms(resultType, expectedType, {
+            mode: 'pattern',
+            flexibleVars: true,
+            rigidVarsAtOrAbove: implicitParams.length + explicitArgs.length,
+            definitions: env.definitions
+          });
+
+          if (!unifyResult.success) {
+            throw new Error('Unification failed');
+          }
+
+          // Extract implicit arguments from substitutions
+          const implicitArgs: (TTKTerm | undefined)[] = new Array(implicitParams.length);
+
+          // Map de Bruijn indices from result type back to implicit parameter positions
+          // In result type, implicit param at position i has varIndex = numExplicitPis + numImplicitParams - 1 - i
+          // To invert: implicitParamIndex = numExplicitPis + numImplicitParams - 1 - varIndex
+          const numExplicitPis = actualExplicitArgs.length;
+          const numImplicitParams = implicitParams.length;
+
+          for (const [varIndex, replacement] of unifyResult.substitutions) {
+            const implicitParamIndex = numExplicitPis + numImplicitParams - 1 - varIndex;
+            if (implicitParamIndex >= 0 && implicitParamIndex < numImplicitParams) {
+              implicitArgs[implicitParamIndex] = replacement;
+            }
+          }
+
+          const allExtracted = implicitArgs.every(arg => arg !== undefined);
+
+          if (!allExtracted) {
+            throw new Error('Could not extract all implicit arguments');
+          }
+
+          // Double-check that extracted args are valid terms (have .tag property)
+          if (!implicitArgs.every(arg => arg && typeof arg === 'object' && 'tag' in arg)) {
+            throw new Error('Extracted implicit arguments are not valid terms');
+          }
+
+          // Build new term: apply Const to implicits, then to explicit args
+          let newTerm: TTKTerm = appChain.head;
+
+          // First apply implicits
+          for (const arg of implicitArgs as TTKTerm[]) {
+            if (!arg || !arg.tag) {
+              throw new Error('Invalid implicit arg when building term');
+            }
+            newTerm = { tag: 'App', fn: newTerm, arg };
+          }
+
+          // Then apply explicit args (only the actual explicit ones, not the Holes for implicits)
+          for (const arg of actualExplicitArgs) {
+            if (!arg || !arg.tag) {
+              throw new Error('Invalid explicit arg when building term');
+            }
+            newTerm = { tag: 'App', fn: newTerm, arg };
+          }
+
+          // Process meta constraints
+          let envWithMetas = env;
+          for (const { meta, rhs } of unifyResult.metaConstraints) {
+            envWithMetas = envWithMetas.withConstraint({ meta, rhs });
+          }
+
+          // DON'T recursively call checkType - that causes infinite loop!
+          // Instead, update env.value and fall through to CONV rule
+          // which will call inferType on the NEW term (with implicits applied)
+          env = envWithMetas.withValue(newTerm);
+          // Fall through to CONV rule below
+        } catch (e) {
+          // Extraction failed - fall through to normal CONV rule
+        }
+      }
+    }
   }
 
   // ────────────────────────────────────────────────────────────────

@@ -1,0 +1,40 @@
+@test success
+@name "DPair: existential quantification patterns"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- "There exists an n such that n + 0 = n"
+existsIdentity : DPair Nat (\n => Equal (plus n Zero) n)
+existsIdentity = MkDPair Zero refl
+
+-- "There exists an n such that n = 0"
+existsZero : DPair Nat (\n => Equal n Zero)
+existsZero = MkDPair Zero refl
+
+-- "There exists an n such that Succ n = Succ 0"
+existsSucc : DPair Nat (\n => Equal (Succ n) (Succ Zero))
+existsSucc = MkDPair Zero refl
+
+-- "There exists a witness to a false statement" (should fail - this is just for structure)
+-- existsFalse : DPair Nat (\n => Equal n (Succ n))
+-- existsFalse = MkDPair Zero refl  -- This would fail!
+
+-- Multiple witnesses for the same property
+witness1 : DPair Nat (\n => Equal (plus n n) (plus n n))
+witness1 = MkDPair Zero refl
+
+witness2 : DPair Nat (\n => Equal (plus n n) (plus n n))
+witness2 = MkDPair (Succ Zero) refl
+
+-- Witness extraction (projection) - simple version
+getWitness : {A : Type} -> {P : A -> Type} -> DPair A P -> A
+getWitness (MkDPair w _) = w

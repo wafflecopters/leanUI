@@ -1,0 +1,22 @@
+@test success
+@name "leqImpliesSum with corrected type"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {b : Nat} -> Leq Zero b
+  LeqSucc : {a b : Nat} -> Leq a b -> Leq (Succ a) (Succ b)
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- CORRECTED: Equal (plus a n) b instead of Equal b (plus b n)
+leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\n => Equal (plus a n) b)
+leqImpliesSum Zero b LeqZero = MkDPair b refl
+leqImpliesSum (Succ a) b (LeqSucc s) = ?todo

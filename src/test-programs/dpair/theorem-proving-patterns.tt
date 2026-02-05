@@ -1,0 +1,37 @@
+@test success
+@name "DPair: theorem proving patterns (like leqImpliesSum)"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {b : Nat} -> Leq Zero b
+  LeqSucc : {a b : Nat} -> Leq a b -> Leq (Succ a) (Succ b)
+
+-- Original pattern: witness to a ≤ b is a difference
+leqImpliesDiff : (a b : Nat) -> Leq a b -> DPair Nat (\d => Equal (plus a d) b)
+leqImpliesDiff Zero b LeqZero = MkDPair b refl
+leqImpliesDiff (Succ a) b (LeqSucc s) = ?todo
+
+-- Variation: witness to equality
+eqImpliesWitness : (a : Nat) -> Equal a a -> DPair Nat (\n => Equal a n)
+eqImpliesWitness a refl = MkDPair a refl
+
+-- Division: witness to divisibility
+-- For simplicity, just show the pattern with specific numbers
+divExample : DPair Nat (\d => Equal (plus (Succ (Succ Zero)) d) (Succ (Succ (Succ (Succ Zero)))))
+divExample = MkDPair (Succ (Succ Zero)) refl
+
+-- Minimum: given two numbers, return the smaller one with proof
+minWitness : Nat -> Nat -> DPair Nat (\m => DPair (Leq m (Succ (Succ (Succ Zero)))) (\_ => Equal m m))
+minWitness Zero b = MkDPair Zero (MkDPair LeqZero refl)
+minWitness (Succ a) Zero = MkDPair Zero (MkDPair LeqZero refl)
+minWitness (Succ a) (Succ b) = ?todo

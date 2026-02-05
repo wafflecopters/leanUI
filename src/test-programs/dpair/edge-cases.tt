@@ -1,0 +1,26 @@
+@test success
+@name "DPair: edge cases and corner cases"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- Constant type family (doesn't depend on fst)
+constantFamily : DPair Nat (\_ => Nat)
+constantFamily = MkDPair Zero (Succ Zero)
+
+-- Deeply nested lambda in type family
+deepLambda : DPair Nat (\n => DPair Nat (\m => Equal n m))
+deepLambda = MkDPair Zero (MkDPair Zero refl)
+
+-- DPair with proof irrelevance pattern
+proofIrrelevant : DPair Nat (\n => DPair (Equal n n) (\_ => Equal n n))
+proofIrrelevant = MkDPair Zero (MkDPair refl refl)
+
+-- Empty base type would be interesting but requires bottom type
+-- inductive Empty : Type where
+-- impossiblePair : DPair Empty (\e => Nat)
+-- impossiblePair = ??? -- can't construct!

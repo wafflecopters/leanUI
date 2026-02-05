@@ -1,0 +1,26 @@
+@test success
+@name "DPair: nested dependent pairs"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- Nested DPair: outer DPair contains inner DPair
+-- The snd of outer depends on fst of outer
+nestedPair : DPair Nat (\n => DPair Nat (\m => Equal n m))
+nestedPair = MkDPair Zero (MkDPair Zero refl)
+
+-- Triple nesting
+triplePair : DPair Nat (\n => DPair Nat (\m => DPair Nat (\k => Equal (Succ n) (Succ k))))
+triplePair = MkDPair Zero (MkDPair Zero (MkDPair Zero refl))
+
+-- Nested with different base types
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+mixedNest : DPair Bool (\b => DPair Nat (\n => Equal n n))
+mixedNest = MkDPair True (MkDPair Zero refl)

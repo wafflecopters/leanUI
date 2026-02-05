@@ -1,0 +1,38 @@
+@test success
+@name "DPair: complex type dependencies"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+-- DPair with arithmetic property
+arithmeticPair : DPair Nat (\n => Equal (plus n n) (mul (Succ (Succ Zero)) n))
+arithmeticPair = MkDPair Zero refl
+
+-- Less-than-or-equal predicate
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {b : Nat} -> Leq Zero b
+  LeqSucc : {a b : Nat} -> Leq a b -> Leq (Succ a) (Succ b)
+
+-- DPair representing "n and a proof that n ≤ some bound"
+boundedNat : DPair Nat (\n => Leq n (Succ (Succ Zero)))
+boundedNat = MkDPair Zero LeqZero
+
+-- Another bounded value
+boundedOne : DPair Nat (\n => Leq n (Succ (Succ Zero)))
+boundedOne = MkDPair (Succ Zero) (LeqSucc LeqZero)
+
+-- DPair with conjunction of properties
+conj : DPair Nat (\n => DPair (Equal n n) (\_ => Leq n (Succ n)))
+conj = MkDPair Zero (MkDPair refl LeqZero)

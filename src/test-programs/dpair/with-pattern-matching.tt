@@ -1,0 +1,27 @@
+@test success
+@name "DPair: with pattern matching and recursion"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Function that returns a DPair based on input
+makePair : Nat -> DPair Nat (\n => Equal n n)
+makePair Zero = MkDPair Zero refl
+makePair (Succ n) = MkDPair (Succ n) refl
+
+-- Extract first component
+getFst : {A : Type} -> {fn : A -> Type} -> DPair A fn -> A
+getFst (MkDPair x _) = x
+
+-- Recursive function building DPairs
+buildPairs : Nat -> DPair Nat (\n => Equal n n)
+buildPairs Zero = MkDPair Zero refl
+buildPairs (Succ n) = MkDPair (Succ n) refl

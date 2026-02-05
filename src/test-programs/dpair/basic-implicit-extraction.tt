@@ -1,0 +1,33 @@
+@test success
+@name "DPair: basic implicit extraction cases"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- Test 1: Simplest case - reflexivity
+test1 : DPair Nat (\n => Equal n n)
+test1 = MkDPair Zero refl
+
+-- Test 2: With successor
+test2 : DPair Nat (\n => Equal n n)
+test2 = MkDPair (Succ Zero) refl
+
+-- Test 3: Dependent on first component
+test3 : DPair Nat (\n => Equal Zero Zero)
+test3 = MkDPair (Succ (Succ Zero)) refl
+
+-- Test 4: Type family that doesn't use the index
+test4 : DPair Nat (\_ => Nat)
+test4 = MkDPair Zero Zero
+
+-- Test 5: Type family that uses index in a complex way
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+test5 : DPair Nat (\n => Equal (plus n Zero) n)
+test5 = MkDPair Zero refl
