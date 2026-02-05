@@ -5187,6 +5187,10 @@ function findUnsolvedWildcards(term: TTKTerm, path: string[] = []): string[][] {
     case 'Binder':
       results.push(...findUnsolvedWildcards(term.domain, [...path, 'domain']));
       results.push(...findUnsolvedWildcards(term.body, [...path, 'body']));
+      // For let bindings, also check the definition value
+      if (term.binderKind.tag === 'BLet') {
+        results.push(...findUnsolvedWildcards(term.binderKind.defVal, [...path, 'binderKind', 'defVal']));
+      }
       break;
 
     case 'Match':
