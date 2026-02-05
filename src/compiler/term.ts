@@ -827,7 +827,7 @@ export class TCEnv<T> {
    */
   addWarning(message: string): void {
     if (!_warningsCollector) return;
-    _warningsCollector.push(TCEnvError.create(message, this));
+    _warningsCollector.push(TCEnvError.create(message, this, 'warning'));
   }
 
   /**
@@ -2321,11 +2321,14 @@ export class TCEnv<T> {
  * should use `wrappedBy()` to provide a semantic message that becomes the new
  * primary, with the original error becoming the cause/detail.
  */
+export type ErrorSeverity = 'error' | 'warning';
+
 export abstract class TCEnvError {
   abstract get errors(): TCEnvError[];
   abstract get message(): string;
   abstract get env(): TCEnv<unknown>;
   abstract get causeStack(): string[];
+  abstract get severity(): ErrorSeverity;
 
   /**
    * Get the full error message including cause stack.
@@ -2363,8 +2366,8 @@ export abstract class TCEnvError {
     return new TCEnvCauseError(this, cause);
   }
 
-  static create<T>(message: string, env: TCEnv<T>): TCEnvError {
-    return new TCEnvErrorUnit(message, env);
+  static create<T>(message: string, env: TCEnv<T>, severity: ErrorSeverity = 'error'): TCEnvError {
+    return new TCEnvErrorUnit(message, env, severity);
   }
 
   static group(errors: TCEnvError[]): TCEnvError {
@@ -2375,7 +2378,8 @@ export abstract class TCEnvError {
 class TCEnvErrorUnit<T> extends TCEnvError {
   constructor(
     public readonly message: string,
-    public readonly env: TCEnv<T>
+    public readonly env: TCEnv<T>,
+    public readonly severity: ErrorSeverity = 'error'
   ) { super(); }
 
   get errors(): TCEnvError[] {
@@ -2407,6 +2411,11 @@ class TCEnvGroupError extends TCEnvError {
   get causeStack(): string[] {
     return this._errors[0]?.causeStack ?? [];
   }
+
+  get severity(): ErrorSeverity {
+    // Return 'error' if any error has severity 'error', otherwise 'warning'
+    return this._errors.some(e => e.severity === 'error') ? 'error' : 'warning';
+  }
 }
 
 /**
@@ -2434,6 +2443,10 @@ class TCEnvWrappedError extends TCEnvError {
   get causeStack(): string[] {
     return [this.inner.message, ...this.inner.causeStack];
   }
+
+  get severity(): ErrorSeverity {
+    return this.inner.severity;
+  }
 }
 
 /**
@@ -2459,6 +2472,10 @@ class TCEnvCauseError extends TCEnvError {
 
   get causeStack(): string[] {
     return [...this.inner.causeStack, this.cause];
+  }
+
+  get severity(): ErrorSeverity {
+    return this.inner.severity;
   }
 }
 
