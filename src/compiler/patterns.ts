@@ -719,6 +719,52 @@ type PatternStackEntry = { tag: 'pattern', pattern: TTKPattern } | { tag: 'done'
 export type CheckStackEntry = { type: TTKTerm, ctxLength: number }
 
 // ============================================================================
+// Binder Substitution Extraction (for type info instantiation)
+// ============================================================================
+
+/**
+ * Extract substitutions for binder variables by comparing a return type term
+ * with the actual scrutinee term. When the constructor return type has a Var
+ * referring to a binder, and the scrutinee has a concrete term at that position,
+ * we record the substitution.
+ *
+ * For example, comparing:
+ *   returnArg: Succ (Var 2)  (from LeqSucc's return type Leq (Succ n) (Succ m))
+ *   scrutineeArg: Succ (Var 1)  (from the scrutinee type Leq (Succ a) (Succ b))
+ * We extract: binder position 0 (which is n) maps to Var 1 (which is a in context)
+ *
+ * @param returnArg A subterm from the constructor's return type
+ * @param scrutineeArg The corresponding subterm from the scrutinee type
+ * @param numBinders Total number of binders in the constructor
+ * @param binderSubstitutions Map to populate: binderPosition -> replacement term
+ */
+function extractBinderSubstitutions(
+  returnArg: TTKTerm,
+  scrutineeArg: TTKTerm,
+  numBinders: number,
+  binderSubstitutions: Map<number, TTKTerm>
+): void {
+  if (returnArg.tag === 'Var') {
+    // The return type references a binder variable
+    // Convert de Bruijn index to binder position (0 = first binder)
+    const binderPos = numBinders - 1 - returnArg.index;
+    if (binderPos >= 0 && binderPos < numBinders) {
+      // Record the substitution: this binder should be replaced with scrutineeArg
+      binderSubstitutions.set(binderPos, scrutineeArg);
+    }
+  } else if (returnArg.tag === 'App' && scrutineeArg.tag === 'App') {
+    // Recurse into applications
+    extractBinderSubstitutions(returnArg.fn, scrutineeArg.fn, numBinders, binderSubstitutions);
+    extractBinderSubstitutions(returnArg.arg, scrutineeArg.arg, numBinders, binderSubstitutions);
+  } else if (returnArg.tag === 'Binder' && scrutineeArg.tag === 'Binder') {
+    // Recurse into binders (though unusual in return types)
+    extractBinderSubstitutions(returnArg.domain, scrutineeArg.domain, numBinders, binderSubstitutions);
+    // Note: body comparison would need index adjustment, skip for now
+  }
+  // For other cases (Const, Sort, etc.), no substitutions to extract
+}
+
+// ============================================================================
 // Pattern Variable Counting
 // ============================================================================
 
@@ -1520,9 +1566,10 @@ export function checkMatchClause(
         solvedEnv.atIndexPath(namePath).recordTypeInfoWithContext(zonkedDomain, patContext);
 
         // For PCtor patterns, record type info for each constructor argument
-        // so that hovering on "neq" in (No neq) shows "Equal m n -> Void" not "DecEq a b".
+        // so that hovering on "leq" in (LeqSucc leq) shows "Leq a b" (the instantiated type)
+        // rather than "Leq n m" (the raw constructor type with binder names).
         // Also record the constructor's full type at the .name sub-path so hovering on
-        // "No" shows the constructor type, not the matched type.
+        // the constructor name shows its type.
         const pat = paddedPatterns[i];
         if (pat.tag === 'PCtor' && pat.args.length > 0) {
           const ctorDef = getTypeDefinition(solvedEnv.definitions, pat.name);
@@ -1539,57 +1586,65 @@ export function checkMatchClause(
               }
             }
 
-            // Map implicit constructor binder positions to scrutinee arg names.
-            // Given scrutinee type (e.g., DecEq x y) and constructor return type (DecEq Var(2) Var(1)),
-            // determine which binder position maps to which scrutinee arg, and if that arg is a Var,
-            // use its context name instead of the constructor's binder name (e.g., "x" instead of "m").
-            const implicitArgNames = new Map<number, string>();
-            if (implicitPositions.size > 0) {
+            // Build substitution map by comparing constructor return type with scrutinee type.
+            // The scrutinee type (zonkedDomain) has the correct instantiated values.
+            // E.g., for LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+            // matched against Leq (Succ a) (Succ b), we want to determine n=a, m=b.
+            // The return type has Var indices referring to binders: Leq (Succ (Var 2)) (Succ (Var 1))
+            // The scrutinee has Var indices referring to context: Leq (Succ (Var X)) (Succ (Var Y))
+            // By comparing args, we can build: binderPos -> contextVar mapping
+            const binderSubstitutions = new Map<number, TTKTerm>();
+            {
               const scrutineeSpine = extractAppSpine(zonkedDomain);
               const { binders: ctorBinders, body: ctorBody } = extractPiSpine(ctorDef);
               const returnSpine = extractAppSpine(ctorBody);
               const numBinders = ctorBinders.length;
 
+              // Match up args from return type and scrutinee to find substitutions
               for (let k = 0; k < Math.min(returnSpine.args.length, scrutineeSpine.args.length); k++) {
                 const retArg = returnSpine.args[k];
                 const scrArg = scrutineeSpine.args[k];
-                if (retArg.tag === 'Var' && scrArg.tag === 'Var') {
-                  const binderPos = numBinders - 1 - retArg.index;
-                  if (binderPos >= 0 && implicitPositions.has(binderPos)) {
-                    const ctxEntry = patContext[patContext.length - 1 - scrArg.index];
-                    if (ctxEntry && ctxEntry.name !== '_') {
-                      implicitArgNames.set(binderPos, ctxEntry.name);
-                    }
-                  }
-                }
+                // Try to extract a variable mapping from nested structures too
+                extractBinderSubstitutions(retArg, scrArg, numBinders, binderSubstitutions);
               }
             }
 
             // Walk the constructor's Pi type, recording at SURFACE arg indices.
             // After padding, kernel args include implicit wildcards (e.g., {m} {n} neq),
             // but the sourceMap uses surface indices (e.g., args[0] = neq).
-            // The elabMap maps surface args[0] -> kernel args[0] (pre-padding index),
-            // which is wrong after padding. So we record directly at surface-indexed keys
-            // that match what the sourceMap produces.
+            // Apply the binderSubstitutions to instantiate types with context variables.
             const kernelPatKey = serializeIndexPath(patPath);
             let ctorType = ctorDef;
-            let ctorArgContext = patContext;
             let surfaceArgIdx = 0;
+            const numBinders = pat.args.length;
             for (let argIdx = 0; argIdx < pat.args.length; argIdx++) {
               if (ctorType.tag !== 'Binder' || ctorType.binderKind.tag !== 'BPi') break;
-              const argDomain = solvedEnv.zonkTerm(ctorType.domain);
+
+              // Get the domain and apply substitutions to replace binder refs with context vars.
+              // Use simultaneous substitution (don't decrement other indices).
+              // At depth argIdx, binders 0..argIdx-1 are in scope with de Bruijn indices argIdx-1..0
+              // binderPos p -> de Bruijn index (argIdx - 1 - p)
+              let argDomain = solvedEnv.zonkTerm(ctorType.domain);
+              argDomain = transformVarsInTerm(argDomain, (varIndex) => {
+                // Convert de Bruijn index to binder position
+                const binderPos = argIdx - 1 - varIndex;
+                if (binderPos >= 0 && binderPos < argIdx && binderSubstitutions.has(binderPos)) {
+                  return binderSubstitutions.get(binderPos)!;
+                }
+                return mkVar(varIndex);
+              });
 
               if (!implicitPositions.has(argIdx)) {
                 // Record at surface-indexed path (matches what sourceMap produces)
+                // Use patContext (the outer context without constructor binders) for proper names
                 solvedEnv.recordTypeInfoAtKey(
-                  `${kernelPatKey}.args[${surfaceArgIdx}]`, argDomain, ctorArgContext);
+                  `${kernelPatKey}.args[${surfaceArgIdx}]`, argDomain, patContext);
                 solvedEnv.recordTypeInfoAtKey(
-                  `${kernelPatKey}.args[${surfaceArgIdx}].name`, argDomain, ctorArgContext);
+                  `${kernelPatKey}.args[${surfaceArgIdx}].name`, argDomain, patContext);
                 surfaceArgIdx++;
               }
 
-              const entryName = implicitArgNames.get(argIdx) ?? ctorType.name;
-              ctorArgContext = [...ctorArgContext, { name: entryName, type: ctorType.domain }];
+              // Move to the body (don't substitute - we handle that via binderSubstitutions)
               ctorType = ctorType.body;
             }
 

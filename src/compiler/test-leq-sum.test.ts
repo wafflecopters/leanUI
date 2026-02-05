@@ -114,46 +114,26 @@ leqPred a b (LeqSucc leq) = leq
     if (decl.sourceMap && decl.typeInfoMap) {
       // Find the "leq" pattern variable inside (LeqSucc leq)
       // It should be at value.clauses[0].patterns[2].args[0] (surface syntax, since {n} {m} are implicit)
-
-      // Let's first see what paths we have
-      const patternPaths = [...decl.sourceMap.entries()]
-        .filter(([path]) => path.includes('patterns[2]'))
-        .map(([path, range]) => ({ path, range }));
-
-      console.log('Pattern paths:', patternPaths.map(p => p.path));
-
-      // Find the leq argument - it should be args[0] in surface syntax since {n} {m} are implicit
       const leqArgPath = 'value.clauses[0].patterns[2].args[0]';
       const leqArgRange = decl.sourceMap.get(leqArgPath);
+      expect(leqArgRange).toBeDefined();
 
-      if (leqArgRange) {
-        const result = getTypeAtCursor(
-          leqArgRange.start.pos,
-          decl.sourceMap,
-          decl.elabMap,
-          decl.typeInfoMap,
-        );
+      const result = getTypeAtCursor(
+        leqArgRange!.start.pos,
+        decl.sourceMap,
+        decl.elabMap,
+        decl.typeInfoMap,
+      );
 
-        console.log('Type at leq:', result?.prettyType);
-        console.log('Context:', result?.context);
+      expect(result).toBeDefined();
+      // The type should be "Leq a b" not "Leq n m"
+      // because unification should have determined that n=a and m=b
+      expect(result!.prettyType).toBe('(Leq a b)');
 
-        expect(result).toBeDefined();
-        if (result) {
-          // The type should be "Leq a b" not "Leq n m"
-          // because unification should have determined that n=a and m=b
-          expect(result.prettyType).toBe('(Leq a b)');
-
-          // The context should NOT contain n and m
-          const contextNames = result.context.map(c => c.name);
-          expect(contextNames).not.toContain('n');
-          expect(contextNames).not.toContain('m');
-        }
-      } else {
-        // If args[0] doesn't exist, try finding where leq is
-        const allArgs = patternPaths.filter(p => p.path.includes('.args['));
-        console.log('All arg paths:', allArgs.map(p => p.path));
-        throw new Error('Could not find leq argument path');
-      }
+      // The context should NOT contain n and m
+      const contextNames = result!.context.map(c => c.name);
+      expect(contextNames).not.toContain('n');
+      expect(contextNames).not.toContain('m');
     }
   });
 
@@ -182,7 +162,6 @@ leqPred a b (LeqSucc leq) = leq
           // Context should only have a and b from the function signature
           // plus possibly leq itself (if it's in scope)
           const contextNames = result.context.map(c => c.name);
-          console.log('Full context:', result.context);
 
           // Check that n and m are NOT in the context
           expect(contextNames).not.toContain('n');
