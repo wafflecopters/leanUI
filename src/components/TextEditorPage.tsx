@@ -1024,6 +1024,9 @@ const styles = {
   errorText: {
     color: '#f85149',
   },
+  warningText: {
+    color: '#d29922',
+  },
 };
 
 // ============================================================================
@@ -1354,9 +1357,17 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
                 {decl.checkSuccess ? (
                   <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
                 ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
-                  <span style={{ marginLeft: 'auto', color: '#f85149', fontSize: '12px' }}>
-                    {decl.checkErrors.length} error(s)
-                  </span>
+                  (() => {
+                    const errors = decl.checkErrors.filter(e => e.severity === 'error').length;
+                    const warnings = decl.checkErrors.filter(e => e.severity === 'warning').length;
+                    return (
+                      <span style={{ marginLeft: 'auto', fontSize: '12px' }}>
+                        {errors > 0 && <span style={{ color: '#f85149' }}>{errors} error{errors !== 1 ? 's' : ''}</span>}
+                        {errors > 0 && warnings > 0 && <span style={{ color: '#8b949e' }}>, </span>}
+                        {warnings > 0 && <span style={{ color: '#d29922' }}>{warnings} warning{warnings !== 1 ? 's' : ''}</span>}
+                      </span>
+                    );
+                  })()
                 ) : null}
               </>
             }
@@ -1403,7 +1414,9 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
                 {decl.checkErrors && decl.checkErrors.length > 0 && (
                   <div style={{ marginTop: '8px' }}>
                     {decl.checkErrors.map((err, j) => (
-                      <div key={j} style={styles.errorText}>{err.message}</div>
+                      <div key={j} style={err.severity === 'warning' ? styles.warningText : styles.errorText}>
+                        {err.message}
+                      </div>
                     ))}
                   </div>
                 )}
@@ -1732,7 +1745,9 @@ export function TextEditorPage() {
             if (sourceRange) {
               // Use the mapped source range
               markers.push({
-                severity: monaco.MarkerSeverity.Error,
+                severity: err.severity === 'warning'
+                  ? monaco.MarkerSeverity.Warning
+                  : monaco.MarkerSeverity.Error,
                 message: err.message,
                 startLineNumber: sourceRange.start.line,
                 startColumn: sourceRange.start.col,
@@ -1744,7 +1759,9 @@ export function TextEditorPage() {
               // Fallback: mark the first line of the block
               const firstLine = block.startLine;
               markers.push({
-                severity: monaco.MarkerSeverity.Error,
+                severity: err.severity === 'warning'
+                  ? monaco.MarkerSeverity.Warning
+                  : monaco.MarkerSeverity.Error,
                 message: err.message,
                 startLineNumber: firstLine,
                 startColumn: 1,
