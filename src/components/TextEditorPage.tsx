@@ -838,6 +838,22 @@ leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
   | LeqSucc p =>
     cases hba with
     | LeqSucc q => exact (congSucc (leqAntisym p q))
+
+record DPair (A : Type) (fn : A -> Type) where
+  fst : A
+  snd : fn fst
+
+succInj: {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
+succInj refl = refl
+
+leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\\n => Equal b (plus a n))
+leqImpliesSum Zero b LeqZero = MkDPair b refl
+leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
+  | MkDPair n pf => MkDPair n (succInj pf)
+
+sigmaSum : (count : Nat) -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSum Zero _ = Zero
+sigmaSum (Succ k) fn = plus (sigmaSum k fn) (Succ k)
 `;
 
 const PRESETS: { name: string; code: string }[] = [
