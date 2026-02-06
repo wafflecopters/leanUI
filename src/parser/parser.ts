@@ -1998,11 +1998,27 @@ export class Parser {
    */
   private expr(minPrec: number, ctx: NameContext, path: IndexPath = [], allowMultilineApp: boolean = false, baseColumn?: number): TTerm {
     // Capture start position for recording the full expression range
-    const startToken = this.current();
+    let startToken = this.current();
+
+    // Remember the position before parsing prefix
+    const posBeforePrefix = this.pos;
 
     // Parse the initial prefix expression
     // Note: We parse with the base path, then adjust if it becomes part of a larger structure
     let left = this.parsePrefix(ctx, path);
+
+    // If parsePrefix consumed tokens (e.g., skipped newlines), update startToken
+    // to be the actual first token of the expression, not a newline we skipped
+    if (this.pos > posBeforePrefix && startToken.type === 'NEWLINE') {
+      // Find first non-newline token starting from posBeforePrefix
+      let searchPos = posBeforePrefix;
+      while (searchPos < this.tokens.length && this.tokens[searchPos].type === 'NEWLINE') {
+        searchPos++;
+      }
+      if (searchPos < this.tokens.length) {
+        startToken = this.tokens[searchPos];
+      }
+    }
 
     // Track whether we've done any infix/application work that extends the expression
     // If we just parse a prefix and break immediately, the prefix already recorded its range
