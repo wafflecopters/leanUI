@@ -1044,8 +1044,9 @@ export class Parser {
       this.advance(); // consume ':'
       // Parse the full type expression (including = as equality operator)
       // Track source positions with path "type"
+      // Use nameToken.col as base column to allow indented continuations
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
-      const type = this.expr(0, [], typePath);
+      const type = this.expr(0, [], typePath, false, nameToken.col);
 
       // Check for :=
       if (this.current().type === 'ASSIGN') {
@@ -1991,8 +1992,11 @@ export class Parser {
    * Main Pratt parser expression handler.
    * @param minPrec Minimum precedence to continue parsing
    * @param ctx Name context for De Bruijn index resolution
+   * @param path Index path for source position tracking
+   * @param allowMultilineApp Allow multi-line application (for inductive declarations)
+   * @param baseColumn When set, skip newlines if next token is indented past this column (for multi-line type signatures)
    */
-  private expr(minPrec: number, ctx: NameContext, path: IndexPath = [], allowMultilineApp: boolean = false): TTerm {
+  private expr(minPrec: number, ctx: NameContext, path: IndexPath = [], allowMultilineApp: boolean = false, baseColumn?: number): TTerm {
     // Capture start position for recording the full expression range
     const startToken = this.current();
 
@@ -2005,6 +2009,27 @@ export class Parser {
     let didInfixWork = false;
 
     while (true) {
+      // Skip newlines if we're in indentation-aware mode and next token is indented
+      if (baseColumn !== undefined && this.current().type === 'NEWLINE') {
+        // Peek at next non-newline token
+        let peekPos = this.pos + 1;
+        while (peekPos < this.tokens.length && this.tokens[peekPos].type === 'NEWLINE') {
+          peekPos++;
+        }
+        if (peekPos < this.tokens.length) {
+          const nextToken = this.tokens[peekPos];
+          // If next token is indented past base column, skip the newlines
+          if (nextToken.col > baseColumn) {
+            while (this.current().type === 'NEWLINE') {
+              this.advance();
+            }
+          } else {
+            // Next token is not indented - expression ends here
+            break;
+          }
+        }
+      }
+
       const token = this.current();
 
       // Check for arrow (right-associative, low precedence)
@@ -2416,6 +2441,9 @@ export class Parser {
     this.expect('RBRACE');
     const closeBracePath = [...path, { kind: 'field' as const, name: 'closeBrace' }];
     this.recordRange(closeBracePath, closeBraceToken, closeBraceToken);
+
+    // Skip newlines before checking for arrow (allows "{x : A}\n  -> B")
+    this.skipNewlines();
 
     // Named binders must be followed by '->'
     if (this.current().type !== 'ARROW') {
