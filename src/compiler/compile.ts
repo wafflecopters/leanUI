@@ -4244,8 +4244,17 @@ function resolveWithScrutineeTypes(
   scrutineeExprs: TTerm[],
   definitions: DefinitionsMap
 ): TTerm {
+  console.warn(`[resolveWithScrutineeTypes] Called with ${scrutineeExprs.length} scrutinee(s)`);
+  console.warn(`[resolveWithScrutineeTypes] declType: ${JSON.stringify(declType, null, 2).substring(0, 500)}`);
+
   // Build a substitution map from hole names to inferred types
   const holeSubstitutions = new Map<string, TTerm>();
+
+  // Check if this is a nested with-clause by counting scrutinees before any Holes
+  // If there are existing scrutinees (not just the ones we're resolving), it's nested
+  const numExistingScrutinees = countScrutineesBeforeHoles(declType);
+  const isNestedWith = numExistingScrutinees > 0;
+  console.warn(`[resolveWithScrutineeTypes] numExistingScrutinees = ${numExistingScrutinees}, isNestedWith = ${isNestedWith}`);
 
   // Extract function parameters from the type to build a context
   // The auxiliary function type is: (param1 : T1) -> ... -> (paramN : TN) -> (scrutinee : _scrut0_type) -> ... -> ReturnType
@@ -4254,7 +4263,26 @@ function resolveWithScrutineeTypes(
 
   for (let i = 0; i < scrutineeExprs.length; i++) {
     const scrutinee = scrutineeExprs[i];
-    const holeName = `_scrut${i}_type`;
+    // The global scrutinee number accounts for existing scrutinees from outer with-clauses
+    const globalScrutineeNum = numExistingScrutinees + i;
+    const holeName = `_scrut${globalScrutineeNum}_type`;
+
+    console.warn(`[resolveWithScrutineeTypes] Processing scrutinee ${i}: numExisting=${numExistingScrutinees}, global#=${globalScrutineeNum}, holeName=${holeName}`);
+
+    // For nested with-clauses (when there are existing scrutinees), the inner scrutinee may
+    // reference pattern variables from outer withs that are not in function parameters.
+    // Use syntactic extraction since we can't build the full context for type inference.
+    if (isNestedWith) {
+      console.warn(`Nested with detected for scrutinee ${i} (global #${globalScrutineeNum}), using syntactic extraction`);
+      const simpleType = tryExtractReturnType(scrutinee, definitions);
+      if (simpleType) {
+        console.warn(`Successfully extracted return type syntactically: ${JSON.stringify(simpleType).substring(0, 200)}`);
+        holeSubstitutions.set(holeName, simpleType);
+      } else {
+        console.warn(`Syntactic extraction failed, leaving as Hole`);
+      }
+      continue;
+    }
 
     try {
       // Elaborate the scrutinee expression.
@@ -4279,11 +4307,6 @@ function resolveWithScrutineeTypes(
       for (const param of functionParams) {
         env = env.extendTTKContext(param.name, param.type);
       }
-
-      // For nested with-clauses, pattern variables from outer withs may be referenced
-      // in the scrutinee expression. We cannot add them to the context with accurate types
-      // at this stage (we'd need to perform pattern matching type inference).
-      // Instead, we attempt inference and fall back to Hole if it fails.
 
       try {
         // Attempt to infer the type of the scrutinee in this context
@@ -4318,6 +4341,70 @@ function resolveWithScrutineeTypes(
 
   // Apply substitutions to the declaration type
   return substituteHoles(declType, holeSubstitutions);
+}
+
+/**
+ * Check if a type signature contains scrutinee parameters (indicating a nested with-clause).
+ */
+function hasScrutineeParams(type: TTerm): boolean {
+  let currentType = type;
+  while (true) {
+    if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
+      if (currentType.name.startsWith('_scrut')) {
+        return true;
+      }
+      currentType = currentType.body;
+    } else if (currentType.tag === 'MultiBinder' && currentType.binderKind.tag === 'BPiTT') {
+      if (currentType.names.some(name => name.startsWith('_scrut'))) {
+        return true;
+      }
+      currentType = currentType.body;
+    } else {
+      break;
+    }
+  }
+  return false;
+}
+
+/**
+ * Count scrutinee parameters that come BEFORE the first Hole domain.
+ * These are existing scrutinees from outer with-clauses.
+ * Scrutinees with Hole domains are the ones being currently resolved.
+ */
+function countScrutineesBeforeHoles(type: TTerm): number {
+  let count = 0;
+  let currentType = type;
+
+  while (true) {
+    if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
+      // If this is a scrutinee parameter with a Hole domain, stop counting
+      if (currentType.name.startsWith('_scrut') && currentType.domain && currentType.domain.tag === 'Hole') {
+        break;
+      }
+      // If this is a scrutinee parameter (but not with Hole domain), count it
+      if (currentType.name.startsWith('_scrut')) {
+        count++;
+      }
+      currentType = currentType.body;
+    } else if (currentType.tag === 'MultiBinder' && currentType.binderKind.tag === 'BPiTT') {
+      // Check if any name is a scrutinee - if so and domain is Hole, stop
+      const hasScrutName = currentType.names.some(name => name.startsWith('_scrut'));
+      if (hasScrutName && currentType.domain.tag === 'Hole') {
+        break;
+      }
+      // Count scrutinee names
+      for (const name of currentType.names) {
+        if (name.startsWith('_scrut')) {
+          count++;
+        }
+      }
+      currentType = currentType.body;
+    } else {
+      break;
+    }
+  }
+
+  return count;
 }
 
 /**

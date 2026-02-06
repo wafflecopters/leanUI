@@ -247,7 +247,13 @@ function desugarWithClause(
   // 2. Use PVar clause patterns instead of constructor patterns
   // 3. Substitute pattern reconstructions into the return type
   // This avoids a type mismatch between scrutinee type and auxiliary instantiation.
-  const useAgdaStyle = hasConstructorPatterns(functionPatterns) && hasOnlySimplePatterns(functionPatterns);
+  //
+  // CRITICAL: For NESTED with-clauses, some constructor patterns come from outer with
+  // scrutinee parameters. We should NOT use Agda style for those - we need to pass
+  // the full reconstructed term (e.g., inl(var)) not just the inner var.
+  // So disable Agda style for nested with-clauses (detected by declType having scrutinees).
+  const isNestedWith = declType && countScrutineeParams(declType) > 0;
+  const useAgdaStyle = !isNestedWith && hasConstructorPatterns(functionPatterns) && hasOnlySimplePatterns(functionPatterns);
   const effectiveClausePatterns = useAgdaStyle
     ? extractInnerPatterns(functionPatterns)
     : functionPatterns;
@@ -264,9 +270,17 @@ function desugarWithClause(
   // Compute the auxiliary function type from the main declaration's type
   // The auxiliary takes: (1) bound variable args, (2) scrutinee args
   // and returns the main function's return type (with pattern reconstructions substituted)
+  console.warn(`[with-desugar] Computing auxiliary type for ${auxName}`);
+  console.warn(`  functionPatterns.length = ${functionPatterns.length}`);
+  console.warn(`  scrutinees.length = ${scrutinees.length}`);
+  console.warn(`  input declType = ${JSON.stringify(declType, null, 2).substring(0, 500)}`);
   const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees, useAgdaStyle, baseName);
+  console.warn(`  computed auxType = ${JSON.stringify(auxType, null, 2).substring(0, 1500)}`);
 
   // Create the auxiliary function definition
+  // withScrutineeCount should be the TOTAL number of scrutinees (existing + new)
+  const numExistingScrutinees = declType ? countScrutineeParams(declType) : 0;
+  const totalScrutineeCount = numExistingScrutinees + scrutinees.length;
   const auxDecl: ParsedDeclaration = {
     kind: 'def',
     name: auxName,
@@ -276,7 +290,7 @@ function desugarWithClause(
       scrutinee: mkHoleTT('_scrutinee', mkHoleTT('_scrutinee_type', mkPropTT())),
       clauses: auxClauses,
     },
-    withScrutineeCount: scrutinees.length,
+    withScrutineeCount: totalScrutineeCount,
     withScrutineeExprs: scrutinees,
     withFunctionPatterns: functionPatterns,
   };
@@ -293,32 +307,42 @@ function desugarWithClause(
   }
 
   // Create the call to the auxiliary function
+  console.warn(`[with-desugar] Creating call to ${auxName}`);
   let call: TTerm = mkConstTT(auxName);
 
   const numPatternVars = countPatternVars(functionPatterns);
   let varIndex = numPatternVars;
+  console.warn(`  numPatternVars = ${numPatternVars}, reconstructing pattern args`);
 
   if (useAgdaStyle) {
+    console.warn(`  Using Agda style, passing ${functionPatterns.length} inner vars`);
     // Agda-style: pass inner vars directly, not constructor-wrapped terms.
     // For PVar: same as before (just the var).
     // For PCtor("Succ", [PVar x]): pass x (the inner var), not Succ(x).
     // Since hasOnlySimplePatterns guarantees each pattern has exactly 1 inner var,
     // the var index assignment is the same as for PVar patterns.
-    for (const _pat of functionPatterns) {
+    for (let i = 0; i < functionPatterns.length; i++) {
       const idx = varIndex - 1;
+      console.warn(`    Agda arg ${i}: Var(${idx})`);
       call = mkAppTT(call, mkVarTT(idx));
       varIndex = idx;
     }
   } else {
     // Original style: pass reconstructed pattern terms
     const patternArgs = patternsToTerms(functionPatterns, varIndex);
-    for (const arg of patternArgs) {
+    console.warn(`  Reconstructed ${patternArgs.length} pattern args:`);
+    for (let i = 0; i < patternArgs.length; i++) {
+      const arg = patternArgs[i];
+      console.warn(`    arg ${i}: ${JSON.stringify(arg).substring(0, 150)}`);
       call = mkAppTT(call, arg);
     }
   }
 
   // Add scrutinee arguments
-  for (const scrutinee of scrutinees) {
+  console.warn(`  Adding ${scrutinees.length} scrutinee arguments`);
+  for (let i = 0; i < scrutinees.length; i++) {
+    const scrutinee = scrutinees[i];
+    console.warn(`    scrutinee ${i}: ${JSON.stringify(scrutinee).substring(0, 200)}`);
     call = mkAppTT(call, scrutinee);
   }
 
@@ -427,6 +451,36 @@ function isSelfRecursiveCall(scrut: TTerm, declName: string): boolean {
   return head.tag === 'Const' && head.name === declName;
 }
 
+/**
+ * Count how many scrutinee parameters (names starting with "_scrut") are in a type signature.
+ * This is used to handle nested with-clauses correctly.
+ */
+function countScrutineeParams(type: TTerm): number {
+  let count = 0;
+  let currentType = type;
+
+  while (true) {
+    if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
+      if (currentType.name.startsWith('_scrut')) {
+        count++;
+      }
+      currentType = currentType.body;
+    } else if (currentType.tag === 'MultiBinder' && currentType.binderKind.tag === 'BPiTT') {
+      // MultiBinder names shouldn't start with _scrut, but check anyway
+      for (const name of currentType.names) {
+        if (name.startsWith('_scrut')) {
+          count++;
+        }
+      }
+      currentType = currentType.body;
+    } else {
+      break;
+    }
+  }
+
+  return count;
+}
+
 function computeAuxiliaryType(
   declType: TTerm | undefined,
   functionPatterns: TPattern[],
@@ -444,13 +498,24 @@ function computeAuxiliaryType(
   const numPatterns = functionPatterns.length;
   const numPatternVars = countPatternVars(functionPatterns);
 
+  // CRITICAL FIX for nested with-clauses:
+  // functionPatterns may include patterns from outer with scrutinee parameters.
+  // We should NOT consume those scrutinee parameters - they should remain in the type!
+  // Count existing scrutinee parameters in declType and subtract from numPatterns.
+  const numExistingScrutinees = countScrutineeParams(declType);
+  const numExplicitToConsume = numPatterns - numExistingScrutinees;
+  console.warn(`  numExistingScrutinees = ${numExistingScrutinees}, numExplicitToConsume = ${numExplicitToConsume}`);
+
   // First, collect info about binders by walking the type
-  const binderInfo = collectBinderInfo(declType, numPatterns);
+  const binderInfo = collectBinderInfo(declType, numExplicitToConsume);
 
   // Compute scrutinee types
   const scrutineeTypes: TTerm[] = [];
   for (let i = 0; i < scrutinees.length; i++) {
     const scrut = scrutinees[i];
+    // For nested with-clauses, scrutinee numbering continues from existing scrutinees
+    const scrutineeIndex = numExistingScrutinees + i;
+
     if (scrut.tag === 'Var') {
       // Look up the type from the explicit argument binders
       // scrut.index counts from most recently bound (0 = last pattern var)
@@ -462,7 +527,7 @@ function computeAuxiliaryType(
         const shift = binderInfo.totalPrefixDepth - depth;
         scrutineeTypes.push(shiftVars(domain, shift));
       } else {
-        scrutineeTypes.push(mkHoleTT(`_scrut${i}_type`, mkPropTT()));
+        scrutineeTypes.push(mkHoleTT(`_scrut${scrutineeIndex}_type`, mkPropTT()));
       }
     } else if (declName && isSelfRecursiveCall(scrut, declName)) {
       // For self-recursive calls (e.g., `leqCanonical pleq qleq`), use the
@@ -473,7 +538,7 @@ function computeAuxiliaryType(
     } else {
       // For other expression scrutinees (e.g., `leq x y`, `compare a b`),
       // use a Hole. The type checker infers the type from with-clause patterns.
-      scrutineeTypes.push(mkHoleTT(`_scrut${i}_type`, mkPropTT()));
+      scrutineeTypes.push(mkHoleTT(`_scrut${scrutineeIndex}_type`, mkPropTT()));
     }
   }
 
@@ -484,7 +549,10 @@ function computeAuxiliaryType(
     : undefined;
 
   // Splice scrutinee types into the original type at the splice point
-  return spliceScrutineesIntoType(declType, numPatterns, scrutineeTypes, scrutinees, reconstructionMap);
+  // We need to consume both non-scrutinee parameters AND existing scrutinees,
+  // then add the new scrutinees
+  const numToConsume = numExplicitToConsume + numExistingScrutinees;
+  return spliceScrutineesIntoType(declType, numToConsume, scrutineeTypes, scrutinees, reconstructionMap, numExistingScrutinees);
 }
 
 /**
@@ -641,10 +709,12 @@ function spliceScrutineesIntoType(
   numExplicit: number,
   scrutineeTypes: TTerm[],
   scrutinees: TTerm[],
-  reconstructionMap?: Map<number, TTerm>
+  reconstructionMap?: Map<number, TTerm>,
+  scrutineeIndexOffset: number = 0
 ): TTerm {
   // Base case: we've consumed all required explicit args, splice here
   if (numExplicit <= 0) {
+    console.warn(`  [splice] At splice point! scrutineeTypes.length = ${scrutineeTypes.length}, offset = ${scrutineeIndexOffset}`);
     let result = type;
 
     // Apply pattern reconstruction substitution for Agda-style desugaring.
@@ -671,8 +741,9 @@ function spliceScrutineesIntoType(
         result = shiftVars(result, 1);
       }
 
-      // Add the scrutinee binder
-      result = mkPiTT(scrutType, result, `_scrut${i}`);
+      // Add the scrutinee binder with correct numbering (offset by existing scrutinees)
+      const scrutineeIndex = scrutineeIndexOffset + i;
+      result = mkPiTT(scrutType, result, `_scrut${scrutineeIndex}`);
     }
 
     return result;
@@ -682,7 +753,7 @@ function spliceScrutineesIntoType(
   if (type.tag === 'Binder' && type.binderKind.tag === 'BPiTT') {
     const isNamed = !!(type as any).named;
     const consumed = isNamed ? 0 : 1;
-    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, scrutinees, reconstructionMap);
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, scrutinees, reconstructionMap, scrutineeIndexOffset);
     if (newBody === type.body) return type;
     return { ...type, body: newBody };
   }
@@ -690,7 +761,7 @@ function spliceScrutineesIntoType(
   if (type.tag === 'MultiBinder' && type.binderKind.tag === 'BPiTT') {
     const isNamed = !!(type as any).named;
     const consumed = isNamed ? 0 : type.names.length;
-    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, scrutinees, reconstructionMap);
+    const newBody = spliceScrutineesIntoType(type.body, numExplicit - consumed, scrutineeTypes, scrutinees, reconstructionMap, scrutineeIndexOffset);
     if (newBody === type.body) return type;
     return { ...type, body: newBody };
   }
@@ -713,7 +784,8 @@ function spliceScrutineesIntoType(
       result = shiftVars(result, 1);
     }
 
-    result = mkPiTT(scrutType, result, `_scrut${i}`);
+    const scrutineeIndex = scrutineeIndexOffset + i;
+    result = mkPiTT(scrutType, result, `_scrut${scrutineeIndex}`);
   }
 
   return result;
