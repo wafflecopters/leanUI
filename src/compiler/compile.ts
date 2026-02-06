@@ -9,7 +9,7 @@ import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkType } from './kernel';
-import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT, mkPropTT, mkHoleTT } from './surface';
+import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT, mkPropTT, mkHoleTT, mkSortTT, mkUOmegaTT } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
@@ -4108,6 +4108,212 @@ function addRecordCtorTypeElabMappings(
 }
 
 /**
+ * Infers types of with-clause scrutinee expressions and substitutes them into
+ * the auxiliary function's type signature.
+ *
+ * For auxiliary functions created by with-desugar, non-variable scrutinees
+ * (e.g., `with f x` where `f x` is an expression) get placeholder hole types
+ * like `_scrut0_type`. This function infers the actual types by elaborating
+ * the scrutinee expressions, then substitutes them back into the signature.
+ *
+ * @param declType - The auxiliary function's type (may contain holes like `_scrut${i}_type`)
+ * @param scrutineeExprs - The scrutinee expressions from the with-clause
+ * @param definitions - Current definitions for type inference
+ * @returns The type with holes substituted by inferred scrutinee types
+ */
+function resolveWithScrutineeTypes(
+  declType: TTerm,
+  scrutineeExprs: TTerm[],
+  definitions: DefinitionsMap
+): TTerm {
+  // Build a substitution map from hole names to inferred types
+  const holeSubstitutions = new Map<string, TTerm>();
+
+  // Extract function parameters from the type to build a context
+  // The auxiliary function type is: (param1 : T1) -> ... -> (paramN : TN) -> (scrutinee : _scrut0_type) -> ... -> ReturnType
+  // The scrutinee expressions can reference param1...paramN
+  const functionParams = extractFunctionParams(declType, scrutineeExprs.length);
+
+  for (let i = 0; i < scrutineeExprs.length; i++) {
+    const scrutinee = scrutineeExprs[i];
+    const holeName = `_scrut${i}_type`;
+
+    try {
+      // Elaborate the scrutinee expression
+      const elabMap: ElabMap = new Map();
+      const kernelScrutinee = elabToKernelWithMap(scrutinee, elabMap, [], [], undefined, createNamedArgInfoLookup(definitions));
+
+      // Build a context from the function parameters so variables can be resolved
+      let env = createTCEnv({ definitions, options: { mode: 'check' } });
+      for (const param of functionParams) {
+        env = env.extendTTKContext(param.name, param.type);
+      }
+
+      // Infer the type of the scrutinee in this context
+      const inferResult = inferType(env.withValue(kernelScrutinee));
+      const solvedResult = inferResult.solveMetasAndConstraints({ liftMetasToFullContext: false });
+      // inferResult.value contains the inferred TYPE (not the term)
+      const inferredType = solvedResult.zonkTerm(inferResult.value);
+
+      // Convert the inferred kernel type back to surface syntax
+      // We need the surface form to substitute into the surface type
+      const surfaceType = kernelToSurface(inferredType);
+      holeSubstitutions.set(holeName, surfaceType);
+    } catch (e) {
+      // If type inference fails, leave the hole as-is
+      // The type checker will handle it (or produce an error)
+      console.warn(`Failed to infer type for scrutinee ${i}:`, e);
+    }
+  }
+
+  // Apply substitutions to the declaration type
+  return substituteHoles(declType, holeSubstitutions);
+}
+
+/**
+ * Extracts function parameters from a type signature, stopping before scrutinee parameters.
+ * Returns the parameter names and types in order.
+ */
+function extractFunctionParams(type: TTerm, scrutineeCount: number): Array<{ name: string; type: TTKTerm }> {
+  const params: Array<{ name: string; type: TTKTerm }> = [];
+  let currentType = type;
+
+  // Traverse Pi binders until we find one with a hole type (that's where scrutinees start)
+  while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
+    // Check if this parameter's type is a hole (scrutinee parameter)
+    const domain = currentType.domain;
+    if (domain && isHoleType(domain)) {
+      // We've reached the scrutinee parameters, stop here
+      break;
+    }
+
+    // Elaborate this parameter's type to kernel form
+    if (domain) {
+      const elabMap: ElabMap = new Map();
+      const kernelDomain = elabToKernelWithMap(domain, elabMap, [], []);
+      params.push({ name: currentType.name, type: kernelDomain });
+    }
+
+    currentType = currentType.body;
+  }
+
+  return params;
+}
+
+/**
+ * Checks if a term is a hole (for identifying scrutinee type parameters).
+ */
+function isHoleType(term: TTerm): boolean {
+  return term.tag === 'Hole';
+}
+
+/**
+ * Converts a kernel term (TTKTerm) to surface syntax (TTerm).
+ * This is a simplified conversion that handles common cases.
+ */
+function kernelToSurface(term: TTKTerm): TTerm {
+  switch (term.tag) {
+    case 'Var':
+      return mkVarTT(term.index);
+    case 'Const':
+      return mkConstTT(term.name);
+    case 'App':
+      return mkAppTT(kernelToSurface(term.fn), kernelToSurface(term.arg));
+    case 'Binder': {
+      const body = kernelToSurface(term.body);
+      const domain = kernelToSurface(term.domain);
+      switch (term.binderKind.tag) {
+        case 'BPi':
+          return mkPiTT(domain, body, term.name || '_');
+        case 'BLam':
+          return { tag: 'Binder', name: term.name || '_', binderKind: { tag: 'BLamTT' }, domain, body };
+        case 'BLet':
+          return { tag: 'Binder', name: term.name || '_', binderKind: { tag: 'BLetTT', defVal: kernelToSurface(term.binderKind.defVal) }, domain, body };
+      }
+      break;
+    }
+    case 'Sort':
+      return mkSortTT(kernelToSurface(term.level));
+    case 'ULevel':
+      return { tag: 'ULevel' };
+    case 'ULit':
+      return mkULitTT(term.n);
+    case 'UOmega':
+      return mkUOmegaTT();
+    case 'Hole':
+      return mkHoleTT(term.id, mkPropTT());
+    default:
+      // For complex terms like Match, Meta, Annot return a hole
+      return mkHoleTT('_complex', mkPropTT());
+  }
+}
+
+/**
+ * Substitutes hole references in a term with concrete types.
+ */
+function substituteHoles(term: TTerm, substitutions: Map<string, TTerm>): TTerm {
+  switch (term.tag) {
+    case 'Hole': {
+      // Check if this hole has a substitution
+      const subst = substitutions.get(term.id);
+      return subst ?? term;
+    }
+    case 'Var':
+    case 'Const':
+    case 'Sort':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+      return term;
+    case 'App':
+      return mkAppTT(
+        substituteHoles(term.fn, substitutions),
+        substituteHoles(term.arg, substitutions)
+      );
+    case 'Binder': {
+      const newDomain = term.domain ? substituteHoles(term.domain, substitutions) : undefined;
+      const newBody = substituteHoles(term.body, substitutions);
+      // Handle BLetTT which has a defVal field
+      let newBinderKind = term.binderKind;
+      if (term.binderKind.tag === 'BLetTT') {
+        newBinderKind = { tag: 'BLetTT', defVal: substituteHoles(term.binderKind.defVal, substitutions) };
+      }
+      return { ...term, domain: newDomain, body: newBody, binderKind: newBinderKind };
+    }
+    case 'MultiBinder': {
+      const newDomain = substituteHoles(term.domain, substitutions);
+      const newBody = substituteHoles(term.body, substitutions);
+      let newBinderKind = term.binderKind;
+      if (term.binderKind.tag === 'BLetTT') {
+        newBinderKind = { tag: 'BLetTT', defVal: substituteHoles(term.binderKind.defVal, substitutions) };
+      }
+      return { ...term, domain: newDomain, body: newBody, binderKind: newBinderKind };
+    }
+    case 'Match': {
+      const newScrutinee = substituteHoles(term.scrutinee, substitutions);
+      const newClauses = term.clauses.map(clause => ({
+        ...clause,
+        rhs: substituteHoles(clause.rhs, substitutions),
+      }));
+      return { ...term, scrutinee: newScrutinee, clauses: newClauses };
+    }
+    case 'Annot': {
+      const newTerm = substituteHoles(term.term, substitutions);
+      const newType = substituteHoles(term.type, substitutions);
+      return { ...term, term: newTerm, type: newType };
+    }
+    case 'TacticBlock':
+      // Don't traverse into tactic blocks
+      return term;
+    case 'WithClause':
+      // WithClauses should be desugared before this point
+      return term;
+    case 'AbsurdMarker':
+      return term;
+  }
+}
+
+/**
  * Process a single term declaration: elaborate and check.
  *
  * Following the flow:
@@ -4134,10 +4340,17 @@ function processTermDeclaration(
   let kernelType: TTKTerm | undefined;
   if (decl.type) {
     try {
+      // For auxiliary with-functions, infer scrutinee types from expressions
+      // and substitute them into the type signature before elaboration
+      let typeToElaborate = decl.type;
+      if (decl.withScrutineeExprs && decl.withScrutineeExprs.length > 0) {
+        typeToElaborate = resolveWithScrutineeTypes(decl.type, decl.withScrutineeExprs, definitions);
+      }
+
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
       // Pass appNamedArgLookup so named arguments in the type signature can be resolved
       const appNamedArgLookup = createNamedArgInfoLookup(definitions);
-      kernelType = elabToKernelWithMap(decl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
+      kernelType = elabToKernelWithMap(typeToElaborate, elabMap, typePath, typePath, undefined, appNamedArgLookup);
     } catch (e) {
       return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
     }

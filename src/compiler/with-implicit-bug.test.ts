@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
 
 describe('With-clause implicit parameter bug', () => {
-  test.skip('UNIT: auxiliary type should not contain Holes after resolution', () => {
+  test('UNIT: auxiliary type should not contain Holes after resolution', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat
@@ -59,7 +59,7 @@ leqCanonical (LeqSucc pleq) (LeqSucc qleq) with leqCanonical pleq qleq
     expect(hasHoles).toBe(false);
   });
 
-  test.only('leqCanonical should compile successfully', () => {
+  test('leqCanonical should compile successfully', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat

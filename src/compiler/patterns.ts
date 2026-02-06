@@ -1492,6 +1492,12 @@ export function checkMatchClause(
   const paddedContextLength = countPatternVars(paddedPatterns);
   const rhsInLevels = deBruijnToLevels(shiftedRhs, paddedContextLength);
 
+  if (loggingEnabled) {
+    console.log('[RHS SHIFT] shiftedRhs:', prettyPrintTTK(shiftedRhs));
+    console.log('[RHS SHIFT] paddedContextLength:', paddedContextLength);
+    console.log('[RHS SHIFT] rhsInLevels:', prettyPrintTTK(rhsInLevels));
+  }
+
   // Create env with padded patterns for unification
   const paddedClause: TTKClause = { ...env.value, patterns: paddedPatterns };
   const paddedEnv = env.withValue(paddedClause);
@@ -1502,6 +1508,10 @@ export function checkMatchClause(
 
   const { returnType: rawReturnType, elabStack, rhsInLevels: transformedRhsInLevels, holeSolutions } = result.value;
 
+  if (loggingEnabled) {
+    console.log('[RHS SHIFT] transformedRhsInLevels:', prettyPrintTTK(transformedRhsInLevels));
+  }
+
   // Zonk the return type to resolve any Holes that were solved during LHS unification
   // This is important because the return type may contain Holes from type elaboration
   // (e.g., Equal {A:=_implicit2} v u) that got unified with actual types during pattern matching
@@ -1510,6 +1520,11 @@ export function checkMatchClause(
   // Convert the transformed RHS back to de Bruijn indices using the final context length
   const finalContextLength = result.context.length;
   const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
+
+  if (loggingEnabled) {
+    console.log('[RHS SHIFT] finalContextLength:', finalContextLength);
+    console.log('[RHS SHIFT] transformedRhs (back to indices):', prettyPrintTTK(transformedRhs));
+  }
 
   // Zonk the elaborated patterns to resolve any padding wildcard holes that were solved during LHS unification
   // This is important because padding wildcards create Hole terms that get unified with actual values
@@ -1524,6 +1539,16 @@ export function checkMatchClause(
     .withCheckingMode('check');
   // Register any remaining Holes in returnType as Metas (in case zonking didn't resolve them all)
   const checkEnv = registerHolesInTermAsMetas(baseEnv, returnType);
+
+  if (loggingEnabled) {
+    console.log('[RHS CHECK] About to type-check RHS:', prettyPrintTTK(transformedRhs));
+    console.log('[RHS CHECK] Context:', checkEnv.context.map((s, i) => `${i}:${s.name}`).join(', '));
+    console.log('[RHS CHECK] Context types (stored in bindings):');
+    checkEnv.context.forEach((s, i) => {
+      console.log(`  ${i}:${s.name} : ${prettyPrintTTK(s.type)}`);
+    });
+    console.log('[RHS CHECK] Expected type:', checkEnv.prettyPrint(returnType));
+  }
 
   // Type check the transformed RHS
   const checkedEnv = checkType(checkEnv, returnType);
