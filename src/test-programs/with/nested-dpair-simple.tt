@@ -1,6 +1,5 @@
-@test failure
-@name "nested with on DPair (simplified - KNOWN LIMITATION)"
-@error "expects (DPair Nat"
+@test success
+@name "nested with on DPair (simplified)"
 @import preambles/nat.tt
 
 inductive Leq : Nat -> Nat -> Type where
