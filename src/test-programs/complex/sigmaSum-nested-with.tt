@@ -1,0 +1,93 @@
+@test failure
+@name "sigmaSum: nested with on DPair and Either (KNOWN BUG: inner with can't see outer pattern vars)"
+@error "expects Nat but was applied to"
+
+-- KNOWN LIMITATION: Nested with-clauses where the inner with's scrutinee
+-- references pattern variables from the outer with don't work yet.
+--
+-- In this example, `startLeqEnd` is a pattern variable from the outer with,
+-- but when resolving the type of `leqImpliesSum start end startLeqEnd` for
+-- the inner with, the desugarer doesn't have access to `startLeqEnd`'s type.
+-- This causes a cascade: startLeqEnd gets Hole type → DPair match fails →
+-- count gets _pad0 type → final error.
+--
+-- Root cause: resolveWithScrutineeTypes elaborates scrutinees with empty
+-- context, but should include outer pattern variables. This requires
+-- architectural changes to how with-desugaring passes context through.
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
+sym refl = refl
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+record DPair (A : Type) (fn : A -> Type) where
+  fst : A
+  snd : fn fst
+
+succInj : {u v : Nat} -> Equal (Succ u) (Succ v) -> Equal u v
+succInj refl = refl
+
+succCong : {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
+succCong refl = refl
+
+leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\n => Equal b (plus a n))
+leqImpliesSum Zero b LeqZero = MkDPair b refl
+leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
+  | MkDPair n pf => MkDPair n (succCong pf)
+
+inductive Void : Type where
+
+zeroNeqSucc : {n : Nat} -> (Equal Zero (Succ n) -> Void)
+zeroNeqSucc = #absurd
+
+inductive DecEq : {A : Type} -> (a b : A) -> Type where
+  Yes : {A : Type} -> {a b : A} -> Equal a b -> DecEq a b
+  No : {A : Type} -> {a b : A} -> (Equal a b -> Void) -> DecEq a b
+
+decEqNat : (x y : Nat) -> DecEq x y
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ y) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No (\eq => zeroNeqSucc (sym eq))
+decEqNat (Succ x) (Succ y) with decEqNat x y
+  | Yes eq => Yes (succCong eq)
+  | No neq => No (\eq => neq (succInj eq))
+
+LessThan : Nat -> Nat -> Type
+LessThan a b = Leq (Succ a) b
+
+inductive Either : Type -> Type -> Type where
+  inl : {L R : Type} -> L -> Either L R
+  inr : {L R : Type} -> R -> Either L R
+
+decGeq : (a b : Nat) -> Either (Leq a b) (LessThan b a)
+decGeq Zero b = inl LeqZero
+decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
+decGeq (Succ a) (Succ b) with decGeq a b
+  | inl aLeqB => inl (LeqSucc aLeqB)
+  | inr bLeA => inr (LeqSucc bLeA)
+
+sigmaSumCount : (count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+sigmaSumCount Zero _ = Zero
+sigmaSumCount (Succ k) fn = plus (sigmaSumCount k fn) (Succ k)
+
+sigmaSumStartCount : (start count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+sigmaSumStartCount start count fn = sigmaSumCount count (\index => fn (plus start index))
+
+sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+sigmaSum start end fn with decGeq start end
+  | inl startLeqEnd with leqImpliesSum start end startLeqEnd
+    | MkDPair count _ => sigmaSumStartCount start count fn
+  | inr endLeStart => Zero
