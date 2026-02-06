@@ -457,6 +457,19 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
       // ι-reduction: reduce pattern matching when scrutinee is a constructor
       const scrut = whnf(term.scrutinee, nextCtx);
 
+      // Pattern matching should only reduce when the scrutinee is a known value.
+      // When the scrutinee is unknown (Hole, Var, Meta), the match is "stuck" and
+      // should not reduce. This is a fundamental rule in type theory: we can't
+      // perform pattern matching until we know what value we're matching against.
+      //
+      // Note: In our encoding, Match terms with Hole scrutinees represent pattern
+      // parameters in function definitions. These should only reduce when applied
+      // to arguments (handled by the App case above).
+      if (scrut.tag === 'Hole' || scrut.tag === 'Meta' || scrut.tag === 'Var') {
+        // Scrutinee is stuck - don't reduce
+        return { tag: 'Match', scrutinee: scrut, clauses: term.clauses };
+      }
+
       // Try to find a matching clause
       for (const clause of term.clauses) {
         if (clause.patterns.length === 0) {

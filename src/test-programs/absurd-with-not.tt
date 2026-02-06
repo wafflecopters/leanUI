@@ -1,0 +1,17 @@
+@test success
+@name "absurd with Not type alias"
+
+inductive Void : Type where
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+Not : Type -> Type
+Not A = A -> Void
+
+succNotZero : {n : Nat} -> Not (Equal (Succ n) Zero)
+succNotZero {n := _} eq = #absurd

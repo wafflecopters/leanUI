@@ -24,6 +24,7 @@ import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
 import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
+import { whnf } from './whnf';
 import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, Tactic } from '../tactics/tactic';
@@ -2843,10 +2844,33 @@ function checkTermDeclaration(
       for (let i = 0; i < decl.surfaceValue.clauses.length; i++) {
         const clause = decl.surfaceValue.clauses[i];
         if (clause.rhs.tag === 'AbsurdMarker') {
+          // Normalize the return type (after all Pi binders) to handle definitions like Not
+          // that expand to function types (e.g., Not A = A -> Void).
+          // We can't just call whnf on the whole type because whnf doesn't reduce under binders.
+          // Instead, we extract the return type and normalize it.
+          const piSpine = extractPiSpine(zonkedKernelType);
+          const normalizedReturnType = whnf(piSpine.body, { definitions: termEnv.definitions, fuel: 100 });
+
+          // Reconstruct the full type with normalized return type
+          let normalizedType = normalizedReturnType;
+          for (let i = piSpine.binders.length - 1; i >= 0; i--) {
+            const binder = piSpine.binders[i];
+            normalizedType = {
+              tag: 'Binder',
+              name: binder.name,
+              binderKind: { tag: 'BPi' },
+              domain: binder.type,
+              body: normalizedType,
+            };
+          }
+
+          // Count parameters from the normalized type for correct arity
+          const normalizedArity = countPiBinders(normalizedType);
+
           // First validate pattern structure - check for positional patterns in implicit positions
-          // This is the same validation done in checkTermClause via reorderPatterns
+          // Use the normalized arity to account for type aliases like Not
           if (namedArgMap && namedArgMap.size > 0) {
-            const reorderResult = reorderPatterns(clause.patterns, namedArgMap, clause.namedPatterns, totalArity);
+            const reorderResult = reorderPatterns(clause.patterns, namedArgMap, clause.namedPatterns, normalizedArity);
             if ('error' in reorderResult && reorderResult.error !== undefined) {
               absurdClauseErrors.push(TCEnvError.create(reorderResult.error, termEnv));
               continue; // Skip absurdity check if pattern structure is invalid
@@ -2858,7 +2882,7 @@ function checkTermDeclaration(
           const patternsEnv = termEnv.withValue(kernelPatterns);
 
           // First try basic absurdity check
-          let isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, zonkedKernelType);
+          let isAbsurd = arePatternsAbsurd(decl.name, patternsEnv, normalizedType);
 
           // If basic check passes (not absurd), try Agda-style recursive splitting
           // This handles cases like Fin Zero where the type is uninhabited
@@ -2866,7 +2890,7 @@ function checkTermDeclaration(
             isAbsurd = tryCaseSplitsInSearchOfAbsurdity(
               decl.name,
               kernelPatterns,
-              zonkedKernelType,
+              normalizedType,
               termEnv.definitions,
               termEnv
             );
@@ -5224,7 +5248,25 @@ function checkTermValue(
   // Enhanced with Agda-style recursive splitting on remaining arguments
   const absurdityChecker = (patterns: TTKPattern[]): boolean => {
     const termName = name ?? '???';
-    const expectedArgCount = countPiBinders(type);
+    // Normalize the return type (after all Pi binders) to handle definitions like Not
+    // that expand to function types (e.g., Not A = A -> Void).
+    // We can't just call whnf on the whole type because whnf doesn't reduce under binders.
+    const piSpine = extractPiSpine(type);
+    const normalizedReturnType = whnf(piSpine.body, { definitions: termEnv.definitions, fuel: 100 });
+
+    // Reconstruct the full type with normalized return type
+    let normalizedType = normalizedReturnType;
+    for (let i = piSpine.binders.length - 1; i >= 0; i--) {
+      const binder = piSpine.binders[i];
+      normalizedType = {
+        tag: 'Binder',
+        name: binder.name,
+        binderKind: { tag: 'BPi' },
+        domain: binder.type,
+        body: normalizedType,
+      };
+    }
+    const expectedArgCount = countPiBinders(normalizedType);
 
     // Pad patterns with wildcards if needed
     const paddedPatterns = [...patterns];
@@ -5232,14 +5274,14 @@ function checkTermValue(
       paddedPatterns.push({ tag: 'PWild', name: '_' });
     }
 
-    // Basic absurdity check with padded patterns
+    // Basic absurdity check with padded patterns (use normalized type)
     const patternEnv = termEnv.withValue(paddedPatterns);
-    if (arePatternsAbsurd(termName, patternEnv, type)) {
+    if (arePatternsAbsurd(termName, patternEnv, normalizedType)) {
       return true;
     }
 
-    // Try Agda-style recursive splitting on remaining arguments
-    return tryCaseSplitsInSearchOfAbsurdity(termName, patterns, type, termEnv.definitions, termEnv);
+    // Try Agda-style recursive splitting on remaining arguments (use normalized type)
+    return tryCaseSplitsInSearchOfAbsurdity(termName, patterns, normalizedType, termEnv.definitions, termEnv);
   };
 
   // Run totality checking (builds case tree and checks coverage)
