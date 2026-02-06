@@ -839,74 +839,68 @@ leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
     cases hba with
     | LeqSucc q => exact (congSucc (leqAntisym p q))
 
-record DPair (A : Type) (fn : A -> Type) where
-  fst : A
-  snd : fn fst
 
-succInj: {u v : Nat} -> Equal (Succ u) (Succ v) -> Equal u v 
-succInj refl = refl
-
-succCong: {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
-succCong refl = refl
-
-leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\\n => Equal b (plus a n))
-leqImpliesSum Zero b LeqZero = MkDPair b refl
-leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
-  | MkDPair n pf => MkDPair n (succCong pf)
-
-sigmaSumCount : (count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSumCount Zero _ = Zero
-sigmaSumCount (Succ k) fn = plus (sigmaSumCount k fn) (Succ k)
-
-sigmaSumStartCount : (start count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSumStartCount start count fn = sigmaSumCount count (\\index => fn (plus start index))
-
-sigmaSumStartOrderedRange : (start end : Nat) -> Leq start end -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSumStartOrderedRange start end leq fn with leqImpliesSum start end leq
-  | MkDPair count _ => sigmaSumStartCount start count fn
-
-inductive Void : Type where
-
-zeroNeqSucc : {n : Nat} -> (Equal Zero (Succ n) -> Void)
-
-inductive DecEq : {A : Type} -> (a b : A) -> Type where
-  Yes : {A : Type} -> {a b : A} -> Equal a b -> DecEq a b
-  No : {A : Type} -> {a b : A} -> (Equal a b -> Void) -> DecEq a b
-
-decEqNat : (x y : Nat) -> DecEq x y
-decEqNat Zero Zero = Yes refl
-decEqNat Zero (Succ y) = No zeroNeqSucc
-decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
-decEqNat (Succ x) (Succ y) with decEqNat x y
-  | Yes eq => Yes (succCong eq)
-  | No neq => No (\\eq => neq (succInj eq))
-
-LessThan : Nat -> Nat -> Type
-LessThan a b = Leq (Succ a) b
-
-inductive Either : Type -> Type -> Type where
-  inl : {L R : Type} -> L -> Either L R
-  inr : {L R : Type} -> R -> Either L R
-
-decGeq : (a b : Nat) -> Either (Leq a b) (LessThan b a)
-decGeq Zero b = inl LeqZero
-decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
-decGeq (Succ a) (Succ b) with decGeq a b
-  | inl aLeqB => inl (LeqSucc aLeqB)
-  | inr bLeA => inr (LeqSucc bLeA)
-
-{-
-sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSum start end fn with decGeq start end
-  | inl startLeqEnd => sigmaSumStartOrderedRange start end startLeqEnd fn
-  | inr endLeStart => Zero
--}
-
-sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSum start end fn with decGeq start end
-  | inl startLeqEnd with leqImpliesSum start end startLeqEnd
-    | MkDPair count _ => sigmaSumStartCount start count fn
-  | inr endLeStart => Zero
+  record DPair (A : Type) (fn : A -> Type) where
+    fst : A
+    snd : fn fst
+  
+  succInj: {u v : Nat} -> Equal (Succ u) (Succ v) -> Equal u v 
+  succInj refl = refl
+  
+  succCong: {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
+  succCong refl = refl
+  
+  leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\\n => Equal b (plus a n))
+  leqImpliesSum Zero b LeqZero = MkDPair b refl
+  leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
+    | MkDPair n pf => MkDPair n (succCong pf)
+  
+  sigmaSumStartCount : (start count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+  sigmaSumStartCount start Zero fn = Zero
+  sigmaSumStartCount start (Succ count) fn = plus (fn (plus start count)) (sigmaSumStartCount start count fn)
+  
+  sigmaSumStartCountAdditive : (start count : Nat) ->
+    (f g : (index : Nat) -> Nat) ->
+    Equal (plus (sigmaSumStartCount start count f) (sigmaSumStartCount start count g)) (sigmaSumStartCount start count (\\n => plus (f n) (g n)))
+  sigmaSumStartCountAdditive start Zero f g = refl
+  sigmaSumStartCountAdditive start (Succ count) f g with sigmaSumStartCountAdditive start count f g
+    | recPrf => ?TODO_PROOF
+  
+  inductive Void : Type where
+  
+  zeroNeqSucc : {n : Nat} -> (Equal Zero (Succ n) -> Void)
+  
+  inductive DecEq : {A : Type} -> (a b : A) -> Type where
+    Yes : {A : Type} -> {a b : A} -> Equal a b -> DecEq a b
+    No : {A : Type} -> {a b : A} -> (Equal a b -> Void) -> DecEq a b
+  
+  decEqNat : (x y : Nat) -> DecEq x y
+  decEqNat Zero Zero = Yes refl
+  decEqNat Zero (Succ y) = No zeroNeqSucc
+  decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
+  decEqNat (Succ x) (Succ y) with decEqNat x y
+    | Yes eq => Yes (succCong eq)
+    | No neq => No (\\eq => neq (succInj eq))
+  
+  LessThan : Nat -> Nat -> Type
+  LessThan a b = Leq (Succ a) b
+  
+  inductive Either : Type -> Type -> Type where
+    inl : {L R : Type} -> L -> Either L R
+    inr : {L R : Type} -> R -> Either L R
+  
+  decGeq : (a b : Nat) -> Either (Leq a b) (LessThan b a)
+  decGeq Zero b = inl LeqZero
+  decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
+  decGeq (Succ a) (Succ b) with decGeq a b
+    | inl aLeqB => inl (LeqSucc aLeqB)
+    | inr bLeA => inr (LeqSucc bLeA)
+  
+  sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+  sigmaSum start end fn with decGeq start end
+    | inl startLeqEnd with leqImpliesSum start end startLeqEnd
+      | MkDPair count _ => sigmaSumStartCount start count fn
+    | inr endLeStart => Zero
 `;
 
 const PRESETS: { name: string; code: string }[] = [
