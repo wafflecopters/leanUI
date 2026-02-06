@@ -4178,23 +4178,57 @@ function extractFunctionParams(type: TTerm, _scrutineeCount: number): Array<{ na
   const params: Array<{ name: string; type: TTKTerm }> = [];
   let currentType = type;
 
-  // Traverse Pi binders until we find one with a hole type (that's where scrutinees start)
-  while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
-    // Check if this parameter's type is a hole (scrutinee parameter)
-    const domain = currentType.domain;
-    if (domain && isHoleType(domain)) {
-      // We've reached the scrutinee parameters, stop here
+  // Traverse Pi binders (both Binder and MultiBinder) until we find scrutinee parameters
+  while (true) {
+    if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
+      // Check if this is a scrutinee parameter (name starts with _scrut)
+      if (currentType.name.startsWith('_scrut')) {
+        // We've reached the scrutinee parameters, stop here
+        break;
+      }
+
+      // Check if this parameter's type is a hole (also indicates scrutinee parameter)
+      const domain = currentType.domain;
+      if (domain && isHoleType(domain)) {
+        // We've reached the scrutinee parameters, stop here
+        break;
+      }
+
+      // Elaborate this parameter's type to kernel form
+      if (domain) {
+        const elabMap: ElabMap = new Map();
+        const kernelDomain = elabToKernelWithMap(domain, elabMap, [], []);
+        params.push({ name: currentType.name, type: kernelDomain });
+      }
+
+      currentType = currentType.body;
+    } else if (currentType.tag === 'MultiBinder' && currentType.binderKind.tag === 'BPiTT') {
+      // MultiBinder: multiple params with same type
+      // Check if any name starts with _scrut (shouldn't happen but check anyway)
+      if (currentType.names.some(name => name.startsWith('_scrut'))) {
+        break;
+      }
+
+      // Check if the domain is a hole
+      if (isHoleType(currentType.domain)) {
+        // We've reached the scrutinee parameters, stop here
+        break;
+      }
+
+      // Elaborate the domain once
+      const elabMap: ElabMap = new Map();
+      const kernelDomain = elabToKernelWithMap(currentType.domain, elabMap, [], []);
+
+      // Add each name with the same type
+      for (const name of currentType.names) {
+        params.push({ name, type: kernelDomain });
+      }
+
+      currentType = currentType.body;
+    } else {
+      // Not a Pi binder, stop
       break;
     }
-
-    // Elaborate this parameter's type to kernel form
-    if (domain) {
-      const elabMap: ElabMap = new Map();
-      const kernelDomain = elabToKernelWithMap(domain, elabMap, [], []);
-      params.push({ name: currentType.name, type: kernelDomain });
-    }
-
-    currentType = currentType.body;
   }
 
   return params;
