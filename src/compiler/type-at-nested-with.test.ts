@@ -107,8 +107,7 @@ sigmaSum start end fn with decGeq start end
       cursorPos,
       decl.sourceMap,
       decl.elabMap,
-      decl.typeInfoMap,
-      decl.definitions
+      decl.typeInfoMap
     );
 
     // EXPECT: Should find type info for leqImpliesSum
@@ -136,8 +135,7 @@ sigmaSum start end fn with decGeq start end
       cursorPos,
       decl.sourceMap,
       decl.elabMap,
-      decl.typeInfoMap,
-      decl.definitions
+      decl.typeInfoMap
     );
 
     // EXPECT: Should find type info for count pattern variable
@@ -166,8 +164,7 @@ sigmaSum start end fn with decGeq start end
       cursorPos,
       decl.sourceMap,
       decl.elabMap,
-      decl.typeInfoMap,
-      decl.definitions
+      decl.typeInfoMap
     );
 
     // EXPECT: Should find type info for count variable in RHS
