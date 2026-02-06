@@ -286,10 +286,23 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         newBranches.set(ctorName, branch)
       }
 
+      let allBranchesRedundant = true;
       for (const [ctorName, branch] of caseTree.branches) {
         const newBranch = caseTreeWithPatternsAdded(branch, clauseIndex, patterns, elabArgs, contextNames, definitions)
-        newBranches.set(ctorName, newBranch ?? branch)
-        didUpdateBranch ||= newBranch !== undefined
+        if (newBranch === undefined) {
+          // This branch couldn't accept the clause (redundant in this branch)
+          newBranches.set(ctorName, branch)
+        } else {
+          // This branch accepted the clause
+          newBranches.set(ctorName, newBranch)
+          allBranchesRedundant = false;
+        }
+      }
+
+      // If ALL existing branches returned undefined AND there are no missing constructors,
+      // then the clause is fully redundant
+      if (allBranchesRedundant && caseTree.branches.size > 0 && caseTree.missingCtors.size === 0) {
+        return undefined;
       }
 
       return {
