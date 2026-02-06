@@ -1010,7 +1010,11 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
     }
 
     case 'Match': {
-      const scrutinee = prettyPrint(term.scrutinee, context, metaVars);
+      // Omit the placeholder scrutinee (_scrutinee) since patterns provide the match structure
+      const scrutineeStr = term.scrutinee.tag === 'Hole' && term.scrutinee.id === '_scrutinee'
+        ? '_'
+        : prettyPrint(term.scrutinee, context, metaVars);
+      const scrutinee = scrutineeStr;
       const clauses = term.clauses.map(c => {
         // Use stored context names if available (from checking), otherwise derive from patterns
         const clauseContext = c.contextNames
@@ -1235,7 +1239,11 @@ export function prettyPrintFormatted(
     }
 
     case 'Match': {
-      const scrutinee = prettyPrintFormatted(term.scrutinee, context, metaVars, options);
+      // Omit the placeholder scrutinee (_scrutinee) since patterns provide the match structure
+      const scrutineeStr = term.scrutinee.tag === 'Hole' && term.scrutinee.id === '_scrutinee'
+        ? '_'
+        : prettyPrintFormatted(term.scrutinee, context, metaVars, options);
+      const scrutinee = scrutineeStr;
       const nextPad = ' '.repeat(nextIndent);
 
       const clauses = term.clauses.map(c => {
@@ -1434,7 +1442,11 @@ export function prettyPrintLatex(
       return `(${prettyPrintLatex(term.term, context, opts)} : ${prettyPrintLatex(term.type, context, opts)})`;
 
     case 'Match': {
-      const scrutinee = prettyPrintLatex(term.scrutinee, context, opts);
+      // Omit the placeholder scrutinee (_scrutinee) since patterns provide the match structure
+      const scrutineeStr = term.scrutinee.tag === 'Hole' && term.scrutinee.id === '_scrutinee'
+        ? '\\_'
+        : prettyPrintLatex(term.scrutinee, context, opts);
+      const scrutinee = scrutineeStr;
       const clauses = term.clauses.map(c => {
         // Collect pattern variable names and add to context for RHS and elabArgs
         const patternVars = collectPatternVars(c.patterns);
