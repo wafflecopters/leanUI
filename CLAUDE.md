@@ -23,7 +23,26 @@ The following files provide essential context. Read them BEFORE diving into code
 - The de Bruijn index convention used throughout
 - What has already been implemented vs. what's planned
 
-### 2. This is Type Theory - Favor Proven Algorithms
+### 2. Fix Bugs, Never Skip Tests
+
+**CRITICAL**: When you encounter a bug or failing test, your job is to FIX it, not document it as a limitation.
+
+**DO:**
+- Write focused unit tests that reproduce the bug at the lowest possible level
+- Research the root cause systematically, layer by layer
+- Fix the underlying issue, even if it requires architectural changes
+- Verify the fix with tests before claiming completion
+- Add regression tests to prevent the bug from recurring
+
+**DON'T:**
+- Document bugs as "known limitations" without attempting to fix them
+- Skip failing tests or mark them as "todo"
+- Make superficial fixes that mask symptoms without addressing root causes
+- Claim a task is complete without running `npx tsc --noEmit && npm test`
+
+**Testing is non-negotiable**: Every bug fix MUST include tests. Every feature MUST have tests. Never skip tests because "they'll probably pass" or "it looks right". Always verify.
+
+### 3. This is Type Theory - Favor Proven Algorithms
 
 This project implements a dependently-typed language similar to Lean, Idris, and Agda. **Type theory has 50+ years of research behind it.** When implementing features:
 

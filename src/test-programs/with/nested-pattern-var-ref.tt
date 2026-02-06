@@ -1,0 +1,20 @@
+@test success
+@name "nested with where inner scrutinee references outer pattern var"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+inductive Either : Type -> Type -> Type where
+  inl : {L R : Type} -> L -> Either L R
+  inr : {L R : Type} -> R -> Either L R
+
+-- Simple function that takes a Nat and returns a Bool
+isZero : Nat -> Bool
+isZero Zero = True
+isZero (Succ _) = False
+
+test : Nat -> Bool
+test n with n
+  | Zero => False
+  | Succ m with isZero m
+    | True => True
+    | False => False

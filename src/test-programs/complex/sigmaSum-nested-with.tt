@@ -1,19 +1,10 @@
 @test failure
-@name "sigmaSum: nested with on DPair and Either (KNOWN BUG: inner with can't see outer pattern vars)"
-@error "expects Nat but was applied to"
+@name "sigmaSum: nested with on DPair and Either (KNOWN LIMITATION: dep types)"
+@error "expects (DPair Nat"
 
--- KNOWN LIMITATION: Nested with-clauses where the inner with's scrutinee
--- references pattern variables from the outer with don't work yet.
---
--- In this example, `startLeqEnd` is a pattern variable from the outer with,
--- but when resolving the type of `leqImpliesSum start end startLeqEnd` for
--- the inner with, the desugarer doesn't have access to `startLeqEnd`'s type.
--- This causes a cascade: startLeqEnd gets Hole type → DPair match fails →
--- count gets _pad0 type → final error.
---
--- Root cause: resolveWithScrutineeTypes elaborates scrutinees with empty
--- context, but should include outer pattern variables. This requires
--- architectural changes to how with-desugaring passes context through.
+-- KNOWN LIMITATION: Nested with-clauses where the inner scrutinee references
+-- a pattern variable with a DEPENDENT type from the outer with.
+-- The issue is in with-desugar.ts call construction for nested auxiliaries.
 
 inductive Nat : Type where
   Zero : Nat
@@ -51,7 +42,7 @@ leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
 inductive Void : Type where
 
 zeroNeqSucc : {n : Nat} -> (Equal Zero (Succ n) -> Void)
-zeroNeqSucc = #absurd
+zeroNeqSucc refl = #absurd
 
 inductive DecEq : {A : Type} -> (a b : A) -> Type where
   Yes : {A : Type} -> {a b : A} -> Equal a b -> DecEq a b

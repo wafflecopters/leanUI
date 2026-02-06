@@ -680,6 +680,9 @@ export interface ParsedDeclaration {
   // Used by compile.ts to compute the actual scrutinee types (replacing holes
   // in the auxiliary type signature) before checking clauses.
   withScrutineeExprs?: TTerm[];
+  // For with-clause auxiliary functions: the function patterns that provide context
+  // for the scrutinee expressions. Needed to elaborate scrutinees with correct de Bruijn indices.
+  withFunctionPatterns?: TPattern[];
   // Original surface value before with-clause desugaring.
   // Used for semantic token extraction (the desugared value loses WithClause structure).
   originalSurfaceValue?: TTerm;

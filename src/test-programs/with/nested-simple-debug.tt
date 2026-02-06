@@ -1,0 +1,15 @@
+@test success
+@name "nested with simple debug"
+@import preambles/nat.tt
+@import preambles/bool.tt
+
+inductive Either : Type -> Type -> Type where
+  inl : {L R : Type} -> L -> Either L R
+  inr : {L R : Type} -> R -> Either L R
+
+classify : Nat -> Nat -> Bool
+classify m n with m
+  | Zero with n
+    | Zero => True
+    | Succ _ => False
+  | Succ _ => True

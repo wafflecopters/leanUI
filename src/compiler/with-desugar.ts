@@ -278,6 +278,7 @@ function desugarWithClause(
     },
     withScrutineeCount: scrutinees.length,
     withScrutineeExprs: scrutinees,
+    withFunctionPatterns: functionPatterns,
   };
 
   // Recursively desugar nested WithClauses in the auxiliary's clause RHS values.

@@ -4172,6 +4172,60 @@ function addRecordCtorTypeElabMappings(
 }
 
 /**
+ * Try to extract the return type from a function application syntactically,
+ * without full type checking. This is useful when the arguments reference
+ * pattern variables that aren't in the current context.
+ *
+ * For example, for `makeProof start end startLeqEnd` where
+ * makeProof : (a b : Nat) -> Leq a b -> DPair Nat (\_ => Nat)
+ * we can extract the return type DPair Nat (\_ => Nat) without type-checking startLeqEnd.
+ */
+function tryExtractReturnType(term: TTerm, definitions: DefinitionsMap): TTerm | undefined {
+  // Extract the function being applied
+  let fn = term;
+  const args: TTerm[] = [];
+  while (fn.tag === 'App') {
+    args.unshift(fn.arg);
+    fn = fn.fn;
+  }
+
+  // If it's a constant (function name), look up its type
+  if (fn.tag === 'Const') {
+    const defn = definitions.terms.get(fn.name);
+    if (!defn || !defn.type) {
+      return undefined;
+    }
+
+    // Convert kernel type to surface form
+    const surfaceType = kernelTypeToSurface(defn.type, definitions);
+
+    // Walk through the function type, skipping past Pi binders for each argument
+    let currentType = surfaceType;
+    for (let i = 0; i < args.length; i++) {
+      if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
+        currentType = currentType.body;
+      } else if (currentType.tag === 'MultiBinder' && currentType.binderKind.tag === 'BPiTT') {
+        // MultiBinder: skip one name per argument
+        const remainingNames = currentType.names.slice(1);
+        if (remainingNames.length > 0) {
+          currentType = { ...currentType, names: remainingNames };
+        } else {
+          currentType = currentType.body;
+        }
+      } else {
+        // Not enough parameters in the type
+        return undefined;
+      }
+    }
+
+    // currentType is now the return type (after consuming all argument binders)
+    return currentType;
+  }
+
+  return undefined;
+}
+
+/**
  * Infers types of with-clause scrutinee expressions and substitutes them into
  * the auxiliary function's type signature.
  *
@@ -4195,7 +4249,7 @@ function resolveWithScrutineeTypes(
 
   // Extract function parameters from the type to build a context
   // The auxiliary function type is: (param1 : T1) -> ... -> (paramN : TN) -> (scrutinee : _scrut0_type) -> ... -> ReturnType
-  // The scrutinee expressions can reference param1...paramN
+  // The scrutinee expressions can reference param1...paramN AND pattern variables from outer with-clauses
   const functionParams = extractFunctionParams(declType, scrutineeExprs.length);
 
   for (let i = 0; i < scrutineeExprs.length; i++) {
@@ -4203,31 +4257,62 @@ function resolveWithScrutineeTypes(
     const holeName = `_scrut${i}_type`;
 
     try {
-      // Elaborate the scrutinee expression
+      // Elaborate the scrutinee expression.
+      // Note: The scrutinee was already parsed with correct de Bruijn indices.
       const elabMap: ElabMap = new Map();
-      const kernelScrutinee = elabToKernelWithMap(scrutinee, elabMap, [], [], undefined, createNamedArgInfoLookup(definitions));
+      const kernelScrutinee = elabToKernelWithMap(
+        scrutinee,
+        elabMap,
+        [],
+        [],
+        undefined,
+        createNamedArgInfoLookup(definitions)
+      );
 
-      // Build a context from the function parameters so variables can be resolved
+      // Build a context for type inference.
+      // The scrutinee's de Bruijn indices may reference BOTH function parameters
+      // AND pattern variables from the function patterns (e.g., from outer with-clauses).
+      // We need to add ALL of them to the context in the correct order.
       let env = createTCEnv({ definitions, options: { mode: 'check' } });
+
+      // Add function parameters to context
       for (const param of functionParams) {
         env = env.extendTTKContext(param.name, param.type);
       }
 
-      // Infer the type of the scrutinee in this context
-      const inferResult = inferType(env.withValue(kernelScrutinee));
-      const solvedResult = inferResult.solveMetasAndConstraints({ liftMetasToFullContext: false });
-      // inferResult.value contains the inferred TYPE (not the term)
-      const inferredType = solvedResult.zonkTerm(inferResult.value);
+      // For nested with-clauses, pattern variables from outer withs may be referenced
+      // in the scrutinee expression. We cannot add them to the context with accurate types
+      // at this stage (we'd need to perform pattern matching type inference).
+      // Instead, we attempt inference and fall back to Hole if it fails.
 
-      // Convert the inferred kernel type back to surface syntax
-      // We need the surface form to substitute into the surface type
-      // IMPORTANT: Pass definitions so implicit arguments are omitted in surface syntax
-      const surfaceType = kernelTypeToSurface(inferredType, definitions);
-      holeSubstitutions.set(holeName, surfaceType);
+      try {
+        // Attempt to infer the type of the scrutinee in this context
+        const inferResult = inferType(env.withValue(kernelScrutinee));
+        const solvedResult = inferResult.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        // inferResult.value contains the inferred TYPE (not the term)
+        const inferredType = solvedResult.zonkTerm(inferResult.value);
+
+        // Convert the inferred kernel type back to surface syntax
+        // We need the surface form to substitute into the surface type
+        // IMPORTANT: Pass definitions so implicit arguments are omitted in surface syntax
+        const surfaceType = kernelTypeToSurface(inferredType, definitions);
+        holeSubstitutions.set(holeName, surfaceType);
+      } catch (e) {
+        // If type inference fails (e.g., because scrutinee references unavailable pattern vars),
+        // try a simpler syntactic approach: extract the return type from a function application
+        console.warn(`Type inference failed for scrutinee ${i}, trying syntactic fallback`);
+        const simpleType = tryExtractReturnType(scrutinee, definitions);
+        if (simpleType) {
+          console.warn(`Successfully extracted return type syntactically`);
+          holeSubstitutions.set(holeName, simpleType);
+        } else {
+          // Fall back to leaving as Hole
+          console.warn(`Syntactic extraction also failed, leaving as Hole`);
+        }
+      }
     } catch (e) {
-      // If type inference fails, leave the hole as-is
-      // The type checker will handle it (or produce an error)
-      console.warn(`Failed to infer type for scrutinee ${i}:`, e);
+      // Elaboration failed
+      console.warn(`Failed to elaborate scrutinee ${i}:`, e);
     }
   }
 
@@ -4402,7 +4487,11 @@ function processTermDeclaration(
       // and substitute them into the type signature before elaboration
       let typeToElaborate = decl.type;
       if (decl.withScrutineeExprs && decl.withScrutineeExprs.length > 0) {
-        typeToElaborate = resolveWithScrutineeTypes(decl.type, decl.withScrutineeExprs, definitions);
+        typeToElaborate = resolveWithScrutineeTypes(
+          decl.type,
+          decl.withScrutineeExprs,
+          definitions
+        );
       }
 
       const typePath: IndexPath = [{ kind: 'field', name: 'type' }];

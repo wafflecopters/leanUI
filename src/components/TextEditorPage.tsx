@@ -839,7 +839,6 @@ leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
     cases hba with
     | LeqSucc q => exact (congSucc (leqAntisym p q))
 
-
 record DPair (A : Type) (fn : A -> Type) where
   fst : A
   snd : fn fst
@@ -855,14 +854,14 @@ leqImpliesSum Zero b LeqZero = MkDPair b refl
 leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
   | MkDPair n pf => MkDPair n (succCong pf)
 
-sigmaSumCount : (count : Nat) -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSumCount : (count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
 sigmaSumCount Zero _ = Zero
 sigmaSumCount (Succ k) fn = plus (sigmaSumCount k fn) (Succ k)
 
-sigmaSumStartCount : (start count : Nat) -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSumStartCount : (start count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
 sigmaSumStartCount start count fn = sigmaSumCount count (\\index => fn (plus start index))
 
-sigmaSumStartOrderedRange : (start end : Nat) -> Leq start end -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSumStartOrderedRange : (start end : Nat) -> Leq start end -> (fn : (index : Nat) -> Nat) -> Nat
 sigmaSumStartOrderedRange start end leq fn with leqImpliesSum start end leq
   | MkDPair count _ => sigmaSumStartCount start count fn
 
@@ -881,6 +880,33 @@ decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
 decEqNat (Succ x) (Succ y) with decEqNat x y
   | Yes eq => Yes (succCong eq)
   | No neq => No (\\eq => neq (succInj eq))
+
+LessThan : Nat -> Nat -> Type
+LessThan a b = Leq (Succ a) b
+
+inductive Either : Type -> Type -> Type where
+  inl : {L R : Type} -> L -> Either L R
+  inr : {L R : Type} -> R -> Either L R
+
+decGeq : (a b : Nat) -> Either (Leq a b) (LessThan b a)
+decGeq Zero b = inl LeqZero
+decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
+decGeq (Succ a) (Succ b) with decGeq a b
+  | inl aLeqB => inl (LeqSucc aLeqB)
+  | inr bLeA => inr (LeqSucc bLeA)
+
+{-
+sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+sigmaSum start end fn with decGeq start end
+  | inl startLeqEnd => sigmaSumStartOrderedRange start end startLeqEnd fn
+  | inr endLeStart => Zero
+-}
+
+sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+sigmaSum start end fn with decGeq start end
+  | inl startLeqEnd with leqImpliesSum start end startLeqEnd
+    | MkDPair count _ => sigmaSumStartCount start count fn
+  | inr endLeStart => Zero
 `;
 
 const PRESETS: { name: string; code: string }[] = [

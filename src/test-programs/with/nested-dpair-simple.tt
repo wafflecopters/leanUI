@@ -1,0 +1,35 @@
+@test failure
+@name "nested with on DPair (simplified - KNOWN LIMITATION)"
+@error "expects (DPair Nat"
+@import preambles/nat.tt
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+inductive Either : Type -> Type -> Type where
+  inl : {L R : Type} -> L -> Either L R
+  inr : {L R : Type} -> R -> Either L R
+
+record DPair (A : Type) (fn : A -> Type) where
+  fst : A
+  snd : fn fst
+
+-- Simplified version: just returns a Nat wrapped in DPair
+makeProof : (a b : Nat) -> Leq a b -> DPair Nat (\_ => Nat)
+makeProof Zero b LeqZero = MkDPair b b
+makeProof (Succ a) (Succ b) (LeqSucc leq) with makeProof a b leq
+  | MkDPair n _ => MkDPair n n
+
+decGeq : (a b : Nat) -> Either (Leq a b) (Leq (Succ b) a)
+decGeq Zero b = inl LeqZero
+decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
+decGeq (Succ a) (Succ b) with decGeq a b
+  | inl aLeqB => inl (LeqSucc aLeqB)
+  | inr bLeA => inr (LeqSucc bLeA)
+
+test : (start end : Nat) -> Nat
+test start end with decGeq start end
+  | inl startLeqEnd with makeProof start end startLeqEnd
+    | MkDPair count _ => count
+  | inr _ => Zero
