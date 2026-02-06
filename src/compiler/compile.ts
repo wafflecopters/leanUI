@@ -2611,34 +2611,98 @@ function remapWithClauseElabMap(
   }
 
   // Find with-clause entries in the sourceMap for this auxiliary
-  // Pattern: value.clauses[N].withClauses[M].*
+  // Pattern: match paths that contain .withClauses[M].*
+  // This includes both direct and nested with-clauses:
+  // - value.clauses[N].withClauses[M].*
+  // - value.clauses[N].withClauses[M].rhs.withClauses[K].*
   const withClausePattern = /^value\.clauses\[(\d+)\]\.withClauses\[(\d+)\](.*)/;
 
   for (const [path] of sourceMap) {
-    const match = path.match(withClausePattern);
-    if (!match) continue;
+    // Check if this path contains any withClauses segment
+    if (!path.includes('.withClauses[')) continue;
 
-    const withIdx = parseInt(match[2]);
-    const rawSuffix = match[3]; // e.g., '.patterns[0]', '.rhs', '.rhs.fn'
+    // Find the LAST occurrence of .withClauses[N] in the path
+    // This handles nested with-clauses where we want to map the innermost level
+    const lastWithMatch = path.match(/^(.*\.withClauses\[)(\d+)\](.*)/);
+    if (!lastWithMatch) continue;
 
-    // Offset pattern indices: with-pattern j → kernel pattern (numFunctionPatterns + j)
-    let suffix = rawSuffix;
-    const patternMatch = suffix.match(/^\.patterns\[(\d+)\](.*)/);
-    if (patternMatch) {
-      const withPatIdx = parseInt(patternMatch[1]);
-      const patSuffix = patternMatch[2];
-      suffix = `.patterns[${numFunctionPatterns + withPatIdx}]${patSuffix}`;
+    // For nested with-clauses, find ALL withClauses segments
+    const allWithMatches = path.match(/\.withClauses\[(\d+)\]/g);
+    if (!allWithMatches) continue;
+
+    // If there's only one withClauses segment, use the original logic
+    if (allWithMatches.length === 1) {
+      const match = path.match(withClausePattern);
+      if (!match) continue;
+
+      const withIdx = parseInt(match[2]);
+      const rawSuffix = match[3]; // e.g., '.patterns[0]', '.rhs', '.rhs.fn'
+
+      // Offset pattern indices: with-pattern j → kernel pattern (numFunctionPatterns + j)
+      let suffix = rawSuffix;
+      const patternMatch = suffix.match(/^\.patterns\[(\d+)\](.*)/);
+      if (patternMatch) {
+        const withPatIdx = parseInt(patternMatch[1]);
+        const patSuffix = patternMatch[2];
+        suffix = `.patterns[${numFunctionPatterns + withPatIdx}]${patSuffix}`;
+      }
+
+      const kernelPath = `value.clauses[${withIdx}]${suffix}`;
+      compiled.elabMap.set(kernelPath, path);
+
+      // Also map for nested Match structure: with-branches are sub-clauses
+      // inside value.clauses[0].rhs (a Match term). No pattern offset needed
+      // since the nested Match has its own independent pattern indices.
+      if (hasNestedMatch) {
+        const nestedPath = `value.clauses[0].rhs.clauses[${withIdx}]${rawSuffix}`;
+        compiled.elabMap.set(nestedPath, path);
+      }
+    } else {
+      // For nested with-clauses (e.g., value.clauses[0].withClauses[1].rhs.withClauses[2].*),
+      // extract the LAST withClauses[N] index and map it to the auxiliary's kernel clauses.
+      const lastWithIndex = path.lastIndexOf('.withClauses[');
+      const remainder = path.substring(lastWithIndex);
+      const remainderMatch = remainder.match(/^\.withClauses\[(\d+)\](.*)/);
+      if (!remainderMatch) continue;
+
+      const withIdx = parseInt(remainderMatch[1]);
+      const rawSuffix = remainderMatch[2];
+
+      // Offset pattern indices for nested with-clauses
+      let suffix = rawSuffix;
+      const patternMatch = suffix.match(/^\.patterns\[(\d+)\](.*)/);
+      if (patternMatch) {
+        const withPatIdx = parseInt(patternMatch[1]);
+        const patSuffix = patternMatch[2];
+        suffix = `.patterns[${numFunctionPatterns + withPatIdx}]${patSuffix}`;
+      }
+
+      const kernelPath = `value.clauses[${withIdx}]${suffix}`;
+      compiled.elabMap.set(kernelPath, path);
+
+      // Also map for nested Match structure
+      if (hasNestedMatch) {
+        const nestedPath = `value.clauses[0].rhs.clauses[${withIdx}]${rawSuffix}`;
+        compiled.elabMap.set(nestedPath, path);
+      }
     }
+  }
 
-    const kernelPath = `value.clauses[${withIdx}]${suffix}`;
-    compiled.elabMap.set(kernelPath, path);
+  // Map scrutinee paths from auxiliary's RHS to main function's with-clause scrutinee paths
+  // The auxiliary's RHS contains the call to the nested auxiliary (or final result),
+  // and the last arguments are the scrutinee expressions.
+  // We need to map: value.clauses[N].rhs.arg.* → value.clauses[M].withClauses[N].rhs.scrutinee.*
+  for (const [path] of sourceMap) {
+    // Find scrutinee entries in the main function's sourceMap
+    const scrutineeMatch = path.match(/^value\.clauses\[(\d+)\]\.withClauses\[(\d+)\]\.rhs\.scrutinee(.*)$/);
+    if (scrutineeMatch) {
+      const withIdx = parseInt(scrutineeMatch[2]);
+      const suffix = scrutineeMatch[3];
 
-    // Also map for nested Match structure: with-branches are sub-clauses
-    // inside value.clauses[0].rhs (a Match term). No pattern offset needed
-    // since the nested Match has its own independent pattern indices.
-    if (hasNestedMatch) {
-      const nestedPath = `value.clauses[0].rhs.clauses[${withIdx}]${rawSuffix}`;
-      compiled.elabMap.set(nestedPath, path);
+      // The auxiliary's scrutinee is the last argument in the RHS call
+      // Map auxiliary kernel path value.clauses[withIdx].rhs.arg* to surface scrutinee path
+      const kernelPath = `value.clauses[${withIdx}].rhs.arg${suffix}`;
+      compiled.elabMap.set(kernelPath, path);
     }
   }
 
@@ -2676,16 +2740,20 @@ function remapWithScrutineeInMainElabMap(
   if (!compiled.elabMap) return;
 
   // Find scrutinee entries in the sourceMap
-  // Pattern: value.clauses[N].scrutinee*
+  // Pattern: paths containing .scrutinee (direct or nested in with-clauses)
+  // - value.clauses[N].scrutinee*
+  // - value.clauses[N].withClauses[M].rhs.scrutinee*
   const scrutineePattern = /^value\.clauses\[(\d+)\]\.scrutinee/;
+  const nestedScrutineePattern = /\.scrutinee($|\.)/;
 
   for (const [path] of sourceMap) {
-    const match = path.match(scrutineePattern);
-    if (match) {
+    // Check if this is a direct scrutinee path (top-level with-clause)
+    const directMatch = path.match(scrutineePattern);
+    if (directMatch) {
       // The scrutinee in the main function is desugared into the RHS
       // (a call to the auxiliary). Map scrutinee paths to the RHS path
       // so type info can be found.
-      const clauseIdx = parseInt(match[1]);
+      const clauseIdx = parseInt(directMatch[1]);
       const suffix = path.substring(`value.clauses[${clauseIdx}].scrutinee`.length);
       // The scrutinee expression appears in the RHS of the main clause
       // as arguments to the auxiliary function call.
@@ -2697,6 +2765,17 @@ function remapWithScrutineeInMainElabMap(
         const kernelPath = suffix === '' ? `${kernelRhsBase}.arg` : `${kernelRhsBase}.arg${suffix}`;
         compiled.elabMap.set(kernelPath, path);
       }
+    } else if (path.includes('.withClauses[') && nestedScrutineePattern.test(path)) {
+      // Handle nested with-clause scrutinees
+      // Pattern: value.clauses[N].withClauses[M].rhs.scrutinee*
+      // The scrutinee in a nested with-clause doesn't need remapping because it's
+      // already stored in the typeInfoMap under its surface path by the auxiliary's
+      // type checking. We just need to ensure the path is accessible.
+      // Actually, for nested with-clauses, the scrutinee is part of the auxiliary
+      // function's RHS, and the auxiliary's typeInfoMap already has entries for it.
+      // The mergeAuxTypeInfoIntoMain function will copy those entries.
+      // So we don't need to do anything special here - just continue.
+      continue;
     }
   }
 }
