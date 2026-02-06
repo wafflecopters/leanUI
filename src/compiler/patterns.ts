@@ -1010,11 +1010,20 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
         const ctxIndex = updatedEnv.context.length - 1 - varIndex;
         if (ctxIndex >= 0 && ctxIndex < updatedEnv.context.length) {
           const varName = updatedEnv.context[ctxIndex]?.name || `?${varIndex}`;
-          const valuePretty = updatedEnv.prettyPrint(value);
-          updatedEnv.addWarning(
-            `Warning: Pattern variable '${varName}' is constrained to be '${valuePretty}' by this constructor.\n` +
-            `Consider replacing '${varName}' with '${valuePretty}' in the pattern for better clarity.`
-          );
+
+          // Only warn about user-written variables, not auto-generated ones.
+          // Auto-generated names start with '_' (implicit args, padding) or '?' (fallback names).
+          const isUserWritten = varName.length > 0 &&
+                                !varName.startsWith('_') &&
+                                !varName.startsWith('?');
+
+          if (isUserWritten) {
+            const valuePretty = updatedEnv.prettyPrint(value);
+            updatedEnv.addWarning(
+              `Warning: Pattern variable '${varName}' is constrained to be '${valuePretty}' by this constructor.\n` +
+              `Consider replacing '${varName}' with '${valuePretty}' in the pattern for better clarity.`
+            );
+          }
         }
       }
     }
