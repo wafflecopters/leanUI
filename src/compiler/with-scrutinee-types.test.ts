@@ -9,17 +9,20 @@ import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
 
 describe('With-clause scrutinee type inference', () => {
-  test.skip('simple function call scrutinee with concrete type - UNSUPPORTED: with-clause with no function params', () => {
+  test('simple function call scrutinee with concrete type', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
+inductive Unit : Type where
+  MkUnit : Unit
+
 makeNat : Nat
 makeNat = Zero
 
-testWith : Nat
-testWith with makeNat
+testWith : Unit -> Nat
+testWith _ with makeNat
   | Zero => Zero
   | Succ n => n
 `;
@@ -30,14 +33,13 @@ testWith with makeNat
       .flatMap(b => b.declarations)
       .find(d => d.name?.includes('with'));
 
-    console.log('Auxiliary:', auxDecl?.name, 'success:', auxDecl?.checkSuccess);
-
-    // If there's no auxiliary, the main function should still work
     if (!auxDecl) {
       const mainDecl = result.blocks
         .flatMap(b => b.declarations)
         .find(d => d.name === 'testWith');
-      console.log('Main decl success:', mainDecl?.checkSuccess);
+      if (mainDecl && !mainDecl.checkSuccess) {
+        console.log('Main decl errors:', mainDecl.checkErrors.map(e => e.message));
+      }
       expect(mainDecl?.checkSuccess).toBe(true);
       return;
     }
@@ -161,14 +163,14 @@ testFn start with makePair start
     expect(mainDecl?.checkSuccess).toBe(true);
   });
 
-  test.skip('complex expression scrutinee with multiple params - KNOWN ISSUE: MkPair not found', () => {
+  test('complex expression scrutinee with multiple params', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat
   Succ : Nat -> Nat
 
-inductive Pair (A B : Type) where
-  MkPair : A -> B -> Pair A B
+inductive Pair : Type -> Type -> Type where
+  MkPair : {A B : Type} -> A -> B -> Pair A B
 
 makePair : Nat -> Nat -> Pair Nat Nat
 makePair a b = MkPair a b
@@ -188,8 +190,6 @@ testWith x y with makePair x y
       console.log('Auxiliary errors:', auxDecl.checkErrors.map(e => e.message));
     }
 
-    // The fallback to holes should allow type checking to succeed
-    // If makePair isn't found, we leave the hole and the type checker solves it
     expect(auxDecl?.checkSuccess).toBe(true);
 
     const mainDecl = result.blocks
