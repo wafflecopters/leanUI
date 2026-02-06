@@ -26,14 +26,6 @@ testWith with makeNat
 
     const result = compileTTFromText(source);
 
-    // Debug: print all declarations and errors
-    console.log('All declarations:', result.blocks.flatMap(b => b.declarations).map(d => d.name));
-    console.log('Parse errors:', result.parseErrors);
-    console.log('Blocks count:', result.blocks.length);
-    result.blocks.forEach((b, i) => {
-      console.log(`Block ${i}:`, b.name, 'declarations:', b.declarations.length);
-    });
-
     const auxDecl = result.blocks
       .flatMap(b => b.declarations)
       .find(d => d.name?.includes('with'));

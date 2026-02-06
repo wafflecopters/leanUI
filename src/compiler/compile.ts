@@ -4174,7 +4174,7 @@ function resolveWithScrutineeTypes(
  * Extracts function parameters from a type signature, stopping before scrutinee parameters.
  * Returns the parameter names and types in order.
  */
-function extractFunctionParams(type: TTerm, scrutineeCount: number): Array<{ name: string; type: TTKTerm }> {
+function extractFunctionParams(type: TTerm, _scrutineeCount: number): Array<{ name: string; type: TTKTerm }> {
   const params: Array<{ name: string; type: TTKTerm }> = [];
   let currentType = type;
 

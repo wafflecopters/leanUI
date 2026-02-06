@@ -6,22 +6,21 @@
  * where contexts grow as patterns are processed.
  */
 import { describe, test, expect } from 'vitest';
-import { TCEnv } from './term';
+import { TCEnv, createDefinitionsMap } from './term';
 import { mkVar, mkConst } from './kernel';
-import type { TTKTerm } from '../types/tt-kernel';
 
 // Helper to create an empty TCEnv for testing
 function createEmptyEnv(): TCEnv<undefined> {
   return new TCEnv(
     [], // context
-    new Map(), // definitions
+    createDefinitionsMap(), // definitions
     new Map(), // metaVars
     [], // constraints
     [], // indexPath
     [], // valueStack
     undefined, // value
     new Map(), // levelMetas
-    { mode: 'infer' } // options
+    { mode: 'check' } // options
   );
 }
 
