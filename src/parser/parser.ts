@@ -676,6 +676,9 @@ export interface ParsedDeclaration {
   // For with-clause auxiliary functions: number of scrutinee pattern positions.
   // Used by totality checker to skip frozen function-pattern positions.
   withScrutineeCount?: number;
+  // For nested with-clauses: how many scrutinees are NEW (vs inherited from parent).
+  // Used by totality checker to only check new scrutinees, not inherited ones.
+  newScrutineeCount?: number;
   // For with-clause auxiliary functions: the original scrutinee expressions.
   // Used by compile.ts to compute the actual scrutinee types (replacing holes
   // in the auxiliary type signature) before checking clauses.

@@ -75,7 +75,7 @@ export function desugarWithClauses(decls: ParsedDeclaration[]): ParsedDeclaratio
 /**
  * Desugar with-clauses in a single declaration.
  */
-function desugarDeclaration(decl: ParsedDeclaration): DesugarResult {
+function desugarDeclaration(decl: ParsedDeclaration, parentScrutinees: TTerm[] = []): DesugarResult {
   if (decl.kind !== 'def' || !decl.value) {
     // Only term definitions can have with-clauses
     return { mainDecl: decl, auxiliaries: [] };
@@ -90,7 +90,7 @@ function desugarDeclaration(decl: ParsedDeclaration): DesugarResult {
   const auxiliaries: ParsedDeclaration[] = [];
 
   // Desugar the value, collecting auxiliary definitions
-  const newValue = desugarTerm(decl.value, baseName, decl.type, auxiliaries);
+  const newValue = desugarTerm(decl.value, baseName, decl.type, auxiliaries, parentScrutinees);
 
   return {
     mainDecl: { ...decl, value: newValue },
@@ -133,45 +133,46 @@ function desugarTerm(
   term: TTerm,
   baseName: string,
   declType: TTerm | undefined,
-  auxiliaries: ParsedDeclaration[]
+  auxiliaries: ParsedDeclaration[],
+  parentScrutinees: TTerm[] = []
 ): TTerm {
   switch (term.tag) {
     case 'WithClause':
-      return desugarWithClause(term, baseName, declType, auxiliaries);
+      return desugarWithClause(term, baseName, declType, auxiliaries, parentScrutinees);
 
     case 'App': {
-      const newFn = desugarTerm(term.fn, baseName, declType, auxiliaries);
-      const newArg = desugarTerm(term.arg, baseName, declType, auxiliaries);
+      const newFn = desugarTerm(term.fn, baseName, declType, auxiliaries, parentScrutinees);
+      const newArg = desugarTerm(term.arg, baseName, declType, auxiliaries, parentScrutinees);
       if (newFn === term.fn && newArg === term.arg) return term;
       return { ...term, fn: newFn, arg: newArg };
     }
 
     case 'Binder': {
-      const newDomain = term.domain ? desugarTerm(term.domain, baseName, declType, auxiliaries) : undefined;
-      const newBody = desugarTerm(term.body, baseName, declType, auxiliaries);
+      const newDomain = term.domain ? desugarTerm(term.domain, baseName, declType, auxiliaries, parentScrutinees) : undefined;
+      const newBody = desugarTerm(term.body, baseName, declType, auxiliaries, parentScrutinees);
       if (newDomain === term.domain && newBody === term.body) return term;
       return { ...term, domain: newDomain, body: newBody };
     }
 
     case 'MultiBinder': {
-      const newDomain = desugarTerm(term.domain, baseName, declType, auxiliaries);
-      const newBody = desugarTerm(term.body, baseName, declType, auxiliaries);
+      const newDomain = desugarTerm(term.domain, baseName, declType, auxiliaries, parentScrutinees);
+      const newBody = desugarTerm(term.body, baseName, declType, auxiliaries, parentScrutinees);
       if (newDomain === term.domain && newBody === term.body) return term;
       return { ...term, domain: newDomain, body: newBody };
     }
 
     case 'Match': {
-      const newScrutinee = desugarTerm(term.scrutinee, baseName, declType, auxiliaries);
+      const newScrutinee = desugarTerm(term.scrutinee, baseName, declType, auxiliaries, parentScrutinees);
       const newClauses = term.clauses.map(c => ({
         ...c,
-        rhs: desugarTerm(c.rhs, baseName, declType, auxiliaries),
+        rhs: desugarTerm(c.rhs, baseName, declType, auxiliaries, parentScrutinees),
       }));
       return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
     }
 
     case 'Annot': {
-      const newTerm = desugarTerm(term.term, baseName, declType, auxiliaries);
-      const newType = desugarTerm(term.type, baseName, declType, auxiliaries);
+      const newTerm = desugarTerm(term.term, baseName, declType, auxiliaries, parentScrutinees);
+      const newType = desugarTerm(term.type, baseName, declType, auxiliaries, parentScrutinees);
       if (newTerm === term.term && newType === term.type) return term;
       return { tag: 'Annot', term: newTerm, type: newType };
     }
@@ -232,11 +233,16 @@ function desugarWithClause(
   withClause: TWithClause,
   baseName: string,
   declType: TTerm | undefined,
-  auxiliaries: ParsedDeclaration[]
+  auxiliaries: ParsedDeclaration[],
+  parentScrutinees: TTerm[] = []
 ): TTerm {
   const auxName = freshWithName(baseName);
   const functionPatterns = withClause.functionPatterns;
   const scrutinees = withClause.scrutinees;
+
+  // For nested with-clauses, accumulate scrutinee expressions from parent withs
+  // This allows us to resolve ALL scrutinee type holes during compilation
+  const allScrutinees = [...parentScrutinees, ...scrutinees];
 
 
 
@@ -270,12 +276,7 @@ function desugarWithClause(
   // Compute the auxiliary function type from the main declaration's type
   // The auxiliary takes: (1) bound variable args, (2) scrutinee args
   // and returns the main function's return type (with pattern reconstructions substituted)
-  console.warn(`[with-desugar] Computing auxiliary type for ${auxName}`);
-  console.warn(`  functionPatterns.length = ${functionPatterns.length}`);
-  console.warn(`  scrutinees.length = ${scrutinees.length}`);
-  console.warn(`  input declType = ${JSON.stringify(declType, null, 2).substring(0, 500)}`);
   const auxType = computeAuxiliaryType(declType, functionPatterns, scrutinees, useAgdaStyle, baseName);
-  console.warn(`  computed auxType = ${JSON.stringify(auxType, null, 2).substring(0, 1500)}`);
 
   // Create the auxiliary function definition
   // withScrutineeCount should be the TOTAL number of scrutinees (existing + new)
@@ -291,14 +292,18 @@ function desugarWithClause(
       clauses: auxClauses,
     },
     withScrutineeCount: totalScrutineeCount,
-    withScrutineeExprs: scrutinees,
+    // For nested withs, only NEW scrutinees should be checked for totality (old ones are frozen)
+    newScrutineeCount: scrutinees.length,
+    // Include ALL scrutinee expressions (parent + new) so compilation can resolve all holes
+    withScrutineeExprs: allScrutinees,
     withFunctionPatterns: functionPatterns,
   };
 
   // Recursively desugar nested WithClauses in the auxiliary's clause RHS values.
   // This handles arbitrary nesting depth (with inside with inside with...).
+  // Pass allScrutinees so nested withs can resolve all parent scrutinee holes.
   if (containsWithClause(auxDecl.value!)) {
-    const nestedResult = desugarDeclaration(auxDecl);
+    const nestedResult = desugarDeclaration(auxDecl, allScrutinees);
     // Push nested auxiliaries FIRST so they are processed before callers
     auxiliaries.push(...nestedResult.auxiliaries);
     auxiliaries.push(nestedResult.mainDecl);
@@ -307,15 +312,12 @@ function desugarWithClause(
   }
 
   // Create the call to the auxiliary function
-  console.warn(`[with-desugar] Creating call to ${auxName}`);
   let call: TTerm = mkConstTT(auxName);
 
   const numPatternVars = countPatternVars(functionPatterns);
   let varIndex = numPatternVars;
-  console.warn(`  numPatternVars = ${numPatternVars}, reconstructing pattern args`);
 
   if (useAgdaStyle) {
-    console.warn(`  Using Agda style, passing ${functionPatterns.length} inner vars`);
     // Agda-style: pass inner vars directly, not constructor-wrapped terms.
     // For PVar: same as before (just the var).
     // For PCtor("Succ", [PVar x]): pass x (the inner var), not Succ(x).
@@ -323,26 +325,19 @@ function desugarWithClause(
     // the var index assignment is the same as for PVar patterns.
     for (let i = 0; i < functionPatterns.length; i++) {
       const idx = varIndex - 1;
-      console.warn(`    Agda arg ${i}: Var(${idx})`);
       call = mkAppTT(call, mkVarTT(idx));
       varIndex = idx;
     }
   } else {
     // Original style: pass reconstructed pattern terms
     const patternArgs = patternsToTerms(functionPatterns, varIndex);
-    console.warn(`  Reconstructed ${patternArgs.length} pattern args:`);
-    for (let i = 0; i < patternArgs.length; i++) {
-      const arg = patternArgs[i];
-      console.warn(`    arg ${i}: ${JSON.stringify(arg).substring(0, 150)}`);
+    for (const arg of patternArgs) {
       call = mkAppTT(call, arg);
     }
   }
 
   // Add scrutinee arguments
-  console.warn(`  Adding ${scrutinees.length} scrutinee arguments`);
-  for (let i = 0; i < scrutinees.length; i++) {
-    const scrutinee = scrutinees[i];
-    console.warn(`    scrutinee ${i}: ${JSON.stringify(scrutinee).substring(0, 200)}`);
+  for (const scrutinee of scrutinees) {
     call = mkAppTT(call, scrutinee);
   }
 
@@ -504,7 +499,6 @@ function computeAuxiliaryType(
   // Count existing scrutinee parameters in declType and subtract from numPatterns.
   const numExistingScrutinees = countScrutineeParams(declType);
   const numExplicitToConsume = numPatterns - numExistingScrutinees;
-  console.warn(`  numExistingScrutinees = ${numExistingScrutinees}, numExplicitToConsume = ${numExplicitToConsume}`);
 
   // First, collect info about binders by walking the type
   const binderInfo = collectBinderInfo(declType, numExplicitToConsume);
@@ -714,7 +708,6 @@ function spliceScrutineesIntoType(
 ): TTerm {
   // Base case: we've consumed all required explicit args, splice here
   if (numExplicit <= 0) {
-    console.warn(`  [splice] At splice point! scrutineeTypes.length = ${scrutineeTypes.length}, offset = ${scrutineeIndexOffset}`);
     let result = type;
 
     // Apply pattern reconstruction substitution for Agda-style desugaring.

@@ -1,10 +1,9 @@
-@test failure
-@name "sigmaSum: nested with on DPair and Either (KNOWN LIMITATION: dep types)"
-@error "expects (DPair Nat"
+@test success
+@name "sigmaSum: nested with on DPair and Either with dependent types"
 
--- KNOWN LIMITATION: Nested with-clauses where the inner scrutinee references
+-- Tests nested with-clauses where the inner scrutinee references
 -- a pattern variable with a DEPENDENT type from the outer with.
--- The issue is in with-desugar.ts call construction for nested auxiliaries.
+-- This requires proper threading of parent scrutinee expressions through desugaring.
 
 inductive Nat : Type where
   Zero : Nat

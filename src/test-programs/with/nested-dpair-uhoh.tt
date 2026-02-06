@@ -1,0 +1,34 @@
+@test success
+@name "uhoh: nested with on DPair with unused parameter"
+@import preambles/nat.tt
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+inductive Either : Type -> Type -> Type where
+  inl : {L R : Type} -> L -> Either L R
+  inr : {L R : Type} -> R -> Either L R
+
+record DPair (A : Type) (fn : A -> Type) where
+  fst : A
+  snd : fn fst
+
+-- Function that produces a DPair from a Leq proof
+leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\_ => Nat)
+leqImpliesSum Zero b LeqZero = MkDPair b b
+leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
+  | MkDPair n _ => MkDPair n n
+
+decGeq : (a b : Nat) -> Either (Leq a b) (Leq (Succ b) a)
+decGeq Zero b = inl LeqZero
+decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
+decGeq (Succ a) (Succ b) with decGeq a b
+  | inl aLeqB => inl (LeqSucc aLeqB)
+  | inr bLeA => inr (LeqSucc bLeA)
+
+uhoh : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
+uhoh start end fn with decGeq start end
+  | inl startLeqEnd with leqImpliesSum start end startLeqEnd
+    | MkDPair count _ => Zero
+  | inr endLeStart => Zero

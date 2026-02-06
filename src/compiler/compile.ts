@@ -99,6 +99,7 @@ export interface ElabDeclaration {
   elabErrorPath?: string;
   /** For with-clause auxiliaries: metadata needed for scrutinee type resolution */
   withScrutineeCount?: number;
+  newScrutineeCount?: number; // For nested withs: how many scrutinees are NEW (vs inherited from parent)
   withScrutineeExprs?: TTerm[];
 }
 
@@ -177,6 +178,7 @@ export interface CompiledDeclaration {
 
   // For with-clause auxiliaries: metadata needed for scrutinee type resolution
   withScrutineeCount?: number;
+  newScrutineeCount?: number; // For nested withs: how many scrutinees are NEW (vs inherited)
   withScrutineeExprs?: TTerm[];
 
   // Errors promoted from failed with-clause auxiliaries (displayed on the main declaration)
@@ -2515,6 +2517,7 @@ function checkDeclaration(
     sourceMap: decl.sourceMap,
     elabErrorPath: decl.elabErrorPath,
     withScrutineeCount: decl.withScrutineeCount,
+    newScrutineeCount: decl.newScrutineeCount,
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap: typeInfoMap.size > 0 ? typeInfoMap : undefined,
     tacticInfoTree: tacticInfoTree,
@@ -2808,7 +2811,7 @@ function unsolvedMetasToHoles(term: TTKTerm): TTKTerm {
 function checkTermDeclaration(
   decl: ElabDeclaration,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; typeInfoCollector?: TypeInfoMap; warningsCollector?: TCEnvError[]; assumeK?: boolean },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; newScrutineeCount?: number; typeInfoCollector?: TypeInfoMap; warningsCollector?: TCEnvError[]; assumeK?: boolean },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, definitions: DefinitionsMap, checkedValue: TTKTerm, zonkedType: TTKTerm, totalityResult?: TotalityResult, tacticInfoTree?: TacticInfoTree } {
 
   if (!decl.name) {
@@ -3081,7 +3084,7 @@ function checkTermDeclaration(
       namedArgMap,
       totalArity,
       annotatedAbsurdClauses,
-      { skipTotality: options?.skipTotality, withScrutineeCount: options?.withScrutineeCount }
+      { skipTotality: options?.skipTotality, withScrutineeCount: options?.withScrutineeCount, newScrutineeCount: options?.newScrutineeCount }
     );
     if (!result.success) {
       return { success: false, errors: result.errors, totalityResult: result.totalityResult }
@@ -3372,6 +3375,7 @@ function createCompiledDeclaration(
     sourceMap,
     elabErrorPath,
     withScrutineeCount: decl.withScrutineeCount,
+    newScrutineeCount: decl.newScrutineeCount,
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap,
     tacticInfoTree,
@@ -4244,17 +4248,12 @@ function resolveWithScrutineeTypes(
   scrutineeExprs: TTerm[],
   definitions: DefinitionsMap
 ): TTerm {
-  console.warn(`[resolveWithScrutineeTypes] Called with ${scrutineeExprs.length} scrutinee(s)`);
-  console.warn(`[resolveWithScrutineeTypes] declType: ${JSON.stringify(declType, null, 2).substring(0, 500)}`);
-
   // Build a substitution map from hole names to inferred types
   const holeSubstitutions = new Map<string, TTerm>();
 
   // Check if this is a nested with-clause by counting scrutinees before any Holes
   // If there are existing scrutinees (not just the ones we're resolving), it's nested
   const numExistingScrutinees = countScrutineesBeforeHoles(declType);
-  const isNestedWith = numExistingScrutinees > 0;
-  console.warn(`[resolveWithScrutineeTypes] numExistingScrutinees = ${numExistingScrutinees}, isNestedWith = ${isNestedWith}`);
 
   // Extract function parameters from the type to build a context
   // The auxiliary function type is: (param1 : T1) -> ... -> (paramN : TN) -> (scrutinee : _scrut0_type) -> ... -> ReturnType
@@ -4263,23 +4262,17 @@ function resolveWithScrutineeTypes(
 
   for (let i = 0; i < scrutineeExprs.length; i++) {
     const scrutinee = scrutineeExprs[i];
-    // The global scrutinee number accounts for existing scrutinees from outer with-clauses
-    const globalScrutineeNum = numExistingScrutinees + i;
-    const holeName = `_scrut${globalScrutineeNum}_type`;
+    // Now that withScrutineeExprs includes ALL scrutinees (parent + new), the index directly maps to scrutinee number
+    const holeName = `_scrut${i}_type`;
 
-    console.warn(`[resolveWithScrutineeTypes] Processing scrutinee ${i}: numExisting=${numExistingScrutinees}, global#=${globalScrutineeNum}, holeName=${holeName}`);
-
-    // For nested with-clauses (when there are existing scrutinees), the inner scrutinee may
-    // reference pattern variables from outer withs that are not in function parameters.
-    // Use syntactic extraction since we can't build the full context for type inference.
-    if (isNestedWith) {
-      console.warn(`Nested with detected for scrutinee ${i} (global #${globalScrutineeNum}), using syntactic extraction`);
+    // For nested with-clauses, scrutinees may reference pattern variables from outer withs.
+    // The FIRST numExistingScrutinees should use syntactic extraction (they're from parent withs).
+    // NEW scrutinees can try type inference first.
+    const isFromParentWith = i < numExistingScrutinees;
+    if (isFromParentWith) {
       const simpleType = tryExtractReturnType(scrutinee, definitions);
       if (simpleType) {
-        console.warn(`Successfully extracted return type syntactically: ${JSON.stringify(simpleType).substring(0, 200)}`);
         holeSubstitutions.set(holeName, simpleType);
-      } else {
-        console.warn(`Syntactic extraction failed, leaving as Hole`);
       }
       continue;
     }
@@ -4323,19 +4316,14 @@ function resolveWithScrutineeTypes(
       } catch (e) {
         // If type inference fails (e.g., because scrutinee references unavailable pattern vars),
         // try a simpler syntactic approach: extract the return type from a function application
-        console.warn(`Type inference failed for scrutinee ${i}, trying syntactic fallback`);
         const simpleType = tryExtractReturnType(scrutinee, definitions);
         if (simpleType) {
-          console.warn(`Successfully extracted return type syntactically`);
           holeSubstitutions.set(holeName, simpleType);
-        } else {
-          // Fall back to leaving as Hole
-          console.warn(`Syntactic extraction also failed, leaving as Hole`);
         }
+        // Otherwise fall back to leaving as Hole
       }
     } catch (e) {
-      // Elaboration failed
-      console.warn(`Failed to elaborate scrutinee ${i}:`, e);
+      // Elaboration failed, leave the hole unresolved
     }
   }
 
@@ -4559,7 +4547,7 @@ function processTermDeclaration(
   decl: ParsedDeclaration,
   sourceMap: SourceMap,
   definitions: DefinitionsMap,
-  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; assumeK?: boolean },
+  options?: { allowUnsolvedSigMetas?: boolean; skipTotality?: boolean; withScrutineeCount?: number; newScrutineeCount?: number; assumeK?: boolean },
 ): ProcessDeclarationResult {
 
   const elabMap: ElabMap = new Map();
@@ -4605,6 +4593,7 @@ function processTermDeclaration(
     elabMap,
     sourceMap,
     withScrutineeCount: decl.withScrutineeCount,
+    newScrutineeCount: decl.newScrutineeCount,
     withScrutineeExprs: decl.withScrutineeExprs,
   };
 
@@ -4800,7 +4789,7 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
       const compiledAuxiliaries: CompiledDeclaration[] = [];
 
       for (const auxDecl of auxiliaryDecls) {
-        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount, assumeK });
+        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount, newScrutineeCount: auxDecl.newScrutineeCount, assumeK });
         // Remap elabMap so with-clause surface paths map to aux kernel paths
         remapWithClauseElabMap(result.compiled, sourceMap, auxDecl.withScrutineeCount ?? 0);
         result.compiled.isWithAuxiliary = true;
@@ -5373,7 +5362,7 @@ function checkTermValue(
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
   annotatedAbsurdClauses: number[] = [],
-  options?: { skipTotality?: boolean; withScrutineeCount?: number },
+  options?: { skipTotality?: boolean; withScrutineeCount?: number; newScrutineeCount?: number },
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   const errors: TCEnvError[] = [];
   const checkedClauses: TTKClause[] = [];
@@ -5514,7 +5503,9 @@ function checkTermValue(
   // always passes specific constructor patterns from the parent clause context).
   if (options?.withScrutineeCount && options.withScrutineeCount > 0 && totalityClauses.length > 0) {
     const totalPatterns = totalityClauses[0].patterns.length;
-    const frozenCount = totalPatterns - options.withScrutineeCount;
+    // For nested withs, only check NEW scrutinees for totality (inherited ones are already matched)
+    const scrutineesToCheck = options.newScrutineeCount ?? options.withScrutineeCount;
+    const frozenCount = totalPatterns - scrutineesToCheck;
     if (frozenCount > 0) {
       totalityClauses = totalityClauses.map(c => ({
         ...c,
@@ -5532,7 +5523,8 @@ function checkTermValue(
   // Annotate frozen position count for with-clause auxiliary case tree rendering
   if (options?.withScrutineeCount && options.withScrutineeCount > 0 && totalityClauses.length > 0) {
     const totalPatterns = totalityClauses[0].patterns.length;
-    const frozenCount = totalPatterns - options.withScrutineeCount;
+    const scrutineesToCheck = options.newScrutineeCount ?? options.withScrutineeCount;
+    const frozenCount = totalPatterns - scrutineesToCheck;
     if (frozenCount > 0) {
       totalityResult.frozenPositionCount = frozenCount;
     }
