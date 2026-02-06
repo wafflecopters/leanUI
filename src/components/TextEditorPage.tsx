@@ -839,21 +839,48 @@ leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
     cases hba with
     | LeqSucc q => exact (congSucc (leqAntisym p q))
 
+
 record DPair (A : Type) (fn : A -> Type) where
   fst : A
   snd : fn fst
 
-succInj: {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
+succInj: {u v : Nat} -> Equal (Succ u) (Succ v) -> Equal u v 
 succInj refl = refl
+
+succCong: {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
+succCong refl = refl
 
 leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\\n => Equal b (plus a n))
 leqImpliesSum Zero b LeqZero = MkDPair b refl
 leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
-  | MkDPair n pf => MkDPair n (succInj pf)
+  | MkDPair n pf => MkDPair n (succCong pf)
 
-sigmaSum : (count : Nat) -> (fn: (index: Nat) -> Nat) -> Nat
-sigmaSum Zero _ = Zero
-sigmaSum (Succ k) fn = plus (sigmaSum k fn) (Succ k)
+sigmaSumCount : (count : Nat) -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSumCount Zero _ = Zero
+sigmaSumCount (Succ k) fn = plus (sigmaSumCount k fn) (Succ k)
+
+sigmaSumStartCount : (start count : Nat) -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSumStartCount start count fn = sigmaSumCount count (\\index => fn (plus start index))
+
+sigmaSumStartOrderedRange : (start end : Nat) -> Leq start end -> (fn: (index: Nat) -> Nat) -> Nat
+sigmaSumStartOrderedRange start end leq fn with leqImpliesSum start end leq
+  | MkDPair count _ => sigmaSumStartCount start count fn
+
+inductive Void : Type where
+
+zeroNeqSucc : {n : Nat} -> (Equal Zero (Succ n) -> Void)
+
+inductive DecEq : {A : Type} -> (a b : A) -> Type where
+  Yes : {A : Type} -> {a b : A} -> Equal a b -> DecEq a b
+  No : {A : Type} -> {a b : A} -> (Equal a b -> Void) -> DecEq a b
+
+decEqNat : (x y : Nat) -> DecEq x y
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ y) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
+decEqNat (Succ x) (Succ y) with decEqNat x y
+  | Yes eq => Yes (succCong eq)
+  | No neq => No (\\eq => neq (succInj eq))
 `;
 
 const PRESETS: { name: string; code: string }[] = [
