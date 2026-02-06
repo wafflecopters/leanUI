@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from './compile';
 
 describe('Sigma sum case from user', () => {
-  test.skip('sigmaSumStartOrderedRange should compile - WIP: named args issue', () => {
+  test('sigmaSumStartOrderedRange should compile', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat

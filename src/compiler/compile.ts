@@ -4157,7 +4157,8 @@ function resolveWithScrutineeTypes(
 
       // Convert the inferred kernel type back to surface syntax
       // We need the surface form to substitute into the surface type
-      const surfaceType = kernelToSurface(inferredType);
+      // IMPORTANT: Pass definitions so implicit arguments are omitted in surface syntax
+      const surfaceType = kernelTypeToSurface(inferredType, definitions);
       holeSubstitutions.set(holeName, surfaceType);
     } catch (e) {
       // If type inference fails, leave the hole as-is
@@ -4239,47 +4240,6 @@ function extractFunctionParams(type: TTerm, _scrutineeCount: number): Array<{ na
  */
 function isHoleType(term: TTerm): boolean {
   return term.tag === 'Hole';
-}
-
-/**
- * Converts a kernel term (TTKTerm) to surface syntax (TTerm).
- * This is a simplified conversion that handles common cases.
- */
-function kernelToSurface(term: TTKTerm): TTerm {
-  switch (term.tag) {
-    case 'Var':
-      return mkVarTT(term.index);
-    case 'Const':
-      return mkConstTT(term.name);
-    case 'App':
-      return mkAppTT(kernelToSurface(term.fn), kernelToSurface(term.arg));
-    case 'Binder': {
-      const body = kernelToSurface(term.body);
-      const domain = kernelToSurface(term.domain);
-      switch (term.binderKind.tag) {
-        case 'BPi':
-          return mkPiTT(domain, body, term.name || '_');
-        case 'BLam':
-          return { tag: 'Binder', name: term.name || '_', binderKind: { tag: 'BLamTT' }, domain, body };
-        case 'BLet':
-          return { tag: 'Binder', name: term.name || '_', binderKind: { tag: 'BLetTT', defVal: kernelToSurface(term.binderKind.defVal) }, domain, body };
-      }
-      break;
-    }
-    case 'Sort':
-      return mkSortTT(kernelToSurface(term.level));
-    case 'ULevel':
-      return { tag: 'ULevel' };
-    case 'ULit':
-      return mkULitTT(term.n);
-    case 'UOmega':
-      return mkUOmegaTT();
-    case 'Hole':
-      return mkHoleTT(term.id, mkPropTT());
-    default:
-      // For complex terms like Match, Meta, Annot return a hole
-      return mkHoleTT('_complex', mkPropTT());
-  }
 }
 
 /**
