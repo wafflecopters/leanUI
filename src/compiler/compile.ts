@@ -746,6 +746,46 @@ function collectSemanticTokensFromSurfaceTerm(
       collectSemanticTokensFromSurfaceTerm(term.body, sourceMap, blockStartLine, [...path, 'body'], tokens);
       break;
 
+    case 'WithClause':
+      // Nested with: collect tokens from scrutinees and all branches
+      {
+        const wc = term as any;  // Cast to access WithClause-specific fields
+        // Collect from scrutinees
+        for (let si = 0; si < wc.scrutinees.length; si++) {
+          collectSemanticTokensFromSurfaceTerm(
+            wc.scrutinees[si],
+            sourceMap,
+            blockStartLine,
+            [...path, 'scrutinee'],
+            tokens
+          );
+        }
+        // Collect from with-clause branches
+        for (let i = 0; i < wc.clauses.length; i++) {
+          const clause = wc.clauses[i];
+          const wcPath = [...path, 'withClauses', i];
+          // Collect from patterns
+          for (let j = 0; j < clause.patterns.length; j++) {
+            collectSemanticTokensFromSurfacePattern(
+              clause.patterns[j],
+              sourceMap,
+              blockStartLine,
+              [...wcPath, 'patterns', j],
+              tokens
+            );
+          }
+          // Collect from rhs (which might itself be a WithClause for further nesting)
+          collectSemanticTokensFromSurfaceTerm(
+            clause.rhs,
+            sourceMap,
+            blockStartLine,
+            [...wcPath, 'rhs'],
+            tokens
+          );
+        }
+      }
+      break;
+
     case 'TacticBlock':
       for (let i = 0; i < term.tactics.length; i++) {
         collectSemanticTokensFromTactic(
