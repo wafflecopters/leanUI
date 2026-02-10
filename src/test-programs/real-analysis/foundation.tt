@@ -21,6 +21,10 @@ inductive Either : Type -> Type -> Type where
   Left : {A B : Type} -> A -> Either A B
   Right : {A B : Type} -> B -> Either A B
 
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim f g (Left a) = f a
+eitherElim f g (Right b) = g b
+
 record Pair (A B : Type) where
   constructor MkPair
   fst : A

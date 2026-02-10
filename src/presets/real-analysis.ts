@@ -25,6 +25,10 @@ inductive Either : Type -> Type -> Type where
   Left : {A B : Type} -> A -> Either A B
   Right : {A B : Type} -> B -> Either A B
 
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim f g (Left a) = f a
+eitherElim f g (Right b) = g b
+
 record Pair (A B : Type) where
   constructor MkPair
   fst : A
@@ -161,8 +165,9 @@ rsub R a b = radd R a (rneg R b)
 rlt : (R : Real) -> Carrier R -> Carrier R -> Type
 rlt R a b = Pair (rle R a b) (Equal a b -> Void)
 
--- Absolute value (postulated — requires case analysis on order)
-postulate rabs : (R : Real) -> Carrier R -> Carrier R
+-- Absolute value: case-split on leTotal (0 ≤ x) vs (x ≤ 0)
+rabs : (R : Real) -> Carrier R -> Carrier R
+rabs R x = eitherElim (\\_ => x) (\\_ => rneg R x) (CompleteOrderedField.leTotal (field R) (rzero R) x)
 
 ------------------------------------------------------------
 -- Limits: the epsilon-delta definition

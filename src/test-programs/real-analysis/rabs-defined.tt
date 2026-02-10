@@ -1,5 +1,5 @@
 @test success
-@name "Real Analysis: full preset compilation"
+@name "Real Analysis: rabs defined via leTotal (no postulate)"
 @import real-analysis/foundation.tt
 @import real-analysis/order-hierarchy.tt
 
@@ -42,7 +42,6 @@ record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
   supUpperBound : (P : A -> Type) -> (x : A) -> P x -> le x (sup P)
   supLeast : (P : A -> Type) -> (b : A) -> ((x : A) -> P x -> le x b) -> le (sup P) b
 
--- Real: a type bundled with a complete ordered field structure
 Real : Type 1
 Real = DPair (Type) CompleteOrderedField
 
@@ -52,40 +51,12 @@ Carrier R = DPair.fst R
 field : (R : Real) -> CompleteOrderedField (Carrier R)
 field R = DPair.snd R
 
--- Field operations, parametric over any Real
-radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-radd R = CompleteOrderedField.add (field R)
-
-rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rmul R = CompleteOrderedField.mul (field R)
-
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
-
-rone : (R : Real) -> Carrier R
-rone R = CompleteOrderedField.one (field R)
 
 rneg : (R : Real) -> Carrier R -> Carrier R
 rneg R = CompleteOrderedField.neg (field R)
 
-rinv : (R : Real) -> Carrier R -> Carrier R
-rinv R = CompleteOrderedField.inv (field R)
-
-rle : (R : Real) -> Carrier R -> Carrier R -> Type
-rle R = CompleteOrderedField.le (field R)
-
-rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rsub R a b = radd R a (rneg R b)
-
-rlt : (R : Real) -> Carrier R -> Carrier R -> Type
-rlt R a b = Pair (rle R a b) (Equal a b -> Void)
-
+-- Absolute value: case-split on leTotal (0 ≤ x) vs (x ≤ 0)
 rabs : (R : Real) -> Carrier R -> Carrier R
 rabs R x = eitherElim (\_ => x) (\_ => rneg R x) (CompleteOrderedField.leTotal (field R) (rzero R) x)
-
-EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
-
-record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
-  eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
-              DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
