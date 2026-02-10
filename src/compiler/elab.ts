@@ -1790,9 +1790,11 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
           );
         }
 
-        // If the function has named parameters, we MUST validate that positional
-        // arguments don't overflow into named parameter positions
-        if (namedMap && namedMap.size > 0) {
+        // If the application uses named arguments and the function has named parameters,
+        // reorder and validate. Only enter this path when hasNamed is true — otherwise
+        // positional-only applications (e.g., MkPair a (\(x : T) => body)) should not
+        // be subject to named-argument position validation.
+        if (hasNamed && namedMap && namedMap.size > 0) {
           // Reorder and validate arguments
           const reorderResult = reorderArgs(args, namedMap, totalArity);
           if ('error' in reorderResult && reorderResult.error !== undefined) {

@@ -1,0 +1,13 @@
+@test success
+@name "named argument syntax still works after annotated lambda fix"
+@import preambles/nat.tt
+@import preambles/pair.tt
+
+-- Verify named argument syntax {A := ...} still works correctly
+-- (regression test for the annotated lambda fix in elab.ts)
+
+test1 : Pair Nat Nat
+test1 = MkPair {A := Nat} {B := Nat} Zero (Succ Zero)
+
+test2 : Pair Nat Nat
+test2 = MkPair {B := Nat} {A := Nat} Zero (Succ Zero)

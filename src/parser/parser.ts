@@ -1086,9 +1086,10 @@ export class Parser {
     //   foo : Type 1
     //   foo = Type   <-- this is a simple definition, not a pattern clause
     if (next.type === 'OPERATOR' && next.value === '=') {
+      const eqCol = this.current().col;
       this.advance(); // consume '='
       const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
-      const value = this.expr(0, [], valuePath);
+      const value = this.expr(0, [], valuePath, false, eqCol);
       return { kind: 'def', name, value };
     }
 
@@ -1191,6 +1192,7 @@ export class Parser {
         this.current().col
       );
     }
+    const equalsCol = this.current().col;
     this.advance(); // consume '='
     this.skipNewlines(); // Allow RHS to start on next line (e.g., let on newline)
 
@@ -1208,7 +1210,9 @@ export class Parser {
     // (We use index 0 here, but it will be adjusted during merging if needed)
     const rhsPath: IndexPath = [...clausePath, { kind: 'field', name: 'rhs' }];
 
-    const rhs = this.expr(0, rhsCtx, rhsPath);
+    // Use equalsCol as baseColumn to allow multi-line function bodies where
+    // continuation lines are indented past the '=' sign
+    const rhs = this.expr(0, rhsCtx, rhsPath, false, equalsCol);
 
     // Track the clause itself in the source map (from first pattern to end of RHS)
     const clauseEndPos = this.getPrevEndPos();
@@ -1363,8 +1367,9 @@ export class Parser {
         const nestedFunctionPatterns = [...effectivePatterns, ...withPatterns];
         rhs = this.parseNestedWith(funcName, nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
       } else {
+        const fatArrowCol = this.current().col;
         this.expect('FATARROW');
-        rhs = this.expr(0, rhsCtx, rhsPath);
+        rhs = this.expr(0, rhsCtx, rhsPath, false, fatArrowCol);
       }
 
       withClauses.push({
@@ -1511,8 +1516,9 @@ export class Parser {
         const nestedFunctionPatterns = [...effectivePatterns, ...withPatterns];
         rhs = this.parseNestedWith(funcName, nestedFunctionPatterns, namedPatterns, rhsCtx, rhsPath, pipeCol);
       } else {
+        const fatArrowCol = this.current().col;
         this.expect('FATARROW');
-        rhs = this.expr(0, rhsCtx, rhsPath);
+        rhs = this.expr(0, rhsCtx, rhsPath, false, fatArrowCol);
       }
 
       nestedClauses.push({
@@ -2848,9 +2854,9 @@ export class Parser {
       while (this.current().type === 'NEWLINE') {
         this.advance();
       }
-      if (this.current().col <= letLineStartCol) {
+      if (this.current().col < letLineStartCol) {
         throw new ParseError(
-          `Body of let expression must be indented beyond line start (column ${letLineStartCol}), found at column ${this.current().col}`,
+          `Body of let expression must be indented to at least line start (column ${letLineStartCol}), found at column ${this.current().col}`,
           this.current().line,
           this.current().col
         );

@@ -1,0 +1,32 @@
+@test success
+@name "let body at same indentation as let keyword"
+@import preambles/nat.tt
+
+-- Previously the body of `let ... in` on a new line had to be indented PAST
+-- the let's column. Since `in` already delimits the body, the body should be
+-- allowed at the same column.
+
+-- Body at same column as let
+test1 : Nat
+test1 =
+  let x = Zero in
+  x
+
+-- Body indented past let (regression: should still work)
+test2 : Nat
+test2 =
+  let x = Zero in
+    x
+
+-- Multiple let bindings with body at same column
+test3 : Nat
+test3 =
+  let x = Zero, y = Succ x in
+  y
+
+-- Nested let with body at same column as outer let
+test4 : Nat
+test4 =
+  let x = Zero in
+  let y = Succ x in
+  y

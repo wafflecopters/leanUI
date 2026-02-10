@@ -2271,16 +2271,18 @@ plusZeroRight n =
     }
   });
 
-  test('Parse pattern clause with let on newline, body at same indent as let - should FAIL', () => {
-    // This should be rejected: let body at same indent as let
+  test('Parse pattern clause with let on newline, body at same indent as let - now allowed', () => {
+    // Since `in` already delimits the body, the body is allowed at the same
+    // column as the `let` keyword. Only bodies DEDENTED past the let column fail.
     const source = `plusZeroRight : Nat -> Nat
 plusZeroRight n =
   let rec = plusZeroRight n in
   cong rec`;
 
-    // This should throw because 'cong rec' is at the same indent as 'let'
-    // which means it's not properly indented as the body of the let
-    assertThrows(() => parseDeclarations(source));
+    // This should parse successfully — body at same indent as let is now OK
+    const decls = parseDeclarations(source);
+    expect(decls.length).toBe(1);
+    expect(decls[0].name).toBe('plusZeroRight');
   });
 });
 

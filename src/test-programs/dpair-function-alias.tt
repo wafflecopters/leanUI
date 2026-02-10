@@ -1,0 +1,22 @@
+@test success
+@name "DPair with function alias (Match inference)"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- Function alias that elaborates to a Match
+IsPos : Nat -> Type
+IsPos n = Equal n (Succ Zero)
+
+-- Inline lambda works (regression test)
+test1 : DPair Nat (\n => Equal n (Succ Zero))
+test1 = MkDPair (Succ Zero) refl
+
+-- Function alias should also work (previously failed with
+-- "Inference not implemented for term type Match")
+test2 : DPair Nat IsPos
+test2 = MkDPair (Succ Zero) refl

@@ -478,7 +478,6 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     throw TCEnvError.create(`Unknown metavariable: ${env.value.id}`, env);
   }
 
-  debugger
   throw TCEnvError.create(`Inference not implemented for term type ${env.value.tag}`, env)
 }
 
@@ -724,7 +723,9 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
             mode: 'pattern',
             flexibleVars: true,
             rigidVarsAtOrAbove: implicitParams.length + explicitArgs.length,
-            definitions: env.definitions
+            // NOTE: Do NOT pass definitions here. We want to extract the surface-level
+            // terms (e.g., Const("IsPos")) without delta-reducing them. The type checker
+            // will handle delta-reduction later when checking the reconstructed term.
           });
 
           if (!unifyResult.success) {

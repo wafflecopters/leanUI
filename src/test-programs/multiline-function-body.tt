@@ -1,0 +1,40 @@
+@test success
+@name "multi-line function body with continuation past equals"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Previously function bodies couldn't span multiple lines because the parser
+-- didn't pass baseColumn to expr() for the RHS. Now continuation lines
+-- indented past the '=' are treated as part of the same expression.
+
+trans : {A : Type} -> {a b c : A} -> Equal a b -> Equal b c -> Equal a c
+trans refl refl = refl
+
+sym : {A : Type} -> {a b : A} -> Equal a b -> Equal b a
+sym refl = refl
+
+-- Pattern clause: multi-line after =
+applySucc : Nat -> Nat
+applySucc n = Succ
+                n
+
+-- Multi-line function body with equality proof
+twoStepSym : {A : Type} -> {a b c : A} -> Equal a b -> Equal b c -> Equal c a
+twoStepSym ab bc = sym
+                     (trans ab bc)
+
+-- Multiple arguments spanning multiple lines (simple definition)
+threeArgs : Nat -> Nat -> Nat -> Nat
+threeArgs a b c = a
+
+apply3 : Nat
+apply3 = threeArgs
+           Zero
+           (Succ Zero)
+           (Succ (Succ Zero))
+
+-- Arguments on same line as function, continuation on next line
+apply3b : Nat
+apply3b = threeArgs Zero
+                    (Succ Zero)
+                    (Succ (Succ Zero))

@@ -359,6 +359,168 @@ describe('predecessor function reduction', () => {
   });
 });
 
+describe('PWild binding alignment', () => {
+  // These tests verify that PWild does NOT produce bindings, which is critical
+  // for correct de Bruijn index alignment in the RHS.
+
+  test('PWild before PVar in constructor: | Succ _ => result uses no binding', () => {
+    // match (Succ Zero) with | Succ _ => True
+    // PWild should not produce a binding; RHS has no variables
+    const clauses: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'Succ',
+          args: [{ tag: 'PWild', name: '_' }]
+        }],
+        rhs: mkConst('True')
+      },
+    ];
+    const scrutinee = mkApp(mkConst('Succ'), mkConst('Zero'));
+    const match = mkMatch(scrutinee, clauses);
+    const result = whnf(match);
+    expect(result).toEqual(mkConst('True'));
+  });
+
+  test('PWild before PVar in constructor: | Pair _ y => y binds to second field', () => {
+    // match (MkPair a b) with | MkPair _ y => y
+    // PWild should NOT produce a binding, so y (de Bruijn 0) should bind to b, not a
+    const clauses: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkPair',
+          args: [
+            { tag: 'PWild', name: '_' },
+            { tag: 'PVar', name: 'y' }
+          ]
+        }],
+        rhs: mkVar(0) // y - should be the SECOND field (b)
+      },
+    ];
+    // MkPair a b => (MkPair a) b
+    const scrutinee = mkApp(mkApp(mkConst('MkPair'), mkConst('a')), mkConst('b'));
+    const match = mkMatch(scrutinee, clauses);
+    const result = whnf(match);
+    // y should bind to 'b' (second arg), NOT 'a' (first arg)
+    expect(result).toEqual(mkConst('b'));
+  });
+
+  test('PVar before PWild in constructor: | Pair x _ => x binds to first field', () => {
+    // match (MkPair a b) with | MkPair x _ => x
+    // x (de Bruijn 0) should bind to a (first field)
+    const clauses: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkPair',
+          args: [
+            { tag: 'PVar', name: 'x' },
+            { tag: 'PWild', name: '_' }
+          ]
+        }],
+        rhs: mkVar(0) // x - should be the FIRST field (a)
+      },
+    ];
+    const scrutinee = mkApp(mkApp(mkConst('MkPair'), mkConst('a')), mkConst('b'));
+    const match = mkMatch(scrutinee, clauses);
+    const result = whnf(match);
+    expect(result).toEqual(mkConst('a'));
+  });
+
+  test('multiple PWild in constructor: | Triple _ _ z => z', () => {
+    // match (MkTriple a b c) with | MkTriple _ _ z => z
+    // Two PWild produce 0 bindings, z (de Bruijn 0) should bind to c
+    const clauses: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkTriple',
+          args: [
+            { tag: 'PWild', name: '_' },
+            { tag: 'PWild', name: '_' },
+            { tag: 'PVar', name: 'z' }
+          ]
+        }],
+        rhs: mkVar(0) // z - should be the THIRD field (c)
+      },
+    ];
+    const scrutinee = mkApp(mkApp(mkApp(mkConst('MkTriple'), mkConst('a')), mkConst('b')), mkConst('c'));
+    const match = mkMatch(scrutinee, clauses);
+    const result = whnf(match);
+    expect(result).toEqual(mkConst('c'));
+  });
+
+  test('PWild with nested constructor: | Ctor _ (Succ y) => y', () => {
+    // match (MkPair a (Succ Zero)) with | MkPair _ (Succ y) => y
+    // PWild skips first arg, Succ y matches second arg, y binds to Zero
+    const clauses: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkPair',
+          args: [
+            { tag: 'PWild', name: '_' },
+            {
+              tag: 'PCtor',
+              name: 'Succ',
+              args: [{ tag: 'PVar', name: 'y' }]
+            }
+          ]
+        }],
+        rhs: mkVar(0) // y - should be Zero
+      },
+    ];
+    const scrutinee = mkApp(
+      mkApp(mkConst('MkPair'), mkConst('a')),
+      mkApp(mkConst('Succ'), mkConst('Zero'))
+    );
+    const match = mkMatch(scrutinee, clauses);
+    const result = whnf(match);
+    expect(result).toEqual(mkConst('Zero'));
+  });
+
+  test('mixed PVar and PWild: | Ctor x _ y => (x, y) binds correctly', () => {
+    // match (MkTriple a b c) with | MkTriple x _ z => x
+    // x (de Bruijn 1) binds to a, z (de Bruijn 0) binds to c
+    const clauses_x: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkTriple',
+          args: [
+            { tag: 'PVar', name: 'x' },
+            { tag: 'PWild', name: '_' },
+            { tag: 'PVar', name: 'z' }
+          ]
+        }],
+        rhs: mkVar(1) // x - should be a (de Bruijn 1 since z is at 0)
+      },
+    ];
+    const scrutinee = mkApp(mkApp(mkApp(mkConst('MkTriple'), mkConst('a')), mkConst('b')), mkConst('c'));
+    const match_x = mkMatch(scrutinee, clauses_x);
+    expect(whnf(match_x)).toEqual(mkConst('a'));
+
+    // Same but return z
+    const clauses_z: TTKClause[] = [
+      {
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkTriple',
+          args: [
+            { tag: 'PVar', name: 'x' },
+            { tag: 'PWild', name: '_' },
+            { tag: 'PVar', name: 'z' }
+          ]
+        }],
+        rhs: mkVar(0) // z - should be c
+      },
+    ];
+    const match_z = mkMatch(scrutinee, clauses_z);
+    expect(whnf(match_z)).toEqual(mkConst('c'));
+  });
+});
+
 describe('isZero function reduction', () => {
   // isZero Zero = True
   // isZero (Succ _) = False

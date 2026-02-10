@@ -1,0 +1,29 @@
+@test success
+@name "annotated lambda as positional arg to constructor"
+@import preambles/nat.tt
+@import preambles/pair.tt
+@import preambles/equality.tt
+
+-- Annotated lambdas inside constructors should work when no named args are used.
+-- Previously this failed with "Too many positional arguments" because the elaborator
+-- ran named-argument reordering even on purely positional applications.
+
+-- Simple: annotated lambda as second arg to MkPair
+test1 : Pair Nat (Nat -> Nat)
+test1 = MkPair Zero (\(x : Nat) => x)
+
+-- Annotated lambda as first arg to MkPair
+test2 : Pair (Nat -> Nat) Nat
+test2 = MkPair (\(x : Nat) => x) Zero
+
+-- Annotated lambda with equality type
+test3 : (a : Nat) -> Pair Nat (Equal a a)
+test3 a = MkPair a refl
+
+-- Annotated lambda returning a Pair (the original motivating bug pattern)
+wrapId : Pair Nat (Nat -> Nat)
+wrapId = MkPair Zero (\(n : Nat) => n)
+
+-- Multiple annotated lambdas
+pairOfFns : Pair (Nat -> Nat) (Nat -> Nat)
+pairOfFns = MkPair (\(x : Nat) => Succ x) (\(y : Nat) => y)
