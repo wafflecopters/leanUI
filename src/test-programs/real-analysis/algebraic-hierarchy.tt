@@ -1,0 +1,28 @@
+@test success
+@name "Real Analysis: algebraic hierarchy (AbelianGroup -> Ring -> CommRing -> Field)"
+@import real-analysis/foundation.tt
+
+record AbelianGroup (A : Type) where
+  add : A -> A -> A
+  zero : A
+  neg : A -> A
+  addAssoc : (a b c : A) -> Equal (add (add a b) c) (add a (add b c))
+  addComm : (a b : A) -> Equal (add a b) (add b a)
+  addZeroRight : (a : A) -> Equal (add a zero) a
+  negRight : (a : A) -> Equal (add a (neg a)) zero
+
+record Ring (A : Type) extends AbelianGroup A where
+  mul : A -> A -> A
+  one : A
+  mulAssoc : (a b c : A) -> Equal (mul (mul a b) c) (mul a (mul b c))
+  mulOneLeft : (a : A) -> Equal (mul one a) a
+  mulOneRight : (a : A) -> Equal (mul a one) a
+  distribLeft : (a b c : A) -> Equal (mul a (add b c)) (add (mul a b) (mul a c))
+  distribRight : (a b c : A) -> Equal (mul (add a b) c) (add (mul a c) (mul b c))
+
+record CommRing (A : Type) extends Ring A where
+  mulComm : (a b : A) -> Equal (mul a b) (mul b a)
+
+record Field (A : Type) extends CommRing A where
+  inv : A -> A
+  mulInvRight : (a : A) -> (Equal a zero -> Void) -> Equal (mul a (inv a)) one

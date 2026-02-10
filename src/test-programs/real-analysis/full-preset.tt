@@ -1,0 +1,92 @@
+@test success
+@name "Real Analysis: full preset compilation"
+@import real-analysis/foundation.tt
+@import real-analysis/order-hierarchy.tt
+
+record AbelianGroup (A : Type) where
+  add : A -> A -> A
+  zero : A
+  neg : A -> A
+  addAssoc : (a b c : A) -> Equal (add (add a b) c) (add a (add b c))
+  addComm : (a b : A) -> Equal (add a b) (add b a)
+  addZeroRight : (a : A) -> Equal (add a zero) a
+  negRight : (a : A) -> Equal (add a (neg a)) zero
+
+record Ring (A : Type) extends AbelianGroup A where
+  mul : A -> A -> A
+  one : A
+  mulAssoc : (a b c : A) -> Equal (mul (mul a b) c) (mul a (mul b c))
+  mulOneLeft : (a : A) -> Equal (mul one a) a
+  mulOneRight : (a : A) -> Equal (mul a one) a
+  distribLeft : (a b c : A) -> Equal (mul a (add b c)) (add (mul a b) (mul a c))
+  distribRight : (a b c : A) -> Equal (mul (add a b) c) (add (mul a c) (mul b c))
+
+record CommRing (A : Type) extends Ring A where
+  mulComm : (a b : A) -> Equal (mul a b) (mul b a)
+
+record Field (A : Type) extends CommRing A where
+  inv : A -> A
+  mulInvRight : (a : A) -> (Equal a zero -> Void) -> Equal (mul a (inv a)) one
+
+record OrderedField (A : Type) : Type 1 extends Field A where
+  le : A -> A -> Type
+  leRefl : (a : A) -> le a a
+  leAntisym : (a b : A) -> le a b -> le b a -> Equal a b
+  leTrans : (a b c : A) -> le a b -> le b c -> le a c
+  leTotal : (a b : A) -> Either (le a b) (le b a)
+  addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
+  mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
+
+record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
+  sup : (A -> Type) -> A
+  supUpperBound : (P : A -> Type) -> (x : A) -> P x -> le x (sup P)
+  supLeast : (P : A -> Type) -> (b : A) -> ((x : A) -> P x -> le x b) -> le (sup P) b
+
+-- The real numbers
+postulate RealPkg : DPair (Type) CompleteOrderedField
+
+Real : Type
+Real = DPair.fst RealPkg
+
+realField : CompleteOrderedField Real
+realField = DPair.snd RealPkg
+
+-- Convenience operations
+radd : Real -> Real -> Real
+radd = CompleteOrderedField.add realField
+
+rmul : Real -> Real -> Real
+rmul = CompleteOrderedField.mul realField
+
+rzero : Real
+rzero = CompleteOrderedField.zero realField
+
+rone : Real
+rone = CompleteOrderedField.one realField
+
+rneg : Real -> Real
+rneg = CompleteOrderedField.neg realField
+
+rinv : Real -> Real
+rinv = CompleteOrderedField.inv realField
+
+rle : Real -> Real -> Type
+rle = CompleteOrderedField.le realField
+
+rsub : Real -> Real -> Real
+rsub a b = radd a (rneg b)
+
+rlt : Real -> Real -> Type
+rlt a b = Pair (rle a b) (Equal a b -> Void)
+
+postulate rabs : Real -> Real
+
+-- Epsilon-delta witness: given δ, prove δ>0 and the epsilon-delta condition
+EpsDeltaWitness : (f : Real -> Real) -> (x0 : Real) -> (L : Real) -> (eps : Real) -> Real -> Type
+EpsDeltaWitness f x0 L eps delta = Pair (rlt rzero delta) ((x : Real) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
+
+-- Limit: epsilon-delta
+-- ∀ε>0, ∃δ>0, ∀x, |x-x0|<δ → |f(x)-L|<ε
+record Limit (f : Real -> Real) (x0 : Real) (L : Real) where
+  eps_delta : (eps : Real) -> rlt rzero eps ->
+              DPair Real (EpsDeltaWitness f x0 L eps)

@@ -1,0 +1,14 @@
+@test success
+@name "postulate: coexists with zero-clause absurd function"
+
+inductive Void : Type where
+
+-- Zero-clause function (NOT a postulate)
+absurd : {A : Type} -> Void -> A
+
+-- Actual postulate
+postulate magic : {A : Type} -> A
+
+-- Both can be used
+foo : Void -> Void
+foo v = absurd v

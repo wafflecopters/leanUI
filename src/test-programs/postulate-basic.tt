@@ -1,0 +1,13 @@
+@test success
+@name "postulate: basic axiom declaration"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- A simple postulate
+postulate myAxiom : Nat
+
+-- Use a postulate in a definition
+foo : Nat
+foo = Succ myAxiom

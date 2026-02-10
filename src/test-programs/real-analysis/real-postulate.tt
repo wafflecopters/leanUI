@@ -1,0 +1,12 @@
+@test success
+@name "Real Analysis: postulate RealPkg + projection"
+@import real-analysis/foundation.tt
+@import real-analysis/ordered-field.tt
+
+postulate RealPkg : DPair (Type) CompleteOrderedField
+
+Real : Type
+Real = DPair.fst RealPkg
+
+realField : CompleteOrderedField Real
+realField = DPair.snd RealPkg

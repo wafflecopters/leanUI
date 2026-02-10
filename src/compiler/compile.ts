@@ -97,6 +97,8 @@ export interface ElabDeclaration {
   elabError?: string;
   /** Serialized surface path where elaboration error occurred */
   elabErrorPath?: string;
+  /** Postulate: type-only declaration with no value (axiom) */
+  isPostulate?: boolean;
   /** For with-clause auxiliaries: metadata needed for scrutinee type resolution */
   withScrutineeCount?: number;
   newScrutineeCount?: number; // For nested withs: how many scrutinees are NEW (vs inherited from parent)
@@ -2188,6 +2190,7 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           kernelType,
           kernelValue,
           kernelConstructors,
+          isPostulate: decl.isPostulate,
           elabMap,
           sourceMap
         });
@@ -2955,6 +2958,18 @@ function checkTermDeclaration(
     // Add to context for subsequent declarations, including namedArgMap for lookup
     if (decl.name) {
       termEnv = addDefinitionInTCEnv(termEnv, decl.name, zonkedKernelType, namedArgMap);
+    }
+
+    // Handle postulates: type signature with no value (declared with `postulate` keyword)
+    // The name is added to definitions (above) so subsequent declarations can reference it,
+    // but no value is checked. The postulate is opaque — it cannot be reduced.
+    if (decl.isPostulate) {
+      return {
+        success: true,
+        definitions: termEnv.definitions,
+        checkedValue: { tag: 'Hole', id: '_postulate' },
+        zonkedType: zonkedKernelType,
+      };
     }
 
     // Handle #absurd clauses from surface value
@@ -4669,6 +4684,7 @@ function processTermDeclaration(
     surfaceValue: decl.value,
     kernelType,
     // kernelValue is NOT set here - elaboration happens clause-by-clause in checkTermDeclaration
+    isPostulate: decl.isPostulate,
     elabMap,
     sourceMap,
     withScrutineeCount: decl.withScrutineeCount,

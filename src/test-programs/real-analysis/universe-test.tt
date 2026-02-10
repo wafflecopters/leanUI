@@ -1,0 +1,13 @@
+@test success
+@name "Real Analysis: Type 1 result annotation for large fields"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+record HasOrder (A : Type) : Type 1 where
+  le : A -> A -> Type
+  leRefl : (a : A) -> le a a

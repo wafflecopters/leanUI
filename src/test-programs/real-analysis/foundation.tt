@@ -1,0 +1,32 @@
+@test success
+@name "Real Analysis: foundation types"
+
+inductive Void : Type where
+
+absurd : {A : Type} -> Void -> A
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst

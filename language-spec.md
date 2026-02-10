@@ -241,6 +241,26 @@ idPoint : Point -> Point
 idPoint p = MkPoint (Point.x p) (Point.y p)
 ```
 
+### Postulates (Axioms)
+
+Postulates declare a name with a type but no definition. They are opaque to reduction — the type checker accepts them on faith.
+
+```
+postulate myAxiom : (A : Type) -> A -> A
+```
+
+Postulates are useful for:
+- Axiomatizing structures that exist but whose construction is not relevant (e.g., the real numbers)
+- Declaring operations whose implementation requires features not yet available (e.g., case analysis on order)
+
+```
+-- Postulate the reals as a complete ordered field
+postulate RealPkg : DPair (Type) CompleteOrderedField
+
+-- Postulate absolute value (requires case analysis on order)
+postulate rabs : Real -> Real
+```
+
 ### Pattern Matching in Definitions
 
 ```
@@ -525,7 +545,7 @@ Named parameters:
 ## Reserved Keywords
 
 ```
-def, inductive, where, match, with, let, in, Type, Prop, fun
+def, inductive, where, match, with, let, in, Type, Prop, fun, postulate
 ```
 
 ## Lexical Conventions

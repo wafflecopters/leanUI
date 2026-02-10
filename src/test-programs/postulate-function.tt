@@ -1,0 +1,13 @@
+@test success
+@name "postulate: function type axiom"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Postulate a function
+postulate double : Nat -> Nat
+
+-- Use it
+four : Nat
+four = double (Succ (Succ Zero))

@@ -1,0 +1,14 @@
+@test success
+@name "Real Analysis: order hierarchy (Preorder -> PartialOrder -> TotalOrder)"
+@import real-analysis/foundation.tt
+
+record Preorder (A : Type) where
+  le : A -> A -> Type
+  leRefl : (a : A) -> le a a
+  leTrans : (a b c : A) -> le a b -> le b c -> le a c
+
+record PartialOrder (A : Type) extends Preorder A where
+  leAntisym : (a b : A) -> le a b -> le b a -> Equal a b
+
+record TotalOrder (A : Type) extends PartialOrder A where
+  leTotal : (a b : A) -> Either (le a b) (le b a)

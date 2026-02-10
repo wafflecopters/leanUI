@@ -1,0 +1,21 @@
+@test success
+@name "Real Analysis: DPair postulate with universe-poly DPair"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+record Foo (A : Type) where
+  x : A
+
+postulate FooPkg : DPair (Type) Foo
+
+Carrier : Type
+Carrier = DPair.fst FooPkg
+
+fooInst : Foo Carrier
+fooInst = DPair.snd FooPkg

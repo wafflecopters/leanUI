@@ -83,7 +83,8 @@ export type TokenType =
   | 'ELLIPSIS'     // ... (for repeating parent patterns in with clauses)
   | 'ABSURD'       // #absurd marker for absurd cases
   | 'BY'           // by keyword (for tactic proofs)
-  | 'BULLET';      // · (middle dot, U+00B7, for tactic subgoal focusing)
+  | 'BULLET'       // · (middle dot, U+00B7, for tactic subgoal focusing)
+  | 'POSTULATE';   // postulate keyword (for axioms)
 
 export interface Token {
   type: TokenType;
@@ -540,6 +541,8 @@ export class Lexer {
             return { type: 'WITH', value: 'with', pos: startPos, line: startLine, col: startCol };
           case 'by':
             return { type: 'BY', value: 'by', pos: startPos, line: startLine, col: startCol };
+          case 'postulate':
+            return { type: 'POSTULATE', value: 'postulate', pos: startPos, line: startLine, col: startCol };
           default:
             // Check for Type_n pattern (e.g., Type_0, Type_1, Type_42)
             if (ident.startsWith('Type_')) {
@@ -686,6 +689,8 @@ export interface ParsedDeclaration {
   // For with-clause auxiliary functions: the function patterns that provide context
   // for the scrutinee expressions. Needed to elaborate scrutinees with correct de Bruijn indices.
   withFunctionPatterns?: TPattern[];
+  // Postulate: type-only declaration with no value (axiom)
+  isPostulate?: boolean;
   // Original surface value before with-clause desugaring.
   // Used for semantic token extraction (the desugared value loses WithClause structure).
   originalSurfaceValue?: TTerm;
@@ -1004,6 +1009,11 @@ export class Parser {
     // Record: record Name (params) [extends ...] where fields
     if (current.type === 'RECORD') {
       return this.parseRecordDeclaration();
+    }
+
+    // Postulate: postulate name : type (axiom with no value)
+    if (current.type === 'POSTULATE') {
+      return this.parsePostulateDeclaration();
     }
 
     // Named declaration: name : type  or  name = impl
@@ -1535,6 +1545,27 @@ export class Parser {
    *   Constructor1 : Type1
    *   Constructor2 : Type2
    */
+  /**
+   * Parse a postulate declaration: postulate name : type
+   * Declares a name with a type but no definition (axiom).
+   */
+  private parsePostulateDeclaration(): ParsedDeclaration {
+    this.expect('POSTULATE');
+    const nameToken = this.expect('IDENT');
+    const name = nameToken.value;
+
+    // Record source range for the postulate name
+    const namePath: IndexPath = [{ kind: 'field', name: 'name' }];
+    this.recordRange(namePath, nameToken, nameToken);
+
+    this.expect('COLON');
+
+    const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+    const type = this.expr(0, [], typePath, false, nameToken.col);
+
+    return { kind: 'def', name, type, isPostulate: true };
+  }
+
   private parseInductiveDeclaration(): ParsedDeclaration {
     this.expect('INDUCTIVE');
     const nameToken = this.expect('IDENT');
@@ -1855,7 +1886,7 @@ export class Parser {
       // Field types are parsed in context of params AND previous fields (for dependent records)
       // Most recent binding first: [prev_fields_reversed..., params_reversed...]
       const currentFieldCtx = [...[...fields].reverse().map(f => f.name), ...fieldCtx];
-      const fieldType = this.expr(0, currentFieldCtx, fieldTypePath);
+      const fieldType = this.expr(0, currentFieldCtx, fieldTypePath, false, fieldNameToken.col);
 
       if (implicit) {
         this.expect('RBRACE');
@@ -2044,6 +2075,14 @@ export class Parser {
             break;
           }
         }
+      }
+
+      // Inside parenthesized expressions (allowMultilineApp), also skip newlines
+      // before arrows and operators so multi-line types work:
+      //   (eps : Real) -> rlt rzero eps ->
+      //                   DPair Real (...)
+      if (allowMultilineApp && this.current().type === 'NEWLINE') {
+        this.skipNewlines();
       }
 
       const token = this.current();

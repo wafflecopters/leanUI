@@ -343,6 +343,7 @@ export function validateDeclarations(
     kind?: string;
     constructorName?: string;
     fields?: Array<{ name: string; type?: TTerm }>;
+    extends?: string[];
   }>,
   initialCtx: SymbolContext = emptySymbolContext()
 ): NameResolutionResult<SymbolContext> {
@@ -384,6 +385,22 @@ export function validateDeclarations(
         for (const field of decl.fields) {
           const projName = `${decl.name}.${field.name}`;
           ctx = addSymbol(ctx, projName);
+        }
+      }
+
+      // For records that extend other records, also register inherited field projections.
+      // If Child extends Parent, then Parent.fieldName is also available as Child.fieldName.
+      if (decl.extends) {
+        for (const parentName of decl.extends) {
+          // Find all symbols that are projections of the parent (parentName.fieldName)
+          const parentPrefix = `${parentName}.`;
+          for (const sym of ctx) {
+            if (sym.startsWith(parentPrefix)) {
+              const fieldName = sym.substring(parentPrefix.length);
+              const childProjName = `${decl.name}.${fieldName}`;
+              ctx = addSymbol(ctx, childProjName);
+            }
+          }
         }
       }
     }

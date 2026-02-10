@@ -120,10 +120,11 @@ compileTTFromText(source)
       ├─ Type Checking
       │   ├─ For inductive types: checkInductiveDeclaration()
       │   ├─ For terms: checkType() / inferType()
+      │   ├─ For postulates: type-check signature only (no value)
       │   └─ For pattern matching: checkMatchClause()
       │
       └─ Verification
-          ├─ checkTotality() → Coverage analysis
+          ├─ checkTotality() → Coverage analysis (skipped for postulates)
           └─ checkStructuralRecursion() → Termination
 ```
 
@@ -151,6 +152,7 @@ compileTTFromText(source)
 | Implicit args | `{x}`, `{name := value}` |
 | Match | `match e with \| p1 => r1 \| p2 => r2` |
 | Inductive | `inductive Name : Type where \| Ctor : T` |
+| Postulate | `postulate name : Type` |
 | Holes | `_`, `?name` |
 
 ### Output
@@ -162,8 +164,14 @@ interface ParsedDeclaration {
   type?: TTerm;          // Surface type annotation
   value?: TTerm;         // Surface value (may contain Match)
   constructors?: Array<{ name: string; type: TTerm }>;
+  isPostulate?: boolean; // True for `postulate` declarations
 }
 ```
+
+**Postulates**: The parser recognizes `postulate name : Type` and produces a
+`ParsedDeclaration` with `kind: 'term'`, a type, no value, and `isPostulate: true`.
+The `isPostulate` flag must be propagated to the `ElabDeclaration` so that
+`checkTermDeclaration` can skip value checking and totality analysis.
 
 ---
 

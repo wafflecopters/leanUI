@@ -11,6 +11,9 @@ import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
 import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { GoalState } from '../tactics/proof-state';
+import { convertToLatex, makeDefaultNotations } from '../compiler/latex-converter';
+import { LaTeXPanel } from './LaTeXPanel';
+import { PRESETS } from '../presets';
 
 // Unicode abbreviations map (Lean-style)
 // Add new abbreviations here - they will be auto-replaced when followed by space/punctuation
@@ -300,630 +303,7 @@ const MONACO_WIDGET_STYLES = `
   }
 `;
 
-const SAMPLE_CODE = `inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Nat
-
-plus : Nat -> Nat -> Nat
-plus Zero b = b
-plus (Succ a) b = Succ (plus a b)
-
-inductive Vec : Type -> Nat -> Type where
-  VNil : {A: Type} -> Vec A Zero
-  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
-
-inductive Fin : Nat -> Type where
-  FZero : {n : Nat} -> Fin (Succ n)
-  FSucc : {n : Nat} -> Fin n -> Fin (Succ n)
-
-nth : {A : Type} -> {n : Nat} -> Vec A n -> Fin n -> A
-nth (VCons h _) FZero = h
-nth (VCons h tail) (FSucc f) = nth tail f
-
-inductive Void : Type where
-
-absurd : {A : Type} -> Void -> A
-
-inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
-  refl : {u : ULevel} -> {A : Type u} -> {a : A} -> Equal a a
-
-zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
-zeroNeqSucc refl = #absurd
-
-double : Nat -> Nat
-double n = ?sorry
-
-right : {A : Type} -> {B : Type} -> B -> A -> B
-right {A} b = \\(x: A) => b
-
-qux : Type
-qux = Nat
-
-qux' : Nat -> Type
-qux' n = Nat
-
-const : {A : Type} -> {B : Type} -> A -> B -> A
-const a = \\ _ => a
-
-swap : {A B C : Type} -> (f : A -> B -> C) -> B -> A -> C
-swap f = \\ x y => f y x
-
-vecConcat : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
-vecConcat VNil v = v
-vecConcat (VCons h tail) v = VCons h (vecConcat tail v)
-
-vecConcat' : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
-vecConcat' VNil v = v
-vecConcat' {a := Succ p} (VCons h tail) v = VCons h (vecConcat' {a := p} tail v)
-
-vecConcat'' : {A : Type} -> {a b : Nat} -> Vec A a -> Vec A b -> Vec A (plus a b)
-vecConcat'' VNil v = v
-vecConcat'' {a:=Succ p} (VCons h tail) v = swap VCons (vecConcat'' {a:=(\\x => x) p} tail v) h
-
-fox : Nat
-fox = (\\x => x) Zero
-
-sym : {A : Type} -> {u v : A} -> Equal u v -> Equal v u
-sym refl = refl
-
-trans : {A : Type} -> {u v w : A} -> Equal u v -> Equal v w -> Equal u w
-trans refl refl = refl
-
-cong : {A B : Type} -> {u v : A} -> {f : A -> B} -> Equal u v -> Equal (f u) (f v)
-cong refl = refl
-
-replace : {x y : Type} -> {f : Type -> Type} -> Equal x y -> f x -> f y
-replace refl fx = fx
-
-record Pair (A B : Type) : Type where
-  constructor MkPair
-  fst: A
-  snd: B
-
-inductive DPairInd : {u v : ULevel} -> (A : Type u) -> (B : A -> Type v) -> Type (UMax u v) where
-  MkDPairInd: {u v : ULevel} -> {A : Type u} -> {B : A -> Type v} -> (a : A) -> B a -> DPairInd A B
-
-record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
-  constructor MkDPair
-  dfst: A
-  dsnd: B dfst
-
-record Semigroup {u : ULevel} (A : Type u) where
-  op : A -> A -> A
-  assoc : (a b c : A) -> Equal (op (op a b) c) (op a (op b c))
-
-record Monoid {u : ULevel} (A : Type u) : Type u extends Semigroup {u} A where
-  e : A
-  identLeft : (a : A) -> Equal (op e a) a
-  identRight : (a : A) -> Equal (op a e) a
-
-record Group {u : ULevel} (A : Type u) : Type u extends Monoid A where
-  inv : A -> A
-  invLeft : (a : A) -> Equal (op (inv a) a) e
-  invRight : (a : A) -> Equal (op a (inv a)) e
-
-plusZeroRight : {n : Nat} -> Equal n (plus n Zero)
-plusZeroRight {n:=Zero} = refl {A:=Nat} {a:=Zero}
-plusZeroRight {n:=Succ n} = let rec = plusZeroRight {n} in
-  cong rec
-
-plusComm : {a b : Nat} -> Equal (plus a b) (plus b a)
-plusComm {a:=Zero}   {b:=Zero}   = refl
-plusComm {a:=Succ a} {b:=Zero}   = let tmp = plusZeroRight in ?B
-plusComm {a:=Zero}   {b:=Succ b} = ?C
-plusComm {a:=Succ a} {b:=Succ b} = ?D
-
-inductive List : Type -> Type where
-  Nil : {A : Type} -> List A
-  Cons : {A : Type} -> A -> List A -> List A
-
-inductive Bool : Type where
-  True : Bool
-  False : Bool
-
-filter : {A : Type} -> (A -> Bool) -> List A -> List A
-filter f Nil = Nil
-filter f (Cons x xs) with f x
-  | True => Cons x (filter f xs)
-  | False => filter f xs
-
-inductive DecEq : Nat -> Nat -> Type where
-  Yes : {m n : Nat} -> Equal m n -> DecEq m n
-  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
-
-succInj : {j k : Nat} -> Equal (Succ j) (Succ k) -> Equal j k
-succInj refl = refl
-
-compose : {u v w : ULevel} -> {A : Type u} -> {B : Type v} -> {C : Type w} -> (B -> C) -> (A -> B) -> (A -> C)
-compose g f = \\a => g (f a)
-
-decEqNat : (x y : Nat) -> DecEq x y
-decEqNat Zero Zero = Yes refl
-decEqNat Zero (Succ y) = No zeroNeqSucc
-decEqNat (Succ x) Zero = No (compose zeroNeqSucc sym)
-decEqNat (Succ x) (Succ y) with decEqNat x y
-  | Yes eq => Yes (cong eq)
-  | No neq => No (compose neq succInj)
-`;
-
-const NAT_MATH_CODE = `-- Nat Math: semiring, triangle sum, and ordering proofs by pattern matching
--- Includes all 12 semiring properties, sum(1..n) = n(n+1)/2, and Leq properties
-
-inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Nat
-
-inductive Equal : {A : Type} -> A -> A -> Type where
-  refl : {A : Type} -> {a : A} -> Equal a a
-
-plus : Nat -> Nat -> Nat
-plus Zero m = m
-plus (Succ n) m = Succ (plus n m)
-
-mul : Nat -> Nat -> Nat
-mul Zero m = Zero
-mul (Succ n) m = plus m (mul n m)
-
-one : Nat
-one = Succ Zero
-
--- Helpers
-congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
-congSucc refl = refl
-
-sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
-sym refl = refl
-
-trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
-trans refl refl = refl
-
--- Addition properties
-plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n
-plusZeroLeft n = refl
-
-plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
-plusZeroRight Zero = refl
-plusZeroRight (Succ n) = congSucc (plusZeroRight n)
-
-plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
-plusSuccRight Zero m = refl
-plusSuccRight (Succ n) m = congSucc (plusSuccRight n m)
-
-plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
-plusAssoc Zero m p = refl
-plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)
-
-plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
-plusComm Zero m = sym (plusZeroRight m)
-plusComm (Succ n) m = trans (congSucc (plusComm n m)) (sym (plusSuccRight m n))
-
-congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
-congPlusRight Zero eq = eq
-congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
-
-congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
-congPlusLeft p refl = refl
-
-plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
-plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
-
--- Multiplication properties
-mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero
-mulZeroLeft n = refl
-
-mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero
-mulZeroRight Zero = refl
-mulZeroRight (Succ n) = mulZeroRight n
-
-mulOneLeft : (n : Nat) -> Equal (mul one n) n
-mulOneLeft n = plusZeroRight n
-
-mulOneRight : (n : Nat) -> Equal (mul n one) n
-mulOneRight Zero = refl
-mulOneRight (Succ n) = congSucc (mulOneRight n)
-
-mulSuccRight : (n m : Nat) -> Equal (mul n (Succ m)) (plus n (mul n m))
-mulSuccRight Zero m = refl
-mulSuccRight (Succ n) m = congSucc (trans (congPlusRight m (mulSuccRight n m)) (plusLeftComm m n (mul n m)))
-
-mulComm : (n m : Nat) -> Equal (mul n m) (mul m n)
-mulComm Zero m = sym (mulZeroRight m)
-mulComm (Succ n) m = trans (congPlusRight m (mulComm n m)) (sym (mulSuccRight m n))
-
-mulDistribRight : (n m p : Nat) -> Equal (mul (plus n m) p) (plus (mul n p) (mul m p))
-mulDistribRight Zero m p = refl
-mulDistribRight (Succ n) m p = trans (congPlusRight p (mulDistribRight n m p)) (sym (plusAssoc p (mul n p) (mul m p)))
-
-mulAssoc : (n m p : Nat) -> Equal (mul (mul n m) p) (mul n (mul m p))
-mulAssoc Zero m p = refl
-mulAssoc (Succ n) m p = trans (mulDistribRight m (mul n m) p) (congPlusRight (mul m p) (mulAssoc n m p))
-
-mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul n p))
-mulDistribLeft Zero m p = refl
-mulDistribLeft (Succ n) m p = trans (congPlusRight (plus m p) (mulDistribLeft n m p)) (trans (plusAssoc m p (plus (mul n m) (mul n p))) (trans (congPlusRight m (plusLeftComm p (mul n m) (mul n p))) (sym (plusAssoc m (mul n m) (plus p (mul n p))))))
-
--- Semiring record and instance
-record Semiring (A : Type) where
-  constructor MkSemiring
-  add : A -> A -> A
-  mul : A -> A -> A
-  zero : A
-  oneS : A
-  addZeroLeft : (a : A) -> Equal (add zero a) a
-  addZeroRight : (a : A) -> Equal (add a zero) a
-  addComm : (a b : A) -> Equal (add a b) (add b a)
-  addAssoc : (a b c : A) -> Equal (add (add a b) c) (add a (add b c))
-  mulZeroL : (a : A) -> Equal (mul zero a) zero
-  mulZeroR : (a : A) -> Equal (mul a zero) zero
-  mulOneL : (a : A) -> Equal (mul oneS a) a
-  mulOneR : (a : A) -> Equal (mul a oneS) a
-  mulComm : (a b : A) -> Equal (mul a b) (mul b a)
-  mulAssoc : (a b c : A) -> Equal (mul (mul a b) c) (mul a (mul b c))
-  distribL : (a b c : A) -> Equal (mul a (add b c)) (add (mul a b) (mul a c))
-  distribR : (a b c : A) -> Equal (mul (add a b) c) (add (mul a c) (mul b c))
-
-natSemiring : Semiring Nat
-natSemiring = MkSemiring plus mul Zero one plusZeroLeft plusZeroRight plusComm plusAssoc mulZeroLeft mulZeroRight mulOneLeft mulOneRight mulComm mulAssoc mulDistribLeft mulDistribRight
-
-------------------------------------------------------------
--- Triangle Sum: 2 * sum(1..n) = n * (n + 1)
-------------------------------------------------------------
-
--- Sum from 0 to n: sum(n) = 0 + 1 + 2 + ... + n
-sum : Nat -> Nat
-sum Zero = Zero
-sum (Succ n) = plus (Succ n) (sum n)
-
--- Theorem: plus (sum n) (sum n) = mul n (Succ n)
--- i.e. 2 * sum(n) = n * (n + 1)
-doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n))
-doubleSum Zero = refl
-doubleSum (Succ n) = trans (plusAssoc (Succ n) (sum n) (plus (Succ n) (sum n))) (trans (congPlusRight (Succ n) (plusLeftComm (sum n) (Succ n) (sum n))) (trans (congPlusRight (Succ n) (congPlusRight (Succ n) (doubleSum n))) (trans (congSucc (plusSuccRight n (plus n (mul n (Succ n))))) (congPlusRight (Succ (Succ n)) (sym (mulSuccRight n (Succ n)))))))
-
-------------------------------------------------------------
--- Leq: ordering on Nat with reflexivity, transitivity, antisymmetry
-------------------------------------------------------------
-
-inductive Leq : Nat -> Nat -> Type where
-  LeqZero : {n : Nat} -> Leq Zero n
-  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
-
--- Reflexivity: a <= a
-leqRefl : (n : Nat) -> Leq n n
-leqRefl Zero = LeqZero
-leqRefl (Succ n) = LeqSucc (leqRefl n)
-
--- Transitivity: a <= b /\\ b <= c => a <= c
-leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c
-leqTrans LeqZero _ = LeqZero
-leqTrans (LeqSucc p) (LeqSucc q) = LeqSucc (leqTrans p q)
-
--- Antisymmetry: a <= b /\\ b <= a => a = b
-leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b
-leqAntisym LeqZero LeqZero = refl
-leqAntisym (LeqSucc p) (LeqSucc q) = congSucc (leqAntisym p q)
-`;
-
-const NAT_MATH_TACTICS_CODE = `-- Nat Math (Tactics): same theorems as Nat Math, proven via tactics
--- Showcases induction, multi-tactic branches, intro, exact, and more
-
-inductive Nat : Type where
-  Zero : Nat
-  Succ : Nat -> Nat
-
-inductive Equal : {A : Type} -> A -> A -> Type where
-  refl : {A : Type} -> {a : A} -> Equal a a
-
-plus : Nat -> Nat -> Nat
-plus Zero m = m
-plus (Succ n) m = Succ (plus n m)
-
-mul : Nat -> Nat -> Nat
-mul Zero m = Zero
-mul (Succ n) m = plus m (mul n m)
-
-one : Nat
-one = Succ Zero
-
--- Utility helpers (pattern matching — 1-line utility proofs)
-congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
-congSucc refl = refl
-
-sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
-sym refl = refl
-
-trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
-trans refl refl = refl
-
-congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
-congPlusRight Zero eq = eq
-congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
-
-congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
-congPlusLeft p refl = refl
-
-------------------------------------------------------------
--- Addition properties via tactics (induction on first arg)
-------------------------------------------------------------
-
-plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n := by
-  intro n; exact refl
-
-plusZeroRight : (n : Nat) -> Equal (plus n Zero) n := by
-  intro n
-  induction n with
-  | Zero => exact refl
-  | Succ n' IH => exact (congSucc IH)
-
-plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m)) := by
-  intro n
-  induction n with
-  | Zero =>
-    intro m
-    exact refl
-  | Succ n' IH =>
-    intro m
-    exact (congSucc (IH m))
-
-plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p)) := by
-  intro n
-  induction n with
-  | Zero =>
-    intros m p
-    exact refl
-  | Succ n' IH =>
-    intros m p
-    exact (congSucc (IH m p))
-
-plusComm : (n m : Nat) -> Equal (plus n m) (plus m n) := by
-  intro n
-  induction n with
-  | Zero =>
-    intro m
-    apply sym
-    exact (plusZeroRight m)
-  | Succ n' IH =>
-    intro m
-    apply trans
-    apply congSucc
-    exact (IH m)
-    apply sym
-    exact (plusSuccRight m n')
-
-plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p)) := by
-  intros m n p
-  apply trans
-  exact (sym (plusAssoc m n p))
-  apply trans
-  exact (congPlusLeft p (plusComm m n))
-  exact (plusAssoc n m p)
-
-------------------------------------------------------------
--- Multiplication properties via tactics
-------------------------------------------------------------
-
-mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero := by
-  intro n; exact refl
-
-mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero := by
-  intro n
-  induction n with
-  | Zero => exact refl
-  | Succ n' IH => exact IH
-
-mulOneLeft : (n : Nat) -> Equal (mul one n) n := by
-  intro n; exact (plusZeroRight n)
-
-mulOneRight : (n : Nat) -> Equal (mul n one) n := by
-  intro n
-  induction n with
-  | Zero => exact refl
-  | Succ n' IH => exact (congSucc IH)
-
-mulSuccRight : (n m : Nat) -> Equal (mul n (Succ m)) (plus n (mul n m)) := by
-  intro n
-  induction n with
-  | Zero =>
-    intro m
-    exact refl
-  | Succ n' IH =>
-    intro m
-    exact (congSucc (trans (congPlusRight m (IH m)) (plusLeftComm m n' (mul n' m))))
-
-mulComm : (n m : Nat) -> Equal (mul n m) (mul m n) := by
-  intro n
-  induction n with
-  | Zero =>
-    intro m
-    exact (sym (mulZeroRight m))
-  | Succ n' IH =>
-    intro m
-    exact (trans (congPlusRight m (IH m)) (sym (mulSuccRight m n')))
-
-mulDistribRight : (n m p : Nat) -> Equal (mul (plus n m) p) (plus (mul n p) (mul m p)) := by
-  intro n
-  induction n with
-  | Zero =>
-    intros m p
-    exact refl
-  | Succ n' IH =>
-    intros m p
-    exact (trans (congPlusRight p (IH m p)) (sym (plusAssoc p (mul n' p) (mul m p))))
-
-mulAssoc : (n m p : Nat) -> Equal (mul (mul n m) p) (mul n (mul m p)) := by
-  intro n
-  induction n with
-  | Zero =>
-    intros m p
-    exact refl
-  | Succ n' IH =>
-    intros m p
-    exact (trans (mulDistribRight m (mul n' m) p) (congPlusRight (mul m p) (IH m p)))
-
-mulDistribLeft : (n m p : Nat) -> Equal (mul n (plus m p)) (plus (mul n m) (mul n p)) := by
-  intro n
-  induction n with
-  | Zero =>
-    intros m p; exact refl
-  | Succ n' IH =>
-    intros m p
-    apply trans
-    exact (congPlusRight (plus m p) (IH m p))
-    apply trans
-    exact (plusAssoc m p (plus (mul n' m) (mul n' p)))
-    apply trans
-    exact (congPlusRight m (plusLeftComm p (mul n' m) (mul n' p)))
-    exact (sym (plusAssoc m (mul n' m) (plus p (mul n' p))))
-
-------------------------------------------------------------
--- Triangle Sum: 2 * sum(1..n) = n * (n + 1)
-------------------------------------------------------------
-
-sum : Nat -> Nat
-sum Zero = Zero
-sum (Succ n) = plus (Succ n) (sum n)
-
--- Triangle sum proof: 2 * sum(1..n) = n * (n + 1)
--- Best-practice: incremental proof with apply/exact, not nested terms
-doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n)) := by
-  intro n
-  induction n with
-  | Zero => exact refl
-  | Succ n' IH =>
-    -- Goal: (n'+1) + sum(n') + (n'+1) + sum(n') = (n'+1) * (n'+2)
-    apply trans
-    exact (plusAssoc (Succ n') (sum n') (plus (Succ n') (sum n')))
-    apply trans
-    apply congPlusRight
-    exact (plusLeftComm (sum n') (Succ n') (sum n'))
-    apply trans
-    apply congPlusRight
-    apply congPlusRight
-    exact IH
-    apply trans
-    apply congSucc
-    exact (plusSuccRight n' (plus n' (mul n' (Succ n'))))
-    apply congPlusRight
-    apply sym
-    exact (mulSuccRight n' (Succ n'))
-
-------------------------------------------------------------
--- Leq: ordering on Nat
-------------------------------------------------------------
-
-inductive Leq : Nat -> Nat -> Type where
-  LeqZero : {n : Nat} -> Leq Zero n
-  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
-
-leqRefl : (n : Nat) -> Leq n n := by
-  intro n
-  induction n with
-  | Zero => exact LeqZero
-  | Succ n' IH => exact (LeqSucc IH)
-
-leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c := by
-  intros a b c hab hbc
-  cases hab with
-  | LeqZero => exact LeqZero
-  | LeqSucc p =>
-    cases hbc with
-    | LeqSucc q => exact (LeqSucc (leqTrans p q))
-
-leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b := by
-  intros a b hab hba
-  cases hab with
-  | LeqZero =>
-    cases hba with
-    | LeqZero => exact refl
-  | LeqSucc p =>
-    cases hba with
-    | LeqSucc q => exact (congSucc (leqAntisym p q))
-
-
-record DPair (A : Type) (fn : A -> Type) where
-  fst : A
-  snd : fn fst
-
-succInj: {u v : Nat} -> Equal (Succ u) (Succ v) -> Equal u v 
-succInj refl = refl
-
-succCong: {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
-succCong refl = refl
-
-leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\\n => Equal b (plus a n))
-leqImpliesSum Zero b LeqZero = MkDPair b refl
-leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
-  | MkDPair n pf => MkDPair n (succCong pf)
-
-sigmaSumStartCount : (start count : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSumStartCount start Zero fn = Zero
-sigmaSumStartCount start (Succ count) fn = plus (fn (plus start count)) (sigmaSumStartCount start count fn)
-
--- Helper lemma for sigmaSumStartCountAdditive inductive step
-sigmaSumAddSuccHelper : (start count : Nat) -> (f g : (index : Nat) -> Nat) ->
-  Equal (plus (sigmaSumStartCount start count f) (sigmaSumStartCount start count g)) (sigmaSumStartCount start count (\\n => plus (f n) (g n))) ->
-  Equal (plus (sigmaSumStartCount start (Succ count) f) (sigmaSumStartCount start (Succ count) g)) (sigmaSumStartCount start (Succ count) (\\n => plus (f n) (g n))) := by
-  intros start count f g recPrf
-  -- Rearrange: plus (plus (f x) sumF) (plus (g x) sumG) = plus (plus (f x) (g x)) (plus sumF sumG)
-  apply trans
-  exact (plusAssoc (f (plus start count)) (sigmaSumStartCount start count f) (plus (g (plus start count)) (sigmaSumStartCount start count g)))
-  apply trans
-  apply congPlusRight
-  exact (plusLeftComm (sigmaSumStartCount start count f) (g (plus start count)) (sigmaSumStartCount start count g))
-  apply trans
-  exact (sym (plusAssoc (f (plus start count)) (g (plus start count)) (plus (sigmaSumStartCount start count f) (sigmaSumStartCount start count g))))
-  apply congPlusRight
-  exact recPrf
-
-sigmaSumStartCountAdditive : (start count : Nat) ->
-  (f g : (index : Nat) -> Nat) ->
-  Equal (plus (sigmaSumStartCount start count f) (sigmaSumStartCount start count g)) (sigmaSumStartCount start count (\\n => plus (f n) (g n)))
-sigmaSumStartCountAdditive start Zero f g = refl
-sigmaSumStartCountAdditive start (Succ count) f g with sigmaSumStartCountAdditive start count f g
-  | recPrf => sigmaSumAddSuccHelper start count f g recPrf
-
-inductive Void : Type where
-
-zeroNeqSucc : {n : Nat} -> (Equal Zero (Succ n) -> Void)
-
-inductive DecEq : {A : Type} -> (a b : A) -> Type where
-  Yes : {A : Type} -> {a b : A} -> Equal a b -> DecEq a b
-  No : {A : Type} -> {a b : A} -> (Equal a b -> Void) -> DecEq a b
-
-decEqNat : (x y : Nat) -> DecEq x y
-decEqNat Zero Zero = Yes refl
-decEqNat Zero (Succ y) = No zeroNeqSucc
-decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
-decEqNat (Succ x) (Succ y) with decEqNat x y
-  | Yes eq => Yes (succCong eq)
-  | No neq => No (\\eq => neq (succInj eq))
-
-LessThan : Nat -> Nat -> Type
-LessThan a b = Leq (Succ a) b
-
-inductive Either : Type -> Type -> Type where
-  inl : {L R : Type} -> L -> Either L R
-  inr : {L R : Type} -> R -> Either L R
-
-decGeq : (a b : Nat) -> Either (Leq a b) (LessThan b a)
-decGeq Zero b = inl LeqZero
-decGeq (Succ a) Zero = inr (LeqSucc (LeqZero {n:=a}))
-decGeq (Succ a) (Succ b) with decGeq a b
-  | inl aLeqB => inl (LeqSucc aLeqB)
-  | inr bLeA => inr (LeqSucc bLeA)
-
-sigmaSum : (start end : Nat) -> (fn : (index : Nat) -> Nat) -> Nat
-sigmaSum start end fn with decGeq start end
-  | inl startLeqEnd with leqImpliesSum start end startLeqEnd
-    | MkDPair count _ => sigmaSumStartCount start count fn
-  | inr endLeStart => Zero
-`;
-
-const PRESETS: { name: string; code: string }[] = [
-  { name: 'Grab Bag', code: SAMPLE_CODE },
-  { name: 'Nat Math', code: NAT_MATH_CODE },
-  { name: 'Nat Math (Tactics)', code: NAT_MATH_TACTICS_CODE },
-];
+// Presets are imported from src/presets/
 
 // Styles
 const styles = {
@@ -1536,9 +916,10 @@ export function TextEditorPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
-  const [code, setCode] = useState(SAMPLE_CODE);
+  const [code, setCode] = useState(PRESETS[0].code);
   const [editorReady, setEditorReady] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const [showLatex, setShowLatex] = useState(false);
   // Rendering options for pretty-printed output
   const [showNamedArgsWithLabels, setShowNamedArgsWithLabels] = useState(true);
   const [showNamedParamsWithBraces, setShowNamedParamsWithBraces] = useState(false);
@@ -1606,6 +987,13 @@ export function TextEditorPage() {
   const compileResult = useMemo<CompileResult>(() => {
     return compileTTFromText(code);
   }, [code]);
+
+  // Convert to LaTeX document when panel is shown
+  const latexNotations = useMemo(() => makeDefaultNotations(), []);
+  const latexDocument = useMemo(() => {
+    if (!showLatex) return null;
+    return convertToLatex(compileResult, latexNotations);
+  }, [showLatex, compileResult, latexNotations]);
 
   // Extract wildcard hints from compile result
   const wildcardHints = useMemo(() => {
@@ -1952,7 +1340,7 @@ export function TextEditorPage() {
           [/\b(Type|Prop|ULevel|USucc|UMax|UIMax)\b/, 'type.identifier'],
 
           // Keywords
-          [/\b(inductive|record|constructor|extends|where|let|in|fun|with|by)\b/, 'keyword'],
+          [/\b(inductive|record|constructor|extends|where|let|in|fun|with|by|postulate)\b/, 'keyword'],
 
           // Absurd marker
           [/#absurd\b/, 'keyword'],
@@ -2170,7 +1558,23 @@ export function TextEditorPage() {
           <h2 style={styles.title}>Text Editor</h2>
           <p style={styles.subtitle}>Edit code and view compilation results</p>
         </div>
-        <div style={{ position: 'relative' as const }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={() => setShowLatex(!showLatex)}
+            style={{
+              background: showLatex ? '#238636' : '#21262d',
+              color: showLatex ? '#ffffff' : '#c9d1d9',
+              border: `1px solid ${showLatex ? '#238636' : '#30363d'}`,
+              borderRadius: '6px',
+              padding: '6px 12px',
+              fontSize: '13px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap' as const,
+            }}
+          >
+            {showLatex ? 'Hide LaTeX' : 'Show LaTeX'}
+          </button>
+          <div style={{ position: 'relative' as const }}>
           <button
             onClick={() => setPresetMenuOpen(!presetMenuOpen)}
             style={{
@@ -2220,9 +1624,21 @@ export function TextEditorPage() {
             </div>
           )}
         </div>
+        </div>
       </div>
 
-      <div style={styles.mainContent}>
+      <div style={{
+        ...styles.mainContent,
+        flexDirection: showLatex ? 'row' as const : 'column' as const,
+      }}>
+        {/* Left side: editor + type info + results */}
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column' as const,
+          overflow: 'hidden',
+          minWidth: 0,
+        }}>
         {/* Source Code Editor - Top Half */}
         <div style={styles.editorSection}>
           <div style={styles.sectionHeader}>Source Code</div>
@@ -2387,6 +1803,20 @@ export function TextEditorPage() {
             ))}
           </div>
         </div>
+        </div>{/* end left side */}
+
+        {/* Right side: LaTeX panel */}
+        {showLatex && (
+          <div style={{
+            flex: 1,
+            borderLeft: '1px solid #30363d',
+            overflowY: 'auto' as const,
+            backgroundColor: '#0d1117',
+            minWidth: 0,
+          }}>
+            <LaTeXPanel document={latexDocument} />
+          </div>
+        )}
       </div>
     </div>
   );

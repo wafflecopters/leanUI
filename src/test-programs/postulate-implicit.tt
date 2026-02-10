@@ -1,0 +1,8 @@
+@test success
+@name "postulate: with implicit arguments"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+-- Postulate with implicits
+postulate funext : {A B : Type} -> {f g : A -> B} -> ((x : A) -> Equal (f x) (g x)) -> Equal f g
