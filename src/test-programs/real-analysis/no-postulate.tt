@@ -1,5 +1,5 @@
 @test success
-@name "Real Analysis: full preset compilation"
+@name "Real Analysis: no-postulate Real (parametric over instance)"
 @import real-analysis/foundation.tt
 @import real-analysis/order-hierarchy.tt
 
@@ -42,10 +42,11 @@ record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
   supUpperBound : (P : A -> Type) -> (x : A) -> P x -> le x (sup P)
   supLeast : (P : A -> Type) -> (b : A) -> ((x : A) -> P x -> le x b) -> le (sup P) b
 
--- Real: a type bundled with a complete ordered field structure
+-- Real is just the type of complete ordered fields: a carrier + structure
 Real : Type 1
 Real = DPair (Type) CompleteOrderedField
 
+-- Convenience: extract carrier and field structure
 Carrier : Real -> Type
 Carrier R = DPair.fst R
 
@@ -82,9 +83,11 @@ rlt R a b = Pair (rle R a b) (Equal a b -> Void)
 
 postulate rabs : (R : Real) -> Carrier R -> Carrier R
 
+-- Epsilon-delta witness
 EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
 EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
 
+-- Limit: epsilon-delta, parametric over a Real
 record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
   eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
               DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)

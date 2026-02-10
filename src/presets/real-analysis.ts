@@ -116,53 +116,53 @@ record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
 -- The Real Numbers
 ------------------------------------------------------------
 
--- The reals exist: a type equipped with a complete ordered field structure.
--- We postulate their existence as a dependent pair (Sigma type).
-postulate RealPkg : DPair (Type) CompleteOrderedField
+-- A "Real" is any type bundled with a complete ordered field structure.
+-- No postulate needed — we just pass the instance around.
+Real : Type 1
+Real = DPair (Type) CompleteOrderedField
 
--- The carrier type
-Real : Type
-Real = DPair.fst RealPkg
+-- Convenience: extract carrier type and field structure
+Carrier : Real -> Type
+Carrier R = DPair.fst R
 
--- The field structure on Real
-realField : CompleteOrderedField Real
-realField = DPair.snd RealPkg
+field : (R : Real) -> CompleteOrderedField (Carrier R)
+field R = DPair.snd R
 
 ------------------------------------------------------------
--- Convenience: field operations on Real
+-- Field operations, parametric over any Real
 ------------------------------------------------------------
 
-radd : Real -> Real -> Real
-radd = CompleteOrderedField.add realField
+radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+radd R = CompleteOrderedField.add (field R)
 
-rmul : Real -> Real -> Real
-rmul = CompleteOrderedField.mul realField
+rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+rmul R = CompleteOrderedField.mul (field R)
 
-rzero : Real
-rzero = CompleteOrderedField.zero realField
+rzero : (R : Real) -> Carrier R
+rzero R = CompleteOrderedField.zero (field R)
 
-rone : Real
-rone = CompleteOrderedField.one realField
+rone : (R : Real) -> Carrier R
+rone R = CompleteOrderedField.one (field R)
 
-rneg : Real -> Real
-rneg = CompleteOrderedField.neg realField
+rneg : (R : Real) -> Carrier R -> Carrier R
+rneg R = CompleteOrderedField.neg (field R)
 
-rinv : Real -> Real
-rinv = CompleteOrderedField.inv realField
+rinv : (R : Real) -> Carrier R -> Carrier R
+rinv R = CompleteOrderedField.inv (field R)
 
-rle : Real -> Real -> Type
-rle = CompleteOrderedField.le realField
+rle : (R : Real) -> Carrier R -> Carrier R -> Type
+rle R = CompleteOrderedField.le (field R)
 
 -- Subtraction: a - b = a + (-b)
-rsub : Real -> Real -> Real
-rsub a b = radd a (rneg b)
+rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+rsub R a b = radd R a (rneg R b)
 
 -- Strict ordering: a < b iff a <= b and a /= b
-rlt : Real -> Real -> Type
-rlt a b = Pair (rle a b) (Equal a b -> Void)
+rlt : (R : Real) -> Carrier R -> Carrier R -> Type
+rlt R a b = Pair (rle R a b) (Equal a b -> Void)
 
 -- Absolute value (postulated — requires case analysis on order)
-postulate rabs : Real -> Real
+postulate rabs : (R : Real) -> Carrier R -> Carrier R
 
 ------------------------------------------------------------
 -- Limits: the epsilon-delta definition
@@ -170,13 +170,13 @@ postulate rabs : Real -> Real
 
 -- Epsilon-delta witness: given delta, prove delta > 0
 -- and the epsilon-delta condition
-EpsDeltaWitness : (f : Real -> Real) -> (x0 : Real) -> (L : Real) -> (eps : Real) -> Real -> Type
-EpsDeltaWitness f x0 L eps delta = Pair (rlt rzero delta) ((x : Real) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
+EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
+EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
 
 -- A proof that lim_{x -> x0} f(x) = L.
 -- For every epsilon > 0, there exists delta > 0 such that
 -- for all x, |x - x0| < delta implies |f(x) - L| < epsilon.
-record Limit (f : Real -> Real) (x0 : Real) (L : Real) where
-  eps_delta : (eps : Real) -> rlt rzero eps ->
-              DPair Real (EpsDeltaWitness f x0 L eps)
+record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
+  eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
+              DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
 `;

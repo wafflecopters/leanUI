@@ -193,36 +193,34 @@ export function makeDefaultNotations(): NotationTable {
   table.set('one', { kind: 'const', latex: '1' });
 
   // ---- Real Analysis notations ----
+  // All operations take (R : Real) as first arg — skip it in rendering.
 
-  // The real number type
-  table.set('Real', { kind: 'const', latex: '\\mathbb{R}' });
+  // Field operations on reals: radd R x y → x + y
+  table.set('radd', { kind: 'infix', latex: '+', arity: 3, skipArgs: [0] });
+  table.set('rmul', { kind: 'infix', latex: '\\cdot', arity: 3, skipArgs: [0] });
+  table.set('rsub', { kind: 'infix', latex: '-', arity: 3, skipArgs: [0] });
+  table.set('rzero', { kind: 'prefix', latex: '0', arity: 1, skipArgs: [0] });
+  table.set('rone', { kind: 'prefix', latex: '1', arity: 1, skipArgs: [0] });
+  table.set('rneg', { kind: 'prefix', latex: '-', arity: 2, skipArgs: [0] });
 
-  // Field operations on reals
-  table.set('radd', { kind: 'infix', latex: '+', arity: 2, skipArgs: [] });
-  table.set('rmul', { kind: 'infix', latex: '\\cdot', arity: 2, skipArgs: [] });
-  table.set('rsub', { kind: 'infix', latex: '-', arity: 2, skipArgs: [] });
-  table.set('rzero', { kind: 'const', latex: '0' });
-  table.set('rone', { kind: 'const', latex: '1' });
-  table.set('rneg', { kind: 'prefix', latex: '-', arity: 1, skipArgs: [] });
+  // Order relations on reals: rle R x y → x ≤ y
+  table.set('rle', { kind: 'infix', latex: '\\le', arity: 3, skipArgs: [0] });
+  table.set('rlt', { kind: 'infix', latex: '<', arity: 3, skipArgs: [0] });
 
-  // Order relations on reals
-  table.set('rle', { kind: 'infix', latex: '\\le', arity: 2, skipArgs: [] });
-  table.set('rlt', { kind: 'infix', latex: '<', arity: 2, skipArgs: [] });
-
-  // Absolute value: |x|
+  // Absolute value: rabs R x → |x|
   table.set('rabs', { kind: 'custom', render: (args, ctx, n) => {
-    if (args.length >= 1) {
-      return `\\left|${termToLatex(args[0], ctx, n)}\\right|`;
+    if (args.length >= 2) {
+      return `\\left|${termToLatex(args[1], ctx, n)}\\right|`;
     }
     return '|\\cdot|';
   }});
 
-  // Limit: lim_{x -> x0} f(x) = L
+  // Limit: Limit R f x0 L → lim_{x → x0} f(x) = L
   table.set('Limit', { kind: 'custom', render: (args, ctx, n) => {
-    if (args.length >= 3) {
-      const f = termToLatex(args[0], ctx, n);
-      const x0 = termToLatex(args[1], ctx, n);
-      const lVal = termToLatex(args[2], ctx, n);
+    if (args.length >= 4) {
+      const f = termToLatex(args[1], ctx, n);
+      const x0 = termToLatex(args[2], ctx, n);
+      const lVal = termToLatex(args[3], ctx, n);
       return `\\lim_{x \\to ${x0}} ${f}(x) = ${lVal}`;
     }
     return '\\text{Limit}';
