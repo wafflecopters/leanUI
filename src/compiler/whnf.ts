@@ -77,9 +77,14 @@ function collectAppSpine(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
 function matchPattern(pattern: TTKPattern, term: TTKTerm, ctx?: WhnfContext): TTKTerm[] | null {
   switch (pattern.tag) {
     case 'PVar':
-    case 'PWild':
-      // Variable/wildcard always matches, binds the term
+      // Variable always matches, binds the term
       return [term];
+    case 'PWild':
+      // Wildcard matches but does NOT produce a binding.
+      // This is critical: the elaborator does not count PWild patterns in de Bruijn
+      // indices for the RHS, so including them in the bindings array would shift
+      // all subsequent indices and cause incorrect substitutions.
+      return [];
 
     case 'PCtor': {
       // Reduce term to whnf and collect spine

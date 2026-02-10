@@ -1,9 +1,9 @@
 @test success
-@name "Real Analysis: full preset compilation"
+@name "Real Analysis: limitAdd step 1 - basic lemmas"
 @import real-analysis/foundation.tt
 @import real-analysis/order-hierarchy.tt
 
--- Transport
+-- Transport / substitution
 replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
 replace P refl px = px
 
@@ -40,18 +40,13 @@ record OrderedField (A : Type) : Type 1 extends Field A where
   leTotal : (a b : A) -> Either (le a b) (le b a)
   addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
   mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
-  abs : A -> A
-  absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
-  zeroLeOne : le zero one
-  zeroNeOne : Equal zero one -> Void
-  invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)
+  zeroLtOne : Pair (le zero one) (Equal zero one -> Void)
 
 record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
   sup : (A -> Type) -> A
   supUpperBound : (P : A -> Type) -> (x : A) -> P x -> le x (sup P)
   supLeast : (P : A -> Type) -> (b : A) -> ((x : A) -> P x -> le x b) -> le (sup P) b
 
--- Real: a type bundled with a complete ordered field structure
 Real : Type 1
 Real = DPair (Type) CompleteOrderedField
 
@@ -61,40 +56,22 @@ Carrier R = DPair.fst R
 field : (R : Real) -> CompleteOrderedField (Carrier R)
 field R = DPair.snd R
 
--- Field operations, parametric over any Real
 radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
 radd R = CompleteOrderedField.add (field R)
-
-rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rmul R = CompleteOrderedField.mul (field R)
 
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
 
-rone : (R : Real) -> Carrier R
-rone R = CompleteOrderedField.one (field R)
-
 rneg : (R : Real) -> Carrier R -> Carrier R
 rneg R = CompleteOrderedField.neg (field R)
-
-rinv : (R : Real) -> Carrier R -> Carrier R
-rinv R = CompleteOrderedField.inv (field R)
 
 rle : (R : Real) -> Carrier R -> Carrier R -> Type
 rle R = CompleteOrderedField.le (field R)
 
-rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rsub R a b = radd R a (rneg R b)
+-- Test: addZeroLeft
+addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
+addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
-rlt : (R : Real) -> Carrier R -> Carrier R -> Type
-rlt R a b = Pair (rle R a b) (Equal a b -> Void)
-
-rabs : (R : Real) -> Carrier R -> Carrier R
-rabs R = CompleteOrderedField.abs (field R)
-
-EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
-
-record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
-  eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
-              DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
+-- Test: negLeft
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
+negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)

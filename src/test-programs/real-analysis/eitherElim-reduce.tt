@@ -1,0 +1,20 @@
+@test success
+@name "Real Analysis: eitherElim reduction with function args"
+@import real-analysis/foundation.tt
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- eitherElim with function-typed args reduces correctly now
+myId : {A : Type} -> A -> A
+myId x = x
+
+test1 : {A : Type} -> (a : A) -> Equal (eitherElim (\x => x) (\x => x) (Left a)) a
+test1 a = refl
+
+test2 : {A : Type} -> (b : A) -> Equal (eitherElim (\x => x) (\x => x) (Right b)) b
+test2 b = refl
+
+test3 : Equal (eitherElim myId myId (Left True)) True
+test3 = refl
