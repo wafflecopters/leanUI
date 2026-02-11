@@ -301,33 +301,47 @@ export function makeDefaultNotations(): NotationTable {
   }});
 
   // DPair — has 4 params: u, v, A, B
+  // Renders as ∃x ∈ ℝ such that ... (carrier sets) or ∃(x : A), ... (other)
   table.set('DPair', { kind: 'custom', render: (args, ctx, n) => {
     if (args.length >= 4) {
       const A = args[2];
       const B = args[3];
-      // If B is a lambda, render as Σ (x : A), body
+
+      // Helper: format the ∃ binder + body
+      const formatDPair = (varName: string, aStr: string, bodyStr: string) => {
+        const isCarrier = CARRIER_LATEX_VALUES.has(aStr);
+        const nameStr = renderVarName(varName);
+        if (isCarrier) {
+          return `\\exists ${nameStr} \\in ${aStr} \\text{ such that } ${bodyStr}`;
+        }
+        return `\\exists\\,(${nameStr} : ${aStr}),\\, ${bodyStr}`;
+      };
+
+      // If B is a lambda, render as ∃(x : A), body
       if (B.tag === 'Binder' && B.binderKind.tag === 'BLam') {
         const varName = B.name || 'x';
         const aStr = termToLatex(A, ctx, n);
         const bodyCtx = [varName, ...ctx];
         const bodyStr = termToLatex(B.body, bodyCtx, n);
-        return `\\Sigma\\,(${renderVarName(varName)} : ${aStr}),\\, ${bodyStr}`;
+        return formatDPair(varName, aStr, bodyStr);
       }
-      // Not a lambda — B is a function (A -> Type). Apply to a fresh var: Σ (x : A), B(x)
+      // Not a lambda — B is a function (A -> Type). Apply to a fresh var: ∃(x : A), B(x)
       // Lift B's free variables by 1 to account for the new binding
-      const varName = 'x';
+      // Detect EpsDeltaWitness to use 'delta' as the binder name
+      const bSpine = extractAppSpine(B);
+      const varName = (bSpine.fn.tag === 'Const' && bSpine.fn.name === 'EpsDeltaWitness') ? 'delta' : 'x';
       const aStr = termToLatex(A, ctx, n);
       const liftedB = shiftTerm(B, 1, 0);
       const bApp: TTKTerm = { tag: 'App', fn: liftedB, arg: { tag: 'Var', index: 0 } };
       const bodyCtx = [varName, ...ctx];
       const bodyStr = termToLatex(bApp, bodyCtx, n);
-      return `\\Sigma\\,(${renderVarName(varName)} : ${aStr}),\\, ${bodyStr}`;
+      return formatDPair(varName, aStr, bodyStr);
     }
     // 2-arg form (legacy)
     if (args.length === 2) {
-      return `\\Sigma\\,(${termToLatex(args[0], ctx, n)})\\,(${termToLatex(args[1], ctx, n)})`;
+      return `\\exists\\,(${termToLatex(args[0], ctx, n)})\\,(${termToLatex(args[1], ctx, n)})`;
     }
-    return '\\Sigma';
+    return '\\exists';
   }});
   // MkDPair — 4 implicit params (u, v, A, B), then fst, snd
   table.set('MkDPair', { kind: 'custom', render: (args, ctx, n) => {
@@ -519,9 +533,24 @@ export function makeDefaultNotations(): NotationTable {
     return '\\langle \\ldots \\rangle';
   }});
 
-  // EpsDeltaWitness — abbreviate: skip R, show concise version
+  // EpsDeltaWitness R f x0 L eps delta
+  // = Pair (0 < delta) (∀x, |x - x0| < delta → |f(x) - L| < eps)
   table.set('EpsDeltaWitness', { kind: 'custom', render: (args, ctx, n) => {
-    // EpsDeltaWitness R f x0 L eps [delta]
+    // Full 6-arg form: render the actual math
+    if (args.length >= 6) {
+      const f = args[1];
+      const x0Str = termToLatex(args[2], ctx, n);
+      const LStr = termToLatex(args[3], ctx, n);
+      const epsStr = termToLatex(args[4], ctx, n);
+      const deltaStr = termToLatex(args[5], ctx, n);
+      // Render f(x) by applying function to fresh variable
+      const fxStr = renderSummand(f, 'x', ctx, n);
+      // Wrap in parens if compound (contains + or -) to avoid ambiguity in |a - b|
+      const fxWrap = (fxStr.includes('+') || fxStr.includes('-')) ? `(${fxStr})` : fxStr;
+      const LWrap = (LStr.includes('+') || LStr.includes('-')) ? `(${LStr})` : LStr;
+      return `0 < ${deltaStr} \\text{ and } \\forall x,\\, \\left|x - ${x0Str}\\right| < ${deltaStr} \\implies \\left|${fxWrap} - ${LWrap}\\right| < ${epsStr}`;
+    }
+    // 5 args — partial application (no delta yet)
     if (args.length >= 5) {
       const visible = args.slice(1); // skip R
       const argsStr = visible.map(a => termToLatex(a, ctx, n)).join(',\\, ');
