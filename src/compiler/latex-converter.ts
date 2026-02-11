@@ -863,6 +863,61 @@ function collectPatternVarsHelper(pattern: TTKPattern, vars: string[]): void {
  * Render a Pi type as a theorem statement: ∀ n m : N, ...
  * Groups consecutive binders with the same type.
  */
+// ---- Binder grouping helpers (shared by typeToLatex and convertTheorem) ----
+
+interface BinderGroup {
+  names: string[];
+  typeLatex: string;
+  isCarrierSet: boolean;
+}
+
+/** Collect carrier latex values for detecting ∈-style binders. */
+const CARRIER_LATEX_VALUES = new Set(Object.values(CARRIER_TYPES));
+
+/**
+ * Group consecutive Pi binders by rendered type, suppressing carrier types.
+ * Returns the groups and the final rendering context.
+ */
+function buildBinderGroups(
+  binders: Array<{ name: string; type: TTKTerm }>,
+  context: string[],
+  notations: NotationTable,
+): { groups: BinderGroup[]; finalCtx: string[] } {
+  const groups: BinderGroup[] = [];
+  let ctx = [...context];
+
+  for (const b of binders) {
+    const cl = isCarrierType(b.type);
+    if (cl) {
+      ctx = [LATEX_PREFIX + cl, ...ctx];
+      continue;
+    }
+    const typeLatex = termToLatex(b.type, ctx, notations);
+    const isCarrierSet = CARRIER_LATEX_VALUES.has(typeLatex);
+    ctx = [b.name, ...ctx];
+    const last = groups[groups.length - 1];
+    if (last && last.typeLatex === typeLatex) {
+      last.names.push(b.name);
+    } else {
+      groups.push({ names: [b.name], typeLatex, isCarrierSet });
+    }
+  }
+
+  return { groups, finalCtx: ctx };
+}
+
+/**
+ * Format a binder group as LaTeX: "x, y : T" or "x, y ∈ ℝ" or just "T" for anon.
+ */
+function formatBinderGroup(g: BinderGroup): string {
+  if (g.names.every(n => n === '_')) return g.typeLatex;
+  const names = g.names.map(renderVarName).join(',\\, ');
+  const sep = g.isCarrierSet ? ' \\in ' : ' : ';
+  return `${names}${sep}${g.typeLatex}`;
+}
+
+// ---- typeToLatex ----
+
 export function typeToLatex(term: TTKTerm, context: string[], notations: NotationTable): string {
   const { binders, body } = extractPiSpine(term);
 
@@ -870,41 +925,9 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
     return termToLatex(term, context, notations);
   }
 
-  // Determine if this looks like a proposition (returns a type that could be a proof)
-  // Heuristic: if the body contains Equal, Leq, Void, or is a Type-valued thing, use ∀
   const isPropLike = looksLikeProp(body, binders.length);
-
-  // Group consecutive binders with same rendered type
-  // Carrier type binders (e.g., R : Real) are suppressed — their LaTeX is
-  // pushed into the context so that Carrier R → ℝ instead of R.
-  // Collect all carrier LaTeX values so we can detect carrier-set-typed binders
-  const carrierLatexValues = new Set(Object.values(CARRIER_TYPES));
-  const groups: { names: string[]; typeLatex: string; isCarrierSet: boolean }[] = [];
-  let runningCtx = [...context];
-
-  for (let i = 0; i < binders.length; i++) {
-    const b = binders[i];
-
-    // Skip carrier type binders — substitute in context
-    const carrierLatex = isCarrierType(b.type);
-    if (carrierLatex) {
-      runningCtx = [LATEX_PREFIX + carrierLatex, ...runningCtx];
-      continue;
-    }
-
-    const typeLatex = termToLatex(b.type, runningCtx, notations);
-    const isCarrierSet = carrierLatexValues.has(typeLatex);
-    runningCtx = [b.name, ...runningCtx];
-
-    const lastGroup = groups[groups.length - 1];
-    if (lastGroup && lastGroup.typeLatex === typeLatex) {
-      lastGroup.names.push(b.name);
-    } else {
-      groups.push({ names: [b.name], typeLatex, isCarrierSet });
-    }
-  }
-
-  const bodyLatex = termToLatex(body, runningCtx, notations);
+  const { groups, finalCtx } = buildBinderGroups(binders, context, notations);
+  const bodyLatex = termToLatex(body, finalCtx, notations);
 
   // If all binders were suppressed (all carrier types), just return the body
   if (groups.length === 0) {
@@ -912,25 +935,13 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
   }
 
   if (isPropLike) {
-    // ∀ n m : N, p : N, body
-    const binderParts = groups.map(g => {
-      // Suppress _ : prefix for anonymous binders — just show the type
-      if (g.names.every(n => n === '_')) {
-        return g.typeLatex;
-      }
-      const names = g.names.map(renderVarName).join(',\\, ');
-      // Use ∈ for carrier set types (e.g., x₀ ∈ ℝ instead of x₀ : ℝ)
-      const sep = g.isCarrierSet ? ' \\in ' : ' : ';
-      return `${names}${sep}${g.typeLatex}`;
-    });
+    const binderParts = groups.map(formatBinderGroup);
     return `\\forall\\, ${binderParts.join(',\\; ')},\\; ${bodyLatex}`;
   } else {
     // Arrow style: N → N → N
     const parts: string[] = [];
     for (const g of groups) {
-      for (const name of g.names) {
-        // If the variable is used in the body, show as dependent
-        // For simplicity, use arrow notation for function types
+      for (const _name of g.names) {
         parts.push(g.typeLatex);
       }
     }
@@ -1440,10 +1451,28 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
   // Compute carrier positions for proof rendering
   const carrierPositions = decl.kernelType ? getCarrierPositions(decl.kernelType) : new Map<number, string>();
 
-  // Header: Theorem name : ∀ ...
   if (decl.kernelType) {
-    const typeStr = typeToLatex(decl.kernelType, [], notations);
-    blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;${nameLatex} : ${typeStr}` });
+    const { binders, body } = extractPiSpine(decl.kernelType);
+    const isPropLike = binders.length > 0 && looksLikeProp(body, binders.length);
+
+    if (isPropLike) {
+      // "Theorem (name). Let ... and ... . Then:" + boxed conclusion
+      const { groups, finalCtx } = buildBinderGroups(binders, [], notations);
+      const bodyLatex = termToLatex(body, finalCtx, notations);
+      const binderParts = groups.map(formatBinderGroup);
+
+      if (binderParts.length > 0) {
+        const bindersStr = binderParts.join('\\text{ and }');
+        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Let } ${bindersStr}\\text{. Then:}` });
+      } else {
+        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{:}` });
+      }
+      blocks.push({ kind: 'rule', latex: `\\boxed{\\displaystyle ${bodyLatex}}` });
+    } else {
+      // Non-propositional: simple "name : type" format
+      const typeStr = typeToLatex(decl.kernelType, [], notations);
+      blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;${nameLatex} : ${typeStr}` });
+    }
   }
 
   // Render proof body from kernel value
