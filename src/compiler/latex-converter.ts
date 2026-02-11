@@ -10,6 +10,57 @@ import { extractAppSpine, extractPiSpine, AppSpine } from './term';
 import { occursIn } from './kernel';
 
 // ============================================================================
+// Greek Letters & Variable Name Cleanup
+// ============================================================================
+
+const GREEK_MAP: Record<string, string> = {
+  'eps': '\\varepsilon',
+  'epsilon': '\\varepsilon',
+  'delta': '\\delta',
+  'alpha': '\\alpha',
+  'beta': '\\beta',
+  'gamma': '\\gamma',
+  'sigma': '\\sigma',
+  'tau': '\\tau',
+  'mu': '\\mu',
+  'nu': '\\nu',
+  'phi': '\\varphi',
+  'psi': '\\psi',
+  'omega': '\\omega',
+  'theta': '\\theta',
+  'eta': '\\eta',
+  'rho': '\\rho',
+  'xi': '\\xi',
+  'zeta': '\\zeta',
+};
+
+/**
+ * Clean up internal variable names for display.
+ * _pad0 → f, _pad1 → g, etc. (elaborator renames)
+ * _implicit... → suppress
+ */
+function cleanVarName(name: string): string {
+  // _padN → letter from alphabet
+  const padMatch = name.match(/^_pad(\d+)$/);
+  if (padMatch) {
+    const idx = parseInt(padMatch[1]);
+    const letters = 'fghpqrstuvw';
+    return idx < letters.length ? letters[idx] : `f_{${idx}}`;
+  }
+  return name;
+}
+
+/**
+ * Render a variable name as LaTeX, applying Greek letter mapping and cleanup.
+ */
+function renderVarName(name: string): string {
+  const cleaned = cleanVarName(name);
+  const greek = GREEK_MAP[cleaned];
+  if (greek) return greek;
+  return escapeLaTeX(cleaned);
+}
+
+// ============================================================================
 // Output Types
 // ============================================================================
 
@@ -119,6 +170,63 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{inr}';
   }});
 
+  // eitherElim: {A} {B} {C} f g e — skip types, show match
+  table.set('eitherElim', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 6) {
+      const f = termToLatex(args[3], ctx, n);
+      const g = termToLatex(args[4], ctx, n);
+      const e = termToLatex(args[5], ctx, n);
+      return `\\text{match}\\;${e}\\;\\{\\text{inl} \\Rightarrow ${f},\\; \\text{inr} \\Rightarrow ${g}\\}`;
+    }
+    // Partial application — show what we have
+    const visible = args.slice(3);
+    if (visible.length > 0) {
+      const argsStr = visible.map(a => termToLatex(a, ctx, n)).join(',\\, ');
+      return `\\text{eitherElim}(${argsStr})`;
+    }
+    return '\\text{eitherElim}';
+  }});
+
+  // replace: {A} x y P proof px — show as substitution
+  table.set('replace', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 6) {
+      const P = termToLatex(args[3], ctx, n);
+      const proof = termToLatex(args[4], ctx, n);
+      const px = termToLatex(args[5], ctx, n);
+      return `\\text{subst}(${P},\\, ${proof},\\, ${px})`;
+    }
+    return '\\text{replace}';
+  }});
+
+  // trans: {A} x y z proof1 proof2 — skip type+values, show proofs
+  table.set('trans', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 6) {
+      const p1 = termToLatex(args[4], ctx, n);
+      const p2 = termToLatex(args[5], ctx, n);
+      return `\\text{trans}(${p1},\\, ${p2})`;
+    }
+    return '\\text{trans}';
+  }});
+
+  // sym: {A} {x} {y} proof — skip type+values, show proof
+  table.set('sym', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 4) {
+      const inner = termToLatex(args[3], ctx, n);
+      return `\\text{sym}(${inner})`;
+    }
+    return '\\text{sym}';
+  }});
+
+  // cong: {A} {B} x y f proof — show function and proof
+  table.set('cong', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 6) {
+      const f = termToLatex(args[4], ctx, n);
+      const proof = termToLatex(args[5], ctx, n);
+      return `\\text{cong}(${f},\\, ${proof})`;
+    }
+    return '\\text{cong}';
+  }});
+
   // DecEq
   table.set('DecEq', { kind: 'custom', render: (args, ctx, n) => {
     // {A} a b
@@ -139,20 +247,56 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{No}';
   }});
 
-  // DPair
+  // DPair — has 4 params: u, v, A, B
   table.set('DPair', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 4) {
+      const A = args[2];
+      const B = args[3];
+      // If B is a lambda, render as Σ (x : A), body
+      if (B.tag === 'Binder' && B.binderKind.tag === 'BLam') {
+        const varName = B.name || 'x';
+        const aStr = termToLatex(A, ctx, n);
+        const bodyCtx = [varName, ...ctx];
+        const bodyStr = termToLatex(B.body, bodyCtx, n);
+        return `\\Sigma\\,(${renderVarName(varName)} : ${aStr}),\\, ${bodyStr}`;
+      }
+      // Not a lambda — render as Σ A B
+      return `\\Sigma\\,(${termToLatex(A, ctx, n)})\\,(${termToLatex(B, ctx, n)})`;
+    }
+    // 2-arg form (legacy)
     if (args.length === 2) {
-      return `\\Sigma\\;(${termToLatex(args[0], ctx, n)})\\;(${termToLatex(args[1], ctx, n)})`;
+      return `\\Sigma\\,(${termToLatex(args[0], ctx, n)})\\,(${termToLatex(args[1], ctx, n)})`;
     }
     return '\\Sigma';
   }});
+  // MkDPair — 4 implicit params (u, v, A, B), then fst, snd
   table.set('MkDPair', { kind: 'custom', render: (args, ctx, n) => {
-    // {A} {fn} fst snd — skip 2 implicits
-    const visible = args.slice(2);
+    const visible = args.slice(4);
     if (visible.length >= 2) {
       return `\\langle ${termToLatex(visible[0], ctx, n)},\\, ${termToLatex(visible[1], ctx, n)} \\rangle`;
     }
+    // Fallback: try skip 2 (older calling convention)
+    if (args.length >= 4 && visible.length < 2) {
+      const vis2 = args.slice(2);
+      if (vis2.length >= 2) {
+        return `\\langle ${termToLatex(vis2[0], ctx, n)},\\, ${termToLatex(vis2[1], ctx, n)} \\rangle`;
+      }
+    }
     return '\\text{MkDPair}';
+  }});
+  // DPair.fst — skip 4 params (u, v, A, B), show projection of 5th arg
+  table.set('DPair.fst', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 5) {
+      return `\\pi_1(${termToLatex(args[4], ctx, n)})`;
+    }
+    return '\\pi_1';
+  }});
+  // DPair.snd — skip 4 params (u, v, A, B), show projection of 5th arg
+  table.set('DPair.snd', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 5) {
+      return `\\pi_2(${termToLatex(args[4], ctx, n)})`;
+    }
+    return '\\pi_2';
   }});
 
   // sigmaSumStartCount(start, count, fn) sums fn(start+0) .. fn(start+count-1)
@@ -192,8 +336,51 @@ export function makeDefaultNotations(): NotationTable {
   // one
   table.set('one', { kind: 'const', latex: '1' });
 
+  // ---- Pair / product types ----
+  table.set('Pair', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 2) {
+      return `${termToLatex(args[0], ctx, n)} \\times ${termToLatex(args[1], ctx, n)}`;
+    }
+    return '\\text{Pair}';
+  }});
+  // MkPair({A}, {B}, a, b) → (a, b)
+  table.set('MkPair', { kind: 'custom', render: (args, ctx, n) => {
+    const visible = args.slice(2);
+    if (visible.length >= 2) {
+      return `(${termToLatex(visible[0], ctx, n)},\\, ${termToLatex(visible[1], ctx, n)})`;
+    }
+    return '\\text{MkPair}';
+  }});
+  // Pair.fst({A}, {B}, p) → π₁(p)
+  table.set('Pair.fst', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 3) {
+      return `\\pi_1(${termToLatex(args[2], ctx, n)})`;
+    }
+    return '\\pi_1';
+  }});
+  // Pair.snd({A}, {B}, p) → π₂(p)
+  table.set('Pair.snd', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 3) {
+      return `\\pi_2(${termToLatex(args[2], ctx, n)})`;
+    }
+    return '\\pi_2';
+  }});
+
   // ---- Real Analysis notations ----
   // All operations take (R : Real) as first arg — skip it in rendering.
+
+  // Carrier(R) → R (transparent: the carrier type IS R for display purposes)
+  table.set('Carrier', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 1) return termToLatex(args[0], ctx, n);
+    return '\\text{Carrier}';
+  }});
+  // field(R) → just the record; usually invisible in math
+  table.set('field', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 1) return `\\text{field}(${termToLatex(args[0], ctx, n)})`;
+    return '\\text{field}';
+  }});
+  // Real type
+  table.set('Real', { kind: 'const', latex: '\\mathbb{R}' });
 
   // Field operations on reals: radd R x y → x + y
   table.set('radd', { kind: 'infix', latex: '+', arity: 3, skipArgs: [0] });
@@ -202,6 +389,22 @@ export function makeDefaultNotations(): NotationTable {
   table.set('rzero', { kind: 'prefix', latex: '0', arity: 1, skipArgs: [0] });
   table.set('rone', { kind: 'prefix', latex: '1', arity: 1, skipArgs: [0] });
   table.set('rneg', { kind: 'prefix', latex: '-', arity: 2, skipArgs: [0] });
+  // rtwo(R) → 2, rhalf(R) → ½, rinv(R, x) → x⁻¹
+  table.set('rtwo', { kind: 'prefix', latex: '2', arity: 1, skipArgs: [0] });
+  table.set('rhalf', { kind: 'custom', render: (_args, _ctx, _n) => {
+    return '\\tfrac{1}{2}';
+  }});
+  table.set('rinv', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 2) {
+      const x = termToLatex(args[1], ctx, n);
+      // Wrap in parens if it's a compound expression
+      if (x.includes('+') || x.includes('-') || x.includes('\\cdot')) {
+        return `(${x})^{-1}`;
+      }
+      return `${x}^{-1}`;
+    }
+    return '\\text{inv}';
+  }});
 
   // Order relations on reals: rle R x y → x ≤ y
   table.set('rle', { kind: 'infix', latex: '\\le', arity: 3, skipArgs: [0] });
@@ -218,13 +421,114 @@ export function makeDefaultNotations(): NotationTable {
   // Limit: Limit R f x0 L → lim_{x → x0} f(x) = L
   table.set('Limit', { kind: 'custom', render: (args, ctx, n) => {
     if (args.length >= 4) {
-      const f = termToLatex(args[1], ctx, n);
+      const f = args[1];
       const x0 = termToLatex(args[2], ctx, n);
       const lVal = termToLatex(args[3], ctx, n);
-      return `\\lim_{x \\to ${x0}} ${f}(x) = ${lVal}`;
+      // If f is a lambda, render its body directly with the bound var
+      if (f.tag === 'Binder' && f.binderKind.tag === 'BLam') {
+        const varName = f.name || 'x';
+        const bodyCtx = [varName, ...ctx];
+        const body = termToLatex(f.body, bodyCtx, n);
+        return `\\lim_{${renderVarName(varName)} \\to ${x0}} ${body} = ${lVal}`;
+      }
+      // Named function: render as f(x) = L
+      const fStr = termToLatex(f, ctx, n);
+      return `\\lim_{x \\to ${x0}} ${fStr}(x) = ${lVal}`;
     }
     return '\\text{Limit}';
   }});
+  // Limit.eps_delta — record projection: R, f, x0, L (4 params), then instance, eps, epsProof
+  table.set('Limit.eps_delta', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 7) {
+      const limitProof = termToLatex(args[4], ctx, n);
+      const epsArg = termToLatex(args[5], ctx, n);
+      const epsProof = termToLatex(args[6], ctx, n);
+      return `${limitProof}.\\varepsilon\\delta(${epsArg},\\, ${epsProof})`;
+    }
+    if (args.length >= 5) {
+      return `${termToLatex(args[4], ctx, n)}.\\varepsilon\\delta`;
+    }
+    return '\\text{eps\\_delta}';
+  }});
+  // MkLimit — record constructor: R, f, x0, L (4 params), then eps_delta field
+  table.set('MkLimit', { kind: 'custom', render: (args, ctx, n) => {
+    // Skip params, just show it as a proof construction
+    if (args.length >= 5) {
+      return `\\langle ${termToLatex(args[4], ctx, n)} \\rangle`;
+    }
+    return '\\langle \\ldots \\rangle';
+  }});
+
+  // EpsDeltaWitness — abbreviate: skip R, show concise version
+  table.set('EpsDeltaWitness', { kind: 'custom', render: (args, ctx, n) => {
+    // EpsDeltaWitness R f x0 L eps [delta]
+    if (args.length >= 5) {
+      const visible = args.slice(1); // skip R
+      const argsStr = visible.map(a => termToLatex(a, ctx, n)).join(',\\, ');
+      return `\\text{Witness}(${argsStr})`;
+    }
+    return '\\text{Witness}';
+  }});
+
+  // ---- CompleteOrderedField projections ----
+  // All take (A : Type) and (inst : CompleteOrderedField A) as first 2 args — skip them.
+  // Operations: render with math symbols
+  table.set('CompleteOrderedField.add', { kind: 'infix', latex: '+', arity: 4, skipArgs: [0, 1] });
+  table.set('CompleteOrderedField.mul', { kind: 'infix', latex: '\\cdot', arity: 4, skipArgs: [0, 1] });
+  table.set('CompleteOrderedField.zero', { kind: 'prefix', latex: '0', arity: 2, skipArgs: [0, 1] });
+  table.set('CompleteOrderedField.one', { kind: 'prefix', latex: '1', arity: 2, skipArgs: [0, 1] });
+  table.set('CompleteOrderedField.neg', { kind: 'prefix', latex: '-', arity: 3, skipArgs: [0, 1] });
+  table.set('CompleteOrderedField.le', { kind: 'infix', latex: '\\le', arity: 4, skipArgs: [0, 1] });
+  table.set('CompleteOrderedField.inv', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 3) {
+      const x = termToLatex(args[2], ctx, n);
+      if (x.includes('+') || x.includes('-') || x.includes('\\cdot')) {
+        return `(${x})^{-1}`;
+      }
+      return `${x}^{-1}`;
+    }
+    return '\\text{inv}';
+  }});
+  table.set('CompleteOrderedField.abs', { kind: 'custom', render: (args, ctx, n) => {
+    if (args.length >= 3) {
+      return `\\left|${termToLatex(args[2], ctx, n)}\\right|`;
+    }
+    return '|\\cdot|';
+  }});
+
+  // Proof projections: skip 2 params, render as \text{name}(visible_args...)
+  const proofProjections = [
+    'addAssoc', 'addComm', 'addZeroRight', 'negRight',
+    'mulAssoc', 'mulOneLeft', 'mulOneRight', 'mulComm',
+    'distribLeft', 'distribRight',
+    'leRefl', 'leAntisym', 'leTrans', 'leTotal',
+    'addLeLeft', 'mulNonneg', 'absTriangle',
+    'zeroLeOne', 'zeroNeOne', 'invPos', 'mulInvRight',
+    'supUpperBound', 'supLeast',
+  ];
+  for (const fieldName of proofProjections) {
+    table.set(`CompleteOrderedField.${fieldName}`, { kind: 'custom', render: (args, ctx, n) => {
+      const visible = args.slice(2);
+      if (visible.length === 0) return `\\text{${fieldName}}`;
+      const argsStr = visible.map(a => termToLatex(a, ctx, n)).join(',\\, ');
+      return `\\text{${fieldName}}(${argsStr})`;
+    }});
+  }
+
+  // ---- Other record projections with same pattern (skip 2 params) ----
+  // For records in the hierarchy: AbelianGroup, Ring, Field, OrderedField
+  const recordHierarchy = [
+    'AbelianGroup', 'Ring', 'CommRing', 'Field', 'OrderedField',
+  ];
+  for (const recName of recordHierarchy) {
+    // Register the same operations for each ancestor record
+    table.set(`${recName}.add`, { kind: 'infix', latex: '+', arity: 4, skipArgs: [0, 1] });
+    table.set(`${recName}.mul`, { kind: 'infix', latex: '\\cdot', arity: 4, skipArgs: [0, 1] });
+    table.set(`${recName}.zero`, { kind: 'prefix', latex: '0', arity: 2, skipArgs: [0, 1] });
+    table.set(`${recName}.one`, { kind: 'prefix', latex: '1', arity: 2, skipArgs: [0, 1] });
+    table.set(`${recName}.neg`, { kind: 'prefix', latex: '-', arity: 3, skipArgs: [0, 1] });
+    table.set(`${recName}.le`, { kind: 'infix', latex: '\\le', arity: 4, skipArgs: [0, 1] });
+  }
 
   return table;
 }
@@ -280,7 +584,7 @@ export function termToLatex(
   switch (term.tag) {
     case 'Var':
       if (term.index < context.length) {
-        return escapeLaTeX(context[term.index]);
+        return renderVarName(context[term.index]);
       }
       return `\\#${term.index}`;
 
@@ -322,23 +626,24 @@ export function termToLatex(
       const newCtx = [term.name, ...context];
       const body = termToLatex(term.body, newCtx, notations);
       const isAnon = term.name === '_' || term.name === '';
+      const nameStr = renderVarName(term.name);
 
       switch (term.binderKind.tag) {
         case 'BPi':
           if (isAnon || !occursIn(0, term.body)) {
             return `${domain} \\to ${body}`;
           }
-          return `\\Pi\\, (${escapeLaTeX(term.name)} : ${domain}),\\, ${body}`;
+          return `\\Pi\\, (${nameStr} : ${domain}),\\, ${body}`;
 
         case 'BLam':
           if (isAnon) {
             return `\\lambda\\, \\_ .\\, ${body}`;
           }
-          return `\\lambda\\, ${escapeLaTeX(term.name)} .\\, ${body}`;
+          return `${nameStr} \\mapsto ${body}`;
 
         case 'BLet': {
           const defVal = termToLatex(term.binderKind.defVal, context, notations);
-          return `\\text{let } ${escapeLaTeX(term.name)} := ${defVal} \\text{ in } ${body}`;
+          return `\\text{let } ${nameStr} := ${defVal} \\text{ in } ${body}`;
         }
       }
       break; // unreachable but satisfies TS
@@ -353,10 +658,10 @@ export function termToLatex(
     }
 
     case 'Hole':
-      return `?_{${term.id}}`;
+      return '?';
 
     case 'Meta':
-      return `?_{${term.id}}`;
+      return '?';
 
     case 'Annot':
       return `(${termToLatex(term.term, context, notations)} : ${termToLatex(term.type, context, notations)})`;
@@ -400,9 +705,15 @@ function renderNotation(
     case 'prefix': {
       if (args.length >= entry.arity) {
         const visible = args.filter((_, i) => !entry.skipArgs.includes(i));
-        const inner = visible.map(a => termToLatex(a, context, notations)).join(',\\,');
         const extra = args.slice(entry.arity);
-        let result = `${entry.latex}(${inner})`;
+        let result: string;
+        if (visible.length === 0) {
+          // All args skipped (e.g., rzero(R), rone(R)) — just show the symbol
+          result = entry.latex;
+        } else {
+          const inner = visible.map(a => termToLatex(a, context, notations)).join(',\\,');
+          result = `${entry.latex}(${inner})`;
+        }
         if (extra.length > 0) {
           result += '\\;' + extra.map(a => termToLatex(a, context, notations)).join('\\;');
         }
@@ -443,7 +754,7 @@ function renderNotation(
 function patternToLatex(pattern: TTKPattern, notations: NotationTable): string {
   switch (pattern.tag) {
     case 'PVar':
-      return escapeLaTeX(pattern.name);
+      return renderVarName(pattern.name);
     case 'PWild':
       return '\\_';
     case 'PCtor': {
@@ -521,7 +832,7 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
   if (isPropLike) {
     // ∀ n m : N, p : N, body
     const binderParts = groups.map(g => {
-      const names = g.names.map(escapeLaTeX).join('\\, ');
+      const names = g.names.map(renderVarName).join('\\, ');
       return `${names} : ${g.typeLatex}`;
     });
     return `\\forall\\, ${binderParts.join(',\\; ')},\\; ${bodyLatex}`;
@@ -542,13 +853,22 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
 
 /**
  * Heuristic: does the body of a Pi look like a proposition?
- * Check for common propositional forms: Equal, Leq, Void, DPair, etc.
+ * Check for common propositional forms: Equal, Leq, Void, DPair, Limit, etc.
  */
 function looksLikeProp(body: TTKTerm, depth: number): boolean {
   const spine = extractAppSpine(body);
   if (spine.fn.tag === 'Const') {
     const name = spine.fn.name;
-    if (['Equal', 'Leq', 'LessThan', 'Void', 'DecEq'].includes(name)) return true;
+    // Direct propositional types
+    if (['Equal', 'Leq', 'LessThan', 'Void', 'DecEq', 'Limit', 'DPair'].includes(name)) return true;
+    // Our wrappers for relations
+    if (['rle', 'rlt'].includes(name)) return true;
+    // Record field projections that are relations (e.g. CompleteOrderedField.le)
+    if (name.endsWith('.le') || name.endsWith('.lt')) return true;
+    // Pair used as conjunction — if either component is prop-like
+    if (name === 'Pair' && spine.args.length >= 2) {
+      return looksLikeProp(spine.args[0], depth) || looksLikeProp(spine.args[1], depth);
+    }
   }
   // If the body is a Pi that looks like a prop, propagate
   if (body.tag === 'Binder' && body.binderKind.tag === 'BPi') {
@@ -640,10 +960,40 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\text{cong}_{+L}(${p},\\, ${inner})`;
     }
 
+    // trans: {A} x y z proof_xy proof_yz — show as chain or concise
+    if (name === 'trans' && spine.args.length >= 6) {
+      const p1 = describeJustification(spine.args[4], context, notations);
+      const p2 = describeJustification(spine.args[5], context, notations);
+      return `\\text{trans}(${p1},\\, ${p2})`;
+    }
+
+    // cong: {A} {B} x y f proof — show function and proof
+    if (name === 'cong' && spine.args.length >= 6) {
+      const f = termToLatex(spine.args[4], context, notations);
+      const inner = describeJustification(spine.args[5], context, notations);
+      return `\\text{cong}(${f},\\, ${inner})`;
+    }
+
+    // replace: {A} x y P proof px — show predicate and proof
+    if (name === 'replace' && spine.args.length >= 6) {
+      const P = termToLatex(spine.args[3], context, notations);
+      const proof = describeJustification(spine.args[4], context, notations);
+      const px = describeJustification(spine.args[5], context, notations);
+      return `\\text{subst}(${P},\\, ${proof},\\, ${px})`;
+    }
+
+    // Check if notation table handles this term — let it render cleanly
+    const entry = notations.get(name);
+    if (entry) {
+      return renderNotation(entry, name, spine.args, context, notations);
+    }
+
     // Named lemma applied to visible args
-    // Skip implicit args (heuristic: args that are Meta, or look like types)
+    // Skip implicit args (heuristic: args that are Meta, Sort, Hole, or known type constants)
     const visibleArgs = spine.args.filter(a =>
-      a.tag !== 'Meta' && a.tag !== 'Sort' && !(a.tag === 'Const' && notations.get(a.name)?.kind === 'const' && ['\\mathbb{N}', '\\text{Type}'].includes((notations.get(a.name) as any)?.latex))
+      a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+      !(a.tag === 'Const' && notations.get(a.name)?.kind === 'const' &&
+        ['\\mathbb{N}', '\\text{Type}', '\\mathbb{R}'].includes((notations.get(a.name) as any)?.latex))
     );
 
     const nameLatex = `\\text{${escapeLaTeX(name)}}`;
@@ -656,7 +1006,7 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
   // Variable reference
   if (term.tag === 'Var' && term.index < context.length) {
-    return escapeLaTeX(context[term.index]);
+    return renderVarName(context[term.index]);
   }
 
   // Lambda — describe briefly
@@ -812,7 +1162,21 @@ function classifyDecl(decl: CompiledDeclaration): DeclCategory {
   if (decl.tacticInfoTree !== undefined) return 'theorem';
   if (decl.surfaceValue?.tag === 'TacticBlock') return 'theorem';
   if (!decl.kernelValue && decl.kernelType) return 'postulate';
+  // Check if the return type looks propositional → classify as theorem
+  if (decl.kernelType && decl.kernelValue) {
+    const returnType = getReturnType(decl.kernelType);
+    if (looksLikeProp(returnType, 0)) return 'theorem';
+  }
   return 'definition';
+}
+
+/** Extract the innermost body of nested Pi types (the return type). */
+function getReturnType(type: TTKTerm): TTKTerm {
+  let current = type;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    current = current.body;
+  }
+  return current;
 }
 
 function convertInductive(decl: CompiledDeclaration, notations: NotationTable): LatexBlock[] {
@@ -866,7 +1230,7 @@ function convertRecord(decl: CompiledDeclaration, notations: NotationTable): Lat
       let ctx: string[] = [];
       const paramParts: string[] = [];
       for (const p of params) {
-        paramParts.push(`(${escapeLaTeX(p.name)} : ${termToLatex(p.type, ctx, notations)})`);
+        paramParts.push(`(${renderVarName(p.name)} : ${termToLatex(p.type, ctx, notations)})`);
         ctx = [p.name, ...ctx];
       }
       header += `\\;${paramParts.join('\\;')}`;
