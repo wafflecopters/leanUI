@@ -104,6 +104,11 @@ function renderVarName(name: string): string {
   const cleaned = cleanVarName(name);
   const greek = GREEK_MAP[cleaned];
   if (greek) return greek;
+  // Subscript detection: single letter + digits → letter_{digits}
+  const subscriptMatch = cleaned.match(/^([a-zA-Z])(\d+)$/);
+  if (subscriptMatch) {
+    return `${escapeLaTeX(subscriptMatch[1])}_{${subscriptMatch[2]}}`;
+  }
   return escapeLaTeX(cleaned);
 }
 
@@ -872,7 +877,9 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
   // Group consecutive binders with same rendered type
   // Carrier type binders (e.g., R : Real) are suppressed — their LaTeX is
   // pushed into the context so that Carrier R → ℝ instead of R.
-  const groups: { names: string[]; typeLatex: string }[] = [];
+  // Collect all carrier LaTeX values so we can detect carrier-set-typed binders
+  const carrierLatexValues = new Set(Object.values(CARRIER_TYPES));
+  const groups: { names: string[]; typeLatex: string; isCarrierSet: boolean }[] = [];
   let runningCtx = [...context];
 
   for (let i = 0; i < binders.length; i++) {
@@ -886,13 +893,14 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
     }
 
     const typeLatex = termToLatex(b.type, runningCtx, notations);
+    const isCarrierSet = carrierLatexValues.has(typeLatex);
     runningCtx = [b.name, ...runningCtx];
 
     const lastGroup = groups[groups.length - 1];
     if (lastGroup && lastGroup.typeLatex === typeLatex) {
       lastGroup.names.push(b.name);
     } else {
-      groups.push({ names: [b.name], typeLatex });
+      groups.push({ names: [b.name], typeLatex, isCarrierSet });
     }
   }
 
@@ -906,8 +914,14 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
   if (isPropLike) {
     // ∀ n m : N, p : N, body
     const binderParts = groups.map(g => {
-      const names = g.names.map(renderVarName).join('\\, ');
-      return `${names} : ${g.typeLatex}`;
+      // Suppress _ : prefix for anonymous binders — just show the type
+      if (g.names.every(n => n === '_')) {
+        return g.typeLatex;
+      }
+      const names = g.names.map(renderVarName).join(',\\, ');
+      // Use ∈ for carrier set types (e.g., x₀ ∈ ℝ instead of x₀ : ℝ)
+      const sep = g.isCarrierSet ? ' \\in ' : ' : ';
+      return `${names}${sep}${g.typeLatex}`;
     });
     return `\\forall\\, ${binderParts.join(',\\; ')},\\; ${bodyLatex}`;
   } else {
