@@ -8,6 +8,7 @@ import { CompiledDeclaration, CompiledBlock, CompileResult } from './compile';
 import { TTKTerm, TTKPattern, TTKClause } from './kernel';
 import { extractAppSpine, extractPiSpine, AppSpine } from './term';
 import { occursIn } from './kernel';
+import { shiftTerm } from './subst';
 
 // ============================================================================
 // Carrier Type Suppression
@@ -312,8 +313,15 @@ export function makeDefaultNotations(): NotationTable {
         const bodyStr = termToLatex(B.body, bodyCtx, n);
         return `\\Sigma\\,(${renderVarName(varName)} : ${aStr}),\\, ${bodyStr}`;
       }
-      // Not a lambda — render as Σ A B
-      return `\\Sigma\\,(${termToLatex(A, ctx, n)})\\,(${termToLatex(B, ctx, n)})`;
+      // Not a lambda — B is a function (A -> Type). Apply to a fresh var: Σ (x : A), B(x)
+      // Lift B's free variables by 1 to account for the new binding
+      const varName = 'x';
+      const aStr = termToLatex(A, ctx, n);
+      const liftedB = shiftTerm(B, 1, 0);
+      const bApp: TTKTerm = { tag: 'App', fn: liftedB, arg: { tag: 'Var', index: 0 } };
+      const bodyCtx = [varName, ...ctx];
+      const bodyStr = termToLatex(bApp, bodyCtx, n);
+      return `\\Sigma\\,(${renderVarName(varName)} : ${aStr}),\\, ${bodyStr}`;
     }
     // 2-arg form (legacy)
     if (args.length === 2) {
