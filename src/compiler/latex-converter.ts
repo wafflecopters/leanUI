@@ -10,6 +10,49 @@ import { extractAppSpine, extractPiSpine, AppSpine } from './term';
 import { occursIn } from './kernel';
 
 // ============================================================================
+// Carrier Type Suppression
+// ============================================================================
+// "Carrier types" are bundled algebraic structures (like Real = DPair Type
+// CompleteOrderedField) where the binding variable is an implementation detail.
+// In math, you write f,g : ℝ → ℝ, not ∀R:ℝ, f,g : R → R.
+//
+// When a Pi/Lambda binder has a carrier type, we:
+// 1. Suppress the binder from rendered output
+// 2. Push the carrier's LaTeX into the context so references resolve to it
+//    (e.g., Carrier R → transparent → Var(R) → ℝ)
+
+const CARRIER_TYPES: Record<string, string> = {
+  'Real': '\\mathbb{R}',
+};
+
+/** Sentinel prefix for raw LaTeX entries in the rendering context. */
+const LATEX_PREFIX = '\x00latex:';
+
+/** Check if a term is a carrier type. Returns the LaTeX string or null. */
+function isCarrierType(type: TTKTerm): string | null {
+  if (type.tag === 'Const' && CARRIER_TYPES[type.name]) {
+    return CARRIER_TYPES[type.name];
+  }
+  return null;
+}
+
+/** Check if a context entry is a carrier substitution. */
+function isCarrierEntry(name: string): boolean {
+  return name.startsWith(LATEX_PREFIX);
+}
+
+/** Find which binder positions in a Pi-type are carrier types. */
+function getCarrierPositions(type: TTKTerm): Map<number, string> {
+  const positions = new Map<number, string>();
+  const { binders } = extractPiSpine(type);
+  for (let i = 0; i < binders.length; i++) {
+    const cl = isCarrierType(binders[i].type);
+    if (cl) positions.set(i, cl);
+  }
+  return positions;
+}
+
+// ============================================================================
 // Greek Letters & Variable Name Cleanup
 // ============================================================================
 
@@ -52,8 +95,12 @@ function cleanVarName(name: string): string {
 
 /**
  * Render a variable name as LaTeX, applying Greek letter mapping and cleanup.
+ * If the name is a carrier substitution (LATEX_PREFIX), return raw LaTeX.
  */
 function renderVarName(name: string): string {
+  if (name.startsWith(LATEX_PREFIX)) {
+    return name.slice(LATEX_PREFIX.length);
+  }
   const cleaned = cleanVarName(name);
   const greek = GREEK_MAP[cleaned];
   if (greek) return greek;
@@ -622,6 +669,14 @@ export function termToLatex(
     }
 
     case 'Binder': {
+      // For Lambda/Pi with carrier domain, skip the binder and render body with substitution
+      const carrierLatex = isCarrierType(term.domain);
+      if (carrierLatex && (term.binderKind.tag === 'BLam' || term.binderKind.tag === 'BPi')) {
+        const carrierCtx = [LATEX_PREFIX + carrierLatex, ...context];
+        const body = termToLatex(term.body, carrierCtx, notations);
+        return body;
+      }
+
       const domain = termToLatex(term.domain, context, notations);
       const newCtx = [term.name, ...context];
       const body = termToLatex(term.body, newCtx, notations);
@@ -650,10 +705,14 @@ export function termToLatex(
     }
 
     case 'App': {
-      // Render as f(a, b, c) math-style instead of juxtaposition
+      // Render as f(a, b, c) math-style, filtering out carrier variables
       const spine = extractAppSpine(term);
       const fnStr = termToLatex(spine.fn, context, notations);
-      const argsStr = spine.args.map(a => termToLatex(a, context, notations)).join(',\\, ');
+      const visibleArgs = spine.args.filter(a =>
+        !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
+      );
+      if (visibleArgs.length === 0) return fnStr;
+      const argsStr = visibleArgs.map(a => termToLatex(a, context, notations)).join(',\\, ');
       return `${fnStr}(${argsStr})`;
     }
 
@@ -811,11 +870,21 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
   const isPropLike = looksLikeProp(body, binders.length);
 
   // Group consecutive binders with same rendered type
+  // Carrier type binders (e.g., R : Real) are suppressed — their LaTeX is
+  // pushed into the context so that Carrier R → ℝ instead of R.
   const groups: { names: string[]; typeLatex: string }[] = [];
   let runningCtx = [...context];
 
   for (let i = 0; i < binders.length; i++) {
     const b = binders[i];
+
+    // Skip carrier type binders — substitute in context
+    const carrierLatex = isCarrierType(b.type);
+    if (carrierLatex) {
+      runningCtx = [LATEX_PREFIX + carrierLatex, ...runningCtx];
+      continue;
+    }
+
     const typeLatex = termToLatex(b.type, runningCtx, notations);
     runningCtx = [b.name, ...runningCtx];
 
@@ -828,6 +897,11 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
   }
 
   const bodyLatex = termToLatex(body, runningCtx, notations);
+
+  // If all binders were suppressed (all carrier types), just return the body
+  if (groups.length === 0) {
+    return bodyLatex;
+  }
 
   if (isPropLike) {
     // ∀ n m : N, p : N, body
@@ -989,9 +1063,10 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
     }
 
     // Named lemma applied to visible args
-    // Skip implicit args (heuristic: args that are Meta, Sort, Hole, or known type constants)
+    // Skip implicit args (heuristic: args that are Meta, Sort, Hole, known type constants, or carrier vars)
     const visibleArgs = spine.args.filter(a =>
       a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+      !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index])) &&
       !(a.tag === 'Const' && notations.get(a.name)?.kind === 'const' &&
         ['\\mathbb{N}', '\\text{Type}', '\\mathbb{R}'].includes((notations.get(a.name) as any)?.latex))
     );
@@ -1039,6 +1114,24 @@ function renderTransChain(steps: TransStep[], context: string[], notations: Nota
 }
 
 /**
+ * Strip outer lambdas from a term, building a rendering context.
+ * Detects carrier type binders and pushes carrier LaTeX instead of the name.
+ */
+function stripLambdasWithCarrier(
+  term: TTKTerm,
+  baseContext: string[],
+): { body: TTKTerm; context: string[] } {
+  const names: string[] = [];
+  let current = term;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BLam') {
+    const carrierLatex = isCarrierType(current.domain);
+    names.push(carrierLatex ? LATEX_PREFIX + carrierLatex : current.name);
+    current = current.body;
+  }
+  return { body: current, context: [...names.reverse(), ...baseContext] };
+}
+
+/**
  * Render the RHS of a match clause (a proof body) as blocks.
  * Detects trans chains, sym, simple terms, or falls back to termToLatex.
  */
@@ -1047,19 +1140,14 @@ function proofBodyToBlocks(
   context: string[],
   notations: NotationTable,
   indent: string,
+  carrierPositions?: Map<number, string>,
 ): LatexBlock[] {
   // Strip any remaining lambdas (e.g. "intros m p" inside a case)
-  let current = term;
-  const extraNames: string[] = [];
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BLam') {
-    extraNames.push(current.name);
-    current = current.body;
-  }
-  const ctx = [...extraNames.reverse(), ...context];
+  const { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
 
   // Nested Match → render as nested cases
   if (current.tag === 'Match') {
-    return renderMatchProof(current, ctx, notations);
+    return renderMatchProof(current, ctx, notations, carrierPositions);
   }
 
   // Try trans chain
@@ -1075,11 +1163,13 @@ function proofBodyToBlocks(
 
 /**
  * Render a Match node as induction/cases proof.
+ * carrierPositions maps Pi-binder indices to carrier LaTeX for suppression.
  */
 function renderMatchProof(
   matchTerm: TTKTerm & { tag: 'Match' },
   context: string[],
   notations: NotationTable,
+  carrierPositions?: Map<number, string>,
 ): LatexBlock[] {
   const blocks: LatexBlock[] = [];
 
@@ -1091,15 +1181,36 @@ function renderMatchProof(
   blocks.push({ kind: 'comment', latex: `\\textit{Proof.}\\;\\text{By induction on } ${scrutineeLatex}\\text{:}` });
 
   for (const clause of matchTerm.clauses) {
-    const patVars = collectPatternVars(clause.patterns);
-    const clauseCtx = [...patVars.reverse(), ...context];
+    // Build context and case header, suppressing carrier-position patterns
+    const ctxEntries: string[] = [];
+    const visiblePatParts: string[] = [];
 
-    // Case header: render the pattern
-    const patLatex = clause.patterns.map(p => patternToLatex(p, notations)).join('\\;');
-    blocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${patLatex}\\text{:}` });
+    for (let pi = 0; pi < clause.patterns.length; pi++) {
+      const pat = clause.patterns[pi];
+      const carrierLatex = carrierPositions?.get(pi);
+      const vars = collectPatternVars([pat]);
+
+      if (carrierLatex) {
+        // Carrier position — substitute in context, suppress from display
+        for (const _v of vars) {
+          ctxEntries.push(LATEX_PREFIX + carrierLatex);
+        }
+      } else {
+        visiblePatParts.push(patternToLatex(pat, notations));
+        ctxEntries.push(...vars);
+      }
+    }
+
+    const clauseCtx = [...ctxEntries.reverse(), ...context];
+
+    // Case header: render visible patterns only
+    if (visiblePatParts.length > 0) {
+      const patLatex = visiblePatParts.join('\\;');
+      blocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${patLatex}\\text{:}` });
+    }
 
     // Render the RHS proof
-    const rhsBlocks = proofBodyToBlocks(clause.rhs, clauseCtx, notations, '\\quad ');
+    const rhsBlocks = proofBodyToBlocks(clause.rhs, clauseCtx, notations, '\\quad ', carrierPositions);
     blocks.push(...rhsBlocks);
   }
 
@@ -1114,19 +1225,14 @@ function proofToLatex(
   term: TTKTerm,
   context: string[],
   notations: NotationTable,
+  carrierPositions?: Map<number, string>,
 ): LatexBlock[] {
-  // Strip outer lambdas (from intro tactic)
-  let current = term;
-  const lambdaNames: string[] = [];
-  while (current.tag === 'Binder' && current.binderKind.tag === 'BLam') {
-    lambdaNames.push(current.name);
-    current = current.body;
-  }
-  const ctx = [...lambdaNames.reverse(), ...context];
+  // Strip outer lambdas, detecting carrier types
+  const { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
 
   // Match → induction
   if (current.tag === 'Match') {
-    return renderMatchProof(current, ctx, notations);
+    return renderMatchProof(current, ctx, notations, carrierPositions);
   }
 
   // Trans chain at top level
@@ -1261,6 +1367,9 @@ function convertDefinition(decl: CompiledDeclaration, notations: NotationTable):
   const name = decl.name ?? '?';
   const nameLatex = `\\text{${escapeLaTeX(name)}}`;
 
+  // Determine carrier positions from the type signature
+  const carrierMap = decl.kernelType ? getCarrierPositions(decl.kernelType) : new Map<number, string>();
+
   // Header: name : type
   if (decl.kernelType) {
     // For definitions that are simple type aliases (LessThan), use typeToLatex for the signature
@@ -1273,11 +1382,31 @@ function convertDefinition(decl: CompiledDeclaration, notations: NotationTable):
     const clauses = extractClauses(decl.kernelValue);
     if (clauses.length > 0) {
       for (const clause of clauses) {
-        const patVars = collectPatternVars(clause.patterns);
-        const clauseCtx = [...patVars.reverse()];
-        const lhsPats = clause.patterns.map(p => patternToLatex(p, notations)).join('\\;');
+        // Build context and LHS patterns, suppressing carrier positions
+        const ctxEntries: string[] = [];
+        const lhsPatParts: string[] = [];
+
+        for (let pi = 0; pi < clause.patterns.length; pi++) {
+          const pat = clause.patterns[pi];
+          const carrierLatex = carrierMap.get(pi);
+          const vars = collectPatternVars([pat]);
+
+          if (carrierLatex) {
+            // Carrier position — use carrier LaTeX in context, suppress from LHS
+            for (const _v of vars) {
+              ctxEntries.push(LATEX_PREFIX + carrierLatex);
+            }
+          } else {
+            lhsPatParts.push(patternToLatex(pat, notations));
+            ctxEntries.push(...vars);
+          }
+        }
+
+        const clauseCtx = [...ctxEntries.reverse()];
+        const lhsPats = lhsPatParts.join('\\;');
         const rhs = termToLatex(clause.rhs, clauseCtx, notations);
-        blocks.push({ kind: 'rule', latex: `${nameLatex}\\;${lhsPats} = ${rhs}` });
+        const lhsStr = lhsPats.length > 0 ? `${nameLatex}\\;${lhsPats}` : nameLatex;
+        blocks.push({ kind: 'rule', latex: `${lhsStr} = ${rhs}` });
       }
     } else {
       // Non-pattern-match definition: name = value
@@ -1294,6 +1423,9 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
   const name = decl.name ?? '?';
   const nameLatex = `\\text{${escapeLaTeX(name)}}`;
 
+  // Compute carrier positions for proof rendering
+  const carrierPositions = decl.kernelType ? getCarrierPositions(decl.kernelType) : new Map<number, string>();
+
   // Header: Theorem name : ∀ ...
   if (decl.kernelType) {
     const typeStr = typeToLatex(decl.kernelType, [], notations);
@@ -1302,7 +1434,7 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
 
   // Render proof body from kernel value
   if (decl.kernelValue) {
-    const proofBlocks = proofToLatex(decl.kernelValue, [], notations);
+    const proofBlocks = proofToLatex(decl.kernelValue, [], notations, carrierPositions);
     blocks.push(...proofBlocks);
   } else {
     blocks.push({ kind: 'comment', latex: '\\textit{Proof.}\\quad\\square' });
