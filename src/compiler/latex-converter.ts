@@ -108,9 +108,12 @@ function renderVarName(name: string): string {
   // Subscript detection: single letter + digits → letter_{digits}
   const subscriptMatch = cleaned.match(/^([a-zA-Z])(\d+)$/);
   if (subscriptMatch) {
-    return `${escapeLaTeX(subscriptMatch[1])}_{${subscriptMatch[2]}}`;
+    return `${subscriptMatch[1]}_{${subscriptMatch[2]}}`;
   }
-  return escapeLaTeX(cleaned);
+  // Single letter → math italic (standard math convention)
+  // Multi-letter → \text{} to avoid rendering as product of variables
+  if (cleaned.length === 1) return escapeLaTeX(cleaned);
+  return `\\text{${escapeLaTeX(cleaned)}}`;
 }
 
 // ============================================================================
@@ -240,13 +243,30 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{eitherElim}';
   }});
 
-  // replace: {A} x y P proof px — show as substitution
+  // replace: {A} x y P proof px — flatten nested chains, suppress motive
   table.set('replace', { kind: 'custom', render: (args, ctx, n) => {
     if (args.length >= 6) {
-      const P = termToLatex(args[3], ctx, n);
-      const proof = termToLatex(args[4], ctx, n);
-      const px = termToLatex(args[5], ctx, n);
-      return `\\text{subst}(${P},\\, ${proof},\\, ${px})`;
+      // Flatten nested replace chains: replace(P, eq, replace(P', eq', base))
+      // → base (by eq', eq)
+      const rewrites: string[] = [];
+      let curArgs = args;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        if (curArgs.length >= 6) {
+          rewrites.push(termToLatex(curArgs[4], ctx, n));
+          const inner = curArgs[5];
+          const innerSpine = extractAppSpine(inner);
+          if (innerSpine.fn.tag === 'Const' && innerSpine.fn.name === 'replace' && innerSpine.args.length >= 6) {
+            curArgs = innerSpine.args;
+            continue;
+          }
+          // Base case
+          const base = termToLatex(inner, ctx, n);
+          const parts = rewrites.reverse().map(r => `\\text{by } ${r}`).join(',\\, ');
+          return `${base}\\;(${parts})`;
+        }
+        break;
+      }
     }
     return '\\text{replace}';
   }});
@@ -730,6 +750,12 @@ export function termToLatex(
           if (isAnon || !occursIn(0, term.body)) {
             return `${domain} \\to ${body}`;
           }
+          // Use ∀ for propositional bodies, Π otherwise
+          if (looksLikeProp(term.body, 1)) {
+            const isCS = CARRIER_LATEX_VALUES.has(domain);
+            const sep = isCS ? ' \\in ' : ' : ';
+            return `\\forall ${nameStr}${sep}${domain},\\, ${body}`;
+          }
           return `\\Pi\\, (${nameStr} : ${domain}),\\, ${body}`;
 
         case 'BLam':
@@ -861,8 +887,12 @@ function patternToLatex(pattern: TTKPattern, notations: NotationTable): string {
     case 'PCtor': {
       const entry = notations.get(pattern.name);
       const ctorName = entry && entry.kind === 'const' ? entry.latex : `\\text{${escapeLaTeX(pattern.name)}}`;
-      if (pattern.args.length === 0) return ctorName;
-      const args = pattern.args.map(p => patternToLatex(p, notations)).join('\\;');
+      // Suppress trivial args (wildcards and _-named vars — implicit type/value args)
+      const visibleArgs = pattern.args.filter(p =>
+        !(p.tag === 'PWild') && !(p.tag === 'PVar' && p.name === '_')
+      );
+      if (visibleArgs.length === 0) return ctorName;
+      const args = visibleArgs.map(p => patternToLatex(p, notations)).join('\\;');
       return `${ctorName}\\;${args}`;
     }
   }
@@ -1110,12 +1140,38 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\text{cong}(${f},\\, ${inner})`;
     }
 
-    // replace: {A} x y P proof px — show predicate and proof
+    // replace: {A} x y P proof px — flatten nested chains, suppress motive
+    // replace(P, eq1, replace(P', eq2, base)) → base (by eq2, eq1)
     if (name === 'replace' && spine.args.length >= 6) {
-      const P = termToLatex(spine.args[3], context, notations);
-      const proof = describeJustification(spine.args[4], context, notations);
-      const px = describeJustification(spine.args[5], context, notations);
-      return `\\text{subst}(${P},\\, ${proof},\\, ${px})`;
+      const rewrites: string[] = [];
+      let cur: TTKTerm = term;
+      while (true) {
+        const sp = extractAppSpine(cur);
+        if (sp.fn.tag === 'Const' && sp.fn.name === 'replace' && sp.args.length >= 6) {
+          rewrites.push(describeJustification(sp.args[4], context, notations));
+          cur = sp.args[5]; // the inner proof (P x)
+        } else {
+          break;
+        }
+      }
+      const baseDesc = describeJustification(cur, context, notations);
+      // Rewrites collected outermost-first; reverse for application order
+      const parts = rewrites.reverse().map(r => `\\text{by } ${r}`).join(',\\, ');
+      return `${baseDesc}\\;(${parts})`;
+    }
+
+    // Ordering transitivity: skip value args, show just the two proofs
+    // CompleteOrderedField.leTrans: (A, inst, a, b, c, h1, h2)
+    if (name === 'CompleteOrderedField.leTrans' && spine.args.length >= 7) {
+      const h1 = describeJustification(spine.args[5], context, notations);
+      const h2 = describeJustification(spine.args[6], context, notations);
+      return `\\text{leTrans}(${h1},\\, ${h2})`;
+    }
+    // User-defined ordering transitivity: (R, a, b, c, h1, h2)
+    if (['leLtTrans', 'ltLeTrans', 'leLtTransLe', 'ltLeTransLe'].includes(name) && spine.args.length >= 6) {
+      const h1 = describeJustification(spine.args[4], context, notations);
+      const h2 = describeJustification(spine.args[5], context, notations);
+      return `\\text{${escapeLaTeX(name)}}(${h1},\\, ${h2})`;
     }
 
     // Check if notation table handles this term — let it render cleanly
@@ -1135,10 +1191,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
     const nameLatex = `\\text{${escapeLaTeX(name)}}`;
     if (visibleArgs.length === 0) return nameLatex;
-    // Show up to 3 args concisely
-    const argStrs = visibleArgs.slice(0, 3).map(a => termToLatex(a, context, notations));
-    const suffix = visibleArgs.length > 3 ? ',\\ldots' : '';
-    return `${nameLatex}(${argStrs.join(',\\,')}${suffix})`;
+    // Show up to 6 args, using describeJustification recursively so nested
+    // proof combinators (replace, trans, leTrans, etc.) get improved rendering
+    const argStrs = visibleArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
+    const suffix = visibleArgs.length > 6 ? ',\\ldots' : '';
+    return `${nameLatex}(${argStrs.join(',\\, ')}${suffix})`;
   }
 
   // Variable reference
@@ -1157,11 +1214,26 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
 /**
  * Render a trans chain as a KaTeX aligned equational proof.
+ * Skips identity steps where LHS and RHS render identically
+ * (e.g. reassociations that are invisible without explicit grouping).
  */
 function renderTransChain(steps: TransStep[], context: string[], notations: NotationTable): string {
+  // Filter out identity steps (where LHS and RHS render the same)
+  const filteredSteps = steps.filter(step => {
+    const lhsStr = termToLatex(step.lhs, context, notations);
+    const rhsStr = termToLatex(step.rhs, context, notations);
+    return lhsStr !== rhsStr;
+  });
+
+  // If all steps are identity (shouldn't happen), just show the LHS
+  if (filteredSteps.length === 0) {
+    const lhs = termToLatex(steps[0].lhs, context, notations);
+    return `${lhs}`;
+  }
+
   const lines: string[] = [];
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
+  for (let i = 0; i < filteredSteps.length; i++) {
+    const step = filteredSteps[i];
     const just = describeJustification(step.justification, context, notations);
     if (i === 0) {
       const lhs = termToLatex(step.lhs, context, notations);
@@ -1170,6 +1242,87 @@ function renderTransChain(steps: TransStep[], context: string[], notations: Nota
     } else {
       const rhs = termToLatex(step.rhs, context, notations);
       lines.push(`&= ${rhs} & \\quad\\small\\text{by } ${just}`);
+    }
+  }
+  return `\\begin{aligned}\n${lines.join(' \\\\\n')}\n\\end{aligned}`;
+}
+
+// ============================================================================
+// Inequality Chain Detection (leTrans, leLtTrans, ltLeTrans)
+// ============================================================================
+
+interface InequalityStep {
+  lhs: TTKTerm;
+  rhs: TTKTerm;
+  relation: '\\le' | '<';
+  justification: TTKTerm;
+}
+
+/**
+ * Detect a chain of ordering transitivity:
+ *   leTrans(A, inst, a, b, c, h1, h2)  — a ≤ b ≤ c
+ *   leLtTrans(R, a, b, c, h1, h2)      — a ≤ b < c
+ *   ltLeTrans(R, a, b, c, h1, h2)      — a < b ≤ c
+ * Recursively flattens h2 if it's also a transitivity step.
+ */
+function detectInequalityChain(term: TTKTerm): InequalityStep[] | null {
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Const') return null;
+
+  const name = spine.fn.name;
+  const args = spine.args;
+
+  let a: TTKTerm, b: TTKTerm, c: TTKTerm, h1: TTKTerm, h2: TTKTerm;
+  let rel1: '\\le' | '<', rel2: '\\le' | '<';
+
+  if (name === 'CompleteOrderedField.leTrans' && args.length >= 7) {
+    // (A, inst, a, b, c, h1, h2) — skip A, inst
+    a = args[2]; b = args[3]; c = args[4]; h1 = args[5]; h2 = args[6];
+    rel1 = '\\le'; rel2 = '\\le';
+  } else if ((name === 'leLtTrans') && args.length >= 6) {
+    // (R, a, b, c, h1, h2) — skip R
+    a = args[1]; b = args[2]; c = args[3]; h1 = args[4]; h2 = args[5];
+    rel1 = '\\le'; rel2 = '<';
+  } else if ((name === 'ltLeTrans') && args.length >= 6) {
+    a = args[1]; b = args[2]; c = args[3]; h1 = args[4]; h2 = args[5];
+    rel1 = '<'; rel2 = '\\le';
+  } else if ((name === 'leLtTransLe' || name === 'ltLeTransLe') && args.length >= 6) {
+    // User-defined wrappers that are just leTrans
+    a = args[1]; b = args[2]; c = args[3]; h1 = args[4]; h2 = args[5];
+    rel1 = '\\le'; rel2 = '\\le';
+  } else {
+    return null;
+  }
+
+  // Recursively check if h2 is also a transitivity step
+  const rest = detectInequalityChain(h2);
+  if (rest) {
+    return [{ lhs: a, rhs: b, relation: rel1, justification: h1 }, ...rest];
+  }
+
+  return [
+    { lhs: a, rhs: b, relation: rel1, justification: h1 },
+    { lhs: b, rhs: c, relation: rel2, justification: h2 },
+  ];
+}
+
+/**
+ * Render an inequality chain as a KaTeX aligned proof.
+ *   a ≤ b   by h1
+ *     < c   by h2
+ */
+function renderInequalityChain(steps: InequalityStep[], context: string[], notations: NotationTable): string {
+  const lines: string[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const just = describeJustification(step.justification, context, notations);
+    if (i === 0) {
+      const lhs = termToLatex(step.lhs, context, notations);
+      const rhs = termToLatex(step.rhs, context, notations);
+      lines.push(`${lhs} &${step.relation} ${rhs} & \\quad\\small\\text{by } ${just}`);
+    } else {
+      const rhs = termToLatex(step.rhs, context, notations);
+      lines.push(`&${step.relation} ${rhs} & \\quad\\small\\text{by } ${just}`);
     }
   }
   return `\\begin{aligned}\n${lines.join(' \\\\\n')}\n\\end{aligned}`;
@@ -1193,9 +1346,69 @@ function stripLambdasWithCarrier(
   return { body: current, context: [...names.reverse(), ...baseContext] };
 }
 
+// ---- Proof rendering helpers ----
+
+/**
+ * Check if a match is trivial argument destructuring (single clause, all PVar/PWild).
+ * These are just "intros" — naming the function arguments — not real case analysis.
+ */
+function isTrivialIntroMatch(matchTerm: TTKTerm & { tag: 'Match' }): boolean {
+  if (matchTerm.clauses.length !== 1) return false;
+  return matchTerm.clauses[0].patterns.every(p => p.tag === 'PVar' || p.tag === 'PWild');
+}
+
+/**
+ * Build rendering context from trivial match patterns, suppressing carrier positions.
+ * Returns entries in reverse order (ready to prepend to context).
+ */
+function buildIntroContext(
+  patterns: TTKPattern[],
+  carrierPositions?: Map<number, string>,
+): string[] {
+  const entries: string[] = [];
+  for (let i = 0; i < patterns.length; i++) {
+    const pat = patterns[i];
+    const cl = carrierPositions?.get(i);
+    const vars = collectPatternVars([pat]);
+    if (cl) {
+      for (const _v of vars) entries.push(LATEX_PREFIX + cl);
+    } else {
+      entries.push(...vars);
+    }
+  }
+  return entries.reverse();
+}
+
+/**
+ * Strip let bindings from a proof body, rendering each as a "Let name := val." block.
+ * Carrier-typed lets are suppressed (pushed into context as carrier substitutions).
+ */
+function stripLetsToBlocks(
+  term: TTKTerm,
+  context: string[],
+  notations: NotationTable,
+  indent: string,
+): { blocks: LatexBlock[]; body: TTKTerm; context: string[] } {
+  const blocks: LatexBlock[] = [];
+  let current = term;
+  let ctx = context;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BLet') {
+    const cl = isCarrierType(current.domain);
+    if (cl) {
+      ctx = [LATEX_PREFIX + cl, ...ctx];
+    } else {
+      const val = termToLatex(current.binderKind.defVal, ctx, notations);
+      blocks.push({ kind: 'rule', latex: `${indent}\\text{Let } ${renderVarName(current.name)} := ${val}\\text{.}` });
+      ctx = [current.name, ...ctx];
+    }
+    current = current.body;
+  }
+  return { blocks, body: current, context: ctx };
+}
+
 /**
  * Render the RHS of a match clause (a proof body) as blocks.
- * Detects trans chains, sym, simple terms, or falls back to termToLatex.
+ * Handles let bindings, trans chains, nested matches, and simple terms.
  */
 function proofBodyToBlocks(
   term: TTKTerm,
@@ -1205,26 +1418,39 @@ function proofBodyToBlocks(
   carrierPositions?: Map<number, string>,
 ): LatexBlock[] {
   // Strip any remaining lambdas (e.g. "intros m p" inside a case)
-  const { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
+  let { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
 
-  // Nested Match → render as nested cases
+  // Strip let bindings into proof step blocks
+  const { blocks: letBlocks, body: afterLets, context: afterLetsCtx } =
+    stripLetsToBlocks(current, ctx, notations, indent);
+  current = afterLets;
+  ctx = afterLetsCtx;
+
+  // Nested Match → render as nested cases (no "Proof." prefix)
   if (current.tag === 'Match') {
-    return renderMatchProof(current, ctx, notations, carrierPositions);
+    return [...letBlocks, ...renderMatchProof(current, ctx, notations, carrierPositions, false)];
   }
 
   // Try trans chain
   const chain = detectTransChain(current);
   if (chain) {
-    return [{ kind: 'rule', latex: `${indent}${renderTransChain(chain, ctx, notations)}` }];
+    return [...letBlocks, { kind: 'rule', latex: `${indent}${renderTransChain(chain, ctx, notations)}` }];
+  }
+
+  // Inequality chain
+  const ineqChain = detectInequalityChain(current);
+  if (ineqChain) {
+    return [...letBlocks, { kind: 'rule', latex: `${indent}${renderInequalityChain(ineqChain, ctx, notations)}` }];
   }
 
   // Simple proof term — render concisely as justification
   const desc = describeJustification(current, ctx, notations);
-  return [{ kind: 'rule', latex: `${indent}${desc}` }];
+  return [...letBlocks, { kind: 'rule', latex: `${indent}${desc}` }];
 }
 
 /**
- * Render a Match node as induction/cases proof.
+ * Render a Match node as case analysis proof.
+ * Only shows constructor patterns (PCtor) in case headers — suppresses PVar/PWild.
  * carrierPositions maps Pi-binder indices to carrier LaTeX for suppression.
  */
 function renderMatchProof(
@@ -1232,18 +1458,26 @@ function renderMatchProof(
   context: string[],
   notations: NotationTable,
   carrierPositions?: Map<number, string>,
+  includeProofHeader: boolean = true,
 ): LatexBlock[] {
   const blocks: LatexBlock[] = [];
 
-  // Determine what we're inducting on
+  // Determine what we're case-splitting on
+  const isHoleScrutinee = matchTerm.scrutinee.tag === 'Hole' && matchTerm.scrutinee.id === '_scrutinee';
   const scrutineeLatex = matchTerm.scrutinee.tag === 'Var' && matchTerm.scrutinee.index < context.length
-    ? escapeLaTeX(context[matchTerm.scrutinee.index])
-    : termToLatex(matchTerm.scrutinee, context, notations);
+    ? renderVarName(context[matchTerm.scrutinee.index])
+    : isHoleScrutinee ? '' : termToLatex(matchTerm.scrutinee, context, notations);
 
-  blocks.push({ kind: 'comment', latex: `\\textit{Proof.}\\;\\text{By induction on } ${scrutineeLatex}\\text{:}` });
+  // Header: "Proof. By cases on X:" or just "By cases on X:"
+  const prefix = includeProofHeader ? '\\textit{Proof.}\\;' : '';
+  if (isHoleScrutinee) {
+    blocks.push({ kind: 'comment', latex: `${prefix}\\text{By pattern matching:}` });
+  } else {
+    blocks.push({ kind: 'comment', latex: `${prefix}\\text{By cases on } ${scrutineeLatex}\\text{:}` });
+  }
 
   for (const clause of matchTerm.clauses) {
-    // Build context and case header, suppressing carrier-position patterns
+    // Build context and case header, suppressing carrier + PVar/PWild patterns
     const ctxEntries: string[] = [];
     const visiblePatParts: string[] = [];
 
@@ -1253,19 +1487,21 @@ function renderMatchProof(
       const vars = collectPatternVars([pat]);
 
       if (carrierLatex) {
-        // Carrier position — substitute in context, suppress from display
         for (const _v of vars) {
           ctxEntries.push(LATEX_PREFIX + carrierLatex);
         }
       } else {
-        visiblePatParts.push(patternToLatex(pat, notations));
+        // Only show constructor patterns in case header (not PVar/PWild)
+        if (pat.tag === 'PCtor') {
+          visiblePatParts.push(patternToLatex(pat, notations));
+        }
         ctxEntries.push(...vars);
       }
     }
 
     const clauseCtx = [...ctxEntries.reverse(), ...context];
 
-    // Case header: render visible patterns only
+    // Case header: only if there are constructor patterns to show
     if (visiblePatParts.length > 0) {
       const patLatex = visiblePatParts.join('\\;');
       blocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${patLatex}\\text{:}` });
@@ -1281,7 +1517,8 @@ function renderMatchProof(
 
 /**
  * Main entry: convert a proof term into LaTeX blocks.
- * Strips outer lambdas, then dispatches on Match / trans / simple.
+ * Strips lambdas, skips trivial intro matches, extracts let bindings,
+ * then dispatches on Match / trans / sym / simple.
  */
 function proofToLatex(
   term: TTKTerm,
@@ -1289,32 +1526,141 @@ function proofToLatex(
   notations: NotationTable,
   carrierPositions?: Map<number, string>,
 ): LatexBlock[] {
-  // Strip outer lambdas, detecting carrier types
-  const { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
+  // 1. Strip outer lambdas, detecting carrier types
+  let { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
 
-  // Match → induction
+  // 2. Skip trivial intro match (single clause, all PVar/PWild)
+  //    These are just function argument destructuring, not real case analysis.
+  if (current.tag === 'Match' && isTrivialIntroMatch(current)) {
+    const clause = current.clauses[0];
+    ctx = [...buildIntroContext(clause.patterns, carrierPositions), ...ctx];
+    current = clause.rhs;
+    // Strip more lambdas in case RHS starts with them
+    const s = stripLambdasWithCarrier(current, ctx);
+    current = s.body;
+    ctx = s.context;
+  }
+
+  // 3. Strip let bindings into proof step blocks
+  const { blocks: letBlocks, body: afterLets, context: afterLetsCtx } =
+    stripLetsToBlocks(current, ctx, notations, '');
+  current = afterLets;
+  ctx = afterLetsCtx;
+
+  // 4. Render the final proof body
+
+  // Non-trivial Match → case analysis
   if (current.tag === 'Match') {
+    if (letBlocks.length > 0) {
+      return [
+        { kind: 'comment', latex: '\\textit{Proof.}' },
+        ...letBlocks,
+        ...renderMatchProof(current, ctx, notations, carrierPositions, false),
+      ];
+    }
     return renderMatchProof(current, ctx, notations, carrierPositions);
   }
 
-  // Trans chain at top level
+  // Trans chain
   const chain = detectTransChain(current);
   if (chain) {
     return [
       { kind: 'comment', latex: '\\textit{Proof.}' },
+      ...letBlocks,
       { kind: 'rule', latex: renderTransChain(chain, ctx, notations) },
     ];
   }
 
-  // Sym wrapping something
+  // Inequality chain: leTrans / leLtTrans / ltLeTrans
+  const ineqChain = detectInequalityChain(current);
+  if (ineqChain) {
+    return [
+      { kind: 'comment', latex: '\\textit{Proof.}' },
+      ...letBlocks,
+      { kind: 'rule', latex: renderInequalityChain(ineqChain, ctx, notations) },
+    ];
+  }
+
+  // Sym
   const symMatch = detectSym(current);
   if (symMatch) {
     const inner = describeJustification(symMatch.inner, ctx, notations);
+    if (letBlocks.length > 0) {
+      return [
+        { kind: 'comment', latex: '\\textit{Proof.}' },
+        ...letBlocks,
+        { kind: 'rule', latex: `\\text{sym}(${inner})` },
+      ];
+    }
     return [{ kind: 'comment', latex: `\\textit{Proof.}\\quad\\text{sym}(${inner})` }];
+  }
+
+  // eitherElim → structured case analysis
+  const eSpine = extractAppSpine(current);
+  if (eSpine.fn.tag === 'Const' && eSpine.fn.name === 'eitherElim' && eSpine.args.length >= 6) {
+    const fInl = eSpine.args[3];
+    const fInr = eSpine.args[4];
+    const scrutinee = eSpine.args[5];
+
+    const resultBlocks: LatexBlock[] = [];
+    if (letBlocks.length > 0) {
+      resultBlocks.push({ kind: 'comment', latex: '\\textit{Proof.}' });
+      resultBlocks.push(...letBlocks);
+    }
+
+    const scrutStr = describeJustification(scrutinee, ctx, notations);
+    const prefix = letBlocks.length > 0 ? '' : '\\textit{Proof.}\\;';
+    resultBlocks.push({ kind: 'comment', latex: `${prefix}\\text{By cases on } ${scrutStr}\\text{:}` });
+
+    // Case inl
+    if (fInl.tag === 'Binder' && fInl.binderKind.tag === 'BLam') {
+      const varName = fInl.name || 'h';
+      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;\\text{inl}\\;(${renderVarName(varName)})\\text{:}` });
+      const inlCtx = [varName, ...ctx];
+      resultBlocks.push(...proofBodyToBlocks(fInl.body, inlCtx, notations, '\\quad ', carrierPositions));
+    }
+
+    // Case inr
+    if (fInr.tag === 'Binder' && fInr.binderKind.tag === 'BLam') {
+      const varName = fInr.name || 'h';
+      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;\\text{inr}\\;(${renderVarName(varName)})\\text{:}` });
+      const inrCtx = [varName, ...ctx];
+      resultBlocks.push(...proofBodyToBlocks(fInr.body, inrCtx, notations, '\\quad ', carrierPositions));
+    }
+
+    return resultBlocks;
+  }
+
+  // Conjunction proof: MkPair(A, B, proof1, proof2) → render as two parts
+  if (eSpine.fn.tag === 'Const' && eSpine.fn.name === 'MkPair' && eSpine.args.length >= 4) {
+    const proof1 = eSpine.args[2];
+    const proof2 = eSpine.args[3];
+    const desc1 = describeJustification(proof1, ctx, notations);
+    const desc2 = describeJustification(proof2, ctx, notations);
+    if (letBlocks.length > 0) {
+      return [
+        { kind: 'comment', latex: '\\textit{Proof.}' },
+        ...letBlocks,
+        { kind: 'rule', latex: `\\text{(i)}\\quad ${desc1}` },
+        { kind: 'rule', latex: `\\text{(ii)}\\quad ${desc2}` },
+      ];
+    }
+    return [
+      { kind: 'comment', latex: '\\textit{Proof.}' },
+      { kind: 'rule', latex: `\\text{(i)}\\quad ${desc1}` },
+      { kind: 'rule', latex: `\\text{(ii)}\\quad ${desc2}` },
+    ];
   }
 
   // Simple proof (refl, single application, etc.)
   const desc = describeJustification(current, ctx, notations);
+  if (letBlocks.length > 0) {
+    return [
+      { kind: 'comment', latex: '\\textit{Proof.}' },
+      ...letBlocks,
+      { kind: 'rule', latex: desc },
+    ];
+  }
   return [{ kind: 'comment', latex: `\\textit{Proof.}\\quad${desc}` }];
 }
 
