@@ -2362,14 +2362,46 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
     }
 
     if (isPropLike) {
-      // "Theorem (name). Let ... and ... . Then:" + boxed conclusion
+      // "Theorem (name). Let ... . Suppose ... . Then:" + boxed conclusion
       const { groups, finalCtx } = buildBinderGroups(binders, [], notations);
       const bodyLatex = termToLatex(body, finalCtx, notations);
-      const binderParts = groups.map(formatBinderGroup);
 
-      if (binderParts.length > 0) {
-        const bindersStr = binderParts.join('\\text{ and }');
-        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Let } ${bindersStr}\\text{. Then:}` });
+      // Classify groups: named binders → "Let", unnamed (all _) → "Suppose"
+      const letGroups: BinderGroup[] = [];
+      const supposeGroups: BinderGroup[] = [];
+      for (const g of groups) {
+        if (g.names.every(n => n === '_')) {
+          supposeGroups.push(g);
+        } else {
+          letGroups.push(g);
+        }
+      }
+
+      // Post-merge carrier set groups that share the same typeLatex in the Let section
+      // e.g., "x₀, L, M ∈ ℝ" and "ε ∈ ℝ" → "x₀, L, M, ε ∈ ℝ"
+      const mergedLetGroups: BinderGroup[] = [];
+      for (const g of letGroups) {
+        const existing = g.isCarrierSet
+          ? mergedLetGroups.find(m => m.isCarrierSet && m.typeLatex === g.typeLatex)
+          : undefined;
+        if (existing) {
+          existing.names.push(...g.names);
+        } else {
+          mergedLetGroups.push({ ...g, names: [...g.names] });
+        }
+      }
+
+      const letParts = mergedLetGroups.map(formatBinderGroup);
+      const supposeParts = supposeGroups.map(formatBinderGroup);
+
+      if (letParts.length > 0 && supposeParts.length > 0) {
+        // Two-part header: "Let ... . Suppose ... . Then:"
+        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Let } ${letParts.join('\\text{ and }')}\\text{.}` });
+        blocks.push({ kind: 'header', latex: `\\quad\\text{Suppose } ${supposeParts.join('\\text{ and }')}\\text{. Then:}` });
+      } else if (letParts.length > 0) {
+        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Let } ${letParts.join('\\text{ and }')}\\text{. Then:}` });
+      } else if (supposeParts.length > 0) {
+        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Suppose } ${supposeParts.join('\\text{ and }')}\\text{. Then:}` });
       } else {
         blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{:}` });
       }
