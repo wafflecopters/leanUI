@@ -860,6 +860,196 @@ function isEffectiveVarRef(term: TTKTerm, context: string[]): boolean {
   return visibleArgs.length === 0 || visibleArgs.every(a => a.tag === 'Var');
 }
 
+/**
+ * Strip DPair/Pair projections from a term, returning the base expression
+ * and the chain of projections applied. E.g.:
+ *   Pair.fst(DPair.snd(X)) → { base: X, projections: ['dsnd', 'pfst'] }
+ *   DPair.fst(X) → { base: X, projections: ['dfst'] }
+ */
+function stripProjections(term: TTKTerm): { base: TTKTerm, projections: string[] } {
+  const projections: string[] = [];
+  let current = term;
+  for (;;) {
+    const spine = extractAppSpine(current);
+    if (spine.fn.tag !== 'Const') break;
+    if (spine.fn.name === 'DPair.fst' && spine.args.length >= 5) {
+      projections.unshift('dfst');
+      current = spine.args[4];
+    } else if (spine.fn.name === 'DPair.snd' && spine.args.length >= 5) {
+      projections.unshift('dsnd');
+      current = spine.args[4];
+    } else if (spine.fn.name === 'Pair.fst' && spine.args.length >= 3) {
+      projections.unshift('pfst');
+      current = spine.args[2];
+    } else if (spine.fn.name === 'Pair.snd' && spine.args.length >= 3) {
+      projections.unshift('psnd');
+      current = spine.args[2];
+    } else {
+      break;
+    }
+  }
+  return { base: current, projections };
+}
+
+/** Structural key for a term — used for grouping without any display suppression. */
+function termStructuralKey(term: TTKTerm): string {
+  switch (term.tag) {
+    case 'Var': return `V${term.index}`;
+    case 'Const': return `C:${term.name}`;
+    case 'App': return `(${termStructuralKey(term.fn)} ${termStructuralKey(term.arg)})`;
+    case 'Sort': return 'S';
+    case 'Binder': return `B(${termStructuralKey(term.domain)},${termStructuralKey(term.body)})`;
+    case 'Meta': return `M${term.id}`;
+    case 'Hole': return `H${term.id}`;
+    default: return '?';
+  }
+}
+
+/**
+ * Detect DPair/Pair destructuring patterns in function application args.
+ * When the same base expression X appears as:
+ *   DPair.fst(X), Pair.fst(DPair.snd(X)), Pair.snd(DPair.snd(X))
+ * introduce "Let (δ, h, bound) = X" and replace projection args with short names.
+ *
+ * Returns null if no pattern found.
+ */
+function detectDestructuringLets(
+  args: TTKTerm[],
+  context: string[],
+  notations: NotationTable,
+  fnName: string,
+): { lets: string[], mainExpr: string } | null {
+  // 1. Strip projections from each arg and group by base (structural equality)
+  const argInfos = args.map(arg => {
+    const result = stripProjections(arg);
+    return {
+      projections: result.projections,
+      base: result.projections.length > 0 ? result.base : null,
+      baseKey: result.projections.length > 0
+        ? termStructuralKey(result.base)
+        : '',
+    };
+  });
+
+  const groups = new Map<string, { base: TTKTerm, argIndices: number[] }>();
+  for (let i = 0; i < argInfos.length; i++) {
+    const info = argInfos[i];
+    if (!info.base) continue;
+    if (!groups.has(info.baseKey)) {
+      groups.set(info.baseKey, { base: info.base, argIndices: [] });
+    }
+    groups.get(info.baseKey)!.argIndices.push(i);
+  }
+
+  // Only extract bases with 2+ projection usages
+  const extractable = [...groups.values()].filter(g => g.argIndices.length >= 2);
+  if (extractable.length === 0) return null;
+
+  // 2. Generate let-bindings and track replacements
+  const lets: string[] = [];
+  const replacements = new Map<number, string>(); // argIdx → replacement LaTeX
+  // Track string replacements for nested occurrences (e.g., π₁(X) inside leTotal)
+  const stringReplacements: [string, string][] = [];
+
+  for (let gi = 0; gi < extractable.length; gi++) {
+    const group = extractable[gi];
+    const sub = extractable.length > 1 ? `_{${gi + 1}}` : '';
+    // Use termToLatex for the let RHS — keeps record dot notation (limF.εδ(...))
+    // where describeJustification would suppress the var-ref receiver
+    const baseLatex = termToLatex(group.base, context, notations);
+
+    // Collect projection names used for this base
+    const projNames = new Map<string, string>(); // projKey → LaTeX name
+    for (const idx of group.argIndices) {
+      const projs = argInfos[idx].projections;
+      const projKey = projs.join('.');
+
+      if (!projNames.has(projKey)) {
+        if (projKey === 'dfst') {
+          projNames.set(projKey, `\\delta${sub}`);
+        } else if (projKey === 'dsnd.pfst') {
+          projNames.set(projKey, `h${sub}`);
+        } else if (projKey === 'dsnd.psnd') {
+          projNames.set(projKey, `\\text{bnd}${sub}`);
+        } else if (projKey === 'pfst') {
+          projNames.set(projKey, `\\pi_1${sub}`);
+        } else if (projKey === 'psnd') {
+          projNames.set(projKey, `\\pi_2${sub}`);
+        } else {
+          // Unknown projection chain — skip this group
+          continue;
+        }
+      }
+      replacements.set(idx, projNames.get(projKey)!);
+    }
+
+    if (projNames.size === 0) continue;
+
+    // Build string replacements for nested occurrences in other args
+    // e.g., leTotal(π₁(baseLatex), ...) → leTotal(δ₁, ...)
+    for (const [projKey, name] of projNames) {
+      let pattern: string | undefined;
+      if (projKey === 'dfst') {
+        pattern = `\\pi_1(${baseLatex})`;
+      } else if (projKey === 'dsnd.pfst') {
+        pattern = `\\pi_1(\\pi_2(${baseLatex}))`;
+      } else if (projKey === 'dsnd.psnd') {
+        pattern = `\\pi_2(\\pi_2(${baseLatex}))`;
+      } else if (projKey === 'pfst') {
+        pattern = `\\pi_1(${baseLatex})`;
+      } else if (projKey === 'psnd') {
+        pattern = `\\pi_2(${baseLatex})`;
+      }
+      if (pattern) stringReplacements.push([pattern, name]);
+    }
+
+    // Sort projection names in canonical order: dfst, dsnd.pfst, dsnd.psnd
+    const order = ['dfst', 'dsnd.pfst', 'dsnd.psnd', 'pfst', 'psnd'];
+    const sortedNames = [...projNames.entries()]
+      .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
+      .map(([_, name]) => name);
+
+    lets.push(`\\text{Let } (${sortedNames.join(',\\, ')}) = ${baseLatex}`);
+  }
+
+  if (lets.length === 0 || replacements.size === 0) return null;
+
+  // 3. Render the main expression with replacements
+  // Apply same filtering as describeJustification (carrier, type, var-ref suppression)
+  const visibleArgStrs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    // Skip implicit-like args (same heuristic as describeJustification)
+    if (arg.tag === 'Meta' || arg.tag === 'Hole' || arg.tag === 'Sort') continue;
+    if (arg.tag === 'Var' && arg.index < context.length && isCarrierEntry(context[arg.index])) continue;
+    if (arg.tag === 'Const' && notations.get(arg.name)?.kind === 'const' &&
+        ['\\mathbb{N}', '\\text{Type}', '\\mathbb{R}'].includes((notations.get(arg.name) as any)?.latex)) continue;
+
+    if (replacements.has(i)) {
+      visibleArgStrs.push(replacements.get(i)!);
+    } else if (isEffectiveVarRef(arg, context)) {
+      continue; // Skip var refs
+    } else {
+      visibleArgStrs.push(describeJustification(arg, context, notations));
+    }
+  }
+
+  // 4. Apply string replacements for nested projection references
+  // Sort longest first to avoid partial matches
+  stringReplacements.sort((a, b) => b[0].length - a[0].length);
+  const fnLatex = `\\text{${escapeLaTeX(fnName)}}`;
+  const displayArgs = visibleArgStrs.slice(0, 8);
+  let mainExpr = displayArgs.length > 0
+    ? `${fnLatex}(${displayArgs.join(',\\, ')})`
+    : fnLatex;
+
+  for (const [from, to] of stringReplacements) {
+    mainExpr = mainExpr.split(from).join(to);
+  }
+
+  return { lets, mainExpr };
+}
+
 /** Check if a term would render as an infix expression (needs parens if nested). */
 function isInfixTerm(term: TTKTerm, notations: NotationTable): boolean {
   if (term.tag !== 'App') return false;
@@ -1929,6 +2119,20 @@ function proofToLatex(
       { kind: 'rule', latex: `\\text{(i)}\\quad ${desc1}` },
       { kind: 'rule', latex: `\\text{(ii)}\\quad ${desc2}` },
     ];
+  }
+
+  // DPair/Pair destructuring: detect repeated projection patterns and render as let-bindings.
+  // E.g. pickDelta(π₁(X), π₁(Y), π₁(π₂(X)), ...) → Let (δ₁, h₁, bnd₁) = X; ...
+  if (eSpine.fn.tag === 'Const' && eSpine.args.length >= 4) {
+    const destrResult = detectDestructuringLets(eSpine.args, ctx, notations, eSpine.fn.name);
+    if (destrResult) {
+      return [
+        { kind: 'comment', latex: '\\textit{Proof.}' },
+        ...letBlocks,
+        ...destrResult.lets.map(l => ({ kind: 'rule' as const, latex: l })),
+        { kind: 'rule', latex: destrResult.mainExpr },
+      ];
+    }
   }
 
   // Simple proof (refl, single application, etc.)
