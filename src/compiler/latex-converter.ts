@@ -1188,10 +1188,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\langle ${inner} \\rangle`;
     }
 
-    // CompleteOrderedField projections: skip A and inst (first 2 args), then apply
+    // Record projections (Foo.bar): skip first 2 args (A and inst), then apply
     // proof-aware rendering (allVarRefs suppression, recursive describeJustification)
-    if (name.startsWith('CompleteOrderedField.') && spine.args.length >= 2) {
-      const projName = name.substring('CompleteOrderedField.'.length);
+    const dotIdx = name.indexOf('.');
+    if (dotIdx > 0 && spine.args.length >= 2) {
+      const projName = name.substring(dotIdx + 1);
       const remainingArgs = spine.args.slice(2);
       const visibleRemaining = remainingArgs.filter(a =>
         a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort'
