@@ -330,23 +330,9 @@ boundFnLeft R f g x0 L M eps d1 d2 hle hf hg x hx = (convertEps R eps (rabs R (r
 boundFnRight : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rle R d2 d1 -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d1 -> rlt R (rabs R (rsub R (f x) L)) (rmul R (rhalf R) eps)) -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (g x) M)) (rmul R (rhalf R) eps)) -> (x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) eps
 boundFnRight R f g x0 L M eps d1 d2 hle hf hg x hx = (convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (hf x (ltLeTrans R (rabs R (rsub R x x0)) d2 d1 hx hle)) (hg x hx)))
 
--- Witness packaging (left case)
-witnessLeft : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt R (rzero R) d1 -> rle R d1 d2 -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d1 -> rlt R (rabs R (rsub R (f x) L)) (rmul R (rhalf R) eps)) -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (g x) M)) (rmul R (rhalf R) eps)) -> EpsDeltaWitness R (\\x => radd R (f x) (g x)) x0 (radd R L M) eps d1
-witnessLeft R f g x0 L M eps d1 d2 hd1 hle hf hg = MkPair hd1 (boundFnLeft R f g x0 L M eps d1 d2 hle hf hg)
-
--- Witness packaging (right case)
-witnessRight : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt R (rzero R) d2 -> rle R d2 d1 -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d1 -> rlt R (rabs R (rsub R (f x) L)) (rmul R (rhalf R) eps)) -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (g x) M)) (rmul R (rhalf R) eps)) -> EpsDeltaWitness R (\\x => radd R (f x) (g x)) x0 (radd R L M) eps d2
-witnessRight R f g x0 L M eps d1 d2 hd2 hle hf hg = MkPair hd2 (boundFnRight R f g x0 L M eps d1 d2 hle hf hg)
-
--- Pick the smaller delta using leTotal
-pickDeltaLeft : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt R (rzero R) d1 -> rle R d1 d2 -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d1 -> rlt R (rabs R (rsub R (f x) L)) (rmul R (rhalf R) eps)) -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (g x) M)) (rmul R (rhalf R) eps)) -> DPair (Carrier R) (EpsDeltaWitness R (\\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-pickDeltaLeft R f g x0 L M eps d1 d2 hd1 hle hf hg = MkDPair d1 (witnessLeft R f g x0 L M eps d1 d2 hd1 hle hf hg)
-
-pickDeltaRight : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt R (rzero R) d2 -> rle R d2 d1 -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d1 -> rlt R (rabs R (rsub R (f x) L)) (rmul R (rhalf R) eps)) -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (g x) M)) (rmul R (rhalf R) eps)) -> DPair (Carrier R) (EpsDeltaWitness R (\\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-pickDeltaRight R f g x0 L M eps d1 d2 hd2 hle hf hg = MkDPair d2 (witnessRight R f g x0 L M eps d1 d2 hd2 hle hf hg)
-
+-- Pick the smaller delta using leTotal (inlined with eitherElim)
 pickDelta : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt R (rzero R) d1 -> rlt R (rzero R) d2 -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d1 -> rlt R (rabs R (rsub R (f x) L)) (rmul R (rhalf R) eps)) -> ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) d2 -> rlt R (rabs R (rsub R (g x) M)) (rmul R (rhalf R) eps)) -> Either (rle R d1 d2) (rle R d2 d1) -> DPair (Carrier R) (EpsDeltaWitness R (\\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-pickDelta R f g x0 L M eps d1 d2 hd1 hd2 hf hg tot = eitherElim (\\hle => pickDeltaLeft R f g x0 L M eps d1 d2 hd1 hle hf hg) (\\hle => pickDeltaRight R f g x0 L M eps d1 d2 hd2 hle hf hg) tot
+pickDelta R f g x0 L M eps d1 d2 hd1 hd2 hf hg tot = eitherElim (\\hle => MkDPair d1 (MkPair hd1 (boundFnLeft R f g x0 L M eps d1 d2 hle hf hg))) (\\hle => MkDPair d2 (MkPair hd2 (boundFnRight R f g x0 L M eps d1 d2 hle hf hg))) tot
 
 -- Assemble the eps-delta proof for the sum
 limitAddEpsDelta : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> (eps : Carrier R) -> rlt R (rzero R) eps -> DPair (Carrier R) (EpsDeltaWitness R (\\x => radd R (f x) (g x)) x0 (radd R L M) eps)
