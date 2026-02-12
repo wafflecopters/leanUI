@@ -925,8 +925,11 @@ function renderNotation(
           }
         }
         const rhs = termToLatex(visible[1], context, notations);
+        // For subtraction/division, wrap compound RHS in parens to avoid ambiguity:
+        // a - b + c should be a - (b + c), not (a - b) + c
+        const wrapRhs = (entry.latex === '-' || entry.latex === '/') && isInfixTerm(visible[1], notations);
         const extra = visible.slice(2);
-        let result = `${lhs} ${entry.latex} ${rhs}`;
+        let result = wrapRhs ? `${lhs} ${entry.latex} (${rhs})` : `${lhs} ${entry.latex} ${rhs}`;
         if (extra.length > 0) {
           result += '\\;' + extra.map(a => termToLatex(a, context, notations)).join('\\;');
         }
