@@ -29,6 +29,13 @@ const CARRIER_TYPES: Record<string, string> = {
 /** Sentinel prefix for raw LaTeX entries in the rendering context. */
 const LATEX_PREFIX = '\x00latex:';
 
+/**
+ * Set of user-defined type names whose bodies are propositional.
+ * Built in convertToLatex() before processing declarations, so that
+ * looksLikeProp can recognize e.g. EpsDeltaWitness as propositional.
+ */
+let _knownPropNames: Set<string> = new Set();
+
 /** Check if a term is a carrier type. Returns the LaTeX string or null. */
 function isCarrierType(type: TTKTerm): string | null {
   if (type.tag === 'Const' && CARRIER_TYPES[type.name]) {
@@ -1031,6 +1038,8 @@ function looksLikeProp(body: TTKTerm, depth: number): boolean {
     if (['rle', 'rlt'].includes(name)) return true;
     // Record field projections that are relations (e.g. CompleteOrderedField.le)
     if (name.endsWith('.le') || name.endsWith('.lt')) return true;
+    // User-defined propositional type names (e.g. EpsDeltaWitness)
+    if (_knownPropNames.has(name)) return true;
     // Pair used as conjunction — if either component is prop-like
     if (name === 'Pair' && spine.args.length >= 2) {
       return looksLikeProp(spine.args[0], depth) || looksLikeProp(spine.args[1], depth);
@@ -1190,8 +1199,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
     // Record projections (Foo.bar): skip first 2 args (A and inst), then apply
     // proof-aware rendering (allVarRefs suppression, recursive describeJustification)
+    // Accessor projections (Pair.fst → π₁, etc.) skip this handler so their
+    // notation table entries render properly with mathematical symbols.
+    const ACCESSOR_PROJECTIONS: Set<string> = new Set(['Pair.fst', 'Pair.snd', 'DPair.fst', 'DPair.snd']);
     const dotIdx = name.indexOf('.');
-    if (dotIdx > 0 && spine.args.length >= 2) {
+    if (dotIdx > 0 && spine.args.length >= 2 && !ACCESSOR_PROJECTIONS.has(name)) {
       const projName = name.substring(dotIdx + 1);
       const remainingArgs = spine.args.slice(2);
       const visibleRemaining = remainingArgs.filter(a =>
@@ -2023,6 +2035,24 @@ function extractClauses(term: TTKTerm): TTKClause[] {
 export function convertToLatex(result: CompileResult, notations?: NotationTable): LatexDocument {
   const n = notations ?? makeDefaultNotations();
   const sections: LatexSection[] = [];
+
+  // Build set of user-defined propositional type names by scanning definition bodies.
+  // e.g. EpsDeltaWitness = \... => Pair (0 < delta) (...) — body is Pair of props.
+  // Function equations compile to Match terms, so we look at the first clause RHS too.
+  _knownPropNames = new Set();
+  for (const block of result.blocks) {
+    for (const decl of block.declarations) {
+      if (decl.name && decl.kernelValue && decl.kind !== 'inductive') {
+        let body: TTKTerm = decl.kernelValue;
+        while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') body = body.body;
+        if (body.tag === 'Match' && body.clauses.length > 0) body = body.clauses[0].rhs;
+        while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') body = body.body;
+        if (looksLikeProp(body, 0)) {
+          _knownPropNames.add(decl.name);
+        }
+      }
+    }
+  }
 
   for (const block of result.blocks) {
     if (block.isComment) continue;
