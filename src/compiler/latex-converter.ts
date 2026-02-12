@@ -1662,9 +1662,17 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
     return renderVarName(context[term.index]);
   }
 
-  // Lambda — describe briefly
+  // Lambda — strip binders, extend context, and render the body
+  // This handles e.g. \x hx => convertEps(...) inside MkPair proof tuples
   if (term.tag === 'Binder' && term.binderKind.tag === 'BLam') {
-    return `\\lambda\\text{-term}`;
+    let body: TTKTerm = term;
+    let ctx = [...context];
+    while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') {
+      const cl = isCarrierType(body.domain);
+      ctx = [cl ? LATEX_PREFIX + cl : body.name, ...ctx];
+      body = body.body;
+    }
+    return describeJustification(body, ctx, notations);
   }
 
   // Fallback: render the term (may be verbose)

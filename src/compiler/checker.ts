@@ -186,7 +186,19 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
 
     // Build Π(x : A). B where A is the elaborated domain and B is the inferred body type
     const piType = mkPi(elaboratedDomain, bodyEnv.value, env.value.name);
-    return bodyEnv.withValue(piType);
+
+    // Build elaborated lambda term (preserving the lambda wrapper).
+    // This is critical: when CONV calls inferType on a lambda, it uses
+    // elaboratedTerm as the kernel term. Without this, the bare body would
+    // be used, losing the lambda binders and leaving dangling de Bruijn indices.
+    const elaboratedLambda: TTKTerm = {
+      tag: 'Binder',
+      name: env.value.name,
+      binderKind: env.value.binderKind,
+      domain: elaboratedDomain,
+      body: bodyEnv.elaboratedTerm ?? env.value.body
+    };
+    return bodyEnv.withValue(piType).withElaboratedTerm(elaboratedLambda);
   }
 
   if (env.isBinderLetTerm()) {
