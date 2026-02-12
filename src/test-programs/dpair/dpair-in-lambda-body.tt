@@ -1,0 +1,26 @@
+@test success
+@name "DPair: MkDPair inside lambda body with expected type propagation"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+@import preambles/either.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- eitherElim: the classic eliminator for Either
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim f g (Left a) = f a
+eitherElim f g (Right b) = g b
+
+-- Test: MkDPair inside lambda bodies, fully applied.
+-- The expected type DPair Nat (\n => Equal n n) should propagate through
+-- eitherElim's return type implicit (C) to give each lambda body
+-- a concrete expected type for MkDPair's implicit resolution.
+test1 : DPair Nat (\n => Equal n n)
+test1 = eitherElim (\x => MkDPair x refl) (\y => MkDPair y refl) (Left Zero)
+
+-- With Right
+test2 : DPair Nat (\n => Equal n n)
+test2 = eitherElim (\x => MkDPair x refl) (\y => MkDPair y refl) (Right (Succ Zero))

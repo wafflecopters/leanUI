@@ -1,0 +1,21 @@
+@test success
+@name "DPair: partial implicit extraction from expected return type"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+record DPair (A : Type) (fn : A -> Type) where
+  constructor MkDPair
+  fst : A
+  snd : fn fst
+
+-- A function with implicit C that only appears in the return type.
+-- A and B appear only in parameter types, not in the return.
+-- Expected type propagation should solve C from the return type,
+-- while A and B are inferred from the arguments.
+applyTo : {A B C : Type} -> (A -> B -> C) -> A -> B -> C
+applyTo f a b = f a b
+
+-- Test: C is DPair Nat (\n => Equal n n), inferred from expected type
+-- A and B are both Nat, inferred from the arguments
+test1 : DPair Nat (\n => Equal n n)
+test1 = applyTo (\x y => MkDPair x refl) Zero Zero

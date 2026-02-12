@@ -1,7 +1,7 @@
 // INFERENCE
 
 import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual, mkULevel } from "./kernel";
-import { subst, shiftTerm, minFreeVarIndex } from "./subst";
+import { subst, shiftTerm, minFreeVarIndex, containsVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap, BinderPartSegment } from "./term";
 import { IndexPath } from "../types/source-position";
 import { unifyTerms } from "./unify";
@@ -791,6 +791,94 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
           // Fall through to CONV rule below
         } catch (e) {
           // Extraction failed - fall through to normal CONV rule
+        }
+      }
+
+      // ──────────────────────────────────────────────────────────────
+      // (APP-RETURN-TYPE-PROPAGATION) - For non-constructor functions
+      // where the return type is simply one of the implicit parameters,
+      // replace that parameter's Hole with the expected type.
+      //
+      // This enables expected type propagation through higher-order
+      // functions like eitherElim, where the return type C is an implicit
+      // parameter that appears in lambda arg domains (A → C), (B → C).
+      // Without this, C remains an unsolved meta during lambda body
+      // checking, preventing MkDPair (etc.) from extracting its implicits.
+      //
+      // How it works:
+      //   1. Walk the full Pi chain to find the return type
+      //   2. If return type is a bare Var referring to a leading implicit,
+      //      replace that Hole in the term with the expected type
+      //   3. Fall through to CONV with the modified term
+      // ──────────────────────────────────────────────────────────────
+      // Skip if any implicit is a ULevel — universe level interactions are complex
+      const hasULevelImplicit = implicitParams.some(p => p.domain.tag === 'ULevel');
+
+      if (!isConstructor && implicitParams.length > 0 && hasEnoughArgs
+          && !expectedIsSort && firstArgsAreHoles && expectedType.tag !== 'Meta'
+          && !hasULevelImplicit) {
+        try {
+          const fullType = env.getTypeDefinitionAssert(constName).value;
+
+          // Count total Pi binders and find the return type
+          let cursor = fullType;
+          let totalPis = 0;
+          while (cursor.tag === 'Binder' && cursor.binderKind.tag === 'BPi') {
+            totalPis++;
+            cursor = cursor.body;
+          }
+          const returnType = cursor;
+
+          // Only fire when fully applied and return type is a simple Var
+          if (explicitArgs.length === totalPis && returnType.tag === 'Var') {
+            const n = implicitParams.length;
+            const m = totalPis - n;
+            const implicitIndex = n + m - 1 - returnType.index;
+
+            if (implicitIndex >= 0 && implicitIndex < n) {
+              // Only fire when the return-type implicit can't be solved
+              // from a non-function explicit arg. If the implicit appears
+              // in a data type domain (like Pair A B), the arg constrains
+              // it. If it only appears in function codomains (like A → C),
+              // those are callbacks whose bodies NEED C to be pre-solved.
+              const returnVarBinder = totalPis - 1 - returnType.index;
+              let solvableFromDataArg = false;
+              {
+                let checkCursor = fullType;
+                for (let pos = 0; pos < totalPis; pos++) {
+                  if (checkCursor.tag !== 'Binder') break;
+                  if (pos >= n) {
+                    // Explicit param: check if domain is NOT a function type
+                    // and contains the return-type Var
+                    const domain = checkCursor.domain;
+                    const isFunction = domain.tag === 'Binder' && domain.binderKind.tag === 'BPi';
+                    if (!isFunction) {
+                      const refIndex = pos - 1 - returnVarBinder;
+                      if (refIndex >= 0 && containsVarIndex(domain, refIndex)) {
+                        solvableFromDataArg = true;
+                        break;
+                      }
+                    }
+                  }
+                  checkCursor = checkCursor.body;
+                }
+              }
+
+              if (!solvableFromDataArg) {
+                // Replace the implicit's Hole with the expected type
+                const newArgs = [...explicitArgs];
+                newArgs[implicitIndex] = expectedType;
+
+                let newTerm: TTKTerm = appChain.head;
+                for (const arg of newArgs) {
+                  newTerm = { tag: 'App', fn: newTerm, arg };
+                }
+                env = env.withValue(newTerm);
+              }
+            }
+          }
+        } catch {
+          // Analysis failed — fall through to CONV
         }
       }
     }
