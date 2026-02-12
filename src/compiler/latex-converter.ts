@@ -755,6 +755,15 @@ export function termToLatex(
       switch (term.binderKind.tag) {
         case 'BPi':
           if (isAnon || !occursIn(0, term.body)) {
+            // Equal X Y -> Void  →  X ≠ Y
+            if (term.body.tag === 'Const' && term.body.name === 'Void') {
+              const eqSpine = extractAppSpine(term.domain);
+              if (eqSpine.fn.tag === 'Const' && eqSpine.fn.name === 'Equal' && eqSpine.args.length >= 3) {
+                const x = termToLatex(eqSpine.args[1], context, notations);
+                const y = termToLatex(eqSpine.args[2], context, notations);
+                return `${x} \\neq ${y}`;
+              }
+            }
             return `${domain} \\to ${body}`;
           }
           // Use ∀ for propositional bodies, Π otherwise
@@ -1066,6 +1075,7 @@ interface TransStep {
  * Detect a chain of `trans` applications.
  * trans : {A} -> {x} -> {y} -> {z} -> Equal x y -> Equal y z -> Equal x z
  * Spine args: [A, x, y, z, proof_xy, proof_yz]
+ * Flattens both sides: trans(trans(a,b), trans(c,d)) → [a, b, c, d]
  */
 function detectTransChain(term: TTKTerm): TransStep[] | null {
   const spine = extractAppSpine(term);
@@ -1074,16 +1084,25 @@ function detectTransChain(term: TTKTerm): TransStep[] | null {
 
   const [_A, x, y, z, proofXY, proofYZ] = spine.args;
 
-  // Check if proofYZ is itself a trans (recursive chain)
-  const rest = detectTransChain(proofYZ);
-  if (rest) {
-    return [{ lhs: x, rhs: y, justification: proofXY }, ...rest];
+  const result: TransStep[] = [];
+
+  // Flatten left side (proofXY may itself be a trans chain)
+  const leftSteps = detectTransChain(proofXY);
+  if (leftSteps) {
+    result.push(...leftSteps);
+  } else {
+    result.push({ lhs: x, rhs: y, justification: proofXY });
   }
 
-  return [
-    { lhs: x, rhs: y, justification: proofXY },
-    { lhs: y, rhs: z, justification: proofYZ },
-  ];
+  // Flatten right side (proofYZ may itself be a trans chain)
+  const rightSteps = detectTransChain(proofYZ);
+  if (rightSteps) {
+    result.push(...rightSteps);
+  } else {
+    result.push({ lhs: y, rhs: z, justification: proofYZ });
+  }
+
+  return result;
 }
 
 /**
@@ -1180,7 +1199,10 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       }
       const baseDesc = describeJustification(cur, context, notations);
       // Rewrites collected outermost-first; reverse for application order
-      const parts = rewrites.reverse().map(r => `\\text{by } ${r}`).join(',\\, ');
+      const rewriteStrs = rewrites.reverse();
+      const parts = rewriteStrs.length === 1
+        ? `\\text{by } ${rewriteStrs[0]}`
+        : `\\text{by } ${rewriteStrs.join(',\\, ')}`;
       return `${baseDesc}\\;(${parts})`;
     }
 
@@ -1308,6 +1330,15 @@ function renderTransChain(steps: TransStep[], context: string[], notations: Nota
   if (filteredSteps.length === 0) {
     const lhs = termToLatex(steps[0].lhs, context, notations);
     return `${lhs}`;
+  }
+
+  // Single-step chain: render inline instead of aligned block
+  if (filteredSteps.length === 1) {
+    const step = filteredSteps[0];
+    const lhs = termToLatex(step.lhs, context, notations);
+    const rhs = termToLatex(step.rhs, context, notations);
+    const just = describeJustification(step.justification, context, notations);
+    return `${lhs} = ${rhs} \\quad\\small\\text{by } ${just}`;
   }
 
   const lines: string[] = [];
