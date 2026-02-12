@@ -1188,6 +1188,22 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\langle ${inner} \\rangle`;
     }
 
+    // CompleteOrderedField projections: skip A and inst (first 2 args), then apply
+    // proof-aware rendering (allVarRefs suppression, recursive describeJustification)
+    if (name.startsWith('CompleteOrderedField.') && spine.args.length >= 2) {
+      const projName = name.substring('CompleteOrderedField.'.length);
+      const remainingArgs = spine.args.slice(2);
+      const visibleRemaining = remainingArgs.filter(a =>
+        a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort'
+      );
+      const projLatex = `\\text{${escapeLaTeX(projName)}}`;
+      if (visibleRemaining.length === 0) return projLatex;
+      if (visibleRemaining.every(a => a.tag === 'Var')) return projLatex;
+      const argStrs = visibleRemaining.slice(0, 6).map(a => describeJustification(a, context, notations));
+      const suffix = visibleRemaining.length > 6 ? ',\\ldots' : '';
+      return `${projLatex}(${argStrs.join(',\\, ')}${suffix})`;
+    }
+
     // Check if notation table handles this term — let it render cleanly
     const entry = notations.get(name);
     if (entry) {
