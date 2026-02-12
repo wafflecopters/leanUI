@@ -1050,6 +1050,29 @@ function detectDestructuringLets(
   return { lets, mainExpr };
 }
 
+/**
+ * Check if a term is a "value computation" — an expression computing a value
+ * (not a proof). In proof rendering, these are typically obvious from the theorem
+ * statement and should be suppressed for readability.
+ * E.g., |f(x)+g(x)-(L+M)| or (a+c) in proof of a+c ≤ b+d.
+ */
+function isValueTerm(term: TTKTerm, notations: NotationTable): boolean {
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Const') return false;
+  const name = spine.fn.name;
+  // Known value-producing operations
+  if (['radd', 'rsub', 'rmul', 'rneg', 'rabs', 'rinv', 'rhalf',
+       'rzero', 'rone', 'rtwo', 'Carrier'].includes(name)) return true;
+  // Infix notation entries produce values
+  const entry = notations.get(name);
+  if (entry && entry.kind === 'infix') return true;
+  // COF value projections
+  if (name.startsWith('CompleteOrderedField.') &&
+      ['add', 'mul', 'neg', 'zero', 'one', 'abs', 'inv', 'sub'].some(
+        op => name.endsWith('.' + op))) return true;
+  return false;
+}
+
 /** Check if a term would render as an infix expression (needs parens if nested). */
 function isInfixTerm(term: TTKTerm, notations: NotationTable): boolean {
   if (term.tag !== 'App') return false;
@@ -1573,8 +1596,9 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       );
       const projLatex = `\\text{${escapeLaTeX(projName)}}`;
       if (visibleRemaining.length === 0) return projLatex;
-      if (visibleRemaining.every(a => isEffectiveVarRef(a, context))) return projLatex;
-      const meaningfulRemaining = visibleRemaining.filter(a => !isEffectiveVarRef(a, context));
+      const isSuppressibleProj = (a: TTKTerm) => isEffectiveVarRef(a, context) || isValueTerm(a, notations);
+      if (visibleRemaining.every(isSuppressibleProj)) return projLatex;
+      const meaningfulRemaining = visibleRemaining.filter(a => !isSuppressibleProj(a));
       const displayRemaining = meaningfulRemaining.length > 0 ? meaningfulRemaining : visibleRemaining;
       const argStrs = displayRemaining.slice(0, 6).map(a => describeJustification(a, context, notations));
       const suffix = displayRemaining.length > 6 ? ',\\ldots' : '';
@@ -1598,13 +1622,13 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
     const nameLatex = `\\text{${escapeLaTeX(name)}}`;
     if (visibleArgs.length === 0) return nameLatex;
-    // If all visible args are just variable references (forwarding context), suppress the
-    // arg list — "pickDeltaLeft" reads better than "pickDeltaLeft(f, g, x₀, L, M, ε, ...)"
-    const allVarRefs = visibleArgs.every(a => isEffectiveVarRef(a, context));
-    if (allVarRefs) return nameLatex;
-    // Filter out context-forwarding args (effective var refs) and show only meaningful ones.
+    // Suppressible args: context-forwarding var refs AND value computations
+    // (e.g., |f(x)+g(x)-(L+M)|) that are obvious from the theorem statement.
+    const isSuppressible = (a: TTKTerm) => isEffectiveVarRef(a, context) || isValueTerm(a, notations);
+    if (visibleArgs.every(isSuppressible)) return nameLatex;
+    // Filter out suppressible args and show only meaningful (proof) ones.
     // "coreEstimate(f, g, x₀, L, M, ½·ε, ...)" → "coreEstimate(½·ε, ...)"
-    const meaningfulArgs = visibleArgs.filter(a => !isEffectiveVarRef(a, context));
+    const meaningfulArgs = visibleArgs.filter(a => !isSuppressible(a));
     const displayArgs = meaningfulArgs.length > 0 ? meaningfulArgs : visibleArgs;
     // Show up to 6 args, using describeJustification recursively so nested
     // proof combinators (replace, trans, leTrans, etc.) get improved rendering
@@ -1623,8 +1647,9 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
         !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
       );
       if (visibleArgs.length === 0) return fnLatex;
-      if (visibleArgs.every(a => isEffectiveVarRef(a, context))) return fnLatex;
-      const meaningfulArgs = visibleArgs.filter(a => !isEffectiveVarRef(a, context));
+      const isSuppressibleVar = (a: TTKTerm) => isEffectiveVarRef(a, context) || isValueTerm(a, notations);
+      if (visibleArgs.every(isSuppressibleVar)) return fnLatex;
+      const meaningfulArgs = visibleArgs.filter(a => !isSuppressibleVar(a));
       const displayArgs = meaningfulArgs.length > 0 ? meaningfulArgs : visibleArgs;
       const argStrs = displayArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
       const suffix = displayArgs.length > 6 ? ',\\ldots' : '';
