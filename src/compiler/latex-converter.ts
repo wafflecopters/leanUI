@@ -214,10 +214,15 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{refl}\\;' + visibleArgs.map(a => termToLatex(a, ctx, n)).join('\\;');
   }});
 
-  // Either
+  // Either — use "or" for propositional disjunction, ⊕ for sum types
   table.set('Either', { kind: 'custom', render: (args, ctx, n) => {
     if (args.length === 2) {
-      return `${termToLatex(args[0], ctx, n)} \\oplus ${termToLatex(args[1], ctx, n)}`;
+      const a = termToLatex(args[0], ctx, n);
+      const b = termToLatex(args[1], ctx, n);
+      if (looksLikeProp(args[0], 0) || looksLikeProp(args[1], 0)) {
+        return `${a} \\text{ or } ${b}`;
+      }
+      return `${a} \\oplus ${b}`;
     }
     return '\\text{Either}';
   }});
