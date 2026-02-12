@@ -577,8 +577,9 @@ export function makeDefaultNotations(): NotationTable {
       const deltaStr = termToLatex(args[5], ctx, n);
       // Render f(x) by applying function to fresh variable
       const fxStr = renderSummand(f, 'x', ctx, n);
-      // Wrap in parens if compound (contains + or -) to avoid ambiguity in |a - b|
-      const fxWrap = (fxStr.includes('+') || fxStr.includes('-')) ? `(${fxStr})` : fxStr;
+      // Wrap RHS in parens if compound (contains + or -) to avoid ambiguity: |a - (b + c)|
+      // LHS doesn't need wrapping since subtraction is left-associative: |a + b - X| = |(a + b) - X|
+      const fxWrap = fxStr;
       const LWrap = (LStr.includes('+') || LStr.includes('-')) ? `(${LStr})` : LStr;
       return `0 < ${deltaStr} \\text{ and } \\forall x,\\, \\left|x - ${x0Str}\\right| < ${deltaStr} \\implies \\left|${fxWrap} - ${LWrap}\\right| < ${epsStr}`;
     }
@@ -836,6 +837,27 @@ export function termToLatex(
   }
 
   return '?'; // fallback
+}
+
+/**
+ * Check if a term is an "effective variable reference" — renders as just a name
+ * in describeJustification (no function call syntax). This includes:
+ * 1. Plain Var (non-carrier)
+ * 2. Var applied to args that are all Vars/carrier-filtered (Var-function suppression)
+ */
+function isEffectiveVarRef(term: TTKTerm, context: string[]): boolean {
+  if (term.tag === 'Var' && term.index < context.length && !isCarrierEntry(context[term.index])) {
+    return true;
+  }
+  if (term.tag !== 'App') return false;
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Var' || spine.fn.index >= context.length) return false;
+  if (isCarrierEntry(context[spine.fn.index])) return false;
+  const visibleArgs = spine.args.filter(a =>
+    a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+    !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
+  );
+  return visibleArgs.length === 0 || visibleArgs.every(a => a.tag === 'Var');
 }
 
 /** Check if a term would render as an infix expression (needs parens if nested). */
@@ -1346,9 +1368,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       );
       const projLatex = `\\text{${escapeLaTeX(projName)}}`;
       if (visibleRemaining.length === 0) return projLatex;
-      if (visibleRemaining.every(a => a.tag === 'Var')) return projLatex;
-      const argStrs = visibleRemaining.slice(0, 6).map(a => describeJustification(a, context, notations));
-      const suffix = visibleRemaining.length > 6 ? ',\\ldots' : '';
+      if (visibleRemaining.every(a => isEffectiveVarRef(a, context))) return projLatex;
+      const meaningfulRemaining = visibleRemaining.filter(a => !isEffectiveVarRef(a, context));
+      const displayRemaining = meaningfulRemaining.length > 0 ? meaningfulRemaining : visibleRemaining;
+      const argStrs = displayRemaining.slice(0, 6).map(a => describeJustification(a, context, notations));
+      const suffix = displayRemaining.length > 6 ? ',\\ldots' : '';
       return `${projLatex}(${argStrs.join(',\\, ')}${suffix})`;
     }
 
@@ -1371,12 +1395,16 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
     if (visibleArgs.length === 0) return nameLatex;
     // If all visible args are just variable references (forwarding context), suppress the
     // arg list — "pickDeltaLeft" reads better than "pickDeltaLeft(f, g, x₀, L, M, ε, ...)"
-    const allVarRefs = visibleArgs.every(a => a.tag === 'Var');
+    const allVarRefs = visibleArgs.every(a => isEffectiveVarRef(a, context));
     if (allVarRefs) return nameLatex;
+    // Filter out context-forwarding args (effective var refs) and show only meaningful ones.
+    // "coreEstimate(f, g, x₀, L, M, ½·ε, ...)" → "coreEstimate(½·ε, ...)"
+    const meaningfulArgs = visibleArgs.filter(a => !isEffectiveVarRef(a, context));
+    const displayArgs = meaningfulArgs.length > 0 ? meaningfulArgs : visibleArgs;
     // Show up to 6 args, using describeJustification recursively so nested
     // proof combinators (replace, trans, leTrans, etc.) get improved rendering
-    const argStrs = visibleArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
-    const suffix = visibleArgs.length > 6 ? ',\\ldots' : '';
+    const argStrs = displayArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
+    const suffix = displayArgs.length > 6 ? ',\\ldots' : '';
     return `${nameLatex}(${argStrs.join(',\\, ')}${suffix})`;
   }
 
@@ -1390,9 +1418,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
         !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
       );
       if (visibleArgs.length === 0) return fnLatex;
-      if (visibleArgs.every(a => a.tag === 'Var')) return fnLatex;
-      const argStrs = visibleArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
-      const suffix = visibleArgs.length > 6 ? ',\\ldots' : '';
+      if (visibleArgs.every(a => isEffectiveVarRef(a, context))) return fnLatex;
+      const meaningfulArgs = visibleArgs.filter(a => !isEffectiveVarRef(a, context));
+      const displayArgs = meaningfulArgs.length > 0 ? meaningfulArgs : visibleArgs;
+      const argStrs = displayArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
+      const suffix = displayArgs.length > 6 ? ',\\ldots' : '';
       return `${fnLatex}(${argStrs.join(',\\, ')}${suffix})`;
     }
   }
