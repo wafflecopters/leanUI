@@ -2394,14 +2394,49 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
       const letParts = mergedLetGroups.map(formatBinderGroup);
       const supposeParts = supposeGroups.map(formatBinderGroup);
 
+      // Check if hypotheses are long (contain quantifiers or the total is > 120 chars)
+      const supposeStr = supposeParts.join('\\text{ and }');
+      const hasLongHypotheses = supposeParts.length >= 3 &&
+        (supposeStr.length > 120 || supposeParts.some(p => p.includes('\\forall') || p.includes('\\implies')));
+
+      // Group hypotheses into lines: short ones merge, long ones get their own line
+      const emitSupposeBlocks = () => {
+        if (!hasLongHypotheses) {
+          blocks.push({ kind: 'header', latex: `\\quad\\text{Suppose } ${supposeStr}\\text{. Then:}` });
+          return;
+        }
+        // Group consecutive short hypotheses together, break at long ones
+        const isLong = (p: string) => p.length > 60 || p.includes('\\forall') || p.includes('\\implies');
+        const lines: string[] = [];
+        let current: string[] = [];
+        for (const p of supposeParts) {
+          if (isLong(p)) {
+            if (current.length > 0) { lines.push(current.join('\\text{ and }')); current = []; }
+            lines.push(p);
+          } else {
+            current.push(p);
+          }
+        }
+        if (current.length > 0) lines.push(current.join('\\text{ and }'));
+        for (let i = 0; i < lines.length; i++) {
+          const prefix = i === 0 ? '\\quad\\text{Suppose }' : '\\quad\\quad\\text{and }';
+          const suffix = i === lines.length - 1 ? '\\text{. Then:}' : '\\text{,}';
+          blocks.push({ kind: 'header', latex: `${prefix}${lines[i]}${suffix}` });
+        }
+      };
+
       if (letParts.length > 0 && supposeParts.length > 0) {
-        // Two-part header: "Let ... . Suppose ... . Then:"
         blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Let } ${letParts.join('\\text{ and }')}\\text{.}` });
-        blocks.push({ kind: 'header', latex: `\\quad\\text{Suppose } ${supposeParts.join('\\text{ and }')}\\text{. Then:}` });
+        emitSupposeBlocks();
       } else if (letParts.length > 0) {
         blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Let } ${letParts.join('\\text{ and }')}\\text{. Then:}` });
       } else if (supposeParts.length > 0) {
-        blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Suppose } ${supposeParts.join('\\text{ and }')}\\text{. Then:}` });
+        if (hasLongHypotheses) {
+          blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{.}` });
+          emitSupposeBlocks();
+        } else {
+          blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{. Suppose } ${supposeStr}\\text{. Then:}` });
+        }
       } else {
         blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{:}` });
       }
