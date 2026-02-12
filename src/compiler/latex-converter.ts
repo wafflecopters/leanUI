@@ -955,7 +955,7 @@ function detectDestructuringLets(
     const group = extractable[gi];
     const sub = extractable.length > 1 ? `_{${gi + 1}}` : '';
     // Use termToLatex for the let RHS — keeps record dot notation (limF.εδ(...))
-    // where describeJustification would suppress the var-ref receiver
+    // where describeJustification would suppress the instance as a var-ref
     const baseLatex = termToLatex(group.base, context, notations);
 
     // Collect projection names used for this base
