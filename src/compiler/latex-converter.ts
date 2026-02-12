@@ -857,6 +857,17 @@ function getInfixOp(term: TTKTerm, notations: NotationTable): string | null {
   return entry.latex;
 }
 
+/** Check if a term is a + infix that renders as subtraction (add+neg pattern). */
+function rendersAsSub(term: TTKTerm, notations: NotationTable): boolean {
+  if (getInfixOp(term, notations) !== '+') return false;
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Const') return false;
+  const entry = notations.get(spine.fn.name);
+  if (!entry || entry.kind !== 'infix') return false;
+  const visible = spine.args.filter((_, i) => !entry.skipArgs.includes(i));
+  return visible.length >= 2 && isNegation(visible[1], notations) !== null;
+}
+
 /**
  * Check if a term is a negation application. Returns the inner (negated) term, or null.
  * Recognizes rneg, CompleteOrderedField.neg, and *.neg prefix entries.
@@ -935,23 +946,26 @@ function renderNotation(
           }
         }
         const rhs = termToLatex(visible[1], context, notations);
-        // Wrap compound RHS in parens to avoid ambiguity:
-        // - For subtraction/division: always wrap infix RHS (a - (b + c), not a - b + c)
-        // - For addition: wrap subtraction RHS (a + (b - c), not a + b - c)
+        // Operator precedence: wrap operands to avoid ambiguity
+        const lhsOp = getInfixOp(visible[0], notations);
         const rhsOp = getInfixOp(visible[1], notations);
-        // Also detect when RHS is add+neg that renders as subtraction
-        const rhsRendersAsSub = rhsOp === '-' || (rhsOp === '+' && (() => {
-          const rhsSpine = extractAppSpine(visible[1]);
-          const rhsEntry = notations.get(rhsSpine.fn.tag === 'Const' ? rhsSpine.fn.name : '');
-          if (!rhsEntry || rhsEntry.kind !== 'infix') return false;
-          const rhsVisible = rhsSpine.args.filter((_, i) => !(rhsEntry as any).skipArgs.includes(i));
-          return rhsVisible.length >= 2 && isNegation(rhsVisible[1], notations) !== null;
-        })());
+        const isMultiplicative = entry.latex === '\\cdot' || entry.latex === '\\times';
+        const isAdditive = (op: string | null) =>
+          op === '+' || op === '-' || rendersAsSub(visible[1], notations);
+        const rendersAsSubLhs = rendersAsSub(visible[0], notations);
+        // Rules:
+        // - Subtraction/division: wrap any infix RHS
+        // - Addition: wrap subtraction RHS (structural or add+neg)
+        // - Multiplication: wrap additive LHS and RHS
+        const wrapLhs =
+          isMultiplicative && (lhsOp === '+' || lhsOp === '-' || rendersAsSubLhs);
         const wrapRhs =
           ((entry.latex === '-' || entry.latex === '/') && isInfixTerm(visible[1], notations)) ||
-          (entry.latex === '+' && rhsRendersAsSub);
+          (entry.latex === '+' && (rhsOp === '-' || rendersAsSub(visible[1], notations))) ||
+          (isMultiplicative && (rhsOp === '+' || rhsOp === '-' || rendersAsSub(visible[1], notations)));
         const extra = visible.slice(2);
-        let result = wrapRhs ? `${lhs} ${entry.latex} (${rhs})` : `${lhs} ${entry.latex} ${rhs}`;
+        const lhsFinal = wrapLhs ? `(${lhs})` : lhs;
+        let result = wrapRhs ? `${lhsFinal} ${entry.latex} (${rhs})` : `${lhsFinal} ${entry.latex} ${rhs}`;
         if (extra.length > 0) {
           result += '\\;' + extra.map(a => termToLatex(a, context, notations)).join('\\;');
         }
