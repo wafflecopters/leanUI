@@ -838,6 +838,30 @@ export function termToLatex(
   return '?'; // fallback
 }
 
+/** Check if a term would render as an infix expression (needs parens if nested). */
+function isInfixTerm(term: TTKTerm, notations: NotationTable): boolean {
+  if (term.tag !== 'App') return false;
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Const') return false;
+  const entry = notations.get(spine.fn.name);
+  return entry?.kind === 'infix';
+}
+
+/**
+ * Check if a term is a negation application. Returns the inner (negated) term, or null.
+ * Recognizes rneg, CompleteOrderedField.neg, and *.neg prefix entries.
+ */
+function isNegation(term: TTKTerm, notations: NotationTable): TTKTerm | null {
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Const') return null;
+  const entry = notations.get(spine.fn.name);
+  if (!entry || entry.kind !== 'prefix' || entry.latex !== '-') return null;
+  if (spine.args.length < entry.arity) return null;
+  const visible = spine.args.filter((_, i) => !entry.skipArgs.includes(i));
+  if (visible.length === 1) return visible[0];
+  return null;
+}
+
 function renderNotation(
   entry: NotationEntry,
   name: string,
@@ -862,6 +886,13 @@ function renderNotation(
         if (visible.length === 0) {
           // All args skipped (e.g., rzero(R), rone(R)) — just show the symbol
           result = entry.latex;
+        } else if (visible.length === 1 && /^[^a-zA-Z\\]+$/.test(entry.latex) &&
+                   !isInfixTerm(visible[0], notations)) {
+          // Operator prefix (e.g., -) with non-infix arg: render without parens
+          // -a, -f(x), -|x| instead of -(a), -(f(x)), -(|x|)
+          // But keep parens for infix: -(a + b) not -a + b
+          const inner = termToLatex(visible[0], context, notations);
+          result = `${entry.latex}${inner}`;
         } else {
           const inner = visible.map(a => termToLatex(a, context, notations)).join(',\\,');
           result = `${entry.latex}(${inner})`;
@@ -879,6 +910,20 @@ function renderNotation(
       const visible = args.filter((_, i) => !entry.skipArgs.includes(i));
       if (visible.length >= 2) {
         const lhs = termToLatex(visible[0], context, notations);
+        // Detect a + neg(b) → a - b
+        if (entry.latex === '+') {
+          const negInner = isNegation(visible[1], notations);
+          if (negInner) {
+            const needsWrap = isInfixTerm(negInner, notations);
+            const rhs = termToLatex(negInner, context, notations);
+            const extra = visible.slice(2);
+            let result = needsWrap ? `${lhs} - (${rhs})` : `${lhs} - ${rhs}`;
+            if (extra.length > 0) {
+              result += '\\;' + extra.map(a => termToLatex(a, context, notations)).join('\\;');
+            }
+            return result;
+          }
+        }
         const rhs = termToLatex(visible[1], context, notations);
         const extra = visible.slice(2);
         let result = `${lhs} ${entry.latex} ${rhs}`;
