@@ -1174,6 +1174,14 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\text{${escapeLaTeX(name)}}(${h1},\\, ${h2})`;
     }
 
+    // MkDPair — existential witness: render second component with describeJustification
+    // so proof terms get the all-Var suppression and other proof-aware rendering
+    if (name === 'MkDPair' && spine.args.length >= 6) {
+      const fst = termToLatex(spine.args[4], context, notations);
+      const snd = describeJustification(spine.args[5], context, notations);
+      return `\\langle ${fst},\\, ${snd} \\rangle`;
+    }
+
     // Check if notation table handles this term — let it render cleanly
     const entry = notations.get(name);
     if (entry) {
@@ -1191,6 +1199,10 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
     const nameLatex = `\\text{${escapeLaTeX(name)}}`;
     if (visibleArgs.length === 0) return nameLatex;
+    // If all visible args are just variable references (forwarding context), suppress the
+    // arg list — "pickDeltaLeft" reads better than "pickDeltaLeft(f, g, x₀, L, M, ε, ...)"
+    const allVarRefs = visibleArgs.every(a => a.tag === 'Var');
+    if (allVarRefs) return nameLatex;
     // Show up to 6 args, using describeJustification recursively so nested
     // proof combinators (replace, trans, leTrans, etc.) get improved rendering
     const argStrs = visibleArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
@@ -1525,6 +1537,7 @@ function proofToLatex(
   context: string[],
   notations: NotationTable,
   carrierPositions?: Map<number, string>,
+  eitherCaseLabels?: Map<string, { left: string; right: string }>,
 ): LatexBlock[] {
   // 1. Strip outer lambdas, detecting carrier types
   let { body: current, context: ctx } = stripLambdasWithCarrier(term, context);
@@ -1598,9 +1611,32 @@ function proofToLatex(
   // eitherElim → structured case analysis
   const eSpine = extractAppSpine(current);
   if (eSpine.fn.tag === 'Const' && eSpine.fn.name === 'eitherElim' && eSpine.args.length >= 6) {
+    const typeA = eSpine.args[0];  // Left type (what inl proves)
+    const typeB = eSpine.args[1];  // Right type (what inr proves)
     const fInl = eSpine.args[3];
     const fInr = eSpine.args[4];
     const scrutinee = eSpine.args[5];
+
+    // Try to get case labels: first from type args, then from Either binder types
+    let leftLabel: string | null = null;
+    let rightLabel: string | null = null;
+    if (typeA.tag !== 'Hole' && typeA.tag !== 'Meta') {
+      leftLabel = termToLatex(typeA, ctx, notations);
+    }
+    if (typeB.tag !== 'Hole' && typeB.tag !== 'Meta') {
+      rightLabel = termToLatex(typeB, ctx, notations);
+    }
+    // Fallback: look up scrutinee variable in Either case labels from theorem type
+    if ((!leftLabel || !rightLabel) && eitherCaseLabels &&
+        scrutinee.tag === 'Var' && scrutinee.index < ctx.length) {
+      const varName = ctx[scrutinee.index];
+      // Try without LATEX_PREFIX since the name in the map is the original binder name
+      const labels = eitherCaseLabels.get(varName);
+      if (labels) {
+        leftLabel = leftLabel || labels.left;
+        rightLabel = rightLabel || labels.right;
+      }
+    }
 
     const resultBlocks: LatexBlock[] = [];
     if (letBlocks.length > 0) {
@@ -1608,22 +1644,24 @@ function proofToLatex(
       resultBlocks.push(...letBlocks);
     }
 
-    const scrutStr = describeJustification(scrutinee, ctx, notations);
+    // Header: "By cases:"
     const prefix = letBlocks.length > 0 ? '' : '\\textit{Proof.}\\;';
-    resultBlocks.push({ kind: 'comment', latex: `${prefix}\\text{By cases on } ${scrutStr}\\text{:}` });
+    resultBlocks.push({ kind: 'comment', latex: `${prefix}\\text{By cases:}` });
 
-    // Case inl
+    // Case 1: use the type label if available
     if (fInl.tag === 'Binder' && fInl.binderKind.tag === 'BLam') {
       const varName = fInl.name || 'h';
-      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;\\text{inl}\\;(${renderVarName(varName)})\\text{:}` });
+      const caseStr = leftLabel || `\\text{inl}\\;(${renderVarName(varName)})`;
+      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${caseStr}\\text{:}` });
       const inlCtx = [varName, ...ctx];
       resultBlocks.push(...proofBodyToBlocks(fInl.body, inlCtx, notations, '\\quad ', carrierPositions));
     }
 
-    // Case inr
+    // Case 2: use the type label if available
     if (fInr.tag === 'Binder' && fInr.binderKind.tag === 'BLam') {
       const varName = fInr.name || 'h';
-      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;\\text{inr}\\;(${renderVarName(varName)})\\text{:}` });
+      const caseStr = rightLabel || `\\text{inr}\\;(${renderVarName(varName)})`;
+      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${caseStr}\\text{:}` });
       const inrCtx = [varName, ...ctx];
       resultBlocks.push(...proofBodyToBlocks(fInr.body, inrCtx, notations, '\\quad ', carrierPositions));
     }
@@ -1858,9 +1896,46 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
     }
   }
 
+  // Build case labels for Either-typed binders (for eitherElim rendering)
+  // Pi binder names may be "_" (unnamed), so we remap to actual pattern variable names
+  // from the kernel value's intro match if available.
+  let eitherCaseLabels: Map<string, { left: string; right: string }> | undefined;
+  if (decl.kernelType) {
+    const { binders: typeBinders } = extractPiSpine(decl.kernelType);
+
+    // Get pattern variable names from the kernel value's trivial intro match
+    let patternVarNames: string[] | undefined;
+    if (decl.kernelValue?.tag === 'Match' && isTrivialIntroMatch(decl.kernelValue)) {
+      patternVarNames = decl.kernelValue.clauses[0].patterns.flatMap(p => collectPatternVars([p]));
+    }
+
+    let scanCtx: string[] = [];
+    let binderIdx = 0;
+    for (const b of typeBinders) {
+      const cl = isCarrierType(b.type);
+      if (cl) {
+        scanCtx = [LATEX_PREFIX + cl, ...scanCtx];
+        binderIdx++;
+        continue;
+      }
+      // Check if this binder has Either type
+      const eitherSpine = extractAppSpine(b.type);
+      if (eitherSpine.fn.tag === 'Const' && eitherSpine.fn.name === 'Either' && eitherSpine.args.length >= 2) {
+        if (!eitherCaseLabels) eitherCaseLabels = new Map();
+        const leftStr = termToLatex(eitherSpine.args[0], scanCtx, notations);
+        const rightStr = termToLatex(eitherSpine.args[1], scanCtx, notations);
+        // Use pattern variable name if available (Pi binder may be "_")
+        const keyName = patternVarNames?.[binderIdx] ?? b.name;
+        eitherCaseLabels.set(keyName, { left: leftStr, right: rightStr });
+      }
+      scanCtx = [b.name, ...scanCtx];
+      binderIdx++;
+    }
+  }
+
   // Render proof body from kernel value
   if (decl.kernelValue) {
-    const proofBlocks = proofToLatex(decl.kernelValue, [], notations, carrierPositions);
+    const proofBlocks = proofToLatex(decl.kernelValue, [], notations, carrierPositions, eitherCaseLabels);
     blocks.push(...proofBlocks);
   } else {
     blocks.push({ kind: 'comment', latex: '\\textit{Proof.}\\quad\\square' });
