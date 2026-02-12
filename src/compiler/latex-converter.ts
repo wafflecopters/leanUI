@@ -1232,6 +1232,23 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
     return `${nameLatex}(${argStrs.join(',\\, ')}${suffix})`;
   }
 
+  // Var-function application: neab(proof) — apply proof-aware arg rendering
+  if (spine.fn.tag === 'Var' && spine.fn.index < context.length && spine.args.length > 0) {
+    const fnName = context[spine.fn.index];
+    if (!isCarrierEntry(fnName)) {
+      const fnLatex = renderVarName(fnName);
+      const visibleArgs = spine.args.filter(a =>
+        a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+        !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
+      );
+      if (visibleArgs.length === 0) return fnLatex;
+      if (visibleArgs.every(a => a.tag === 'Var')) return fnLatex;
+      const argStrs = visibleArgs.slice(0, 6).map(a => describeJustification(a, context, notations));
+      const suffix = visibleArgs.length > 6 ? ',\\ldots' : '';
+      return `${fnLatex}(${argStrs.join(',\\, ')}${suffix})`;
+    }
+  }
+
   // Variable reference
   if (term.tag === 'Var' && term.index < context.length) {
     return renderVarName(context[term.index]);
