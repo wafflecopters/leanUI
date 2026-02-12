@@ -1182,6 +1182,12 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\langle ${fst},\\, ${snd} \\rangle`;
     }
 
+    // MkLimit — record constructor wrapping a proof term
+    if (name === 'MkLimit' && spine.args.length >= 5) {
+      const inner = describeJustification(spine.args[4], context, notations);
+      return `\\langle ${inner} \\rangle`;
+    }
+
     // Check if notation table handles this term — let it render cleanly
     const entry = notations.get(name);
     if (entry) {
