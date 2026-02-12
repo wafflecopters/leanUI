@@ -764,6 +764,10 @@ export function termToLatex(
                 return `${x} \\neq ${y}`;
               }
             }
+            // Use ⟹ for propositional implications, → for function types
+            if (looksLikeProp(term.domain, 0) && looksLikeProp(term.body, 0)) {
+              return `${domain} \\implies ${body}`;
+            }
             return `${domain} \\to ${body}`;
           }
           // Use ∀ for propositional bodies, Π otherwise
@@ -1042,7 +1046,12 @@ function looksLikeProp(body: TTKTerm, depth: number): boolean {
   if (spine.fn.tag === 'Const') {
     const name = spine.fn.name;
     // Direct propositional types
-    if (['Equal', 'Leq', 'LessThan', 'Void', 'DecEq', 'Limit', 'DPair'].includes(name)) return true;
+    if (['Equal', 'Leq', 'LessThan', 'Void', 'DecEq', 'Limit'].includes(name)) return true;
+    // DPair as existential (not sigma type): DPair(A, P) is propositional if A is not a Sort
+    // (DPair Type COF is a sigma type = Real, not a proposition)
+    if (name === 'DPair' && spine.args.length >= 2) {
+      return spine.args[0].tag !== 'Sort';
+    }
     // Our wrappers for relations
     if (['rle', 'rlt'].includes(name)) return true;
     // Record field projections that are relations (e.g. CompleteOrderedField.le)
