@@ -1135,11 +1135,26 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\text{cong}_{+L}(${p},\\, ${inner})`;
     }
 
-    // trans: {A} x y z proof_xy proof_yz — show as chain or concise
+    // trans: {A} x y z proof_xy proof_yz — flatten nested trans chains
+    // trans(a, trans(b, trans(c, d))) → a;\, b;\, c;\, d
     if (name === 'trans' && spine.args.length >= 6) {
-      const p1 = describeJustification(spine.args[4], context, notations);
-      const p2 = describeJustification(spine.args[5], context, notations);
-      return `\\text{trans}(${p1},\\, ${p2})`;
+      const steps: string[] = [];
+      let cur: TTKTerm = term;
+      while (true) {
+        const sp = extractAppSpine(cur);
+        if (sp.fn.tag === 'Const' && sp.fn.name === 'trans' && sp.args.length >= 6) {
+          steps.push(describeJustification(sp.args[4], context, notations));
+          cur = sp.args[5];
+        } else {
+          steps.push(describeJustification(cur, context, notations));
+          break;
+        }
+      }
+      if (steps.length <= 2) {
+        return `\\text{trans}(${steps.join(',\\, ')})`;
+      }
+      // 3+ steps: render as semicolon-separated chain (more readable than nested trans)
+      return steps.join('\\;;\\, ');
     }
 
     // cong: {A} {B} x y f proof — show function and proof
