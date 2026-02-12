@@ -847,6 +847,16 @@ function isInfixTerm(term: TTKTerm, notations: NotationTable): boolean {
   return entry?.kind === 'infix';
 }
 
+/** Get the infix operator LaTeX string for a term, or null if not infix. */
+function getInfixOp(term: TTKTerm, notations: NotationTable): string | null {
+  if (term.tag !== 'App') return null;
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag !== 'Const') return null;
+  const entry = notations.get(spine.fn.name);
+  if (entry?.kind !== 'infix') return null;
+  return entry.latex;
+}
+
 /**
  * Check if a term is a negation application. Returns the inner (negated) term, or null.
  * Recognizes rneg, CompleteOrderedField.neg, and *.neg prefix entries.
@@ -925,9 +935,21 @@ function renderNotation(
           }
         }
         const rhs = termToLatex(visible[1], context, notations);
-        // For subtraction/division, wrap compound RHS in parens to avoid ambiguity:
-        // a - b + c should be a - (b + c), not (a - b) + c
-        const wrapRhs = (entry.latex === '-' || entry.latex === '/') && isInfixTerm(visible[1], notations);
+        // Wrap compound RHS in parens to avoid ambiguity:
+        // - For subtraction/division: always wrap infix RHS (a - (b + c), not a - b + c)
+        // - For addition: wrap subtraction RHS (a + (b - c), not a + b - c)
+        const rhsOp = getInfixOp(visible[1], notations);
+        // Also detect when RHS is add+neg that renders as subtraction
+        const rhsRendersAsSub = rhsOp === '-' || (rhsOp === '+' && (() => {
+          const rhsSpine = extractAppSpine(visible[1]);
+          const rhsEntry = notations.get(rhsSpine.fn.tag === 'Const' ? rhsSpine.fn.name : '');
+          if (!rhsEntry || rhsEntry.kind !== 'infix') return false;
+          const rhsVisible = rhsSpine.args.filter((_, i) => !(rhsEntry as any).skipArgs.includes(i));
+          return rhsVisible.length >= 2 && isNegation(rhsVisible[1], notations) !== null;
+        })());
+        const wrapRhs =
+          ((entry.latex === '-' || entry.latex === '/') && isInfixTerm(visible[1], notations)) ||
+          (entry.latex === '+' && rhsRendersAsSub);
         const extra = visible.slice(2);
         let result = wrapRhs ? `${lhs} ${entry.latex} (${rhs})` : `${lhs} ${entry.latex} ${rhs}`;
         if (extra.length > 0) {
