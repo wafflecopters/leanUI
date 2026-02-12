@@ -1340,12 +1340,27 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `\\text{${escapeLaTeX(name)}}(${h1},\\, ${h2})`;
     }
 
-    // MkDPair — existential witness: render second component with describeJustification
-    // so proof terms get the all-Var suppression and other proof-aware rendering
+    // MkDPair — existential witness: render with proof-aware rendering
+    // Flatten nested MkPair: ⟨x, (a,b)⟩ → ⟨x, a, b⟩
     if (name === 'MkDPair' && spine.args.length >= 6) {
       const fst = termToLatex(spine.args[4], context, notations);
-      const snd = describeJustification(spine.args[5], context, notations);
+      // Check if snd is MkPair — flatten to ⟨fst, a, b⟩
+      const sndTerm = spine.args[5];
+      const sndSpine = extractAppSpine(sndTerm);
+      if (sndSpine.fn.tag === 'Const' && sndSpine.fn.name === 'MkPair' && sndSpine.args.length >= 4) {
+        const a = describeJustification(sndSpine.args[2], context, notations);
+        const b = describeJustification(sndSpine.args[3], context, notations);
+        return `\\langle ${fst},\\, ${a},\\, ${b} \\rangle`;
+      }
+      const snd = describeJustification(sndTerm, context, notations);
       return `\\langle ${fst},\\, ${snd} \\rangle`;
+    }
+
+    // MkPair — conjunction/pair: render both components with proof-aware rendering
+    if (name === 'MkPair' && spine.args.length >= 4) {
+      const a = describeJustification(spine.args[2], context, notations);
+      const b = describeJustification(spine.args[3], context, notations);
+      return `(${a},\\, ${b})`;
     }
 
     // MkLimit — record constructor wrapping a proof term
