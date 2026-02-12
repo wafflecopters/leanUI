@@ -1971,8 +1971,23 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
   const carrierPositions = decl.kernelType ? getCarrierPositions(decl.kernelType) : new Map<number, string>();
 
   if (decl.kernelType) {
-    const { binders, body } = extractPiSpine(decl.kernelType);
+    let { binders, body } = extractPiSpine(decl.kernelType);
     const isPropLike = binders.length > 0 && looksLikeProp(body, binders.length);
+
+    // Detect negation conclusion: ... → Equal X Y → ⊥  →  fold into X ≠ Y
+    if (isPropLike && body.tag === 'Const' && body.name === 'Void' && binders.length > 0) {
+      const lastBinder = binders[binders.length - 1];
+      if (!isCarrierType(lastBinder.type)) {
+        const eqSpine = extractAppSpine(lastBinder.type);
+        if (eqSpine.fn.tag === 'Const' && eqSpine.fn.name === 'Equal' && eqSpine.args.length >= 3) {
+          binders = binders.slice(0, -1);
+          body = {
+            tag: 'Binder', name: '_', binderKind: { tag: 'BPi' },
+            domain: lastBinder.type, body: { tag: 'Const', name: 'Void' },
+          } as TTKTerm;
+        }
+      }
+    }
 
     if (isPropLike) {
       // "Theorem (name). Let ... and ... . Then:" + boxed conclusion
