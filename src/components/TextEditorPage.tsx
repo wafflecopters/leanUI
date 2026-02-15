@@ -13,6 +13,7 @@ import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { GoalState } from '../tactics/proof-state';
 import { convertToLatex, makeDefaultNotations } from '../compiler/latex-converter';
 import { LaTeXPanel } from './LaTeXPanel';
+import { WYSIWYGPanel } from './WYSIWYGPanel';
 import { PRESETS } from '../presets';
 
 // Unicode abbreviations map (Lean-style)
@@ -920,6 +921,7 @@ export function TextEditorPage() {
   const [editorReady, setEditorReady] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [showLatex, setShowLatex] = useState(false);
+  const [showWYSIWYG, setShowWYSIWYG] = useState(false);
   // Rendering options for pretty-printed output
   const [showNamedArgsWithLabels, setShowNamedArgsWithLabels] = useState(true);
   const [showNamedParamsWithBraces, setShowNamedParamsWithBraces] = useState(false);
@@ -1560,7 +1562,22 @@ export function TextEditorPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
-            onClick={() => setShowLatex(!showLatex)}
+            onClick={() => { setShowWYSIWYG(!showWYSIWYG); if (!showWYSIWYG) setShowLatex(false); }}
+            style={{
+              background: showWYSIWYG ? '#238636' : '#21262d',
+              color: showWYSIWYG ? '#ffffff' : '#c9d1d9',
+              border: `1px solid ${showWYSIWYG ? '#238636' : '#30363d'}`,
+              borderRadius: '6px',
+              padding: '6px 12px',
+              fontSize: '13px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap' as const,
+            }}
+          >
+            {showWYSIWYG ? 'Hide WYSIWYG' : 'Show WYSIWYG'}
+          </button>
+          <button
+            onClick={() => { setShowLatex(!showLatex); if (!showLatex) setShowWYSIWYG(false); }}
             style={{
               background: showLatex ? '#238636' : '#21262d',
               color: showLatex ? '#ffffff' : '#c9d1d9',
@@ -1629,7 +1646,7 @@ export function TextEditorPage() {
 
       <div style={{
         ...styles.mainContent,
-        flexDirection: showLatex ? 'row' as const : 'column' as const,
+        flexDirection: (showLatex || showWYSIWYG) ? 'row' as const : 'column' as const,
       }}>
         {/* Left side: editor + type info + results */}
         <div style={{
@@ -1815,6 +1832,19 @@ export function TextEditorPage() {
             minWidth: 0,
           }}>
             <LaTeXPanel document={latexDocument} />
+          </div>
+        )}
+
+        {/* Right side: WYSIWYG panel */}
+        {showWYSIWYG && (
+          <div style={{
+            flex: 1,
+            borderLeft: '1px solid #30363d',
+            overflowY: 'auto' as const,
+            backgroundColor: '#0d1117',
+            minWidth: 0,
+          }}>
+            <WYSIWYGPanel />
           </div>
         )}
       </div>
