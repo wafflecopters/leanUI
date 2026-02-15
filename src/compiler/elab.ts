@@ -613,8 +613,9 @@ function hasNamedArgs(term: TTerm): boolean {
 function reorderArgs(
   args: SpineArg[],
   namedMap: NamedArgMap,
-  totalArity?: number
-): { ordered: TTerm[]; error?: undefined } | { ordered?: undefined; error: string } {
+  totalArity?: number,
+  allowOverflow?: boolean
+): { ordered: TTerm[]; overflow?: TTerm[]; error?: undefined } | { ordered?: undefined; error: string } {
   // Separate named and positional arguments
   const named: Array<{ name: string; term: TTerm }> = [];
   const positional: TTerm[] = [];
@@ -695,9 +696,14 @@ function reorderArgs(
   }
 
   // Check if we have leftover positional arguments
-  if (posIdx < positional.length) {
-    const extraCount = positional.length - posIdx;
-    return { error: `Too many positional arguments: ${extraCount} extra argument(s) cannot fill named parameter positions` };
+  const overflowArgs = posIdx < positional.length ? positional.slice(posIdx) : undefined;
+  if (overflowArgs) {
+    if (!allowOverflow) {
+      const extraCount = overflowArgs.length;
+      return { error: `Too many positional arguments: ${extraCount} extra argument(s) cannot fill named parameter positions` };
+    }
+    // When overflow is allowed, continue processing - overflow args will be applied
+    // to the result of the function application (e.g., (Pair.snd p) b where b is overflow)
   }
 
   // Check for unfilled gaps that precede filled positions
@@ -737,7 +743,7 @@ function reorderArgs(
 
   // Trailing nulls are OK (partial application) - trim them
   const ordered = result.slice(0, fillUpTo + 1).filter((t): t is TTerm => t !== null);
-  return { ordered };
+  return { ordered, overflow: overflowArgs };
 }
 
 /**
@@ -2169,8 +2175,11 @@ export function elabToKernelWithMap(
       // If the function has named parameters, we MUST validate that positional
       // arguments don't overflow into named parameter positions
       if (namedMap && namedMap.size > 0) {
-        // Reorder and validate arguments, passing totalArity for proper sizing
-        const reorderResult = reorderArgs(args, namedMap, totalArity);
+        // Allow overflow when there are no named args in the call.
+        // This handles cases like `Pair.snd p b` where Pair.snd returns a function
+        // and `b` is applied to the result. collectAppSpine flattens the entire
+        // spine, so overflow args need to be separated and applied afterwards.
+        const reorderResult = reorderArgs(args, namedMap, totalArity, !hasNamed);
         if ('error' in reorderResult && reorderResult.error !== undefined) {
           throw new NamedArgElabError(reorderResult.error, surfacePath);
         }
@@ -2185,6 +2194,18 @@ export function elabToKernelWithMap(
             arg: elabToKernelWithMap(arg, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup)
           };
         }
+
+        // Apply overflow args (extra positional args beyond the function's arity)
+        if (reorderResult.overflow) {
+          for (const overflowArg of reorderResult.overflow) {
+            result = {
+              tag: 'App',
+              fn: result,
+              arg: elabToKernelWithMap(overflowArg, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup)
+            };
+          }
+        }
+
         return result;
       }
 

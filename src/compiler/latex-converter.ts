@@ -102,6 +102,19 @@ function cleanVarName(name: string): string {
 }
 
 /**
+ * Check if a variable name looks like a proof/hypothesis variable (Lean convention).
+ * Short h-prefixed names (hab, hbc, hle, hlt, heps, hx, hne) are hypothesis names.
+ * Short ne-prefixed names (neab, nebc) are negation hypothesis names.
+ * Also catches single-letter proof vars like 'h' and short names like 'eq'.
+ */
+function isHypothesisName(name: string): boolean {
+  if (/^h[a-z]{0,5}$/.test(name)) return true;  // h, hab, hbc, hle, hlt, heps, hx
+  if (/^ne[a-z]{1,3}$/.test(name)) return true;  // neab, nebc
+  if (name === 'eq') return true;                 // equality from pattern matching
+  return false;
+}
+
+/**
  * Render a variable name as LaTeX, applying Greek letter mapping and cleanup.
  * If the name is a carrier substitution (LATEX_PREFIX), return raw LaTeX.
  */
@@ -152,7 +165,7 @@ export type NotationEntry =
   | { kind: 'const'; latex: string }                                // 0-arity constant: Nat → ℕ
   | { kind: 'prefix'; latex: string; arity: number; skipArgs: number[] }  // prefix function: S(x)
   | { kind: 'infix'; latex: string; arity: number; skipArgs: number[] }   // infix: x + y
-  | { kind: 'custom'; render: (args: TTKTerm[], ctx: string[], n: NotationTable) => string };
+  | { kind: 'custom'; arity?: number; render: (args: TTKTerm[], ctx: string[], n: NotationTable) => string };
 
 export type NotationTable = Map<string, NotationEntry>;
 
@@ -391,14 +404,14 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{MkDPair}';
   }});
   // DPair.fst — skip 4 params (u, v, A, B), show projection of 5th arg
-  table.set('DPair.fst', { kind: 'custom', render: (args, ctx, n) => {
+  table.set('DPair.fst', { kind: 'custom', arity: 5, render: (args, ctx, n) => {
     if (args.length >= 5) {
       return `\\pi_1(${termToLatex(args[4], ctx, n)})`;
     }
     return '\\pi_1';
   }});
   // DPair.snd — skip 4 params (u, v, A, B), show projection of 5th arg
-  table.set('DPair.snd', { kind: 'custom', render: (args, ctx, n) => {
+  table.set('DPair.snd', { kind: 'custom', arity: 5, render: (args, ctx, n) => {
     if (args.length >= 5) {
       return `\\pi_2(${termToLatex(args[4], ctx, n)})`;
     }
@@ -458,14 +471,14 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{MkPair}';
   }});
   // Pair.fst({A}, {B}, p) → π₁(p)
-  table.set('Pair.fst', { kind: 'custom', render: (args, ctx, n) => {
+  table.set('Pair.fst', { kind: 'custom', arity: 3, render: (args, ctx, n) => {
     if (args.length >= 3) {
       return `\\pi_1(${termToLatex(args[2], ctx, n)})`;
     }
     return '\\pi_1';
   }});
   // Pair.snd({A}, {B}, p) → π₂(p)
-  table.set('Pair.snd', { kind: 'custom', render: (args, ctx, n) => {
+  table.set('Pair.snd', { kind: 'custom', arity: 3, render: (args, ctx, n) => {
     if (args.length >= 3) {
       return `\\pi_2(${termToLatex(args[2], ctx, n)})`;
     }
@@ -535,7 +548,12 @@ export function makeDefaultNotations(): NotationTable {
         const varName = f.name || 'x';
         const bodyCtx = [varName, ...ctx];
         const body = termToLatex(f.body, bodyCtx, n);
-        return `\\lim_{${renderVarName(varName)} \\to ${x0}} ${body} = ${lVal}`;
+        // Parenthesize infix bodies: lim (f(x) + g(x)) not lim f(x) + g(x)
+        const bodyHead = extractAppSpine(f.body);
+        const needsParens = bodyHead.fn.tag === 'Const' &&
+          n.has(bodyHead.fn.name) && n.get(bodyHead.fn.name)!.kind === 'infix';
+        const bodyStr = needsParens ? `(${body})` : body;
+        return `\\lim_{${renderVarName(varName)} \\to ${x0}} ${bodyStr} = ${lVal}`;
       }
       // Named function: render as f(x) = L
       const fStr = termToLatex(f, ctx, n);
@@ -544,12 +562,19 @@ export function makeDefaultNotations(): NotationTable {
     return '\\text{Limit}';
   }});
   // Limit.eps_delta — record projection: R, f, x0, L (4 params), then instance, eps, epsProof
-  table.set('Limit.eps_delta', { kind: 'custom', render: (args, ctx, n) => {
+  // Use function name as subscript (εδ_f) so the reader knows which limit is being applied.
+  // Suppress epsProof (positivity argument) — a mathematician leaves this implicit.
+  table.set('Limit.eps_delta', { kind: 'custom', arity: 7, render: (args, ctx, n) => {
     if (args.length >= 7) {
-      const limitProof = termToLatex(args[4], ctx, n);
+      const fRendered = termToLatex(args[1], ctx, n);
       const epsArg = termToLatex(args[5], ctx, n);
-      const epsProof = termToLatex(args[6], ctx, n);
-      return `${limitProof}.\\varepsilon\\delta(${epsArg},\\, ${epsProof})`;
+      // Use function name as subscript when short (simple variable)
+      if (fRendered.length <= 3) {
+        return `\\varepsilon\\delta_{${fRendered}}(${epsArg})`;
+      }
+      // Complex function: fall back to showing the instance name
+      const limitProof = termToLatex(args[4], ctx, n);
+      return `${limitProof}.\\varepsilon\\delta(${epsArg})`;
     }
     if (args.length >= 5) {
       return `${termToLatex(args[4], ctx, n)}.\\varepsilon\\delta`;
@@ -1051,6 +1076,50 @@ function detectDestructuringLets(
 }
 
 /**
+ * Recursively walk a term tree collecting DPair/Pair projection bases.
+ * Each base is grouped by structural key, with the set of projection chains found.
+ * Does NOT recurse into lambda/let bodies (shifted de Bruijn indices would cause
+ * false mismatches), but string replacement catches those occurrences anyway since
+ * the rendered LaTeX for the base is identical regardless of depth.
+ */
+function collectProjectionBasesFromTerm(
+  term: TTKTerm,
+  result: Map<string, { base: TTKTerm, projections: Map<string, TTKTerm> }>,
+): void {
+  // Try stripping projections from this term
+  const stripped = stripProjections(term);
+  if (stripped.projections.length > 0) {
+    const key = termStructuralKey(stripped.base);
+    if (!result.has(key)) {
+      result.set(key, { base: stripped.base, projections: new Map() });
+    }
+    const projKey = stripped.projections.join('.');
+    if (!result.get(key)!.projections.has(projKey)) {
+      result.get(key)!.projections.set(projKey, term);
+    }
+    // Don't recurse further — the base is the important part, and it may
+    // contain nested projections that stripProjections already handles
+    return;
+  }
+
+  // Not a projection — recurse into subterms (but not into binder bodies)
+  switch (term.tag) {
+    case 'App':
+      collectProjectionBasesFromTerm(term.fn, result);
+      collectProjectionBasesFromTerm(term.arg, result);
+      break;
+    case 'Binder':
+      collectProjectionBasesFromTerm(term.domain, result);
+      // Skip body: lambda/let bodies have shifted indices
+      break;
+    case 'Match':
+      collectProjectionBasesFromTerm(term.scrutinee, result);
+      // Skip clause bodies: shifted indices
+      break;
+  }
+}
+
+/**
  * Check if a term is a "value computation" — an expression computing a value
  * (not a proof). In proof rendering, these are typically obvious from the theorem
  * statement and should be suppressed for readability.
@@ -1213,8 +1282,21 @@ function renderNotation(
       return `(${entry.latex})`;
     }
 
-    case 'custom':
-      return entry.render(args, context, notations);
+    case 'custom': {
+      const renderArgs = entry.arity !== undefined ? args.slice(0, entry.arity) : args;
+      const result = entry.render(renderArgs, context, notations);
+      if (entry.arity !== undefined && args.length > entry.arity) {
+        const overflow = args.slice(entry.arity).filter(a =>
+          !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index])) &&
+          a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort'
+        );
+        if (overflow.length > 0) {
+          const overflowStr = overflow.map(a => termToLatex(a, context, notations)).join(',\\, ');
+          return `${result}(${overflowStr})`;
+        }
+      }
+      return result;
+    }
   }
 }
 
@@ -1450,10 +1532,159 @@ function detectSym(term: TTKTerm): { inner: TTKTerm } | null {
 }
 
 /**
+ * Try to flatten a deeply nested single-proof-arg chain.
+ * f(g(h(base))) where each function has exactly 1 non-suppressible arg
+ * becomes a list of rendered steps in forward order (innermost first).
+ * Returns null if the term is not a suitable chain (< 3 levels).
+ */
+function tryFlattenProofChain(
+  term: TTKTerm,
+  context: string[],
+  notations: NotationTable,
+): string | null {
+  type ChainStep = { rendered: string; isConst: boolean };
+  const steps: ChainStep[] = [];
+  let current = term;
+  let endedWithLeaf = false;
+
+  const SPECIAL_NAMES = new Set([
+    'refl', 'sym', 'cong', 'congSucc', 'congPlusRight', 'congPlusLeft',
+    'replace', 'MkDPair', 'MkPair', 'MkLimit', 'eitherElim',
+  ]);
+
+  while (true) {
+    const sp = extractAppSpine(current);
+
+    // Handle Const function applications (Named lemma path)
+    if (sp.fn.tag === 'Const') {
+      const name = sp.fn.name;
+      // Stop at special-cased names that have their own rendering
+      if (SPECIAL_NAMES.has(name)) break;
+      // Stop at accessor projections (Pair.fst/snd, DPair.fst/snd)
+      const ACCESSOR_PROJECTIONS_CHAIN = new Set(['Pair.fst', 'Pair.snd', 'DPair.fst', 'DPair.snd']);
+      if (ACCESSOR_PROJECTIONS_CHAIN.has(name)) break;
+
+      // Determine visible args based on context
+      let visibleArgs: TTKTerm[];
+      const dotIdx = name.indexOf('.');
+      const entry = notations.get(name);
+
+      if (dotIdx > 0 && sp.args.length >= 2 && !ACCESSOR_PROJECTIONS_CHAIN.has(name)) {
+        // Record projection: skip first 2 args (A, inst), filter rest
+        visibleArgs = sp.args.slice(2).filter(a =>
+          a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort'
+        );
+      } else if (entry && entry.kind === 'custom' && entry.arity !== undefined) {
+        // Custom notation with arity: visible = args beyond skipped params
+        visibleArgs = sp.args.filter(a =>
+          a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+          !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
+        );
+      } else if (entry) {
+        break; // Other notation entries, let normal rendering handle them
+      } else {
+        // Named lemma: filter out implicit/carrier args
+        visibleArgs = sp.args.filter(a =>
+          a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+          !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index])) &&
+          !(a.tag === 'Const' && notations.get(a.name)?.kind === 'const' &&
+            ['\\mathbb{N}', '\\text{Type}', '\\mathbb{R}'].includes((notations.get(a.name) as any)?.latex))
+        );
+      }
+
+      const isSup = (a: TTKTerm) => isEffectiveVarRef(a, context) || isValueTerm(a, notations);
+      const meaningful = visibleArgs.filter(a => !isSup(a));
+
+      // Compute display name
+      const displayName = dotIdx > 0
+        ? `\\text{${escapeLaTeX(name.substring(dotIdx + 1))}}`
+        : `\\text{${escapeLaTeX(name)}}`;
+
+      if (meaningful.length === 0) {
+        // Leaf: no proof args
+        steps.push({ rendered: displayName, isConst: true });
+        endedWithLeaf = true;
+        break;
+      }
+      if (meaningful.length === 1) {
+        // Single proof arg: extend chain
+        steps.push({ rendered: displayName, isConst: true });
+        current = meaningful[0];
+        continue;
+      }
+      break; // Multiple proof args, can't flatten
+    }
+
+    // Handle Var-function applications (hypothesis applied as function)
+    if (sp.fn.tag === 'Var' && sp.fn.index < context.length && sp.args.length > 0) {
+      const fnName = context[sp.fn.index];
+      if (!isCarrierEntry(fnName)) {
+        const fnLatex = isHypothesisName(fnName)
+          ? '\\text{assumption}'
+          : renderVarName(fnName);
+        const visibleArgs = sp.args.filter(a =>
+          a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
+          !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
+        );
+        const isSup = (a: TTKTerm) => isEffectiveVarRef(a, context) || isValueTerm(a, notations);
+        const meaningful = visibleArgs.filter(a => !isSup(a));
+
+        if (meaningful.length === 0) {
+          steps.push({ rendered: fnLatex, isConst: false });
+          endedWithLeaf = true;
+          break;
+        }
+        if (meaningful.length === 1) {
+          steps.push({ rendered: fnLatex, isConst: false });
+          current = meaningful[0];
+          continue;
+        }
+      }
+      break;
+    }
+
+    break; // Can't flatten further
+  }
+
+  // Need at least 2 outer steps for chain flattening to be worthwhile
+  // (2 steps + base = 3 segments, e.g., "base ; step1 ; step2")
+  // Exception: 1 Const step with a complex base is still worth flattening
+  // e.g., convertEps(coreEstimate(a, b)) → coreEstimate(a, b) ; convertEps
+  if (steps.length < 2) {
+    if (steps.length === 1 && !endedWithLeaf && steps[0].isConst) {
+      const baseRendered = describeJustification(current, context, notations);
+      if (baseRendered.length > 20) {
+        return `${baseRendered}\\;;\\, ${steps[0].rendered}`;
+      }
+    }
+    return null;
+  }
+
+  // Steps are collected outermost-first: [outer, middle, inner]
+  // Reverse for forward order: [inner, middle, outer]
+  const reversed = [...steps].reverse();
+
+  // Check if we ended with a leaf (0 meaningful args → pushed to steps and broke)
+  // vs breaking out with unprocessed `current` (special name, multi-arg, etc.)
+  if (endedWithLeaf) {
+    // All terms processed into steps — just join them
+    return reversed.map(s => s.rendered).join('\\;;\\, ');
+  } else {
+    // `current` is an unprocessed base term — render it and prepend
+    const baseRendered = describeJustification(current, context, notations);
+    return [baseRendered, ...reversed.map(s => s.rendered)].join('\\;;\\, ');
+  }
+}
+
+/**
  * Short description of a proof justification for equational chain annotations.
  * Tries to be concise: "refl", "sym(plusZeroRight(m))", "cong_S(IH)", etc.
  */
 function describeJustification(term: TTKTerm, context: string[], notations: NotationTable): string {
+  // Try chain flattening first: f(g(h(x))) → x ; h ; g ; f
+  const chainResult = tryFlattenProofChain(term, context, notations);
+  if (chainResult) return chainResult;
+
   // refl (with or without implicit args)
   const spine = extractAppSpine(term);
   if (spine.fn.tag === 'Const') {
@@ -1509,11 +1740,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return steps.join('\\;;\\, ');
     }
 
-    // cong: {A} {B} x y f proof — show function and proof
+    // cong: {A} {B} x y f proof — strip cong wrapper, just show the inner proof
+    // In equational proofs, the reader sees what changed from LHS→RHS context;
+    // citing just the base lemma (without the congruence motive) is standard math style.
     if (name === 'cong' && spine.args.length >= 6) {
-      const f = termToLatex(spine.args[4], context, notations);
-      const inner = describeJustification(spine.args[5], context, notations);
-      return `\\text{cong}(${f},\\, ${inner})`;
+      return describeJustification(spine.args[5], context, notations);
     }
 
     // replace: {A} x y P proof px — flatten nested chains, suppress motive
@@ -1605,9 +1836,37 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
       return `${projLatex}(${argStrs.join(',\\, ')}${suffix})`;
     }
 
+    // Projection of hypothesis variable: π₁(hab) → assumption
+    if (ACCESSOR_PROJECTIONS.has(name)) {
+      const projIdx = name.startsWith('DPair') ? 4 : 2;
+      if (spine.args.length > projIdx) {
+        const target = spine.args[projIdx];
+        if (target.tag === 'Var' && target.index < context.length &&
+            !isCarrierEntry(context[target.index]) && isHypothesisName(context[target.index])) {
+          return '\\text{assumption}';
+        }
+      }
+    }
+
     // Check if notation table handles this term — let it render cleanly
+    // In proof context, suppress obvious overflow args (e.g., bnd₁(x, hx) → bnd₁)
     const entry = notations.get(name);
     if (entry) {
+      const arity = entry.kind === 'custom' ? entry.arity :
+                    (entry.kind === 'prefix' || entry.kind === 'infix') ? entry.arity : undefined;
+      if (arity !== undefined && spine.args.length > arity) {
+        const baseResult = renderNotation(entry, name, spine.args.slice(0, arity), context, notations);
+        const overflow = spine.args.slice(arity).filter(a =>
+          !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index])) &&
+          a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort'
+        );
+        const isSup = (a: TTKTerm) => isEffectiveVarRef(a, context) || isValueTerm(a, notations);
+        if (overflow.length === 0 || overflow.every(isSup)) return baseResult;
+        const meaningful = overflow.filter(a => !isSup(a));
+        const display = meaningful.length > 0 ? meaningful : overflow;
+        const argStrs = display.map(a => describeJustification(a, context, notations));
+        return `${baseResult}(${argStrs.join(',\\, ')})`;
+      }
       return renderNotation(entry, name, spine.args, context, notations);
     }
 
@@ -1641,7 +1900,10 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
   if (spine.fn.tag === 'Var' && spine.fn.index < context.length && spine.args.length > 0) {
     const fnName = context[spine.fn.index];
     if (!isCarrierEntry(fnName)) {
-      const fnLatex = renderVarName(fnName);
+      // Hypothesis variable used as a function: neab(leAntisym(...)) → assumption(leAntisym(...))
+      const fnLatex = isHypothesisName(fnName)
+        ? '\\text{assumption}'
+        : renderVarName(fnName);
       const visibleArgs = spine.args.filter(a =>
         a.tag !== 'Meta' && a.tag !== 'Hole' && a.tag !== 'Sort' &&
         !(a.tag === 'Var' && a.index < context.length && isCarrierEntry(context[a.index]))
@@ -1659,7 +1921,11 @@ function describeJustification(term: TTKTerm, context: string[], notations: Nota
 
   // Variable reference
   if (term.tag === 'Var' && term.index < context.length) {
-    return renderVarName(context[term.index]);
+    const varName = context[term.index];
+    if (!isCarrierEntry(varName) && isHypothesisName(varName)) {
+      return '\\text{assumption}';
+    }
+    return renderVarName(varName);
   }
 
   // Lambda — strip binders, extend context, and render the body
@@ -1919,6 +2185,25 @@ function proofBodyToBlocks(
     return [...letBlocks, { kind: 'rule', latex: `${indent}${renderInequalityChain(ineqChain, ctx, notations)}` }];
   }
 
+  // MkDPair+MkPair: existential witness with conjunction — render as structured proof
+  // ⟨witness, proof1, proof2⟩ → "Choose witness. (i) proof1 (ii) proof2"
+  const dSpine = extractAppSpine(current);
+  if (dSpine.fn.tag === 'Const' && dSpine.fn.name === 'MkDPair' && dSpine.args.length >= 6) {
+    const witness = termToLatex(dSpine.args[4], ctx, notations);
+    const sndTerm = dSpine.args[5];
+    const sndSpine = extractAppSpine(sndTerm);
+    if (sndSpine.fn.tag === 'Const' && sndSpine.fn.name === 'MkPair' && sndSpine.args.length >= 4) {
+      const p1 = describeJustification(sndSpine.args[2], ctx, notations);
+      const p2 = describeJustification(sndSpine.args[3], ctx, notations);
+      return [
+        ...letBlocks,
+        { kind: 'rule', latex: `${indent}\\text{Choose } ${witness}\\text{.}` },
+        { kind: 'rule', latex: `${indent}\\text{(i)}\\quad ${p1}` },
+        { kind: 'rule', latex: `${indent}\\text{(ii)}\\quad ${p2}` },
+      ];
+    }
+  }
+
   // Simple proof term — render concisely as justification
   const desc = describeJustification(current, ctx, notations);
   return [...letBlocks, { kind: 'rule', latex: `${indent}${desc}` }];
@@ -1980,11 +2265,11 @@ function renderMatchProof(
     // Case header: only if there are constructor patterns to show
     if (visiblePatParts.length > 0) {
       const patLatex = visiblePatParts.join('\\;');
-      blocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${patLatex}\\text{:}` });
+      blocks.push({ kind: 'rule', latex: `\\quad\\textbf{Case}\\;${patLatex}\\text{:}` });
     }
 
     // Render the RHS proof
-    const rhsBlocks = proofBodyToBlocks(clause.rhs, clauseCtx, notations, '\\quad ', carrierPositions);
+    const rhsBlocks = proofBodyToBlocks(clause.rhs, clauseCtx, notations, '\\quad\\quad ', carrierPositions);
     blocks.push(...rhsBlocks);
   }
 
@@ -2023,6 +2308,23 @@ function proofToLatex(
     stripLetsToBlocks(current, ctx, notations, '');
   current = afterLets;
   ctx = afterLetsCtx;
+
+  // 3.5. MkLimit unwrapping: expose inner proof for structured rendering.
+  // MkLimit(R, f, x0, L, \eps \heps => body) → strip to body in extended context.
+  {
+    const mkLimitSpine = extractAppSpine(current);
+    if (mkLimitSpine.fn.tag === 'Const' && mkLimitSpine.fn.name === 'MkLimit' && mkLimitSpine.args.length >= 5) {
+      const innerProof = mkLimitSpine.args[4];
+      const stripped = stripLambdasWithCarrier(innerProof, ctx);
+      current = stripped.body;
+      ctx = stripped.context;
+      // Re-strip lets from unwrapped body
+      const innerLets = stripLetsToBlocks(current, ctx, notations, '');
+      letBlocks.push(...innerLets.blocks);
+      current = innerLets.body;
+      ctx = innerLets.context;
+    }
+  }
 
   // 4. Render the final proof body
 
@@ -2102,32 +2404,135 @@ function proofToLatex(
       }
     }
 
-    const resultBlocks: LatexBlock[] = [];
-    if (letBlocks.length > 0) {
-      resultBlocks.push({ kind: 'comment', latex: '\\textit{Proof.}' });
-      resultBlocks.push(...letBlocks);
+    // Cross-case CSE: factor out repeated DPair/Pair projection bases
+    // shared across both case bodies into let-bindings before "By cases:".
+    const cseLetBlocks: LatexBlock[] = [];
+    const cseReplacements: [string, string][] = [];
+
+    if (fInl.tag === 'Binder' && fInl.binderKind.tag === 'BLam' &&
+        fInr.tag === 'Binder' && fInr.binderKind.tag === 'BLam') {
+      const projBases = new Map<string, { base: TTKTerm, projections: Map<string, TTKTerm> }>();
+      collectProjectionBasesFromTerm(fInl.body, projBases);
+      collectProjectionBasesFromTerm(fInr.body, projBases);
+
+      const extractable = [...projBases.values()].filter(g => g.projections.size >= 2);
+
+      if (extractable.length > 0) {
+        // Use inl case context for rendering (same result for both since base
+        // doesn't reference the case variable at index 0)
+        const caseCtx = [fInl.name || 'h', ...ctx];
+
+        for (let gi = 0; gi < extractable.length; gi++) {
+          const group = extractable[gi];
+          const sub = extractable.length > 1 ? `_{${gi + 1}}` : '';
+          const baseLatex = termToLatex(group.base, caseCtx, notations);
+
+          // Determine projection family and complete the set
+          const hasDPairOfPair = group.projections.has('dfst') ||
+            group.projections.has('dsnd.pfst') || group.projections.has('dsnd.psnd');
+          const hasPlainPair = group.projections.has('pfst') || group.projections.has('psnd');
+
+          const projNames = new Map<string, string>();
+          if (hasDPairOfPair) {
+            projNames.set('dfst', `\\delta${sub}`);
+            projNames.set('dsnd.pfst', `h${sub}`);
+            projNames.set('dsnd.psnd', `\\text{bnd}${sub}`);
+          } else if (hasPlainPair) {
+            projNames.set('pfst', `\\pi_1${sub}`);
+            projNames.set('psnd', `\\pi_2${sub}`);
+          }
+
+          if (projNames.size === 0) continue;
+
+          // Build string replacement patterns
+          for (const [projKey, name] of projNames) {
+            let pattern: string | undefined;
+            if (projKey === 'dfst') pattern = `\\pi_1(${baseLatex})`;
+            else if (projKey === 'dsnd.pfst') pattern = `\\pi_1(\\pi_2(${baseLatex}))`;
+            else if (projKey === 'dsnd.psnd') pattern = `\\pi_2(\\pi_2(${baseLatex}))`;
+            else if (projKey === 'pfst') pattern = `\\pi_1(${baseLatex})`;
+            else if (projKey === 'psnd') pattern = `\\pi_2(${baseLatex})`;
+            if (pattern) cseReplacements.push([pattern, name]);
+          }
+
+          // Sort names in canonical order for the let-binding
+          const order = ['dfst', 'dsnd.pfst', 'dsnd.psnd', 'pfst', 'psnd'];
+          const sortedNames = [...projNames.entries()]
+            .sort(([a], [b]) => order.indexOf(a) - order.indexOf(b))
+            .map(([_, name]) => name);
+
+          cseLetBlocks.push({
+            kind: 'rule',
+            latex: `\\text{Let } (${sortedNames.join(',\\, ')}) = ${baseLatex}`,
+          });
+        }
+
+        // Sort replacements longest-first to avoid partial matches
+        cseReplacements.sort((a, b) => b[0].length - a[0].length);
+      }
     }
 
-    // Header: "By cases:"
-    const prefix = letBlocks.length > 0 ? '' : '\\textit{Proof.}\\;';
-    resultBlocks.push({ kind: 'comment', latex: `${prefix}\\text{By cases:}` });
+    // Fallback: reconstruct case types from scrutinee structure
+    // e.g., leTotal(R, inst, a, b) → left: a ≤ b, right: b ≤ a
+    if (!leftLabel || !rightLabel) {
+      const scrutSpine = extractAppSpine(scrutinee);
+      if (scrutSpine.fn.tag === 'Const' && scrutSpine.fn.name.endsWith('.leTotal') && scrutSpine.args.length >= 4) {
+        let aLatex = termToLatex(scrutSpine.args[2], ctx, notations);
+        let bLatex = termToLatex(scrutSpine.args[3], ctx, notations);
+        // Apply CSE replacements so δ₁/δ₂ appear instead of full projection expressions
+        for (const [from, to] of cseReplacements) {
+          aLatex = aLatex.split(from).join(to);
+          bLatex = bLatex.split(from).join(to);
+        }
+        leftLabel = leftLabel || `${aLatex} \\leq ${bLatex}`;
+        rightLabel = rightLabel || `${bLatex} \\leq ${aLatex}`;
+      }
+    }
+
+    const resultBlocks: LatexBlock[] = [];
+    if (letBlocks.length > 0 || cseLetBlocks.length > 0) {
+      resultBlocks.push({ kind: 'comment', latex: '\\textit{Proof.}' });
+      resultBlocks.push(...letBlocks);
+      resultBlocks.push(...cseLetBlocks);
+    }
+
+    // Header: "By cases:" with scrutinee info if available
+    const prefix = (letBlocks.length > 0 || cseLetBlocks.length > 0) ? '' : '\\textit{Proof.}\\;';
+    const scrutineeDesc = (leftLabel && rightLabel) ? ` (${termToLatex(scrutinee, ctx, notations)})` : '';
+    let scrutineeDescCSE = scrutineeDesc;
+    for (const [from, to] of cseReplacements) {
+      scrutineeDescCSE = scrutineeDescCSE.split(from).join(to);
+    }
+    resultBlocks.push({ kind: 'comment', latex: `${prefix}\\text{By cases}${scrutineeDescCSE}\\text{:}` });
+
+    // Helper to apply CSE string replacements to rendered blocks
+    const applyCSE = (blocks: LatexBlock[]): LatexBlock[] => {
+      if (cseReplacements.length === 0) return blocks;
+      return blocks.map(block => {
+        let latex = block.latex;
+        for (const [from, to] of cseReplacements) {
+          latex = latex.split(from).join(to);
+        }
+        return { ...block, latex };
+      });
+    };
 
     // Case 1: use the type label if available
     if (fInl.tag === 'Binder' && fInl.binderKind.tag === 'BLam') {
       const varName = fInl.name || 'h';
       const caseStr = leftLabel || `\\text{inl}\\;(${renderVarName(varName)})`;
-      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${caseStr}\\text{:}` });
+      resultBlocks.push({ kind: 'rule', latex: `\\quad\\textbf{Case}\\;${caseStr}\\text{:}` });
       const inlCtx = [varName, ...ctx];
-      resultBlocks.push(...proofBodyToBlocks(fInl.body, inlCtx, notations, '\\quad ', carrierPositions));
+      resultBlocks.push(...applyCSE(proofBodyToBlocks(fInl.body, inlCtx, notations, '\\quad\\quad ', carrierPositions)));
     }
 
     // Case 2: use the type label if available
     if (fInr.tag === 'Binder' && fInr.binderKind.tag === 'BLam') {
       const varName = fInr.name || 'h';
       const caseStr = rightLabel || `\\text{inr}\\;(${renderVarName(varName)})`;
-      resultBlocks.push({ kind: 'rule', latex: `\\textbf{Case}\\;${caseStr}\\text{:}` });
+      resultBlocks.push({ kind: 'rule', latex: `\\quad\\textbf{Case}\\;${caseStr}\\text{:}` });
       const inrCtx = [varName, ...ctx];
-      resultBlocks.push(...proofBodyToBlocks(fInr.body, inrCtx, notations, '\\quad ', carrierPositions));
+      resultBlocks.push(...applyCSE(proofBodyToBlocks(fInr.body, inrCtx, notations, '\\quad\\quad ', carrierPositions)));
     }
 
     return resultBlocks;
@@ -2174,6 +2579,13 @@ function proofToLatex(
     return [
       { kind: 'comment', latex: '\\textit{Proof.}' },
       ...letBlocks,
+      { kind: 'rule', latex: desc },
+    ];
+  }
+  // Long proofs get their own line for readability
+  if (desc.length > 70) {
+    return [
+      { kind: 'comment', latex: '\\textit{Proof.}' },
       { kind: 'rule', latex: desc },
     ];
   }
@@ -2448,7 +2860,7 @@ function convertTheorem(decl: CompiledDeclaration, notations: NotationTable): La
       } else {
         blocks.push({ kind: 'header', latex: `\\textbf{Theorem}\\;(${nameLatex})\\text{:}` });
       }
-      blocks.push({ kind: 'rule', latex: `\\boxed{\\displaystyle ${bodyLatex}}` });
+      blocks.push({ kind: 'header', latex: `\\boxed{\\displaystyle ${bodyLatex}}` });
     } else {
       // Non-propositional: simple "name : type" format
       const typeStr = typeToLatex(decl.kernelType, [], notations);

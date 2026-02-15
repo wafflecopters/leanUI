@@ -1,3 +1,6 @@
 server/lean_projects/**
 dist
 node_modules
+
+# Puzzlets scripts (synced from game)
+.puzzlets/

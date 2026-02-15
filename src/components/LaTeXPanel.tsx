@@ -134,14 +134,14 @@ function BlockRenderer({ block }: { block: LatexBlock }) {
       );
     case 'rule':
       return (
-        <div style={{ margin: '2px 0', paddingLeft: '16px' }}>
-          <KaTeX tex={block.latex} display={true} />
+        <div style={{ margin: '2px 0', paddingLeft: '16px', textAlign: 'left' }}>
+          <KaTeX tex={block.latex} display={false} />
         </div>
       );
     case 'comment':
       return (
-        <div style={{ margin: '4px 0', paddingLeft: '16px' }}>
-          <KaTeX tex={block.latex} display={true} />
+        <div style={{ margin: '6px 0 2px 0', paddingLeft: '16px', textAlign: 'left' }}>
+          <KaTeX tex={block.latex} display={false} />
         </div>
       );
   }
@@ -188,7 +188,9 @@ export function LaTeXPanel({ document }: LaTeXPanelProps) {
 
   return (
     <div className="latex-panel" style={{ padding: '12px' }}>
-      <style>{`.latex-panel .katex { color: #ffffff; }`}</style>
+      <style>{`
+        .latex-panel .katex { color: #ffffff; font-size: 1.1em; }
+      `}</style>
       {document.sections.map((section, i) => (
         <SectionCard key={`${section.name}-${i}`} section={section} />
       ))}
