@@ -1,6 +1,5 @@
 server/lean_projects/**
 dist
 node_modules
+.vscode/
 
-# Puzzlets scripts (synced from game)
-.puzzlets/
