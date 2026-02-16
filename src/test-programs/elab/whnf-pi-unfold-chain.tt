@@ -1,0 +1,13 @@
+@test success
+@name "WHNF Pi unfold: chained type alias"
+
+inductive Void : Type where
+
+Not : Type -> Type
+Not A = A -> Void
+
+DoubleNot : Type -> Type
+DoubleNot A = Not (Not A)
+
+dne : {A : Type} -> A -> DoubleNot A
+dne a fn = fn a

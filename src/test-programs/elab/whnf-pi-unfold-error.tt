@@ -1,0 +1,14 @@
+@test failure
+@name "WHNF Pi unfold: still rejects excess patterns"
+@error "Pattern count exceeds"
+@import preambles/nat.tt
+
+inductive Void : Type where
+
+Not : Type -> Type
+Not A = A -> Void
+
+-- Not Nat unfolds to (Nat -> Void), so 1 Pi binder.
+-- Providing 2 patterns should still be rejected.
+bad : Not Nat
+bad a b = ?todo

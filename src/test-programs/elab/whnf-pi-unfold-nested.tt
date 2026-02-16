@@ -1,0 +1,9 @@
+@test success
+@name "WHNF Pi unfold: nested type alias with multiple hidden binders"
+@import preambles/nat.tt
+
+MyFun : Type -> Type -> Type
+MyFun A B = A -> B
+
+apply : {A B : Type} -> MyFun A B -> A -> B
+apply f x = f x

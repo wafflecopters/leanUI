@@ -1,0 +1,13 @@
+-- Test: a record projection returning a function, applied to extra args.
+-- The elaborator's collectAppSpine flattens (Pair.snd p) b into
+-- Pair.snd applied to [p, b], but Pair.snd only expects 1 explicit arg.
+-- The extra arg (b) should be applied to the RESULT of Pair.snd.
+@test success
+@name "Projection returning function applied to extra args"
+
+record Pair (A B : Type) where
+  fst : A
+  snd : B
+
+applySecond : {A B C : Type} -> Pair A (B -> C) -> B -> C
+applySecond p b = Pair.snd p b

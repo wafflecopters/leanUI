@@ -1,0 +1,20 @@
+@test success
+@name "Implicit lambda binders: auto-insert for nested implicit params"
+@import preambles/equality.tt
+
+inductive Void : Type where
+
+record PeanoNat : Type 1 where
+  carrier : Type
+  zero : carrier
+  succ : carrier -> carrier
+  zeroNeqSucc : {n : carrier} -> (Equal zero (succ n) -> Void)
+  succInj : {m n : carrier} -> Equal (succ m) (succ n) -> Equal m n
+  ind : {P : carrier -> Type} -> P zero -> ({n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> P n
+
+-- The step function's type is ({n : carrier} -> P n -> P (succ n))
+-- In TTK, {n} becomes explicit. The elaborator should auto-insert
+-- an implicit lambda binder for {n} so the user can write \ih => ...
+-- instead of \n ih => ...
+plus : {N : PeanoNat} -> PeanoNat.carrier N -> PeanoNat.carrier N -> PeanoNat.carrier N
+plus {N} a b = (PeanoNat.ind N) b (\ih => PeanoNat.succ N ih) a

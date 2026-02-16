@@ -12,7 +12,7 @@ import { arraySeg, fieldSeg, IndexPath, serializeIndexPath } from '../types/sour
 import { countPiBinders, DefinitionsMap, extractAppSpine, extractPiSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
-import { areWhnfTypesDefEq } from './whnf';
+import { areWhnfTypesDefEq, whnf, whnfToPi } from './whnf';
 import { checkType } from './checker';
 
 // ============================================================================
@@ -846,7 +846,9 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   assertDefined(nextCheckTypeEntry, 'No next check type')
 
   const checkType = checkTypeEntry.type
-  let nextCheckType = nextCheckTypeEntry.type
+  // WHNF-reduce to expose Pi binders hidden behind type aliases
+  let nextCheckType = whnf(nextCheckTypeEntry.type, { definitions: workEnv.definitions });
+  nextCheckTypeEntry.type = nextCheckType;
 
   logInfo(() => `  Pop T -> ${prettyPrintInTTKContext(checkType, workEnv.context.slice(0, checkTypeEntry.ctxLength))}`)
   logInfo(() => `  Peek T -> ${prettyPrintInTTKContext(nextCheckType, workEnv.context.slice(0, nextCheckTypeEntry.ctxLength))}`)
@@ -1194,8 +1196,9 @@ function applySubstitutionToTermInLevels(
 }
 
 function processPattern(pattern: TTKPattern, checkTypeEntry: CheckStackEntry, patternStack: PatternStackEntry[], checkStack: CheckStackEntry[], elabStack: TTKTerm[], workEnv: TCEnv<unknown>) {
-  const checkType = checkTypeEntry.type
-  assertIsPi(checkType, 'Check type must be a Pi')
+  // WHNF-reduce to expose Pi binders hidden behind type aliases (e.g., Not A = A -> Void)
+  const checkType = whnfToPi(checkTypeEntry.type, workEnv.definitions);
+  checkTypeEntry.type = checkType;
 
   const binderName = checkType.name
   const binderType = checkType.domain

@@ -1,0 +1,23 @@
+-- Test: nested projection returning a function, applied to multiple extra args.
+-- (Pair.snd (DPair.snd w)) x should work when DPair.snd returns a Pair
+-- whose snd field is a function type.
+@test success
+@name "Nested projection returning function applied to multiple extra args"
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+record DPair (A : Type) (fn : A -> Type) where
+  fst : A
+  snd : fn fst
+
+record Pair (A B : Type) where
+  fst : A
+  snd : B
+
+-- DPair.snd w : Pair Nat (Nat -> Nat)
+-- Pair.snd (DPair.snd w) : Nat -> Nat
+-- (Pair.snd (DPair.snd w)) x : Nat
+applyNested : DPair Nat (\n => Pair Nat (Nat -> Nat)) -> Nat -> Nat
+applyNested w x = Pair.snd (DPair.snd w) x

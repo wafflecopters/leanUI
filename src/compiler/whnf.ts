@@ -1,4 +1,4 @@
-import { TTKTerm, TTKPattern, isDefinitionallyEqual, levelsEqual } from "./kernel";
+import { TTKTerm, TTKPattern, isDefinitionallyEqual, levelsEqual, prettyPrint } from "./kernel";
 import { subst, substPatternBindings } from "./subst";
 import { DefinitionsMap, getTermDefinition, RecordInfo, extractAppSpine } from "./term";
 
@@ -501,4 +501,33 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
     default:
       return term;
   }
+}
+
+/**
+ * Count Pi binders in a term, using WHNF to unfold type aliases.
+ * Unlike `countPiBinders` in term.ts which only counts syntactic Pis,
+ * this version delta-reduces definitions like `Not A = A -> Void` to
+ * expose hidden Pi binders.
+ */
+export function countPiBindersWhnf(term: TTKTerm, definitions: DefinitionsMap): number {
+  let count = 0;
+  let current = whnf(term, { definitions });
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    count++;
+    current = whnf(current.body, { definitions });
+  }
+  return count;
+}
+
+/**
+ * WHNF-reduce a term and assert it's a Pi type.
+ * Used in pattern matching where the check type may be a type alias
+ * that needs unfolding to expose the Pi structure.
+ */
+export function whnfToPi(term: TTKTerm, definitions: DefinitionsMap): TTKTerm & { tag: 'Binder'; binderKind: { tag: 'BPi' } } {
+  const reduced = whnf(term, { definitions });
+  if (reduced.tag !== 'Binder' || reduced.binderKind.tag !== 'BPi') {
+    throw new Error(`Expected Pi type after WHNF, got: ${prettyPrint(reduced)}`);
+  }
+  return reduced as TTKTerm & { tag: 'Binder'; binderKind: { tag: 'BPi' } };
 }

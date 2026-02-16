@@ -5,7 +5,7 @@ export type { TTKContext } from "./kernel";
 import { solveConstraints } from "./meta";
 import { applySubstitutionToConstraints, applySubstitutionToContext, applySubstitutionToMetaVars, enumerateAppliedSubstitutions, minFreeVarIndex, shiftTerm } from "./subst";
 import { unifyTerms } from "./unify";
-import { areTypesDefEq } from "./whnf";
+import { areTypesDefEq, whnf } from "./whnf";
 import type { TypeInfoMap } from "./type-info";
 
 export interface CheckError {
@@ -124,8 +124,8 @@ export function updateDefinitionsInTCEnv<T>(env: TCEnv<T>, fn: (d: DefinitionsMa
   );
 }
 
-export function addDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, namedArgMap?: NamedArgMap): TCEnv<T> {
-  return updateDefinitionsInTCEnv(env, (d) => addDefinition(d, name, type, undefined, namedArgMap));
+export function addDefinitionInTCEnv<T>(env: TCEnv<T>, name: string, type: TTKTerm, namedArgMap?: NamedArgMap, argNamedArgInfos?: ArgNamedArgInfos): TCEnv<T> {
+  return updateDefinitionsInTCEnv(env, (d) => addDefinition(d, name, type, undefined, namedArgMap, argNamedArgInfos));
 }
 
 export function setDefinitionValueInTCEnv<T>(env: TCEnv<T>, name: string, value: TTKTerm): TCEnv<T> {
@@ -163,6 +163,13 @@ export function addMetaVarInTCEnv<T>(env: TCEnv<T>, type: TTKTerm): { env: TCEnv
 export type NamedArgMap = Map<string, number>;
 
 /**
+ * Map from parameter position to the named arg info for that parameter's domain type.
+ * Used to auto-insert implicit lambda binders when a lambda argument has fewer
+ * binders than the expected type (because some are implicit in the surface type).
+ */
+export type ArgNamedArgInfos = Map<number, { namedArgMap: NamedArgMap; totalArity: number }>;
+
+/**
  * Extra metadata for records stored as inductives.
  * Records are single-constructor inductives with named fields and projections.
  */
@@ -198,6 +205,7 @@ export type TermDefinition = {
   type: TTKTerm,
   value?: TTKTerm,
   namedArgMap?: NamedArgMap,  // Named args from the type signature
+  argNamedArgInfos?: ArgNamedArgInfos,  // Nested implicits for each param's domain
 }
 
 export type DefinitionsMap = {
@@ -219,10 +227,11 @@ export function addDefinition(
   name: string,
   type: TTKTerm,
   value?: TTKTerm,
-  namedArgMap?: NamedArgMap
+  namedArgMap?: NamedArgMap,
+  argNamedArgInfos?: ArgNamedArgInfos
 ): DefinitionsMap {
   const newMap = new Map<string, TermDefinition>(definitions.terms);
-  newMap.set(name, { name, type, value, namedArgMap });
+  newMap.set(name, { name, type, value, namedArgMap, argNamedArgInfos });
   return {
     ...definitions,
     terms: newMap,
@@ -266,6 +275,7 @@ export function createNamedArgLookup(definitions: DefinitionsMap): (name: string
 export interface NamedArgInfo {
   namedArgMap: NamedArgMap;
   totalArity: number;
+  argNamedArgInfos?: ArgNamedArgInfos;
 }
 
 /**
@@ -279,7 +289,8 @@ export function createNamedArgInfoLookup(definitions: DefinitionsMap): (name: st
     if (termDef?.namedArgMap && termDef.type) {
       return {
         namedArgMap: termDef.namedArgMap,
-        totalArity: countPiBinders(termDef.type)
+        totalArity: countPiBinders(termDef.type),
+        argNamedArgInfos: termDef.argNamedArgInfos,
       };
     }
 
@@ -2202,6 +2213,12 @@ export class TCEnv<T> {
 
     if (normalized.tag === 'Binder' && normalized.binderKind.tag === 'BPi') {
       return this.withValue({ tag: 'Binder', name: normalized.name, binderKind: { tag: 'BPi' }, domain: normalized.domain, body: normalized.body });
+    }
+
+    // Try WHNF with definitions to unfold type aliases (e.g., Not A = A -> Void)
+    const whnfReduced = whnf(normalized, { definitions: this.definitions });
+    if (whnfReduced.tag === 'Binder' && whnfReduced.binderKind.tag === 'BPi') {
+      return this.withValue({ tag: 'Binder', name: whnfReduced.name, binderKind: { tag: 'BPi' }, domain: whnfReduced.domain, body: whnfReduced.body });
     }
 
     if (normalized.tag === 'Hole' || normalized.tag === 'Meta') {

@@ -7,14 +7,14 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
+import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, extractArgNamedArgInfos, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkType } from './kernel';
 import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT, mkPropTT, mkHoleTT, mkSortTT, mkUOmegaTT } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -24,7 +24,7 @@ import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
 import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
-import { whnf } from './whnf';
+import { whnf, countPiBindersWhnf } from './whnf';
 import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, Tactic } from '../tactics/tactic';
@@ -2159,8 +2159,9 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 
           // Create a lookup that includes this inductive type's named arg info
           // This is needed because the inductive type isn't registered in definitions yet
+          const inductiveArgNamedArgInfos = decl.type ? extractArgNamedArgInfos(decl.type) : undefined;
           const ctorAppLookup = decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0
-            ? (name: string) => name === decl.name ? { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity } : undefined
+            ? (name: string) => name === decl.name ? { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity, argNamedArgInfos: inductiveArgNamedArgInfos?.size ? inductiveArgNamedArgInfos : undefined } as import('./term').NamedArgInfo : undefined
             : undefined;
 
           kernelConstructors = decl.constructors.map((ctor, ctorIndex) => {
@@ -2942,6 +2943,7 @@ function checkTermDeclaration(
 
     // Extract named arg info from type for use in definition and pattern elaboration
     const namedArgMap = decl.surfaceType ? extractNamedArgMap(decl.surfaceType) : undefined;
+    const argNamedArgInfos = decl.surfaceType ? extractArgNamedArgInfos(decl.surfaceType) : undefined;
     const totalArity = decl.surfaceType ? countParameters(decl.surfaceType) : undefined;
 
     // Zonk the kernel type to substitute any solved metas (e.g., implicit params inferred from arguments).
@@ -2957,7 +2959,7 @@ function checkTermDeclaration(
 
     // Add to context for subsequent declarations, including namedArgMap for lookup
     if (decl.name) {
-      termEnv = addDefinitionInTCEnv(termEnv, decl.name, zonkedKernelType, namedArgMap);
+      termEnv = addDefinitionInTCEnv(termEnv, decl.name, zonkedKernelType, namedArgMap, argNamedArgInfos?.size ? argNamedArgInfos : undefined);
     }
 
     // Handle postulates: type signature with no value (declared with `postulate` keyword)
@@ -3168,6 +3170,11 @@ function checkTermDeclaration(
     const surfaceClauses = surfaceClausesWithIndices.map(({ clause }) => clause);
     const surfaceClauseIndices = surfaceClausesWithIndices.map(({ originalIndex }) => originalIndex);
 
+    // Use WHNF-aware arity so type aliases like `Not A = A -> Void` expose hidden Pi binders
+    const effectiveTotalArity = totalArity !== undefined
+      ? countPiBindersWhnf(zonkedKernelType, termEnv.definitions)
+      : undefined;
+
     const result = checkTermValue(
       decl.name,
       termEnv,
@@ -3176,9 +3183,10 @@ function checkTermDeclaration(
       surfaceClauseIndices,
       decl.elabMap ?? new Map(),
       namedArgMap,
-      totalArity,
+      effectiveTotalArity,
       annotatedAbsurdClauses,
-      { skipTotality: options?.skipTotality, withScrutineeCount: options?.withScrutineeCount, newScrutineeCount: options?.newScrutineeCount }
+      { skipTotality: options?.skipTotality, withScrutineeCount: options?.withScrutineeCount, newScrutineeCount: options?.newScrutineeCount },
+      argNamedArgInfos
     );
     if (!result.success) {
       return { success: false, errors: result.errors, totalityResult: result.totalityResult }
@@ -3537,15 +3545,16 @@ function processInductiveDeclaration(
   // Extract inductive's named arg map and arity for constructor elaboration
   const inductiveNamedArgMap = decl.type ? extractNamedArgMap(decl.type) : undefined;
   const inductiveTotalArity = decl.type ? countParameters(decl.type) : undefined;
+  const inductiveArgNamedArgInfos = decl.type ? extractArgNamedArgInfos(decl.type) : undefined;
 
   // Create a combined lookup that checks both:
   // 1. The current inductive type being defined (not yet in definitions)
   // 2. Other types already in definitions (e.g., Equal from a previous declaration)
   const baseAppLookup = createNamedArgInfoLookup(definitions);
-  const ctorAppLookup = (name: string) => {
+  const ctorAppLookup = (name: string): import('./term').NamedArgInfo | undefined => {
     // First check if it's the current inductive type
     if (decl.name && name === decl.name && inductiveNamedArgMap && inductiveNamedArgMap.size > 0) {
-      return { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity };
+      return { namedArgMap: inductiveNamedArgMap, totalArity: inductiveTotalArity ?? 0, argNamedArgInfos: inductiveArgNamedArgInfos?.size ? inductiveArgNamedArgInfos : undefined };
     }
     // Otherwise check existing definitions
     return baseAppLookup(name);
@@ -3810,6 +3819,174 @@ function substituteInheritedFieldRefs(
 }
 
 /**
+ * Insert implicit argument Holes for Var-headed applications that reference
+ * previous record fields with implicit parameters.
+ *
+ * When field `indZero` references field `ind` (which has `{P : carrier -> Type}`),
+ * the parser resolves `ind` to a Var. But the elaborator only inserts implicit
+ * Holes for Const-headed applications. This function bridges the gap by
+ * pre-processing the surface term to insert Holes at implicit positions.
+ *
+ * @param term - The surface term to process
+ * @param currentFieldIndex - Index of the current field (0-based in the field list)
+ * @param fieldImplicitInfos - Map from field index → implicit arg info
+ */
+type LocalBinderImplicitInfo = { namedArgMap: NamedArgMap; totalArity: number } | null;
+
+function insertFieldImplicitHoles(
+  term: TTerm,
+  currentFieldIndex: number,
+  fieldImplicitInfos: Map<number, { namedArgMap: NamedArgMap; totalArity: number }>
+): TTerm {
+  let holeCounter = 0;
+
+  /**
+   * Try to insert Holes at implicit positions for a Var-headed application.
+   * Returns the rebuilt App spine if insertion was done, or null otherwise.
+   */
+  function tryInsertImplicits(
+    head: TTerm,
+    transformedArgs: TTerm[],
+    info: { namedArgMap: NamedArgMap; totalArity: number }
+  ): TTerm | null {
+    if (info.namedArgMap.size > 0 && transformedArgs.length < info.totalArity) {
+      const namedPositions = new Set(info.namedArgMap.values());
+      const newArgs: TTerm[] = [];
+      let posIdx = 0;
+
+      for (let pos = 0; pos < info.totalArity && (posIdx < transformedArgs.length || namedPositions.has(pos)); pos++) {
+        if (namedPositions.has(pos)) {
+          newArgs.push(mkHoleTT(`_field_implicit${holeCounter++}`, mkPropTT()));
+        } else if (posIdx < transformedArgs.length) {
+          newArgs.push(transformedArgs[posIdx++]);
+        } else {
+          break;
+        }
+      }
+      while (posIdx < transformedArgs.length) {
+        newArgs.push(transformedArgs[posIdx++]);
+      }
+
+      let result: TTerm = head;
+      for (const arg of newArgs) {
+        result = { tag: 'App', fn: result, arg };
+      }
+      return result;
+    }
+    return null;
+  }
+
+  function transform(t: TTerm, depth: number, localBinderStack: LocalBinderImplicitInfo[]): TTerm {
+    // For App nodes, collect the spine and check if head is a Var with implicits
+    if (t.tag === 'App') {
+      // Collect the full application spine
+      const args: TTerm[] = [];
+      let current: TTerm = t;
+      while (current.tag === 'App') {
+        args.unshift(current.arg);
+        current = current.fn;
+      }
+      const head = current;
+
+      // Transform args recursively first
+      const transformedArgs = args.map(a => transform(a, depth, localBinderStack));
+
+      // Check if head is a Var pointing to a field or local binder with implicits
+      if (head.tag === 'Var') {
+        const topLevelIndex = head.index - depth;
+        if (topLevelIndex >= 0 && topLevelIndex < currentFieldIndex) {
+          // Field reference — look up field implicit info
+          const fieldListIndex = (currentFieldIndex - 1) - topLevelIndex;
+          const info = fieldImplicitInfos.get(fieldListIndex);
+          if (info) {
+            const result = tryInsertImplicits(head, transformedArgs, info);
+            if (result) return result;
+          }
+        } else if (head.index < depth) {
+          // Local binder reference — look up binder stack
+          const stackIndex = depth - 1 - head.index;
+          if (stackIndex >= 0 && stackIndex < localBinderStack.length) {
+            const info = localBinderStack[stackIndex];
+            if (info) {
+              const result = tryInsertImplicits(head, transformedArgs, info);
+              if (result) return result;
+            }
+          }
+        }
+      }
+
+      // No implicit insertion needed — rebuild with transformed args
+      let result: TTerm = transform(head, depth, localBinderStack);
+      for (const arg of transformedArgs) {
+        result = { tag: 'App', fn: result, arg };
+      }
+      return result;
+    }
+
+    // Track depth and local binder info through binders
+    if (t.tag === 'Binder') {
+      const domain = t.domain ? transform(t.domain, depth, localBinderStack) : t.domain;
+      // Extract implicit info from the domain (the type of the bound variable)
+      // so we can insert Holes when this variable is applied in the body
+      let binderInfo: LocalBinderImplicitInfo = null;
+      if (t.domain) {
+        const domainNamedArgMap = extractNamedArgMap(t.domain);
+        if (domainNamedArgMap.size > 0) {
+          binderInfo = { namedArgMap: domainNamedArgMap, totalArity: countParameters(t.domain) };
+        }
+      }
+      const body = transform(t.body, depth + 1, [...localBinderStack, binderInfo]);
+      if (domain === t.domain && body === t.body) return t;
+      return { ...t, domain, body };
+    }
+
+    if (t.tag === 'MultiBinder') {
+      const domain = transform(t.domain, depth, localBinderStack);
+      // Extract implicit info for MultiBinder (all names share the same domain type)
+      let binderInfo: LocalBinderImplicitInfo = null;
+      const domainNamedArgMap = extractNamedArgMap(t.domain);
+      if (domainNamedArgMap.size > 0) {
+        binderInfo = { namedArgMap: domainNamedArgMap, totalArity: countParameters(t.domain) };
+      }
+      const bodyStack = [...localBinderStack];
+      for (let i = 0; i < t.names.length; i++) {
+        bodyStack.push(binderInfo);
+      }
+      const body = transform(t.body, depth + t.names.length, bodyStack);
+      if (domain === t.domain && body === t.body) return t;
+      return { ...t, domain, body };
+    }
+
+    if (t.tag === 'Match') {
+      const scrutinee = transform(t.scrutinee, depth, localBinderStack);
+      const clauses = t.clauses.map(c => {
+        const binderCount = countPatternBinders(c.patterns);
+        // Pattern binders don't have known function types, push nulls
+        const clauseStack = [...localBinderStack];
+        for (let i = 0; i < binderCount; i++) clauseStack.push(null);
+        const rhs = transform(c.rhs, depth + binderCount, clauseStack);
+        if (rhs === c.rhs) return c;
+        return { ...c, rhs };
+      });
+      if (scrutinee === t.scrutinee && clauses.every((c, i) => c === t.clauses[i])) return t;
+      return { ...t, scrutinee, clauses };
+    }
+
+    if (t.tag === 'Annot') {
+      const term = transform(t.term, depth, localBinderStack);
+      const type = transform(t.type, depth, localBinderStack);
+      if (term === t.term && type === t.type) return t;
+      return { ...t, term, type };
+    }
+
+    // Var, Const, Sort, Hole, ULevel, ULit, UOmega, etc. — leaf nodes
+    return t;
+  }
+
+  return transform(term, 0, []);
+}
+
+/**
  * Count the number of binders introduced by a list of patterns.
  */
 function countPatternBinders(patterns: TPattern[]): number {
@@ -3862,6 +4039,7 @@ function processRecordDeclaration(
   // ============================================================================
   const inheritedFields: TTKRecordField[] = [];
   const inheritedFieldNames: string[] = [];
+  const inheritedFieldParents: string[] = [];  // Track which parent each inherited field came from
   if (decl.extends && decl.extends.length > 0) {
     for (const parentName of decl.extends) {
       const parentFields = extractParentRecordFields(parentName, definitions);
@@ -3896,6 +4074,7 @@ function processRecordDeclaration(
         }
         inheritedFields.push(field);
         inheritedFieldNames.push(field.name);
+        inheritedFieldParents.push(parentName);
       }
     }
   }
@@ -3934,6 +4113,9 @@ function processRecordDeclaration(
   // inherited fields with the correct Var indices.
   // ============================================================================
   const kernelFields: TTKRecordField[] = [];
+  // Track implicit arg info for each field so later fields can insert Holes
+  // when referencing earlier fields with implicit params (e.g., ind has {P})
+  const fieldImplicitInfos = new Map<number, { namedArgMap: NamedArgMap; totalArity: number }>();
   if (decl.fields) {
     for (let i = 0; i < decl.fields.length; i++) {
       const field = decl.fields[i];
@@ -3944,14 +4126,24 @@ function processRecordDeclaration(
           { kind: 'field', name: 'type' }
         ];
         // Substitute inherited field references (Const → Var) in the surface term
-        const substitutedType = substituteInheritedFieldRefs(field.type, inheritedFieldNames, i);
+        let processedType = substituteInheritedFieldRefs(field.type, inheritedFieldNames, i);
+        // Insert Holes for implicit args of previous field references
+        if (fieldImplicitInfos.size > 0) {
+          processedType = insertFieldImplicitHoles(processedType, i, fieldImplicitInfos);
+        }
         // Pass levelNamesInScope so ULevel params (like u) are recognized in field types
-        const kernelType = elabToKernelWithMap(substitutedType, elabMap, fieldTypePath, fieldTypePath, undefined, appNamedArgLookup, undefined, levelNamesInScope);
+        const kernelType = elabToKernelWithMap(processedType, elabMap, fieldTypePath, fieldTypePath, undefined, appNamedArgLookup, undefined, levelNamesInScope);
         kernelFields.push({
           name: field.name,
           type: kernelType,
           implicit: field.implicit
         });
+        // Extract implicit info from this field's surface type for use by later fields
+        const fieldNamedArgMap = extractNamedArgMap(field.type);
+        if (fieldNamedArgMap.size > 0) {
+          const fieldTotalArity = countParameters(field.type);
+          fieldImplicitInfos.set(i, { namedArgMap: fieldNamedArgMap, totalArity: fieldTotalArity });
+        }
       } catch (e) {
         return createElabErrorResult(e, decl, sourceMap, elabMap, definitions);
       }
@@ -4096,17 +4288,69 @@ function processRecordDeclaration(
   };
   const projections = generateProjections(zonkedRecord);
 
-  // Build namedArgMap for projections: all record params are implicit
-  // (they're inferred from the record argument)
-  const projectionNamedArgMap: NamedArgMap = new Map();
-  for (let i = 0; i < ttkRecord.params.length; i++) {
-    projectionNamedArgMap.set(ttkRecord.params[i].name, i);
-  }
-
-  // Add projections to definitions with namedArgMap
+  // Build per-projection namedArgMaps: record params are implicit,
+  // plus any implicit parameters from the field type itself.
+  // Projection type structure: (P1 : T1) → ... → (Pn : Tn) → (self : R P1..Pn) → FieldType
+  // Positions: params at 0..numParams-1, self at numParams, field binders at numParams+1+
   let finalDefinitions = result.newDefinitions;
-  for (const proj of projections) {
-    finalDefinitions = addDefinition(finalDefinitions, proj.name, proj.type, proj.value, projectionNamedArgMap);
+  const numParams = ttkRecord.params.length;
+  const numInherited = inheritedFields.length;
+  for (let projIdx = 0; projIdx < projections.length; projIdx++) {
+    const proj = projections[projIdx];
+    const projNamedArgMap: NamedArgMap = new Map();
+
+    // Record params are always implicit (inferred from the record argument)
+    for (let k = 0; k < numParams; k++) {
+      projNamedArgMap.set(ttkRecord.params[k].name, k);
+    }
+
+    // Add field type's implicit parameters
+    const fieldImplicitOffset = numParams + 1;  // past params + self arg
+    if (projIdx < numInherited) {
+      // Inherited field — look up parent projection's namedArgMap and re-index
+      const parentName = inheritedFieldParents[projIdx];
+      const fieldName = zonkedRecord.fields[projIdx].name;
+      const parentProjDef = getTermDefinition(finalDefinitions, `${parentName}.${fieldName}`);
+      if (parentProjDef?.namedArgMap) {
+        const parentRecord = finalDefinitions.inductiveTypes.get(parentName);
+        const parentNumParams = parentRecord?.recordInfo?.paramCount ?? 0;
+        const parentImplicitOffset = parentNumParams + 1;
+        for (const [name, pos] of parentProjDef.namedArgMap) {
+          if (pos >= parentImplicitOffset) {
+            // This is a field-type implicit — re-index to child's offset
+            const fieldOffset = pos - parentImplicitOffset;
+            projNamedArgMap.set(name, fieldImplicitOffset + fieldOffset);
+          }
+        }
+      }
+    } else {
+      // Local field — extract implicit params from surface type
+      const localIdx = projIdx - numInherited;
+      if (decl.fields && localIdx < decl.fields.length) {
+        const fieldNamedArgMap = extractNamedArgMap(decl.fields[localIdx].type);
+        for (const [name, pos] of fieldNamedArgMap) {
+          projNamedArgMap.set(name, pos + fieldImplicitOffset);
+        }
+      }
+    }
+
+    // Extract argNamedArgInfos: for each parameter whose domain has implicits,
+    // shift positions by fieldImplicitOffset to account for record params + self
+    let projArgNamedArgInfos: import('./term').ArgNamedArgInfos | undefined;
+    if (projIdx >= numInherited) {
+      const localIdx = projIdx - numInherited;
+      if (decl.fields && localIdx < decl.fields.length) {
+        const fieldArgInfos = extractArgNamedArgInfos(decl.fields[localIdx].type);
+        if (fieldArgInfos.size > 0) {
+          projArgNamedArgInfos = new Map();
+          for (const [pos, info] of fieldArgInfos) {
+            projArgNamedArgInfos.set(pos + fieldImplicitOffset, info);
+          }
+        }
+      }
+    }
+
+    finalDefinitions = addDefinition(finalDefinitions, proj.name, proj.type, proj.value, projNamedArgMap, projArgNamedArgInfos);
   }
 
   // Build pretty-printed projections for display
@@ -4864,7 +5108,8 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
           const mainKernelType = elabToKernelWithMap(mainDecl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
           // Extract namedArgMap so implicit args are recognized when auxiliaries call the main function
           const mainNamedArgMap = extractNamedArgMap(mainDecl.type);
-          definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined, mainNamedArgMap.size > 0 ? mainNamedArgMap : undefined);
+          const mainArgNamedArgInfos = extractArgNamedArgInfos(mainDecl.type);
+          definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined, mainNamedArgMap.size > 0 ? mainNamedArgMap : undefined, mainArgNamedArgInfos.size > 0 ? mainArgNamedArgInfos : undefined);
         } catch (_e) {
           // If type elaboration fails, continue - the error will be caught when we process the main decl
         }
@@ -5337,6 +5582,7 @@ function checkMatchClauseFromSurface(
   originalSurfaceIndex: number,
   namedArgMap: NamedArgMap | undefined,
   totalArity: number | undefined,
+  argNamedArgInfos?: import('./term').ArgNamedArgInfos,
 ): TTKClause {
   // Surface path uses the ORIGINAL surface index (before filtering absurd clauses)
   // Kernel path uses the filtered kernel index (after absurd clauses are removed)
@@ -5418,7 +5664,7 @@ function checkMatchClauseFromSurface(
   const appNamedArgLookup = (name: string) => {
     // For recursive calls, use the current function's named arg info
     if (name === termName && namedArgMap && namedArgMap.size > 0) {
-      return { namedArgMap, totalArity };
+      return { namedArgMap, totalArity: totalArity ?? 0, argNamedArgInfos: argNamedArgInfos?.size ? argNamedArgInfos : undefined };
     }
     return baseNamedArgLookup(name);
   };
@@ -5458,6 +5704,7 @@ function checkTermValue(
   totalArity: number | undefined,
   annotatedAbsurdClauses: number[] = [],
   options?: { skipTotality?: boolean; withScrutineeCount?: number; newScrutineeCount?: number },
+  argNamedArgInfos?: import('./term').ArgNamedArgInfos,
 ): { success: false, errors: TCEnvError[], totalityResult?: TotalityResult } | { success: true, checkedValue: TTKTerm, totalityResult?: TotalityResult } {
   const errors: TCEnvError[] = [];
   const checkedClauses: TTKClause[] = [];
@@ -5466,7 +5713,7 @@ function checkTermValue(
   const hasNoClauses = surfaceClauses.length === 0;
 
   const firstClauseRootPatternsCount = hasNoClauses ? 0 : surfaceClauses[0].patterns.length;
-  const maxAllowedPatternsCount = countPiBinders(type);
+  const maxAllowedPatternsCount = countPiBindersWhnf(type, termEnv.definitions);
 
   // Note: #absurd clauses are validated in checkTermDeclaration and filtered before reaching here
   // The annotatedAbsurdClauses parameter contains their surface indices
@@ -5494,7 +5741,8 @@ function checkTermValue(
           clauseIndex,
           originalSurfaceIndex,
           namedArgMap,
-          totalArity
+          totalArity,
+          argNamedArgInfos
         );
         checkedClauses.push(checkedClause);
       } catch (e) {

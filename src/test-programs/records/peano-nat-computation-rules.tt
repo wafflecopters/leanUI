@@ -1,0 +1,18 @@
+@test success
+@name "PeanoNat with indZero and indSucc computation rules"
+@import preambles/equality.tt
+
+inductive Void : Type where
+
+Not : {u : ULevel} -> Type u -> Type ω
+Not A = A -> Void
+
+record PeanoNat : Type 1 where
+  carrier : Type
+  zero : carrier
+  succ : carrier -> carrier
+  zeroNeqSucc : {n : carrier} -> Not (Equal zero (succ n))
+  succInj : {m n : carrier} -> Equal (succ m) (succ n) -> Equal m n
+  ind : {P : carrier -> Type} -> P zero -> ({n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> P n
+  indZero : {P : carrier -> Type} -> (base : P zero) -> (step : {n : carrier} -> P n -> P (succ n)) -> Equal (ind base step zero) base
+  indSucc : {P : carrier -> Type} -> (base : P zero) -> (step : {n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> Equal (ind base step (succ n)) (step (ind base step n))

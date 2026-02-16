@@ -1,0 +1,13 @@
+@test success
+@name "Higher-order unification: constant function motive inference"
+@import preambles/nat.tt
+
+-- postulate ind since defining it directly isn't needed for this test
+postulate ind : {P : Nat -> Type} -> P Zero -> ({n : Nat} -> P n -> P (Succ n)) -> (n : Nat) -> P n
+
+-- P should be inferred as \_ => Nat (constant function)
+-- This requires solving ?P Zero = Nat => ?P = \_ => Nat
+-- The step function's {n : Nat} is auto-inserted as an implicit lambda,
+-- so \ih => Succ ih provides 1 explicit binder (for the IH).
+plus : Nat -> Nat -> Nat
+plus a b = ind b (\ih => Succ ih) a

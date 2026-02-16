@@ -1,0 +1,17 @@
+@test success
+@name "PeanoNat record: implicit field params inferred in projection calls"
+@import preambles/equality.tt
+
+inductive Void : Type where
+
+record PeanoNat : Type 1 where
+  carrier : Type
+  zero : carrier
+  succ : carrier -> carrier
+  zeroNeqSucc : {n : carrier} -> (Equal zero (succ n) -> Void)
+  succInj : {m n : carrier} -> Equal (succ m) (succ n) -> Equal m n
+  ind : {P : carrier -> Type} -> P zero -> ({n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> P n
+
+-- {n} in step type is auto-inserted as implicit lambda binder
+plus : {N : PeanoNat} -> PeanoNat.carrier N -> PeanoNat.carrier N -> PeanoNat.carrier N
+plus {N} a b = (PeanoNat.ind N) b (\ih => PeanoNat.succ N ih) a

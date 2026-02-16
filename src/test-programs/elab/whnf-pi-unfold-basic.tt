@@ -1,0 +1,10 @@
+@test success
+@name "WHNF Pi unfold: Not (Not A) exposes hidden Pi binder"
+
+inductive Void : Type where
+
+Not : {u : ULevel} -> Type u -> Type ω
+Not A = A -> Void
+
+doubleNegElim : {u : ULevel} -> {A : Type u} -> A -> Not (Not A)
+doubleNegElim a fn = fn a

@@ -1,14 +1,6 @@
-export const TRIANGLE_NUMBERS_CODE = `inductive Equal : {u : ULevel} -> {A : Type u} -> A -> A -> Type where
-  refl : {u : ULevel} -> {A : Type u} -> {a : A} -> (Equal a a)
-
-sym : {u : ULevel} -> {A : Type u} -> {x y : A} -> Equal x y -> Equal y x
-sym relf = refl
-
-trans : {u : ULevel} -> {A : Type u} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
-trans relf refl = refl
-
-cong : {u v : ULevel} -> {A : Type u} -> {B : Type v} -> (f : A -> B) -> {x y : A} -> Equal x y -> Equal (f x) (f y)
-cong f refl = refl
+@test success
+@name "PeanoNat abstract: plusComm and plusAssoc"
+@import preambles/equality.tt
 
 inductive Void : Type where
 
@@ -25,53 +17,55 @@ record PeanoNat : Type 1 where
   indZero : {P : carrier -> Type} -> (base : P zero) -> (step : {n : carrier} -> P n -> P (succ n)) -> Equal (ind base step zero) base
   indSucc : {P : carrier -> Type} -> (base : P zero) -> (step : {n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> Equal (ind base step (succ n)) (step (ind base step n))
 
--- Addition via the ind eliminator
-plus : (N : PeanoNat) -> PeanoNat.carrier N -> PeanoNat.carrier N -> PeanoNat.carrier N
-plus N n m = PeanoNat.ind N m (\\ih => PeanoNat.succ N ih) n
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
 
--- Derived computation rules for plus
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl q = q
+
+plus : (N : PeanoNat) -> PeanoNat.carrier N -> PeanoNat.carrier N -> PeanoNat.carrier N
+plus N n m = PeanoNat.ind N m (\ih => PeanoNat.succ N ih) n
+
 plusZeroEq : (N : PeanoNat) -> (m : PeanoNat.carrier N) -> Equal (plus N (PeanoNat.zero N) m) m
-plusZeroEq N m = PeanoNat.indZero N m (\\ih => PeanoNat.succ N ih)
+plusZeroEq N m = PeanoNat.indZero N m (\ih => PeanoNat.succ N ih)
 
 plusSuccEq : (N : PeanoNat) -> (k : PeanoNat.carrier N) -> (m : PeanoNat.carrier N) -> Equal (plus N (PeanoNat.succ N k) m) (PeanoNat.succ N (plus N k m))
-plusSuccEq N k m = PeanoNat.indSucc N m (\\ih => PeanoNat.succ N ih) k
+plusSuccEq N k m = PeanoNat.indSucc N m (\ih => PeanoNat.succ N ih) k
 
--- Motives (elaborator can't infer dependent motives via higher-order unification)
 pzrP : (N : PeanoNat) -> PeanoNat.carrier N -> Type
 pzrP N n = Equal (plus N n (PeanoNat.zero N)) n
+
+plusZeroRight : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> Equal (plus N n (PeanoNat.zero N)) n
+plusZeroRight N = (PeanoNat.ind N {P := pzrP N}
+  (plusZeroEq N (PeanoNat.zero N))
+  (\ih => trans (plusSuccEq N _ (PeanoNat.zero N)) (cong (PeanoNat.succ N) ih)))
 
 psrP : (N : PeanoNat) -> PeanoNat.carrier N -> PeanoNat.carrier N -> Type
 psrP N m n = Equal (plus N n (PeanoNat.succ N m)) (PeanoNat.succ N (plus N n m))
 
+plusSuccRight : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> (m : PeanoNat.carrier N) -> Equal (plus N n (PeanoNat.succ N m)) (PeanoNat.succ N (plus N n m))
+plusSuccRight N n m = (PeanoNat.ind N {P := psrP N m}
+  (trans (plusZeroEq N (PeanoNat.succ N m)) (sym (cong (PeanoNat.succ N) (plusZeroEq N m))))
+  (\ih => trans (trans (plusSuccEq N _ (PeanoNat.succ N m)) (cong (PeanoNat.succ N) ih)) (sym (cong (PeanoNat.succ N) (plusSuccEq N _ m))))
+  n)
+
 pcP : (N : PeanoNat) -> PeanoNat.carrier N -> PeanoNat.carrier N -> Type
 pcP N m n = Equal (plus N n m) (plus N m n)
+
+plusComm : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> (m : PeanoNat.carrier N) -> Equal (plus N n m) (plus N m n)
+plusComm N n m = (PeanoNat.ind N {P := pcP N m}
+  (trans (plusZeroEq N m) (sym (plusZeroRight N m)))
+  (\ih => trans (trans (plusSuccEq N _ m) (cong (PeanoNat.succ N) ih)) (sym (plusSuccRight N m _)))
+  n)
 
 paP : (N : PeanoNat) -> PeanoNat.carrier N -> PeanoNat.carrier N -> PeanoNat.carrier N -> Type
 paP N b c a = Equal (plus N (plus N a b) c) (plus N a (plus N b c))
 
--- Lemmas
-plusZeroRight : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> Equal (plus N n (PeanoNat.zero N)) n
-plusZeroRight N = (PeanoNat.ind N {P := pzrP N}
-  (plusZeroEq N (PeanoNat.zero N))
-  (\\ih => trans (plusSuccEq N _ (PeanoNat.zero N)) (cong (PeanoNat.succ N) ih)))
-
-plusSuccRight : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> (m : PeanoNat.carrier N) -> Equal (plus N n (PeanoNat.succ N m)) (PeanoNat.succ N (plus N n m))
-plusSuccRight N n m = (PeanoNat.ind N {P := psrP N m}
-  (trans (plusZeroEq N (PeanoNat.succ N m)) (sym (cong (PeanoNat.succ N) (plusZeroEq N m))))
-  (\\ih => trans (trans (plusSuccEq N _ (PeanoNat.succ N m)) (cong (PeanoNat.succ N) ih)) (sym (cong (PeanoNat.succ N) (plusSuccEq N _ m))))
-  n)
-
--- Commutativity
-plusComm : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> (m : PeanoNat.carrier N) -> Equal (plus N n m) (plus N m n)
-plusComm N n m = (PeanoNat.ind N {P := pcP N m}
-  (trans (plusZeroEq N m) (sym (plusZeroRight N m)))
-  (\\ih => trans (trans (plusSuccEq N _ m) (cong (PeanoNat.succ N) ih)) (sym (plusSuccRight N m _)))
-  n)
-
--- Associativity
 plusAssoc : (N : PeanoNat) -> (a : PeanoNat.carrier N) -> (b : PeanoNat.carrier N) -> (c : PeanoNat.carrier N) -> Equal (plus N (plus N a b) c) (plus N a (plus N b c))
 plusAssoc N a b c = (PeanoNat.ind N {P := paP N b c}
-  (trans (cong (\\x => plus N x c) (plusZeroEq N b)) (sym (plusZeroEq N (plus N b c))))
-  (\\ih => trans (trans (trans (cong (\\x => plus N x c) (plusSuccEq N _ b)) (plusSuccEq N _ c)) (cong (PeanoNat.succ N) ih)) (sym (plusSuccEq N _ (plus N b c))))
+  (trans (cong (\x => plus N x c) (plusZeroEq N b)) (sym (plusZeroEq N (plus N b c))))
+  (\ih => trans (trans (trans (cong (\x => plus N x c) (plusSuccEq N _ b)) (plusSuccEq N _ c)) (cong (PeanoNat.succ N) ih)) (sym (plusSuccEq N _ (plus N b c))))
   a)
-`;
