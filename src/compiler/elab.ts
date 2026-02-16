@@ -23,7 +23,7 @@ import type {
   TLevel,
 } from './surface';
 
-import { mkHoleTT, mkPropTT } from './surface';
+import { mkHoleTT, mkPropTT, shiftSurfaceTerm } from './surface';
 
 import type {
   TTKTerm,
@@ -57,7 +57,7 @@ import {
   serializeIndexPath
 } from '../types/source-position';
 
-import type { DefinitionsMap } from './term';
+import type { ArgNamedArgInfos, DefinitionsMap } from './term';
 
 // Re-export TTKRecordDef for consumers
 export type { TTKRecordDef };
@@ -541,6 +541,125 @@ export function countParameters(surfaceType: TTerm): number {
 }
 
 /**
+ * Extract named argument info for each parameter's domain type.
+ * Walks the Pi chain and for each parameter whose domain is itself a Pi chain
+ * with implicit binders, records its namedArgMap and totalArity.
+ *
+ * Example: for `{P : A -> Type} -> P zero -> ({n : A} -> P n -> P (succ n)) -> (n : A) -> P n`
+ * Returns Map { 2 => { namedArgMap: { n => 0 }, totalArity: 2 } }
+ * because position 2 (the step function) has domain `{n : A} -> P n -> P (succ n)`
+ * which has implicit `n` at position 0.
+ */
+export function extractArgNamedArgInfos(surfaceType: TTerm): ArgNamedArgInfos {
+  const result: ArgNamedArgInfos = new Map();
+  let index = 0;
+  let current: TTerm = surfaceType;
+
+  while (true) {
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      if (current.domain) {
+        const domainNamedArgMap = extractNamedArgMap(current.domain);
+        if (domainNamedArgMap.size > 0) {
+          const totalArity = countParameters(current.domain);
+          result.set(index, { namedArgMap: domainNamedArgMap, totalArity });
+        }
+      }
+      index++;
+      current = current.body;
+    } else if (current.tag === 'MultiBinder' && current.binderKind.tag === 'BPiTT') {
+      // MultiBinder — all share the same domain
+      if (current.domain) {
+        const domainNamedArgMap = extractNamedArgMap(current.domain);
+        if (domainNamedArgMap.size > 0) {
+          const totalArity = countParameters(current.domain);
+          for (let i = 0; i < current.names.length; i++) {
+            result.set(index + i, { namedArgMap: domainNamedArgMap, totalArity });
+          }
+        }
+      }
+      index += current.names.length;
+      current = current.body;
+    } else {
+      break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Wrap a lambda with implicit binders at positions marked in the namedArgMap.
+ * This is the dual of reorderArgs: just as reorderArgs fills implicit APP positions
+ * with Holes, this fills implicit LAMBDA positions with anonymous (_) binders.
+ *
+ * Only wraps when the user provides fewer binders than totalArity,
+ * indicating they omitted the implicit ones.
+ */
+export function wrapLambdaWithImplicits(
+  lambda: TTerm,
+  info: { namedArgMap: NamedArgMap; totalArity: number }
+): TTerm {
+  // Collect user's lambda binders
+  const userBinders: Array<{ name: string; domain: TTerm | undefined }> = [];
+  let body = lambda;
+
+  while (body.tag === 'Binder' && body.binderKind.tag === 'BLamTT') {
+    userBinders.push({ name: body.name, domain: body.domain });
+    body = body.body;
+  }
+
+  // If user already provided enough binders for the full arity, don't wrap
+  if (userBinders.length >= info.totalArity) {
+    return lambda;
+  }
+
+  // Interleave: fill implicit positions with anonymous binders
+  const namedPositions = new Set(info.namedArgMap.values());
+  const allBinders: Array<{ name: string; domain: TTerm | undefined }> = [];
+  let userIdx = 0;
+
+  for (let pos = 0; pos < info.totalArity; pos++) {
+    if (namedPositions.has(pos)) {
+      // Implicit position — insert anonymous binder with Hole domain (to be inferred)
+      allBinders.push({ name: '_', domain: mkHoleTT('_implicit_lam_domain', mkPropTT()) });
+    } else {
+      // Explicit position — use user's binder
+      if (userIdx < userBinders.length) {
+        allBinders.push(userBinders[userIdx]);
+        userIdx++;
+      } else {
+        // User provided fewer explicit binders than available — stop
+        break;
+      }
+    }
+  }
+
+  // Shift the body's free variables to account for the extra binders we inserted.
+  // The body was written with `userBinders.length` binders above it;
+  // now there are `allBinders.length` binders, so shift by the difference.
+  // Cutoff = userBinders.length: variables bound by the user's original lambdas
+  // (indices 0..userBinders.length-1) keep their positions since user binders
+  // maintain relative order. Only free variables (>= userBinders.length) need shifting.
+  const extraBinders = allBinders.length - userBinders.length;
+  let result = extraBinders > 0
+    ? shiftSurfaceTerm(extraBinders, body, userBinders.length)
+    : body;
+
+  // Rebuild lambda chain from inside out
+  for (let i = allBinders.length - 1; i >= 0; i--) {
+    result = {
+      tag: 'Binder',
+      binderKind: { tag: 'BLamTT' } as any,
+      name: allBinders[i].name,
+      domain: allBinders[i].domain,
+      body: result
+    };
+  }
+
+  return result;
+}
+
+/**
  * Lookup function for getting a definition's named argument map.
  * Returns undefined if the definition doesn't exist or has no named args.
  */
@@ -552,6 +671,7 @@ export type NamedArgMapLookup = (name: string) => NamedArgMap | undefined;
 export interface NamedArgInfo {
   namedArgMap: NamedArgMap;
   totalArity?: number;
+  argNamedArgInfos?: ArgNamedArgInfos;
 }
 
 /**
@@ -1780,11 +1900,13 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
         // Try to get the named arg info for the function
         let namedMap: NamedArgMap | undefined;
         let totalArity: number | undefined;
+        let argInfos: ArgNamedArgInfos | undefined;
         if (head.tag === 'Const') {
           const info = lookup(head.name);
           if (info) {
             namedMap = info.namedArgMap;
             totalArity = info.totalArity;
+            argInfos = info.argNamedArgInfos;
           }
         }
 
@@ -1810,7 +1932,13 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
           // Build the elaborated application spine
           const orderedArgs = reorderResult.ordered!;
           let result = elab(head);
-          for (const arg of orderedArgs) {
+          for (let i = 0; i < orderedArgs.length; i++) {
+            let arg = orderedArgs[i];
+            // Wrap lambda args with implicit binders if the parameter type has nested implicits
+            const posInfo = argInfos?.get(i);
+            if (posInfo && arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
+              arg = wrapLambdaWithImplicits(arg, posInfo);
+            }
             result = {
               tag: 'App',
               fn: result,
@@ -1820,7 +1948,25 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
           return result;
         }
 
-        // No named params on function - simple elaboration
+        // No named params on function — check for argNamedArgInfos wrapping
+        if (argInfos && argInfos.size > 0) {
+          let result = elab(head);
+          for (let i = 0; i < args.length; i++) {
+            let arg = args[i].term;
+            const posInfo = argInfos.get(i);
+            if (posInfo && arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
+              arg = wrapLambdaWithImplicits(arg, posInfo);
+            }
+            result = {
+              tag: 'App',
+              fn: result,
+              arg: elab(arg)
+            };
+          }
+          return result;
+        }
+
+        // Simple elaboration — no named params and no argNamedArgInfos
         return {
           tag: 'App',
           fn: elab(t.fn),
@@ -2186,8 +2332,15 @@ export function elabToKernelWithMap(
 
         // Build the elaborated application spine
         const orderedArgs = reorderResult.ordered!;
+        const argInfos = namedArgInfo?.argNamedArgInfos;
         let result = elabToKernelWithMap(head, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup);
-        for (const arg of orderedArgs) {
+        for (let i = 0; i < orderedArgs.length; i++) {
+          let arg = orderedArgs[i];
+          // Wrap lambda args with implicit binders if the parameter type has nested implicits
+          const posInfo = argInfos?.get(i);
+          if (posInfo && arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
+            arg = wrapLambdaWithImplicits(arg, posInfo);
+          }
           result = {
             tag: 'App',
             fn: result,
@@ -2209,7 +2362,27 @@ export function elabToKernelWithMap(
         return result;
       }
 
-      // No named params on function - simple elaboration
+      // No named params on function — check for argNamedArgInfos wrapping
+      const argInfos = namedArgInfo?.argNamedArgInfos;
+      if (argInfos && argInfos.size > 0) {
+        // Need to collect spine to know arg positions for lambda wrapping
+        let result = elabToKernelWithMap(head, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup);
+        for (let i = 0; i < args.length; i++) {
+          let arg = args[i].term;
+          const posInfo = argInfos.get(i);
+          if (posInfo && arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
+            arg = wrapLambdaWithImplicits(arg, posInfo);
+          }
+          result = {
+            tag: 'App',
+            fn: result,
+            arg: elabToKernelWithMap(arg, elabMap, surfacePath, kernelPath, patternNamedArgMap, appNamedArgLookup)
+          };
+        }
+        return result;
+      }
+
+      // Simple elaboration — no named params and no argNamedArgInfos
       return {
         tag: 'App',
         fn: elabToKernelWithMap(

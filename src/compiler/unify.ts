@@ -1,4 +1,4 @@
-import { levelsEqual, mkVar, prettyPrint, TTKTerm, isDefinitionallyEqual } from "./kernel";
+import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKTerm, isDefinitionallyEqual } from "./kernel";
 import { DefinitionsMap, extractAppSpine } from "./term";
 import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
@@ -802,9 +802,68 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // FLEX-RIGID - Meta applied to arguments vs rigid term
+  //
+  // When one side is App(Meta(?m), arg1, arg2, ...) and the other is rigid,
+  // use the constant-function heuristic: solve ?m = \_ ... _ => rhs
+  // (ignoring all arguments). This handles common cases like:
+  //   ?P Zero = Nat  →  ?P = \_ => Nat
+  //
+  // This is sound when the args don't appear free in rhs. Since the lambdas
+  // ignore their arguments (using wildcards), the solution beta-reduces
+  // correctly: (\_ => Nat) Zero = Nat.
+  // ─────────────────────────────────────────────────────────────────────────
+  {
+    const metaAppA = extractMetaApp(a);
+    if (metaAppA) {
+      const numArgs = metaAppA.args.length;
+      let solution = shiftTerm(b, numArgs, 0);
+      for (let i = 0; i < numArgs; i++) {
+        solution = mkLambda(mkSort(mkULit(0)), solution, '_');
+      }
+      return {
+        success: true,
+        substitutions: [],
+        metaConstraints: [{ meta: metaAppA.meta, rhs: solution }],
+        levelConstraints: [],
+      };
+    }
+    const metaAppB = extractMetaApp(b);
+    if (metaAppB) {
+      const numArgs = metaAppB.args.length;
+      let solution = shiftTerm(a, numArgs, 0);
+      for (let i = 0; i < numArgs; i++) {
+        solution = mkLambda(mkSort(mkULit(0)), solution, '_');
+      }
+      return {
+        success: true,
+        substitutions: [],
+        metaConstraints: [{ meta: metaAppB.meta, rhs: solution }],
+        levelConstraints: [],
+      };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // CONFLICT - Different term constructors cannot unify
   // ─────────────────────────────────────────────────────────────────────────
   return { success: false, reason: 'conflict' };
+}
+
+// ============================================================================
+// Helper: Extract meta-variable application spine
+// ============================================================================
+
+/**
+ * If term is App(App(Meta(?m), a1), a2, ...), extract the meta id and args.
+ * Returns null if the head of the application spine is not a Meta.
+ */
+function extractMetaApp(term: TTKTerm): { meta: string; args: TTKTerm[] } | null {
+  const spine = extractAppSpine(term);
+  if (spine.fn.tag === 'Meta' && spine.args.length > 0) {
+    return { meta: spine.fn.id, args: spine.args };
+  }
+  return null;
 }
 
 // ============================================================================

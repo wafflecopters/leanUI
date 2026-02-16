@@ -14,6 +14,7 @@ import { GoalState } from '../tactics/proof-state';
 import { convertToLatex, makeDefaultNotations } from '../compiler/latex-converter';
 import { LaTeXPanel } from './LaTeXPanel';
 import { WYSIWYGPanel } from './WYSIWYGPanel';
+import { parseAndResolveDeclarations, prettyPrintAllDeclarations } from '../compiler/declaration-printer';
 import { PRESETS } from '../presets';
 
 // Unicode abbreviations map (Lean-style)
@@ -990,6 +991,16 @@ export function TextEditorPage() {
     return compileTTFromText(code);
   }, [code]);
 
+  // Parse declarations for WYSIWYG panel (lightweight: parse + pattern resolve only, no type checking)
+  const parsedDeclarations = useMemo(() => {
+    if (!showWYSIWYG) return [];
+    return parseAndResolveDeclarations(code);
+  }, [showWYSIWYG, code]);
+
+  const handleWysiwygChange = useCallback((decls: import('../parser/parser').ParsedDeclaration[]) => {
+    setCode(prettyPrintAllDeclarations(decls));
+  }, []);
+
   // Convert to LaTeX document when panel is shown
   const latexNotations = useMemo(() => makeDefaultNotations(), []);
   const latexDocument = useMemo(() => {
@@ -1844,7 +1855,10 @@ export function TextEditorPage() {
             backgroundColor: '#0d1117',
             minWidth: 0,
           }}>
-            <WYSIWYGPanel />
+            <WYSIWYGPanel
+              declarations={parsedDeclarations}
+              onDeclarationsChange={handleWysiwygChange}
+            />
           </div>
         )}
       </div>

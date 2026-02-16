@@ -1358,7 +1358,7 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
       // If this is the variable we're replacing
       if (term.index === targetIndex + depth) {
         // Shift the replacement term by depth (it's going under 'depth' binders)
-        return shift(depth, replacement, 0);
+        return shiftSurfaceTerm(depth, replacement, 0);
       }
       return term;
 
@@ -1464,7 +1464,7 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
  * @param term - The term to shift
  * @param cutoff - Only shift variables >= cutoff
  */
-function shift(amount: number, term: TTerm, cutoff: number): TTerm {
+export function shiftSurfaceTerm(amount: number, term: TTerm, cutoff: number): TTerm {
   switch (term.tag) {
     case 'Var':
       return term.index >= cutoff
@@ -1473,7 +1473,7 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 
     case 'Sort':
       // Level is now a term, so shift variables in the level
-      return { tag: 'Sort', level: shift(amount, term.level, cutoff) };
+      return { tag: 'Sort', level: shiftSurfaceTerm(amount, term.level, cutoff) };
 
     case 'Const':
     case 'ULevel':
@@ -1485,13 +1485,13 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
 
     case 'Binder': {
       // Handle all binder types uniformly
-      const newDomain = term.domain !== undefined ? shift(amount, term.domain, cutoff) : undefined;
-      const newBody = shift(amount, term.body, cutoff + 1);
+      const newDomain = term.domain !== undefined ? shiftSurfaceTerm(amount, term.domain, cutoff) : undefined;
+      const newBody = shiftSurfaceTerm(amount, term.body, cutoff + 1);
 
       // For BLet, also shift the definition value
       let newBinderKind: BinderKind;
       if (term.binderKind.tag === 'BLetTT') {
-        const newDefVal = shift(amount, term.binderKind.defVal, cutoff);
+        const newDefVal = shiftSurfaceTerm(amount, term.binderKind.defVal, cutoff);
         newBinderKind = { tag: 'BLetTT', defVal: newDefVal };
       } else {
         newBinderKind = term.binderKind;
@@ -1507,8 +1507,8 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
     }
 
     case 'MultiBinder': {
-      const newDomain = shift(amount, term.domain, cutoff);
-      const newBody = shift(amount, term.body, cutoff + term.names.length);
+      const newDomain = shiftSurfaceTerm(amount, term.domain, cutoff);
+      const newBody = shiftSurfaceTerm(amount, term.body, cutoff + term.names.length);
       return {
         tag: 'MultiBinder',
         names: term.names,
@@ -1521,34 +1521,34 @@ function shift(amount: number, term: TTerm, cutoff: number): TTerm {
     case 'App':
       return {
         tag: 'App',
-        fn: shift(amount, term.fn, cutoff),
-        arg: shift(amount, term.arg, cutoff)
+        fn: shiftSurfaceTerm(amount, term.fn, cutoff),
+        arg: shiftSurfaceTerm(amount, term.arg, cutoff)
       };
 
     case 'Hole':
       return {
         tag: 'Hole',
         id: term.id,
-        type: shift(amount, term.type, cutoff),
+        type: shiftSurfaceTerm(amount, term.type, cutoff),
         context: term.context
       };
 
     case 'Annot':
       return {
         tag: 'Annot',
-        term: shift(amount, term.term, cutoff),
-        type: shift(amount, term.type, cutoff)
+        term: shiftSurfaceTerm(amount, term.term, cutoff),
+        type: shiftSurfaceTerm(amount, term.type, cutoff)
       };
 
     case 'Match':
       return {
         tag: 'Match',
-        scrutinee: shift(amount, term.scrutinee, cutoff),
+        scrutinee: shiftSurfaceTerm(amount, term.scrutinee, cutoff),
         clauses: term.clauses.map(c => ({
           patterns: c.patterns,
           // TODO: when we implement proper pattern binding, we need to account for
           // variables bound by patterns when shifting in the RHS
-          rhs: shift(amount, c.rhs, cutoff)
+          rhs: shiftSurfaceTerm(amount, c.rhs, cutoff)
         }))
       };
 
@@ -1623,12 +1623,12 @@ export function expandMultiBinders(term: TTerm): TTerm {
       // Build nested binders from inside out (reverse order)
       for (let i = term.names.length - 1; i >= 0; i--) {
         // Shift the domain by i to account for the i binders above position i
-        const shiftedDomain = i > 0 ? shift(i, baseDomain, 0) : baseDomain;
+        const shiftedDomain = i > 0 ? shiftSurfaceTerm(i, baseDomain, 0) : baseDomain;
 
         let binderKind: BinderKind;
         if (term.binderKind.tag === 'BLetTT') {
           // Shift the let value too
-          const shiftedDefVal = i > 0 ? shift(i, term.binderKind.defVal, 0) : term.binderKind.defVal;
+          const shiftedDefVal = i > 0 ? shiftSurfaceTerm(i, term.binderKind.defVal, 0) : term.binderKind.defVal;
           binderKind = { tag: 'BLetTT', defVal: expandMultiBinders(shiftedDefVal) };
         } else {
           binderKind = term.binderKind;
@@ -1961,7 +1961,7 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
 /**
  * Pretty-print a pattern (helper for Match)
  */
-function prettyPrintPatternTT(pattern: TPattern): string {
+export function prettyPrintPatternTT(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       return pattern.name;
@@ -2035,6 +2035,8 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
             const domain = stripOuterParens(prettyPrintTT(current.domain!, ctx));
             if (currentAnon) {
               parts.push(domain);
+            } else if (current.named) {
+              parts.push(`{${current.name} : ${domain}}`);
             } else {
               parts.push(`(${current.name} : ${domain})`);
             }
@@ -2075,6 +2077,9 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
 
       switch (term.binderKind.tag) {
         case 'BPiTT':
+          if (term.named) {
+            return `({${namesStr} : ${domain}} -> ${body})`;
+          }
           return `((${namesStr} : ${domain}) -> ${body})`;
         case 'BLamTT':
           return `(\\(${namesStr} : ${domain}) => ${body})`;
