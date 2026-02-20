@@ -509,6 +509,15 @@ export function normalizeConstraintDepth(
   return { normalized: { ...constraint, rhs, rhsType, ctx: targetContext }, shifted: true };
 }
 
+/** Priority for constraint solving: lower = solved first.
+ * Pattern solutions are most precise, constant-function heuristic least precise. */
+function constraintPriority(c: Constraint): number {
+  if (c.isPatternSolution === true) return 0;          // Non-constant pattern — best
+  if (c.isPatternSolution === 'constant') return 1;    // Constant-function pattern
+  if (c.isPatternSolution === undefined) return 2;     // Bare meta or non-flex-rigid
+  return 3;                                             // Constant-function heuristic — worst
+}
+
 export function solveConstraints(
   metaVars: Map<string, MetaVar>,
   constraints: Constraint[],
@@ -519,8 +528,11 @@ export function solveConstraints(
 
   const newMetaVars = new Map(metaVars);
 
-  // Use a queue so forwarded constraints can be processed in the same pass
-  const queue = [...constraints];
+  // Sort constraints by solution quality: pattern unification (precise) first,
+  // then bare metas / non-flex-rigid, then constant-function heuristic (lossy) last.
+  // This ensures that when multiple constraints target the same meta, the most
+  // precise solution wins (e.g., pattern motive inference before constant-function).
+  const queue = [...constraints].sort((a, b) => constraintPriority(a) - constraintPriority(b));
   // Fuel prevents infinite loops from cyclic meta chains.
   // Use a generous multiplier because structural unification decomposition
   // can generate sub-constraints that need processing in the same pass.
@@ -529,7 +541,6 @@ export function solveConstraints(
     const constraint = queue.shift()!;
     const meta = newMetaVars.get(constraint.meta);
 
-    // DEBUG: trace specific metas
     // Skip constraints for metas that don't exist in the map.
     // This happens when unification creates constraints for unelaborated Holes
     // (with names like 'hole:f_type') which haven't been converted to Metas yet.
@@ -583,7 +594,13 @@ export function solveConstraints(
           // (e.g., `plus ?m ?n` can't reduce to WHNF, making it incomparable with
           // `Succ(...)` even though `?m = Succ(k)` would make them equal).
           // Defer the constraint instead.
-          if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)) {
+          //
+          // Also tolerate conflicts when the meta was solved by pattern unification
+          // and this constraint is non-pattern. Pattern solutions are the unique correct
+          // answer; non-pattern constraints (from APP decomposition) are less precise
+          // and may have incompatible structure (lambda vs partial application).
+          const toleratePatternConflict = meta.isPatternSolved && constraint.isPatternSolution !== true;
+          if (!containsUnsolvedMeta(resolvedRhs, newMetaVars) && !toleratePatternConflict) {
             const names = effectiveContext.map(c => c.name).reverse();
             const metaTypeStr = prettyPrint(meta.type, names);
             throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
@@ -627,9 +644,12 @@ export function solveConstraints(
         // Skip this check if the RHS contains unsolved metas — stuck terms can't be
         // reduced to WHNF, so head comparisons may give false positives.
         if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
-          const names = effectiveContext.map(c => c.name).reverse();
-          const metaTypeStr = prettyPrint(meta.type, names);
-          throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+          // Tolerate when pattern-solved meta conflicts with non-pattern constraint
+          if (!(meta.isPatternSolved && normConstraint.isPatternSolution !== true)) {
+            const names = effectiveContext.map(c => c.name).reverse();
+            const metaTypeStr = prettyPrint(meta.type, names);
+            throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+          }
         }
         // Var-vs-Var conflict detection.
         // After normalization, both solution and resolvedRhs are at effectiveContext
@@ -724,10 +744,29 @@ export function solveConstraints(
               queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
             }
           } else if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)) {
-            // No unsolved metas and no inversion possible — real conflict
-            const names = effectiveContext.map(c => c.name).reverse();
-            const metaTypeStr = prettyPrint(meta.type, names);
-            throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+            // No unsolved metas and no inversion possible.
+            // Tolerate conflicts when the meta was solved by pattern unification
+            // and this constraint is non-pattern. Pattern solutions are authoritative;
+            // non-pattern constraints (from APP decomposition) are less precise and
+            // may have incompatible structure (lambda vs partial application).
+            if (meta.isPatternSolved && normConstraint.isPatternSolution !== true) {
+              // Pattern solution takes precedence over non-pattern constraint.
+              // However, if the pattern solution contains Holes (incomplete from
+              // constant-function pattern unification where the body wasn't known)
+              // and the new RHS is complete, upgrade to the complete solution.
+              // The constant-function heuristic (isPatternSolution: false) often has
+              // the correct body while the constant-pattern (isPatternSolution: 'constant')
+              // has Holes for unknown positions.
+              if (termContainsHole(meta.solution) && !termContainsHole(resolvedRhs)
+                && canSolveMetaInContext(resolvedRhs, effectiveContext.length)) {
+                newMetaVars.set(normConstraint.meta, { ...meta, solution: resolvedRhs, ctx: effectiveContext });
+              }
+            } else {
+              // Real conflict
+              const names = effectiveContext.map(c => c.name).reverse();
+              const metaTypeStr = prettyPrint(meta.type, names);
+              throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+            }
           }
           // else: defer (rhs has unsolved metas, inversion not applicable)
         } else {
@@ -736,6 +775,13 @@ export function solveConstraints(
           // be re-normalized to the TARGET meta's effective context.
           for (const mc of unifyResult.metaConstraints) {
             queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+          }
+          // If the existing solution contains Holes (incomplete from constant-function
+          // pattern unification) and the new RHS doesn't, upgrade to the complete solution.
+          // The successful unification above confirms structural compatibility.
+          if (termContainsHole(meta.solution) && !termContainsHole(resolvedRhs)
+            && canSolveMetaInContext(resolvedRhs, effectiveContext.length)) {
+            newMetaVars.set(normConstraint.meta, { ...meta, solution: resolvedRhs, ctx: effectiveContext });
           }
         }
       }
@@ -768,7 +814,8 @@ export function solveConstraints(
           throw new Error(`Universe level mismatch for meta ${normConstraint.meta} : ${prettyPrint(meta.type, names)}: cannot solve with ${prettyPrint(normConstraint.rhs, names)} which has type ${prettyPrint(rhsType, names)}`);
         }
       }
-      newMetaVars.set(normConstraint.meta, { ...meta, solution: normConstraint.rhs, ctx: effectiveContext });
+      const isPatternSolved = (normConstraint.isPatternSolution === true || normConstraint.isPatternSolution === 'constant') ? true : meta.isPatternSolved;
+      newMetaVars.set(normConstraint.meta, { ...meta, solution: normConstraint.rhs, ctx: effectiveContext, isPatternSolved });
 
       // If this is a "hole:" prefixed constraint, also copy the solution to the plain ID
       // This is needed because registerHolesInTermAsMetas creates two meta entries:
@@ -777,7 +824,7 @@ export function solveConstraints(
         const plainId = normConstraint.meta.slice(5); // Remove "hole:" prefix
         const plainMeta = newMetaVars.get(plainId);
         if (plainMeta && !plainMeta.solution) {
-          newMetaVars.set(plainId, { ...plainMeta, solution: normConstraint.rhs, ctx: effectiveContext });
+          newMetaVars.set(plainId, { ...plainMeta, solution: normConstraint.rhs, ctx: effectiveContext, isPatternSolved });
         }
       }
     } else {
@@ -786,6 +833,22 @@ export function solveConstraints(
   }
 
   return { constraints: stillStuck, metaVars: newMetaVars };
+}
+
+/** Check if a term contains any Hole nodes (incomplete solutions from pattern unification) */
+function termContainsHole(term: TTKTerm): boolean {
+  switch (term.tag) {
+    case 'Hole': return true;
+    case 'Var': case 'Const': case 'Meta': return false;
+    case 'Sort': return termContainsHole(term.level);
+    case 'App': return termContainsHole(term.fn) || termContainsHole(term.arg);
+    case 'Binder':
+      return termContainsHole(term.domain) || termContainsHole(term.body) ||
+        (term.binderKind.tag === 'BLet' && termContainsHole(term.binderKind.defVal));
+    case 'Match':
+      return termContainsHole(term.scrutinee) || term.clauses.some(c => termContainsHole(c.rhs));
+    default: return false;
+  }
 }
 
 function termContainsMeta(term: TTKTerm): boolean {
@@ -829,6 +892,23 @@ export function canSolveMeta(meta: MetaVar, rhs: TTKTerm): boolean {
   return canSolveMetaInContext(rhs, meta.ctx.length);
 }
 
+/** Count the total number of variables bound by patterns in a clause */
+function countPatternVarsInClause(patterns: TTKPattern[]): number {
+  let count = 0;
+  for (const p of patterns) count += countPatternVarsInPattern(p);
+  return count;
+}
+
+function countPatternVarsInPattern(pattern: TTKPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      return pattern.args.reduce((sum, p) => sum + countPatternVarsInPattern(p), 0);
+  }
+}
+
 function canSolveMetaInContext(rhs: TTKTerm, contextLength: number): boolean {
   return maxFreeVarIndex(rhs) < contextLength;
 }
@@ -870,7 +950,10 @@ function maxFreeVarIndexAt(term: TTKTerm, depth: number): number {
     case 'Annot':
       return Math.max(maxFreeVarIndexAt(term.term, depth), maxFreeVarIndexAt(term.type, depth));
     case 'Match':
-      return Math.max(maxFreeVarIndexAt(term.scrutinee, depth), ...term.clauses.map(c => maxFreeVarIndexAt(c.rhs, depth)));
+      return Math.max(maxFreeVarIndexAt(term.scrutinee, depth), ...term.clauses.map(c => {
+        const patVars = countPatternVarsInClause(c.patterns);
+        return maxFreeVarIndexAt(c.rhs, depth + patVars);
+      }));
 
     case 'ULevel':
     case 'ULit':

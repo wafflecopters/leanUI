@@ -1,0 +1,18 @@
+@test success
+@name "Pattern unif: dependent motive inference for plusZeroRight"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ n) b = Succ (plus n b)
+
+-- This requires pattern unification to infer the motive:
+--   ?P n = Equal (plus n Zero) n
+--   Solution: ?P := \n => Equal (plus n Zero) n
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = cong Succ (plusZeroRight n)

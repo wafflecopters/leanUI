@@ -1,0 +1,11 @@
+@test success
+@name "Pattern unif: solution with free variables"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- f is a free variable in the motive solution
+-- ?P n = Equal (f n) (f n)   →   ?P := \n. Equal (f n) (f n)
+-- This tests that free vars (f) are correctly shifted past the lambda telescope
+fRefl : (f : Nat -> Nat) -> (n : Nat) -> Equal (f n) (f n)
+fRefl f Zero = refl
+fRefl f (Succ n) = refl

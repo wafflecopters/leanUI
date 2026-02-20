@@ -14,7 +14,6 @@ import { GoalState } from '../tactics/proof-state';
 import { convertToLatex, makeDefaultNotations } from '../compiler/latex-converter';
 import { LaTeXPanel } from './LaTeXPanel';
 import { WYSIWYGPanel } from './WYSIWYGPanel';
-import { parseAndResolveDeclarations, prettyPrintAllDeclarations } from '../compiler/declaration-printer';
 import { PRESETS } from '../presets';
 
 // Unicode abbreviations map (Lean-style)
@@ -991,15 +990,19 @@ export function TextEditorPage() {
     return compileTTFromText(code);
   }, [code]);
 
-  // Parse declarations for WYSIWYG panel (lightweight: parse + pattern resolve only, no type checking)
-  const parsedDeclarations = useMemo(() => {
+  // Flatten compiled declarations for WYSIWYG panel (excluding with-clause auxiliaries)
+  const compiledDeclarations = useMemo(() => {
     if (!showWYSIWYG) return [];
-    return parseAndResolveDeclarations(code);
-  }, [showWYSIWYG, code]);
-
-  const handleWysiwygChange = useCallback((decls: import('../parser/parser').ParsedDeclaration[]) => {
-    setCode(prettyPrintAllDeclarations(decls));
-  }, []);
+    const decls: import('../compiler/compile').CompiledDeclaration[] = [];
+    for (const block of compileResult.blocks) {
+      for (const d of block.declarations) {
+        if (!d.isWithAuxiliary) {
+          decls.push(d);
+        }
+      }
+    }
+    return decls;
+  }, [showWYSIWYG, compileResult]);
 
   // Convert to LaTeX document when panel is shown
   const latexNotations = useMemo(() => makeDefaultNotations(), []);
@@ -1856,8 +1859,8 @@ export function TextEditorPage() {
             minWidth: 0,
           }}>
             <WYSIWYGPanel
-              declarations={parsedDeclarations}
-              onDeclarationsChange={handleWysiwygChange}
+              declarations={compiledDeclarations}
+              onCodeChange={setCode}
             />
           </div>
         )}

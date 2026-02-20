@@ -1,81 +1,58 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ParsedDeclaration } from '../parser/parser';
-import { prettyPrintDeclaration } from '../compiler/declaration-printer';
-import { parseTTSource } from '../compiler/compile';
-import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
+import { CompiledDeclaration, parseTTSource } from '../compiler/compile';
+import { prettyPrintCompiledDeclaration } from '../compiler/declaration-printer';
 
 export interface WYSIWYGPanelProps {
-  declarations: ParsedDeclaration[];
-  onDeclarationsChange: (decls: ParsedDeclaration[]) => void;
+  /** Compiled declarations for display (zonked kernel terms — no unsolved metas) */
+  declarations: CompiledDeclaration[];
+  /** Called with new source text when the user edits a box */
+  onCodeChange: (code: string) => void;
 }
 
 /** Label for the declaration kind badge */
-function declKindLabel(decl: ParsedDeclaration): string {
-  if (decl.kind === 'inductive') return 'inductive';
-  if (decl.kind === 'record') return 'record';
-  if (decl.kind === 'def') {
-    if (decl.isPostulate) return 'postulate';
-    return 'definition';
+function declKindLabel(decl: CompiledDeclaration): string {
+  if (decl.kind === 'inductive') {
+    if (decl.isRecord) return 'record';
+    return 'inductive';
   }
-  return 'expression';
+  return 'definition';
 }
 
 /** Color for the declaration kind badge */
-function declKindColor(decl: ParsedDeclaration): string {
-  if (decl.kind === 'inductive') return '#3fb950';
-  if (decl.kind === 'record') return '#a371f7';
-  if (decl.kind === 'def') return '#58a6ff';
-  return '#8b949e';
-}
-
-/**
- * Build a constructor name set from the declarations for pattern resolution.
- */
-function buildSymbolContext(decls: ParsedDeclaration[]): Set<string> {
-  const names = new Set<string>();
-  for (const d of decls) {
-    if (d.constructors) {
-      for (const c of d.constructors) {
-        names.add(c.name);
-      }
-    }
+function declKindColor(decl: CompiledDeclaration): string {
+  if (decl.kind === 'inductive') {
+    if (decl.isRecord) return '#a371f7';
+    return '#3fb950';
   }
-  return names;
+  return '#58a6ff';
 }
 
 /**
- * Parse a single declaration's text, resolving patterns using
- * the constructor names from all other declarations.
+ * Validate that a box's text parses successfully.
+ * Returns null on success, error message on failure.
  */
-function parseBoxText(
-  text: string,
-  allDecls: ParsedDeclaration[],
-  boxIndex: number
-): { decls: ParsedDeclaration[]; error: string | null } {
+function validateBoxText(text: string): string | null {
   try {
     const result = parseTTSource(text);
-    const parsed: ParsedDeclaration[] = [];
+    let hasDecleration = false;
     for (const block of result.blocks) {
-      if (block.kind === 'declarations') {
-        parsed.push(...block.declarations);
+      if (block.kind === 'declarations' && block.declarations.length > 0) {
+        hasDecleration = true;
+      }
+      if (block.kind === 'error') {
+        return block.errors[0]?.message || 'Parse error';
       }
     }
-    if (parsed.length === 0) {
-      return { decls: [], error: 'No declaration found' };
+    if (!hasDecleration) {
+      return 'No declaration found';
     }
-
-    // Build symbol context from all other declarations
-    const otherDecls = allDecls.filter((_, i) => i !== boxIndex);
-    const ctx = buildSymbolContext([...otherDecls, ...parsed]);
-    const resolved = resolvePatternsInDeclarations(parsed, ctx);
-
-    return { decls: resolved, error: null };
+    return null;
   } catch (e) {
-    return { decls: [], error: e instanceof Error ? e.message : String(e) };
+    return e instanceof Error ? e.message : String(e);
   }
 }
 
-export function WYSIWYGPanel({ declarations, onDeclarationsChange }: WYSIWYGPanelProps) {
+export function WYSIWYGPanel({ declarations, onCodeChange }: WYSIWYGPanelProps) {
   // Local textarea content per box
   const [localTexts, setLocalTexts] = useState<string[]>([]);
   // Which box is being edited (null = sync from props)
@@ -85,14 +62,14 @@ export function WYSIWYGPanel({ declarations, onDeclarationsChange }: WYSIWYGPane
   // "+" menu state
   const [addMenuOpen, setAddMenuOpen] = useState(false);
 
-  // Ref to track the latest declarations for closures
-  const declsRef = useRef(declarations);
-  declsRef.current = declarations;
+  // Ref to track the latest local texts for closures
+  const localTextsRef = useRef(localTexts);
+  localTextsRef.current = localTexts;
 
-  // Sync local texts from declarations when not editing
+  // Sync local texts from compiled declarations when not editing
   useEffect(() => {
     if (editingIndex === null) {
-      const texts = declarations.map(d => prettyPrintDeclaration(d));
+      const texts = declarations.map(d => prettyPrintCompiledDeclaration(d));
       setLocalTexts(texts);
       setErrors(declarations.map(() => null));
     }
@@ -117,35 +94,35 @@ export function WYSIWYGPanel({ declarations, onDeclarationsChange }: WYSIWYGPane
   }, []);
 
   const handleBlur = useCallback((index: number) => {
-    const text = localTexts[index];
+    const text = localTextsRef.current[index];
     if (text === undefined) {
       setEditingIndex(null);
       return;
     }
 
-    const { decls: parsed, error } = parseBoxText(text, declsRef.current, index);
-
-    if (error || parsed.length === 0) {
+    // Validate the edited box
+    const error = validateBoxText(text);
+    if (error) {
       setErrors(prev => {
         const next = [...prev];
-        next[index] = error || 'Empty declaration';
+        next[index] = error;
         return next;
       });
       setEditingIndex(null);
       return;
     }
 
-    // Replace declaration(s) at this index with parsed result
-    const newDecls = [...declsRef.current];
-    newDecls.splice(index, 1, ...parsed);
+    // Reconstruct full source from all box texts and push up
     setEditingIndex(null);
-    onDeclarationsChange(newDecls);
-  }, [localTexts, onDeclarationsChange]);
+    const fullSource = localTextsRef.current.join('\n\n') + '\n';
+    onCodeChange(fullSource);
+  }, [onCodeChange]);
 
   const handleDelete = useCallback((index: number) => {
-    const newDecls = declsRef.current.filter((_, i) => i !== index);
-    onDeclarationsChange(newDecls);
-  }, [onDeclarationsChange]);
+    const newTexts = localTextsRef.current.filter((_, i) => i !== index);
+    const fullSource = newTexts.join('\n\n') + '\n';
+    onCodeChange(fullSource);
+  }, [onCodeChange]);
 
   const handleAdd = useCallback((kind: 'inductive' | 'record' | 'def') => {
     setAddMenuOpen(false);
@@ -161,13 +138,10 @@ export function WYSIWYGPanel({ declarations, onDeclarationsChange }: WYSIWYGPane
         template = 'newDef : Type\nnewDef = _';
         break;
     }
-
-    // Parse the template to get a real declaration
-    const { decls: parsed } = parseBoxText(template, declsRef.current, -1);
-    if (parsed.length > 0) {
-      onDeclarationsChange([...declsRef.current, ...parsed]);
-    }
-  }, [onDeclarationsChange]);
+    const newTexts = [...localTextsRef.current, template];
+    const fullSource = newTexts.join('\n\n') + '\n';
+    onCodeChange(fullSource);
+  }, [onCodeChange]);
 
   return (
     <div style={{

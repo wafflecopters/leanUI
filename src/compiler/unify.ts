@@ -1,4 +1,4 @@
-import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKTerm, isDefinitionallyEqual } from "./kernel";
+import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKTerm, TTKPattern, isDefinitionallyEqual } from "./kernel";
 import { DefinitionsMap, extractAppSpine } from "./term";
 import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
@@ -36,8 +36,14 @@ const DEFAULT_UNIFY_FUEL = 1000;
 
 export type Substitutions = [number, TTKTerm][]
 
-/** Constraint: metavariable ?m should equal rhs */
-export type MetaConstraint = { meta: string; rhs: TTKTerm }
+/** Constraint: metavariable ?m should equal rhs.
+ *  isPatternSolution:
+ *    true      → non-constant pattern solution (spine vars used in RHS)
+ *    'constant' → constant-function pattern solution (spine vars NOT used in RHS, metas may be present)
+ *    false     → constant-function heuristic (from solveFlexRigid)
+ *    undefined → non-flex-rigid (bare meta assign, APP decomposition, etc.)
+ */
+export type MetaConstraint = { meta: string; rhs: TTKTerm; isPatternSolution?: boolean | 'constant' }
 
 /** Constraint: level metavariable ?l should equal rhs (now a term) */
 export type LevelConstraint = { lmvar: string; rhs: TTKTerm }
@@ -363,6 +369,7 @@ function adjustMetaConstraintDepth(result: UnifyResult): UnifyResult {
   const adjusted = result.metaConstraints.map(mc => ({
     meta: mc.meta,
     rhs: shiftTerm(mc.rhs, -1, 0),
+    isPatternSolution: mc.isPatternSolution,
   }));
 
   return {
@@ -393,6 +400,7 @@ function containsVars(term: TTKTerm): boolean {
       return false;
   }
 }
+
 
 export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): UnifyResult {
   // OPTIMIZATION: If terms are structurally identical, they unify immediately.
@@ -654,6 +662,46 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // datatype, check that the indices are self-unifiable before proceeding.
   // ─────────────────────────────────────────────────────────────────────────
   if (a.tag === 'App' && b.tag === 'App') {
+    // PATTERN UNIFICATION: If one side is a meta-headed application with a
+    // pairwise-distinct-var spine, pattern unification gives the precise solution.
+    // This must be attempted BEFORE structural decomposition, which would lose
+    // the spine information (decomposing App(Meta(?P), arg) vs App(f, arg) into
+    // Meta(?P) = f, losing the arg needed for pattern unification).
+    //
+    // If pattern unif fails (non-var spine), fall through to normal App decomposition.
+    const metaAppA = extractMetaApp(a);
+    if (metaAppA) {
+      const patternResult = tryPatternUnify(metaAppA.meta, metaAppA.args, b);
+      if (patternResult !== null) {
+        return {
+          success: true,
+          substitutions: [],
+          metaConstraints: [{
+            meta: metaAppA.meta,
+            rhs: patternResult.solution,
+            isPatternSolution: patternResult.isConstant ? 'constant' as const : true,
+          }],
+          levelConstraints: [],
+        };
+      }
+    }
+    const metaAppB = extractMetaApp(b);
+    if (metaAppB) {
+      const patternResult = tryPatternUnify(metaAppB.meta, metaAppB.args, a);
+      if (patternResult !== null) {
+        return {
+          success: true,
+          substitutions: [],
+          metaConstraints: [{
+            meta: metaAppB.meta,
+            rhs: patternResult.solution,
+            isPatternSolution: patternResult.isConstant ? 'constant' as const : true,
+          }],
+          levelConstraints: [],
+        };
+      }
+    }
+
     // Extract spines to check if both are constructor applications
     const spineA = extractAppSpine(a);
     const spineB = extractAppSpine(b);
@@ -804,41 +852,33 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // ─────────────────────────────────────────────────────────────────────────
   // FLEX-RIGID - Meta applied to arguments vs rigid term
   //
-  // When one side is App(Meta(?m), arg1, arg2, ...) and the other is rigid,
-  // use the constant-function heuristic: solve ?m = \_ ... _ => rhs
-  // (ignoring all arguments). This handles common cases like:
-  //   ?P Zero = Nat  →  ?P = \_ => Nat
+  // When one side is App(Meta(?m), arg1, arg2, ...) and the other is rigid:
   //
-  // This is sound when the args don't appear free in rhs. Since the lambdas
-  // ignore their arguments (using wildcards), the solution beta-reduces
-  // correctly: (\_ => Nat) Zero = Nat.
+  // 1. Try PATTERN UNIFICATION (Miller fragment): if all args are pairwise
+  //    distinct bound variables, compute the precise solution by inverting
+  //    the spine. E.g.: ?P n = Equal (plus n Zero) n → ?P = \n. Equal (plus n Zero) n
+  //
+  // 2. Fall back to CONSTANT-FUNCTION heuristic: ?m = \_ ... _ => rhs
+  //    (ignoring all arguments). Sound when args don't appear free in rhs.
   // ─────────────────────────────────────────────────────────────────────────
   {
     const metaAppA = extractMetaApp(a);
     if (metaAppA) {
-      const numArgs = metaAppA.args.length;
-      let solution = shiftTerm(b, numArgs, 0);
-      for (let i = 0; i < numArgs; i++) {
-        solution = mkLambda(mkSort(mkULit(0)), solution, '_');
-      }
+      const { solution, isPatternSolution } = solveFlexRigid(metaAppA.meta, metaAppA.args, b);
       return {
         success: true,
         substitutions: [],
-        metaConstraints: [{ meta: metaAppA.meta, rhs: solution }],
+        metaConstraints: [{ meta: metaAppA.meta, rhs: solution, isPatternSolution }],
         levelConstraints: [],
       };
     }
     const metaAppB = extractMetaApp(b);
     if (metaAppB) {
-      const numArgs = metaAppB.args.length;
-      let solution = shiftTerm(a, numArgs, 0);
-      for (let i = 0; i < numArgs; i++) {
-        solution = mkLambda(mkSort(mkULit(0)), solution, '_');
-      }
+      const { solution, isPatternSolution } = solveFlexRigid(metaAppB.meta, metaAppB.args, a);
       return {
         success: true,
         substitutions: [],
-        metaConstraints: [{ meta: metaAppB.meta, rhs: solution }],
+        metaConstraints: [{ meta: metaAppB.meta, rhs: solution, isPatternSolution }],
         levelConstraints: [],
       };
     }
@@ -848,6 +888,264 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   // CONFLICT - Different term constructors cannot unify
   // ─────────────────────────────────────────────────────────────────────────
   return { success: false, reason: 'conflict' };
+}
+
+// ============================================================================
+// Pattern Unification (Miller Fragment)
+// ============================================================================
+
+/**
+ * Solve a flex-rigid equation: App(Meta(?m), x1, ..., xn) = rhs.
+ *
+ * Tries pattern unification first (precise), falls back to the
+ * constant-function heuristic (conservative).
+ */
+function solveFlexRigid(metaId: string, spine: TTKTerm[], rhs: TTKTerm): { solution: TTKTerm, isPatternSolution: boolean | 'constant' } {
+  // Try pattern unification: if spine is pairwise distinct bound vars,
+  // compute the precise solution by inverting the spine.
+  const patternResult = tryPatternUnify(metaId, spine, rhs);
+  if (patternResult !== null) {
+    return {
+      solution: patternResult.solution,
+      isPatternSolution: patternResult.isConstant ? 'constant' as const : true,
+    };
+  }
+
+  // Fall back to constant-function heuristic: ?m = \_ ... _ => rhs
+  const numArgs = spine.length;
+  let solution = shiftTerm(rhs, numArgs, 0);
+  for (let i = 0; i < numArgs; i++) {
+    solution = mkLambda(mkSort(mkULit(0)), solution, '_');
+  }
+  return { solution, isPatternSolution: false };
+}
+
+/**
+ * Try to solve a flex-rigid equation by Miller's pattern unification.
+ *
+ * Given ?M x1 ... xn = t where each xi = Var(ii) and all ii are
+ * pairwise distinct, compute ?M := \x1...\xn. rename(t).
+ *
+ * The renaming maps spine variables to lambda binder positions and
+ * shifts other free variables past the lambda telescope.
+ *
+ * Returns the complete solution (wrapped in lambdas), or null if
+ * pattern unification doesn't apply (non-Var in spine, repeated
+ * indices, scope escape, or occurs check failure).
+ */
+function tryPatternUnify(
+  metaId: string,
+  spine: TTKTerm[],
+  rhs: TTKTerm,
+): { solution: TTKTerm; isConstant: boolean } | null {
+  const numArgs = spine.length;
+
+  // 1. Check spine is a pattern: all args must be distinct Vars
+  const varIndices: number[] = [];
+  for (const arg of spine) {
+    if (arg.tag !== 'Var') return null;
+    if (varIndices.includes(arg.index)) return null; // non-linear
+    varIndices.push(arg.index);
+  }
+
+  // 2. Build renaming: varIndices[j] → j (position in lambda telescope)
+  //    Lambda binders are outermost-first, so in de Bruijn:
+  //    position 0 (first/outermost lambda) = index numArgs-1 inside body
+  //    position n-1 (last/innermost lambda) = index 0 inside body
+  const renaming = new Map<number, number>();
+  for (let j = 0; j < numArgs; j++) {
+    renaming.set(varIndices[j], j);
+  }
+
+  // 3. Apply renaming to rhs with occurs check
+  const renamed = applyPatternRenaming(rhs, renaming, numArgs, metaId, 0);
+  if (renamed === null) return null;
+
+  // 4. Check if the solution uses the lambda-bound variables.
+  //    If it does, this is a genuine non-constant pattern solution (highest priority).
+  //    If it doesn't, it's a constant-function pattern solution (lower priority than
+  //    non-constant patterns, but higher than bare meta assigns).
+  const isConstant = !usesLambdaVars(renamed, numArgs, 0);
+
+  // 5. Wrap in lambdas (outermost first: \x0. \x1. ... \xn-1. body)
+  let solution = renamed;
+  for (let i = numArgs - 1; i >= 0; i--) {
+    solution = mkLambda(mkSort(mkULit(0)), solution, '_');
+  }
+
+  return { solution, isConstant };
+}
+
+/**
+ * Check if a renamed pattern body uses any of the lambda-bound variables.
+ * At depth d, the lambda-bound vars are indices d..d+numArgs-1.
+ * Skips inside Meta nodes (they might resolve to contain the variables later,
+ * but we can't verify that now).
+ */
+function usesLambdaVars(term: TTKTerm, numArgs: number, depth: number): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return term.index >= depth && term.index < depth + numArgs;
+    case 'App':
+      return usesLambdaVars(term.fn, numArgs, depth) || usesLambdaVars(term.arg, numArgs, depth);
+    case 'Binder':
+      return usesLambdaVars(term.domain, numArgs, depth) || usesLambdaVars(term.body, numArgs, depth + 1);
+    case 'Match':
+      if (usesLambdaVars(term.scrutinee, numArgs, depth)) return true;
+      return term.clauses.some(c => {
+        const patVars = c.patterns.reduce((sum, p) => sum + countPatternBinders(p), 0);
+        return usesLambdaVars(c.rhs, numArgs, depth + patVars);
+      });
+    case 'Annot':
+      return usesLambdaVars(term.term, numArgs, depth) || usesLambdaVars(term.type, numArgs, depth);
+    case 'Meta':
+    case 'Const':
+    case 'Hole':
+    case 'Sort':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+      return false;
+    default:
+      return false;
+  }
+}
+
+/** Count binders introduced by a pattern (for depth tracking in usesLambdaVars) */
+function countPatternBinders(pat: TTKPattern): number {
+  switch (pat.tag) {
+    case 'PVar': return 1;
+    case 'PWild': return 1;  // PWild also binds a de Bruijn variable (unnamed but occupies a slot)
+    case 'PCtor': return pat.args.reduce((sum, p) => sum + countPatternBinders(p), 0);
+    default: return 0;
+  }
+}
+
+/**
+ * Apply a pattern renaming to a term.
+ *
+ * For a free variable Var(k) at traversal depth d:
+ * - If k < d: locally bound within rhs, keep as-is
+ * - If k >= d and (k-d) is a spine var at position j:
+ *   → Var(d + numArgs - 1 - j)  (lambda binder in de Bruijn)
+ * - If k >= d and (k-d) is NOT a spine var:
+ *   → Var(k + numArgs)  (shifted past lambda telescope)
+ *
+ * Returns null on occurs check failure (metaId found in term).
+ */
+function applyPatternRenaming(
+  term: TTKTerm,
+  renaming: Map<number, number>,
+  numArgs: number,
+  metaId: string,
+  depth: number
+): TTKTerm | null {
+  switch (term.tag) {
+    case 'Var': {
+      if (term.index < depth) return term; // locally bound in rhs
+      const freeIdx = term.index - depth;
+      const lambdaPos = renaming.get(freeIdx);
+      if (lambdaPos !== undefined) {
+        // Spine var → lambda binder position (de Bruijn: outermost = numArgs-1)
+        const newIdx = depth + numArgs - 1 - lambdaPos;
+        return newIdx === term.index ? term : mkVar(newIdx);
+      }
+      // Not a spine var: shift past lambda telescope
+      return mkVar(term.index + numArgs);
+    }
+
+    case 'Meta':
+      if (term.id === metaId) return null; // occurs check
+      return term;
+
+    case 'Const':
+    case 'Hole':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+      return term;
+
+    case 'Sort': {
+      const level = applyPatternRenaming(term.level, renaming, numArgs, metaId, depth);
+      if (level === null) return null;
+      if (level === term.level) return term;
+      return { tag: 'Sort', level };
+    }
+
+    case 'App': {
+      const fn = applyPatternRenaming(term.fn, renaming, numArgs, metaId, depth);
+      if (fn === null) return null;
+      const arg = applyPatternRenaming(term.arg, renaming, numArgs, metaId, depth);
+      if (arg === null) return null;
+      if (fn === term.fn && arg === term.arg) return term;
+      return { tag: 'App', fn, arg };
+    }
+
+    case 'Binder': {
+      const domain = applyPatternRenaming(term.domain, renaming, numArgs, metaId, depth);
+      if (domain === null) return null;
+      const body = applyPatternRenaming(term.body, renaming, numArgs, metaId, depth + 1);
+      if (body === null) return null;
+      let binderKind = term.binderKind;
+      if (binderKind.tag === 'BLet') {
+        const defVal = applyPatternRenaming(binderKind.defVal, renaming, numArgs, metaId, depth);
+        if (defVal === null) return null;
+        if (defVal !== binderKind.defVal) {
+          binderKind = { ...binderKind, defVal };
+        }
+      }
+      if (domain === term.domain && body === term.body && binderKind === term.binderKind) return term;
+      return { ...term, domain, body, binderKind };
+    }
+
+    case 'Annot': {
+      const t = applyPatternRenaming(term.term, renaming, numArgs, metaId, depth);
+      if (t === null) return null;
+      const ty = applyPatternRenaming(term.type, renaming, numArgs, metaId, depth);
+      if (ty === null) return null;
+      if (t === term.term && ty === term.type) return term;
+      return { tag: 'Annot', term: t, type: ty };
+    }
+
+    case 'Match': {
+      const scrutinee = applyPatternRenaming(term.scrutinee, renaming, numArgs, metaId, depth);
+      if (scrutinee === null) return null;
+      const clauses = [];
+      let changed = scrutinee !== term.scrutinee;
+      for (const c of term.clauses) {
+        const patVarCount = countPatternBindings(c.patterns);
+        const clauseRhs = applyPatternRenaming(c.rhs, renaming, numArgs, metaId, depth + patVarCount);
+        if (clauseRhs === null) return null;
+        if (clauseRhs !== c.rhs) changed = true;
+        clauses.push(clauseRhs === c.rhs ? c : { ...c, rhs: clauseRhs });
+      }
+      if (!changed) return term;
+      return { tag: 'Match', scrutinee, clauses };
+    }
+  }
+}
+
+/** Count the number of variable bindings in a list of patterns. */
+function countPatternBindings(patterns: TTKPattern[]): number {
+  let count = 0;
+  for (const p of patterns) {
+    count += countSinglePatternBindings(p);
+  }
+  return count;
+}
+
+function countSinglePatternBindings(p: TTKPattern): number {
+  switch (p.tag) {
+    case 'PVar': return 1;
+    case 'PWild': return 1;  // PWild also binds a de Bruijn variable (unnamed but occupies a slot)
+    case 'PCtor': {
+      let count = 0;
+      for (const arg of p.args) {
+        count += countSinglePatternBindings(arg);
+      }
+      return count;
+    }
+  }
 }
 
 // ============================================================================
@@ -870,7 +1168,6 @@ function extractMetaApp(term: TTKTerm): { meta: string; args: TTKTerm[] } | null
 // Pattern Matching Helpers
 // ============================================================================
 
-import { TTKPattern } from "./kernel";
 import { subst } from "./subst";
 import { transformVarsInTerm } from "./term";
 

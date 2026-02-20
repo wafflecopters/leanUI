@@ -1,0 +1,7 @@
+@test success
+@name "Pattern unif: Vec head with index unification"
+@import preambles/nat.tt
+@import preambles/vec.tt
+
+vhead : {A : Type} -> {n : Nat} -> Vec A (Succ n) -> A
+vhead (VCons x xs) = x

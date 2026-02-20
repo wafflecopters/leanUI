@@ -194,7 +194,7 @@ elabToKernelWithMap(
 ### Elaboration Tasks
 
 1. **De Bruijn conversion**: Named vars → indices
-2. **Record inlining**: Expand `extends` clauses
+2. **Record inlining**: Expand `extends` clauses (field inheritance only — no `toParent` coercion functions are generated, and no automatic coercion insertion during elaboration; see Lean's `structure extends` for comparison)
 3. **Named arg reordering**: `{a := 1}` → positional slot
 4. **Implicit filling**: Insert Holes for omitted implicits
 5. **Let type holes**: `let x = v` → `let x : Hole = v`

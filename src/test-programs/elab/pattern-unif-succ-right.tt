@@ -1,0 +1,23 @@
+@test success
+@name "Pattern unif: plusSuccRight motive inference"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl q = q
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ n) b = Succ (plus n b)
+
+-- plusSuccRight : (n m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+-- Requires motive: ?P n = Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight : (n : Nat) -> (m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = cong Succ (plusSuccRight n m)

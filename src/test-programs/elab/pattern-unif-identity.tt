@@ -1,0 +1,12 @@
+@test success
+@name "Pattern unif: identity motive ?P x = x"
+@import preambles/nat.tt
+
+-- postulate an eliminator with a dependent motive
+postulate ind : {P : Nat -> Type} -> P Zero -> ({n : Nat} -> P n -> P (Succ n)) -> (n : Nat) -> P n
+
+-- identity : (n : Nat) -> Nat
+-- The motive ?P must be inferred as \n => Nat (constant, same as before)
+-- but also exercising pattern unification path (which also produces \_ => Nat)
+identity : Nat -> Nat
+identity n = ind Zero (\ih => Succ ih) n

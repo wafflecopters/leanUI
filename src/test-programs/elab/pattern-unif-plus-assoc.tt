@@ -1,0 +1,35 @@
+@test success
+@name "Pattern unif: plusAssoc full motive inference"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl q = q
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ n) b = Succ (plus n b)
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = cong Succ (plusZeroRight n)
+
+plusSuccRight : (n : Nat) -> (m : Nat) -> Equal (plus n (Succ m)) (Succ (plus n m))
+plusSuccRight Zero m = refl
+plusSuccRight (Succ n) m = cong Succ (plusSuccRight n m)
+
+plusComm : (n : Nat) -> (m : Nat) -> Equal (plus n m) (plus m n)
+plusComm Zero m = sym (plusZeroRight m)
+plusComm (Succ n) m = trans (cong Succ (plusComm n m)) (sym (plusSuccRight m n))
+
+-- Associativity: the hardest motive inference
+-- ?P a = Equal (plus (plus a b) c) (plus a (plus b c))
+plusAssoc : (a : Nat) -> (b : Nat) -> (c : Nat) -> Equal (plus (plus a b) c) (plus a (plus b c))
+plusAssoc Zero b c = refl
+plusAssoc (Succ a) b c = cong Succ (plusAssoc a b c)

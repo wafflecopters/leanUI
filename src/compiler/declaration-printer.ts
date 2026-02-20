@@ -1,17 +1,21 @@
 /**
- * Pretty-print ParsedDeclarations back to source text.
+ * Pretty-print declarations back to source text.
  *
- * This is the inverse of parsing: given a ParsedDeclaration (surface-level TT tree),
- * reconstruct the source text that would parse back to the same declaration.
+ * Two modes:
+ * 1. prettyPrintDeclaration(ParsedDeclaration) — from surface syntax (for editing roundtrip)
+ * 2. prettyPrintCompiledDeclaration(CompiledDeclaration) — from kernel output (for display)
  *
- * Used by the WYSIWYG editor for bidirectional sync: TT tree ↔ source text.
+ * The compiled path uses zonked kernel terms, so all metas are resolved and
+ * lambda binder types are fully elaborated (no ?ih_type holes).
  */
 
 import { ParsedDeclaration } from '../parser/parser';
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { TTerm, TPattern, TClause } from './surface';
 import { prettyPrintTT, prettyPrintPatternTT } from './surface';
-import { parseTTSource } from './compile';
+import { parseTTSource, CompiledDeclaration } from './compile';
+import { prettyPrintFormatted, prettyPrintPattern, prettyPrintPatternList } from './kernel';
+import { TTKTerm, TTKPattern, TTKClause } from './kernel';
 
 /**
  * Strip outer parentheses from a string, e.g. "(Nat -> Nat)" → "Nat -> Nat"
@@ -63,6 +67,22 @@ export function collectPatternVars(patterns: TPattern[]): string[] {
   return vars;
 }
 
+/** Collect variable names from kernel patterns */
+function collectKernelPatternVars(patterns: TTKPattern[]): string[] {
+  const vars: string[] = [];
+  function walk(pat: TTKPattern): void {
+    switch (pat.tag) {
+      case 'PVar': vars.push(pat.name); break;
+      case 'PWild': vars.push(pat.name || '_'); break;
+      case 'PCtor':
+        for (const arg of pat.args) walk(arg);
+        break;
+    }
+  }
+  for (const p of patterns) walk(p);
+  return vars;
+}
+
 /**
  * Print a single clause of a pattern-matching definition.
  * Returns "name pat1 pat2 = rhs"
@@ -80,6 +100,25 @@ function printClause(name: string, clause: TClause, outerContext: string[]): str
   const patsStr = patternStrs.length > 0 ? ' ' + patternStrs.join(' ') : '';
   return `${name}${patsStr} = ${rhsStr}`;
 }
+
+/** Print a kernel clause as "name pat1 pat2 = rhs" */
+function printKernelClause(name: string, clause: TTKClause): string {
+  const patternStrs = clause.patterns.map(p => prettyPrintPattern(p));
+
+  // Build context for RHS from pattern vars (or stored contextNames)
+  const context = clause.contextNames
+    ? [...clause.contextNames]
+    : [...collectKernelPatternVars(clause.patterns).reverse()];
+
+  const rhsStr = stripOuterParens(prettyPrintFormatted(clause.rhs, context, clause.metaVars));
+
+  const patsStr = patternStrs.length > 0 ? ' ' + patternStrs.join(' ') : '';
+  return `${name}${patsStr} = ${rhsStr}`;
+}
+
+// ============================================================================
+// Surface (ParsedDeclaration) Pretty-Printing
+// ============================================================================
 
 /**
  * Pretty-print a single ParsedDeclaration back to source text.
@@ -234,6 +273,118 @@ function printExpr(decl: ParsedDeclaration): string {
   }
   return '_';
 }
+
+// ============================================================================
+// Compiled (CompiledDeclaration) Pretty-Printing
+// ============================================================================
+
+/**
+ * Pretty-print a CompiledDeclaration using zonked kernel terms.
+ *
+ * All metas are resolved, so lambda binder types show their inferred types
+ * (e.g., `\(ih : PeanoNat.carrier N)`) instead of parser Holes (`?ih_type`).
+ *
+ * Falls back to surface terms for records (which preserve record syntax).
+ */
+export function prettyPrintCompiledDeclaration(decl: CompiledDeclaration): string {
+  if (decl.kind === 'inductive') {
+    // Records: use surface fields to preserve record syntax
+    if (decl.isRecord && decl.surfaceFields) {
+      return printCompiledRecord(decl);
+    }
+    return printCompiledInductive(decl);
+  }
+  return printCompiledDef(decl);
+}
+
+function printCompiledInductive(decl: CompiledDeclaration): string {
+  const name = decl.name || 'Unnamed';
+  const typeStr = decl.prettyType ? ' : ' + stripOuterParens(decl.prettyType) : '';
+  const lines = [`inductive ${name}${typeStr} where`];
+
+  if (decl.prettyConstructors) {
+    for (const ctor of decl.prettyConstructors) {
+      lines.push(`  ${ctor.name} : ${stripOuterParens(ctor.prettyType)}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function printCompiledRecord(decl: CompiledDeclaration): string {
+  const name = decl.name || 'Unnamed';
+
+  // Use surface params for record syntax
+  let paramsStr = '';
+  let paramContext: string[] = [];
+  if (decl.surfaceParams && decl.surfaceParams.length > 0) {
+    const paramParts: string[] = [];
+    for (const p of decl.surfaceParams) {
+      const typeStr = stripOuterParens(prettyPrintTT(p.type, paramContext));
+      paramParts.push(`(${p.name} : ${typeStr})`);
+      paramContext = [p.name, ...paramContext];
+    }
+    paramsStr = ' ' + paramParts.join(' ');
+  }
+
+  // Use surface extends expressions
+  let extendsStr = '';
+  if (decl.surfaceExtendsExprs && decl.surfaceExtendsExprs.length > 0) {
+    const extParts = decl.surfaceExtendsExprs.map(e => stripOuterParens(prettyPrintTT(e, paramContext)));
+    extendsStr = ' extends ' + extParts.join(', ');
+  }
+
+  const lines = [`record ${name}${paramsStr}${extendsStr} where`];
+
+  // Use surface fields
+  if (decl.surfaceFields) {
+    let fieldContext = paramContext;
+    for (const field of decl.surfaceFields) {
+      const typeStr = stripOuterParens(prettyPrintTT(field.type, fieldContext));
+      lines.push(`  ${field.name} : ${typeStr}`);
+      fieldContext = [field.name, ...fieldContext];
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function printCompiledDef(decl: CompiledDeclaration): string {
+  const name = decl.name || '_';
+  const lines: string[] = [];
+
+  // Type signature (from kernel, fully resolved)
+  if (decl.prettyType) {
+    lines.push(`${name} : ${stripOuterParens(decl.prettyType)}`);
+  }
+
+  // Value (from kernel)
+  const kv = decl.kernelValue;
+  if (kv) {
+    if (kv.tag === 'Match' && kv.scrutinee.tag === 'Hole' && kv.scrutinee.id === '_scrutinee') {
+      // Pattern-matching definition: render each clause as "name pats = rhs"
+      for (const clause of kv.clauses) {
+        lines.push(printKernelClause(name, clause));
+      }
+    } else {
+      // Simple definition: use prettyValue or render kernelValue
+      const valueStr = decl.prettyValue
+        ? stripOuterParens(decl.prettyValue)
+        : stripOuterParens(prettyPrintFormatted(kv, []));
+      lines.push(`${name} = ${valueStr}`);
+    }
+  }
+
+  if (lines.length === 0) {
+    return name;
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
+// Utility functions
+// ============================================================================
 
 /**
  * Pretty-print an array of declarations, joining with blank lines.

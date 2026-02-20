@@ -1,0 +1,45 @@
+@test success
+@name "Constraint ordering: PeanoNat.ind motive inference"
+@import preambles/equality.tt
+
+inductive Void : Type where
+
+Not : {u : ULevel} -> Type u -> Type ω
+Not A = A -> Void
+
+record PeanoNat : Type 1 where
+  carrier : Type
+  zero : carrier
+  succ : carrier -> carrier
+  zeroNeqSucc : {n : carrier} -> Not (Equal zero (succ n))
+  succInj : {m n : carrier} -> Equal (succ m) (succ n) -> Equal m n
+  ind : {P : carrier -> Type} -> P zero -> ({n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> P n
+  indZero : {P : carrier -> Type} -> (base : P zero) -> (step : {n : carrier} -> P n -> P (succ n)) -> Equal (ind base step zero) base
+  indSucc : {P : carrier -> Type} -> (base : P zero) -> (step : {n : carrier} -> P n -> P (succ n)) -> (n : carrier) -> Equal (ind base step (succ n)) (step (ind base step n))
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl q = q
+
+plus : (N : PeanoNat) -> PeanoNat.carrier N -> PeanoNat.carrier N -> PeanoNat.carrier N
+plus N n m = PeanoNat.ind N m (\ih => PeanoNat.succ N ih) n
+
+plusZeroEq : (N : PeanoNat) -> (m : PeanoNat.carrier N) -> Equal (plus N (PeanoNat.zero N) m) m
+plusZeroEq N m = PeanoNat.indZero N m (\ih => PeanoNat.succ N ih)
+
+plusSuccEq : (N : PeanoNat) -> (k : PeanoNat.carrier N) -> (m : PeanoNat.carrier N) -> Equal (plus N (PeanoNat.succ N k) m) (PeanoNat.succ N (plus N k m))
+plusSuccEq N k m = PeanoNat.indSucc N m (\ih => PeanoNat.succ N ih) k
+
+-- plusZeroRight WITHOUT explicit {P := ...} annotation
+-- The motive ?P n = Equal (plus N n (PeanoNat.zero N)) n should be inferred
+-- via constraint prioritization: pattern constraint from return type beats
+-- constant-function constraint from base case
+plusZeroRight : (N : PeanoNat) -> (n : PeanoNat.carrier N) -> Equal (plus N n (PeanoNat.zero N)) n
+plusZeroRight N = (PeanoNat.ind N
+  (plusZeroEq N (PeanoNat.zero N))
+  (\ih => trans (plusSuccEq N _ (PeanoNat.zero N)) (cong (PeanoNat.succ N) ih)))

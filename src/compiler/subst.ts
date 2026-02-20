@@ -457,7 +457,10 @@ function minFreeVarIndexHelper(term: TTKTerm, depth: number): number {
 
     case 'Match': {
       const scrutineeMin = minFreeVarIndexHelper(term.scrutinee, depth);
-      const clauseMins = term.clauses.map(c => minFreeVarIndexHelper(c.rhs, depth));
+      const clauseMins = term.clauses.map(c => {
+        const patVars = countClausePatternVars(c.patterns);
+        return minFreeVarIndexHelper(c.rhs, depth + patVars);
+      });
       return Math.min(scrutineeMin, ...clauseMins);
     }
 

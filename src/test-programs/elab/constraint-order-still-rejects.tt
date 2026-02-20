@@ -1,0 +1,24 @@
+@test failure
+@name "Constraint ordering: wrong induction step still fails"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl q = q
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ n) b = Succ (plus n b)
+
+-- Wrong step: uses refl instead of a real proof, so the step body has type
+-- Equal n n (from refl), not Equal (plus (Succ n) Zero) (Succ n).
+-- Pattern unification and constraint ordering should NOT mask this error.
+broken : (n : Nat) -> Equal (plus n Zero) n
+broken Zero = refl
+broken (Succ n) = cong Succ refl

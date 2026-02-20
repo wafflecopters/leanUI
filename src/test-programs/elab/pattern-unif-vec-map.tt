@@ -1,0 +1,8 @@
+@test success
+@name "Pattern unif: Vec map preserves length index"
+@import preambles/nat.tt
+@import preambles/vec.tt
+
+vmap : {A B : Type} -> {n : Nat} -> (A -> B) -> Vec A n -> Vec B n
+vmap f VNil = VNil
+vmap f (VCons x xs) = VCons (f x) (vmap f xs)

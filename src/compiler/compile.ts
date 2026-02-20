@@ -2497,7 +2497,7 @@ function checkDeclaration(
     surfaceConstructors: decl.surfaceConstructors,
     // Kernel terms
     kernelType: decl.kernelType,
-    kernelValue: decl.kernelValue,
+    kernelValue: checkedValue ?? decl.kernelValue,
     kernelConstructors: effectiveConstructors,
     indexPositions,
     prettyType: decl.kernelType ? prettyPrintTTK(decl.kernelType) : undefined,
@@ -3856,7 +3856,7 @@ function insertFieldImplicitHoles(
 
       for (let pos = 0; pos < info.totalArity && (posIdx < transformedArgs.length || namedPositions.has(pos)); pos++) {
         if (namedPositions.has(pos)) {
-          newArgs.push(mkHoleTT(`_field_implicit${holeCounter++}`, mkPropTT()));
+          newArgs.push(mkHoleTT(`_field_implicit_f${currentFieldIndex}_${holeCounter++}`, mkPropTT()));
         } else if (posIdx < transformedArgs.length) {
           newArgs.push(transformedArgs[posIdx++]);
         } else {

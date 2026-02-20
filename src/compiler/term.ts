@@ -23,12 +23,17 @@ export type Constraint = {
   meta: string,
   rhs: TTKTerm,
   rhsType?: TTKTerm,  // Optional: the type of rhs for well-typed constraint checking
+  isPatternSolution?: boolean | 'constant',  // true = non-constant pattern, 'constant' = constant pattern, false = heuristic
 }
 
 export type MetaVar = {
   ctx: TTKContext,
   type: TTKTerm,
   solution?: TTKTerm,
+  /** True if this meta was solved via pattern unification (Miller fragment).
+   *  Pattern solutions are provably the unique correct answer, so non-pattern
+   *  constraints that conflict with them can be safely ignored. */
+  isPatternSolved?: boolean,
   /** True if this meta was created from an explicit user hole (e.g., ?sorry) */
   isHole?: boolean,
   /** Constructor tag for case branches (e.g., 'Zero', 'Succ') */

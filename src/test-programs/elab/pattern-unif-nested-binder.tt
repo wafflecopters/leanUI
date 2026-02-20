@@ -1,0 +1,9 @@
+@test success
+@name "Pattern unif: solution with nested binder in return type"
+@import preambles/nat.tt
+
+-- The motive solution must be a lambda whose body contains a Pi type
+-- ?P n = (Nat -> Nat)   →   ?P := \n. Nat -> Nat (constant, but testing binder in RHS)
+constFun : (n : Nat) -> (Nat -> Nat)
+constFun Zero = \x => x
+constFun (Succ n) = \x => Succ x
