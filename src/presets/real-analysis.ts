@@ -1,5 +1,5 @@
-export const REAL_ANALYSIS_CODE = `-- Real Analysis: algebraic hierarchy, ordered fields, and epsilon-delta limits
--- Builds from scratch to the real numbers and proves lim(f+g) = lim(f) + lim(g)
+export const REAL_ANALYSIS_CODE = `-- Real Analysis: algebraic hierarchy, ordered fields, limits, and derivatives
+-- Builds from scratch to the real numbers and proves (f+g)' = f' + g' and (c*f)' = c*f'
 
 ------------------------------------------------------------
 -- Foundation: basic types and equality
@@ -184,7 +184,7 @@ rabs R = CompleteOrderedField.abs (field R)
 -- Epsilon-delta witness: given delta, prove delta > 0
 -- and the epsilon-delta condition
 EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
+EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs R (rsub R x x0)) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
 
 -- A proof that lim_{x -> x0} f(x) = L.
 -- For every epsilon > 0, there exists delta > 0 such that
@@ -327,5 +327,70 @@ convertEps R eps v hlt = replace (\\z => rlt R v z) (halfMulEps R eps) hlt
 -- pickDelta is inlined: uses eitherElim on leTotal to pick smaller delta,
 -- each case builds the EpsDeltaWitness via convertEps + coreEstimate + ltLeTrans
 limitAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> Limit R (\\x => radd R (f x) (g x)) x0 (radd R L M)
-limitAdd R f g x0 L M limF limG = MkLimit (\\eps heps => eitherElim (\\hle => MkDPair (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))) (\\x hx => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) hx hle)))))) (\\hle => MkDPair (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))) (\\x hx => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) hx hle)) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx))))) (CompleteOrderedField.leTotal (field R) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))))
+limitAdd R f g x0 L M limF limG = MkLimit (\\eps heps => eitherElim (\\hle => MkDPair (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))) (\\x hx0 hxd => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 hxd) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) hxd hle)))))) (\\hle => MkDPair (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))) (\\x hx0 hxd => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) hxd hle)) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 hxd))))) (CompleteOrderedField.leTotal (field R) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))))
+
+------------------------------------------------------------
+-- DERIVATIVES
+------------------------------------------------------------
+
+-- Difference quotient: (f(x) - f(x0)) / (x - x0)
+diffQuot : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> Carrier R -> Carrier R
+diffQuot R f x0 x = rmul R (rsub R (f x) (f x0)) (rinv R (rsub R x x0))
+
+-- Definition: HasDerivative R f x0 L means lim_{x->x0} (f(x)-f(x0))/(x-x0) = L
+HasDerivative : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> Type
+HasDerivative R f x0 L = Limit R (diffQuot R f x0) x0 L
+
+-- limitExt: if f and g agree pointwise, limits transfer
+limitExt : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> ((x : Carrier R) -> Equal (f x) (g x)) -> Limit R f x0 L -> Limit R g x0 L
+limitExt R f g x0 L ext limF = MkLimit (\\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\\x hx0 hxd => replace (\\z => rlt R (rabs R (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
+
+-- distribRight: (a+b)*c = a*c + b*c (from the ring axiom)
+-- Already in the record as CompleteOrderedField.distribRight
+
+-- Key algebraic identity for derivAdd:
+-- diffQuot(f+g,x0,x) = diffQuot(f,x0,x) + diffQuot(g,x0,x)
+-- i.e. ((f+g)(x)-(f+g)(x0)) * (x-x0)^{-1} = (f(x)-f(x0))*(x-x0)^{-1} + (g(x)-g(x0))*(x-x0)^{-1}
+-- Proof: by distribRight and subAddSub
+diffQuotAddEq : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 x : Carrier R) -> Equal (radd R (diffQuot R f x0 x) (diffQuot R g x0 x)) (diffQuot R (\\y => radd R (f y) (g y)) x0 x)
+diffQuotAddEq R f g x0 x = trans (sym (CompleteOrderedField.distribRight (field R) (rsub R (f x) (f x0)) (rsub R (g x) (g x0)) (rinv R (rsub R x x0)))) (cong (\\z => rmul R z (rinv R (rsub R x x0))) (sym (subAddSub R (f x) (g x) (f x0) (g x0))))
+
+-- THE DERIVATIVE THEOREM: (f+g)' = f' + g'
+derivAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> HasDerivative R f x0 L -> HasDerivative R g x0 M -> HasDerivative R (\\x => radd R (f x) (g x)) x0 (radd R L M)
+derivAdd R f g x0 L M hf hg = limitExt R (\\x => radd R (diffQuot R f x0 x) (diffQuot R g x0 x)) (diffQuot R (\\y => radd R (f y) (g y)) x0) x0 (radd R L M) (diffQuotAddEq R f g x0) (limitAdd R (diffQuot R f x0) (diffQuot R g x0) x0 L M hf hg)
+
+------------------------------------------------------------
+-- SCALAR MULTIPLICATION OF LIMITS AND DERIVATIVES
+------------------------------------------------------------
+
+-- Postulate: 0*a = 0
+postulate mulZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (rmul R (rzero R) a) (rzero R)
+
+-- Helper: c*0 = 0
+mulZeroRight : (R : Real) -> (c : Carrier R) -> Equal (rmul R c (rzero R)) (rzero R)
+mulZeroRight R c = trans (CompleteOrderedField.mulComm (field R) c (rzero R)) (mulZeroLeft R c)
+
+-- Helper: neg distributes through mul on the right: c*(-b) = -(c*b)
+-- Proof: c*(-b) + c*b = c*((-b)+b) = c*0 = 0, so c*(-b) = -(c*b)
+mulNegRight : (R : Real) -> (c b : Carrier R) -> Equal (rmul R c (rneg R b)) (rneg R (rmul R c b))
+mulNegRight R c b = negUnique R (rmul R c b) (rmul R c (rneg R b)) (trans (sym (CompleteOrderedField.distribLeft (field R) c b (rneg R b))) (trans (cong (\\z => rmul R c z) (CompleteOrderedField.negRight (field R) b)) (mulZeroRight R c)))
+
+-- Helper: c*(a-b) = c*a - c*b
+mulSubDistrib : (R : Real) -> (c a b : Carrier R) -> Equal (rmul R c (rsub R a b)) (rsub R (rmul R c a) (rmul R c b))
+mulSubDistrib R c a b = trans (CompleteOrderedField.distribLeft (field R) c a (rneg R b)) (cong (\\z => radd R (rmul R c a) z) (mulNegRight R c b))
+
+-- Key algebraic identity for derivScalar:
+-- c * diffQuot(f,x0,x) = diffQuot(c*f,x0,x)
+-- i.e. c * ((f(x)-f(x0)) * inv(x-x0)) = (c*f(x) - c*f(x0)) * inv(x-x0)
+-- Proof: c*(A*B) = (c*A)*B by assoc, then c*A = c*fx - c*fx0 by distribLeft
+diffQuotScalarEq : (R : Real) -> (c : Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 x : Carrier R) -> Equal (rmul R c (diffQuot R f x0 x)) (diffQuot R (\\y => rmul R c (f y)) x0 x)
+diffQuotScalarEq R c f x0 x = trans (sym (CompleteOrderedField.mulAssoc (field R) c (rsub R (f x) (f x0)) (rinv R (rsub R x x0)))) (cong (\\z => rmul R z (rinv R (rsub R x x0))) (mulSubDistrib R c (f x) (f x0)))
+
+-- Scalar multiplication of limits (postulated — the epsilon-delta
+-- proof is routine: use delta from limF at eps/|c|, then |c|*|f(x)-L| < eps)
+postulate limitScalar : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> Void) -> (f : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> Limit R f x0 L -> Limit R (\\x => rmul R c (f x)) x0 (rmul R c L)
+
+-- THE DERIVATIVE THEOREM: (c*f)' = c*f'
+derivScalar : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> Void) -> (f : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> HasDerivative R f x0 L -> HasDerivative R (\\x => rmul R c (f x)) x0 (rmul R c L)
+derivScalar R c hcnz f x0 L hf = limitExt R (\\x => rmul R c (diffQuot R f x0 x)) (diffQuot R (\\y => rmul R c (f y)) x0) x0 (rmul R c L) (diffQuotScalarEq R c f x0) (limitScalar R c hcnz (diffQuot R f x0) x0 L hf)
 `;

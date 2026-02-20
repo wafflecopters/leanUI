@@ -606,7 +606,7 @@ export function makeDefaultNotations(): NotationTable {
       // LHS doesn't need wrapping since subtraction is left-associative: |a + b - X| = |(a + b) - X|
       const fxWrap = fxStr;
       const LWrap = (LStr.includes('+') || LStr.includes('-')) ? `(${LStr})` : LStr;
-      return `0 < ${deltaStr} \\text{ and } \\forall x,\\, \\left|x - ${x0Str}\\right| < ${deltaStr} \\implies \\left|${fxWrap} - ${LWrap}\\right| < ${epsStr}`;
+      return `0 < ${deltaStr} \\text{ and } \\forall x,\\, 0 < \\left|x - ${x0Str}\\right| < ${deltaStr} \\implies \\left|${fxWrap} - ${LWrap}\\right| < ${epsStr}`;
     }
     // 5 args — partial application (no delta yet)
     if (args.length >= 5) {

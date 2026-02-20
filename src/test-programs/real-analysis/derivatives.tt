@@ -1,0 +1,145 @@
+@test success
+@name "Real Analysis: derivative definitions and derivAdd"
+@import real-analysis/foundation.tt
+@import real-analysis/order-hierarchy.tt
+
+-- Transport
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+record AbelianGroup (A : Type) where
+  add : A -> A -> A
+  zero : A
+  neg : A -> A
+  addAssoc : (a b c : A) -> Equal (add (add a b) c) (add a (add b c))
+  addComm : (a b : A) -> Equal (add a b) (add b a)
+  addZeroRight : (a : A) -> Equal (add a zero) a
+  negRight : (a : A) -> Equal (add a (neg a)) zero
+
+record Ring (A : Type) extends AbelianGroup A where
+  mul : A -> A -> A
+  one : A
+  mulAssoc : (a b c : A) -> Equal (mul (mul a b) c) (mul a (mul b c))
+  mulOneLeft : (a : A) -> Equal (mul one a) a
+  mulOneRight : (a : A) -> Equal (mul a one) a
+  distribLeft : (a b c : A) -> Equal (mul a (add b c)) (add (mul a b) (mul a c))
+  distribRight : (a b c : A) -> Equal (mul (add a b) c) (add (mul a c) (mul b c))
+
+record CommRing (A : Type) extends Ring A where
+  mulComm : (a b : A) -> Equal (mul a b) (mul b a)
+
+record Field (A : Type) extends CommRing A where
+  inv : A -> A
+  mulInvRight : (a : A) -> (Equal a zero -> Void) -> Equal (mul a (inv a)) one
+
+record OrderedField (A : Type) : Type 1 extends Field A where
+  le : A -> A -> Type
+  leRefl : (a : A) -> le a a
+  leAntisym : (a b : A) -> le a b -> le b a -> Equal a b
+  leTrans : (a b c : A) -> le a b -> le b c -> le a c
+  leTotal : (a b : A) -> Either (le a b) (le b a)
+  addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
+  mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
+  abs : A -> A
+  absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
+  zeroLeOne : le zero one
+  zeroNeOne : Equal zero one -> Void
+  invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)
+
+record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
+  sup : (A -> Type) -> A
+  supUpperBound : (P : A -> Type) -> (x : A) -> P x -> le x (sup P)
+  supLeast : (P : A -> Type) -> (b : A) -> ((x : A) -> P x -> le x b) -> le (sup P) b
+
+-- Real: a type bundled with a complete ordered field structure
+Real : Type 1
+Real = DPair (Type) CompleteOrderedField
+
+Carrier : Real -> Type
+Carrier R = DPair.fst R
+
+field : (R : Real) -> CompleteOrderedField (Carrier R)
+field R = DPair.snd R
+
+-- Field operations
+radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+radd R = CompleteOrderedField.add (field R)
+
+rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+rmul R = CompleteOrderedField.mul (field R)
+
+rzero : (R : Real) -> Carrier R
+rzero R = CompleteOrderedField.zero (field R)
+
+rone : (R : Real) -> Carrier R
+rone R = CompleteOrderedField.one (field R)
+
+rneg : (R : Real) -> Carrier R -> Carrier R
+rneg R = CompleteOrderedField.neg (field R)
+
+rinv : (R : Real) -> Carrier R -> Carrier R
+rinv R = CompleteOrderedField.inv (field R)
+
+rle : (R : Real) -> Carrier R -> Carrier R -> Type
+rle R = CompleteOrderedField.le (field R)
+
+rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+rsub R a b = radd R a (rneg R b)
+
+rlt : (R : Real) -> Carrier R -> Carrier R -> Type
+rlt R a b = Pair (rle R a b) (Equal a b -> Void)
+
+rabs : (R : Real) -> Carrier R -> Carrier R
+rabs R = CompleteOrderedField.abs (field R)
+
+EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
+EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs R (rsub R x x0)) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
+
+record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
+  eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
+              DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
+
+-- Difference quotient
+diffQuot : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> Carrier R -> Carrier R
+diffQuot R f x0 x = rmul R (rsub R (f x) (f x0)) (rinv R (rsub R x x0))
+
+-- Derivative definition
+HasDerivative : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> Type
+HasDerivative R f x0 L = Limit R (diffQuot R f x0) x0 L
+
+-- limitExt
+limitExt : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> ((x : Carrier R) -> Equal (f x) (g x)) -> Limit R f x0 L -> Limit R g x0 L
+limitExt R f g x0 L ext limF = MkLimit (\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\x hx0 hxd => replace (\z => rlt R (rabs R (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
+
+-- Algebraic lemmas
+addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
+addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
+
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
+negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)
+
+negUnique : (R : Real) -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg R a)
+negUnique R a b h = (trans (sym (addZeroLeft R b)) (trans (cong (\z => radd R z b) (sym (negLeft R a))) (trans (CompleteOrderedField.addAssoc (field R) (rneg R a) a b) (trans (cong (\z => radd R (rneg R a) z) h) (CompleteOrderedField.addZeroRight (field R) (rneg R a))))))
+
+negAddCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg R a) (rneg R b))) (rzero R)
+negAddCancel R a b = (trans (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg R a) (rneg R b))) (trans (cong (\z => radd R z (rneg R b)) (trans (CompleteOrderedField.addComm (field R) (radd R a b) (rneg R a)) (trans (sym (CompleteOrderedField.addAssoc (field R) (rneg R a) a b)) (trans (cong (\z => radd R z b) (negLeft R a)) (addZeroLeft R b))))) (CompleteOrderedField.negRight (field R) b)))
+
+negAdd : (R : Real) -> (a b : Carrier R) -> Equal (rneg R (radd R a b)) (radd R (rneg R a) (rneg R b))
+negAdd R a b = sym (negUnique R (radd R a b) (radd R (rneg R a) (rneg R b)) (negAddCancel R a b))
+
+fourTermRearrange : (R : Real) -> (a b c d : Carrier R) -> Equal (radd R (radd R a b) (radd R c d)) (radd R (radd R a c) (radd R b d))
+fourTermRearrange R a b c d = (trans (CompleteOrderedField.addAssoc (field R) a b (radd R c d)) (trans (cong (\z => radd R a z) (trans (CompleteOrderedField.addComm (field R) b (radd R c d)) (trans (CompleteOrderedField.addAssoc (field R) c d b) (cong (\z => radd R c z) (CompleteOrderedField.addComm (field R) d b))))) (sym (CompleteOrderedField.addAssoc (field R) a c (radd R b d)))))
+
+subAddSub : (R : Real) -> (a b c d : Carrier R) -> Equal (rsub R (radd R a b) (radd R c d)) (radd R (rsub R a c) (rsub R b d))
+subAddSub R a b c d = trans (cong (\z => radd R (radd R a b) z) (negAdd R c d)) (fourTermRearrange R a b (rneg R c) (rneg R d))
+
+-- Key identity: diffQuot(f+g) = diffQuot(f) + diffQuot(g)
+diffQuotAddEq : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 x : Carrier R) -> Equal (radd R (diffQuot R f x0 x) (diffQuot R g x0 x)) (diffQuot R (\y => radd R (f y) (g y)) x0 x)
+diffQuotAddEq R f g x0 x = trans (sym (CompleteOrderedField.distribRight (field R) (rsub R (f x) (f x0)) (rsub R (g x) (g x0)) (rinv R (rsub R x x0)))) (cong (\z => rmul R z (rinv R (rsub R x x0))) (sym (subAddSub R (f x) (g x) (f x0) (g x0))))
+
+-- limitAdd (postulated — proved in the main preset)
+postulate limitAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> Limit R (\x => radd R (f x) (g x)) x0 (radd R L M)
+
+-- (f+g)' = f' + g'
+derivAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> HasDerivative R f x0 L -> HasDerivative R g x0 M -> HasDerivative R (\x => radd R (f x) (g x)) x0 (radd R L M)
+derivAdd R f g x0 L M hf hg = limitExt R (\x => radd R (diffQuot R f x0 x) (diffQuot R g x0 x)) (diffQuot R (\y => radd R (f y) (g y)) x0) x0 (radd R L M) (diffQuotAddEq R f g x0) (limitAdd R (diffQuot R f x0) (diffQuot R g x0) x0 L M hf hg)
