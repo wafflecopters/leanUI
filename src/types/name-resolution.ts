@@ -12,9 +12,54 @@
  * - Report undefined symbol errors with locations
  */
 
-import { TTerm } from '../compiler/surface';
+import { TTerm, TPattern } from '../compiler/surface';
 import { IndexPath } from './source-position';
 import { defaultRecordConstructorName } from '../compiler/elab';
+
+/**
+ * Collect all variable names from a list of patterns.
+ * This includes PVar names and recursively collects from PCtor args.
+ * Used by name resolution to add pattern-bound names to scope before checking RHS.
+ */
+function collectPatternVarNames(patterns: TPattern[]): string[] {
+  const names: string[] = [];
+  for (const p of patterns) {
+    names.push(...collectSinglePatternVarNames(p));
+  }
+  return names;
+}
+
+/**
+ * Collect variable names from a single pattern.
+ */
+function collectSinglePatternVarNames(pattern: TPattern): string[] {
+  switch (pattern.tag) {
+    case 'PVar':
+      return [pattern.name];
+    case 'PWild':
+      return [];
+    case 'PCtor': {
+      // PCtor with no args that's not a known constructor will be converted to PVar
+      // by pattern resolution. For name resolution purposes, treat no-arg PCtor names
+      // as potential variables too (they'll be in scope in the RHS).
+      const names: string[] = [];
+      if (pattern.args.length === 0 && (!pattern.namedArgs || pattern.namedArgs.length === 0)) {
+        // Zero-arg PCtor: could be a constructor or a variable binding.
+        // Add the name so it's in scope regardless.
+        names.push(pattern.name);
+      }
+      for (const arg of pattern.args) {
+        names.push(...collectSinglePatternVarNames(arg));
+      }
+      if (pattern.namedArgs) {
+        for (const na of pattern.namedArgs) {
+          names.push(...collectSinglePatternVarNames(na.pattern));
+        }
+      }
+      return names;
+    }
+  }
+}
 
 // ============================================================================
 // Reserved Names
@@ -176,10 +221,28 @@ export function validateTerm(
         // Validate scrutinee
         walk(t.scrutinee, [...p, { kind: 'field' as const, name: 'scrutinee' }]);
 
-        // Validate each clause
+        // Validate each clause, with pattern variable names added to context
+        // This prevents false "Undefined symbol" errors for pattern variables
+        // that the parser's collectPatternVars heuristic missed (multi-char uppercase
+        // names like 'Lg', 'Lf' that become Const in the RHS instead of Var).
         t.clauses.forEach((clause, i) => {
           const clausePath: IndexPath = [...p, { kind: 'field' as const, name: 'clauses' }, { kind: 'array' as const, index: i }];
+          // Collect all pattern variable names from this clause's patterns
+          const patVarNames = collectPatternVarNames(clause.patterns);
+          if (clause.namedPatterns) {
+            for (const np of clause.namedPatterns) {
+              patVarNames.push(...collectSinglePatternVarNames(np.pattern));
+            }
+          }
+          // Create a local context extended with pattern variable names
+          const savedCtx = ctx;
+          let localCtx = ctx;
+          for (const name of patVarNames) {
+            localCtx = addSymbol(localCtx, name);
+          }
+          ctx = localCtx;
           walk(clause.rhs, [...clausePath, { kind: 'field' as const, name: 'rhs' }]);
+          ctx = savedCtx;
         });
         break;
 

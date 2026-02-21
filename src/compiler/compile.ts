@@ -5067,6 +5067,16 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
           });
           totalNameErrors++;
         }
+        // Still add the declaration name (and constructors) to context to avoid
+        // cascading "undefined symbol" errors in subsequent declarations.
+        if (origDecl.name) {
+          symbolContext = new Set([...symbolContext, origDecl.name]);
+        }
+        if (origDecl.constructors) {
+          for (const ctor of origDecl.constructors) {
+            symbolContext = new Set([...symbolContext, ctor.name]);
+          }
+        }
       }
 
       // Pattern resolution for this declaration (using current symbol context)
