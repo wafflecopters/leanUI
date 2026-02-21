@@ -7,7 +7,7 @@
 
 import { groupByIndentation } from '../parser/indentation-grouper';
 import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, extractArgNamedArgInfos, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
+import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, extractArgNamedArgInfos, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, fixRhsForVariablePatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkType } from './kernel';
 import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT, mkPropTT, mkHoleTT, mkSortTT, mkUOmegaTT } from './surface';
 import { validateDeclarations, emptySymbolContext, SymbolContext } from '../types/name-resolution';
@@ -5625,6 +5625,12 @@ function checkMatchClauseFromSurface(
   // Fix RHS for constructor patterns that the parser mistakenly treated as variables
   // (e.g., lowercase constructors like 'refl' that the parser thought were variable bindings)
   rhsToElab = fixRhsForConstructorPatterns(patternsToElab, rhsToElab, termEnv.definitions);
+
+  // Fix RHS for variable patterns that the parser failed to bind.
+  // The parser's collectPatternVars heuristic may treat multi-char uppercase names
+  // (like 'Lg', 'Lf') as constructors, leaving them as Const in the RHS instead of Var.
+  // After pattern resolution converts them to PVar, this function fixes the RHS to match.
+  rhsToElab = fixRhsForVariablePatterns(patternsToElab, rhsToElab, termEnv.definitions);
 
   // Elaborate patterns to kernel form
   const kernelPatterns: TTKPattern[] = patternsToElab.map((pattern, patternIndex) => {

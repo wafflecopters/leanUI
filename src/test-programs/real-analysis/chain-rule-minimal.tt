@@ -1,0 +1,124 @@
+@test success
+@name "Real Analysis: chain rule minimal test"
+
+inductive Void : Type where
+
+absurd : {A : Type} -> Void -> A
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim f g (Left a) = f a
+eitherElim f g (Right b) = g b
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+record AbelianGroup (A : Type) where
+  add : A -> A -> A
+  zero : A
+  neg : A -> A
+  addAssoc : (a b c : A) -> Equal (add (add a b) c) (add a (add b c))
+  addComm : (a b : A) -> Equal (add a b) (add b a)
+  addZeroRight : (a : A) -> Equal (add a zero) a
+  negRight : (a : A) -> Equal (add a (neg a)) zero
+
+record Ring (A : Type) extends AbelianGroup A where
+  mul : A -> A -> A
+  one : A
+  mulAssoc : (a b c : A) -> Equal (mul (mul a b) c) (mul a (mul b c))
+  mulOneLeft : (a : A) -> Equal (mul one a) a
+  mulOneRight : (a : A) -> Equal (mul a one) a
+  distribLeft : (a b c : A) -> Equal (mul a (add b c)) (add (mul a b) (mul a c))
+  distribRight : (a b c : A) -> Equal (mul (add a b) c) (add (mul a c) (mul b c))
+
+record CommRing (A : Type) extends Ring A where
+  mulComm : (a b : A) -> Equal (mul a b) (mul b a)
+
+record Field (A : Type) extends CommRing A where
+  inv : A -> A
+  mulInvRight : (a : A) -> (Equal a zero -> Void) -> Equal (mul a (inv a)) one
+
+record OrderedField (A : Type) : Type 1 extends Field A where
+  le : A -> A -> Type
+  leRefl : (a : A) -> le a a
+  leAntisym : (a b : A) -> le a b -> le b a -> Equal a b
+  leTrans : (a b c : A) -> le a b -> le b c -> le a c
+  leTotal : (a b : A) -> Either (le a b) (le b a)
+  addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
+  mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
+  abs : A -> A
+  absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
+  zeroLeOne : le zero one
+  zeroNeOne : Equal zero one -> Void
+  invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)
+
+record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
+  sup : (A -> Type) -> A
+  supUpperBound : (P : A -> Type) -> (x : A) -> P x -> le x (sup P)
+  supLeast : (P : A -> Type) -> (b : A) -> ((x : A) -> P x -> le x b) -> le (sup P) b
+
+Real : Type 1
+Real = DPair (Type) CompleteOrderedField
+
+Carrier : Real -> Type
+Carrier R = DPair.fst R
+
+field : (R : Real) -> CompleteOrderedField (Carrier R)
+field R = DPair.snd R
+
+radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+radd R = CompleteOrderedField.add (field R)
+
+rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+rmul R = CompleteOrderedField.mul (field R)
+
+rzero : (R : Real) -> Carrier R
+rzero R = CompleteOrderedField.zero (field R)
+
+rneg : (R : Real) -> Carrier R -> Carrier R
+rneg R = CompleteOrderedField.neg (field R)
+
+rinv : (R : Real) -> Carrier R -> Carrier R
+rinv R = CompleteOrderedField.inv (field R)
+
+rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+rsub R a b = radd R a (rneg R b)
+
+-- Tests with multi-char uppercase variable names
+test3b : (R : Real) -> (g : Carrier R -> Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (Lg : Carrier R) -> Carrier R
+test3b R g f x0 Lg = rmul R x0 Lg
+
+test3d : (R : Real) -> (g : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (Lg : Carrier R) -> Carrier R
+test3d R g x0 Lg = rmul R x0 Lg
+
+test3d2 : (R : Real) -> (g : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (Lg : Carrier R) -> Carrier R
+test3d2 R g x0 Lg = rmul R x0 x0
+
+-- Test with multi-char uppercase used in more complex expression
+testChainTermA : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lg : Carrier R) -> Carrier R -> Carrier R
+testChainTermA R g f x0 Lg x = rmul R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rinv R (rsub R x x0))

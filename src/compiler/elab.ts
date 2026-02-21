@@ -970,6 +970,181 @@ export function fixRhsForConstructorPatterns(
 }
 
 /**
+ * Fix RHS for pattern variables that the parser failed to bind.
+ *
+ * The parser's collectPatternVars uses a heuristic that treats multi-character
+ * uppercase identifiers as constructors. After pattern resolution (PCtor→PVar),
+ * these patterns are correctly PVar, but the RHS was already parsed with a
+ * context that didn't include them — so they appear as Const("Lg") instead of Var,
+ * and all other Var indices are computed with the wrong binding count.
+ *
+ * This function:
+ * 1. Replicates the parser's heuristic to determine which PVar patterns the parser missed
+ * 2. Replaces Const references with proper Var references for missed variables
+ * 3. Shifts all existing Var indices up to account for the additional bindings
+ *
+ * @param patterns - The clause patterns (after pattern resolution, so PVar for all vars)
+ * @param rhs - The clause RHS (surface syntax, may have Const for missed vars)
+ * @param definitions - Not used (kept for API consistency)
+ * @returns The transformed RHS with proper variable references
+ */
+export function fixRhsForVariablePatterns(
+  patterns: TPattern[],
+  rhs: TTerm,
+  _definitions: DefinitionsMap
+): TTerm {
+  // Replicate the parser's collectPatternVars heuristic to identify which
+  // PVar patterns the parser would NOT have bound as variables.
+  // The parser treats as variable: lowercase-start, single uppercase, PVar, PWild.
+  // It does NOT bind: multi-char uppercase (treated as constructor PCtor).
+  // After pattern resolution, those PCtor are now PVar, but the RHS still has Const.
+  const missedVars: { name: string; fullVarIndex: number }[] = [];
+  let fullVarIndex = 0;
+
+  for (const pattern of patterns) {
+    if (pattern.tag === 'PVar') {
+      const name = pattern.name;
+      const firstChar = name[0];
+      const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
+      const isSingleUppercase = name.length === 1 && firstChar === firstChar.toUpperCase();
+
+      if (isLowercase || isSingleUppercase) {
+        // Parser would have bound this as a variable — no fixup needed
+      } else {
+        // Parser would have treated this as a constructor (multi-char uppercase)
+        // After pattern resolution it's PVar, but RHS has Const(name) and wrong indices
+        missedVars.push({ name, fullVarIndex });
+      }
+      fullVarIndex++;
+    } else if (pattern.tag === 'PWild') {
+      fullVarIndex++;
+    } else if (pattern.tag === 'PCtor') {
+      fullVarIndex += countPatternVars(pattern);
+    }
+  }
+
+  if (missedVars.length === 0) return rhs;
+
+  const totalVars = fullVarIndex; // Total after including missed vars
+
+  // Compute de Bruijn indices for missed variables
+  // In de Bruijn: index 0 = last (rightmost), index (total-1) = first (leftmost)
+  const missedDeBruijn = missedVars.map(mv => ({
+    name: mv.name,
+    deBruijnIndex: totalVars - 1 - mv.fullVarIndex
+  })).sort((a, b) => a.deBruijnIndex - b.deBruijnIndex); // Sort ascending
+
+  // Transform the RHS:
+  // For Const references to missed variables: replace with Var at correct index
+  // For existing Var references: shift up based on how many missed variables
+  // have de Bruijn indices <= the existing index
+  return transformRhsForVariablePatterns(rhs, missedDeBruijn);
+}
+
+/**
+ * Transform RHS by replacing Const references to missed variable patterns with Var,
+ * and shifting existing Var indices to account for the inserted bindings.
+ *
+ * The shift is NOT uniform — each existing Var index is shifted by the number of
+ * missed variables that have de Bruijn index <= that index. This correctly handles
+ * missed variables that are "inserted" between existing bindings.
+ */
+function transformRhsForVariablePatterns(
+  term: TTerm,
+  missedDeBruijn: { name: string; deBruijnIndex: number }[]  // sorted ascending
+): TTerm {
+  function transform(t: TTerm, depth: number): TTerm {
+    switch (t.tag) {
+      case 'Const': {
+        // Check if this Const should become a Var
+        const varMatch = missedDeBruijn.find(v => v.name === t.name);
+        if (varMatch) {
+          return { tag: 'Var', index: varMatch.deBruijnIndex + depth };
+        }
+        return t;
+      }
+
+      case 'Var': {
+        // Shift up existing Var indices based on how many missed variables
+        // have de Bruijn index <= this index (adjusting for binding depth)
+        const adjustedIndex = t.index - depth;
+        if (adjustedIndex >= 0) {
+          // Count how many missed variables are at or below this adjusted index
+          // Each one pushes this variable's index up by 1
+          let shift = 0;
+          for (const mv of missedDeBruijn) {
+            if (mv.deBruijnIndex <= adjustedIndex + shift) {
+              shift++;
+            } else {
+              break; // sorted ascending, so no more below
+            }
+          }
+          if (shift > 0) {
+            return { tag: 'Var', index: t.index + shift };
+          }
+        }
+        return t;
+      }
+
+      case 'App':
+        return {
+          tag: 'App',
+          fn: transform(t.fn, depth),
+          arg: transform(t.arg, depth),
+          ...(t.argName ? { argName: t.argName } : {})
+        };
+
+      case 'Binder':
+        return {
+          tag: 'Binder',
+          name: t.name,
+          binderKind: t.binderKind,
+          domain: t.domain ? transform(t.domain, depth) : undefined,
+          body: transform(t.body, depth + 1),
+          ...(t.named !== undefined ? { named: t.named } : {})
+        };
+
+      case 'MultiBinder':
+        return {
+          tag: 'MultiBinder',
+          names: t.names,
+          binderKind: t.binderKind,
+          domain: transform(t.domain, depth),
+          body: transform(t.body, depth + t.names.length),
+          ...(t.named !== undefined ? { named: t.named } : {})
+        };
+
+      case 'Match':
+        return {
+          tag: 'Match',
+          scrutinee: transform(t.scrutinee, depth),
+          clauses: t.clauses.map(c => ({
+            ...c,
+            rhs: transform(c.rhs, depth + countClausePatternVars(c.patterns))
+          }))
+        };
+
+      case 'Annot':
+        return {
+          tag: 'Annot',
+          term: transform(t.term, depth),
+          type: transform(t.type, depth)
+        };
+
+      case 'Sort':
+      case 'Hole':
+      case 'ULevel':
+        return t;
+
+      default:
+        return t;
+    }
+  }
+
+  return transform(term, 0);
+}
+
+/**
  * Transform RHS by replacing Var references to constructor patterns with Const,
  * and adjusting remaining Var indices.
  */

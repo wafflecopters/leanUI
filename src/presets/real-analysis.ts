@@ -1,5 +1,5 @@
 export const REAL_ANALYSIS_CODE = `-- Real Analysis: algebraic hierarchy, ordered fields, limits, and derivatives
--- Builds from scratch to the real numbers and proves (f+g)' = f' + g' and (c*f)' = c*f'
+-- Proves (f+g)' = f' + g', (c*f)' = c*f', and the chain rule (g.f)' = g'(f(x0)) * f'(x0)
 
 ------------------------------------------------------------
 -- Foundation: basic types and equality
@@ -393,4 +393,52 @@ postulate limitScalar : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> V
 -- THE DERIVATIVE THEOREM: (c*f)' = c*f'
 derivScalar : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> Void) -> (f : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> HasDerivative R f x0 L -> HasDerivative R (\\x => rmul R c (f x)) x0 (rmul R c L)
 derivScalar R c hcnz f x0 L hf = limitExt R (\\x => rmul R c (diffQuot R f x0 x)) (diffQuot R (\\y => rmul R c (f y)) x0) x0 (rmul R c L) (diffQuotScalarEq R c f x0) (limitScalar R c hcnz (diffQuot R f x0) x0 L hf)
+
+------------------------------------------------------------
+-- THE CHAIN RULE: (g . f)'(x0) = g'(f(x0)) . f'(x0)
+------------------------------------------------------------
+
+-- Helper: (a - b) + b = a
+subCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (rsub R a b) b) a
+subCancel R a b = trans (CompleteOrderedField.addAssoc (field R) a (rneg R b) b) (trans (cong (\\z => radd R a z) (negLeft R b)) (CompleteOrderedField.addZeroRight (field R) a))
+
+-- The "error term" in the chain rule decomposition:
+-- A(x) = (g(f(x)) - g(f(x0)) - g'*(f(x) - f(x0))) * inv(x - x0)
+-- This measures how well g's linear approximation at f(x0) predicts g(f(x)),
+-- normalized by (x - x0). Crucially, A(x) = 0 when f(x) = f(x0) (no case split needed).
+chainTermA : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lg : Carrier R) -> Carrier R -> Carrier R
+chainTermA R g f x0 Lg x = rmul R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rinv R (rsub R x x0))
+
+-- Core algebraic identity for the chain rule:
+-- A(x) + g' * diffQuot(f, x0, x) = diffQuot(g.f, x0, x)
+--
+-- Proof: Let D = g(f(x))-g(f(x0)), B = f(x)-f(x0), C = inv(x-x0).
+-- A(x) + g'*diffQuot(f)
+--   = (D - g'*B)*C + g'*(B*C)         [definitions]
+--   = (D - g'*B)*C + (g'*B)*C         [associativity]
+--   = ((D - g'*B) + g'*B)*C           [distribRight]
+--   = D*C                              [cancellation: (a-b)+b = a]
+--   = diffQuot(g.f, x0, x)            [definition]
+chainAlgId : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lg : Carrier R) -> (x : Carrier R) -> Equal (radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) (diffQuot R (\\y => g (f y)) x0 x)
+chainAlgId R g f x0 Lg x = trans (cong (\\z => radd R (chainTermA R g f x0 Lg x) z) (sym (CompleteOrderedField.mulAssoc (field R) Lg (rsub R (f x) (f x0)) (rinv R (rsub R x x0))))) (trans (sym (CompleteOrderedField.distribRight (field R) (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rmul R Lg (rsub R (f x) (f x0))) (rinv R (rsub R x x0)))) (cong (\\z => rmul R z (rinv R (rsub R x x0))) (subCancel R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0))))))
+
+-- Postulate: A(x) -> 0 as x -> x0
+-- This is the analytic heart of the chain rule. It follows from:
+--   (1) g's differentiability at f(x0): |g(y)-g(y0)-g'(y-y0)| < eps*|y-y0| near y0
+--   (2) f's continuity at x0 (from differentiability): |f(x)-f(x0)| < delta_g near x0
+--   (3) f's differentiability: |f(x)-f(x0)| / |x-x0| is bounded near x0
+-- When f(x)=f(x0), the numerator is 0, so A(x)=0 automatically (no case split needed).
+postulate chainTermALimit : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lg Lf : Carrier R) -> HasDerivative R f x0 Lf -> HasDerivative R g (f x0) Lg -> Limit R (chainTermA R g f x0 Lg) x0 (rzero R)
+
+-- Postulate: lim(c*f) = c*lim(f) for all c (generalizes limitScalar to include c = 0)
+postulate limitScalarAll : (R : Real) -> (c : Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> Limit R f x0 L -> Limit R (\\x => rmul R c (f x)) x0 (rmul R c L)
+
+-- THE CHAIN RULE
+-- Proof: By the algebraic identity, diffQuot(g.f, x0, x) = A(x) + g'*diffQuot(f, x0, x).
+-- Taking limits:
+--   lim diffQuot(g.f) = lim A(x) + g' * lim diffQuot(f)    [limitAdd + limitScalar]
+--                      = 0       + g' * f'                   [chainTermALimit + hypothesis]
+--                      = g' * f'                              [addZeroLeft]
+derivChain : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier R) -> HasDerivative R f x0 Lf -> HasDerivative R g (f x0) Lg -> HasDerivative R (\\x => g (f x)) x0 (rmul R Lg Lf)
+derivChain R g f x0 Lf Lg hf hg = limitExt R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) (diffQuot R (\\y => g (f y)) x0) x0 (rmul R Lg Lf) (chainAlgId R g f x0 Lg) (replace (\\z => Limit R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) x0 z) (addZeroLeft R (rmul R Lg Lf)) (limitAdd R (chainTermA R g f x0 Lg) (\\x => rmul R Lg (diffQuot R f x0 x)) x0 (rzero R) (rmul R Lg Lf) (chainTermALimit R g f x0 Lg Lf hf hg) (limitScalarAll R Lg (diffQuot R f x0) x0 Lf hf)))
 `;
