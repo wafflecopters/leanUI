@@ -6,8 +6,8 @@
  * Applies: refl
  */
 
-import { TTKTerm } from '../compiler/kernel';
-import { MetaVar } from '../compiler/term';
+import { TTKTerm, TTKPattern } from '../compiler/kernel';
+import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult } from './tactic';
 import { whnf } from '../compiler/whnf';
@@ -60,12 +60,10 @@ export class ReflexivityTactic implements Tactic {
       const rhs = args[args.length - 1];
       const lhs = args[args.length - 2];
 
-      // Normalize both sides
-      const lhsWhnf = whnf(lhs, { definitions: engine.definitions });
-      const rhsWhnf = whnf(rhs, { definitions: engine.definitions });
-
-      // Check if they're definitionally equal (structurally identical after normalization)
-      if (!this.defEqual(lhsWhnf, rhsWhnf)) {
+      // Check if they're definitionally equal (recursive WHNF + structural comparison)
+      if (!this.defEqual(lhs, rhs, engine.definitions)) {
+        const lhsWhnf = whnf(lhs, { definitions: engine.definitions });
+        const rhsWhnf = whnf(rhs, { definitions: engine.definitions });
         return {
           success: false,
           error: `reflexivity: sides are not definitionally equal\n  LHS: ${this.termToString(lhsWhnf)}\n  RHS: ${this.termToString(rhsWhnf)}`
@@ -105,50 +103,93 @@ export class ReflexivityTactic implements Tactic {
   }
 
   /**
-   * Check if two terms are definitionally equal (structurally identical)
+   * Check if two terms are definitionally equal (structurally identical after WHNF)
    */
-  private defEqual(a: TTKTerm, b: TTKTerm): boolean {
-    if (a.tag !== b.tag) return false;
+  private defEqual(a: TTKTerm, b: TTKTerm, definitions?: DefinitionsMap, depth: number = 0): boolean {
+    if (depth > 50) return false;
+    if (a === b) return true;
 
-    switch (a.tag) {
+    // Normalize both sides to WHNF
+    const aN = definitions ? whnf(a, { definitions }) : a;
+    const bN = definitions ? whnf(b, { definitions }) : b;
+
+    if (aN === bN) return true;
+    if (aN.tag !== bN.tag) return false;
+
+    // Structural comparison of WHNF forms
+    // Recursive calls use defEqual (which will WHNF subterms)
+    switch (aN.tag) {
       case 'Var':
-        return b.tag === 'Var' && a.index === b.index;
+        return bN.tag === 'Var' && aN.index === bN.index;
 
       case 'Const':
-        return b.tag === 'Const' && a.name === b.name;
+        return bN.tag === 'Const' && aN.name === bN.name;
 
       case 'App':
-        return b.tag === 'App' &&
-               this.defEqual(a.fn, b.fn) &&
-               this.defEqual(a.arg, b.arg);
+        return bN.tag === 'App' &&
+               this.defEqual(aN.fn, (bN as any).fn, definitions, depth + 1) &&
+               this.defEqual(aN.arg, (bN as any).arg, definitions, depth + 1);
 
       case 'Binder':
-        return b.tag === 'Binder' &&
-               a.binderKind.tag === b.binderKind.tag &&
-               this.defEqual(a.domain, b.domain) &&
-               this.defEqual(a.body, b.body);
+        return bN.tag === 'Binder' &&
+               aN.binderKind.tag === (bN as any).binderKind.tag &&
+               this.defEqual(aN.domain, (bN as any).domain, definitions, depth + 1) &&
+               this.defEqual(aN.body, (bN as any).body, definitions, depth + 1);
 
       case 'Sort':
-        return b.tag === 'Sort' && this.defEqual(a.level, b.level);
+        return bN.tag === 'Sort' && this.defEqual(aN.level, (bN as any).level, definitions, depth + 1);
 
-      case 'ULevel':
-        return b.tag === 'ULevel';
+      case 'Match':
+        if (bN.tag !== 'Match') return false;
+        if (aN.clauses.length !== bN.clauses.length) return false;
+        // For stuck Match terms (after WHNF), compare scrutinee and clauses structurally
+        // Don't re-WHNF scrutinee (it's already stuck), use undefined definitions
+        if (!this.defEqual(aN.scrutinee, bN.scrutinee, definitions, depth + 1)) return false;
+        return aN.clauses.every((c, i) =>
+          this.patternsEqual(c.patterns, bN.clauses[i].patterns) &&
+          this.defEqual(c.rhs, bN.clauses[i].rhs, undefined, depth + 1)
+        );
+
+      case 'Annot':
+        return bN.tag === 'Annot' &&
+               this.defEqual(aN.term, (bN as any).term, definitions, depth + 1);
 
       case 'ULit':
-        return b.tag === 'ULit' && a.n === b.n;
+        return bN.tag === 'ULit' && aN.n === bN.n;
+
+      case 'ULevel':
+        return bN.tag === 'ULevel';
 
       case 'UOmega':
-        return b.tag === 'UOmega';
+        return bN.tag === 'UOmega';
 
       case 'Meta':
-        // Metas are equal if they have the same ID
-        return b.tag === 'Meta' && a.id === b.id;
+        return bN.tag === 'Meta' && aN.id === bN.id;
 
       case 'Hole':
-        return b.tag === 'Hole' && a.id === b.id;
+        return bN.tag === 'Hole' && aN.id === bN.id;
 
       default:
         return false;
+    }
+  }
+
+  /**
+   * Check if two pattern lists are structurally equal
+   */
+  private patternsEqual(a: TTKPattern[], b: TTKPattern[]): boolean {
+    if (a.length !== b.length) return false;
+    return a.every((p, i) => this.patternEqual(p, b[i]));
+  }
+
+  private patternEqual(a: TTKPattern, b: TTKPattern): boolean {
+    if (a.tag !== b.tag) return false;
+    switch (a.tag) {
+      case 'PVar':
+      case 'PWild':
+        return true;
+      case 'PCtor':
+        return b.tag === 'PCtor' && a.name === b.name && this.patternsEqual(a.args, b.args);
     }
   }
 
@@ -169,4 +210,5 @@ export class ReflexivityTactic implements Tactic {
         return `<${term.tag}>`;
     }
   }
+
 }

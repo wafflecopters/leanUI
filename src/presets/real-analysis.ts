@@ -211,11 +211,13 @@ record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carri
 -- Algebraic lemmas
 ------------------------------------------------------------
 
-addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
-addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
+addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a := by
+  intros R a
+  erw (CompleteOrderedField.addComm (field R) (rzero R) a), (CompleteOrderedField.addZeroRight (field R) a)
 
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R) := by
+  intros R a
+  erw (CompleteOrderedField.addComm (field R) (rneg R a) a), (CompleteOrderedField.negRight (field R) a)
 
 addLeRight : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rle R (radd R a c) (radd R b c)
 addLeRight R a b c h = (replace (\\z => rle R z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\\z => rle R (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
@@ -244,11 +246,13 @@ ltLeTrans : (R : Real) -> (a b c : Carrier R) -> rlt R a b -> rle R b c -> rlt R
 ltLeTrans R a b c hab hbc = MkPair (ltLeTransLe R a b c (Pair.fst hab) hbc) (ltLeTransNe R a b c (Pair.fst hab) (Pair.snd hab) hbc)
 
 -- Cancellation: a + c = b + c => a = b
-addCancelRightHelper : (R : Real) -> (x c : Carrier R) -> Equal (radd R (radd R x c) (rneg R c)) x
-addCancelRightHelper R x c = (trans (CompleteOrderedField.addAssoc (field R) x c (rneg R c)) (trans (cong (\\z => radd R x z) (CompleteOrderedField.negRight (field R) c)) (CompleteOrderedField.addZeroRight (field R) x)))
+addCancelRightHelper : (R : Real) -> (x c : Carrier R) -> Equal (radd R (radd R x c) (rneg R c)) x := by
+  intros R x c
+  erw (CompleteOrderedField.addAssoc (field R) x c (rneg R c)), (CompleteOrderedField.negRight (field R) c), (CompleteOrderedField.addZeroRight (field R) x)
 
-addCancelRight : (R : Real) -> (a b c : Carrier R) -> Equal (radd R a c) (radd R b c) -> Equal a b
-addCancelRight R a b c h = (trans (sym (addCancelRightHelper R a c)) (trans (cong (\\z => radd R z (rneg R c)) h) (addCancelRightHelper R b c)))
+addCancelRight : (R : Real) -> (a b c : Carrier R) -> Equal (radd R a c) (radd R b c) -> Equal a b := by
+  intros R a b c h
+  erw (sym (addCancelRightHelper R a c)), h, (addCancelRightHelper R b c)
 
 -- Strict addition: a < b, c < d => a + c < b + d
 addLtBothNe : (R : Real) -> (a b c d : Carrier R) -> rle R a b -> (Equal a b -> Void) -> rle R c d -> Equal (radd R a c) (radd R b d) -> Void
@@ -278,8 +282,9 @@ halfPlusHalf : (R : Real) -> Equal (radd R (rhalf R) (rhalf R)) (rone R)
 halfPlusHalf R = (trans (trans (cong (\\z => radd R z z) (sym (CompleteOrderedField.mulOneLeft (field R) (rhalf R)))) (sym (CompleteOrderedField.distribRight (field R) (rone R) (rone R) (rhalf R)))) (CompleteOrderedField.mulInvRight (field R) (rtwo R) (twoNeZero R)))
 
 -- (1/2)*e + (1/2)*e = e
-halfMulEps : (R : Real) -> (e : Carrier R) -> Equal (radd R (rmul R (rhalf R) e) (rmul R (rhalf R) e)) e
-halfMulEps R e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\\z => rmul R z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))
+halfMulEps : (R : Real) -> (e : Carrier R) -> Equal (radd R (rmul R (rhalf R) e) (rmul R (rhalf R) e)) e := by
+  intros R e
+  erw (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)), (halfPlusHalf R), (CompleteOrderedField.mulOneLeft (field R) e)
 
 zeroLeTwo : (R : Real) -> rle R (rzero R) (rtwo R)
 zeroLeTwo R = CompleteOrderedField.leTrans (field R) (rzero R) (rone R) (rtwo R) (CompleteOrderedField.zeroLeOne (field R)) (oneLeTwo R)
@@ -301,14 +306,17 @@ halfMulEpsPos R e hlt = MkPair (halfMulEpsLe R e (Pair.fst hlt)) (halfMulEpsNe R
 -- Negation distributes over addition: -(a+b) = (-a)+(-b)
 ------------------------------------------------------------
 
-addSumNeg : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (rneg R a)) b
-addSumNeg R a b = (trans (CompleteOrderedField.addComm (field R) (radd R a b) (rneg R a)) (trans (sym (CompleteOrderedField.addAssoc (field R) (rneg R a) a b)) (trans (cong (\\z => radd R z b) (negLeft R a)) (addZeroLeft R b))))
+addSumNeg : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (rneg R a)) b := by
+  intros R a b
+  erw (CompleteOrderedField.addComm (field R) (radd R a b) (rneg R a)), (sym (CompleteOrderedField.addAssoc (field R) (rneg R a) a b)), (negLeft R a), (addZeroLeft R b)
 
-negAddCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg R a) (rneg R b))) (rzero R)
-negAddCancel R a b = (trans (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg R a) (rneg R b))) (trans (cong (\\z => radd R z (rneg R b)) (addSumNeg R a b)) (CompleteOrderedField.negRight (field R) b)))
+negAddCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg R a) (rneg R b))) (rzero R) := by
+  intros R a b
+  erw (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg R a) (rneg R b))), (addSumNeg R a b), (CompleteOrderedField.negRight (field R) b)
 
-negUnique : (R : Real) -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg R a)
-negUnique R a b h = (trans (sym (addZeroLeft R b)) (trans (cong (\\z => radd R z b) (sym (negLeft R a))) (trans (CompleteOrderedField.addAssoc (field R) (rneg R a) a b) (trans (cong (\\z => radd R (rneg R a) z) h) (CompleteOrderedField.addZeroRight (field R) (rneg R a))))))
+negUnique : (R : Real) -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg R a) := by
+  intros R a b h
+  erw (sym (addZeroLeft R b)), (sym (negLeft R a)), (CompleteOrderedField.addAssoc (field R) (rneg R a) a b), h, (CompleteOrderedField.addZeroRight (field R) (rneg R a))
 
 negAdd : (R : Real) -> (a b : Carrier R) -> Equal (rneg R (radd R a b)) (radd R (rneg R a) (rneg R b))
 negAdd R a b = sym (negUnique R (radd R a b) (radd R (rneg R a) (rneg R b)) (negAddCancel R a b))
@@ -382,8 +390,9 @@ mulZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (rmul R (rzero R) a) (rzero
 mulZeroLeft R a = addCancelRight R (rmul R (rzero R) a) (rzero R) (rmul R (rzero R) a) (trans (sym (CompleteOrderedField.distribRight (field R) (rzero R) (rzero R) a)) (trans (cong (\\z => rmul R z a) (addZeroLeft R (rzero R))) (sym (addZeroLeft R (rmul R (rzero R) a)))))
 
 -- Helper: c*0 = 0
-mulZeroRight : (R : Real) -> (c : Carrier R) -> Equal (rmul R c (rzero R)) (rzero R)
-mulZeroRight R c = trans (CompleteOrderedField.mulComm (field R) c (rzero R)) (mulZeroLeft R c)
+mulZeroRight : (R : Real) -> (c : Carrier R) -> Equal (rmul R c (rzero R)) (rzero R) := by
+  intros R c
+  erw (CompleteOrderedField.mulComm (field R) c (rzero R)), (mulZeroLeft R c)
 
 -- Helper: neg distributes through mul on the right: c*(-b) = -(c*b)
 -- Proof: c*(-b) + c*b = c*((-b)+b) = c*0 = 0, so c*(-b) = -(c*b)
@@ -391,8 +400,9 @@ mulNegRight : (R : Real) -> (c b : Carrier R) -> Equal (rmul R c (rneg R b)) (rn
 mulNegRight R c b = negUnique R (rmul R c b) (rmul R c (rneg R b)) (trans (sym (CompleteOrderedField.distribLeft (field R) c b (rneg R b))) (trans (cong (\\z => rmul R c z) (CompleteOrderedField.negRight (field R) b)) (mulZeroRight R c)))
 
 -- Helper: c*(a-b) = c*a - c*b
-mulSubDistrib : (R : Real) -> (c a b : Carrier R) -> Equal (rmul R c (rsub R a b)) (rsub R (rmul R c a) (rmul R c b))
-mulSubDistrib R c a b = trans (CompleteOrderedField.distribLeft (field R) c a (rneg R b)) (cong (\\z => radd R (rmul R c a) z) (mulNegRight R c b))
+mulSubDistrib : (R : Real) -> (c a b : Carrier R) -> Equal (rmul R c (rsub R a b)) (rsub R (rmul R c a) (rmul R c b)) := by
+  intros R c a b
+  erw (CompleteOrderedField.distribLeft (field R) c a (rneg R b)), (mulNegRight R c b)
 
 -- Key algebraic identity for derivScalar:
 -- c * diffQuot(f,x0,x) = diffQuot(c*f,x0,x)
@@ -410,8 +420,9 @@ subSelf : (R : Real) -> (a : Carrier R) -> Equal (rsub R a a) (rzero R)
 subSelf R a = CompleteOrderedField.negRight (field R) a
 
 -- (a - b) + b = a
-subCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (rsub R a b) b) a
-subCancel R a b = trans (CompleteOrderedField.addAssoc (field R) a (rneg R b) b) (trans (cong (\\z => radd R a z) (negLeft R b)) (CompleteOrderedField.addZeroRight (field R) a))
+subCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (rsub R a b) b) a := by
+  intros R a b
+  erw (CompleteOrderedField.addAssoc (field R) a (rneg R b) b), (negLeft R b), (CompleteOrderedField.addZeroRight (field R) a)
 
 -- |c| > 0 when c /= 0
 absPos : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> Void) -> rlt R (rzero R) (rabs R c)
@@ -461,8 +472,9 @@ absLeAbsPlusOne : (R : Real) -> (c : Carrier R) -> rle R (rabs R c) (radd R (rab
 absLeAbsPlusOne R c = replace (\\z => rle R z (radd R (rabs R c) (rone R))) (CompleteOrderedField.addZeroRight (field R) (rabs R c)) (CompleteOrderedField.addLeLeft (field R) (rzero R) (rone R) (rabs R c) (CompleteOrderedField.zeroLeOne (field R)))
 
 -- M * (a * inv(M)) = a when M /= 0
-mulInvCancel : (R : Real) -> (M a : Carrier R) -> (Equal M (rzero R) -> Void) -> Equal (rmul R M (rmul R a (rinv R M))) a
-mulInvCancel R M a hne = trans (sym (CompleteOrderedField.mulAssoc (field R) M a (rinv R M))) (trans (cong (\\z => rmul R z (rinv R M)) (CompleteOrderedField.mulComm (field R) M a)) (trans (CompleteOrderedField.mulAssoc (field R) a M (rinv R M)) (trans (cong (\\z => rmul R a z) (CompleteOrderedField.mulInvRight (field R) M hne)) (CompleteOrderedField.mulOneRight (field R) a))))
+mulInvCancel : (R : Real) -> (M a : Carrier R) -> (Equal M (rzero R) -> Void) -> Equal (rmul R M (rmul R a (rinv R M))) a := by
+  intros R M a hne
+  erw (sym (CompleteOrderedField.mulAssoc (field R) M a (rinv R M))), (CompleteOrderedField.mulComm (field R) M a), (CompleteOrderedField.mulAssoc (field R) a M (rinv R M)), (CompleteOrderedField.mulInvRight (field R) M hne), (CompleteOrderedField.mulOneRight (field R) a)
 
 -- 0 < eps, 0 < M => 0 < eps * inv(M)
 -- Proof: le part from mulNonneg + invPos; ne part from eps * inv(M) = 0 => eps = 0
@@ -497,12 +509,14 @@ derivScalar R c hcnz f x0 L hf = limitExt R (\\x => rmul R c (diffQuot R f x0 x)
 ------------------------------------------------------------
 
 -- neg(0) = 0
-negZero : (R : Real) -> Equal (rneg R (rzero R)) (rzero R)
-negZero R = trans (sym (addZeroLeft R (rneg R (rzero R)))) (CompleteOrderedField.negRight (field R) (rzero R))
+negZero : (R : Real) -> Equal (rneg R (rzero R)) (rzero R) := by
+  intros R
+  erw (sym (addZeroLeft R (rneg R (rzero R)))), (CompleteOrderedField.negRight (field R) (rzero R))
 
 -- a - 0 = a
-subZeroRight : (R : Real) -> (a : Carrier R) -> Equal (rsub R a (rzero R)) a
-subZeroRight R a = trans (cong (\\z => radd R a z) (negZero R)) (CompleteOrderedField.addZeroRight (field R) a)
+subZeroRight : (R : Real) -> (a : Carrier R) -> Equal (rsub R a (rzero R)) a := by
+  intros R a
+  erw (negZero R), (CompleteOrderedField.addZeroRight (field R) a)
 
 -- |a * b| = |a| * |b| (convenience alias)
 absOfMul : (R : Real) -> (a b : Carrier R) -> Equal (rabs R (rmul R a b)) (rmul R (rabs R a) (rabs R b))
@@ -541,16 +555,19 @@ subTriangle R a b c = replace (\\z => rle R (rabs R z) (radd R (rabs R (rsub R a
 -- Left: 0 = |a| implies |a| = 0 implies a = 0 by absEqZero.
 -- Right: 0 /= |a|, so if a = 0 then |a| = |0| = 0, contradicting 0 /= |a|.
 -- (-a) * b = -(a * b) — negation on the left of multiplication
-mulNegLeft : (R : Real) -> (a b : Carrier R) -> Equal (rmul R (rneg R a) b) (rneg R (rmul R a b))
-mulNegLeft R a b = trans (CompleteOrderedField.mulComm (field R) (rneg R a) b) (trans (mulNegRight R b a) (cong (\\z => rneg R z) (CompleteOrderedField.mulComm (field R) b a)))
+mulNegLeft : (R : Real) -> (a b : Carrier R) -> Equal (rmul R (rneg R a) b) (rneg R (rmul R a b)) := by
+  intros R a b
+  erw (CompleteOrderedField.mulComm (field R) (rneg R a) b), (mulNegRight R b a), (CompleteOrderedField.mulComm (field R) b a)
 
 -- (a - b) * c = a*c - b*c — right distributivity for subtraction
-mulSubDistribRight : (R : Real) -> (a b c : Carrier R) -> Equal (rmul R (rsub R a b) c) (rsub R (rmul R a c) (rmul R b c))
-mulSubDistribRight R a b c = trans (CompleteOrderedField.distribRight (field R) a (rneg R b) c) (cong (\\z => radd R (rmul R a c) z) (mulNegLeft R b c))
+mulSubDistribRight : (R : Real) -> (a b c : Carrier R) -> Equal (rmul R (rsub R a b) c) (rsub R (rmul R a c) (rmul R b c)) := by
+  intros R a b c
+  erw (CompleteOrderedField.distribRight (field R) a (rneg R b) c), (mulNegLeft R b c)
 
 -- a * (inv(a) * b) = b when a /= 0 (variant of mulInvCancel)
-mulInvLeftCancel : (R : Real) -> (a b : Carrier R) -> (Equal a (rzero R) -> Void) -> Equal (rmul R a (rmul R (rinv R a) b)) b
-mulInvLeftCancel R a b hne = trans (sym (CompleteOrderedField.mulAssoc (field R) a (rinv R a) b)) (trans (cong (\\z => rmul R z b) (CompleteOrderedField.mulInvRight (field R) a hne)) (CompleteOrderedField.mulOneLeft (field R) b))
+mulInvLeftCancel : (R : Real) -> (a b : Carrier R) -> (Equal a (rzero R) -> Void) -> Equal (rmul R a (rmul R (rinv R a) b)) b := by
+  intros R a b hne
+  erw (sym (CompleteOrderedField.mulAssoc (field R) a (rinv R a) b)), (CompleteOrderedField.mulInvRight (field R) a hne), (CompleteOrderedField.mulOneLeft (field R) b)
 
 -- (a*inv(b) - c) * b = a - c*b when b /= 0
 -- Proof: distribRight gives (a*inv(b))*b - c*b. Then a*inv(b)*b = a*(inv(b)*b) = a*1 = a.
@@ -584,8 +601,9 @@ derivBoundZero R g y0 Lg eta = replace (\\z => rle R z (rmul R eta (rabs R (rzer
 
 -- a - b = 0 implies a = b
 -- Proof: a = a - b + b = 0 + b = b
-subEqZeroToEq : (R : Real) -> (a b : Carrier R) -> Equal (rsub R a b) (rzero R) -> Equal a b
-subEqZeroToEq R a b h = trans (sym (subCancel R a b)) (trans (cong (\\z => radd R z b) h) (addZeroLeft R b))
+subEqZeroToEq : (R : Real) -> (a b : Carrier R) -> Equal (rsub R a b) (rzero R) -> Equal a b := by
+  intros R a b h
+  erw (sym (subCancel R a b)), h, (addZeroLeft R b)
 
 -- When d = y - y0 /= 0: 0 < |d|, so derivative gives |diffQuot(g)-Lg| < eta.
 -- Then |g(y)-g(y0)-Lg*(y-y0)| = |(diffQuot-Lg)*(y-y0)| = |diffQuot-Lg|*|y-y0| <= eta*|y-y0|.

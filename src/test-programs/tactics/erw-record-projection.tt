@@ -1,0 +1,38 @@
+@test success
+@name "erw: record projection wrapper aliases (real-analysis pattern)"
+
+-- Simulates the real-analysis pattern where wrapper functions
+-- like `radd` wrap record projections like `CompleteOrderedField.add`
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+record MyGroup (A : Type) where
+  constructor MkMyGroup
+  op : A -> A -> A
+  e : A
+  comm : (a b : A) -> Equal (op a b) (op b a)
+  idRight : (a : A) -> Equal (op a e) a
+
+-- Wrapper functions (like radd, rzero in real-analysis)
+myOp : {A : Type} -> MyGroup A -> A -> A -> A
+myOp g a b = MyGroup.op g a b
+
+myE : {A : Type} -> MyGroup A -> A
+myE g = MyGroup.e g
+
+-- idLeft proved via comm + idRight (like addZeroLeft in real-analysis)
+-- Term mode would be: trans (MyGroup.comm g (myE g) a) (MyGroup.idRight g a)
+-- With erw, the goal uses myOp/myE but proof uses MyGroup.op/MyGroup.e
+idLeft : {A : Type} -> (g : MyGroup A) -> (a : A) -> Equal (myOp g (myE g) a) a := by
+  intros A g a
+  erw (MyGroup.comm g (myE g) a), (MyGroup.idRight g a)
