@@ -1739,8 +1739,68 @@ function elaborateTacticBlock(
           case 'UOmega':
             return { tag: 'UOmega' };
 
-          // For complex terms, just use standard elaboration
-          // (Binder, Match, etc. are unlikely in tactic arguments)
+          case 'Binder': {
+            // Handle lambdas, pi, let in tactic arguments
+            // This allows e.g. `rw (cong (\z => plus x z) h)` where x is a tactic context var
+            const domain = term.domain ? surfaceToKernel(term.domain, depth) : undefined;
+            let binderKind: import('./kernel').TTKBinderKind;
+            if (term.binderKind.tag === 'BLetTT') {
+              binderKind = { tag: 'BLet', defVal: surfaceToKernel(term.binderKind.defVal, depth) };
+            } else if (term.binderKind.tag === 'BLamTT') {
+              binderKind = { tag: 'BLam' };
+            } else {
+              binderKind = { tag: 'BPi' };
+            }
+            // Extend name context for body resolution
+            nameContext.push(term.name);
+            const body = surfaceToKernel(term.body, depth);
+            nameContext.pop();
+            return {
+              tag: 'Binder',
+              binderKind,
+              name: term.name,
+              domain: domain ?? { tag: 'Hole', id: '_' },
+              body
+            };
+          }
+
+          case 'MultiBinder': {
+            // Multi-name binder: (a b c : T) -> body
+            const domain = surfaceToKernel(term.domain, depth);
+            const binderKind: import('./kernel').TTKBinderKind = term.binderKind.tag === 'BLamTT'
+              ? { tag: 'BLam' }
+              : term.binderKind.tag === 'BPiTT'
+              ? { tag: 'BPi' }
+              : { tag: 'BLet', defVal: surfaceToKernel((term.binderKind as any).defVal, depth) };
+            // Desugar into nested single binders, extending name context
+            let result: import('./kernel').TTKTerm;
+            for (const name of term.names) {
+              nameContext.push(name);
+            }
+            result = surfaceToKernel(term.body, depth);
+            // Build nested binders from inside out
+            for (let i = term.names.length - 1; i >= 0; i--) {
+              nameContext.pop();
+              result = {
+                tag: 'Binder',
+                binderKind,
+                name: term.names[i],
+                domain,
+                body: result
+              };
+            }
+            return result;
+          }
+
+          case 'Annot': {
+            // Type annotation: (term : type)
+            // Just elaborate both parts; the annotation will be checked during type checking
+            const annotTerm = surfaceToKernel(term.term, depth);
+            const annotType = surfaceToKernel(term.type, depth);
+            return { tag: 'Annot' as any, term: annotTerm, type: annotType };
+          }
+
+          // For complex terms (Match, etc.), use standard elaboration
           default:
             return elabToKernelWithMap(term, elabMap, [], []);
         }
@@ -1784,6 +1844,24 @@ function elaborateTacticBlock(
                 return { tag: 'ULit', n: term.n };
               case 'UOmega':
                 return { tag: 'UOmega' };
+              case 'Binder': {
+                const domain = term.domain ? surfaceToKernel(term.domain, depth) : undefined;
+                let binderKind: import('./kernel').TTKBinderKind;
+                if (term.binderKind.tag === 'BLetTT') {
+                  binderKind = { tag: 'BLet', defVal: surfaceToKernel(term.binderKind.defVal, depth) };
+                } else if (term.binderKind.tag === 'BLamTT') {
+                  binderKind = { tag: 'BLam' };
+                } else {
+                  binderKind = { tag: 'BPi' };
+                }
+                nameContext.push(term.name);
+                const body = surfaceToKernel(term.body, depth);
+                nameContext.pop();
+                return {
+                  tag: 'Binder', binderKind, name: term.name,
+                  domain: domain ?? { tag: 'Hole', id: '_' }, body
+                };
+              }
               default:
                 return elabToKernelWithMap(term, elabMap, [], []);
             }

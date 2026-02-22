@@ -1,0 +1,29 @@
+@test success
+@name "rw: cong with lambda referencing context vars"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+postulate plus : Nat -> Nat -> Nat
+postulate plusAssoc : (a b c : Nat) -> Equal (plus (plus a b) c) (plus a (plus b c))
+postulate plusZeroRight : (a : Nat) -> Equal (plus a Zero) a
+postulate negRight : (a : Nat) -> Equal (plus a a) Zero
+
+-- Trans chain using cong with lambda that references 'x' from intros
+-- Term mode: trans (plusAssoc x y z) (trans (cong (\w => plus x w) (negRight y)) (plusZeroRight x))
+cancelHelper : (x y : Nat) -> Equal (plus (plus x y) y) x := by
+  intros x y
+  rw (plusAssoc x y y), (cong (\w => plus x w) (negRight y)), (plusZeroRight x)

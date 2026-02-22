@@ -1,0 +1,30 @@
+@test success
+@name "rw: compound expression arguments (trans chain pattern)"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Simulating the real-analysis pattern: using rw with compound proof terms
+plusZero : (n : Nat) -> Equal (Succ n) (Succ n)
+plusZero n = refl
+
+comm : (a b : Nat) -> Equal (Succ (Succ a)) (Succ (Succ b)) -> Equal (Succ (Succ b)) (Succ (Succ a))
+comm a b h = sym h
+
+-- Chain: trans (sym h) (sym h) = rw (sym h), (sym h)
+test : (a b : Nat) -> Equal a b -> Equal b a -> Equal a a := by
+  intros a b h1 h2
+  rw h1, h2

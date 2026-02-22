@@ -1,0 +1,24 @@
+@test success
+@name "rewrite: lambda in tactic argument (cong pattern)"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Test that lambdas in tactic args can reference context variables
+-- cong (\z => Succ z) h rewrites via congruence
+test : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m) := by
+  intros n m h
+  exact (cong (\z => Succ z) h)

@@ -15,6 +15,7 @@
  */
 
 import { TTKTerm } from '../compiler/kernel';
+import { DefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
@@ -64,7 +65,9 @@ export class RewriteTactic implements Tactic {
       const { typeA, lhs, rhs } = eqArgs;
 
       // 4. Replace LHS with RHS in the goal type
-      const newGoalType = this.substitute(goal.type, lhs, rhs);
+      //    Uses WHNF-based matching to handle definition aliases
+      //    (e.g., `radd R` matching `CompleteOrderedField.add (field R)`)
+      const newGoalType = this.substitute(goal.type, lhs, rhs, engine.definitions);
 
       // 5. Check if anything changed
       if (this.termEqual(goal.type, newGoalType)) {
@@ -79,7 +82,7 @@ export class RewriteTactic implements Tactic {
       //    then replace shifted lhs with Var(0).
       const shiftedGoal = shiftTerm(goal.type, 1, 0);
       const shiftedLhs = shiftTerm(lhs, 1, 0);
-      const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 });
+      const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 }, engine.definitions);
       const motive: TTKTerm = {
         tag: 'Binder',
         binderKind: { tag: 'BLam' },
@@ -188,11 +191,14 @@ export class RewriteTactic implements Tactic {
   }
 
   /**
-   * Substitute all occurrences of `from` with `to` in `term`
+   * Substitute all occurrences of `from` with `to` in `term`.
+   * Uses WHNF-based matching when definitions are provided, so that
+   * definition aliases (like `radd R` vs `CompleteOrderedField.add (field R)`)
+   * are treated as equal.
    */
-  private substitute(term: TTKTerm, from: TTKTerm, to: TTKTerm): TTKTerm {
-    // If term matches from, replace with to
-    if (this.termEqual(term, from)) {
+  private substitute(term: TTKTerm, from: TTKTerm, to: TTKTerm, definitions?: DefinitionsMap): TTKTerm {
+    // If term matches from (structurally or modulo definitions), replace with to
+    if (this.termEqualModDefs(term, from, definitions)) {
       return to;
     }
 
@@ -211,8 +217,8 @@ export class RewriteTactic implements Tactic {
       case 'App':
         return {
           tag: 'App',
-          fn: this.substitute(term.fn, from, to),
-          arg: this.substitute(term.arg, from, to)
+          fn: this.substitute(term.fn, from, to, definitions),
+          arg: this.substitute(term.arg, from, to, definitions)
         };
 
       case 'Binder':
@@ -220,13 +226,34 @@ export class RewriteTactic implements Tactic {
           tag: 'Binder',
           binderKind: term.binderKind,
           name: term.name,
-          domain: this.substitute(term.domain, from, to),
-          body: this.substitute(term.body, from, to)
+          domain: this.substitute(term.domain, from, to, definitions),
+          body: this.substitute(term.body, from, to, definitions)
         };
 
       default:
         return term;
     }
+  }
+
+  /**
+   * Check if two terms are definitionally equal (modulo definition unfolding).
+   * First tries structural equality (fast path), then falls back to
+   * WHNF comparison when definitions are available.
+   */
+  private termEqualModDefs(a: TTKTerm, b: TTKTerm, definitions?: DefinitionsMap): boolean {
+    // Fast path: structural equality
+    if (this.termEqual(a, b)) return true;
+
+    // Slow path: WHNF both sides and compare structurally
+    if (definitions) {
+      const aN = whnf(a, { definitions });
+      const bN = whnf(b, { definitions });
+      // Only retry if WHNF actually changed something
+      if (aN !== a || bN !== b) {
+        return this.termEqual(aN, bN);
+      }
+    }
+    return false;
   }
 
   /**
@@ -270,6 +297,17 @@ export class RewriteTactic implements Tactic {
 
       case 'Hole':
         return b.tag === 'Hole' && a.id === b.id;
+
+      case 'Match':
+        if (b.tag !== 'Match') return false;
+        if (!this.termEqual(a.scrutinee, b.scrutinee)) return false;
+        if (a.clauses.length !== b.clauses.length) return false;
+        return a.clauses.every((clause, i) => {
+          const other = b.tag === 'Match' ? b.clauses[i] : undefined;
+          if (!other) return false;
+          if (clause.patterns.length !== other.patterns.length) return false;
+          return this.termEqual(clause.rhs, other.rhs);
+        });
 
       default:
         return false;
