@@ -1,0 +1,17 @@
+@test success
+@name "rw: single rewrite closes equality goal"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- rw h rewrites and finishes with reflexivity
+test : {n m : Nat} -> Equal n m -> Equal n m := by
+  intros n m h
+  rw h

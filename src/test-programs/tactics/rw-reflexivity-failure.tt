@@ -1,0 +1,18 @@
+@test failure
+@name "rw: fails when refl can't close goal after rewrite"
+@import preambles/nat.tt
+@error "reflexivity"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- After rw h1, goal becomes Equal b c which is NOT refl
+test : {a b c : Nat} -> Equal a b -> Equal a c := by
+  intros a b c h1
+  rw h1

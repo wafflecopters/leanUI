@@ -1,0 +1,22 @@
+@test success
+@name "rewrite: complex LHS (function application)"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Rewrite with a compound LHS: h says (Succ n) = m, so goal changes
+test : {n m : Nat} -> Equal (Succ n) m -> Equal (Succ (Succ n)) (Succ m) := by
+  intros n m h
+  rewrite h
+  exact refl

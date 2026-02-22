@@ -3594,6 +3594,23 @@ export class Parser {
         };
       }
 
+      case 'rw': {
+        // Parse comma-separated list of rewrite terms
+        const rwArgs: TTerm[] = [];
+        const firstArgPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        rwArgs.push(this.expr(0, ctx, firstArgPath));
+        while (this.current().type === 'COMMA') {
+          this.advance(); // consume comma
+          const nextArgPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: rwArgs.length }];
+          rwArgs.push(this.expr(0, ctx, nextArgPath));
+        }
+        return {
+          name: 'rw',
+          args: rwArgs,
+          indexPath: path
+        };
+      }
+
       case 'assumption':
       case 'constructor':
       case 'reflexivity': {

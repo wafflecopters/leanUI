@@ -9,19 +9,25 @@
  *   h : Equal (plus n Zero) n
  *   goal : Equal (plus (plus n Zero) m) (plus n m)
  *   After rewrite h: goal becomes Equal (plus n m) (plus n m)
+ *
+ * Proof term: replace (\z => goal[lhs := z]) (sym h) ?newGoal
+ * where ?newGoal has type goal[lhs := rhs]
  */
 
-import { TTKTerm, TTKContext } from '../compiler/kernel';
-import { MetaVar, DefinitionsMap } from '../compiler/term';
+import { TTKTerm } from '../compiler/kernel';
+import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
-import { Tactic, TacticResult } from './tactic';
+import { Tactic, TacticResult, freshMetaName } from './tactic';
 import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
+import { shiftTerm } from '../compiler/subst';
 
 /**
  * RewriteTactic: Use an equality proof to substitute in the goal
  *
- * Basic implementation: syntactic replacement of LHS with RHS
+ * Given h : Equal lhs rhs, transforms goal G[lhs] into G[rhs].
+ * Builds proof term: replace P (sym h) ?newGoal
+ * where P = \z => G[lhs := z] (the motive).
  */
 export class RewriteTactic implements Tactic {
   name = 'rewrite';
@@ -33,54 +39,95 @@ export class RewriteTactic implements Tactic {
       // 1. Infer type of the equality proof
       const env = engine.toTCEnv(goal, this.equalityProof);
       const inferredEnv = inferType(env);
-      const proofType = inferredEnv.value;
+      // Solve constraints to resolve implicit argument metas (e.g., for `sym h`)
+      let solvedEnv = inferredEnv;
+      try {
+        solvedEnv = inferredEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+      } catch {
+        // Best effort — proceed with what we have
+      }
+      // Zonk to substitute solved metas into the type
+      const proofType = solvedEnv.zonkTerm(solvedEnv.value);
 
       // 2. Normalize to find equality type
       const proofTypeWhnf = whnf(proofType, { definitions: engine.definitions });
 
-      // 3. Check that it's an equality type and extract LHS and RHS
-      const { lhs, rhs } = this.extractEqualityArgs(proofTypeWhnf);
-      if (!lhs || !rhs) {
+      // 3. Check that it's an equality type and extract type param, LHS, and RHS
+      const eqArgs = this.extractEqualityArgs(proofTypeWhnf);
+      if (!eqArgs) {
         return {
           success: false,
           error: `rewrite: argument must be an equality proof, got ${this.termToString(proofTypeWhnf)}`
         };
       }
 
+      const { typeA, lhs, rhs } = eqArgs;
+
       // 4. Replace LHS with RHS in the goal type
       const newGoalType = this.substitute(goal.type, lhs, rhs);
 
       // 5. Check if anything changed
-      if (this.defEqual(goal.type, newGoalType)) {
+      if (this.termEqual(goal.type, newGoalType)) {
         return {
           success: false,
           error: `rewrite: no occurrences of ${this.termToString(lhs)} found in goal`
         };
       }
 
-      // 6. Create a new meta for the transformed goal
+      // 6. Build the motive: \z => goal.type[lhs := z]
+      //    Shift goal type and lhs into the lambda body scope (depth +1),
+      //    then replace shifted lhs with Var(0).
+      const shiftedGoal = shiftTerm(goal.type, 1, 0);
+      const shiftedLhs = shiftTerm(lhs, 1, 0);
+      const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 });
+      const motive: TTKTerm = {
+        tag: 'Binder',
+        binderKind: { tag: 'BLam' },
+        name: '_z',
+        domain: typeA,
+        body: motiveBody
+      };
+
+      // 7. Create a new meta for the transformed goal
+      const newMetaId = freshMetaName();
       const newMeta: MetaVar = {
         ctx: goal.ctx,
         type: newGoalType,
         solution: undefined
       };
 
-      // 7. Build the proof term using transport/subst
-      // For now, we use a placeholder that will need to be elaborated
-      // In a full implementation, this would construct:
-      //   subst equalityProof newMetaProof
-      const proofTerm: TTKTerm = {
-        tag: 'Meta',
-        id: goalId + '_rewrite'
+      // 8. Build the proof term: replace motive (sym h) ?newGoal
+      //    replace : {A} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+      //    We need: P lhs (original goal) from P rhs (new goal)
+      //    sym h : Equal rhs lhs, so replace P (sym h) : P rhs -> P lhs
+      const symProof: TTKTerm = {
+        tag: 'App',
+        fn: { tag: 'Const', name: 'sym' },
+        arg: this.equalityProof
       };
 
-      // 8. Update engine state
+      // replace motive (sym h) ?newGoal
+      const proofTerm: TTKTerm = {
+        tag: 'App',
+        fn: {
+          tag: 'App',
+          fn: {
+            tag: 'App',
+            fn: { tag: 'Const', name: 'replace' },
+            arg: motive
+          },
+          arg: symProof
+        },
+        arg: { tag: 'Meta', id: newMetaId }
+      };
+
+      // 9. Update engine state
       const newMetaVars = new Map(engine.metaVars);
       newMetaVars.set(goalId, { ...goal, solution: proofTerm });
-      newMetaVars.set(goalId + '_rewrite', newMeta);
+      newMetaVars.set(newMetaId, newMeta);
 
       // Replace current goal with new goal
-      const newGoals = engine.goals.map(g => g === goalId ? goalId + '_rewrite' : g);
+      const newGoals = engine.goals.map(g => g === goalId ? newMetaId : g);
 
       return {
         success: true,
@@ -90,7 +137,11 @@ export class RewriteTactic implements Tactic {
         })
       };
     } catch (e) {
-      const errorMsg = e instanceof Error ? e.message : String(e);
+      const errorMsg = e instanceof Error
+        ? e.message
+        : (e && typeof e === 'object' && 'message' in e)
+          ? String((e as any).message)
+          : String(e);
       return {
         success: false,
         error: `rewrite: ${errorMsg}`,
@@ -100,12 +151,12 @@ export class RewriteTactic implements Tactic {
   }
 
   /**
-   * Extract LHS and RHS from an equality type
+   * Extract type param, LHS and RHS from an equality type
    * Equal is typically: (Equal A) lhs rhs or ((Equal A) lhs) rhs
    */
-  private extractEqualityArgs(type: TTKTerm): { lhs: TTKTerm | null; rhs: TTKTerm | null } {
+  private extractEqualityArgs(type: TTKTerm): { typeA: TTKTerm; lhs: TTKTerm; rhs: TTKTerm } | null {
     if (type.tag !== 'App') {
-      return { lhs: null, rhs: null };
+      return null;
     }
 
     // Walk backwards through application spine
@@ -118,18 +169,22 @@ export class RewriteTactic implements Tactic {
 
     // Check that head is Equal (or const resolving to Equal)
     if (current.tag !== 'Const' || current.name !== 'Equal') {
-      return { lhs: null, rhs: null };
+      return null;
     }
 
     // Need at least 2 args (lhs and rhs); may have type arg
     if (args.length < 2) {
-      return { lhs: null, rhs: null };
+      return null;
     }
 
     const rhs = args[args.length - 1];
     const lhs = args[args.length - 2];
+    // Type arg is the first arg (if present), otherwise use a Hole
+    const typeA = args.length >= 3
+      ? args[args.length - 3]
+      : { tag: 'Hole' as const, id: '_rewrite_type' };
 
-    return { lhs, rhs };
+    return { typeA, lhs, rhs };
   }
 
   /**
@@ -137,7 +192,7 @@ export class RewriteTactic implements Tactic {
    */
   private substitute(term: TTKTerm, from: TTKTerm, to: TTKTerm): TTKTerm {
     // If term matches from, replace with to
-    if (this.defEqual(term, from)) {
+    if (this.termEqual(term, from)) {
       return to;
     }
 
@@ -175,9 +230,9 @@ export class RewriteTactic implements Tactic {
   }
 
   /**
-   * Check if two terms are definitionally equal (structurally identical)
+   * Check if two terms are structurally equal
    */
-  private defEqual(a: TTKTerm, b: TTKTerm): boolean {
+  private termEqual(a: TTKTerm, b: TTKTerm): boolean {
     if (a.tag !== b.tag) return false;
 
     switch (a.tag) {
@@ -189,17 +244,17 @@ export class RewriteTactic implements Tactic {
 
       case 'App':
         return b.tag === 'App' &&
-               this.defEqual(a.fn, b.fn) &&
-               this.defEqual(a.arg, b.arg);
+               this.termEqual(a.fn, b.fn) &&
+               this.termEqual(a.arg, b.arg);
 
       case 'Binder':
         return b.tag === 'Binder' &&
                a.binderKind.tag === b.binderKind.tag &&
-               this.defEqual(a.domain, b.domain) &&
-               this.defEqual(a.body, b.body);
+               this.termEqual(a.domain, b.domain) &&
+               this.termEqual(a.body, b.body);
 
       case 'Sort':
-        return b.tag === 'Sort' && this.defEqual(a.level, b.level);
+        return b.tag === 'Sort' && this.termEqual(a.level, b.level);
 
       case 'ULevel':
         return b.tag === 'ULevel';

@@ -27,7 +27,7 @@ import { subst } from './subst';
 import { whnf, countPiBindersWhnf } from './whnf';
 import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
-import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, Tactic } from '../tactics/tactic';
+import { ExactTactic, AssumptionTactic, IntroTactic, IntrosTactic, ApplyTactic, TacticSequence, Tactic } from '../tactics/tactic';
 import { CasesTactic } from '../tactics/cases-tactic';
 import { ReflexivityTactic } from '../tactics/reflexivity-tactic';
 import { InductionTactic } from '../tactics/induction-tactic';
@@ -1541,6 +1541,15 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       }
       // args[0] is a TTKTerm at this point (elaborated by caller)
       return new SubstTactic(cmd.args[0] as TTKTerm);
+
+    case 'rw': {
+      // rw h1, h2, h3 = rewrite h1; rewrite h2; rewrite h3; reflexivity
+      if (cmd.args.length === 0) {
+        throw new Error(`'rw' tactic requires at least 1 argument`);
+      }
+      const rewrites = cmd.args.map(arg => new RewriteTactic(arg as TTKTerm));
+      return new TacticSequence('rw', [...rewrites, new ReflexivityTactic()]);
+    }
 
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);

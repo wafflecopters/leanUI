@@ -1,0 +1,19 @@
+@test failure
+@name "rewrite: fails when arg is not an equality proof"
+@import preambles/nat.tt
+@error "equality proof"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Passing a Nat instead of an equality proof should fail
+test : {n : Nat} -> Equal n n := by
+  intro n
+  rewrite n
+  exact refl

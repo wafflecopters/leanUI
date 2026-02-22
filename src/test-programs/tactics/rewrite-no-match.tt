@@ -1,0 +1,19 @@
+@test failure
+@name "rewrite: fails when LHS not in goal"
+@import preambles/nat.tt
+@error "no occurrences"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- n doesn't appear in the goal, so rewrite should fail
+test : {n m p : Nat} -> Equal n m -> Equal p p := by
+  intros n m p h
+  rewrite h
+  exact refl
