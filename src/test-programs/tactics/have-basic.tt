@@ -1,0 +1,21 @@
+@test success
+@name "have: introduce local hypothesis"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+-- Use have to introduce an intermediate result
+test : {n m : Nat} -> Equal n m -> Equal (Succ (Succ n)) (Succ (Succ m)) := by
+  intros n m h
+  have h2 : Equal (Succ n) (Succ m) := cong Succ h
+  exact (cong Succ h2)

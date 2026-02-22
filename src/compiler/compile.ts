@@ -36,6 +36,7 @@ import { SymmetryTactic } from '../tactics/symmetry-tactic';
 import { TransitivityTactic } from '../tactics/transitivity-tactic';
 import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
+import { HaveTactic } from '../tactics/have-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
@@ -1551,6 +1552,15 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       return new TacticSequence('rw', [...rewrites, new ReflexivityTactic()]);
     }
 
+    case 'have': {
+      // have h : T := proof
+      if (cmd.args.length !== 3) {
+        throw new Error(`'have' tactic requires name, type, and proof (got ${cmd.args.length} args)`);
+      }
+      const haveName = cmd.args[0].tag === 'Const' ? (cmd.args[0] as any).name : '_';
+      return new HaveTactic(haveName, cmd.args[1] as TTKTerm, cmd.args[2] as TTKTerm);
+    }
+
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);
   }
@@ -1669,9 +1679,13 @@ function elaborateTacticBlock(
     }
 
     // Elaborate arguments in the CURRENT goal's context
-    const elabArgs: Array<TTerm | TTKTerm> = cmd.args.map(arg => {
+    const elabArgs: Array<TTerm | TTKTerm> = cmd.args.map((arg, argIndex) => {
       // For intro/intros, keep names as Const (don't elaborate)
       if (cmd.name === 'intro' || cmd.name === 'intros') {
+        return arg;
+      }
+      // For have, args[0] is the hypothesis name — keep as Const
+      if (cmd.name === 'have' && argIndex === 0) {
         return arg;
       }
 

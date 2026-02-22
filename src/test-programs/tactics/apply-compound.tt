@@ -1,0 +1,18 @@
+@test success
+@name "apply: compound expression (partially applied)"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+-- apply (trans h1) should work with compound expressions
+test : {a b c : Nat} -> Equal a b -> Equal b c -> Equal a c := by
+  intros a b c h1 h2
+  apply (trans h1)
+  exact h2

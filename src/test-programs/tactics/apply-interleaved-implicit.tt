@@ -1,0 +1,19 @@
+@test success
+@name "apply: interleaved implicit args get solved"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+-- cong has implicit {A B x y} then explicit (f) then implicit-ish (eq)
+-- apply (cong Succ) should work — only the equality arg becomes a subgoal
+test : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m) := by
+  intros n m h
+  apply (cong Succ)
+  exact h

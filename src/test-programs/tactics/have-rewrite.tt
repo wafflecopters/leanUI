@@ -1,0 +1,25 @@
+@test success
+@name "have: use have then rewrite"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+-- Use have to name an intermediate, then rewrite with it
+test : {a b c : Nat} -> Equal a b -> Equal b c -> Equal (Succ a) (Succ c) := by
+  intros a b c h1 h2
+  have h3 : Equal a c := trans h1 h2
+  rewrite h3
+  exact refl

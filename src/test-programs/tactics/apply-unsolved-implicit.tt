@@ -1,0 +1,17 @@
+@test success
+@name "apply: unsolved implicit shouldn't become subgoal"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+-- A function where implicit arg can't be determined from return type alone
+-- but SHOULD still be inferred (not become a subgoal)
+id : {A : Type} -> A -> A
+id x = x
+
+-- apply id should create one subgoal (the value), not two (Type + value)
+test : Nat -> Nat := by
+  intro n
+  apply id
+  exact n

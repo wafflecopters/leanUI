@@ -1,0 +1,13 @@
+@test failure
+@name "have: fails when proof doesn't match declared type"
+@import preambles/nat.tt
+@error "conflict"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+-- Proof is refl but type says Equal n m (not necessarily equal)
+test : {n m : Nat} -> Equal (Succ n) (Succ m) := by
+  intros n m
+  have h : Equal n m := refl
+  exact refl
