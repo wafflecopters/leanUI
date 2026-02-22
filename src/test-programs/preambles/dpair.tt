@@ -1,0 +1,8 @@
+inductive DPair : (A : Type) -> (A -> Type) -> Type where
+  MkDPair : {A : Type} -> {P : A -> Type} -> (x : A) -> P x -> DPair A P
+
+DPair.fst : {A : Type} -> {P : A -> Type} -> DPair A P -> A
+DPair.fst (MkDPair x p) = x
+
+DPair.snd : {A : Type} -> {P : A -> Type} -> (d : DPair A P) -> P (DPair.fst d)
+DPair.snd (MkDPair x p) = p

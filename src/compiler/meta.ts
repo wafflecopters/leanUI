@@ -606,10 +606,11 @@ export function solveConstraints(
             throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
           }
         } else {
-          // Queue propagated sub-constraints from unification
-          for (const mc of unifyResult.metaConstraints) {
-            queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
-          }
+          // Do NOT queue sub-constraints from non-normalized unification.
+          // The meta.solution is at effectiveContext depth, but resolvedRhs is at
+          // constraint.ctx depth (which is deeper). Sub-constraints from unifying
+          // terms at different depths would have wrong de Bruijn indices.
+          // This unification is only for conflict detection, not constraint propagation.
         }
       }
       stillStuck.push(constraint);
@@ -741,7 +742,7 @@ export function solveConstraints(
           if (invResult) {
             // Case inversion succeeded — queue the sub-constraints
             for (const mc of invResult.constraints) {
-              queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
+                queue.push({ ctx: effectiveContext, meta: mc.meta, rhs: mc.rhs });
             }
           } else if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)) {
             // No unsolved metas and no inversion possible.

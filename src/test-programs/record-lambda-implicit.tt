@@ -1,0 +1,64 @@
+@test success
+@name "Record constructor with lambda implicit parameter"
+@import preambles/nat.tt
+@import preambles/equality.tt
+@import preambles/pair.tt
+@import preambles/dpair.tt
+
+-- Record with function param + DPair in field type (like Limit)
+record LimitLike (f : Nat -> Nat) (v : Nat) where
+  eps_delta : (eps : Nat) -> DPair Nat (\delta => Pair (Equal delta delta) ((x : Nat) -> Equal (f x) (f v)))
+
+-- Simple case: f is a variable
+testSimple : (g : Nat -> Nat) -> (v : Nat) -> LimitLike g v
+testSimple g v = MkLimitLike (\eps => MkDPair eps (MkPair refl (\x => refl)))
+
+-- Bug case: f is a lambda capturing outer vars
+testLambda : (g : Nat -> Nat) -> (v : Nat) -> LimitLike (\x => g x) v
+testLambda g v = MkLimitLike (\eps => MkDPair eps (MkPair refl (\x => refl)))
+
+-- More complex: 4 record params + 2 pi binders in field (like real Limit)
+record LimitLike4 (a : Nat) (f : Nat -> Nat) (b c : Nat) where
+  eps_delta : (eps : Nat) -> (h : Nat) -> DPair Nat (\delta => Pair (Equal delta delta) ((x : Nat) -> Equal (f x) (f c)))
+
+-- f is a variable — should pass
+test4Simple : (g : Nat -> Nat) -> (b c : Nat) -> LimitLike4 b g b c
+test4Simple g b c = MkLimitLike4 (\eps h => MkDPair eps (MkPair refl (\x => refl)))
+
+-- f is a lambda — the real bug case (4 params, shift by 3)
+test4Lambda : (g : Nat -> Nat) -> (b c : Nat) -> LimitLike4 b (\x => g x) b c
+test4Lambda g b c = MkLimitLike4 (\eps h => MkDPair eps (MkPair refl (\x => refl)))
+
+-- Named predicate (like EpsDeltaWitness in real analysis)
+Witness : (f : Nat -> Nat) -> (v : Nat) -> Nat -> Nat -> Type
+Witness f v eps delta = Pair (Equal delta delta) ((x : Nat) -> Equal (f x) (f v))
+
+record LimitNamed (a : Nat) (f : Nat -> Nat) (b c : Nat) where
+  eps_delta : (eps : Nat) -> (h : Nat) -> DPair Nat (Witness f c eps)
+
+-- f is a variable — should pass
+testNamedSimple : (g : Nat -> Nat) -> (b c : Nat) -> LimitNamed b g b c
+testNamedSimple g b c = MkLimitNamed (\eps h => MkDPair eps (MkPair refl (\x => refl)))
+
+-- f is a lambda — reproduces the real bug?
+testNamedLambda : (g : Nat -> Nat) -> (b c : Nat) -> LimitNamed b (\x => g x) b c
+testNamedLambda g b c = MkLimitNamed (\eps h => MkDPair eps (MkPair refl (\x => refl)))
+
+-- Closest to real Limit: universe-polymorphic DPair, named witness, 4 params
+-- Universe-polymorphic DPair
+inductive DPairU : {u v : ULevel} -> (A : Type u) -> (A -> Type v) -> Type (UMax u v) where
+  MkDPairU : {u v : ULevel} -> {A : Type u} -> {P : A -> Type v} -> (x : A) -> P x -> DPairU A P
+
+WitnessU : (f : Nat -> Nat) -> (v : Nat) -> Nat -> Nat -> Type
+WitnessU f v eps delta = Pair (Equal delta delta) ((x : Nat) -> Equal (f x) (f v))
+
+record LimitU (R : Nat) (f : Nat -> Nat) (x0 L : Nat) where
+  eps_delta : (eps : Nat) -> (heps : Nat) -> DPairU Nat (WitnessU f L eps)
+
+-- f variable
+testUSimple : (g : Nat -> Nat) -> (x0 L : Nat) -> LimitU Zero g x0 L
+testUSimple g x0 L = MkLimitU (\eps heps => MkDPairU eps (MkPair refl (\x => refl)))
+
+-- f lambda (mirrors limitScalarAll)
+testULambda : (g : Nat -> Nat) -> (x0 L : Nat) -> LimitU Zero (\x => g x) x0 L
+testULambda g x0 L = MkLimitU (\eps heps => MkDPairU eps (MkPair refl (\x => refl)))

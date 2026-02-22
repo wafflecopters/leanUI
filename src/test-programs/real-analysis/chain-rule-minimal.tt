@@ -73,6 +73,10 @@ record OrderedField (A : Type) : Type 1 extends Field A where
   mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
   abs : A -> A
   absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
+  absMul : (a b : A) -> Equal (abs (mul a b)) (mul (abs a) (abs b))
+  absNonneg : (a : A) -> le zero (abs a)
+  absZero : Equal (abs zero) zero
+  absEqZero : (a : A) -> Equal (abs a) zero -> Equal a zero
   zeroLeOne : le zero one
   zeroNeOne : Equal zero one -> Void
   invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)

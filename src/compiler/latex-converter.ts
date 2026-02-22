@@ -649,7 +649,7 @@ export function makeDefaultNotations(): NotationTable {
     'mulAssoc', 'mulOneLeft', 'mulOneRight', 'mulComm',
     'distribLeft', 'distribRight',
     'leRefl', 'leAntisym', 'leTrans', 'leTotal',
-    'addLeLeft', 'mulNonneg', 'absTriangle',
+    'addLeLeft', 'mulNonneg', 'absTriangle', 'absMul', 'absNonneg', 'absZero', 'absEqZero',
     'zeroLeOne', 'zeroNeOne', 'invPos', 'mulInvRight',
     'supUpperBound', 'supLeast',
   ];

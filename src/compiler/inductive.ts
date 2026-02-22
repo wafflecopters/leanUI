@@ -88,14 +88,16 @@ export function checkInductiveDeclaration(
 
   errors.push(
     ...checkTermOnlyContainsValidConstructors(defEnv.inInductiveDefinitionType()),
-    ...constructors.flatMap((_, index) =>
+    // Skip constructor validity check for records — record field types
+    // can legitimately contain lambda expressions (e.g., DPair Nat (\x => ...))
+    ...(recordInfo ? [] : constructors.flatMap((_, index) =>
       checkTermOnlyContainsValidConstructors(
         defEnv
           .inInductiveDefinitionConstructors()
           .inInductiveDefinitionConstructor(index)
           .inInductiveDefinitionConstructorType(),
       )
-    )
+    ))
   )
 
   if (errors.length > 0) {
@@ -255,14 +257,19 @@ function checkDomainPositivity(
     checkDomainPositivity(inductiveName, ctorName, env.inAppFn(), errors);
     checkDomainPositivity(inductiveName, ctorName, env.inAppArg(), errors);
   } else if (env.isBinderTerm()) {
-    checkNestedPiForNegativeOccurrences(
-      inductiveName,
-      ctorName,
-      env,
-      'strictly_positive',
-      errors,
-    );
     if (env.isBinderPiTerm()) {
+      checkNestedPiForNegativeOccurrences(
+        inductiveName,
+        ctorName,
+        env,
+        'strictly_positive',
+        errors,
+      );
+    } else if (env.isBinderLambdaTerm()) {
+      // Lambdas can appear in record constructor types (e.g., DPair Nat (\x => ...))
+      // Traverse body at same polarity — lambdas don't flip polarity
+      checkDomainPositivity(inductiveName, ctorName, env.inBinderLambdaDomain(), errors);
+      checkDomainPositivity(inductiveName, ctorName, env.inBinderLambdaBody(), errors);
     } else {
       throw new Error(`Syntax has been checked already. This should not happen. Binder-${env.value.binderKind.tag}`);
     }
@@ -305,6 +312,11 @@ function checkNestedPiForNegativeOccurrences(
     if (env.isBinderPiTerm()) {
       checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiDomain(), flipPolarity(polarity), errors);
       checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderPiBody(), polarity, errors);
+    } else if (env.isBinderLambdaTerm()) {
+      // Lambdas can appear in record constructor types (e.g., DPair Nat (\x => ...))
+      // Traverse at same polarity — lambdas don't flip polarity
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderLambdaDomain(), polarity, errors);
+      checkNestedPiForNegativeOccurrences(inductiveName, ctorName, env.inBinderLambdaBody(), polarity, errors);
     } else {
       throw new Error(`Syntax has been checked already. This should not happen. Binder-${env.value.binderKind.tag}`);
     }
