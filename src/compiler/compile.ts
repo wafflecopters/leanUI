@@ -37,6 +37,7 @@ import { TransitivityTactic } from '../tactics/transitivity-tactic';
 import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
 import { HaveTactic } from '../tactics/have-tactic';
+import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
@@ -1552,6 +1553,29 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       return new TacticSequence('rw', [...rewrites, new ReflexivityTactic()]);
     }
 
+    case 'erw': {
+      // erw h1, h2, h3 = enhanced rewrite h1; ...; reflexivity (with deep definitional equality)
+      if (cmd.args.length === 0) {
+        throw new Error(`'erw' tactic requires at least 1 argument`);
+      }
+      const enhancedRewrites = cmd.args.map(arg => new RewriteTactic(arg as TTKTerm, { enhanced: true }));
+      return new TacticSequence('erw', [...enhancedRewrites, new ReflexivityTactic()]);
+    }
+
+    case 'unfold': {
+      if (cmd.args.length === 0) {
+        throw new Error(`'unfold' tactic requires at least 1 argument`);
+      }
+      // Extract names from Const nodes
+      const unfoldNames = cmd.args.map(arg => {
+        if (arg.tag !== 'Const') {
+          throw new Error(`'unfold' tactic arguments must be identifiers, got ${arg.tag}`);
+        }
+        return (arg as any).name;
+      });
+      return new UnfoldTactic(unfoldNames);
+    }
+
     case 'have': {
       // have h : T := proof
       if (cmd.args.length !== 3) {
@@ -1680,8 +1704,8 @@ function elaborateTacticBlock(
 
     // Elaborate arguments in the CURRENT goal's context
     const elabArgs: Array<TTerm | TTKTerm> = cmd.args.map((arg, argIndex) => {
-      // For intro/intros, keep names as Const (don't elaborate)
-      if (cmd.name === 'intro' || cmd.name === 'intros') {
+      // For intro/intros/unfold, keep names as Const (don't elaborate)
+      if (cmd.name === 'intro' || cmd.name === 'intros' || cmd.name === 'unfold') {
         return arg;
       }
       // For have, args[0] is the hypothesis name — keep as Const

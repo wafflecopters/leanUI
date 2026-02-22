@@ -33,7 +33,10 @@ import { shiftTerm } from '../compiler/subst';
 export class RewriteTactic implements Tactic {
   name = 'rewrite';
 
-  constructor(public readonly equalityProof: TTKTerm) {}
+  constructor(
+    public readonly equalityProof: TTKTerm,
+    public readonly options: { enhanced?: boolean } = {}
+  ) {}
 
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
@@ -197,8 +200,12 @@ export class RewriteTactic implements Tactic {
    * are treated as equal.
    */
   private substitute(term: TTKTerm, from: TTKTerm, to: TTKTerm, definitions?: DefinitionsMap): TTKTerm {
-    // If term matches from (structurally or modulo definitions), replace with to
-    if (this.termEqualModDefs(term, from, definitions)) {
+    // If term matches from, replace with to
+    // In enhanced mode (erw), use recursive deep definitional equality
+    const isMatch = this.options.enhanced && definitions
+      ? this.termEqualDeep(term, from, definitions)
+      : this.termEqualModDefs(term, from, definitions);
+    if (isMatch) {
       return to;
     }
 
@@ -254,6 +261,67 @@ export class RewriteTactic implements Tactic {
       }
     }
     return false;
+  }
+
+  /**
+   * Deep definitional equality: WHNF at every level, then recursively compare.
+   * Used by `erw` to handle nested aliases like `rzero R` vs
+   * `CompleteOrderedField.zero (Carrier R) (field R)`.
+   */
+  private termEqualDeep(a: TTKTerm, b: TTKTerm, definitions: DefinitionsMap, depth: number = 0): boolean {
+    // Prevent infinite recursion
+    if (depth > 100) return false;
+
+    // Fast path: structural equality
+    if (this.termEqual(a, b)) return true;
+
+    // WHNF both sides
+    const aN = whnf(a, { definitions });
+    const bN = whnf(b, { definitions });
+
+    // Check structural equality after WHNF
+    if (this.termEqual(aN, bN)) return true;
+
+    // Recursive comparison on WHNF'd terms
+    if (aN.tag !== bN.tag) return false;
+
+    switch (aN.tag) {
+      case 'Var':
+        return bN.tag === 'Var' && aN.index === bN.index;
+      case 'Const':
+        return bN.tag === 'Const' && aN.name === bN.name;
+      case 'App':
+        return bN.tag === 'App' &&
+               this.termEqualDeep(aN.fn, (bN as any).fn, definitions, depth + 1) &&
+               this.termEqualDeep(aN.arg, (bN as any).arg, definitions, depth + 1);
+      case 'Binder':
+        return bN.tag === 'Binder' &&
+               aN.binderKind.tag === (bN as any).binderKind.tag &&
+               this.termEqualDeep(aN.domain, (bN as any).domain, definitions, depth + 1) &&
+               this.termEqualDeep(aN.body, (bN as any).body, definitions, depth + 1);
+      case 'Sort':
+        return bN.tag === 'Sort' && this.termEqualDeep(aN.level, (bN as any).level, definitions, depth + 1);
+      case 'Meta':
+        return bN.tag === 'Meta' && aN.id === (bN as any).id;
+      case 'Hole':
+        return bN.tag === 'Hole' && aN.id === (bN as any).id;
+      case 'ULit':
+        return bN.tag === 'ULit' && aN.n === (bN as any).n;
+      case 'ULevel':
+        return bN.tag === 'ULevel';
+      case 'UOmega':
+        return bN.tag === 'UOmega';
+      case 'Match':
+        if (bN.tag !== 'Match') return false;
+        if (!this.termEqualDeep(aN.scrutinee, (bN as any).scrutinee, definitions, depth + 1)) return false;
+        if (aN.clauses.length !== (bN as any).clauses.length) return false;
+        return aN.clauses.every((clause, i) => {
+          const other = (bN as any).clauses[i];
+          return this.termEqualDeep(clause.rhs, other.rhs, definitions, depth + 1);
+        });
+      default:
+        return false;
+    }
   }
 
   /**

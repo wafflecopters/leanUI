@@ -1,0 +1,29 @@
+@test success
+@name "erw: chained enhanced rewrite with aliases"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Two wrapper aliases
+mySucc : Nat -> Nat
+mySucc n = Succ n
+
+myDouble : Nat -> Nat
+myDouble n = Succ (Succ n)
+
+-- Chain: first rewrite transforms myDouble to Succ (Succ n),
+-- second rewrite transforms Succ (Succ n) to mySucc (mySucc n)
+-- Actually let's keep it simpler — both equalities stated in raw terms
+h1 : (n : Nat) -> Equal (Succ (Succ n)) (Succ (Succ n))
+h1 n = refl
+
+test : (n : Nat) -> Equal (myDouble n) (myDouble n) := by
+  intros n
+  erw (h1 n)

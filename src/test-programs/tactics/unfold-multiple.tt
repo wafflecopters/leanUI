@@ -1,0 +1,16 @@
+@test success
+@name "unfold: multiple constants"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+myZero : Nat
+myZero = Zero
+
+mySucc : Nat -> Nat
+mySucc n = Succ n
+
+test : Equal (mySucc myZero) (Succ Zero) := by
+  unfold mySucc, myZero
+  exact refl

@@ -1,0 +1,26 @@
+@test success
+@name "erw: basic enhanced rewrite with wrapper alias"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Wrapper alias (different head symbol than Succ)
+mySucc : Nat -> Nat
+mySucc n = Succ n
+
+-- Proof states equality in terms of Succ, goal uses mySucc
+-- Regular rw would fail because mySucc n ≠ Succ n structurally
+-- erw succeeds because it uses deep definitional equality (WHNF at every level)
+lemma : (n : Nat) -> Equal (Succ n) (Succ n)
+lemma n = refl
+
+test : (n : Nat) -> Equal (mySucc n) (mySucc n) := by
+  intros n
+  erw (lemma n)

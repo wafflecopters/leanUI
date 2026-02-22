@@ -3594,7 +3594,8 @@ export class Parser {
         };
       }
 
-      case 'rw': {
+      case 'rw':
+      case 'erw': {
         // Parse comma-separated list of rewrite terms
         const rwArgs: TTerm[] = [];
         const firstArgPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
@@ -3605,8 +3606,47 @@ export class Parser {
           rwArgs.push(this.expr(0, ctx, nextArgPath));
         }
         return {
-          name: 'rw',
+          name: tacticName,
           args: rwArgs,
+          indexPath: path
+        };
+      }
+
+      case 'unfold': {
+        // Parse comma-separated list of identifiers: unfold f, g, h
+        const unfoldArgs: TTerm[] = [];
+        if (this.current().type !== 'IDENT') {
+          throw new ParseError(
+            'unfold expects at least one identifier',
+            this.current().line,
+            this.current().col
+          );
+        }
+        const firstUnfoldPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        const firstUnfoldToken = this.current();
+        unfoldArgs.push(mkConstTT(this.current().value));
+        this.recordRange(firstUnfoldPath, firstUnfoldToken, firstUnfoldToken);
+        this.advance();
+
+        while (this.current().type === 'COMMA') {
+          this.advance(); // consume comma
+          if (this.current().type !== 'IDENT') {
+            throw new ParseError(
+              'unfold expects identifier after comma',
+              this.current().line,
+              this.current().col
+            );
+          }
+          const nextUnfoldPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: unfoldArgs.length }];
+          const nextUnfoldToken = this.current();
+          unfoldArgs.push(mkConstTT(this.current().value));
+          this.recordRange(nextUnfoldPath, nextUnfoldToken, nextUnfoldToken);
+          this.advance();
+        }
+
+        return {
+          name: 'unfold',
+          args: unfoldArgs,
           indexPath: path
         };
       }

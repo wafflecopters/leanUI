@@ -1,0 +1,28 @@
+@test success
+@name "erw: nested wrapper aliases (wrapper of wrapper)"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Nested aliases: inc wraps Succ, myInc wraps inc
+inc : Nat -> Nat
+inc n = Succ n
+
+myInc : Nat -> Nat
+myInc n = inc n
+
+-- Proof in terms of Succ, goal in terms of myInc
+-- erw must resolve myInc → inc → Succ at nested levels
+lemma : (n : Nat) -> Equal (Succ n) (Succ n)
+lemma n = refl
+
+test : (n : Nat) -> Equal (myInc n) (myInc n) := by
+  intros n
+  erw (lemma n)

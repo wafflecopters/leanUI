@@ -1,0 +1,13 @@
+@test failure
+@name "unfold: postulate has no definition"
+@error "has no definition"
+@import preambles/nat.tt
+
+postulate mystery : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+test : Equal (mystery Zero) (mystery Zero) := by
+  unfold mystery
+  exact refl

@@ -1,0 +1,15 @@
+@test failure
+@name "unfold: no occurrences found"
+@error "no occurrences"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+double : Nat -> Nat
+double n = Succ (Succ n)
+
+-- double doesn't appear in the goal, so unfold should fail
+test : Equal Zero Zero := by
+  unfold double
+  exact refl

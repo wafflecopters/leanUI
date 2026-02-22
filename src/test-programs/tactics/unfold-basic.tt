@@ -1,0 +1,15 @@
+@test success
+@name "unfold: basic constant expansion"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+double : Nat -> Nat
+double n = Succ (Succ n)
+
+-- After unfold, goal becomes Equal ((\n => Succ (Succ n)) Zero) (Succ (Succ Zero))
+-- which beta-reduces to Equal (Succ (Succ Zero)) (Succ (Succ Zero))
+test : Equal (double Zero) (Succ (Succ Zero)) := by
+  unfold double
+  exact refl

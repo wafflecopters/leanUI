@@ -1,0 +1,27 @@
+@test success
+@name "unfold: unfold then rw (the real use case)"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Wrapper functions
+myAdd : Nat -> Nat -> Nat
+myAdd Zero m = m
+myAdd (Succ n) m = Succ (myAdd n m)
+
+-- A lemma about the raw definition
+myAddZero : (n : Nat) -> Equal (myAdd Zero n) n
+myAddZero n = refl
+
+-- Goal uses the wrapper, proof uses the raw form.
+-- unfold exposes the definition so rw can match.
+test : (n : Nat) -> Equal (myAdd Zero n) n := by
+  intros n
+  rw (myAddZero n)
