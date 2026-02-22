@@ -1,0 +1,8 @@
+@test failure
+@name "constructor: fails on type with multiple constructors"
+@error "has 2 constructors"
+@import preambles/nat.tt
+
+-- Nat has Zero and Succ — constructor should fail
+bad : Nat := by
+  constructor

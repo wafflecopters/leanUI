@@ -1,0 +1,14 @@
+@test success
+@name "constructor: record type"
+@import preambles/nat.tt
+
+record MyPoint where
+  constructor MkPoint
+  x : Nat
+  y : Nat
+
+-- constructor should find MkPoint
+origin : MyPoint := by
+  constructor
+  exact Zero
+  exact Zero

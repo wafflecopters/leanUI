@@ -1,0 +1,14 @@
+@test success
+@name "constructor: combined with erw for real-analysis pattern"
+@import preambles/nat.tt
+@import preambles/pair.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+-- Prove a Pair of equalities using constructor + erw
+pairOfRefls : (n : Nat) -> Pair (Equal n n) (Equal (Succ n) (Succ n)) := by
+  intros n
+  constructor
+  exact refl
+  exact refl

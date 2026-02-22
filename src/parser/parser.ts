@@ -3458,8 +3458,8 @@ export class Parser {
 
       const focusedTactics: TacticCommand[] = [];
 
-      // Check for same-line tactic: · exact foo
-      if (this.current().type === 'IDENT' && this.current().line === bulletToken.line) {
+      // Check for same-line tactic: · exact foo (CONSTRUCTOR is also valid as tactic name)
+      if ((this.current().type === 'IDENT' || this.current().type === 'CONSTRUCTOR') && this.current().line === bulletToken.line) {
         const tacticPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: 0 }];
         const tactic = this.parseTactic(ctx, tacticPath);
         focusedTactics.push(tactic);
@@ -3512,8 +3512,8 @@ export class Parser {
       };
     }
 
-    // Tactic name is always an identifier
-    if (this.current().type !== 'IDENT') {
+    // Tactic name is always an identifier (or CONSTRUCTOR keyword used as tactic)
+    if (this.current().type !== 'IDENT' && this.current().type !== 'CONSTRUCTOR') {
       throw new ParseError(
         'Expected tactic name',
         this.current().line,

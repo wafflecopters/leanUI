@@ -38,6 +38,7 @@ import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
 import { HaveTactic } from '../tactics/have-tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
+import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
@@ -1561,6 +1562,12 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       const enhancedRewrites = cmd.args.map(arg => new RewriteTactic(arg as TTKTerm, { enhanced: true }));
       return new TacticSequence('erw', [...enhancedRewrites, new ReflexivityTactic()]);
     }
+
+    case 'constructor':
+      if (cmd.args.length !== 0) {
+        throw new Error(`'constructor' tactic requires no arguments, got ${cmd.args.length}`);
+      }
+      return new ConstructorTactic();
 
     case 'unfold': {
       if (cmd.args.length === 0) {

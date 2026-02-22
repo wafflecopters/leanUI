@@ -1,0 +1,11 @@
+@test success
+@name "constructor: followed by exact for each subgoal"
+@import preambles/nat.tt
+@import preambles/pair.tt
+
+-- Pair of pairs: constructor creates 2 subgoals, each solved with exact
+mkNestedPair : Pair (Pair Nat Nat) Nat := by
+  intros
+  constructor
+  exact (MkPair Zero (Succ Zero))
+  exact (Succ (Succ Zero))

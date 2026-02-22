@@ -1,0 +1,29 @@
+@test success
+@name "erw: multi-step chain rewrites"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Two lemmas about plus Zero
+lemma1 : (n : Nat) -> Equal (plus Zero n) n
+lemma1 n = refl
+
+lemma2 : (n : Nat) -> Equal n (plus Zero n)
+lemma2 n = refl
+
+-- erw chain: first rewrite plus Zero (plus Zero n) to plus Zero n,
+-- then rewrite plus Zero n to n
+test : (n : Nat) -> Equal (plus Zero (plus Zero n)) n := by
+  intros n
+  erw (lemma1 (plus Zero n)), (lemma1 n)

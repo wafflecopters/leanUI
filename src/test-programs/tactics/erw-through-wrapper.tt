@@ -1,0 +1,26 @@
+@test success
+@name "erw: rewrite through wrapper function (delta-expansion)"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- Wrapper function that hides `plus Zero`
+doublePlus : Nat -> Nat -> Nat
+doublePlus n m = plus Zero (plus n m)
+
+-- Lemma: plus Zero n = n
+plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n
+plusZeroLeft n = refl
+
+-- erw needs to see through `doublePlus` (WHNF expands it) to find `plus Zero ...`
+test : (n m : Nat) -> Equal (doublePlus n m) (plus n m) := by
+  intros n m
+  erw (plusZeroLeft (plus n m))

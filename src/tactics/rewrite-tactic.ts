@@ -209,6 +209,25 @@ export class RewriteTactic implements Tactic {
       return to;
     }
 
+    // In enhanced mode, WHNF the term to expose hidden subterms.
+    // E.g., `rsub R a (rzero R)` WHNF's to `radd R a (rneg R (rzero R))`,
+    // exposing `rneg R (rzero R)` which can then be matched and replaced.
+    // Only attempt when the App head is a defined constant (δ-reduction target),
+    // and only recurse if WHNF actually changes the head (prevents infinite loop
+    // since whnf always creates new App objects even when nothing reduces).
+    if (this.options.enhanced && definitions && term.tag === 'App') {
+      let head: TTKTerm = term;
+      while (head.tag === 'App') head = head.fn;
+      if (head.tag === 'Const') {
+        const termN = whnf(term, { definitions });
+        let headN: TTKTerm = termN;
+        while (headN.tag === 'App') headN = headN.fn;
+        if (headN.tag !== 'Const' || headN.name !== head.name) {
+          return this.substitute(termN, from, to, definitions);
+        }
+      }
+    }
+
     // Recursively substitute in subterms
     switch (term.tag) {
       case 'Var':

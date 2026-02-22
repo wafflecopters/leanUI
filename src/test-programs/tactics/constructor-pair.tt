@@ -1,0 +1,12 @@
+@test success
+@name "constructor: Pair type with two subgoals"
+@import preambles/nat.tt
+@import preambles/bool.tt
+@import preambles/pair.tt
+
+-- constructor should find MkPair and create subgoals for each field
+mkNatBool : Nat -> Bool -> Pair Nat Bool := by
+  intros n b
+  constructor
+  exact n
+  exact b

@@ -1,0 +1,13 @@
+@test success
+@name "constructor: DPair dependent pair"
+@import preambles/nat.tt
+@import preambles/dpair.tt
+@import preambles/equality.tt
+
+-- constructor on DPair creates subgoals for witness and proof
+-- DPair Nat (\n => Equal n Zero) — exists n, n = Zero
+existsZero : DPair Nat (\n => Equal n Zero) := by
+  intros
+  constructor
+  exact Zero
+  exact refl

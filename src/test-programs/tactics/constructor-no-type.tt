@@ -1,0 +1,8 @@
+@test failure
+@name "constructor: fails on non-inductive type"
+@error "not a constant"
+@import preambles/nat.tt
+
+-- Nat -> Nat is a function type, not an inductive type
+bad : Nat -> Nat := by
+  constructor

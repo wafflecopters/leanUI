@@ -1,0 +1,36 @@
+@test success
+@name "erw: four-step rewrite chain"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+f : Nat -> Nat
+f x = x
+
+g : Nat -> Nat
+g x = x
+
+h : Nat -> Nat
+h x = x
+
+-- Each step rewrites one function application to identity
+step1 : (n : Nat) -> Equal (f n) n
+step1 n = refl
+
+step2 : (n : Nat) -> Equal (g n) n
+step2 n = refl
+
+step3 : (n : Nat) -> Equal (h n) n
+step3 n = refl
+
+-- f (g (h Zero)) = Zero via 3 rewrite steps + refl
+test : Equal (f (g (h Zero))) Zero := by
+  intros
+  erw (step1 (g (h Zero))), (step2 (h Zero)), (step3 Zero)

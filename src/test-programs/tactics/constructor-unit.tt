@@ -1,0 +1,9 @@
+@test success
+@name "constructor: unit-like type with no explicit args"
+
+inductive Unit : Type where
+  tt : Unit
+
+-- constructor should solve the goal completely (no subgoals)
+mkUnit : Unit := by
+  constructor

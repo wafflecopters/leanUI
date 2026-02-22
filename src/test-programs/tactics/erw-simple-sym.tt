@@ -1,0 +1,27 @@
+@test success
+@name "erw: rewrite with sym-wrapped proof"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+f : Nat -> Nat
+f n = n
+
+-- Goal uses f, proof uses sym to flip direction
+lemma1 : Equal (f Zero) Zero
+lemma1 = refl
+
+-- erw with sym should work
+test : Equal Zero (f Zero) := by
+  intros
+  erw (sym lemma1)

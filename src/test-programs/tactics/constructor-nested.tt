@@ -1,0 +1,13 @@
+@test success
+@name "constructor: nested constructor calls for Pair of Pair"
+@import preambles/nat.tt
+@import preambles/pair.tt
+
+-- Pair (Pair Nat Nat) Nat
+-- constructor on outer Pair, then constructor on inner Pair subgoal
+nestedConstruction : Pair (Pair Nat Nat) Nat := by
+  constructor
+  constructor
+  exact Zero
+  exact (Succ Zero)
+  exact (Succ (Succ Zero))
