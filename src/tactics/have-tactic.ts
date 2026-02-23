@@ -17,7 +17,7 @@ import { TTKTerm } from '../compiler/kernel';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
-import { checkType } from '../compiler/checker';
+import { checkType, inferType } from '../compiler/checker';
 import { shiftTerm } from '../compiler/subst';
 import { TCEnv } from '../compiler/term';
 
@@ -54,11 +54,25 @@ export class HaveTactic implements Tactic {
         { mode: 'check' }
       );
 
-      const checkedEnv = checkType(env, this.hypType);
+      // When no explicit type is given, hypType is a Hole. We need the actual inferred type.
+      let resolvedType: TTKTerm;
+      let checkedEnv: TCEnv<TTKTerm>;
+
+      if (this.hypType.tag === 'Hole') {
+        // Type inferred: infer the proof's type, then check against it
+        const inferredEnv = inferType(env);
+        resolvedType = inferredEnv.zonkTerm(inferredEnv.value);
+        checkedEnv = inferredEnv as any;
+      } else {
+        // Explicit type given: check proof against it
+        checkedEnv = checkType(env, this.hypType);
+        resolvedType = this.hypType;
+      }
+
       const checkedProof = checkedEnv.zonkTerm(checkedEnv.elaboratedTerm ?? this.hypProof);
 
-      // 2. Create new goal with extended context
-      const newCtx = [...goal.ctx, { name: this.hypName, type: this.hypType }];
+      // 2. Create new goal with extended context (store value for ζ-reduction)
+      const newCtx = [...goal.ctx, { name: this.hypName, type: resolvedType, value: checkedProof }];
       const newGoalType = shiftTerm(goal.type, 1, 0);
 
       const newMetaId = freshMetaName();
@@ -73,7 +87,7 @@ export class HaveTactic implements Tactic {
         tag: 'Binder',
         binderKind: { tag: 'BLet', defVal: checkedProof },
         name: this.hypName,
-        domain: this.hypType,
+        domain: resolvedType,
         body: { tag: 'Meta', id: newMetaId }
       };
 

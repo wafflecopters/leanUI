@@ -1,0 +1,12 @@
+@test success
+@name "obtain: Pair destructuring"
+@import preambles/nat.tt
+@import preambles/pair.tt
+@import preambles/equal-simple.tt
+
+-- Use obtain on a Pair
+pairTest : Nat
+pairTest := by
+  have p : Pair Nat Nat := MkPair Zero (Succ Zero)
+  obtain (x, y) := p
+  exact y

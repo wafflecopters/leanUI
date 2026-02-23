@@ -1,0 +1,12 @@
+@test success
+@name "constructor: Pair with function args and := by"
+@import preambles/nat.tt
+@import preambles/pair.tt
+@import preambles/equal-simple.tt
+
+makePair : Nat -> Nat -> Pair Nat Nat
+makePair a b := by
+  intros a b
+  constructor
+  · exact a
+  · exact b

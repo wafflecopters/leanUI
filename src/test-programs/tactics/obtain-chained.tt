@@ -1,0 +1,23 @@
+@test success
+@name "obtain: chained DPair of Pair"
+@import preambles/nat.tt
+@import preambles/dpair.tt
+@import preambles/pair.tt
+@import preambles/equal-simple.tt
+
+-- Predicate
+IsGood : Nat -> Type
+IsGood n = Pair (Equal n n) Nat
+
+-- Witness
+goodWitness : DPair Nat IsGood
+goodWitness = MkDPair Zero (MkPair refl (Succ Zero))
+
+-- Chain two obtains: first destructure the DPair, then the Pair
+-- After the first obtain, n is abstract and rest : IsGood n = Pair (Equal n n) Nat
+-- After the second obtain, h1 : Equal n n and val : Nat
+chainedTest : Nat
+chainedTest := by
+  obtain (n, rest) := goodWitness
+  obtain (h1, val) := rest
+  exact val

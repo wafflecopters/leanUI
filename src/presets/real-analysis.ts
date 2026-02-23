@@ -301,7 +301,10 @@ halfMulEpsNe R e hle hne heq = hne (trans (sym (addZeroLeft R (rzero R))) (trans
 
 -- 0 < e => 0 < (1/2)*e
 halfMulEpsPos : (R : Real) -> (e : Carrier R) -> rlt R (rzero R) e -> rlt R (rzero R) (rmul R (rhalf R) e)
-halfMulEpsPos R e hlt = MkPair (halfMulEpsLe R e (Pair.fst hlt)) (halfMulEpsNe R e (Pair.fst hlt) (Pair.snd hlt))
+halfMulEpsPos R e hlt := by
+  constructor
+  · exact (halfMulEpsLe R e (Pair.fst hlt))
+  · exact (halfMulEpsNe R e (Pair.fst hlt) (Pair.snd hlt))
 
 ------------------------------------------------------------
 -- Negation distributes over addition: -(a+b) = (-a)+(-b)
@@ -353,7 +356,16 @@ convertEps R eps v hlt = replace (\\z => rlt R v z) (halfMulEps R eps) hlt
 -- pickDelta is inlined: uses eitherElim on leTotal to pick smaller delta,
 -- each case builds the EpsDeltaWitness via convertEps + coreEstimate + ltLeTrans
 limitAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> Limit R (\\x => radd R (f x) (g x)) x0 (radd R L M)
-limitAdd R f g x0 L M limF limG = MkLimit (\\eps heps => eitherElim (\\hle => MkDPair (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))) (\\x hx0 hxd => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 hxd) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) hxd hle)))))) (\\hle => MkDPair (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))) (\\x hx0 hxd => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) hxd hle)) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) x hx0 hxd))))) (CompleteOrderedField.leTotal (field R) (DPair.fst (Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)))))
+limitAdd R f g x0 L M limF limG := by
+  constructor
+  intros eps heps
+  have dF := Limit.eps_delta limF (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)
+  have dG := Limit.eps_delta limG (rmul R (rhalf R) eps) (halfMulEpsPos R eps heps)
+  cases (CompleteOrderedField.leTotal (field R) (DPair.fst dF) (DPair.fst dG)) with
+  | Left hle =>
+    exact (MkDPair (DPair.fst dF) (MkPair (Pair.fst (DPair.snd dF)) (\\x hx0 hxd => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 hxd) (Pair.snd (DPair.snd dG) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst dF) (DPair.fst dG) hxd hle))))))
+  | Right hle =>
+    exact (MkDPair (DPair.fst dG) (MkPair (Pair.fst (DPair.snd dG)) (\\x hx0 hxd => convertEps R eps (rabs R (rsub R (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul R (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst dG) (DPair.fst dF) hxd hle)) (Pair.snd (DPair.snd dG) x hx0 hxd)))))
 
 ------------------------------------------------------------
 -- DERIVATIVES
@@ -369,7 +381,14 @@ HasDerivative R f x0 L = Limit R (diffQuot R f x0) x0 L
 
 -- limitExt: if f and g agree pointwise, limits transfer
 limitExt : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> ((x : Carrier R) -> Equal (f x) (g x)) -> Limit R f x0 L -> Limit R g x0 L
-limitExt R f g x0 L ext limF = MkLimit (\\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\\x hx0 hxd => replace (\\z => rlt R (rabs R (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
+limitExt R f g x0 L ext limF := by
+  constructor
+  intros eps heps
+  constructor
+  · exact (DPair.fst (Limit.eps_delta limF eps heps))
+  · constructor
+    · exact (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps)))
+    · exact (\\x hx0 hxd => replace (\\z => rlt R (rabs R (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))
 
 -- distribRight: (a+b)*c = a*c + b*c (from the ring axiom)
 -- Already in the record as CompleteOrderedField.distribRight
@@ -432,11 +451,16 @@ subCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (rsub R a b) b) a :
 
 -- |c| > 0 when c /= 0
 absPos : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> Void) -> rlt R (rzero R) (rabs R c)
-absPos R c hne = MkPair (CompleteOrderedField.absNonneg (field R) c) (\\heq => hne (CompleteOrderedField.absEqZero (field R) c (sym heq)))
+absPos R c hne := by
+  constructor
+  · exact (CompleteOrderedField.absNonneg (field R) c)
+  · exact (\\heq => hne (CompleteOrderedField.absEqZero (field R) c (sym heq)))
 
 -- a <= b => 0 <= b - a
 leToSubNonneg : (R : Real) -> (a b : Carrier R) -> rle R a b -> rle R (rzero R) (rsub R b a)
-leToSubNonneg R a b hab = replace (\\z => rle R z (rsub R b a)) (subSelf R a) (addLeRight R a b (rneg R a) hab)
+leToSubNonneg R a b hab := by
+  rewrite (sym (subSelf R a))
+  exact (addLeRight R a b (rneg R a) hab)
 
 -- 0 <= c, a <= b => c*a <= c*b
 -- Proof: 0 <= b-a, so 0 <= c*(b-a) = c*b - c*a, add c*a: c*a <= c*b
@@ -445,7 +469,10 @@ mulLeLeft R c a b hc hab = replace (\\z => rle R (rmul R c a) z) (subCancel R (r
 
 -- 0 < 1
 zeroLtOne : (R : Real) -> rlt R (rzero R) (rone R)
-zeroLtOne R = MkPair (CompleteOrderedField.zeroLeOne (field R)) (CompleteOrderedField.zeroNeOne (field R))
+zeroLtOne R := by
+  constructor
+  · exact (CompleteOrderedField.zeroLeOne (field R))
+  · exact (CompleteOrderedField.zeroNeOne (field R))
 
 -- 1 <= |c| + 1 (used for absPlusOnePos)
 -- From absNonneg: 0 <= |c|. addLeLeft: le (1+0) (1+|c|). Commute to get le 1 (|c|+1).
@@ -468,7 +495,10 @@ mulLtLeftNe : (R : Real) -> (c a b : Carrier R) -> rle R (rzero R) c -> (Equal c
   erw (sym (CompleteOrderedField.mulOneLeft (field R) a)), (cong (\\z => rmul R z a) (sym (trans (CompleteOrderedField.mulComm (field R) (rinv R c) c) (CompleteOrderedField.mulInvRight (field R) c hcne)))), (CompleteOrderedField.mulAssoc (field R) (rinv R c) c a), (cong (\\z => rmul R (rinv R c) z) heq), (sym (CompleteOrderedField.mulAssoc (field R) (rinv R c) c b)), (cong (\\z => rmul R z b) (trans (CompleteOrderedField.mulComm (field R) (rinv R c) c) (CompleteOrderedField.mulInvRight (field R) c hcne))), (CompleteOrderedField.mulOneLeft (field R) b)
 
 mulLtLeft : (R : Real) -> (c a b : Carrier R) -> rlt R (rzero R) c -> rlt R a b -> rlt R (rmul R c a) (rmul R c b)
-mulLtLeft R c a b hc hab = MkPair (mulLeLeft R c a b (Pair.fst hc) (Pair.fst hab)) (\\heq => Pair.snd hab (mulLtLeftNe R c a b (Pair.fst hc) (Pair.snd hc) (Pair.fst hab) heq))
+mulLtLeft R c a b hc hab := by
+  constructor
+  · exact (mulLeLeft R c a b (Pair.fst hc) (Pair.fst hab))
+  · exact (\\heq => Pair.snd hab (mulLtLeftNe R c a b (Pair.fst hc) (Pair.snd hc) (Pair.fst hab) heq))
 
 -- a <= b, 0 <= c => a*c <= b*c (right multiplication variant)
 mulLeRight : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rle R (rzero R) c -> rle R (rmul R a c) (rmul R b c)
@@ -486,7 +516,10 @@ mulInvCancel : (R : Real) -> (M a : Carrier R) -> (Equal M (rzero R) -> Void) ->
 -- 0 < eps, 0 < M => 0 < eps * inv(M)
 -- Proof: le part from mulNonneg + invPos; ne part from eps * inv(M) = 0 => eps = 0
 epsOverMPos : (R : Real) -> (eps M : Carrier R) -> rlt R (rzero R) eps -> rlt R (rzero R) M -> rlt R (rzero R) (rmul R eps (rinv R M))
-epsOverMPos R eps M heps hM = MkPair (CompleteOrderedField.mulNonneg (field R) eps (rinv R M) (Pair.fst heps) (CompleteOrderedField.invPos (field R) M (Pair.fst hM) (Pair.snd hM))) (\\heq => Pair.snd heps (trans heq (trans (cong (\\z => rmul R z (rinv R M)) (sym (mulZeroLeft R (rinv R M)))) (sym (CompleteOrderedField.mulAssoc (field R) (rzero R) (rinv R M) (rinv R M))))))
+epsOverMPos R eps M heps hM := by
+  constructor
+  · exact (CompleteOrderedField.mulNonneg (field R) eps (rinv R M) (Pair.fst heps) (CompleteOrderedField.invPos (field R) M (Pair.fst hM) (Pair.snd hM)))
+  · exact (\\heq => Pair.snd heps (trans heq (trans (cong (\\z => rmul R z (rinv R M)) (sym (mulZeroLeft R (rinv R M)))) (sym (CompleteOrderedField.mulAssoc (field R) (rzero R) (rinv R M) (rinv R M))))))
 
 ------------------------------------------------------------
 -- Scalar multiplication of limits (proved)
@@ -501,7 +534,14 @@ scalarAbsBound R c a b = replace (\\z => rle R (rabs R z) (rmul R (radd R (rabs 
 -- Proof: Use M = |c| + 1 > 0. Get delta from limF at eps/M.
 -- Then |c*f(x) - c*L| = |c|*|f(x)-L| <= M*|f(x)-L| < M*(eps/M) = eps.
 limitScalarAll : (R : Real) -> (c : Carrier R) -> (h : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> Limit R h x0 L -> Limit R (\\x => rmul R c (h x)) x0 (rmul R c L)
-limitScalarAll R c h x0 L limH = MkLimit (\\eps heps => MkDPair (DPair.fst (Limit.eps_delta limH (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (epsOverMPos R eps (radd R (rabs R c) (rone R)) heps (absPlusOnePos R c)))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limH (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (epsOverMPos R eps (radd R (rabs R c) (rone R)) heps (absPlusOnePos R c))))) (\\x hx0 hxd => replace (\\z => rlt R (rabs R (rsub R (rmul R c (h x)) (rmul R c L))) z) (mulInvCancel R (radd R (rabs R c) (rone R)) eps (absPlusOneNe R c)) (leLtTrans R (rabs R (rsub R (rmul R c (h x)) (rmul R c L))) (rmul R (radd R (rabs R c) (rone R)) (rabs R (rsub R (h x) L))) (rmul R (radd R (rabs R c) (rone R)) (rmul R eps (rinv R (radd R (rabs R c) (rone R))))) (scalarAbsBound R c (h x) L) (mulLtLeft R (radd R (rabs R c) (rone R)) (rabs R (rsub R (h x) L)) (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (absPlusOnePos R c) (Pair.snd (DPair.snd (Limit.eps_delta limH (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (epsOverMPos R eps (radd R (rabs R c) (rone R)) heps (absPlusOnePos R c)))) x hx0 hxd))))))
+limitScalarAll R c h x0 L limH := by
+  constructor
+  intros eps heps
+  constructor
+  · exact (DPair.fst (Limit.eps_delta limH (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (epsOverMPos R eps (radd R (rabs R c) (rone R)) heps (absPlusOnePos R c))))
+  · constructor
+    · exact (Pair.fst (DPair.snd (Limit.eps_delta limH (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (epsOverMPos R eps (radd R (rabs R c) (rone R)) heps (absPlusOnePos R c)))))
+    · exact (\\x hx0 hxd => replace (\\z => rlt R (rabs R (rsub R (rmul R c (h x)) (rmul R c L))) z) (mulInvCancel R (radd R (rabs R c) (rone R)) eps (absPlusOneNe R c)) (leLtTrans R (rabs R (rsub R (rmul R c (h x)) (rmul R c L))) (rmul R (radd R (rabs R c) (rone R)) (rabs R (rsub R (h x) L))) (rmul R (radd R (rabs R c) (rone R)) (rmul R eps (rinv R (radd R (rabs R c) (rone R))))) (scalarAbsBound R c (h x) L) (mulLtLeft R (radd R (rabs R c) (rone R)) (rabs R (rsub R (h x) L)) (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (absPlusOnePos R c) (Pair.snd (DPair.snd (Limit.eps_delta limH (rmul R eps (rinv R (radd R (rabs R c) (rone R)))) (epsOverMPos R eps (radd R (rabs R c) (rone R)) heps (absPlusOnePos R c)))) x hx0 hxd))))
 
 -- limitScalar: special case for c /= 0 (calls limitScalarAll)
 limitScalar : (R : Real) -> (c : Carrier R) -> (Equal c (rzero R) -> Void) -> (f : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> Limit R f x0 L -> Limit R (\\x => rmul R c (f x)) x0 (rmul R c L)
@@ -626,11 +666,22 @@ DerivBoundWitness R g y0 Lg eta dg = Pair (rlt R (rzero R) dg) ((y : Carrier R) 
 
 -- Full derivBound: case split on y-y0 = 0 vs y-y0 /= 0
 derivBound : (R : Real) -> (g : Carrier R -> Carrier R) -> (y0 Lg : Carrier R) -> HasDerivative R g y0 Lg -> (eta : Carrier R) -> rlt R (rzero R) eta -> Sigma (Carrier R) (DerivBoundWitness R g y0 Lg eta)
-derivBound R g y0 Lg hg eta heta = mkSigma (Carrier R) (DerivBoundWitness R g y0 Lg eta) (DPair.fst (Limit.eps_delta hg eta heta)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta hg eta heta))) (\\y hyd => eitherElim (\\heq => replace (\\z => rle R (rabs R (rsub R (rsub R (g z) (g y0)) (rmul R Lg (rsub R z y0)))) (rmul R eta (rabs R (rsub R z y0)))) (sym (subEqZeroToEq R y y0 heq)) (replace (\\z => rle R (rabs R (rsub R (rsub R (g y0) (g y0)) (rmul R Lg z))) (rmul R eta (rabs R z))) (sym (subSelf R y0)) (derivBoundZero R g y0 Lg eta))) (\\hne => derivBoundNonzero R g y0 Lg eta y hne (ltToLe R (rabs R (rsub R (diffQuot R g y0 y) Lg)) eta (Pair.snd (DPair.snd (Limit.eps_delta hg eta heta)) y (absPos R (rsub R y y0) hne) hyd))) (eqOrNeZero R (rsub R y y0))))
+derivBound R g y0 Lg hg eta heta := by
+  constructor
+  · exact (DPair.fst (Limit.eps_delta hg eta heta))
+  · constructor
+    · exact (Pair.fst (DPair.snd (Limit.eps_delta hg eta heta)))
+    · exact (\\y hyd => eitherElim
+        (\\heq => replace (\\z => rle R (rabs R (rsub R (rsub R (g z) (g y0)) (rmul R Lg (rsub R z y0)))) (rmul R eta (rabs R (rsub R z y0)))) (sym (subEqZeroToEq R y y0 heq)) (replace (\\z => rle R (rabs R (rsub R (rsub R (g y0) (g y0)) (rmul R Lg z))) (rmul R eta (rabs R z))) (sym (subSelf R y0)) (derivBoundZero R g y0 Lg eta)))
+        (\\hne => derivBoundNonzero R g y0 Lg eta y hne (ltToLe R (rabs R (rsub R (diffQuot R g y0 y) Lg)) eta (Pair.snd (DPair.snd (Limit.eps_delta hg eta heta)) y (absPos R (rsub R y y0) hne) hyd)))
+        (eqOrNeZero R (rsub R y y0)))
 
 -- a < b => a + c < b + c
 addLtRight : (R : Real) -> (a b c : Carrier R) -> rlt R a b -> rlt R (radd R a c) (radd R b c)
-addLtRight R a b c h = MkPair (addLeRight R a b c (Pair.fst h)) (\\heq => Pair.snd h (addCancelRight R a b c heq))
+addLtRight R a b c h := by
+  constructor
+  · exact (addLeRight R a b c (Pair.fst h))
+  · exact (\\heq => Pair.snd h (addCancelRight R a b c heq))
 
 -- |a| <= |a - b| + |b| (variant of triangle inequality)
 absSubAdd : (R : Real) -> (a b : Carrier R) -> rle R (rabs R a) (radd R (rabs R (rsub R a b)) (rabs R b))
@@ -642,7 +693,18 @@ DiffQuotBoundWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Ca
 DiffQuotBoundWitness R f x0 Lf df = Pair (rlt R (rzero R) df) ((x : Carrier R) -> rlt R (rzero R) (rabs R (rsub R x x0)) -> rlt R (rabs R (rsub R x x0)) df -> rlt R (rabs R (diffQuot R f x0 x)) (radd R (rabs R Lf) (rone R)))
 
 diffQuotBounded : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative R f x0 Lf -> Sigma (Carrier R) (DiffQuotBoundWitness R f x0 Lf)
-diffQuotBounded R f x0 Lf hf = mkSigma (Carrier R) (DiffQuotBoundWitness R f x0 Lf) (DPair.fst (Limit.eps_delta hf (rone R) (zeroLtOne R))) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta hf (rone R) (zeroLtOne R)))) (\\x hx0 hxd => leLtTrans R (rabs R (diffQuot R f x0 x)) (radd R (rabs R (rsub R (diffQuot R f x0 x) Lf)) (rabs R Lf)) (radd R (rabs R Lf) (rone R)) (absSubAdd R (diffQuot R f x0 x) Lf) (replace (\\z => rlt R (radd R (rabs R (rsub R (diffQuot R f x0 x) Lf)) (rabs R Lf)) z) (CompleteOrderedField.addComm (field R) (rone R) (rabs R Lf)) (addLtRight R (rabs R (rsub R (diffQuot R f x0 x) Lf)) (rone R) (rabs R Lf) (Pair.snd (DPair.snd (Limit.eps_delta hf (rone R) (zeroLtOne R))) x hx0 hxd)))))
+diffQuotBounded R f x0 Lf hf := by
+  constructor
+  · exact (DPair.fst (Limit.eps_delta hf (rone R) (zeroLtOne R)))
+  · constructor
+    · exact (Pair.fst (DPair.snd (Limit.eps_delta hf (rone R) (zeroLtOne R))))
+    · exact (\\x hx0 hxd => leLtTrans R (rabs R (diffQuot R f x0 x))
+        (radd R (rabs R (rsub R (diffQuot R f x0 x) Lf)) (rabs R Lf))
+        (radd R (rabs R Lf) (rone R)) (absSubAdd R (diffQuot R f x0 x) Lf)
+        (replace (\\z => rlt R (radd R (rabs R (rsub R (diffQuot R f x0 x) Lf)) (rabs R Lf)) z)
+          (CompleteOrderedField.addComm (field R) (rone R) (rabs R Lf))
+          (addLtRight R (rabs R (rsub R (diffQuot R f x0 x) Lf)) (rone R) (rabs R Lf)
+            (Pair.snd (DPair.snd (Limit.eps_delta hf (rone R) (zeroLtOne R))) x hx0 hxd))))
 
 -- diffQuot(f,x0,x) * (x-x0) = f(x)-f(x0) when x-x0 /= 0
 -- Proof: (a*inv(b))*b = a*(inv(b)*b) = a*1 = a
@@ -672,7 +734,13 @@ absMulBound R a b M eps hle hlt hM = leLtTrans R (rmul R (rabs R a) (rabs R b)) 
 -- For any target > 0, exists delta > 0, 0 < |x-x0| < delta => |f(x)-f(x0)| < target
 -- We need min of two deltas: d1 from diffQuotBounded, d2 = target/(|Lf|+1)
 continuousFromDeriv : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative R f x0 Lf -> (target : Carrier R) -> rlt R (rzero R) target -> Sigma (Carrier R) (ContinuousWitness R f x0 target)
-continuousFromDeriv R f x0 Lf hf target htarget = eitherElim (\\hle => mkSigma (Carrier R) (ContinuousWitness R f x0 target) (DPair.fst (diffQuotBounded R f x0 Lf hf)) (MkPair (Pair.fst (DPair.snd (diffQuotBounded R f x0 Lf hf))) (\\x hx0 hxd => replace (\\z => rlt R z target) (absDiffQuotTimesH R f x0 x (eqOrNeZeroRight R (rsub R x x0) (Pair.snd hx0))) (replace (\\z => rlt R (rmul R (rabs R (diffQuot R f x0 x)) (rabs R (rsub R x x0))) z) (mulInvCancel R (radd R (rabs R Lf) (rone R)) target (absPlusOneNe R Lf)) (absMulBound R (diffQuot R f x0 x) (rsub R x x0) (radd R (rabs R Lf) (rone R)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (ltToLe R (rabs R (diffQuot R f x0 x)) (radd R (rabs R Lf) (rone R)) (Pair.snd (DPair.snd (diffQuotBounded R f x0 Lf hf)) x hx0 hxd)) (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (diffQuotBounded R f x0 Lf hf)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) hxd hle) (absPlusOnePos R Lf)))))) (\\hle => mkSigma (Carrier R) (ContinuousWitness R f x0 target) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (MkPair (epsOverMPos R target (radd R (rabs R Lf) (rone R)) htarget (absPlusOnePos R Lf)) (\\x hx0 hxd => replace (\\z => rlt R z target) (absDiffQuotTimesH R f x0 x (eqOrNeZeroRight R (rsub R x x0) (Pair.snd hx0))) (replace (\\z => rlt R (rmul R (rabs R (diffQuot R f x0 x)) (rabs R (rsub R x x0))) z) (mulInvCancel R (radd R (rabs R Lf) (rone R)) target (absPlusOneNe R Lf)) (absMulBound R (diffQuot R f x0 x) (rsub R x x0) (radd R (rabs R Lf) (rone R)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (Pair.snd (DPair.snd (diffQuotBounded R f x0 Lf hf)) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (DPair.fst (diffQuotBounded R f x0 Lf hf)) hxd hle)) hxd (absPlusOnePos R Lf)))))) (CompleteOrderedField.leTotal (field R) (DPair.fst (diffQuotBounded R f x0 Lf hf)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))))
+continuousFromDeriv R f x0 Lf hf target htarget := by
+  have dqb := diffQuotBounded R f x0 Lf hf
+  cases (CompleteOrderedField.leTotal (field R) (DPair.fst dqb) (rmul R target (rinv R (radd R (rabs R Lf) (rone R))))) with
+  | Left hle =>
+    exact (mkSigma (Carrier R) (ContinuousWitness R f x0 target) (DPair.fst dqb) (MkPair (Pair.fst (DPair.snd dqb)) (\\x hx0 hxd => replace (\\z => rlt R z target) (absDiffQuotTimesH R f x0 x (eqOrNeZeroRight R (rsub R x x0) (Pair.snd hx0))) (replace (\\z => rlt R (rmul R (rabs R (diffQuot R f x0 x)) (rabs R (rsub R x x0))) z) (mulInvCancel R (radd R (rabs R Lf) (rone R)) target (absPlusOneNe R Lf)) (absMulBound R (diffQuot R f x0 x) (rsub R x x0) (radd R (rabs R Lf) (rone R)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (ltToLe R (rabs R (diffQuot R f x0 x)) (radd R (rabs R Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 hxd)) (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst dqb) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) hxd hle) (absPlusOnePos R Lf))))))
+  | Right hle =>
+    exact (mkSigma (Carrier R) (ContinuousWitness R f x0 target) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (MkPair (epsOverMPos R target (radd R (rabs R Lf) (rone R)) htarget (absPlusOnePos R Lf)) (\\x hx0 hxd => replace (\\z => rlt R z target) (absDiffQuotTimesH R f x0 x (eqOrNeZeroRight R (rsub R x x0) (Pair.snd hx0))) (replace (\\z => rlt R (rmul R (rabs R (diffQuot R f x0 x)) (rabs R (rsub R x x0))) z) (mulInvCancel R (radd R (rabs R Lf) (rone R)) target (absPlusOneNe R Lf)) (absMulBound R (diffQuot R f x0 x) (rsub R x x0) (radd R (rabs R Lf) (rone R)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (Pair.snd (DPair.snd dqb) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (rmul R target (rinv R (radd R (rabs R Lf) (rone R)))) (DPair.fst dqb) hxd hle)) hxd (absPlusOnePos R Lf))))))
 
 ------------------------------------------------------------
 -- THE CHAIN RULE: (g . f)'(x0) = g'(f(x0)) . f'(x0)
@@ -715,7 +783,19 @@ chainBound R num fxfx0 h eta M eps hdb hdq heta hmul = replace (\\z => rlt R (ra
 -- The heart of the chain rule: A(x) -> 0 as x -> x0
 -- Uses derivBound (unpunctured), diffQuotBounded (strict), and continuousFromDeriv.
 chainTermALimit : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lg Lf : Carrier R) -> HasDerivative R f x0 Lf -> HasDerivative R g (f x0) Lg -> Limit R (chainTermA R g f x0 Lg) x0 (rzero R)
-chainTermALimit R g f x0 Lg Lf hf hg = MkLimit (\\eps heps => eitherElim (\\hle => MkDPair (DPair.fst (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf))))))) (MkPair (Pair.fst (DPair.snd (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))))))) (\\x hx0 hxd => replace (\\z => rlt R (rabs R z) eps) (sym (subZeroRight R (chainTermA R g f x0 Lg x))) (chainBound R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rsub R (f x) (f x0)) (rsub R x x0) (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (radd R (rabs R Lf) (rone R)) eps (Pair.snd (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (f x) (Pair.snd (DPair.snd (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf))))))) x hx0 hxd)) (Pair.snd (DPair.snd (diffQuotBounded R f x0 Lf hf)) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf))))))) (DPair.fst (diffQuotBounded R f x0 Lf hf)) hxd hle)) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)) (trans (CompleteOrderedField.mulComm (field R) (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (radd R (rabs R Lf) (rone R))) (mulInvCancel R (radd R (rabs R Lf) (rone R)) eps (absPlusOneNe R Lf))))))) (\\hle => MkDPair (DPair.fst (diffQuotBounded R f x0 Lf hf)) (MkPair (Pair.fst (DPair.snd (diffQuotBounded R f x0 Lf hf))) (\\x hx0 hxd => replace (\\z => rlt R (rabs R z) eps) (sym (subZeroRight R (chainTermA R g f x0 Lg x))) (chainBound R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rsub R (f x) (f x0)) (rsub R x x0) (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (radd R (rabs R Lf) (rone R)) eps (Pair.snd (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (f x) (Pair.snd (DPair.snd (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf))))))) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst (diffQuotBounded R f x0 Lf hf)) (DPair.fst (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf))))))) hxd hle))) (Pair.snd (DPair.snd (diffQuotBounded R f x0 Lf hf)) x hx0 hxd) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)) (trans (CompleteOrderedField.mulComm (field R) (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (radd R (rabs R Lf) (rone R))) (mulInvCancel R (radd R (rabs R Lf) (rone R)) eps (absPlusOneNe R Lf))))))) (CompleteOrderedField.leTotal (field R) (DPair.fst (continuousFromDeriv R f x0 Lf hf (DPair.fst (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)))) (Pair.fst (DPair.snd (derivBound R g (f x0) Lg hg (rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))) (epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf))))))) (DPair.fst (diffQuotBounded R f x0 Lf hf))))
+chainTermALimit R g f x0 Lg Lf hf hg := by
+  constructor
+  intros eps heps
+  have dqb := diffQuotBounded R f x0 Lf hf
+  have epsM := rmul R eps (rinv R (radd R (rabs R Lf) (rone R)))
+  have hepsM := epsOverMPos R eps (radd R (rabs R Lf) (rone R)) heps (absPlusOnePos R Lf)
+  have db := derivBound R g (f x0) Lg hg epsM hepsM
+  have cfd := continuousFromDeriv R f x0 Lf hf (DPair.fst db) (Pair.fst (DPair.snd db))
+  cases (CompleteOrderedField.leTotal (field R) (DPair.fst cfd) (DPair.fst dqb)) with
+  | Left hle =>
+    exact (MkDPair (DPair.fst cfd) (MkPair (Pair.fst (DPair.snd cfd)) (\\x hx0 hxd => replace (\\z => rlt R (rabs R z) eps) (sym (subZeroRight R (chainTermA R g f x0 Lg x))) (chainBound R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rsub R (f x) (f x0)) (rsub R x x0) epsM (radd R (rabs R Lf) (rone R)) eps (Pair.snd (DPair.snd db) (f x) (Pair.snd (DPair.snd cfd) x hx0 hxd)) (Pair.snd (DPair.snd dqb) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst cfd) (DPair.fst dqb) hxd hle)) hepsM (trans (CompleteOrderedField.mulComm (field R) epsM (radd R (rabs R Lf) (rone R))) (mulInvCancel R (radd R (rabs R Lf) (rone R)) eps (absPlusOneNe R Lf)))))))
+  | Right hle =>
+    exact (MkDPair (DPair.fst dqb) (MkPair (Pair.fst (DPair.snd dqb)) (\\x hx0 hxd => replace (\\z => rlt R (rabs R z) eps) (sym (subZeroRight R (chainTermA R g f x0 Lg x))) (chainBound R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rsub R (f x) (f x0)) (rsub R x x0) epsM (radd R (rabs R Lf) (rone R)) eps (Pair.snd (DPair.snd db) (f x) (Pair.snd (DPair.snd cfd) x hx0 (ltLeTrans R (rabs R (rsub R x x0)) (DPair.fst dqb) (DPair.fst cfd) hxd hle))) (Pair.snd (DPair.snd dqb) x hx0 hxd) hepsM (trans (CompleteOrderedField.mulComm (field R) epsM (radd R (rabs R Lf) (rone R))) (mulInvCancel R (radd R (rabs R Lf) (rone R)) eps (absPlusOneNe R Lf)))))))
 
 -- THE CHAIN RULE
 -- Proof: By the algebraic identity, diffQuot(g.f, x0, x) = A(x) + g'*diffQuot(f, x0, x).

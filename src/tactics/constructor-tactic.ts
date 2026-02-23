@@ -28,8 +28,8 @@ export class ConstructorTactic implements Tactic {
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
       // Zonk goal type to resolve any solved metas, then normalize to WHNF
-      const zonkedGoalType = engine.zonkTerm(goal.type);
-      const goalTypeWhnf = whnf(zonkedGoalType, { definitions: engine.definitions });
+      const zonkedGoalType = engine.zonkTerm(goal.type, goal.ctx.length);
+      const goalTypeWhnf = whnf(zonkedGoalType, { definitions: engine.definitions, typingContext: goal.ctx });
 
       // Walk the App spine to find the inductive type head
       let current: TTKTerm = goalTypeWhnf;
@@ -75,8 +75,11 @@ export class ConstructorTactic implements Tactic {
       const ctor = inductiveDef.constructors[0];
       const ctorTerm: TTKTerm = { tag: 'Const', name: ctor.name };
 
-      // Delegate to ApplyTactic
-      const applyResult = new ApplyTactic(ctorTerm).apply(engine, goal, goalId);
+      // Delegate to ApplyTactic with zonked goal type so that unification
+      // sees the concrete type (e.g., Pair Nat Nat) instead of unresolved
+      // metas from earlier constructor steps (e.g., App(Meta(?P), Meta(?fst)))
+      const zonkedGoal = { ...goal, type: goalTypeWhnf };
+      const applyResult = new ApplyTactic(ctorTerm).apply(engine, zonkedGoal, goalId);
 
       if (!applyResult.success) {
         return {

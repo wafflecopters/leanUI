@@ -1241,7 +1241,8 @@ export class TCEnv<T> {
   unifyTerms<S extends TTKTerm>(this: TCEnv<S>, lhs: TTKTerm, rhs: TTKTerm): TCEnv<S> {
     const result = unifyTerms(lhs, rhs, {
       mode: this.options.mode,
-      definitions: this.definitions
+      definitions: this.definitions,
+      typingContext: this.context
     });
 
     if (!result.success) {
@@ -1993,9 +1994,9 @@ export class TCEnv<T> {
     );
   }
 
-  inBinderLetBodyWithDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>, domain: TTKTerm): TCEnv<TTKTerm> {
+  inBinderLetBodyWithDomain(this: TCEnv<TTKTerm & { tag: 'Binder' } & { binderKind: { tag: 'BLet' } }>, domain: TTKTerm, letValue?: TTKTerm): TCEnv<TTKTerm> {
     return new TCEnv(
-      [...this.context, { name: this.value.name, type: domain }],
+      [...this.context, { name: this.value.name, type: domain, value: letValue }],
       this.definitions,
       this.metaVars,
       this.constraints,
@@ -2148,14 +2149,14 @@ export class TCEnv<T> {
 
   // Error Checkors
   assertTermsAreDefinitionallyEqual(this: TCEnv<TTKTerm>, lhs: TTKTerm, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
-    if (!areTypesDefEq(lhs, rhs, this.definitions)) {
+    if (!areTypesDefEq(lhs, rhs, this.definitions, this.context)) {
       throw this.expectedTermsToBeDefinitionallyEqualError(lhs, rhs, message);
     }
     return this;
   }
 
   assertValueIsDefinitionallyEqual(this: TCEnv<TTKTerm>, rhs: TTKTerm, message?: string): TCEnv<TTKTerm> {
-    if (!areTypesDefEq(this.value, rhs, this.definitions)) {
+    if (!areTypesDefEq(this.value, rhs, this.definitions, this.context)) {
       throw this.expectedTermsToBeDefinitionallyEqualError(this.value, rhs, message);
     }
     return this;
@@ -2221,7 +2222,7 @@ export class TCEnv<T> {
     }
 
     // Try WHNF with definitions to unfold type aliases (e.g., Not A = A -> Void)
-    const whnfReduced = whnf(normalized, { definitions: this.definitions });
+    const whnfReduced = whnf(normalized, { definitions: this.definitions, typingContext: this.context });
     if (whnfReduced.tag === 'Binder' && whnfReduced.binderKind.tag === 'BPi') {
       return this.withValue({ tag: 'Binder', name: whnfReduced.name, binderKind: { tag: 'BPi' }, domain: whnfReduced.domain, body: whnfReduced.body });
     }

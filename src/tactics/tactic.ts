@@ -82,8 +82,15 @@ export class ExactTactic implements Tactic {
         { mode: 'check' }
       );
 
+      // Zonk goal type to resolve any solved metas before type checking.
+      // Without this, App(Meta(?P), Meta(?x)) stays as-is and hits the
+      // flex-rigid solver, generating a constant-function heuristic that
+      // conflicts with the already-solved pattern. After zonking (and WHNF),
+      // it becomes the concrete type (e.g., Nat) and checks trivially.
+      const zonkedGoalType = whnf(engine.zonkTerm(goal.type, goal.ctx.length), { definitions: engine.definitions, typingContext: goal.ctx });
+
       // Check term has expected type
-      const checkedEnv = checkType(env, goal.type);
+      const checkedEnv = checkType(env, zonkedGoalType);
 
       // Zonk the checked term (resolve any new metas)
       const solution = checkedEnv.zonkTerm(checkedEnv.elaboratedTerm ?? this.term);
@@ -175,11 +182,11 @@ export class IntroTactic implements Tactic {
   constructor(public readonly userName?: string) {}
 
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
-    const goalType = goal.type;
-
-    // Reduce goal type to WHNF
+    // Zonk goal type to resolve solved metas, then WHNF
+    const goalType = engine.zonkTerm(goal.type, goal.ctx.length);
     const goalTypeWhnf = whnf(goalType, {
-      definitions: engine.definitions
+      definitions: engine.definitions,
+      typingContext: goal.ctx
     });
 
     // Check if goal type is a Pi (Binder with BPi kind)
@@ -256,8 +263,10 @@ export class IntrosTactic implements Tactic {
       const currentGoal = current.getFocusedGoal();
       if (!currentGoal) break;
 
-      const goalTypeWhnf = whnf(currentGoal.type, {
-        definitions: current.definitions
+      const zonkedGoalType = current.zonkTerm(currentGoal.type, currentGoal.ctx.length);
+      const goalTypeWhnf = whnf(zonkedGoalType, {
+        definitions: current.definitions,
+        typingContext: currentGoal.ctx
       });
 
       // Check if it's a Pi type (Binder with BPi kind)
@@ -327,7 +336,8 @@ export class ApplyTactic implements Tactic {
       // Collect arguments from Pi type
       const argMetas: { id: string; meta: MetaVar; implicit: boolean }[] = [];
       let currentType = whnf(fnType, {
-        definitions: engine.definitions
+        definitions: engine.definitions,
+        typingContext: goal.ctx
       });
 
       // Look up which args are implicit
@@ -355,7 +365,8 @@ export class ApplyTactic implements Tactic {
         // Substitute meta into body to get next type
         currentType = subst(0, { tag: 'Meta', id: argMetaId }, currentType.body);
         currentType = whnf(currentType, {
-          definitions: engine.definitions
+          definitions: engine.definitions,
+          typingContext: goal.ctx
         });
         argIndex++;
       }

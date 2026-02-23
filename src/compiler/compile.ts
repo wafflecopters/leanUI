@@ -37,6 +37,7 @@ import { TransitivityTactic } from '../tactics/transitivity-tactic';
 import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
 import { HaveTactic } from '../tactics/have-tactic';
+import { ObtainTactic } from '../tactics/obtain-tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
@@ -848,9 +849,13 @@ function collectSemanticTokensFromTactic(
 
     case 'cases':
     case 'induction':
-      // First arg is the variable being cased/inducted on
+      // First arg is the scrutinee (variable for induction, expression for cases)
       if (tactic.args.length > 0) {
-        addSemanticTokenDirect([...path, 'args', 0], sourceMap, blockStartLine, 'boundVar', tokens);
+        if (tactic.name === 'induction') {
+          addSemanticTokenDirect([...path, 'args', 0], sourceMap, blockStartLine, 'boundVar', tokens);
+        } else {
+          collectSemanticTokensFromSurfaceTerm(tactic.args[0], sourceMap, blockStartLine, [...path, 'args', 0], tokens);
+        }
       }
       // Process case branches
       if (tactic.caseBranches) {
@@ -888,6 +893,18 @@ function collectSemanticTokensFromTactic(
       }
       if (tactic.args.length > 2) {
         collectSemanticTokensFromSurfaceTerm(tactic.args[2], sourceMap, blockStartLine, [...path, 'args', 2], tokens);
+      }
+      break;
+
+    case 'obtain':
+      // obtain (x, y, z) := proof
+      // args[0..N-1] = bound var names, args[N] = proof (term)
+      for (let oi = 0; oi < tactic.args.length - 1; oi++) {
+        addSemanticTokenDirect([...path, 'args', oi], sourceMap, blockStartLine, 'boundVar', tokens);
+      }
+      if (tactic.args.length > 0) {
+        const proofIdx = tactic.args.length - 1;
+        collectSemanticTokensFromSurfaceTerm(tactic.args[proofIdx], sourceMap, blockStartLine, [...path, 'args', proofIdx], tokens);
       }
       break;
 
@@ -1592,6 +1609,21 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       return new HaveTactic(haveName, cmd.args[1] as TTKTerm, cmd.args[2] as TTKTerm);
     }
 
+    case 'obtain': {
+      // obtain (x, y, z) := proof
+      // args[0..N-1] = binding names, args[N] = proof term
+      if (cmd.args.length < 2) {
+        throw new Error(`'obtain' tactic requires at least one name and a proof expression`);
+      }
+      const obtainNames: string[] = [];
+      for (let i = 0; i < cmd.args.length - 1; i++) {
+        const arg = cmd.args[i];
+        obtainNames.push(arg.tag === 'Const' ? (arg as any).name : '_');
+      }
+      const obtainProof = cmd.args[cmd.args.length - 1] as TTKTerm;
+      return new ObtainTactic(obtainNames, obtainProof);
+    }
+
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);
   }
@@ -1717,6 +1749,10 @@ function elaborateTacticBlock(
       }
       // For have, args[0] is the hypothesis name — keep as Const
       if (cmd.name === 'have' && argIndex === 0) {
+        return arg;
+      }
+      // For obtain, args[0..N-1] are binding names — keep as Const, only elaborate the last arg (proof)
+      if (cmd.name === 'obtain' && argIndex < cmd.args.length - 1) {
         return arg;
       }
 
@@ -2017,6 +2053,64 @@ function elaborateTacticBlock(
               case 'App':
                 return insertImplicitHolesForApp(term, branchSurfaceToKernel, depth);
 
+              case 'Sort':
+                return { tag: 'Sort', level: branchSurfaceToKernel(term.level, depth) as any };
+              case 'Hole':
+                return { tag: 'Hole', id: term.id };
+              case 'ULevel':
+                return { tag: 'ULevel' };
+              case 'ULit':
+                return { tag: 'ULit', n: term.n };
+              case 'UOmega':
+                return { tag: 'UOmega' };
+
+              case 'Binder': {
+                const domain = term.domain ? branchSurfaceToKernel(term.domain, depth) : undefined;
+                let binderKind: import('./kernel').TTKBinderKind;
+                if (term.binderKind.tag === 'BLetTT') {
+                  binderKind = { tag: 'BLet', defVal: branchSurfaceToKernel(term.binderKind.defVal, depth) };
+                } else if (term.binderKind.tag === 'BLamTT') {
+                  binderKind = { tag: 'BLam' };
+                } else {
+                  binderKind = { tag: 'BPi' };
+                }
+                branchNameContext.push(term.name);
+                const body = branchSurfaceToKernel(term.body, depth);
+                branchNameContext.pop();
+                return {
+                  tag: 'Binder', binderKind, name: term.name,
+                  domain: domain ?? { tag: 'Hole', id: '_' }, body
+                };
+              }
+
+              case 'MultiBinder': {
+                const domain = branchSurfaceToKernel(term.domain, depth);
+                const binderKind: import('./kernel').TTKBinderKind = term.binderKind.tag === 'BLamTT'
+                  ? { tag: 'BLam' }
+                  : term.binderKind.tag === 'BPiTT'
+                  ? { tag: 'BPi' }
+                  : { tag: 'BLet', defVal: branchSurfaceToKernel((term.binderKind as any).defVal, depth) };
+                let result: import('./kernel').TTKTerm;
+                for (const name of term.names) {
+                  branchNameContext.push(name);
+                }
+                result = branchSurfaceToKernel(term.body, depth);
+                for (let i = term.names.length - 1; i >= 0; i--) {
+                  branchNameContext.pop();
+                  result = {
+                    tag: 'Binder', binderKind, name: term.names[i],
+                    domain, body: result
+                  };
+                }
+                return result;
+              }
+
+              case 'Annot': {
+                const annotTerm = branchSurfaceToKernel(term.term, depth);
+                const annotType = branchSurfaceToKernel(term.type, depth);
+                return { tag: 'Annot' as any, term: annotTerm, type: annotType };
+              }
+
               default:
                 return elabToKernelWithMap(term, elabMap, [], []);
             }
@@ -2120,6 +2214,60 @@ function elaborateTacticBlock(
                     }
                     case 'App':
                       return insertImplicitHolesForApp(term, nestedSurfaceToKernel, depth);
+                    case 'Sort':
+                      return { tag: 'Sort', level: nestedSurfaceToKernel(term.level, depth) as any };
+                    case 'Hole':
+                      return { tag: 'Hole', id: term.id };
+                    case 'ULevel':
+                      return { tag: 'ULevel' };
+                    case 'ULit':
+                      return { tag: 'ULit', n: term.n };
+                    case 'UOmega':
+                      return { tag: 'UOmega' };
+                    case 'Binder': {
+                      const domain = term.domain ? nestedSurfaceToKernel(term.domain, depth) : undefined;
+                      let binderKind: import('./kernel').TTKBinderKind;
+                      if (term.binderKind.tag === 'BLetTT') {
+                        binderKind = { tag: 'BLet', defVal: nestedSurfaceToKernel(term.binderKind.defVal, depth) };
+                      } else if (term.binderKind.tag === 'BLamTT') {
+                        binderKind = { tag: 'BLam' };
+                      } else {
+                        binderKind = { tag: 'BPi' };
+                      }
+                      nestedNameContext.push(term.name);
+                      const body = nestedSurfaceToKernel(term.body, depth);
+                      nestedNameContext.pop();
+                      return {
+                        tag: 'Binder', binderKind, name: term.name,
+                        domain: domain ?? { tag: 'Hole', id: '_' }, body
+                      };
+                    }
+                    case 'MultiBinder': {
+                      const domain = nestedSurfaceToKernel(term.domain, depth);
+                      const binderKind: import('./kernel').TTKBinderKind = term.binderKind.tag === 'BLamTT'
+                        ? { tag: 'BLam' }
+                        : term.binderKind.tag === 'BPiTT'
+                        ? { tag: 'BPi' }
+                        : { tag: 'BLet', defVal: nestedSurfaceToKernel((term.binderKind as any).defVal, depth) };
+                      let result: import('./kernel').TTKTerm;
+                      for (const name of term.names) {
+                        nestedNameContext.push(name);
+                      }
+                      result = nestedSurfaceToKernel(term.body, depth);
+                      for (let i = term.names.length - 1; i >= 0; i--) {
+                        nestedNameContext.pop();
+                        result = {
+                          tag: 'Binder', binderKind, name: term.names[i],
+                          domain, body: result
+                        };
+                      }
+                      return result;
+                    }
+                    case 'Annot': {
+                      const annotTerm = nestedSurfaceToKernel(term.term, depth);
+                      const annotType = nestedSurfaceToKernel(term.type, depth);
+                      return { tag: 'Annot' as any, term: annotTerm, type: annotType };
+                    }
                     default:
                       return elabToKernelWithMap(term, elabMap, [], []);
                   }

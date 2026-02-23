@@ -1,0 +1,13 @@
+@test success
+@name "auto-intros: pattern args automatically introduced in := by"
+@import preambles/nat.tt
+
+add : Nat -> Nat -> Nat
+add Zero y = y
+add (Succ x) y = Succ (add x y)
+
+-- Auto-intros: x and y should be automatically introduced
+-- without needing to write `intros x y`
+addTactic : Nat -> Nat -> Nat
+addTactic x y := by
+  exact (add x y)

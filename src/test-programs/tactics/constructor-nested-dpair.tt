@@ -1,0 +1,21 @@
+@test success
+@name "constructor: nested MkDPair + MkPair pattern"
+@import preambles/nat.tt
+@import preambles/pair.tt
+
+inductive DPair : (A : Type) -> (A -> Type) -> Type where
+  | MkDPair : {A : Type} -> {P : A -> Type} -> (fst : A) -> P fst -> DPair A P
+
+DPair.fst : {A : Type} -> {P : A -> Type} -> DPair A P -> A
+DPair.fst (MkDPair a b) = a
+
+DPair.snd : {A : Type} -> {P : A -> Type} -> (d : DPair A P) -> P (DPair.fst d)
+DPair.snd (MkDPair a b) = b
+
+-- Test: build DPair Nat (\n => Pair Nat Nat) using nested constructor + bullets
+testNested : DPair Nat (\n => Pair Nat Nat) := by
+  constructor
+  · exact Zero
+  · constructor
+    · exact (Succ Zero)
+    · exact (Succ (Succ Zero))

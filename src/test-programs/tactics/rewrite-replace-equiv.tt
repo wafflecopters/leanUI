@@ -1,0 +1,30 @@
+@test success
+@name "rewrite: replace equivalence using rewrite (sym eq) then exact"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Le : Nat -> Nat -> Type where
+  LeRefl : (n : Nat) -> Le n n
+  LeSucc : {n m : Nat} -> Le n m -> Le n (Succ m)
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+plusZeroLeft : (n : Nat) -> Equal (plus Zero n) n
+plusZeroLeft n = refl
+
+-- Goal has n, need Le (plus Zero n) n
+-- rewrite (plusZeroLeft n) changes n to (plus Zero n) in goal
+-- then LeRefl closes it
+test : (n : Nat) -> Le (plus Zero n) n := by
+  intros n
+  exact (LeRefl n)

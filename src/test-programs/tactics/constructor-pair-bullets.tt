@@ -1,0 +1,10 @@
+@test success
+@name "constructor: Pair with bullets (MkPair decomposition)"
+@import preambles/nat.tt
+@import preambles/pair.tt
+@import preambles/equal-simple.tt
+
+testPair : Pair Nat Nat := by
+  constructor
+  · exact Zero
+  · exact (Succ Zero)

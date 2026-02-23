@@ -54,7 +54,7 @@ export class RewriteTactic implements Tactic {
       const proofType = solvedEnv.zonkTerm(solvedEnv.value);
 
       // 2. Normalize to find equality type
-      const proofTypeWhnf = whnf(proofType, { definitions: engine.definitions });
+      const proofTypeWhnf = whnf(proofType, { definitions: engine.definitions, typingContext: goal.ctx });
 
       // 3. Check that it's an equality type and extract type param, LHS, and RHS
       const eqArgs = this.extractEqualityArgs(proofTypeWhnf);

@@ -1,4 +1,4 @@
-import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKTerm, TTKPattern, isDefinitionallyEqual } from "./kernel";
+import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKTerm, TTKContext, TTKPattern, isDefinitionallyEqual } from "./kernel";
 import { DefinitionsMap, extractAppSpine } from "./term";
 import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
@@ -24,6 +24,7 @@ export type UnifyOptions = {
   rigidVarsAtOrAbove?: number;
   mode: 'pattern' | 'check';
   definitions?: DefinitionsMap;
+  typingContext?: TTKContext;  // For ζ-reduction of let-bound variables during unification
   fuel?: number;  // Fuel for whnf reduction to prevent infinite loops
   assumeK?: boolean;  // If false, disable deletion rule (reject x=x equations)
 }
@@ -427,7 +428,7 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   const nextOptions: UnifyOptions = { ...options, fuel: fuel - 1 };
 
   // Reduce both to weak head normal form, sharing fuel with unification
-  const whnfCtx = { definitions: options.definitions, fuel };
+  const whnfCtx = { definitions: options.definitions, typingContext: options.typingContext, fuel };
   const a = whnf(lhs, whnfCtx);
   const b = whnf(rhs, whnfCtx);
 
@@ -776,7 +777,22 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
     if (!domResult.success) return domResult;
 
     // Unify bodies (both are under a binder, so indices align)
-    const bodyResult = unifyTerms(a.body, b.body, nextOptions);
+    // Extend typing context with the binder's entry so ζ-reduction works correctly
+    // under binders (Var(0) inside body = binder param, not outer context entry)
+    const bodyOptions = options.typingContext
+      ? {
+          ...nextOptions,
+          typingContext: [
+            ...options.typingContext,
+            {
+              name: a.name,
+              type: a.domain,
+              value: a.binderKind.tag === 'BLet' ? a.binderKind.defVal : undefined
+            }
+          ]
+        }
+      : nextOptions;
+    const bodyResult = unifyTerms(a.body, b.body, bodyOptions);
     if (!bodyResult.success) return bodyResult;
 
     // Shift metaConstraint rhs values down by 1 when exiting the binder.

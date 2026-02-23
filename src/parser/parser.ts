@@ -712,6 +712,7 @@ export class Parser {
   private pos = 0;
   private currentSourceMap: SourceMap = new Map();
   private currentPath: IndexPath = [];
+  private parenDepth = 0;
 
   constructor(
     private operators: Record<string, OperatorInfo> = DEFAULT_OPERATORS
@@ -1184,10 +1185,62 @@ export class Parser {
       return this.parseWithClause(funcName, patterns, namedPatterns, clausePath, clauseStartPos);
     }
 
+    // Check for ':= by' (tactic mode definition with pattern args)
+    // e.g., absPos R c hne := by
+    if (this.current().type === 'ASSIGN') {
+      this.advance(); // consume ':='
+      if (this.current().type === 'BY') {
+        this.advance(); // consume 'by'
+        const valuePath: IndexPath = [{ kind: 'field', name: 'value' }];
+        const value = this.parseTacticBlock([], valuePath);
+
+        // Auto-intros: prepend synthetic `intros` with pattern variable names
+        // so users don't need to manually write `intros x y z` after `:= by`
+        // Note: We use getPatternIntroName instead of collectPatternVars because
+        // each top-level pattern corresponds to exactly one function parameter,
+        // regardless of the constructor/variable heuristic (e.g., "Lg" is a
+        // variable even though it starts with uppercase and is multi-character)
+        if (value.tag === 'TacticBlock' && patterns.length > 0) {
+          const getPatternIntroName = (p: TPattern): string => {
+            if (p.tag === 'PVar') return p.name;
+            if (p.tag === 'PWild') return '_';
+            // PCtor with no args: use the name as the intro name
+            if (p.tag === 'PCtor' && p.args.length === 0) return p.name;
+            // PCtor with args: compound pattern, use '_'
+            return '_';
+          };
+          const allNames = [
+            ...patterns.map(getPatternIntroName),
+            ...namedPatterns.map(np => getPatternIntroName(np.pattern)),
+          ];
+
+          if (allNames.length > 0) {
+            // Don't prepend if user already wrote intros as first tactic
+            const firstTactic = value.tactics[0];
+            if (!firstTactic || firstTactic.name !== 'intros') {
+              const syntheticIntros: TacticCommand = {
+                name: 'intros',
+                args: allNames.map(name => mkConstTT(name)),
+              };
+              value.tactics.unshift(syntheticIntros);
+            }
+          }
+        }
+
+        return { kind: 'def', name: funcName, value };
+      }
+      // := without by after patterns — not valid in pattern clause
+      throw new ParseError(
+        `Expected 'by' after ':=' in pattern clause for '${funcName}'`,
+        this.current().line,
+        this.current().col
+      );
+    }
+
     // Expect '='
     if (this.current().type !== 'OPERATOR' || this.current().value !== '=') {
       throw new ParseError(
-        `Expected '=' or 'with' in pattern clause, got ${this.current().type} '${this.current().value}'`,
+        `Expected '=', ':= by', or 'with' in pattern clause, got ${this.current().type} '${this.current().value}'`,
         this.current().line,
         this.current().col
       );
@@ -2349,6 +2402,7 @@ export class Parser {
    */
   private parseParenExpr(ctx: NameContext, path: IndexPath = []): TTerm {
     this.expect('LPAREN');
+    this.parenDepth++;
 
     // Check if this is a binder: (x : T) or (x y z : T) for Pi
     const startPos = this.pos;
@@ -2395,6 +2449,7 @@ export class Parser {
               const niPath: IndexPath = [...path, { kind: 'field' as const, name: 'names' }, { kind: 'array' as const, index: ni }];
               this.recordRange(niPath, nameTokens[ni], nameTokens[ni]);
             }
+            this.parenDepth--;
             return {
               tag: 'MultiBinder',
               names,
@@ -2432,6 +2487,7 @@ export class Parser {
             // Single name - use regular Binder
             const namePath = [...path, { kind: 'field' as const, name: 'name' }];
             this.recordRange(namePath, nameTokens[0], nameTokens[0]);
+            this.parenDepth--;
             return mkPiTT(type, body, name);
           }
 
@@ -2439,6 +2495,7 @@ export class Parser {
           const name = nameTokens[0].type === 'UNDERSCORE' ? '_' : nameTokens[0].value;
           const idx = ctx.indexOf(name);
           const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name);
+          this.parenDepth--;
           return { tag: 'Annot', term, type };
         }
       } else {
@@ -2456,11 +2513,13 @@ export class Parser {
       const type = this.expr(0, ctx, path, true);
       this.skipNewlines();
       this.expect('RPAREN');
+      this.parenDepth--;
       return { tag: 'Annot', term: expr, type };
     }
 
     this.skipNewlines();
     this.expect('RPAREN');
+    this.parenDepth--;
     return expr;
   }
 
@@ -2666,7 +2725,8 @@ export class Parser {
     }
 
     // Parse body with the innermost body path
-    const body = this.expr(0, ctx, bodyPath);
+    // When inside parentheses, allow multi-line lambda bodies
+    const body = this.expr(0, ctx, bodyPath, this.parenDepth > 0);
 
     // Build nested lambdas/multi-binders from right to left
     let result: TTerm = body;
@@ -3664,20 +3724,26 @@ export class Parser {
 
       case 'cases':
       case 'induction': {
-        // cases/induction <identifier> [with | ctor params => tactics | ...]
-        if (this.current().type !== 'IDENT') {
-          throw new ParseError(
-            `${tacticName} expects an identifier argument`,
-            this.current().line,
-            this.current().col
-          );
-        }
-        const argName = this.current().value;
-        const argToken = this.current();
-        this.advance();
-
+        // cases/induction <scrutinee> [with | ctor params => tactics | ...]
+        // cases allows arbitrary expressions; induction requires an identifier
         const argPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
-        this.recordRange(argPath, argToken, argToken);
+        let scrutineeExpr: TTerm;
+        if (tacticName === 'induction') {
+          if (this.current().type !== 'IDENT') {
+            throw new ParseError(
+              `${tacticName} expects an identifier argument`,
+              this.current().line,
+              this.current().col
+            );
+          }
+          const argToken = this.current();
+          scrutineeExpr = mkConstTT(this.current().value);
+          this.advance();
+          this.recordRange(argPath, argToken, argToken);
+        } else {
+          // cases: parse expression as scrutinee
+          scrutineeExpr = this.expr(0, ctx, argPath);
+        }
 
         // Check for optional 'with' clause for structured syntax
         if (this.current().type === 'WITH') {
@@ -3804,7 +3870,7 @@ export class Parser {
 
           return {
             name: tacticName,
-            args: [mkConstTT(argName)],
+            args: [scrutineeExpr],
             caseBranches,
             indexPath: path
           };
@@ -3813,13 +3879,14 @@ export class Parser {
         // No 'with' clause - simple cases
         return {
           name: tacticName,
-          args: [mkConstTT(argName)],
+          args: [scrutineeExpr],
           indexPath: path
         };
       }
 
       case 'have': {
-        // have <identifier> ':' <term> ':=' <term>
+        // have <identifier> ':' <term> ':=' <term>   (with type annotation)
+        // have <identifier> ':=' <term>               (type inferred)
         if (this.current().type !== 'IDENT') {
           throw new ParseError(
             'have expects identifier after \'have\'',
@@ -3832,6 +3899,21 @@ export class Parser {
         const hypNameToken = this.current();
         this.advance();
 
+        const hypNamePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        this.recordRange(hypNamePath, hypNameToken, hypNameToken);
+
+        if (this.current().type === 'ASSIGN') {
+          // have name := expr (type inferred via Hole)
+          this.advance(); // consume ':='
+          const hypProofPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 2 }];
+          const hypProof = this.expr(0, ctx, hypProofPath);
+          return {
+            name: tacticName,
+            args: [mkConstTT(hypName), mkHoleTT('_have_type', mkHoleTT('_have_type_type', mkPropTT())), hypProof],
+            indexPath: path
+          };
+        }
+
         this.expect('COLON');
 
         const hypTypePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 1 }];
@@ -3842,12 +3924,44 @@ export class Parser {
         const hypProofPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 2 }];
         const hypProof = this.expr(0, ctx, hypProofPath);
 
-        const hypNamePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
-        this.recordRange(hypNamePath, hypNameToken, hypNameToken);
-
         return {
           name: tacticName,
           args: [mkConstTT(hypName), hypType, hypProof],
+          indexPath: path
+        };
+      }
+
+      case 'obtain': {
+        // obtain (x, y, z) := expr
+        this.expect('LPAREN');
+        const obtainNames: TTerm[] = [];
+        while (true) {
+          if (this.current().type === 'IDENT') {
+            obtainNames.push(mkConstTT(this.current().value));
+            this.advance();
+          } else if (this.current().type === 'UNDERSCORE') {
+            obtainNames.push(mkConstTT('_'));
+            this.advance();
+          } else {
+            throw new ParseError(
+              'obtain: expected identifier or underscore in binding list',
+              this.current().line,
+              this.current().col
+            );
+          }
+          if (this.current().type === 'COMMA') {
+            this.advance();
+          } else {
+            break;
+          }
+        }
+        this.expect('RPAREN');
+        this.expect('ASSIGN');
+        const obtainProofPath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: obtainNames.length }];
+        const obtainProof = this.expr(0, ctx, obtainProofPath);
+        return {
+          name: tacticName,
+          args: [...obtainNames, obtainProof],
           indexPath: path
         };
       }

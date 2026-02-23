@@ -232,8 +232,8 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     const solvedEnv = valEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
     const solvedDomain = solvedEnv.zonkTerm(elaboratedDomain);
 
-    // 4. Infer body type with x : solvedDomain in context
-    const bodyEnv = inferType(solvedEnv.atValueAndPathOfEnv(env).inBinderLetBodyWithDomain(solvedDomain));
+    // 4. Infer body type with x : solvedDomain in context (pass let-value for ζ-reduction)
+    const bodyEnv = inferType(solvedEnv.atValueAndPathOfEnv(env).inBinderLetBodyWithDomain(solvedDomain, elaboratedValue));
 
     // 5. Build elaborated let term with solved domain
     const elaboratedLet: TTKTerm = {
@@ -728,35 +728,42 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
             }
           }
 
-          // Now resultType is the type after applying all explicit args
-          // Unify it with expected type to extract implicit args
-          // Unify result type with expected type in pattern mode
-          const unifyResult = unifyTerms(resultType, expectedType, {
-            mode: 'pattern',
-            flexibleVars: true,
-            rigidVarsAtOrAbove: implicitParams.length + explicitArgs.length,
-            // NOTE: Do NOT pass definitions here. We want to extract the surface-level
-            // terms (e.g., Const("IsPos")) without delta-reducing them. The type checker
-            // will handle delta-reduction later when checking the reconstructed term.
-          });
+          // Extract implicit arguments by directly matching the App spine structure.
+          //
+          // For record constructors, the result type is always of the form
+          // `InductiveName Var(n-1) ... Var(0)` where each Var refers to a
+          // binder position. We extract implicits by pairing result type spine
+          // args (Vars) with expected type spine args (concrete terms).
+          //
+          // This AVOIDS using unifyTerms which would incorrectly apply substitutions
+          // across de Bruijn namespace boundaries — result type Vars refer to MkDPair's
+          // binders while expected type Vars refer to the typing context.
+          const resultSpine = getAppChainHeadAndArgs(resultType);
+          const expectedSpine = getAppChainHeadAndArgs(expectedType);
 
-          if (!unifyResult.success) {
-            throw new Error('Unification failed');
+          if (!resultSpine || !expectedSpine) {
+            throw new Error('Could not extract App spines');
           }
 
-          // Extract implicit arguments from substitutions
-          const implicitArgs: (TTKTerm | undefined)[] = new Array(implicitParams.length);
+          // Verify same head constructor and same number of args
+          if (resultSpine.head.tag !== 'Const' || expectedSpine.head.tag !== 'Const' ||
+              (resultSpine.head as any).name !== (expectedSpine.head as any).name ||
+              resultSpine.args.length !== expectedSpine.args.length) {
+            throw new Error('Mismatched spine structure');
+          }
 
-          // Map de Bruijn indices from result type back to implicit parameter positions
-          // In result type, implicit param at position i has varIndex = numExplicitPis + numImplicitParams - 1 - i
-          // To invert: implicitParamIndex = numExplicitPis + numImplicitParams - 1 - varIndex
+          const implicitArgs: (TTKTerm | undefined)[] = new Array(implicitParams.length);
           const numExplicitPis = actualExplicitArgs.length;
           const numImplicitParams = implicitParams.length;
 
-          for (const [varIndex, replacement] of unifyResult.substitutions) {
-            const implicitParamIndex = numExplicitPis + numImplicitParams - 1 - varIndex;
-            if (implicitParamIndex >= 0 && implicitParamIndex < numImplicitParams) {
-              implicitArgs[implicitParamIndex] = replacement;
+          // Map each Var in the result spine to its corresponding expected spine arg
+          for (let i = 0; i < resultSpine.args.length; i++) {
+            const resultArg = resultSpine.args[i];
+            if (resultArg.tag === 'Var') {
+              const implicitParamIndex = numExplicitPis + numImplicitParams - 1 - resultArg.index;
+              if (implicitParamIndex >= 0 && implicitParamIndex < numImplicitParams) {
+                implicitArgs[implicitParamIndex] = expectedSpine.args[i];
+              }
             }
           }
 
@@ -790,16 +797,10 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
             newTerm = { tag: 'App', fn: newTerm, arg };
           }
 
-          // Process meta constraints
-          let envWithMetas = env;
-          for (const { meta, rhs } of unifyResult.metaConstraints) {
-            envWithMetas = envWithMetas.withConstraint({ meta, rhs });
-          }
-
           // DON'T recursively call checkType - that causes infinite loop!
           // Instead, update env.value and fall through to CONV rule
           // which will call inferType on the NEW term (with implicits applied)
-          env = envWithMetas.withValue(newTerm);
+          env = env.withValue(newTerm);
           // Fall through to CONV rule below
         } catch (e) {
           // Extraction failed - fall through to normal CONV rule

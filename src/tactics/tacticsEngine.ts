@@ -77,9 +77,15 @@ export class TacticEngine {
   }
 
   /**
-   * Substitute solved metas in an arbitrary term (zonking)
+   * Substitute solved metas in an arbitrary term (zonking).
+   *
+   * @param contextDepth - The context depth at which `term` lives.
+   *   When meta solutions contain Var references set at a different depth,
+   *   this enables correct de Bruijn index shifting. For example, if
+   *   Meta(?m_R) was solved as Var(8) in a 9-entry context, but appears
+   *   inside a Pi body (depth 10), the solution must be shifted to Var(9).
    */
-  zonkTerm(term: TTKTerm): TTKTerm {
+  zonkTerm(term: TTKTerm, contextDepth: number = 0): TTKTerm {
     // Create a minimal TCEnv for zonking
     const env = new TCEnv(
       [],  // Empty context
@@ -92,7 +98,9 @@ export class TacticEngine {
       new Map(),
       { mode: 'check' }
     );
-    return env.zonkTerm(term);
+    // Use depth-aware zonking to correctly shift de Bruijn indices
+    // when meta solutions cross binder boundaries
+    return env.zonkTermAtDepth(term, contextDepth);
   }
 
   // --- State Transformation Methods ---

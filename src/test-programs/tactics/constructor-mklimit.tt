@@ -1,0 +1,16 @@
+@test success
+@name "constructor: MkLimit-like pattern with intros for function arg"
+@import preambles/nat.tt
+@import preambles/pair.tt
+
+-- A type whose constructor takes a function argument
+inductive MyLimit : Type where
+  MkMyLimit : (Nat -> Pair Nat Nat) -> MyLimit
+
+-- Build using constructor then intros for the function arg
+buildLimit : MyLimit := by
+  constructor
+  intros n
+  constructor
+  · exact n
+  · exact (Succ n)

@@ -1,0 +1,12 @@
+@test success
+@name "cases: Either from inline expression (leTotal-like pattern)"
+@import preambles/nat.tt
+@import preambles/either.tt
+
+-- cases on an inline function call (not a variable)
+-- Simulates the eitherElim pattern: cases (someExpr) with | Left => ... | Right => ...
+chooseSmaller : Either Nat Nat -> Nat := by
+  intros e
+  cases e with
+  | Left n => exact n
+  | Right m => exact m

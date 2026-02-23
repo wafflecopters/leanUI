@@ -1,0 +1,19 @@
+@test success
+@name "constructor: MkPair on type alias (rlt-like pattern)"
+
+inductive Pair : (A : Type) -> (B : Type) -> Type where
+  MkPair : {A B : Type} -> A -> B -> Pair A B
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Type alias like rlt
+MyPred : Nat -> Nat -> Type
+MyPred a b = Pair Nat Nat
+
+-- constructor should WHNF the goal to find Pair
+test : MyPred Zero (Succ Zero) := by
+  constructor
+  · exact Zero
+  · exact (Succ Zero)

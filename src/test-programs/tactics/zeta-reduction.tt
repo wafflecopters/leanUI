@@ -1,0 +1,27 @@
+@test success
+@name "zeta-reduction: have-bound variables reduce during type checking"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Basic let binding (term mode)
+letBasic : Equal Zero Zero
+letBasic = let x = Zero in refl
+
+-- Have tactic with type annotation
+haveZetaAnnotated : Equal Zero Zero
+haveZetaAnnotated := by
+  have x : Nat := Zero
+  exact refl
+
+-- Have tactic without type annotation (type inferred)
+haveZetaInferred : Equal Zero Zero
+haveZetaInferred := by
+  have x := Zero
+  exact refl
+
+-- Multiple have bindings with chain
+haveChain : Equal (Succ Zero) (Succ Zero)
+haveChain := by
+  have x : Nat := Zero
+  have y : Nat := Succ x
+  exact refl

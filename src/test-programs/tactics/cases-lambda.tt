@@ -1,0 +1,13 @@
+@test success
+@name "cases: lambda in branch body"
+@import preambles/nat.tt
+@import preambles/either.tt
+
+-- Test that lambdas inside cases branches correctly resolve outer names
+applyEither : (n : Nat) -> Either Nat Nat -> Nat
+applyEither n e := by
+  cases e with
+  | Left x =>
+    exact ((\m => Succ m) x)
+  | Right y =>
+    exact ((\m => Succ (Succ m)) y)

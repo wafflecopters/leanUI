@@ -1,0 +1,14 @@
+@test success
+@name "cases: have + cases + lambda in branch"
+@import preambles/nat.tt
+@import preambles/either.tt
+
+-- Tests the combination of have + cases + lambda in exact, like limitAdd uses
+testHaveCasesLambda : Nat -> Nat -> Either Nat Nat -> Nat
+testHaveCasesLambda a b e := by
+  have sum := Succ a
+  cases e with
+  | Left x =>
+    exact ((\n => Succ n) sum)
+  | Right y =>
+    exact ((\n => Succ n) sum)

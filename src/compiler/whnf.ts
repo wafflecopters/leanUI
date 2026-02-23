@@ -1,5 +1,6 @@
-import { TTKTerm, TTKPattern, isDefinitionallyEqual, levelsEqual, prettyPrint } from "./kernel";
+import { TTKTerm, TTKPattern, TTKContext, isDefinitionallyEqual, levelsEqual, prettyPrint } from "./kernel";
 import { subst, substPatternBindings } from "./subst";
+import { shiftTerm } from "./subst";
 import { DefinitionsMap, getTermDefinition, RecordInfo, extractAppSpine } from "./term";
 
 /**
@@ -7,6 +8,7 @@ import { DefinitionsMap, getTermDefinition, RecordInfo, extractAppSpine } from "
  */
 export type WhnfContext = {
   definitions?: DefinitionsMap;
+  typingContext?: TTKContext;  // For ζ-reduction of Var nodes (let-binding values)
   fuel?: number;  // Prevent infinite reduction, default 1000
   deltaDepth?: number;  // Limit depth of δ-reduction (definition unfolding)
 }
@@ -254,31 +256,31 @@ function extractProjectionTarget(
  * - δ-reduction: unfold definitions
  * - ι-reduction: pattern matching on constructors
  */
-export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm, definitions?: DefinitionsMap): boolean {
+export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm, definitions?: DefinitionsMap, typingContext?: TTKContext): boolean {
   // Check record eta BEFORE normalization (projections get unfolded by whnf)
   // Record eta: MkR (R.f1 r) ... (R.fN r) ≃ r
   const eta1 = tryRecordEtaContract(t1, definitions);
   if (eta1 !== null) {
-    if (areTypesDefEq(eta1, t2, definitions)) {
+    if (areTypesDefEq(eta1, t2, definitions, typingContext)) {
       return true;
     }
   }
 
   const eta2 = tryRecordEtaContract(t2, definitions);
   if (eta2 !== null) {
-    if (areTypesDefEq(t1, eta2, definitions)) {
+    if (areTypesDefEq(t1, eta2, definitions, typingContext)) {
       return true;
     }
   }
 
-  const ctx: WhnfContext = { definitions };
+  const ctx: WhnfContext = { definitions, typingContext };
   // Normalize both terms
   const n1 = whnf(t1, ctx);
   const n2 = whnf(t2, ctx);
-  return areWhnfTypesDefEq(n1, n2, definitions);
+  return areWhnfTypesDefEq(n1, n2, definitions, typingContext);
 }
 
-export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: DefinitionsMap): boolean {
+export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: DefinitionsMap, typingContext?: TTKContext): boolean {
   // Quick structural check first
   if (isDefinitionallyEqual(n1, n2)) {
     return true;
@@ -292,7 +294,7 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
       if (!isFreeIn(0, n1.body.fn)) {
         // Eta contract: compare f with n2 (f needs index shift down)
         const contracted = subst(0, { tag: 'Var', index: 0 }, n1.body.fn);
-        return areTypesDefEq(contracted, n2, definitions);
+        return areTypesDefEq(contracted, n2, definitions, typingContext);
       }
     }
   }
@@ -302,7 +304,7 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
     if (n2.body.tag === 'App' && n2.body.arg.tag === 'Var' && n2.body.arg.index === 0) {
       if (!isFreeIn(0, n2.body.fn)) {
         const contracted = subst(0, { tag: 'Var', index: 0 }, n2.body.fn);
-        return areTypesDefEq(n1, contracted, definitions);
+        return areTypesDefEq(n1, contracted, definitions, typingContext);
       }
     }
   }
@@ -318,21 +320,28 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
     case 'Const':
       return n2.tag === 'Const' && n1.name === n2.name;
 
-    case 'Binder':
+    case 'Binder': {
       if (n2.tag !== 'Binder' || n1.binderKind.tag !== n2.binderKind.tag) {
         return false;
       }
-      if (!areTypesDefEq(n1.domain, n2.domain, definitions)) return false;
-      if (!areTypesDefEq(n1.body, n2.body, definitions)) return false;
+      if (!areTypesDefEq(n1.domain, n2.domain, definitions, typingContext)) return false;
+      // Extend typing context when comparing under binders so that Var indices
+      // in the body are correctly mapped to context entries
+      const letValue = n1.binderKind.tag === 'BLet' ? (n1.binderKind as { tag: 'BLet'; defVal: TTKTerm }).defVal : undefined;
+      const bodyCtx = typingContext
+        ? [...typingContext, { name: n1.name, type: n1.domain, value: letValue }]
+        : undefined;
+      if (!areTypesDefEq(n1.body, n2.body, definitions, bodyCtx)) return false;
       if (n1.binderKind.tag === 'BLet' && n2.binderKind.tag === 'BLet') {
-        return areTypesDefEq(n1.binderKind.defVal, n2.binderKind.defVal, definitions);
+        return areTypesDefEq(n1.binderKind.defVal, n2.binderKind.defVal, definitions, typingContext);
       }
       return true;
+    }
 
     case 'App':
       return n2.tag === 'App' &&
-        areTypesDefEq(n1.fn, n2.fn, definitions) &&
-        areTypesDefEq(n1.arg, n2.arg, definitions);
+        areTypesDefEq(n1.fn, n2.fn, definitions, typingContext) &&
+        areTypesDefEq(n1.arg, n2.arg, definitions, typingContext);
 
     case 'Hole':
       return n2.tag === 'Hole' && n1.id === n2.id;
@@ -341,14 +350,14 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
       return n2.tag === 'Meta' && n1.id === n2.id;
 
     case 'Annot':
-      return areTypesDefEq(n1.term, n2, definitions);
+      return areTypesDefEq(n1.term, n2, definitions, typingContext);
 
     case 'Match':
       if (n2.tag !== 'Match') return false;
-      if (!areTypesDefEq(n1.scrutinee, n2.scrutinee, definitions)) return false;
+      if (!areTypesDefEq(n1.scrutinee, n2.scrutinee, definitions, typingContext)) return false;
       if (n1.clauses.length !== n2.clauses.length) return false;
       for (let i = 0; i < n1.clauses.length; i++) {
-        if (!areTypesDefEq(n1.clauses[i].rhs, n2.clauses[i].rhs, definitions)) return false;
+        if (!areTypesDefEq(n1.clauses[i].rhs, n2.clauses[i].rhs, definitions, typingContext)) return false;
       }
       return true;
 
@@ -386,6 +395,25 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
   const nextCtx: WhnfContext = { ...ctx, fuel: fuel - 1, deltaDepth };
 
   switch (term.tag) {
+    case 'Var': {
+      // ζ-reduction for variables: if the variable refers to a let-binding
+      // in the typing context, reduce to its value
+      if (ctx?.typingContext) {
+        const D = ctx.typingContext.length;
+        const entryIndex = D - 1 - term.index;
+        if (entryIndex >= 0 && entryIndex < D) {
+          const entry = ctx.typingContext[entryIndex];
+          if (entry?.value) {
+            // Shift value to current context depth: the value was stored at
+            // context depth entryIndex, so shift by (term.index + 1)
+            const shifted = shiftTerm(entry.value, term.index + 1, 0);
+            return whnf(shifted, nextCtx);
+          }
+        }
+      }
+      return term;
+    }
+
     case 'App': {
       const fn = whnf(term.fn, nextCtx);
       if (fn.tag === 'Binder' && fn.binderKind.tag === 'BLam') {

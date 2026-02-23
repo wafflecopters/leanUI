@@ -37,7 +37,8 @@ export class CasesTactic implements Tactic {
 
       // 2. Normalize to find inductive type
       const scrutineeTypeWhnf = whnf(scrutineeType, {
-        definitions: engine.definitions
+        definitions: engine.definitions,
+        typingContext: goal.ctx
       });
 
       // 3. Extract inductive type name
@@ -84,10 +85,14 @@ export class CasesTactic implements Tactic {
           typeArgs
         );
 
+        // Shift goal type by number of new params added to context
+        const numNewParams = branchCtx.length - goal.ctx.length;
+        const branchGoalType = numNewParams > 0 ? shiftTerm(goal.type, numNewParams, 0) : goal.type;
+
         const branchId = freshMetaName();
         const branchMeta: MetaVar = {
           ctx: branchCtx,
-          type: goal.type,
+          type: branchGoalType,
           solution: undefined,
           caseTag: ctor.name
         };

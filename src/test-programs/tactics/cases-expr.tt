@@ -1,0 +1,11 @@
+@test success
+@name "cases on expression: Either elimination"
+@import preambles/nat.tt
+@import preambles/either.tt
+
+-- Simple function using cases on an expression
+casesExprTest : Nat -> Nat -> Nat
+casesExprTest a b := by
+  cases (Left a : Either Nat Nat) with
+  | Left x => exact x
+  | Right y => exact y

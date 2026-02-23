@@ -1,0 +1,19 @@
+@test success
+@name "obtain: basic DPair destructuring"
+@import preambles/nat.tt
+@import preambles/dpair.tt
+@import preambles/equal-simple.tt
+
+-- IsPos predicate
+IsPos : Nat -> Type
+IsPos n = Equal n (Succ Zero)
+
+-- A witness
+witness : DPair Nat IsPos
+witness = MkDPair (Succ Zero) refl
+
+-- Use obtain to destructure
+obtainTest : Nat
+obtainTest := by
+  obtain (n, h) := witness
+  exact n
