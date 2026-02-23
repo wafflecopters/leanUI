@@ -24,16 +24,16 @@ record Env where
   inst : MyField Carrier
 
 -- Wrappers
-radd : (R : Env) -> Env.Carrier R -> Env.Carrier R -> Env.Carrier R
-radd R x y = MyField.add (Env.inst R) x y
+radd : {R : Env} -> Env.Carrier R -> Env.Carrier R -> Env.Carrier R
+radd {R} x y = MyField.add (Env.inst R) x y
 
-rneg : (R : Env) -> Env.Carrier R -> Env.Carrier R
-rneg R x = MyField.neg (Env.inst R) x
+rneg : {R : Env} -> Env.Carrier R -> Env.Carrier R
+rneg {R} x = MyField.neg (Env.inst R) x
 
 rzero : (R : Env) -> Env.Carrier R
 rzero R = MyField.zero (Env.inst R)
 
--- negLeft: radd R (rneg R a) a = rzero R
-negLeft : (R : Env) -> (a : Env.Carrier R) -> Equal (radd R (rneg R a) a) (rzero R) := by
+-- negLeft: radd (rneg a) a = rzero R
+negLeft : (R : Env) -> (a : Env.Carrier R) -> Equal (radd (rneg a) a) (rzero R) := by
   intros R a
-  erw (MyField.addComm (Env.inst R) (rneg R a) a), (MyField.negRight (Env.inst R) a)
+  erw (MyField.addComm (Env.inst R) (rneg a) a), (MyField.negRight (Env.inst R) a)

@@ -1,0 +1,44 @@
+@test success
+@name "implicit radd: cong with implicit arg in lambda"
+@import preambles/equal-simple.tt
+
+cong : {A B : Type} -> {a b : A} -> (f : A -> B) -> Equal a b -> Equal (f a) (f b)
+cong f refl = refl
+
+sym : {A : Type} -> {a b : A} -> Equal a b -> Equal b a
+sym refl = refl
+
+trans : {A : Type} -> {a b c : A} -> Equal a b -> Equal b c -> Equal a c
+trans refl refl = refl
+
+record COF (A : Type) where
+  add : A -> A -> A
+  mul : A -> A -> A
+  one : A
+  mulOneLeft : (a : A) -> Equal (mul one a) a
+
+record R where
+  carrier : Type
+  cof : COF carrier
+
+C : R -> Type
+C r = R.carrier r
+
+-- implicit first arg
+fadd : {r : R} -> C r -> C r -> C r
+fadd {r} = COF.add (R.cof r)
+
+fmul : (r : R) -> C r -> C r -> C r
+fmul r = COF.mul (R.cof r)
+
+fone : (r : R) -> C r
+fone r = COF.one (R.cof r)
+
+-- Test 1: direct use of cong result (no erw) — should compile
+test1 : (r : R) -> (h : C r) -> Equal (fmul r (fone r) h) h -> Equal (fadd h h) (fadd (fmul r (fone r) h) (fmul r (fone r) h))
+test1 r h hmul = cong (\z => fadd z z) (sym hmul)
+
+-- Test 2: same thing via erw — should also compile
+test2 : (r : R) -> (h : C r) -> Equal (fmul r (fone r) h) h -> Equal (fadd h h) (fadd (fmul r (fone r) h) (fmul r (fone r) h)) := by
+  intros r h hmul
+  erw (cong (\z => fadd z z) (sym hmul))

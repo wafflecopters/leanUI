@@ -1,0 +1,25 @@
+@test success
+@name "implicit radd: basic usage"
+
+record CompleteOrderedField (A : Type) where
+  add : A -> A -> A
+  zero : A
+  mul : A -> A -> A
+  one : A
+
+record Real where
+  carrier : Type
+  field : CompleteOrderedField carrier
+
+Carrier : Real -> Type
+Carrier R = Real.carrier R
+
+radd : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+radd {R} = CompleteOrderedField.add (Real.field R)
+
+rzero : (R : Real) -> Carrier R
+rzero R = CompleteOrderedField.zero (Real.field R)
+
+-- Simple test: radd a b type-checks
+testAdd : (R : Real) -> (a b : Carrier R) -> Carrier R
+testAdd R a b = radd a b

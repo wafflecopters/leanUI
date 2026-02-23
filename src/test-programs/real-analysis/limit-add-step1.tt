@@ -56,22 +56,22 @@ Carrier R = DPair.fst R
 field : (R : Real) -> CompleteOrderedField (Carrier R)
 field R = DPair.snd R
 
-radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-radd R = CompleteOrderedField.add (field R)
+radd : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+radd {R} = CompleteOrderedField.add (field R)
 
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
 
-rneg : (R : Real) -> Carrier R -> Carrier R
-rneg R = CompleteOrderedField.neg (field R)
+rneg : {R : Real} -> Carrier R -> Carrier R
+rneg {R} = CompleteOrderedField.neg (field R)
 
-rle : (R : Real) -> Carrier R -> Carrier R -> Type
-rle R = CompleteOrderedField.le (field R)
+rle : {R : Real} -> Carrier R -> Carrier R -> Type
+rle {R} = CompleteOrderedField.le (field R)
 
 -- Test: addZeroLeft
-addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
+addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd (rzero R) a) a
 addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
 -- Test: negLeft
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd (rneg a) a) (rzero R)
+negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)

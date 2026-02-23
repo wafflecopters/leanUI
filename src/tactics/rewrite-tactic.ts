@@ -21,7 +21,7 @@ import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
 import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
-import { shiftTerm } from '../compiler/subst';
+import { shiftTerm, subst } from '../compiler/subst';
 
 /**
  * RewriteTactic: Use an equality proof to substitute in the goal
@@ -50,8 +50,12 @@ export class RewriteTactic implements Tactic {
       } catch {
         // Best effort — proceed with what we have
       }
-      // Zonk to substitute solved metas into the type
-      const proofType = solvedEnv.zonkTerm(solvedEnv.value);
+      // Zonk to substitute solved metas into the type.
+      // Use depth-aware zonking because ensurePi's normalize may beta-reduce
+      // App(\z => f({?m}, z), ?a) → f({?m}, ?a), moving meta ?m from depth D+1
+      // (inside the lambda) to depth D (outside). zonkTermAtDepth adjusts the
+      // meta solution's de Bruijn indices for the depth change.
+      const proofType = solvedEnv.zonkTermAtDepth(solvedEnv.value, goal.ctx.length);
 
       // 2. Normalize to find equality type
       const proofTypeWhnf = whnf(proofType, { definitions: engine.definitions, typingContext: goal.ctx });
@@ -65,9 +69,16 @@ export class RewriteTactic implements Tactic {
         };
       }
 
-      const { typeA, lhs, rhs } = eqArgs;
+      const { typeA, lhs: rawLhs, rhs: rawRhs } = eqArgs;
 
-      // 4. Replace LHS with RHS in the goal type
+      // 4. Beta-reduce LHS and RHS without delta-reducing definitions.
+      //    cong (\z => radd z z) h produces Equal ((\z => radd z z) a) ((\z => radd z z) b)
+      //    where the LHS/RHS are un-beta-reduced. We need radd(a,a) / radd(b,b) to match the goal,
+      //    but NOT the delta-reduced CompleteOrderedField.add(field(R), a, a).
+      const lhs = this.betaReduce(rawLhs);
+      const rhs = this.betaReduce(rawRhs);
+
+      // 5. Replace LHS with RHS in the goal type
       //    Uses WHNF-based matching to handle definition aliases
       //    (e.g., `radd R` matching `CompleteOrderedField.add (field R)`)
       const newGoalType = this.substitute(goal.type, lhs, rhs, engine.definitions);
@@ -154,6 +165,41 @@ export class RewriteTactic implements Tactic {
         cause: e instanceof Error ? e : undefined
       };
     }
+  }
+
+  /**
+   * Beta-reduce a term (repeatedly at the top level) without delta-reducing definitions.
+   * Reduces App(Binder(BLam, ..., body), arg) → body[0 := arg].
+   * This is needed because cong/sym produce un-beta-reduced terms like
+   * App(\z => radd z z, h) which should match radd(h, h) in the goal.
+   */
+  private betaReduce(term: TTKTerm): TTKTerm {
+    let current = term;
+    // Repeat to handle nested beta-redexes
+    for (let i = 0; i < 100; i++) {
+      if (current.tag === 'App') {
+        // Collect the application spine
+        const args: TTKTerm[] = [];
+        let head: TTKTerm = current;
+        while (head.tag === 'App') {
+          args.unshift(head.arg);
+          head = head.fn;
+        }
+        // If head is a lambda, beta-reduce one step
+        if (head.tag === 'Binder' && head.binderKind.tag === 'BLam' && args.length > 0) {
+          const arg = args[0];
+          let result = subst(0, arg, head.body);
+          // Re-apply remaining args
+          for (let j = 1; j < args.length; j++) {
+            result = { tag: 'App', fn: result, arg: args[j] };
+          }
+          current = result;
+          continue;
+        }
+      }
+      break;
+    }
+    return current;
   }
 
   /**
@@ -413,6 +459,9 @@ export class RewriteTactic implements Tactic {
       case 'App':
         return `(${this.termToString(term.fn)} ${this.termToString(term.arg)})`;
       case 'Binder':
+        if (term.binderKind.tag === 'BLam') {
+          return `(\\${term.name} => ${this.termToString(term.body)})`;
+        }
         return `(${term.name} : ${this.termToString(term.domain)}) -> ${this.termToString(term.body)}`;
       default:
         return `<${term.tag}>`;

@@ -67,8 +67,8 @@ field R = DPair.snd R
 radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
 radd R = CompleteOrderedField.add (field R)
 
-rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rmul R = CompleteOrderedField.mul (field R)
+rmul : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rmul {R} = CompleteOrderedField.mul (field R)
 
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
@@ -76,20 +76,20 @@ rzero R = CompleteOrderedField.zero (field R)
 rone : (R : Real) -> Carrier R
 rone R = CompleteOrderedField.one (field R)
 
-rneg : (R : Real) -> Carrier R -> Carrier R
-rneg R = CompleteOrderedField.neg (field R)
+rneg : {R : Real} -> Carrier R -> Carrier R
+rneg {R} = CompleteOrderedField.neg (field R)
 
-rinv : (R : Real) -> Carrier R -> Carrier R
-rinv R = CompleteOrderedField.inv (field R)
+rinv : {R : Real} -> Carrier R -> Carrier R
+rinv {R} = CompleteOrderedField.inv (field R)
 
-rle : (R : Real) -> Carrier R -> Carrier R -> Type
-rle R = CompleteOrderedField.le (field R)
+rle : {R : Real} -> Carrier R -> Carrier R -> Type
+rle {R} = CompleteOrderedField.le (field R)
 
-rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rsub R a b = radd R a (rneg R b)
+rsub : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rsub {R} a b = radd R a (rneg b)
 
-rlt : (R : Real) -> Carrier R -> Carrier R -> Type
-rlt R a b = Pair (rle R a b) (Equal a b -> Void)
+rlt : {R : Real} -> Carrier R -> Carrier R -> Type
+rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 
 rabs : {R : Real} -> Carrier R -> Carrier R
 rabs {R} = CompleteOrderedField.abs (field R)
@@ -99,8 +99,8 @@ rabs {R} = CompleteOrderedField.abs (field R)
 addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
 addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
+negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
 
 -- ============ Halving: two, half, and their properties ============
 
@@ -108,7 +108,7 @@ rtwo : (R : Real) -> Carrier R
 rtwo R = radd R (rone R) (rone R)
 
 rhalf : (R : Real) -> Carrier R
-rhalf R = rinv R (rtwo R)
+rhalf R = rinv (rtwo R)
 
 -- twoNeZero: 1+1 ≠ 0
 -- We prove this from zeroLeOne and zeroNeOne: if 1+1=0, then since 0<=1 and 0<=1 we get 0<=1+1=0, so 1+1=0 implies 0<=0 and 1+1<=0. But also 0=1+1 means 1=-1, eventually leading to 0=1 contradiction.
@@ -122,27 +122,27 @@ rhalf R = rinv R (rtwo R)
 -- But addLtBoth needs addLeRight etc. Let's use a simpler path: 0 <= 1 and 0 != 1, plus addLeLeft gives 0+0 <= 0+1, i.e. 0 <= 1. Then addLeLeft again: 1+0 <= 1+1, i.e. 1 <= 1+1. By leTrans, 0 <= 1+1. If 1+1=0, then 1<=0. But 0<=1 and 1<=0 implies 0=1, contradiction.
 
 -- addLeRight using addLeLeft and commutativity
-addLeRight : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rle R (radd R a c) (radd R b c)
-addLeRight R a b c h = (replace (\z => rle R z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle R (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
+addLeRight : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle (radd R a c) (radd R b c)
+addLeRight R a b c h = (replace (\z => rle z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
 
 -- oneLeTwo: 1 <= 1+1
-oneLeTwo : (R : Real) -> rle R (rone R) (rtwo R)
-oneLeTwo R = (replace (\z => rle R z (rtwo R)) (addZeroLeft R (rone R)) (addLeRight R (rzero R) (rone R) (rone R) (CompleteOrderedField.zeroLeOne (field R))))
+oneLeTwo : (R : Real) -> rle (rone R) (rtwo R)
+oneLeTwo R = (replace (\z => rle z (rtwo R)) (addZeroLeft R (rone R)) (addLeRight R (rzero R) (rone R) (rone R) (CompleteOrderedField.zeroLeOne (field R))))
 
 -- twoNeZero: 1+1 ≠ 0
 twoNeZero : (R : Real) -> Equal (rtwo R) (rzero R) -> Void
-twoNeZero R eq = (CompleteOrderedField.zeroNeOne (field R) (CompleteOrderedField.leAntisym (field R) (rzero R) (rone R) (CompleteOrderedField.zeroLeOne (field R)) (replace (\z => rle R (rone R) z) eq (oneLeTwo R))))
+twoNeZero R eq = (CompleteOrderedField.zeroNeOne (field R) (CompleteOrderedField.leAntisym (field R) (rzero R) (rone R) (CompleteOrderedField.zeroLeOne (field R)) (replace (\z => rle (rone R) z) eq (oneLeTwo R))))
 
 -- halfPlusHalf: half + half = 1
 -- half = inv(2), so 2 * half = 1 (mulInvRight). Also 2 * half = half + half (distribRight: (1+1)*half = 1*half + 1*half = half + half)
 -- Actually: (1+1) * inv(1+1) = 1 by mulInvRight. And (1+1)*x = 1*x + 1*x = x + x by distribRight + mulOneLeft.
-twoMulHalf : (R : Real) -> Equal (rmul R (rtwo R) (rhalf R)) (rone R)
+twoMulHalf : (R : Real) -> Equal (rmul (rtwo R) (rhalf R)) (rone R)
 twoMulHalf R = CompleteOrderedField.mulInvRight (field R) (rtwo R) (twoNeZero R)
 
-distribRightHalf : (R : Real) -> Equal (rmul R (rtwo R) (rhalf R)) (radd R (rmul R (rone R) (rhalf R)) (rmul R (rone R) (rhalf R)))
+distribRightHalf : (R : Real) -> Equal (rmul (rtwo R) (rhalf R)) (radd R (rmul (rone R) (rhalf R)) (rmul (rone R) (rhalf R)))
 distribRightHalf R = CompleteOrderedField.distribRight (field R) (rone R) (rone R) (rhalf R)
 
-halfIsHalf : (R : Real) -> Equal (rmul R (rone R) (rhalf R)) (rhalf R)
+halfIsHalf : (R : Real) -> Equal (rmul (rone R) (rhalf R)) (rhalf R)
 halfIsHalf R = CompleteOrderedField.mulOneLeft (field R) (rhalf R)
 
 halfPlusHalf : (R : Real) -> Equal (radd R (rhalf R) (rhalf R)) (rone R)
@@ -150,5 +150,5 @@ halfPlusHalf R = (trans (trans (cong (\z => radd R z z) (sym (halfIsHalf R))) (s
 
 -- halfMulEps: half * eps + half * eps = eps (for splitting epsilon)
 -- Proof: half*e + half*e = (half+half)*e = 1*e = e
-halfMulEps : (R : Real) -> (e : Carrier R) -> Equal (radd R (rmul R (rhalf R) e) (rmul R (rhalf R) e)) e
-halfMulEps R e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\z => rmul R z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))
+halfMulEps : (R : Real) -> (e : Carrier R) -> Equal (radd R (rmul (rhalf R) e) (rmul (rhalf R) e)) e
+halfMulEps R e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\z => rmul z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))

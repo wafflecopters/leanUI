@@ -98,31 +98,31 @@ field R = DPair.snd R
 radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
 radd R = CompleteOrderedField.add (field R)
 
-rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rmul R = CompleteOrderedField.mul (field R)
+rmul : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rmul {R} = CompleteOrderedField.mul (field R)
 
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
 
-rneg : (R : Real) -> Carrier R -> Carrier R
-rneg R = CompleteOrderedField.neg (field R)
+rneg : {R : Real} -> Carrier R -> Carrier R
+rneg {R} = CompleteOrderedField.neg (field R)
 
-rinv : (R : Real) -> Carrier R -> Carrier R
-rinv R = CompleteOrderedField.inv (field R)
+rinv : {R : Real} -> Carrier R -> Carrier R
+rinv {R} = CompleteOrderedField.inv (field R)
 
-rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rsub R a b = radd R a (rneg R b)
+rsub : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rsub {R} a b = radd R a (rneg b)
 
 -- Tests with multi-char uppercase variable names
 test3b : (R : Real) -> (g : Carrier R -> Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (Lg : Carrier R) -> Carrier R
-test3b R g f x0 Lg = rmul R x0 Lg
+test3b R g f x0 Lg = rmul x0 Lg
 
 test3d : (R : Real) -> (g : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (Lg : Carrier R) -> Carrier R
-test3d R g x0 Lg = rmul R x0 Lg
+test3d R g x0 Lg = rmul x0 Lg
 
 test3d2 : (R : Real) -> (g : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (Lg : Carrier R) -> Carrier R
-test3d2 R g x0 Lg = rmul R x0 x0
+test3d2 R g x0 Lg = rmul x0 x0
 
 -- Test with multi-char uppercase used in more complex expression
 testChainTermA : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lg : Carrier R) -> Carrier R -> Carrier R
-testChainTermA R g f x0 Lg x = rmul R (rsub R (rsub R (g (f x)) (g (f x0))) (rmul R Lg (rsub R (f x) (f x0)))) (rinv R (rsub R x x0))
+testChainTermA R g f x0 Lg x = rmul (rsub (rsub (g (f x)) (g (f x0))) (rmul Lg (rsub (f x) (f x0)))) (rinv (rsub x x0))

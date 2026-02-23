@@ -67,8 +67,8 @@ field R = DPair.snd R
 radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
 radd R = CompleteOrderedField.add (field R)
 
-rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rmul R = CompleteOrderedField.mul (field R)
+rmul : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rmul {R} = CompleteOrderedField.mul (field R)
 
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
@@ -76,20 +76,20 @@ rzero R = CompleteOrderedField.zero (field R)
 rone : (R : Real) -> Carrier R
 rone R = CompleteOrderedField.one (field R)
 
-rneg : (R : Real) -> Carrier R -> Carrier R
-rneg R = CompleteOrderedField.neg (field R)
+rneg : {R : Real} -> Carrier R -> Carrier R
+rneg {R} = CompleteOrderedField.neg (field R)
 
-rinv : (R : Real) -> Carrier R -> Carrier R
-rinv R = CompleteOrderedField.inv (field R)
+rinv : {R : Real} -> Carrier R -> Carrier R
+rinv {R} = CompleteOrderedField.inv (field R)
 
-rle : (R : Real) -> Carrier R -> Carrier R -> Type
-rle R = CompleteOrderedField.le (field R)
+rle : {R : Real} -> Carrier R -> Carrier R -> Type
+rle {R} = CompleteOrderedField.le (field R)
 
-rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rsub R a b = radd R a (rneg R b)
+rsub : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rsub {R} a b = radd R a (rneg b)
 
-rlt : (R : Real) -> Carrier R -> Carrier R -> Type
-rlt R a b = Pair (rle R a b) (Equal a b -> Void)
+rlt : {R : Real} -> Carrier R -> Carrier R -> Type
+rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 
 rabs : {R : Real} -> Carrier R -> Carrier R
 rabs {R} = CompleteOrderedField.abs (field R)
@@ -99,40 +99,40 @@ rabs {R} = CompleteOrderedField.abs (field R)
 addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
 addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
+negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
 
 -- addLeRight: adding to the right preserves le  (a <= b => a+c <= b+c)
-addLeRight : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rle R (radd R a c) (radd R b c)
-addLeRight R a b c h = (replace (\z => rle R z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle R (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
+addLeRight : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle (radd R a c) (radd R b c)
+addLeRight R a b c h = (replace (\z => rle z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
 
 -- addLeBoth: le on both sides implies le on sums
-addLeBoth : (R : Real) -> (a b c d : Carrier R) -> rle R a b -> rle R c d -> rle R (radd R a c) (radd R b d)
+addLeBoth : (R : Real) -> (a b c d : Carrier R) -> rle a b -> rle c d -> rle (radd R a c) (radd R b d)
 addLeBoth R a b c d hab hcd = (CompleteOrderedField.leTrans (field R) (radd R a c) (radd R b c) (radd R b d) (addLeRight R a b c hab) (CompleteOrderedField.addLeLeft (field R) c d b hcd))
 
 -- leLtTrans helpers
-leLtTransLe : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rle R b c -> rle R a c
+leLtTransLe : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle b c -> rle a c
 leLtTransLe R a b c hab hbc = CompleteOrderedField.leTrans (field R) a b c hab hbc
 
-leLtTransNe : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rle R b c -> (Equal b c -> Void) -> Equal a c -> Void
-leLtTransNe R a b c hab hbc nebc eq = nebc (CompleteOrderedField.leAntisym (field R) b c hbc (replace (\z => rle R z b) eq hab))
+leLtTransNe : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle b c -> (Equal b c -> Void) -> Equal a c -> Void
+leLtTransNe R a b c hab hbc nebc eq = nebc (CompleteOrderedField.leAntisym (field R) b c hbc (replace (\z => rle z b) eq hab))
 
 -- leLtTrans: le + lt gives lt
-leLtTrans : (R : Real) -> (a b c : Carrier R) -> rle R a b -> rlt R b c -> rlt R a c
+leLtTrans : (R : Real) -> (a b c : Carrier R) -> rle a b -> rlt b c -> rlt a c
 leLtTrans R a b c hab hbc = MkPair (leLtTransLe R a b c hab (Pair.fst hbc)) (leLtTransNe R a b c hab (Pair.fst hbc) (Pair.snd hbc))
 
 -- addCancelRight helper: (x + c) + (-c) = x
-addCancelRightHelper : (R : Real) -> (x c : Carrier R) -> Equal (radd R (radd R x c) (rneg R c)) x
-addCancelRightHelper R x c = (trans (CompleteOrderedField.addAssoc (field R) x c (rneg R c)) (trans (cong (\z => radd R x z) (CompleteOrderedField.negRight (field R) c)) (CompleteOrderedField.addZeroRight (field R) x)))
+addCancelRightHelper : (R : Real) -> (x c : Carrier R) -> Equal (radd R (radd R x c) (rneg c)) x
+addCancelRightHelper R x c = (trans (CompleteOrderedField.addAssoc (field R) x c (rneg c)) (trans (cong (\z => radd R x z) (CompleteOrderedField.negRight (field R) c)) (CompleteOrderedField.addZeroRight (field R) x)))
 
 -- addCancelRight: a + c = b + c  =>  a = b
 addCancelRight : (R : Real) -> (a b c : Carrier R) -> Equal (radd R a c) (radd R b c) -> Equal a b
-addCancelRight R a b c h = (trans (sym (addCancelRightHelper R a c)) (trans (cong (\z => radd R z (rneg R c)) h) (addCancelRightHelper R b c)))
+addCancelRight R a b c h = (trans (sym (addCancelRightHelper R a c)) (trans (cong (\z => radd R z (rneg c)) h) (addCancelRightHelper R b c)))
 
 -- addLtBoth helpers
-addLtBothNe : (R : Real) -> (a b c d : Carrier R) -> rle R a b -> (Equal a b -> Void) -> rle R c d -> Equal (radd R a c) (radd R b d) -> Void
-addLtBothNe R a b c d leab neab lecd eq = (neab (addCancelRight R a b c (CompleteOrderedField.leAntisym (field R) (radd R a c) (radd R b c) (addLeRight R a b c leab) (CompleteOrderedField.leTrans (field R) (radd R b c) (radd R b d) (radd R a c) (CompleteOrderedField.addLeLeft (field R) c d b lecd) (replace (\z => rle R (radd R b d) z) (sym eq) (CompleteOrderedField.leRefl (field R) (radd R b d)))))))
+addLtBothNe : (R : Real) -> (a b c d : Carrier R) -> rle a b -> (Equal a b -> Void) -> rle c d -> Equal (radd R a c) (radd R b d) -> Void
+addLtBothNe R a b c d leab neab lecd eq = (neab (addCancelRight R a b c (CompleteOrderedField.leAntisym (field R) (radd R a c) (radd R b c) (addLeRight R a b c leab) (CompleteOrderedField.leTrans (field R) (radd R b c) (radd R b d) (radd R a c) (CompleteOrderedField.addLeLeft (field R) c d b lecd) (replace (\z => rle (radd R b d) z) (sym eq) (CompleteOrderedField.leRefl (field R) (radd R b d)))))))
 
 -- addLtBoth: strict lt on both sides implies strict lt on sums
-addLtBoth : (R : Real) -> (a b c d : Carrier R) -> rlt R a b -> rlt R c d -> rlt R (radd R a c) (radd R b d)
+addLtBoth : (R : Real) -> (a b c d : Carrier R) -> rlt a b -> rlt c d -> rlt (radd R a c) (radd R b d)
 addLtBoth R a b c d hab hcd = MkPair (addLeBoth R a b c d (Pair.fst hab) (Pair.fst hcd)) (addLtBothNe R a b c d (Pair.fst hab) (Pair.snd hab) (Pair.fst hcd))

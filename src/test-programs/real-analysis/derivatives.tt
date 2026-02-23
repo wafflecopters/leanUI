@@ -69,8 +69,8 @@ field R = DPair.snd R
 radd : (R : Real) -> Carrier R -> Carrier R -> Carrier R
 radd R = CompleteOrderedField.add (field R)
 
-rmul : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rmul R = CompleteOrderedField.mul (field R)
+rmul : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rmul {R} = CompleteOrderedField.mul (field R)
 
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
@@ -78,34 +78,34 @@ rzero R = CompleteOrderedField.zero (field R)
 rone : (R : Real) -> Carrier R
 rone R = CompleteOrderedField.one (field R)
 
-rneg : (R : Real) -> Carrier R -> Carrier R
-rneg R = CompleteOrderedField.neg (field R)
+rneg : {R : Real} -> Carrier R -> Carrier R
+rneg {R} = CompleteOrderedField.neg (field R)
 
-rinv : (R : Real) -> Carrier R -> Carrier R
-rinv R = CompleteOrderedField.inv (field R)
+rinv : {R : Real} -> Carrier R -> Carrier R
+rinv {R} = CompleteOrderedField.inv (field R)
 
-rle : (R : Real) -> Carrier R -> Carrier R -> Type
-rle R = CompleteOrderedField.le (field R)
+rle : {R : Real} -> Carrier R -> Carrier R -> Type
+rle {R} = CompleteOrderedField.le (field R)
 
-rsub : (R : Real) -> Carrier R -> Carrier R -> Carrier R
-rsub R a b = radd R a (rneg R b)
+rsub : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rsub {R} a b = radd R a (rneg b)
 
-rlt : (R : Real) -> Carrier R -> Carrier R -> Type
-rlt R a b = Pair (rle R a b) (Equal a b -> Void)
+rlt : {R : Real} -> Carrier R -> Carrier R -> Type
+rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 
 rabs : {R : Real} -> Carrier R -> Carrier R
 rabs {R} = CompleteOrderedField.abs (field R)
 
 EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs (rsub R x x0)) -> rlt R (rabs (rsub R x x0)) delta -> rlt R (rabs (rsub R (f x) L)) eps)
+EpsDeltaWitness R f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
 
 record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
-  eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
+  eps_delta : (eps : Carrier R) -> rlt (rzero R) eps ->
               DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
 
 -- Difference quotient
 diffQuot : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> Carrier R -> Carrier R
-diffQuot R f x0 x = rmul R (rsub R (f x) (f x0)) (rinv R (rsub R x x0))
+diffQuot R f x0 x = rmul (rsub (f x) (f x0)) (rinv (rsub x x0))
 
 -- Derivative definition
 HasDerivative : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> Type
@@ -113,33 +113,33 @@ HasDerivative R f x0 L = Limit R (diffQuot R f x0) x0 L
 
 -- limitExt
 limitExt : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> ((x : Carrier R) -> Equal (f x) (g x)) -> Limit R f x0 L -> Limit R g x0 L
-limitExt R f g x0 L ext limF = MkLimit (\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\x hx0 hxd => replace (\z => rlt R (rabs (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
+limitExt R f g x0 L ext limF = MkLimit (\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\x hx0 hxd => replace (\z => rlt (rabs (rsub z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
 
 -- Algebraic lemmas
 addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
 addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg R a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg R a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
+negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
 
-negUnique : (R : Real) -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg R a)
-negUnique R a b h = (trans (sym (addZeroLeft R b)) (trans (cong (\z => radd R z b) (sym (negLeft R a))) (trans (CompleteOrderedField.addAssoc (field R) (rneg R a) a b) (trans (cong (\z => radd R (rneg R a) z) h) (CompleteOrderedField.addZeroRight (field R) (rneg R a))))))
+negUnique : (R : Real) -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg a)
+negUnique R a b h = (trans (sym (addZeroLeft R b)) (trans (cong (\z => radd R z b) (sym (negLeft R a))) (trans (CompleteOrderedField.addAssoc (field R) (rneg a) a b) (trans (cong (\z => radd R (rneg a) z) h) (CompleteOrderedField.addZeroRight (field R) (rneg a))))))
 
-negAddCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg R a) (rneg R b))) (rzero R)
-negAddCancel R a b = (trans (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg R a) (rneg R b))) (trans (cong (\z => radd R z (rneg R b)) (trans (CompleteOrderedField.addComm (field R) (radd R a b) (rneg R a)) (trans (sym (CompleteOrderedField.addAssoc (field R) (rneg R a) a b)) (trans (cong (\z => radd R z b) (negLeft R a)) (addZeroLeft R b))))) (CompleteOrderedField.negRight (field R) b)))
+negAddCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg a) (rneg b))) (rzero R)
+negAddCancel R a b = (trans (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg a) (rneg b))) (trans (cong (\z => radd R z (rneg b)) (trans (CompleteOrderedField.addComm (field R) (radd R a b) (rneg a)) (trans (sym (CompleteOrderedField.addAssoc (field R) (rneg a) a b)) (trans (cong (\z => radd R z b) (negLeft R a)) (addZeroLeft R b))))) (CompleteOrderedField.negRight (field R) b)))
 
-negAdd : (R : Real) -> (a b : Carrier R) -> Equal (rneg R (radd R a b)) (radd R (rneg R a) (rneg R b))
-negAdd R a b = sym (negUnique R (radd R a b) (radd R (rneg R a) (rneg R b)) (negAddCancel R a b))
+negAdd : (R : Real) -> (a b : Carrier R) -> Equal (rneg (radd R a b)) (radd R (rneg a) (rneg b))
+negAdd R a b = sym (negUnique R (radd R a b) (radd R (rneg a) (rneg b)) (negAddCancel R a b))
 
 fourTermRearrange : (R : Real) -> (a b c d : Carrier R) -> Equal (radd R (radd R a b) (radd R c d)) (radd R (radd R a c) (radd R b d))
 fourTermRearrange R a b c d = (trans (CompleteOrderedField.addAssoc (field R) a b (radd R c d)) (trans (cong (\z => radd R a z) (trans (CompleteOrderedField.addComm (field R) b (radd R c d)) (trans (CompleteOrderedField.addAssoc (field R) c d b) (cong (\z => radd R c z) (CompleteOrderedField.addComm (field R) d b))))) (sym (CompleteOrderedField.addAssoc (field R) a c (radd R b d)))))
 
-subAddSub : (R : Real) -> (a b c d : Carrier R) -> Equal (rsub R (radd R a b) (radd R c d)) (radd R (rsub R a c) (rsub R b d))
-subAddSub R a b c d = trans (cong (\z => radd R (radd R a b) z) (negAdd R c d)) (fourTermRearrange R a b (rneg R c) (rneg R d))
+subAddSub : (R : Real) -> (a b c d : Carrier R) -> Equal (rsub (radd R a b) (radd R c d)) (radd R (rsub a c) (rsub b d))
+subAddSub R a b c d = trans (cong (\z => radd R (radd R a b) z) (negAdd R c d)) (fourTermRearrange R a b (rneg c) (rneg d))
 
 -- Key identity: diffQuot(f+g) = diffQuot(f) + diffQuot(g)
 diffQuotAddEq : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 x : Carrier R) -> Equal (radd R (diffQuot R f x0 x) (diffQuot R g x0 x)) (diffQuot R (\y => radd R (f y) (g y)) x0 x)
-diffQuotAddEq R f g x0 x = trans (sym (CompleteOrderedField.distribRight (field R) (rsub R (f x) (f x0)) (rsub R (g x) (g x0)) (rinv R (rsub R x x0)))) (cong (\z => rmul R z (rinv R (rsub R x x0))) (sym (subAddSub R (f x) (g x) (f x0) (g x0))))
+diffQuotAddEq R f g x0 x = trans (sym (CompleteOrderedField.distribRight (field R) (rsub (f x) (f x0)) (rsub (g x) (g x0)) (rinv (rsub x x0)))) (cong (\z => rmul z (rinv (rsub x x0))) (sym (subAddSub R (f x) (g x) (f x0) (g x0))))
 
 -- limitAdd (postulated — proved in the main preset)
 postulate limitAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> Limit R (\x => radd R (f x) (g x)) x0 (radd R L M)
