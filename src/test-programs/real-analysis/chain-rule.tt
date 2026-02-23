@@ -88,11 +88,11 @@ rsub R a b = radd R a (rneg R b)
 rlt : (R : Real) -> Carrier R -> Carrier R -> Type
 rlt R a b = Pair (rle R a b) (Equal a b -> Void)
 
-rabs : (R : Real) -> Carrier R -> Carrier R
-rabs R = CompleteOrderedField.abs (field R)
+rabs : {R : Real} -> Carrier R -> Carrier R
+rabs {R} = CompleteOrderedField.abs (field R)
 
 EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs R (rsub R x x0)) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
+EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs (rsub R x x0)) -> rlt R (rabs (rsub R x x0)) delta -> rlt R (rabs (rsub R (f x) L)) eps)
 
 record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
   eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->
@@ -107,7 +107,7 @@ HasDerivative R f x0 L = Limit R (diffQuot R f x0) x0 L
 
 -- limitExt and limitAdd (postulated — proved in the full preset)
 limitExt : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> ((x : Carrier R) -> Equal (f x) (g x)) -> Limit R f x0 L -> Limit R g x0 L
-limitExt R f g x0 L ext limF = MkLimit (\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\x hx0 hxd => replace (\z => rlt R (rabs R (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
+limitExt R f g x0 L ext limF = MkLimit (\eps heps => MkDPair (DPair.fst (Limit.eps_delta limF eps heps)) (MkPair (Pair.fst (DPair.snd (Limit.eps_delta limF eps heps))) (\x hx0 hxd => replace (\z => rlt R (rabs (rsub R z L)) eps) (ext x) (Pair.snd (DPair.snd (Limit.eps_delta limF eps heps)) x hx0 hxd))))
 
 postulate limitAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> Limit R (\x => radd R (f x) (g x)) x0 (radd R L M)
 

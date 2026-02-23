@@ -529,7 +529,7 @@ export function makeDefaultNotations(): NotationTable {
   table.set('rle', { kind: 'infix', latex: '\\le', arity: 3, skipArgs: [0] });
   table.set('rlt', { kind: 'infix', latex: '<', arity: 3, skipArgs: [0] });
 
-  // Absolute value: rabs R x → |x|
+  // Absolute value: rabs x → |x| (R is implicit)
   table.set('rabs', { kind: 'custom', render: (args, ctx, n) => {
     if (args.length >= 2) {
       return `\\left|${termToLatex(args[1], ctx, n)}\\right|`;

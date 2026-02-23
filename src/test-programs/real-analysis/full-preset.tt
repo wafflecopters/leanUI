@@ -93,11 +93,11 @@ rsub R a b = radd R a (rneg R b)
 rlt : (R : Real) -> Carrier R -> Carrier R -> Type
 rlt R a b = Pair (rle R a b) (Equal a b -> Void)
 
-rabs : (R : Real) -> Carrier R -> Carrier R
-rabs R = CompleteOrderedField.abs (field R)
+rabs : {R : Real} -> Carrier R -> Carrier R
+rabs {R} = CompleteOrderedField.abs (field R)
 
 EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs R (rsub R x x0)) -> rlt R (rabs R (rsub R x x0)) delta -> rlt R (rabs R (rsub R (f x) L)) eps)
+EpsDeltaWitness R f x0 L eps delta = Pair (rlt R (rzero R) delta) ((x : Carrier R) -> rlt R (rzero R) (rabs (rsub R x x0)) -> rlt R (rabs (rsub R x x0)) delta -> rlt R (rabs (rsub R (f x) L)) eps)
 
 record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
   eps_delta : (eps : Carrier R) -> rlt R (rzero R) eps ->

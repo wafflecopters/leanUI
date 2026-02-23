@@ -58,5 +58,5 @@ rneg : (R : Real) -> Carrier R -> Carrier R
 rneg R = CompleteOrderedField.neg (field R)
 
 -- Absolute value: case-split on leTotal (0 ≤ x) vs (x ≤ 0)
-rabs : (R : Real) -> Carrier R -> Carrier R
-rabs R x = eitherElim (\_ => x) (\_ => rneg R x) (CompleteOrderedField.leTotal (field R) (rzero R) x)
+rabs : {R : Real} -> Carrier R -> Carrier R
+rabs {R} x = eitherElim (\_ => x) (\_ => rneg R x) (CompleteOrderedField.leTotal (field R) (rzero R) x)

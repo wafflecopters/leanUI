@@ -91,8 +91,8 @@ rsub R a b = radd R a (rneg R b)
 rlt : (R : Real) -> Carrier R -> Carrier R -> Type
 rlt R a b = Pair (rle R a b) (Equal a b -> Void)
 
-rabs : (R : Real) -> Carrier R -> Carrier R
-rabs R = CompleteOrderedField.abs (field R)
+rabs : {R : Real} -> Carrier R -> Carrier R
+rabs {R} = CompleteOrderedField.abs (field R)
 
 -- ============ Basic helpers ============
 
