@@ -1,0 +1,16 @@
+@test success
+@name "suffices: backward reasoning with apply"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- cong : Equal a b -> Equal (f a) (f b)
+congSucc : {a b : Nat} -> Equal a b -> Equal (Succ a) (Succ b)
+congSucc refl = refl
+
+-- Test: suffices reduces the goal via backward reasoning
+-- Goal: Equal (Succ Zero) (Succ Zero)
+-- suffices h : Equal Zero Zero by exact (congSucc h)
+-- Then prove h : Equal Zero Zero by exact refl
+testSufficesApply : Equal (Succ Zero) (Succ Zero) := by
+  suffices h : Equal Zero Zero by exact (congSucc h)
+  exact refl

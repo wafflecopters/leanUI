@@ -38,6 +38,7 @@ import { CongTactic } from '../tactics/cong-tactic';
 import { SubstTactic } from '../tactics/subst-tactic';
 import { HaveTactic } from '../tactics/have-tactic';
 import { ObtainTactic } from '../tactics/obtain-tactic';
+import { SufficesTactic } from '../tactics/suffices-tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
@@ -908,6 +909,23 @@ function collectSemanticTokensFromTactic(
       }
       break;
 
+    case 'suffices':
+      // suffices h : T by <closing tactics>
+      // args[0] = name (bound var), args[1] = type (term)
+      if (tactic.args.length > 0) {
+        addSemanticTokenDirect([...path, 'args', 0], sourceMap, blockStartLine, 'boundVar', tokens);
+      }
+      if (tactic.args.length > 1) {
+        collectSemanticTokensFromSurfaceTerm(tactic.args[1], sourceMap, blockStartLine, [...path, 'args', 1], tokens);
+      }
+      // Closing tactics
+      if (tactic.focusedTactics) {
+        for (let fi = 0; fi < tactic.focusedTactics.length; fi++) {
+          collectSemanticTokensFromTactic(tactic.focusedTactics[fi], sourceMap, blockStartLine, [...path, 'focusedTactics', fi], tokens);
+        }
+      }
+      break;
+
     default:
       // assumption, constructor, reflexivity, etc. — no args to highlight
       break;
@@ -1624,6 +1642,21 @@ function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>
       return new ObtainTactic(obtainNames, obtainProof);
     }
 
+    case 'suffices': {
+      // suffices h : T by <closing tactics>
+      // args[0] = name, args[1] = type (TTKTerm)
+      // focusedTactics = closing tactics (already compiled with h in scope)
+      if (cmd.args.length !== 2) {
+        throw new Error(`'suffices' tactic requires name and type (got ${cmd.args.length} args)`);
+      }
+      const suffName = cmd.args[0].tag === 'Const' ? (cmd.args[0] as any).name : '_';
+      const closingTactics = cmd.focusedTactics ?? [];
+      if (closingTactics.length === 0) {
+        throw new Error(`'suffices' tactic requires closing tactics after 'by'`);
+      }
+      return new SufficesTactic(suffName, cmd.args[1] as TTKTerm, closingTactics);
+    }
+
     default:
       throw new Error(`Unknown tactic: ${cmd.name}`);
   }
@@ -1876,9 +1909,14 @@ function elaborateTacticBlock(
       return surfaceToKernel(arg);
     });
 
-    // Elaborate focused tactics (for bullet syntax)
+    // Elaborate focused tactics (for bullet syntax and suffices closing tactics)
     let elabFocusedTactics: Tactic[] | undefined;
     if (cmd.focusedTactics && cmd.focusedTactics.length > 0) {
+      // For suffices, the closing tactics see the hypothesis name in scope
+      const sufficesHypName = cmd.name === 'suffices' && cmd.args.length >= 1 && cmd.args[0].tag === 'Const'
+        ? (cmd.args[0] as any).name as string
+        : undefined;
+
       elabFocusedTactics = cmd.focusedTactics.map(focusedCmd => {
         // Recursively elaborate each focused tactic
         const focusedElabArgs: Array<TTerm | TTKTerm> = focusedCmd.args.map(arg => {
@@ -1886,6 +1924,10 @@ function elaborateTacticBlock(
             return arg;
           }
           const nameContext: string[] = goal.ctx.map(binding => binding.name);
+          // For suffices closing tactics, h is in scope (will be Var(0) = last in context)
+          if (sufficesHypName) {
+            nameContext.push(sufficesHypName);
+          }
           function surfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
             switch (term.tag) {
               case 'Var':

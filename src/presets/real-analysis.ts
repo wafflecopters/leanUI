@@ -804,5 +804,14 @@ chainTermALimit R g f x0 Lg Lf hf hg := by
 --                      = 0       + g' * f'                   [chainTermALimit + hypothesis]
 --                      = g' * f'                              [addZeroLeft]
 derivChain : (R : Real) -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier R) -> HasDerivative R f x0 Lf -> HasDerivative R g (f x0) Lg -> HasDerivative R (\\x => g (f x)) x0 (rmul R Lg Lf)
-derivChain R g f x0 Lf Lg hf hg = limitExt R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) (diffQuot R (\\y => g (f y)) x0) x0 (rmul R Lg Lf) (chainAlgId R g f x0 Lg) (replace (\\z => Limit R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) x0 z) (addZeroLeft R (rmul R Lg Lf)) (limitAdd R (chainTermA R g f x0 Lg) (\\x => rmul R Lg (diffQuot R f x0 x)) x0 (rzero R) (rmul R Lg Lf) (chainTermALimit R g f x0 Lg Lf hf hg) (limitScalarAll R Lg (diffQuot R f x0) x0 Lf hf)))
+derivChain R g f x0 Lf Lg hf hg := by
+  -- Reduce to proving the limit of A(x) + Lg*diffQuot(f, x0, x)
+  suffices h : Limit R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) x0 (rmul R Lg Lf) by
+    exact limitExt R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) (diffQuot R (\\y => g (f y)) x0) x0 (rmul R Lg Lf) (chainAlgId R g f x0 Lg) h
+  -- Split the limit of a sum into two limits
+  have hA := chainTermALimit R g f x0 Lg Lf hf hg
+  have hScale := limitScalarAll R Lg (diffQuot R f x0) x0 Lf hf
+  have hSum := limitAdd R (chainTermA R g f x0 Lg) (\\x => rmul R Lg (diffQuot R f x0 x)) x0 (rzero R) (rmul R Lg Lf) hA hScale
+  -- Rewrite 0 + Lg*Lf = Lg*Lf
+  exact replace (\\z => Limit R (\\x => radd R (chainTermA R g f x0 Lg x) (rmul R Lg (diffQuot R f x0 x))) x0 z) (addZeroLeft R (rmul R Lg Lf)) hSum
 `;

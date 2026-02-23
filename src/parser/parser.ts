@@ -3481,11 +3481,10 @@ export class Parser {
         if (this.current().col < baseIndent) {
           break;
         }
-        throw new ParseError(
-          'Expected newline or semicolon after tactic',
-          this.current().line,
-          this.current().col
-        );
+        // Sub-block tactics (like suffices) may have already consumed the
+        // newline separator. If we're still at valid indentation, just
+        // continue to parse the next tactic.
+        // continue;  -- fall through to next loop iteration
       }
     }
 
@@ -3927,6 +3926,88 @@ export class Parser {
         return {
           name: tacticName,
           args: [mkConstTT(hypName), hypType, hypProof],
+          indexPath: path
+        };
+      }
+
+      case 'suffices': {
+        // suffices h : T by <closing tactic(s)>
+        // Parse: name ':' type 'by' tactic
+        if (this.current().type !== 'IDENT') {
+          throw new ParseError(
+            'suffices expects identifier after \'suffices\'',
+            this.current().line,
+            this.current().col
+          );
+        }
+
+        const suffName = this.current().value;
+        const suffNameToken = this.current();
+        this.advance();
+
+        const suffNamePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 0 }];
+        this.recordRange(suffNamePath, suffNameToken, suffNameToken);
+
+        this.expect('COLON');
+
+        // Parse type — but stop before 'by' keyword
+        // We parse an expression, but 'by' is recognized as the IDENT 'by' not as BY keyword
+        // Actually 'by' IS a keyword token. Let me check.
+        const suffTypePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 1 }];
+        const suffType = this.expr(0, ctx, suffTypePath);
+
+        // Expect 'by' keyword
+        if (this.current().type !== 'BY') {
+          throw new ParseError(
+            'suffices expects \'by\' after type',
+            this.current().line,
+            this.current().col
+          );
+        }
+        this.advance(); // consume 'by'
+
+        // Parse closing tactic(s) — rest of current line
+        // We parse on the same line or indented on next line
+        const closingTactics: TacticCommand[] = [];
+        if (this.current().type === 'NEWLINE') {
+          // Multi-line: parse indented tactic block
+          this.advance();
+          this.skipNewlines();
+          const closingBaseIndent = this.current().col;
+          // Must be indented more than the suffices keyword
+          if (closingBaseIndent <= tacticToken.col) {
+            throw new ParseError(
+              'suffices: closing tactics must be indented',
+              this.current().line,
+              this.current().col
+            );
+          }
+          while (this.current().type !== 'EOF' && this.current().col >= closingBaseIndent) {
+            const closingPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: closingTactics.length }];
+            closingTactics.push(this.parseTactic(ctx, closingPath));
+            if (this.current().type === 'NEWLINE') {
+              this.advance();
+              this.skipNewlines();
+            } else if (this.current().type === 'SEMICOLON') {
+              this.advance();
+              if (this.current().type === 'NEWLINE') {
+                this.advance();
+                this.skipNewlines();
+              }
+            } else {
+              break;
+            }
+          }
+        } else {
+          // Single-line: parse one tactic on the same line
+          const closingPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: 0 }];
+          closingTactics.push(this.parseTactic(ctx, closingPath));
+        }
+
+        return {
+          name: tacticName,
+          args: [mkConstTT(suffName), suffType],
+          focusedTactics: closingTactics,
           indexPath: path
         };
       }

@@ -1,0 +1,12 @@
+@test success
+@name "suffices: multi-line closing tactic"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+cong : {A B : Type} -> {a b : A} -> (f : A -> B) -> Equal a b -> Equal (f a) (f b)
+cong f refl = refl
+
+testSufficesMultiline : Equal (Succ (Succ Zero)) (Succ (Succ Zero)) := by
+  suffices h : Equal (Succ Zero) (Succ Zero) by
+    exact (cong Succ h)
+  exact refl

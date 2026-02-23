@@ -1,0 +1,11 @@
+@test success
+@name "suffices: basic backward reasoning"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Test: suffices h : T by exact h
+-- Goal: Equal Zero Zero
+-- suffices introduces h : Equal Zero Zero, closing tactic uses it
+testSuffices : Equal Zero Zero := by
+  suffices h : Equal Zero Zero by exact h
+  exact refl
