@@ -836,13 +836,16 @@ function collectSemanticTokensFromTactic(
     case 'refine':
     case 'rewrite':
     case 'subst':
-      // Argument is a full term expression — recurse for full highlighting
-      if (tactic.args.length > 0) {
+    case 'rw':
+    case 'erw':
+    case 'unfold':
+      // Arguments are full term expressions — recurse for full highlighting
+      for (let j = 0; j < tactic.args.length; j++) {
         collectSemanticTokensFromSurfaceTerm(
-          tactic.args[0],
+          tactic.args[j],
           sourceMap,
           blockStartLine,
-          [...path, 'args', 0],
+          [...path, 'args', j],
           tokens
         );
       }

@@ -265,5 +265,44 @@ inductive Vec : {A : Type} -> Nat -> Type where
         expect(token.line).toBeGreaterThanOrEqual(3);
       }
     });
+
+    test('erw tactic args get semantic tokens', () => {
+      const source = `inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero b = b
+plus (Succ a) b = Succ (plus a b)
+
+plusZero : (n : Nat) -> Equal (plus n Zero) n := by
+  intros n
+  erw (trans refl refl)`;
+      const result = compileTTFromText(source);
+      const tokens = extractSemanticTokens(result);
+
+      validateSemanticTokens(source, tokens);
+
+      // The erw tactic is on the last line — should have tokens for 'trans', 'refl' args
+      const lastLine = source.split('\n').length;
+      const erwLineTokens = tokens.filter(t => t.line === lastLine);
+
+      // Should have tacticName for 'erw' plus tokens for the term args (trans, refl, refl)
+      const tacticTokens = erwLineTokens.filter(t => t.type === 'tacticName');
+      expect(tacticTokens.length).toBe(1);
+
+      const termTokens = erwLineTokens.filter(t => t.type === 'termName' || t.type === 'constName');
+      // trans and refl should be highlighted
+      expect(termTokens.length).toBeGreaterThanOrEqual(1);
+    });
   });
 });
