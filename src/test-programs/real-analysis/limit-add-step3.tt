@@ -40,12 +40,6 @@ record OrderedField (A : Type) : Type 1 extends Field A where
   leTotal : (a b : A) -> Either (le a b) (le b a)
   addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
   mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
-  abs : A -> A
-  absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
-  absMul : (a b : A) -> Equal (abs (mul a b)) (mul (abs a) (abs b))
-  absNonneg : (a : A) -> le zero (abs a)
-  absZero : Equal (abs zero) zero
-  absEqZero : (a : A) -> Equal (abs a) zero -> Equal a zero
   zeroLeOne : le zero one
   zeroNeOne : Equal zero one -> Void
   invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)
@@ -91,16 +85,15 @@ rsub {R} a b = radd R a (rneg b)
 rlt : {R : Real} -> Carrier R -> Carrier R -> Type
 rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 
-rabs : {R : Real} -> Carrier R -> Carrier R
-rabs {R} = CompleteOrderedField.abs (field R)
+postulate rabs : {R : Real} -> Carrier R -> Carrier R
 
 -- ============ Basic helpers ============
 
-addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
-addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
+addZeroLeft : {R : Real} -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
+addZeroLeft {R} a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : {R : Real} -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
+negLeft {R} a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
 
 -- ============ Halving: two, half, and their properties ============
 
@@ -122,12 +115,12 @@ rhalf R = rinv (rtwo R)
 -- But addLtBoth needs addLeRight etc. Let's use a simpler path: 0 <= 1 and 0 != 1, plus addLeLeft gives 0+0 <= 0+1, i.e. 0 <= 1. Then addLeLeft again: 1+0 <= 1+1, i.e. 1 <= 1+1. By leTrans, 0 <= 1+1. If 1+1=0, then 1<=0. But 0<=1 and 1<=0 implies 0=1, contradiction.
 
 -- addLeRight using addLeLeft and commutativity
-addLeRight : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle (radd R a c) (radd R b c)
-addLeRight R a b c h = (replace (\z => rle z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
+addLeRight : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle (radd R a c) (radd R b c)
+addLeRight {R} a b c h = (replace (\z => rle z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
 
 -- oneLeTwo: 1 <= 1+1
 oneLeTwo : (R : Real) -> rle (rone R) (rtwo R)
-oneLeTwo R = (replace (\z => rle z (rtwo R)) (addZeroLeft R (rone R)) (addLeRight R (rzero R) (rone R) (rone R) (CompleteOrderedField.zeroLeOne (field R))))
+oneLeTwo R = (replace (\z => rle z (rtwo R)) (addZeroLeft (rone R)) (addLeRight (rzero R) (rone R) (rone R) (CompleteOrderedField.zeroLeOne (field R))))
 
 -- twoNeZero: 1+1 ≠ 0
 twoNeZero : (R : Real) -> Equal (rtwo R) (rzero R) -> Void
@@ -150,5 +143,5 @@ halfPlusHalf R = (trans (trans (cong (\z => radd R z z) (sym (halfIsHalf R))) (s
 
 -- halfMulEps: half * eps + half * eps = eps (for splitting epsilon)
 -- Proof: half*e + half*e = (half+half)*e = 1*e = e
-halfMulEps : (R : Real) -> (e : Carrier R) -> Equal (radd R (rmul (rhalf R) e) (rmul (rhalf R) e)) e
-halfMulEps R e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\z => rmul z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))
+halfMulEps : {R : Real} -> (e : Carrier R) -> Equal (radd R (rmul (rhalf R) e) (rmul (rhalf R) e)) e
+halfMulEps {R} e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\z => rmul z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))

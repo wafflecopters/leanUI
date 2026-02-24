@@ -84,10 +84,10 @@ rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 postulate rabs : {R : Real} -> Carrier R -> Carrier R
 
 -- Epsilon-delta witness
-EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
+EpsDeltaWitness : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
+EpsDeltaWitness {R} f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
 
 -- Limit: epsilon-delta, parametric over a Real
-record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
+record Limit {R : Real} (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
   eps_delta : (eps : Carrier R) -> rlt (rzero R) eps ->
-              DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
+              DPair (Carrier R) (EpsDeltaWitness f x0 L eps)

@@ -40,12 +40,6 @@ record OrderedField (A : Type) : Type 1 extends Field A where
   leTotal : (a b : A) -> Either (le a b) (le b a)
   addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
   mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
-  abs : A -> A
-  absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
-  absMul : (a b : A) -> Equal (abs (mul a b)) (mul (abs a) (abs b))
-  absNonneg : (a : A) -> le zero (abs a)
-  absZero : Equal (abs zero) zero
-  absEqZero : (a : A) -> Equal (abs a) zero -> Equal a zero
   zeroLeOne : le zero one
   zeroNeOne : Equal zero one -> Void
   invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)
@@ -93,12 +87,11 @@ rsub {R} a b = radd R a (rneg b)
 rlt : {R : Real} -> Carrier R -> Carrier R -> Type
 rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 
-rabs : {R : Real} -> Carrier R -> Carrier R
-rabs {R} = CompleteOrderedField.abs (field R)
+postulate rabs : {R : Real} -> Carrier R -> Carrier R
 
-EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
+EpsDeltaWitness : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
+EpsDeltaWitness {R} f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
 
-record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
+record Limit {R : Real} (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
   eps_delta : (eps : Carrier R) -> rlt (rzero R) eps ->
-              DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
+              DPair (Carrier R) (EpsDeltaWitness f x0 L eps)

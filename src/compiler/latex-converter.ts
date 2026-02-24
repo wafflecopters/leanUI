@@ -636,20 +636,13 @@ export function makeDefaultNotations(): NotationTable {
     }
     return '\\text{inv}';
   }});
-  table.set('CompleteOrderedField.abs', { kind: 'custom', render: (args, ctx, n) => {
-    if (args.length >= 3) {
-      return `\\left|${termToLatex(args[2], ctx, n)}\\right|`;
-    }
-    return '|\\cdot|';
-  }});
-
   // Proof projections: skip 2 params, render as \text{name}(visible_args...)
   const proofProjections = [
     'addAssoc', 'addComm', 'addZeroRight', 'negRight',
     'mulAssoc', 'mulOneLeft', 'mulOneRight', 'mulComm',
     'distribLeft', 'distribRight',
     'leRefl', 'leAntisym', 'leTrans', 'leTotal',
-    'addLeLeft', 'mulNonneg', 'absTriangle', 'absMul', 'absNonneg', 'absZero', 'absEqZero',
+    'addLeLeft', 'mulNonneg',
     'zeroLeOne', 'zeroNeOne', 'invPos', 'mulInvRight',
     'supUpperBound', 'supLeast',
   ];
@@ -1137,7 +1130,7 @@ function isValueTerm(term: TTKTerm, notations: NotationTable): boolean {
   if (entry && entry.kind === 'infix') return true;
   // COF value projections
   if (name.startsWith('CompleteOrderedField.') &&
-      ['add', 'mul', 'neg', 'zero', 'one', 'abs', 'inv', 'sub'].some(
+      ['add', 'mul', 'neg', 'zero', 'one', 'inv', 'sub'].some(
         op => name.endsWith('.' + op))) return true;
   return false;
 }

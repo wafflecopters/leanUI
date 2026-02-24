@@ -360,8 +360,9 @@ describe('predecessor function reduction', () => {
 });
 
 describe('PWild binding alignment', () => {
-  // These tests verify that PWild does NOT produce bindings, which is critical
-  // for correct de Bruijn index alignment in the RHS.
+  // These tests verify that PWild does NOT produce bindings during WHNF reduction.
+  // Pattern-matching functions (compiled via checkTermValue) use RHS de Bruijn indices
+  // relative to PVar bindings only. WHNF's matchPattern must follow the same convention.
 
   test('PWild before PVar in constructor: | Succ _ => result uses no binding', () => {
     // match (Succ Zero) with | Succ _ => True
@@ -408,7 +409,8 @@ describe('PWild binding alignment', () => {
 
   test('PVar before PWild in constructor: | Pair x _ => x binds to first field', () => {
     // match (MkPair a b) with | MkPair x _ => x
-    // x (de Bruijn 0) should bind to a (first field)
+    // Only PVar binds: x → bindings[0]
+    // x is at Var(0)
     const clauses: TTKClause[] = [
       {
         patterns: [{
@@ -419,7 +421,7 @@ describe('PWild binding alignment', () => {
             { tag: 'PWild', name: '_' }
           ]
         }],
-        rhs: mkVar(0) // x - should be the FIRST field (a)
+        rhs: mkVar(0) // x - first field (a), only PVar binding
       },
     ];
     const scrutinee = mkApp(mkApp(mkConst('MkPair'), mkConst('a')), mkConst('b'));
@@ -482,7 +484,8 @@ describe('PWild binding alignment', () => {
 
   test('mixed PVar and PWild: | Ctor x _ y => (x, y) binds correctly', () => {
     // match (MkTriple a b c) with | MkTriple x _ z => x
-    // x (de Bruijn 1) binds to a, z (de Bruijn 0) binds to c
+    // Only PVars bind: x=bindings[0], z=bindings[1]
+    // x is at Var(1), z is at Var(0)
     const clauses_x: TTKClause[] = [
       {
         patterns: [{
@@ -494,7 +497,7 @@ describe('PWild binding alignment', () => {
             { tag: 'PVar', name: 'z' }
           ]
         }],
-        rhs: mkVar(1) // x - should be a (de Bruijn 1 since z is at 0)
+        rhs: mkVar(1) // x - first field (a), index 1 with 2 PVar bindings
       },
     ];
     const scrutinee = mkApp(mkApp(mkApp(mkConst('MkTriple'), mkConst('a')), mkConst('b')), mkConst('c'));

@@ -346,6 +346,37 @@ function areTermsDefinitelyDifferent(
 }
 
 /**
+ * Check if two terms are compatible as constant functions — i.e., both WHNF
+ * to function-like terms (lambda or Match with Hole scrutinee) that produce
+ * the same result when applied to any argument.
+ *
+ * This handles the case where the constant-function heuristic produces a lambda
+ * with a dummy domain (Type) but correct body, while the actual solution is a
+ * named function (delta-unfolding to Match(Hole, ...)) with the proper domain.
+ * E.g.: P (defined as match _ | n => Nat) vs \(_:Type) => Nat
+ */
+function areConstantFunctionsCompatible(a: TTKTerm, b: TTKTerm, definitions?: DefinitionsMap): boolean {
+  const wa = definitions ? whnf(a, { definitions }) : a;
+  const wb = definitions ? whnf(b, { definitions }) : b;
+  // Check if both are function-like (lambda or Match with Hole scrutinee).
+  // Pattern-matching definitions use Match(Hole, clauses) instead of lambdas.
+  const isFnLike = (t: TTKTerm): boolean =>
+    (t.tag === 'Binder' && t.binderKind.tag === 'BLam') ||
+    (t.tag === 'Match' && t.scrutinee.tag === 'Hole');
+  if (isFnLike(wa) && isFnLike(wb)) {
+    // Apply both to a dummy argument and compare results.
+    // This handles both lambdas (beta-reduction) and Match(Hole) (scrutinee substitution).
+    const dummy: TTKTerm = { tag: 'Const', name: '_areConstFnCompat_dummy' };
+    const mkApp = (fn: TTKTerm, arg: TTKTerm): TTKTerm => ({ tag: 'App', fn, arg });
+    const ctx = definitions ? { definitions } : {};
+    const resultA = whnf(mkApp(wa, dummy), ctx);
+    const resultB = whnf(mkApp(wb, dummy), ctx);
+    return isDefinitionallyEqual(resultA, resultB);
+  }
+  return false;
+}
+
+/**
  * Get the head of a term (unwrap applications).
  */
 function getHead(term: TTKTerm): TTKTerm {
@@ -595,12 +626,18 @@ export function solveConstraints(
           // `Succ(...)` even though `?m = Succ(k)` would make them equal).
           // Defer the constraint instead.
           //
-          // Also tolerate conflicts when the meta was solved by pattern unification
-          // and this constraint is non-pattern. Pattern solutions are the unique correct
-          // answer; non-pattern constraints (from APP decomposition) are less precise
-          // and may have incompatible structure (lambda vs partial application).
-          const toleratePatternConflict = meta.isPatternSolved && constraint.isPatternSolution !== true;
-          if (!containsUnsolvedMeta(resolvedRhs, newMetaVars) && !toleratePatternConflict) {
+          // Also tolerate conflicts when:
+          // 1. The meta was solved by pattern unification and this constraint is non-pattern.
+          //    Pattern solutions are the unique correct answer; non-pattern constraints
+          //    (from APP decomposition) are less precise.
+          // 2. The constraint is a constant-function heuristic (isPatternSolution: false).
+          //    These use dummy lambda domains (Type instead of actual domain).
+          // 3. The two solutions are compatible as constant functions (same result when applied).
+          const tolerateConflict =
+            (meta.isPatternSolved && constraint.isPatternSolution !== true) ||
+            constraint.isPatternSolution === false ||
+            areConstantFunctionsCompatible(meta.solution, resolvedRhs, definitions);
+          if (!containsUnsolvedMeta(resolvedRhs, newMetaVars) && !tolerateConflict) {
             const names = effectiveContext.map(c => c.name).reverse();
             const metaTypeStr = prettyPrint(meta.type, names);
             throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
@@ -645,8 +682,14 @@ export function solveConstraints(
         // Skip this check if the RHS contains unsolved metas — stuck terms can't be
         // reduced to WHNF, so head comparisons may give false positives.
         if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
-          // Tolerate when pattern-solved meta conflicts with non-pattern constraint
-          if (!(meta.isPatternSolved && normConstraint.isPatternSolution !== true)) {
+          // Tolerate when pattern-solved meta conflicts with non-pattern constraint,
+          // or when the conflict comes from a constant-function heuristic (dummy domains),
+          // or when both solutions are compatible constant functions.
+          const tolerateConflict =
+            (meta.isPatternSolved && normConstraint.isPatternSolution !== true) ||
+            normConstraint.isPatternSolution === false ||
+            areConstantFunctionsCompatible(meta.solution, resolvedRhs, definitions);
+          if (!tolerateConflict) {
             const names = effectiveContext.map(c => c.name).reverse();
             const metaTypeStr = prettyPrint(meta.type, names);
             throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
@@ -747,11 +790,13 @@ export function solveConstraints(
           } else if (!containsUnsolvedMeta(resolvedRhs, newMetaVars)) {
             // No unsolved metas and no inversion possible.
             // Tolerate conflicts when the meta was solved by pattern unification
-            // and this constraint is non-pattern. Pattern solutions are authoritative;
-            // non-pattern constraints (from APP decomposition) are less precise and
-            // may have incompatible structure (lambda vs partial application).
-            if (meta.isPatternSolved && normConstraint.isPatternSolution !== true) {
-              // Pattern solution takes precedence over non-pattern constraint.
+            // and this constraint is non-pattern, or when the constraint is a
+            // constant-function heuristic (uses dummy lambda domains).
+            const tolerateConflict =
+              (meta.isPatternSolved && normConstraint.isPatternSolution !== true) ||
+              normConstraint.isPatternSolution === false;
+            if (tolerateConflict) {
+              // Existing solution takes precedence over less-trusted constraint.
               // However, if the pattern solution contains Holes (incomplete from
               // constant-function pattern unification where the body wasn't known)
               // and the new RHS is complete, upgrade to the complete solution.
@@ -762,8 +807,8 @@ export function solveConstraints(
                 && canSolveMetaInContext(resolvedRhs, effectiveContext.length)) {
                 newMetaVars.set(normConstraint.meta, { ...meta, solution: resolvedRhs, ctx: effectiveContext });
               }
-            } else {
-              // Real conflict
+            } else if (!areConstantFunctionsCompatible(meta.solution, resolvedRhs, definitions)) {
+              // Real conflict — terms are not even compatible as constant functions
               const names = effectiveContext.map(c => c.name).reverse();
               const metaTypeStr = prettyPrint(meta.type, names);
               throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);

@@ -1,0 +1,28 @@
+@test success
+@name "Record projection iota-reduction: fst/snd return correct fields"
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+P : Nat -> Type
+P n = Nat
+
+myPair : DPair Nat P
+myPair = MkDPair Zero (Succ Zero)
+
+-- DPair.fst should return Zero (fst field), NOT Succ Zero (snd field)
+testFst : Equal (DPair.fst myPair) Zero
+testFst = refl
+
+-- DPair.snd should return Succ Zero (snd field), NOT Zero (fst field)
+testSnd : Equal (DPair.snd myPair) (Succ Zero)
+testSnd = refl

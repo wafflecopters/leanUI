@@ -69,9 +69,9 @@ rle : {R : Real} -> Carrier R -> Carrier R -> Type
 rle {R} = CompleteOrderedField.le (field R)
 
 -- Test: addZeroLeft
-addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd (rzero R) a) a
-addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
+addZeroLeft : {R : Real} -> (a : Carrier R) -> Equal (radd (rzero R) a) a
+addZeroLeft {R} a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
 -- Test: negLeft
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd (rneg a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : {R : Real} -> (a : Carrier R) -> Equal (radd (rneg a) a) (rzero R)
+negLeft {R} a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)

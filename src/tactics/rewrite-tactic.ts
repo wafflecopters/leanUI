@@ -14,7 +14,7 @@
  * where ?newGoal has type goal[lhs := rhs]
  */
 
-import { TTKTerm } from '../compiler/kernel';
+import { TTKTerm, TTKPattern } from '../compiler/kernel';
 import { DefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
@@ -261,6 +261,10 @@ export class RewriteTactic implements Tactic {
     // Only attempt when the App head is a defined constant (δ-reduction target),
     // and only recurse if WHNF actually changes the head (prevents infinite loop
     // since whnf always creates new App objects even when nothing reduces).
+    // IMPORTANT: Only keep the WHNF'd result if a substitution actually occurred
+    // within it (detected via reference identity). Otherwise, fall through to the
+    // normal recursive descent on the original term to preserve its structural form
+    // for subsequent rewrite steps.
     if (this.options.enhanced && definitions && term.tag === 'App') {
       let head: TTKTerm = term;
       while (head.tag === 'App') head = head.fn;
@@ -269,12 +273,17 @@ export class RewriteTactic implements Tactic {
         let headN: TTKTerm = termN;
         while (headN.tag === 'App') headN = headN.fn;
         if (headN.tag !== 'Const' || headN.name !== head.name) {
-          return this.substitute(termN, from, to, definitions);
+          const result = this.substitute(termN, from, to, definitions);
+          if (result !== termN) {
+            // A substitution occurred in the WHNF'd form — use it
+            return result;
+          }
+          // No substitution in WHNF'd form — fall through to preserve original structure
         }
       }
     }
 
-    // Recursively substitute in subterms
+    // Recursively substitute in subterms, preserving reference identity when nothing changes
     switch (term.tag) {
       case 'Var':
       case 'Const':
@@ -286,21 +295,25 @@ export class RewriteTactic implements Tactic {
       case 'UOmega':
         return term;
 
-      case 'App':
-        return {
-          tag: 'App',
-          fn: this.substitute(term.fn, from, to, definitions),
-          arg: this.substitute(term.arg, from, to, definitions)
-        };
+      case 'App': {
+        const newFn = this.substitute(term.fn, from, to, definitions);
+        const newArg = this.substitute(term.arg, from, to, definitions);
+        if (newFn === term.fn && newArg === term.arg) return term;
+        return { tag: 'App', fn: newFn, arg: newArg };
+      }
 
-      case 'Binder':
+      case 'Binder': {
+        const newDomain = this.substitute(term.domain, from, to, definitions);
+        const newBody = this.substitute(term.body, from, to, definitions);
+        if (newDomain === term.domain && newBody === term.body) return term;
         return {
           tag: 'Binder',
           binderKind: term.binderKind,
           name: term.name,
-          domain: this.substitute(term.domain, from, to, definitions),
-          body: this.substitute(term.body, from, to, definitions)
+          domain: newDomain,
+          body: newBody
         };
+      }
 
       default:
         return term;
@@ -382,6 +395,8 @@ export class RewriteTactic implements Tactic {
         if (aN.clauses.length !== (bN as any).clauses.length) return false;
         return aN.clauses.every((clause, i) => {
           const other = (bN as any).clauses[i];
+          if (clause.patterns.length !== other.patterns.length) return false;
+          if (!this.patternsEqual(clause.patterns, other.patterns)) return false;
           return this.termEqualDeep(clause.rhs, other.rhs, definitions, depth + 1);
         });
       default:
@@ -438,13 +453,31 @@ export class RewriteTactic implements Tactic {
         return a.clauses.every((clause, i) => {
           const other = b.tag === 'Match' ? b.clauses[i] : undefined;
           if (!other) return false;
-          if (clause.patterns.length !== other.patterns.length) return false;
+          if (!this.patternsEqual(clause.patterns, other.patterns)) return false;
           return this.termEqual(clause.rhs, other.rhs);
         });
 
       default:
         return false;
     }
+  }
+
+  /**
+   * Check if two pattern lists are structurally equal.
+   * Compares tag, name (for PCtor), and recursively for PCtor args.
+   */
+  private patternsEqual(ps1: TTKPattern[], ps2: TTKPattern[]): boolean {
+    if (ps1.length !== ps2.length) return false;
+    return ps1.every((p, i) => this.patternEqual(p, ps2[i]));
+  }
+
+  private patternEqual(p1: TTKPattern, p2: TTKPattern): boolean {
+    if (p1.tag !== p2.tag) return false;
+    if (p1.tag === 'PCtor' && p2.tag === 'PCtor') {
+      return p1.name === p2.name && this.patternsEqual(p1.args, p2.args);
+    }
+    // PVar and PWild: just tag match is enough
+    return true;
   }
 
   /**

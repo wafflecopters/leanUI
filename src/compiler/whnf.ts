@@ -1,6 +1,5 @@
 import { TTKTerm, TTKPattern, TTKContext, isDefinitionallyEqual, levelsEqual, prettyPrint } from "./kernel";
-import { subst, substPatternBindings } from "./subst";
-import { shiftTerm } from "./subst";
+import { subst, substPatternBindings, shiftTerm, minFreeVarIndex } from "./subst";
 import { DefinitionsMap, getTermDefinition, RecordInfo, extractAppSpine } from "./term";
 
 /**
@@ -83,9 +82,9 @@ function matchPattern(pattern: TTKPattern, term: TTKTerm, ctx?: WhnfContext): TT
       return [term];
     case 'PWild':
       // Wildcard matches but does NOT produce a binding.
-      // This is critical: the elaborator does not count PWild patterns in de Bruijn
-      // indices for the RHS, so including them in the bindings array would shift
-      // all subsequent indices and cause incorrect substitutions.
+      // Pattern-matching functions (compiled via checkTermValue) use RHS de Bruijn indices
+      // relative to PVar bindings ONLY. Record projections must also follow this convention
+      // (see buildProjectionValue in record.ts which uses Var(0) for the single PVar).
       return [];
 
     case 'PCtor': {
@@ -499,7 +498,6 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
       // parameters in function definitions. These should only reduce when applied
       // to arguments (handled by the App case above).
       if (scrut.tag === 'Hole' || scrut.tag === 'Meta' || scrut.tag === 'Var') {
-        // Scrutinee is stuck - don't reduce
         return { tag: 'Match', scrutinee: scrut, clauses: term.clauses };
       }
 

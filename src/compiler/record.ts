@@ -433,13 +433,12 @@ function buildProjectionValue(record: TTKRecordDef, fieldIdx: number): TTKTerm {
     args: patternArgs,
   };
 
-  // The RHS: return the field variable
-  // In the pattern context, variables are bound left-to-right:
-  //   p1 = totalCtorArgs-1, p2 = totalCtorArgs-2, ..., fn = 0
-  // So the field at position (numParams + fieldIdx) has index:
-  //   totalCtorArgs - 1 - (numParams + fieldIdx) = numFields - 1 - fieldIdx
-  const fieldVarIdx = numFields - 1 - fieldIdx;
-  const rhs: TTKTerm = mkVar(fieldVarIdx);
+  // The RHS: return the field variable.
+  // Since only the target field uses PVar (all others are PWild), and WHNF's
+  // matchPattern returns bindings only for PVar (not PWild), the RHS must use
+  // Var(0) — the single PVar binding. This matches the PVar-only convention
+  // used by pattern-matching functions compiled via checkTermValue.
+  const rhs: TTKTerm = mkVar(0);
 
   const clause: TTKClause = {
     patterns: [pattern],

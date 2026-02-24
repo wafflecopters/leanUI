@@ -705,7 +705,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
 
       // WHITELIST: Only run for specific constructors known to need this feature
       // This prevents interfering with other constructors that work fine with normal implicit handling
-      const isWhitelisted = constName === 'MkDPair';
+      const isWhitelisted = constName === 'MkDPair' || constName === 'MkSigma';
 
       if (implicitParams.length > 0 && hasEnoughArgs && !expectedIsSort && firstArgsAreHoles && isConstructor && isWhitelisted) {
         try {

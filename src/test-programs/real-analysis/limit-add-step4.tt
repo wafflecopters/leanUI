@@ -40,12 +40,6 @@ record OrderedField (A : Type) : Type 1 extends Field A where
   leTotal : (a b : A) -> Either (le a b) (le b a)
   addLeLeft : (a b c : A) -> le a b -> le (add c a) (add c b)
   mulNonneg : (a b : A) -> le zero a -> le zero b -> le zero (mul a b)
-  abs : A -> A
-  absTriangle : (a b : A) -> le (abs (add a b)) (add (abs a) (abs b))
-  absMul : (a b : A) -> Equal (abs (mul a b)) (mul (abs a) (abs b))
-  absNonneg : (a : A) -> le zero (abs a)
-  absZero : Equal (abs zero) zero
-  absEqZero : (a : A) -> Equal (abs a) zero -> Equal a zero
   zeroLeOne : le zero one
   zeroNeOne : Equal zero one -> Void
   invPos : (a : A) -> le zero a -> (Equal a zero -> Void) -> le zero (inv a)
@@ -91,56 +85,56 @@ rsub {R} a b = radd R a (rneg b)
 rlt : {R : Real} -> Carrier R -> Carrier R -> Type
 rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
 
-rabs : {R : Real} -> Carrier R -> Carrier R
-rabs {R} = CompleteOrderedField.abs (field R)
+postulate rabs : {R : Real} -> Carrier R -> Carrier R
+postulate absTriangle : {R : Real} -> (a b : Carrier R) -> rle (rabs (radd R a b)) (radd R (rabs a) (rabs b))
 
 -- ============ Algebraic helpers ============
 
-addZeroLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
-addZeroLeft R a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
+addZeroLeft : {R : Real} -> (a : Carrier R) -> Equal (radd R (rzero R) a) a
+addZeroLeft {R} a = trans (CompleteOrderedField.addComm (field R) (rzero R) a) (CompleteOrderedField.addZeroRight (field R) a)
 
-negLeft : (R : Real) -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
-negLeft R a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
+negLeft : {R : Real} -> (a : Carrier R) -> Equal (radd R (rneg a) a) (rzero R)
+negLeft {R} a = trans (CompleteOrderedField.addComm (field R) (rneg a) a) (CompleteOrderedField.negRight (field R) a)
 
-addLeRight : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle (radd R a c) (radd R b c)
-addLeRight R a b c h = (replace (\z => rle z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
+addLeRight : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle (radd R a c) (radd R b c)
+addLeRight {R} a b c h = (replace (\z => rle z (radd R b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\z => rle (radd R c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
 
-addLeBoth : (R : Real) -> (a b c d : Carrier R) -> rle a b -> rle c d -> rle (radd R a c) (radd R b d)
-addLeBoth R a b c d hab hcd = (CompleteOrderedField.leTrans (field R) (radd R a c) (radd R b c) (radd R b d) (addLeRight R a b c hab) (CompleteOrderedField.addLeLeft (field R) c d b hcd))
+addLeBoth : {R : Real} -> (a b c d : Carrier R) -> rle a b -> rle c d -> rle (radd R a c) (radd R b d)
+addLeBoth {R} a b c d hab hcd = (CompleteOrderedField.leTrans (field R) (radd R a c) (radd R b c) (radd R b d) (addLeRight a b c hab) (CompleteOrderedField.addLeLeft (field R) c d b hcd))
 
 -- leLtTrans helpers
-leLtTransLe : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle b c -> rle a c
-leLtTransLe R a b c hab hbc = CompleteOrderedField.leTrans (field R) a b c hab hbc
+leLtTransLe : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle b c -> rle a c
+leLtTransLe {R} a b c hab hbc = CompleteOrderedField.leTrans (field R) a b c hab hbc
 
-leLtTransNe : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle b c -> (Equal b c -> Void) -> Equal a c -> Void
-leLtTransNe R a b c hab hbc nebc eq = nebc (CompleteOrderedField.leAntisym (field R) b c hbc (replace (\z => rle z b) eq hab))
+leLtTransNe : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle b c -> (Equal b c -> Void) -> Equal a c -> Void
+leLtTransNe {R} a b c hab hbc nebc eq = nebc (CompleteOrderedField.leAntisym (field R) b c hbc (replace (\z => rle z b) eq hab))
 
 -- leLtTrans: a <= b, b < c => a < c
-leLtTrans : (R : Real) -> (a b c : Carrier R) -> rle a b -> rlt b c -> rlt a c
-leLtTrans R a b c hab hbc = MkPair (leLtTransLe R a b c hab (Pair.fst hbc)) (leLtTransNe R a b c hab (Pair.fst hbc) (Pair.snd hbc))
+leLtTrans : {R : Real} -> (a b c : Carrier R) -> rle a b -> rlt b c -> rlt a c
+leLtTrans {R} a b c hab hbc = MkPair (leLtTransLe a b c hab (Pair.fst hbc)) (leLtTransNe a b c hab (Pair.fst hbc) (Pair.snd hbc))
 
 -- ltLeTrans helpers
-ltLeTransLe : (R : Real) -> (a b c : Carrier R) -> rle a b -> rle b c -> rle a c
-ltLeTransLe R a b c hab hbc = CompleteOrderedField.leTrans (field R) a b c hab hbc
+ltLeTransLe : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle b c -> rle a c
+ltLeTransLe {R} a b c hab hbc = CompleteOrderedField.leTrans (field R) a b c hab hbc
 
-ltLeTransNe : (R : Real) -> (a b c : Carrier R) -> rle a b -> (Equal a b -> Void) -> rle b c -> Equal a c -> Void
-ltLeTransNe R a b c hab neab hbc eq = neab (CompleteOrderedField.leAntisym (field R) a b hab (CompleteOrderedField.leTrans (field R) b c a hbc (replace (\z => rle z a) eq (CompleteOrderedField.leRefl (field R) a))))
+ltLeTransNe : {R : Real} -> (a b c : Carrier R) -> rle a b -> (Equal a b -> Void) -> rle b c -> Equal a c -> Void
+ltLeTransNe {R} a b c hab neab hbc eq = neab (CompleteOrderedField.leAntisym (field R) a b hab (CompleteOrderedField.leTrans (field R) b c a hbc (replace (\z => rle z a) eq (CompleteOrderedField.leRefl (field R) a))))
 
 -- ltLeTrans: a < b, b <= c => a < c
-ltLeTrans : (R : Real) -> (a b c : Carrier R) -> rlt a b -> rle b c -> rlt a c
-ltLeTrans R a b c hab hbc = MkPair (ltLeTransLe R a b c (Pair.fst hab) hbc) (ltLeTransNe R a b c (Pair.fst hab) (Pair.snd hab) hbc)
+ltLeTrans : {R : Real} -> (a b c : Carrier R) -> rlt a b -> rle b c -> rlt a c
+ltLeTrans {R} a b c hab hbc = MkPair (ltLeTransLe a b c (Pair.fst hab) hbc) (ltLeTransNe a b c (Pair.fst hab) (Pair.snd hab) hbc)
 
-addCancelRightHelper : (R : Real) -> (x c : Carrier R) -> Equal (radd R (radd R x c) (rneg c)) x
-addCancelRightHelper R x c = (trans (CompleteOrderedField.addAssoc (field R) x c (rneg c)) (trans (cong (\z => radd R x z) (CompleteOrderedField.negRight (field R) c)) (CompleteOrderedField.addZeroRight (field R) x)))
+addCancelRightHelper : {R : Real} -> (x c : Carrier R) -> Equal (radd R (radd R x c) (rneg c)) x
+addCancelRightHelper {R} x c = (trans (CompleteOrderedField.addAssoc (field R) x c (rneg c)) (trans (cong (\z => radd R x z) (CompleteOrderedField.negRight (field R) c)) (CompleteOrderedField.addZeroRight (field R) x)))
 
-addCancelRight : (R : Real) -> (a b c : Carrier R) -> Equal (radd R a c) (radd R b c) -> Equal a b
-addCancelRight R a b c h = (trans (sym (addCancelRightHelper R a c)) (trans (cong (\z => radd R z (rneg c)) h) (addCancelRightHelper R b c)))
+addCancelRight : {R : Real} -> (a b c : Carrier R) -> Equal (radd R a c) (radd R b c) -> Equal a b
+addCancelRight {R} a b c h = (trans (sym (addCancelRightHelper a c)) (trans (cong (\z => radd R z (rneg c)) h) (addCancelRightHelper b c)))
 
-addLtBothNe : (R : Real) -> (a b c d : Carrier R) -> rle a b -> (Equal a b -> Void) -> rle c d -> Equal (radd R a c) (radd R b d) -> Void
-addLtBothNe R a b c d leab neab lecd eq = (neab (addCancelRight R a b c (CompleteOrderedField.leAntisym (field R) (radd R a c) (radd R b c) (addLeRight R a b c leab) (CompleteOrderedField.leTrans (field R) (radd R b c) (radd R b d) (radd R a c) (CompleteOrderedField.addLeLeft (field R) c d b lecd) (replace (\z => rle (radd R b d) z) (sym eq) (CompleteOrderedField.leRefl (field R) (radd R b d)))))))
+addLtBothNe : {R : Real} -> (a b c d : Carrier R) -> rle a b -> (Equal a b -> Void) -> rle c d -> Equal (radd R a c) (radd R b d) -> Void
+addLtBothNe {R} a b c d leab neab lecd eq = (neab (addCancelRight a b c (CompleteOrderedField.leAntisym (field R) (radd R a c) (radd R b c) (addLeRight a b c leab) (CompleteOrderedField.leTrans (field R) (radd R b c) (radd R b d) (radd R a c) (CompleteOrderedField.addLeLeft (field R) c d b lecd) (replace (\z => rle (radd R b d) z) (sym eq) (CompleteOrderedField.leRefl (field R) (radd R b d)))))))
 
-addLtBoth : (R : Real) -> (a b c d : Carrier R) -> rlt a b -> rlt c d -> rlt (radd R a c) (radd R b d)
-addLtBoth R a b c d hab hcd = MkPair (addLeBoth R a b c d (Pair.fst hab) (Pair.fst hcd)) (addLtBothNe R a b c d (Pair.fst hab) (Pair.snd hab) (Pair.fst hcd))
+addLtBoth : {R : Real} -> (a b c d : Carrier R) -> rlt a b -> rlt c d -> rlt (radd R a c) (radd R b d)
+addLtBoth {R} a b c d hab hcd = MkPair (addLeBoth a b c d (Pair.fst hab) (Pair.fst hcd)) (addLtBothNe a b c d (Pair.fst hab) (Pair.snd hab) (Pair.fst hcd))
 
 -- ============ Halving ============
 
@@ -151,7 +145,7 @@ rhalf : (R : Real) -> Carrier R
 rhalf R = rinv (rtwo R)
 
 oneLeTwo : (R : Real) -> rle (rone R) (rtwo R)
-oneLeTwo R = (replace (\z => rle z (rtwo R)) (addZeroLeft R (rone R)) (addLeRight R (rzero R) (rone R) (rone R) (CompleteOrderedField.zeroLeOne (field R))))
+oneLeTwo R = (replace (\z => rle z (rtwo R)) (addZeroLeft (rone R)) (addLeRight (rzero R) (rone R) (rone R) (CompleteOrderedField.zeroLeOne (field R))))
 
 twoNeZero : (R : Real) -> Equal (rtwo R) (rzero R) -> Void
 twoNeZero R eq = (CompleteOrderedField.zeroNeOne (field R) (CompleteOrderedField.leAntisym (field R) (rzero R) (rone R) (CompleteOrderedField.zeroLeOne (field R)) (replace (\z => rle (rone R) z) eq (oneLeTwo R))))
@@ -159,8 +153,8 @@ twoNeZero R eq = (CompleteOrderedField.zeroNeOne (field R) (CompleteOrderedField
 halfPlusHalf : (R : Real) -> Equal (radd R (rhalf R) (rhalf R)) (rone R)
 halfPlusHalf R = (trans (trans (cong (\z => radd R z z) (sym (CompleteOrderedField.mulOneLeft (field R) (rhalf R)))) (sym (CompleteOrderedField.distribRight (field R) (rone R) (rone R) (rhalf R)))) (CompleteOrderedField.mulInvRight (field R) (rtwo R) (twoNeZero R)))
 
-halfMulEps : (R : Real) -> (e : Carrier R) -> Equal (radd R (rmul (rhalf R) e) (rmul (rhalf R) e)) e
-halfMulEps R e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\z => rmul z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))
+halfMulEps : {R : Real} -> (e : Carrier R) -> Equal (radd R (rmul (rhalf R) e) (rmul (rhalf R) e)) e
+halfMulEps {R} e = (trans (sym (CompleteOrderedField.distribRight (field R) (rhalf R) (rhalf R) e)) (trans (cong (\z => rmul z e) (halfPlusHalf R)) (CompleteOrderedField.mulOneLeft (field R) e)))
 
 zeroLeTwo : (R : Real) -> rle (rzero R) (rtwo R)
 zeroLeTwo R = CompleteOrderedField.leTrans (field R) (rzero R) (rone R) (rtwo R) (CompleteOrderedField.zeroLeOne (field R)) (oneLeTwo R)
@@ -168,87 +162,87 @@ zeroLeTwo R = CompleteOrderedField.leTrans (field R) (rzero R) (rone R) (rtwo R)
 halfPos : (R : Real) -> rle (rzero R) (rhalf R)
 halfPos R = CompleteOrderedField.invPos (field R) (rtwo R) (zeroLeTwo R) (twoNeZero R)
 
-halfMulEpsLe : (R : Real) -> (e : Carrier R) -> rle (rzero R) e -> rle (rzero R) (rmul (rhalf R) e)
-halfMulEpsLe R e hle = CompleteOrderedField.mulNonneg (field R) (rhalf R) e (halfPos R) hle
+halfMulEpsLe : {R : Real} -> (e : Carrier R) -> rle (rzero R) e -> rle (rzero R) (rmul (rhalf R) e)
+halfMulEpsLe {R} e hle = CompleteOrderedField.mulNonneg (field R) (rhalf R) e (halfPos R) hle
 
-halfMulEpsNe : (R : Real) -> (e : Carrier R) -> rle (rzero R) e -> (Equal (rzero R) e -> Void) -> Equal (rzero R) (rmul (rhalf R) e) -> Void
-halfMulEpsNe R e hle hne heq = hne (trans (sym (addZeroLeft R (rzero R))) (trans (cong (\z => radd R z z) heq) (halfMulEps R e)))
+halfMulEpsNe : {R : Real} -> (e : Carrier R) -> rle (rzero R) e -> (Equal (rzero R) e -> Void) -> Equal (rzero R) (rmul (rhalf R) e) -> Void
+halfMulEpsNe {R} e hle hne heq = hne (trans (sym (addZeroLeft (rzero R))) (trans (cong (\z => radd R z z) heq) (halfMulEps e)))
 
-halfMulEpsPos : (R : Real) -> (e : Carrier R) -> rlt (rzero R) e -> rlt (rzero R) (rmul (rhalf R) e)
-halfMulEpsPos R e hlt = MkPair (halfMulEpsLe R e (Pair.fst hlt)) (halfMulEpsNe R e (Pair.fst hlt) (Pair.snd hlt))
+halfMulEpsPos : {R : Real} -> (e : Carrier R) -> rlt (rzero R) e -> rlt (rzero R) (rmul (rhalf R) e)
+halfMulEpsPos {R} e hlt = MkPair (halfMulEpsLe e (Pair.fst hlt)) (halfMulEpsNe e (Pair.fst hlt) (Pair.snd hlt))
 
 -- ============ negAdd: -(a+b) = (-a)+(-b) ============
 
-addSumNeg : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (rneg a)) b
-addSumNeg R a b = (trans (CompleteOrderedField.addComm (field R) (radd R a b) (rneg a)) (trans (sym (CompleteOrderedField.addAssoc (field R) (rneg a) a b)) (trans (cong (\z => radd R z b) (negLeft R a)) (addZeroLeft R b))))
+addSumNeg : {R : Real} -> (a b : Carrier R) -> Equal (radd R (radd R a b) (rneg a)) b
+addSumNeg {R} a b = (trans (CompleteOrderedField.addComm (field R) (radd R a b) (rneg a)) (trans (sym (CompleteOrderedField.addAssoc (field R) (rneg a) a b)) (trans (cong (\z => radd R z b) (negLeft a)) (addZeroLeft b))))
 
-negAddCancel : (R : Real) -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg a) (rneg b))) (rzero R)
-negAddCancel R a b = (trans (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg a) (rneg b))) (trans (cong (\z => radd R z (rneg b)) (addSumNeg R a b)) (CompleteOrderedField.negRight (field R) b)))
+negAddCancel : {R : Real} -> (a b : Carrier R) -> Equal (radd R (radd R a b) (radd R (rneg a) (rneg b))) (rzero R)
+negAddCancel {R} a b = (trans (sym (CompleteOrderedField.addAssoc (field R) (radd R a b) (rneg a) (rneg b))) (trans (cong (\z => radd R z (rneg b)) (addSumNeg a b)) (CompleteOrderedField.negRight (field R) b)))
 
-negUnique : (R : Real) -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg a)
-negUnique R a b h = (trans (sym (addZeroLeft R b)) (trans (cong (\z => radd R z b) (sym (negLeft R a))) (trans (CompleteOrderedField.addAssoc (field R) (rneg a) a b) (trans (cong (\z => radd R (rneg a) z) h) (CompleteOrderedField.addZeroRight (field R) (rneg a))))))
+negUnique : {R : Real} -> (a b : Carrier R) -> Equal (radd R a b) (rzero R) -> Equal b (rneg a)
+negUnique {R} a b h = (trans (sym (addZeroLeft b)) (trans (cong (\z => radd R z b) (sym (negLeft a))) (trans (CompleteOrderedField.addAssoc (field R) (rneg a) a b) (trans (cong (\z => radd R (rneg a) z) h) (CompleteOrderedField.addZeroRight (field R) (rneg a))))))
 
-negAdd : (R : Real) -> (a b : Carrier R) -> Equal (rneg (radd R a b)) (radd R (rneg a) (rneg b))
-negAdd R a b = sym (negUnique R (radd R a b) (radd R (rneg a) (rneg b)) (negAddCancel R a b))
+negAdd : {R : Real} -> (a b : Carrier R) -> Equal (rneg (radd R a b)) (radd R (rneg a) (rneg b))
+negAdd {R} a b = sym (negUnique (radd R a b) (radd R (rneg a) (rneg b)) (negAddCancel a b))
 
 -- ============ subAddSub ============
 
-fourTermRearrange : (R : Real) -> (a b c d : Carrier R) -> Equal (radd R (radd R a b) (radd R c d)) (radd R (radd R a c) (radd R b d))
-fourTermRearrange R a b c d = (trans (CompleteOrderedField.addAssoc (field R) a b (radd R c d)) (trans (cong (\z => radd R a z) (trans (CompleteOrderedField.addComm (field R) b (radd R c d)) (trans (CompleteOrderedField.addAssoc (field R) c d b) (cong (\z => radd R c z) (CompleteOrderedField.addComm (field R) d b))))) (sym (CompleteOrderedField.addAssoc (field R) a c (radd R b d)))))
+fourTermRearrange : {R : Real} -> (a b c d : Carrier R) -> Equal (radd R (radd R a b) (radd R c d)) (radd R (radd R a c) (radd R b d))
+fourTermRearrange {R} a b c d = (trans (CompleteOrderedField.addAssoc (field R) a b (radd R c d)) (trans (cong (\z => radd R a z) (trans (CompleteOrderedField.addComm (field R) b (radd R c d)) (trans (CompleteOrderedField.addAssoc (field R) c d b) (cong (\z => radd R c z) (CompleteOrderedField.addComm (field R) d b))))) (sym (CompleteOrderedField.addAssoc (field R) a c (radd R b d)))))
 
-subAddSub : (R : Real) -> (a b c d : Carrier R) -> Equal (rsub (radd R a b) (radd R c d)) (radd R (rsub a c) (rsub b d))
-subAddSub R a b c d = trans (cong (\z => radd R (radd R a b) z) (negAdd R c d)) (fourTermRearrange R a b (rneg c) (rneg d))
+subAddSub : {R : Real} -> (a b c d : Carrier R) -> Equal (rsub (radd R a b) (radd R c d)) (radd R (rsub a c) (rsub b d))
+subAddSub {R} a b c d = trans (cong (\z => radd R (radd R a b) z) (negAdd c d)) (fourTermRearrange a b (rneg c) (rneg d))
 
 -- ============ Limit definition ============
 
-EpsDeltaWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness R f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
+EpsDeltaWitness : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
+EpsDeltaWitness {R} f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
 
-record Limit (R : Real) (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
-  eps_delta : (eps : Carrier R) -> rlt (rzero R) eps -> DPair (Carrier R) (EpsDeltaWitness R f x0 L eps)
+record Limit {R : Real} (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
+  eps_delta : (eps : Carrier R) -> rlt (rzero R) eps -> DPair (Carrier R) (EpsDeltaWitness f x0 L eps)
 
 -- ============ limitAdd proof (factored into small helpers) ============
 
 -- Core estimate: |f(x)-L| < he, |g(x)-M| < he => |(f+g)(x)-(L+M)| < he+he
 -- Uses: subAddSub + absTriangle + addLtBoth + leLtTrans
-coreEstimate : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M he : Carrier R) -> (x : Carrier R) -> rlt (rabs (rsub (f x) L)) he -> rlt (rabs (rsub (g x) M)) he -> rlt (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (radd R he he)
-coreEstimate R f g x0 L M he x hfx hgx = (leLtTrans R (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (radd R (rabs (rsub (f x) L)) (rabs (rsub (g x) M))) (radd R he he) (replace (\z => rle (rabs z) (radd R (rabs (rsub (f x) L)) (rabs (rsub (g x) M)))) (sym (subAddSub R (f x) (g x) L M)) (CompleteOrderedField.absTriangle (field R) (rsub (f x) L) (rsub (g x) M))) (addLtBoth R (rabs (rsub (f x) L)) he (rabs (rsub (g x) M)) he hfx hgx))
+coreEstimate : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M he : Carrier R) -> (x : Carrier R) -> rlt (rabs (rsub (f x) L)) he -> rlt (rabs (rsub (g x) M)) he -> rlt (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (radd R he he)
+coreEstimate {R} f g x0 L M he x hfx hgx = (leLtTrans (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (radd R (rabs (rsub (f x) L)) (rabs (rsub (g x) M))) (radd R he he) (replace (\z => rle (rabs z) (radd R (rabs (rsub (f x) L)) (rabs (rsub (g x) M)))) (sym (subAddSub (f x) (g x) L M)) (absTriangle (rsub (f x) L) (rsub (g x) M))) (addLtBoth (rabs (rsub (f x) L)) he (rabs (rsub (g x) M)) he hfx hgx))
 
 -- Convert < (he+he) to < eps via halfMulEps
-convertEps : (R : Real) -> (eps v : Carrier R) -> rlt v (radd R (rmul (rhalf R) eps) (rmul (rhalf R) eps)) -> rlt v eps
-convertEps R eps v hlt = replace (\z => rlt v z) (halfMulEps R eps) hlt
+convertEps : {R : Real} -> (eps v : Carrier R) -> rlt v (radd R (rmul (rhalf R) eps) (rmul (rhalf R) eps)) -> rlt v eps
+convertEps {R} eps v hlt = replace (\z => rlt v z) (halfMulEps eps) hlt
 
 -- Bound function (left case: d1 <= d2, use d1)
-boundFnLeft : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rle d1 d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> (x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (radd R (f x) (g x)) (radd R L M))) eps
-boundFnLeft R f g x0 L M eps d1 d2 hle hf hg x hx0 hxd = (convertEps R eps (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul (rhalf R) eps) x (hf x hx0 hxd) (hg x hx0 (ltLeTrans R (rabs (rsub x x0)) d1 d2 hxd hle))))
+boundFnLeft : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rle d1 d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> (x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (radd R (f x) (g x)) (radd R L M))) eps
+boundFnLeft {R} f g x0 L M eps d1 d2 hle hf hg x hx0 hxd = (convertEps eps (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (hf x hx0 hxd) (hg x hx0 (ltLeTrans (rabs (rsub x x0)) d1 d2 hxd hle))))
 
 -- Bound function (right case: d2 <= d1, use d2)
-boundFnRight : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rle d2 d1 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> (x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (radd R (f x) (g x)) (radd R L M))) eps
-boundFnRight R f g x0 L M eps d1 d2 hle hf hg x hx0 hxd = (convertEps R eps (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (coreEstimate R f g x0 L M (rmul (rhalf R) eps) x (hf x hx0 (ltLeTrans R (rabs (rsub x x0)) d2 d1 hxd hle)) (hg x hx0 hxd)))
+boundFnRight : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rle d2 d1 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> (x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (radd R (f x) (g x)) (radd R L M))) eps
+boundFnRight {R} f g x0 L M eps d1 d2 hle hf hg x hx0 hxd = (convertEps eps (rabs (rsub (radd R (f x) (g x)) (radd R L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (hf x hx0 (ltLeTrans (rabs (rsub x x0)) d2 d1 hxd hle)) (hg x hx0 hxd)))
 
 -- Witness (left case)
-witnessLeft : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d1 -> rle d1 d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> EpsDeltaWitness R (\x => radd R (f x) (g x)) x0 (radd R L M) eps d1
-witnessLeft R f g x0 L M eps d1 d2 hd1 hle hf hg = MkPair hd1 (boundFnLeft R f g x0 L M eps d1 d2 hle hf hg)
+witnessLeft : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d1 -> rle d1 d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> EpsDeltaWitness (\x => radd R (f x) (g x)) x0 (radd R L M) eps d1
+witnessLeft {R} f g x0 L M eps d1 d2 hd1 hle hf hg = MkPair hd1 (boundFnLeft f g x0 L M eps d1 d2 hle hf hg)
 
 -- Witness (right case)
-witnessRight : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d2 -> rle d2 d1 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> EpsDeltaWitness R (\x => radd R (f x) (g x)) x0 (radd R L M) eps d2
-witnessRight R f g x0 L M eps d1 d2 hd2 hle hf hg = MkPair hd2 (boundFnRight R f g x0 L M eps d1 d2 hle hf hg)
+witnessRight : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d2 -> rle d2 d1 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> EpsDeltaWitness (\x => radd R (f x) (g x)) x0 (radd R L M) eps d2
+witnessRight {R} f g x0 L M eps d1 d2 hd2 hle hf hg = MkPair hd2 (boundFnRight f g x0 L M eps d1 d2 hle hf hg)
 
 -- Pick delta using leTotal
-pickDeltaLeft : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d1 -> rle d1 d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> DPair (Carrier R) (EpsDeltaWitness R (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-pickDeltaLeft R f g x0 L M eps d1 d2 hd1 hle hf hg = MkDPair d1 (witnessLeft R f g x0 L M eps d1 d2 hd1 hle hf hg)
+pickDeltaLeft : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d1 -> rle d1 d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> DPair (Carrier R) (EpsDeltaWitness (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
+pickDeltaLeft {R} f g x0 L M eps d1 d2 hd1 hle hf hg = MkDPair d1 (witnessLeft f g x0 L M eps d1 d2 hd1 hle hf hg)
 
-pickDeltaRight : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d2 -> rle d2 d1 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> DPair (Carrier R) (EpsDeltaWitness R (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-pickDeltaRight R f g x0 L M eps d1 d2 hd2 hle hf hg = MkDPair d2 (witnessRight R f g x0 L M eps d1 d2 hd2 hle hf hg)
+pickDeltaRight : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d2 -> rle d2 d1 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> DPair (Carrier R) (EpsDeltaWitness (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
+pickDeltaRight {R} f g x0 L M eps d1 d2 hd2 hle hf hg = MkDPair d2 (witnessRight f g x0 L M eps d1 d2 hd2 hle hf hg)
 
-pickDelta : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d1 -> rlt (rzero R) d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> Either (rle d1 d2) (rle d2 d1) -> DPair (Carrier R) (EpsDeltaWitness R (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-pickDelta R f g x0 L M eps d1 d2 hd1 hd2 hf hg tot = eitherElim (\hle => pickDeltaLeft R f g x0 L M eps d1 d2 hd1 hle hf hg) (\hle => pickDeltaRight R f g x0 L M eps d1 d2 hd2 hle hf hg) tot
+pickDelta : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M eps d1 d2 : Carrier R) -> rlt (rzero R) d1 -> rlt (rzero R) d2 -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d1 -> rlt (rabs (rsub (f x) L)) (rmul (rhalf R) eps)) -> ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) d2 -> rlt (rabs (rsub (g x) M)) (rmul (rhalf R) eps)) -> Either (rle d1 d2) (rle d2 d1) -> DPair (Carrier R) (EpsDeltaWitness (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
+pickDelta {R} f g x0 L M eps d1 d2 hd1 hd2 hf hg tot = eitherElim (\hle => pickDeltaLeft f g x0 L M eps d1 d2 hd1 hle hf hg) (\hle => pickDeltaRight f g x0 L M eps d1 d2 hd2 hle hf hg) tot
 
 -- The eps-delta function for the sum limit
-limitAddEpsDelta : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> (eps : Carrier R) -> rlt (rzero R) eps -> DPair (Carrier R) (EpsDeltaWitness R (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
-limitAddEpsDelta R f g x0 L M limF limG eps heps = (pickDelta R f g x0 L M eps (DPair.fst (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos R eps heps))) (Pair.fst (DPair.snd (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos R eps heps)))) (Pair.fst (DPair.snd (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos R eps heps)))) (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos R eps heps)))) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos R eps heps)))) (CompleteOrderedField.leTotal (field R) (DPair.fst (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos R eps heps))) (DPair.fst (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos R eps heps)))))
+limitAddEpsDelta : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit f x0 L -> Limit g x0 M -> (eps : Carrier R) -> rlt (rzero R) eps -> DPair (Carrier R) (EpsDeltaWitness (\x => radd R (f x) (g x)) x0 (radd R L M) eps)
+limitAddEpsDelta {R} f g x0 L M limF limG eps heps = (pickDelta f g x0 L M eps (DPair.fst (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps))) (DPair.fst (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps))) (Pair.fst (DPair.snd (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)))) (Pair.fst (DPair.snd (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)))) (Pair.snd (DPair.snd (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)))) (Pair.snd (DPair.snd (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)))) (CompleteOrderedField.leTotal (field R) (DPair.fst (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps))) (DPair.fst (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)))))
 
 -- ============ THE THEOREM ============
 
-limitAdd : (R : Real) -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit R f x0 L -> Limit R g x0 M -> Limit R (\x => radd R (f x) (g x)) x0 (radd R L M)
-limitAdd R f g x0 L M limF limG = MkLimit (limitAddEpsDelta R f g x0 L M limF limG)
+limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit (\x => radd R (f x) (g x)) x0 (radd R L M)
+limitAdd {R} f g x0 L M limF limG = MkLimit (limitAddEpsDelta f g x0 L M limF limG)

@@ -1,0 +1,28 @@
+@test success
+@name "Record projection iota-reduction: 3-field record returns correct fields"
+
+record Triple (A B C : Type) where
+  constructor MkTriple
+  first : A
+  second : B
+  third : C
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+myTriple : Triple Nat Nat Nat
+myTriple = MkTriple Zero (Succ Zero) (Succ (Succ Zero))
+
+-- Each projection must return the correct field
+testFirst : Equal (Triple.first myTriple) Zero
+testFirst = refl
+
+testSecond : Equal (Triple.second myTriple) (Succ Zero)
+testSecond = refl
+
+testThird : Equal (Triple.third myTriple) (Succ (Succ Zero))
+testThird = refl

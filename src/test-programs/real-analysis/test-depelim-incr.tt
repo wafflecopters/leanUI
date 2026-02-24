@@ -1,0 +1,68 @@
+@test success
+@name "Dependent dpairElim incremental"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim f g (Left a) = f a
+eitherElim f g (Right b) = g b
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+dpairElim : {A : Type} -> {B : A -> Type} -> (C : DPair A B -> Type) -> ((x : A) -> (y : B x) -> C (MkDPair x y)) -> (d : DPair A B) -> C d
+dpairElim C f (MkDPair a b) = f a b
+
+record OF (A : Type) : Type 1 where
+  add : A -> A -> A
+  zero : A
+  neg : A -> A
+  le : A -> A -> Type
+  leTotal : (a b : A) -> Either (le a b) (le b a)
+  leRefl : (a : A) -> le a a
+
+R : Type 1
+R = DPair (Type) OF
+
+Carrier : R -> Type
+Carrier r = DPair.fst r
+
+fld : (r : R) -> OF (Carrier r)
+fld r = DPair.snd r
+
+rle : {r : R} -> Carrier r -> Carrier r -> Type
+rle {r} = OF.le (fld r)
+
+rneg : {r : R} -> Carrier r -> Carrier r
+rneg {r} = OF.neg (fld r)
+
+rzero : (r : R) -> Carrier r
+rzero r = OF.zero (fld r)
+
+rabsData : {r : R} -> (a : Carrier r) -> DPair (Carrier r) (\v => Either (Pair (Equal v a) (rle (rzero r) a)) (Pair (Equal v (rneg a)) (rle a (rzero r))))
+rabsData {r} a = (eitherElim (\h => MkDPair a (Left (MkPair refl h))) (\h => MkDPair (rneg a) (Right (MkPair refl h))) (OF.leTotal (fld r) (rzero r) a))
+
+rabs : {r : R} -> Carrier r -> Carrier r
+rabs {r} a = DPair.fst (rabsData a)
+
+-- Test: just dpairElim with the rabsData, without the motive
+testDpairElim : {r : R} -> (a : Carrier r) -> Carrier r
+testDpairElim {r} a = (dpairElim (\d => Carrier r) (\v ev => v) (rabsData a))

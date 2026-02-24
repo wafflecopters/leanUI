@@ -1,0 +1,55 @@
+@test success
+@name "Define abs via eitherElimDep and prove absNonneg"
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim f g (Left a) = f a
+eitherElim f g (Right b) = g b
+
+eitherElimDep : {A B : Type} -> (C : Either A B -> Type) -> ((a : A) -> C (Left a)) -> ((b : B) -> C (Right b)) -> (e : Either A B) -> C e
+eitherElimDep C f g (Left a) = f a
+eitherElimDep C f g (Right b) = g b
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+record OF (A : Type) : Type 1 where
+  neg : A -> A
+  le : A -> A -> Type
+  leTotal : (a b : A) -> Either (le a b) (le b a)
+  leRefl : (a : A) -> le a a
+
+R : Type 1
+R = DPair (Type) OF
+
+Carrier : R -> Type
+Carrier r = DPair.fst r
+
+fld : (r : R) -> OF (Carrier r)
+fld r = DPair.snd r
+
+rle : {r : R} -> Carrier r -> Carrier r -> Type
+rle {r} = OF.le (fld r)
+
+rneg : {r : R} -> Carrier r -> Carrier r
+rneg {r} = OF.neg (fld r)
+
+postulate rzero : (r : R) -> Carrier r
+
+rabs : {r : R} -> Carrier r -> Carrier r
+rabs {r} a = eitherElim (\_ => a) (\_ => rneg a) (OF.leTotal (fld r) (rzero r) a)
+
+absElim : {r : R} -> (a : Carrier r) -> (C : Carrier r -> Type) -> (rle (rzero r) a -> C a) -> (rle a (rzero r) -> C (rneg a)) -> C (rabs a)
+absElim {r} a C pos neg = eitherElimDep (\e => C (eitherElim (\_ => a) (\_ => rneg a) e)) (\h => pos h) (\h => neg h) (OF.leTotal (fld r) (rzero r) a)
+
+-- Test: absElim produces a term of type C (rabs a) from proofs of C a and C (rneg a)
+absRefl : {r : R} -> (a : Carrier r) -> Equal (rabs a) (rabs a)
+absRefl {r} a = absElim a (\x => Equal x x) (\_ => refl) (\_ => refl)

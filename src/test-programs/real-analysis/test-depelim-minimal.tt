@@ -1,0 +1,10 @@
+@test success
+@name "Dependent dpairElim minimal"
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+dpairElim : {A : Type} -> {B : A -> Type} -> (C : DPair A B -> Type) -> ((x : A) -> (y : B x) -> C (MkDPair x y)) -> (d : DPair A B) -> C d
+dpairElim C f (MkDPair a b) = f a b
