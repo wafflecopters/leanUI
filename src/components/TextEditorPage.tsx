@@ -996,7 +996,8 @@ export function TextEditorPage() {
     const decls: import('../compiler/compile').CompiledDeclaration[] = [];
     for (const block of compileResult.blocks) {
       for (const d of block.declarations) {
-        if (!d.isWithAuxiliary) {
+        // TODO: temporary filter — only show limitAdd for WYSIWYG development
+        if (!d.isWithAuxiliary && d.name === 'limitAdd') {
           decls.push(d);
         }
       }

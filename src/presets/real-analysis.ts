@@ -450,6 +450,7 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   | Right hle =>
     exact (MkDPair (DPair.fst dG) (MkPair (Pair.fst (DPair.snd dG)) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 (ltLeTrans (rabs (rsub x x0)) (DPair.fst dG) (DPair.fst dF) hxd hle)) (Pair.snd (DPair.snd dG) x hx0 hxd)))))
 
+{-
 ------------------------------------------------------------
 -- DERIVATIVES
 ------------------------------------------------------------
@@ -868,4 +869,5 @@ derivChain : {R : Real} -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier
   have hSum := limitAdd (chainTermA g f x0 Lg) (\\x => rmul Lg (diffQuot f x0 x)) x0 (rzero R) (rmul Lg Lf) hA hScale
   -- Rewrite 0 + Lg*Lf = Lg*Lf
   exact replace (\\z => Limit (\\x => radd (chainTermA g f x0 Lg x) (rmul Lg (diffQuot f x0 x))) x0 z) (addZeroLeft (rmul Lg Lf)) hSum
+-}
 `;
