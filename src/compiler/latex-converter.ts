@@ -2132,9 +2132,25 @@ function stripLetsToBlocks(
     if (cl) {
       ctx = [LATEX_PREFIX + cl, ...ctx];
     } else {
-      const val = termToLatex(current.binderKind.defVal, ctx, notations);
+      // Flatten inner lets from defVal (e.g., suffices body containing have chains)
+      const ctxBeforeFlatten = ctx;
+      let defVal = current.binderKind.defVal;
+      while (defVal.tag === 'Binder' && defVal.binderKind.tag === 'BLet') {
+        const innerCl = isCarrierType(defVal.domain);
+        if (innerCl) {
+          ctx = [LATEX_PREFIX + innerCl, ...ctx];
+        } else {
+          const innerVal = describeJustification(defVal.binderKind.defVal, ctx, notations);
+          blocks.push({ kind: 'rule', latex: `${indent}\\text{Let } ${renderVarName(defVal.name)} := ${innerVal}\\text{.}` });
+          ctx = [defVal.name, ...ctx];
+        }
+        defVal = defVal.body;
+      }
+      // defVal is now the innermost body (actual value of the outer let)
+      const val = describeJustification(defVal, ctx, notations);
       blocks.push({ kind: 'rule', latex: `${indent}\\text{Let } ${renderVarName(current.name)} := ${val}\\text{.}` });
-      ctx = [current.name, ...ctx];
+      // Restore context: body only sees the outer let name, not inner let names
+      ctx = [current.name, ...ctxBeforeFlatten];
     }
     current = current.body;
   }
