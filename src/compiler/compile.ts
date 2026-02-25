@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -24,6 +24,7 @@ import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
 import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
+import { BlockContributions, IncrementalCache, extractBlockDepInfo, computeRecheckSet } from './incremental';
 import { whnf, countPiBindersWhnf } from './whnf';
 import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
@@ -5294,6 +5295,289 @@ function processTermDeclaration(
   };
 }
 
+// ============================================================================
+// Single-block compilation (extracted for incremental reuse)
+// ============================================================================
+
+interface CompileOneBlockResult {
+  compiled: CompiledBlock;
+  newDefinitions: DefinitionsMap;
+  newSymbolContext: SymbolContext;
+  newConstructorParamNames: ConstructorParamNames;
+  checkErrorCount: number;
+  nameErrorCount: number;
+}
+
+/**
+ * Compile a single parsed block given the accumulated state from prior blocks.
+ * This is the extracted inner loop of compileTTFromText.
+ */
+function compileOneBlock(
+  block: ParsedBlock,
+  blockIndex: number,
+  definitions: DefinitionsMap,
+  symbolContext: SymbolContext,
+  constructorParamNames: ConstructorParamNames,
+  assumeK: boolean,
+  options?: CompileOptions
+): CompileOneBlockResult {
+  let checkErrorCount = 0;
+  let nameErrorCount = 0;
+  // Clone constructorParamNames so we don't mutate caller's copy
+  constructorParamNames = new Map(constructorParamNames);
+
+  // Handle comment blocks
+  if (block.kind === 'comment') {
+    return {
+      compiled: {
+        blockIndex, sourceLines: block.sourceLines, startLine: block.startLine,
+        parseSuccess: true, parseErrors: [],
+        nameResolutionSuccess: true, nameResolutionErrors: [],
+        declarations: [], isComment: true
+      },
+      newDefinitions: definitions, newSymbolContext: symbolContext,
+      newConstructorParamNames: constructorParamNames,
+      checkErrorCount: 0, nameErrorCount: 0,
+    };
+  }
+
+  // Handle parse error blocks
+  if (block.kind === 'error') {
+    return {
+      compiled: {
+        blockIndex, sourceLines: block.sourceLines, startLine: block.startLine,
+        parseSuccess: false, parseErrors: block.errors,
+        nameResolutionSuccess: true, nameResolutionErrors: [],
+        declarations: [], isComment: false
+      },
+      newDefinitions: definitions, newSymbolContext: symbolContext,
+      newConstructorParamNames: constructorParamNames,
+      checkErrorCount: 0, nameErrorCount: 0,
+    };
+  }
+
+  // Process declarations in this block
+  const compiledDecls: CompiledDeclaration[] = [];
+  const blockNameErrors: NameResolutionErrorWithRange[] = [];
+
+  for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
+    const origDecl = block.declarations[declIndex];
+    const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine, block.posOffset);
+
+    // Name resolution for this declaration (using current symbol context)
+    const nameResult = validateDeclarations([origDecl], symbolContext);
+    if (nameResult.success) {
+      symbolContext = nameResult.value;
+    } else {
+      for (const err of nameResult.errors) {
+        blockNameErrors.push({
+          message: err.message,
+          symbolName: err.symbolName,
+          path: serializeIndexPath(err.path),
+          declarationIndex: declIndex
+        });
+        nameErrorCount++;
+      }
+      if (origDecl.name) {
+        symbolContext = new Set([...symbolContext, origDecl.name]);
+      }
+      if (origDecl.constructors) {
+        for (const ctor of origDecl.constructors) {
+          symbolContext = new Set([...symbolContext, ctor.name]);
+        }
+      }
+    }
+
+    // Pattern resolution for this declaration (using current symbol context)
+    const [resolvedDecl] = resolvePatternsInDeclarations([origDecl], symbolContext);
+
+    // Save original surface value before desugaring (for semantic highlighting)
+    const originalSurfaceValue = resolvedDecl.value;
+
+    // Desugar with-clauses (may produce auxiliary declarations)
+    const desugaredDecls = desugarWithClauses([resolvedDecl]);
+    const mainDecl = desugaredDecls[0];
+    const auxiliaryDecls = desugaredDecls.slice(1);
+
+    if (auxiliaryDecls.length > 0 && originalSurfaceValue) {
+      mainDecl.originalSurfaceValue = originalSurfaceValue;
+    }
+
+    // Register all auxiliary declarations in symbol context
+    for (const auxDecl of auxiliaryDecls) {
+      const auxNameResult = validateDeclarations([auxDecl], symbolContext);
+      if (auxNameResult.success) {
+        symbolContext = auxNameResult.value;
+      }
+    }
+
+    // Pre-register the main function's type signature if there are auxiliaries
+    if (auxiliaryDecls.length > 0 && mainDecl.kind === 'def' && mainDecl.type && mainDecl.name) {
+      try {
+        const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
+        const appNamedArgLookup = createNamedArgInfoLookup(definitions);
+        const elabMap: ElabMap = new Map();
+        const mainKernelType = elabToKernelWithMap(mainDecl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
+        const mainNamedArgMap = extractNamedArgMap(mainDecl.type);
+        const mainArgNamedArgInfos = extractArgNamedArgInfos(mainDecl.type);
+        definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined, mainNamedArgMap.size > 0 ? mainNamedArgMap : undefined, mainArgNamedArgInfos.size > 0 ? mainArgNamedArgInfos : undefined);
+      } catch (_e) {
+        // If type elaboration fails, continue - error will be caught later
+      }
+    }
+
+    // Process auxiliary declarations FIRST
+    const failedAuxNames = new Set<string>();
+    const auxErrorsForMain: TCEnvError[] = [];
+    const auxElabMapForMain: ElabMap = new Map();
+    const compiledAuxiliaries: CompiledDeclaration[] = [];
+
+    for (const auxDecl of auxiliaryDecls) {
+      const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount, newScrutineeCount: auxDecl.newScrutineeCount, assumeK });
+      remapWithClauseElabMap(result.compiled, sourceMap, auxDecl.withScrutineeCount ?? 0);
+      result.compiled.isWithAuxiliary = true;
+      compiledAuxiliaries.push(result.compiled);
+      compiledDecls.push(result.compiled);
+      if (result.success) {
+        definitions = result.newDefinitions;
+      } else {
+        if (auxDecl.name) failedAuxNames.add(auxDecl.name);
+        const mainName = mainDecl.name ?? '';
+        for (const err of result.compiled.checkErrors) {
+          if (auxDecl.name && mainName && err.message.includes(auxDecl.name)) {
+            auxErrorsForMain.push(TCEnvError.create(err.message.split(auxDecl.name).join(mainName), err.env));
+          } else {
+            auxErrorsForMain.push(err);
+          }
+        }
+        if (result.compiled.elabMap) {
+          for (const [key, value] of result.compiled.elabMap) {
+            auxElabMapForMain.set(key, value);
+          }
+        }
+      }
+      checkErrorCount += result.errorCount;
+    }
+
+    // Now process the main declaration
+    if (mainDecl.kind === 'inductive') {
+      const result = processInductiveDeclaration(mainDecl, sourceMap, definitions);
+      compiledDecls.push(result.compiled);
+      if (result.success) {
+        definitions = result.newDefinitions;
+        if (result.compiled.kernelConstructors) {
+          const newCtorParamNames = buildConstructorParamNames(result.compiled.kernelConstructors);
+          for (const [ctorName, paramInfo] of newCtorParamNames) {
+            constructorParamNames.set(ctorName, paramInfo);
+          }
+          setConstructorParamNames(constructorParamNames);
+        }
+        if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
+          for (const ctor of result.compiled.kernelConstructors) {
+            const recheckErr = recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+            if (recheckErr) {
+              const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+              result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+              result.compiled.checkSuccess = false;
+              checkErrorCount++;
+            }
+          }
+        }
+      }
+      checkErrorCount += result.errorCount;
+    } else if (mainDecl.kind === 'record') {
+      const result = processRecordDeclaration(mainDecl, sourceMap, definitions);
+      compiledDecls.push(result.compiled);
+      if (result.success) {
+        definitions = result.newDefinitions;
+        if (result.compiled.kernelConstructors) {
+          const newCtorParamNames = buildConstructorParamNames(result.compiled.kernelConstructors);
+          for (const [ctorName, paramInfo] of newCtorParamNames) {
+            constructorParamNames.set(ctorName, paramInfo);
+          }
+          setConstructorParamNames(constructorParamNames);
+        }
+        if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
+          for (const ctor of result.compiled.kernelConstructors) {
+            const recheckErr = recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
+            if (recheckErr) {
+              const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+              result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+              result.compiled.checkSuccess = false;
+              checkErrorCount++;
+            }
+          }
+        }
+      }
+      checkErrorCount += result.errorCount;
+    } else {
+      const result = processTermDeclaration(mainDecl, sourceMap, definitions, { assumeK });
+      if (auxiliaryDecls.length > 0) {
+        remapWithScrutineeInMainElabMap(result.compiled, sourceMap);
+        for (const auxCompiled of compiledAuxiliaries) {
+          mergeAuxTypeInfoIntoMain(result.compiled, auxCompiled);
+        }
+      }
+      if (failedAuxNames.size > 0) {
+        const originalCount = result.compiled.checkErrors.length;
+        result.compiled.checkErrors = result.compiled.checkErrors.filter(err => {
+          for (const auxName of failedAuxNames) {
+            if (err.message.includes(`Type definition not found: ${auxName}`)) return false;
+          }
+          return true;
+        });
+        checkErrorCount -= (originalCount - result.compiled.checkErrors.length);
+      }
+      if (auxErrorsForMain.length > 0) {
+        result.compiled.withClauseErrors = auxErrorsForMain;
+        if (auxElabMapForMain.size > 0) {
+          result.compiled.withClauseElabMap = auxElabMapForMain;
+        }
+      }
+      compiledDecls.push(result.compiled);
+      if (result.success) {
+        definitions = result.newDefinitions;
+        if (options?.recheckZonkedTerms && result.compiled.kernelType) {
+          const recheckErr = recheckZonkedTerm(result.compiled.kernelType, definitions, `${mainDecl.name} type signature`);
+          if (recheckErr) {
+            const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+            result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+            result.compiled.checkSuccess = false;
+            checkErrorCount++;
+          }
+        }
+        if (options?.recheckZonkedTerms && result.compiled.kernelValue) {
+          const recheckErr = recheckZonkedTerm(result.compiled.kernelValue, definitions, `${mainDecl.name} value`);
+          if (recheckErr) {
+            const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
+            result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
+            result.compiled.checkSuccess = false;
+            checkErrorCount++;
+          }
+        }
+      }
+      checkErrorCount += result.errorCount;
+    }
+  }
+
+  return {
+    compiled: {
+      blockIndex, sourceLines: block.sourceLines, startLine: block.startLine,
+      parseSuccess: true, parseErrors: [],
+      nameResolutionSuccess: blockNameErrors.length === 0,
+      nameResolutionErrors: blockNameErrors,
+      declarations: compiledDecls, isComment: false
+    },
+    newDefinitions: definitions, newSymbolContext: symbolContext,
+    newConstructorParamNames: constructorParamNames,
+    checkErrorCount, nameErrorCount,
+  };
+}
+
+// ============================================================================
+// Full compilation
+// ============================================================================
+
 /**
  * Compile TT source code to elaborated kernel terms.
  *
@@ -5336,296 +5620,13 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
 
   for (let blockIndex = 0; blockIndex < parseResult.blocks.length; blockIndex++) {
     const block = parseResult.blocks[blockIndex];
-
-    // Handle comment blocks
-    if (block.kind === 'comment') {
-      compiledBlocks.push({
-        blockIndex,
-        sourceLines: block.sourceLines,
-        startLine: block.startLine,
-        parseSuccess: true,
-        parseErrors: [],
-        nameResolutionSuccess: true,
-        nameResolutionErrors: [],
-        declarations: [],
-        isComment: true
-      });
-      continue;
-    }
-
-    // Handle parse error blocks
-    if (block.kind === 'error') {
-      compiledBlocks.push({
-        blockIndex,
-        sourceLines: block.sourceLines,
-        startLine: block.startLine,
-        parseSuccess: false,
-        parseErrors: block.errors,
-        nameResolutionSuccess: true,
-        nameResolutionErrors: [],
-        declarations: [],
-        isComment: false
-      });
-      continue;
-    }
-
-    // Process declarations in this block
-    const compiledDecls: CompiledDeclaration[] = [];
-    const blockNameErrors: NameResolutionErrorWithRange[] = [];
-
-    for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
-      const origDecl = block.declarations[declIndex];
-      const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine, block.posOffset);
-
-      // Name resolution for this declaration (using current symbol context)
-      const nameResult = validateDeclarations([origDecl], symbolContext);
-      if (nameResult.success) {
-        symbolContext = nameResult.value;
-      } else {
-        // Collect name resolution errors with paths for source range lookup
-        for (const err of nameResult.errors) {
-          blockNameErrors.push({
-            message: err.message,
-            symbolName: err.symbolName,
-            path: serializeIndexPath(err.path),
-            declarationIndex: declIndex
-          });
-          totalNameErrors++;
-        }
-        // Still add the declaration name (and constructors) to context to avoid
-        // cascading "undefined symbol" errors in subsequent declarations.
-        if (origDecl.name) {
-          symbolContext = new Set([...symbolContext, origDecl.name]);
-        }
-        if (origDecl.constructors) {
-          for (const ctor of origDecl.constructors) {
-            symbolContext = new Set([...symbolContext, ctor.name]);
-          }
-        }
-      }
-
-      // Pattern resolution for this declaration (using current symbol context)
-      const [resolvedDecl] = resolvePatternsInDeclarations([origDecl], symbolContext);
-
-      // Save original surface value before desugaring (for semantic highlighting)
-      // After desugaring, WithClause is replaced by a call to the auxiliary function,
-      // losing the original source structure needed for syntax highlighting.
-      const originalSurfaceValue = resolvedDecl.value;
-
-      // Desugar with-clauses (may produce auxiliary declarations)
-      const desugaredDecls = desugarWithClauses([resolvedDecl]);
-
-      // Separate main declaration from auxiliaries
-      // Auxiliaries must be processed FIRST because the main declaration references them
-      const mainDecl = desugaredDecls[0];
-      const auxiliaryDecls = desugaredDecls.slice(1);
-
-      // Preserve original surface value on main declaration for semantic token extraction
-      if (auxiliaryDecls.length > 0 && originalSurfaceValue) {
-        mainDecl.originalSurfaceValue = originalSurfaceValue;
-      }
-
-      // First: register all auxiliary declarations in symbol context
-      for (const auxDecl of auxiliaryDecls) {
-        const auxNameResult = validateDeclarations([auxDecl], symbolContext);
-        if (auxNameResult.success) {
-          symbolContext = auxNameResult.value;
-        }
-      }
-
-      // Pre-register the main function's type signature if there are auxiliaries
-      // This allows auxiliaries to make recursive calls to the main function
-      if (auxiliaryDecls.length > 0 && mainDecl.kind === 'def' && mainDecl.type && mainDecl.name) {
-        try {
-          const typePath: IndexPath = [{ kind: 'field', name: 'type' }];
-          const appNamedArgLookup = createNamedArgInfoLookup(definitions);
-          const elabMap: ElabMap = new Map();
-          const mainKernelType = elabToKernelWithMap(mainDecl.type, elabMap, typePath, typePath, undefined, appNamedArgLookup);
-          // Extract namedArgMap so implicit args are recognized when auxiliaries call the main function
-          const mainNamedArgMap = extractNamedArgMap(mainDecl.type);
-          const mainArgNamedArgInfos = extractArgNamedArgInfos(mainDecl.type);
-          definitions = addDefinition(definitions, mainDecl.name, mainKernelType, undefined, mainNamedArgMap.size > 0 ? mainNamedArgMap : undefined, mainArgNamedArgInfos.size > 0 ? mainArgNamedArgInfos : undefined);
-        } catch (_e) {
-          // If type elaboration fails, continue - the error will be caught when we process the main decl
-        }
-      }
-
-      // NOTE: Non-variable scrutinee types (e.g., `with f x y`) are left as Holes
-      // in the auxiliary type. The type checker solves them during clause checking
-      // via unification with constructor patterns (e.g., pattern `refl` unifies
-      // the Hole with `Equal ? ?`). This avoids a lossy kernel→surface→kernel
-      // round-trip that previously existed in resolveAuxScrutineeTypes.
-
-      // Process auxiliary declarations FIRST (so their types are available)
-      // Note: auxiliary declarations are always term definitions (kind === 'def')
-      const failedAuxNames = new Set<string>();
-      const auxErrorsForMain: TCEnvError[] = [];
-      const auxElabMapForMain: ElabMap = new Map();
-      const compiledAuxiliaries: CompiledDeclaration[] = [];
-
-      for (const auxDecl of auxiliaryDecls) {
-        const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount, newScrutineeCount: auxDecl.newScrutineeCount, assumeK });
-        // Remap elabMap so with-clause surface paths map to aux kernel paths
-        remapWithClauseElabMap(result.compiled, sourceMap, auxDecl.withScrutineeCount ?? 0);
-        result.compiled.isWithAuxiliary = true;
-        compiledAuxiliaries.push(result.compiled);
-        compiledDecls.push(result.compiled);
-        if (result.success) {
-          definitions = result.newDefinitions;
-        } else {
-          // Track failed auxiliaries so we can filter cascading errors on the main declaration
-          if (auxDecl.name) failedAuxNames.add(auxDecl.name);
-          // Promote errors to the main declaration, replacing internal auxiliary name with main name
-          const mainName = mainDecl.name ?? '';
-          for (const err of result.compiled.checkErrors) {
-            if (auxDecl.name && mainName && err.message.includes(auxDecl.name)) {
-              auxErrorsForMain.push(TCEnvError.create(err.message.split(auxDecl.name).join(mainName), err.env));
-            } else {
-              auxErrorsForMain.push(err);
-            }
-          }
-          // Collect auxiliary's elabMap for source range mapping of promoted errors
-          if (result.compiled.elabMap) {
-            for (const [key, value] of result.compiled.elabMap) {
-              auxElabMapForMain.set(key, value);
-            }
-          }
-        }
-        totalCheckErrors += result.errorCount;
-      }
-
-      // Now process the main declaration
-      if (mainDecl.kind === 'inductive') {
-        // 3. If it is an inductive type def...
-        const result = processInductiveDeclaration(mainDecl, sourceMap, definitions);
-        compiledDecls.push(result.compiled);
-
-        if (result.success) {
-          definitions = result.newDefinitions;
-          // Update constructor param names for subsequent term elaboration
-          if (result.compiled.kernelConstructors) {
-            const newCtorParamNames = buildConstructorParamNames(result.compiled.kernelConstructors);
-            for (const [ctorName, paramInfo] of newCtorParamNames) {
-              constructorParamNames.set(ctorName, paramInfo);
-            }
-            setConstructorParamNames(constructorParamNames);
-          }
-          // Recheck zonked constructor types if enabled
-          if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
-            for (const ctor of result.compiled.kernelConstructors) {
-              const recheckErr = recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
-              if (recheckErr) {
-                const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
-                result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
-                result.compiled.checkSuccess = false;
-                totalCheckErrors++;
-              }
-            }
-          }
-        }
-        totalCheckErrors += result.errorCount;
-      } else if (mainDecl.kind === 'record') {
-        // 3b. If it is a record definition...
-        const result = processRecordDeclaration(mainDecl, sourceMap, definitions);
-        compiledDecls.push(result.compiled);
-
-        if (result.success) {
-          definitions = result.newDefinitions;
-          // Update constructor param names for subsequent term elaboration
-          if (result.compiled.kernelConstructors) {
-            const newCtorParamNames = buildConstructorParamNames(result.compiled.kernelConstructors);
-            for (const [ctorName, paramInfo] of newCtorParamNames) {
-              constructorParamNames.set(ctorName, paramInfo);
-            }
-            setConstructorParamNames(constructorParamNames);
-          }
-          // Recheck zonked constructor types if enabled
-          if (options?.recheckZonkedTerms && result.compiled.kernelConstructors) {
-            for (const ctor of result.compiled.kernelConstructors) {
-              const recheckErr = recheckZonkedTerm(ctor.type, definitions, `${mainDecl.name}.${ctor.name} constructor type`);
-              if (recheckErr) {
-                const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
-                result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
-                result.compiled.checkSuccess = false;
-                totalCheckErrors++;
-              }
-            }
-          }
-        }
-        totalCheckErrors += result.errorCount;
-      } else {
-        // 4. If we are looking at a term...
-        const result = processTermDeclaration(mainDecl, sourceMap, definitions, { assumeK });
-        // For declarations with with-clauses, remap scrutinee paths in elabMap
-        // and merge auxiliary typeInfoMap entries so type-at-cursor works in with-clauses
-        if (auxiliaryDecls.length > 0) {
-          remapWithScrutineeInMainElabMap(result.compiled, sourceMap);
-          for (const auxCompiled of compiledAuxiliaries) {
-            mergeAuxTypeInfoIntoMain(result.compiled, auxCompiled);
-          }
-        }
-
-        // Filter cascading "Type definition not found" errors for failed auxiliaries
-        if (failedAuxNames.size > 0) {
-          const originalCount = result.compiled.checkErrors.length;
-          result.compiled.checkErrors = result.compiled.checkErrors.filter(err => {
-            for (const auxName of failedAuxNames) {
-              if (err.message.includes(`Type definition not found: ${auxName}`)) return false;
-            }
-            return true;
-          });
-          const suppressedCount = originalCount - result.compiled.checkErrors.length;
-          totalCheckErrors -= suppressedCount;
-        }
-
-        // Attach promoted auxiliary errors to the main declaration
-        if (auxErrorsForMain.length > 0) {
-          result.compiled.withClauseErrors = auxErrorsForMain;
-          if (auxElabMapForMain.size > 0) {
-            result.compiled.withClauseElabMap = auxElabMapForMain;
-          }
-        }
-
-        compiledDecls.push(result.compiled);
-
-        if (result.success) {
-          definitions = result.newDefinitions;
-          // Recheck zonked type signature if enabled
-          if (options?.recheckZonkedTerms && result.compiled.kernelType) {
-            const recheckErr = recheckZonkedTerm(result.compiled.kernelType, definitions, `${mainDecl.name} type signature`);
-            if (recheckErr) {
-              const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
-              result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
-              result.compiled.checkSuccess = false;
-              totalCheckErrors++;
-            }
-          }
-          // Recheck zonked value if enabled (skip Match values)
-          if (options?.recheckZonkedTerms && result.compiled.kernelValue) {
-            const recheckErr = recheckZonkedTerm(result.compiled.kernelValue, definitions, `${mainDecl.name} value`);
-            if (recheckErr) {
-              const errEnv = createTCEnv({ definitions, options: { mode: 'check' } });
-              result.compiled.checkErrors.push(TCEnvError.create(recheckErr, errEnv));
-              result.compiled.checkSuccess = false;
-              totalCheckErrors++;
-            }
-          }
-        }
-        totalCheckErrors += result.errorCount;
-      }
-    } // end for (let declIndex = 0; ...)
-
-    compiledBlocks.push({
-      blockIndex,
-      sourceLines: block.sourceLines,
-      startLine: block.startLine,
-      parseSuccess: true,
-      parseErrors: [],
-      nameResolutionSuccess: blockNameErrors.length === 0,
-      nameResolutionErrors: blockNameErrors,
-      declarations: compiledDecls,
-      isComment: false
-    });
+    const result = compileOneBlock(block, blockIndex, definitions, symbolContext, constructorParamNames, assumeK, options);
+    compiledBlocks.push(result.compiled);
+    definitions = result.newDefinitions;
+    symbolContext = result.newSymbolContext;
+    constructorParamNames = result.newConstructorParamNames;
+    totalCheckErrors += result.checkErrorCount;
+    totalNameErrors += result.nameErrorCount;
   }
 
   return {
@@ -5635,6 +5636,240 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
     totalNameErrors,
     totalCheckErrors,
     definitions
+  };
+}
+
+// ============================================================================
+// Incremental compilation
+// ============================================================================
+
+/**
+ * Compute what a single block contributed to the global state,
+ * by diffing the state before and after compilation.
+ */
+function computeBlockContributions(
+  beforeDefs: DefinitionsMap,
+  afterDefs: DefinitionsMap,
+  beforeSymbols: SymbolContext,
+  afterSymbols: SymbolContext,
+  beforeCtorParams: ConstructorParamNames,
+  afterCtorParams: ConstructorParamNames,
+): BlockContributions {
+  const terms: [string, TermDefinition][] = [];
+  for (const [name, def] of afterDefs.terms) {
+    if (!beforeDefs.terms.has(name)) {
+      terms.push([name, def]);
+    }
+  }
+
+  const inductiveTypes: [string, InductiveDefinition][] = [];
+  for (const [name, def] of afterDefs.inductiveTypes) {
+    if (!beforeDefs.inductiveTypes.has(name)) {
+      inductiveTypes.push([name, def]);
+    }
+  }
+
+  const constructorMappings: [string, string][] = [];
+  for (const [ctor, ind] of afterDefs.inductiveNameOfConstructor) {
+    if (!beforeDefs.inductiveNameOfConstructor.has(ctor)) {
+      constructorMappings.push([ctor, ind]);
+    }
+  }
+
+  const symbolNames: string[] = [];
+  for (const name of afterSymbols) {
+    if (!beforeSymbols.has(name)) {
+      symbolNames.push(name);
+    }
+  }
+
+  const constructorParamEntries: [string, unknown[]][] = [];
+  for (const [name, params] of afterCtorParams) {
+    if (!beforeCtorParams.has(name)) {
+      constructorParamEntries.push([name, params]);
+    }
+  }
+
+  return { terms, inductiveTypes, constructorMappings, symbolNames, constructorParamEntries };
+}
+
+/**
+ * Replay cached block contributions into the running state.
+ */
+function applyBlockContributions(
+  definitions: DefinitionsMap,
+  symbolContext: SymbolContext,
+  constructorParamNames: ConstructorParamNames,
+  contributions: BlockContributions,
+): {
+  definitions: DefinitionsMap;
+  symbolContext: SymbolContext;
+  constructorParamNames: ConstructorParamNames;
+} {
+  let newTerms = definitions.terms;
+  if (contributions.terms.length > 0) {
+    newTerms = new Map(newTerms);
+    for (const [name, def] of contributions.terms) {
+      newTerms.set(name, def);
+    }
+  }
+
+  let newIndTypes = definitions.inductiveTypes;
+  let newCtorMap = definitions.inductiveNameOfConstructor;
+  if (contributions.inductiveTypes.length > 0) {
+    newIndTypes = new Map(newIndTypes);
+    for (const [name, def] of contributions.inductiveTypes) {
+      newIndTypes.set(name, def);
+    }
+  }
+  if (contributions.constructorMappings.length > 0) {
+    newCtorMap = new Map(newCtorMap);
+    for (const [ctor, ind] of contributions.constructorMappings) {
+      newCtorMap.set(ctor, ind);
+    }
+  }
+
+  definitions = {
+    terms: newTerms,
+    inductiveTypes: newIndTypes,
+    inductiveNameOfConstructor: newCtorMap,
+  };
+
+  if (contributions.symbolNames.length > 0) {
+    symbolContext = new Set(symbolContext);
+    for (const name of contributions.symbolNames) {
+      symbolContext.add(name);
+    }
+  }
+
+  if (contributions.constructorParamEntries.length > 0) {
+    constructorParamNames = new Map(constructorParamNames);
+    for (const [name, params] of contributions.constructorParamEntries) {
+      constructorParamNames.set(name, params as any);
+    }
+  }
+
+  return { definitions, symbolContext, constructorParamNames };
+}
+
+/**
+ * Incrementally compile TT source, reusing cached results for unchanged blocks.
+ *
+ * Algorithm:
+ * 1. Parse the source, compare block texts with cache to find changed blocks
+ * 2. Compute the transitive recheck set via dependency DAG
+ * 3. Walk blocks in order: replay cached contributions or recompile
+ * 4. Return CompileResult (same shape as compileTTFromText)
+ *
+ * The cache is mutated in-place for efficiency (designed for useRef).
+ */
+export function compileIncrementalTT(
+  source: string,
+  cache: IncrementalCache,
+  options?: CompileOptions
+): CompileResult {
+  // Reset counters for fresh compilation
+  resetWildcardCounter();
+  resetWithCounter();
+
+  const sourceAssumeK = parseAssumeKDirective(source);
+  const assumeK = sourceAssumeK ?? options?.assumeK ?? true;
+
+  // 1. Parse the source
+  const parseResult = parseTTSource(source);
+
+  // 2. Find changed blocks by comparing source text with cache
+  const changedIndices = new Set<number>();
+  for (let i = 0; i < parseResult.blocks.length; i++) {
+    const block = parseResult.blocks[i];
+    const sourceText = block.sourceLines.join('\n');
+    const cached = cache.blocks[i];
+    if (!cached || cached.sourceText !== sourceText) {
+      changedIndices.add(i);
+    }
+  }
+
+  // 3. Compute dependency DAG and recheck set
+  const blockInfos = parseResult.blocks.map((block, i) => extractBlockDepInfo(block, i));
+  const recheckSet = computeRecheckSet(blockInfos, changedIndices);
+
+  // 4. Walk blocks: replay cached or recompile
+  let definitions = createDefinitionsMap();
+  let constructorParamNames: ConstructorParamNames = new Map();
+  let symbolContext: SymbolContext = emptySymbolContext();
+  const compiledBlocks: CompiledBlock[] = [];
+  let totalCheckErrors = 0;
+  let totalNameErrors = 0;
+
+  for (let blockIndex = 0; blockIndex < parseResult.blocks.length; blockIndex++) {
+    const block = parseResult.blocks[blockIndex];
+
+    if (!recheckSet.has(blockIndex) && cache.blocks[blockIndex]) {
+      // Replay cached result
+      const cached = cache.blocks[blockIndex]!;
+      compiledBlocks.push(cached.compiledBlock);
+
+      const applied = applyBlockContributions(
+        definitions, symbolContext, constructorParamNames,
+        cached.contributions
+      );
+      definitions = applied.definitions;
+      symbolContext = applied.symbolContext;
+      constructorParamNames = applied.constructorParamNames;
+
+      // Keep global constructor param state in sync
+      setConstructorParamNames(constructorParamNames);
+
+      totalCheckErrors += cached.checkErrorCount;
+      totalNameErrors += cached.nameErrorCount;
+    } else {
+      // Ensure global constructor param state is current before compiling
+      setConstructorParamNames(constructorParamNames);
+
+      const beforeDefs = definitions;
+      const beforeSymbols = symbolContext;
+      const beforeCtorParams = constructorParamNames;
+
+      const result = compileOneBlock(
+        block, blockIndex, definitions, symbolContext,
+        constructorParamNames, assumeK, options
+      );
+
+      compiledBlocks.push(result.compiled);
+      definitions = result.newDefinitions;
+      symbolContext = result.newSymbolContext;
+      constructorParamNames = result.newConstructorParamNames;
+      totalCheckErrors += result.checkErrorCount;
+      totalNameErrors += result.nameErrorCount;
+
+      // Compute and cache contributions
+      const contributions = computeBlockContributions(
+        beforeDefs, definitions,
+        beforeSymbols, symbolContext,
+        beforeCtorParams, constructorParamNames
+      );
+
+      const sourceText = block.sourceLines.join('\n');
+      cache.blocks[blockIndex] = {
+        sourceText,
+        compiledBlock: result.compiled,
+        contributions,
+        checkErrorCount: result.checkErrorCount,
+        nameErrorCount: result.nameErrorCount,
+      };
+    }
+  }
+
+  // Trim cache if source has fewer blocks now
+  cache.blocks.length = parseResult.blocks.length;
+
+  return {
+    success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
+    blocks: compiledBlocks,
+    totalParseErrors: parseResult.totalErrors,
+    totalNameErrors,
+    totalCheckErrors,
+    definitions,
   };
 }
 

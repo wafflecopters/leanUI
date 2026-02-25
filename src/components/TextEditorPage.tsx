@@ -5,7 +5,8 @@ import React, { useRef, useMemo, useState, useCallback, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
-import { compileTTFromText, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
+import { compileIncrementalTT, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
+import { createIncrementalCache, IncrementalCache } from '../compiler/incremental';
 import { getTypeAtCursor, getTypeAtSelection, TypeAtCursorResult, CursorQueryResult } from '../compiler/type-info';
 import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
@@ -932,6 +933,8 @@ export function TextEditorPage() {
     selStartLine?: number; selStartCol?: number;
     selEndLine?: number; selEndCol?: number;
   } | null>(null);
+  // Incremental compilation cache (persists across renders)
+  const incrementalCacheRef = useRef<IncrementalCache>(createIncrementalCache());
   // Ref to store current compile result (for hover provider)
   const compileResultRef = useRef<CompileResult | null>(null);
   // Ref to store current wildcard hints (updated from compileResult)
@@ -985,9 +988,9 @@ export function TextEditorPage() {
     };
   }, []);
 
-  // Compile and type check the source code
+  // Compile and type check the source code (incrementally)
   const compileResult = useMemo<CompileResult>(() => {
-    return compileTTFromText(code);
+    return compileIncrementalTT(code, incrementalCacheRef.current);
   }, [code]);
 
   // Flatten compiled declarations for WYSIWYG panel (excluding with-clause auxiliaries)
