@@ -14,7 +14,7 @@ import { MathEditorState, createEditorState, MathRow, MathNode } from '../math-e
 import { handleInput, InputAction, getCommandCandidates, getSelectedCandidate } from '../math-editor/input';
 import { moveRight, moveLeft, moveUp, moveDown, resolveRow, findChildIndex, getSlots, getSlotRow, clampOffsetBeforeHoles } from '../math-editor/navigation';
 import { renderToLatex } from '../math-editor/render';
-import { inferTypeSignature } from '../math-editor/type-inference';
+import { inferTypeSignatureParts } from '../math-editor/type-inference';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 
 export interface MathEditorProps {
@@ -216,7 +216,7 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
   const selected = state.commandBuffer !== null ? getSelectedCandidate(state.commandBuffer) : null;
 
   // Type inference
-  const typeSignature = useMemo(() => inferTypeSignature(state.root, registry), [state.root, registry]);
+  const typeParts = useMemo(() => inferTypeSignatureParts(state.root, registry), [state.root, registry]);
 
   return (
     <>
@@ -309,18 +309,21 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
       </div>
 
       {/* Type inference display — outside the editor box so it's not clipped */}
-      {typeSignature && (
+      {typeParts && (
         <div style={{
           marginTop: '4px',
           fontSize: '12px',
           fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
           color: '#484f58',
           textAlign: 'center',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
+          lineHeight: '1.8',
         }}>
-          {typeSignature}
+          {typeParts.map((part, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span style={{ color: '#30363d' }}>{' -> '}</span>}
+              <span style={{ whiteSpace: 'nowrap' }}>{part}</span>
+            </React.Fragment>
+          ))}
         </div>
       )}
     </>

@@ -31,6 +31,17 @@ function getDefaultRegistry(): SyntaxRegistry {
 }
 
 export function inferTypeSignature(root: MathRow, registry?: SyntaxRegistry): string | null {
+  const parts = inferTypeSignatureParts(root, registry);
+  return parts ? parts.join(' -> ') : null;
+}
+
+/**
+ * Returns the type signature as an array of Pi-spine segments,
+ * e.g. ['{R : Real}', '(a : Carrier R)', '?'].
+ * Each segment is one binder or the body. The caller can join with ' -> '
+ * or render each segment separately for wrapping.
+ */
+export function inferTypeSignatureParts(root: MathRow, registry?: SyntaxRegistry): string[] | null {
   const reg = registry ?? getDefaultRegistry();
 
   // 1. Strip leading If/Let/Assume text nodes
@@ -77,7 +88,7 @@ export function inferTypeSignature(root: MathRow, registry?: SyntaxRegistry): st
     parts.push(`(${b.names.join(' ')} : ${b.typeExpr})`);
   }
   parts.push(bodyExpr);
-  return parts.join(' -> ');
+  return parts;
 }
 
 // ============================================================================
