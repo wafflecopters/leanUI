@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { resetIds, mkRow, mkSymbol, mkHole, mkText, mkDelimiter, mkSub, mkFrac } from './types';
+import { resetIds, mkRow, mkSymbol, mkHole, mkText, mkDelimiter, mkSub, mkFrac, mkBigOp } from './types';
 import { inferTypeSignature } from './type-inference';
 
 beforeEach(() => resetIds());
@@ -9,9 +9,9 @@ describe('inferTypeSignature', () => {
     expect(inferTypeSignature(mkRow([]))).toBe(null);
   });
 
-  test('no relation symbol → null', () => {
+  test('no relation symbol → anonymous hypothesis', () => {
     const row = mkRow([mkSymbol('a'), mkSymbol('b')]);
-    expect(inferTypeSignature(row)).toBe(null);
+    expect(inferTypeSignature(row)).toBe('(_ : a b) -> ?');
   });
 
   test('incomplete: a ∈ (nothing after) → null', () => {
@@ -93,13 +93,13 @@ describe('inferTypeSignature', () => {
     );
   });
 
-  test('partial: first segment complete, second incomplete → null', () => {
+  test('partial: first segment complete, second has no relation → anonymous hypothesis', () => {
     const row = mkRow([
       mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
       mkText('and'),
-      mkSymbol('f'), // incomplete — no relation symbol
+      mkSymbol('f'), // no relation symbol — becomes anonymous hypothesis
     ]);
-    expect(inferTypeSignature(row)).toBe(null);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (_ : f) -> ?');
   });
 
   test('single variable with colon and Nat', () => {
@@ -181,6 +181,64 @@ describe('body separators', () => {
     const row = mkRow([
       mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
       mkText('then'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
+  });
+});
+
+// ============================================================================
+// Anonymous hypothesis bindings (segments without ∈ or :)
+// ============================================================================
+
+describe('anonymous hypothesis bindings', () => {
+  test('a ∈ ℝ and lim_{x→x₀} f(x) = L → anonymous hypothesis', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkBigOp('lim', mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))]), null),
+      mkSymbol('f'),
+      mkDelimiter('(', ')', mkRow([mkSymbol('x')])),
+      mkSymbol('='),
+      mkSymbol('L'),
+    ]);
+    const result = inferTypeSignature(row);
+    expect(result).toBe('{R : Real} -> (a : Carrier R) -> (_ : Limit (\\x => f (x)) x0 L) -> ?');
+  });
+
+  test('x₀, L, m ∈ ℝ and f, g : ℝ → ℝ and lim_{x→x₀} f(x) = L', () => {
+    const row = mkRow([
+      mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')])),
+      mkSymbol(','), mkSymbol('L'), mkSymbol(','), mkSymbol('m'),
+      mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('f'), mkSymbol(','), mkSymbol('g'),
+      mkSymbol(':'),
+      mkSymbol('\\mathbb{R}'), mkSymbol('\\to'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkBigOp('lim', mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))]), null),
+      mkSymbol('f'),
+      mkDelimiter('(', ')', mkRow([mkSymbol('x')])),
+      mkSymbol('='),
+      mkSymbol('L'),
+    ]);
+    const result = inferTypeSignature(row);
+    expect(result).toBe('{R : Real} -> (x0 L m : Carrier R) -> (f g : Carrier R -> Carrier R) -> (_ : Limit (\\x => f (x)) x0 L) -> ?');
+  });
+
+  test('a ∈ ℝ and a = a → anonymous equality hypothesis', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (_ : Equal a a) -> ?');
+  });
+
+  test('incomplete segment with ∈ but no type → skipped gracefully', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('b'), mkSymbol('\\in'), // incomplete — skipped
     ]);
     expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
   });

@@ -44,11 +44,20 @@ export function inferTypeSignature(root: MathRow, registry?: SyntaxRegistry): st
   const bindings: Binding[] = [];
   let needsR = false;
 
+  // Parse each segment as a binding. Segments without ∈/: become anonymous
+  // hypothesis bindings (the whole expression is the type).
   for (const seg of segments) {
     const parsed = parseSegment(seg, reg);
-    if (parsed === null) return null; // incomplete input
-    bindings.push(parsed);
-    if (parsed.usesR) needsR = true;
+    if (parsed !== null) {
+      bindings.push(parsed);
+      if (parsed.usesR) needsR = true;
+    } else if (seg.length > 0 && !hasRelationSymbol(seg)) {
+      // No relation symbol → anonymous hypothesis (e.g. "lim f(x) = L")
+      const typeResult = convertToSource(reg, seg);
+      bindings.push({ names: ['_'], typeExpr: typeResult.source, usesR: typeResult.needsR });
+      if (typeResult.needsR) needsR = true;
+    }
+    // Has relation symbol but incomplete (e.g. "a ∈") → skip, user is mid-typing
   }
 
   if (bindings.length === 0) return null;
@@ -156,6 +165,11 @@ function splitByAnd(children: readonly MathNode[]): MathNode[][] {
 // ============================================================================
 // Segment parsing — find relation symbol, extract names + type
 // ============================================================================
+
+/** Check if a node list contains a relation symbol (∈ or :) at the top level. */
+function hasRelationSymbol(nodes: readonly MathNode[]): boolean {
+  return nodes.some(n => n.tag === 'Symbol' && (n.value === '\\in' || n.value === ':'));
+}
 
 function parseSegment(nodes: MathNode[], registry: SyntaxRegistry): Binding | null {
   // Find the relation symbol: \in or :
