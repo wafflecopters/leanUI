@@ -107,6 +107,8 @@ interface CommandEntry {
   create: () => MathNode;
   /** Which slot to place cursor in after creation */
   cursorSlot: string;
+  /** Optional extra nodes to insert after the main node (e.g., a body Hole) */
+  afterNodes?: () => MathNode[];
 }
 
 const COMMAND_TABLE: Record<string, CommandEntry> = {
@@ -151,8 +153,9 @@ const COMMAND_TABLE: Record<string, CommandEntry> = {
     cursorSlot: 'below',
   },
   lim: {
-    create: () => mkBigOp('lim', mkRow([mkHole()]), null),
+    create: () => mkBigOp('lim', mkRow([mkHole(), mkSymbol('\\to'), mkHole()]), null),
     cursorSlot: 'below',
+    afterNodes: () => [mkHole()],
   },
 };
 
@@ -645,7 +648,10 @@ function acceptCommand(state: MathEditorState): MathEditorState {
     const row = resolveRow(state.root, state.cursor.path);
     const offset = state.cursor.offset;
     const node = entry.create();
-    const newRow = insertAtOffset(row, offset, node);
+    const after = entry.afterNodes?.() ?? [];
+    const newChildren = [...row.children];
+    newChildren.splice(offset, 0, node, ...after);
+    const newRow: MathRow = { ...row, children: newChildren };
     const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
 
     return {

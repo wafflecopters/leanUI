@@ -411,7 +411,7 @@ describe('command mode (\\)', () => {
     expect(s.cursor.path[0].slot).toBe('below');
   });
 
-  test('\\lim creates BigOp with below only', () => {
+  test('\\lim creates BigOp with □→□ below and trailing □', () => {
     const root = mkRow([]);
     let s = mkState(root, { path: [], offset: 0 });
     s = handleInput(s, char('\\'));
@@ -419,13 +419,23 @@ describe('command mode (\\)', () => {
     s = handleInput(s, char('i'));
     s = handleInput(s, char('m'));
 
+    // BigOp + trailing Hole
+    expect(s.root.children).toHaveLength(2);
     const op = s.root.children[0];
     expect(op.tag).toBe('BigOp');
     if (op.tag === 'BigOp') {
       expect(op.operator).toBe('lim');
-      expect(op.below).not.toBeNull();
       expect(op.above).toBeNull();
+      expect(op.below).not.toBeNull();
+      // Below slot: [Hole, \to, Hole]
+      expect(op.below!.children).toHaveLength(3);
+      expect(op.below!.children[0].tag).toBe('Hole');
+      expect(op.below!.children[1].tag).toBe('Symbol');
+      expect((op.below!.children[1] as any).value).toBe('\\to');
+      expect(op.below!.children[2].tag).toBe('Hole');
     }
+    // Trailing body Hole
+    expect(s.root.children[1].tag).toBe('Hole');
   });
 
   test('\\vec creates an accent', () => {
