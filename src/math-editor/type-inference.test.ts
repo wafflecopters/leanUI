@@ -115,13 +115,13 @@ describe('inferTypeSignature', () => {
 // ============================================================================
 
 describe('body separators', () => {
-  test('a ∈ ℝ, then a = a', () => {
+  test('a ∈ ℝ, then a = a → body converted via registry', () => {
     const row = mkRow([
       mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
       mkSymbol(','), mkText('then'),
       mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
   });
 
   test('a ∈ ℝ then a = a (space-then-space)', () => {
@@ -130,7 +130,7 @@ describe('body separators', () => {
       mkText('then'),
       mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
   });
 
   test('a ∈ ℝ. Then a = a (dot-Then)', () => {
@@ -139,7 +139,7 @@ describe('body separators', () => {
       mkSymbol('.'), mkText('Then'),
       mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
   });
 
   test('body with ℝ adds implicit R', () => {
@@ -148,7 +148,8 @@ describe('body separators', () => {
       mkText('then'),
       mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (n : Nat) -> n \\in Carrier R');
+    // \in matches element-of pattern: elem n (Carrier R)
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (n : Nat) -> elem n (Carrier R)');
   });
 
   test('combined: a, b ∈ ℝ and f : ℝ → ℝ, then f(a) + f(b)', () => {
@@ -165,8 +166,9 @@ describe('body separators', () => {
       mkSymbol('f'),
       mkDelimiter('(', ')', mkRow([mkSymbol('b')])),
     ]);
+    // + pattern matches: radd (f (a)) (f (b))
     expect(inferTypeSignature(row)).toBe(
-      '{R : Real} -> (a b : Carrier R) -> (f : Carrier R -> Carrier R) -> f (a) + f (b)'
+      '{R : Real} -> (a b : Carrier R) -> (f : Carrier R -> Carrier R) -> radd (f (a)) (f (b))'
     );
   });
 
@@ -196,7 +198,7 @@ describe('leading token stripping', () => {
       mkSymbol('.'), mkText('Then'),
       mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
   });
 
   test('If a ∈ ℝ then a = a', () => {
@@ -206,7 +208,7 @@ describe('leading token stripping', () => {
       mkText('then'),
       mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
   });
 
   test('Assume a ∈ ℝ, then a = a', () => {
@@ -216,7 +218,7 @@ describe('leading token stripping', () => {
       mkSymbol(','), mkText('then'),
       mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
     ]);
-    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
   });
 
   test('case-insensitive: let, if, assume', () => {

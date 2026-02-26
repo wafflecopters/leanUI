@@ -15,6 +15,7 @@ import { handleInput, InputAction, getCommandCandidates, getSelectedCandidate } 
 import { moveRight, moveLeft, moveUp, moveDown, resolveRow, findChildIndex, getSlots, getSlotRow, clampOffsetBeforeHoles } from '../math-editor/navigation';
 import { renderToLatex } from '../math-editor/render';
 import { inferTypeSignature } from '../math-editor/type-inference';
+import { SyntaxRegistry } from '../math-editor/syntax-registry';
 
 export interface MathEditorProps {
   /** Initial state (optional — creates empty state by default) */
@@ -23,9 +24,11 @@ export interface MathEditorProps {
   onChange?: (state: MathEditorState) => void;
   /** Placeholder text shown when empty */
   placeholder?: string;
+  /** Syntax registry for expression conversion (uses default if not provided) */
+  registry?: SyntaxRegistry;
 }
 
-export function MathEditor({ initialState, onChange, placeholder }: MathEditorProps) {
+export function MathEditor({ initialState, onChange, placeholder, registry }: MathEditorProps) {
   const [state, setState] = useState<MathEditorState>(initialState ?? createEditorState);
   const containerRef = useRef<HTMLDivElement>(null);
   const katexRef = useRef<HTMLDivElement>(null);
@@ -213,7 +216,7 @@ export function MathEditor({ initialState, onChange, placeholder }: MathEditorPr
   const selected = state.commandBuffer !== null ? getSelectedCandidate(state.commandBuffer) : null;
 
   // Type inference
-  const typeSignature = useMemo(() => inferTypeSignature(state.root), [state.root]);
+  const typeSignature = useMemo(() => inferTypeSignature(state.root, registry), [state.root, registry]);
 
   return (
     <>

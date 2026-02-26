@@ -2,17 +2,19 @@
  * Type inference for math editor expressions.
  *
  * Parses a flat MathRow into binding groups (separated by \text{and})
- * and produces a type signature string.
+ * and produces a type signature string using the syntax registry for
+ * expression conversion.
  *
  * Example:
  *   a, b ∈ ℝ  and  f, g : ℝ → ℝ
  *   → {R : Real} -> (a b : Carrier R) -> (f g : Carrier R -> Carrier R) -> ?
  *
  *   Let a, b ∈ ℝ, then a + b = b + a
- *   → {R : Real} -> (a b : Carrier R) -> a + b = b + a
+ *   → {R : Real} -> (a b : Carrier R) -> Equal (radd a b) (rsub a b)
  */
 
 import { MathRow, MathNode } from './types';
+import { SyntaxRegistry, createDefaultRegistry, convertToSource } from './syntax-registry';
 
 // ============================================================================
 // Public API
@@ -21,7 +23,16 @@ import { MathRow, MathNode } from './types';
 /** Leading text tokens that are stripped (case-insensitive). */
 const LEADING_TOKENS = new Set(['if', 'let', 'assume']);
 
-export function inferTypeSignature(root: MathRow): string | null {
+/** Lazily-initialized default registry. */
+let _defaultRegistry: SyntaxRegistry | null = null;
+function getDefaultRegistry(): SyntaxRegistry {
+  if (!_defaultRegistry) _defaultRegistry = createDefaultRegistry();
+  return _defaultRegistry;
+}
+
+export function inferTypeSignature(root: MathRow, registry?: SyntaxRegistry): string | null {
+  const reg = registry ?? getDefaultRegistry();
+
   // 1. Strip leading If/Let/Assume text nodes
   const children = stripLeadingTokens(root.children);
 
@@ -34,7 +45,7 @@ export function inferTypeSignature(root: MathRow): string | null {
   let needsR = false;
 
   for (const seg of segments) {
-    const parsed = parseSegment(seg);
+    const parsed = parseSegment(seg, reg);
     if (parsed === null) return null; // incomplete input
     bindings.push(parsed);
     if (parsed.usesR) needsR = true;
@@ -45,9 +56,9 @@ export function inferTypeSignature(root: MathRow): string | null {
   // 4. Convert body if present
   let bodyExpr = '?';
   if (bodyNodes !== null && bodyNodes.length > 0) {
-    const bodyResult = convertTypeExpr(bodyNodes);
-    bodyExpr = bodyResult.expr;
-    if (bodyResult.usesR) needsR = true;
+    const bodyResult = convertToSource(reg, bodyNodes);
+    bodyExpr = bodyResult.source;
+    if (bodyResult.needsR) needsR = true;
   }
 
   // 5. Assemble
@@ -146,7 +157,7 @@ function splitByAnd(children: readonly MathNode[]): MathNode[][] {
 // Segment parsing — find relation symbol, extract names + type
 // ============================================================================
 
-function parseSegment(nodes: MathNode[]): Binding | null {
+function parseSegment(nodes: MathNode[], registry: SyntaxRegistry): Binding | null {
   // Find the relation symbol: \in or :
   const relIndex = nodes.findIndex(n =>
     n.tag === 'Symbol' && (n.value === '\\in' || n.value === ':')
@@ -161,11 +172,11 @@ function parseSegment(nodes: MathNode[]): Binding | null {
   const names = extractNames(nameNodes);
   if (names.length === 0) return null;
 
-  const typeResult = convertTypeExpr(typeNodes);
+  const typeResult = convertToSource(registry, typeNodes);
   return {
     names,
-    typeExpr: typeResult.expr,
-    usesR: typeResult.usesR,
+    typeExpr: typeResult.source,
+    usesR: typeResult.needsR,
   };
 }
 
@@ -206,100 +217,4 @@ function rowToSimpleString(row: MathRow): string | null {
     }
   }
   return parts.join('');
-}
-
-// ============================================================================
-// Type expression conversion
-// ============================================================================
-
-interface TypeResult {
-  expr: string;
-  usesR: boolean;
-}
-
-/** Known type mappings from LaTeX symbols to type theory types. */
-const TYPE_MAP: Record<string, { type: string; usesR: boolean }> = {
-  '\\mathbb{R}': { type: 'Carrier R', usesR: true },
-  '\\mathbb{N}': { type: 'Nat', usesR: false },
-  '\\mathbb{Z}': { type: 'Int', usesR: false },
-};
-
-function convertTypeExpr(nodes: MathNode[]): TypeResult {
-  const parts: string[] = [];
-  let usesR = false;
-
-  for (let i = 0; i < nodes.length; i++) {
-    const n = nodes[i];
-    switch (n.tag) {
-      case 'Symbol': {
-        const mapped = TYPE_MAP[n.value];
-        if (mapped) {
-          parts.push(mapped.type);
-          if (mapped.usesR) usesR = true;
-        } else if (n.value === '\\to') {
-          parts.push('->');
-        } else if (n.value === '\\times') {
-          parts.push('×');
-        } else {
-          parts.push(n.value);
-        }
-        break;
-      }
-      case 'Delimiter': {
-        const inner = convertTypeExpr(n.inner.children as MathNode[]);
-        if (inner.usesR) usesR = true;
-        parts.push(`(${inner.expr})`);
-        break;
-      }
-      case 'Sub': {
-        // Subscripted type like T_n
-        const base = convertTypeExpr(n.base.children as MathNode[]);
-        const sub = rowToSimpleString(n.sub);
-        if (base.usesR) usesR = true;
-        parts.push(sub ? `${base.expr}${sub}` : base.expr);
-        break;
-      }
-      case 'Frac': {
-        // Unlikely in type position, but handle gracefully
-        const numer = convertTypeExpr(n.numer.children as MathNode[]);
-        const denom = convertTypeExpr(n.denom.children as MathNode[]);
-        if (numer.usesR) usesR = true;
-        if (denom.usesR) usesR = true;
-        parts.push(`(${numer.expr} / ${denom.expr})`);
-        break;
-      }
-      default:
-        // Hole, BigOp, Accent, etc. — skip or render as ?
-        if (n.tag === 'Hole') {
-          parts.push('?');
-        }
-        break;
-    }
-  }
-
-  // Join: spaces around ->, otherwise concatenate
-  const expr = joinTypeParts(parts);
-  return { expr, usesR };
-}
-
-/** Join type parts with proper spacing around arrows. */
-function joinTypeParts(parts: string[]): string {
-  if (parts.length === 0) return '?';
-
-  const result: string[] = [];
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    if (p === '->') {
-      result.push(' -> ');
-    } else if (i > 0 && result.length > 0 && !result[result.length - 1].endsWith(' ')) {
-      // Don't add space if previous ended with space (arrow)
-      // Concatenate type fragments: "Carrier" + " " + "R" → "Carrier R"
-      // But "Carrier R" is already one token from TYPE_MAP
-      result.push(' ');
-      result.push(p);
-    } else {
-      result.push(p);
-    }
-  }
-  return result.join('');
 }

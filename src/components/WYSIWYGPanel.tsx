@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import katex from 'katex';
 import { CompiledDeclaration } from '../compiler/compile';
 import { TeXExpressionEditor } from './TeXExpressionEditor';
 import { MathEditor } from './MathEditor';
+import { createDefaultRegistry, SyntaxRegistry, SyntaxEntry, patternToDisplayLatex } from '../math-editor/syntax-registry';
 
 export interface WYSIWYGPanelProps {
   /** Compiled declarations for display (zonked kernel terms — no unsolved metas) */
@@ -20,6 +22,8 @@ function declKindColor(decl: CompiledDeclaration): string {
 }
 
 export function WYSIWYGPanel({ declarations }: WYSIWYGPanelProps) {
+  const registry = useMemo(() => createDefaultRegistry(), []);
+
   // Per-box editable name
   const [localNames, setLocalNames] = useState<string[]>(() =>
     declarations.map(d => d.name || '')
@@ -160,6 +164,7 @@ export function WYSIWYGPanel({ declarations }: WYSIWYGPanelProps) {
 
           {/* Structured math editor */}
           <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d' }}>
+            <SyntaxReferencePanel registry={registry} />
             <div style={{
               fontSize: '11px',
               color: '#8b949e',
@@ -167,10 +172,140 @@ export function WYSIWYGPanel({ declarations }: WYSIWYGPanelProps) {
             }}>
               Structured Editor
             </div>
-            <MathEditor placeholder="type math here" />
+            <MathEditor placeholder="type math here" registry={registry} />
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ============================================================================
+// Syntax Reference Panel — compact display of available syntax patterns
+// ============================================================================
+
+function SyntaxReferenceEntry({ entry }: { entry: SyntaxEntry }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const latex = useMemo(() => patternToDisplayLatex(entry.pattern), [entry.pattern]);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    try {
+      katex.render(latex, ref.current, {
+        displayMode: false,
+        throwOnError: false,
+        trust: (context) => ['\\htmlId', '\\class', '\\textcolor'].includes(context.command),
+        strict: false,
+      });
+    } catch {
+      ref.current.textContent = latex;
+    }
+  }, [latex]);
+
+  // Clean template for display: \$x => body → λx => body, $$a → a, $a → a
+  const displayTemplate = entry.template
+    .replace(/\\\$/g, 'λ')       // \$ (lambda binder) → λ
+    .replace(/\$\$/g, '$')       // $$ (auto-paren sigil) → $ (temporary)
+    .replace(/\$/g, '');          // strip all remaining $ sigils
+
+  return (
+    <>
+      <span ref={ref} style={{ fontSize: '11px', justifySelf: 'end' }} />
+      <span style={{ color: '#30363d', fontSize: '10px' }}>{'\u2192'}</span>
+      <span style={{
+        fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+        color: '#8b949e',
+        fontSize: '10px',
+      }}>
+        {displayTemplate}
+      </span>
+    </>
+  );
+}
+
+function SymbolMapEntry({ symbol, source }: { symbol: string; source: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    try {
+      katex.render(symbol, ref.current, {
+        displayMode: false,
+        throwOnError: false,
+        strict: false,
+      });
+    } catch {
+      ref.current.textContent = symbol;
+    }
+  }, [symbol]);
+
+  return (
+    <>
+      <span ref={ref} style={{ fontSize: '11px', justifySelf: 'end' }} />
+      <span style={{ color: '#30363d', fontSize: '10px' }}>{'\u2192'}</span>
+      <span style={{
+        fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+        color: '#8b949e',
+        fontSize: '10px',
+      }}>
+        {source}
+      </span>
+    </>
+  );
+}
+
+function SyntaxReferencePanel({ registry }: { registry: SyntaxRegistry }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const symbolEntries = useMemo(() =>
+    [...registry.symbolMap.entries()],
+    [registry.symbolMap]
+  );
+
+  return (
+    <div style={{
+      marginBottom: '4px',
+      borderRadius: '4px',
+      border: '1px solid #21262d',
+      backgroundColor: '#0d1117',
+      overflow: 'hidden',
+    }}>
+      <div
+        onClick={() => setExpanded(prev => !prev)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          padding: '3px 8px',
+          cursor: 'pointer',
+          userSelect: 'none',
+          fontSize: '10px',
+          color: '#484f58',
+          letterSpacing: '0.03em',
+        }}
+      >
+        <span style={{ fontSize: '8px' }}>{expanded ? '\u25BC' : '\u25B6'}</span>
+        <span>Syntax ({registry.entries.length + symbolEntries.length})</span>
+      </div>
+
+      {expanded && (
+        <div style={{
+          padding: '4px 8px 6px',
+          display: 'grid',
+          gridTemplateColumns: 'auto auto 1fr',
+          rowGap: '2px',
+          columnGap: '8px',
+          alignItems: 'center',
+          borderTop: '1px solid #21262d',
+        }}>
+          {symbolEntries.map(([sym, { source }]) => (
+            <SymbolMapEntry key={sym} symbol={sym} source={source} />
+          ))}
+          {registry.entries.map(entry => (
+            <SyntaxReferenceEntry key={entry.name} entry={entry} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
