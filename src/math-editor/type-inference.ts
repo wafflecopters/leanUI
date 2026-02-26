@@ -7,6 +7,9 @@
  * Example:
  *   a, b ∈ ℝ  and  f, g : ℝ → ℝ
  *   → {R : Real} -> (a b : Carrier R) -> (f g : Carrier R -> Carrier R) -> ?
+ *
+ *   Let a, b ∈ ℝ, then a + b = b + a
+ *   → {R : Real} -> (a b : Carrier R) -> a + b = b + a
  */
 
 import { MathRow, MathNode } from './types';
@@ -15,8 +18,18 @@ import { MathRow, MathNode } from './types';
 // Public API
 // ============================================================================
 
+/** Leading text tokens that are stripped (case-insensitive). */
+const LEADING_TOKENS = new Set(['if', 'let', 'assume']);
+
 export function inferTypeSignature(root: MathRow): string | null {
-  const segments = splitByAnd(root.children);
+  // 1. Strip leading If/Let/Assume text nodes
+  const children = stripLeadingTokens(root.children);
+
+  // 2. Split by body separator (then / . Then / , then)
+  const { bindings: bindingNodes, body: bodyNodes } = splitByBodySeparator(children);
+
+  // 3. Split bindings by "and"
+  const segments = splitByAnd(bindingNodes);
   const bindings: Binding[] = [];
   let needsR = false;
 
@@ -29,12 +42,21 @@ export function inferTypeSignature(root: MathRow): string | null {
 
   if (bindings.length === 0) return null;
 
+  // 4. Convert body if present
+  let bodyExpr = '?';
+  if (bodyNodes !== null && bodyNodes.length > 0) {
+    const bodyResult = convertTypeExpr(bodyNodes);
+    bodyExpr = bodyResult.expr;
+    if (bodyResult.usesR) needsR = true;
+  }
+
+  // 5. Assemble
   const parts: string[] = [];
   if (needsR) parts.push('{R : Real}');
   for (const b of bindings) {
     parts.push(`(${b.names.join(' ')} : ${b.typeExpr})`);
   }
-  parts.push('?');
+  parts.push(bodyExpr);
   return parts.join(' -> ');
 }
 
@@ -46,6 +68,58 @@ interface Binding {
   names: string[];
   typeExpr: string;
   usesR: boolean;
+}
+
+// ============================================================================
+// Leading token stripping
+// ============================================================================
+
+function stripLeadingTokens(children: readonly MathNode[]): MathNode[] {
+  let start = 0;
+  while (start < children.length) {
+    const c = children[start];
+    if (c.tag === 'Text' && LEADING_TOKENS.has(c.content.toLowerCase())) {
+      start++;
+    } else {
+      break;
+    }
+  }
+  return start === 0 ? [...children] : children.slice(start);
+}
+
+// ============================================================================
+// Body separator — split bindings from conclusion
+// ============================================================================
+
+interface BodySplit {
+  bindings: MathNode[];
+  body: MathNode[] | null;
+}
+
+/**
+ * Scan for a body separator: `then`, `, then`, `. Then`, `. then`.
+ * Returns bindings (before separator) and body (after separator).
+ */
+function splitByBodySeparator(children: MathNode[]): BodySplit {
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+
+    // Pattern: Text('then') alone
+    if (c.tag === 'Text' && c.content.toLowerCase() === 'then') {
+      return { bindings: children.slice(0, i), body: children.slice(i + 1) };
+    }
+
+    // Pattern: Symbol(',') or Symbol('.') followed by Text('then')
+    if ((c.tag === 'Symbol' && (c.value === ',' || c.value === '.')) &&
+        i + 1 < children.length) {
+      const next = children[i + 1];
+      if (next.tag === 'Text' && next.content.toLowerCase() === 'then') {
+        return { bindings: children.slice(0, i), body: children.slice(i + 2) };
+      }
+    }
+  }
+
+  return { bindings: children, body: null };
 }
 
 // ============================================================================

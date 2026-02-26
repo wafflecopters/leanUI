@@ -109,3 +109,136 @@ describe('inferTypeSignature', () => {
     expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
   });
 });
+
+// ============================================================================
+// Body separators
+// ============================================================================
+
+describe('body separators', () => {
+  test('a ∈ ℝ, then a = a', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol(','), mkText('then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+  });
+
+  test('a ∈ ℝ then a = a (space-then-space)', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+  });
+
+  test('a ∈ ℝ. Then a = a (dot-Then)', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol('.'), mkText('Then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+  });
+
+  test('body with ℝ adds implicit R', () => {
+    const row = mkRow([
+      mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+      mkText('then'),
+      mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (n : Nat) -> n \\in Carrier R');
+  });
+
+  test('combined: a, b ∈ ℝ and f : ℝ → ℝ, then f(a) + f(b)', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol(','), mkSymbol('b'),
+      mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('f'), mkSymbol(':'),
+      mkSymbol('\\mathbb{R}'), mkSymbol('\\to'), mkSymbol('\\mathbb{R}'),
+      mkSymbol(','), mkText('then'),
+      mkSymbol('f'),
+      mkDelimiter('(', ')', mkRow([mkSymbol('a')])),
+      mkSymbol('+'),
+      mkSymbol('f'),
+      mkDelimiter('(', ')', mkRow([mkSymbol('b')])),
+    ]);
+    expect(inferTypeSignature(row)).toBe(
+      '{R : Real} -> (a b : Carrier R) -> (f : Carrier R -> Carrier R) -> f (a) + f (b)'
+    );
+  });
+
+  test('no body separator → ? as before', () => {
+    const row = mkRow([mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}')]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
+  });
+
+  test('body separator with empty body → ?', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('then'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
+  });
+});
+
+// ============================================================================
+// Leading token stripping
+// ============================================================================
+
+describe('leading token stripping', () => {
+  test('Let a ∈ ℝ. Then a = a', () => {
+    const row = mkRow([
+      mkText('Let'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol('.'), mkText('Then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+  });
+
+  test('If a ∈ ℝ then a = a', () => {
+    const row = mkRow([
+      mkText('If'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+  });
+
+  test('Assume a ∈ ℝ, then a = a', () => {
+    const row = mkRow([
+      mkText('Assume'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol(','), mkText('then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> a = a');
+  });
+
+  test('case-insensitive: let, if, assume', () => {
+    const row = mkRow([
+      mkText('let'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
+  });
+
+  test('leading Let with no bindings → null', () => {
+    const row = mkRow([mkText('Let')]);
+    expect(inferTypeSignature(row)).toBe(null);
+  });
+
+  test('non-leading text is NOT stripped', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('b'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    // "and" splits into two separate binding groups — not stripped
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (b : Carrier R) -> ?');
+  });
+});
