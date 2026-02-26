@@ -13,7 +13,7 @@ import 'katex/dist/katex.min.css';
 import { MathEditorState, createEditorState, MathRow, MathNode } from '../math-editor/types';
 import { handleInput, InputAction, getCommandCandidates, getSelectedCandidate } from '../math-editor/input';
 import { moveRight, moveLeft, moveUp, moveDown, resolveRow, findChildIndex, getSlots, getSlotRow, clampOffsetBeforeHoles } from '../math-editor/navigation';
-import { renderToLatex } from '../math-editor/render';
+import { renderToLatexSegments } from '../math-editor/render';
 import { inferTypeSignatureParts } from '../math-editor/type-inference';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 
@@ -38,8 +38,8 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
     onChange?.(state);
   }, [state, onChange]);
 
-  // Render LaTeX via KaTeX
-  const latex = useMemo(() => renderToLatex(state), [state]);
+  // Render LaTeX segments — each top-level node is a separate segment for wrapping
+  const segments = useMemo(() => renderToLatexSegments(state), [state]);
 
   useEffect(() => {
     if (!katexRef.current) return;
@@ -47,11 +47,10 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
     const isEmpty = state.root.children.length === 0;
 
     if (isEmpty && placeholder) {
-      // Show placeholder with cursor
       try {
         const placeholderLatex = `\\htmlId{cursor}{\\textcolor{#4488ff}{\\rule[-0.15em]{1.5px}{1.05em}}}\\textcolor{#484f58}{\\text{${placeholder}}}`;
         katex.render(placeholderLatex, katexRef.current, {
-          displayMode: true,
+          displayMode: false,
           throwOnError: false,
           trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
           strict: false,
@@ -62,17 +61,31 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
       return;
     }
 
-    try {
-      katex.render(latex, katexRef.current, {
-        displayMode: true,
-        throwOnError: false,
-        trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
-        strict: false,
-      });
-    } catch {
-      katexRef.current.innerHTML = `<span style="color:#f85149">Render error</span>`;
+    // Render each segment as its own inline KaTeX block
+    katexRef.current.innerHTML = '';
+    for (const seg of segments) {
+      if (seg.tag === 'text') {
+        const textEl = document.createElement('span');
+        textEl.style.margin = '0 0.3em';
+        textEl.style.fontFamily = 'KaTeX_Main, "Times New Roman", serif';
+        textEl.textContent = seg.content;
+        katexRef.current.appendChild(textEl);
+      } else {
+        const mathEl = document.createElement('span');
+        try {
+          katex.render(seg.latex, mathEl, {
+            displayMode: false,
+            throwOnError: false,
+            trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
+            strict: false,
+          });
+        } catch {
+          mathEl.textContent = seg.latex;
+        }
+        katexRef.current.appendChild(mathEl);
+      }
     }
-  }, [latex, placeholder, state.root.children.length]);
+  }, [segments, placeholder, state.root.children.length]);
 
   // Keyboard handler
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -234,9 +247,6 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
           border: '1px solid #30363d',
           backgroundColor: '#0d1117',
           position: 'relative',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
         }}
         onFocus={(e) => {
           e.currentTarget.style.borderColor = '#58a6ff';
@@ -247,9 +257,13 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
       >
         <div
           ref={katexRef}
+          className="math-editor-katex"
           style={{
             color: '#ffffff',
             minHeight: '24px',
+            textAlign: 'center',
+            lineHeight: '2.2',
+            fontSize: '1.21em',
           }}
         />
 

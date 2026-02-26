@@ -28,6 +28,56 @@ export function renderToLatex(state: MathEditorState): string {
   return renderRow(state.root, state.cursor, []);
 }
 
+/** Segment of rendered LaTeX — either a math chunk or a text separator. */
+export type LatexSegment =
+  | { tag: 'math'; latex: string }
+  | { tag: 'text'; content: string };
+
+/**
+ * Render the root row as per-node segments for wrapping.
+ * Each top-level node becomes its own math segment, and Text nodes become
+ * text separators. The browser can wrap between any two segments.
+ * Cursor is attached to the segment it's adjacent to.
+ */
+export function renderToLatexSegments(state: MathEditorState): LatexSegment[] {
+  const { root, cursor } = state;
+  const isCursorRow = rowPathEquals(cursor.path, []);
+  const segments: LatexSegment[] = [];
+
+  for (let i = 0; i < root.children.length; i++) {
+    const child = root.children[i];
+
+    if (child.tag === 'Text') {
+      // Cursor before this text node: attach to a zero-width math segment
+      if (isCursorRow && cursor.offset === i) {
+        segments.push({ tag: 'math', latex: CURSOR_LATEX });
+      }
+      segments.push({ tag: 'text', content: child.content });
+    } else {
+      // Build this node's LaTeX, prepending cursor if it's at this offset
+      let latex = '';
+      if (isCursorRow && cursor.offset === i) {
+        latex += CURSOR_LATEX;
+      }
+      latex += renderNode(child, cursor, []);
+      segments.push({ tag: 'math', latex });
+    }
+  }
+
+  // Cursor at end of row
+  if (isCursorRow && cursor.offset === root.children.length) {
+    // Append cursor to last math segment, or create a new one
+    const last = segments[segments.length - 1];
+    if (last && last.tag === 'math') {
+      last.latex += CURSOR_LATEX;
+    } else {
+      segments.push({ tag: 'math', latex: CURSOR_LATEX });
+    }
+  }
+
+  return segments;
+}
+
 function renderRow(row: MathRow, cursor: CursorState, currentPath: RowPath): string {
   const isCursorRow = rowPathEquals(cursor.path, currentPath);
   const parts: string[] = [];
