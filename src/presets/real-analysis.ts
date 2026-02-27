@@ -450,6 +450,10 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   | Right hle =>
     exact (MkDPair (DPair.fst dG) (MkPair (Pair.fst (DPair.snd dG)) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 (ltLeTrans (rabs (rsub x x0)) (DPair.fst dG) (DPair.fst dF) hxd hle)) (Pair.snd (DPair.snd dG) x hx0 hxd)))))
 
+-- lim (f+g+h) = (L+M)+N: three-function limit addition via two applications of limitAdd
+limitAdd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 L M N : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit h x0 N -> Limit (\\x => radd (radd (f x) (g x)) (h x)) x0 (radd (radd L M) N)
+limitAdd3 {R} f g h x0 L M N limF limG limH = limitAdd (\\x => radd (f x) (g x)) h x0 (radd L M) N (limitAdd f g x0 L M limF limG) limH
+
 ------------------------------------------------------------
 -- The lim operator: projecting the limit value
 ------------------------------------------------------------
@@ -481,6 +485,10 @@ lim {R} {L} f x0 pf = L
 -- lim f + lim g = lim (f + g): both sides reduce to Lf + Lg
 limit_pull_radd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier R) -> (limF : Limit f x0 Lf) -> (limG : Limit g x0 Lg) -> Equal (radd (lim f x0 limF) (lim g x0 limG)) (lim (\\x => radd (f x) (g x)) x0 (limitAdd f g x0 Lf Lg limF limG))
 limit_pull_radd _ _ _ _ _ _ _ = refl
+
+-- (lim f + lim g) + lim h = lim ((f+g)+h): both sides reduce to (Lf+Lg)+Lh
+limit_pull_radd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 Lf Lg Lh : Carrier R) -> (limF : Limit f x0 Lf) -> (limG : Limit g x0 Lg) -> (limH : Limit h x0 Lh) -> Equal (radd (radd (lim f x0 limF) (lim g x0 limG)) (lim h x0 limH)) (lim (\\x => radd (radd (f x) (g x)) (h x)) x0 (limitAdd3 f g h x0 Lf Lg Lh limF limG limH))
+limit_pull_radd3 _ _ _ _ _ _ _ _ _ _ = refl
 
 -- c * lim f = lim (c * f): both sides reduce to c * Lf
 -- NOTE: needs limitScalarAll which is in the commented-out derivatives section.
