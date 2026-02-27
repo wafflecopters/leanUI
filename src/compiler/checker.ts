@@ -982,6 +982,11 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     inferredEnv = envWithMeta.withValue(newInferredType);
   }
 
+  // NOTE: Pre-check for under-application (Pi vs non-Pi expected type)
+  // is handled by the constraint solver's shape-incompatibility detection
+  // in meta.ts, not here. The expected type may be a Var or App that reduces
+  // to a Pi, so checking the syntactic tag is unreliable.
+
   // Now try to unify the inferred type with the expected type
   // First, substitute any solved level metas in both types
   const inferredTypeWithLevels = inferredEnv.substituteLevelMetasInTerm(inferredEnv.value);

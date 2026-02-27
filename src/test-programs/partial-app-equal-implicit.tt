@@ -1,0 +1,19 @@
+@test failure
+@name "partial application with implicit extraction in Equal should be rejected"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- A wrapper type: Holds A n v means we have a value v of type A indexed by n
+inductive Holds (A : Type) (n : Nat) (v : A) : Type where
+  | MkHolds : Holds A n v
+
+-- extract: given a Holds proof, extract v (the implicit parameter)
+-- This is analogous to lim extracting L from Limit f x0 L
+extract : {A : Type} -> {v : A} -> (n : Nat) -> Holds A n v -> A
+extract {A} {v} n pf = v
+
+-- This should FAIL: extract Zero is missing the Holds proof argument
+-- extract Zero : Holds A Zero ?v -> A  (a function type, NOT type A)
+-- But Equal requires both sides to have same type
+bad : {A : Type} -> {v : A} -> (pf : Holds A Zero v) -> Equal v (extract Zero)
+bad = ?TODO

@@ -778,7 +778,7 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
 
   if (blockHeaderContent && blockBodyContent) {
     return (
-      <BlockCard header={blockHeaderContent} body={blockBodyContent} initiallyExpanded={false} />
+      <BlockCard header={blockHeaderContent} body={blockBodyContent} initiallyExpanded={false} hasError={true} />
     );
   }
 
@@ -794,6 +794,7 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
           <BlockCard
             key={i}
             initiallyExpanded={decl.checkSuccess === false}
+            hasError={decl.checkSuccess === false}
             header={
               <>
                 <span style={{
@@ -817,19 +818,18 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
                 )}
                 {decl.checkSuccess ? (
                   <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
-                ) : decl.checkErrors && decl.checkErrors.length > 0 ? (
-                  (() => {
-                    const errors = decl.checkErrors.filter(e => e.severity === 'error').length;
-                    const warnings = decl.checkErrors.filter(e => e.severity === 'warning').length;
+                ) : (() => {
+                    const errors = decl.checkErrors?.filter(e => e.severity === 'error').length ?? 0;
+                    const warnings = decl.checkErrors?.filter(e => e.severity === 'warning').length ?? 0;
                     return (
                       <span style={{ marginLeft: 'auto', fontSize: '12px' }}>
-                        {errors > 0 && <span style={{ color: '#f85149' }}>{errors} error{errors !== 1 ? 's' : ''}</span>}
+                        {errors > 0 ? <span style={{ color: '#f85149' }}>{errors} error{errors !== 1 ? 's' : ''}</span>
+                         : <span style={{ color: '#f85149' }}>FAIL</span>}
                         {errors > 0 && warnings > 0 && <span style={{ color: '#8b949e' }}>, </span>}
                         {warnings > 0 && <span style={{ color: '#d29922' }}>{warnings} warning{warnings !== 1 ? 's' : ''}</span>}
                       </span>
                     );
-                  })()
-                ) : null}
+                  })()}
               </>
             }
             body={
@@ -899,11 +899,14 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
   );
 }
 
-function BlockCard(props: { header: React.ReactNode, body: React.ReactNode, initiallyExpanded?: boolean }) {
+function BlockCard(props: { header: React.ReactNode, body: React.ReactNode, initiallyExpanded?: boolean, hasError?: boolean }) {
   const [expanded, setExpanded] = useState(props.initiallyExpanded ?? true)
 
   return (
-    <div style={styles.blockCard}>
+    <div style={{
+      ...styles.blockCard,
+      ...(props.hasError ? { borderLeft: '3px solid #f85149' } : {}),
+    }}>
       <div style={styles.blockHeader} onClick={() => setExpanded(e => !e)}>
         {props.header}
       </div>

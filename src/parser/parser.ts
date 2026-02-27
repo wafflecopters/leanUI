@@ -170,15 +170,15 @@ const APPLICATION_PRECEDENCE = 100;
  *          | NUMBER                    -- numeric literal
  *          | '_'                       -- wildcard hole
  */
-type PrefixParselet = (parser: Parser, token: Token, ctx: NameContext, path: IndexPath) => TTerm;
+type PrefixParselet = (parser: Parser, token: Token, ctx: NameContext, path: IndexPath, baseColumn?: number) => TTerm;
 
 /**
  * Registry of prefix parselets indexed by token type.
  * Each entry defines how to parse an expression starting with that token.
  */
 const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
-  'LPAREN': (p, _t, ctx, path) => p['parseParenExpr'](ctx, path),
-  'LBRACE': (p, _t, ctx, path) => p['parseBraceExpr'](ctx, path),
+  'LPAREN': (p, _t, ctx, path, bc) => p['parseParenExpr'](ctx, path, bc),
+  'LBRACE': (p, _t, ctx, path, bc) => p['parseBraceExpr'](ctx, path, bc),
   'LAMBDA': (p, _t, ctx, path) => p['parseLambda'](ctx, path),
   'LET': (p, _t, ctx, path) => p['parseLet'](ctx, path),
   'CASE': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
@@ -2087,6 +2087,8 @@ export class Parser {
    * @param baseColumn When set, skip newlines if next token is indented past this column (for multi-line type signatures)
    */
   private expr(minPrec: number, ctx: NameContext, path: IndexPath = [], allowMultilineApp: boolean = false, baseColumn?: number): TTerm {
+    const effectiveBaseColumn = baseColumn;
+
     // Capture start position for recording the full expression range
     let startToken = this.current();
 
@@ -2095,7 +2097,7 @@ export class Parser {
 
     // Parse the initial prefix expression
     // Note: We parse with the base path, then adjust if it becomes part of a larger structure
-    let left = this.parsePrefix(ctx, path);
+    let left = this.parsePrefix(ctx, path, effectiveBaseColumn);
 
     // If parsePrefix consumed tokens (e.g., skipped newlines), update startToken
     // to be the actual first token of the expression, not a newline we skipped
@@ -2115,8 +2117,10 @@ export class Parser {
     let didInfixWork = false;
 
     while (true) {
-      // Skip newlines if we're in indentation-aware mode and next token is indented
-      if (baseColumn !== undefined && this.current().type === 'NEWLINE') {
+      // Skip newlines if we're in indentation-aware mode and next token is indented.
+      // Don't apply when allowMultilineApp is true — that mode handles newlines differently
+      // (always skips them inside parentheses).
+      if (effectiveBaseColumn !== undefined && !allowMultilineApp && this.current().type === 'NEWLINE') {
         // Peek at next non-newline token
         let peekPos = this.pos + 1;
         while (peekPos < this.tokens.length && this.tokens[peekPos].type === 'NEWLINE') {
@@ -2125,7 +2129,7 @@ export class Parser {
         if (peekPos < this.tokens.length) {
           const nextToken = this.tokens[peekPos];
           // If next token is indented past base column, skip the newlines
-          if (nextToken.col > baseColumn) {
+          if (nextToken.col > effectiveBaseColumn) {
             while (this.current().type === 'NEWLINE') {
               this.advance();
             }
@@ -2162,7 +2166,7 @@ export class Parser {
 
         // Parse body with extended path for position tracking
         const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
-        const right = this.expr(ARROW_PRECEDENCE, arrowCtx, bodyPath);
+        const right = this.expr(ARROW_PRECEDENCE, arrowCtx, bodyPath, false, effectiveBaseColumn);
 
         // Non-dependent arrow: Π (_: left) . right
         left = mkPiTT(left, right, '_');
@@ -2372,7 +2376,7 @@ export class Parser {
    * Parse prefix expressions and atoms.
    * Uses the PREFIX_PARSELETS table for dispatch.
    */
-  private parsePrefix(ctx: NameContext, path: IndexPath = []): TTerm {
+  private parsePrefix(ctx: NameContext, path: IndexPath = [], baseColumn?: number): TTerm {
     // Skip newlines so expressions can continue on the next line after
     // infix operators like -> or user-defined operators.  This is safe
     // because the application (juxtaposition) loop in expr/exprUntil
@@ -2384,7 +2388,7 @@ export class Parser {
     const parselet = PREFIX_PARSELETS[token.type];
 
     if (parselet) {
-      return parselet(this, token, ctx, path);
+      return parselet(this, token, ctx, path, baseColumn);
     }
 
     throw new ParseError(
@@ -2400,7 +2404,8 @@ export class Parser {
    * - Type annotation: (expr : type)
    * - Pi binder: (x : A) → B
    */
-  private parseParenExpr(ctx: NameContext, path: IndexPath = []): TTerm {
+  private parseParenExpr(ctx: NameContext, path: IndexPath = [], baseColumn?: number): TTerm {
+    const effectiveBaseColumn = baseColumn;
     this.expect('LPAREN');
     this.parenDepth++;
 
@@ -2441,7 +2446,7 @@ export class Parser {
 
             // Parse the body at path.body
             const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
-            const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
+            const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath, false, effectiveBaseColumn);
 
             // Multiple names - use MultiBinder
             // Record source ranges for each name
@@ -2482,7 +2487,7 @@ export class Parser {
 
             // Parse the body at path.body
             const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
-            const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
+            const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath, false, effectiveBaseColumn);
 
             // Single name - use regular Binder
             const namePath = [...path, { kind: 'field' as const, name: 'name' }];
@@ -2530,7 +2535,8 @@ export class Parser {
    *
    * Named binders are used for named arguments that can be passed by name at call sites.
    */
-  private parseBraceExpr(ctx: NameContext, path: IndexPath = []): TTerm {
+  private parseBraceExpr(ctx: NameContext, path: IndexPath = [], baseColumn?: number): TTerm {
+    const effectiveBaseColumn = baseColumn;
     // Capture the opening brace for syntax highlighting
     const openBraceToken = this.current();
     this.expect('LBRACE');
@@ -2585,7 +2591,7 @@ export class Parser {
 
     // Parse the body
     const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
-    const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath);
+    const body = this.expr(ARROW_PRECEDENCE, newCtx, bodyPath, false, effectiveBaseColumn);
 
     if (names.length === 1) {
       // Single name - use regular Binder with named: true

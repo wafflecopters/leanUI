@@ -183,7 +183,7 @@ export function validateTerm(
         }
         break;
 
-      case 'Binder':
+      case 'Binder': {
         // Validate domain (if present - let bindings may have optional domain)
         if (t.domain !== undefined) {
           walk(t.domain, [...p, { kind: 'field', name: 'domain' }]);
@@ -194,18 +194,32 @@ export function validateTerm(
           walk(t.binderKind.defVal, [...p, { kind: 'field', name: 'defVal' }]);
         }
 
-        // Validate body
+        // Add binder name to context for the body (Pi/Lambda binders introduce names)
+        const savedCtxB = ctx;
+        if (t.name && t.name !== '_') {
+          ctx = addSymbol(ctx, t.name);
+        }
         walk(t.body, [...p, { kind: 'field', name: 'body' }]);
+        ctx = savedCtxB;
         break;
+      }
 
-      case 'MultiBinder':
+      case 'MultiBinder': {
         // Multi-name binder: {x y : Nat} -> body or (a b : T) -> body
-        // Validate domain and body (same structure as Binder)
         if (t.domain !== undefined) {
           walk(t.domain, [...p, { kind: 'field', name: 'domain' }]);
         }
+        // Add all binder names to context for the body
+        const savedCtxM = ctx;
+        for (const name of t.names) {
+          if (name !== '_') {
+            ctx = addSymbol(ctx, name);
+          }
+        }
         walk(t.body, [...p, { kind: 'field', name: 'body' }]);
+        ctx = savedCtxM;
         break;
+      }
 
       case 'App':
         walk(t.fn, [...p, { kind: 'field', name: 'fn' }]);

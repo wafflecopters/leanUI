@@ -5,6 +5,65 @@ import { unifyTerms } from "./unify";
 import { whnf } from "./whnf";
 
 /**
+ * Substitute solved metas in a term using the given metaVars map.
+ * Standalone version of TCEnv.zonkTerm for use in solveConstraints.
+ */
+function zonkWithMetas(term: TTKTerm, metaVars: Map<string, MetaVar>): TTKTerm {
+  switch (term.tag) {
+    case 'Meta': {
+      const metaVar = metaVars.get(term.id);
+      if (metaVar?.solution) return zonkWithMetas(metaVar.solution, metaVars);
+      return term;
+    }
+    case 'Hole': {
+      const metaVar = metaVars.get(term.id);
+      if (metaVar?.solution) return zonkWithMetas(metaVar.solution, metaVars);
+      return term;
+    }
+    case 'Var':
+    case 'Const':
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+      return term;
+    case 'Sort': {
+      const level = zonkWithMetas(term.level, metaVars);
+      return level === term.level ? term : { tag: 'Sort', level };
+    }
+    case 'App': {
+      const fn = zonkWithMetas(term.fn, metaVars);
+      const arg = zonkWithMetas(term.arg, metaVars);
+      return fn === term.fn && arg === term.arg ? term : { tag: 'App', fn, arg };
+    }
+    case 'Binder': {
+      const bk = term.binderKind.tag === 'BLet'
+        ? { tag: 'BLet' as const, defVal: zonkWithMetas(term.binderKind.defVal, metaVars) }
+        : term.binderKind;
+      const domain = zonkWithMetas(term.domain, metaVars);
+      const body = zonkWithMetas(term.body, metaVars);
+      return domain === term.domain && body === term.body && bk === term.binderKind
+        ? term
+        : { tag: 'Binder', name: term.name, binderKind: bk, domain, body };
+    }
+    case 'Annot': {
+      const t = zonkWithMetas(term.term, metaVars);
+      const ty = zonkWithMetas(term.type, metaVars);
+      return t === term.term && ty === term.type ? term : { tag: 'Annot', term: t, type: ty };
+    }
+    case 'Match': {
+      const scrutinee = zonkWithMetas(term.scrutinee, metaVars);
+      const clauses = term.clauses.map(c => ({
+        ...c,
+        rhs: zonkWithMetas(c.rhs, metaVars)
+      }));
+      return { tag: 'Match', scrutinee, clauses };
+    }
+    default:
+      return term;
+  }
+}
+
+/**
  * Check if a term contains any unsolved meta variables.
  * Used to avoid false "implicit argument conflict" errors when unification
  * fails because a term is stuck on unsolved metas (e.g., `plus ?m ?n` can't
@@ -321,6 +380,38 @@ function areTermsDefinitelyDifferent(
     }
   }
 
+  // After WHNF, a rigid application (head is Const/Match/Sort — not Meta/Hole/Var)
+  // is definitely different from a Binder (Pi/Lambda). An App in WHNF means the head
+  // couldn't be reduced further, so it can never become a Pi or Lambda.
+  // This catches under-application errors where a partially-applied function returns
+  // a Pi but is expected to return a data type (e.g., Carrier R vs Limit -> Carrier R).
+  {
+    const isRigidHead = (h: TTKTerm): boolean =>
+      h.tag === 'Match' || h.tag === 'Const' || h.tag === 'Sort';
+    const isRigidApp = (t: TTKTerm): boolean =>
+      t.tag === 'App' && isRigidHead(getHead(t));
+    // Only check BPi (function types), not BLam (lambdas). A lambda can legitimately
+    // appear alongside a rigid App when a type family parameter (e.g., \n => Pair Nat T)
+    // is compared to a partially-applied type (e.g., Pair ?_implicit0) — they unify after
+    // beta-reduction. But a Pi (function type) vs rigid App is a definite conflict.
+    const isBPi = (t: TTKTerm): boolean =>
+      t.tag === 'Binder' && t.binderKind.tag === 'BPi';
+    if ((isRigidApp(wa) && isBPi(wb)) ||
+        (isRigidApp(wb) && isBPi(wa))) {
+      return true;
+    }
+    // Also: bare rigid Const vs Pi (type alias would have been unfolded by WHNF)
+    if ((wa.tag === 'Const' && isBPi(wb)) ||
+        (wb.tag === 'Const' && isBPi(wa))) {
+      return true;
+    }
+    // Sort vs App/Binder
+    if ((wa.tag === 'Sort' && (wb.tag === 'App' || wb.tag === 'Binder')) ||
+        (wb.tag === 'Sort' && (wa.tag === 'App' || wa.tag === 'Binder'))) {
+      return true;
+    }
+  }
+
   // Var-Var comparison with context-based name lookup — ONLY inside constructor
   // arguments. At the top level, different Var indices commonly arise from
   // context depth shifts (e.g., a let-binding for a recursive call shifts all
@@ -556,6 +647,10 @@ export function solveConstraints(
   definitions?: DefinitionsMap
 ): { constraints: Constraint[], metaVars: Map<string, MetaVar> } {
   const stillStuck: Constraint[] = [];
+  // Collect constraints that are deferred because the RHS contains unsolved metas.
+  // After the main loop, we re-check these with updated meta solutions — metas that
+  // were unsolved during the main pass may now be solved, enabling conflict detection.
+  const deferredConflicts: { constraint: Constraint, effectiveContext: TTKContext }[] = [];
 
   const newMetaVars = new Map(metaVars);
 
@@ -813,8 +908,17 @@ export function solveConstraints(
               const metaTypeStr = prettyPrint(meta.type, names);
               throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
             }
+          } else {
+            // RHS has unsolved metas AND inversion failed.
+            // Defer for post-pass: after the main loop, metas that were unsolved
+            // during this pass may now be solved, allowing conflict detection.
+            const tolerateConflict =
+              (meta.isPatternSolved && normConstraint.isPatternSolution !== true) ||
+              normConstraint.isPatternSolution === false;
+            if (!tolerateConflict) {
+              deferredConflicts.push({ constraint: { ...normConstraint, rhs: resolvedRhs }, effectiveContext });
+            }
           }
-          // else: defer (rhs has unsolved metas, inversion not applicable)
         } else {
           // Queue any new meta constraints from the unification.
           // These inherit effectiveContext as their ctx — when dequeued, they'll
@@ -875,6 +979,52 @@ export function solveConstraints(
       }
     } else {
       stillStuck.push(constraint); // original constraint, retains original ctx for future attempts
+    }
+  }
+
+  // Post-pass: re-check deferred constraints with updated meta solutions.
+  // Metas that were unsolved during the main pass may now have solutions,
+  // enabling us to detect conflicts that were previously hidden.
+  if (definitions) {
+    for (const { constraint: dc, effectiveContext: dcCtx } of deferredConflicts) {
+      const meta = newMetaVars.get(dc.meta);
+      if (!meta?.solution) continue;
+
+      // Zonk both sides to substitute any metas solved during the main pass
+      const zonkedSol = zonkWithMetas(meta.solution, newMetaVars);
+      const zonkedRhs = zonkWithMetas(dc.rhs, newMetaVars);
+
+      // If both sides still contain unsolved metas after zonking,
+      // skip — we can't make a definitive judgment yet
+      if (containsUnsolvedMeta(zonkedSol, newMetaVars) && containsUnsolvedMeta(zonkedRhs, newMetaVars)) {
+        continue;
+      }
+
+      // Check for Pi vs non-Pi conflict caused by under-application.
+      // The key signal is: one side is fully resolved and NOT a Pi (its WHNF is final),
+      // while the other side IS a Pi AND still contains unsolved metas.
+      //
+      // The unsolved metas in the Pi side are a strong signal of under-application:
+      // the user forgot to provide some argument, leaving a function type (Pi) where
+      // a value type was expected. The missing argument's meta remains unsolved.
+      //
+      // When both sides are fully resolved but disagree, we do NOT throw — this can
+      // happen from spurious APP decomposition constraints where a meta gets a wrong
+      // solution (e.g., DPair.fst projection vs function type from overflow args).
+      // These spurious conflicts don't cause type errors because the "wrong" solution
+      // is never used in a way that matters.
+      const solHasUnsolved = containsUnsolvedMeta(zonkedSol, newMetaVars);
+      const rhsHasUnsolved = containsUnsolvedMeta(zonkedRhs, newMetaVars);
+      const wSol = whnf(zonkedSol, { definitions });
+      const wRhs = whnf(zonkedRhs, { definitions });
+
+      const isPi = (t: TTKTerm) => t.tag === 'Binder' && t.binderKind.tag === 'BPi';
+      if ((!solHasUnsolved && !isPi(wSol) && isPi(wRhs) && rhsHasUnsolved) ||
+          (!rhsHasUnsolved && !isPi(wRhs) && isPi(wSol) && solHasUnsolved)) {
+        const names = dcCtx.map(c => c.name).reverse();
+        const metaTypeStr = prettyPrint(meta.type, names);
+        throw new Error(`Implicit argument conflict for ${dc.meta} : ${metaTypeStr}: inferred ${prettyPrint(zonkedSol, names)} but required to be ${prettyPrint(zonkedRhs, names)}`);
+      }
     }
   }
 

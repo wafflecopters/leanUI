@@ -1,0 +1,13 @@
+@test failure
+@name "partial application in Equal should be rejected (simple)"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- foo takes two Nats and returns a Nat
+foo : Nat -> Nat -> Nat
+foo x y = x
+
+-- This should FAIL: foo Zero has type Nat -> Nat, not Nat
+-- Equal requires both sides to have the same type
+bad : Equal Zero (foo Zero)
+bad = ?TODO

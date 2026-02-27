@@ -1,5 +1,19 @@
 # TODO
 
+## Current Focus: `lim` Projection Operator
+
+See [LIMIT-DESIGN.md](LIMIT-DESIGN.md) for full design document.
+
+**Status**: Implementing and testing in the real analysis preset.
+
+- [x] Design `lim` as type-directed projection extracting `L` from `Limit f x0 L`
+- [x] Define `lim`, `limitConst`, `subSelf`, `zeroLtOne` in real analysis preset
+- [x] Prove `limit_pull_radd`: `lim f + lim g = lim (f + g)` (`refl`)
+- [ ] Prove `limit_pull_scalar`: `c * lim f = lim (c * f)` (needs `limitScalarAll` moved out of block comment)
+- [x] Prove `limit_pull_const_add`: `k + lim f = lim (k + f)` (`refl`)
+- [x] Prove `lim_const`: `k = lim (const k)` (`refl`)
+- [ ] Uncomment derivatives section and move `limitScalarAll` deps outside block comment
+
 ## Upcoming
 
 - [x] Add inference/checking for `let` expressions ✅

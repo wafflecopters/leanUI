@@ -1,0 +1,33 @@
+@test failure
+@name "partially applied lim in Equal should be rejected"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Simplified versions of the real analysis types
+postulate MyField : Type
+postulate carrier : MyField -> Type
+
+postulate radd : {R : MyField} -> carrier R -> carrier R -> carrier R
+
+-- Simplified Limit: just a wrapper
+inductive Limit {R : MyField} (f : carrier R -> carrier R) (x0 : carrier R) (L : carrier R) : Type where
+  | MkLimit : Limit f x0 L
+
+-- lim: extract the limit value from a convergence proof
+lim : {R : MyField} -> {L : carrier R} -> (f : carrier R -> carrier R) -> (x0 : carrier R) -> Limit f x0 L -> carrier R
+lim {R} {L} f x0 pf = L
+
+-- Suppose we have a limit addition theorem
+postulate limitAdd : {R : MyField} -> (f g : carrier R -> carrier R) -> (x0 Lf Lg : carrier R)
+  -> Limit f x0 Lf -> Limit g x0 Lg -> Limit (\x => radd (f x) (g x)) x0 (radd Lf Lg)
+
+-- This should FAIL: lim (\x => radd (f x) (radd (g x) (h x))) x0
+-- is missing the Limit proof argument!
+-- Its type is: Limit (\x => ...) x0 ?L -> carrier R
+-- But the LHS of Equal is carrier R
+limit_add_3 : {R : MyField} -> (f g h : carrier R -> carrier R) ->
+  (x0 Lf Lg Lh : carrier R) ->
+  (limF : Limit f x0 Lf) -> (limG : Limit g x0 Lg) -> (limH : Limit h x0 Lh) ->
+  Equal (radd (lim f x0 limF) (radd (lim g x0 limG) (lim h x0 limH)))
+        (lim (\x => radd (f x) (radd (g x) (h x))) x0)
+limit_add_3 = ?TODO

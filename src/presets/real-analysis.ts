@@ -450,6 +450,52 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   | Right hle =>
     exact (MkDPair (DPair.fst dG) (MkPair (Pair.fst (DPair.snd dG)) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 (ltLeTrans (rabs (rsub x x0)) (DPair.fst dG) (DPair.fst dF) hxd hle)) (Pair.snd (DPair.snd dG) x hx0 hxd)))))
 
+------------------------------------------------------------
+-- The lim operator: projecting the limit value
+------------------------------------------------------------
+
+-- a - a = 0
+subSelf : {R : Real} -> (a : Carrier R) -> Equal (rsub a a) (rzero R)
+subSelf {R} a = CompleteOrderedField.negRight (field R) a
+
+-- 0 < 1
+zeroLtOne : (R : Real) -> rlt (rzero R) (rone R) := by
+  intros R
+  constructor
+  · exact (CompleteOrderedField.zeroLeOne (field R))
+  · exact (CompleteOrderedField.zeroNeOne (field R))
+
+-- The limit of a constant function: lim_{x->x0} k = k
+-- Proof: For any eps > 0, pick delta = 1. Then |k - k| = 0 < eps.
+limitConst : {R : Real} -> (k x0 : Carrier R) -> Limit (\\_ => k) x0 k := by
+  intros R k x0
+  constructor
+  intros eps heps
+  exact (MkDPair (rone R) (MkPair (zeroLtOne R) (\\x hx0 hxd => replace (\\z => rlt (rabs z) eps) (sym (subSelf k)) (replace (\\z => rlt z eps) (sym (absZero R)) heps))))
+
+-- lim: extract the limit value from a convergence proof
+-- Given f, x0, and a proof that lim_{x->x0} f(x) = L, returns L
+lim : {R : Real} -> {L : Carrier R} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> Limit f x0 L -> Carrier R
+lim {R} {L} f x0 pf = L
+
+-- lim f + lim g = lim (f + g): both sides reduce to Lf + Lg
+limit_pull_radd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier R) -> (limF : Limit f x0 Lf) -> (limG : Limit g x0 Lg) -> Equal (radd (lim f x0 limF) (lim g x0 limG)) (lim (\\x => radd (f x) (g x)) x0 (limitAdd f g x0 Lf Lg limF limG))
+limit_pull_radd _ _ _ _ _ _ _ = refl
+
+-- c * lim f = lim (c * f): both sides reduce to c * Lf
+-- NOTE: needs limitScalarAll which is in the commented-out derivatives section.
+-- Uncomment that section to enable this theorem.
+-- limit_pull_scalar : {R : Real} -> (c : Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> (limF : Limit f x0 Lf) -> Equal (rmul c (lim f x0 limF)) (lim (\\x => rmul c (f x)) x0 (limitScalarAll c f x0 Lf limF))
+-- limit_pull_scalar _ _ _ _ _ = refl
+
+-- k = lim_{x->x0} k: both sides reduce to k
+lim_const : {R : Real} -> (k x0 : Carrier R) -> Equal k (lim (\\_ => k) x0 (limitConst k x0))
+lim_const _ _ = refl
+
+-- k + lim f = lim (k + f): both sides reduce to k + Lf
+limit_pull_const_add : {R : Real} -> (k : Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> (limF : Limit f x0 Lf) -> Equal (radd k (lim f x0 limF)) (lim (\\x => radd k (f x)) x0 (limitAdd (\\_ => k) f x0 k Lf (limitConst k x0) limF))
+limit_pull_const_add _ _ _ _ _ = refl
+
 {-
 ------------------------------------------------------------
 -- DERIVATIVES
