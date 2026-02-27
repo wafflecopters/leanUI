@@ -302,3 +302,76 @@ describe('leading token stripping', () => {
     expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (b : Carrier R) -> ?');
   });
 });
+
+// ============================================================================
+// Quantifier stripping (∀ / forall / for all)
+// ============================================================================
+
+describe('quantifier stripping', () => {
+  test('∀ n ∈ ℕ → (n : Nat) -> ?', () => {
+    const row = mkRow([
+      mkSymbol('\\forall'), mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+
+  test('∀ n ∈ ℕ, then n ≥ 0 → with body', () => {
+    const row = mkRow([
+      mkSymbol('\\forall'), mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+      mkSymbol(','), mkText('then'),
+      mkSymbol('n'), mkSymbol('\\geq'), mkSymbol('0'),
+    ]);
+    // ≥ not in default registry → falls through to literal
+    expect(inferTypeSignature(row)).toContain('(n : Nat) ->');
+  });
+
+  test('Let ∀ a ∈ ℝ. Then a = a → preamble + quantifier combo', () => {
+    const row = mkRow([
+      mkText('Let'),
+      mkSymbol('\\forall'), mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol('.'), mkText('Then'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
+  });
+
+  test('a ∈ ℝ and ∀ b ∈ ℝ → quantifier on second segment only', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('\\forall'), mkSymbol('b'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (b : Carrier R) -> ?');
+  });
+
+  test('Text "forall" n ∈ ℕ → stripped (case-insensitive)', () => {
+    const row = mkRow([
+      mkText('forall'), mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+
+  test('Text "Forall" n ∈ ℕ → stripped (case-insensitive)', () => {
+    const row = mkRow([
+      mkText('Forall'), mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+
+  test('Text "for" "all" n ∈ ℕ → two-word quantifier stripped', () => {
+    const row = mkRow([
+      mkText('for'), mkText('all'), mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+
+  test('∀ a + b = 0 → quantifier on anonymous hypothesis', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkText('and'),
+      mkSymbol('\\forall'), mkSymbol('a'), mkSymbol('+'), mkSymbol('b'), mkSymbol('='), mkSymbol('0'),
+    ]);
+    // Second segment: ∀ stripped, "a + b = 0" becomes anonymous hypothesis
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (_ : Equal (radd a b) 0) -> ?');
+  });
+});

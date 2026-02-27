@@ -1,27 +1,90 @@
 /**
- * Type inference for math editor expressions.
+ * Type Signature Grammar
+ * ======================
  *
- * Parses a flat MathRow into binding groups (separated by \text{and})
- * and produces a type signature string using the syntax registry for
- * expression conversion.
+ * This file defines the complete grammar for converting visual math (MathNode
+ * trees from the structured editor) into TT type signature strings. All
+ * structural rules live here; expression-level patterns (like `a + b → radd a b`)
+ * live in syntax-registry.ts.
  *
- * Example:
- *   a, b ∈ ℝ  and  f, g : ℝ → ℝ
- *   → {R : Real} -> (a b : Carrier R) -> (f g : Carrier R -> Carrier R) -> ?
+ * Grammar:
  *
- *   Let a, b ∈ ℝ, then a + b = b + a
- *   → {R : Real} -> (a b : Carrier R) -> Equal (radd a b) (rsub a b)
+ *   Signature  ::= Preamble? Bindings Separator? Body?
+ *   Preamble   ::= ('If' | 'Let' | 'Assume')+          -- case-insensitive, stripped
+ *   Bindings   ::= Binding ('and' Binding)*
+ *   Binding    ::= Quantifier? Names Relation TypeExpr   -- named: "∀ a, b ∈ ℝ"
+ *                | Quantifier? TypeExpr                   -- anonymous: "a = b"
+ *   Quantifier ::= '∀' | 'forall' | 'for all'           -- stripped at binder start
+ *   Names      ::= Name (',' Name)*
+ *   Name       ::= symbol | symbol_subscript              -- e.g., x or x₀
+ *   Relation   ::= '∈' | ':'
+ *   Separator  ::= 'then' | ',' 'then' | '.' 'then'     -- case-insensitive
+ *   Body       ::= Expr                                   -- conclusion
+ *   Expr       ::= <see syntax-registry.ts>               -- pattern-matched to TT
+ *
+ * Examples:
+ *   ∀ n ∈ ℕ, n ≥ 0
+ *   → (n : Nat) -> rge n (rzero R)
+ *
+ *   Let a, b ∈ ℝ and f : ℝ → ℝ, then f(a + b) = f(a) + f(b)
+ *   → {R : Real} -> (a b : Carrier R) -> (f : Carrier R -> Carrier R) -> Equal ...
+ *
+ *   ∀ a ∈ ℝ and ∀ b ∈ ℝ, then a + b = b + a
+ *   → {R : Real} -> (a : Carrier R) -> (b : Carrier R) -> Equal ...
  */
 
 import { MathRow, MathNode } from './types';
 import { SyntaxRegistry, createDefaultRegistry, convertToSource } from './syntax-registry';
 
 // ============================================================================
-// Public API
+// Grammar Rules — all structural tokens/keywords defined here
 // ============================================================================
 
-/** Leading text tokens that are stripped (case-insensitive). */
-const LEADING_TOKENS = new Set(['if', 'let', 'assume']);
+/** Preamble: leading text tokens stripped from the start (case-insensitive). */
+const PREAMBLE_TOKENS = new Set(['if', 'let', 'assume']);
+
+/** Quantifier: stripped at the start of each binder segment (case-insensitive). */
+const QUANTIFIER_SYMBOLS = new Set(['\\forall']);
+const QUANTIFIER_TEXTS = new Set(['forall']);
+
+/** Segment separator: splits bindings into individual binder groups. */
+const SEGMENT_SEPARATOR = 'and';
+
+/** Relation symbols: separate names from their type in a binding. */
+const RELATION_SYMBOLS = new Set(['\\in', ':']);
+
+/**
+ * Strip a leading quantifier (∀ / forall / for all) from a segment.
+ * Returns the remaining nodes after the quantifier.
+ */
+function stripQuantifier(nodes: MathNode[]): MathNode[] {
+  if (nodes.length === 0) return nodes;
+  const first = nodes[0];
+
+  // Symbol('\\forall')
+  if (first.tag === 'Symbol' && QUANTIFIER_SYMBOLS.has(first.value)) {
+    return nodes.slice(1);
+  }
+
+  // Text('forall') — case-insensitive
+  if (first.tag === 'Text' && QUANTIFIER_TEXTS.has(first.content.toLowerCase())) {
+    return nodes.slice(1);
+  }
+
+  // Text('for') followed by Text('all') — case-insensitive
+  if (first.tag === 'Text' && first.content.toLowerCase() === 'for' && nodes.length >= 2) {
+    const second = nodes[1];
+    if (second.tag === 'Text' && second.content.toLowerCase() === 'all') {
+      return nodes.slice(2);
+    }
+  }
+
+  return nodes;
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
 
 /** Lazily-initialized default registry. */
 let _defaultRegistry: SyntaxRegistry | null = null;
@@ -55,9 +118,10 @@ export function inferTypeSignatureParts(root: MathRow, registry?: SyntaxRegistry
   const bindings: Binding[] = [];
   let needsR = false;
 
-  // Parse each segment as a binding. Segments without ∈/: become anonymous
-  // hypothesis bindings (the whole expression is the type).
-  for (const seg of segments) {
+  // Parse each segment as a binding. Strip leading quantifier (∀/forall/for all)
+  // from each segment. Segments without ∈/: become anonymous hypothesis bindings.
+  for (const rawSeg of segments) {
+    const seg = stripQuantifier(rawSeg);
     const parsed = parseSegment(seg, reg);
     if (parsed !== null) {
       bindings.push(parsed);
@@ -109,7 +173,7 @@ function stripLeadingTokens(children: readonly MathNode[]): MathNode[] {
   let start = 0;
   while (start < children.length) {
     const c = children[start];
-    if (c.tag === 'Text' && LEADING_TOKENS.has(c.content.toLowerCase())) {
+    if (c.tag === 'Text' && PREAMBLE_TOKENS.has(c.content.toLowerCase())) {
       start++;
     } else {
       break;
@@ -162,7 +226,7 @@ function splitByAnd(children: readonly MathNode[]): MathNode[][] {
   let current: MathNode[] = [];
 
   for (const child of children) {
-    if (child.tag === 'Text' && child.content.toLowerCase() === 'and') {
+    if (child.tag === 'Text' && child.content.toLowerCase() === SEGMENT_SEPARATOR) {
       if (current.length > 0) segments.push(current);
       current = [];
     } else {
@@ -179,13 +243,13 @@ function splitByAnd(children: readonly MathNode[]): MathNode[][] {
 
 /** Check if a node list contains a relation symbol (∈ or :) at the top level. */
 function hasRelationSymbol(nodes: readonly MathNode[]): boolean {
-  return nodes.some(n => n.tag === 'Symbol' && (n.value === '\\in' || n.value === ':'));
+  return nodes.some(n => n.tag === 'Symbol' && RELATION_SYMBOLS.has(n.value));
 }
 
 function parseSegment(nodes: MathNode[], registry: SyntaxRegistry): Binding | null {
   // Find the relation symbol: \in or :
   const relIndex = nodes.findIndex(n =>
-    n.tag === 'Symbol' && (n.value === '\\in' || n.value === ':')
+    n.tag === 'Symbol' && RELATION_SYMBOLS.has(n.value)
   );
   if (relIndex < 0) return null;
 
