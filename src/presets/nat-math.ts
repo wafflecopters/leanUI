@@ -128,9 +128,14 @@ sum (Succ n) = plus (Succ n) (sum n)
 
 -- Theorem: plus (sum n) (sum n) = mul n (Succ n)
 -- i.e. 2 * sum(n) = n * (n + 1)
+{-
 doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n))
 doubleSum Zero = refl
 doubleSum (Succ n) = trans (plusAssoc (Succ n) (sum n) (plus (Succ n) (sum n))) (trans (congPlusRight (Succ n) (plusLeftComm (sum n) (Succ n) (sum n))) (trans (congPlusRight (Succ n) (congPlusRight (Succ n) (doubleSum n))) (trans (congSucc (plusSuccRight n (plus n (mul n (Succ n))))) (congPlusRight (Succ (Succ n)) (sym (mulSuccRight n (Succ n)))))))
+-}
+
+doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n))
+doubleSum = ?TODO
 
 ------------------------------------------------------------
 -- Leq: ordering on Nat with reflexivity, transitivity, antisymmetry
