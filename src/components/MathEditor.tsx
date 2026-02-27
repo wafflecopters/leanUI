@@ -73,7 +73,7 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
       } else {
         const mathEl = document.createElement('span');
         try {
-          katex.render(seg.latex, mathEl, {
+          katex.render(`\\displaystyle ${seg.latex}`, mathEl, {
             displayMode: false,
             throwOnError: false,
             trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
