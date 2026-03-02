@@ -128,21 +128,22 @@ natSemiring = MkSemiring plus mul Zero one plusZeroLeft plusZeroRight plusComm p
 -- Triangle Sum: 2 * sum(1..n) = n * (n + 1)
 ------------------------------------------------------------
 
--- Sum from 0 to n: sum(n) = 0 + 1 + 2 + ... + n
-sum : Nat -> Nat
-sum Zero = Zero
-sum (Succ n) = plus (Succ n) (sum n)
+@syntax $0 - $1
+minus : Nat -> Nat -> Nat
+minus a Zero = a
+minus Zero _ = Zero
+minus (Succ a) (Succ b) = minus a b
 
--- Theorem: plus (sum n) (sum n) = mul n (Succ n)
--- i.e. 2 * sum(n) = n * (n + 1)
-{-
-doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n))
-doubleSum Zero = refl
-doubleSum (Succ n) = trans (plusAssoc (Succ n) (sum n) (plus (Succ n) (sum n))) (trans (congPlusRight (Succ n) (plusLeftComm (sum n) (Succ n) (sum n))) (trans (congPlusRight (Succ n) (congPlusRight (Succ n) (doubleSum n))) (trans (congSucc (plusSuccRight n (plus n (mul n (Succ n))))) (congPlusRight (Succ (Succ n)) (sym (mulSuccRight n (Succ n)))))))
--}
+sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
+sumStartCount start Zero f = Zero
+sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start (Succ k)))
 
-doubleSum : (n : Nat) -> Equal (plus (sum n) (sum n)) (mul n (Succ n))
-doubleSum = ?TODO
+@syntax \\sum_{$0 = $1}^{$2} $3 @becomes sum $1 $2 (\\$0 => $3)
+sum : (start end : Nat) -> (Nat -> Nat) -> Nat
+sum start end f = sumStartCount start (Succ (minus end start)) f
+
+summationSplit : ?TODO
+summationSplit = ?TODO2
 
 ------------------------------------------------------------
 -- Leq: ordering on Nat with reflexivity, transitivity, antisymmetry

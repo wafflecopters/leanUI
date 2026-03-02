@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { CompiledDeclaration } from '../compiler/compile';
-import { MathEditor } from './MathEditor';
+import { DualMathEditor } from './DualMathEditor';
 import { SyntaxRegistry, SyntaxEntry, patternToDisplayLatex, SyntaxAnnotation, buildRegistryFromAnnotations } from '../math-editor/syntax-registry';
 
 export interface WYSIWYGPanelProps {
@@ -145,17 +145,10 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
             />
           </div>
 
-          {/* Structured math editor */}
+          {/* Structured math editors (type + proof) */}
           <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d' }}>
             <SyntaxReferencePanel registry={registries[i]} />
-            <div style={{
-              fontSize: '11px',
-              color: '#8b949e',
-              marginBottom: '4px',
-            }}>
-              Structured Editor
-            </div>
-            <MathEditor placeholder="type math here" registry={registries[i]} />
+            <DualMathEditor placeholder="type signature" registry={registries[i]} />
           </div>
         </div>
       ))}

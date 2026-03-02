@@ -1101,5 +1101,5 @@ export function buildRegistryFromAnnotations(annotations: SyntaxAnnotation[]): S
     }
   }
 
-  return { entries, symbolMap };
+  return { entries, symbolMap, parent: createDefaultRegistry() };
 }
