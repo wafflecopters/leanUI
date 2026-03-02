@@ -206,6 +206,19 @@ export function renderStaticLatex(root: MathRow): string {
   return renderRowStatic(root);
 }
 
+/** Static segments — same segmentation as renderToLatexSegments but no cursor/htmlId. */
+export function renderStaticLatexSegments(root: MathRow): LatexSegment[] {
+  const segments: LatexSegment[] = [];
+  for (const child of root.children) {
+    if (child.tag === 'Text') {
+      segments.push({ tag: 'text', content: child.content });
+    } else {
+      segments.push({ tag: 'math', latex: renderNodeStatic(child) });
+    }
+  }
+  return segments;
+}
+
 function renderRowStatic(row: MathRow): string {
   const result = row.children.map(c => renderNodeStatic(c)).join('');
   if (result === '') return '\\vphantom{0}';

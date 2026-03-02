@@ -932,6 +932,46 @@ describe('buildRegistryFromAnnotations', () => {
     const result = convertToSource(registry, nodes);
     expect(result.source).toBe('summation m n (\\k => k)');
   });
+
+  test('end-to-end: ∑_{j=i}^{n\'} j with Succ pattern — upper limit is Sup node', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'Succ', pattern: '$0\\prime' },
+      { declName: 'sum',
+        pattern: '\\sum_{$0 = $1}^{$2} $3 @becomes sum $$1 $$2 (\\$0 => $$3)' },
+    ]);
+
+    // ∑_{j = i}^{n'} j — upper limit n' is a Sup(n, prime) node
+    const nPrime = mkSup(mkRow([mkSymbol('n')]), mkRow([mkSymbol('\\prime')]));
+    const sumNode = mkBigOp('sum',
+      mkRow([mkSymbol('j'), mkSymbol('='), mkSymbol('i')]),  // below: j = i
+      mkRow([nPrime]),                                        // above: n'
+      mkRow([mkSymbol('j')]),                                 // body: j
+    );
+    const result = convertToSource(registry, [sumNode]);
+    // BigOp wraps in parens since it produces multi-arg application
+    expect(result.source).toContain('sum i (Succ n) (\\j => j)');
+  });
+
+  test('Succ pattern converts standalone Sup node', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'Succ', pattern: '$0\\prime' },
+    ]);
+    const nPrime = mkSup(mkRow([mkSymbol('n')]), mkRow([mkSymbol('\\prime')]));
+    // As a single node in a row
+    const result = convertToSource(registry, [nPrime]);
+    expect(result.source).toBe('Succ n');
+  });
+
+  test('Succ pattern converts Sup node inside body expression', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'Succ', pattern: '$0\\prime' },
+      { declName: 'Equal', pattern: '$0 = $1' },
+    ]);
+    const nPrime = mkSup(mkRow([mkSymbol('n')]), mkRow([mkSymbol('\\prime')]));
+    // n' = m  — Sup node followed by = and m
+    const result = convertToSource(registry, [nPrime, mkSymbol('='), mkSymbol('m')]);
+    expect(result.source).toBe('Equal (Succ n) m');
+  });
 });
 
 // ============================================================================

@@ -138,7 +138,7 @@ sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
 sumStartCount start Zero f = Zero
 sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start (Succ k)))
 
-@syntax \\sum_{$0 = $1}^{$2} $3 @becomes sum $1 $2 (\\$0 => $3)
+@syntax \\sum_{$0 = $1}^{$2} $3 @becomes sum $$1 $$2 (\\$0 => $$3)
 sum : (start end : Nat) -> (Nat -> Nat) -> Nat
 sum start end f = sumStartCount start (Succ (minus end start)) f
 

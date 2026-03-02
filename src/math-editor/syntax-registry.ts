@@ -435,9 +435,26 @@ function convertSingleNode(registry: SyntaxRegistry, node: MathNode): ConvertRes
     }
 
     case 'Sub': {
+      // Try sub-specific patterns first
+      const sortedSub = getSortedEntries(registry);
+      for (const entry of sortedSub) {
+        if (entry.pattern.length === 1 && entry.pattern[0].tag === 'sub') {
+          const bindings = matchRow(entry.pattern, [node]);
+          if (bindings !== null) {
+            let nr = entry.needsR ?? false;
+            const converted = new Map<string, string>();
+            for (const [name, captured] of bindings) {
+              const r = convertToSource(registry, captured);
+              converted.set(name, r.source);
+              if (r.needsR) nr = true;
+            }
+            return { source: substituteTemplate(entry.template, converted), needsR: nr };
+          }
+        }
+      }
+      // Fallback: subscript concatenation for names (e.g., x₁ → x1)
       const base = convertToSource(registry, node.base.children);
       const sub = convertToSource(registry, node.sub.children);
-      // Subscript concatenation for names (e.g., x₁ → x1)
       return {
         source: `${base.source}${sub.source}`,
         needsR: base.needsR || sub.needsR,
@@ -445,11 +462,29 @@ function convertSingleNode(registry: SyntaxRegistry, node: MathNode): ConvertRes
     }
 
     case 'Sup': {
-      const base = convertToSource(registry, node.base.children);
+      // Try sup-specific patterns first
+      const sortedSup = getSortedEntries(registry);
+      for (const entry of sortedSup) {
+        if (entry.pattern.length === 1 && entry.pattern[0].tag === 'sup') {
+          const bindings = matchRow(entry.pattern, [node]);
+          if (bindings !== null) {
+            let nr = entry.needsR ?? false;
+            const converted = new Map<string, string>();
+            for (const [name, captured] of bindings) {
+              const r = convertToSource(registry, captured);
+              converted.set(name, r.source);
+              if (r.needsR) nr = true;
+            }
+            return { source: substituteTemplate(entry.template, converted), needsR: nr };
+          }
+        }
+      }
+      // Fallback
+      const baseSup = convertToSource(registry, node.base.children);
       const sup = convertToSource(registry, node.sup.children);
       return {
-        source: `${base.source}^${sup.source}`,
-        needsR: base.needsR || sup.needsR,
+        source: `${baseSup.source}^${sup.source}`,
+        needsR: baseSup.needsR || sup.needsR,
       };
     }
 

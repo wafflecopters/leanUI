@@ -1874,7 +1874,6 @@ export function TextEditorPage() {
             <WYSIWYGPanel
               declarations={compiledDeclarations}
               allDeclarations={allCompiledDeclarations}
-              onCodeChange={setCode}
             />
           </div>
         )}

@@ -13,7 +13,7 @@ import 'katex/dist/katex.min.css';
 import { MathEditorState, createEditorState, MathRow, MathNode } from '../math-editor/types';
 import { handleInput, InputAction, getCommandCandidates, getSelectedCandidate } from '../math-editor/input';
 import { moveRight, moveLeft, moveUp, moveDown, exitCompound, resolveRow, findChildIndex, getSlots, getSlotRow, clampOffsetBeforeHoles } from '../math-editor/navigation';
-import { renderToLatexSegments, renderStaticLatex } from '../math-editor/render';
+import { renderToLatexSegments, renderStaticLatexSegments } from '../math-editor/render';
 import { inferTypeSignatureParts } from '../math-editor/type-inference';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 
@@ -67,9 +67,10 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
   }, [state, onChange]);
 
   // Render LaTeX segments — each top-level node is a separate segment for wrapping
-  const segments = useMemo(() => active ? renderToLatexSegments(state) : null, [state, active]);
-  // Static LaTeX (no cursor) for inactive editor
-  const staticLatex = useMemo(() => !active ? renderStaticLatex(state.root) : null, [state.root, active]);
+  const segments = useMemo(
+    () => active ? renderToLatexSegments(state) : renderStaticLatexSegments(state.root),
+    [state, active],
+  );
 
   useEffect(() => {
     if (!katexRef.current) return;
@@ -109,30 +110,22 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
       container.appendChild(el);
     };
 
-    // Inactive editor — render static (no cursor)
-    if (!active) {
-      katexRef.current.innerHTML = '';
-      renderPrefix(katexRef.current);
-      const contentLatex = isEmpty
-        ? `\\textcolor{#484f58}{\\text{${placeholder ?? ''}}}`
-        : staticLatex!;
-      renderLatexSpan(katexRef.current, contentLatex);
-      return;
-    }
-
+    // Empty + placeholder (active shows cursor, inactive shows dimmed text)
     if (isEmpty && placeholder) {
       katexRef.current.innerHTML = '';
       renderPrefix(katexRef.current);
-      const placeholderLatex = `\\htmlId{cursor}{\\textcolor{#4488ff}{\\rule[-0.15em]{1.5px}{1.05em}}}\\textcolor{#484f58}{\\text{${placeholder}}}`;
+      const placeholderLatex = active
+        ? `\\htmlId{cursor}{\\textcolor{#4488ff}{\\rule[-0.15em]{1.5px}{1.05em}}}\\textcolor{#484f58}{\\text{${placeholder}}}`
+        : `\\textcolor{#484f58}{\\text{${placeholder}}}`;
       renderLatexSpan(katexRef.current, placeholderLatex);
       return;
     }
 
-    // Render each segment as its own inline KaTeX block
+    // Render each segment as its own inline KaTeX block (both active and inactive)
     katexRef.current.innerHTML = '';
     renderPrefix(katexRef.current);
 
-    for (const seg of segments!) {
+    for (const seg of segments) {
       if (seg.tag === 'text') {
         const textEl = document.createElement('span');
         textEl.style.margin = '0 0.3em';
@@ -154,7 +147,7 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
         katexRef.current.appendChild(mathEl);
       }
     }
-  }, [segments, staticLatex, placeholder, state.root.children.length, active, proofPrefix]);
+  }, [segments, placeholder, state.root.children.length, active, proofPrefix]);
 
   // Keyboard handler
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -206,7 +199,7 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
       e.preventDefault();
       setState(prev => {
         if (prev.commandBuffer !== null) {
-          return handleInput(prev, { type: 'char', char: 'Tab' });
+          return handleInput(prev, { type: 'char', char: 'Tab' }, registry);
         }
         return moveRight(prev);
       });
@@ -216,7 +209,7 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
     // Backspace
     if (e.key === 'Backspace') {
       e.preventDefault();
-      setState(prev => handleInput(prev, { type: 'backspace' }));
+      setState(prev => handleInput(prev, { type: 'backspace' }, registry));
       return;
     }
 
@@ -225,7 +218,7 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
       e.preventDefault();
       setState(prev => {
         if (prev.commandBuffer !== null) {
-          return handleInput(prev, { type: 'char', char: 'Enter' });
+          return handleInput(prev, { type: 'char', char: 'Enter' }, registry);
         }
         return prev;
       });
@@ -242,10 +235,10 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
     // Regular character input — single printable char
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
-      setState(prev => handleInput(prev, { type: 'char', char: e.key }));
+      setState(prev => handleInput(prev, { type: 'char', char: e.key }, registry));
       return;
     }
-  }, [onTransferUp, onTransferDown]);
+  }, [onTransferUp, onTransferDown, registry]);
 
   // Click handler — map DOM click to cursor position
   const handleClick = useCallback((e: React.MouseEvent) => {
@@ -317,8 +310,8 @@ export const MathEditor = forwardRef<MathEditorHandle, MathEditorProps>(function
   }, [state.root, onFocusClaim]);
 
   // Command candidates
-  const candidates = state.commandBuffer !== null ? getCommandCandidates(state.commandBuffer) : [];
-  const selected = state.commandBuffer !== null ? getSelectedCandidate(state.commandBuffer) : null;
+  const candidates = state.commandBuffer !== null ? getCommandCandidates(state.commandBuffer, registry) : [];
+  const selected = state.commandBuffer !== null ? getSelectedCandidate(state.commandBuffer, registry) : null;
 
   // Type inference
   const typeParts = useMemo(() => inferTypeSignatureParts(state.root, registry), [state.root, registry]);

@@ -11,6 +11,7 @@ import {
   mkBigOp, mkAccent, mkDelimiter, mkText, freshId,
 } from './types';
 import { resolveRow, getSlots, getSlotRow, findChildIndex, moveRight } from './navigation';
+import { SyntaxRegistry, PatternElement } from './syntax-registry';
 
 // ============================================================================
 // Tree mutation helpers
@@ -161,6 +162,7 @@ const COMMAND_TABLE: Record<string, CommandEntry> = {
 
 /** Symbol shortcuts — single characters or short names that map to LaTeX symbols */
 const SYMBOL_TABLE: Record<string, string> = {
+  // Lowercase Greek
   alpha: '\\alpha',
   beta: '\\beta',
   gamma: '\\gamma',
@@ -170,18 +172,27 @@ const SYMBOL_TABLE: Record<string, string> = {
   zeta: '\\zeta',
   eta: '\\eta',
   theta: '\\theta',
+  vartheta: '\\vartheta',
+  iota: '\\iota',
+  kappa: '\\kappa',
   lambda: '\\lambda',
   mu: '\\mu',
   nu: '\\nu',
   xi: '\\xi',
   pi: '\\pi',
+  varpi: '\\varpi',
   rho: '\\rho',
+  varrho: '\\varrho',
   sigma: '\\sigma',
+  varsigma: '\\varsigma',
   tau: '\\tau',
+  upsilon: '\\upsilon',
   phi: '\\phi',
+  varphi: '\\varphi',
   chi: '\\chi',
   psi: '\\psi',
   omega: '\\omega',
+  // Uppercase Greek
   Gamma: '\\Gamma',
   Delta: '\\Delta',
   Theta: '\\Theta',
@@ -189,6 +200,7 @@ const SYMBOL_TABLE: Record<string, string> = {
   Xi: '\\Xi',
   Pi: '\\Pi',
   Sigma: '\\Sigma',
+  Upsilon: '\\Upsilon',
   Phi: '\\Phi',
   Psi: '\\Psi',
   Omega: '\\Omega',
@@ -235,19 +247,19 @@ export type InputAction =
   | { type: 'right' }
   | { type: 'tab' };
 
-export function handleInput(state: MathEditorState, action: InputAction): MathEditorState {
+export function handleInput(state: MathEditorState, action: InputAction, registry?: SyntaxRegistry): MathEditorState {
   // If in text buffer mode, route to text handler
   if (state.textBuffer !== null) {
     if (action.type === 'char') return handleTextChar(state, action.char);
     if (action.type === 'backspace') return handleTextBackspace(state);
     // Other actions: commit text first, then process
     const committed = commitTextBuffer(state);
-    return handleInput(committed, action);
+    return handleInput(committed, action, registry);
   }
 
   // If in command buffer mode, route to command handler
   if (state.commandBuffer !== null && action.type === 'char') {
-    return handleCommandChar(state, action.char);
+    return handleCommandChar(state, action.char, registry);
   }
 
   switch (action.type) {
@@ -490,6 +502,40 @@ function handleSuperscript(state: MathEditorState): MathEditorState {
   };
 }
 
+/**
+ * \prime command: wraps the previous node in a Sup with \prime as superscript.
+ * Similar to handleSuperscript but pre-fills the superscript slot and places
+ * the cursor AFTER the Sup node (not inside it).
+ */
+function handlePrimeCommand(state: MathEditorState): MathEditorState {
+  const row = resolveRow(state.root, state.cursor.path);
+  const offset = state.cursor.offset;
+
+  if (offset === 0) {
+    // Nothing to the left — insert Sup with Hole base and \prime
+    const sup = mkSup(mkRow([mkHole()]), mkRow([mkSymbol('\\prime')]));
+    const newRow = insertAtOffset(row, offset, sup);
+    const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
+    return { ...state, root: newRoot, cursor: { path: state.cursor.path, offset: offset + 1 } };
+  }
+
+  const leftNode = row.children[offset - 1];
+
+  // If left node is already a Sup or SubSup — insert prime into the existing sup slot
+  if (leftNode.tag === 'Sup') {
+    const newSup = { ...leftNode, sup: mkRow([...leftNode.sup.children, mkSymbol('\\prime')]) };
+    const newRow = replaceAtIndex(row, offset - 1, newSup);
+    const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
+    return { ...state, root: newRoot, cursor: { path: state.cursor.path, offset } };
+  }
+
+  // Wrap left node as base of new Sup with \prime
+  const sup = mkSup(mkRow([leftNode]), mkRow([mkSymbol('\\prime')]));
+  const newRow = replaceAtIndex(row, offset - 1, sup);
+  const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
+  return { ...state, root: newRoot, cursor: { path: state.cursor.path, offset } };
+}
+
 // ============================================================================
 // Delimiter handling
 // ============================================================================
@@ -621,26 +667,94 @@ function dissolveCompound(
 // Command buffer
 // ============================================================================
 
+/**
+ * Extract slash-command names from a registry — both symbolMap entries
+ * and LaTeX literals found in pattern entries (e.g., \prime from `@syntax $0\prime`).
+ * Also walks parent registries.
+ */
+function getRegistrySymbolNames(registry?: SyntaxRegistry): Map<string, string> {
+  const result = new Map<string, string>();
+
+  function addSymbol(symbol: string) {
+    // Convert LaTeX symbol to command name: \prime → prime
+    // Skip \mathbb{R} etc. (compound LaTeX with braces — already in SYMBOL_TABLE as R)
+    if (symbol.startsWith('\\') && !symbol.includes('{')) {
+      const name = symbol.slice(1);
+      if (!result.has(name) && !SYMBOL_TABLE[name] && !COMMAND_TABLE[name]) {
+        result.set(name, symbol);
+      }
+    }
+  }
+
+  function collectLiteralsFromPattern(elements: PatternElement[]) {
+    for (const e of elements) {
+      switch (e.tag) {
+        case 'literal': addSymbol(e.symbol); break;
+        case 'bigop':
+          if (e.below) collectLiteralsFromPattern(e.below);
+          if (e.above) collectLiteralsFromPattern(e.above);
+          if (e.body) collectLiteralsFromPattern(e.body);
+          break;
+        case 'frac':
+          collectLiteralsFromPattern(e.numer);
+          collectLiteralsFromPattern(e.denom);
+          break;
+        case 'delimiter':
+          collectLiteralsFromPattern(e.inner);
+          break;
+        case 'accent':
+          collectLiteralsFromPattern(e.body);
+          break;
+        case 'sub':
+          collectLiteralsFromPattern(e.base);
+          collectLiteralsFromPattern(e.sub);
+          break;
+        case 'sup':
+          collectLiteralsFromPattern(e.base);
+          collectLiteralsFromPattern(e.sup);
+          break;
+      }
+    }
+  }
+
+  let r: SyntaxRegistry | undefined = registry;
+  while (r) {
+    // From symbolMap
+    for (const [symbol] of r.symbolMap) {
+      addSymbol(symbol);
+    }
+    // From pattern entries
+    for (const entry of r.entries) {
+      collectLiteralsFromPattern(entry.pattern);
+    }
+    r = r.parent;
+  }
+  return result;
+}
+
 /** Returns all command/symbol names that start with the given prefix. */
-export function getCommandCandidates(prefix: string): string[] {
+export function getCommandCandidates(prefix: string, registry?: SyntaxRegistry): string[] {
   if (prefix === '') return [];
-  const all = [...Object.keys(COMMAND_TABLE), ...Object.keys(SYMBOL_TABLE)];
-  return all.filter(key => key.startsWith(prefix)).sort();
+  const registryNames = getRegistrySymbolNames(registry);
+  const all = [...Object.keys(COMMAND_TABLE), ...Object.keys(SYMBOL_TABLE), ...registryNames.keys()];
+  // Deduplicate
+  const unique = [...new Set(all)];
+  return unique.filter(key => key.startsWith(prefix)).sort();
 }
 
 /** Returns the currently selected (best-match) candidate for a buffer. */
-export function getSelectedCandidate(buffer: string): string | null {
-  const candidates = getCommandCandidates(buffer);
+export function getSelectedCandidate(buffer: string, registry?: SyntaxRegistry): string | null {
+  const candidates = getCommandCandidates(buffer, registry);
   if (candidates.length === 0) return null;
   // Exact match gets priority
   if (candidates.includes(buffer)) return buffer;
   return candidates[0];
 }
 
-function handleCommandChar(state: MathEditorState, char: string): MathEditorState {
+function handleCommandChar(state: MathEditorState, char: string, registry?: SyntaxRegistry): MathEditorState {
   if (char === ' ' || char === 'Enter' || char === 'Tab') {
     // Accept current best match
-    return acceptCommand(state);
+    return acceptCommand(state, registry);
   }
 
   if (char === '\\') {
@@ -652,14 +766,15 @@ function handleCommandChar(state: MathEditorState, char: string): MathEditorStat
   const newBuffer = state.commandBuffer! + char;
 
   // Check if any commands/symbols start with the new buffer
-  const candidates = getCommandCandidates(newBuffer);
+  const candidates = getCommandCandidates(newBuffer, registry);
+  const registryNames = getRegistrySymbolNames(registry);
 
   if (candidates.length === 0) {
     // No matches for the new buffer.
     // Try to accept what was in the old buffer and re-process this char.
     const oldBuffer = state.commandBuffer!;
-    if (COMMAND_TABLE[oldBuffer] || SYMBOL_TABLE[oldBuffer]) {
-      const executed = acceptCommand(state);
+    if (COMMAND_TABLE[oldBuffer] || SYMBOL_TABLE[oldBuffer] || registryNames.has(oldBuffer)) {
+      const executed = acceptCommand(state, registry);
       return handleChar(executed, char);
     }
     // No valid command at all — cancel command mode
@@ -668,7 +783,7 @@ function handleCommandChar(state: MathEditorState, char: string): MathEditorStat
 
   if (candidates.length === 1 && candidates[0] === newBuffer) {
     // Exactly one match and it's a complete match — auto-fire
-    return acceptCommand({ ...state, commandBuffer: newBuffer });
+    return acceptCommand({ ...state, commandBuffer: newBuffer }, registry);
   }
 
   // Multiple candidates or partial match — keep accumulating
@@ -676,9 +791,9 @@ function handleCommandChar(state: MathEditorState, char: string): MathEditorStat
 }
 
 /** Accept the best matching command for the current buffer. */
-function acceptCommand(state: MathEditorState): MathEditorState {
+function acceptCommand(state: MathEditorState, registry?: SyntaxRegistry): MathEditorState {
   const buffer = state.commandBuffer!;
-  const selected = getSelectedCandidate(buffer);
+  const selected = getSelectedCandidate(buffer, registry);
 
   if (!selected) {
     // No match — cancel
@@ -688,6 +803,11 @@ function acceptCommand(state: MathEditorState): MathEditorState {
   // Special: \text enters text mode
   if (selected === 'text') {
     return { ...state, commandBuffer: null, textBuffer: '' };
+  }
+
+  // Special: \prime wraps the previous node in a Sup with \prime as superscript
+  if (selected === 'prime') {
+    return handlePrimeCommand({ ...state, commandBuffer: null });
   }
 
   // Try command table first (compound nodes)
@@ -718,6 +838,14 @@ function acceptCommand(state: MathEditorState): MathEditorState {
   if (symbolValue) {
     const newState = { ...state, commandBuffer: null };
     return insertSymbol(newState, symbolValue);
+  }
+
+  // Try registry symbols (from @syntax annotations)
+  const registryNames = getRegistrySymbolNames(registry);
+  const registrySymbol = registryNames.get(selected);
+  if (registrySymbol) {
+    const newState = { ...state, commandBuffer: null };
+    return insertSymbol(newState, registrySymbol);
   }
 
   // Unknown command — cancel

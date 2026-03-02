@@ -9,8 +9,6 @@ export interface WYSIWYGPanelProps {
   declarations: CompiledDeclaration[];
   /** All compiled declarations (for building syntax registry from @syntax annotations) */
   allDeclarations: CompiledDeclaration[];
-  /** Called with new source text when the user edits a box */
-  onCodeChange: (code: string) => void;
 }
 
 /** Color for the declaration kind badge */
