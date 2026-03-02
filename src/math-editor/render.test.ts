@@ -51,13 +51,13 @@ describe('renderStaticLatex', () => {
   });
 
   test('renders BigOp sum', () => {
-    const row = mkRow([mkBigOp('sum', mkRow([mkSymbol('i'), mkSymbol('='), mkSymbol('0')]), mkRow([mkSymbol('n')]))]);
-    expect(renderStaticLatex(row)).toBe('\\sum_{i = 0}^{n}');
+    const row = mkRow([mkBigOp('sum', mkRow([mkSymbol('i'), mkSymbol('='), mkSymbol('0')]), mkRow([mkSymbol('n')]), mkRow([mkSymbol('k')]))]);
+    expect(renderStaticLatex(row)).toBe('\\sum_{i = 0}^{n}k');
   });
 
   test('renders BigOp lim (below only)', () => {
-    const row = mkRow([mkBigOp('lim', mkRow([mkSymbol('n'), mkSymbol('\\to'), mkSymbol('\\infty')]), null)]);
-    expect(renderStaticLatex(row)).toBe('\\lim_{n \\to \\infty}');
+    const row = mkRow([mkBigOp('lim', mkRow([mkSymbol('n'), mkSymbol('\\to'), mkSymbol('\\infty')]), null, mkRow([mkSymbol('f')]))]);
+    expect(renderStaticLatex(row)).toBe('\\lim_{n \\to \\infty}f');
   });
 
   test('renders accent vec', () => {

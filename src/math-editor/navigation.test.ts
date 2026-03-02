@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { resetIds, mkRow, mkSymbol, mkHole, mkFrac, mkSub, mkSup, mkSubSup, mkBigOp, mkDelimiter, MathEditorState } from './types';
-import { moveRight, moveLeft, moveUp, moveDown } from './navigation';
+import { moveRight, moveLeft, moveUp, moveDown, exitCompound } from './navigation';
 
 beforeEach(() => resetIds());
 
@@ -151,7 +151,12 @@ describe('moveRight', () => {
     s = moveRight(s);
     expect(s.cursor.path).toEqual([{ nodeId: op.id, slot: 'above' }]);
 
-    // Past 'n', exit above, exit BigOp
+    // Past 'n', exit above, enter body
+    s = moveRight(s);
+    s = moveRight(s);
+    expect(s.cursor.path).toEqual([{ nodeId: op.id, slot: 'body' }]);
+
+    // Past body Hole, exit BigOp
     s = moveRight(s);
     s = moveRight(s);
     expect(s.cursor).toEqual({ path: [], offset: 1 });
@@ -430,5 +435,161 @@ describe('Hole-aware cursor placement', () => {
     expect(s2.cursor.path).toEqual([{ nodeId: frac.id, slot: 'denom' }]);
     // denom is [a, Hole], effective end = 1, clamped from 3 to 1
     expect(s2.cursor.offset).toBe(1);
+  });
+});
+
+// ============================================================================
+// Vertical navigation bubble-up through nested structures
+// ============================================================================
+
+describe('moveDown/moveUp bubble-up through hierarchy', () => {
+  test('down from inside delimiter in frac numer reaches denom', () => {
+    // frac{ n (n+1) }{ 2 } — cursor inside the parens in the numerator
+    const delim = mkDelimiter('(', ')', mkRow([mkSymbol('n'), mkSymbol('+'), mkSymbol('1')]));
+    const frac = mkFrac(mkRow([mkSymbol('n'), delim]), mkRow([mkSymbol('2')]));
+    const root = mkRow([frac]);
+
+    // Cursor inside delimiter's inner row, at offset 1 (between 'n' and '+')
+    const s = mkState(root, {
+      path: [
+        { nodeId: frac.id, slot: 'numer' },
+        { nodeId: delim.id, slot: 'inner' },
+      ],
+      offset: 1,
+    });
+    const s2 = moveDown(s);
+
+    // Should bubble up: Delimiter has no vertical neighbors,
+    // but its parent Frac does (numer → denom)
+    expect(s2.cursor.path).toEqual([{ nodeId: frac.id, slot: 'denom' }]);
+    expect(s2.cursor.offset).toBe(1); // clamped to denom length
+  });
+
+  test('up from inside delimiter in frac denom reaches numer', () => {
+    const delim = mkDelimiter('(', ')', mkRow([mkSymbol('a')]));
+    const frac = mkFrac(mkRow([mkSymbol('x')]), mkRow([delim]));
+    const root = mkRow([frac]);
+
+    // Cursor inside delimiter's inner row in the denominator
+    const s = mkState(root, {
+      path: [
+        { nodeId: frac.id, slot: 'denom' },
+        { nodeId: delim.id, slot: 'inner' },
+      ],
+      offset: 0,
+    });
+    const s2 = moveUp(s);
+
+    expect(s2.cursor.path).toEqual([{ nodeId: frac.id, slot: 'numer' }]);
+    expect(s2.cursor.offset).toBe(0);
+  });
+
+  test('down from deeply nested delimiter in frac numer', () => {
+    // frac{ ( (x) ) }{ y } — delimiter inside delimiter inside frac numer
+    const innerDelim = mkDelimiter('(', ')', mkRow([mkSymbol('x')]));
+    const outerDelim = mkDelimiter('(', ')', mkRow([innerDelim]));
+    const frac = mkFrac(mkRow([outerDelim]), mkRow([mkSymbol('y')]));
+    const root = mkRow([frac]);
+
+    // Cursor deep inside innermost delimiter
+    const s = mkState(root, {
+      path: [
+        { nodeId: frac.id, slot: 'numer' },
+        { nodeId: outerDelim.id, slot: 'inner' },
+        { nodeId: innerDelim.id, slot: 'inner' },
+      ],
+      offset: 0,
+    });
+    const s2 = moveDown(s);
+
+    // Should bubble up through both delimiters to reach frac denom
+    expect(s2.cursor.path).toEqual([{ nodeId: frac.id, slot: 'denom' }]);
+  });
+
+  test('down from delimiter in sub base reaches sub slot', () => {
+    // x_(delim) with cursor inside the delimiter → should reach sub
+    const delim = mkDelimiter('(', ')', mkRow([mkSymbol('a')]));
+    const sub = mkSub(mkRow([delim]), mkRow([mkSymbol('2')]));
+    const root = mkRow([sub]);
+
+    const s = mkState(root, {
+      path: [
+        { nodeId: sub.id, slot: 'base' },
+        { nodeId: delim.id, slot: 'inner' },
+      ],
+      offset: 0,
+    });
+    const s2 = moveDown(s);
+
+    expect(s2.cursor.path).toEqual([{ nodeId: sub.id, slot: 'sub' }]);
+  });
+
+  test('up from delimiter in BigOp below reaches above', () => {
+    const delim = mkDelimiter('(', ')', mkRow([mkSymbol('i')]));
+    const op = mkBigOp('sum', mkRow([delim]), mkRow([mkSymbol('n')]));
+    const root = mkRow([op]);
+
+    const s = mkState(root, {
+      path: [
+        { nodeId: op.id, slot: 'below' },
+        { nodeId: delim.id, slot: 'inner' },
+      ],
+      offset: 0,
+    });
+    const s2 = moveUp(s);
+
+    expect(s2.cursor.path).toEqual([{ nodeId: op.id, slot: 'above' }]);
+  });
+
+  test('no vertical neighbor at any level returns unchanged state', () => {
+    // Delimiter at root level — no vertical neighbors anywhere
+    const delim = mkDelimiter('(', ')', mkRow([mkSymbol('x')]));
+    const root = mkRow([delim]);
+
+    const s = mkState(root, {
+      path: [{ nodeId: delim.id, slot: 'inner' }],
+      offset: 0,
+    });
+    const s2 = moveDown(s);
+
+    // No vertical neighbor found — state unchanged
+    expect(s2).toBe(s);
+  });
+});
+
+// ============================================================================
+// exitCompound — Escape key
+// ============================================================================
+
+describe('exitCompound', () => {
+  test('from BigOp below → cursor after BigOp', () => {
+    const op = mkBigOp('sum', mkRow([mkSymbol('i')]), mkRow([mkSymbol('n')]));
+    const root = mkRow([op, mkSymbol('x')]);
+    const s = mkState(root, { path: [{ nodeId: op.id, slot: 'below' }], offset: 1 });
+    const s2 = exitCompound(s);
+    expect(s2.cursor).toEqual({ path: [], offset: 1 });
+  });
+
+  test('from BigOp above → cursor after BigOp', () => {
+    const op = mkBigOp('sum', mkRow([mkSymbol('i')]), mkRow([mkSymbol('n')]));
+    const root = mkRow([op, mkSymbol('x')]);
+    const s = mkState(root, { path: [{ nodeId: op.id, slot: 'above' }], offset: 0 });
+    const s2 = exitCompound(s);
+    expect(s2.cursor).toEqual({ path: [], offset: 1 });
+  });
+
+  test('from Frac numer → cursor after Frac', () => {
+    const frac = mkFrac(mkRow([mkSymbol('a')]), mkRow([mkSymbol('b')]));
+    const root = mkRow([frac, mkSymbol('+')]);
+    const s = mkState(root, { path: [{ nodeId: frac.id, slot: 'numer' }], offset: 0 });
+    const s2 = exitCompound(s);
+    expect(s2.cursor).toEqual({ path: [], offset: 1 });
+  });
+
+  test('at root → no change', () => {
+    const root = mkRow([mkSymbol('x')]);
+    const s = mkState(root, { path: [], offset: 0 });
+    const s2 = exitCompound(s);
+    expect(s2).toBe(s);
   });
 });

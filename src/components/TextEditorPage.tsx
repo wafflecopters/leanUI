@@ -1011,6 +1011,12 @@ export function TextEditorPage() {
     return decls;
   }, [showWYSIWYG, compileResult]);
 
+  // All declarations (for building syntax registry from @syntax annotations)
+  const allCompiledDeclarations = useMemo(() => {
+    if (!showWYSIWYG) return [];
+    return compileResult.blocks.flatMap(b => b.declarations);
+  }, [showWYSIWYG, compileResult]);
+
   // Convert to LaTeX document when panel is shown
   const latexNotations = useMemo(() => makeDefaultNotations(), []);
   const latexDocument = useMemo(() => {
@@ -1867,6 +1873,7 @@ export function TextEditorPage() {
           }}>
             <WYSIWYGPanel
               declarations={compiledDeclarations}
+              allDeclarations={allCompiledDeclarations}
               onCodeChange={setCode}
             />
           </div>

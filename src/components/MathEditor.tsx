@@ -12,7 +12,7 @@ import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { MathEditorState, createEditorState, MathRow, MathNode } from '../math-editor/types';
 import { handleInput, InputAction, getCommandCandidates, getSelectedCandidate } from '../math-editor/input';
-import { moveRight, moveLeft, moveUp, moveDown, resolveRow, findChildIndex, getSlots, getSlotRow, clampOffsetBeforeHoles } from '../math-editor/navigation';
+import { moveRight, moveLeft, moveUp, moveDown, exitCompound, resolveRow, findChildIndex, getSlots, getSlotRow, clampOffsetBeforeHoles } from '../math-editor/navigation';
 import { renderToLatexSegments } from '../math-editor/render';
 import { inferTypeSignatureParts } from '../math-editor/type-inference';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -52,7 +52,7 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
         katex.render(placeholderLatex, katexRef.current, {
           displayMode: false,
           throwOnError: false,
-          trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
+          trust: (context) => ['\\htmlId', '\\htmlClass'].includes(context.command),
           strict: false,
         });
       } catch {
@@ -76,7 +76,7 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
           katex.render(`\\displaystyle ${seg.latex}`, mathEl, {
             displayMode: false,
             throwOnError: false,
-            trust: (context) => ['\\htmlId', '\\class'].includes(context.command),
+            trust: (context) => ['\\htmlId', '\\htmlClass'].includes(context.command),
             strict: false,
           });
         } catch {
@@ -108,6 +108,13 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setState(prev => moveDown(prev));
+      return;
+    }
+
+    // Escape — exit current compound node to parent row
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setState(prev => exitCompound(prev));
       return;
     }
 
@@ -233,6 +240,7 @@ export function MathEditor({ initialState, onChange, placeholder, registry }: Ma
 
   return (
     <>
+      <style>{`.cursor-compound { outline: 1px solid rgba(88, 166, 255, 0.25); outline-offset: 2px; border-radius: 3px; }`}</style>
       <div
         ref={containerRef}
         tabIndex={0}

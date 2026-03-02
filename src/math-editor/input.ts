@@ -59,6 +59,7 @@ function replaceSlot(
     case 'BigOp':
       if (slotName === 'below') return { ...node, below: transform(node.below!) };
       if (slotName === 'above') return { ...node, above: transform(node.above!) };
+      if (slotName === 'body') return { ...node, body: transform(node.body) };
       return node;
     case 'Accent':
       if (slotName === 'body') return { ...node, body: transform(node.body) };
@@ -155,7 +156,6 @@ const COMMAND_TABLE: Record<string, CommandEntry> = {
   lim: {
     create: () => mkBigOp('lim', mkRow([mkHole(), mkSymbol('\\to'), mkHole()]), null),
     cursorSlot: 'below',
-    afterNodes: () => [mkHole()],
   },
 };
 
@@ -292,8 +292,10 @@ function handleChar(state: MathEditorState, char: string): MathEditorState {
       // Enter text mode
       return { ...state, textBuffer: '' };
 
-    default:
-      return insertSymbol(state, char);
+    default: {
+      const inserted = insertSymbol(state, char);
+      return tryMergeKeyword(inserted);
+    }
   }
 }
 
@@ -324,6 +326,54 @@ function insertSymbol(state: MathEditorState, value: string): MathEditorState {
   const newRow = insertAtOffset(row, offset, mkSymbol(value));
   const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
   return { ...state, root: newRoot, cursor: { path: state.cursor.path, offset: offset + 1 } };
+}
+
+/**
+ * Grammar keywords that should be auto-merged from consecutive letter symbols.
+ * When the user types 'I','f' and "if" is in this set, the two Symbol nodes
+ * are replaced with a single Text('If') node.
+ */
+const AUTO_MERGE_KEYWORDS = new Set(['if', 'let', 'assume', 'and', 'then', 'forall']);
+
+/**
+ * After inserting a symbol, check if the last N symbols at the cursor spell
+ * a recognized keyword. If so, merge them into a Text node.
+ * Only merges when preceded by a non-letter (word boundary).
+ */
+function tryMergeKeyword(state: MathEditorState): MathEditorState {
+  const row = resolveRow(state.root, state.cursor.path);
+  const offset = state.cursor.offset;
+
+  // Scan backwards from cursor collecting consecutive single-char letter Symbols
+  let word = '';
+  let startIdx = offset - 1;
+  while (startIdx >= 0) {
+    const node = row.children[startIdx];
+    if (node.tag !== 'Symbol' || node.value.length !== 1 || !/^[a-zA-Z]$/.test(node.value)) break;
+    word = node.value + word;
+    if (AUTO_MERGE_KEYWORDS.has(word.toLowerCase())) {
+      // Only merge if preceded by a non-letter or at the start of the row
+      const preceded = startIdx > 0 ? row.children[startIdx - 1] : null;
+      const precededByLetter = preceded !== null &&
+        preceded.tag === 'Symbol' && preceded.value.length === 1 && /^[a-zA-Z]$/.test(preceded.value);
+      if (!precededByLetter) {
+        // Replace symbols [startIdx..offset-1] with Text(word)
+        const textNode = mkText(word);
+        const newChildren = [...row.children];
+        newChildren.splice(startIdx, offset - startIdx, textNode);
+        const newRow: MathRow = { ...row, children: newChildren };
+        const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
+        return {
+          ...state,
+          root: newRoot,
+          cursor: { ...state.cursor, offset: startIdx + 1 },
+        };
+      }
+    }
+    startIdx--;
+  }
+
+  return state;
 }
 
 // ============================================================================
@@ -530,10 +580,8 @@ function handleBackspace(state: MathEditorState): MathEditorState {
       return dissolveCompound(state, row, offset - 1, leftNode.body);
     }
     if (leftNode.tag === 'BigOp') {
-      // Just delete the BigOp
-      const newRow = removeAtIndex(row, offset - 1);
-      const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
-      return { ...state, root: newRoot, cursor: { path: state.cursor.path, offset: offset - 1 } };
+      // Dissolve: spill body content
+      return dissolveCompound(state, row, offset - 1, leftNode.body);
     }
   }
 

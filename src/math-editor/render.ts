@@ -104,6 +104,11 @@ function renderRow(row: MathRow, cursor: CursorState, currentPath: RowPath): str
 
 function renderNode(node: MathNode, cursor: CursorState, currentPath: RowPath): string {
   const inner = renderNodeInner(node, cursor, currentPath);
+  // Highlight compound nodes that contain the cursor
+  const isActiveCompound = cursor.path.some(seg => seg.nodeId === node.id);
+  if (isActiveCompound) {
+    return `\\htmlId{n-${node.id}}{\\htmlClass{cursor-compound}{${inner}}}`;
+  }
   return `\\htmlId{n-${node.id}}{${inner}}`;
 }
 
@@ -150,6 +155,8 @@ function renderNodeInner(node: MathNode, cursor: CursorState, currentPath: RowPa
         const above = renderRow(node.above, cursor, [...currentPath, { nodeId: node.id, slot: 'above' }]);
         result += `^{${above}}`;
       }
+      const bigopBody = renderRow(node.body, cursor, [...currentPath, { nodeId: node.id, slot: 'body' }]);
+      result += bigopBody;
       return result;
     }
 
@@ -223,6 +230,7 @@ function renderNodeStatic(node: MathNode): string {
       let r = `\\${node.operator}`;
       if (node.below !== null) r += `_{${renderRowStatic(node.below)}}`;
       if (node.above !== null) r += `^{${renderRowStatic(node.above)}}`;
+      r += renderRowStatic(node.body);
       return r;
     }
     case 'Accent': {

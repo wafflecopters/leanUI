@@ -18,7 +18,7 @@ import { MathNode, MathRow } from './types';
 export type PatternElement =
   | { tag: 'literal'; symbol: string }
   | { tag: 'capture'; name: string }
-  | { tag: 'bigop'; operator: string; below: PatternElement[] | null; above: PatternElement[] | null }
+  | { tag: 'bigop'; operator: string; below: PatternElement[] | null; above: PatternElement[] | null; body: PatternElement[] | null }
   | { tag: 'frac'; numer: PatternElement[]; denom: PatternElement[] }
   | { tag: 'delimiter'; open: string; close: string; inner: PatternElement[] }
   | { tag: 'accent'; accent: string; body: PatternElement[] }
@@ -29,8 +29,8 @@ export type PatternElement =
 export const pat = {
   literal: (symbol: string): PatternElement => ({ tag: 'literal', symbol }),
   capture: (name: string): PatternElement => ({ tag: 'capture', name }),
-  bigop: (operator: string, below: PatternElement[] | null, above: PatternElement[] | null = null): PatternElement =>
-    ({ tag: 'bigop', operator, below, above }),
+  bigop: (operator: string, below: PatternElement[] | null, above: PatternElement[] | null = null, body: PatternElement[] | null = null): PatternElement =>
+    ({ tag: 'bigop', operator, below, above, body }),
   frac: (numer: PatternElement[], denom: PatternElement[]): PatternElement =>
     ({ tag: 'frac', numer, denom }),
   delimiter: (open: string, close: string, inner: PatternElement[]): PatternElement =>
@@ -57,7 +57,7 @@ export interface SyntaxEntry {
 
 export interface SyntaxRegistry {
   entries: SyntaxEntry[];
-  symbolMap: Map<string, { source: string; needsR: boolean }>;
+  symbolMap: Map<string, { source: string; needsR: boolean; isRecord?: boolean }>;
   parent?: SyntaxRegistry;
 }
 
@@ -119,6 +119,11 @@ export function matchRow(pattern: PatternElement[], nodes: readonly MathNode[]):
         if (pe.above !== null) {
           if (node.above === null) return null;
           const sub = matchRow(pe.above, node.above.children);
+          if (sub === null) return null;
+          mergeBindings(bindings, sub);
+        }
+        if (pe.body !== null) {
+          const sub = matchRow(pe.body, node.body.children);
           if (sub === null) return null;
           mergeBindings(bindings, sub);
         }
@@ -315,7 +320,7 @@ function getSortedEntries(registry: SyntaxRegistry): SyntaxEntry[] {
 }
 
 /** Look up a symbol in the registry chain's symbolMaps. */
-function lookupSymbol(registry: SyntaxRegistry, value: string): { source: string; needsR: boolean } | undefined {
+export function lookupSymbol(registry: SyntaxRegistry, value: string): { source: string; needsR: boolean; isRecord?: boolean } | undefined {
   let current: SyntaxRegistry | undefined = registry;
   while (current) {
     const mapped = current.symbolMap.get(value);
@@ -397,7 +402,9 @@ function convertSingleNode(registry: SyntaxRegistry, node: MathNode): ConvertRes
               converted.set(name, r.source);
               if (r.needsR) nr = true;
             }
-            return { source: substituteTemplate(entry.template, converted), needsR: nr };
+            const src = substituteTemplate(entry.template, converted);
+            // Wrap in parens — BigOp produces multi-arg applications that need grouping
+            return { source: `(${src})`, needsR: nr };
           }
         }
       }
@@ -518,7 +525,8 @@ function patternElementToLatex(pe: PatternElement): string {
       const op = `\\${pe.operator}`;
       const below = pe.below ? `_{${pe.below.map(p => patternElementToLatex(p)).join(' ')}}` : '';
       const above = pe.above ? `^{${pe.above.map(p => patternElementToLatex(p)).join(' ')}}` : '';
-      return `${op}${below}${above}`;
+      const body = pe.body ? ` ${pe.body.map(p => patternElementToLatex(p)).join(' ')}` : '';
+      return `${op}${below}${above}${body}`;
     }
     case 'frac': {
       const n = pe.numer.map(p => patternElementToLatex(p)).join(' ');
@@ -568,8 +576,7 @@ export function createDefaultRegistry(): SyntaxRegistry {
     {
       name: 'limit-equals',
       pattern: [
-        pat.bigop('lim', [pat.capture('x'), pat.literal('\\to'), pat.capture('a')]),
-        pat.capture('body'),
+        pat.bigop('lim', [pat.capture('x'), pat.literal('\\to'), pat.capture('a')], null, [pat.capture('body')]),
         pat.literal('='),
         pat.capture('L'),
       ],
@@ -582,8 +589,7 @@ export function createDefaultRegistry(): SyntaxRegistry {
     {
       name: 'limit',
       pattern: [
-        pat.bigop('lim', [pat.capture('x'), pat.literal('\\to'), pat.capture('a')]),
-        pat.capture('body'),
+        pat.bigop('lim', [pat.capture('x'), pat.literal('\\to'), pat.capture('a')], null, [pat.capture('body')]),
       ],
       template: 'Limit (\\$x => $body) $$a',
       needsR: true,
@@ -690,6 +696,410 @@ export function createDefaultRegistry(): SyntaxRegistry {
       priority: 5,
     },
   ];
+
+  return { entries, symbolMap };
+}
+
+// ============================================================================
+// @syntax annotation parser — converts pattern strings to SyntaxEntry objects
+// ============================================================================
+
+/** Known LaTeX command abbreviations for common symbols. */
+const LATEX_ABBREVIATIONS: Record<string, string> = {
+  '\\N': '\\mathbb{N}',
+  '\\R': '\\mathbb{R}',
+  '\\Z': '\\mathbb{Z}',
+};
+
+/** BigOp operators: LaTeX command → internal operator name. */
+const BIGOP_OPERATORS: Record<string, string> = {
+  '\\sum': 'sum',
+  '\\prod': 'prod',
+  '\\int': 'int',
+  '\\lim': 'lim',
+};
+
+export interface ParsedSyntaxAnnotation {
+  /** Symbol mapping (no captures): e.g., \mathbb{N} → Nat */
+  symbolMapping?: { symbol: string; source: string };
+  /** Pattern entry (has captures): e.g., $0 + $1 → plus $$0 $$1 */
+  entry?: SyntaxEntry;
+}
+
+/**
+ * Parse a @syntax annotation string and generate the corresponding
+ * symbol mapping or pattern entry.
+ *
+ * Pattern syntax:
+ *   $N        — capture for explicit arg N (0-indexed)
+ *   $Name     — capture for implicit arg Name (uppercase first letter)
+ *   \command  — LaTeX command (\N, \R, \Z are expanded to \mathbb{...})
+ *   _{...}    — subscript (creates Sub pattern; or BigOp below slot)
+ *   ^{...}    — superscript (creates Sup pattern; or BigOp above slot)
+ *   \prime    — as postfix, creates Sup with prime
+ *   other     — literal symbol
+ *
+ * If the pattern contains no captures, it becomes a symbol mapping.
+ * Otherwise it becomes a SyntaxEntry with auto-generated template.
+ */
+export function parseSyntaxAnnotation(
+  patternStr: string,
+  declName: string,
+  priority?: number,
+): ParsedSyntaxAnnotation {
+  // Split on @becomes for explicit template override
+  const becomesIdx = patternStr.indexOf(' @becomes ');
+  const rawPattern = becomesIdx >= 0 ? patternStr.slice(0, becomesIdx) : patternStr;
+  const explicitTemplate = becomesIdx >= 0 ? patternStr.slice(becomesIdx + ' @becomes '.length).trim() : null;
+
+  const elements = parsePatternString(rawPattern);
+
+  const hasCaptures = containsCaptures(elements);
+
+  if (!hasCaptures) {
+    // Symbol mapping: the entire pattern is literal(s)
+    const symbol = elementsToSymbol(elements);
+    return { symbolMapping: { symbol, source: declName } };
+  }
+
+  // Use explicit template or auto-generate from captures
+  const template = explicitTemplate ?? generateTemplate(declName, elements);
+  const effectivePriority = priority ?? computeDefaultPriority(elements);
+
+  return {
+    entry: {
+      name: declName,
+      pattern: elements,
+      template,
+      priority: effectivePriority,
+    },
+  };
+}
+
+/**
+ * Parse a pattern string into PatternElement[].
+ * Handles LaTeX commands, captures ($N/$Name), subscripts, superscripts, BigOps.
+ */
+export function parsePatternString(input: string): PatternElement[] {
+  let i = 0;
+
+  function skipSpaces(): void {
+    while (i < input.length && input[i] === ' ') i++;
+  }
+
+  function parseCapture(): PatternElement {
+    i++; // skip $
+    let name = '';
+    while (i < input.length && /[a-zA-Z0-9_]/.test(input[i])) {
+      name += input[i]; i++;
+    }
+    if (name === '') name = '?'; // malformed capture
+    return pat.capture(name);
+  }
+
+  function parseLaTeXCommand(): string {
+    let cmd = '\\';
+    i++; // skip \
+    while (i < input.length && /[a-zA-Z]/.test(input[i])) {
+      cmd += input[i]; i++;
+    }
+    // Handle \mathbb{X} — consume the {X} part
+    if (cmd === '\\mathbb' && i < input.length && input[i] === '{') {
+      i++; // skip {
+      let arg = '';
+      while (i < input.length && input[i] !== '}') {
+        arg += input[i]; i++;
+      }
+      if (i < input.length && input[i] === '}') i++; // skip }
+      cmd = `\\mathbb{${arg}}`;
+    }
+    // Apply abbreviations
+    if (cmd in LATEX_ABBREVIATIONS) cmd = LATEX_ABBREVIATIONS[cmd];
+    return cmd;
+  }
+
+  function parseBraced(): PatternElement[] {
+    i++; // skip {
+    const elems: PatternElement[] = [];
+    while (i < input.length && input[i] !== '}') {
+      skipSpaces();
+      if (i >= input.length || input[i] === '}') break;
+      const elem = parseElement();
+      if (elem) elems.push(elem);
+    }
+    if (i < input.length && input[i] === '}') i++; // skip }
+    return elems;
+  }
+
+  function parseSingleOrBraced(): PatternElement[] {
+    skipSpaces();
+    if (i < input.length && input[i] === '{') {
+      return parseBraced();
+    }
+    // Single element
+    const elem = parseElement();
+    return elem ? [elem] : [];
+  }
+
+  function parseElement(): PatternElement | null {
+    skipSpaces();
+    if (i >= input.length) return null;
+
+    const ch = input[i];
+
+    // Capture: $name
+    if (ch === '$') {
+      const capture = parseCapture();
+      return applyPostfix(capture);
+    }
+
+    // LaTeX command: \command
+    if (ch === '\\') {
+      const cmd = parseLaTeXCommand();
+
+      // Check if this is a BigOp operator
+      if (cmd in BIGOP_OPERATORS) {
+        return parseBigOp(BIGOP_OPERATORS[cmd]);
+      }
+
+      const literal = pat.literal(cmd);
+      return applyPostfix(literal);
+    }
+
+    // Skip braces used for grouping (not meaningful at top level)
+    if (ch === '{' || ch === '}') {
+      i++;
+      return null; // will be skipped
+    }
+
+    // Regular character: literal
+    i++;
+    const literal = pat.literal(ch);
+    return applyPostfix(literal);
+  }
+
+  function applyPostfix(base: PatternElement): PatternElement {
+    // Check for \prime postfix → creates Sup with prime
+    if (i < input.length && input[i] === '\\') {
+      const savedI = i;
+      const cmd = parseLaTeXCommand();
+      if (cmd === '\\prime') {
+        return pat.sup([base], [pat.literal('\\prime')]);
+      }
+      // Not a postfix command — restore position
+      i = savedI;
+    }
+
+    // Check for subscript
+    if (i < input.length && input[i] === '_') {
+      i++; // skip _
+      const sub = parseSingleOrBraced();
+      // Check for additional superscript after subscript
+      skipSpaces();
+      if (i < input.length && input[i] === '^') {
+        i++; // skip ^
+        // For now, ignore the sup part of a SubSup on non-BigOp
+        // (would need SubSup pattern element)
+        parseSingleOrBraced();
+      }
+      return pat.sub([base], sub);
+    }
+
+    // Check for superscript
+    if (i < input.length && input[i] === '^') {
+      i++; // skip ^
+      const sup = parseSingleOrBraced();
+      return pat.sup([base], sup);
+    }
+
+    return base;
+  }
+
+  function parseBigOp(operator: string): PatternElement {
+    let below: PatternElement[] | null = null;
+    let above: PatternElement[] | null = null;
+    let body: PatternElement[] | null = null;
+
+    skipSpaces();
+    if (i < input.length && input[i] === '_') {
+      i++; // skip _
+      below = parseSingleOrBraced();
+    }
+
+    skipSpaces();
+    if (i < input.length && input[i] === '^') {
+      i++; // skip ^
+      above = parseSingleOrBraced();
+    }
+
+    // Parse one body element (the expression being operated on)
+    skipSpaces();
+    if (i < input.length) {
+      const el = parseElement();
+      if (el) body = [el];
+    }
+
+    return pat.bigop(operator, below, above, body);
+  }
+
+  // Parse all elements
+  const result: PatternElement[] = [];
+  while (i < input.length) {
+    skipSpaces();
+    if (i >= input.length) break;
+    const elem = parseElement();
+    if (elem) result.push(elem);
+  }
+
+  return result;
+}
+
+// ============================================================================
+// Helpers for parseSyntaxAnnotation
+// ============================================================================
+
+/** Check if a pattern element tree contains any captures. */
+function containsCaptures(elements: PatternElement[]): boolean {
+  for (const e of elements) {
+    switch (e.tag) {
+      case 'capture': return true;
+      case 'sub': if (containsCaptures(e.base) || containsCaptures(e.sub)) return true; break;
+      case 'sup': if (containsCaptures(e.base) || containsCaptures(e.sup)) return true; break;
+      case 'bigop':
+        if ((e.below !== null && containsCaptures(e.below)) ||
+            (e.above !== null && containsCaptures(e.above)) ||
+            (e.body !== null && containsCaptures(e.body))) return true;
+        break;
+      case 'frac': if (containsCaptures(e.numer) || containsCaptures(e.denom)) return true; break;
+      case 'delimiter': if (containsCaptures(e.inner)) return true; break;
+      case 'accent': if (containsCaptures(e.body)) return true; break;
+    }
+  }
+  return false;
+}
+
+/** Collect all capture names from a pattern, in the order they appear. */
+function collectCaptures(elements: PatternElement[]): string[] {
+  const captures: string[] = [];
+  function walk(elems: PatternElement[]) {
+    for (const e of elems) {
+      switch (e.tag) {
+        case 'capture': captures.push(e.name); break;
+        case 'sub': walk(e.base); walk(e.sub); break;
+        case 'sup': walk(e.base); walk(e.sup); break;
+        case 'bigop':
+          if (e.below) walk(e.below);
+          if (e.above) walk(e.above);
+          if (e.body) walk(e.body);
+          break;
+        case 'frac': walk(e.numer); walk(e.denom); break;
+        case 'delimiter': walk(e.inner); break;
+        case 'accent': walk(e.body); break;
+      }
+    }
+  }
+  walk(elements);
+  return captures;
+}
+
+/**
+ * Generate a TT source template from declaration name and pattern captures.
+ *
+ * - Numbered captures ($0, $1, $2) → explicit args: `$$0 $$1 $$2`
+ * - Named captures ($A, $B) → implicit args: `{$$A} {$$B}`
+ * - Implicits emitted first (in appearance order), then explicits (in numeric order)
+ */
+function generateTemplate(declName: string, elements: PatternElement[]): string {
+  const captures = collectCaptures(elements);
+
+  // Separate named (implicit) and numbered (explicit) captures
+  const implicitCaptures = captures.filter(c => /^[A-Z]/.test(c));
+  const explicitCaptures = captures
+    .filter(c => /^\d/.test(c))
+    .sort((a, b) => parseInt(a) - parseInt(b));
+
+  const parts = [declName];
+
+  for (const c of implicitCaptures) {
+    parts.push(`{$$${c}}`);
+  }
+
+  for (const c of explicitCaptures) {
+    parts.push(`$$${c}`);
+  }
+
+  return parts.join(' ');
+}
+
+/** Convert literal-only elements to a single symbol string. */
+function elementsToSymbol(elements: PatternElement[]): string {
+  if (elements.length === 1 && elements[0].tag === 'literal') {
+    return elements[0].symbol;
+  }
+  return elements.map(e => e.tag === 'literal' ? e.symbol : '?').join('');
+}
+
+/**
+ * Compute a default priority for a pattern.
+ * - Infix (starts with capture): 10, or 5 for = and → operators
+ * - Structural (starts with non-capture): 50
+ */
+function computeDefaultPriority(elements: PatternElement[]): number {
+  if (elements[0]?.tag === 'capture') {
+    // Check for wide-binding operators
+    for (const e of elements) {
+      if (e.tag === 'literal' && (e.symbol === '=' || e.symbol === '\\to')) {
+        return 5;
+      }
+    }
+    return 10;
+  }
+  return 50;
+}
+
+// ============================================================================
+// Registry builder — construct a SyntaxRegistry from @syntax annotations
+// ============================================================================
+
+export interface SyntaxAnnotation {
+  declName: string;
+  pattern: string;
+  isRecord?: boolean;
+}
+
+/**
+ * Build a SyntaxRegistry from a list of @syntax annotations.
+ *
+ * Annotations are processed in order. For infix patterns, earlier definitions
+ * bind wider (lower priority value → tried first in ascending sort).
+ * For structural patterns, later definitions bind tighter (higher priority
+ * value → tried first in descending sort).
+ */
+export function buildRegistryFromAnnotations(annotations: SyntaxAnnotation[]): SyntaxRegistry {
+  const symbolMap = new Map<string, { source: string; needsR: boolean; isRecord?: boolean }>();
+  const entries: SyntaxEntry[] = [];
+
+  let infixCounter = 5;   // Incrementing: earlier → lower → binds wider
+  let structuralCounter = 50; // Incrementing: later → higher → tried first
+
+  for (const ann of annotations) {
+    const result = parseSyntaxAnnotation(ann.pattern, ann.declName);
+
+    if (result.symbolMapping) {
+      symbolMap.set(result.symbolMapping.symbol, { source: result.symbolMapping.source, needsR: false, isRecord: ann.isRecord });
+    }
+
+    if (result.entry) {
+      if (result.entry.pattern[0]?.tag === 'capture') {
+        // Infix pattern: use incrementing counter
+        result.entry.priority = infixCounter++;
+      } else {
+        // Structural pattern: use incrementing counter
+        result.entry.priority = structuralCounter++;
+      }
+      entries.push(result.entry);
+    }
+  }
 
   return { entries, symbolMap };
 }

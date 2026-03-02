@@ -1,21 +1,28 @@
 export const NAT_MATH_CODE = `-- Nat Math: semiring, triangle sum, and ordering proofs by pattern matching
 -- Includes all 12 semiring properties, sum(1..n) = n(n+1)/2, and Leq properties
 
+@syntax \\N
 inductive Nat : Type where
+  @syntax 0
   Zero : Nat
+  @syntax $0\\prime
   Succ : Nat -> Nat
 
+@syntax $0 =_{$A} $1
 inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {a : A} -> Equal a a
 
+@syntax $0 + $1
 plus : Nat -> Nat -> Nat
 plus Zero m = m
 plus (Succ n) m = Succ (plus n m)
 
+@syntax $0 \\cdot $1
 mul : Nat -> Nat -> Nat
 mul Zero m = Zero
 mul (Succ n) m = plus m (mul n m)
 
+@syntax 1
 one : Nat
 one = Succ Zero
 
@@ -141,6 +148,7 @@ doubleSum = ?TODO
 -- Leq: ordering on Nat with reflexivity, transitivity, antisymmetry
 ------------------------------------------------------------
 
+@syntax $0 \\leq $1
 inductive Leq : Nat -> Nat -> Type where
   LeqZero : {n : Nat} -> Leq Zero n
   LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)

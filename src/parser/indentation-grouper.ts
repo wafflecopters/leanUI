@@ -305,6 +305,27 @@ export function groupByIndentation(source: string): SourceBlock[] {
         // Non-indented code line - attach any pending comments
         const trimmed = line.trim();
 
+        // @syntax directive lines attach to the next declaration (like comments)
+        if (/^@syntax\s/.test(trimmed)) {
+          if (inBlock) {
+            // End current block before collecting the directive
+            blocks.push({
+              lines: currentBlock,
+              startLine: blockStartLine,
+              isInductive: isInductiveBlock,
+              isComment: false
+            });
+            currentBlock = [];
+            inBlock = false;
+            isInductiveBlock = false;
+          }
+          if (pendingAttachedComments.length === 0) {
+            pendingCommentsStartLine = lineNumber;
+          }
+          pendingAttachedComments.push(line);
+          continue;
+        }
+
         // Check if it's an inductive definition
         if (trimmed.startsWith('inductive ')) {
           // Start new inductive block

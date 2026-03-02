@@ -30,6 +30,7 @@ export function getSlots(node: MathNode): readonly SlotInfo[] {
       const slots: SlotInfo[] = [];
       if (node.below !== null) slots.push({ name: 'below' });
       if (node.above !== null) slots.push({ name: 'above' });
+      slots.push({ name: 'body' });
       return slots;
     }
     case 'Accent':
@@ -66,6 +67,7 @@ export function getSlotRow(node: MathNode, slotName: string): MathRow | null {
     case 'BigOp':
       if (slotName === 'below') return node.below;
       if (slotName === 'above') return node.above;
+      if (slotName === 'body') return node.body;
       return null;
     case 'Accent':
       if (slotName === 'body') return node.body;
@@ -147,7 +149,12 @@ export function moveRight(state: MathEditorState): MathEditorState {
   } else {
     // Exiting compound node — cursor after it in parent row
     const parentNodeIndex = findChildIndex(parentRow, lastSeg.nodeId);
-    return { ...state, cursor: { path: parentPath, offset: parentNodeIndex + 1 } };
+    const newState = { ...state, cursor: { path: parentPath, offset: parentNodeIndex + 1 } };
+    // If we landed at end of parent row and still inside a compound, keep bubbling
+    if (parentNodeIndex + 1 >= parentRow.children.length && parentPath.length > 0) {
+      return moveRight(newState);
+    }
+    return newState;
   }
 }
 
@@ -237,8 +244,9 @@ function getVerticalNeighbors(node: MathNode, currentSlot: string): VerticalNeig
       if (currentSlot === 'sup') return { above: null, below: 'base' };
       return { above: null, below: null };
     case 'BigOp':
-      if (currentSlot === 'below') return { above: 'above', below: null };
-      if (currentSlot === 'above') return { above: null, below: 'below' };
+      if (currentSlot === 'below') return { above: node.above !== null ? 'above' : null, below: null };
+      if (currentSlot === 'above') return { above: null, below: node.below !== null ? 'below' : null };
+      if (currentSlot === 'body') return { above: null, below: null };
       return { above: null, below: null };
     default:
       return { above: null, below: null };
@@ -277,10 +285,14 @@ export function moveDown(state: MathEditorState): MathEditorState {
 }
 
 function moveVertical(state: MathEditorState, direction: 'up' | 'down'): MathEditorState {
-  // Case 1: Cursor is inside a slot — try vertical neighbor within same compound node
-  if (state.cursor.path.length > 0) {
-    const lastSeg = state.cursor.path[state.cursor.path.length - 1];
-    const parentPath = state.cursor.path.slice(0, -1);
+  // Case 1: Walk up the path hierarchy looking for a vertical neighbor.
+  // e.g. cursor inside Delimiter.inner inside Frac.numer — Delimiter has no
+  // vertical neighbor, so bubble up to Frac which has numer↔denom.
+  let currentPath = state.cursor.path;
+
+  while (currentPath.length > 0) {
+    const lastSeg = currentPath[currentPath.length - 1];
+    const parentPath = currentPath.slice(0, -1);
     const parentRow = resolveRow(state.root, parentPath);
     const parentNode = parentRow.children.find(c => c.id === lastSeg.nodeId);
 
@@ -302,10 +314,10 @@ function moveVertical(state: MathEditorState, direction: 'up' | 'down'): MathEdi
           };
         }
       }
-
-      // No vertical neighbor found — check if the BigOp's target slot is null
-      // (e.g., lim has no 'above'). Try exiting and looking at parent row.
     }
+
+    // No vertical neighbor at this level — try parent
+    currentPath = parentPath;
   }
 
   // Case 2: Cursor in a row (root or parent) — look at adjacent compound nodes
@@ -374,4 +386,16 @@ export function rowPathEquals(a: RowPath, b: RowPath): boolean {
     if (a[i].nodeId !== b[i].nodeId || a[i].slot !== b[i].slot) return false;
   }
   return true;
+}
+
+/** Exit the current compound node, placing cursor after it in the parent row. */
+export function exitCompound(state: MathEditorState): MathEditorState {
+  if (state.cursor.path.length === 0) return state; // Already at root
+
+  const parentPath = state.cursor.path.slice(0, -1);
+  const lastSeg = state.cursor.path[state.cursor.path.length - 1];
+  const parentRow = resolveRow(state.root, parentPath);
+  const parentNodeIndex = findChildIndex(parentRow, lastSeg.nodeId);
+
+  return { ...state, cursor: { path: parentPath, offset: parentNodeIndex + 1 } };
 }

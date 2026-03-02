@@ -105,6 +105,10 @@ export interface ElabDeclaration {
   elabErrorPath?: string;
   /** Postulate: type-only declaration with no value (axiom) */
   isPostulate?: boolean;
+  /** @syntax annotation pattern string for structured math editor */
+  syntax?: string;
+  /** @syntax annotations on constructors */
+  constructorSyntax?: Array<{ name: string; syntax: string }>;
   /** For with-clause auxiliaries: metadata needed for scrutinee type resolution */
   withScrutineeCount?: number;
   newScrutineeCount?: number; // For nested withs: how many scrutinees are NEW (vs inherited from parent)
@@ -200,6 +204,11 @@ export interface CompiledDeclaration {
 
   // Tactic InfoTree for goal-at-cursor feature
   tacticInfoTree?: TacticInfoTree;
+
+  // @syntax annotation pattern string for structured math editor
+  syntax?: string;
+  // @syntax annotations on constructors
+  constructorSyntax?: Array<{ name: string; syntax: string }>;
 }
 
 /**
@@ -533,6 +542,19 @@ export function extractDirectiveTokens(source: string): SemanticToken[] {
           column: valueIndex + 1,
           length: value.length,
           type: 'directiveValue'
+        });
+      }
+    }
+
+    // For @syntax lines, also highlight @becomes keyword
+    if (directive === '@syntax') {
+      const becomesMatch = line.match(/@becomes\b/);
+      if (becomesMatch && becomesMatch.index !== undefined) {
+        tokens.push({
+          line: lineIndex + 1,
+          column: becomesMatch.index + 1,
+          length: '@becomes'.length,
+          type: 'directive'
         });
       }
     }
@@ -2506,6 +2528,11 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           });
         }
 
+        // Collect @syntax annotations from constructors
+        const constructorSyntax = decl.constructors
+          ?.filter(c => c.syntax !== undefined)
+          .map(c => ({ name: c.name, syntax: c.syntax! }));
+
         elabDeclarations.push({
           name: decl.name,
           kind: decl.kind === 'inductive' ? 'inductive' : 'term',
@@ -2519,7 +2546,9 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           kernelConstructors,
           isPostulate: decl.isPostulate,
           elabMap,
-          sourceMap
+          sourceMap,
+          syntax: decl.syntax,
+          ...(constructorSyntax && constructorSyntax.length > 0 ? { constructorSyntax } : {}),
         });
       } catch (e) {
         // Elaboration error - record the error for later reporting
@@ -2528,6 +2557,10 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
         const elabErrorPath = e instanceof NamedArgElabError && e.surfacePath
           ? serializeIndexPath(e.surfacePath)
           : undefined;
+        const constructorSyntaxErr = decl.constructors
+          ?.filter(c => c.syntax !== undefined)
+          .map(c => ({ name: c.name, syntax: c.syntax! }));
+
         elabDeclarations.push({
           name: decl.name,
           kind: decl.kind === 'inductive' ? 'inductive' : 'term',
@@ -2538,6 +2571,8 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
           sourceMap,
           elabError: errorMessage,
           elabErrorPath,
+          syntax: decl.syntax,
+          ...(constructorSyntaxErr && constructorSyntaxErr.length > 0 ? { constructorSyntax: constructorSyntaxErr } : {}),
         });
       }
     }
@@ -2851,6 +2886,8 @@ function checkDeclaration(
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap: typeInfoMap.size > 0 ? typeInfoMap : undefined,
     tacticInfoTree: tacticInfoTree,
+    syntax: decl.syntax,
+    constructorSyntax: decl.constructorSyntax,
   };
 
   return { compiled, newDefinitions, errorCount };
@@ -3807,6 +3844,11 @@ function createCompiledDeclaration(
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap,
     tacticInfoTree,
+    syntax: decl.syntax,
+    constructorSyntax: (() => {
+      const cs = decl.constructors?.filter(c => c.syntax !== undefined).map(c => ({ name: c.name, syntax: c.syntax! }));
+      return cs && cs.length > 0 ? cs : undefined;
+    })(),
   };
 }
 
@@ -5257,6 +5299,7 @@ function processTermDeclaration(
     isPostulate: decl.isPostulate,
     elabMap,
     sourceMap,
+    syntax: decl.syntax,
     withScrutineeCount: decl.withScrutineeCount,
     newScrutineeCount: decl.newScrutineeCount,
     withScrutineeExprs: decl.withScrutineeExprs,

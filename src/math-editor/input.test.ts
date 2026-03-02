@@ -411,7 +411,7 @@ describe('command mode (\\)', () => {
     expect(s.cursor.path[0].slot).toBe('below');
   });
 
-  test('\\lim creates BigOp with □→□ below and trailing □', () => {
+  test('\\lim creates BigOp with □→□ below and body □', () => {
     const root = mkRow([]);
     let s = mkState(root, { path: [], offset: 0 });
     s = handleInput(s, char('\\'));
@@ -419,8 +419,8 @@ describe('command mode (\\)', () => {
     s = handleInput(s, char('i'));
     s = handleInput(s, char('m'));
 
-    // BigOp + trailing Hole
-    expect(s.root.children).toHaveLength(2);
+    // Just BigOp (body is now inside it)
+    expect(s.root.children).toHaveLength(1);
     const op = s.root.children[0];
     expect(op.tag).toBe('BigOp');
     if (op.tag === 'BigOp') {
@@ -433,9 +433,10 @@ describe('command mode (\\)', () => {
       expect(op.below!.children[1].tag).toBe('Symbol');
       expect((op.below!.children[1] as any).value).toBe('\\to');
       expect(op.below!.children[2].tag).toBe('Hole');
+      // Body slot: [Hole]
+      expect(op.body.children).toHaveLength(1);
+      expect(op.body.children[0].tag).toBe('Hole');
     }
-    // Trailing body Hole
-    expect(s.root.children[1].tag).toBe('Hole');
   });
 
   test('\\vec creates an accent', () => {
@@ -905,5 +906,179 @@ describe('text mode', () => {
     // 'text' is unique in SYMBOL_TABLE → auto-fires → enters text mode
     expect(s.commandBuffer).toBe(null);
     expect(s.textBuffer).toBe('');
+  });
+
+  test('typing "if" in text mode creates TextNode', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    s = handleInput(s, char(' ')); // enter text mode
+    expect(s.textBuffer).toBe('');
+    s = handleInput(s, char('i'));
+    expect(s.textBuffer).toBe('i');
+    s = handleInput(s, char('f'));
+    expect(s.textBuffer).toBe('if');
+    s = handleInput(s, char(' ')); // commit
+    expect(s.textBuffer).toBe(null);
+    expect(s.root.children).toHaveLength(1);
+    expect(s.root.children[0].tag).toBe('Text');
+    expect((s.root.children[0] as any).content).toBe('if');
+  });
+
+  test('full sequence: <sp>If<sp> a \\in R', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    // Type "If" as text
+    s = handleInput(s, char(' '));
+    s = handleInput(s, char('I'));
+    s = handleInput(s, char('f'));
+    s = handleInput(s, char(' '));
+    // Type 'a'
+    s = handleInput(s, char('a'));
+    // Type \in
+    s = handleInput(s, char('\\'));
+    s = handleInput(s, char('i'));
+    s = handleInput(s, char('n'));
+    // 'in' is exact match but 'infty' also matches, so press space to accept
+    s = handleInput(s, char(' '));
+    // Type R
+    s = handleInput(s, char('R'));
+
+    // Should have: Text('If'), Symbol('a'), Symbol('\\in'), Symbol('R')
+    // Note: \R maps to \\mathbb{R} but R here is typed as a raw character
+    expect(s.root.children).toHaveLength(4);
+    expect(s.root.children[0].tag).toBe('Text');
+    expect((s.root.children[0] as any).content).toBe('If');
+    expect(s.root.children[1].tag).toBe('Symbol');
+    expect((s.root.children[1] as any).value).toBe('a');
+    expect(s.root.children[2].tag).toBe('Symbol');
+    expect((s.root.children[2] as any).value).toBe('\\in');
+    expect(s.root.children[3].tag).toBe('Symbol');
+  });
+});
+
+// ============================================================================
+// Auto-merge keywords (typing letters directly merges recognized keywords)
+// ============================================================================
+
+describe('auto-merge keywords', () => {
+  test('typing I,f auto-merges into Text("If")', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    s = handleInput(s, char('I'));
+    expect(s.root.children).toHaveLength(1);
+    expect(s.root.children[0].tag).toBe('Symbol');
+
+    s = handleInput(s, char('f'));
+    // Should auto-merge into Text('If')
+    expect(s.root.children).toHaveLength(1);
+    expect(s.root.children[0].tag).toBe('Text');
+    expect((s.root.children[0] as any).content).toBe('If');
+    expect(s.cursor.offset).toBe(1);
+  });
+
+  test('typing L,e,t auto-merges into Text("Let")', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    s = handleInput(s, char('L'));
+    s = handleInput(s, char('e'));
+    s = handleInput(s, char('t'));
+    expect(s.root.children).toHaveLength(1);
+    expect(s.root.children[0].tag).toBe('Text');
+    expect((s.root.children[0] as any).content).toBe('Let');
+  });
+
+  test('typing a,n,d after non-letter auto-merges into Text("and")', () => {
+    // Simulate: after some symbol like \\mathbb{R}
+    const root = mkRow([mkSymbol('\\mathbb{R}')]);
+    let s = mkState(root, { path: [], offset: 1 });
+    s = handleInput(s, char('a'));
+    s = handleInput(s, char('n'));
+    s = handleInput(s, char('d'));
+    // Should merge into Text('and')
+    expect(s.root.children).toHaveLength(2);
+    expect(s.root.children[0].tag).toBe('Symbol');
+    expect(s.root.children[1].tag).toBe('Text');
+    expect((s.root.children[1] as any).content).toBe('and');
+  });
+
+  test('typing t,h,e,n auto-merges into Text("then")', () => {
+    const root = mkRow([mkSymbol(',')]);
+    let s = mkState(root, { path: [], offset: 1 });
+    s = handleInput(s, char('t'));
+    s = handleInput(s, char('h'));
+    s = handleInput(s, char('e'));
+    s = handleInput(s, char('n'));
+    expect(s.root.children).toHaveLength(2);
+    expect(s.root.children[1].tag).toBe('Text');
+    expect((s.root.children[1] as any).content).toBe('then');
+  });
+
+  test('does NOT merge when preceded by a letter (e.g. "band")', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    s = handleInput(s, char('b'));
+    s = handleInput(s, char('a'));
+    s = handleInput(s, char('n'));
+    s = handleInput(s, char('d'));
+    // Should NOT merge — preceded by letter 'b'
+    expect(s.root.children).toHaveLength(4);
+    expect(s.root.children.every(c => c.tag === 'Symbol')).toBe(true);
+  });
+
+  test('single letter does not merge (not a keyword)', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    s = handleInput(s, char('a'));
+    expect(s.root.children).toHaveLength(1);
+    expect(s.root.children[0].tag).toBe('Symbol');
+  });
+
+  test('full flow: If a ∈ ℝ and b ∈ ℝ, then a = a', () => {
+    let s = mkState(mkRow([]), { path: [], offset: 0 });
+    // "If"
+    s = handleInput(s, char('I'));
+    s = handleInput(s, char('f'));
+    expect(s.root.children[0].tag).toBe('Text');
+    // "a"
+    s = handleInput(s, char('a'));
+    // "∈" via \in
+    s = handleInput(s, char('\\'));
+    s = handleInput(s, char('i'));
+    s = handleInput(s, char('n'));
+    s = handleInput(s, char(' ')); // accept command
+    // "ℝ" via \R
+    s = handleInput(s, char('\\'));
+    s = handleInput(s, char('R'));
+    // "and"
+    s = handleInput(s, char('a'));
+    s = handleInput(s, char('n'));
+    s = handleInput(s, char('d'));
+    const andIdx = s.root.children.findIndex(c => c.tag === 'Text' && (c as any).content === 'and');
+    expect(andIdx).toBeGreaterThan(0);
+    // "b"
+    s = handleInput(s, char('b'));
+    // "∈ ℝ"
+    s = handleInput(s, char('\\'));
+    s = handleInput(s, char('i'));
+    s = handleInput(s, char('n'));
+    s = handleInput(s, char(' '));
+    s = handleInput(s, char('\\'));
+    s = handleInput(s, char('R'));
+    // ", then"
+    s = handleInput(s, char(','));
+    s = handleInput(s, char('t'));
+    s = handleInput(s, char('h'));
+    s = handleInput(s, char('e'));
+    s = handleInput(s, char('n'));
+    const thenIdx = s.root.children.findIndex(c => c.tag === 'Text' && (c as any).content === 'then');
+    expect(thenIdx).toBeGreaterThan(0);
+    // "a = a"
+    s = handleInput(s, char('a'));
+    s = handleInput(s, char('='));
+    s = handleInput(s, char('a'));
+
+    // Verify structure: Text('If'), Symbol('a'), Symbol('\\in'), Symbol('\\mathbb{R}'),
+    //                   Text('and'), Symbol('b'), Symbol('\\in'), Symbol('\\mathbb{R}'),
+    //                   Symbol(','), Text('then'), Symbol('a'), Symbol('='), Symbol('a')
+    const tags = s.root.children.map(c =>
+      c.tag === 'Text' ? `Text(${(c as any).content})` : `Symbol(${(c as any).value})`
+    );
+    expect(tags).toContain('Text(If)');
+    expect(tags).toContain('Text(and)');
+    expect(tags).toContain('Text(then)');
   });
 });

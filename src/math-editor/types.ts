@@ -84,13 +84,14 @@ export interface SubSupNode {
   readonly sup: MathRow;
 }
 
-/** \sum, \int, \prod, \lim — body is just the next nodes in parent row */
+/** \sum, \int, \prod, \lim — body is the expression being operated on */
 export interface BigOpNode {
   readonly tag: 'BigOp';
   readonly id: NodeId;
   readonly operator: 'sum' | 'int' | 'prod' | 'lim';
   readonly below: MathRow | null;
   readonly above: MathRow | null;
+  readonly body: MathRow;
 }
 
 /** \vec{body}, \hat{body}, \overline{body} */
@@ -172,8 +173,8 @@ export function mkSubSup(base: MathRow, sub: MathRow, sup: MathRow): SubSupNode 
   return { tag: 'SubSup', id: freshId(), base, sub, sup };
 }
 
-export function mkBigOp(operator: BigOpNode['operator'], below: MathRow | null, above: MathRow | null): BigOpNode {
-  return { tag: 'BigOp', id: freshId(), operator, below, above };
+export function mkBigOp(operator: BigOpNode['operator'], below: MathRow | null, above: MathRow | null, body?: MathRow): BigOpNode {
+  return { tag: 'BigOp', id: freshId(), operator, below, above, body: body ?? mkRow([mkHole()]) };
 }
 
 export function mkAccent(accent: AccentNode['accent'], body: MathRow): AccentNode {

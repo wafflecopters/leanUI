@@ -84,7 +84,8 @@ export type TokenType =
   | 'ABSURD'       // #absurd marker for absurd cases
   | 'BY'           // by keyword (for tactic proofs)
   | 'BULLET'       // · (middle dot, U+00B7, for tactic subgoal focusing)
-  | 'POSTULATE';   // postulate keyword (for axioms)
+  | 'POSTULATE'    // postulate keyword (for axioms)
+  | 'SYNTAX';      // @syntax annotation (value = pattern string)
 
 export interface Token {
   type: TokenType;
@@ -289,7 +290,7 @@ export class Lexer {
         continue;
       }
 
-      // Skip directive lines (@assumeK, @test, @name, etc.)
+      // Handle directive lines (@assumeK, @test, @name, @syntax, etc.)
       // Check if we're at start of line (col === 1) or only whitespace before @
       if (ch === '@') {
         const lineStart = this.pos - (this.col - 1);
@@ -297,7 +298,35 @@ export class Lexer {
         const onlyWhitespaceOrCommentBefore = /^(\s|--\s*)*$/.test(beforeAt);
 
         if (onlyWhitespaceOrCommentBefore) {
-          // Skip to end of line
+          // Check for @syntax annotation — emit a SYNTAX token instead of skipping
+          const rest = this.input.slice(this.pos);
+          const syntaxMatch = rest.match(/^@syntax[ \t]+/);
+          if (syntaxMatch) {
+            const startPos = this.pos;
+            const startLine = this.line;
+            const startCol = this.col;
+            // Skip past "@syntax "
+            this.pos += syntaxMatch[0].length;
+            this.col += syntaxMatch[0].length;
+            // Capture rest of line as the pattern string
+            let patternEnd = this.pos;
+            while (patternEnd < this.input.length && this.input[patternEnd] !== '\n') {
+              patternEnd++;
+            }
+            const pattern = this.input.slice(this.pos, patternEnd).trim();
+            this.tokens.push({
+              type: 'SYNTAX',
+              value: pattern,
+              pos: startPos,
+              line: startLine,
+              col: startCol,
+            });
+            this.col += (patternEnd - this.pos);
+            this.pos = patternEnd;
+            continue;
+          }
+
+          // Skip other directive lines to end of line
           while (this.pos < this.input.length && this.input[this.pos] !== '\n') {
             this.pos++;
           }
@@ -668,8 +697,10 @@ export interface ParsedDeclaration {
   name?: string;
   type?: TTerm;
   value?: TTerm;
+  // @syntax annotation pattern string (visual notation for structured editor)
+  syntax?: string;
   // For inductive types
-  constructors?: Array<{ name: string; type: TTerm }>;
+  constructors?: Array<{ name: string; type: TTerm; syntax?: string }>;
   // For records
   params?: ParsedRecordParam[];
   fields?: ParsedRecordField[];
@@ -889,6 +920,15 @@ export class Parser {
       this.skipNewlines();
       if (this.current().type === 'EOF') break;
 
+      // Check for @syntax annotation before the declaration
+      let pendingSyntax: string | undefined;
+      if (this.current().type === 'SYNTAX') {
+        pendingSyntax = this.current().value;
+        this.advance();
+        this.skipNewlines();
+        if (this.current().type === 'EOF') break;
+      }
+
       // Reset source map for each declaration
       this.currentSourceMap = new Map();
       this.currentPath = [];
@@ -897,6 +937,11 @@ export class Parser {
         // Pass both previous declarations AND current results
         const decl = this.parseDeclaration([...allPrevDecls, ...results.map(r => r.decl)]);
         if (decl) {
+          // Attach @syntax annotation if present
+          if (pendingSyntax !== undefined) {
+            decl.syntax = pendingSyntax;
+          }
+
           // Check if this declaration can be merged with the previous one
           const prev = results[results.length - 1];
 
@@ -1651,10 +1696,19 @@ export class Parser {
     this.skipNewlines();
 
     // Parse constructors
-    const constructors: Array<{ name: string; type: TTerm }> = [];
+    const constructors: Array<{ name: string; type: TTerm; syntax?: string }> = [];
     let ctorIndex = 0;
 
     while (this.current().type !== 'EOF') {
+      // Check for @syntax annotation before constructor
+      let ctorSyntax: string | undefined;
+      if (this.current().type === 'SYNTAX') {
+        ctorSyntax = this.current().value;
+        this.advance();
+        this.skipNewlines();
+        if (this.current().type === 'EOF') break;
+      }
+
       // Check for pipe or identifier (constructors can start with either)
       const current = this.current();
 
@@ -1694,7 +1748,7 @@ export class Parser {
       ];
       const ctorType = this.expr(0, [], ctorPath);
 
-      constructors.push({ name: ctorName, type: ctorType });
+      constructors.push({ name: ctorName, type: ctorType, ...(ctorSyntax !== undefined ? { syntax: ctorSyntax } : {}) });
       ctorIndex++;
 
       // Skip newlines between constructors

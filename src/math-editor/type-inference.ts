@@ -15,6 +15,10 @@
  *   Binding    ::= Quantifier? Names Relation TypeExpr   -- named: "∀ a, b ∈ ℝ"
  *                | Quantifier? TypeExpr                   -- anonymous: "a = b"
  *   Quantifier ::= '∀' | 'forall' | 'for all'           -- stripped at binder start
+ *
+ *   Keywords ('If', 'and', 'then', 'forall') can be entered as:
+ *     - A Text node (via text mode: space + letters + space)
+ *     - Consecutive single-char Symbol nodes (typed directly as characters)
  *   Names      ::= Name (',' Name)*
  *   Name       ::= symbol | symbol_subscript              -- e.g., x or x₀
  *   Relation   ::= '∈' | ':'
@@ -34,7 +38,7 @@
  */
 
 import { MathRow, MathNode } from './types';
-import { SyntaxRegistry, createDefaultRegistry, convertToSource } from './syntax-registry';
+import { SyntaxRegistry, createDefaultRegistry, convertToSource, lookupSymbol } from './syntax-registry';
 
 // ============================================================================
 // Grammar Rules — all structural tokens/keywords defined here
@@ -54,6 +58,38 @@ const SEGMENT_SEPARATOR = 'and';
 const RELATION_SYMBOLS = new Set(['\\in', ':']);
 
 /**
+ * Try to match consecutive single-character Symbol nodes at `startIdx`
+ * against a set of known words (case-insensitive).
+ * Returns the number of Symbol nodes consumed, or 0 if no match.
+ */
+function tryMatchSymbolWord(children: readonly MathNode[], startIdx: number, words: Set<string>): number {
+  let word = '';
+  for (let i = startIdx; i < children.length; i++) {
+    const c = children[i];
+    if (c.tag !== 'Symbol' || c.value.length !== 1) break;
+    word += c.value;
+    if (words.has(word.toLowerCase())) {
+      return word.length;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Check whether a node is a Text node matching a word (case-insensitive),
+ * OR a sequence of single-char Symbol nodes spelling the word.
+ * Returns number of nodes consumed (1 for Text, N for Symbols), or 0 for no match.
+ */
+function matchesWord(children: readonly MathNode[], idx: number, word: string): number {
+  if (idx >= children.length) return 0;
+  const c = children[idx];
+  // Text node match
+  if (c.tag === 'Text' && c.content.toLowerCase() === word) return 1;
+  // Symbol sequence match
+  return tryMatchSymbolWord(children, idx, new Set([word]));
+}
+
+/**
  * Strip a leading quantifier (∀ / forall / for all) from a segment.
  * Returns the remaining nodes after the quantifier.
  */
@@ -66,10 +102,9 @@ function stripQuantifier(nodes: MathNode[]): MathNode[] {
     return nodes.slice(1);
   }
 
-  // Text('forall') — case-insensitive
-  if (first.tag === 'Text' && QUANTIFIER_TEXTS.has(first.content.toLowerCase())) {
-    return nodes.slice(1);
-  }
+  // Text('forall') or Symbol sequence 'f','o','r','a','l','l' — case-insensitive
+  const forallLen = matchesWord(nodes, 0, 'forall');
+  if (forallLen > 0) return nodes.slice(forallLen);
 
   // Text('for') followed by Text('all') — case-insensitive
   if (first.tag === 'Text' && first.content.toLowerCase() === 'for' && nodes.length >= 2) {
@@ -175,9 +210,15 @@ function stripLeadingTokens(children: readonly MathNode[]): MathNode[] {
     const c = children[start];
     if (c.tag === 'Text' && PREAMBLE_TOKENS.has(c.content.toLowerCase())) {
       start++;
-    } else {
-      break;
+      continue;
     }
+    // Also try matching consecutive Symbol nodes spelling a preamble word
+    const consumed = tryMatchSymbolWord(children, start, PREAMBLE_TOKENS);
+    if (consumed > 0) {
+      start += consumed;
+      continue;
+    }
+    break;
   }
   return start === 0 ? [...children] : children.slice(start);
 }
@@ -193,6 +234,7 @@ interface BodySplit {
 
 /**
  * Scan for a body separator: `then`, `, then`, `. Then`, `. then`.
+ * Also recognizes consecutive Symbol nodes spelling "then".
  * Returns bindings (before separator) and body (after separator).
  */
 function splitByBodySeparator(children: MathNode[]): BodySplit {
@@ -204,12 +246,17 @@ function splitByBodySeparator(children: MathNode[]): BodySplit {
       return { bindings: children.slice(0, i), body: children.slice(i + 1) };
     }
 
-    // Pattern: Symbol(',') or Symbol('.') followed by Text('then')
-    if ((c.tag === 'Symbol' && (c.value === ',' || c.value === '.')) &&
-        i + 1 < children.length) {
-      const next = children[i + 1];
-      if (next.tag === 'Text' && next.content.toLowerCase() === 'then') {
-        return { bindings: children.slice(0, i), body: children.slice(i + 2) };
+    // Pattern: Symbol sequence spelling "then"
+    const thenLen = matchesWord(children, i, 'then');
+    if (thenLen > 1) { // >1 to require Symbol sequence, not a single node
+      return { bindings: children.slice(0, i), body: children.slice(i + thenLen) };
+    }
+
+    // Pattern: Symbol(',') or Symbol('.') followed by Text('then') or Symbol-sequence 'then'
+    if (c.tag === 'Symbol' && (c.value === ',' || c.value === '.')) {
+      const afterLen = matchesWord(children, i + 1, 'then');
+      if (afterLen > 0) {
+        return { bindings: children.slice(0, i), body: children.slice(i + 1 + afterLen) };
       }
     }
   }
@@ -224,13 +271,26 @@ function splitByBodySeparator(children: MathNode[]): BodySplit {
 function splitByAnd(children: readonly MathNode[]): MathNode[][] {
   const segments: MathNode[][] = [];
   let current: MathNode[] = [];
+  const andSet = new Set([SEGMENT_SEPARATOR]);
 
-  for (const child of children) {
+  let i = 0;
+  while (i < children.length) {
+    const child = children[i];
     if (child.tag === 'Text' && child.content.toLowerCase() === SEGMENT_SEPARATOR) {
       if (current.length > 0) segments.push(current);
       current = [];
+      i++;
     } else {
-      current.push(child);
+      // Check for Symbol sequence spelling "and"
+      const consumed = tryMatchSymbolWord(children, i, andSet);
+      if (consumed > 0) {
+        if (current.length > 0) segments.push(current);
+        current = [];
+        i += consumed;
+      } else {
+        current.push(child);
+        i++;
+      }
     }
   }
   if (current.length > 0) segments.push(current);
@@ -261,12 +321,25 @@ function parseSegment(nodes: MathNode[], registry: SyntaxRegistry): Binding | nu
   const names = extractNames(nameNodes);
   if (names.length === 0) return null;
 
+  // Record types need carrier projection insertion which isn't implemented yet
+  checkNotRecordType(typeNodes, registry);
+
   const typeResult = convertToSource(registry, typeNodes);
   return {
     names,
     typeExpr: typeResult.source,
     usesR: typeResult.needsR,
   };
+}
+
+/** Throws if typeNodes resolve to a record type — carrier projection insertion not yet implemented. */
+function checkNotRecordType(typeNodes: readonly MathNode[], registry: SyntaxRegistry): void {
+  if (typeNodes.length === 1 && typeNodes[0].tag === 'Symbol') {
+    const mapped = lookupSymbol(registry, typeNodes[0].value);
+    if (mapped?.isRecord) {
+      throw new Error(`carrier projection insertion not implemented yet (type '${typeNodes[0].value}' is a record)`);
+    }
+  }
 }
 
 // ============================================================================
@@ -281,6 +354,11 @@ function extractNames(nodes: MathNode[]): string[] {
       if (n.value === ',' || n.value === ' ') continue;
       // Single-char identifiers and multi-char (Greek, etc.)
       names.push(n.value);
+    }
+    // Text nodes created by space-triggered text mode (e.g., "n" typed as space-n-space)
+    if (n.tag === 'Text') {
+      const trimmed = n.content.trim();
+      if (trimmed.length > 0) names.push(trimmed);
     }
     // Sub nodes: extract base as a subscripted name
     if (n.tag === 'Sub') {

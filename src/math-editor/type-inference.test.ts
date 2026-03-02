@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { resetIds, mkRow, mkSymbol, mkHole, mkText, mkDelimiter, mkSub, mkFrac, mkBigOp } from './types';
 import { inferTypeSignature } from './type-inference';
+import { buildRegistryFromAnnotations } from './syntax-registry';
 
 beforeEach(() => resetIds());
 
@@ -195,9 +196,8 @@ describe('anonymous hypothesis bindings', () => {
     const row = mkRow([
       mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
       mkText('and'),
-      mkBigOp('lim', mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))]), null),
-      mkSymbol('f'),
-      mkDelimiter('(', ')', mkRow([mkSymbol('x')])),
+      mkBigOp('lim', mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))]), null,
+        mkRow([mkSymbol('f'), mkDelimiter('(', ')', mkRow([mkSymbol('x')]))])),
       mkSymbol('='),
       mkSymbol('L'),
     ]);
@@ -215,9 +215,8 @@ describe('anonymous hypothesis bindings', () => {
       mkSymbol(':'),
       mkSymbol('\\mathbb{R}'), mkSymbol('\\to'), mkSymbol('\\mathbb{R}'),
       mkText('and'),
-      mkBigOp('lim', mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))]), null),
-      mkSymbol('f'),
-      mkDelimiter('(', ')', mkRow([mkSymbol('x')])),
+      mkBigOp('lim', mkRow([mkSymbol('x'), mkSymbol('\\to'), mkSub(mkRow([mkSymbol('x')]), mkRow([mkSymbol('0')]))]), null,
+        mkRow([mkSymbol('f'), mkDelimiter('(', ')', mkRow([mkSymbol('x')]))])),
       mkSymbol('='),
       mkSymbol('L'),
     ]);
@@ -373,5 +372,128 @@ describe('quantifier stripping', () => {
     ]);
     // Second segment: ∀ stripped, "a + b = 0" becomes anonymous hypothesis
     expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (_ : Equal (radd a b) 0) -> ?');
+  });
+});
+
+// ============================================================================
+// Symbol-sequence keyword matching (typing characters directly, no text mode)
+// ============================================================================
+
+describe('symbol-sequence keyword matching', () => {
+  test('Symbol I,f as preamble → stripped like Text("If")', () => {
+    const row = mkRow([
+      mkSymbol('I'), mkSymbol('f'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
+  });
+
+  test('Symbol L,e,t as preamble → stripped like Text("Let")', () => {
+    const row = mkRow([
+      mkSymbol('L'), mkSymbol('e'), mkSymbol('t'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> ?');
+  });
+
+  test('Symbol a,n,d as segment separator → same as Text("and")', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol('a'), mkSymbol('n'), mkSymbol('d'),
+      mkSymbol('b'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> (b : Carrier R) -> ?');
+  });
+
+  test('Symbol t,h,e,n as body separator', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol('t'), mkSymbol('h'), mkSymbol('e'), mkSymbol('n'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
+  });
+
+  test('Symbol comma + t,h,e,n as body separator', () => {
+    const row = mkRow([
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol(','),
+      mkSymbol('t'), mkSymbol('h'), mkSymbol('e'), mkSymbol('n'),
+      mkSymbol('a'), mkSymbol('='), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('{R : Real} -> (a : Carrier R) -> Equal a a');
+  });
+
+  test('full symbol sequence: If a ∈ ℝ and b ∈ ℝ, then a + b = b + a', () => {
+    const row = mkRow([
+      mkSymbol('I'), mkSymbol('f'),
+      mkSymbol('a'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol('a'), mkSymbol('n'), mkSymbol('d'),
+      mkSymbol('b'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}'),
+      mkSymbol(','),
+      mkSymbol('t'), mkSymbol('h'), mkSymbol('e'), mkSymbol('n'),
+      mkSymbol('a'), mkSymbol('+'), mkSymbol('b'), mkSymbol('='), mkSymbol('b'), mkSymbol('+'), mkSymbol('a'),
+    ]);
+    expect(inferTypeSignature(row)).toBe(
+      '{R : Real} -> (a : Carrier R) -> (b : Carrier R) -> Equal (radd a b) (radd b a)'
+    );
+  });
+
+  test('If n ∈ ℕ, then → (n : Nat) -> ?', () => {
+    const row = mkRow([
+      mkText('If'),
+      mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+      mkSymbol(','), mkText('then'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+
+  // Text nodes created by space-triggered text mode (space-n-space → Text("n"))
+  test('Text("n") as variable name works like Symbol("n")', () => {
+    const row = mkRow([mkText('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}')]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+
+  test('if Text("n") ∈ ℕ, then → handles text-mode variable names', () => {
+    const row = mkRow([
+      mkText('if'),
+      mkText('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}'),
+      mkSymbol(','), mkText('then'),
+    ]);
+    expect(inferTypeSignature(row)).toBe('(n : Nat) -> ?');
+  });
+});
+
+describe('record type detection', () => {
+  test('n ∈ ℕ with inductive type succeeds', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'Nat', pattern: '\\N' },
+    ]);
+    const row = mkRow([mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}')]);
+    expect(inferTypeSignature(row, registry)).toBe('(n : Nat) -> ?');
+  });
+
+  test('n ∈ ℕ with record type throws', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'PeanoNat', pattern: '\\N', isRecord: true },
+    ]);
+    const row = mkRow([mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}')]);
+    expect(() => inferTypeSignature(row, registry)).toThrow('carrier projection insertion not implemented yet');
+  });
+
+  test('n : ℕ with record type also throws', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'PeanoNat', pattern: '\\N', isRecord: true },
+    ]);
+    const row = mkRow([mkSymbol('n'), mkSymbol(':'), mkSymbol('\\mathbb{N}')]);
+    expect(() => inferTypeSignature(row, registry)).toThrow('carrier projection insertion not implemented yet');
+  });
+
+  test('error message includes the symbol name', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'PeanoNat', pattern: '\\N', isRecord: true },
+    ]);
+    const row = mkRow([mkSymbol('n'), mkSymbol('\\in'), mkSymbol('\\mathbb{N}')]);
+    expect(() => inferTypeSignature(row, registry)).toThrow('\\mathbb{N}');
   });
 });
