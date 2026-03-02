@@ -413,7 +413,9 @@ const styles = {
   },
   blockCard: {
     backgroundColor: '#161b22',
-    border: '1px solid #30363d',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: '#30363d',
     borderRadius: '6px',
     marginBottom: '12px',
     overflow: 'hidden',
@@ -905,7 +907,7 @@ function BlockCard(props: { header: React.ReactNode, body: React.ReactNode, init
   return (
     <div style={{
       ...styles.blockCard,
-      ...(props.hasError ? { borderLeft: '3px solid #f85149' } : {}),
+      ...(props.hasError ? { borderLeftColor: '#f85149', borderLeftWidth: '3px' } : {}),
     }}>
       <div style={styles.blockHeader} onClick={() => setExpanded(e => !e)}>
         {props.header}

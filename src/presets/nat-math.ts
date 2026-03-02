@@ -142,8 +142,8 @@ sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start (
 sum : (start end : Nat) -> (Nat -> Nat) -> Nat
 sum start end f = sumStartCount start (Succ (minus end start)) f
 
-summationSplit : ?TODO
-summationSplit = ?TODO2
+summationSplit : (i n : Nat) -> (f : Nat -> Nat) -> Equal (sum i (Succ n) (\\k => (f (k)))) (plus (sum i n (\\k => (f (k)))) (f (plus i (Succ n))))
+summationSplit = ?TODO
 
 ------------------------------------------------------------
 -- Leq: ordering on Nat with reflexivity, transitivity, antisymmetry
