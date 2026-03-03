@@ -60,8 +60,20 @@ export class RewriteTactic implements Tactic {
       // 2. Normalize to find equality type
       const proofTypeWhnf = whnf(proofType, { definitions: engine.definitions, typingContext: goal.ctx });
 
-      // 3. Check that it's an equality type and extract type param, LHS, and RHS
-      const eqArgs = this.extractEqualityArgs(proofTypeWhnf);
+      // 3. Check that it's an equality type and extract type param, LHS, and RHS.
+      //    If the proof type is a Pi (function type like minusSucc : {i n} -> Leq i n -> Equal ...),
+      //    instantiate all binders with Meta placeholders to reach the equality at the end.
+      let proofTypeForExtraction = proofTypeWhnf;
+      let hasMetas = false;
+      if (proofTypeWhnf.tag === 'Binder' && proofTypeWhnf.binderKind.tag === 'BPi') {
+        const instantiated = this.instantiatePis(proofTypeWhnf);
+        if (instantiated) {
+          proofTypeForExtraction = instantiated.body;
+          hasMetas = true;
+        }
+      }
+
+      const eqArgs = this.extractEqualityArgs(proofTypeForExtraction);
       if (!eqArgs) {
         return {
           success: false,
@@ -69,14 +81,25 @@ export class RewriteTactic implements Tactic {
         };
       }
 
-      const { typeA, lhs: rawLhs, rhs: rawRhs } = eqArgs;
+      let { typeA, lhs: rawLhs, rhs: rawRhs } = eqArgs;
 
       // 4. Beta-reduce LHS and RHS without delta-reducing definitions.
       //    cong (\z => radd z z) h produces Equal ((\z => radd z z) a) ((\z => radd z z) b)
       //    where the LHS/RHS are un-beta-reduced. We need radd(a,a) / radd(b,b) to match the goal,
       //    but NOT the delta-reduced CompleteOrderedField.add(field(R), a, a).
-      const lhs = this.betaReduce(rawLhs);
-      const rhs = this.betaReduce(rawRhs);
+      let lhs = this.betaReduce(rawLhs);
+      let rhs = this.betaReduce(rawRhs);
+
+      // 4b. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
+      //     match the LHS pattern against subterms of the goal to solve the Metas.
+      if (hasMetas) {
+        const bindings = this.findPatternMatch(goal.type, lhs, engine.definitions);
+        if (bindings && bindings.size > 0) {
+          lhs = this.applyMetaBindings(lhs, bindings);
+          rhs = this.applyMetaBindings(rhs, bindings);
+          typeA = this.applyMetaBindings(typeA, bindings);
+        }
+      }
 
       // 5. Replace LHS with RHS in the goal type
       //    Uses WHNF-based matching to handle definition aliases
@@ -200,6 +223,155 @@ export class RewriteTactic implements Tactic {
       break;
     }
     return current;
+  }
+
+  /**
+   * Peel all Pi binders from a type, substituting Meta placeholders for each bound var.
+   * Returns the instantiated body and the list of meta IDs created.
+   * Used when the rewrite proof is a function (e.g., minusSucc : {i n} -> Leq i n -> Equal ...).
+   */
+  private instantiatePis(type: TTKTerm): { body: TTKTerm; metaIds: string[] } | null {
+    const metaIds: string[] = [];
+    let current = type;
+    while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+      const metaId = `_rewrite_arg_${metaIds.length}`;
+      metaIds.push(metaId);
+      current = subst(0, { tag: 'Meta', id: metaId }, current.body);
+    }
+    if (metaIds.length === 0) return null;
+    return { body: current, metaIds };
+  }
+
+  /**
+   * Find a subterm of `term` that matches the `pattern` (which may contain Metas).
+   * Returns the Meta bindings if a match is found, null otherwise.
+   */
+  private findPatternMatch(
+    term: TTKTerm,
+    pattern: TTKTerm,
+    definitions?: DefinitionsMap,
+  ): Map<string, TTKTerm> | null {
+    // Try matching at this node
+    const bindings = new Map<string, TTKTerm>();
+    if (this.tryMatchPattern(pattern, term, bindings, definitions)) {
+      return bindings;
+    }
+
+    // Recurse into subterms
+    switch (term.tag) {
+      case 'App': {
+        const fnResult = this.findPatternMatch(term.fn, pattern, definitions);
+        if (fnResult) return fnResult;
+        return this.findPatternMatch(term.arg, pattern, definitions);
+      }
+      case 'Binder': {
+        const domResult = this.findPatternMatch(term.domain, pattern, definitions);
+        if (domResult) return domResult;
+        // Don't recurse into binder body — pattern vars would have wrong indices
+        return null;
+      }
+      case 'Match': {
+        const scrutResult = this.findPatternMatch(term.scrutinee, pattern, definitions);
+        if (scrutResult) return scrutResult;
+        for (const clause of term.clauses) {
+          const rhsResult = this.findPatternMatch(clause.rhs, pattern, definitions);
+          if (rhsResult) return rhsResult;
+        }
+        return null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Try to match a pattern (with Metas as wildcards) against a concrete term.
+   * Records meta bindings in the `bindings` map.
+   * Returns true if the match succeeds.
+   */
+  private tryMatchPattern(
+    pattern: TTKTerm,
+    term: TTKTerm,
+    bindings: Map<string, TTKTerm>,
+    definitions?: DefinitionsMap,
+  ): boolean {
+    // Meta in pattern matches anything
+    if (pattern.tag === 'Meta') {
+      const existing = bindings.get(pattern.id);
+      if (existing) return this.termEqual(existing, term);
+      bindings.set(pattern.id, term);
+      return true;
+    }
+
+    // Try structural match first
+    if (pattern.tag !== term.tag) {
+      // If definitions available, try WHNF on both sides
+      if (definitions) {
+        const patN = whnf(pattern, { definitions });
+        const termN = whnf(term, { definitions });
+        if ((patN !== pattern || termN !== term) && patN.tag === termN.tag) {
+          return this.tryMatchPattern(patN, termN, bindings, definitions);
+        }
+      }
+      return false;
+    }
+
+    switch (pattern.tag) {
+      case 'Var':
+        return term.tag === 'Var' && pattern.index === term.index;
+      case 'Const':
+        return term.tag === 'Const' && pattern.name === term.name;
+      case 'App':
+        return term.tag === 'App' &&
+          this.tryMatchPattern(pattern.fn, term.fn, bindings, definitions) &&
+          this.tryMatchPattern(pattern.arg, term.arg, bindings, definitions);
+      case 'Binder':
+        return term.tag === 'Binder' &&
+          pattern.binderKind.tag === term.binderKind.tag &&
+          this.tryMatchPattern(pattern.domain, term.domain, bindings, definitions) &&
+          this.tryMatchPattern(pattern.body, term.body, bindings, definitions);
+      case 'Sort':
+        return term.tag === 'Sort' && this.tryMatchPattern(pattern.level, term.level, bindings, definitions);
+      case 'ULit':
+        return term.tag === 'ULit' && pattern.n === term.n;
+      case 'Hole':
+        // Holes also act as wildcards
+        bindings.set(pattern.id, term);
+        return true;
+      default:
+        return this.termEqual(pattern, term);
+    }
+  }
+
+  /**
+   * Replace Meta placeholders in a term with their bound values.
+   */
+  private applyMetaBindings(term: TTKTerm, bindings: Map<string, TTKTerm>): TTKTerm {
+    switch (term.tag) {
+      case 'Meta': {
+        const bound = bindings.get(term.id);
+        return bound ?? term;
+      }
+      case 'App': {
+        const fn = this.applyMetaBindings(term.fn, bindings);
+        const arg = this.applyMetaBindings(term.arg, bindings);
+        if (fn === term.fn && arg === term.arg) return term;
+        return { tag: 'App', fn, arg };
+      }
+      case 'Binder': {
+        const domain = this.applyMetaBindings(term.domain, bindings);
+        const body = this.applyMetaBindings(term.body, bindings);
+        if (domain === term.domain && body === term.body) return term;
+        return { ...term, domain, body };
+      }
+      case 'Sort': {
+        const level = this.applyMetaBindings(term.level, bindings);
+        if (level === term.level) return term;
+        return { tag: 'Sort', level };
+      }
+      default:
+        return term;
+    }
   }
 
   /**

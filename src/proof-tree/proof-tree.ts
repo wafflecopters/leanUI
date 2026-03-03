@@ -28,7 +28,9 @@ export type ProofNode =
   | IntrosNode
   | InductionNode
   | ExactNode
-  | UnfoldNode;
+  | UnfoldNode
+  | RewriteNode
+  | ApplyNode;
 
 export interface HoleNode {
   readonly tag: 'hole';
@@ -60,6 +62,22 @@ export interface UnfoldNode {
   readonly tag: 'unfold';
   readonly id: ProofNodeId;
   /** The definition name to unfold (e.g., 'plus', 'sum'). */
+  readonly name: string;
+  readonly child: ProofNode;
+}
+
+export interface RewriteNode {
+  readonly tag: 'rewrite';
+  readonly id: ProofNodeId;
+  /** The equality lemma name (e.g., 'plusComm'). */
+  readonly name: string;
+  readonly child: ProofNode;
+}
+
+export interface ApplyNode {
+  readonly tag: 'apply';
+  readonly id: ProofNodeId;
+  /** The lemma/function name (e.g., 'congSucc'). */
   readonly name: string;
   readonly child: ProofNode;
 }
@@ -133,6 +151,14 @@ export function mkUnfold(name: string, child: ProofNode): UnfoldNode {
   return { tag: 'unfold', id: freshProofId(), name, child };
 }
 
+export function mkRewrite(name: string, child: ProofNode): RewriteNode {
+  return { tag: 'rewrite', id: freshProofId(), name, child };
+}
+
+export function mkApply(name: string, child: ProofNode): ApplyNode {
+  return { tag: 'apply', id: freshProofId(), name, child };
+}
+
 export function mkCase(
   label: string, body: ProofNode,
   constructorName?: string, constructorParamNames?: readonly string[],
@@ -162,8 +188,9 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'exact':
       return null;
     case 'intros':
-      return findNode(root.child, id);
     case 'unfold':
+    case 'rewrite':
+    case 'apply':
       return findNode(root.child, id);
     case 'induction':
       for (const c of root.cases) {
@@ -182,6 +209,8 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
       return null;
     case 'intros':
     case 'unfold':
+    case 'rewrite':
+    case 'apply':
       return findCase(root.child, id);
     case 'induction':
       for (const c of root.cases) {
@@ -202,6 +231,8 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
       return false;
     case 'intros':
     case 'unfold':
+    case 'rewrite':
+    case 'apply':
       return isCursorInSubtree(node.child, cursorId);
     case 'induction':
       return node.cases.some(c =>
@@ -234,6 +265,8 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
       break;
     case 'intros':
     case 'unfold':
+    case 'rewrite':
+    case 'apply':
       linearizeImpl(node.child, depth + 1, out);
       break;
     case 'induction':
@@ -261,7 +294,9 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
     case 'exact':
       return root;
     case 'intros':
-    case 'unfold': {
+    case 'unfold':
+    case 'rewrite':
+    case 'apply': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
     }
@@ -288,7 +323,9 @@ export function updateCase(
     case 'exact':
       return root;
     case 'intros':
-    case 'unfold': {
+    case 'unfold':
+    case 'rewrite':
+    case 'apply': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
     }
@@ -370,6 +407,28 @@ export function applyUnfold(state: ProofTreeState, name: string): ProofTreeState
   const childHole = mkHole();
   const unfold = mkUnfold(name, childHole);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, unfold);
+  return { root: newRoot, cursor: { nodeId: childHole.id } };
+}
+
+/** Apply rewrite at the cursor (must be a hole). Replaces the hole with a rewrite node + child hole. */
+export function applyRewrite(state: ProofTreeState, name: string): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const childHole = mkHole();
+  const rewrite = mkRewrite(name, childHole);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, rewrite);
+  return { root: newRoot, cursor: { nodeId: childHole.id } };
+}
+
+/** Apply "apply" at the cursor (must be a hole). Replaces the hole with an apply node + child hole. */
+export function applyApplyTactic(state: ProofTreeState, name: string): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const childHole = mkHole();
+  const apply = mkApply(name, childHole);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, apply);
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
@@ -615,6 +674,8 @@ function computeContextImpl(
     }
 
     case 'unfold':
+    case 'rewrite':
+    case 'apply':
       return computeContextImpl(node.child, cursorId, hypotheses);
 
     case 'induction': {

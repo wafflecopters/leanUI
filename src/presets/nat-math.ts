@@ -125,27 +125,6 @@ natSemiring : Semiring Nat
 natSemiring = MkSemiring plus mul Zero one plusZeroLeft plusZeroRight plusComm plusAssoc mulZeroLeft mulZeroRight mulOneLeft mulOneRight mulComm mulAssoc mulDistribLeft mulDistribRight
 
 ------------------------------------------------------------
--- Triangle Sum: 2 * sum(1..n) = n * (n + 1)
-------------------------------------------------------------
-
-@syntax $0 - $1
-minus : Nat -> Nat -> Nat
-minus a Zero = a
-minus Zero _ = Zero
-minus (Succ a) (Succ b) = minus a b
-
-sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
-sumStartCount start Zero f = Zero
-sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start (Succ k)))
-
-@syntax \\sum_{$0 = $1}^{$2} $3 @becomes sum $$1 $$2 (\\$0 => $$3)
-sum : (start end : Nat) -> (Nat -> Nat) -> Nat
-sum start end f = sumStartCount start (Succ (minus end start)) f
-
-summationSplit : (i n : Nat) -> (f : Nat -> Nat) -> Equal (sum i (Succ n) (\\k => (f (k)))) (plus (sum i n (\\k => (f (k)))) (f (plus i (Succ n))))
-summationSplit = ?TODO
-
-------------------------------------------------------------
 -- Leq: ordering on Nat with reflexivity, transitivity, antisymmetry
 ------------------------------------------------------------
 
@@ -168,4 +147,40 @@ leqTrans (LeqSucc p) (LeqSucc q) = LeqSucc (leqTrans p q)
 leqAntisym : {a b : Nat} -> Leq a b -> Leq b a -> Equal a b
 leqAntisym LeqZero LeqZero = refl
 leqAntisym (LeqSucc p) (LeqSucc q) = congSucc (leqAntisym p q)
+
+------------------------------------------------------------
+-- Subtraction and minus-Leq lemmas
+------------------------------------------------------------
+
+@syntax $0 - $1
+minus : Nat -> Nat -> Nat
+minus a Zero = a
+minus Zero _ = Zero
+minus (Succ a) (Succ b) = minus a b
+
+minusSucc : {i n : Nat} -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i))
+minusSucc LeqZero = refl
+minusSucc (LeqSucc l) = minusSucc l
+
+plusMinusCancel : {i n : Nat} -> Leq i n -> Equal (plus i (minus n i)) n
+plusMinusCancel LeqZero = refl
+plusMinusCancel (LeqSucc l) = congSucc (plusMinusCancel l)
+
+------------------------------------------------------------
+-- Summation: sum, sumStartCount, splitting
+------------------------------------------------------------
+
+sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
+sumStartCount start Zero f = Zero
+sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start k))
+
+sumStartCountSplit : (s k : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ k) f) (plus (sumStartCount s k f) (f (plus s k)))
+sumStartCountSplit s k f = refl
+
+@syntax \\sum_{$0 = $1}^{$2} $3 @becomes sum $$1 $$2 (\\$0 => $$3)
+sum : (start end : Nat) -> (Nat -> Nat) -> Nat
+sum start end f = sumStartCount start (minus (Succ end) start) f
+
+summationSplit : (i n : Nat) -> Leq i n -> (f : Nat -> Nat) -> Equal (sum i (Succ n) (\\k => (f (k)))) (plus (sum i n (\\k => (f (k)))) (f (plus i (Succ n))))
+summationSplit = ?TODO
 `;

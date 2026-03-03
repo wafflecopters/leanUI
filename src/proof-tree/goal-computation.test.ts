@@ -8,7 +8,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { resetIds } from '../math-editor/types';
 import {
   resetProofIds,
-  mkHole as mkTreeHole, mkIntros, mkInduction, mkCase, mkExact, mkUnfold,
+  mkHole as mkTreeHole, mkIntros, mkInduction, mkCase, mkExact, mkUnfold, mkRewrite,
   applyUnfold,
 } from './proof-tree';
 import {
@@ -646,8 +646,8 @@ describe('computeCaseGoalDirect', () => {
     expect(result.type).toEqual(
       mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkConst('Zero')), mkConst('Zero'))
     );
-    // Context should still have n : Nat (no new entries for Zero)
-    expect(result.ctx).toHaveLength(1);
+    // Context: scrutinee removed, Zero has no params → empty
+    expect(result.ctx).toHaveLength(0);
     expect(result.caseTag).toBe('Zero');
   });
 
@@ -677,16 +677,19 @@ describe('computeCaseGoalDirect', () => {
     const zeroCtor = { name: 'Zero', type: mkConst('Nat') as TTKTerm };
     const result = computeCaseGoalDirect(goal, 1, zeroCtor, 'Nat', defs);
 
-    // Goal should be Equal(Nat, f(Zero), f(i)) — n replaced by Zero, f and i untouched
+    // Scrutinee n removed, Zero has no params → context is [i, f]
+    // De Bruijn: f=Var(0), i=Var(1)
+    // Goal should be Equal(Nat, f(Zero), f(i))
     expect(result.type).toEqual(
       mkApp(
         mkApp(mkApp(mkConst('Equal'), mkConst('Nat')),
           mkApp(mkVar(0), mkConst('Zero'))),  // f(Zero)
-        mkApp(mkVar(0), mkVar(2)),             // f(i)
+        mkApp(mkVar(0), mkVar(1)),             // f(i)
       )
     );
-    // Context unchanged (Zero has no params)
-    expect(result.ctx).toHaveLength(3);
+    expect(result.ctx).toHaveLength(2);
+    expect(result.ctx[0].name).toBe('i');
+    expect(result.ctx[1].name).toBe('f');
   });
 
   test('Succ case with scrutinee at index 1 — adds param and IH', () => {
@@ -711,39 +714,80 @@ describe('computeCaseGoalDirect', () => {
     const succCtor = { name: 'Succ', type: mkPi(mkConst('Nat'), mkConst('Nat'), 'n') as TTKTerm };
     const result = computeCaseGoalDirect(goal, 1, succCtor, 'Nat', defs);
 
-    // Context should add n' (Succ param) and IH
-    // Original: [i, n, f]  + [n', IH] = 5 entries
-    expect(result.ctx).toHaveLength(5);
-    expect(result.ctx[3].name).toBe('n');  // Succ's param name from ctor type
-    expect(result.ctx[4].name).toBe('IH');
+    // Scrutinee n removed, replaced by param n'. Context: [i, n', f, IH]
+    expect(result.ctx).toHaveLength(4);
+    expect(result.ctx[0].name).toBe('i');
+    expect(result.ctx[1].name).toBe('n');  // Succ's param name from ctor type
+    expect(result.ctx[2].name).toBe('f');
+    expect(result.ctx[3].name).toBe('IH');
 
-    // Goal should be Equal(Nat, f(Succ(n')), i)
-    // After extending context by 2 (n', IH):
-    //   f was Var(0) → Var(2), n was Var(1) → replaced by Succ(Var(1)),
-    //   i was Var(2) → Var(4)
-    // Succ(n'): n' is at index 1 (shifted by ihOffset=1), so Succ(Var(1))
-    // But wait — constructor app has params.length=1, ihOffset=1
-    // ctorApp = App(Const("Succ"), Var((1-1-0)+1)) = App(Const("Succ"), Var(1))
-    // So goal = Equal(Nat, App(Var(2), App(Const("Succ"), Var(1))), Var(4))
+    // De Bruijn in new context [i, n', f, IH]:
+    //   IH=Var(0), f=Var(1), n'=Var(2), i=Var(3)
+    // Goal: Equal(Nat, f(Succ(n')), i)
+    //   f=Var(1), Succ(n')=App(Succ, Var(2)), i=Var(3)
     expect(result.type).toEqual(
       mkApp(
         mkApp(mkApp(mkConst('Equal'), mkConst('Nat')),
-          mkApp(mkVar(2), mkApp(mkConst('Succ'), mkVar(1)))),  // f(Succ(n'))
-        mkVar(4),                                                 // i
+          mkApp(mkVar(1), mkApp(mkConst('Succ'), mkVar(2)))),  // f(Succ(n'))
+        mkVar(3),                                                 // i
       )
     );
 
-    // IH type should be: Equal(Nat, f(n'), i) — the goal with n replaced by n'
-    // n' is at the right index from IH's perspective
-    expect(result.ctx[4].type).toEqual(
+    // IH type: Equal(Nat, f(n'), i) — goal with n replaced by n'
+    // From IH's scope [i, n', f] (IH not in own scope):
+    //   f=Var(0), n'=Var(1), i=Var(2)
+    expect(result.ctx[3].type).toEqual(
       mkApp(
         mkApp(mkApp(mkConst('Equal'), mkConst('Nat')),
-          mkApp(mkVar(2), mkVar(1))),  // f(n')
-        mkVar(4),                       // i
+          mkApp(mkVar(0), mkVar(1))),  // f(n')
+        mkVar(2),                       // i
       )
     );
 
     expect(result.caseTag).toBe('Succ');
+  });
+
+  test('Zero case substitutes scrutinee in context entry types (Bug 1 fix)', () => {
+    const defs = makeNatDefs();
+
+    // Add Leq inductive type
+    const leqType = mkPi(mkConst('Nat'), mkPi(mkConst('Nat'), mkSort(mkULit(0))));
+    defs.inductiveTypes.set('Leq', {
+      name: 'Leq',
+      type: leqType,
+      constructors: [],
+      indexPositions: [],
+    });
+
+    // Context: [i : Nat, n : Nat, l : Leq i n]
+    // De Bruijn from l's perspective: Var(0)=n, Var(1)=i
+    // From goal: Var(0)=l, Var(1)=n, Var(2)=i
+    const leqIN = mkApp(mkApp(mkConst('Leq'), mkVar(1)), mkVar(0)) as TTKTerm; // Leq(i, n) from l's scope
+    const goal = {
+      ctx: [
+        { name: 'i', type: mkConst('Nat') as TTKTerm },
+        { name: 'n', type: mkConst('Nat') as TTKTerm },
+        { name: 'l', type: leqIN },
+      ],
+      type: mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')),
+        mkApp(mkConst('f'), mkVar(1))), // f(n)
+        mkVar(2)),                        // i
+      solution: undefined,
+    };
+
+    // Induction on n (scrutineeIdx=1), Zero case
+    const zeroCtor = { name: 'Zero', type: mkConst('Nat') as TTKTerm };
+    const result = computeCaseGoalDirect(goal, 1, zeroCtor, 'Nat', defs);
+
+    // Context: [i, l] (n removed). l's type should be Leq(i, Zero) not Leq(i, n)!
+    expect(result.ctx).toHaveLength(2);
+    expect(result.ctx[0].name).toBe('i');
+    expect(result.ctx[1].name).toBe('l');
+    // l's type: original Leq(Var(1), Var(0)) with Var(0)=n replaced by Zero
+    // After removal of n: Leq(Var(0), Zero) where Var(0)=i
+    expect(result.ctx[1].type).toEqual(
+      mkApp(mkApp(mkConst('Leq'), mkVar(0)), mkConst('Zero'))
+    );
   });
 
   test('Zero case with scrutinee at index 2 — deeply nested', () => {
@@ -828,11 +872,10 @@ describe('induction goal computation with scrutinee at various indices', () => {
     expect(ctx1!.goal).not.toContain('\\mapsto');
     expect(ctx1!.goal).not.toContain('□');
 
-    // Hypotheses should include i, n, f (from intros)
-    expect(ctx1!.hypotheses.length).toBeGreaterThanOrEqual(3);
+    // Scrutinee n removed, Zero has no params → hypotheses: [i, f]
+    expect(ctx1!.hypotheses.length).toBe(2);
     expect(ctx1!.hypotheses[0].name).toBe('i');
-    expect(ctx1!.hypotheses[1].name).toBe('n');
-    expect(ctx1!.hypotheses[2].name).toBe('f');
+    expect(ctx1!.hypotheses[1].name).toBe('f');
   });
 
   test('intros [i, n, f] then induction on n — Succ case has IH and constructor', () => {
@@ -870,8 +913,10 @@ describe('induction goal computation with scrutinee at various indices', () => {
     expect(ctx2!.goal).not.toContain('\\mapsto');
     expect(ctx2!.goal).not.toContain('□');
 
-    // Should have i, n, f from intros + n (Succ param) + IH
-    expect(ctx2!.hypotheses.length).toBeGreaterThanOrEqual(5);
+    // Scrutinee n removed, Succ adds param n' and IH → hypotheses: [i, n', f, IH]
+    expect(ctx2!.hypotheses.length).toBe(4);
+    expect(ctx2!.hypotheses[0].name).toBe('i');
+    expect(ctx2!.hypotheses[2].name).toBe('f');
     const ihHyp = ctx2!.hypotheses.find(h => h.name === 'IH');
     expect(ihHyp).toBeDefined();
     expect(ihHyp!.type).toContain('Equal');
@@ -1092,5 +1137,76 @@ summationSplit = ?TODO
     expect(ctx).not.toBeNull();
     expect(ctx!.goal).not.toContain('\\square');
     expect(ctx!.goal).toContain('Equal');
+  });
+});
+
+// ============================================================================
+// Rewrite tactic with Pi-type lemmas (Bug 2 fix)
+// ============================================================================
+
+describe('rewrite with Pi-type (function) lemmas', () => {
+  function compileWithMinusSucc() {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+minus : Nat -> Nat -> Nat
+minus a Zero = a
+minus Zero _ = Zero
+minus (Succ a) (Succ b) = minus a b
+
+minusSucc : {i n : Nat} -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i))
+minusSucc LeqZero = refl
+minusSucc (LeqSucc l) = minusSucc l
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Goal to test rewrite on:
+-- After intros [i, n, l], goal contains: minus (Succ n) i
+testLemma : (i n : Nat) -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i))
+testLemma = ?TODO
+`;
+    return compileTTFromText(source);
+  }
+
+  test('rewrite minusSucc changes goal when proof is a function type', () => {
+    const result = compileWithMinusSucc();
+    const testDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testLemma');
+    expect(testDecl).toBeDefined();
+    const kernelType = testDecl!.kernelType!;
+    const definitions = result.definitions;
+
+    // Build proof tree: intros [i, n, l] then rewrite minusSucc
+    const rewriteChild = mkTreeHole();
+    const rewriteNode = mkRewrite('minusSucc', rewriteChild);
+    const intros = mkIntros(['i', 'n', 'l'], rewriteNode);
+
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      intros, rewriteChild.id, surfaceType, emptyRegistry,
+      undefined, kernelType, definitions,
+    );
+    expect(ctx).not.toBeNull();
+
+    // After rewrite, the goal should have changed
+    // minusSucc : Equal (minus (Succ n) i) (Succ (minus n i))
+    // Rewrites LHS → RHS in goal, so minus(Succ n, i) → Succ(minus(n, i))
+    // The rewritten goal should contain Succ(minus(...)) instead of minus(Succ(...), ...)
+    expect(ctx!.goal).toContain('Equal');
+    // The goal should be Equal (Succ (minus n i)) (Succ (minus n i)) = refl
+    expect(ctx!.goal).toContain('Succ');
   });
 });

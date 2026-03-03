@@ -24,8 +24,9 @@ import { mkRow } from '../math-editor/types';
 import { renderStaticLatex } from '../math-editor/render';
 import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
 import { TacticEngine, createInitialEngine } from '../tactics/tacticsEngine';
-import { IntrosTactic } from '../tactics/tactic';
+import { IntrosTactic, ApplyTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
+import { RewriteTactic } from '../tactics/rewrite-tactic';
 
 // ============================================================================
 // Types
@@ -474,6 +475,77 @@ export function replaceVar(term: TTKTerm, targetIdx: number, replacement: TTKTer
   }
 }
 
+/**
+ * Remap variables in a term for the restructured induction case context.
+ *
+ * When performing induction, the scrutinee is REMOVED from context and replaced
+ * by constructor parameters. This function adjusts de Bruijn indices in a term
+ * (typically the goal type or IH type) to account for this restructuring.
+ *
+ * Original context: [...far..., scrutinee, ...near...]
+ * New context:      [...far..., params..., ...near..., (IH)]
+ *
+ * Variable mapping (at depth 0):
+ *   Var(k) for k < scrutineeIdx  → Var(k + ihOffset)                [near entries shift for IH]
+ *   Var(scrutineeIdx)            → ctorApp                           [scrutinee → constructor]
+ *   Var(k) for k > scrutineeIdx  → Var(k + numParams - 1 + ihOffset) [far entries shift for params+IH]
+ *
+ * Under binders, the scrutinee index shifts up by depth.
+ */
+function remapScrutineeVars(
+  term: TTKTerm,
+  scrutineeIdx: number,
+  ctorApp: TTKTerm,
+  numParams: number,
+  ihOffset: number,
+): TTKTerm {
+  function go(t: TTKTerm, depth: number): TTKTerm {
+    switch (t.tag) {
+      case 'Var': {
+        if (t.index < depth) return t; // bound by local binder, unchanged
+        const adjustedScrutIdx = scrutineeIdx + depth;
+        if (t.index === adjustedScrutIdx) {
+          return shiftTerm(ctorApp, depth, 0);
+        } else if (t.index < adjustedScrutIdx) {
+          // Context var with original idx < scrutineeIdx (near entries)
+          return ihOffset === 0 ? t : { tag: 'Var', index: t.index + ihOffset };
+        } else {
+          // Context var with original idx > scrutineeIdx (far entries)
+          const shift = numParams - 1 + ihOffset;
+          return shift === 0 ? t : { tag: 'Var', index: t.index + shift };
+        }
+      }
+      case 'App': {
+        const fn = go(t.fn, depth);
+        const arg = go(t.arg, depth);
+        if (fn === t.fn && arg === t.arg) return t;
+        return { tag: 'App', fn, arg };
+      }
+      case 'Binder': {
+        const domain = go(t.domain, depth);
+        const body = go(t.body, depth + 1);
+        if (domain === t.domain && body === t.body) return t;
+        return { ...t, domain, body };
+      }
+      case 'Match': {
+        const scrutinee = go(t.scrutinee, depth);
+        let changed = scrutinee !== t.scrutinee;
+        const clauses = t.clauses.map(c => {
+          const numVars = countPatternVars(c.patterns[0]);
+          const rhs = go(c.rhs, depth + numVars);
+          if (rhs !== c.rhs) changed = true;
+          return rhs === c.rhs ? c : { ...c, rhs };
+        });
+        if (!changed) return t;
+        return { tag: 'Match', scrutinee, clauses };
+      }
+      default:
+        return t;
+    }
+  }
+  return go(term, 0);
+}
+
 /** Count the number of binding variables in a pattern. */
 function countPatternVars(pat: import('../compiler/kernel').TTKPattern): number {
   switch (pat.tag) {
@@ -499,7 +571,8 @@ export function computeCaseGoalDirect(
   definitions: DefinitionsMap,
 ): MetaVar {
   // Extract type args from scrutinee type for implicit param substitution
-  const scrutineeType = goal.ctx[goal.ctx.length - 1 - scrutineeIdx].type;
+  const s = goal.ctx.length - 1 - scrutineeIdx; // scrutinee array position
+  const scrutineeType = goal.ctx[s].type;
   const typeArgs = extractTypeArgsFromType(scrutineeType);
 
   // Count constructor parameters (skip implicit ones)
@@ -508,50 +581,102 @@ export function computeCaseGoalDirect(
     ctor.type, numImplicit, typeArgs, inductiveName, definitions
   );
 
-  // Total new context entries: params + (IH if recursive)
-  const numNewEntries = params.length + (hasRecursiveParam ? 1 : 0);
+  const numParams = params.length;
+  const ihOffset = hasRecursiveParam ? 1 : 0;
+  const netShift = numParams - 1; // replacing 1 scrutinee entry with numParams param entries
 
-  // Build extended context: original ctx + constructor params + optional IH
-  const newCtx = [...goal.ctx];
-  for (const p of params) {
-    newCtx.push({ name: p.name, type: p.type });
+  // Build restructured context:
+  // [entries_before_scrutinee, ctor_params, entries_after_scrutinee (subst'd), IH]
+  // The scrutinee is REMOVED and replaced by ctor params. This ensures params
+  // are in scope for entries that depended on the scrutinee (e.g., l : Leq i n
+  // becomes l : Leq i Zero in the Zero case, or l : Leq i (Succ n') in Succ).
+  const newCtx: Array<{ name: string; type: TTKTerm }> = [];
+
+  // 1. Entries before scrutinee (positions 0..s-1): unchanged
+  for (let j = 0; j < s; j++) {
+    newCtx.push(goal.ctx[j]);
   }
 
-  // Build constructor application for substitution:
-  // e.g., Succ(n') where n' is at de Bruijn index (numNewEntries - 1 - paramLocalIdx)
-  // relative to the NEW context
-  let ctorApp: TTKTerm = { tag: 'Const', name: ctor.name };
-  const ihOffset = hasRecursiveParam ? 1 : 0;
-  for (let i = 0; i < params.length; i++) {
-    ctorApp = {
+  // 2. Constructor params (at positions s..s+numParams-1, replacing the scrutinee)
+  for (let i = 0; i < numParams; i++) {
+    const shiftedType = shiftTerm(params[i].type, s, 0);
+    newCtx.push({ name: params[i].name, type: shiftedType });
+  }
+
+  // 3. Entries after scrutinee: substitute scrutinee var with ctor app.
+  //    Use replaceVar (not subst) FIRST to avoid index collisions,
+  //    then shift for the extra params.
+  for (let j = s + 1; j < goal.ctx.length; j++) {
+    let entryType = goal.ctx[j].type;
+    const scrutVarInEntry = j - 1 - s; // scrutinee's de Bruijn index in this entry's type
+
+    // Build ctor app for this entry's scope. After restructuring:
+    // - The entry moves from position j to position j+netShift
+    // - Params at positions s..s+numParams-1
+    // - Last param at Var(j-1-s) = same index as old scrutinee
+    // - First param at Var(j-1-s + numParams-1)
+    let ctorAppLocal: TTKTerm = { tag: 'Const', name: ctor.name };
+    for (let i = 0; i < numParams; i++) {
+      ctorAppLocal = {
+        tag: 'App',
+        fn: ctorAppLocal,
+        arg: { tag: 'Var', index: scrutVarInEntry + numParams - 1 - i },
+      };
+    }
+
+    // Replace the scrutinee var with ctor app (no index shifting)
+    entryType = replaceVar(entryType, scrutVarInEntry, ctorAppLocal);
+
+    // Shift vars pointing to entries before scrutinee (index >= j-s after replaceVar)
+    // by netShift, because those entries are now further away due to inserted params.
+    if (netShift !== 0) {
+      entryType = shiftTerm(entryType, netShift, j - s);
+    }
+    newCtx.push({ name: goal.ctx[j].name, type: entryType });
+  }
+
+  // Build goal type using remapScrutineeVars: a custom variable remapping that
+  // correctly handles the restructured context (scrutinee removed, params inserted).
+  //
+  // Original var mapping → new index:
+  //   Var(k) for k < scrutineeIdx  → Var(k + ihOffset)              [near entries]
+  //   Var(scrutineeIdx)            → ctorApp                         [scrutinee replaced]
+  //   Var(k) for k > scrutineeIdx  → Var(k + numParams - 1 + ihOffset) [far entries]
+
+  // Build ctorApp for goal scope with FINAL indices:
+  //   param[i] at position s+i → Var(scrutineeIdx + numParams - 1 + ihOffset - i)
+  let ctorAppGoal: TTKTerm = { tag: 'Const', name: ctor.name };
+  for (let i = 0; i < numParams; i++) {
+    ctorAppGoal = {
       tag: 'App',
-      fn: ctorApp,
-      arg: { tag: 'Var', index: (params.length - 1 - i) + ihOffset },
+      fn: ctorAppGoal,
+      arg: { tag: 'Var', index: scrutineeIdx + numParams - 1 + ihOffset - i },
     };
   }
 
-  // Shift goal type to account for new context entries
-  const shiftedGoalType = shiftTerm(goal.type, numNewEntries, 0);
-
-  // Replace the scrutinee (now at shifted index) with constructor app
-  const shiftedScrutineeIdx = scrutineeIdx + numNewEntries;
-  const caseGoalType = replaceVar(shiftedGoalType, shiftedScrutineeIdx, ctorApp);
-
-  // NOTE: Do NOT call fullNormalize here. The substitution Var(n) → Const("Zero")
-  // doesn't create beta-redexes. fullNormalize would aggressively unfold definitions
-  // like sum → sumStartCount, producing unreadable goals with internal helpers.
-  // fullNormalize is only needed after UnfoldTactic (which replaces Const with lambdas).
+  const caseGoalType = remapScrutineeVars(
+    goal.type, scrutineeIdx, ctorAppGoal, numParams, ihOffset
+  );
 
   // Add induction hypothesis if recursive
   if (hasRecursiveParam && recursiveParamLocalIdx !== null) {
-    // IH type: the goal type with scrutinee replaced by the recursive param
-    // The recursive param is at index (params.length - 1 - recursiveParamLocalIdx) + 1 (for IH slot)
-    // But IH is the LAST entry, so from IH's perspective, recursive param is at
-    // (params.length - 1 - recursiveParamLocalIdx) + 1
-    const recursiveVarIdx = (params.length - 1 - recursiveParamLocalIdx) + 1;
-    const shiftedGoalForIH = shiftTerm(goal.type, numNewEntries, 0);
-    const shiftedScrutineeForIH = scrutineeIdx + numNewEntries;
-    const ihType = replaceVar(shiftedGoalForIH, shiftedScrutineeForIH, { tag: 'Var', index: recursiveVarIdx });
+    // IH type: goal with scrutinee replaced by the recursive param.
+    // IH sees entries 0..newCtx.length-2 (everything before IH itself).
+    // IH scope depth = newCtx.length - 1 = n + numParams - 2 (without IH's own entry).
+    // But IH is about to be pushed, making newCtx.length = n + numParams - 1 + 1.
+    // From IH's scope (depth = n + numParams - 1, not counting itself):
+    //   param[recursiveParamLocalIdx] at position s + recursiveParamLocalIdx
+    //   → Var(scrutineeIdx + numParams - 1 - recursiveParamLocalIdx)
+    const recursiveParamRef: TTKTerm = {
+      tag: 'Var',
+      index: scrutineeIdx + numParams - 1 - recursiveParamLocalIdx,
+    };
+
+    // Remap with ihOffset=0 since IH doesn't count itself
+    const ihType = remapScrutineeVars(
+      goal.type, scrutineeIdx, recursiveParamRef, numParams, 0
+    );
+
     newCtx.push({ name: 'IH', type: ihType });
   }
 
@@ -721,6 +846,50 @@ function replayProofTree(
 
       return replayProofTree(
         node.child, cursorId, normalizedEngine,
+        caseLabel, caseLabelLatex, inductionVar,
+      );
+    }
+
+    case 'rewrite': {
+      // Apply RewriteTactic with Const(name) as the equality proof
+      const goal = engine.getFocusedGoal();
+      if (!goal) return null;
+
+      const tactic = new RewriteTactic({ tag: 'Const', name: node.name });
+      const result = tactic.apply(engine, goal, goalId);
+
+      if (!result.success) {
+        // Rewrite failed — continue with unchanged engine
+        return replayProofTree(
+          node.child, cursorId, engine,
+          caseLabel, caseLabelLatex, inductionVar,
+        );
+      }
+
+      return replayProofTree(
+        node.child, cursorId, result.newEngine!,
+        caseLabel, caseLabelLatex, inductionVar,
+      );
+    }
+
+    case 'apply': {
+      // Apply ApplyTactic with Const(name) as the function
+      const goal = engine.getFocusedGoal();
+      if (!goal) return null;
+
+      const tactic = new ApplyTactic({ tag: 'Const', name: node.name });
+      const result = tactic.apply(engine, goal, goalId);
+
+      if (!result.success) {
+        // Apply failed — continue with unchanged engine
+        return replayProofTree(
+          node.child, cursorId, engine,
+          caseLabel, caseLabelLatex, inductionVar,
+        );
+      }
+
+      return replayProofTree(
+        node.child, cursorId, result.newEngine!,
         caseLabel, caseLabelLatex, inductionVar,
       );
     }
@@ -924,8 +1093,9 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'exact':
       return null;
     case 'intros':
-      return findNodeById(node.child, id);
     case 'unfold':
+    case 'rewrite':
+    case 'apply':
       return findNodeById(node.child, id);
     case 'induction':
       for (const c of node.cases) {
@@ -1004,7 +1174,9 @@ function walkTreeSurface(
     }
 
     case 'unfold':
-      // No kernel type — can't unfold, pass through
+    case 'rewrite':
+    case 'apply':
+      // No kernel type — can't process, pass through
       return walkTreeSurface(node.child, cursorId, currentType, hypotheses, nameCtx, rev);
 
     case 'induction': {

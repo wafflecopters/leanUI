@@ -494,7 +494,7 @@ export function buildFromPattern(pattern: PatternElement[], captures: Map<string
         if (allCapturesUnbound(pe.sub, captures)) {
           result.push(...buildFromPattern(pe.base, captures));
         } else {
-          const base = buildPatternRow(pe.base, captures);
+          const base = buildBaseRow(pe.base, captures);
           const sub = buildPatternRow(pe.sub, captures);
           result.push(mkSub(base, sub));
         }
@@ -505,7 +505,7 @@ export function buildFromPattern(pattern: PatternElement[], captures: Map<string
         if (allCapturesUnbound(pe.sup, captures)) {
           result.push(...buildFromPattern(pe.base, captures));
         } else {
-          const base = buildPatternRow(pe.base, captures);
+          const base = buildBaseRow(pe.base, captures);
           const sup = buildPatternRow(pe.sup, captures);
           result.push(mkSup(base, sup));
         }
@@ -519,6 +519,31 @@ export function buildFromPattern(pattern: PatternElement[], captures: Map<string
 
 function buildPatternRow(elements: PatternElement[], captures: Map<string, MathNode[]>): MathRow {
   return mkRow(buildFromPattern(elements, captures));
+}
+
+/** Infix symbols that require parens when placed inside a sup/sub base. */
+const INFIX_SYMBOLS = new Set([
+  '+', '-', '=', '\\cdot', '\\times',
+  '\\to', '\\leq', '\\geq', '\\neq', '\\in',
+  '\\implies', '\\iff', '\\subset', '\\subseteq',
+]);
+
+/** Check if a list of MathNodes contains an infix operator at the top level. */
+function containsInfix(nodes: readonly MathNode[]): boolean {
+  return nodes.some(n => n.tag === 'Symbol' && INFIX_SYMBOLS.has(n.value));
+}
+
+/**
+ * Build a MathRow for use as a sup/sub base, wrapping in parens if the
+ * captured content contains infix operators. Without this, `Succ(a - b)`
+ * would render as `a - b'` instead of `(a - b)'`.
+ */
+function buildBaseRow(elements: PatternElement[], captures: Map<string, MathNode[]>): MathRow {
+  const nodes = buildFromPattern(elements, captures);
+  if (containsInfix(nodes)) {
+    return mkRow([mkDelimiter('(', ')', mkRow(nodes))]);
+  }
+  return mkRow(nodes);
 }
 
 /** Collect all capture names from a pattern element list. */

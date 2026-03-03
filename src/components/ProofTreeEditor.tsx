@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyRewrite, applyApplyTactic,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse,
   moveCursorUp, moveCursorDown,
   clearNode,
@@ -116,7 +116,9 @@ type TacticMode =
   | { tactic: 'intros' }
   | { tactic: 'induction' }
   | { tactic: 'exact' }
-  | { tactic: 'unfold' };
+  | { tactic: 'unfold' }
+  | { tactic: 'rewrite' }
+  | { tactic: 'apply' };
 
 // ============================================================================
 // Main Component
@@ -371,6 +373,8 @@ function ProofNodeView(props: NodeViewProps) {
     case 'induction': return <InductionView {...props} />;
     case 'exact': return <ExactView {...props} />;
     case 'unfold': return <UnfoldView {...props} />;
+    case 'rewrite': return <RewriteView {...props} />;
+    case 'apply': return <ApplyView {...props} />;
   }
 }
 
@@ -471,6 +475,16 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
         if (name) result = applyUnfold(state, name);
         break;
       }
+      case 'rewrite': {
+        const name = value.trim();
+        if (name) result = applyRewrite(state, name);
+        break;
+      }
+      case 'apply': {
+        const name = value.trim();
+        if (name) result = applyApplyTactic(state, name);
+        break;
+      }
     }
     if (result) onPushChange(result);
     onTacticMode(null);
@@ -508,6 +522,12 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'unfold' }); }}>
             Unfold...
           </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'rewrite' }); }}>
+            Rewrite...
+          </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'apply' }); }}>
+            Apply...
+          </button>
         </span>
       )}
 
@@ -517,6 +537,8 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
             {activeTactic === 'intros' ? 'Given' :
              activeTactic === 'induction' ? 'Induct on' :
              activeTactic === 'unfold' ? 'Unfold' :
+             activeTactic === 'rewrite' ? 'Rewrite' :
+             activeTactic === 'apply' ? 'Apply' :
              'by'}
           </span>
           <input
@@ -527,6 +549,8 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               activeTactic === 'intros' ? 'n, m, f' :
               activeTactic === 'induction' ? 'variable name' :
               activeTactic === 'unfold' ? 'definition name' :
+              activeTactic === 'rewrite' ? 'lemma name' :
+              activeTactic === 'apply' ? 'lemma name' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}
@@ -757,6 +781,70 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
     <>
       <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
         <span style={keywordStyle}>unfold </span>
+        <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        <span style={mutedStyle}>,</span>
+      </div>
+      <ProofNodeView
+        node={node.child}
+        depth={depth + 1}
+        cursorId={cursorId}
+        state={state}
+        tacticMode={tacticMode}
+        onTacticMode={onTacticMode}
+        onPushChange={onPushChange}
+        onClickNode={onClickNode}
+        typedContext={typedContext}
+        inductiveMap={inductiveMap}
+        registry={registry}
+      />
+    </>
+  );
+}
+
+// ============================================================================
+// RewriteView — renders "rewrite <name>,"
+// ============================================================================
+
+function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+  if (node.tag !== 'rewrite') return null;
+  const isFocused = cursorId === node.id;
+
+  return (
+    <>
+      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+        <span style={keywordStyle}>rewrite </span>
+        <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        <span style={mutedStyle}>,</span>
+      </div>
+      <ProofNodeView
+        node={node.child}
+        depth={depth + 1}
+        cursorId={cursorId}
+        state={state}
+        tacticMode={tacticMode}
+        onTacticMode={onTacticMode}
+        onPushChange={onPushChange}
+        onClickNode={onClickNode}
+        typedContext={typedContext}
+        inductiveMap={inductiveMap}
+        registry={registry}
+      />
+    </>
+  );
+}
+
+// ============================================================================
+// ApplyView — renders "apply <name>,"
+// ============================================================================
+
+function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+  if (node.tag !== 'apply') return null;
+  const isFocused = cursorId === node.id;
+
+  return (
+    <>
+      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+        <span style={keywordStyle}>apply </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
       </div>
