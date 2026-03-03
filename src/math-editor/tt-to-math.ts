@@ -1,0 +1,580 @@
+/**
+ * Reverse conversion: TTerm (surface parse tree) → MathNode tree.
+ *
+ * Used to pre-fill the structured math editor from an existing parsed
+ * type signature. Walks the TTerm Pi-spine, reverse-matches @syntax
+ * patterns, and builds MathNode trees.
+ */
+
+import { TTerm } from '../compiler/surface';
+import { SyntaxRegistry, SyntaxEntry, PatternElement } from './syntax-registry';
+import {
+  MathNode, MathRow,
+  mkRow, mkSymbol, mkHole, mkSup, mkSub, mkBigOp, mkFrac, mkAccent, mkDelimiter, mkText,
+} from './types';
+
+// ============================================================================
+// Reverse Registry
+// ============================================================================
+
+export interface ReverseRegistry {
+  sourceToVisual: Map<string, string>;   // "Nat" → "\\mathbb{N}"
+  nameToEntry: Map<string, SyntaxEntry>; // "plus" → entry with pattern [$0, +, $1]
+}
+
+/** Extract function name from a template string (first space-delimited token). */
+function templateFunctionName(template: string): string {
+  const firstSpace = template.indexOf(' ');
+  return firstSpace >= 0 ? template.slice(0, firstSpace) : template;
+}
+
+export function buildReverseRegistry(registry: SyntaxRegistry): ReverseRegistry {
+  const sourceToVisual = new Map<string, string>();
+  const nameToEntry = new Map<string, SyntaxEntry>();
+
+  let r: SyntaxRegistry | undefined = registry;
+  while (r) {
+    for (const [symbol, { source }] of r.symbolMap) {
+      if (!sourceToVisual.has(source)) {
+        sourceToVisual.set(source, symbol);
+      }
+    }
+    for (const entry of r.entries) {
+      // Key by the function name in the template (e.g., "Equal" from "Equal {$$A} $$0 $$1")
+      const fnName = templateFunctionName(entry.template);
+      // Skip infix patterns where template starts with $ (not a function name)
+      if (!fnName.startsWith('$') && !nameToEntry.has(fnName)) {
+        nameToEntry.set(fnName, entry);
+      }
+    }
+    r = r.parent;
+  }
+
+  return { sourceToVisual, nameToEntry };
+}
+
+// ============================================================================
+// Template Parsing — extract arg-to-capture mapping
+// ============================================================================
+
+export type TemplateSlot =
+  | { kind: 'direct'; capture: string }
+  | { kind: 'implicit'; capture: string }
+  | { kind: 'lambda'; binderCapture: string; bodyCapture: string };
+
+/**
+ * Parse template slots from a template string.
+ * E.g., "sum $$1 $$2 (\\$0 => $$3)" → [direct($1), direct($2), lambda($0, $3)]
+ */
+export function parseTemplateSlots(template: string): TemplateSlot[] {
+  // Strip function name (first token)
+  const firstSpace = template.indexOf(' ');
+  if (firstSpace < 0) return [];
+  let rest = template.slice(firstSpace).trim();
+
+  const slots: TemplateSlot[] = [];
+  while (rest.length > 0) {
+    rest = rest.trimStart();
+    if (rest.length === 0) break;
+
+    // Implicit: {$$N} or {$N}
+    const implicitMatch = rest.match(/^\{\$\$?(\w+)\}/);
+    if (implicitMatch) {
+      slots.push({ kind: 'implicit', capture: implicitMatch[1] });
+      rest = rest.slice(implicitMatch[0].length);
+      continue;
+    }
+
+    // Lambda: (\\...$N => $$M) — manual parsing to handle variable backslashes
+    if (rest.startsWith('(')) {
+      const lambdaResult = tryParseLambdaSlot(rest);
+      if (lambdaResult) {
+        slots.push(lambdaResult.slot);
+        rest = rest.slice(lambdaResult.consumed);
+        continue;
+      }
+    }
+
+    // Direct: $$N or $N
+    const directMatch = rest.match(/^\$\$?(\w+)/);
+    if (directMatch) {
+      slots.push({ kind: 'direct', capture: directMatch[1] });
+      rest = rest.slice(directMatch[0].length);
+      continue;
+    }
+
+    // Skip unknown character
+    rest = rest.slice(1);
+  }
+
+  return slots;
+}
+
+/** Try to parse a lambda slot like (\$N => $$M) from the start of `s`. */
+function tryParseLambdaSlot(s: string): { slot: TemplateSlot; consumed: number } | null {
+  // Skip '('
+  let j = 1;
+  // Skip any leading backslashes
+  while (j < s.length && s[j] === '\\') j++;
+  // Expect '$'
+  if (j >= s.length || s[j] !== '$') return null;
+  j++; // skip $
+  // Read binder capture name
+  let binderName = '';
+  while (j < s.length && /\w/.test(s[j])) { binderName += s[j]; j++; }
+  if (!binderName) return null;
+  // Skip whitespace
+  while (j < s.length && s[j] === ' ') j++;
+  // Expect '=>'
+  if (s.slice(j, j + 2) !== '=>') return null;
+  j += 2;
+  // Skip whitespace
+  while (j < s.length && s[j] === ' ') j++;
+  // Read body capture: $$M or $M
+  if (j >= s.length || s[j] !== '$') return null;
+  j++; // skip first $
+  if (j < s.length && s[j] === '$') j++; // skip optional second $
+  let bodyName = '';
+  while (j < s.length && /\w/.test(s[j])) { bodyName += s[j]; j++; }
+  if (!bodyName) return null;
+  // Expect ')'
+  if (j >= s.length || s[j] !== ')') return null;
+  j++; // skip )
+
+  return {
+    slot: { kind: 'lambda', binderCapture: binderName, bodyCapture: bodyName },
+    consumed: j,
+  };
+}
+
+// ============================================================================
+// Pi-spine decomposition
+// ============================================================================
+
+export interface BinderInfo {
+  names: string[];
+  domain: TTerm;
+  isImplicit: boolean;
+}
+
+/** Structural equality for TTerms (for grouping same-domain binders). */
+function ttermStructuralEqual(a: TTerm, b: TTerm): boolean {
+  if (a.tag !== b.tag) return false;
+  switch (a.tag) {
+    case 'Const': return (b as typeof a).name === a.name;
+    case 'Var': return (b as typeof a).index === a.index;
+    case 'Sort': return ttermStructuralEqual(a.level, (b as typeof a).level);
+    case 'ULit': return (b as typeof a).n === a.n;
+    case 'ULevel': case 'UOmega': return true;
+    case 'App': {
+      const bApp = b as typeof a;
+      return ttermStructuralEqual(a.fn, bApp.fn) && ttermStructuralEqual(a.arg, bApp.arg);
+    }
+    default: return false;
+  }
+}
+
+/** Check if a TTerm contains any Var references (used to prevent grouping across de Bruijn shifts). */
+function domainHasVars(term: TTerm): boolean {
+  switch (term.tag) {
+    case 'Var': return true;
+    case 'App': return domainHasVars((term as any).fn) || domainHasVars((term as any).arg);
+    case 'Binder': return (term.domain ? domainHasVars(term.domain) : false) || domainHasVars(term.body);
+    case 'Sort': return domainHasVars(term.level);
+    case 'Annot': return domainHasVars(term.term) || domainHasVars(term.type);
+    default: return false;
+  }
+}
+
+export function decomposePiSpine(type: TTerm): { binders: BinderInfo[]; body: TTerm } {
+  const binders: BinderInfo[] = [];
+  let current = type;
+
+  while (true) {
+    if (current.tag === 'MultiBinder' && current.binderKind.tag === 'BPiTT') {
+      binders.push({
+        names: [...current.names],
+        domain: current.domain,
+        isImplicit: current.named === true,
+      });
+      current = current.body;
+      continue;
+    }
+
+    if (current.tag === 'Binder' && current.binderKind.tag === 'BPiTT') {
+      const isImplicit = current.named === true;
+      const last = binders[binders.length - 1];
+
+      // Group consecutive same-domain non-implicit binders.
+      // Don't group anonymous ('_') binders — they're separate hypotheses.
+      // Also only group when domain has no Var references (avoids de Bruijn shift confusion).
+      if (last && !isImplicit && !last.isImplicit &&
+          current.name !== '_' && !last.names.includes('_') &&
+          current.domain && !domainHasVars(current.domain) &&
+          ttermStructuralEqual(last.domain, current.domain)) {
+        last.names.push(current.name);
+      } else {
+        binders.push({
+          names: [current.name],
+          domain: current.domain!,
+          isImplicit,
+        });
+      }
+      current = current.body;
+      continue;
+    }
+
+    break;
+  }
+
+  return { binders, body: current };
+}
+
+// ============================================================================
+// Core conversion: TTerm → MathNode[]
+// ============================================================================
+
+function flattenApp(term: TTerm): { fn: TTerm; args: TTerm[] } {
+  const args: TTerm[] = [];
+  let current = term;
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+  return { fn: current, args };
+}
+
+export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[]): MathNode[] {
+  switch (term.tag) {
+    case 'Const': {
+      const visual = rev.sourceToVisual.get(term.name);
+      if (visual) return [mkSymbol(visual)];
+      return [mkSymbol(term.name)];
+    }
+
+    case 'Var': {
+      const name = ctx[term.index];
+      if (name) return [mkSymbol(name)];
+      return [mkSymbol(`?v${term.index}`)];
+    }
+
+    case 'App': {
+      const { fn, args } = flattenApp(term);
+
+      if (fn.tag === 'Const') {
+        const entry = rev.nameToEntry.get(fn.name);
+        if (entry) {
+          const captures = buildCaptureMap(entry, args, rev, ctx);
+          if (captures) {
+            return buildFromPattern(entry.pattern, captures);
+          }
+        }
+
+        // Fallback: f(a, b)
+        const visual = rev.sourceToVisual.get(fn.name);
+        const fnNode = visual ? mkSymbol(visual) : mkSymbol(fn.name);
+
+        if (args.length === 0) return [fnNode];
+
+        const argNodes: MathNode[] = [];
+        for (let i = 0; i < args.length; i++) {
+          if (i > 0) argNodes.push(mkSymbol(','));
+          argNodes.push(...ttermToMathNodes(args[i], rev, ctx));
+        }
+        return [fnNode, mkDelimiter('(', ')', mkRow(argNodes))];
+      }
+
+      // Non-const function (e.g., variable applied to args)
+      const fnNodes = ttermToMathNodes(fn, rev, ctx);
+      if (args.length === 0) return fnNodes;
+
+      const argNodes: MathNode[] = [];
+      for (let i = 0; i < args.length; i++) {
+        if (i > 0) argNodes.push(mkSymbol(','));
+        argNodes.push(...ttermToMathNodes(args[i], rev, ctx));
+      }
+      return [...fnNodes, mkDelimiter('(', ')', mkRow(argNodes))];
+    }
+
+    case 'Binder': {
+      if (term.binderKind.tag === 'BLamTT') {
+        const bodyCtx = [term.name, ...ctx];
+        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        return [mkSymbol(term.name), mkSymbol('\\mapsto'), ...bodyNodes];
+      }
+      if (term.binderKind.tag === 'BPiTT') {
+        const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx) : [mkHole()];
+        const bodyCtx = [term.name, ...ctx];
+        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        return [...domainNodes, mkSymbol('\\to'), ...bodyNodes];
+      }
+      return [mkHole()];
+    }
+
+    case 'MultiBinder': {
+      if (term.binderKind.tag === 'BPiTT') {
+        const domainNodes = ttermToMathNodes(term.domain, rev, ctx);
+        const bodyCtx = [...[...term.names].reverse(), ...ctx];
+        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        return [...domainNodes, mkSymbol('\\to'), ...bodyNodes];
+      }
+      return [mkHole()];
+    }
+
+    case 'Sort':
+      return [mkSymbol('Type')];
+
+    case 'Hole':
+      return [mkHole()];
+
+    case 'Annot':
+      return ttermToMathNodes(term.term, rev, ctx);
+
+    default:
+      return [mkHole()];
+  }
+}
+
+// ============================================================================
+// Capture map: map TTerm args to pattern capture names
+// ============================================================================
+
+function buildCaptureMap(
+  entry: SyntaxEntry,
+  args: TTerm[],
+  rev: ReverseRegistry,
+  ctx: string[],
+): Map<string, MathNode[]> | null {
+  const slots = parseTemplateSlots(entry.template);
+  const captures = new Map<string, MathNode[]>();
+  let argIdx = 0;
+
+  for (const slot of slots) {
+    switch (slot.kind) {
+      case 'implicit':
+        // No corresponding surface arg — skip
+        break;
+      case 'direct':
+        if (argIdx >= args.length) return null;
+        captures.set(slot.capture, ttermToMathNodes(args[argIdx], rev, ctx));
+        argIdx++;
+        break;
+      case 'lambda':
+        if (argIdx >= args.length) return null;
+        {
+          const arg = args[argIdx];
+          if (arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
+            captures.set(slot.binderCapture, [mkSymbol(arg.name)]);
+            const bodyCtx = [arg.name, ...ctx];
+            captures.set(slot.bodyCapture, ttermToMathNodes(arg.body, rev, bodyCtx));
+          } else {
+            // Not a lambda — can't destructure via this template
+            return null;
+          }
+        }
+        argIdx++;
+        break;
+    }
+  }
+
+  return captures;
+}
+
+// ============================================================================
+// Pattern → MathNode[] builder
+// ============================================================================
+
+export function buildFromPattern(pattern: PatternElement[], captures: Map<string, MathNode[]>): MathNode[] {
+  const result: MathNode[] = [];
+
+  for (const pe of pattern) {
+    switch (pe.tag) {
+      case 'literal':
+        result.push(mkSymbol(pe.symbol));
+        break;
+
+      case 'capture': {
+        const nodes = captures.get(pe.name);
+        if (nodes && nodes.length > 0) {
+          result.push(...nodes);
+        } else {
+          result.push(mkHole());
+        }
+        break;
+      }
+
+      case 'bigop': {
+        const below = pe.below ? buildPatternRow(pe.below, captures) : null;
+        const above = pe.above ? buildPatternRow(pe.above, captures) : null;
+        const body = pe.body ? buildPatternRow(pe.body, captures) : mkRow([mkHole()]);
+        const op = pe.operator as 'sum' | 'int' | 'prod' | 'lim';
+        result.push(mkBigOp(op, below, above, body));
+        break;
+      }
+
+      case 'frac': {
+        const numer = buildPatternRow(pe.numer, captures);
+        const denom = buildPatternRow(pe.denom, captures);
+        result.push(mkFrac(numer, denom));
+        break;
+      }
+
+      case 'delimiter': {
+        const inner = buildPatternRow(pe.inner, captures);
+        result.push(mkDelimiter(pe.open, pe.close, inner));
+        break;
+      }
+
+      case 'accent': {
+        const body = buildPatternRow(pe.body, captures);
+        const accentType = pe.accent as 'vec' | 'hat' | 'bar' | 'tilde' | 'dot' | 'overline';
+        result.push(mkAccent(accentType, body));
+        break;
+      }
+
+      case 'sub': {
+        // If all captures in the subscript are unbound (implicit), skip it
+        if (allCapturesUnbound(pe.sub, captures)) {
+          result.push(...buildFromPattern(pe.base, captures));
+        } else {
+          const base = buildPatternRow(pe.base, captures);
+          const sub = buildPatternRow(pe.sub, captures);
+          result.push(mkSub(base, sub));
+        }
+        break;
+      }
+
+      case 'sup': {
+        if (allCapturesUnbound(pe.sup, captures)) {
+          result.push(...buildFromPattern(pe.base, captures));
+        } else {
+          const base = buildPatternRow(pe.base, captures);
+          const sup = buildPatternRow(pe.sup, captures);
+          result.push(mkSup(base, sup));
+        }
+        break;
+      }
+    }
+  }
+
+  return result;
+}
+
+function buildPatternRow(elements: PatternElement[], captures: Map<string, MathNode[]>): MathRow {
+  return mkRow(buildFromPattern(elements, captures));
+}
+
+/** Collect all capture names from a pattern element list. */
+function collectCaptureNames(elements: PatternElement[]): string[] {
+  const names: string[] = [];
+  function walk(elems: PatternElement[]) {
+    for (const e of elems) {
+      switch (e.tag) {
+        case 'capture': names.push(e.name); break;
+        case 'sub': walk(e.base); walk(e.sub); break;
+        case 'sup': walk(e.base); walk(e.sup); break;
+        case 'bigop':
+          if (e.below) walk(e.below);
+          if (e.above) walk(e.above);
+          if (e.body) walk(e.body);
+          break;
+        case 'frac': walk(e.numer); walk(e.denom); break;
+        case 'delimiter': walk(e.inner); break;
+        case 'accent': walk(e.body); break;
+      }
+    }
+  }
+  walk(elements);
+  return names;
+}
+
+/**
+ * Check if all captures in a pattern element list are unbound.
+ * Returns true ONLY when there are captures and ALL are unbound.
+ * Returns false when there are no captures (literal-only patterns should be kept).
+ */
+function allCapturesUnbound(elements: PatternElement[], captures: Map<string, MathNode[]>): boolean {
+  const captureNames = collectCaptureNames(elements);
+  if (captureNames.length === 0) return false; // no captures → keep the element
+  return captureNames.every(name => !captures.has(name));
+}
+
+// ============================================================================
+// Top-level: TTerm type → MathRow for structured editor
+// ============================================================================
+
+/** Check if a TTerm domain is a function type (Pi/arrow), e.g., Nat -> Nat. */
+function domainIsFunctionType(domain: TTerm): boolean {
+  if (domain.tag === 'Binder' && domain.binderKind.tag === 'BPiTT') return true;
+  if (domain.tag === 'MultiBinder' && domain.binderKind.tag === 'BPiTT') return true;
+  return false;
+}
+
+export function surfaceTypeToMathRow(type: TTerm, registry: SyntaxRegistry): MathRow {
+  const rev = buildReverseRegistry(registry);
+  const { binders, body } = decomposePiSpine(type);
+
+  const nodes: MathNode[] = [];
+
+  // Collect all binder names for context building
+  const allNames: string[] = [];
+  for (const b of binders) {
+    for (const name of b.names) {
+      allNames.push(name);
+    }
+  }
+
+  // Full context for body: innermost-first (de Bruijn order)
+  const fullCtx = [...allNames].reverse();
+
+  let nonImplicitCount = 0;
+  let namesSeenSoFar = 0;
+
+  for (const b of binders) {
+    if (b.isImplicit) {
+      namesSeenSoFar += b.names.length;
+      continue; // skip implicit binders
+    }
+
+    // Context for this binder's domain: names from previous binders only
+    const domainCtx = allNames.slice(0, namesSeenSoFar);
+    const domainCtxReversed = [...domainCtx].reverse();
+
+    if (nonImplicitCount > 0) {
+      nodes.push(mkText('and'));
+    }
+
+    const isAnonymous = b.names.every(n => n === '_');
+
+    if (isAnonymous) {
+      // Anonymous hypothesis: just the type expression
+      const typeNodes = ttermToMathNodes(b.domain, rev, domainCtxReversed);
+      nodes.push(...typeNodes);
+    } else {
+      // Named binder: ∀ n, m ∈ type
+      nodes.push(mkSymbol('\\forall'));
+      for (let j = 0; j < b.names.length; j++) {
+        if (j > 0) nodes.push(mkSymbol(','));
+        nodes.push(mkSymbol(b.names[j]));
+      }
+      // Use ":" for function-type domains (e.g., f : ℕ → ℕ), "∈" for simple types (e.g., n ∈ ℕ)
+      nodes.push(mkSymbol(domainIsFunctionType(b.domain) ? ':' : '\\in'));
+      const domainNodes = ttermToMathNodes(b.domain, rev, domainCtxReversed);
+      nodes.push(...domainNodes);
+    }
+
+    namesSeenSoFar += b.names.length;
+    nonImplicitCount++;
+  }
+
+  // Body
+  if (nonImplicitCount > 0) {
+    nodes.push(mkSymbol(','));
+    nodes.push(mkText('then'));
+  }
+
+  const bodyNodes = ttermToMathNodes(body, rev, fullCtx);
+  nodes.push(...bodyNodes);
+
+  return mkRow(nodes);
+}

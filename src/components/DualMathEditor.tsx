@@ -12,11 +12,12 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { MathEditor, MathEditorHandle } from './MathEditor';
 import { SyntaxRegistry, convertToSource } from '../math-editor/syntax-registry';
 import { inferTypeSignatureParts } from '../math-editor/type-inference';
-import { MathEditorState, MathRow } from '../math-editor/types';
+import { MathEditorState, MathRow, createEditorState } from '../math-editor/types';
 
 export interface DualMathEditorProps {
   placeholder?: string;
   registry?: SyntaxRegistry;
+  initialTypeRoot?: MathRow;
 }
 
 /** Shared container styles — no individual border, embedded inside the outer wrapper. */
@@ -26,13 +27,24 @@ const editorContainerStyle: React.CSSProperties = {
   backgroundColor: 'transparent',
 };
 
-export function DualMathEditor({ placeholder, registry }: DualMathEditorProps) {
+export function DualMathEditor({ placeholder, registry, initialTypeRoot }: DualMathEditorProps) {
   const [activeEditor, setActiveEditor] = useState<'type' | 'proof'>('type');
   const typeRef = useRef<MathEditorHandle>(null);
   const proofRef = useRef<MathEditorHandle>(null);
 
+  // Compute initial state for type editor
+  const typeInitialState = useMemo<MathEditorState | undefined>(() => {
+    if (!initialTypeRoot || initialTypeRoot.children.length === 0) return undefined;
+    return {
+      root: initialTypeRoot,
+      cursor: { path: [], offset: initialTypeRoot.children.length },
+      commandBuffer: null,
+      textBuffer: null,
+    };
+  }, [initialTypeRoot]);
+
   // Track roots for combined term display
-  const [typeRoot, setTypeRoot] = useState<MathRow | null>(null);
+  const [typeRoot, setTypeRoot] = useState<MathRow | null>(initialTypeRoot ?? null);
   const [proofRoot, setProofRoot] = useState<MathRow | null>(null);
 
   const handleTypeChange = useCallback((state: MathEditorState) => {
@@ -104,6 +116,7 @@ export function DualMathEditor({ placeholder, registry }: DualMathEditorProps) {
         {/* Type signature editor (top) */}
         <MathEditor
           ref={typeRef}
+          initialState={typeInitialState}
           placeholder={placeholder}
           registry={registry}
           active={activeEditor === 'type'}

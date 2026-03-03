@@ -2,7 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { CompiledDeclaration } from '../compiler/compile';
 import { DualMathEditor } from './DualMathEditor';
+import { ProofTreeEditor } from './ProofTreeEditor';
 import { SyntaxRegistry, SyntaxEntry, patternToDisplayLatex, SyntaxAnnotation, buildRegistryFromAnnotations } from '../math-editor/syntax-registry';
+import { surfaceTypeToMathRow } from '../math-editor/tt-to-math';
+import { MathRow } from '../math-editor/types';
+import { ProofTreeHistory, createHistory, createInitialState } from '../proof-tree/proof-tree';
 
 export interface WYSIWYGPanelProps {
   /** Compiled declarations for display (zonked kernel terms — no unsolved metas) */
@@ -62,6 +66,18 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
     });
   }, [declarations, allDeclarations]);
 
+  // Compute initial type roots from surfaceType for pre-filling editors
+  const initialTypeRoots = useMemo<(MathRow | undefined)[]>(() => {
+    return declarations.map((decl, i) => {
+      if (!decl.surfaceType) return undefined;
+      try {
+        return surfaceTypeToMathRow(decl.surfaceType, registries[i]);
+      } catch {
+        return undefined;
+      }
+    });
+  }, [declarations, registries]);
+
   // Per-box editable name
   const [localNames, setLocalNames] = useState<string[]>(() =>
     declarations.map(d => d.name || '')
@@ -70,6 +86,18 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
     setLocalNames(prev => {
       const next = [...prev];
       next[index] = value;
+      return next;
+    });
+  };
+
+  // Per-declaration proof tree history
+  const [proofHistories, setProofHistories] = useState<ProofTreeHistory[]>(() =>
+    declarations.map(() => createHistory(createInitialState()))
+  );
+  const handleProofHistoryChange = (index: number, h: ProofTreeHistory) => {
+    setProofHistories(prev => {
+      const next = [...prev];
+      next[index] = h;
       return next;
     });
   };
@@ -146,7 +174,18 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
           {/* Structured math editors (type + proof) */}
           <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d' }}>
             <SyntaxReferencePanel registry={registries[i]} />
-            <DualMathEditor placeholder="type signature" registry={registries[i]} />
+            <DualMathEditor placeholder="type signature" registry={registries[i]} initialTypeRoot={initialTypeRoots[i]} />
+          </div>
+
+          {/* Structured proof tree editor */}
+          <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d' }}>
+            <div style={{ fontSize: '10px', color: '#484f58', marginBottom: '4px', letterSpacing: '0.03em' }}>
+              PROOF
+            </div>
+            <ProofTreeEditor
+              history={proofHistories[i] ?? createHistory(createInitialState())}
+              onHistoryChange={(h) => handleProofHistoryChange(i, h)}
+            />
           </div>
         </div>
       ))}
