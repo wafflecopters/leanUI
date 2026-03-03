@@ -824,7 +824,7 @@ describe('induction goal computation with scrutinee at various indices', () => {
     expect(ctx1!.goal).toContain('Equal');
     // Check that 0 (rendered from Zero) appears in the goal
     expect(ctx1!.goal).toMatch(/0|Zero/);
-    // Verify no rendering artifacts (boxes, \mapsto, etc.)
+    // Verify no rendering artifacts (boxes, etc.)
     expect(ctx1!.goal).not.toContain('\\mapsto');
     expect(ctx1!.goal).not.toContain('□');
 
@@ -995,7 +995,6 @@ summationSplit = ?TODO
     // No grey boxes (unknown/unsupported terms)
     expect(ctx!.goal).not.toContain('\\square');
 
-    // The lambda \k => f(k) is part of the original type — \mapsto is correct for it
     // Should contain Zero (rendered from Const("Zero"))
     expect(ctx!.goal).toContain('Zero');
   });
@@ -1033,5 +1032,65 @@ summationSplit = ?TODO
     // Should have IH hypothesis
     const ihHyp = ctx!.hypotheses.find(h => h.name === 'IH');
     expect(ihHyp).toBeDefined();
+  });
+
+  test('intros → induction → unfold: does not over-reduce', () => {
+    const result = compilePreset();
+    const sumSplitDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'summationSplit');
+    const kernelType = sumSplitDecl!.kernelType!;
+    const definitions = result.definitions;
+
+    // Build proof tree: intros [i, n, f] → induction n → Zero case → unfold sum
+    const unfoldChild = mkTreeHole();
+    const unfoldNode = mkUnfold('sum', unfoldChild);
+    const succBody = mkTreeHole();
+    const c1 = mkCase('n = 0', unfoldNode, 'Zero', []);
+    const c2 = mkCase('n = Succ k', succBody, 'Succ', ['k']);
+    const ind = mkInduction('n', [c1, c2]);
+    const intros = mkIntros(['i', 'n', 'f'], ind);
+
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      intros, unfoldChild.id, surfaceType, emptyRegistry,
+      undefined, kernelType, definitions,
+    );
+    expect(ctx).not.toBeNull();
+
+    // After unfold sum, sum should be replaced but NOT over-reduced
+    // Should NOT have grey boxes (internal helpers rendered as unknown)
+    expect(ctx!.goal).not.toContain('\\square');
+    // sum was unfolded — it should be replaced by its body (sumStartCount)
+    // but sumStartCount itself should NOT be further unfolded
+    expect(ctx!.goal).not.toContain('sum(');  // sum should be gone (unfolded)
+    // But no additional lambdas from definition unfolding
+    expect(ctx!.goal).toContain('Equal');
+  });
+
+  test('intros → induction → unfold sum → unfold minus: no grey boxes', () => {
+    const result = compilePreset();
+    const sumSplitDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'summationSplit');
+    const kernelType = sumSplitDecl!.kernelType!;
+    const definitions = result.definitions;
+
+    // Build proof tree: intros [i, n, f] → induction n → Zero case → unfold sum → unfold minus
+    const minusChild = mkTreeHole();
+    const unfoldMinus = mkUnfold('minus', minusChild);
+    const unfoldSum = mkUnfold('sum', unfoldMinus);
+    const succBody = mkTreeHole();
+    const c1 = mkCase('n = 0', unfoldSum, 'Zero', []);
+    const c2 = mkCase('n = Succ k', succBody, 'Succ', ['k']);
+    const ind = mkInduction('n', [c1, c2]);
+    const intros = mkIntros(['i', 'n', 'f'], ind);
+
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      intros, minusChild.id, surfaceType, emptyRegistry,
+      undefined, kernelType, definitions,
+    );
+    expect(ctx).not.toBeNull();
+    expect(ctx!.goal).not.toContain('\\square');
+    expect(ctx!.goal).toContain('Equal');
   });
 });

@@ -6,7 +6,7 @@
  * patterns, and builds MathNode trees.
  */
 
-import { TTerm } from '../compiler/surface';
+import { TTerm, TPattern } from '../compiler/surface';
 import { SyntaxRegistry, SyntaxEntry, PatternElement } from './syntax-registry';
 import {
   MathNode, MathRow,
@@ -300,7 +300,7 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
       if (term.binderKind.tag === 'BLamTT') {
         const bodyCtx = [term.name, ...ctx];
         const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
-        return [mkSymbol(term.name), mkSymbol('\\mapsto'), ...bodyNodes];
+        return [mkSymbol(term.name), mkSymbol('\\to'), ...bodyNodes];
       }
       if (term.binderKind.tag === 'BPiTT') {
         const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx) : [mkHole()];
@@ -330,8 +330,65 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
     case 'Annot':
       return ttermToMathNodes(term.term, rev, ctx);
 
+    case 'Match': {
+      // Render as: match scrutinee { pat1 → rhs1 | pat2 → rhs2 | ... }
+      // This appears when unfolding pattern-matching definitions where the
+      // scrutinee is a variable (stuck iota-reduction).
+      // Skip Hole scrutinees (implementation detail of compiled pattern-matching functions).
+      const scrutNodes = term.scrutinee.tag === 'Hole'
+        ? [] : [...ttermToMathNodes(term.scrutinee, rev, ctx), mkSymbol('\\,')];
+      const clauseNodes: MathNode[] = [];
+      for (let i = 0; i < term.clauses.length; i++) {
+        if (i > 0) clauseNodes.push(mkSymbol('\\mid'));
+        const clause = term.clauses[i];
+        const patStr = clause.patterns.map(p => renderPattern(p)).join(',\\,');
+        // Extend context with pattern-bound variables
+        const patVars = collectTPatternVars(clause.patterns);
+        const clauseCtx = [...[...patVars].reverse(), ...ctx];
+        const rhsNodes = ttermToMathNodes(clause.rhs, rev, clauseCtx);
+        clauseNodes.push(mkSymbol(patStr), mkSymbol('\\Rightarrow'), ...rhsNodes);
+      }
+      return [
+        mkDelimiter('\\{', '\\}', mkRow([
+          ...scrutNodes,
+          ...clauseNodes,
+        ])),
+      ];
+    }
+
     default:
       return [mkHole()];
+  }
+}
+
+// ============================================================================
+// Pattern rendering helpers (for Match display)
+// ============================================================================
+
+/** Render a TPattern to a string for display in match expressions. */
+function renderPattern(p: TPattern): string {
+  switch (p.tag) {
+    case 'PVar': return p.name;
+    case 'PWild': return '\\_';
+    case 'PCtor': {
+      if (p.args.length === 0) return p.name;
+      return `${p.name}(${p.args.map(a => renderPattern(a)).join(', ')})`;
+    }
+  }
+}
+
+/** Collect bound variable names from patterns (in order). */
+function collectTPatternVars(patterns: TPattern[]): string[] {
+  const vars: string[] = [];
+  for (const p of patterns) collectTPatternVarsInto(p, vars);
+  return vars;
+}
+
+function collectTPatternVarsInto(p: TPattern, vars: string[]): void {
+  switch (p.tag) {
+    case 'PVar': vars.push(p.name); break;
+    case 'PWild': vars.push('_'); break;
+    case 'PCtor': for (const a of p.args) collectTPatternVarsInto(a, vars); break;
   }
 }
 

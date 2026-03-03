@@ -13,9 +13,9 @@
  * 4. Render to LaTeX via kernelTypeToSurface + ttermToMathNodes
  */
 
-import { TTerm, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
-import { TTKTerm } from '../compiler/kernel';
-import { DefinitionsMap, NamedArgMap, MetaVar } from '../compiler/term';
+import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
+import { TTKTerm, TTKPattern } from '../compiler/kernel';
+import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { whnf } from '../compiler/whnf';
 import { shiftTerm, subst } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -93,6 +93,19 @@ function lookupNamedArgMap(name: string, definitions: DefinitionsMap): NamedArgM
   return undefined;
 }
 
+/** Convert a kernel TTKPattern to a surface TPattern. */
+function kernelPatternToSurface(p: TTKPattern): TPattern {
+  switch (p.tag) {
+    case 'PVar': return { tag: 'PVar', name: p.name };
+    case 'PWild': return { tag: 'PWild' };
+    case 'PCtor': return {
+      tag: 'PCtor',
+      name: p.name,
+      args: p.args.map(a => kernelPatternToSurface(a)),
+    };
+  }
+}
+
 /**
  * Convert a kernel TTKTerm to a surface TTerm.
  * Handles the type forms that commonly appear in goals.
@@ -147,7 +160,26 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
       return mkHoleTT('_unsupported_binder', prop);
     }
     case 'Match': {
-      return mkHoleTT('_match', prop);
+      // Render Match as a case-of application: show scrutinee and clause RHS bodies
+      // This arises when unfolding pattern-matching definitions (e.g., unfold minus)
+      // where the scrutinee is a variable, so iota-reduction can't fire.
+      // Render as: match scrutinee { clause1 | clause2 | ... }
+      // For now, render just the scrutinee as a visual indicator.
+      const scrut = kernelTypeToSurface(t.scrutinee, definitions);
+      // Show each clause RHS
+      const clauseTerms = t.clauses.map(c => kernelTypeToSurface(c.rhs, definitions));
+      if (clauseTerms.length === 0) return mkHoleTT('_empty_match', prop);
+      // Use a simple rendering: first clause that isn't a hole
+      // Actually, render as a structured Match TTerm if available,
+      // otherwise show scrutinee
+      return {
+        tag: 'Match',
+        scrutinee: scrut,
+        clauses: t.clauses.map(c => ({
+          patterns: c.patterns.map(p => kernelPatternToSurface(p)),
+          rhs: kernelTypeToSurface(c.rhs, definitions),
+        })),
+      } as TTerm;
     }
     default: return mkHoleTT(`_unsupported_${t.tag}`, prop);
   }
@@ -224,7 +256,11 @@ function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngi
   const goal = engine.metaVars.get(goalId);
   if (!goal) return engine;
 
-  const normalized = fullNormalize(goal.type, engine.definitions);
+  // Use empty definitions so fullNormalize only does beta/iota reduction,
+  // not delta-reduction of other constants. UnfoldTactic already replaced
+  // the target constant with its lambda body — we just need to beta-reduce
+  // the resulting (\x => body)(arg) redexes.
+  const normalized = fullNormalize(goal.type, createDefinitionsMap());
   if (normalized === goal.type) return engine;
 
   const newMetaVars = new Map(engine.metaVars);

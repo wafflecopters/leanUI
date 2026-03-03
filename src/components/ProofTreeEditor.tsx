@@ -30,6 +30,7 @@ import {
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
+import SplitPane from './SplitPane';
 
 // ============================================================================
 // Props
@@ -64,9 +65,12 @@ const containerStyle: React.CSSProperties = {
   color: '#c9d1d9',
   lineHeight: '1.6',
   minHeight: '40px',
-  display: 'flex',
-  gap: '12px',
 };
+
+const INITIAL_PANE_SIZES = [
+  { size: 65, mode: 'percent' as const },
+  { size: 35, mode: 'percent' as const },
+];
 
 // ============================================================================
 // InlineKaTeX — renders a LaTeX string inline
@@ -213,25 +217,30 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
       onKeyDown={handleKeyDown}
       style={containerStyle}
     >
-      {/* Left: proof tree */}
-      <div style={{ flex: 1, padding: '8px 0', minWidth: 0 }}>
-        <ProofNodeView
-          node={state.root}
-          depth={0}
-          cursorId={state.cursor.nodeId}
-          state={state}
-          tacticMode={tacticMode}
-          onTacticMode={setTacticMode}
-          onPushChange={pushChange}
-          onClickNode={handleClickNode}
-          typedContext={typedContext}
-          inductiveMap={inductiveMap}
-          registry={registry}
-        />
-      </div>
+      <SplitPane
+        direction="horizontal"
+        paneSizes={INITIAL_PANE_SIZES}
+      >
+        {/* Left: proof tree */}
+        <div style={{ padding: '8px 0', minWidth: 0, overflowY: 'auto', height: '100%' }}>
+          <ProofNodeView
+            node={state.root}
+            depth={0}
+            cursorId={state.cursor.nodeId}
+            state={state}
+            tacticMode={tacticMode}
+            onTacticMode={setTacticMode}
+            onPushChange={pushChange}
+            onClickNode={handleClickNode}
+            typedContext={typedContext}
+            inductiveMap={inductiveMap}
+            registry={registry}
+          />
+        </div>
 
-      {/* Right: goal panel */}
-      <GoalPanel context={typedContext} />
+        {/* Right: goal panel */}
+        <GoalPanel context={typedContext} />
+      </SplitPane>
     </div>
   );
 }
@@ -247,12 +256,11 @@ function GoalPanel({ context }: { context: TypedProofContext | null }) {
 
   return (
     <div style={{
-      width: '220px',
-      flexShrink: 0,
       padding: '8px 12px',
-      borderLeft: '1px solid #21262d',
       fontSize: '12px',
       lineHeight: '1.5',
+      overflowY: 'auto',
+      height: '100%',
     }}>
       {/* Hypotheses */}
       {hypotheses.length > 0 && (

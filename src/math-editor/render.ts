@@ -192,7 +192,8 @@ function renderSymbol(value: string): string {
   }
   if (value === '\\in' || value === '\\to' || value === '\\leq' || value === '\\geq' ||
       value === '\\neq' || value === '\\subset' || value === '\\subseteq' ||
-      value === '\\implies' || value === '\\iff') {
+      value === '\\implies' || value === '\\iff' ||
+      value === '\\Rightarrow' || value === '\\mid') {
     return ` ${value} `;
   }
   return value;
