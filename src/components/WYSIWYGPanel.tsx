@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { CompiledDeclaration } from '../compiler/compile';
+import { DefinitionsMap, createDefinitionsMap, addDefinition, addInductiveDefinition } from '../compiler/term';
 import { DualMathEditor } from './DualMathEditor';
 import { ProofTreeEditor } from './ProofTreeEditor';
 import { SyntaxRegistry, SyntaxEntry, patternToDisplayLatex, SyntaxAnnotation, buildRegistryFromAnnotations } from '../math-editor/syntax-registry';
@@ -78,6 +79,28 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
       }
     });
   }, [declarations, registries]);
+
+  // Build DefinitionsMap from all compiled declarations (for unfold tactic)
+  const definitionsMap = useMemo<DefinitionsMap>(() => {
+    let defs = createDefinitionsMap();
+    for (const decl of allDeclarations) {
+      if (!decl.name) continue;
+      if (decl.kind === 'inductive' && decl.kernelType && decl.kernelConstructors) {
+        defs = addInductiveDefinition(
+          defs, decl.name, decl.kernelType,
+          decl.kernelConstructors,
+          decl.indexPositions ?? [],
+          decl.namedArgMap,
+        );
+      } else if (decl.kind === 'term' && decl.kernelType) {
+        defs = addDefinition(
+          defs, decl.name, decl.kernelType,
+          decl.kernelValue, decl.namedArgMap,
+        );
+      }
+    }
+    return defs;
+  }, [allDeclarations]);
 
   // Build InductiveMap from all compiled declarations
   const inductiveMap = useMemo<InductiveMap>(() => {
@@ -201,6 +224,8 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
               history={proofHistories[i] ?? createHistory(createInitialState())}
               onHistoryChange={(h) => handleProofHistoryChange(i, h)}
               surfaceType={decl.surfaceType}
+              kernelType={decl.kernelType}
+              definitions={definitionsMap}
               registry={registries[i]}
               inductiveMap={inductiveMap}
             />

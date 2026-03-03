@@ -13,11 +13,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import { TTerm } from '../compiler/surface';
+import { TTKTerm } from '../compiler/kernel';
+import { DefinitionsMap } from '../compiler/term';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse,
   moveCursorUp, moveCursorDown,
   clearNode,
@@ -38,6 +40,10 @@ export interface ProofTreeEditorProps {
   onHistoryChange: (h: ProofTreeHistory) => void;
   /** Surface type of the declaration — enables real type info in goal panel */
   surfaceType?: TTerm;
+  /** Kernel type of the declaration — enables unfold normalization */
+  kernelType?: TTKTerm;
+  /** Definitions map — needed for unfold to normalize terms */
+  definitions?: DefinitionsMap;
   /** Syntax registry for structured math rendering of types/goals */
   registry?: SyntaxRegistry;
   /** Map of inductive type names to their constructors — enables case-specific goals */
@@ -105,13 +111,14 @@ type TacticMode =
   | null
   | { tactic: 'intros' }
   | { tactic: 'induction' }
-  | { tactic: 'exact' };
+  | { tactic: 'exact' }
+  | { tactic: 'unfold' };
 
 // ============================================================================
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, registry, inductiveMap }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -123,7 +130,10 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, registr
   // Compute typed context at cursor position (uses surface type when available)
   const typedContext = useMemo<TypedProofContext | null>(() => {
     if (surfaceType) {
-      return computeTypedContext(state.root, state.cursor.nodeId, surfaceType, registry ?? emptyRegistry, inductiveMap);
+      return computeTypedContext(
+        state.root, state.cursor.nodeId, surfaceType, registry ?? emptyRegistry,
+        inductiveMap, kernelType, definitions,
+      );
     }
     // Fallback: use untyped context, convert to TypedProofContext shape
     const ctx = computeContext(state.root, state.cursor.nodeId);
@@ -134,7 +144,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, registr
       inductionVar: ctx.inductionVar,
       goal: ctx.goalDescription,
     };
-  }, [state.root, state.cursor.nodeId, surfaceType, registry, emptyRegistry, inductiveMap]);
+  }, [state.root, state.cursor.nodeId, surfaceType, kernelType, definitions, registry, emptyRegistry, inductiveMap]);
 
   // Dispatch a structural change (goes on undo stack)
   const pushChange = useCallback((newState: ProofTreeState) => {
@@ -233,7 +243,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, registr
 function GoalPanel({ context }: { context: TypedProofContext | null }) {
   if (!context) return null;
 
-  const { hypotheses, caseLabel, inductionVar, goal } = context;
+  const { hypotheses, caseLabel, caseLabelLatex, inductionVar, goal } = context;
 
   return (
     <div style={{
@@ -290,7 +300,7 @@ function GoalPanel({ context }: { context: TypedProofContext | null }) {
           </div>
           <div style={{ padding: '1px 0' }}>
             <InlineKaTeX
-              latex={textToLatex(caseLabel)}
+              latex={caseLabelLatex ?? textToLatex(caseLabel)}
               style={{ fontSize: '12px' }}
             />
           </div>
@@ -352,6 +362,7 @@ function ProofNodeView(props: NodeViewProps) {
     case 'intros': return <IntrosView {...props} />;
     case 'induction': return <InductionView {...props} />;
     case 'exact': return <ExactView {...props} />;
+    case 'unfold': return <UnfoldView {...props} />;
   }
 }
 
@@ -447,6 +458,11 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
         if (expr) result = applyExact(state, expr);
         break;
       }
+      case 'unfold': {
+        const name = value.trim();
+        if (name) result = applyUnfold(state, name);
+        break;
+      }
     }
     if (result) onPushChange(result);
     onTacticMode(null);
@@ -481,13 +497,19 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'exact' }); }}>
             Exact...
           </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'unfold' }); }}>
+            Unfold...
+          </button>
         </span>
       )}
 
       {isFocused && activeTactic && (
         <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
           <span style={keywordStyle}>
-            {activeTactic === 'intros' ? 'Given' : activeTactic === 'induction' ? 'Induct on' : 'by'}
+            {activeTactic === 'intros' ? 'Given' :
+             activeTactic === 'induction' ? 'Induct on' :
+             activeTactic === 'unfold' ? 'Unfold' :
+             'by'}
           </span>
           <input
             ref={inputRef}
@@ -496,6 +518,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
             placeholder={
               activeTactic === 'intros' ? 'n, m, f' :
               activeTactic === 'induction' ? 'variable name' :
+              activeTactic === 'unfold' ? 'definition name' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}
@@ -710,6 +733,38 @@ function CaseView({
           registry={registry}
         />
       )}
+    </>
+  );
+}
+
+// ============================================================================
+// UnfoldView — renders "unfold <name>,"
+// ============================================================================
+
+function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+  if (node.tag !== 'unfold') return null;
+  const isFocused = cursorId === node.id;
+
+  return (
+    <>
+      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+        <span style={keywordStyle}>unfold </span>
+        <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        <span style={mutedStyle}>,</span>
+      </div>
+      <ProofNodeView
+        node={node.child}
+        depth={depth + 1}
+        cursorId={cursorId}
+        state={state}
+        tacticMode={tacticMode}
+        onTacticMode={onTacticMode}
+        onPushChange={onPushChange}
+        onClickNode={onClickNode}
+        typedContext={typedContext}
+        inductiveMap={inductiveMap}
+        registry={registry}
+      />
     </>
   );
 }

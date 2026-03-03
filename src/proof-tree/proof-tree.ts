@@ -27,7 +27,8 @@ export type ProofNode =
   | HoleNode
   | IntrosNode
   | InductionNode
-  | ExactNode;
+  | ExactNode
+  | UnfoldNode;
 
 export interface HoleNode {
   readonly tag: 'hole';
@@ -53,6 +54,14 @@ export interface ExactNode {
   readonly tag: 'exact';
   readonly id: ProofNodeId;
   readonly expr: string;
+}
+
+export interface UnfoldNode {
+  readonly tag: 'unfold';
+  readonly id: ProofNodeId;
+  /** The definition name to unfold (e.g., 'plus', 'sum'). */
+  readonly name: string;
+  readonly child: ProofNode;
 }
 
 export interface CaseNode {
@@ -120,6 +129,10 @@ export function mkExact(expr: string): ExactNode {
   return { tag: 'exact', id: freshProofId(), expr };
 }
 
+export function mkUnfold(name: string, child: ProofNode): UnfoldNode {
+  return { tag: 'unfold', id: freshProofId(), name, child };
+}
+
 export function mkCase(
   label: string, body: ProofNode,
   constructorName?: string, constructorParamNames?: readonly string[],
@@ -150,6 +163,8 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
       return null;
     case 'intros':
       return findNode(root.child, id);
+    case 'unfold':
+      return findNode(root.child, id);
     case 'induction':
       for (const c of root.cases) {
         const found = findNode(c.body, id);
@@ -166,6 +181,7 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'exact':
       return null;
     case 'intros':
+    case 'unfold':
       return findCase(root.child, id);
     case 'induction':
       for (const c of root.cases) {
@@ -185,6 +201,7 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'exact':
       return false;
     case 'intros':
+    case 'unfold':
       return isCursorInSubtree(node.child, cursorId);
     case 'induction':
       return node.cases.some(c =>
@@ -216,6 +233,7 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'exact':
       break;
     case 'intros':
+    case 'unfold':
       linearizeImpl(node.child, depth + 1, out);
       break;
     case 'induction':
@@ -242,7 +260,8 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
     case 'hole':
     case 'exact':
       return root;
-    case 'intros': {
+    case 'intros':
+    case 'unfold': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
     }
@@ -268,7 +287,8 @@ export function updateCase(
     case 'hole':
     case 'exact':
       return root;
-    case 'intros': {
+    case 'intros':
+    case 'unfold': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
     }
@@ -340,6 +360,17 @@ export function applyInductionWithCtors(
   const firstBody = cases.length > 0 ? cases[0].body : null;
   const cursorId = firstBody ? firstBody.id : induction.id;
   return { root: newRoot, cursor: { nodeId: cursorId } };
+}
+
+/** Apply unfold at the cursor (must be a hole). Replaces the hole with an unfold node + child hole. */
+export function applyUnfold(state: ProofTreeState, name: string): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const childHole = mkHole();
+  const unfold = mkUnfold(name, childHole);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, unfold);
+  return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
 /** Apply exact at the cursor (must be a hole). */
@@ -582,6 +613,9 @@ function computeContextImpl(
       ];
       return computeContextImpl(node.child, cursorId, extended);
     }
+
+    case 'unfold':
+      return computeContextImpl(node.child, cursorId, hypotheses);
 
     case 'induction': {
       for (const c of node.cases) {
