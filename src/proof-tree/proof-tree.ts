@@ -61,6 +61,20 @@ export interface CaseNode {
   readonly label: string;
   readonly body: ProofNode;
   readonly collapsed: boolean;
+  /** Constructor name (e.g., 'Zero', 'Succ') — set when induction knows the inductive type */
+  readonly constructorName?: string;
+  /** Names for constructor parameters (e.g., ['k'] for Succ) */
+  readonly constructorParamNames?: readonly string[];
+  /** Pre-rendered LaTeX for the case label (e.g., "n = 0" rendered through structured pipeline) */
+  readonly labelLatex?: string;
+}
+
+/** Info needed to create a case with constructor metadata. */
+export interface ConstructorCaseInfo {
+  readonly label: string;
+  readonly constructorName: string;
+  readonly paramNames: readonly string[];
+  readonly labelLatex?: string;
 }
 
 // ============================================================================
@@ -106,8 +120,16 @@ export function mkExact(expr: string): ExactNode {
   return { tag: 'exact', id: freshProofId(), expr };
 }
 
-export function mkCase(label: string, body: ProofNode): CaseNode {
-  return { tag: 'case', id: freshProofId(), label, body, collapsed: false };
+export function mkCase(
+  label: string, body: ProofNode,
+  constructorName?: string, constructorParamNames?: readonly string[],
+  labelLatex?: string,
+): CaseNode {
+  const node: CaseNode = { tag: 'case', id: freshProofId(), label, body, collapsed: false };
+  if (constructorName !== undefined) (node as any).constructorName = constructorName;
+  if (constructorParamNames !== undefined) (node as any).constructorParamNames = constructorParamNames;
+  if (labelLatex !== undefined) (node as any).labelLatex = labelLatex;
+  return node;
 }
 
 export function createInitialState(): ProofTreeState {
@@ -295,6 +317,26 @@ export function applyInduction(
   const newRoot = replaceNode(state.root, state.cursor.nodeId, induction);
 
   // Cursor → first case's body hole
+  const firstBody = cases.length > 0 ? cases[0].body : null;
+  const cursorId = firstBody ? firstBody.id : induction.id;
+  return { root: newRoot, cursor: { nodeId: cursorId } };
+}
+
+/** Apply induction with constructor metadata at the cursor (must be a hole). */
+export function applyInductionWithCtors(
+  state: ProofTreeState,
+  scrutinee: string,
+  ctorInfos: readonly ConstructorCaseInfo[],
+): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const cases = ctorInfos.map(info =>
+    mkCase(info.label, mkHole(), info.constructorName, info.paramNames, info.labelLatex)
+  );
+  const induction = mkInduction(scrutinee, cases);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, induction);
+
   const firstBody = cases.length > 0 ? cases[0].body : null;
   const cursorId = firstBody ? firstBody.id : induction.id;
   return { root: newRoot, cursor: { nodeId: cursorId } };
@@ -489,6 +531,82 @@ export function clearNode(state: ProofTreeState, nodeId: ProofNodeId): ProofTree
   const newHole = mkHole();
   const newRoot = replaceNode(state.root, nodeId, newHole);
   return { root: newRoot, cursor: { nodeId: newHole.id } };
+}
+
+// ============================================================================
+// Context Computation — derive hypotheses + goal from path to cursor
+// ============================================================================
+
+export interface ContextEntry {
+  readonly name: string;
+  readonly source: 'intro' | 'case-ih';
+}
+
+export interface ProofContext {
+  readonly hypotheses: readonly ContextEntry[];
+  readonly caseLabel?: string;
+  readonly inductionVar?: string;
+  readonly goalDescription: string;
+}
+
+/**
+ * Walk the tree from root to the cursor node, collecting hypotheses and
+ * case information encountered along the way.
+ */
+export function computeContext(root: ProofNode, cursorId: ProofNodeId): ProofContext | null {
+  return computeContextImpl(root, cursorId, []);
+}
+
+function computeContextImpl(
+  node: ProofNode,
+  cursorId: ProofNodeId,
+  hypotheses: readonly ContextEntry[],
+): ProofContext | null {
+  // Cursor is on this node
+  if (node.id === cursorId) {
+    return {
+      hypotheses,
+      goalDescription: node.tag === 'hole' ? '?' : node.tag === 'exact' ? node.expr : '',
+    };
+  }
+
+  switch (node.tag) {
+    case 'hole':
+    case 'exact':
+      return null;
+
+    case 'intros': {
+      const extended: ContextEntry[] = [
+        ...hypotheses,
+        ...node.names.map(name => ({ name, source: 'intro' as const })),
+      ];
+      return computeContextImpl(node.child, cursorId, extended);
+    }
+
+    case 'induction': {
+      for (const c of node.cases) {
+        // Cursor is on the case header
+        if (c.id === cursorId) {
+          return {
+            hypotheses,
+            caseLabel: c.label,
+            inductionVar: node.scrutinee,
+            goalDescription: '',
+          };
+        }
+        // Cursor is somewhere inside the case body
+        const result = computeContextImpl(c.body, cursorId, hypotheses);
+        if (result) {
+          return {
+            ...result,
+            caseLabel: result.caseLabel ?? c.label,
+            inductionVar: result.inductionVar ?? node.scrutinee,
+          };
+        }
+      }
+      return null;
+    }
+  }
 }
 
 // ============================================================================

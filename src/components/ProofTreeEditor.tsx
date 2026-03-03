@@ -4,18 +4,30 @@
  * Each proof is a tree of tactic nodes (intros, induction, exact, hole).
  * State is fully immutable — every action produces a new state.
  * Undo/redo is built on immutable history snapshots.
+ *
+ * Features:
+ * - KaTeX rendering for case labels, intro names, exact expressions
+ * - Goal panel showing context + goal at cursor position
  */
 
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import katex from 'katex';
+import { TTerm } from '../compiler/surface';
+import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, ProofNodeId,
-  linearize, findNode, findCase,
-  applyIntros, applyInduction, applyExact,
+  computeContext,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse,
   moveCursorUp, moveCursorDown,
   clearNode,
   pushState, updateCurrent, undo, redo,
 } from '../proof-tree/proof-tree';
+import {
+  TypedProofContext, computeTypedContext,
+  InductiveMap, extractTypeHead, generateCaseInfos,
+} from '../proof-tree/goal-computation';
+import { buildReverseRegistry } from '../math-editor/tt-to-math';
 
 // ============================================================================
 // Props
@@ -24,6 +36,12 @@ import {
 export interface ProofTreeEditorProps {
   history: ProofTreeHistory;
   onHistoryChange: (h: ProofTreeHistory) => void;
+  /** Surface type of the declaration — enables real type info in goal panel */
+  surfaceType?: TTerm;
+  /** Syntax registry for structured math rendering of types/goals */
+  registry?: SyntaxRegistry;
+  /** Map of inductive type names to their constructors — enables case-specific goals */
+  inductiveMap?: InductiveMap;
 }
 
 // ============================================================================
@@ -35,13 +53,49 @@ const FONT_UI = '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial
 
 const containerStyle: React.CSSProperties = {
   outline: 'none',
-  padding: '8px 0',
   fontSize: '13px',
   fontFamily: FONT_UI,
   color: '#c9d1d9',
   lineHeight: '1.6',
   minHeight: '40px',
+  display: 'flex',
+  gap: '12px',
 };
+
+// ============================================================================
+// InlineKaTeX — renders a LaTeX string inline
+// ============================================================================
+
+function InlineKaTeX({ latex, style }: { latex: string; style?: React.CSSProperties }) {
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    try {
+      katex.render(latex, ref.current, {
+        displayMode: false,
+        throwOnError: false,
+        trust: true,
+        strict: false,
+      });
+    } catch {
+      ref.current.textContent = latex;
+    }
+  }, [latex]);
+
+  return <span ref={ref} style={style} />;
+}
+
+/** Convert a plain-text math expression to LaTeX. Simple heuristic. */
+function textToLatex(text: string): string {
+  return text
+    .replace(/'/g, "'")     // prime
+    .replace(/\bNat\b/g, '\\mathbb{N}')
+    .replace(/\bType\b/g, '\\text{Type}')
+    .replace(/->/g, '\\to ')
+    .replace(/=>/g, '\\Rightarrow ')
+    .replace(/\brefl\b/g, '\\text{refl}');
+}
 
 // ============================================================================
 // Tactic input state (ephemeral, per-hole)
@@ -57,12 +111,30 @@ type TacticMode =
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, registry, inductiveMap }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
   // Ephemeral tactic input mode (not part of immutable state)
   const [tacticMode, setTacticMode] = useState<TacticMode>(null);
+
+  const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
+
+  // Compute typed context at cursor position (uses surface type when available)
+  const typedContext = useMemo<TypedProofContext | null>(() => {
+    if (surfaceType) {
+      return computeTypedContext(state.root, state.cursor.nodeId, surfaceType, registry ?? emptyRegistry, inductiveMap);
+    }
+    // Fallback: use untyped context, convert to TypedProofContext shape
+    const ctx = computeContext(state.root, state.cursor.nodeId);
+    if (!ctx) return null;
+    return {
+      hypotheses: ctx.hypotheses.map(h => ({ name: h.name, type: '' })),
+      caseLabel: ctx.caseLabel,
+      inductionVar: ctx.inductionVar,
+      goal: ctx.goalDescription,
+    };
+  }, [state.root, state.cursor.nodeId, surfaceType, registry, emptyRegistry, inductiveMap]);
 
   // Dispatch a structural change (goes on undo stack)
   const pushChange = useCallback((newState: ProofTreeState) => {
@@ -131,16 +203,127 @@ export function ProofTreeEditor({ history, onHistoryChange }: ProofTreeEditorPro
       onKeyDown={handleKeyDown}
       style={containerStyle}
     >
-      <ProofNodeView
-        node={state.root}
-        depth={0}
-        cursorId={state.cursor.nodeId}
-        state={state}
-        tacticMode={tacticMode}
-        onTacticMode={setTacticMode}
-        onPushChange={pushChange}
-        onClickNode={handleClickNode}
-      />
+      {/* Left: proof tree */}
+      <div style={{ flex: 1, padding: '8px 0', minWidth: 0 }}>
+        <ProofNodeView
+          node={state.root}
+          depth={0}
+          cursorId={state.cursor.nodeId}
+          state={state}
+          tacticMode={tacticMode}
+          onTacticMode={setTacticMode}
+          onPushChange={pushChange}
+          onClickNode={handleClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
+        />
+      </div>
+
+      {/* Right: goal panel */}
+      <GoalPanel context={typedContext} />
+    </div>
+  );
+}
+
+// ============================================================================
+// GoalPanel — shows context + goal at cursor position
+// ============================================================================
+
+function GoalPanel({ context }: { context: TypedProofContext | null }) {
+  if (!context) return null;
+
+  const { hypotheses, caseLabel, inductionVar, goal } = context;
+
+  return (
+    <div style={{
+      width: '220px',
+      flexShrink: 0,
+      padding: '8px 12px',
+      borderLeft: '1px solid #21262d',
+      fontSize: '12px',
+      lineHeight: '1.5',
+    }}>
+      {/* Hypotheses */}
+      {hypotheses.length > 0 && (
+        <div style={{ marginBottom: '10px' }}>
+          <div style={{
+            fontSize: '10px',
+            color: '#484f58',
+            letterSpacing: '0.04em',
+            marginBottom: '4px',
+            fontWeight: 600,
+          }}>
+            CONTEXT
+          </div>
+          {hypotheses.map((h, i) => (
+            <div key={i} style={{
+              padding: '1px 0',
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: '4px',
+              flexWrap: 'wrap',
+            }}>
+              <InlineKaTeX latex={textToLatex(h.name)} style={{ fontSize: '12px' }} />
+              {h.type && (
+                <>
+                  <span style={{ color: '#484f58', fontSize: '11px' }}>:</span>
+                  <InlineKaTeX latex={h.type} style={{ fontSize: '11px' }} />
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Case info */}
+      {caseLabel && (
+        <div style={{ marginBottom: '10px' }}>
+          <div style={{
+            fontSize: '10px',
+            color: '#484f58',
+            letterSpacing: '0.04em',
+            marginBottom: '4px',
+            fontWeight: 600,
+          }}>
+            CASE
+          </div>
+          <div style={{ padding: '1px 0' }}>
+            <InlineKaTeX
+              latex={textToLatex(caseLabel)}
+              style={{ fontSize: '12px' }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Goal */}
+      <div>
+        <div style={{
+          fontSize: '10px',
+          color: '#484f58',
+          letterSpacing: '0.04em',
+          marginBottom: '4px',
+          fontWeight: 600,
+        }}>
+          GOAL
+        </div>
+        <div style={{
+          padding: '4px 8px',
+          backgroundColor: '#0d1117',
+          borderRadius: '4px',
+          border: '1px solid #21262d',
+          wordBreak: 'break-word' as const,
+        }}>
+          {goal === '?' ? (
+            <span style={{ color: '#d29922', fontStyle: 'italic' }}>unsolved</span>
+          ) : goal ? (
+            <InlineKaTeX latex={goal} style={{ fontSize: '11px' }} />
+          ) : (
+            <span style={{ color: '#484f58' }}>&mdash;</span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -158,6 +341,9 @@ interface NodeViewProps {
   onTacticMode: (m: TacticMode) => void;
   onPushChange: (s: ProofTreeState) => void;
   onClickNode: (id: ProofNodeId) => void;
+  typedContext?: TypedProofContext | null;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
 }
 
 function ProofNodeView(props: NodeViewProps) {
@@ -192,12 +378,6 @@ const keywordStyle: React.CSSProperties = {
   fontStyle: 'italic',
 };
 
-const nameStyle: React.CSSProperties = {
-  color: '#e6edf3',
-  fontFamily: FONT_MONO,
-  fontSize: '12px',
-};
-
 const mutedStyle: React.CSSProperties = {
   color: '#484f58',
 };
@@ -211,12 +391,6 @@ const btnStyle: React.CSSProperties = {
   padding: '1px 8px',
   cursor: 'pointer',
   fontFamily: FONT_UI,
-};
-
-const btnActiveStyle: React.CSSProperties = {
-  ...btnStyle,
-  borderColor: '#58a6ff',
-  color: '#58a6ff',
 };
 
 const inputStyle: React.CSSProperties = {
@@ -235,7 +409,7 @@ const inputStyle: React.CSSProperties = {
 // HoleView
 // ============================================================================
 
-function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode }: NodeViewProps) {
+function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
   const isFocused = cursorId === node.id;
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -250,7 +424,22 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       }
       case 'induction': {
         const scrutinee = value.trim();
-        if (scrutinee) result = applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
+        if (scrutinee) {
+          // Try to auto-generate cases from inductive type info
+          const hyp = typedContext?.hypotheses.find(h => h.name === scrutinee);
+          const rawType = hyp?.rawType;
+          const headName = rawType ? extractTypeHead(rawType) : null;
+          const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
+
+          if (indInfo) {
+            const rev = registry ? buildReverseRegistry(registry) : undefined;
+            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev);
+            result = applyInductionWithCtors(state, scrutinee, ctorInfos);
+          } else {
+            // Fallback: hardcoded case labels
+            result = applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
+          }
+        }
         break;
       }
       case 'exact': {
@@ -319,7 +508,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               if (inputRef.current) handleSubmit(inputRef.current.value);
             }}
           >
-            {'↵'}
+            {'\u21B5'}
           </button>
         </span>
       )}
@@ -332,26 +521,27 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
 }
 
 // ============================================================================
-// IntrosView
+// IntrosView — renders "Given n, m, and f,"
 // ============================================================================
 
-function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode }: NodeViewProps) {
+function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
   if (node.tag !== 'intros') return null;
   const isFocused = cursorId === node.id;
 
-  // Format names with Oxford comma: "Given a, b, and c,"
-  const formatNames = (names: readonly string[]) => {
-    if (names.length === 0) return '';
-    if (names.length === 1) return names[0];
-    if (names.length === 2) return `${names[0]} and ${names[1]}`;
-    return names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1];
+  // Build a single KaTeX expression for all names with Oxford comma
+  const namesLatex = (names: readonly string[]): string => {
+    const parts = names.map(n => textToLatex(n));
+    if (parts.length === 0) return '';
+    if (parts.length === 1) return parts[0];
+    if (parts.length === 2) return `${parts[0]} \\text{ and } ${parts[1]}`;
+    return parts.slice(0, -1).join(',\\, ') + ',\\, \\text{and } ' + parts[parts.length - 1];
   };
 
   return (
     <>
       <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
         <span style={keywordStyle}>Given </span>
-        <span style={nameStyle}>{formatNames(node.names)}</span>
+        <InlineKaTeX latex={namesLatex(node.names)} style={{ fontSize: '13px' }} />
         <span style={mutedStyle}>,</span>
       </div>
       <ProofNodeView
@@ -363,6 +553,9 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
         onTacticMode={onTacticMode}
         onPushChange={onPushChange}
         onClickNode={onClickNode}
+        typedContext={typedContext}
+        inductiveMap={inductiveMap}
+        registry={registry}
       />
     </>
   );
@@ -372,7 +565,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 // InductionView
 // ============================================================================
 
-function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode }: NodeViewProps) {
+function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
   if (node.tag !== 'induction') return null;
   const isFocused = cursorId === node.id;
 
@@ -398,7 +591,10 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
           {node.collapsed ? '\u25B6' : '\u25BC'}
         </span>
         <span style={keywordStyle}>induct on </span>
-        <span style={nameStyle}>{node.scrutinee}</span>
+        <InlineKaTeX
+          latex={textToLatex(node.scrutinee)}
+          style={{ fontSize: '13px' }}
+        />
         <span style={mutedStyle}>:</span>
       </div>
 
@@ -415,6 +611,9 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
           onTacticMode={onTacticMode}
           onPushChange={onPushChange}
           onClickNode={onClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
         />
       ))}
 
@@ -447,11 +646,15 @@ interface CaseViewProps {
   onTacticMode: (m: TacticMode) => void;
   onPushChange: (s: ProofTreeState) => void;
   onClickNode: (id: ProofNodeId) => void;
+  typedContext?: TypedProofContext | null;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
 }
 
 function CaseView({
   caseNode, caseIndex, inductionId, depth,
   cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  typedContext, inductiveMap, registry,
 }: CaseViewProps) {
   const isFocused = cursorId === caseNode.id;
 
@@ -476,7 +679,10 @@ function CaseView({
           {caseNode.collapsed ? '\u25B6' : '\u25BC'}
         </span>
         <span style={{ color: '#7ee787', fontWeight: 500 }}>Case </span>
-        <span style={nameStyle}>{caseNode.label}</span>
+        <InlineKaTeX
+          latex={caseNode.labelLatex ?? textToLatex(caseNode.label)}
+          style={{ fontSize: '13px' }}
+        />
         <span style={mutedStyle}>:</span>
 
         {isFocused && (
@@ -484,7 +690,7 @@ function CaseView({
             style={{ ...btnStyle, marginLeft: '8px', fontSize: '10px', color: '#f85149' }}
             onClick={handleDelete}
           >
-            {'×'}
+            {'\u00d7'}
           </button>
         )}
       </div>
@@ -499,6 +705,9 @@ function CaseView({
           onTacticMode={onTacticMode}
           onPushChange={onPushChange}
           onClickNode={onClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
         />
       )}
     </>
@@ -516,7 +725,10 @@ function ExactView({ node, depth, cursorId, onClickNode }: NodeViewProps) {
   return (
     <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
       <span style={keywordStyle}>by </span>
-      <span style={{ ...nameStyle, color: '#79c0ff' }}>{node.expr}</span>
+      <InlineKaTeX
+        latex={textToLatex(node.expr)}
+        style={{ fontSize: '13px' }}
+      />
     </div>
   );
 }

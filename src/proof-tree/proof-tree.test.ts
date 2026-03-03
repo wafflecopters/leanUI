@@ -11,6 +11,7 @@ import {
   editIntroName, addIntroName, removeIntroName,
   editScrutinee, editExact, editCaseLabel,
   clearNode,
+  computeContext,
   createHistory, pushState, updateCurrent, undo, redo,
   ProofTreeState,
 } from './proof-tree';
@@ -874,5 +875,128 @@ describe('full workflow', () => {
     hist = undo(hist);
     expect(hist.current).toBe(s1);
     expect(hist.current.root.tag).toBe('intros');
+  });
+});
+
+// ============================================================================
+// 11. computeContext
+// ============================================================================
+
+describe('computeContext', () => {
+  test('returns null when cursor not found', () => {
+    const hole = mkHole();
+    expect(computeContext(hole, 9999)).toBeNull();
+  });
+
+  test('cursor on root hole has empty context', () => {
+    const hole = mkHole();
+    const ctx = computeContext(hole, hole.id);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.hypotheses).toEqual([]);
+    expect(ctx!.goalDescription).toBe('?');
+    expect(ctx!.caseLabel).toBeUndefined();
+    expect(ctx!.inductionVar).toBeUndefined();
+  });
+
+  test('cursor on exact node shows expression', () => {
+    const exact = mkExact('refl');
+    const ctx = computeContext(exact, exact.id);
+    expect(ctx!.goalDescription).toBe('refl');
+    expect(ctx!.hypotheses).toEqual([]);
+  });
+
+  test('intros adds names to context', () => {
+    const child = mkHole();
+    const intros = mkIntros(['i', 'f', 'n'], child);
+    const ctx = computeContext(intros, child.id);
+    expect(ctx!.hypotheses).toHaveLength(3);
+    expect(ctx!.hypotheses[0]).toEqual({ name: 'i', source: 'intro' });
+    expect(ctx!.hypotheses[1]).toEqual({ name: 'f', source: 'intro' });
+    expect(ctx!.hypotheses[2]).toEqual({ name: 'n', source: 'intro' });
+    expect(ctx!.goalDescription).toBe('?');
+  });
+
+  test('cursor on intros node itself has no hypotheses from itself', () => {
+    const child = mkHole();
+    const intros = mkIntros(['n', 'm'], child);
+    const ctx = computeContext(intros, intros.id);
+    // The intros node is the cursor target, so its own names aren't "in scope" yet
+    expect(ctx!.hypotheses).toEqual([]);
+  });
+
+  test('nested intros accumulate context', () => {
+    const innerHole = mkHole();
+    const inner = mkIntros(['m'], innerHole);
+    const outer = mkIntros(['n'], inner);
+    const ctx = computeContext(outer, innerHole.id);
+    expect(ctx!.hypotheses).toHaveLength(2);
+    expect(ctx!.hypotheses[0].name).toBe('n');
+    expect(ctx!.hypotheses[1].name).toBe('m');
+  });
+
+  test('cursor on case header shows case info', () => {
+    const c1 = mkCase('n = 0', mkHole());
+    const c2 = mkCase("n = k'", mkHole());
+    const ind = mkInduction('n', [c1, c2]);
+
+    const ctx = computeContext(ind, c1.id);
+    expect(ctx!.caseLabel).toBe('n = 0');
+    expect(ctx!.inductionVar).toBe('n');
+  });
+
+  test('cursor inside case body shows case info', () => {
+    const body1 = mkHole();
+    const body2 = mkHole();
+    const c1 = mkCase('n = 0', body1);
+    const c2 = mkCase("n = k'", body2);
+    const ind = mkInduction('n', [c1, c2]);
+
+    const ctx = computeContext(ind, body2.id);
+    expect(ctx!.caseLabel).toBe("n = k'");
+    expect(ctx!.inductionVar).toBe('n');
+    expect(ctx!.goalDescription).toBe('?');
+  });
+
+  test('full workflow: intros → induction → case body', () => {
+    const body1 = mkHole();
+    const body2 = mkHole();
+    const c1 = mkCase('n = 0', body1);
+    const c2 = mkCase("n = k'", body2);
+    const ind = mkInduction('n', [c1, c2]);
+    const intros = mkIntros(['i', 'f', 'n'], ind);
+
+    // Cursor on second case body hole
+    const ctx = computeContext(intros, body2.id);
+    expect(ctx!.hypotheses).toHaveLength(3);
+    expect(ctx!.hypotheses.map(h => h.name)).toEqual(['i', 'f', 'n']);
+    expect(ctx!.caseLabel).toBe("n = k'");
+    expect(ctx!.inductionVar).toBe('n');
+    expect(ctx!.goalDescription).toBe('?');
+  });
+
+  test('cursor on induction node itself shows no case info', () => {
+    const c1 = mkCase('n = 0', mkHole());
+    const ind = mkInduction('n', [c1]);
+    const intros = mkIntros(['n'], ind);
+
+    const ctx = computeContext(intros, ind.id);
+    expect(ctx!.hypotheses).toHaveLength(1);
+    expect(ctx!.hypotheses[0].name).toBe('n');
+    expect(ctx!.caseLabel).toBeUndefined();
+    expect(ctx!.inductionVar).toBeUndefined();
+  });
+
+  test('exact inside case shows full context', () => {
+    const exact = mkExact('refl');
+    const c1 = mkCase('n = 0', exact);
+    const ind = mkInduction('n', [c1]);
+    const intros = mkIntros(['n'], ind);
+
+    const ctx = computeContext(intros, exact.id);
+    expect(ctx!.hypotheses).toHaveLength(1);
+    expect(ctx!.hypotheses[0].name).toBe('n');
+    expect(ctx!.caseLabel).toBe('n = 0');
+    expect(ctx!.inductionVar).toBe('n');
+    expect(ctx!.goalDescription).toBe('refl');
   });
 });

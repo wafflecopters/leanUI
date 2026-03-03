@@ -7,6 +7,7 @@ import { SyntaxRegistry, SyntaxEntry, patternToDisplayLatex, SyntaxAnnotation, b
 import { surfaceTypeToMathRow } from '../math-editor/tt-to-math';
 import { MathRow } from '../math-editor/types';
 import { ProofTreeHistory, createHistory, createInitialState } from '../proof-tree/proof-tree';
+import { InductiveMap, InductiveInfo } from '../proof-tree/goal-computation';
 
 export interface WYSIWYGPanelProps {
   /** Compiled declarations for display (zonked kernel terms — no unsolved metas) */
@@ -77,6 +78,20 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
       }
     });
   }, [declarations, registries]);
+
+  // Build InductiveMap from all compiled declarations
+  const inductiveMap = useMemo<InductiveMap>(() => {
+    const map = new Map<string, InductiveInfo>();
+    for (const decl of allDeclarations) {
+      if (decl.kind === 'inductive' && decl.name && decl.surfaceConstructors) {
+        map.set(decl.name, {
+          name: decl.name,
+          constructors: decl.surfaceConstructors,
+        });
+      }
+    }
+    return map;
+  }, [allDeclarations]);
 
   // Per-box editable name
   const [localNames, setLocalNames] = useState<string[]>(() =>
@@ -185,6 +200,9 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
             <ProofTreeEditor
               history={proofHistories[i] ?? createHistory(createInitialState())}
               onHistoryChange={(h) => handleProofHistoryChange(i, h)}
+              surfaceType={decl.surfaceType}
+              registry={registries[i]}
+              inductiveMap={inductiveMap}
             />
           </div>
         </div>
