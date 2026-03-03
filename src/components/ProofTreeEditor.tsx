@@ -428,6 +428,55 @@ const inputStyle: React.CSSProperties = {
   width: '150px',
 };
 
+const deleteBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  color: '#f85149',
+  fontSize: '13px',
+  cursor: 'pointer',
+  padding: '0 4px',
+  marginLeft: '4px',
+  opacity: 0.7,
+  lineHeight: 1,
+};
+
+// ============================================================================
+// TacticRow — shared row wrapper with hover-reveal delete button
+// ============================================================================
+
+function TacticRow({
+  nodeId, depth, isFocused, onClickNode, onDelete, children,
+}: {
+  nodeId: ProofNodeId;
+  depth: number;
+  isFocused: boolean;
+  onClickNode: (id: ProofNodeId) => void;
+  onDelete: () => void;
+  children: React.ReactNode;
+}) {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      style={nodeRowStyle(depth, isFocused)}
+      onClick={() => onClickNode(nodeId)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {children}
+      {hovered && (
+        <button
+          style={deleteBtnStyle}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          title="Delete this tactic"
+        >
+          {'\u00d7'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ============================================================================
 // HoleView
 // ============================================================================
@@ -592,13 +641,18 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
     return parts.slice(0, -1).join(',\\, ') + ',\\, \\text{and } ' + parts[parts.length - 1];
   };
 
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
   return (
     <>
-      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
         <span style={keywordStyle}>Given </span>
         <InlineKaTeX latex={namesLatex(node.names)} style={{ fontSize: '13px' }} />
         <span style={mutedStyle}>,</span>
-      </div>
+      </TacticRow>
       <ProofNodeView
         node={node.child}
         depth={depth + 1}
@@ -636,9 +690,14 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
   return (
     <>
-      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
         <span
           onClick={handleToggleCollapse}
           style={{ cursor: 'pointer', fontSize: '10px', marginRight: '4px', color: '#484f58', userSelect: 'none' as const }}
@@ -651,7 +710,7 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
           style={{ fontSize: '13px' }}
         />
         <span style={mutedStyle}>:</span>
-      </div>
+      </TacticRow>
 
       {!node.collapsed && node.cases.map((c, i) => (
         <CaseView
@@ -777,13 +836,18 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
   if (node.tag !== 'unfold') return null;
   const isFocused = cursorId === node.id;
 
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
   return (
     <>
-      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
         <span style={keywordStyle}>unfold </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
-      </div>
+      </TacticRow>
       <ProofNodeView
         node={node.child}
         depth={depth + 1}
@@ -809,13 +873,18 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
   if (node.tag !== 'rewrite') return null;
   const isFocused = cursorId === node.id;
 
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
   return (
     <>
-      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
         <span style={keywordStyle}>rewrite </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
-      </div>
+      </TacticRow>
       <ProofNodeView
         node={node.child}
         depth={depth + 1}
@@ -841,13 +910,18 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
   if (node.tag !== 'apply') return null;
   const isFocused = cursorId === node.id;
 
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
   return (
     <>
-      <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
         <span style={keywordStyle}>apply </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
-      </div>
+      </TacticRow>
       <ProofNodeView
         node={node.child}
         depth={depth + 1}
@@ -869,17 +943,22 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
 // ExactView
 // ============================================================================
 
-function ExactView({ node, depth, cursorId, onClickNode }: NodeViewProps) {
+function ExactView({ node, depth, cursorId, state, onPushChange, onClickNode }: NodeViewProps) {
   if (node.tag !== 'exact') return null;
   const isFocused = cursorId === node.id;
 
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
   return (
-    <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
+    <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
       <span style={keywordStyle}>by </span>
       <InlineKaTeX
         latex={textToLatex(node.expr)}
         style={{ fontSize: '13px' }}
       />
-    </div>
+    </TacticRow>
   );
 }
