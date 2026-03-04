@@ -621,3 +621,18 @@ EOF
 // Using Write tool directly
 Write({ file_path: '/tmp/test.ts', content: 'const x = 1;' })
 ```
+
+---
+
+## Status Tracking
+
+The file `status.md` at the project root is read by **Conductor** (a project manager dashboard) to generate project summaries and progress tracking.
+
+**After completing any significant feature, bug fix, or refactor, update `status.md`:**
+- Move completed work from "Up Next" to "Recent Progress"
+- Update "Current Focus" to reflect what you're working on now
+- Add/remove blockers as they arise or resolve
+- Keep each section concise (3-5 bullet points max for Recent Progress, prioritized list for Up Next)
+- Trim old items from "Recent Progress" — keep only the ~5 most recent
+
+**This is not optional.** If you just finished a task and are about to report completion, check whether `status.md` needs updating. When in doubt, update it.
