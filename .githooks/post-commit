@@ -1,0 +1,13 @@
+#!/bin/sh
+# Remind to update status.md if it wasn't part of this commit
+if ! git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^status\.md$'; then
+  MSG=$(git log -1 --pretty=%s)
+  case "$MSG" in
+    fix\ typo*|fixup*|wip*|merge*|Merge*) ;;
+    *)
+      echo ""
+      echo "📊 Reminder: Is status.md still up to date?"
+      echo ""
+      ;;
+  esac
+fi

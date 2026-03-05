@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f status.md ]; then last_mod=$(stat -f '%m' status.md 2>/dev/null || stat -c '%Y' status.md 2>/dev/null); now=$(date +%s); age=$(( (now - last_mod) / 86400 )); if [ \"$age\" -ge 1 ]; then echo '\\n⚠️  status.md is '\"$age\"' day(s) old. Run /update-status to refresh it.'; fi; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
