@@ -1,0 +1,12 @@
+@test success
+@name "sorry after partial proof leaves remaining goal unsolved"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+myThm : (n m : Nat) -> Equal n m -> Equal (Succ n) (Succ m) := by
+  intros n m h
+  apply cong
+  ?rest

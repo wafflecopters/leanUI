@@ -23,8 +23,9 @@ export interface ProseItem {
 
 export type ProseItemKind =
   | { tag: 'intro'; latex: string }
-  | { tag: 'chain'; steps: ChainStep[]; goalLatex?: string }
-  | { tag: 'apply'; name: string; subgoalLatex?: string[] }
+  | { tag: 'unfold'; name: string; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'rewrite'; name: string; reverse?: boolean; equationLatex?: string; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[] }
   | { tag: 'inductionHeader'; scrutinee: string }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; error?: string }
@@ -37,6 +38,8 @@ export interface ChainStep {
   readonly type: 'unfold' | 'rewrite';
   readonly name: string;
   readonly reverse?: boolean;
+  /** For rewrite steps: the unified equation rendered as LaTeX (e.g., "a + 0 = a"). */
+  readonly equationLatex?: string;
 }
 
 // ============================================================================
@@ -106,15 +109,26 @@ function isChainNode(node: ProofNode): node is (ProofNode & { tag: 'unfold' | 'r
 /**
  * Collect a chain of consecutive unfold/rewrite nodes.
  * Returns the chain steps and the first non-chain child.
+ * Attaches unified equation LaTeX from the goal map when available.
  */
-function collectChain(node: ProofNode): { steps: ChainStep[]; tail: ProofNode } {
+function collectChain(
+  node: ProofNode,
+  goalMap: Map<ProofNodeId, NodeGoalInfo>,
+): { steps: ChainStep[]; tail: ProofNode } {
   const steps: ChainStep[] = [];
   let current = node;
   while (isChainNode(current)) {
+    const nodeInfo = goalMap.get(current.id);
     if (current.tag === 'unfold') {
       steps.push({ nodeId: current.id, type: 'unfold', name: current.name });
     } else {
-      steps.push({ nodeId: current.id, type: 'rewrite', name: current.name, reverse: current.reverse });
+      steps.push({
+        nodeId: current.id,
+        type: 'rewrite',
+        name: current.name,
+        reverse: current.reverse,
+        equationLatex: nodeInfo?.unifiedEquationLatex,
+      });
     }
     current = current.child;
   }
@@ -168,14 +182,35 @@ export function generateProofProse(
 
       case 'unfold':
       case 'rewrite': {
-        // Collect chain of consecutive unfold/rewrite
-        const { steps, tail } = collectChain(node);
+        // Collect chain of consecutive unfold/rewrite, emit each as its own item.
+        // Each step shows the goal AFTER that step (= the next node's goal).
+        // The first step also carries preGoalLatex (the goal before the chain).
+        const { steps, tail } = collectChain(node, goalMap);
         const tailInfo = goalMap.get(tail.id);
-        emit(node.id, depth, {
-          tag: 'chain',
-          steps,
-          goalLatex: tailInfo?.goalLatex,
-        });
+        for (let si = 0; si < steps.length; si++) {
+          const step = steps[si];
+          // Goal after this step = next step's node goal, or the tail's goal
+          const nextGoalLatex = si + 1 < steps.length
+            ? goalMap.get(steps[si + 1].nodeId)?.goalLatex
+            : tailInfo?.goalLatex;
+          // Pre-goal: only the first step needs it (subsequent steps' pre-goal
+          // was already shown as the previous step's post-goal)
+          const preGoalLatex = si === 0
+            ? goalMap.get(steps[0].nodeId)?.goalLatex
+            : undefined;
+          if (step.type === 'unfold') {
+            emit(step.nodeId, depth, { tag: 'unfold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex });
+          } else {
+            emit(step.nodeId, depth, {
+              tag: 'rewrite',
+              name: step.name,
+              reverse: step.reverse,
+              equationLatex: step.equationLatex,
+              preGoalLatex,
+              goalLatex: nextGoalLatex,
+            });
+          }
+        }
         walk(tail, depth);
         break;
       }
@@ -186,10 +221,12 @@ export function generateProofProse(
           const childInfo = goalMap.get(child.id);
           return childInfo?.goalLatex ?? '?';
         });
-        emit(node.id, depth, { tag: 'apply', name: node.name, subgoalLatex });
-        // Walk each child at increased depth
+        emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex });
+        // Only increase depth when there are multiple subgoals (actual branching).
+        // Single-subgoal apply chains stay at the same depth to avoid progressive indentation.
+        const childDepth = node.children.length > 1 ? depth + 1 : depth;
         for (const child of node.children) {
-          walk(child, depth + 1);
+          walk(child, childDepth);
         }
         break;
       }

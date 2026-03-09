@@ -73,16 +73,16 @@ describe('computeTypedContext (surface-only fallback)', () => {
     expect(ctx!.hypotheses).toHaveLength(3);
 
     expect(ctx!.hypotheses[0].name).toBe('i');
-    expect(ctx!.hypotheses[0].type).toBe('Nat');
+    expect(ctx!.hypotheses[0].type).toBe('\\operatorname{Nat}');
 
     expect(ctx!.hypotheses[1].name).toBe('f');
     expect(ctx!.hypotheses[1].type).toContain('Nat');
     expect(ctx!.hypotheses[1].type).toContain('\\to');
 
     expect(ctx!.hypotheses[2].name).toBe('n');
-    expect(ctx!.hypotheses[2].type).toBe('Nat');
+    expect(ctx!.hypotheses[2].type).toBe('\\operatorname{Nat}');
 
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('cursor on intros node itself has empty context', () => {
@@ -101,7 +101,7 @@ describe('computeTypedContext (surface-only fallback)', () => {
 
     const ctx = computeTypedContext(intros, child.id, type, emptyRegistry);
     expect(ctx!.hypotheses).toHaveLength(3);
-    expect(ctx!.hypotheses[0].type).toBe('Nat');
+    expect(ctx!.hypotheses[0].type).toBe('\\operatorname{Nat}');
     expect(ctx!.hypotheses[1].type).toBe('?');
     expect(ctx!.hypotheses[2].type).toBe('?');
   });
@@ -124,7 +124,7 @@ describe('computeTypedContext (surface-only fallback)', () => {
     expect(ctx!.inductionVar).toBe('n');
     expect(ctx!.hypotheses).toHaveLength(1);
     expect(ctx!.hypotheses[0].name).toBe('n');
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('cursor in case body shows case info + goal', () => {
@@ -139,7 +139,7 @@ describe('computeTypedContext (surface-only fallback)', () => {
     const ctx = computeTypedContext(intros, body2.id, type, emptyRegistry);
     expect(ctx!.caseLabel).toBe("n = k'");
     expect(ctx!.inductionVar).toBe('n');
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('exact node shows expression as goal', () => {
@@ -166,7 +166,7 @@ describe('computeTypedContext (surface-only fallback)', () => {
     const ctx2 = computeTypedContext(intros, hole.id, type, emptyRegistry);
     expect(ctx2!.hypotheses).toHaveLength(3);
     expect(ctx2!.caseLabel).toBe("n = k'");
-    expect(ctx2!.goal).toBe('Nat');
+    expect(ctx2!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('renders correct variable names in context', () => {
@@ -177,8 +177,8 @@ describe('computeTypedContext (surface-only fallback)', () => {
     const intros = mkIntros(['n', 'm', 'h'], child);
 
     const ctx = computeTypedContext(intros, child.id, type, emptyRegistry);
-    expect(ctx!.hypotheses[0].type).toBe('Nat');
-    expect(ctx!.hypotheses[1].type).toBe('Nat');
+    expect(ctx!.hypotheses[0].type).toBe('\\operatorname{Nat}');
+    expect(ctx!.hypotheses[1].type).toBe('\\operatorname{Nat}');
     expect(ctx!.hypotheses[2].type).toContain('Equal');
     expect(ctx!.hypotheses[2].type).toContain('n');
     expect(ctx!.hypotheses[2].type).toContain('m');
@@ -378,10 +378,10 @@ describe('computeTypedContext with TacticEngine', () => {
     expect(ctx).not.toBeNull();
     expect(ctx!.hypotheses).toHaveLength(2);
     expect(ctx!.hypotheses[0].name).toBe('n');
-    expect(ctx!.hypotheses[0].type).toBe('Nat');
+    expect(ctx!.hypotheses[0].type).toBe('\\operatorname{Nat}');
     expect(ctx!.hypotheses[1].name).toBe('m');
-    expect(ctx!.hypotheses[1].type).toBe('Nat');
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.hypotheses[1].type).toBe('\\operatorname{Nat}');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('unfold after intros works (was broken with manual Pi peeling)', () => {
@@ -406,7 +406,7 @@ describe('computeTypedContext with TacticEngine', () => {
     expect(ctx!.hypotheses).toHaveLength(1);
     expect(ctx!.hypotheses[0].name).toBe('n');
     // After unfold, myNat should become Nat
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('unfold with pattern matching (iota reduction)', () => {
@@ -474,7 +474,7 @@ describe('computeTypedContext with TacticEngine', () => {
       undefined, mkConst('myNat'), defs,
     );
     expect(ctx).not.toBeNull();
-    expect(ctx!.goal).toBe('myNat');
+    expect(ctx!.goal).toBe('\\operatorname{myNat}');
   });
 
   test('unfold without definitions falls through unchanged', () => {
@@ -485,7 +485,7 @@ describe('computeTypedContext with TacticEngine', () => {
     // No kernel type — surface-only fallback
     const ctx = computeTypedContext(unfold, childHole.id, type, emptyRegistry);
     expect(ctx).not.toBeNull();
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('multiple unfolds in sequence', () => {
@@ -502,7 +502,7 @@ describe('computeTypedContext with TacticEngine', () => {
       undefined, mkConst('a'), defs,
     );
     expect(ctx).not.toBeNull();
-    expect(ctx!.goal).toBe('Nat');
+    expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
   test('induction with real tactic creates case-specific goals', () => {

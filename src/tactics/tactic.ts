@@ -17,8 +17,21 @@ import { unifyTerms } from '../compiler/unify';
  * TacticResult: Outcome of applying a tactic
  */
 export type TacticResult =
-  | { success: true; newEngine: TacticEngine }
+  | { success: true; newEngine: TacticEngine; unifiedEquation?: UnifiedEquation; solvedArgs?: SolvedArg[] }
   | { success: false; error: string; cause?: Error };
+
+/** Info about the equation used by a rewrite tactic (with all implicit args unified). */
+export interface UnifiedEquation {
+  readonly lhs: TTKTerm;
+  readonly rhs: TTKTerm;
+}
+
+/** An argument that was solved by unification in an apply tactic. */
+export interface SolvedArg {
+  readonly term: TTKTerm;
+  readonly type: TTKTerm;
+  readonly implicit: boolean;
+}
 
 /**
  * Tactic: A proof state transformation
@@ -449,12 +462,23 @@ export class ApplyTactic implements Tactic {
         ? solvedEngine.focusIndex
         : Math.min(solvedEngine.focusIndex, Math.max(0, newGoals.length - 1));
 
+      // Collect solved args for prose rendering (e.g., "f" in "cong f")
+      const solvedArgs: SolvedArg[] = argMetas.map(({ id, meta: origMeta, implicit }) => {
+        const solved = solvedEngine.metaVars.get(id);
+        return {
+          term: solved?.solution ?? { tag: 'Hole' as const, id: '_' },
+          type: origMeta.type,
+          implicit,
+        };
+      });
+
       return {
         success: true,
         newEngine: solvedEngine.withUpdates({
           goals: newGoals,
           focusIndex: newFocusIndex
-        })
+        }),
+        solvedArgs,
       };
     } catch (e) {
       // Handle TCEnvError (which is not an Error instance)

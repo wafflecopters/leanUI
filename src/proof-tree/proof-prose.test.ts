@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { generateProofProse, ProseItem, ChainStep } from './proof-prose';
+import { generateProofProse, ProseItem } from './proof-prose';
 import { ProofNode, resetProofIds, freshProofId } from './proof-tree';
 import { NodeGoalInfo } from './goal-computation';
 
@@ -110,49 +110,66 @@ describe('generateProofProse', () => {
     expect((items[0].kind as any).latex).toBe('x, y');
   });
 
-  test('single unfold produces chain with one step', () => {
+  test('single unfold produces unfold item with goal', () => {
     const hole: ProofNode = { tag: 'hole', id: 2 };
     const unfold: ProofNode = { tag: 'unfold', id: 1, name: 'plus', child: hole };
     const goalMap = mkGoalMap([[2, { goalLatex: 'n = n' }]]);
     const items = generateProofProse(unfold, 2, goalMap);
 
     expect(items).toHaveLength(2);
-    expect(items[0].kind.tag).toBe('chain');
-    const chain = items[0].kind as any;
-    expect(chain.steps).toHaveLength(1);
-    expect(chain.steps[0].type).toBe('unfold');
-    expect(chain.steps[0].name).toBe('plus');
-    expect(chain.goalLatex).toBe('n = n');
+    expect(items[0].kind.tag).toBe('unfold');
+    expect((items[0].kind as any).name).toBe('plus');
+    expect((items[0].kind as any).goalLatex).toBe('n = n');
     expect(items[1].kind.tag).toBe('hole');
   });
 
-  test('consecutive unfold+rewrite chains collapse', () => {
+  test('consecutive unfold+rewrite produce separate items, each with next goal', () => {
     const hole: ProofNode = { tag: 'hole', id: 4 };
     const rewrite: ProofNode = { tag: 'rewrite', id: 3, name: 'plusComm', reverse: false, child: hole };
     const unfold2: ProofNode = { tag: 'unfold', id: 2, name: 'sum', child: rewrite };
     const unfold1: ProofNode = { tag: 'unfold', id: 1, name: 'plus', child: unfold2 };
 
-    const goalMap = mkGoalMap([[4, { goalLatex: 'final goal' }]]);
+    const goalMap = mkGoalMap([
+      [2, { goalLatex: 'after plus' }],
+      [3, { goalLatex: 'after sum' }],
+      [4, { goalLatex: 'final goal' }],
+    ]);
     const items = generateProofProse(unfold1, 4, goalMap);
 
-    // Should produce: 1 chain item (3 steps) + 1 hole
-    expect(items).toHaveLength(2);
-    expect(items[0].kind.tag).toBe('chain');
-    const chain = items[0].kind as any;
-    expect(chain.steps).toHaveLength(3);
-    expect(chain.steps[0]).toEqual({ nodeId: 1, type: 'unfold', name: 'plus' });
-    expect(chain.steps[1]).toEqual({ nodeId: 2, type: 'unfold', name: 'sum' });
-    expect(chain.steps[2]).toEqual({ nodeId: 3, type: 'rewrite', name: 'plusComm', reverse: false });
-    expect(chain.goalLatex).toBe('final goal');
+    // 3 separate items (unfold, unfold, rewrite) + 1 hole
+    expect(items).toHaveLength(4);
+    expect(items[0].kind.tag).toBe('unfold');
+    expect((items[0].kind as any).name).toBe('plus');
+    expect((items[0].kind as any).goalLatex).toBe('after plus'); // next step's goal
+    expect(items[1].kind.tag).toBe('unfold');
+    expect((items[1].kind as any).name).toBe('sum');
+    expect((items[1].kind as any).goalLatex).toBe('after sum');
+    expect(items[2].kind.tag).toBe('rewrite');
+    expect((items[2].kind as any).name).toBe('plusComm');
+    expect((items[2].kind as any).goalLatex).toBe('final goal'); // tail's goal
+    expect(items[3].kind.tag).toBe('hole');
   });
 
-  test('reverse rewrite records reverse flag in chain step', () => {
+  test('reverse rewrite records reverse flag', () => {
     const hole: ProofNode = { tag: 'hole', id: 2 };
     const rewrite: ProofNode = { tag: 'rewrite', id: 1, name: 'minusSucc', reverse: true, child: hole };
 
     const items = generateProofProse(rewrite, 2, mkGoalMap([]));
-    const chain = items[0].kind as any;
-    expect(chain.steps[0].reverse).toBe(true);
+    expect(items[0].kind.tag).toBe('rewrite');
+    expect((items[0].kind as any).reverse).toBe(true);
+  });
+
+  test('rewrite with equationLatex', () => {
+    const hole: ProofNode = { tag: 'hole', id: 2 };
+    const rewrite: ProofNode = { tag: 'rewrite', id: 1, name: 'plusZero', reverse: false, child: hole };
+
+    const goalMap = mkGoalMap([
+      [1, { unifiedEquationLatex: 'n + 0 = n' }],
+      [2, { goalLatex: 'done' }],
+    ]);
+    const items = generateProofProse(rewrite, 2, goalMap);
+    expect(items[0].kind.tag).toBe('rewrite');
+    expect((items[0].kind as any).equationLatex).toBe('n + 0 = n');
   });
 
   test('apply with one child', () => {
@@ -165,8 +182,8 @@ describe('generateProofProse', () => {
     expect(items[0].kind.tag).toBe('apply');
     expect((items[0].kind as any).name).toBe('congSucc');
     expect((items[0].kind as any).subgoalLatex).toEqual(['n = m']);
-    // Child at depth 1
-    expect(items[1].depth).toBe(1);
+    // Single child stays at same depth (no progressive indentation)
+    expect(items[1].depth).toBe(0);
     expect(items[1].kind.tag).toBe('hole');
   });
 
@@ -261,12 +278,12 @@ describe('generateProofProse', () => {
     ]);
     const items = generateProofProse(intros, 4, goalMap);
 
-    // intro, chain, exact, qed
-    expect(items.map(i => i.kind.tag)).toEqual(['intro', 'chain', 'exact', 'qed']);
-    // All at depth 0 (intros doesn't increase depth, chain doesn't increase depth)
-    expect(items.map(i => i.depth)).toEqual([0, 0, 0, 0]);
+    // intro, unfold, rewrite, exact, qed
+    expect(items.map(i => i.kind.tag)).toEqual(['intro', 'unfold', 'rewrite', 'exact', 'qed']);
+    // All at depth 0
+    expect(items.map(i => i.depth)).toEqual([0, 0, 0, 0, 0]);
     // Only exact node is cursor
-    expect(items.map(i => i.isCursor)).toEqual([false, false, true, true]);
+    expect(items.map(i => i.isCursor)).toEqual([false, false, false, true, true]);
   });
 
   test('multi-char variable names get mathit', () => {

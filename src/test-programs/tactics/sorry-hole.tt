@@ -1,0 +1,8 @@
+@test success
+@name "sorry (?hole) leaves goal unsolved without error"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+myThm : (n : Nat) -> Equal n n := by
+  intros n
+  ?todo

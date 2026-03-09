@@ -18,7 +18,7 @@ import { TTKTerm, TTKPattern, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
-import { Tactic, TacticResult, freshMetaName } from './tactic';
+import { Tactic, TacticResult, UnifiedEquation, freshMetaName } from './tactic';
 import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
 import { shiftTerm, subst } from '../compiler/subst';
@@ -199,7 +199,8 @@ export class RewriteTactic implements Tactic {
         newEngine: engine.withUpdates({
           metaVars: newMetaVars,
           goals: newGoals
-        })
+        }),
+        unifiedEquation: { lhs, rhs } as UnifiedEquation,
       };
     } catch (e) {
       const errorMsg = e instanceof Error

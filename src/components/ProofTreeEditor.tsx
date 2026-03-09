@@ -78,14 +78,14 @@ const INITIAL_PANE_SIZES = [
 // InlineKaTeX — renders a LaTeX string inline
 // ============================================================================
 
-function InlineKaTeX({ latex, style }: { latex: string; style?: React.CSSProperties }) {
+function InlineKaTeX({ latex, style, displayMode }: { latex: string; style?: React.CSSProperties; displayMode?: boolean }) {
   const ref = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
     if (!ref.current) return;
     try {
       katex.render(latex, ref.current, {
-        displayMode: false,
+        displayMode: displayMode ?? false,
         throwOnError: false,
         trust: true,
         strict: false,
@@ -1129,6 +1129,7 @@ function ProofProseView({
         <ProseItemView
           key={`${item.nodeId}-${idx}`}
           item={item}
+          prevItem={idx > 0 ? items[idx - 1] : undefined}
           onClick={() => onClickNode(item.nodeId)}
           state={state}
           tacticMode={tacticMode}
@@ -1152,6 +1153,7 @@ function ProofProseView({
 
 interface ProseItemViewProps {
   item: ProseItem;
+  prevItem?: ProseItem;
   onClick: () => void;
   state: ProofTreeState;
   tacticMode: TacticMode;
@@ -1170,19 +1172,18 @@ const proseStyle: React.CSSProperties = {
   lineHeight: '1.7',
   cursor: 'pointer',
   fontFamily: '"STIX Two Text", "Times New Roman", Georgia, serif',
+  textAlign: 'left',
 };
 
-/** Style for a centered, non-breaking equation block */
+/** Style for a centered display-mode equation block */
 const eqBlockStyle: React.CSSProperties = {
   display: 'block',
-  textAlign: 'center',
-  padding: '4px 0',
-  whiteSpace: 'nowrap',
+  padding: '2px 0',
   overflowX: 'auto',
 };
 
 function ProseItemView({
-  item, onClick, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  item, prevItem, onClick, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
 }: ProseItemViewProps) {
   const rowStyle: React.CSSProperties = {
@@ -1199,6 +1200,26 @@ function ProseItemView({
 
   const prose: React.CSSProperties = { color: '#c9d1d9' };
 
+  // Does the previous item already show a goal equation (making the pre-goal redundant)?
+  const prevShowedGoal = prevItem && (
+    (prevItem.kind.tag === 'unfold' && prevItem.kind.goalLatex) ||
+    (prevItem.kind.tag === 'rewrite' && prevItem.kind.goalLatex) ||
+    (prevItem.kind.tag === 'apply' && (prevItem.kind.subgoalLatex?.length ?? 0) <= 1 && prevItem.kind.subgoalLatex?.[0])
+  );
+
+  // "We must show [goal]" prefix for steps where no prior goal is visible
+  function mustShowPrefix(preGoalLatex?: string): React.ReactNode {
+    if (prevShowedGoal || !preGoalLatex) return null;
+    return (
+      <>
+        <span style={prose}>We must show</span>
+        <span style={eqBlockStyle}>
+          <InlineKaTeX latex={preGoalLatex} displayMode />
+        </span>
+      </>
+    );
+  }
+
   switch (kind.tag) {
     case 'intro':
       return (
@@ -1209,37 +1230,54 @@ function ProseItemView({
         </div>
       );
 
-    case 'chain': {
-      // "By definition of X, by Y, and by Z (←), it suffices to show [goal]."
-      const chainParts = kind.steps.map((step, i) => {
-        const isFirst = i === 0;
-        const isLast = i === kind.steps.length - 1;
-        const prefix = isFirst ? '' : (isLast && kind.steps.length > 2 ? ', and ' : isLast ? ' and ' : ', ');
-        const arrow = step.type === 'rewrite' && step.reverse ? ' (\u2190)' : '';
-        const verb = step.type === 'unfold'
-          ? (isFirst ? 'By definition of ' : 'by definition of ')
-          : (isFirst ? 'By ' : 'by ');
-        return (
-          <span key={step.nodeId}>
-            <span style={prose}>{prefix}{verb}</span>
-            <InlineKaTeX latex={texNameForProse(step.name)} style={{ fontSize: '13px' }} />
-            {arrow && <span style={prose}>{arrow}</span>}
-          </span>
-        );
-      });
-
+    case 'unfold':
       return (
         <div style={rowStyle} onClick={onClick}>
-          {chainParts}
+          {mustShowPrefix(kind.preGoalLatex)}
+          <span style={prose}>which is true, by definition of{' '}</span>
+          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
           {kind.goalLatex ? (
             <>
-              <span style={prose}>, it suffices to show</span>
+              <span style={prose}>, if</span>
               <span style={eqBlockStyle}>
-                <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '13px' }} />
+                <InlineKaTeX latex={kind.goalLatex} displayMode />
               </span>
             </>
           ) : (
-            <span style={prose}>,</span>
+            <span style={prose}>.</span>
+          )}
+        </div>
+      );
+
+    case 'rewrite': {
+      const arrow = kind.reverse ? ' (\u2190)' : '';
+      return (
+        <div style={rowStyle} onClick={onClick}>
+          {mustShowPrefix(kind.preGoalLatex)}
+          <span style={prose}>which is true, because{' '}</span>
+          {kind.equationLatex ? (
+            <>
+              <InlineKaTeX latex={kind.equationLatex} style={{ fontSize: '12px' }} />
+              <span style={prose}>{arrow} (</span>
+              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+              <span style={prose}>)</span>
+            </>
+          ) : (
+            <>
+              <span style={prose}>of{' '}</span>
+              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+              {arrow && <span style={prose}>{arrow}</span>}
+            </>
+          )}
+          {kind.goalLatex ? (
+            <>
+              <span style={prose}>, if</span>
+              <span style={eqBlockStyle}>
+                <InlineKaTeX latex={kind.goalLatex} displayMode />
+              </span>
+            </>
+          ) : (
+            <span style={prose}>.</span>
           )}
         </div>
       );
@@ -1247,16 +1285,29 @@ function ProseItemView({
 
     case 'apply': {
       const subgoals = kind.subgoalLatex ?? [];
+      const appliedArgs = kind.appliedArgsLatex ?? [];
       if (subgoals.length <= 1) {
         return (
           <div style={rowStyle} onClick={onClick}>
-            <span style={prose}>By{' '}</span>
+            {mustShowPrefix(kind.preGoalLatex)}
+            <span style={prose}>which is true, by{' '}</span>
             <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+            {appliedArgs.length > 0 && (
+              <>
+                <span style={prose}>{' '}applied to{' '}</span>
+                {appliedArgs.map((arg, i) => (
+                  <React.Fragment key={i}>
+                    {i > 0 && <span style={prose}>,{' '}</span>}
+                    <InlineKaTeX latex={arg} style={{ fontSize: '13px' }} />
+                  </React.Fragment>
+                ))}
+              </>
+            )}
             {subgoals[0] ? (
               <>
-                <span style={prose}>, it suffices to show</span>
+                <span style={prose}>, if</span>
                 <span style={eqBlockStyle}>
-                  <InlineKaTeX latex={subgoals[0]} style={{ fontSize: '13px' }} />
+                  <InlineKaTeX latex={subgoals[0]} displayMode />
                 </span>
               </>
             ) : (
@@ -1268,13 +1319,25 @@ function ProseItemView({
       // Multiple subgoals
       return (
         <div style={rowStyle} onClick={onClick}>
-          <span style={prose}>By{' '}</span>
+          {mustShowPrefix(kind.preGoalLatex)}
+          <span style={prose}>which is true, by{' '}</span>
           <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-          <span style={prose}>, it suffices to show:</span>
+          {appliedArgs.length > 0 && (
+            <>
+              <span style={prose}>{' '}applied to{' '}</span>
+              {appliedArgs.map((arg, i) => (
+                <React.Fragment key={i}>
+                  {i > 0 && <span style={prose}>,{' '}</span>}
+                  <InlineKaTeX latex={arg} style={{ fontSize: '13px' }} />
+                </React.Fragment>
+              ))}
+            </>
+          )}
+          <span style={prose}>, if:</span>
           {subgoals.map((sg, i) => (
-            <div key={i} style={{ paddingLeft: '16px', paddingTop: '2px', textAlign: 'center' }}>
+            <div key={i} style={{ paddingTop: '2px', textAlign: 'center' }}>
               <span style={prose}>({i + 1}){' '}</span>
-              <InlineKaTeX latex={sg} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={sg} displayMode />
             </div>
           ))}
         </div>

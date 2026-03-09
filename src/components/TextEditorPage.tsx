@@ -1005,7 +1005,7 @@ export function TextEditorPage() {
     for (const block of compileResult.blocks) {
       for (const d of block.declarations) {
         // TODO: temporary filter — only show specific terms for WYSIWYG development
-        if (!d.isWithAuxiliary && (d.name === 'limitAdd' || d.name === 'summationSplit')) {
+        if (!d.isWithAuxiliary && (d.name === 'limitAdd' || d.name === 'summationSplit' || d.name === 'triangleSum')) {
           decls.push(d);
         }
       }

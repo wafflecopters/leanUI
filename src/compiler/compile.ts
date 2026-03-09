@@ -1505,8 +1505,11 @@ export interface ElabOptions {
  * Convert a tactic command to a Tactic object.
  * Args can be TTerm (un-elaborated) or TTKTerm (elaborated).
  */
-function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>; focusedTactics?: Tactic[] }): Tactic {
+function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>; focusedTactics?: Tactic[] }): Tactic | 'sorry' {
   switch (cmd.name) {
+    case 'sorry':
+      return 'sorry';
+
     case 'focus':
       if (!cmd.focusedTactics || cmd.focusedTactics.length === 0) {
         throw new Error(`'focus' tactic requires nested tactics`);
@@ -1739,6 +1742,7 @@ function elaborateTacticBlock(
 
   // Create initial tactic engine
   let engine = createInitialEngine(expectedType, context, definitions);
+  let hasSorry = false;
 
   // Create InfoTree root
   const rootNode: TacticInfoNode = {
@@ -1802,8 +1806,8 @@ function elaborateTacticBlock(
 
     // Elaborate arguments in the CURRENT goal's context
     const elabArgs: Array<TTerm | TTKTerm> = cmd.args.map((arg, argIndex) => {
-      // For intro/intros/unfold, keep names as Const (don't elaborate)
-      if (cmd.name === 'intro' || cmd.name === 'intros' || cmd.name === 'unfold') {
+      // For sorry/intro/intros/unfold, keep args as-is (don't elaborate)
+      if (cmd.name === 'sorry' || cmd.name === 'intro' || cmd.name === 'intros' || cmd.name === 'unfold') {
         return arg;
       }
       // For have, args[0] is the hypothesis name — keep as Const
@@ -2003,7 +2007,13 @@ function elaborateTacticBlock(
           }
           return surfaceToKernel(arg);
         });
-        return tacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs });
+        const t = tacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs });
+        if (t === 'sorry') {
+          hasSorry = true;
+          // Return a no-op tactic that leaves the goal unsolved
+          return { name: 'sorry', apply: (_eng, _goal, _goalId) => ({ success: true, newEngine: _eng }) } as Tactic;
+        }
+        return t;
       });
     }
 
@@ -2013,6 +2023,21 @@ function elaborateTacticBlock(
 
     // Convert command to Tactic object with elaborated args
     const tactic = tacticCommandToTactic({ name: cmd.name, args: elabArgs, focusedTactics: elabFocusedTactics });
+
+    // sorry tactic: leave goal unsolved (produces a Hole in the proof term)
+    if (tactic === 'sorry') {
+      hasSorry = true;
+      // Record in InfoTree
+      const tacticNode: TacticInfoNode = {
+        position,
+        goalsBefore,
+        goalsAfter: goalsBefore,
+        tactic: { tag: 'sorry' } as any,
+        children: []
+      };
+      rootNode.children.push(tacticNode);
+      continue;
+    }
 
     const result = tactic.apply(engine, goal, goalId);
 
@@ -2185,7 +2210,7 @@ function elaborateTacticBlock(
           }
 
           const branchElabArgs: Array<TTerm | TTKTerm> = branchTactic.args.map(arg => {
-            if (branchTactic.name === 'intro' || branchTactic.name === 'intros') {
+            if (branchTactic.name === 'sorry' || branchTactic.name === 'intro' || branchTactic.name === 'intros') {
               return arg;
             }
             return branchSurfaceToKernel(arg);
@@ -2195,6 +2220,13 @@ function elaborateTacticBlock(
           const branchGoalsBefore = extractGoalStates(engineToProofState(engine));
 
           const branchTacticObj = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
+
+          // sorry: leave goal unsolved
+          if (branchTacticObj === 'sorry') {
+            hasSorry = true;
+            continue;
+          }
+
           const branchResult = branchTacticObj.apply(engine, branchGoal, branchGoalId2);
 
           if (!branchResult.success) {
@@ -2342,13 +2374,20 @@ function elaborateTacticBlock(
                 }
 
                 const nestedElabArgs: Array<TTerm | TTKTerm> = nestedTactic.args.map(arg => {
-                  if (nestedTactic.name === 'intro' || nestedTactic.name === 'intros') {
+                  if (nestedTactic.name === 'sorry' || nestedTactic.name === 'intro' || nestedTactic.name === 'intros') {
                     return arg;
                   }
                   return nestedSurfaceToKernel(arg);
                 });
 
                 const nestedTacticObj = tacticCommandToTactic({ name: nestedTactic.name, args: nestedElabArgs });
+
+                // sorry: leave goal unsolved
+                if (nestedTacticObj === 'sorry') {
+                  hasSorry = true;
+                  continue;
+                }
+
                 const nestedResult = nestedTacticObj.apply(engine, nestedGoal, nestedGoalId2);
                 if (!nestedResult.success) {
                   const errorMsg = `Structured cases (${nestedBranch.constructor}): tactic '${nestedTactic.name}' failed: ${nestedResult.error}`;
@@ -2369,9 +2408,9 @@ function elaborateTacticBlock(
     }
   }
 
-  // Check that all goals are solved
+  // Check that all goals are solved (sorry leaves goals unsolved intentionally)
   const remainingGoals = engine.getUnsolvedGoals();
-  if (remainingGoals.length > 0) {
+  if (remainingGoals.length > 0 && !hasSorry) {
     throw new Error(`Tactic proof has unsolved goals: ${remainingGoals.length} remaining`);
   }
 

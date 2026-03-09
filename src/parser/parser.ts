@@ -3631,6 +3631,17 @@ export class Parser {
       };
     }
 
+    // Hole as a tactic: ?name or ?_ means "leave this goal unsolved"
+    if (this.current().type === 'HOLE') {
+      const holeToken = this.current();
+      this.advance();
+      return {
+        name: 'sorry',
+        args: [{ tag: 'Hole', id: holeToken.value } as TTerm],
+        indexPath: path
+      };
+    }
+
     // Tactic name is always an identifier (or CONSTRUCTOR keyword used as tactic)
     if (this.current().type !== 'IDENT' && this.current().type !== 'CONSTRUCTOR') {
       throw new ParseError(

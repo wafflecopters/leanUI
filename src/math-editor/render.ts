@@ -196,6 +196,11 @@ function renderSymbol(value: string): string {
       value === '\\Rightarrow' || value === '\\mid') {
     return ` ${value} `;
   }
+  // Multi-letter names (not LaTeX commands) render upright, like \sin or \log.
+  // Exclude primed variables (n', x') and single-letter+digit (x0, x1).
+  if (value.length > 1 && !value.startsWith('\\') && /^[a-zA-Z]{2,}/.test(value)) {
+    return `\\operatorname{${value}}`;
+  }
   return value;
 }
 

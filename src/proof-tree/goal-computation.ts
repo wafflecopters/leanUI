@@ -1119,6 +1119,17 @@ function validateExactNode(
 // ============================================================================
 
 /** Build a de Bruijn name context for rendering a term at depth `ctx.length`. */
+/** Check if a term contains any Hole or Meta (unsolved). */
+function containsHoleOrMeta(t: TTKTerm): boolean {
+  switch (t.tag) {
+    case 'Hole': case 'Meta': return true;
+    case 'App': return containsHoleOrMeta(t.fn) || containsHoleOrMeta(t.arg);
+    case 'Binder': return containsHoleOrMeta(t.domain) || containsHoleOrMeta(t.body);
+    case 'Match': return containsHoleOrMeta(t.scrutinee) || t.clauses.some(c => containsHoleOrMeta(c.rhs));
+    default: return false;
+  }
+}
+
 function buildNameCtx(ctx: ReadonlyArray<{ name: string }>): string[] {
   const nameCtx: string[] = [];
   for (let j = ctx.length - 1; j >= 0; j--) {
@@ -1242,6 +1253,10 @@ export interface NodeGoalInfo {
   readonly hypotheses: readonly TypedHypothesis[];
   readonly caseLabelLatex?: string;
   readonly validation?: ValidationResult;
+  /** For rewrite nodes: the unified equation (lhs = rhs) with all implicit args filled in. */
+  readonly unifiedEquationLatex?: string;
+  /** For apply nodes: LaTeX of solved explicit args (e.g., "f" in "cong f"). */
+  readonly appliedArgsLatex?: string[];
 }
 
 /**
@@ -1335,6 +1350,19 @@ export function replayEntireTree(
           { reverse: node.reverse },
         );
         const tacResult = tactic.apply(eng, goal, gId);
+        // Capture the unified equation and attach it to this node's info
+        if (tacResult.success && tacResult.unifiedEquation) {
+          const { lhs, rhs } = tacResult.unifiedEquation;
+          const nameCtx = buildNameCtx(goal.ctx);
+          const lhsSurface = kernelTypeToSurface(lhs, definitions);
+          const rhsSurface = kernelTypeToSurface(rhs, definitions);
+          const lhsLatex = renderTerm(lhsSurface, nameCtx, rev);
+          const rhsLatex = renderTerm(rhsSurface, nameCtx, rev);
+          const existing = result.get(node.id);
+          if (existing) {
+            result.set(node.id, { ...existing, unifiedEquationLatex: `${lhsLatex} = ${rhsLatex}` });
+          }
+        }
         walk(node.child, tacResult.success ? tacResult.newEngine! : eng, caseLabelLatex);
         break;
       }
@@ -1352,7 +1380,34 @@ export function replayEntireTree(
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
+
+        // Extract solved value-level args for prose rendering (e.g., "f" in "cong f")
+        // Skip type-level args (whose type is Sort) and unsolved args (subgoals).
         const newEngine = tacResult.newEngine!;
+        if (tacResult.solvedArgs) {
+          const nameCtx = buildNameCtx(goal.ctx);
+          const appliedArgsLatex: string[] = [];
+          for (const arg of tacResult.solvedArgs) {
+            if (arg.term.tag === 'Hole' || arg.term.tag === 'Meta') continue; // unsolved
+            if (arg.type.tag === 'Sort') continue; // type-level arg (e.g., {A : Type})
+            try {
+              // Zonk to resolve any metas inside the solution
+              const zonked = newEngine.zonkTerm(arg.term, goal.ctx.length);
+              const surface = kernelTypeToSurface(zonked, definitions);
+              const latex = renderTerm(surface, nameCtx, rev);
+              appliedArgsLatex.push(latex);
+            } catch {
+              // rendering failed — skip
+            }
+          }
+          if (appliedArgsLatex.length > 0) {
+            const existing = result.get(node.id);
+            if (existing) {
+              result.set(node.id, { ...existing, appliedArgsLatex });
+            }
+          }
+        }
+
         const baseFocus = newEngine.focusIndex;
         for (let i = 0; i < node.children.length; i++) {
           const childFocusIdx = baseFocus + i;

@@ -210,4 +210,11 @@ summationSplit : (i n : Nat) -> Leq i n -> (f : Nat -> Nat) -> Equal (sum i (Suc
   -- Step 2: rewrite f(plus i (minus (Succ n) i)) to f(Succ n)
   apply congPlusRight
   exact (cong f (plusMinusSucc l))
+
+@syntax 2
+two : Nat
+two = Succ (Succ Zero)
+
+triangleSum : (n : Nat) -> Equal (mul (Succ (Succ Zero)) (sum Zero n (\\i => i))) (mul (plus n (Succ n)) n) := by
+  ?TODO
 `;
