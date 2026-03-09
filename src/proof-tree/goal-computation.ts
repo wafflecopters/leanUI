@@ -1114,6 +1114,51 @@ function validateExactNode(
   return { status: 'error', message: result.error ?? 'Type mismatch' };
 }
 
+// ============================================================================
+// Rendering helpers (shared by computeWithTacticEngine and replayEntireTree)
+// ============================================================================
+
+/** Build a de Bruijn name context for rendering a term at depth `ctx.length`. */
+function buildNameCtx(ctx: ReadonlyArray<{ name: string }>): string[] {
+  const nameCtx: string[] = [];
+  for (let j = ctx.length - 1; j >= 0; j--) {
+    nameCtx.push(ctx[j].name);
+  }
+  return nameCtx;
+}
+
+/** Render hypotheses from a MetaVar's context to TypedHypothesis[]. */
+function renderHypotheses(
+  ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+): TypedHypothesis[] {
+  const hypotheses: TypedHypothesis[] = [];
+  for (let i = 0; i < ctx.length; i++) {
+    const entry = ctx[i];
+    const nameCtx: string[] = [];
+    for (let j = i - 1; j >= 0; j--) {
+      nameCtx.push(ctx[j].name);
+    }
+    const surfaceHypType = kernelTypeToSurface(entry.type, definitions);
+    const typeLatex = renderTerm(surfaceHypType, nameCtx, rev);
+    hypotheses.push({ name: entry.name, type: typeLatex, rawType: surfaceHypType });
+  }
+  return hypotheses;
+}
+
+/** Render a goal type to LaTeX from a TacticEngine + goal MetaVar. */
+export function renderGoalLatex(
+  engine: TacticEngine,
+  goal: MetaVar,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+): string {
+  const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
+  const surface = kernelTypeToSurface(zonked, definitions);
+  return renderTerm(surface, buildNameCtx(goal.ctx), rev);
+}
+
 /**
  * Compute typed context using the real TacticEngine.
  */
@@ -1135,35 +1180,8 @@ function computeWithTacticEngine(
   const goal = replay.engine.metaVars.get(replay.goalId);
   if (!goal) return null;
 
-  // Zonk the goal type to resolve any solved metas
-  const zonkedGoalType = replay.engine.zonkTerm(goal.type, goal.ctx.length);
-
-  // Render hypotheses from MetaVar.ctx
-  const hypotheses: TypedHypothesis[] = [];
-  for (let i = 0; i < goal.ctx.length; i++) {
-    const entry = goal.ctx[i];
-    // Build name context for rendering: all entries up to (not including) this one
-    const nameCtx: string[] = [];
-    for (let j = i - 1; j >= 0; j--) {
-      nameCtx.push(goal.ctx[j].name);
-    }
-
-    // Convert kernel type to surface, then render
-    const surfaceHypType = kernelTypeToSurface(entry.type, definitions);
-    const typeLatex = renderTerm(surfaceHypType, nameCtx, rev);
-
-    hypotheses.push({
-      name: entry.name,
-      type: typeLatex,
-      rawType: surfaceHypType,
-    });
-  }
-
-  // Render goal
-  const goalNameCtx: string[] = [];
-  for (let j = goal.ctx.length - 1; j >= 0; j--) {
-    goalNameCtx.push(goal.ctx[j].name);
-  }
+  // Render hypotheses and goal using shared helpers
+  const hypotheses = renderHypotheses(goal.ctx, definitions, rev);
 
   // For exact nodes, show the expression and validate it
   const cursorNode = findNodeById(root, cursorId);
@@ -1173,8 +1191,7 @@ function computeWithTacticEngine(
     goalLatex = cursorNode.expr;
     validation = validateExactNode(cursorNode.expr, replay.engine, replay.goalId);
   } else {
-    const surfaceGoalType = kernelTypeToSurface(zonkedGoalType, definitions);
-    goalLatex = renderTerm(surfaceGoalType, goalNameCtx, rev);
+    goalLatex = renderGoalLatex(replay.engine, goal, definitions, rev);
   }
 
   return {
@@ -1214,6 +1231,202 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
       }
       return null;
   }
+}
+
+// ============================================================================
+// Replay Entire Tree — collect goal info at every node
+// ============================================================================
+
+export interface NodeGoalInfo {
+  readonly goalLatex: string;
+  readonly hypotheses: readonly TypedHypothesis[];
+  readonly caseLabelLatex?: string;
+  readonly validation?: ValidationResult;
+}
+
+/**
+ * Replay the entire proof tree, collecting goal info at every node.
+ * Unlike replayProofTree (which stops at cursor), this visits all nodes
+ * and builds a complete map for prose rendering.
+ */
+export function replayEntireTree(
+  root: ProofNode,
+  kernelType: TTKTerm,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+): Map<ProofNodeId, NodeGoalInfo> {
+  const result = new Map<ProofNodeId, NodeGoalInfo>();
+  const engine = createInitialEngine(kernelType, [], definitions);
+
+  function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string): void {
+    const goal = eng.metaVars.get(gId);
+    if (!goal) return;
+    result.set(nodeId, {
+      goalLatex: renderGoalLatex(eng, goal, definitions, rev),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev),
+      caseLabelLatex,
+    });
+  }
+
+  function recordExact(nodeId: ProofNodeId, eng: TacticEngine, gId: string, expr: string): void {
+    const goal = eng.metaVars.get(gId);
+    if (!goal) return;
+    const validation = validateExactNode(expr, eng, gId);
+    result.set(nodeId, {
+      goalLatex: renderGoalLatex(eng, goal, definitions, rev),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev),
+      validation,
+    });
+  }
+
+  function walk(
+    node: ProofNode,
+    eng: TacticEngine,
+    caseLabelLatex?: string,
+  ): void {
+    const gId = eng.getFocusedGoalId();
+    if (!gId) return;
+
+    switch (node.tag) {
+      case 'hole': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        break;
+      }
+
+      case 'exact': {
+        recordExact(node.id, eng, gId, node.expr);
+        break;
+      }
+
+      case 'intros': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const tactic = new IntrosTactic([...node.names]);
+        const tacResult = tactic.apply(eng, goal, gId);
+        walk(node.child, tacResult.success ? tacResult.newEngine! : eng, caseLabelLatex);
+        break;
+      }
+
+      case 'unfold': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const tactic = new UnfoldTactic([node.name]);
+        const tacResult = tactic.apply(eng, goal, gId);
+        if (tacResult.success) {
+          const newGoalId = tacResult.newEngine!.getFocusedGoalId();
+          const normalized = newGoalId
+            ? normalizeGoalInEngine(tacResult.newEngine!, newGoalId)
+            : tacResult.newEngine!;
+          walk(node.child, normalized, caseLabelLatex);
+        } else {
+          walk(node.child, eng, caseLabelLatex);
+        }
+        break;
+      }
+
+      case 'rewrite': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const tactic = new RewriteTactic(
+          { tag: 'Const', name: node.name },
+          { reverse: node.reverse },
+        );
+        const tacResult = tactic.apply(eng, goal, gId);
+        walk(node.child, tacResult.success ? tacResult.newEngine! : eng, caseLabelLatex);
+        break;
+      }
+
+      case 'apply': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) {
+          for (const child of node.children) walk(child, eng, caseLabelLatex);
+          break;
+        }
+        const tactic = new ApplyTactic({ tag: 'Const', name: node.name });
+        const tacResult = tactic.apply(eng, goal, gId);
+        if (!tacResult.success) {
+          for (const child of node.children) walk(child, eng, caseLabelLatex);
+          break;
+        }
+        const newEngine = tacResult.newEngine!;
+        const baseFocus = newEngine.focusIndex;
+        for (let i = 0; i < node.children.length; i++) {
+          const childFocusIdx = baseFocus + i;
+          if (childFocusIdx >= newEngine.goals.length) break;
+          const childEngine = newEngine.withUpdates({ focusIndex: childFocusIdx });
+          walk(node.children[i], childEngine, caseLabelLatex);
+        }
+        break;
+      }
+
+      case 'induction': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) break;
+
+        const scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
+        if (scrutineeIdx === null) {
+          // Fallback: record each case with unchanged engine
+          for (const c of node.cases) {
+            recordGoal(c.id, eng, gId, c.labelLatex);
+            walk(c.body, eng, c.labelLatex);
+          }
+          break;
+        }
+
+        const scrutineeType = goal.ctx[goal.ctx.length - 1 - scrutineeIdx].type;
+        const scrutineeTypeWhnf = whnf(scrutineeType, { definitions: eng.definitions });
+        const inductiveName = getInductiveHead(scrutineeTypeWhnf);
+        if (!inductiveName) {
+          for (const c of node.cases) {
+            recordGoal(c.id, eng, gId, c.labelLatex);
+            walk(c.body, eng, c.labelLatex);
+          }
+          break;
+        }
+        const inductiveDef = eng.definitions.inductiveTypes.get(inductiveName);
+        if (!inductiveDef) {
+          for (const c of node.cases) {
+            recordGoal(c.id, eng, gId, c.labelLatex);
+            walk(c.body, eng, c.labelLatex);
+          }
+          break;
+        }
+
+        for (const c of node.cases) {
+          const ctor = inductiveDef.constructors.find(ct => ct.name === c.constructorName);
+          if (!ctor) {
+            recordGoal(c.id, eng, gId, c.labelLatex);
+            walk(c.body, eng, c.labelLatex);
+            continue;
+          }
+          const caseGoalId = `${gId}_case_${c.constructorName}`;
+          const caseMeta = computeCaseGoalDirect(goal, scrutineeIdx, ctor, inductiveName, eng.definitions);
+          const caseMetaVars = new Map(eng.metaVars);
+          caseMetaVars.set(caseGoalId, caseMeta);
+          const caseGoals = [...eng.goals];
+          const focusIdx = caseGoals.indexOf(gId);
+          if (focusIdx >= 0) caseGoals[focusIdx] = caseGoalId;
+          else caseGoals.push(caseGoalId);
+          const caseEngine = eng.withUpdates({
+            metaVars: caseMetaVars,
+            goals: caseGoals,
+            focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
+          });
+          recordGoal(c.id, caseEngine, caseGoalId, c.labelLatex);
+          walk(c.body, caseEngine, c.labelLatex);
+        }
+        break;
+      }
+    }
+  }
+
+  walk(root, engine);
+  return result;
 }
 
 /**

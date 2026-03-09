@@ -27,9 +27,11 @@ import {
 } from '../proof-tree/proof-tree';
 import {
   TypedProofContext, computeTypedContext, computeApplySubgoalCount,
+  NodeGoalInfo, replayEntireTree,
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
-import { buildReverseRegistry } from '../math-editor/tt-to-math';
+import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
+import { ProseItem, generateProofProse } from '../proof-tree/proof-prose';
 import SplitPane from './SplitPane';
 
 // ============================================================================
@@ -131,6 +133,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 
   // Ephemeral tactic input mode (not part of immutable state)
   const [tacticMode, setTacticMode] = useState<TacticMode>(null);
+  const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('tactics');
 
   const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
 
@@ -152,6 +155,26 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
       goal: ctx.goalDescription,
     };
   }, [state.root, state.cursor.nodeId, surfaceType, kernelType, definitions, registry, emptyRegistry, inductiveMap]);
+
+  // Compute goal map for prose view (replays entire tree, not just to cursor)
+  const rev = useMemo<ReverseRegistry | null>(() => {
+    if (!registry) return null;
+    return buildReverseRegistry(registry);
+  }, [registry]);
+
+  const goalMap = useMemo<Map<ProofNodeId, NodeGoalInfo>>(() => {
+    if (!kernelType || !definitions || !rev) return new Map();
+    try {
+      return replayEntireTree(state.root, kernelType, definitions, rev);
+    } catch {
+      return new Map();
+    }
+  }, [state.root, kernelType, definitions, rev]);
+
+  // Generate prose items from proof tree + goal map
+  const proseItems = useMemo<ProseItem[]>(() => {
+    return generateProofProse(state.root, state.cursor.nodeId, goalMap);
+  }, [state.root, state.cursor.nodeId, goalMap]);
 
   // Dispatch a structural change (goes on undo stack)
   const pushChange = useCallback((newState: ProofTreeState) => {
@@ -224,23 +247,65 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
         direction="horizontal"
         paneSizes={INITIAL_PANE_SIZES}
       >
-        {/* Left: proof tree */}
-        <div style={{ padding: '8px 0', minWidth: 0, overflowY: 'auto', height: '100%' }}>
-          <ProofNodeView
-            node={state.root}
-            depth={0}
-            cursorId={state.cursor.nodeId}
-            state={state}
-            tacticMode={tacticMode}
-            onTacticMode={setTacticMode}
-            onPushChange={pushChange}
-            onClickNode={handleClickNode}
-            typedContext={typedContext}
-            inductiveMap={inductiveMap}
-            registry={registry}
-            kernelType={kernelType}
-            definitions={definitions}
-          />
+        {/* Left: proof tree / prose */}
+        <div style={{ minWidth: 0, overflowY: 'auto', height: '100%', display: 'flex', flexDirection: 'column' }}>
+          {/* Tab bar */}
+          <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
+            {(['tactics', 'proof'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  padding: '4px 12px',
+                  fontSize: '11px',
+                  color: activeTab === tab ? '#c9d1d9' : '#484f58',
+                  background: activeTab === tab ? '#161b22' : 'transparent',
+                  border: 'none',
+                  borderBottom: activeTab === tab ? '2px solid #58a6ff' : '2px solid transparent',
+                  cursor: 'pointer',
+                  fontFamily: FONT_UI,
+                  textTransform: 'capitalize',
+                }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ padding: '8px 0', overflowY: 'auto', flex: 1 }}>
+            {activeTab === 'tactics' ? (
+              <ProofNodeView
+                node={state.root}
+                depth={0}
+                cursorId={state.cursor.nodeId}
+                state={state}
+                tacticMode={tacticMode}
+                onTacticMode={setTacticMode}
+                onPushChange={pushChange}
+                onClickNode={handleClickNode}
+                typedContext={typedContext}
+                inductiveMap={inductiveMap}
+                registry={registry}
+                kernelType={kernelType}
+                definitions={definitions}
+              />
+            ) : (
+              <ProofProseView
+                items={proseItems}
+                cursorId={state.cursor.nodeId}
+                state={state}
+                tacticMode={tacticMode}
+                onTacticMode={setTacticMode}
+                onPushChange={pushChange}
+                onClickNode={handleClickNode}
+                typedContext={typedContext}
+                inductiveMap={inductiveMap}
+                registry={registry}
+                kernelType={kernelType}
+                definitions={definitions}
+              />
+            )}
+          </div>
         </div>
 
         {/* Right: goal panel */}
@@ -1030,3 +1095,482 @@ function ExactView({ node, depth, cursorId, state, onPushChange, onClickNode }: 
     </TacticRow>
   );
 }
+
+// ============================================================================
+// ProofProseView — natural language proof rendering
+// ============================================================================
+
+interface ProseViewProps {
+  items: ProseItem[];
+  cursorId: ProofNodeId;
+  state: ProofTreeState;
+  tacticMode: TacticMode;
+  onTacticMode: (m: TacticMode) => void;
+  onPushChange: (s: ProofTreeState) => void;
+  onClickNode: (id: ProofNodeId) => void;
+  typedContext: TypedProofContext | null;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
+  kernelType?: TTKTerm;
+  definitions?: DefinitionsMap;
+}
+
+function ProofProseView({
+  items, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  typedContext, inductiveMap, registry, kernelType, definitions,
+}: ProseViewProps) {
+  if (items.length === 0) {
+    return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
+  }
+
+  return (
+    <div>
+      {items.map((item, idx) => (
+        <ProseItemView
+          key={`${item.nodeId}-${idx}`}
+          item={item}
+          onClick={() => onClickNode(item.nodeId)}
+          state={state}
+          tacticMode={tacticMode}
+          onTacticMode={onTacticMode}
+          onPushChange={onPushChange}
+          onClickNode={onClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          kernelType={kernelType}
+          definitions={definitions}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ============================================================================
+// ProseItemView — renders a single prose item
+// ============================================================================
+
+interface ProseItemViewProps {
+  item: ProseItem;
+  onClick: () => void;
+  state: ProofTreeState;
+  tacticMode: TacticMode;
+  onTacticMode: (m: TacticMode) => void;
+  onPushChange: (s: ProofTreeState) => void;
+  onClickNode: (id: ProofNodeId) => void;
+  typedContext: TypedProofContext | null;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
+  kernelType?: TTKTerm;
+  definitions?: DefinitionsMap;
+}
+
+const proseStyle: React.CSSProperties = {
+  fontSize: '13px',
+  lineHeight: '1.7',
+  cursor: 'pointer',
+  fontFamily: '"STIX Two Text", "Times New Roman", Georgia, serif',
+};
+
+/** Style for a centered, non-breaking equation block */
+const eqBlockStyle: React.CSSProperties = {
+  display: 'block',
+  textAlign: 'center',
+  padding: '4px 0',
+  whiteSpace: 'nowrap',
+  overflowX: 'auto',
+};
+
+function ProseItemView({
+  item, onClick, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  typedContext, inductiveMap, registry, kernelType, definitions,
+}: ProseItemViewProps) {
+  const rowStyle: React.CSSProperties = {
+    ...proseStyle,
+    paddingLeft: `${item.depth * 20 + 12}px`,
+    paddingRight: '12px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    backgroundColor: item.isCursor ? 'rgba(88, 166, 255, 0.08)' : 'transparent',
+    borderLeft: item.isCursor ? '2px solid #58a6ff' : '2px solid transparent',
+  };
+
+  const { kind } = item;
+
+  const prose: React.CSSProperties = { color: '#c9d1d9' };
+
+  switch (kind.tag) {
+    case 'intro':
+      return (
+        <div style={rowStyle} onClick={onClick}>
+          <span style={prose}>Let{' '}</span>
+          <InlineKaTeX latex={kind.latex} style={{ fontSize: '13px' }} />
+          <span style={prose}>.</span>
+        </div>
+      );
+
+    case 'chain': {
+      // "By definition of X, by Y, and by Z (←), it suffices to show [goal]."
+      const chainParts = kind.steps.map((step, i) => {
+        const isFirst = i === 0;
+        const isLast = i === kind.steps.length - 1;
+        const prefix = isFirst ? '' : (isLast && kind.steps.length > 2 ? ', and ' : isLast ? ' and ' : ', ');
+        const arrow = step.type === 'rewrite' && step.reverse ? ' (\u2190)' : '';
+        const verb = step.type === 'unfold'
+          ? (isFirst ? 'By definition of ' : 'by definition of ')
+          : (isFirst ? 'By ' : 'by ');
+        return (
+          <span key={step.nodeId}>
+            <span style={prose}>{prefix}{verb}</span>
+            <InlineKaTeX latex={texNameForProse(step.name)} style={{ fontSize: '13px' }} />
+            {arrow && <span style={prose}>{arrow}</span>}
+          </span>
+        );
+      });
+
+      return (
+        <div style={rowStyle} onClick={onClick}>
+          {chainParts}
+          {kind.goalLatex ? (
+            <>
+              <span style={prose}>, it suffices to show</span>
+              <span style={eqBlockStyle}>
+                <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '13px' }} />
+              </span>
+            </>
+          ) : (
+            <span style={prose}>,</span>
+          )}
+        </div>
+      );
+    }
+
+    case 'apply': {
+      const subgoals = kind.subgoalLatex ?? [];
+      if (subgoals.length <= 1) {
+        return (
+          <div style={rowStyle} onClick={onClick}>
+            <span style={prose}>By{' '}</span>
+            <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+            {subgoals[0] ? (
+              <>
+                <span style={prose}>, it suffices to show</span>
+                <span style={eqBlockStyle}>
+                  <InlineKaTeX latex={subgoals[0]} style={{ fontSize: '13px' }} />
+                </span>
+              </>
+            ) : (
+              <span style={prose}>.</span>
+            )}
+          </div>
+        );
+      }
+      // Multiple subgoals
+      return (
+        <div style={rowStyle} onClick={onClick}>
+          <span style={prose}>By{' '}</span>
+          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+          <span style={prose}>, it suffices to show:</span>
+          {subgoals.map((sg, i) => (
+            <div key={i} style={{ paddingLeft: '16px', paddingTop: '2px', textAlign: 'center' }}>
+              <span style={prose}>({i + 1}){' '}</span>
+              <InlineKaTeX latex={sg} style={{ fontSize: '13px' }} />
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    case 'inductionHeader':
+      return (
+        <div style={rowStyle} onClick={onClick}>
+          <span style={prose}>We proceed by induction on{' '}</span>
+          <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
+          <span style={prose}>.</span>
+        </div>
+      );
+
+    case 'caseHeader':
+      return (
+        <div style={{ ...rowStyle, fontWeight: 600 }} onClick={onClick}>
+          <span style={{ color: kind.isBaseCase ? '#d2a8ff' : '#79c0ff' }}>
+            {kind.isBaseCase ? 'Base case' : 'Inductive step'}
+          </span>
+          <span style={prose}> (</span>
+          <InlineKaTeX latex={kind.labelLatex} style={{ fontSize: '12px' }} />
+          <span style={prose}>):</span>
+        </div>
+      );
+
+    case 'exact':
+      return (
+        <div style={rowStyle} onClick={onClick}>
+          {kind.solved ? (
+            <>
+              <span style={prose}>The result follows from{' '}</span>
+              <InlineKaTeX latex={texNameForProse(kind.exprLatex)} style={{ fontSize: '13px' }} />
+              <span style={prose}>.</span>
+            </>
+          ) : kind.error ? (
+            <>
+              <span style={{ color: '#f85149' }}>By{' '}</span>
+              <InlineKaTeX latex={texNameForProse(kind.exprLatex)} style={{ fontSize: '13px' }} />
+              <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>({kind.error})</span>
+            </>
+          ) : (
+            <>
+              <span style={prose}>By{' '}</span>
+              <InlineKaTeX latex={texNameForProse(kind.exprLatex)} style={{ fontSize: '13px' }} />
+              <span style={prose}>.</span>
+            </>
+          )}
+        </div>
+      );
+
+    case 'qed':
+      return (
+        <div style={{ ...rowStyle, paddingTop: '2px' }} onClick={onClick}>
+          <span style={{ color: '#3fb950', fontSize: '14px' }}>&#8718;</span>
+        </div>
+      );
+
+    case 'hole': {
+      if (!item.isCursor) {
+        return (
+          <div style={rowStyle} onClick={onClick}>
+            <span style={{ color: '#d29922', fontStyle: 'italic' }}>?</span>
+          </div>
+        );
+      }
+      // Active hole at cursor — show goal + tactic buttons
+      // Reuse the HoleView's tactic input logic
+      return (
+        <HoleProseView
+          nodeId={item.nodeId}
+          depth={item.depth}
+          goalLatex={kind.goalLatex}
+          state={state}
+          tacticMode={tacticMode}
+          onTacticMode={onTacticMode}
+          onPushChange={onPushChange}
+          onClickNode={onClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          kernelType={kernelType}
+          definitions={definitions}
+        />
+      );
+    }
+
+    default:
+      return null;
+  }
+}
+
+/** Render a variable name for prose inline KaTeX.
+ *  Single chars stay as math italic (e.g., n, f).
+ *  Multi-char names use \textsf for clean sans-serif rendering (e.g., sum, minusSucc). */
+function texNameForProse(name: string): string {
+  if (name.length === 1) return name;
+  if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
+  return `\\textsf{${name}}`;
+}
+
+// ============================================================================
+// HoleProseView — active hole in prose view with tactic buttons
+// ============================================================================
+
+interface HoleProseViewProps {
+  nodeId: ProofNodeId;
+  depth: number;
+  goalLatex?: string;
+  state: ProofTreeState;
+  tacticMode: TacticMode;
+  onTacticMode: (m: TacticMode) => void;
+  onPushChange: (s: ProofTreeState) => void;
+  onClickNode: (id: ProofNodeId) => void;
+  typedContext: TypedProofContext | null;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
+  kernelType?: TTKTerm;
+  definitions?: DefinitionsMap;
+}
+
+function HoleProseView({
+  nodeId, depth, goalLatex, state, tacticMode, onTacticMode, onPushChange,
+  onClickNode, typedContext, inductiveMap, registry, kernelType, definitions,
+}: HoleProseViewProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const activeTactic = tacticMode?.tactic ?? null;
+
+  useEffect(() => {
+    if (activeTactic && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [activeTactic]);
+
+  const handleSubmit = useCallback((value: string) => {
+    if (!tacticMode) return;
+    let result: ProofTreeState | null = null;
+    switch (tacticMode.tactic) {
+      case 'intros': {
+        const names = value.split(',').map(s => s.trim()).filter(Boolean);
+        if (names.length > 0) result = applyIntros(state, names);
+        break;
+      }
+      case 'induction': {
+        const scrutinee = value.trim();
+        if (scrutinee) {
+          const hyp = typedContext?.hypotheses.find(h => h.name === scrutinee);
+          const rawType = hyp?.rawType;
+          const headName = rawType ? extractTypeHead(rawType) : null;
+          const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
+          if (indInfo) {
+            const rev = registry ? buildReverseRegistry(registry) : undefined;
+            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev);
+            result = applyInductionWithCtors(state, scrutinee, ctorInfos);
+          } else {
+            result = applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
+          }
+        }
+        break;
+      }
+      case 'exact': {
+        const expr = value.trim();
+        if (expr) result = applyExact(state, expr);
+        break;
+      }
+      case 'unfold': {
+        const name = value.trim();
+        if (name) result = applyUnfold(state, name);
+        break;
+      }
+      case 'rewrite': {
+        const name = value.trim();
+        if (name) result = applyRewrite(state, name);
+        break;
+      }
+      case 'rewrite_rev': {
+        const name = value.trim();
+        if (name) result = applyRewrite(state, name, true);
+        break;
+      }
+      case 'apply': {
+        const name = value.trim();
+        if (name) {
+          let numChildren = 1;
+          if (kernelType && definitions) {
+            numChildren = computeApplySubgoalCount(
+              state.root, state.cursor.nodeId, kernelType, definitions, name,
+            );
+          }
+          result = applyApplyTactic(state, name, numChildren);
+        }
+        break;
+      }
+    }
+    if (result) onPushChange(result);
+    onTacticMode(null);
+  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      handleSubmit(e.currentTarget.value);
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onTacticMode(null);
+    }
+  }, [handleSubmit, onTacticMode]);
+
+  const rowStyle: React.CSSProperties = {
+    ...proseStyle,
+    paddingLeft: `${depth * 20 + 12}px`,
+    paddingRight: '12px',
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    backgroundColor: 'rgba(88, 166, 255, 0.08)',
+    borderLeft: '2px solid #58a6ff',
+  };
+
+  return (
+    <div style={rowStyle} onClick={() => onClickNode(nodeId)}>
+      {/* Goal display */}
+      {goalLatex && (
+        <div style={{ marginBottom: '4px' }}>
+          <span style={{ color: '#484f58', fontSize: '11px' }}>Remaining to show: </span>
+          <InlineKaTeX latex={goalLatex} style={{ fontSize: '12px' }} />
+        </div>
+      )}
+
+      {/* Tactic buttons or input */}
+      {!activeTactic ? (
+        <span style={{ display: 'inline-flex', gap: '4px', flexWrap: 'wrap' }}>
+          <span style={{ color: '#d29922', fontStyle: 'italic', marginRight: '6px' }}>?</span>
+          {[
+            { tactic: 'intros' as const, label: 'Intros' },
+            { tactic: 'induction' as const, label: 'Induction' },
+            { tactic: 'exact' as const, label: 'Exact' },
+            { tactic: 'unfold' as const, label: 'Unfold' },
+            { tactic: 'rewrite' as const, label: 'Rewrite' },
+            { tactic: 'rewrite_rev' as const, label: 'Rewrite\u2190' },
+            { tactic: 'apply' as const, label: 'Apply' },
+          ].map(({ tactic, label }) => (
+            <button
+              key={tactic}
+              style={proseBtnStyle}
+              onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic }); }}
+            >
+              {label}
+            </button>
+          ))}
+        </span>
+      ) : (
+        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+          <span style={keywordStyle}>
+            {activeTactic === 'intros' ? 'Given' :
+             activeTactic === 'induction' ? 'Induct on' :
+             activeTactic === 'unfold' ? 'Unfold' :
+             activeTactic === 'rewrite' ? 'Rewrite' :
+             activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
+             activeTactic === 'apply' ? 'Apply' :
+             'by'}
+          </span>
+          <input
+            ref={inputRef}
+            autoFocus
+            style={inputStyle}
+            placeholder={
+              activeTactic === 'intros' ? 'n, m, f' :
+              activeTactic === 'induction' ? 'variable name' :
+              activeTactic === 'unfold' ? 'definition name' :
+              activeTactic === 'rewrite' || activeTactic === 'rewrite_rev' ? 'lemma name' :
+              activeTactic === 'apply' ? 'lemma name' :
+              'proof expression'
+            }
+            onKeyDown={handleKeyDown}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button style={proseBtnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode(null); }}>
+            Cancel
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
+const proseBtnStyle: React.CSSProperties = {
+  padding: '1px 6px',
+  fontSize: '10px',
+  fontFamily: FONT_UI,
+  color: '#8b949e',
+  background: '#21262d',
+  border: '1px solid #30363d',
+  borderRadius: '3px',
+  cursor: 'pointer',
+};

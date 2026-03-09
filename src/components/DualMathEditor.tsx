@@ -1,18 +1,15 @@
 /**
- * DualMathEditor — two MathEditor instances stacked vertically.
+ * DualMathEditor — type signature editor with combined term display.
  *
- * Top: type signature editor (declaration)
- * Bottom: proof/definition editor with "Proof:" prefix
- *
- * The cursor transfers between them via arrow keys. Only the active
- * editor shows a cursor.
+ * The proof/definition editor has been removed — proofs are now handled
+ * by the structured ProofTreeEditor.
  */
 
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { MathEditor, MathEditorHandle } from './MathEditor';
 import { SyntaxRegistry, convertToSource } from '../math-editor/syntax-registry';
 import { inferTypeSignatureParts } from '../math-editor/type-inference';
-import { MathEditorState, MathRow, createEditorState } from '../math-editor/types';
+import { MathEditorState, MathRow } from '../math-editor/types';
 
 export interface DualMathEditorProps {
   placeholder?: string;
@@ -28,9 +25,7 @@ const editorContainerStyle: React.CSSProperties = {
 };
 
 export function DualMathEditor({ placeholder, registry, initialTypeRoot }: DualMathEditorProps) {
-  const [activeEditor, setActiveEditor] = useState<'type' | 'proof'>('type');
   const typeRef = useRef<MathEditorHandle>(null);
-  const proofRef = useRef<MathEditorHandle>(null);
 
   // Compute initial state for type editor
   const typeInitialState = useMemo<MathEditorState | undefined>(() => {
@@ -43,66 +38,31 @@ export function DualMathEditor({ placeholder, registry, initialTypeRoot }: DualM
     };
   }, [initialTypeRoot]);
 
-  // Track roots for combined term display
+  // Track root for combined term display
   const [typeRoot, setTypeRoot] = useState<MathRow | null>(initialTypeRoot ?? null);
-  const [proofRoot, setProofRoot] = useState<MathRow | null>(null);
 
   const handleTypeChange = useCallback((state: MathEditorState) => {
     setTypeRoot(state.root);
   }, []);
 
-  const handleProofChange = useCallback((state: MathEditorState) => {
-    setProofRoot(state.root);
-  }, []);
-
-  // Transfer: type editor down → proof editor
-  const handleTransferDown = useCallback(() => {
-    setActiveEditor('proof');
-    // Small delay to let React re-render with active=true before focusing
-    setTimeout(() => proofRef.current?.focus(), 0);
-  }, []);
-
-  // Transfer: proof editor up → type editor
-  const handleTransferUp = useCallback(() => {
-    setActiveEditor('type');
-    setTimeout(() => typeRef.current?.focus(), 0);
-  }, []);
-
-  // Click handlers
   const handleTypeClaim = useCallback(() => {
-    setActiveEditor('type');
-  }, []);
-
-  const handleProofClaim = useCallback(() => {
-    setActiveEditor('proof');
+    // No-op now that there's only one editor
   }, []);
 
   // Combined term display
   const combinedTerm = useMemo(() => {
-    if (!typeRoot && !proofRoot) return null;
+    if (!typeRoot) return null;
 
     const parts: string[] = [];
 
     // Type signature parts
-    if (typeRoot) {
-      const typeParts = inferTypeSignatureParts(typeRoot, registry);
-      if (typeParts) {
-        parts.push(...typeParts);
-      }
-    }
-
-    // Proof/definition expression
-    if (proofRoot && proofRoot.children.length > 0) {
-      const proofResult = convertToSource(registry ?? { symbolMap: new Map(), entries: [] }, proofRoot.children);
-      if (proofResult.source !== '?') {
-        // If we have type parts, the last part is the body — replace it with the full expression
-        // Actually, just append the proof as a separate display
-        parts.push(proofResult.source);
-      }
+    const typeParts = inferTypeSignatureParts(typeRoot, registry);
+    if (typeParts) {
+      parts.push(...typeParts);
     }
 
     return parts.length > 0 ? parts : null;
-  }, [typeRoot, proofRoot, registry]);
+  }, [typeRoot, registry]);
 
   return (
     <div>
@@ -113,36 +73,15 @@ export function DualMathEditor({ placeholder, registry, initialTypeRoot }: DualM
         backgroundColor: '#0d1117',
         overflow: 'hidden',
       }}>
-        {/* Type signature editor (top) */}
+        {/* Type signature editor */}
         <MathEditor
           ref={typeRef}
           initialState={typeInitialState}
           placeholder={placeholder}
           registry={registry}
-          active={activeEditor === 'type'}
-          onTransferDown={handleTransferDown}
+          active={true}
           onFocusClaim={handleTypeClaim}
           onChange={handleTypeChange}
-          showTypeInference={false}
-          containerStyle={editorContainerStyle}
-        />
-
-        {/* Thin divider */}
-        <div style={{
-          borderTop: '1px dashed #30363d',
-          margin: '0 12px',
-        }} />
-
-        {/* Proof/definition editor (bottom) */}
-        <MathEditor
-          ref={proofRef}
-          placeholder="enter proof"
-          registry={registry}
-          active={activeEditor === 'proof'}
-          onTransferUp={handleTransferUp}
-          onFocusClaim={handleProofClaim}
-          onChange={handleProofChange}
-          proofPrefix={"\\text{Proof: }"}
           showTypeInference={false}
           containerStyle={editorContainerStyle}
         />
