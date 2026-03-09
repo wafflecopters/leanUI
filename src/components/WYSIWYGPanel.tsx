@@ -92,6 +92,10 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
           decl.indexPositions ?? [],
           decl.namedArgMap,
         );
+        // Also add constructors to terms map so ExactTactic can find them
+        for (const ctor of decl.kernelConstructors) {
+          defs = addDefinition(defs, ctor.name, ctor.type, undefined, ctor.namedArgMap);
+        }
       } else if (decl.kind === 'term' && decl.kernelType) {
         defs = addDefinition(
           defs, decl.name, decl.kernelType,

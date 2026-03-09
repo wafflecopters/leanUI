@@ -355,7 +355,21 @@ export function addInductiveDefinition(
 }
 
 export function getTypeDefinition(definitions: DefinitionsMap, name: string) {
-  return definitions.terms.get(name)?.type;
+  const termType = definitions.terms.get(name)?.type;
+  if (termType) return termType;
+  // Fallback: check if it's a constructor (stored in inductiveTypes, not terms)
+  const indName = definitions.inductiveNameOfConstructor.get(name);
+  if (indName) {
+    const ind = definitions.inductiveTypes.get(indName);
+    if (ind) {
+      const ctor = ind.constructors.find(c => c.name === name);
+      if (ctor) return ctor.type;
+    }
+  }
+  // Fallback: check if it's an inductive type name
+  const ind = definitions.inductiveTypes.get(name);
+  if (ind) return ind.type;
+  return undefined;
 }
 
 export function getTermDefinition(definitions: DefinitionsMap, name: string) {
