@@ -118,6 +118,7 @@ type TacticMode =
   | { tactic: 'exact' }
   | { tactic: 'unfold' }
   | { tactic: 'rewrite' }
+  | { tactic: 'rewrite_rev' }
   | { tactic: 'apply' };
 
 // ============================================================================
@@ -561,6 +562,11 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
         if (name) result = applyRewrite(state, name);
         break;
       }
+      case 'rewrite_rev': {
+        const name = value.trim();
+        if (name) result = applyRewrite(state, name, true);
+        break;
+      }
       case 'apply': {
         const name = value.trim();
         if (name) {
@@ -614,6 +620,9 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'rewrite' }); }}>
             Rewrite...
           </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'rewrite_rev' }); }}>
+            Rewrite←...
+          </button>
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'apply' }); }}>
             Apply...
           </button>
@@ -627,6 +636,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
              activeTactic === 'induction' ? 'Induct on' :
              activeTactic === 'unfold' ? 'Unfold' :
              activeTactic === 'rewrite' ? 'Rewrite' :
+             activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
              activeTactic === 'apply' ? 'Apply' :
              'by'}
           </span>
@@ -639,6 +649,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               activeTactic === 'induction' ? 'variable name' :
               activeTactic === 'unfold' ? 'definition name' :
               activeTactic === 'rewrite' ? 'lemma name' :
+              activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
               'proof expression'
             }
@@ -931,7 +942,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
   return (
     <>
       <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
-        <span style={keywordStyle}>rewrite </span>
+        <span style={keywordStyle}>{node.reverse ? 'rewrite\u2190 ' : 'rewrite '}</span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
       </TacticRow>

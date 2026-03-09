@@ -1,0 +1,17 @@
+@test success
+@name "recursion through let bindings - addLeftCancel"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+succInj : {n m : Nat} -> Equal (Succ n) (Succ m) -> Equal n m
+succInj refl = refl
+
+addLeftCancel : (x a b : Nat) -> Equal (plus x a) (plus x b) -> Equal a b
+addLeftCancel Zero a b eq = eq
+addLeftCancel (Succ x) a b eq = let eq2 = succInj eq in
+  let res = addLeftCancel x a b eq2 in
+    res

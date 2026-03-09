@@ -860,7 +860,10 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const tactic = new RewriteTactic({ tag: 'Const', name: node.name });
+      const tactic = new RewriteTactic(
+        { tag: 'Const', name: node.name },
+        { reverse: node.reverse },
+      );
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {

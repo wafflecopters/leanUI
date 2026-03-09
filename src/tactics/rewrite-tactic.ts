@@ -35,7 +35,7 @@ export class RewriteTactic implements Tactic {
 
   constructor(
     public readonly equalityProof: TTKTerm,
-    public readonly options: { enhanced?: boolean } = {}
+    public readonly options: { enhanced?: boolean; reverse?: boolean } = {}
   ) {}
 
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
@@ -81,6 +81,11 @@ export class RewriteTactic implements Tactic {
       }
 
       let { typeA, lhs: rawLhs, rhs: rawRhs } = eqArgs;
+
+      // For reverse rewrite (rewrite←), swap LHS and RHS so we replace RHS with LHS.
+      if (this.options.reverse) {
+        [rawLhs, rawRhs] = [rawRhs, rawLhs];
+      }
 
       // 4. Beta-reduce LHS and RHS without delta-reducing definitions.
       //    cong (\z => radd z z) h produces Equal ((\z => radd z z) a) ((\z => radd z z) b)
@@ -142,10 +147,16 @@ export class RewriteTactic implements Tactic {
         solution: undefined
       };
 
-      // 8. Build the proof term: replace motive (sym h) ?newGoal
+      // 8. Build the proof term: replace motive eqProof ?newGoal
       //    replace : {A} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
-      //    We need: P lhs (original goal) from P rhs (new goal)
-      //    sym h : Equal rhs lhs, so replace P (sym h) : P rhs -> P lhs
+      //
+      //    Normal (rewrite h where h : Equal lhs rhs):
+      //      We swapped nothing, so we need sym h : Equal rhs lhs
+      //      replace P (sym h) : P rhs -> P lhs
+      //
+      //    Reverse (rewrite← h where h : Equal lhs rhs):
+      //      We swapped lhs/rhs above, so "lhs" is now the original rhs.
+      //      Use h directly: replace P h : P lhs -> P rhs
       //
       //    When the proof is a Pi-type (e.g., minusSucc : {i n} -> Leq i n -> Equal ...),
       //    build the fully-applied proof: minusSucc arg0 arg1 ... argN
@@ -156,13 +167,11 @@ export class RewriteTactic implements Tactic {
           appliedProof = { tag: 'App', fn: appliedProof, arg };
         }
       }
-      const symProof: TTKTerm = {
-        tag: 'App',
-        fn: { tag: 'Const', name: 'sym' },
-        arg: appliedProof
-      };
+      const eqProof: TTKTerm = this.options.reverse
+        ? appliedProof
+        : { tag: 'App', fn: { tag: 'Const', name: 'sym' }, arg: appliedProof };
 
-      // replace motive (sym h) ?newGoal
+      // replace motive eqProof ?newGoal
       const proofTerm: TTKTerm = {
         tag: 'App',
         fn: {
@@ -172,7 +181,7 @@ export class RewriteTactic implements Tactic {
             fn: { tag: 'Const', name: 'replace' },
             arg: motive
           },
-          arg: symProof
+          arg: eqProof
         },
         arg: { tag: 'Meta', id: newMetaId }
       };

@@ -44,6 +44,8 @@ export interface RecursiveCallSite {
   args: TTKTerm[];
   /** The parent term stack leading to this call (for error reporting) */
   parentStack: TTKTerm[];
+  /** The actual Const term at this call site (for binder depth computation) */
+  constTerm: TTKTerm;
   /** The index path to this call site within the RHS */
   indexPath: IndexPath;
 }
@@ -363,6 +365,34 @@ export function visitTermWithParentStack(
 }
 
 // ============================================================================
+// Binder Depth Computation
+// ============================================================================
+
+/**
+ * Compute how many binder bodies we've entered to reach the current term.
+ * This is needed because de Bruijn indices are shifted by each enclosing binder,
+ * so when checking recursive call arguments against the structurally-smaller map
+ * (which uses pattern-level indices), we must adjust for the depth offset.
+ *
+ * Only binder BODIES increase depth (not domains or let defVals), since only
+ * the body introduces a new variable in scope.
+ *
+ * @param parentStack Stack of parent terms (from root to immediate parent)
+ * @param currentTerm The term we're currently visiting
+ */
+export function computeBinderDepth(parentStack: TTKTerm[], currentTerm: TTKTerm): number {
+  let depth = 0;
+  for (let i = 0; i < parentStack.length; i++) {
+    const parent = parentStack[i];
+    const child = (i < parentStack.length - 1) ? parentStack[i + 1] : currentTerm;
+    if (parent.tag === 'Binder' && parent.body === child) {
+      depth++;
+    }
+  }
+  return depth;
+}
+
+// ============================================================================
 // Recursive Call Site Checking
 // ============================================================================
 
@@ -370,16 +400,21 @@ export function visitTermWithParentStack(
  * Check if a single recursive call site is valid (structurally decreasing).
  *
  * A call is valid if at least one argument at position i is:
- * - A Var with De Bruijn index k, where k is smaller than pattern position i
+ * - A Var with De Bruijn index k, where (k - binderDepth) is smaller than pattern position i
+ *
+ * The binderDepth adjustment accounts for let/lambda binders that shift de Bruijn
+ * indices relative to the pattern-level indices in the smallerMap.
  *
  * @param args The arguments applied to the recursive function
  * @param smallerMap Map of De Bruijn indices that are structurally smaller
  * @param contextNames Variable names for error reporting
+ * @param binderDepth Number of binder bodies between the clause RHS root and this call site
  */
 export function checkRecursiveCallSite(
   args: TTKTerm[],
   smallerMap: StructurallySmallerMap,
-  contextNames: string[]
+  contextNames: string[],
+  binderDepth: number = 0
 ): CallSiteCheckResult {
   // Check each argument position
   for (let i = 0; i < args.length; i++) {
@@ -392,14 +427,18 @@ export function checkRecursiveCallSite(
     // Check if the reduced argument is a Var
     if (reducedArg.tag === 'Var') {
       const varIndex = reducedArg.index;
-      const smallerThanPos = smallerMap.get(varIndex);
+      // Adjust for binder depth: pattern-level index = varIndex - binderDepth
+      const adjustedIndex = varIndex - binderDepth;
+      if (adjustedIndex >= 0) {
+        const smallerThanPos = smallerMap.get(adjustedIndex);
 
-      // If this variable is smaller than position i, the call is valid
-      if (smallerThanPos === i) {
-        return {
-          isValid: true,
-          decreasingArgPosition: i
-        };
+        // If this variable is smaller than position i, the call is valid
+        if (smallerThanPos === i) {
+          return {
+            isValid: true,
+            decreasingArgPosition: i
+          };
+        }
       }
     }
   }
@@ -433,10 +472,10 @@ export function findRecursiveCallSites(
       // Only record if there are arguments (a bare Const with no args is also invalid,
       // but extractAppSpineFromParentStack returns null in that case)
       if (args !== null) {
-        callSites.push({ args, parentStack: [...parentStack], indexPath: [...indexPath] });
+        callSites.push({ args, parentStack: [...parentStack], constTerm: term, indexPath: [...indexPath] });
       } else {
         // Bare Const reference with zero args - still a call site (invalid one)
-        callSites.push({ args: [], parentStack: [...parentStack], indexPath: [...indexPath] });
+        callSites.push({ args: [], parentStack: [...parentStack], constTerm: term, indexPath: [...indexPath] });
       }
     }
   });
@@ -458,7 +497,8 @@ export function checkClauseRecursion(
   const contextNames = clause.contextNames ?? collectPatternVars(clause.patterns).reverse();
 
   for (const callSite of callSites) {
-    const result = checkRecursiveCallSite(callSite.args, smallerMap, contextNames);
+    const binderDepth = computeBinderDepth(callSite.parentStack, callSite.constTerm);
+    const result = checkRecursiveCallSite(callSite.args, smallerMap, contextNames, binderDepth);
     if (!result.isValid && result.error) {
       errors.push({
         message: result.error,

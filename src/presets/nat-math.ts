@@ -69,10 +69,6 @@ congPlusLeft p refl = refl
 plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
 plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
 
-addLeftCancel : {x a b : Nat} -> Equal (plus x a) (plus x b) -> Equal a b
-addLeftCancel {x:=Zero} {a} {b} eq = eq
-addLeftCancel {x:=Succ x} {a} {b} eq = addLeftCancel {x} {a} {b} (succInj eq)
-
 -- Multiplication properties
 mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero
 mulZeroLeft n = refl
