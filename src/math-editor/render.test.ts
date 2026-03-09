@@ -57,7 +57,7 @@ describe('renderStaticLatex', () => {
 
   test('renders BigOp lim (below only)', () => {
     const row = mkRow([mkBigOp('lim', mkRow([mkSymbol('n'), mkSymbol('\\to'), mkSymbol('\\infty')]), null, mkRow([mkSymbol('f')]))]);
-    expect(renderStaticLatex(row)).toBe('\\lim_{n \\to \\infty}f');
+    expect(renderStaticLatex(row)).toBe('\\lim_{n \\to \\infty }f');
   });
 
   test('renders accent vec', () => {
@@ -171,7 +171,7 @@ describe('operator spacing', () => {
 
   test('\\in gets spaces', () => {
     const row = mkRow([mkSymbol('x'), mkSymbol('\\in'), mkSymbol('\\mathbb{R}')]);
-    expect(renderStaticLatex(row)).toBe('x \\in \\mathbb{R}');
+    expect(renderStaticLatex(row)).toBe('x \\in \\mathbb{R} ');
   });
 
   test('regular symbols have no extra space', () => {

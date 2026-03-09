@@ -186,15 +186,20 @@ function renderNodeInner(node: MathNode, cursor: CursorState, currentPath: RowPa
 function renderSymbol(value: string): string {
   // Single chars just pass through: 'x', '+', '2', etc.
   // LaTeX commands like '\alpha', '\in' also pass through
-  // Operators that need spacing
-  if (value === '+' || value === '-' || value === '=') {
+  // Operators that need surrounding spaces for readability
+  if (value === '+' || value === '-' || value === '=' ||
+      value === '\\in' || value === '\\to' || value === '\\cdot' ||
+      value === '\\leq' || value === '\\geq' || value === '\\neq' ||
+      value === '\\implies' || value === '\\iff' || value === '\\times' ||
+      value === '\\equiv' || value === '\\approx' || value === '\\sim' ||
+      value === '\\subset' || value === '\\subseteq' || value === '\\cup' ||
+      value === '\\cap' || value === '\\vee' || value === '\\wedge') {
     return ` ${value} `;
   }
-  if (value === '\\in' || value === '\\to' || value === '\\leq' || value === '\\geq' ||
-      value === '\\neq' || value === '\\subset' || value === '\\subseteq' ||
-      value === '\\implies' || value === '\\iff' ||
-      value === '\\Rightarrow' || value === '\\mid') {
-    return ` ${value} `;
+  // All LaTeX commands need a trailing space so they don't merge with adjacent tokens
+  // (e.g., \cdot followed by n would render as \cdotn without a space)
+  if (value.startsWith('\\') && value.length > 1) {
+    return `${value} `;
   }
   // Multi-letter names (not LaTeX commands) render upright, like \sin or \log.
   // Exclude primed variables (n', x') and single-letter+digit (x0, x1).
