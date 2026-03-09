@@ -13,7 +13,7 @@
  */
 
 import { describe, test, expect } from "vitest";
-import { TTKPattern, TTKTerm, TTKClause, mkVar, mkConst, mkApp, mkLambda, mkType } from "./kernel";
+import { TTKPattern, TTKTerm, TTKClause, mkVar, mkConst, mkApp, mkLambda, mkLet, mkType } from "./kernel";
 import { fieldSeg } from "../types/source-position";
 import {
   collectPatternVars,
@@ -795,6 +795,151 @@ describe('checkStructuralRecursion', () => {
     const result = checkStructuralRecursion('add', clauses);
 
     expect(result.isValid).toBe(true);
+  });
+});
+
+// ============================================================================
+// Tests for recursive calls inside Let bindings
+// ============================================================================
+
+describe('recursive calls inside let bindings', () => {
+  test('valid recursion inside single let body', () => {
+    // f : Nat -> Nat
+    // f (Succ n) = let x = something in f n
+    // Pattern: (Succ n) — n is index 0, smaller than position 0
+    // In let body: n is shifted to index 1
+    // rhs = Let x = Zero in (f Var(1))
+    const clause: TTKClause = {
+      patterns: [mkPCtor('Succ', [mkPVar('n')])],
+      rhs: mkLet('x', mkType(0), mkConst('Zero'),
+        mkApp(mkConst('f'), mkVar(1))  // n is at index 1 inside let body
+      ),
+      contextNames: ['n'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'f');
+
+    expect(result.isValid).toBe(true);
+    expect(result.callSites.length).toBe(1);
+    expect(result.errors.length).toBe(0);
+  });
+
+  test('valid recursion inside nested let bodies', () => {
+    // f : Nat -> Nat
+    // f (Succ n) = let x = ... in let y = ... in f n
+    // n at pattern level is index 0
+    // Inside 2 let bodies: n is shifted to index 2
+    const clause: TTKClause = {
+      patterns: [mkPCtor('Succ', [mkPVar('n')])],
+      rhs: mkLet('x', mkType(0), mkConst('Zero'),
+        mkLet('y', mkType(0), mkConst('Zero'),
+          mkApp(mkConst('f'), mkVar(2))  // n is at index 2 inside 2 let bodies
+        )
+      ),
+      contextNames: ['n'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'f');
+
+    expect(result.isValid).toBe(true);
+    expect(result.callSites.length).toBe(1);
+    expect(result.errors.length).toBe(0);
+  });
+
+  test('valid recursion in let defVal (not body)', () => {
+    // f : Nat -> Nat
+    // f (Succ n) = let res = f n in res
+    // The recursive call is in defVal, which is NOT under the let binder
+    // So n is still at its pattern-level index 0
+    const clause: TTKClause = {
+      patterns: [mkPCtor('Succ', [mkPVar('n')])],
+      rhs: mkLet('res', mkType(0),
+        mkApp(mkConst('f'), mkVar(0)),  // defVal: f n, n at index 0 (not shifted)
+        mkVar(0)  // body: res
+      ),
+      contextNames: ['n'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'f');
+
+    expect(result.isValid).toBe(true);
+    expect(result.callSites.length).toBe(1);
+    expect(result.errors.length).toBe(0);
+  });
+
+  test('valid recursion in let defVal inside another let body', () => {
+    // addLeftCancel (Succ x) a b eq = let eq2 = succInj eq in
+    //   let res = addLeftCancel x a b (succInj eq2) in res
+    // Patterns: (Succ x) a b eq — x is index 3, smaller than position 0
+    // Inside outer let body: x is shifted to index 4
+    // Inner let defVal is NOT under inner let binder, so stays at depth 1
+    // So x is at index 4 in the recursive call
+    const patterns = [
+      mkPCtor('Succ', [mkPVar('x')]),
+      mkPVar('a'),
+      mkPVar('b'),
+      mkPVar('eq'),
+    ];
+    const clause: TTKClause = {
+      patterns,
+      rhs: mkLet('eq2', mkType(0),
+        mkApp(mkConst('succInj'), mkVar(0)),  // defVal: succInj(eq), eq at index 0
+        // body (depth 1): let res = addLeftCancel(x, a, b, succInj(eq2)) in res
+        mkLet('res', mkType(0),
+          // defVal (still depth 1): addLeftCancel x a b (succInj eq2)
+          mkApp(mkApp(mkApp(mkApp(mkConst('addLeftCancel'), mkVar(4)),  // x shifted by 1
+            mkVar(3)),  // a shifted by 1
+            mkVar(2)),  // b shifted by 1
+            mkApp(mkConst('succInj'), mkVar(0))),  // eq2 at index 0
+          mkVar(0)  // body (depth 2): res
+        )
+      ),
+      contextNames: ['eq', 'b', 'a', 'x'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'addLeftCancel');
+
+    expect(result.isValid).toBe(true);
+    expect(result.callSites.length).toBe(1);
+    expect(result.errors.length).toBe(0);
+  });
+
+  test('invalid recursion inside let is still caught', () => {
+    // f : Nat -> Nat
+    // f n = let x = ... in f n
+    // n is at top level (not smaller), even shifted it's not valid
+    const clause: TTKClause = {
+      patterns: [mkPVar('n')],
+      rhs: mkLet('x', mkType(0), mkConst('Zero'),
+        mkApp(mkConst('f'), mkVar(1))  // n shifted to index 1, but still not smaller
+      ),
+      contextNames: ['n'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'f');
+
+    expect(result.isValid).toBe(false);
+    expect(result.errors.length).toBe(1);
+  });
+
+  test('valid recursion inside lambda body', () => {
+    // f : Nat -> Nat -> Nat
+    // f (Succ n) = \m => f n m
+    // n at pattern level is index 0, shifted to 1 inside lambda
+    const clause: TTKClause = {
+      patterns: [mkPCtor('Succ', [mkPVar('n')])],
+      rhs: mkLambda(mkType(0),
+        mkApp(mkApp(mkConst('f'), mkVar(1)), mkVar(0)),  // f n m, n at index 1
+        'm'
+      ),
+      contextNames: ['n'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'f');
+
+    expect(result.isValid).toBe(true);
+    expect(result.callSites.length).toBe(1);
+    expect(result.errors.length).toBe(0);
   });
 });
 

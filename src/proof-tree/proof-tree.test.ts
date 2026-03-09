@@ -1,11 +1,11 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import {
   resetProofIds, freshProofId,
-  mkHole, mkIntros, mkInduction, mkCase, mkExact,
+  mkHole, mkIntros, mkInduction, mkCase, mkExact, mkApply,
   createInitialState,
   findNode, findCase, isCursorInSubtree, linearize,
   replaceNode, updateCase,
-  applyIntros, applyInduction, applyExact,
+  applyIntros, applyInduction, applyExact, applyApplyTactic,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse,
   moveCursorUp, moveCursorDown,
   editIntroName, addIntroName, removeIntroName,
@@ -998,5 +998,138 @@ describe('computeContext', () => {
     expect(ctx!.caseLabel).toBe('n = 0');
     expect(ctx!.inductionVar).toBe('n');
     expect(ctx!.goalDescription).toBe('refl');
+  });
+});
+
+// ============================================================================
+// 12. Multi-child Apply
+// ============================================================================
+
+describe('multi-child apply', () => {
+  test('applyApplyTactic with numChildren=1 creates single child (default)', () => {
+    const state = createInitialState();
+    const result = applyApplyTactic(state, 'congSucc')!;
+    expect(result).not.toBeNull();
+    expect(result.root.tag).toBe('apply');
+    const apply = result.root as any;
+    expect(apply.name).toBe('congSucc');
+    expect(apply.children).toHaveLength(1);
+    expect(apply.children[0].tag).toBe('hole');
+    expect(result.cursor.nodeId).toBe(apply.children[0].id);
+  });
+
+  test('applyApplyTactic with numChildren=2 creates two child holes', () => {
+    const state = createInitialState();
+    const result = applyApplyTactic(state, 'trans', 2)!;
+    expect(result).not.toBeNull();
+    const apply = result.root as any;
+    expect(apply.children).toHaveLength(2);
+    expect(apply.children[0].tag).toBe('hole');
+    expect(apply.children[1].tag).toBe('hole');
+    expect(apply.children[0].id).not.toBe(apply.children[1].id);
+    // Cursor on first child
+    expect(result.cursor.nodeId).toBe(apply.children[0].id);
+  });
+
+  test('findNode finds nodes inside multi-child apply', () => {
+    const child1 = mkHole();
+    const child2 = mkExact('refl');
+    const apply = mkApply('trans', [child1, child2]);
+    expect(findNode(apply, child1.id)).toBe(child1);
+    expect(findNode(apply, child2.id)).toBe(child2);
+  });
+
+  test('linearize includes all children of apply', () => {
+    const child1 = mkHole();
+    const child2 = mkHole();
+    const apply = mkApply('trans', [child1, child2]);
+    const entries = linearize(apply);
+    expect(entries.map(e => e.id)).toEqual([apply.id, child1.id, child2.id]);
+    expect(entries.map(e => e.depth)).toEqual([0, 1, 1]);
+  });
+
+  test('replaceNode replaces inside multi-child apply', () => {
+    const child1 = mkHole();
+    const child2 = mkHole();
+    const apply = mkApply('trans', [child1, child2]);
+
+    const exact = mkExact('ab');
+    const newTree = replaceNode(apply, child2.id, exact);
+    expect(newTree.tag).toBe('apply');
+    const newApply = newTree as any;
+    expect(newApply.children[0]).toBe(child1); // unchanged
+    expect(newApply.children[1].tag).toBe('exact');
+    expect(newApply.children[1].expr).toBe('ab');
+  });
+
+  test('isCursorInSubtree works with multi-child apply', () => {
+    const child1 = mkHole();
+    const child2 = mkHole();
+    const apply = mkApply('trans', [child1, child2]);
+    expect(isCursorInSubtree(apply, child1.id)).toBe(true);
+    expect(isCursorInSubtree(apply, child2.id)).toBe(true);
+    expect(isCursorInSubtree(apply, 9999)).toBe(false);
+  });
+
+  test('cursor navigation through multi-child apply', () => {
+    const child1 = mkHole();
+    const child2 = mkHole();
+    const apply = mkApply('trans', [child1, child2]);
+    let state: ProofTreeState = { root: apply, cursor: { nodeId: apply.id } };
+
+    state = moveCursorDown(state);
+    expect(state.cursor.nodeId).toBe(child1.id);
+
+    state = moveCursorDown(state);
+    expect(state.cursor.nodeId).toBe(child2.id);
+  });
+
+  test('computeContext passes through apply children', () => {
+    const child1 = mkHole();
+    const child2 = mkHole();
+    const apply = mkApply('trans', [child1, child2]);
+    const intros = mkIntros(['n'], apply);
+
+    const ctx1 = computeContext(intros, child1.id);
+    expect(ctx1!.hypotheses).toHaveLength(1);
+    expect(ctx1!.hypotheses[0].name).toBe('n');
+
+    const ctx2 = computeContext(intros, child2.id);
+    expect(ctx2!.hypotheses).toHaveLength(1);
+    expect(ctx2!.hypotheses[0].name).toBe('n');
+  });
+
+  test('clearNode on multi-child apply reverts to hole', () => {
+    const child1 = mkHole();
+    const child2 = mkHole();
+    const apply = mkApply('trans', [child1, child2]);
+    const state: ProofTreeState = { root: apply, cursor: { nodeId: apply.id } };
+    const result = clearNode(state, apply.id)!;
+    expect(result.root.tag).toBe('hole');
+  });
+
+  test('workflow: intros → apply (2 children) → exact both', () => {
+    let state = createInitialState();
+    state = applyIntros(state, ['n', 'm'])!;
+    state = applyApplyTactic(state, 'trans', 2)!;
+
+    // Cursor on first child — apply exact
+    state = applyExact(state, 'ab')!;
+
+    // Navigate to second child
+    state = moveCursorDown(state);
+    const applyNode = (state.root as any).child;
+    expect(applyNode.tag).toBe('apply');
+    expect(state.cursor.nodeId).toBe(applyNode.children[1].id);
+
+    // Apply exact on second child
+    state = applyExact(state, 'bc')!;
+
+    // Verify both children are exact
+    const finalApply = (state.root as any).child;
+    expect(finalApply.children[0].tag).toBe('exact');
+    expect(finalApply.children[0].expr).toBe('ab');
+    expect(finalApply.children[1].tag).toBe('exact');
+    expect(finalApply.children[1].expr).toBe('bc');
   });
 });

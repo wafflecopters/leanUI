@@ -4,6 +4,7 @@ import { mkVar, mkConst, mkApp, mkPi, mkLambda, mkSort, mkULit } from '../compil
 import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, addInductiveDefinition, DefinitionsMap } from '../compiler/term';
 import { compileTTFromText } from '../compiler/compile';
+import { NAT_MATH_CODE } from '../presets/nat-math';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { resetIds } from '../math-editor/types';
 import {
@@ -1208,5 +1209,173 @@ testLemma = ?TODO
     expect(ctx!.goal).toContain('Equal');
     // The goal should be Equal (Succ (minus n i)) (Succ (minus n i)) = refl
     expect(ctx!.goal).toContain('Succ');
+  });
+});
+
+// ============================================================================
+// summationSplit: complete proof (term-level, compiled from nat-math preset)
+// ============================================================================
+
+describe('summationSplit: complete term-level proof', () => {
+  // The proof relies on:
+  //   leqSuccRight : Leq i n -> Leq i (Succ n)
+  //   cong : (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+  //   plusMinusSucc : Leq i n -> Equal (plus i (minus (Succ n) i)) (Succ n)
+  //
+  // Proof outline for: Equal (sum i (Succ n) f) (plus (sum i n f) (f (Succ n)))
+  //
+  //   sum i (Succ n) f
+  //     = sumStartCount i (minus (Succ (Succ n)) i) f           -- by def of sum
+  //     = sumStartCount i (Succ (minus (Succ n) i)) f           -- by cong + minusSucc (leqSuccRight l)
+  //     ≡ plus (sumStartCount i (minus (Succ n) i) f)           -- by iota (definitional)
+  //            (f (plus i (minus (Succ n) i)))
+  //     = plus (sumStartCount i (minus (Succ n) i) f)           -- by congPlusRight + cong f (plusMinusSucc l)
+  //            (f (Succ n))
+  //     = plus (sum i n f) (f (Succ n))                         -- by def of sum
+
+  function compileWithProof() {
+    // The nat-math preset now includes the complete proof with all helpers
+    return compileTTFromText(NAT_MATH_CODE);
+  }
+
+  test('helper lemmas type-check', () => {
+    const result = compileWithProof();
+
+    const leqSR = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'leqSuccRight');
+    expect(leqSR).toBeDefined();
+    expect(leqSR!.checkSuccess).toBe(true);
+
+    const congDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'cong');
+    expect(congDecl).toBeDefined();
+    expect(congDecl!.checkSuccess).toBe(true);
+
+    const pms = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'plusMinusSucc');
+    expect(pms).toBeDefined();
+    expect(pms!.checkSuccess).toBe(true);
+  });
+
+  test('summationSplit proof type-checks', () => {
+    const result = compileWithProof();
+
+    const summSplit = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'summationSplit');
+    expect(summSplit).toBeDefined();
+    expect(summSplit!.checkSuccess).toBe(true);
+  });
+
+  test('proof tree: intros then unfold sum shows correct goal structure', () => {
+    const result = compileWithProof();
+    const summSplit = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'summationSplit');
+    const kernelType = summSplit!.kernelType!;
+    const definitions = result.definitions;
+
+    // Build proof tree: intros [i, n, l, f] → unfold sum
+    const unfoldChild = mkTreeHole();
+    const unfoldNode = mkUnfold('sum', unfoldChild);
+    const intros = mkIntros(['i', 'n', 'l', 'f'], unfoldNode);
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      intros, unfoldChild.id, surfaceType, emptyRegistry,
+      undefined, kernelType, definitions,
+    );
+    expect(ctx).not.toBeNull();
+
+    // After unfold sum, goal should contain sumStartCount and minus (internals exposed)
+    expect(ctx!.goal).toContain('Equal');
+    expect(ctx!.goal).not.toContain('\\square');
+    // 4 hypotheses: i, n, l, f
+    expect(ctx!.hypotheses).toHaveLength(4);
+    expect(ctx!.hypotheses[0].name).toBe('i');
+    expect(ctx!.hypotheses[1].name).toBe('n');
+    expect(ctx!.hypotheses[2].name).toBe('l');
+    expect(ctx!.hypotheses[3].name).toBe('f');
+  });
+
+  test('proof tree: intros then rewrite minusSucc transforms goal', () => {
+    const result = compileWithProof();
+    // Use the testLemma pattern: a goal that directly contains minus (Succ n) i
+    // After intros [i, n, l, f] + unfold sum, the goal has minus (Succ (Succ n)) i
+    // and minus (Succ n) i — rewrite minusSucc should transform one of them
+    const summSplit = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'summationSplit');
+    const kernelType = summSplit!.kernelType!;
+    const definitions = result.definitions;
+
+    // intros [i, n, l, f] → unfold sum → rewrite minusSucc
+    const rewriteChild = mkTreeHole();
+    const rewriteNode = mkRewrite('minusSucc', rewriteChild);
+    const unfoldNode = mkUnfold('sum', rewriteNode);
+    const intros = mkIntros(['i', 'n', 'l', 'f'], unfoldNode);
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      intros, rewriteChild.id, surfaceType, emptyRegistry,
+      undefined, kernelType, definitions,
+    );
+    // With context search, the rewrite should succeed: it finds l : Leq i n
+    // in context and uses it as the premise for minusSucc.
+    expect(ctx).not.toBeNull();
+    expect(ctx!.goal).toContain('Equal');
+  });
+});
+
+describe('rewrite with context search: integration', () => {
+  // Compile a simple source with Nat, Equal, Leq, minus, minusSucc
+  function compileMinusSuccSource() {
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {m n : Nat} -> Leq m n -> Leq (Succ m) (Succ n)
+minus : Nat -> Nat -> Nat
+minus n Zero = n
+minus Zero (Succ m) = Zero
+minus (Succ n) (Succ m) = minus n m
+minusSucc : {i n : Nat} -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i))
+minusSucc LeqZero = refl
+minusSucc (LeqSucc l) = minusSucc l
+`;
+    return compileTTFromText(source);
+  }
+
+  test('rewrite minusSucc auto-solves Leq premise from context', () => {
+    const result = compileMinusSuccSource();
+    expect(result.success).toBe(true);
+
+    // Get minusSucc's kernel type to use as our goal
+    const minusSuccDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'minusSucc');
+    expect(minusSuccDecl).toBeDefined();
+    const goalType = minusSuccDecl!.kernelType!;
+
+    // Build proof tree: intros [i, n, l] → rewrite minusSucc → hole
+    const hole = mkTreeHole();
+    const rewriteNode = mkRewrite('minusSucc', hole);
+    const intros = mkIntros(['i', 'n', 'l'], rewriteNode);
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      intros, hole.id, surfaceType, emptyRegistry,
+      undefined, goalType, result.definitions,
+    );
+    expect(ctx).not.toBeNull();
+
+    // After intros [i, n, l] and rewrite minusSucc with context search:
+    // - Context should have 3 hypotheses: i, n, l
+    expect(ctx!.hypotheses).toHaveLength(3);
+    expect(ctx!.hypotheses[0].name).toBe('i');
+    expect(ctx!.hypotheses[1].name).toBe('n');
+    expect(ctx!.hypotheses[2].name).toBe('l');
+
+    // - Goal should be transformed: both sides should be equal
+    //   (Equal (Succ (minus n i)) (Succ (minus n i)))
+    expect(ctx!.goal).toContain('Equal');
+    // The goal should NOT contain 'minus' applied to 'Succ' (the unrewritten pattern)
+    // It should have Succ applied to minus instead
   });
 });

@@ -6,7 +6,7 @@
  * patterns, and builds MathNode trees.
  */
 
-import { TTerm, TPattern } from '../compiler/surface';
+import { TTerm, TPattern, shiftSurfaceTerm } from '../compiler/surface';
 import { SyntaxRegistry, SyntaxEntry, PatternElement } from './syntax-registry';
 import {
   MathNode, MathRow,
@@ -393,6 +393,19 @@ function collectTPatternVarsInto(p: TPattern, vars: string[]): void {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/** Pick a fresh variable name not already in ctx. Tries base, then base2, base3, ... */
+function chooseFreshName(base: string, ctx: string[]): string {
+  if (!ctx.includes(base)) return base;
+  for (let i = 2; ; i++) {
+    const name = `${base}${i}`;
+    if (!ctx.includes(name)) return name;
+  }
+}
+
+// ============================================================================
 // Capture map: map TTerm args to pattern capture names
 // ============================================================================
 
@@ -425,8 +438,19 @@ function buildCaptureMap(
             const bodyCtx = [arg.name, ...ctx];
             captures.set(slot.bodyCapture, ttermToMathNodes(arg.body, rev, bodyCtx));
           } else {
-            // Not a lambda — can't destructure via this template
-            return null;
+            // Non-lambda arg (e.g., a variable `f`) — eta-expand for rendering:
+            // treat `f` as `\x => f(x)`, using a fresh binder name.
+            // Shift arg's de Bruijn indices up by 1 since we place it under a new binder.
+            const binderName = chooseFreshName('x', ctx);
+            captures.set(slot.binderCapture, [mkSymbol(binderName)]);
+            const shiftedArg = shiftSurfaceTerm(1, arg, 0);
+            const syntheticBody: TTerm = {
+              tag: 'App',
+              fn: shiftedArg,
+              arg: { tag: 'Var', index: 0 },
+            };
+            const bodyCtx = [binderName, ...ctx];
+            captures.set(slot.bodyCapture, ttermToMathNodes(syntheticBody, rev, bodyCtx));
           }
         }
         argIdx++;

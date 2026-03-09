@@ -79,7 +79,8 @@ export interface ApplyNode {
   readonly id: ProofNodeId;
   /** The lemma/function name (e.g., 'congSucc'). */
   readonly name: string;
-  readonly child: ProofNode;
+  /** Sub-proofs for each subgoal created by apply. */
+  readonly children: readonly ProofNode[];
 }
 
 export interface CaseNode {
@@ -155,8 +156,8 @@ export function mkRewrite(name: string, child: ProofNode): RewriteNode {
   return { tag: 'rewrite', id: freshProofId(), name, child };
 }
 
-export function mkApply(name: string, child: ProofNode): ApplyNode {
-  return { tag: 'apply', id: freshProofId(), name, child };
+export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode {
+  return { tag: 'apply', id: freshProofId(), name, children };
 }
 
 export function mkCase(
@@ -190,8 +191,13 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'intros':
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       return findNode(root.child, id);
+    case 'apply':
+      for (const child of root.children) {
+        const found = findNode(child, id);
+        if (found) return found;
+      }
+      return null;
     case 'induction':
       for (const c of root.cases) {
         const found = findNode(c.body, id);
@@ -210,8 +216,13 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'intros':
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       return findCase(root.child, id);
+    case 'apply':
+      for (const child of root.children) {
+        const found = findCase(child, id);
+        if (found) return found;
+      }
+      return null;
     case 'induction':
       for (const c of root.cases) {
         if (c.id === id) return c;
@@ -232,8 +243,9 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'intros':
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       return isCursorInSubtree(node.child, cursorId);
+    case 'apply':
+      return node.children.some(child => isCursorInSubtree(child, cursorId));
     case 'induction':
       return node.cases.some(c =>
         c.id === cursorId || isCursorInSubtree(c.body, cursorId)
@@ -266,8 +278,12 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'intros':
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       linearizeImpl(node.child, depth + 1, out);
+      break;
+    case 'apply':
+      for (const child of node.children) {
+        linearizeImpl(child, depth + 1, out);
+      }
       break;
     case 'induction':
       if (!node.collapsed) {
@@ -295,10 +311,18 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
       return root;
     case 'intros':
     case 'unfold':
-    case 'rewrite':
-    case 'apply': {
+    case 'rewrite': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'apply': {
+      let changed = false;
+      const newChildren = root.children.map(child => {
+        const newChild = replaceNode(child, targetId, replacement);
+        if (newChild !== child) changed = true;
+        return newChild;
+      });
+      return changed ? { ...root, children: newChildren } : root;
     }
     case 'induction': {
       let changed = false;
@@ -324,10 +348,18 @@ export function updateCase(
       return root;
     case 'intros':
     case 'unfold':
-    case 'rewrite':
-    case 'apply': {
+    case 'rewrite': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'apply': {
+      let changed = false;
+      const newChildren = root.children.map(child => {
+        const newChild = updateCase(child, caseId, updater);
+        if (newChild !== child) changed = true;
+        return newChild;
+      });
+      return changed ? { ...root, children: newChildren } : root;
     }
     case 'induction': {
       let changed = false;
@@ -421,15 +453,15 @@ export function applyRewrite(state: ProofTreeState, name: string): ProofTreeStat
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
-/** Apply "apply" at the cursor (must be a hole). Replaces the hole with an apply node + child hole. */
-export function applyApplyTactic(state: ProofTreeState, name: string): ProofTreeState | null {
+/** Apply "apply" at the cursor (must be a hole). Replaces the hole with an apply node + child holes. */
+export function applyApplyTactic(state: ProofTreeState, name: string, numChildren = 1): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
-  const childHole = mkHole();
-  const apply = mkApply(name, childHole);
+  const children = Array.from({ length: Math.max(1, numChildren) }, () => mkHole());
+  const apply = mkApply(name, children);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, apply);
-  return { root: newRoot, cursor: { nodeId: childHole.id } };
+  return { root: newRoot, cursor: { nodeId: children[0].id } };
 }
 
 /** Apply exact at the cursor (must be a hole). */
@@ -675,8 +707,14 @@ function computeContextImpl(
 
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       return computeContextImpl(node.child, cursorId, hypotheses);
+
+    case 'apply':
+      for (const child of node.children) {
+        const result = computeContextImpl(child, cursorId, hypotheses);
+        if (result) return result;
+      }
+      return null;
 
     case 'induction': {
       for (const c of node.cases) {

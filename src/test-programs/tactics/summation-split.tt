@@ -1,0 +1,71 @@
+@test success
+@name "summationSplit: tactic proof with rw chain"
+@import preambles/nat.tt
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+minus : Nat -> Nat -> Nat
+minus a Zero = a
+minus Zero _ = Zero
+minus (Succ a) (Succ b) = minus a b
+
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+leqSuccRight : {i n : Nat} -> Leq i n -> Leq i (Succ n)
+leqSuccRight LeqZero = LeqZero
+leqSuccRight (LeqSucc l) = LeqSucc (leqSuccRight l)
+
+minusSucc : {i n : Nat} -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i))
+minusSucc LeqZero = refl
+minusSucc (LeqSucc l) = minusSucc l
+
+plusMinusCancel : {i n : Nat} -> Leq i n -> Equal (plus i (minus n i)) n
+plusMinusCancel LeqZero = refl
+plusMinusCancel (LeqSucc l) = congSucc (plusMinusCancel l)
+
+plusMinusSucc : {i n : Nat} -> Leq i n -> Equal (plus i (minus (Succ n) i)) (Succ n)
+plusMinusSucc LeqZero = refl
+plusMinusSucc (LeqSucc l) = congSucc (plusMinusSucc l)
+
+sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
+sumStartCount start Zero f = Zero
+sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start k))
+
+sum : (start end : Nat) -> (Nat -> Nat) -> Nat
+sum start end f = sumStartCount start (minus (Succ end) start) f
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Tactic proof of summationSplit
+summationSplit : (i n : Nat) -> Leq i n -> (f : Nat -> Nat) -> Equal (sum i (Succ n) f) (plus (sum i n f) (f (Succ n))) := by
+  intros i n l f
+  -- Step 1: rewrite the count in sumStartCount using minusSucc
+  apply trans
+  exact (cong (\k => sumStartCount i k f) (minusSucc (leqSuccRight l)))
+  -- Step 2: rewrite f(plus i (minus (Succ n) i)) to f(Succ n)
+  apply congPlusRight
+  exact (cong f (plusMinusSucc l))

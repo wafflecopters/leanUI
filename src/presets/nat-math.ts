@@ -30,6 +30,9 @@ one = Succ Zero
 congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
 congSucc refl = refl
 
+succInj : {n m : Nat} -> Equal (Succ n) (Succ m) -> Equal n m
+succInj refl = refl
+
 sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
 sym refl = refl
 
@@ -65,6 +68,10 @@ congPlusLeft p refl = refl
 
 plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
 plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
+
+addLeftCancel : {x a b : Nat} -> Equal (plus x a) (plus x b) -> Equal a b
+addLeftCancel {x:=Zero} {a} {b} eq = eq
+addLeftCancel {x:=Succ x} {a} {b} eq = addLeftCancel {x} {a} {b} (succInj eq)
 
 -- Multiplication properties
 mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero
@@ -166,6 +173,23 @@ plusMinusCancel : {i n : Nat} -> Leq i n -> Equal (plus i (minus n i)) n
 plusMinusCancel LeqZero = refl
 plusMinusCancel (LeqSucc l) = congSucc (plusMinusCancel l)
 
+-- Leq weakening: i <= n implies i <= Succ n
+leqSuccRight : {i n : Nat} -> Leq i n -> Leq i (Succ n)
+leqSuccRight LeqZero = LeqZero
+leqSuccRight (LeqSucc l) = LeqSucc (leqSuccRight l)
+
+-- General congruence (implicits first for tactic compatibility)
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+-- Key helper: plus i (minus (Succ n) i) = Succ n (when Leq i n)
+plusMinusSucc : {i n : Nat} -> Leq i n -> Equal (plus i (minus (Succ n) i)) (Succ n)
+plusMinusSucc LeqZero = refl
+plusMinusSucc (LeqSucc l) = congSucc (plusMinusSucc l)
+
 ------------------------------------------------------------
 -- Summation: sum, sumStartCount, splitting
 ------------------------------------------------------------
@@ -181,6 +205,13 @@ sumStartCountSplit s k f = refl
 sum : (start end : Nat) -> (Nat -> Nat) -> Nat
 sum start end f = sumStartCount start (minus (Succ end) start) f
 
-summationSplit : (i n : Nat) -> Leq i n -> (f : Nat -> Nat) -> Equal (sum i (Succ n) (\\k => (f (k)))) (plus (sum i n (\\k => (f (k)))) (f (plus i (Succ n))))
-summationSplit = ?TODO
+-- Summation splitting: sum from i to (n+1) = sum from i to n + f(n+1)
+summationSplit : (i n : Nat) -> Leq i n -> (f : Nat -> Nat) -> Equal (sum i (Succ n) f) (plus (sum i n f) (f (Succ n))) := by
+  intros i n l f
+  -- Step 1: rewrite the count in sumStartCount using minusSucc
+  apply trans
+  exact (cong (\\k => sumStartCount i k f) (minusSucc (leqSuccRight l)))
+  -- Step 2: rewrite f(plus i (minus (Succ n) i)) to f(Succ n)
+  apply congPlusRight
+  exact (cong f (plusMinusSucc l))
 `;

@@ -24,7 +24,7 @@ import { mkRow } from '../math-editor/types';
 import { renderStaticLatex } from '../math-editor/render';
 import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
 import { TacticEngine, createInitialEngine } from '../tactics/tacticsEngine';
-import { IntrosTactic, ApplyTactic } from '../tactics/tactic';
+import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
 
@@ -38,12 +38,17 @@ export interface TypedHypothesis {
   readonly rawType?: TTerm;  // Raw surface type (for inductive type lookup)
 }
 
+export type ValidationResult =
+  | { readonly status: 'solved' }
+  | { readonly status: 'error'; readonly message: string };
+
 export interface TypedProofContext {
   readonly hypotheses: readonly TypedHypothesis[];
   readonly caseLabel?: string;
   readonly caseLabelLatex?: string;
   readonly inductionVar?: string;
   readonly goal: string;  // LaTeX string from structured math renderer
+  readonly validation?: ValidationResult;
 }
 
 /** Info about an inductive type's constructors (surface-level). */
@@ -881,17 +886,48 @@ function replayProofTree(
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
-        // Apply failed — continue with unchanged engine
-        return replayProofTree(
-          node.child, cursorId, engine,
-          caseLabel, caseLabelLatex, inductionVar,
-        );
+        // Apply failed — search children with unchanged engine
+        for (const child of node.children) {
+          if (child.id === cursorId) {
+            return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+          }
+          const childResult = replayProofTree(
+            child, cursorId, engine,
+            caseLabel, caseLabelLatex, inductionVar,
+          );
+          if (childResult) return childResult;
+        }
+        return null;
       }
 
-      return replayProofTree(
-        node.child, cursorId, result.newEngine!,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      // Apply succeeded — match children to subgoals
+      const newEngine = result.newEngine!;
+      const baseFocus = newEngine.focusIndex;
+
+      for (let i = 0; i < node.children.length; i++) {
+        const child = node.children[i];
+        // Focus engine on the i-th subgoal
+        const childFocusIdx = baseFocus + i;
+        if (childFocusIdx >= newEngine.goals.length) break;
+
+        const childEngine = newEngine.withUpdates({ focusIndex: childFocusIdx });
+
+        if (child.id === cursorId) {
+          const childGoalId = childEngine.getFocusedGoalId();
+          return {
+            engine: childEngine,
+            goalId: childGoalId!,
+            caseLabel, caseLabelLatex, inductionVar,
+          };
+        }
+
+        const childResult = replayProofTree(
+          child, cursorId, childEngine,
+          caseLabel, caseLabelLatex, inductionVar,
+        );
+        if (childResult) return childResult;
+      }
+      return null;
     }
 
     case 'induction': {
@@ -981,6 +1017,42 @@ function replayProofTree(
 }
 
 // ============================================================================
+// Apply subgoal count — used by UI to determine number of children
+// ============================================================================
+
+/**
+ * Compute how many subgoals `apply <name>` creates at the given cursor position.
+ * Returns 1 as fallback if engine replay or tactic application fails.
+ */
+export function computeApplySubgoalCount(
+  root: ProofNode,
+  cursorId: ProofNodeId,
+  kernelType: TTKTerm,
+  definitions: DefinitionsMap,
+  name: string,
+): number {
+  try {
+    const engine = createInitialEngine(kernelType, [], definitions);
+    const replay = replayProofTree(root, cursorId, engine);
+    if (!replay) return 1;
+
+    const goal = replay.engine.metaVars.get(replay.goalId);
+    if (!goal) return 1;
+
+    const tactic = new ApplyTactic({ tag: 'Const', name });
+    const result = tactic.apply(replay.engine, goal, replay.goalId);
+    if (!result.success || !result.newEngine) return 1;
+
+    // Number of new subgoals = new goals count - old goals count + 1
+    // (the focused goal was removed and replaced by N new ones)
+    const numSubgoals = result.newEngine.goals.length - replay.engine.goals.length + 1;
+    return Math.max(1, numSubgoals);
+  } catch {
+    return 1;
+  }
+}
+
+// ============================================================================
 // Core computation
 // ============================================================================
 
@@ -1011,6 +1083,32 @@ export function computeTypedContext(
 
   // Fallback: surface-only rendering (no tactic engine)
   return computeSurfaceOnly(root, cursorId, surfaceType, rev);
+}
+
+/**
+ * Validate an exact node by resolving the expression to a kernel term
+ * and running ExactTactic to type-check it against the goal.
+ */
+function validateExactNode(
+  expr: string,
+  engine: TacticEngine,
+  goalId: string,
+): ValidationResult {
+  const goal = engine.metaVars.get(goalId);
+  if (!goal) return { status: 'error', message: 'No goal' };
+
+  // Resolve expression: try as context variable first, then as constant
+  const varIdx = findVarIndex(expr, goal.ctx);
+  const term: TTKTerm = varIdx !== null
+    ? { tag: 'Var', index: varIdx }
+    : { tag: 'Const', name: expr };
+
+  const tactic = new ExactTactic(term);
+  const result = tactic.apply(engine, goal, goalId);
+  if (result.success) {
+    return { status: 'solved' };
+  }
+  return { status: 'error', message: result.error ?? 'Type mismatch' };
 }
 
 /**
@@ -1064,11 +1162,13 @@ function computeWithTacticEngine(
     goalNameCtx.push(goal.ctx[j].name);
   }
 
-  // For exact nodes, show the expression rather than the goal type
+  // For exact nodes, show the expression and validate it
   const cursorNode = findNodeById(root, cursorId);
   let goalLatex: string;
+  let validation: ValidationResult | undefined;
   if (cursorNode?.tag === 'exact') {
     goalLatex = cursorNode.expr;
+    validation = validateExactNode(cursorNode.expr, replay.engine, replay.goalId);
   } else {
     const surfaceGoalType = kernelTypeToSurface(zonkedGoalType, definitions);
     goalLatex = renderTerm(surfaceGoalType, goalNameCtx, rev);
@@ -1080,6 +1180,7 @@ function computeWithTacticEngine(
     caseLabelLatex: replay.caseLabelLatex,
     inductionVar: replay.inductionVar,
     goal: goalLatex,
+    validation,
   };
 }
 
@@ -1095,8 +1196,13 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'intros':
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       return findNodeById(node.child, id);
+    case 'apply':
+      for (const child of node.children) {
+        const found = findNodeById(child, id);
+        if (found) return found;
+      }
+      return null;
     case 'induction':
       for (const c of node.cases) {
         if (c.id === id) return node; // Case header — return induction node
@@ -1175,9 +1281,16 @@ function walkTreeSurface(
 
     case 'unfold':
     case 'rewrite':
-    case 'apply':
       // No kernel type — can't process, pass through
       return walkTreeSurface(node.child, cursorId, currentType, hypotheses, nameCtx, rev);
+
+    case 'apply':
+      // No kernel type — can't process, pass through each child
+      for (const child of node.children) {
+        const result = walkTreeSurface(child, cursorId, currentType, hypotheses, nameCtx, rev);
+        if (result) return result;
+      }
+      return null;
 
     case 'induction': {
       for (const c of node.cases) {

@@ -26,7 +26,7 @@ import {
   pushState, updateCurrent, undo, redo,
 } from '../proof-tree/proof-tree';
 import {
-  TypedProofContext, computeTypedContext,
+  TypedProofContext, computeTypedContext, computeApplySubgoalCount,
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
@@ -237,6 +237,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
             typedContext={typedContext}
             inductiveMap={inductiveMap}
             registry={registry}
+            kernelType={kernelType}
+            definitions={definitions}
           />
         </div>
 
@@ -254,7 +256,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 function GoalPanel({ context }: { context: TypedProofContext | null }) {
   if (!context) return null;
 
-  const { hypotheses, caseLabel, caseLabelLatex, inductionVar, goal } = context;
+  const { hypotheses, caseLabel, caseLabelLatex, inductionVar, goal, validation } = context;
 
   return (
     <div style={{
@@ -328,21 +330,49 @@ function GoalPanel({ context }: { context: TypedProofContext | null }) {
         }}>
           GOAL
         </div>
-        <div style={{
-          padding: '4px 8px',
-          backgroundColor: '#0d1117',
-          borderRadius: '4px',
-          border: '1px solid #21262d',
-          wordBreak: 'break-word' as const,
-        }}>
-          {goal === '?' ? (
-            <span style={{ color: '#d29922', fontStyle: 'italic' }}>unsolved</span>
-          ) : goal ? (
-            <InlineKaTeX latex={goal} style={{ fontSize: '11px' }} />
-          ) : (
-            <span style={{ color: '#484f58' }}>&mdash;</span>
-          )}
-        </div>
+        {validation?.status === 'solved' ? (
+          <div style={{
+            padding: '4px 8px',
+            backgroundColor: 'rgba(63, 185, 80, 0.1)',
+            borderRadius: '4px',
+            border: '1px solid rgba(63, 185, 80, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}>
+            <span style={{ color: '#3fb950', fontSize: '13px' }}>&#10003;</span>
+            <span style={{ color: '#3fb950', fontSize: '11px', fontWeight: 500 }}>Goal solved</span>
+          </div>
+        ) : (
+          <>
+            <div style={{
+              padding: '4px 8px',
+              backgroundColor: '#0d1117',
+              borderRadius: '4px',
+              border: `1px solid ${validation?.status === 'error' ? 'rgba(248, 81, 73, 0.4)' : '#21262d'}`,
+              wordBreak: 'break-word' as const,
+            }}>
+              {goal === '?' ? (
+                <span style={{ color: '#d29922', fontStyle: 'italic' }}>unsolved</span>
+              ) : goal ? (
+                <InlineKaTeX latex={goal} style={{ fontSize: '11px' }} />
+              ) : (
+                <span style={{ color: '#484f58' }}>&mdash;</span>
+              )}
+            </div>
+            {validation?.status === 'error' && (
+              <div style={{
+                marginTop: '4px',
+                padding: '3px 8px',
+                fontSize: '10px',
+                color: '#f85149',
+                lineHeight: '1.4',
+              }}>
+                {validation.message}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -364,6 +394,8 @@ interface NodeViewProps {
   typedContext?: TypedProofContext | null;
   inductiveMap?: InductiveMap;
   registry?: SyntaxRegistry;
+  kernelType?: TTKTerm;
+  definitions?: DefinitionsMap;
 }
 
 function ProofNodeView(props: NodeViewProps) {
@@ -481,7 +513,7 @@ function TacticRow({
 // HoleView
 // ============================================================================
 
-function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   const isFocused = cursorId === node.id;
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -531,7 +563,15 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       }
       case 'apply': {
         const name = value.trim();
-        if (name) result = applyApplyTactic(state, name);
+        if (name) {
+          let numChildren = 1;
+          if (kernelType && definitions) {
+            numChildren = computeApplySubgoalCount(
+              state.root, state.cursor.nodeId, kernelType, definitions, name,
+            );
+          }
+          result = applyApplyTactic(state, name, numChildren);
+        }
         break;
       }
     }
@@ -628,7 +668,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
 // IntrosView — renders "Given n, m, and f,"
 // ============================================================================
 
-function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   if (node.tag !== 'intros') return null;
   const isFocused = cursorId === node.id;
 
@@ -665,6 +705,8 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
         typedContext={typedContext}
         inductiveMap={inductiveMap}
         registry={registry}
+        kernelType={kernelType}
+        definitions={definitions}
       />
     </>
   );
@@ -674,7 +716,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 // InductionView
 // ============================================================================
 
-function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   if (node.tag !== 'induction') return null;
   const isFocused = cursorId === node.id;
 
@@ -728,6 +770,8 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
           typedContext={typedContext}
           inductiveMap={inductiveMap}
           registry={registry}
+          kernelType={kernelType}
+          definitions={definitions}
         />
       ))}
 
@@ -763,12 +807,14 @@ interface CaseViewProps {
   typedContext?: TypedProofContext | null;
   inductiveMap?: InductiveMap;
   registry?: SyntaxRegistry;
+  kernelType?: TTKTerm;
+  definitions?: DefinitionsMap;
 }
 
 function CaseView({
   caseNode, caseIndex, inductionId, depth,
   cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode,
-  typedContext, inductiveMap, registry,
+  typedContext, inductiveMap, registry, kernelType, definitions,
 }: CaseViewProps) {
   const isFocused = cursorId === caseNode.id;
 
@@ -822,6 +868,8 @@ function CaseView({
           typedContext={typedContext}
           inductiveMap={inductiveMap}
           registry={registry}
+          kernelType={kernelType}
+          definitions={definitions}
         />
       )}
     </>
@@ -832,7 +880,7 @@ function CaseView({
 // UnfoldView — renders "unfold <name>,"
 // ============================================================================
 
-function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   if (node.tag !== 'unfold') return null;
   const isFocused = cursorId === node.id;
 
@@ -860,6 +908,8 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
         typedContext={typedContext}
         inductiveMap={inductiveMap}
         registry={registry}
+        kernelType={kernelType}
+        definitions={definitions}
       />
     </>
   );
@@ -869,7 +919,7 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 // RewriteView — renders "rewrite <name>,"
 // ============================================================================
 
-function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   if (node.tag !== 'rewrite') return null;
   const isFocused = cursorId === node.id;
 
@@ -897,6 +947,8 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
         typedContext={typedContext}
         inductiveMap={inductiveMap}
         registry={registry}
+        kernelType={kernelType}
+        definitions={definitions}
       />
     </>
   );
@@ -906,7 +958,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
 // ApplyView — renders "apply <name>,"
 // ============================================================================
 
-function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry }: NodeViewProps) {
+function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
   if (node.tag !== 'apply') return null;
   const isFocused = cursorId === node.id;
 
@@ -922,19 +974,24 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
       </TacticRow>
-      <ProofNodeView
-        node={node.child}
-        depth={depth + 1}
-        cursorId={cursorId}
-        state={state}
-        tacticMode={tacticMode}
-        onTacticMode={onTacticMode}
-        onPushChange={onPushChange}
-        onClickNode={onClickNode}
-        typedContext={typedContext}
-        inductiveMap={inductiveMap}
-        registry={registry}
-      />
+      {node.children.map((child) => (
+        <ProofNodeView
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          cursorId={cursorId}
+          state={state}
+          tacticMode={tacticMode}
+          onTacticMode={onTacticMode}
+          onPushChange={onPushChange}
+          onClickNode={onClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          kernelType={kernelType}
+          definitions={definitions}
+        />
+      ))}
     </>
   );
 }

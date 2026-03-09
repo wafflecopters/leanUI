@@ -14,7 +14,7 @@
  * where ?newGoal has type goal[lhs := rhs]
  */
 
-import { TTKTerm, TTKPattern } from '../compiler/kernel';
+import { TTKTerm, TTKPattern, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
@@ -64,12 +64,11 @@ export class RewriteTactic implements Tactic {
       //    If the proof type is a Pi (function type like minusSucc : {i n} -> Leq i n -> Equal ...),
       //    instantiate all binders with Meta placeholders to reach the equality at the end.
       let proofTypeForExtraction = proofTypeWhnf;
-      let hasMetas = false;
+      let instantiated: { body: TTKTerm; metaIds: string[]; premiseTypes: Map<string, TTKTerm> } | null = null;
       if (proofTypeWhnf.tag === 'Binder' && proofTypeWhnf.binderKind.tag === 'BPi') {
-        const instantiated = this.instantiatePis(proofTypeWhnf);
+        instantiated = this.instantiatePis(proofTypeWhnf);
         if (instantiated) {
           proofTypeForExtraction = instantiated.body;
-          hasMetas = true;
         }
       }
 
@@ -92,9 +91,16 @@ export class RewriteTactic implements Tactic {
 
       // 4b. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.
-      if (hasMetas) {
+      let allBindings: Map<string, TTKTerm> | null = null;
+      if (instantiated) {
         const bindings = this.findPatternMatch(goal.type, lhs, engine.definitions);
         if (bindings && bindings.size > 0) {
+          // 4c. Search context for unsolved premise metas (like Lean's `assumption`)
+          this.searchContextForPremises(
+            instantiated.metaIds, bindings, instantiated.premiseTypes,
+            goal.ctx, engine.definitions
+          );
+          allBindings = bindings;
           lhs = this.applyMetaBindings(lhs, bindings);
           rhs = this.applyMetaBindings(rhs, bindings);
           typeA = this.applyMetaBindings(typeA, bindings);
@@ -140,10 +146,20 @@ export class RewriteTactic implements Tactic {
       //    replace : {A} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
       //    We need: P lhs (original goal) from P rhs (new goal)
       //    sym h : Equal rhs lhs, so replace P (sym h) : P rhs -> P lhs
+      //
+      //    When the proof is a Pi-type (e.g., minusSucc : {i n} -> Leq i n -> Equal ...),
+      //    build the fully-applied proof: minusSucc arg0 arg1 ... argN
+      let appliedProof: TTKTerm = this.equalityProof;
+      if (instantiated && allBindings) {
+        for (const metaId of instantiated.metaIds) {
+          const arg = allBindings.get(metaId) ?? { tag: 'Meta' as const, id: metaId };
+          appliedProof = { tag: 'App', fn: appliedProof, arg };
+        }
+      }
       const symProof: TTKTerm = {
         tag: 'App',
         fn: { tag: 'Const', name: 'sym' },
-        arg: this.equalityProof
+        arg: appliedProof
       };
 
       // replace motive (sym h) ?newGoal
@@ -227,19 +243,24 @@ export class RewriteTactic implements Tactic {
 
   /**
    * Peel all Pi binders from a type, substituting Meta placeholders for each bound var.
-   * Returns the instantiated body and the list of meta IDs created.
+   * Returns the instantiated body, the list of meta IDs created, and the domain types
+   * for each meta (with prior metas already substituted in).
    * Used when the rewrite proof is a function (e.g., minusSucc : {i n} -> Leq i n -> Equal ...).
    */
-  private instantiatePis(type: TTKTerm): { body: TTKTerm; metaIds: string[] } | null {
+  private instantiatePis(type: TTKTerm): { body: TTKTerm; metaIds: string[]; premiseTypes: Map<string, TTKTerm> } | null {
     const metaIds: string[] = [];
+    const premiseTypes = new Map<string, TTKTerm>();
     let current = type;
     while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
       const metaId = `_rewrite_arg_${metaIds.length}`;
       metaIds.push(metaId);
+      // Record the domain type BEFORE substituting (it already has prior metas substituted
+      // because we processed earlier binders)
+      premiseTypes.set(metaId, current.domain);
       current = subst(0, { tag: 'Meta', id: metaId }, current.body);
     }
     if (metaIds.length === 0) return null;
-    return { body: current, metaIds };
+    return { body: current, metaIds, premiseTypes };
   }
 
   /**
@@ -371,6 +392,40 @@ export class RewriteTactic implements Tactic {
       }
       default:
         return term;
+    }
+  }
+
+  /**
+   * Search the goal context for hypotheses matching unsolved premise types.
+   * After pattern matching solves equality-pattern metas (like {i}, {n}),
+   * premise metas (like Leq i n) may remain unsolved. This method searches
+   * the context for matching hypotheses, similar to Lean's `assumption` tactic.
+   */
+  private searchContextForPremises(
+    metaIds: string[],
+    bindings: Map<string, TTKTerm>,
+    premiseTypes: Map<string, TTKTerm>,
+    goalCtx: TTKContext,
+    definitions?: DefinitionsMap,
+  ): void {
+    for (const metaId of metaIds) {
+      if (bindings.has(metaId)) continue; // already solved by pattern match
+
+      const rawPremiseType = premiseTypes.get(metaId);
+      if (!rawPremiseType) continue;
+
+      // Apply current bindings to get concrete type (e.g., Leq Meta(?_0) Meta(?_1) → Leq i n)
+      const concreteType = this.applyMetaBindings(rawPremiseType, bindings);
+
+      // Search context backwards (most recent first)
+      for (let i = goalCtx.length - 1; i >= 0; i--) {
+        const entryType = goalCtx[i].type;
+        if (this.termEqualModDefs(concreteType, entryType, definitions)) {
+          const debruijnIdx = goalCtx.length - 1 - i;
+          bindings.set(metaId, { tag: 'Var', index: debruijnIdx });
+          break;
+        }
+      }
     }
   }
 
