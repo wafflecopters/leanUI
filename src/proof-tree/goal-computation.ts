@@ -410,6 +410,8 @@ interface ReplayResult {
   caseLabel?: string;
   caseLabelLatex?: string;
   inductionVar?: string;
+  /** Error from a failed tactic (rewrite, unfold, apply) that preceded the cursor */
+  tacticError?: string;
 }
 
 /**
@@ -836,11 +838,15 @@ function replayProofTree(
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
-        // Unfold failed — continue with unchanged engine
-        return replayProofTree(
+        // Unfold failed — continue with unchanged engine, propagate error
+        const childResult = replayProofTree(
           node.child, cursorId, engine,
           caseLabel, caseLabelLatex, inductionVar,
         );
+        if (childResult) {
+          childResult.tacticError = `unfold ${node.name}: ${result.error ?? 'failed'}`;
+        }
+        return childResult;
       }
 
       // Normalize the goal type to reduce beta-redexes from constant unfolding
@@ -867,11 +873,15 @@ function replayProofTree(
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
-        // Rewrite failed — continue with unchanged engine
-        return replayProofTree(
+        // Rewrite failed — continue with unchanged engine, propagate error
+        const childResult = replayProofTree(
           node.child, cursorId, engine,
           caseLabel, caseLabelLatex, inductionVar,
         );
+        if (childResult) {
+          childResult.tacticError = `rewrite ${node.reverse ? '← ' : ''}${node.name}: ${result.error ?? 'failed'}`;
+        }
+        return childResult;
       }
 
       return replayProofTree(
@@ -1206,6 +1216,11 @@ function computeWithTacticEngine(
     validation = validateExactNode(cursorNode.expr, replay.engine, replay.goalId);
   } else {
     goalLatex = renderGoalLatex(replay.engine, goal, definitions, rev);
+  }
+
+  // Surface tactic errors (failed rewrite/unfold) as validation errors
+  if (!validation && replay.tacticError) {
+    validation = { status: 'error', message: replay.tacticError };
   }
 
   return {

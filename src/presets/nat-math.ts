@@ -197,6 +197,12 @@ sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start k
 sumStartCountSplit : (s k : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ k) f) (plus (sumStartCount s k f) (f (plus s k)))
 sumStartCountSplit s k f = refl
 
+sumStartCountZero : (s : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s Zero f) Zero
+sumStartCountZero s f = refl
+
+sumStartCountOne : (s : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ Zero) f) (f s)
+sumStartCountOne s f = cong f (plusZeroRight s)
+
 @syntax \\sum_{$0 = $1}^{$2} $3 @becomes sum $$1 $$2 (\\$0 => $$3)
 sum : (start end : Nat) -> (Nat -> Nat) -> Nat
 sum start end f = sumStartCount start (minus (Succ end) start) f

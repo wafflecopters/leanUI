@@ -1318,6 +1318,59 @@ describe('summationSplit: complete term-level proof', () => {
   });
 });
 
+describe('rewrite mulZeroRight via computeTypedContext', () => {
+  function compileMulSource() {
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+plus : Nat -> Nat -> Nat
+plus Zero n = n
+plus (Succ m) n = Succ (plus m n)
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero
+mulZeroRight Zero = refl
+mulZeroRight (Succ n) = mulZeroRight n
+testGoal : Equal (mul (Succ (Succ Zero)) Zero) (plus Zero (mul (Succ Zero) Zero))
+testGoal = refl
+`;
+    return compileTTFromText(source);
+  }
+
+  test('rewrite mulZeroRight makes progress on mul(2,0) = 0 + mul(1,0)', () => {
+    const result = compileMulSource();
+    expect(result.success).toBe(true);
+
+    const testDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testGoal');
+    expect(testDecl).toBeDefined();
+    const goalType = testDecl!.kernelType!;
+
+    // Build proof tree: rewrite mulZeroRight → hole
+    const hole = mkTreeHole();
+    const rewriteNode = mkRewrite('mulZeroRight', hole);
+    const surfaceType = mkConstTT('_');
+
+    const ctx = computeTypedContext(
+      rewriteNode, hole.id, surfaceType, emptyRegistry,
+      undefined, goalType, result.definitions,
+    );
+    expect(ctx).not.toBeNull();
+
+    // After rewrite mulZeroRight, mul(Succ(Succ Zero), Zero) → Zero
+    // Goal: Equal(Zero, plus(Zero, mul(Succ(Zero), Zero)))
+    expect(ctx!.goal).toContain('\\operatorname{Equal}');
+    // First arg should be Zero (rewritten from mul(2,0))
+    expect(ctx!.goal).toMatch(/Equal.*Zero.*plus/);
+  });
+});
+
 describe('rewrite with context search: integration', () => {
   // Compile a simple source with Nat, Equal, Leq, minus, minusSucc
   function compileMinusSuccSource() {

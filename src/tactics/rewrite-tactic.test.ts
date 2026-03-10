@@ -58,6 +58,9 @@ cong f refl = refl
 sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
 sumStartCount start Zero f = Zero
 sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start k))
+mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero
+mulZeroRight Zero = refl
+mulZeroRight (Succ n) = mulZeroRight n
 sumStartCountOne : (s : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ Zero) f) (f s)
 sumStartCountOne s f = cong f (plusZeroRight s)
 `;
@@ -336,6 +339,41 @@ testRwPrecision = refl
     expect(newGoalStr).toContain('mul');
     // RHS should still contain 'plus' — it should NOT have been replaced
     expect(newGoalStr).toContain('plus');
+  });
+});
+
+describe('RewriteTactic: mulZeroRight on concrete goal', () => {
+  test('rewrite mulZeroRight makes progress on mul(2,0) = 0 + mul(1,0)', () => {
+    const defs = getDefinitions();
+
+    // Goal: Equal (mul (Succ (Succ Zero)) Zero) (plus Zero (mul (Succ Zero) Zero))
+    // mulZeroRight : (n : Nat) -> Equal (mul n Zero) Zero
+    // Should match mul(Succ(Succ Zero), Zero) and replace with Zero
+    const source = BASE_SOURCE + `
+testMulZero : Equal (mul (Succ (Succ Zero)) Zero) (plus Zero (mul (Succ Zero) Zero))
+testMulZero = refl
+`;
+    const compiled = compileTTFromText(source);
+    const decl = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'testMulZero');
+    expect(decl).toBeDefined();
+
+    const engine = createInitialEngine(decl!.kernelType!, [], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'mulZeroRight' });
+    const result = tactic.apply(engine, goal, goalId);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const newGoalStr = termToString(newGoal.type);
+    // After rewriting mul(Succ(Succ Zero), Zero) -> Zero,
+    // goal should become Equal Zero (plus Zero (mul (Succ Zero) Zero))
+    // or if it replaces both occurrences: Equal Zero (plus Zero Zero)
+    expect(newGoalStr).toContain('Equal');
+    expect(newGoalStr).toContain('Zero');
   });
 });
 
