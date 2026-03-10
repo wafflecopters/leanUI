@@ -1869,9 +1869,11 @@ export function TextEditorPage() {
           <div style={{
             flex: 1,
             borderLeft: '1px solid #30363d',
-            overflowY: 'auto' as const,
+            overflow: 'hidden',
             backgroundColor: '#0d1117',
             minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
           }}>
             <WYSIWYGPanel
               declarations={compiledDeclarations}

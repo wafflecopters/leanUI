@@ -23,9 +23,9 @@ export interface ProseItem {
 
 export type ProseItemKind =
   | { tag: 'intro'; latex: string }
-  | { tag: 'unfold'; name: string; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'rewrite'; name: string; reverse?: boolean; equationLatex?: string; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[] }
+  | { tag: 'unfold'; name: string; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'rewrite'; name: string; reverse?: boolean; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
   | { tag: 'inductionHeader'; scrutinee: string }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; error?: string }
@@ -198,8 +198,9 @@ export function generateProofProse(
           const preGoalLatex = si === 0
             ? goalMap.get(steps[0].nodeId)?.goalLatex
             : undefined;
+          const stepError = goalMap.get(step.nodeId)?.tacticError;
           if (step.type === 'unfold') {
-            emit(step.nodeId, depth, { tag: 'unfold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex });
+            emit(step.nodeId, depth, { tag: 'unfold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
           } else {
             emit(step.nodeId, depth, {
               tag: 'rewrite',
@@ -208,6 +209,7 @@ export function generateProofProse(
               equationLatex: step.equationLatex,
               preGoalLatex,
               goalLatex: nextGoalLatex,
+              error: stepError,
             });
           }
         }
@@ -221,7 +223,7 @@ export function generateProofProse(
           const childInfo = goalMap.get(child.id);
           return childInfo?.goalLatex ?? '?';
         });
-        emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex });
+        emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex, error: info?.tacticError });
         // Only increase depth when there are multiple subgoals (actual branching).
         // Single-subgoal apply chains stay at the same depth to avoid progressive indentation.
         const childDepth = node.children.length > 1 ? depth + 1 : depth;

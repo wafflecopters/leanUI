@@ -1275,6 +1275,8 @@ export interface NodeGoalInfo {
   readonly unifiedEquationLatex?: string;
   /** For apply nodes: LaTeX of solved explicit args (e.g., "f" in "cong f"). */
   readonly appliedArgsLatex?: string[];
+  /** Error message when this tactic (unfold/rewrite/apply) failed. */
+  readonly tacticError?: string;
 }
 
 /**
@@ -1354,6 +1356,9 @@ export function replayEntireTree(
             : tacResult.newEngine!;
           walk(node.child, normalized, caseLabelLatex);
         } else {
+          // Tag the node with error info
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
           walk(node.child, eng, caseLabelLatex);
         }
         break;
@@ -1385,6 +1390,10 @@ export function replayEntireTree(
             result.set(node.id, { ...existing, unifiedEquationLatex: `${lhsLatex} = ${rhsLatex}` });
           }
         }
+        if (!tacResult.success) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
+        }
         walk(node.child, tacResult.success ? tacResult.newEngine! : eng, caseLabelLatex);
         break;
       }
@@ -1399,6 +1408,8 @@ export function replayEntireTree(
         const tactic = new ApplyTactic({ tag: 'Const', name: node.name });
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }

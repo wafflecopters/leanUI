@@ -66,7 +66,7 @@ const containerStyle: React.CSSProperties = {
   fontFamily: FONT_UI,
   color: '#c9d1d9',
   lineHeight: '1.6',
-  minHeight: '40px',
+  height: '400px',
 };
 
 const INITIAL_PANE_SIZES = [
@@ -288,6 +288,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 registry={registry}
                 kernelType={kernelType}
                 definitions={definitions}
+                goalMap={goalMap}
               />
             ) : (
               <ProofProseView
@@ -462,6 +463,7 @@ interface NodeViewProps {
   registry?: SyntaxRegistry;
   kernelType?: TTKTerm;
   definitions?: DefinitionsMap;
+  goalMap?: Map<ProofNodeId, NodeGoalInfo>;
 }
 
 function ProofNodeView(props: NodeViewProps) {
@@ -543,20 +545,29 @@ const deleteBtnStyle: React.CSSProperties = {
 // ============================================================================
 
 function TacticRow({
-  nodeId, depth, isFocused, onClickNode, onDelete, children,
+  nodeId, depth, isFocused, onClickNode, onDelete, hasError, children,
 }: {
   nodeId: ProofNodeId;
   depth: number;
   isFocused: boolean;
   onClickNode: (id: ProofNodeId) => void;
   onDelete: () => void;
+  hasError?: boolean;
   children: React.ReactNode;
 }) {
   const [hovered, setHovered] = useState(false);
 
+  const style: React.CSSProperties = hasError
+    ? {
+        ...nodeRowStyle(depth, isFocused),
+        borderLeftColor: '#f85149',
+        backgroundColor: isFocused ? 'rgba(248, 81, 73, 0.12)' : 'rgba(248, 81, 73, 0.06)',
+      }
+    : nodeRowStyle(depth, isFocused);
+
   return (
     <div
-      style={nodeRowStyle(depth, isFocused)}
+      style={style}
       onClick={() => onClickNode(nodeId)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -744,7 +755,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
 // IntrosView — renders "Given n, m, and f,"
 // ============================================================================
 
-function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
+function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
   if (node.tag !== 'intros') return null;
   const isFocused = cursorId === node.id;
 
@@ -783,6 +794,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
         registry={registry}
         kernelType={kernelType}
         definitions={definitions}
+        goalMap={goalMap}
       />
     </>
   );
@@ -792,7 +804,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 // InductionView
 // ============================================================================
 
-function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
+function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
   if (node.tag !== 'induction') return null;
   const isFocused = cursorId === node.id;
 
@@ -848,6 +860,7 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
           registry={registry}
           kernelType={kernelType}
           definitions={definitions}
+          goalMap={goalMap}
         />
       ))}
 
@@ -885,12 +898,13 @@ interface CaseViewProps {
   registry?: SyntaxRegistry;
   kernelType?: TTKTerm;
   definitions?: DefinitionsMap;
+  goalMap?: Map<ProofNodeId, NodeGoalInfo>;
 }
 
 function CaseView({
   caseNode, caseIndex, inductionId, depth,
   cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode,
-  typedContext, inductiveMap, registry, kernelType, definitions,
+  typedContext, inductiveMap, registry, kernelType, definitions, goalMap,
 }: CaseViewProps) {
   const isFocused = cursorId === caseNode.id;
 
@@ -946,6 +960,7 @@ function CaseView({
           registry={registry}
           kernelType={kernelType}
           definitions={definitions}
+          goalMap={goalMap}
         />
       )}
     </>
@@ -956,9 +971,10 @@ function CaseView({
 // UnfoldView — renders "unfold <name>,"
 // ============================================================================
 
-function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
+function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
   if (node.tag !== 'unfold') return null;
   const isFocused = cursorId === node.id;
+  const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
     const result = clearNode(state, node.id);
@@ -967,7 +983,7 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 
   return (
     <>
-      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>unfold </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
@@ -986,6 +1002,7 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
         registry={registry}
         kernelType={kernelType}
         definitions={definitions}
+        goalMap={goalMap}
       />
     </>
   );
@@ -995,9 +1012,10 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 // RewriteView — renders "rewrite <name>,"
 // ============================================================================
 
-function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
+function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
   if (node.tag !== 'rewrite') return null;
   const isFocused = cursorId === node.id;
+  const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
     const result = clearNode(state, node.id);
@@ -1006,7 +1024,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
 
   return (
     <>
-      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>{node.reverse ? 'rewrite\u2190 ' : 'rewrite '}</span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
@@ -1025,6 +1043,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
         registry={registry}
         kernelType={kernelType}
         definitions={definitions}
+        goalMap={goalMap}
       />
     </>
   );
@@ -1034,9 +1053,10 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
 // ApplyView — renders "apply <name>,"
 // ============================================================================
 
-function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions }: NodeViewProps) {
+function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
   if (node.tag !== 'apply') return null;
   const isFocused = cursorId === node.id;
+  const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
     const result = clearNode(state, node.id);
@@ -1045,7 +1065,7 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
 
   return (
     <>
-      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>apply </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
@@ -1066,6 +1086,7 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
           registry={registry}
           kernelType={kernelType}
           definitions={definitions}
+          goalMap={goalMap}
         />
       ))}
     </>
@@ -1125,24 +1146,36 @@ function ProofProseView({
 
   return (
     <div>
-      {items.map((item, idx) => (
-        <ProseItemView
-          key={`${item.nodeId}-${idx}`}
-          item={item}
-          prevItem={idx > 0 ? items[idx - 1] : undefined}
-          onClick={() => onClickNode(item.nodeId)}
-          state={state}
-          tacticMode={tacticMode}
-          onTacticMode={onTacticMode}
-          onPushChange={onPushChange}
-          onClickNode={onClickNode}
-          typedContext={typedContext}
-          inductiveMap={inductiveMap}
-          registry={registry}
-          kernelType={kernelType}
-          definitions={definitions}
-        />
-      ))}
+      {items.map((item, idx) => {
+        // Deletable items: anything except hole, qed, caseHeader
+        const isDeletable = item.kind.tag === 'intro' || item.kind.tag === 'unfold'
+          || item.kind.tag === 'rewrite' || item.kind.tag === 'apply'
+          || item.kind.tag === 'exact' || item.kind.tag === 'inductionHeader';
+        const handleDelete = isDeletable ? () => {
+          const result = clearNode(state, item.nodeId);
+          if (result) onPushChange(result);
+        } : undefined;
+
+        return (
+          <ProseItemView
+            key={`${item.nodeId}-${idx}`}
+            item={item}
+            prevItem={idx > 0 ? items[idx - 1] : undefined}
+            onClick={() => onClickNode(item.nodeId)}
+            onDelete={handleDelete}
+            state={state}
+            tacticMode={tacticMode}
+            onTacticMode={onTacticMode}
+            onPushChange={onPushChange}
+            onClickNode={onClickNode}
+            typedContext={typedContext}
+            inductiveMap={inductiveMap}
+            registry={registry}
+            kernelType={kernelType}
+            definitions={definitions}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -1155,6 +1188,7 @@ interface ProseItemViewProps {
   item: ProseItem;
   prevItem?: ProseItem;
   onClick: () => void;
+  onDelete?: () => void;
   state: ProofTreeState;
   tacticMode: TacticMode;
   onTacticMode: (m: TacticMode) => void;
@@ -1183,22 +1217,31 @@ const eqBlockStyle: React.CSSProperties = {
 };
 
 function ProseItemView({
-  item, prevItem, onClick, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  item, prevItem, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
 }: ProseItemViewProps) {
-  const rowStyle: React.CSSProperties = {
-    ...proseStyle,
-    paddingLeft: `${item.depth * 20 + 12}px`,
-    paddingRight: '12px',
-    paddingTop: '1px',
-    paddingBottom: '1px',
-    backgroundColor: item.isCursor ? 'rgba(88, 166, 255, 0.08)' : 'transparent',
-    borderLeft: item.isCursor ? '2px solid #58a6ff' : '2px solid transparent',
-  };
-
+  const [hovered, setHovered] = useState(false);
   const { kind } = item;
 
-  const prose: React.CSSProperties = { color: '#c9d1d9' };
+  // Check for error on unfold/rewrite/apply items
+  const hasError = (kind.tag === 'unfold' || kind.tag === 'rewrite' || kind.tag === 'apply') && !!kind.error;
+
+  const rowStyle: React.CSSProperties = {
+    ...proseStyle,
+    position: 'relative' as const,
+    paddingLeft: `${item.depth * 20 + 12}px`,
+    paddingRight: '28px',
+    paddingTop: '1px',
+    paddingBottom: '1px',
+    backgroundColor: hasError
+      ? (item.isCursor ? 'rgba(248, 81, 73, 0.12)' : 'rgba(248, 81, 73, 0.06)')
+      : (item.isCursor ? 'rgba(88, 166, 255, 0.08)' : 'transparent'),
+    borderLeft: hasError
+      ? '2px solid #f85149'
+      : (item.isCursor ? '2px solid #58a6ff' : '2px solid transparent'),
+  };
+
+  const prose: React.CSSProperties = { color: hasError ? '#f85149' : '#c9d1d9' };
 
   // Does the previous item already show a goal equation (making the pre-goal redundant)?
   const prevShowedGoal = prevItem && (
@@ -1220,22 +1263,64 @@ function ProseItemView({
     );
   }
 
+  // Error message suffix for failed tactics
+  const errorSuffix = hasError ? (
+    <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>
+      ({(kind as any).error})
+    </span>
+  ) : null;
+
+  // Deletable items get an (x) button on hover
+  const isDeletable = kind.tag === 'intro' || kind.tag === 'unfold' || kind.tag === 'rewrite'
+    || kind.tag === 'apply' || kind.tag === 'exact' || kind.tag === 'inductionHeader';
+
+  const deleteBtn = isDeletable && onDelete && hovered ? (
+    <button
+      onClick={(e) => { e.stopPropagation(); onDelete(); }}
+      style={{
+        position: 'absolute',
+        right: '4px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+        background: 'none',
+        border: 'none',
+        color: '#f85149',
+        cursor: 'pointer',
+        fontSize: '14px',
+        padding: '0 4px',
+        lineHeight: 1,
+        fontFamily: 'inherit',
+      }}
+      title="Delete this step"
+    >
+      &times;
+    </button>
+  ) : null;
+
+  const rowHandlers = {
+    onClick,
+    onMouseEnter: () => setHovered(true),
+    onMouseLeave: () => setHovered(false),
+  };
+
   switch (kind.tag) {
     case 'intro':
       return (
-        <div style={rowStyle} onClick={onClick}>
+        <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>Let{' '}</span>
           <InlineKaTeX latex={kind.latex} style={{ fontSize: '13px' }} />
           <span style={prose}>.</span>
+          {deleteBtn}
         </div>
       );
 
     case 'unfold':
       return (
-        <div style={rowStyle} onClick={onClick}>
+        <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.preGoalLatex)}
           <span style={prose}>which is true, by definition of{' '}</span>
           <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+          {errorSuffix}
           {kind.goalLatex ? (
             <>
               <span style={prose}>, if</span>
@@ -1246,13 +1331,14 @@ function ProseItemView({
           ) : (
             <span style={prose}>.</span>
           )}
+          {deleteBtn}
         </div>
       );
 
     case 'rewrite': {
       const arrow = kind.reverse ? ' (\u2190)' : '';
       return (
-        <div style={rowStyle} onClick={onClick}>
+        <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.preGoalLatex)}
           <span style={prose}>which is true, because{' '}</span>
           {kind.equationLatex ? (
@@ -1269,6 +1355,7 @@ function ProseItemView({
               {arrow && <span style={prose}>{arrow}</span>}
             </>
           )}
+          {errorSuffix}
           {kind.goalLatex ? (
             <>
               <span style={prose}>, if</span>
@@ -1279,6 +1366,7 @@ function ProseItemView({
           ) : (
             <span style={prose}>.</span>
           )}
+          {deleteBtn}
         </div>
       );
     }
@@ -1288,7 +1376,7 @@ function ProseItemView({
       const appliedArgs = kind.appliedArgsLatex ?? [];
       if (subgoals.length <= 1) {
         return (
-          <div style={rowStyle} onClick={onClick}>
+          <div style={rowStyle} {...rowHandlers}>
             {mustShowPrefix(kind.preGoalLatex)}
             <span style={prose}>which is true, by{' '}</span>
             <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
@@ -1303,6 +1391,7 @@ function ProseItemView({
                 ))}
               </>
             )}
+            {errorSuffix}
             {subgoals[0] ? (
               <>
                 <span style={prose}>, if</span>
@@ -1313,12 +1402,13 @@ function ProseItemView({
             ) : (
               <span style={prose}>.</span>
             )}
+            {deleteBtn}
           </div>
         );
       }
       // Multiple subgoals
       return (
-        <div style={rowStyle} onClick={onClick}>
+        <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.preGoalLatex)}
           <span style={prose}>which is true, by{' '}</span>
           <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
@@ -1333,6 +1423,7 @@ function ProseItemView({
               ))}
             </>
           )}
+          {errorSuffix}
           <span style={prose}>, if:</span>
           {subgoals.map((sg, i) => (
             <div key={i} style={{ paddingTop: '2px', textAlign: 'center' }}>
@@ -1340,22 +1431,24 @@ function ProseItemView({
               <InlineKaTeX latex={sg} displayMode />
             </div>
           ))}
+          {deleteBtn}
         </div>
       );
     }
 
     case 'inductionHeader':
       return (
-        <div style={rowStyle} onClick={onClick}>
+        <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>We proceed by induction on{' '}</span>
           <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
           <span style={prose}>.</span>
+          {deleteBtn}
         </div>
       );
 
     case 'caseHeader':
       return (
-        <div style={{ ...rowStyle, fontWeight: 600 }} onClick={onClick}>
+        <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
           <span style={{ color: kind.isBaseCase ? '#d2a8ff' : '#79c0ff' }}>
             {kind.isBaseCase ? 'Base case' : 'Inductive step'}
           </span>
@@ -1367,7 +1460,7 @@ function ProseItemView({
 
     case 'exact':
       return (
-        <div style={rowStyle} onClick={onClick}>
+        <div style={rowStyle} {...rowHandlers}>
           {kind.solved ? (
             <>
               <span style={prose}>The result follows from{' '}</span>
@@ -1387,12 +1480,13 @@ function ProseItemView({
               <span style={prose}>.</span>
             </>
           )}
+          {deleteBtn}
         </div>
       );
 
     case 'qed':
       return (
-        <div style={{ ...rowStyle, paddingTop: '2px' }} onClick={onClick}>
+        <div style={{ ...rowStyle, paddingTop: '2px' }} {...rowHandlers}>
           <span style={{ color: '#3fb950', fontSize: '14px' }}>&#8718;</span>
         </div>
       );
@@ -1400,7 +1494,7 @@ function ProseItemView({
     case 'hole': {
       if (!item.isCursor) {
         return (
-          <div style={rowStyle} onClick={onClick}>
+          <div style={rowStyle} {...rowHandlers}>
             <span style={{ color: '#d29922', fontStyle: 'italic' }}>?</span>
           </div>
         );

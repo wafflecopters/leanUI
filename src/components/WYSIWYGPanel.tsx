@@ -146,20 +146,26 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
 
   return (
     <div style={{
-      padding: '16px',
+      height: '100%',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
       color: '#c9d1d9',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
     }}>
       <h3 style={{
-        margin: '0 0 16px 0',
+        margin: 0,
+        padding: '16px 16px 8px',
         color: '#e6edf3',
         fontSize: '14px',
         fontWeight: 600,
         letterSpacing: '0.02em',
+        flexShrink: 0,
       }}>
         WYSIWYG Editor
       </h3>
 
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px 16px' }}>
       {declarations.map((decl, i) => (
         <div key={i} style={{
           marginBottom: '12px',
@@ -236,6 +242,7 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
           </div>
         </div>
       ))}
+      </div>
     </div>
   );
 }
