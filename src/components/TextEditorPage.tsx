@@ -821,17 +821,17 @@ function BlockRenderer({ block, renderOptions }: { block: CompiledBlock; renderO
                 {decl.checkSuccess ? (
                   <span style={{ marginLeft: 'auto', color: '#3fb950', fontSize: '12px' }}>OK</span>
                 ) : (() => {
-                    const errors = decl.checkErrors?.filter(e => e.severity === 'error').length ?? 0;
-                    const warnings = decl.checkErrors?.filter(e => e.severity === 'warning').length ?? 0;
-                    return (
-                      <span style={{ marginLeft: 'auto', fontSize: '12px' }}>
-                        {errors > 0 ? <span style={{ color: '#f85149' }}>{errors} error{errors !== 1 ? 's' : ''}</span>
-                         : <span style={{ color: '#f85149' }}>FAIL</span>}
-                        {errors > 0 && warnings > 0 && <span style={{ color: '#8b949e' }}>, </span>}
-                        {warnings > 0 && <span style={{ color: '#d29922' }}>{warnings} warning{warnings !== 1 ? 's' : ''}</span>}
-                      </span>
-                    );
-                  })()}
+                  const errors = decl.checkErrors?.filter(e => e.severity === 'error').length ?? 0;
+                  const warnings = decl.checkErrors?.filter(e => e.severity === 'warning').length ?? 0;
+                  return (
+                    <span style={{ marginLeft: 'auto', fontSize: '12px' }}>
+                      {errors > 0 ? <span style={{ color: '#f85149' }}>{errors} error{errors !== 1 ? 's' : ''}</span>
+                        : <span style={{ color: '#f85149' }}>FAIL</span>}
+                      {errors > 0 && warnings > 0 && <span style={{ color: '#8b949e' }}>, </span>}
+                      {warnings > 0 && <span style={{ color: '#d29922' }}>{warnings} warning{warnings !== 1 ? 's' : ''}</span>}
+                    </span>
+                  );
+                })()}
               </>
             }
             body={
@@ -1005,7 +1005,7 @@ export function TextEditorPage() {
     for (const block of compileResult.blocks) {
       for (const d of block.declarations) {
         // TODO: temporary filter — only show specific terms for WYSIWYG development
-        if (!d.isWithAuxiliary && (d.name === 'limitAdd' || d.name === 'summationSplit' || d.name === 'triangleSum')) {
+        if (!d.isWithAuxiliary && (d.name === 'limitAdd' || d.name === 'triangleSum')) {
           decls.push(d);
         }
       }
@@ -1621,55 +1621,55 @@ export function TextEditorPage() {
             {showLatex ? 'Hide LaTeX' : 'Show LaTeX'}
           </button>
           <div style={{ position: 'relative' as const }}>
-          <button
-            onClick={() => setPresetMenuOpen(!presetMenuOpen)}
-            style={{
-              background: '#21262d',
-              color: '#c9d1d9',
-              border: '1px solid #30363d',
-              borderRadius: '6px',
-              padding: '6px 12px',
-              fontSize: '13px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap' as const,
-            }}
-          >
-            Load Preset ▾
-          </button>
-          {presetMenuOpen && (
-            <div style={{
-              position: 'absolute' as const,
-              right: 0,
-              top: '100%',
-              marginTop: '4px',
-              background: '#161b22',
-              border: '1px solid #30363d',
-              borderRadius: '6px',
-              overflow: 'hidden',
-              zIndex: 100,
-              minWidth: '180px',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-            }}>
-              {PRESETS.map((preset) => (
-                <div
-                  key={preset.name}
-                  onClick={() => loadPreset(preset.name)}
-                  style={{
-                    padding: '8px 16px',
-                    cursor: 'pointer',
-                    fontSize: '13px',
-                    color: '#c9d1d9',
-                    borderBottom: '1px solid #21262d',
-                  }}
-                  onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#30363d'; }}
-                  onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
-                >
-                  {preset.name}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+            <button
+              onClick={() => setPresetMenuOpen(!presetMenuOpen)}
+              style={{
+                background: '#21262d',
+                color: '#c9d1d9',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                padding: '6px 12px',
+                fontSize: '13px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap' as const,
+              }}
+            >
+              Load Preset ▾
+            </button>
+            {presetMenuOpen && (
+              <div style={{
+                position: 'absolute' as const,
+                right: 0,
+                top: '100%',
+                marginTop: '4px',
+                background: '#161b22',
+                border: '1px solid #30363d',
+                borderRadius: '6px',
+                overflow: 'hidden',
+                zIndex: 100,
+                minWidth: '180px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+              }}>
+                {PRESETS.map((preset) => (
+                  <div
+                    key={preset.name}
+                    onClick={() => loadPreset(preset.name)}
+                    style={{
+                      padding: '8px 16px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      color: '#c9d1d9',
+                      borderBottom: '1px solid #21262d',
+                    }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#30363d'; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                  >
+                    {preset.name}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1685,170 +1685,170 @@ export function TextEditorPage() {
           overflow: 'hidden',
           minWidth: 0,
         }}>
-        {/* Source Code Editor - Top Half */}
-        <div style={styles.editorSection}>
-          <div style={styles.sectionHeader}>Source Code</div>
-          <div style={styles.editorWrapper}>
-            <Editor
-              height="100%"
-              defaultLanguage="tt"
-              value={code}
-              onChange={handleEditorChange}
-              onMount={handleEditorDidMount}
-              options={{
-                minimap: { enabled: false },
-                fontSize: 13,
-                lineNumbers: 'on',
-                scrollBeyondLastLine: false,
-                automaticLayout: true,
-                wordWrap: 'off',
-                folding: true,
-                renderWhitespace: 'selection',
-                fixedOverflowWidgets: true,
-                'semanticHighlighting.enabled': true,
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Type Info Panel */}
-        <div style={styles.typeInfoPanel}>
-          {typeInfoAtCursor ? (
-            <>
-              {/* Case 1: Term type info */}
-              {typeInfoAtCursor.kind === 'term' && (
-                <>
-                  <div>
-                    <span style={styles.typeInfoValue}>
-                      {typeInfoAtCursor.expression
-                        ? `${typeInfoAtCursor.expression} : ${typeInfoAtCursor.info.prettyType}`
-                        : typeInfoAtCursor.info.prettyType}
-                    </span>
-                  </div>
-                  {typeInfoAtCursor.info.expectedType &&
-                    typeInfoAtCursor.info.surfacePath.includes('clauses[') && (
-                      <div>
-                        <span style={styles.typeInfoLabel}>Expected </span>
-                        <span style={styles.typeInfoValue}>{typeInfoAtCursor.info.expectedType}</span>
-                      </div>
-                    )}
-                  {typeInfoAtCursor.info.context.length > 0 && (
-                    <div>
-                      <div style={styles.typeInfoLabel}>Context</div>
-                      {typeInfoAtCursor.info.context.map((entry: { name: string; type: string }, i: number) => (
-                        <div key={i} style={styles.typeInfoContext}>
-                          <span style={styles.typeInfoContextName}>{entry.name}</span>
-                          <span style={{ color: '#8b949e' }}> : </span>
-                          <span style={styles.typeInfoContextType}>{entry.type}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {/* Case 2: Tactic goal states */}
-              {typeInfoAtCursor.kind === 'tactic' && (
-                <>
-                  {typeInfoAtCursor.goalStates.length === 0 ? (
-                    <div style={styles.typeInfoValue}>No goals (proof complete)</div>
-                  ) : (
-                    typeInfoAtCursor.goalStates.map((goal: GoalState, idx: number) => {
-                      // Extract context names for better pretty printing
-                      const contextNames = goal.hypotheses.map(h => h.name);
-
-                      return (
-                        <div key={goal.id} style={{ marginBottom: idx < typeInfoAtCursor.goalStates.length - 1 ? '12px' : '0' }}>
-                          {/* Goal header */}
-                          {(typeInfoAtCursor.goalStates.length > 1 || goal.caseTag) && (
-                            <div style={styles.typeInfoLabel}>
-                              {typeInfoAtCursor.goalStates.length > 1 && `Goal ${idx + 1}/${typeInfoAtCursor.goalStates.length}`}
-                              {typeInfoAtCursor.goalStates.length > 1 && goal.caseTag && ' '}
-                              {goal.caseTag && `(${goal.caseTag})`}
-                            </div>
-                          )}
-
-                          {/* Hypotheses (what's in scope) */}
-                          {goal.hypotheses.length > 0 && (
-                            <div style={{ marginTop: (typeInfoAtCursor.goalStates.length > 1 || goal.caseTag) ? '8px' : '0' }}>
-                              <div style={styles.typeInfoLabel}>Hypotheses</div>
-                              {goal.hypotheses.map((hyp, i) => (
-                                <div key={i} style={styles.typeInfoContext}>
-                                  <span style={styles.typeInfoContextName}>{hyp.name}</span>
-                                  <span style={{ color: '#8b949e' }}> : </span>
-                                  <span style={styles.typeInfoContextType}>
-                                    {prettyPrintTTK(hyp.type, contextNames.slice(0, i), new Map())}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-
-                          {/* Target (goal to prove) */}
-                          <div style={{ marginTop: '8px' }}>
-                            <div style={styles.typeInfoLabel}>Goal</div>
-                            <span style={styles.typeInfoValue}>
-                              {prettyPrintTTK(goal.target, contextNames, new Map())}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </>
-              )}
-            </>
-          ) : (
-            <span style={{ color: '#484f58' }}>Move cursor over an expression or tactic to see info</span>
-          )}
-        </div>
-
-        {/* Compile Results - Bottom Half */}
-        <div style={styles.resultsSection}>
-          <div style={styles.sectionHeader}>
-            <span>
-              Compile Results
-              {!compileResult.success && (
-                <span style={{ marginLeft: '8px', color: '#f85149' }}>
-                  ({compileResult.totalParseErrors + compileResult.totalNameErrors + compileResult.totalCheckErrors} errors)
-                </span>
-              )}
-            </span>
-            <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', fontSize: '11px', color: '#8b949e' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={showNamedArgsWithLabels}
-                  onChange={(e) => setShowNamedArgsWithLabels(e.target.checked)}
-                  style={{ cursor: 'pointer' }}
-                />
-                Show named args as {'{A:=...}'}
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={showNamedParamsWithBraces}
-                  onChange={(e) => setShowNamedParamsWithBraces(e.target.checked)}
-                  style={{ cursor: 'pointer' }}
-                />
-                Show named params as {'{A : Type}'}
-              </label>
-            </span>
-          </div>
-          <div style={styles.resultsContent}>
-            {compileResult.blocks.map((block, i) => (
-              <BlockRenderer
-                key={i}
-                block={block}
-                renderOptions={{
-                  showNamedArgsWithLabels,
-                  showNamedParamsWithBraces,
-                  definitions: compileResult.definitions,
+          {/* Source Code Editor - Top Half */}
+          <div style={styles.editorSection}>
+            <div style={styles.sectionHeader}>Source Code</div>
+            <div style={styles.editorWrapper}>
+              <Editor
+                height="100%"
+                defaultLanguage="tt"
+                value={code}
+                onChange={handleEditorChange}
+                onMount={handleEditorDidMount}
+                options={{
+                  minimap: { enabled: false },
+                  fontSize: 13,
+                  lineNumbers: 'on',
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true,
+                  wordWrap: 'off',
+                  folding: true,
+                  renderWhitespace: 'selection',
+                  fixedOverflowWidgets: true,
+                  'semanticHighlighting.enabled': true,
                 }}
               />
-            ))}
+            </div>
           </div>
-        </div>
+
+          {/* Type Info Panel */}
+          <div style={styles.typeInfoPanel}>
+            {typeInfoAtCursor ? (
+              <>
+                {/* Case 1: Term type info */}
+                {typeInfoAtCursor.kind === 'term' && (
+                  <>
+                    <div>
+                      <span style={styles.typeInfoValue}>
+                        {typeInfoAtCursor.expression
+                          ? `${typeInfoAtCursor.expression} : ${typeInfoAtCursor.info.prettyType}`
+                          : typeInfoAtCursor.info.prettyType}
+                      </span>
+                    </div>
+                    {typeInfoAtCursor.info.expectedType &&
+                      typeInfoAtCursor.info.surfacePath.includes('clauses[') && (
+                        <div>
+                          <span style={styles.typeInfoLabel}>Expected </span>
+                          <span style={styles.typeInfoValue}>{typeInfoAtCursor.info.expectedType}</span>
+                        </div>
+                      )}
+                    {typeInfoAtCursor.info.context.length > 0 && (
+                      <div>
+                        <div style={styles.typeInfoLabel}>Context</div>
+                        {typeInfoAtCursor.info.context.map((entry: { name: string; type: string }, i: number) => (
+                          <div key={i} style={styles.typeInfoContext}>
+                            <span style={styles.typeInfoContextName}>{entry.name}</span>
+                            <span style={{ color: '#8b949e' }}> : </span>
+                            <span style={styles.typeInfoContextType}>{entry.type}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Case 2: Tactic goal states */}
+                {typeInfoAtCursor.kind === 'tactic' && (
+                  <>
+                    {typeInfoAtCursor.goalStates.length === 0 ? (
+                      <div style={styles.typeInfoValue}>No goals (proof complete)</div>
+                    ) : (
+                      typeInfoAtCursor.goalStates.map((goal: GoalState, idx: number) => {
+                        // Extract context names for better pretty printing
+                        const contextNames = goal.hypotheses.map(h => h.name);
+
+                        return (
+                          <div key={goal.id} style={{ marginBottom: idx < typeInfoAtCursor.goalStates.length - 1 ? '12px' : '0' }}>
+                            {/* Goal header */}
+                            {(typeInfoAtCursor.goalStates.length > 1 || goal.caseTag) && (
+                              <div style={styles.typeInfoLabel}>
+                                {typeInfoAtCursor.goalStates.length > 1 && `Goal ${idx + 1}/${typeInfoAtCursor.goalStates.length}`}
+                                {typeInfoAtCursor.goalStates.length > 1 && goal.caseTag && ' '}
+                                {goal.caseTag && `(${goal.caseTag})`}
+                              </div>
+                            )}
+
+                            {/* Hypotheses (what's in scope) */}
+                            {goal.hypotheses.length > 0 && (
+                              <div style={{ marginTop: (typeInfoAtCursor.goalStates.length > 1 || goal.caseTag) ? '8px' : '0' }}>
+                                <div style={styles.typeInfoLabel}>Hypotheses</div>
+                                {goal.hypotheses.map((hyp, i) => (
+                                  <div key={i} style={styles.typeInfoContext}>
+                                    <span style={styles.typeInfoContextName}>{hyp.name}</span>
+                                    <span style={{ color: '#8b949e' }}> : </span>
+                                    <span style={styles.typeInfoContextType}>
+                                      {prettyPrintTTK(hyp.type, contextNames.slice(0, i), new Map())}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Target (goal to prove) */}
+                            <div style={{ marginTop: '8px' }}>
+                              <div style={styles.typeInfoLabel}>Goal</div>
+                              <span style={styles.typeInfoValue}>
+                                {prettyPrintTTK(goal.target, contextNames, new Map())}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <span style={{ color: '#484f58' }}>Move cursor over an expression or tactic to see info</span>
+            )}
+          </div>
+
+          {/* Compile Results - Bottom Half */}
+          <div style={styles.resultsSection}>
+            <div style={styles.sectionHeader}>
+              <span>
+                Compile Results
+                {!compileResult.success && (
+                  <span style={{ marginLeft: '8px', color: '#f85149' }}>
+                    ({compileResult.totalParseErrors + compileResult.totalNameErrors + compileResult.totalCheckErrors} errors)
+                  </span>
+                )}
+              </span>
+              <span style={{ marginLeft: 'auto', display: 'flex', gap: '16px', fontSize: '11px', color: '#8b949e' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={showNamedArgsWithLabels}
+                    onChange={(e) => setShowNamedArgsWithLabels(e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  Show named args as {'{A:=...}'}
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={showNamedParamsWithBraces}
+                    onChange={(e) => setShowNamedParamsWithBraces(e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  Show named params as {'{A : Type}'}
+                </label>
+              </span>
+            </div>
+            <div style={styles.resultsContent}>
+              {compileResult.blocks.map((block, i) => (
+                <BlockRenderer
+                  key={i}
+                  block={block}
+                  renderOptions={{
+                    showNamedArgsWithLabels,
+                    showNamedParamsWithBraces,
+                    definitions: compileResult.definitions,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
         </div>{/* end left side */}
 
         {/* Right side: LaTeX panel */}

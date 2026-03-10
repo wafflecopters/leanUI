@@ -165,9 +165,16 @@ minusSucc : {i n : Nat} -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i)
 minusSucc LeqZero = refl
 minusSucc (LeqSucc l) = minusSucc l
 
+minusEqSuccMinusSucc : {a b : Nat} -> Equal (minus a b) (minus (Succ a) (Succ b))
+minusEqSuccMinusSucc {a} {b} = refl
+
 plusMinusCancel : {i n : Nat} -> Leq i n -> Equal (plus i (minus n i)) n
 plusMinusCancel LeqZero = refl
 plusMinusCancel (LeqSucc l) = congSucc (plusMinusCancel l)
+
+minusSelf : {n : Nat} -> Equal (minus n n) Zero
+minusSelf {n:=Zero} = refl
+minusSelf {n:=Succ n} = trans (sym minusEqSuccMinusSucc) minusSelf
 
 -- Leq weakening: i <= n implies i <= Succ n
 leqSuccRight : {i n : Nat} -> Leq i n -> Leq i (Succ n)
@@ -216,6 +223,14 @@ summationSplit : (i n : Nat) -> Leq i n -> (f : Nat -> Nat) -> Equal (sum i (Suc
   -- Step 2: rewrite f(plus i (minus (Succ n) i)) to f(Succ n)
   apply congPlusRight
   exact (cong f (plusMinusSucc l))
+
+summationBase : (i : Nat) -> (f : Nat -> Nat) -> Equal (sum i i f) (f i) := by
+  intros i f
+  unfold sum
+  rewrite minusSucc
+  rewrite minusSelf
+  rewrite sumStartCountOne
+  exact refl
 
 @syntax 2
 two : Nat
