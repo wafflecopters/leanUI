@@ -13,6 +13,7 @@ import { createInitialEngine, TacticEngine } from './tacticsEngine';
 import { IntroTactic, IntrosTactic, resetMetaCounter } from './tactic';
 import { RewriteTactic } from './rewrite-tactic';
 import { DefinitionsMap } from '../compiler/term';
+import { betaNormalize } from '../compiler/subst';
 
 beforeEach(() => {
   resetMetaCounter();
@@ -49,6 +50,16 @@ minusSucc (LeqSucc l) = minusSucc l
 plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
 plusZeroRight Zero = refl
 plusZeroRight (Succ n) = congSucc (plusZeroRight n)
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
+sumStartCount start Zero f = Zero
+sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start k))
+sumStartCountOne : (s : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ Zero) f) (f s)
+sumStartCountOne s f = cong f (plusZeroRight s)
 `;
 
 // Compile once and reuse
@@ -275,6 +286,152 @@ testDoubleLeq l1 l2 = minusSucc l2
     const proofStr = termToString(solvedGoal!.solution!);
     // l2 is at de Bruijn index 0 (most recent in context of length 4)
     expect(proofStr).toContain('#0');
+  });
+});
+
+describe('RewriteTactic: substitution precision (no over-matching)', () => {
+  test('rewrite sumStartCountOne only replaces sumStartCount, not the surrounding mul', () => {
+    const defs = getDefinitions();
+
+    // Goal: Equal (mul (Succ (Succ Zero)) (sumStartCount Zero (Succ Zero) (\i => i)))
+    //             (plus Zero (mul (Succ Zero) Zero))
+    // After rewrite sumStartCountOne, sumStartCount(0, 1, \i=>i) -> (\i=>i)(0)
+    // Expected new goal: Equal (mul (Succ (Succ Zero)) ((\i=>i)(Zero))) (plus Zero (mul (Succ Zero) Zero))
+    // The mul wrapper and the RHS should NOT be replaced, even though they're
+    // definitionally equal to the LHS after WHNF reduction.
+    const source = BASE_SOURCE + `
+testRwPrecision : Equal (mul (Succ (Succ Zero)) (sumStartCount Zero (Succ Zero) (\\i => i))) (plus Zero (mul (Succ Zero) Zero))
+testRwPrecision = refl
+`;
+    const compiled = compileTTFromText(source);
+    const decl = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'testRwPrecision');
+    expect(decl).toBeDefined();
+    const goalType = decl!.kernelType!;
+
+    // No intros needed — goal is already the equation
+    const engine = createInitialEngine(goalType, [], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // Verify the goal has the expected structure
+    const goalStr = termToString(goal.type);
+    expect(goalStr).toContain('mul');
+    expect(goalStr).toContain('sumStartCount');
+
+    // Apply rewrite sumStartCountOne
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'sumStartCountOne' });
+    const result = tactic.apply(engine, goal, goalId);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const newGoalStr = termToString(newGoal.type);
+
+    // The rewritten goal should still contain 'mul' — the rewrite should only
+    // replace the sumStartCount subterm, not the entire mul expression.
+    // BUG: termEqualModDefs uses WHNF comparison, so mul(2, sumStartCount(0,1,id))
+    // and sumStartCount(0,1,id) both WHNF to Zero, causing the entire mul expr
+    // to be replaced too.
+    expect(newGoalStr).toContain('mul');
+    // RHS should still contain 'plus' — it should NOT have been replaced
+    expect(newGoalStr).toContain('plus');
+  });
+});
+
+describe('betaNormalize: clean up lambda applications in goals', () => {
+  test('betaNormalize reduces (\\i => i)(Zero) to Zero', () => {
+
+    // (\i => i)(Zero) = App(Binder(BLam, "i", Nat, Var(0)), Const("Zero"))
+    const term: TTKTerm = {
+      tag: 'App',
+      fn: {
+        tag: 'Binder',
+        binderKind: { tag: 'BLam' },
+        name: 'i',
+        domain: { tag: 'Const', name: 'Nat' },
+        body: { tag: 'Var', index: 0 }
+      },
+      arg: { tag: 'Const', name: 'Zero' }
+    };
+    const result = betaNormalize(term);
+    expect(result).toEqual({ tag: 'Const', name: 'Zero' });
+  });
+
+  test('betaNormalize reduces nested: mul(2, (\\i => i)(Zero)) keeps mul', () => {
+
+    // mul (Succ (Succ Zero)) ((\i => i) Zero)
+    const lambdaApp: TTKTerm = {
+      tag: 'App',
+      fn: {
+        tag: 'Binder',
+        binderKind: { tag: 'BLam' },
+        name: 'i',
+        domain: { tag: 'Const', name: 'Nat' },
+        body: { tag: 'Var', index: 0 }
+      },
+      arg: { tag: 'Const', name: 'Zero' }
+    };
+    const term: TTKTerm = {
+      tag: 'App',
+      fn: {
+        tag: 'App',
+        fn: { tag: 'Const', name: 'mul' },
+        arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } }
+      },
+      arg: lambdaApp
+    };
+    const result = betaNormalize(term);
+    const resultStr = termToString(result);
+    // Should still have mul — only the lambda app was reduced
+    expect(resultStr).toContain('mul');
+    // The (\i => i)(Zero) part should be reduced to just Zero
+    expect(resultStr).not.toContain('\\');
+    expect(resultStr).toBe('((mul (Succ (Succ Zero))) Zero)');
+  });
+
+  test('betaNormalize leaves non-redex terms unchanged', () => {
+
+    const term: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'Const', name: 'Succ' },
+      arg: { tag: 'Const', name: 'Zero' }
+    };
+    const result = betaNormalize(term);
+    // Should be reference-identical (no change)
+    expect(result).toBe(term);
+  });
+
+  test('rewrite sumStartCountOne produces beta-normalized goal', () => {
+    const defs = getDefinitions();
+    const source = BASE_SOURCE + `
+testRwBeta : Equal (mul (Succ (Succ Zero)) (sumStartCount Zero (Succ Zero) (\\i => i))) (plus Zero (mul (Succ Zero) Zero))
+testRwBeta = refl
+`;
+    const compiled = compileTTFromText(source);
+    const decl = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'testRwBeta');
+    expect(decl).toBeDefined();
+
+    const engine = createInitialEngine(decl!.kernelType!, [], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'sumStartCountOne' });
+    const result = tactic.apply(engine, goal, goalId);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // Beta-normalize the rewritten goal
+
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const normalized = betaNormalize(newGoal.type);
+    const normalizedStr = termToString(normalized);
+
+    // After beta-normalization, (\i => i)(Zero) should be just Zero
+    // So the goal should be: Equal (mul (Succ (Succ Zero)) Zero) (plus Zero (mul (Succ Zero) Zero))
+    expect(normalizedStr).toContain('mul');
+    expect(normalizedStr).toContain('plus');
+    expect(normalizedStr).not.toContain('\\'); // no lambdas should remain
   });
 });
 

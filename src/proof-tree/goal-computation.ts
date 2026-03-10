@@ -17,7 +17,7 @@ import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleT
 import { TTKTerm, TTKPattern } from '../compiler/kernel';
 import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { whnf } from '../compiler/whnf';
-import { shiftTerm, subst } from '../compiler/subst';
+import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { ReverseRegistry, buildReverseRegistry, ttermToMathNodes } from '../math-editor/tt-to-math';
 import { mkRow } from '../math-editor/types';
@@ -1151,7 +1151,8 @@ function renderHypotheses(
     for (let j = i - 1; j >= 0; j--) {
       nameCtx.push(ctx[j].name);
     }
-    const surfaceHypType = kernelTypeToSurface(entry.type, definitions);
+    const normalizedType = betaNormalize(entry.type);
+    const surfaceHypType = kernelTypeToSurface(normalizedType, definitions);
     const typeLatex = renderTerm(surfaceHypType, nameCtx, rev);
     hypotheses.push({ name: entry.name, type: typeLatex, rawType: surfaceHypType });
   }
@@ -1166,7 +1167,9 @@ export function renderGoalLatex(
   rev: ReverseRegistry,
 ): string {
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
-  const surface = kernelTypeToSurface(zonked, definitions);
+  // Beta-normalize to clean up redexes like (\i => i)(0) → 0
+  const normalized = betaNormalize(zonked);
+  const surface = kernelTypeToSurface(normalized, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
 
@@ -1352,7 +1355,11 @@ export function replayEntireTree(
         const tacResult = tactic.apply(eng, goal, gId);
         // Capture the unified equation and attach it to this node's info
         if (tacResult.success && tacResult.unifiedEquation) {
-          const { lhs, rhs } = tacResult.unifiedEquation;
+          const newEngine = tacResult.newEngine!;
+          const { lhs: rawLhs, rhs: rawRhs } = tacResult.unifiedEquation;
+          // Zonk to resolve metas, then beta-normalize to clean up redexes
+          const lhs = betaNormalize(newEngine.zonkTerm(rawLhs, goal.ctx.length));
+          const rhs = betaNormalize(newEngine.zonkTerm(rawRhs, goal.ctx.length));
           const nameCtx = buildNameCtx(goal.ctx);
           const lhsSurface = kernelTypeToSurface(lhs, definitions);
           const rhsSurface = kernelTypeToSurface(rhs, definitions);
@@ -1391,8 +1398,8 @@ export function replayEntireTree(
             if (arg.term.tag === 'Hole' || arg.term.tag === 'Meta') continue; // unsolved
             if (arg.type.tag === 'Sort') continue; // type-level arg (e.g., {A : Type})
             try {
-              // Zonk to resolve any metas inside the solution
-              const zonked = newEngine.zonkTerm(arg.term, goal.ctx.length);
+              // Zonk to resolve any metas, then beta-normalize
+              const zonked = betaNormalize(newEngine.zonkTerm(arg.term, goal.ctx.length));
               const surface = kernelTypeToSurface(zonked, definitions);
               const latex = renderTerm(surface, nameCtx, rev);
               appliedArgsLatex.push(latex);

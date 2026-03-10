@@ -311,6 +311,43 @@ export function shiftTerm(term: TTKTerm, amount: number, cutoff: number): TTKTer
 }
 
 /**
+ * Beta-normalize a term: recursively reduce all beta-redexes (App of lambda).
+ * Does NOT delta-reduce (unfold definitions) — only contracts (\x => body)(arg) → body[x := arg].
+ * Useful for cleaning up goal displays after rewrite produces un-reduced lambda applications.
+ */
+export function betaNormalize(term: TTKTerm): TTKTerm {
+  switch (term.tag) {
+    case 'App': {
+      const fn = betaNormalize(term.fn);
+      const arg = betaNormalize(term.arg);
+      // Beta-reduce: (\x => body)(arg) → body[0 := arg]
+      if (fn.tag === 'Binder' && fn.binderKind.tag === 'BLam') {
+        return betaNormalize(subst(0, arg, fn.body));
+      }
+      if (fn === term.fn && arg === term.arg) return term;
+      return { tag: 'App', fn, arg };
+    }
+    case 'Binder': {
+      const domain = betaNormalize(term.domain);
+      const body = betaNormalize(term.body);
+      if (domain === term.domain && body === term.body) return term;
+      return { ...term, domain, body };
+    }
+    case 'Match': {
+      const scrutinee = betaNormalize(term.scrutinee);
+      const clauses = term.clauses.map(c => {
+        const rhs = betaNormalize(c.rhs);
+        return rhs === c.rhs ? c : { ...c, rhs };
+      });
+      if (scrutinee === term.scrutinee && clauses.every((c, i) => c === term.clauses[i])) return term;
+      return { ...term, scrutinee, clauses };
+    }
+    default:
+      return term;
+  }
+}
+
+/**
  * Find the minimum free variable index in a term.
  * Returns Infinity if the term has no free variables.
  * Used to check for escaping variables before shifting.

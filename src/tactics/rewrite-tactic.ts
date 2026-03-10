@@ -485,9 +485,12 @@ export class RewriteTactic implements Tactic {
   private substitute(term: TTKTerm, from: TTKTerm, to: TTKTerm, definitions?: DefinitionsMap): TTKTerm {
     // If term matches from, replace with to
     // In enhanced mode (erw), use recursive deep definitional equality
+    // In normal mode, use structural equality only — WHNF comparison is too aggressive
+    // because unrelated subterms may be definitionally equal to the LHS
+    // (e.g., mul(2, sumStartCount(0,1,id)) WHNF≡ sumStartCount(0,1,id) ≡ Zero)
     const isMatch = this.options.enhanced && definitions
       ? this.termEqualDeep(term, from, definitions)
-      : this.termEqualModDefs(term, from, definitions);
+      : this.termEqual(term, from);
     if (isMatch) {
       return to;
     }
