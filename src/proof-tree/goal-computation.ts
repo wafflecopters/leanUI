@@ -780,6 +780,20 @@ function searchCasesForCursor(
 }
 
 /**
+ * Resolve a name against the goal context. If the name matches a hypothesis,
+ * return a Var term with the correct de Bruijn index. Otherwise return Const.
+ */
+function resolveNameInGoal(name: string, goal: MetaVar): TTKTerm {
+  // Search context from most recent (innermost) to oldest (outermost)
+  for (let i = goal.ctx.length - 1; i >= 0; i--) {
+    if (goal.ctx[i].name === name) {
+      return { tag: 'Var', index: goal.ctx.length - 1 - i };
+    }
+  }
+  return { tag: 'Const', name };
+}
+
+/**
  * Replay the proof tree against a TacticEngine, applying real tactics
  * at each node until we reach the cursor. Returns the engine state
  * at the cursor position.
@@ -862,12 +876,12 @@ function replayProofTree(
     }
 
     case 'rewrite': {
-      // Apply RewriteTactic with Const(name) as the equality proof
+      // Apply RewriteTactic — resolve name against context first (for hypotheses like IH)
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
       const tactic = new RewriteTactic(
-        { tag: 'Const', name: node.name },
+        resolveNameInGoal(node.name, goal),
         { reverse: node.reverse },
       );
       const result = tactic.apply(engine, goal, goalId);
@@ -891,11 +905,11 @@ function replayProofTree(
     }
 
     case 'apply': {
-      // Apply ApplyTactic with Const(name) as the function
+      // Apply ApplyTactic — resolve name against context first (for hypotheses)
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const tactic = new ApplyTactic({ tag: 'Const', name: node.name });
+      const tactic = new ApplyTactic(resolveNameInGoal(node.name, goal));
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
@@ -1369,7 +1383,7 @@ export function replayEntireTree(
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const tactic = new RewriteTactic(
-          { tag: 'Const', name: node.name },
+          resolveNameInGoal(node.name, goal),
           { reverse: node.reverse },
         );
         const tacResult = tactic.apply(eng, goal, gId);
@@ -1405,7 +1419,7 @@ export function replayEntireTree(
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
-        const tactic = new ApplyTactic({ tag: 'Const', name: node.name });
+        const tactic = new ApplyTactic(resolveNameInGoal(node.name, goal));
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
           const existing = result.get(node.id);
