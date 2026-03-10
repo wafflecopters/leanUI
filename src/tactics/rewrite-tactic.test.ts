@@ -375,6 +375,58 @@ testMulZero = refl
     expect(newGoalStr).toContain('Equal');
     expect(newGoalStr).toContain('Zero');
   });
+
+  test('rewrite mulZeroRight works after rewrite sumStartCountOne (beta-redex in goal)', () => {
+    const defs = getDefinitions();
+
+    // After rewriting sumStartCountOne, the goal contains (\i => i)(Zero)
+    // which is a beta-redex. mulZeroRight's pattern `mul ?n Zero` must still
+    // match `mul (Succ (Succ Zero)) ((\i => i) Zero)` where the second arg
+    // is a beta-redex, not a bare `Zero`.
+    const source = BASE_SOURCE + `
+testChainedRw : Equal (mul (Succ (Succ Zero)) (sumStartCount Zero (Succ Zero) (\\i => i))) (plus Zero (mul (Succ Zero) Zero))
+testChainedRw = refl
+`;
+    const compiled = compileTTFromText(source);
+    const decl = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'testChainedRw');
+    expect(decl).toBeDefined();
+
+    let engine = createInitialEngine(decl!.kernelType!, [], defs);
+    let goal = engine.getFocusedGoal()!;
+    let goalId = engine.getFocusedGoalId()!;
+
+    // Step 1: rewrite sumStartCountOne
+    const rw1 = new RewriteTactic({ tag: 'Const', name: 'sumStartCountOne' });
+    const res1 = rw1.apply(engine, goal, goalId);
+    expect(res1.success).toBe(true);
+    if (!res1.success) return;
+
+    engine = res1.newEngine;
+    goal = engine.getFocusedGoal()!;
+    goalId = engine.getFocusedGoalId()!;
+
+    // The goal now has (\i => i)(Zero) in place of sumStartCount(...)
+    const midGoalStr = termToString(goal.type);
+    expect(midGoalStr).toContain('mul');
+    // Verify the beta-redex exists
+    expect(midGoalStr).toContain('\\');  // lambda still present
+
+    // Step 2: rewrite mulZeroRight — this should succeed despite the beta-redex
+    const rw2 = new RewriteTactic({ tag: 'Const', name: 'mulZeroRight' });
+    const res2 = rw2.apply(engine, goal, goalId);
+
+    expect(res2.success).toBe(true);
+    if (!res2.success) {
+      console.error('mulZeroRight failed:', res2.error);
+      return;
+    }
+
+    const finalGoal = res2.newEngine.getFocusedGoal()!;
+    const finalGoalStr = termToString(finalGoal.type);
+    // After mulZeroRight, mul(..., Zero) → Zero
+    expect(finalGoalStr).toContain('Equal');
+    expect(finalGoalStr).toContain('Zero');
+  });
 });
 
 describe('betaNormalize: clean up lambda applications in goals', () => {

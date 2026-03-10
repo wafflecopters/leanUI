@@ -21,7 +21,7 @@ import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, UnifiedEquation, freshMetaName } from './tactic';
 import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
-import { shiftTerm, subst } from '../compiler/subst';
+import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 
 /**
  * RewriteTactic: Use an equality proof to substitute in the goal
@@ -94,13 +94,20 @@ export class RewriteTactic implements Tactic {
       let lhs = this.betaReduce(rawLhs);
       let rhs = this.betaReduce(rawRhs);
 
-      // 4b. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
+      // 4b. Beta-normalize the goal type to clean up redexes from previous rewrites.
+      //     E.g., after rewriting sumStartCountOne, the goal may contain
+      //     `mul (Succ (Succ Zero)) ((\i => i) Zero)` instead of `mul ... Zero`.
+      //     Without beta-normalization, pattern matching via structural equality
+      //     would fail because `(\i => i)(Zero)` ≠ `Zero` structurally.
+      const goalType = betaNormalize(goal.type);
+
+      // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.
       let allBindings: Map<string, TTKTerm> | null = null;
       if (instantiated) {
-        const bindings = this.findPatternMatch(goal.type, lhs, engine.definitions);
+        const bindings = this.findPatternMatch(goalType, lhs, engine.definitions);
         if (bindings && bindings.size > 0) {
-          // 4c. Search context for unsolved premise metas (like Lean's `assumption`)
+          // 4d. Search context for unsolved premise metas (like Lean's `assumption`)
           this.searchContextForPremises(
             instantiated.metaIds, bindings, instantiated.premiseTypes,
             goal.ctx, engine.definitions
@@ -115,10 +122,10 @@ export class RewriteTactic implements Tactic {
       // 5. Replace LHS with RHS in the goal type
       //    Uses WHNF-based matching to handle definition aliases
       //    (e.g., `radd R` matching `CompleteOrderedField.add (field R)`)
-      const newGoalType = this.substitute(goal.type, lhs, rhs, engine.definitions);
+      const newGoalType = this.substitute(goalType, lhs, rhs, engine.definitions);
 
-      // 5. Check if anything changed
-      if (this.termEqual(goal.type, newGoalType)) {
+      // 5b. Check if anything changed
+      if (this.termEqual(goalType, newGoalType)) {
         return {
           success: false,
           error: `rewrite: no occurrences of ${this.termToString(lhs)} found in goal`
@@ -128,7 +135,7 @@ export class RewriteTactic implements Tactic {
       // 6. Build the motive: \z => goal.type[lhs := z]
       //    Shift goal type and lhs into the lambda body scope (depth +1),
       //    then replace shifted lhs with Var(0).
-      const shiftedGoal = shiftTerm(goal.type, 1, 0);
+      const shiftedGoal = shiftTerm(goalType, 1, 0);
       const shiftedLhs = shiftTerm(lhs, 1, 0);
       const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 }, engine.definitions);
       const motive: TTKTerm = {
