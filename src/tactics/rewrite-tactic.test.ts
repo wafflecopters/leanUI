@@ -12,6 +12,7 @@ import { compileTTFromText } from '../compiler/compile';
 import { createInitialEngine, TacticEngine } from './tacticsEngine';
 import { IntroTactic, IntrosTactic, resetMetaCounter } from './tactic';
 import { RewriteTactic } from './rewrite-tactic';
+import { UnfoldTactic } from './unfold-tactic';
 import { DefinitionsMap } from '../compiler/term';
 import { betaNormalize } from '../compiler/subst';
 
@@ -63,6 +64,11 @@ mulZeroRight Zero = refl
 mulZeroRight (Succ n) = mulZeroRight n
 sumStartCountOne : (s : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ Zero) f) (f s)
 sumStartCountOne s f = cong f (plusZeroRight s)
+minusSelf : {n : Nat} -> Equal (minus n n) Zero
+minusSelf {n:=Zero} = refl
+minusSelf {n:=Succ n} = minusSelf
+sum : (start end : Nat) -> (Nat -> Nat) -> Nat
+sum start end f = sumStartCount start (minus (Succ end) start) f
 `;
 
 // Compile once and reuse
@@ -544,3 +550,52 @@ function termToString(term: TTKTerm): string {
     default: return `<${term.tag}>`;
   }
 }
+
+const SUMMATION_BASE_SOURCE = BASE_SOURCE + `
+summationBase : (i : Nat) -> (f : Nat -> Nat) -> Equal (sum i i f) (f i)
+summationBase i f = summationBase i f
+`;
+
+describe('summationBase chain: unfold sum, rewrite minusSucc, rewrite minusSelf, rewrite sumStartCountOne', () => {
+  test('full chain succeeds on sum i i f = f i', () => {
+    const compiled = compileTTFromText(SUMMATION_BASE_SOURCE);
+    const defs = compiled.definitions;
+    const summationBaseType = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'summationBase')?.kernelType;
+    if (!summationBaseType) throw new Error('summationBase not found');
+
+    // Step 1: intros i f
+    let engine = setupEngineWithIntros(summationBaseType, defs, ['i', 'f']);
+    let goal = engine.getFocusedGoal()!;
+    let goalId = engine.getFocusedGoalId()!;
+    // Step 2: unfold sum
+    const unfoldResult = new UnfoldTactic(['sum']).apply(engine, goal, goalId);
+    if (!unfoldResult.success) throw new Error(`unfold failed: ${unfoldResult.error}`);
+    engine = unfoldResult.newEngine;
+    goal = engine.getFocusedGoal()!;
+    goalId = engine.getFocusedGoalId()!;
+
+    // Step 3: rewrite minusSucc
+    const rwMinusSucc = new RewriteTactic(
+      { tag: 'Const', name: 'minusSucc' },
+    ).apply(engine, goal, goalId);
+    if (!rwMinusSucc.success) throw new Error(`rewrite minusSucc failed: ${rwMinusSucc.error}`);
+    engine = rwMinusSucc.newEngine;
+    goal = engine.getFocusedGoal()!;
+    goalId = engine.getFocusedGoalId()!;
+
+    // Step 4: rewrite minusSelf
+    const rwMinusSelf = new RewriteTactic(
+      { tag: 'Const', name: 'minusSelf' },
+    ).apply(engine, goal, goalId);
+    if (!rwMinusSelf.success) throw new Error(`rewrite minusSelf failed: ${rwMinusSelf.error}`);
+    engine = rwMinusSelf.newEngine;
+    goal = engine.getFocusedGoal()!;
+    goalId = engine.getFocusedGoalId()!;
+
+    // Step 5: rewrite sumStartCountOne
+    const rwSCO = new RewriteTactic(
+      { tag: 'Const', name: 'sumStartCountOne' },
+    ).apply(engine, goal, goalId);
+    expect(rwSCO.success).toBe(true);
+  });
+});

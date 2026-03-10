@@ -1,0 +1,64 @@
+@test success
+@name "summationBase: sum i i f = f i by rewrite chain"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+cong : {A B : Type} -> (f : A -> B) -> {a b : A} -> Equal a b -> Equal (f a) (f b)
+cong f refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+-- Leq inductive type
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {i n : Nat} -> Leq i n -> Leq (Succ i) (Succ n)
+
+leqRefl : {n : Nat} -> Leq n n
+leqRefl {n:=Zero} = LeqZero
+leqRefl {n:=Succ n} = LeqSucc leqRefl
+
+-- Arithmetic
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ n) = cong Succ (plusZeroRight n)
+
+minus : Nat -> Nat -> Nat
+minus n Zero = n
+minus Zero (Succ m) = Zero
+minus (Succ n) (Succ m) = minus n m
+
+minusSucc : {i n : Nat} -> Leq i n -> Equal (minus (Succ n) i) (Succ (minus n i))
+minusSucc LeqZero = refl
+minusSucc (LeqSucc l) = minusSucc l
+
+minusSelf : {n : Nat} -> Equal (minus n n) Zero
+minusSelf {n:=Zero} = refl
+minusSelf {n:=Succ n} = minusSelf
+
+-- Summation
+sumStartCount : (start count : Nat) -> (Nat -> Nat) -> Nat
+sumStartCount start Zero f = Zero
+sumStartCount start (Succ k) f = plus (sumStartCount start k f) (f (plus start k))
+
+sumStartCountOne : (s : Nat) -> (f : Nat -> Nat) -> Equal (sumStartCount s (Succ Zero) f) (f s)
+sumStartCountOne s f = cong f (plusZeroRight s)
+
+sum : (start end : Nat) -> (Nat -> Nat) -> Nat
+sum start end f = sumStartCount start (minus (Succ end) start) f
+
+-- The proof using tactic block
+summationBase : (i : Nat) -> (f : Nat -> Nat) -> Equal (sum i i f) (f i) := by
+  intros i f
+  unfold sum
+  rewrite minusSucc
+  rewrite minusSelf
+  rewrite sumStartCountOne
+  exact refl
