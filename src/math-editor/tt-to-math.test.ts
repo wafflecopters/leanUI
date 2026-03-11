@@ -387,3 +387,85 @@ describe('surfaceTypeToMathRow — full type signatures', () => {
     expect(flat).toContain('\\to');
   });
 });
+
+describe('operator precedence — parenthesization', () => {
+  let decls: ReturnType<typeof compileNatMath>;
+  let rev: ReturnType<typeof buildReverseRegistry>;
+
+  beforeAll(() => {
+    decls = compileNatMath();
+    const idx = decls.length;
+    const registry = buildRegistryBefore(decls, idx);
+    rev = buildReverseRegistry(registry);
+  });
+
+  test('mul(plus(n, 1), n) wraps plus in parens: (n + 1) · n', () => {
+    // mul(plus(Var(0), Succ(Zero)), Var(0))
+    const term: TTerm = {
+      tag: 'App', fn: { tag: 'App',
+        fn: { tag: 'Const', name: 'mul' },
+        arg: { tag: 'App', fn: { tag: 'App',
+          fn: { tag: 'Const', name: 'plus' },
+          arg: { tag: 'Var', index: 0 } },
+          arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } } },
+      arg: { tag: 'Var', index: 0 },
+    };
+    const nodes = ttermToMathNodes(term, rev, ['n']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    // Should have parens around n + 1
+    expect(flat).toContain('(');
+    expect(flat).toContain(')');
+    expect(flat).toContain('\\cdot');
+    // The delimiter wraps plus content: (n + 1)
+    const delimNode = nodes.find(n => n.tag === 'Delimiter');
+    expect(delimNode).toBeDefined();
+    if (delimNode && delimNode.tag === 'Delimiter') {
+      const inner = flattenRow(delimNode.inner);
+      expect(inner).toContain('+');
+    }
+  });
+
+  test('plus(mul(a, b), c) does NOT wrap mul in parens: a · b + c', () => {
+    // plus(mul(Var(0), Var(1)), Var(2))
+    const term: TTerm = {
+      tag: 'App', fn: { tag: 'App',
+        fn: { tag: 'Const', name: 'plus' },
+        arg: { tag: 'App', fn: { tag: 'App',
+          fn: { tag: 'Const', name: 'mul' },
+          arg: { tag: 'Var', index: 0 } },
+          arg: { tag: 'Var', index: 1 } } },
+      arg: { tag: 'Var', index: 2 },
+    };
+    const nodes = ttermToMathNodes(term, rev, ['a', 'b', 'c']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    // mul has higher precedence than plus — no parens needed
+    expect(flat).toContain('\\cdot');
+    expect(flat).toContain('+');
+    // No Delimiter wrapping
+    const delimNode = nodes.find(n => n.tag === 'Delimiter');
+    expect(delimNode).toBeUndefined();
+  });
+
+  test('plus(sum_bigop, x) wraps sum in parens when followed by +', () => {
+    // plus(sum(Zero, Var(0), \i => Var(0)), Succ(Var(0)))
+    const term: TTerm = {
+      tag: 'App', fn: { tag: 'App',
+        fn: { tag: 'Const', name: 'plus' },
+        arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'App',
+          fn: { tag: 'Const', name: 'sum' },
+          arg: { tag: 'Const', name: 'Zero' } },
+          arg: { tag: 'Var', index: 0 } },
+          arg: { tag: 'Binder', name: 'i', binderKind: { tag: 'BLamTT' },
+            domain: { tag: 'Const', name: 'Nat' },
+            body: { tag: 'Var', index: 0 } } } },
+      arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Var', index: 0 } },
+    };
+    const nodes = ttermToMathNodes(term, rev, ['n']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    // BigOp followed by + should be wrapped
+    expect(flat).toContain('(');
+    expect(flat).toContain('+');
+    const delimNode = nodes.find(n => n.tag === 'Delimiter');
+    expect(delimNode).toBeDefined();
+  });
+});

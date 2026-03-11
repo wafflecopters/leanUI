@@ -728,3 +728,44 @@ describe('summationBase chain: unfold sum, rewrite minusSucc, rewrite minusSelf,
     expect(rwSCO.success).toBe(true);
   });
 });
+
+const TRIANGLE_SUM_SOURCE = BASE_SOURCE + `
+postulate triangleSum : (n : Nat) -> Equal (mul (Succ (Succ Zero)) (sum Zero n (\\i => i))) (mul (plus n (Succ n)) n)
+`;
+
+describe('triangleSum: induction + rewrite IH', () => {
+  test('Succ case after induction: IH LHS differs from goal (sum bound is Succ(x0) vs x0)', async () => {
+    const compiled = compileTTFromText(TRIANGLE_SUM_SOURCE);
+    expect(compiled.success).toBe(true);
+    const defs = compiled.definitions;
+    const tsType = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'triangleSum')?.kernelType;
+    if (!tsType) throw new Error('triangleSum not found');
+
+    let engine = setupEngineWithIntros(tsType, defs, ['n']);
+    let goal = engine.getFocusedGoal()!;
+    let goalId = engine.getFocusedGoalId()!;
+
+    const { InductionTactic } = await import('./induction-tactic');
+    const inductionResult = new InductionTactic({ tag: 'Var', index: 0 }).apply(engine, goal, goalId);
+    expect(inductionResult.success).toBe(true);
+    if (!inductionResult.success) return;
+    engine = inductionResult.newEngine;
+
+    // Focus Succ case
+    const succGoalId = engine.goals[1];
+    const succGoal = engine.metaVars.get(succGoalId)!;
+    expect(succGoal.ctx.some(e => e.name === 'IH')).toBe(true);
+    engine = engine.withUpdates({ focusIndex: 1 });
+
+    // Goal has sum(Zero, Succ(x0), ...) but IH has sum(Zero, x0, ...)
+    // So rewrite IH correctly fails — summationSplit is needed first.
+    const ihIdx = succGoal.ctx.length - 1 - succGoal.ctx.findIndex(e => e.name === 'IH');
+    const rwResult = new RewriteTactic({ tag: 'Var', index: ihIdx }).apply(
+      engine, succGoal as any, succGoalId
+    );
+    expect(rwResult.success).toBe(false);
+    if (!rwResult.success) {
+      expect(rwResult.error).toContain('no occurrences');
+    }
+  });
+});

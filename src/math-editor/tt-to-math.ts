@@ -462,13 +462,74 @@ function buildCaptureMap(
 }
 
 // ============================================================================
+// Operator precedence for parenthesization
+// ============================================================================
+
+const PREC_RELATION = 0;   // =, ≤, <, →, etc.
+const PREC_ADDITIVE = 1;   // +, -
+const PREC_MULTIPLICATIVE = 2; // ·, ×
+const PREC_ATOM = 100;     // no infix operator
+
+const SYMBOL_PREC = new Map<string, number>([
+  ['=', PREC_RELATION], ['\\le', PREC_RELATION], ['\\leq', PREC_RELATION],
+  ['\\ge', PREC_RELATION], ['\\geq', PREC_RELATION],
+  ['<', PREC_RELATION], ['>', PREC_RELATION],
+  ['\\neq', PREC_RELATION], ['\\in', PREC_RELATION],
+  ['\\to', PREC_RELATION], ['\\implies', PREC_RELATION],
+  ['+', PREC_ADDITIVE], ['-', PREC_ADDITIVE],
+  ['\\cdot', PREC_MULTIPLICATIVE], ['\\times', PREC_MULTIPLICATIVE],
+]);
+
+/** Get the minimum precedence of top-level operators in a node array. */
+function nodesMinPrec(nodes: readonly MathNode[]): number {
+  let minPrec = PREC_ATOM;
+  for (const n of nodes) {
+    if (n.tag === 'Symbol') {
+      const p = SYMBOL_PREC.get(n.value);
+      if (p !== undefined && p < minPrec) minPrec = p;
+    }
+    // BigOp body extends ambiguously — treat as lowest arithmetic precedence
+    if (n.tag === 'BigOp') minPrec = Math.min(minPrec, PREC_ADDITIVE - 1);
+  }
+  return minPrec;
+}
+
+/** Get the precedence of an infix pattern from its literal operators. */
+function patternPrec(pattern: PatternElement[]): number {
+  let minPrec = PREC_ATOM;
+  for (const pe of pattern) {
+    if (pe.tag === 'literal') {
+      const p = SYMBOL_PREC.get(pe.symbol);
+      if (p !== undefined && p < minPrec) minPrec = p;
+    }
+  }
+  return minPrec;
+}
+
+/** Check if a capture needs parens due to lower precedence than surrounding pattern. */
+function captureNeedsWrap(
+  nodes: MathNode[],
+  patPrec: number,
+  isFollowedByLiteral: boolean,
+): boolean {
+  const capPrec = nodesMinPrec(nodes);
+  // Wrap if capture has strictly lower precedence than pattern operator
+  if (capPrec < patPrec) return true;
+  // BigOp at end of capture followed by more content is always ambiguous
+  if (isFollowedByLiteral && nodes.length > 0 && nodes[nodes.length - 1].tag === 'BigOp') return true;
+  return false;
+}
+
+// ============================================================================
 // Pattern → MathNode[] builder
 // ============================================================================
 
 export function buildFromPattern(pattern: PatternElement[], captures: Map<string, MathNode[]>): MathNode[] {
   const result: MathNode[] = [];
+  const pPrec = patternPrec(pattern);
 
-  for (const pe of pattern) {
+  for (let pi = 0; pi < pattern.length; pi++) {
+    const pe = pattern[pi];
     switch (pe.tag) {
       case 'literal':
         result.push(mkSymbol(pe.symbol));
@@ -477,7 +538,13 @@ export function buildFromPattern(pattern: PatternElement[], captures: Map<string
       case 'capture': {
         const nodes = captures.get(pe.name);
         if (nodes && nodes.length > 0) {
-          result.push(...nodes);
+          // Check if next pattern element is a literal (operator follows this capture)
+          const nextIsLit = pi + 1 < pattern.length && pattern[pi + 1].tag === 'literal';
+          if (pPrec < PREC_ATOM && captureNeedsWrap(nodes, pPrec, nextIsLit)) {
+            result.push(mkDelimiter('(', ')', mkRow(nodes)));
+          } else {
+            result.push(...nodes);
+          }
         } else {
           result.push(mkHole());
         }
