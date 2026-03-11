@@ -269,46 +269,41 @@ export class IntrosTactic implements Tactic {
 
   apply(engine: TacticEngine, _goal: MetaVar, _goalId: string): TacticResult {
     let current = engine;
-    let nameIndex = 0;
 
-    // Keep applying intro while goal is a Pi type (Binder with BPi)
-    while (true) {
-      const currentGoal = current.getFocusedGoal();
-      if (!currentGoal) break;
-
-      const zonkedGoalType = current.zonkTerm(currentGoal.type, currentGoal.ctx.length);
-      const goalTypeWhnf = whnf(zonkedGoalType, {
-        definitions: current.definitions,
-        typingContext: currentGoal.ctx
-      });
-
-      // Check if it's a Pi type (Binder with BPi kind)
-      if (goalTypeWhnf.tag !== 'Binder' || goalTypeWhnf.binderKind.tag !== 'BPi') {
-        break;
+    if (this.names && this.names.length > 0) {
+      // Named mode: introduce exactly these names, fail if any can't be introduced
+      for (let i = 0; i < this.names.length; i++) {
+        const currentGoal = current.getFocusedGoal();
+        if (!currentGoal) {
+          return { success: false, error: `intros: no goal remaining for '${this.names[i]}'` };
+        }
+        const currentGoalId = current.getFocusedGoalId();
+        if (!currentGoalId) {
+          return { success: false, error: `intros: no goal remaining for '${this.names[i]}'` };
+        }
+        const introResult = new IntroTactic(this.names[i]).apply(current, currentGoal, currentGoalId);
+        if (!introResult.success) {
+          return { success: false, error: `intros: cannot introduce '${this.names[i]}' — ${introResult.error}` };
+        }
+        current = introResult.newEngine;
       }
-
-      // Determine name
-      const name = this.names && nameIndex < this.names.length
-        ? this.names[nameIndex]
-        : undefined;
-      nameIndex++;
-
-      // Apply intro
-      const currentGoalId = current.getFocusedGoalId();
-      if (!currentGoalId) break;
-
-      const introResult = new IntroTactic(name).apply(
-        current,
-        currentGoal,
-        currentGoalId
-      );
-
-      if (!introResult.success) {
-        // If intro fails for any reason, return what we have so far
-        return { success: true, newEngine: current };
+    } else {
+      // No names: introduce all Pi binders automatically
+      while (true) {
+        const currentGoal = current.getFocusedGoal();
+        if (!currentGoal) break;
+        const zonkedGoalType = current.zonkTerm(currentGoal.type, currentGoal.ctx.length);
+        const goalTypeWhnf = whnf(zonkedGoalType, {
+          definitions: current.definitions,
+          typingContext: currentGoal.ctx
+        });
+        if (goalTypeWhnf.tag !== 'Binder' || goalTypeWhnf.binderKind.tag !== 'BPi') break;
+        const currentGoalId = current.getFocusedGoalId();
+        if (!currentGoalId) break;
+        const introResult = new IntroTactic().apply(current, currentGoal, currentGoalId);
+        if (!introResult.success) break;
+        current = introResult.newEngine;
       }
-
-      current = introResult.newEngine;
     }
 
     return { success: true, newEngine: current };

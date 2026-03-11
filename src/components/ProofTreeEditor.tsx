@@ -599,7 +599,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
     let result: ProofTreeState | null = null;
     switch (tacticMode.tactic) {
       case 'intros': {
-        const names = value.split(',').map(s => s.trim()).filter(Boolean);
+        const names = value.split(/[\s,]+/).filter(Boolean);
         if (names.length > 0) result = applyIntros(state, names);
         break;
       }
@@ -1572,7 +1572,7 @@ function HoleProseView({
     let result: ProofTreeState | null = null;
     switch (tacticMode.tactic) {
       case 'intros': {
-        const names = value.split(',').map(s => s.trim()).filter(Boolean);
+        const names = value.split(/[\s,]+/).filter(Boolean);
         if (names.length > 0) result = applyIntros(state, names);
         break;
       }
