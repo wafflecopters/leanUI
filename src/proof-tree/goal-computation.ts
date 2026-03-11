@@ -16,7 +16,7 @@
 import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern } from '../compiler/kernel';
 import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap } from '../compiler/term';
-import { whnf } from '../compiler/whnf';
+import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { ReverseRegistry, buildReverseRegistry, ttermToMathNodes } from '../math-editor/tt-to-math';
@@ -197,62 +197,6 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
  * but doesn't beta-reduce the resulting applications.
  * Uses fuel to prevent infinite loops with recursive definitions.
  */
-function fullNormalize(term: TTKTerm, definitions: DefinitionsMap, fuel = 50): TTKTerm {
-  if (fuel <= 0) return term;
-
-  const reduced = whnf(term, { definitions, fuel: 200 });
-
-  switch (reduced.tag) {
-    case 'Var':
-    case 'Const':
-    case 'Hole':
-    case 'Meta':
-    case 'ULevel':
-    case 'ULit':
-    case 'UOmega':
-      return reduced;
-
-    case 'Sort':
-      return { tag: 'Sort', level: fullNormalize(reduced.level, definitions, fuel - 1) };
-
-    case 'App': {
-      const { head, args } = collectAppSpine(reduced);
-      const normArgs = args.map(a => fullNormalize(a, definitions, fuel - 1));
-      let result: TTKTerm = head;
-      for (const a of normArgs) {
-        result = { tag: 'App', fn: result, arg: a };
-      }
-      const re = whnf(result, { definitions, fuel: 200 });
-      if (re !== result && re.tag !== 'App') {
-        return fullNormalize(re, definitions, fuel - 1);
-      }
-      return re !== result ? re : result;
-    }
-
-    case 'Binder': {
-      const domain = fullNormalize(reduced.domain, definitions, fuel - 1);
-      const body = fullNormalize(reduced.body, definitions, fuel - 1);
-      if (reduced.binderKind.tag === 'BLet') {
-        const defVal = fullNormalize(reduced.binderKind.defVal, definitions, fuel - 1);
-        return { ...reduced, domain, body, binderKind: { tag: 'BLet', defVal } };
-      }
-      return { ...reduced, domain, body };
-    }
-
-    case 'Annot':
-      return fullNormalize(reduced.term, definitions, fuel - 1);
-
-    case 'Match': {
-      const scrutinee = fullNormalize(reduced.scrutinee, definitions, fuel - 1);
-      const match: TTKTerm = { tag: 'Match', scrutinee, clauses: reduced.clauses };
-      const re = whnf(match, { definitions, fuel: 200 });
-      if (re.tag !== 'Match') {
-        return fullNormalize(re, definitions, fuel - 1);
-      }
-      return match;
-    }
-  }
-}
 
 /**
  * Normalize a MetaVar's goal type after unfold and update the engine.

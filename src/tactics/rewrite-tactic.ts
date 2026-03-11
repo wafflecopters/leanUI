@@ -15,13 +15,13 @@
  */
 
 import { TTKTerm, TTKPattern, TTKContext } from '../compiler/kernel';
-import { DefinitionsMap } from '../compiler/term';
+import { DefinitionsMap, createDefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, UnifiedEquation, freshMetaName } from './tactic';
 import { inferType } from '../compiler/checker';
-import { whnf } from '../compiler/whnf';
-import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
+import { whnf, fullNormalize } from '../compiler/whnf';
+import { shiftTerm, subst } from '../compiler/subst';
 
 /**
  * RewriteTactic: Use an equality proof to substitute in the goal
@@ -94,12 +94,16 @@ export class RewriteTactic implements Tactic {
       let lhs = this.betaReduce(rawLhs);
       let rhs = this.betaReduce(rawRhs);
 
-      // 4b. Beta-normalize the goal type to clean up redexes from previous rewrites.
-      //     E.g., after rewriting sumStartCountOne, the goal may contain
-      //     `mul (Succ (Succ Zero)) ((\i => i) Zero)` instead of `mul ... Zero`.
-      //     Without beta-normalization, pattern matching via structural equality
-      //     would fail because `(\i => i)(Zero)` ≠ `Zero` structurally.
-      const goalType = betaNormalize(goal.type);
+      // 4b. Deep-normalize the goal type using beta+iota only (no delta).
+      //     This reduces motive applications (App(λx.body, arg) → body[x:=arg])
+      //     and match expressions on known constructors, but does NOT unfold
+      //     definitions like `plus` or `sum`. This is critical because:
+      //     - After induction, goals are App(motive, ctor_pattern) which need beta-reducing
+      //     - After unfold, goals have match redexes that need iota-reducing
+      //     - Delta-reducing would expose internal match structures, making subterm
+      //       matching impossible (e.g., plus(Succ(x), y) → match x with ...)
+      const emptyDefs = createDefinitionsMap();
+      const goalType = fullNormalize(goal.type, emptyDefs);
 
       // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.

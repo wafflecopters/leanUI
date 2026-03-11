@@ -551,6 +551,135 @@ function termToString(term: TTKTerm): string {
   }
 }
 
+describe('RewriteTactic: rewrite with context hypothesis (IH)', () => {
+  test('rewrite Var(IH) works when IH is an equality in context', () => {
+    const defs = getDefinitions();
+
+    // Simulate: after induction on n for a theorem like
+    // (n : Nat) -> Equal (plus n Zero) n
+    // In the Succ case, context has [x0 : Nat, IH : Equal (plus x0 Zero) x0]
+    // Goal: Equal (plus (Succ x0) Zero) (Succ x0)
+    // which reduces to: Equal (Succ (plus x0 Zero)) (Succ x0)
+    // Rewriting IH should replace (plus x0 Zero) with x0
+
+    // Build the scenario: goal type = Equal (Succ (plus x0 Zero)) (Succ x0)
+    // Context: [x0 : Nat, IH : Equal (plus x0 Zero) x0]
+    const source = BASE_SOURCE + `
+testIH : (n : Nat) -> Equal (plus n Zero) n
+testIH n = testIH n
+`;
+    const compiled = compileTTFromText(source);
+    const testIHType = compiled.blocks.flatMap(b => b.declarations).find(d => d.name === 'testIH')?.kernelType;
+    if (!testIHType) throw new Error('testIH not found');
+
+    // Use the InductionTactic approach: create context manually
+    // x0 : Nat (index 0 in array)
+    // IH : Equal (plus (Var 0) Zero) (Var 0)  -- Var(0) = x0 from IH's perspective
+    const x0Entry = { name: 'x0', type: { tag: 'Const' as const, name: 'Nat' } };
+    // IH type: Equal (plus x0 Zero) x0
+    // In context position 1, x0 is at Var(0)
+    const ihType: TTKTerm = {
+      tag: 'App', fn: {
+        tag: 'App', fn: {
+          tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+          arg: { tag: 'Const', name: 'Nat' } // type arg
+        },
+        arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: { tag: 'Var', index: 0 } }, arg: { tag: 'Const', name: 'Zero' } } // lhs: plus x0 Zero
+      },
+      arg: { tag: 'Var', index: 0 } // rhs: x0
+    };
+    const ihEntry = { name: 'IH', type: ihType };
+
+    // Goal type: Equal (Succ (plus x0 Zero)) (Succ x0)
+    // From goal's perspective: x0 is Var(1), IH is Var(0)
+    const goalType: TTKTerm = {
+      tag: 'App', fn: {
+        tag: 'App', fn: {
+          tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+          arg: { tag: 'Const', name: 'Nat' }
+        },
+        arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: { tag: 'Var', index: 1 } }, arg: { tag: 'Const', name: 'Zero' } } }
+      },
+      arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Var', index: 1 } }
+    };
+
+    const ctx = [x0Entry, ihEntry];
+    const goalId = 'test_goal';
+    const goal = { ctx, type: goalType, solution: undefined };
+    const engine = createInitialEngine(goalType, [], compiled.definitions)
+      .withUpdates({
+        metaVars: new Map([['test_goal', goal]]),
+        goals: ['test_goal'],
+      });
+
+    // Rewrite with IH (Var(0) in goal's context)
+    const tactic = new RewriteTactic({ tag: 'Var', index: 0 });
+    const result = tactic.apply(engine, goal as any, goalId);
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      console.error('Rewrite IH failed:', result.error);
+      return;
+    }
+
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const newGoalStr = termToString(newGoal.type);
+    // After rewrite: plus x0 Zero -> x0, so goal becomes Equal (Succ x0) (Succ x0)
+    expect(newGoalStr).not.toContain('plus');
+    expect(newGoalStr).toContain('Succ');
+  });
+});
+
+describe('RewriteTactic: rewrite IH after induction', () => {
+  test('induction → unfold → rewrite IH in Succ case', async () => {
+    const defs = getDefinitions();
+    const goalType = getDeclType('plusZeroRight');
+
+    // intros n → induction n → focus Succ case → unfold plus → rewrite IH
+    let engine = setupEngineWithIntros(goalType, defs, ['n']);
+    let goal = engine.getFocusedGoal()!;
+    let goalId = engine.getFocusedGoalId()!;
+
+    // Induction on n
+    const { InductionTactic } = await import('./induction-tactic');
+    const inductionResult = new InductionTactic({ tag: 'Var', index: 0 }).apply(engine, goal, goalId);
+    expect(inductionResult.success).toBe(true);
+    if (!inductionResult.success) return;
+    engine = inductionResult.newEngine;
+
+    // Focus Succ case (goal index 1)
+    const succGoalId = engine.goals[1];
+    const succGoal = engine.metaVars.get(succGoalId)!;
+    expect(succGoal.ctx.some(e => e.name === 'IH')).toBe(true);
+    engine = engine.withUpdates({ focusIndex: 1 });
+
+    // Unfold plus — exposes Succ(plus(x0, Zero)) from plus(Succ(x0), Zero)
+    const unfoldResult = new UnfoldTactic(['plus']).apply(engine, succGoal as any, succGoalId);
+    expect(unfoldResult.success).toBe(true);
+    if (!unfoldResult.success) return;
+    engine = unfoldResult.newEngine;
+    const postUnfoldGoal = engine.getFocusedGoal()!;
+    const postUnfoldGoalId = engine.getFocusedGoalId()!;
+
+    // Verify unfolded goal contains Succ(plus(x0, Zero))
+    const unfoldedStr = termToString(postUnfoldGoal.type);
+    expect(unfoldedStr).toContain('Succ');
+    expect(unfoldedStr).toContain('plus');
+
+    // Rewrite IH — replaces plus(x0, Zero) with x0
+    const ihVarIndex = postUnfoldGoal.ctx.length - 1 - postUnfoldGoal.ctx.findIndex(e => e.name === 'IH');
+    const rwResult = new RewriteTactic({ tag: 'Var', index: ihVarIndex }).apply(engine, postUnfoldGoal, postUnfoldGoalId);
+    expect(rwResult.success).toBe(true);
+    if (!rwResult.success) return;
+
+    // After rewrite IH: goal should be Equal(Succ(x0), Succ(x0))
+    const finalGoal = rwResult.newEngine.getFocusedGoal()!;
+    const finalStr = termToString(finalGoal.type);
+    expect(finalStr).not.toContain('plus');
+    expect(finalStr).toContain('Succ');
+  });
+});
+
 const SUMMATION_BASE_SOURCE = BASE_SOURCE + `
 summationBase : (i : Nat) -> (f : Nat -> Nat) -> Equal (sum i i f) (f i)
 summationBase i f = summationBase i f

@@ -11,75 +11,9 @@
 
 import { TTKTerm } from '../compiler/kernel';
 import { MetaVar, getTermDefinition, createDefinitionsMap } from '../compiler/term';
-import { whnf } from '../compiler/whnf';
+import { fullNormalize } from '../compiler/whnf';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
-
-/**
- * Collect the head and arguments of a nested App spine.
- */
-function collectAppSpine(t: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
-  const args: TTKTerm[] = [];
-  let head = t;
-  while (head.tag === 'App') {
-    args.unshift(head.arg);
-    head = head.fn;
-  }
-  return { head, args };
-}
-
-/**
- * Deep normalize a term using only beta/iota reduction (no delta).
- * After unfolding a definition, we need to reduce the resulting redexes
- * (lambda applications and match on constructors) without expanding other constants.
- */
-function deepBetaIotaNormalize(term: TTKTerm, fuel = 50): TTKTerm {
-  if (fuel <= 0) return term;
-  const emptyDefs = createDefinitionsMap();
-  const reduced = whnf(term, { definitions: emptyDefs, fuel: 200 });
-  switch (reduced.tag) {
-    case 'Var': case 'Const': case 'Hole': case 'Meta':
-    case 'ULevel': case 'ULit': case 'UOmega':
-      return reduced;
-    case 'Sort':
-      return { tag: 'Sort', level: deepBetaIotaNormalize(reduced.level, fuel - 1) };
-    case 'App': {
-      const { head, args } = collectAppSpine(reduced);
-      const normArgs = args.map(a => deepBetaIotaNormalize(a, fuel - 1));
-      let result: TTKTerm = head;
-      for (const a of normArgs) {
-        result = { tag: 'App', fn: result, arg: a };
-      }
-      const re = whnf(result, { definitions: emptyDefs, fuel: 200 });
-      if (re !== result && re.tag !== 'App') {
-        return deepBetaIotaNormalize(re, fuel - 1);
-      }
-      return re !== result ? re : result;
-    }
-    case 'Binder': {
-      const domain = deepBetaIotaNormalize(reduced.domain, fuel - 1);
-      const body = deepBetaIotaNormalize(reduced.body, fuel - 1);
-      if (reduced.binderKind.tag === 'BLet') {
-        const defVal = deepBetaIotaNormalize(reduced.binderKind.defVal, fuel - 1);
-        return { ...reduced, domain, body, binderKind: { tag: 'BLet', defVal } };
-      }
-      return { ...reduced, domain, body };
-    }
-    case 'Annot':
-      return deepBetaIotaNormalize(reduced.term, fuel - 1);
-    case 'Match': {
-      const scrutinee = deepBetaIotaNormalize(reduced.scrutinee, fuel - 1);
-      const match: TTKTerm = { tag: 'Match', scrutinee, clauses: reduced.clauses };
-      const re = whnf(match, { definitions: emptyDefs, fuel: 200 });
-      if (re.tag !== 'Match') {
-        return deepBetaIotaNormalize(re, fuel - 1);
-      }
-      return match;
-    }
-    default:
-      return reduced;
-  }
-}
 
 export class UnfoldTactic implements Tactic {
   name = 'unfold';
@@ -119,7 +53,7 @@ export class UnfoldTactic implements Tactic {
       // Deep beta/iota-normalize the unfolded type to reduce redexes
       // (e.g., (\x => body)(arg) from definition substitution, Match on known args).
       // Uses empty definitions so we only do beta/iota, not delta-reduction.
-      currentType = deepBetaIotaNormalize(currentType);
+      currentType = fullNormalize(currentType, createDefinitionsMap());
 
       // Create new goal with unfolded type
       const newMetaId = freshMetaName();
