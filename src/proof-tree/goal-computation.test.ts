@@ -254,6 +254,19 @@ describe('generateCaseInfos', () => {
     expect(cases[1].constructorName).toBe('Succ');
     expect(cases[1].paramNames).toEqual(['n']);
   });
+
+  test('unnamed params get fresh "x" name', () => {
+    // Succ has a named param 'n', but if we had an unnamed param it would get 'x'
+    const cases = generateCaseInfos('n', natInfo);
+    // With no context, Succ param uses binder name 'n'
+    expect(cases[1].paramNames).toEqual(['n']);
+  });
+
+  test('freshens names when context has conflicts', () => {
+    // If context already has 'n', the Succ param 'n' should become 'n1'
+    const cases = generateCaseInfos('n', natInfo, undefined, ['n', 'm']);
+    expect(cases[1].paramNames).toEqual(['n1']);
+  });
 });
 
 // ============================================================================

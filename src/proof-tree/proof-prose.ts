@@ -30,6 +30,7 @@ export type ProseItemKind =
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; error?: string }
   | { tag: 'hole'; goalLatex?: string }
+  | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'qed' };
 
 /** A single step in an unfold/rewrite chain. */
@@ -245,6 +246,18 @@ export function generateProofProse(
           });
           walk(c.body, depth + 2);
         }
+        break;
+      }
+
+      case 'simp': {
+        emit(node.id, depth, {
+          tag: 'simp',
+          lemmas: node.lemmas,
+          stepCount: node.steps.length,
+          preGoalLatex: info?.goalLatex,
+        });
+        // Steps are already replayed by the engine; just recurse into child
+        walk(node.child, depth);
         break;
       }
     }

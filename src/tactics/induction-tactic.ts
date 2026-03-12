@@ -20,6 +20,16 @@ import { whnf } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
 
 /**
+ * Pick a fresh variable name: try `base`, then `base1`, `base2`, etc.
+ */
+function freshVarName(base: string, used: ReadonlySet<string>): string {
+  if (!used.has(base)) return base;
+  let i = 1;
+  while (used.has(`${base}${i}`)) i++;
+  return `${base}${i}`;
+}
+
+/**
  * InductionTactic: Perform induction with induction hypotheses
  *
  * Creates one subgoal per constructor. For recursive constructors,
@@ -244,6 +254,12 @@ export class InductionTactic implements Tactic {
     let recursiveArgIndex: number | null = null;
     let paramCount = 0;
 
+    // Build set of used names from existing context
+    const usedNames = new Set<string>();
+    for (const entry of baseCtx) {
+      usedNames.add(entry.name);
+    }
+
     // Substitute type arguments for implicit params and skip those binders
     for (let i = 0; i < numImplicit; i++) {
       if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
@@ -253,11 +269,15 @@ export class InductionTactic implements Tactic {
     }
 
     // Walk through the remaining (explicit) Pi binders
-    let paramIdx = 0;
     while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
       const rawName = currentType.name;
-      const paramName = (rawName && rawName !== '_') ? rawName : ('_arg' + paramIdx);
-      paramIdx++;
+      let paramName: string;
+      if (rawName && rawName !== '_') {
+        paramName = freshVarName(rawName, usedNames);
+      } else {
+        paramName = freshVarName('x', usedNames);
+      }
+      usedNames.add(paramName);
       newCtx.push({
         name: paramName,
         type: currentType.domain
@@ -361,8 +381,9 @@ export class InductionTactic implements Tactic {
     branchMetas: Array<{ id: string; ctor: string; meta: MetaVar; numParams: number }>,
     _branches: TTKTerm[]
   ): TTKTerm {
-    const clauses: TTKClause[] = branchMetas.map(({ id, ctor, numParams }) => {
-      const pattern = this.buildCtorPattern(ctor, numParams);
+    const clauses: TTKClause[] = branchMetas.map(({ id, ctor, meta, numParams }) => {
+      const usedNames = new Set(meta.ctx.map(e => e.name));
+      const pattern = this.buildCtorPattern(ctor, numParams, usedNames);
       return {
         patterns: [pattern],
         rhs: { tag: 'Meta' as const, id }
@@ -379,11 +400,14 @@ export class InductionTactic implements Tactic {
   /**
    * Build a constructor pattern for a Match clause
    */
-  private buildCtorPattern(ctorName: string, numParams: number): TTKPattern {
+  private buildCtorPattern(ctorName: string, numParams: number, usedNames?: Set<string>): TTKPattern {
     // Build PCtor with PVar for each parameter
     const args: TTKPattern[] = [];
+    const used = usedNames ?? new Set<string>();
     for (let i = 0; i < numParams; i++) {
-      args.push({ tag: 'PVar', name: `x${i}` });
+      const name = freshVarName('x', used);
+      used.add(name);
+      args.push({ tag: 'PVar', name });
     }
 
     return {

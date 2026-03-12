@@ -17,21 +17,25 @@ import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap } from '../compiler/term';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
-  ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, ProofNodeId,
+  ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyRewrite, applyApplyTactic,
-  addCase, removeCase, toggleCollapse, toggleInductionCollapse,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyRewrite, applyApplyTactic, applySimp,
+  addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode,
   pushState, updateCurrent, undo, redo,
 } from '../proof-tree/proof-tree';
+import { runSimp } from '../tactics/simp-tactic';
 import {
-  TypedProofContext, computeTypedContext, computeApplySubgoalCount,
-  NodeGoalInfo, replayEntireTree,
+  TypedProofContext, ValidationResult, computeTypedContext, computeApplySubgoalCount,
+  NodeGoalInfo, replayEntireTree, replayToEngine,
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
 import { ProseItem, generateProofProse } from '../proof-tree/proof-prose';
+import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
+import { computeTacticSuggestions, TacticSuggestion } from '../proof-tree/tactic-suggestions';
+import { InteractiveGoalView } from './InteractiveGoalView';
 import SplitPane from './SplitPane';
 
 // ============================================================================
@@ -121,7 +125,8 @@ type TacticMode =
   | { tactic: 'unfold' }
   | { tactic: 'rewrite' }
   | { tactic: 'rewrite_rev' }
-  | { tactic: 'apply' };
+  | { tactic: 'apply' }
+  | { tactic: 'simp' };
 
 // ============================================================================
 // Main Component
@@ -134,6 +139,11 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   // Ephemeral tactic input mode (not part of immutable state)
   const [tacticMode, setTacticMode] = useState<TacticMode>(null);
   const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('tactics');
+
+  // Goal interaction state (shared between GoalPanel and prose view)
+  const [goalSelectedPath, setGoalSelectedPath] = useState<GoalPath | null>(null);
+  const [goalEditingNames, setGoalEditingNames] = useState<string[] | null>(null);
+  const [goalEditingSuggestionId, setGoalEditingSuggestionId] = useState<string | null>(null);
 
   const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
 
@@ -155,6 +165,31 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
       goal: ctx.goalDescription,
     };
   }, [state.root, state.cursor.nodeId, surfaceType, kernelType, definitions, registry, emptyRegistry, inductiveMap]);
+
+  // Compute interactive goal from kernel info (shared between GoalPanel and prose view)
+  const interactiveGoal = useMemo<InteractiveGoal | null>(() => {
+    if (!typedContext?.kernelGoal) return null;
+    if (typedContext.validation?.status === 'solved') return null;
+    const { engine, goal, definitions: defs, rev: r } = typedContext.kernelGoal;
+    try {
+      return renderInteractiveGoal(engine, goal, defs, r);
+    } catch {
+      return null;
+    }
+  }, [typedContext?.kernelGoal, typedContext?.validation]);
+
+  // Compute tactic suggestions from selection
+  const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    if (!interactiveGoal || !goalSelectedPath) return [];
+    return computeTacticSuggestions(goalSelectedPath, interactiveGoal);
+  }, [goalSelectedPath, interactiveGoal]);
+
+  // Reset goal selection when cursor changes
+  useEffect(() => {
+    setGoalSelectedPath(null);
+    setGoalEditingNames(null);
+    setGoalEditingSuggestionId(null);
+  }, [state.cursor.nodeId]);
 
   // Compute goal map for prose view (replays entire tree, not just to cursor)
   const rev = useMemo<ReverseRegistry | null>(() => {
@@ -304,13 +339,33 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 registry={registry}
                 kernelType={kernelType}
                 definitions={definitions}
+                interactiveGoal={interactiveGoal}
+                suggestions={goalSuggestions}
+                selectedPath={goalSelectedPath}
+                onSelectPath={setGoalSelectedPath}
+                editingNames={goalEditingNames}
+                onEditingNames={setGoalEditingNames}
+                editingSuggestionId={goalEditingSuggestionId}
+                onEditingSuggestionId={setGoalEditingSuggestionId}
               />
             )}
           </div>
         </div>
 
         {/* Right: goal panel */}
-        <GoalPanel context={typedContext} />
+        <GoalPanel
+          context={typedContext}
+          state={state}
+          onPushChange={pushChange}
+          interactiveGoal={interactiveGoal}
+          suggestions={goalSuggestions}
+          selectedPath={goalSelectedPath}
+          onSelectPath={setGoalSelectedPath}
+          editingNames={goalEditingNames}
+          onEditingNames={setGoalEditingNames}
+          editingSuggestionId={goalEditingSuggestionId}
+          onEditingSuggestionId={setGoalEditingSuggestionId}
+        />
       </SplitPane>
     </div>
   );
@@ -320,10 +375,189 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 // GoalPanel — shows context + goal at cursor position
 // ============================================================================
 
-function GoalPanel({ context }: { context: TypedProofContext | null }) {
+// ============================================================================
+// GoalInteraction — shared interactive goal + suggestion pills
+// ============================================================================
+
+interface GoalInteractionProps {
+  interactiveGoal: InteractiveGoal | null;
+  suggestions: readonly TacticSuggestion[];
+  selectedPath: GoalPath | null;
+  onSelectPath: (p: GoalPath | null) => void;
+  editingNames: string[] | null;
+  onEditingNames: (n: string[] | null) => void;
+  editingSuggestionId: string | null;
+  onEditingSuggestionId: (id: string | null) => void;
+  state: ProofTreeState;
+  onPushChange: (s: ProofTreeState) => void;
+  /** Fallback LaTeX when interactive goal is unavailable. */
+  fallbackGoalLatex?: string;
+  validation?: ValidationResult;
+}
+
+function GoalInteraction({
+  interactiveGoal, suggestions,
+  selectedPath, onSelectPath,
+  editingNames, onEditingNames,
+  editingSuggestionId, onEditingSuggestionId,
+  state, onPushChange,
+  fallbackGoalLatex, validation,
+}: GoalInteractionProps) {
+  const handleApplySuggestion = (suggestion: TacticSuggestion) => {
+    const names = editingSuggestionId === suggestion.id && editingNames
+      ? editingNames
+      : [...(suggestion.proposedNames ?? [])];
+    const result = applyIntros(state, names);
+    if (result) {
+      onPushChange(result);
+      onSelectPath(null);
+      onEditingNames(null);
+      onEditingSuggestionId(null);
+    }
+  };
+
+  const handleStartEditing = (suggestion: TacticSuggestion) => {
+    if (editingSuggestionId === suggestion.id) {
+      onEditingSuggestionId(null);
+      onEditingNames(null);
+    } else {
+      onEditingSuggestionId(suggestion.id);
+      onEditingNames([...(suggestion.proposedNames ?? [])]);
+    }
+  };
+
+  return (
+    <>
+      {/* Goal display */}
+      {validation?.status === 'solved' ? (
+        <div style={{
+          padding: '4px 8px',
+          backgroundColor: 'rgba(63, 185, 80, 0.1)',
+          borderRadius: '4px',
+          border: '1px solid rgba(63, 185, 80, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+        }}>
+          <span style={{ color: '#3fb950', fontSize: '13px' }}>&#10003;</span>
+          <span style={{ color: '#3fb950', fontSize: '11px', fontWeight: 500 }}>Goal solved</span>
+        </div>
+      ) : interactiveGoal ? (
+        <InteractiveGoalView
+          goal={interactiveGoal}
+          selectedPath={selectedPath}
+          onSelectPath={onSelectPath}
+          style={{ fontSize: '11px' }}
+        />
+      ) : (
+        <>
+          <div style={{
+            padding: '4px 8px',
+            backgroundColor: '#0d1117',
+            borderRadius: '4px',
+            border: `1px solid ${validation?.status === 'error' ? 'rgba(248, 81, 73, 0.4)' : '#21262d'}`,
+            wordBreak: 'break-word' as const,
+          }}>
+            {fallbackGoalLatex === '?' ? (
+              <span style={{ color: '#d29922', fontStyle: 'italic' }}>unsolved</span>
+            ) : fallbackGoalLatex ? (
+              <InlineKaTeX latex={fallbackGoalLatex} style={{ fontSize: '11px' }} />
+            ) : (
+              <span style={{ color: '#484f58' }}>&mdash;</span>
+            )}
+          </div>
+          {validation?.status === 'error' && (
+            <div style={{
+              marginTop: '4px',
+              padding: '3px 8px',
+              fontSize: '10px',
+              color: '#f85149',
+              lineHeight: '1.4',
+            }}>
+              {validation.message}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Tactic suggestions */}
+      {suggestions.length > 0 && (
+        <div style={{ marginTop: '8px' }}>
+          {suggestions.map(s => {
+            const isEditing = editingSuggestionId === s.id;
+            const names = isEditing && editingNames ? editingNames : [...(s.proposedNames ?? [])];
+            return (
+              <div key={s.id} style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '3px 0',
+                flexWrap: 'wrap',
+              }}>
+                <button
+                  style={suggestionBtnStyle}
+                  onClick={() => handleStartEditing(s)}
+                  title={s.description}
+                >
+                  {s.label}
+                </button>
+                {names.map((name, i) => (
+                  <input
+                    key={i}
+                    value={name}
+                    onChange={e => {
+                      const updated = [...names];
+                      updated[i] = e.target.value;
+                      onEditingNames(updated);
+                      if (!isEditing) onEditingSuggestionId(s.id);
+                    }}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleApplySuggestion(s);
+                      }
+                    }}
+                    style={nameInputStyle}
+                  />
+                ))}
+                <button
+                  style={applyBtnStyle}
+                  onClick={() => handleApplySuggestion(s)}
+                >
+                  Apply
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ============================================================================
+// GoalPanel — shows context + goal at cursor position (right pane)
+// ============================================================================
+
+function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
+  selectedPath, onSelectPath, editingNames, onEditingNames,
+  editingSuggestionId, onEditingSuggestionId,
+}: {
+  context: TypedProofContext | null;
+  state?: ProofTreeState;
+  onPushChange?: (s: ProofTreeState) => void;
+  interactiveGoal: InteractiveGoal | null;
+  suggestions: readonly TacticSuggestion[];
+  selectedPath: GoalPath | null;
+  onSelectPath: (p: GoalPath | null) => void;
+  editingNames: string[] | null;
+  onEditingNames: (n: string[] | null) => void;
+  editingSuggestionId: string | null;
+  onEditingSuggestionId: (id: string | null) => void;
+}) {
   if (!context) return null;
 
-  const { hypotheses, caseLabel, caseLabelLatex, inductionVar, goal, validation } = context;
+  const { hypotheses, caseLabel, caseLabelLatex, goal, validation } = context;
 
   return (
     <div style={{
@@ -336,15 +570,7 @@ function GoalPanel({ context }: { context: TypedProofContext | null }) {
       {/* Hypotheses */}
       {hypotheses.length > 0 && (
         <div style={{ marginBottom: '10px' }}>
-          <div style={{
-            fontSize: '10px',
-            color: '#484f58',
-            letterSpacing: '0.04em',
-            marginBottom: '4px',
-            fontWeight: 600,
-          }}>
-            CONTEXT
-          </div>
+          <div style={sectionHeaderStyle}>CONTEXT</div>
           {hypotheses.map((h, i) => (
             <div key={i} style={{
               padding: '1px 0',
@@ -368,15 +594,7 @@ function GoalPanel({ context }: { context: TypedProofContext | null }) {
       {/* Case info */}
       {caseLabel && (
         <div style={{ marginBottom: '10px' }}>
-          <div style={{
-            fontSize: '10px',
-            color: '#484f58',
-            letterSpacing: '0.04em',
-            marginBottom: '4px',
-            fontWeight: 600,
-          }}>
-            CASE
-          </div>
+          <div style={sectionHeaderStyle}>CASE</div>
           <div style={{ padding: '1px 0' }}>
             <InlineKaTeX
               latex={caseLabelLatex ?? textToLatex(caseLabel)}
@@ -388,62 +606,85 @@ function GoalPanel({ context }: { context: TypedProofContext | null }) {
 
       {/* Goal */}
       <div>
-        <div style={{
-          fontSize: '10px',
-          color: '#484f58',
-          letterSpacing: '0.04em',
-          marginBottom: '4px',
-          fontWeight: 600,
-        }}>
-          GOAL
-        </div>
-        {validation?.status === 'solved' ? (
+        <div style={sectionHeaderStyle}>GOAL</div>
+        {state && onPushChange ? (
+          <GoalInteraction
+            interactiveGoal={interactiveGoal}
+            suggestions={suggestions}
+            selectedPath={selectedPath}
+            onSelectPath={onSelectPath}
+            editingNames={editingNames}
+            onEditingNames={onEditingNames}
+            editingSuggestionId={editingSuggestionId}
+            onEditingSuggestionId={onEditingSuggestionId}
+            state={state}
+            onPushChange={onPushChange}
+            fallbackGoalLatex={goal}
+            validation={validation}
+          />
+        ) : (
           <div style={{
             padding: '4px 8px',
-            backgroundColor: 'rgba(63, 185, 80, 0.1)',
+            backgroundColor: '#0d1117',
             borderRadius: '4px',
-            border: '1px solid rgba(63, 185, 80, 0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px',
+            border: '1px solid #21262d',
+            wordBreak: 'break-word' as const,
           }}>
-            <span style={{ color: '#3fb950', fontSize: '13px' }}>&#10003;</span>
-            <span style={{ color: '#3fb950', fontSize: '11px', fontWeight: 500 }}>Goal solved</span>
-          </div>
-        ) : (
-          <>
-            <div style={{
-              padding: '4px 8px',
-              backgroundColor: '#0d1117',
-              borderRadius: '4px',
-              border: `1px solid ${validation?.status === 'error' ? 'rgba(248, 81, 73, 0.4)' : '#21262d'}`,
-              wordBreak: 'break-word' as const,
-            }}>
-              {goal === '?' ? (
-                <span style={{ color: '#d29922', fontStyle: 'italic' }}>unsolved</span>
-              ) : goal ? (
-                <InlineKaTeX latex={goal} style={{ fontSize: '11px' }} />
-              ) : (
-                <span style={{ color: '#484f58' }}>&mdash;</span>
-              )}
-            </div>
-            {validation?.status === 'error' && (
-              <div style={{
-                marginTop: '4px',
-                padding: '3px 8px',
-                fontSize: '10px',
-                color: '#f85149',
-                lineHeight: '1.4',
-              }}>
-                {validation.message}
-              </div>
+            {goal ? (
+              <InlineKaTeX latex={goal} style={{ fontSize: '11px' }} />
+            ) : (
+              <span style={{ color: '#484f58' }}>&mdash;</span>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>
   );
 }
+
+const sectionHeaderStyle: React.CSSProperties = {
+  fontSize: '10px',
+  color: '#484f58',
+  letterSpacing: '0.04em',
+  marginBottom: '4px',
+  fontWeight: 600,
+};
+
+const suggestionBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: '1px solid #30363d',
+  borderRadius: '4px',
+  color: '#d2a8ff',
+  fontSize: '11px',
+  padding: '2px 8px',
+  cursor: 'pointer',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+  fontWeight: 500,
+};
+
+const nameInputStyle: React.CSSProperties = {
+  background: '#0d1117',
+  border: '1px solid #30363d',
+  borderRadius: '4px',
+  color: '#e6edf3',
+  fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", monospace',
+  fontSize: '11px',
+  padding: '2px 6px',
+  outline: 'none',
+  width: '50px',
+};
+
+const applyBtnStyle: React.CSSProperties = {
+  background: 'rgba(88, 166, 255, 0.15)',
+  border: '1px solid rgba(88, 166, 255, 0.3)',
+  borderRadius: '4px',
+  color: '#58a6ff',
+  fontSize: '10px',
+  padding: '2px 8px',
+  cursor: 'pointer',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+  fontWeight: 500,
+};
 
 // ============================================================================
 // Node Dispatcher
@@ -475,6 +716,7 @@ function ProofNodeView(props: NodeViewProps) {
     case 'unfold': return <UnfoldView {...props} />;
     case 'rewrite': return <RewriteView {...props} />;
     case 'apply': return <ApplyView {...props} />;
+    case 'simp': return <SimpView {...props} />;
   }
 }
 
@@ -614,7 +856,8 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
 
           if (indInfo) {
             const rev = registry ? buildReverseRegistry(registry) : undefined;
-            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev);
+            const ctxNames = typedContext?.hypotheses.map(h => h.name);
+            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
             result = applyInductionWithCtors(state, scrutinee, ctorInfos);
           } else {
             // Fallback: hardcoded case labels
@@ -656,10 +899,24 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
         }
         break;
       }
+      case 'simp': {
+        const lemmaStr = value.trim();
+        if (lemmaStr && kernelType && definitions) {
+          const lemmas = lemmaStr.split(/[\s,]+/).filter(Boolean);
+          const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
+          if (engine) {
+            const simpResult = runSimp(engine, lemmas);
+            if (simpResult.success) {
+              result = applySimp(state, lemmas, simpResult.proofNodes);
+            }
+          }
+        }
+        break;
+      }
     }
     if (result) onPushChange(result);
     onTacticMode(null);
-  }, [tacticMode, state, onPushChange, onTacticMode]);
+  }, [tacticMode, state, onPushChange, onTacticMode, kernelType, definitions]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -679,7 +936,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
   return (
     <div style={nodeRowStyle(depth, isFocused)} onClick={() => onClickNode(node.id)}>
       {isFocused && !tacticMode && (
-        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+        <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span style={{ ...mutedStyle, fontSize: '12px', marginRight: '4px' }}>?</span>
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'intros' }); }}>
             Given...
@@ -702,6 +959,9 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'apply' }); }}>
             Apply...
           </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'simp' }); }}>
+            Simp...
+          </button>
         </span>
       )}
 
@@ -714,6 +974,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
              activeTactic === 'rewrite' ? 'Rewrite' :
              activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
              activeTactic === 'apply' ? 'Apply' :
+             activeTactic === 'simp' ? 'Simp' :
              'by'}
           </span>
           <input
@@ -727,6 +988,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               activeTactic === 'rewrite' ? 'lemma name' :
               activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
+              activeTactic === 'simp' ? 'lemma1, lemma2, ...' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}
@@ -1094,6 +1356,76 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
 }
 
 // ============================================================================
+// SimpView
+// ============================================================================
+
+function SimpView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
+  if (node.tag !== 'simp') return null;
+  const isFocused = cursorId === node.id;
+
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
+  const handleToggle = useCallback(() => {
+    const result = toggleSimpCollapse(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
+  return (
+    <>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+        <span style={keywordStyle}>simp </span>
+        <span style={{ color: '#79c0ff' }}>{node.lemmas.join(', ')}</span>
+        <span style={mutedStyle}> ({node.steps.length} step{node.steps.length !== 1 ? 's' : ''})</span>
+        <button
+          style={{ ...btnStyle, marginLeft: '4px', padding: '0 4px', fontSize: '10px' }}
+          onClick={(e) => { e.stopPropagation(); handleToggle(); }}
+        >
+          {node.collapsed ? '\u25B6' : '\u25BC'}
+        </button>
+      </TacticRow>
+      {!node.collapsed && node.steps.map((step) => (
+        <ProofNodeView
+          key={step.id}
+          node={step}
+          depth={depth + 1}
+          cursorId={cursorId}
+          state={state}
+          tacticMode={tacticMode}
+          onTacticMode={onTacticMode}
+          onPushChange={onPushChange}
+          onClickNode={onClickNode}
+          typedContext={typedContext}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          kernelType={kernelType}
+          definitions={definitions}
+          goalMap={goalMap}
+        />
+      ))}
+      <ProofNodeView
+        node={node.child}
+        depth={depth + 1}
+        cursorId={cursorId}
+        state={state}
+        tacticMode={tacticMode}
+        onTacticMode={onTacticMode}
+        onPushChange={onPushChange}
+        onClickNode={onClickNode}
+        typedContext={typedContext}
+        inductiveMap={inductiveMap}
+        registry={registry}
+        kernelType={kernelType}
+        definitions={definitions}
+        goalMap={goalMap}
+      />
+    </>
+  );
+}
+
+// ============================================================================
 // ExactView
 // ============================================================================
 
@@ -1134,11 +1466,22 @@ interface ProseViewProps {
   registry?: SyntaxRegistry;
   kernelType?: TTKTerm;
   definitions?: DefinitionsMap;
+  // Shared goal interaction state
+  interactiveGoal: InteractiveGoal | null;
+  suggestions: readonly TacticSuggestion[];
+  selectedPath: GoalPath | null;
+  onSelectPath: (p: GoalPath | null) => void;
+  editingNames: string[] | null;
+  onEditingNames: (n: string[] | null) => void;
+  editingSuggestionId: string | null;
+  onEditingSuggestionId: (id: string | null) => void;
 }
 
 function ProofProseView({
   items, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
+  interactiveGoal, suggestions, selectedPath, onSelectPath,
+  editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -1173,6 +1516,14 @@ function ProofProseView({
             registry={registry}
             kernelType={kernelType}
             definitions={definitions}
+            interactiveGoal={interactiveGoal}
+            suggestions={suggestions}
+            selectedPath={selectedPath}
+            onSelectPath={onSelectPath}
+            editingNames={editingNames}
+            onEditingNames={onEditingNames}
+            editingSuggestionId={editingSuggestionId}
+            onEditingSuggestionId={onEditingSuggestionId}
           />
         );
       })}
@@ -1199,6 +1550,15 @@ interface ProseItemViewProps {
   registry?: SyntaxRegistry;
   kernelType?: TTKTerm;
   definitions?: DefinitionsMap;
+  // Shared goal interaction state
+  interactiveGoal: InteractiveGoal | null;
+  suggestions: readonly TacticSuggestion[];
+  selectedPath: GoalPath | null;
+  onSelectPath: (p: GoalPath | null) => void;
+  editingNames: string[] | null;
+  onEditingNames: (n: string[] | null) => void;
+  editingSuggestionId: string | null;
+  onEditingSuggestionId: (id: string | null) => void;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -1219,6 +1579,8 @@ const eqBlockStyle: React.CSSProperties = {
 function ProseItemView({
   item, prevItem, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
+  interactiveGoal, suggestions, selectedPath, onSelectPath,
+  editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -1272,7 +1634,8 @@ function ProseItemView({
 
   // Deletable items get an (x) button on hover
   const isDeletable = kind.tag === 'intro' || kind.tag === 'unfold' || kind.tag === 'rewrite'
-    || kind.tag === 'apply' || kind.tag === 'exact' || kind.tag === 'inductionHeader';
+    || kind.tag === 'apply' || kind.tag === 'exact' || kind.tag === 'inductionHeader'
+          || kind.tag === 'simp';
 
   const deleteBtn = isDeletable && onDelete && hovered ? (
     <button
@@ -1484,6 +1847,21 @@ function ProseItemView({
         </div>
       );
 
+    case 'simp':
+      return (
+        <div style={rowStyle} {...rowHandlers}>
+          <span style={prose}>Simplifying using{' '}</span>
+          {kind.lemmas.map((lemma, i) => (
+            <React.Fragment key={i}>
+              {i > 0 && <span style={prose}>,{' '}</span>}
+              <InlineKaTeX latex={texNameForProse(lemma)} style={{ fontSize: '13px' }} />
+            </React.Fragment>
+          ))}
+          <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''}).</span>
+          {deleteBtn}
+        </div>
+      );
+
     case 'qed':
       return (
         <div style={{ ...rowStyle, paddingTop: '2px' }} {...rowHandlers}>
@@ -1516,6 +1894,14 @@ function ProseItemView({
           registry={registry}
           kernelType={kernelType}
           definitions={definitions}
+          interactiveGoal={interactiveGoal}
+          suggestions={suggestions}
+          selectedPath={selectedPath}
+          onSelectPath={onSelectPath}
+          editingNames={editingNames}
+          onEditingNames={onEditingNames}
+          editingSuggestionId={editingSuggestionId}
+          onEditingSuggestionId={onEditingSuggestionId}
         />
       );
     }
@@ -1552,11 +1938,22 @@ interface HoleProseViewProps {
   registry?: SyntaxRegistry;
   kernelType?: TTKTerm;
   definitions?: DefinitionsMap;
+  // Shared goal interaction state
+  interactiveGoal: InteractiveGoal | null;
+  suggestions: readonly TacticSuggestion[];
+  selectedPath: GoalPath | null;
+  onSelectPath: (p: GoalPath | null) => void;
+  editingNames: string[] | null;
+  onEditingNames: (n: string[] | null) => void;
+  editingSuggestionId: string | null;
+  onEditingSuggestionId: (id: string | null) => void;
 }
 
 function HoleProseView({
   nodeId, depth, goalLatex, state, tacticMode, onTacticMode, onPushChange,
   onClickNode, typedContext, inductiveMap, registry, kernelType, definitions,
+  interactiveGoal, suggestions, selectedPath, onSelectPath,
+  editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -1585,7 +1982,8 @@ function HoleProseView({
           const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
           if (indInfo) {
             const rev = registry ? buildReverseRegistry(registry) : undefined;
-            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev);
+            const ctxNames = typedContext?.hypotheses.map(h => h.name);
+            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
             result = applyInductionWithCtors(state, scrutinee, ctorInfos);
           } else {
             result = applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
@@ -1626,6 +2024,20 @@ function HoleProseView({
         }
         break;
       }
+      case 'simp': {
+        const lemmaStr = value.trim();
+        if (lemmaStr && kernelType && definitions) {
+          const lemmas = lemmaStr.split(/[\s,]+/).filter(Boolean);
+          const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
+          if (engine) {
+            const simpResult = runSimp(engine, lemmas);
+            if (simpResult.success) {
+              result = applySimp(state, lemmas, simpResult.proofNodes);
+            }
+          }
+        }
+        break;
+      }
     }
     if (result) onPushChange(result);
     onTacticMode(null);
@@ -1656,13 +2068,23 @@ function HoleProseView({
 
   return (
     <div style={rowStyle} onClick={() => onClickNode(nodeId)}>
-      {/* Goal display */}
-      {goalLatex && (
-        <div style={{ marginBottom: '4px' }}>
-          <span style={{ color: '#484f58', fontSize: '11px' }}>Remaining to show: </span>
-          <InlineKaTeX latex={goalLatex} style={{ fontSize: '12px' }} />
-        </div>
-      )}
+      {/* Goal display — shared interactive goal component */}
+      <div style={{ marginBottom: '4px' }}>
+        <span style={{ color: '#484f58', fontSize: '11px', display: 'block', marginBottom: '2px' }}>Remaining to show:</span>
+        <GoalInteraction
+          interactiveGoal={interactiveGoal}
+          suggestions={suggestions}
+          selectedPath={selectedPath}
+          onSelectPath={onSelectPath}
+          editingNames={editingNames}
+          onEditingNames={onEditingNames}
+          editingSuggestionId={editingSuggestionId}
+          onEditingSuggestionId={onEditingSuggestionId}
+          state={state}
+          onPushChange={onPushChange}
+          fallbackGoalLatex={goalLatex}
+        />
+      </div>
 
       {/* Tactic buttons or input */}
       {!activeTactic ? (
@@ -1676,6 +2098,7 @@ function HoleProseView({
             { tactic: 'rewrite' as const, label: 'Rewrite' },
             { tactic: 'rewrite_rev' as const, label: 'Rewrite\u2190' },
             { tactic: 'apply' as const, label: 'Apply' },
+            { tactic: 'simp' as const, label: 'Simp' },
           ].map(({ tactic, label }) => (
             <button
               key={tactic}
@@ -1695,6 +2118,7 @@ function HoleProseView({
              activeTactic === 'rewrite' ? 'Rewrite' :
              activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
              activeTactic === 'apply' ? 'Apply' :
+             activeTactic === 'simp' ? 'Simp' :
              'by'}
           </span>
           <input
@@ -1707,6 +2131,7 @@ function HoleProseView({
               activeTactic === 'unfold' ? 'definition name' :
               activeTactic === 'rewrite' || activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
+              activeTactic === 'simp' ? 'lemma1, lemma2, ...' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}

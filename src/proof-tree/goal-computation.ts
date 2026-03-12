@@ -49,6 +49,13 @@ export interface TypedProofContext {
   readonly inductionVar?: string;
   readonly goal: string;  // LaTeX string from structured math renderer
   readonly validation?: ValidationResult;
+  /** Kernel-level goal info for interactive rendering (available when using TacticEngine). */
+  readonly kernelGoal?: {
+    readonly engine: TacticEngine;
+    readonly goal: MetaVar;
+    readonly definitions: DefinitionsMap;
+    readonly rev: ReverseRegistry;
+  };
 }
 
 /** Info about an inductive type's constructors (surface-level). */
@@ -223,7 +230,7 @@ function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngi
 // ============================================================================
 
 /** Render a TTerm expression to LaTeX using the structured math editor pipeline. */
-function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): string {
+export function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): string {
   const nodes = ttermToMathNodes(term, rev, ctx);
   return renderStaticLatex(mkRow(nodes));
 }
@@ -315,11 +322,32 @@ export function generateCaseInfos(
   scrutinee: string,
   inductiveInfo: InductiveInfo,
   rev?: ReverseRegistry,
+  contextNames?: readonly string[],
 ): ConstructorCaseInfo[] {
   return inductiveInfo.constructors.map(ctor => {
     const params = peelConstructorParams(ctor.type);
-    const paramNames = params.map((p, i) => {
-      return p.name !== '_' ? p.name : `x${i}`;
+    const usedNames = new Set(contextNames ?? []);
+    const paramNames = params.map((p) => {
+      let name: string;
+      if (p.name !== '_') {
+        name = p.name;
+        if (usedNames.has(name)) {
+          // If the binder's own name is taken, freshen it
+          let i = 1;
+          while (usedNames.has(`${name}${i}`)) i++;
+          name = `${name}${i}`;
+        }
+      } else {
+        // Pick 'x', 'x1', 'x2', ... avoiding conflicts
+        name = 'x';
+        if (usedNames.has(name)) {
+          let i = 1;
+          while (usedNames.has(`x${i}`)) i++;
+          name = `x${i}`;
+        }
+      }
+      usedNames.add(name);
+      return name;
     });
 
     let label = `${scrutinee} = ${ctor.name}`;
@@ -984,6 +1012,41 @@ function replayProofTree(
       }
       return null;
     }
+
+    case 'simp': {
+      // Replay each step sequentially, then recurse into child
+      let currentEngine = engine;
+      for (const step of node.steps) {
+        const stepGoalId = currentEngine.getFocusedGoalId();
+        const stepGoal = currentEngine.getFocusedGoal();
+        if (!stepGoalId || !stepGoal) break;
+
+        if (step.tag === 'rewrite') {
+          const tactic = new RewriteTactic(
+            resolveNameInGoal(step.name, stepGoal),
+            { reverse: step.reverse },
+          );
+          const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
+          if (result.success) {
+            currentEngine = result.newEngine!;
+          }
+        } else if (step.tag === 'unfold') {
+          const tactic = new UnfoldTactic([step.name]);
+          const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
+          if (result.success) {
+            const newId = result.newEngine.getFocusedGoalId();
+            currentEngine = newId
+              ? normalizeGoalInEngine(result.newEngine, newId)
+              : result.newEngine;
+          }
+        }
+      }
+
+      return replayProofTree(
+        node.child, cursorId, currentEngine,
+        caseLabel, caseLabelLatex, inductionVar,
+      );
+    }
   }
 }
 
@@ -1036,6 +1099,21 @@ export function computeApplySubgoalCount(
  *
  * Falls back to surface-only rendering when kernel type is not available.
  */
+/**
+ * Replay the proof tree to the cursor position and return the TacticEngine.
+ * Used by simp and other meta-tactics that need the engine state.
+ */
+export function replayToEngine(
+  root: ProofNode,
+  cursorId: ProofNodeId,
+  kernelType: TTKTerm,
+  definitions: DefinitionsMap,
+): TacticEngine | null {
+  const engine = createInitialEngine(kernelType, [], definitions);
+  const replay = replayProofTree(root, cursorId, engine);
+  return replay?.engine ?? null;
+}
+
 export function computeTypedContext(
   root: ProofNode,
   cursorId: ProofNodeId,
@@ -1098,7 +1176,7 @@ function containsHoleOrMeta(t: TTKTerm): boolean {
   }
 }
 
-function buildNameCtx(ctx: ReadonlyArray<{ name: string }>): string[] {
+export function buildNameCtx(ctx: ReadonlyArray<{ name: string }>): string[] {
   const nameCtx: string[] = [];
   for (let j = ctx.length - 1; j >= 0; j--) {
     nameCtx.push(ctx[j].name);
@@ -1188,6 +1266,12 @@ function computeWithTacticEngine(
     inductionVar: replay.inductionVar,
     goal: goalLatex,
     validation,
+    kernelGoal: {
+      engine: replay.engine,
+      goal,
+      definitions,
+      rev,
+    },
   };
 }
 
@@ -1217,6 +1301,13 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
         if (found) return found;
       }
       return null;
+    case 'simp': {
+      for (const step of node.steps) {
+        const found = findNodeById(step, id);
+        if (found) return found;
+      }
+      return findNodeById(node.child, id);
+    }
   }
 }
 
@@ -1468,6 +1559,41 @@ export function replayEntireTree(
         }
         break;
       }
+
+      case 'simp': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        let currentEngine = eng;
+        // Replay each step
+        for (const step of node.steps) {
+          const stepGoalId = currentEngine.getFocusedGoalId();
+          const stepGoal = currentEngine.getFocusedGoal();
+          if (!stepGoalId || !stepGoal) break;
+
+          recordGoal(step.id, currentEngine, stepGoalId, caseLabelLatex);
+
+          if (step.tag === 'rewrite') {
+            const tactic = new RewriteTactic(
+              resolveNameInGoal(step.name, stepGoal),
+              { reverse: step.reverse },
+            );
+            const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
+            if (stepResult.success) {
+              currentEngine = stepResult.newEngine!;
+            }
+          } else if (step.tag === 'unfold') {
+            const tactic = new UnfoldTactic([step.name]);
+            const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
+            if (stepResult.success) {
+              const newId = stepResult.newEngine.getFocusedGoalId();
+              currentEngine = newId
+                ? normalizeGoalInEngine(stepResult.newEngine, newId)
+                : stepResult.newEngine;
+            }
+          }
+        }
+        walk(node.child, currentEngine, caseLabelLatex);
+        break;
+      }
     }
   }
 
@@ -1577,5 +1703,9 @@ function walkTreeSurface(
       }
       return null;
     }
+
+    case 'simp':
+      // No kernel type — pass through to child
+      return walkTreeSurface(node.child, cursorId, currentType, hypotheses, nameCtx, rev);
   }
 }

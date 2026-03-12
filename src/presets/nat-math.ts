@@ -22,7 +22,7 @@ mul : Nat -> Nat -> Nat
 mul Zero m = Zero
 mul (Succ n) m = plus m (mul n m)
 
-@syntax 1
+@syntax 1 @becomes Succ Zero
 one : Nat
 one = Succ Zero
 
@@ -68,6 +68,12 @@ congPlusLeft p refl = refl
 
 plusLeftComm : (m n p : Nat) -> Equal (plus m (plus n p)) (plus n (plus m p))
 plusLeftComm m n p = trans (sym (plusAssoc m n p)) (trans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
+
+succPlusOneLeft : (n : Nat) -> Equal (Succ n) (plus one n)
+succPlusOneLeft n = refl
+
+succPlusOneRight : (n : Nat) -> Equal (Succ n) (plus n one)
+succPlusOneRight n = plusComm one n
 
 -- Multiplication properties
 mulZeroLeft : (n : Nat) -> Equal (mul Zero n) Zero
@@ -232,10 +238,10 @@ summationBase : (i : Nat) -> (f : Nat -> Nat) -> Equal (sum i i f) (f i) := by
   rewrite sumStartCountOne
   exact refl
 
-@syntax 2
+@syntax 2 @becomes Succ (Succ Zero)
 two : Nat
 two = Succ (Succ Zero)
 
-triangleSum : (n : Nat) -> Equal (mul (Succ (Succ Zero)) (sum Zero n (\\i => i))) (mul (plus n (Succ n)) n) := by
+triangleSum : (n : Nat) -> Equal (mul two (sum Zero n (\\i => i))) (mul (plus n one) n) := by
   ?TODO
 `;

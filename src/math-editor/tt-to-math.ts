@@ -6,7 +6,7 @@
  * patterns, and builds MathNode trees.
  */
 
-import { TTerm, TPattern, shiftSurfaceTerm } from '../compiler/surface';
+import { TTerm, TPattern, shiftSurfaceTerm, occursInTT } from '../compiler/surface';
 import { SyntaxRegistry, SyntaxEntry, PatternElement } from './syntax-registry';
 import {
   MathNode, MathRow,
@@ -306,6 +306,13 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
         const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx) : [mkHole()];
         const bodyCtx = [term.name, ...ctx];
         const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        // Named dependent binder: render as (name : domain) → body
+        if (term.name !== '_' && term.name !== '' && occursInTT(0, term.body)) {
+          return [
+            mkDelimiter('(', ')', mkRow([mkSymbol(term.name), mkSymbol(':'), ...domainNodes])),
+            mkSymbol('\\to'), ...bodyNodes,
+          ];
+        }
         return [...domainNodes, mkSymbol('\\to'), ...bodyNodes];
       }
       return [mkHole()];

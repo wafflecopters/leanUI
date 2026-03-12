@@ -201,8 +201,12 @@ function renderSymbol(value: string): string {
   if (value.startsWith('\\') && value.length > 1) {
     return `${value} `;
   }
+  // Single letter + digits: render as subscript (x0 → x_{0}, n12 → n_{12})
+  if (/^[a-zA-Z]\d+$/.test(value)) {
+    return `{${value[0]}}_{${value.slice(1)}}`;
+  }
   // Multi-letter names (not LaTeX commands) render upright, like \sin or \log.
-  // Exclude primed variables (n', x') and single-letter+digit (x0, x1).
+  // Exclude primed variables (n', x').
   if (value.length > 1 && !value.startsWith('\\') && /^[a-zA-Z]{2,}/.test(value)) {
     return `\\operatorname{${value}}`;
   }

@@ -183,4 +183,16 @@ describe('operator spacing', () => {
     const row = mkRow([mkSymbol('a'), mkText('and'), mkSymbol('b')]);
     expect(renderStaticLatex(row)).toBe('a\\;\\text{and}\\;b');
   });
+
+  test('renders single-letter + digits as subscript', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('x0')]))).toBe('{x}_{0}');
+    expect(renderStaticLatex(mkRow([mkSymbol('n1')]))).toBe('{n}_{1}');
+    expect(renderStaticLatex(mkRow([mkSymbol('a12')]))).toBe('{a}_{12}');
+  });
+
+  test('does not subscript multi-letter names or primes', () => {
+    expect(renderStaticLatex(mkRow([mkSymbol('sum')]))).toBe('\\operatorname{sum}');
+    expect(renderStaticLatex(mkRow([mkSymbol("n'")]))).toBe("n'");
+    expect(renderStaticLatex(mkRow([mkSymbol('x')]))).toBe('x');
+  });
 });

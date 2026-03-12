@@ -1424,11 +1424,16 @@ export function typeToLatex(term: TTKTerm, context: string[], notations: Notatio
     const binderParts = groups.map(formatBinderGroup);
     return `\\forall\\, ${binderParts.join(',\\; ')},\\; ${bodyLatex}`;
   } else {
-    // Arrow style: N → N → N
+    // Arrow style: N → N → N, but (a : N) → (f : N → N) → ... for named binders
     const parts: string[] = [];
     for (const g of groups) {
-      for (const _name of g.names) {
-        parts.push(g.typeLatex);
+      if (g.names.every(n => n === '_')) {
+        for (const _name of g.names) {
+          parts.push(g.typeLatex);
+        }
+      } else {
+        // Named binder group: show as (name : type)
+        parts.push(`(${formatBinderGroup(g)})`);
       }
     }
     parts.push(bodyLatex);

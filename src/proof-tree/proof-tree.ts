@@ -30,7 +30,8 @@ export type ProofNode =
   | ExactNode
   | UnfoldNode
   | RewriteNode
-  | ApplyNode;
+  | ApplyNode
+  | SimpNode;
 
 export interface HoleNode {
   readonly tag: 'hole';
@@ -83,6 +84,19 @@ export interface ApplyNode {
   readonly name: string;
   /** Sub-proofs for each subgoal created by apply. */
   readonly children: readonly ProofNode[];
+}
+
+export interface SimpNode {
+  readonly tag: 'simp';
+  readonly id: ProofNodeId;
+  /** Lemma names passed to simp. */
+  readonly lemmas: readonly string[];
+  /** Individual rewrite/unfold steps discovered by simp. */
+  readonly steps: readonly ProofNode[];
+  /** Whether the step list is collapsed in the UI. */
+  readonly collapsed: boolean;
+  /** The continuation proof after simp completes. */
+  readonly child: ProofNode;
 }
 
 export interface CaseNode {
@@ -162,6 +176,10 @@ export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode
   return { tag: 'apply', id: freshProofId(), name, children };
 }
 
+export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode): SimpNode {
+  return { tag: 'simp', id: freshProofId(), lemmas, steps, collapsed: true, child };
+}
+
 export function mkCase(
   label: string, body: ProofNode,
   constructorName?: string, constructorParamNames?: readonly string[],
@@ -206,6 +224,13 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
         if (found) return found;
       }
       return null;
+    case 'simp': {
+      for (const step of root.steps) {
+        const found = findNode(step, id);
+        if (found) return found;
+      }
+      return findNode(root.child, id);
+    }
   }
 }
 
@@ -232,6 +257,13 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
         if (found) return found;
       }
       return null;
+    case 'simp': {
+      for (const step of root.steps) {
+        const found = findCase(step, id);
+        if (found) return found;
+      }
+      return findCase(root.child, id);
+    }
   }
 }
 
@@ -252,6 +284,9 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
       return node.cases.some(c =>
         c.id === cursorId || isCursorInSubtree(c.body, cursorId)
       );
+    case 'simp':
+      return node.steps.some(step => isCursorInSubtree(step, cursorId)) ||
+        isCursorInSubtree(node.child, cursorId);
   }
 }
 
@@ -297,6 +332,14 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
         }
       }
       break;
+    case 'simp':
+      if (!node.collapsed) {
+        for (const step of node.steps) {
+          linearizeImpl(step, depth + 1, out);
+        }
+      }
+      linearizeImpl(node.child, depth + 1, out);
+      break;
   }
 }
 
@@ -334,6 +377,17 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
         return c;
       });
       return changed ? { ...root, cases: newCases } : root;
+    }
+    case 'simp': {
+      let changed = false;
+      const newSteps = root.steps.map(step => {
+        const newStep = replaceNode(step, targetId, replacement);
+        if (newStep !== step) changed = true;
+        return newStep;
+      });
+      const newChild = replaceNode(root.child, targetId, replacement);
+      if (newChild !== root.child) changed = true;
+      return changed ? { ...root, steps: newSteps, child: newChild } : root;
     }
   }
 }
@@ -375,6 +429,17 @@ export function updateCase(
         return c;
       });
       return changed ? { ...root, cases: newCases } : root;
+    }
+    case 'simp': {
+      let changed = false;
+      const newSteps = root.steps.map(step => {
+        const newStep = updateCase(step, caseId, updater);
+        if (newStep !== step) changed = true;
+        return newStep;
+      });
+      const newChild = updateCase(root.child, caseId, updater);
+      if (newChild !== root.child) changed = true;
+      return changed ? { ...root, steps: newSteps, child: newChild } : root;
     }
   }
 }
@@ -466,6 +531,21 @@ export function applyApplyTactic(state: ProofTreeState, name: string, numChildre
   return { root: newRoot, cursor: { nodeId: children[0].id } };
 }
 
+/** Apply simp at the cursor (must be a hole). Replaces the hole with a simp node containing steps + child hole. */
+export function applySimp(
+  state: ProofTreeState,
+  lemmas: readonly string[],
+  steps: readonly ProofNode[],
+): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const childHole = mkHole();
+  const simp = mkSimp(lemmas, steps, childHole);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, simp);
+  return { root: newRoot, cursor: { nodeId: childHole.id } };
+}
+
 /** Apply exact at the cursor (must be a hole). */
 export function applyExact(state: ProofTreeState, expr: string): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
@@ -533,6 +613,27 @@ export function toggleCollapse(state: ProofTreeState, caseId: ProofNodeId): Proo
   let cursor = state.cursor;
   if (newCollapsed && isCursorInSubtree(caseNode.body, state.cursor.nodeId)) {
     cursor = { nodeId: caseId };
+  }
+
+  return { root: newRoot, cursor };
+}
+
+/** Toggle collapse on a simp node's step list. Fixes cursor if it gets hidden. */
+export function toggleSimpCollapse(state: ProofTreeState, nodeId: ProofNodeId): ProofTreeState | null {
+  const node = findNode(state.root, nodeId);
+  if (!node || node.tag !== 'simp') return null;
+
+  const newCollapsed = !node.collapsed;
+  const updatedNode: SimpNode = { ...node, collapsed: newCollapsed };
+  const newRoot = replaceNode(state.root, nodeId, updatedNode);
+
+  // If collapsing and cursor is inside a step, move cursor to simp header
+  let cursor = state.cursor;
+  if (newCollapsed) {
+    const cursorInSteps = node.steps.some(step => isCursorInSubtree(step, state.cursor.nodeId));
+    if (cursorInSteps) {
+      cursor = { nodeId: nodeId };
+    }
   }
 
   return { root: newRoot, cursor };
@@ -709,6 +810,10 @@ function computeContextImpl(
 
     case 'unfold':
     case 'rewrite':
+      return computeContextImpl(node.child, cursorId, hypotheses);
+
+    case 'simp':
+      // Steps are read-only sub-nodes; check child continuation
       return computeContextImpl(node.child, cursorId, hypotheses);
 
     case 'apply':
