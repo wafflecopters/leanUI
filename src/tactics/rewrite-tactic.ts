@@ -103,7 +103,7 @@ export class RewriteTactic implements Tactic {
       //     - Delta-reducing would expose internal match structures, making subterm
       //       matching impossible (e.g., plus(Succ(x), y) → match x with ...)
       const emptyDefs = createDefinitionsMap();
-      let goalType = fullNormalize(goal.type, emptyDefs);
+      const goalType = fullNormalize(goal.type, emptyDefs);
 
       // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.
@@ -121,11 +121,10 @@ export class RewriteTactic implements Tactic {
           rhs = this.applyMetaBindings(rhs, bindings);
           typeA = this.applyMetaBindings(typeA, bindings);
 
-          // 4e. Delta-normalize the LHS and goal so they use the same form for
-          //     simple aliases like `one` (= Succ Zero). Uses WHNF on leaf constants
-          //     to expand definitions without unfolding recursive functions.
+          // 4e. Delta-normalize the LHS so simple aliases like `one` (= Succ Zero)
+          //     match the goal's already-elaborated form. Only expand the LHS, not
+          //     the goal (goal normalization would break Var references like IH).
           lhs = this.shallowDeltaNormalize(lhs, engine.definitions);
-          goalType = this.shallowDeltaNormalize(goalType, engine.definitions);
         }
       }
 
