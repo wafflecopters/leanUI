@@ -83,6 +83,11 @@ mulDistribRight : (n m p : Nat) -> Equal (mul (plus n m) p) (plus (mul n p) (mul
 mulDistribRight Zero m p = refl
 mulDistribRight (Succ n) m p = trans (congPlusRight p (mulDistribRight n m p)) (sym (plusAssoc p (mul n p) (mul m p)))
 postulate mulComm : (n m : Nat) -> Equal (mul n m) (mul m n)
+succInj : {n m : Nat} -> Equal (Succ n) (Succ m) -> Equal n m
+succInj refl = refl
+plusCancelLeft : {a b c : Nat} -> Equal (plus a b) (plus a c) -> Equal b c
+plusCancelLeft {a:=Zero} {b} {c} eq = eq
+plusCancelLeft {a:=Succ a} {b} {c} eq = let k = succInj eq in plusCancelLeft k
 `;
 
 // Compile once and reuse
@@ -1172,5 +1177,69 @@ describe('RewriteTactic: post-order (bottom-up) occurrence counting', () => {
     const lhsOfEq = newGoal.type.tag === 'App' && newGoal.type.fn.tag === 'App'
       ? newGoal.type.fn.arg : null;
     expect(lhsOfEq).toEqual(mulTwoA);
+  });
+});
+
+// =============================================================================
+// Tests for rewriting with premise-carrying lemmas (like plusCancelLeft)
+// =============================================================================
+
+describe('RewriteTactic with premise-carrying lemmas', () => {
+  test('rewrite plusCancelLeft cancels common plus prefix', () => {
+    // Goal: Equal (plus a b) (plus a c) → should become Equal b c
+    // plusCancelLeft : {a b c : Nat} -> Equal (plus a b) (plus a c) -> Equal b c
+    const definitions = getDefinitions();
+    const Nat: TTKTerm = { tag: 'Const', name: 'Nat' };
+    const a: TTKTerm = { tag: 'Var', index: 2 };
+    const b: TTKTerm = { tag: 'Var', index: 1 };
+    const c: TTKTerm = { tag: 'Var', index: 0 };
+    const plusAB: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: b };
+    const plusAC: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: c };
+
+    // Equal (plus a b) (plus a c)
+    const goalType: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: Nat }, arg: plusAB },
+      arg: plusAC
+    };
+
+    const ctx = [
+      { name: 'a', type: Nat },
+      { name: 'b', type: Nat },
+      { name: 'c', type: Nat },
+    ];
+
+    const engine = createInitialEngine(goalType, ctx, definitions);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const result = new RewriteTactic(
+      { tag: 'Const', name: 'plusCancelLeft' },
+      { enhanced: true }
+    ).apply(engine, goal, goalId);
+
+    // Should succeed and produce a goal without 'plus'
+    if (!result.success) {
+      throw new Error(`rewrite plusCancelLeft failed: ${result.error}`);
+    }
+
+    // Get the new goal from the new engine
+    const newEngine = result.newEngine;
+    const newGoalId = newEngine.goals[newEngine.focusIndex];
+    const newGoal = newEngine.metaVars.get(newGoalId);
+    expect(newGoal).toBeDefined();
+    if (!newGoal) return;
+
+    // Verify the new goal is Equal Nat b c — the 'plus a' prefix should be cancelled.
+    // Expected structure: App(App(App(Const("Equal"), Const("Nat")), Var(1)), Var(0))
+    const newType = newGoal.type;
+    expect(newType.tag).toBe('App'); // Equal _ _ c
+    const equalBC = newType as any;
+    expect(equalBC.arg).toEqual(c); // c = Var(0)
+    expect(equalBC.fn.tag).toBe('App'); // Equal _ b
+    expect(equalBC.fn.arg).toEqual(b); // b = Var(1)
+    expect(equalBC.fn.fn.tag).toBe('App'); // Equal Nat
+    expect(equalBC.fn.fn.fn).toEqual({ tag: 'Const', name: 'Equal' });
+    expect(equalBC.fn.fn.arg).toEqual(Nat);
   });
 });

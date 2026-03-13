@@ -413,7 +413,10 @@ const styles = {
   },
   blockCard: {
     backgroundColor: '#161b22',
-    borderWidth: '1px',
+    borderTopWidth: '1px',
+    borderRightWidth: '1px',
+    borderBottomWidth: '1px',
+    borderLeftWidth: '1px',
     borderStyle: 'solid',
     borderColor: '#30363d',
     borderRadius: '6px',

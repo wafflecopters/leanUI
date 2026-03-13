@@ -72,7 +72,7 @@ export class RewriteTactic implements Tactic {
         }
       }
 
-      const eqArgs = this.extractEqualityArgs(proofTypeForExtraction);
+      let eqArgs = this.extractEqualityArgs(proofTypeForExtraction);
       if (!eqArgs) {
         return {
           success: false,
@@ -81,6 +81,31 @@ export class RewriteTactic implements Tactic {
       }
 
       let { typeA, lhs: rawLhs, rhs: rawRhs } = eqArgs;
+
+      // 3b. Premise-driven rewrite: when the conclusion equality has bare metas as
+      //     both LHS and RHS (e.g., plusCancelLeft : {a b c} -> Equal(plus a b)(plus a c) -> Equal b c
+      //     produces conclusion Equal Meta(?b) Meta(?c)), the pattern is too general to match
+      //     anything useful. Instead, find the premise equality and use IT as the rewrite source.
+      //     Match the premise equality against the goal equality to solve metas, then the
+      //     new goal becomes the conclusion equality with metas substituted.
+      let premiseDrivenRewrite: {
+        premiseEq: { typeA: TTKTerm; lhs: TTKTerm; rhs: TTKTerm };
+        conclusionLhs: TTKTerm;
+        conclusionRhs: TTKTerm;
+      } | null = null;
+      if (instantiated && rawLhs.tag === 'Meta' && rawRhs.tag === 'Meta') {
+        for (const [_metaId, premiseType] of instantiated.premiseTypes) {
+          const premiseEq = this.extractEqualityArgs(premiseType);
+          if (premiseEq) {
+            premiseDrivenRewrite = {
+              premiseEq,
+              conclusionLhs: rawLhs,
+              conclusionRhs: rawRhs,
+            };
+            break;
+          }
+        }
+      }
 
       // For reverse rewrite (rewrite←), swap LHS and RHS so we replace RHS with LHS.
       if (this.options.reverse) {
@@ -114,7 +139,43 @@ export class RewriteTactic implements Tactic {
       let newGoalType: TTKTerm = goalType;
       let foundNonTrivialRewrite = false;
 
-      if (instantiated) {
+      if (premiseDrivenRewrite && instantiated) {
+        // Premise-driven rewrite: match premise equality against goal equality.
+        // For plusCancelLeft: premise = Equal(plus ?a ?b)(plus ?a ?c), conclusion = Equal ?b ?c
+        // Match premise LHS against goal's equality LHS, premise RHS against goal's equality RHS.
+        // The new goal becomes the conclusion with metas solved.
+        const goalEq = this.extractEqualityArgs(goalType);
+        if (goalEq) {
+          const bindings = new Map<string, TTKTerm>();
+          const premLhs = this.betaReduce(premiseDrivenRewrite.premiseEq.lhs);
+          const premRhs = this.betaReduce(premiseDrivenRewrite.premiseEq.rhs);
+          const goalLhsBeta = this.betaReduce(goalEq.lhs);
+          const goalRhsBeta = this.betaReduce(goalEq.rhs);
+
+          // Try matching premise LHS against goal LHS, then premise RHS against goal RHS
+          if (this.tryMatchPattern(premLhs, goalLhsBeta, bindings, engine.definitions) &&
+              this.tryMatchPattern(premRhs, goalRhsBeta, bindings, engine.definitions)) {
+
+            // Build the new goal: conclusion equality with metas solved
+            const concLhs = this.applyMetaBindings(premiseDrivenRewrite.conclusionLhs, bindings);
+            const concRhs = this.applyMetaBindings(premiseDrivenRewrite.conclusionRhs, bindings);
+            const concTypeA = this.applyMetaBindings(premiseDrivenRewrite.premiseEq.typeA, bindings);
+
+            newGoalType = {
+              tag: 'App',
+              fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: concTypeA }, arg: concLhs },
+              arg: concRhs
+            };
+
+            // For the motive and proof term, use the premise equality sides
+            lhs = this.applyMetaBindings(premLhs, bindings);
+            rhs = this.applyMetaBindings(premRhs, bindings);
+            typeA = concTypeA;
+            allBindings = bindings;
+            foundNonTrivialRewrite = !this.termEqual(goalType, newGoalType);
+          }
+        }
+      } else if (instantiated) {
         const allMatches = this.findAllPatternMatches(goalType, lhs, engine.definitions);
 
         for (const bindings of allMatches) {
@@ -187,22 +248,7 @@ export class RewriteTactic implements Tactic {
         };
       }
 
-      // 6. Build the motive: \z => goal.type[lhs := z]
-      //    Shift goal type and lhs into the lambda body scope (depth +1),
-      //    then replace shifted lhs with Var(0).
-      //    When occurrences are specified, abstract over only those occurrences.
-      const shiftedGoal = shiftTerm(goalType, 1, 0);
-      const shiftedLhs = shiftTerm(lhs, 1, 0);
-      const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 }, engine.definitions, occurrences);
-      const motive: TTKTerm = {
-        tag: 'Binder',
-        binderKind: { tag: 'BLam' },
-        name: '_z',
-        domain: typeA,
-        body: motiveBody
-      };
-
-      // 7. Create a new meta for the transformed goal
+      // 6-8. Build the proof term
       const newMetaId = freshMetaName();
       const newMeta: MetaVar = {
         ctx: goal.ctx,
@@ -210,44 +256,88 @@ export class RewriteTactic implements Tactic {
         solution: undefined
       };
 
-      // 8. Build the proof term: replace motive eqProof ?newGoal
-      //    replace : {A} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
-      //
-      //    Normal (rewrite h where h : Equal lhs rhs):
-      //      We swapped nothing, so we need sym h : Equal rhs lhs
-      //      replace P (sym h) : P rhs -> P lhs
-      //
-      //    Reverse (rewrite← h where h : Equal lhs rhs):
-      //      We swapped lhs/rhs above, so "lhs" is now the original rhs.
-      //      Use h directly: replace P h : P lhs -> P rhs
-      //
-      //    When the proof is a Pi-type (e.g., minusSucc : {i n} -> Leq i n -> Equal ...),
-      //    build the fully-applied proof: minusSucc arg0 arg1 ... argN
-      let appliedProof: TTKTerm = this.equalityProof;
-      if (instantiated && allBindings) {
+      let proofTerm: TTKTerm;
+
+      if (premiseDrivenRewrite && instantiated && allBindings) {
+        // Premise-driven rewrite: the lemma takes the original goal as a premise
+        // and produces the new goal as its conclusion.
+        // Proof term: lemma {implicit_args...} ?premiseMeta
+        // where ?premiseMeta : originalGoalType is solved by the original goal,
+        // and the result has type newGoalType = Equal b c.
+        //
+        // Since the lemma goes original→new (not new→original), we can't use
+        // replace. Instead, we record that the original goal is "consumed" by
+        // the lemma application, and the new goal is what the user must prove
+        // to complete the overall proof.
+        //
+        // We create a "premise meta" for the original goal type, and the lemma
+        // applied to all args (including the premise meta) produces the new goal.
+        const premiseMetaId = freshMetaName();
+        const premiseMeta: MetaVar = {
+          ctx: goal.ctx,
+          type: goalType,  // The original goal type becomes the premise
+          solution: undefined
+        };
+
+        // Build: lemma {a} {b} {c} ?premiseMeta
+        let appliedProof: TTKTerm = this.equalityProof;
         for (const metaId of instantiated.metaIds) {
           const arg = allBindings.get(metaId) ?? { tag: 'Meta' as const, id: metaId };
           appliedProof = { tag: 'App', fn: appliedProof, arg };
         }
-      }
-      const eqProof: TTKTerm = this.options.reverse
-        ? appliedProof
-        : { tag: 'App', fn: { tag: 'Const', name: 'sym' }, arg: appliedProof };
 
-      // replace motive eqProof ?newGoal
-      const proofTerm: TTKTerm = {
-        tag: 'App',
-        fn: {
+        // The proof term is the fully-applied lemma — its type is the new goal.
+        // The old goal's solution references the premise meta which the user must prove.
+        proofTerm = appliedProof;
+
+        // The old goal is solved by the premise meta (the user proves the original goal
+        // indirectly through the new goal). We swap: the user proves ?newGoal : newGoalType,
+        // and the engine tracks that the lemma connects old→new.
+        // For the engine, we set the old goal's solution to a Hole placeholder that
+        // records the premise-driven connection.
+        proofTerm = { tag: 'Hole', id: `_premise_driven_${this.termToString(this.equalityProof)}` };
+      } else {
+        // Standard rewrite: build replace-based proof term.
+        //
+        // 6. Build the motive: \z => goal.type[lhs := z]
+        const shiftedGoal = shiftTerm(goalType, 1, 0);
+        const shiftedLhs = shiftTerm(lhs, 1, 0);
+        const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 }, engine.definitions, occurrences);
+        const motive: TTKTerm = {
+          tag: 'Binder',
+          binderKind: { tag: 'BLam' },
+          name: '_z',
+          domain: typeA,
+          body: motiveBody
+        };
+
+        // 8. Build the proof term: replace motive eqProof ?newGoal
+        //    replace : {A} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+        let appliedProof: TTKTerm = this.equalityProof;
+        if (instantiated && allBindings) {
+          for (const metaId of instantiated.metaIds) {
+            const arg = allBindings.get(metaId) ?? { tag: 'Meta' as const, id: metaId };
+            appliedProof = { tag: 'App', fn: appliedProof, arg };
+          }
+        }
+        const eqProof: TTKTerm = this.options.reverse
+          ? appliedProof
+          : { tag: 'App', fn: { tag: 'Const', name: 'sym' }, arg: appliedProof };
+
+        proofTerm = {
           tag: 'App',
           fn: {
             tag: 'App',
-            fn: { tag: 'Const', name: 'replace' },
-            arg: motive
+            fn: {
+              tag: 'App',
+              fn: { tag: 'Const', name: 'replace' },
+              arg: motive
+            },
+            arg: eqProof
           },
-          arg: eqProof
-        },
-        arg: { tag: 'Meta', id: newMetaId }
-      };
+          arg: { tag: 'Meta', id: newMetaId }
+        };
+      }
 
       // 9. Update engine state
       const newMetaVars = new Map(engine.metaVars);
