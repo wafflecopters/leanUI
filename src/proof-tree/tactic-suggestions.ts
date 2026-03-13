@@ -50,23 +50,26 @@ export function computeTacticSuggestions(
 
   const suggestions: TacticSuggestion[] = [];
 
-  // Try `exact refl` — if the goal is `Equal a a`, this closes it immediately
+  // Try `exact refl` — only when clicking on an Equal(...) subterm
   if (kernelGoal) {
-    const { engine, goal: metaGoal } = kernelGoal;
-    const goalId = engine.getFocusedGoalId();
-    if (goalId) {
-      try {
-        const reflTactic = new ExactTactic({ tag: 'Const', name: 'refl' });
-        const result = reflTactic.apply(engine, metaGoal, goalId);
-        if (result.success) {
-          suggestions.push({
-            id: 'exact-refl',
-            label: 'refl',
-            labelLatex: '\\textbf{refl}',
-            description: 'Both sides are equal — close with refl',
-          });
-        }
-      } catch { /* refl doesn't apply */ }
+    const subtermInfo = goal.subtermMap.get(selectedPath);
+    if (subtermInfo?.headName === 'Equal') {
+      const { engine, goal: metaGoal } = kernelGoal;
+      const goalId = engine.getFocusedGoalId();
+      if (goalId) {
+        try {
+          const reflTactic = new ExactTactic({ tag: 'Const', name: 'refl' });
+          const result = reflTactic.apply(engine, metaGoal, goalId);
+          if (result.success) {
+            suggestions.push({
+              id: 'exact-refl',
+              label: 'refl',
+              labelLatex: '\\textbf{refl}',
+              description: 'Both sides are equal — close with refl',
+            });
+          }
+        } catch { /* refl doesn't apply */ }
+      }
     }
   }
 

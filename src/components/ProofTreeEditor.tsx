@@ -448,7 +448,9 @@ function GoalInteraction({
   const handleApplySuggestion = (suggestion: TacticSuggestion) => {
     let result: ProofTreeState | null = null;
 
-    if (suggestion.id.startsWith('unfold-')) {
+    if (suggestion.id === 'exact-refl') {
+      result = applyExact(state, 'refl');
+    } else if (suggestion.id.startsWith('unfold-')) {
       const name = suggestion.id.slice('unfold-'.length);
       result = applyUnfold(state, name);
     } else if (suggestion.id.startsWith('induction-')) {
