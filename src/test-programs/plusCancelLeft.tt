@@ -1,0 +1,15 @@
+@test success
+@name "plusCancelLeft with succInj in let"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero n = n
+plus (Succ m) n = Succ (plus m n)
+
+succInj : {n m : Nat} -> Equal (Succ n) (Succ m) -> Equal n m
+succInj refl = refl
+
+plusCancelLeft : {a b c : Nat} -> Equal (plus a b) (plus a c) -> Equal b c
+plusCancelLeft {a:=Zero} {b} {c} eq = eq
+plusCancelLeft {a:=Succ a} {b} {c} eq = let k = succInj eq in plusCancelLeft k

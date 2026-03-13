@@ -107,35 +107,80 @@ export class RewriteTactic implements Tactic {
 
       // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.
+      //     We collect ALL matches and try each, because the first match may produce
+      //     a no-op rewrite (e.g., mulComm on mul(x,x) → mul(x,x)).
       let allBindings: Map<string, TTKTerm> | null = null;
+      const occurrences = this.options.occurrences;
+      let newGoalType: TTKTerm = goalType;
+      let foundNonTrivialRewrite = false;
+
       if (instantiated) {
-        const bindings = this.findPatternMatch(goalType, lhs, engine.definitions);
-        if (bindings && bindings.size > 0) {
+        const allMatches = this.findAllPatternMatches(goalType, lhs, engine.definitions);
+
+        for (const bindings of allMatches) {
+          if (bindings.size === 0) continue;
+
           // 4d. Search context for unsolved premise metas (like Lean's `assumption`)
           this.searchContextForPremises(
             instantiated.metaIds, bindings, instantiated.premiseTypes,
             goal.ctx, engine.definitions
           );
-          allBindings = bindings;
-          lhs = this.applyMetaBindings(lhs, bindings);
-          rhs = this.applyMetaBindings(rhs, bindings);
-          typeA = this.applyMetaBindings(typeA, bindings);
 
-          // 4e. Delta-normalize the LHS so simple aliases like `one` (= Succ Zero)
-          //     match the goal's already-elaborated form. Only expand the LHS, not
-          //     the goal (goal normalization would break Var references like IH).
-          lhs = this.shallowDeltaNormalize(lhs, engine.definitions);
+          const candidateLhs = this.applyMetaBindings(lhs, bindings);
+          const candidateRhs = this.applyMetaBindings(rhs, bindings);
+
+          // 5. Replace LHS with RHS in the goal type
+          let candidateGoal = this.substitute(goalType, candidateLhs, candidateRhs, engine.definitions, occurrences);
+
+          // 5a. If no match, try delta-normalizing the LHS for simple aliases
+          if (this.termEqual(goalType, candidateGoal)) {
+            const normalizedLhs = this.shallowDeltaNormalize(candidateLhs, engine.definitions);
+            if (!this.termEqual(candidateLhs, normalizedLhs)) {
+              candidateGoal = this.substitute(goalType, normalizedLhs, candidateRhs, engine.definitions, occurrences);
+              if (!this.termEqual(goalType, candidateGoal)) {
+                lhs = normalizedLhs;
+                rhs = candidateRhs;
+                typeA = this.applyMetaBindings(typeA, bindings);
+                allBindings = bindings;
+                newGoalType = candidateGoal;
+                foundNonTrivialRewrite = true;
+                break;
+              }
+            }
+          }
+
+          if (!this.termEqual(goalType, candidateGoal)) {
+            lhs = candidateLhs;
+            rhs = candidateRhs;
+            typeA = this.applyMetaBindings(typeA, bindings);
+            allBindings = bindings;
+            newGoalType = candidateGoal;
+            foundNonTrivialRewrite = true;
+            break;
+          }
+        }
+      } else {
+        // No Pi instantiation needed — direct substitute
+        newGoalType = this.substitute(goalType, lhs, rhs, engine.definitions, occurrences);
+
+        // 5a. Delta-normalize fallback
+        if (this.termEqual(goalType, newGoalType)) {
+          const normalizedLhs = this.shallowDeltaNormalize(lhs, engine.definitions);
+          if (!this.termEqual(lhs, normalizedLhs)) {
+            newGoalType = this.substitute(goalType, normalizedLhs, rhs, engine.definitions, occurrences);
+            if (!this.termEqual(goalType, newGoalType)) {
+              lhs = normalizedLhs;
+            }
+          }
+        }
+
+        if (!this.termEqual(goalType, newGoalType)) {
+          foundNonTrivialRewrite = true;
         }
       }
 
-      // 5. Replace LHS with RHS in the goal type
-      //    Uses WHNF-based matching to handle definition aliases
-      //    (e.g., `radd R` matching `CompleteOrderedField.add (field R)`)
-      const occurrences = this.options.occurrences;
-      const newGoalType = this.substitute(goalType, lhs, rhs, engine.definitions, occurrences);
-
       // 5b. Check if anything changed
-      if (this.termEqual(goalType, newGoalType)) {
+      if (!foundNonTrivialRewrite) {
         return {
           success: false,
           error: `rewrite: no occurrences of ${this.termToString(lhs)} found in goal`
@@ -300,37 +345,49 @@ export class RewriteTactic implements Tactic {
     pattern: TTKTerm,
     definitions?: DefinitionsMap,
   ): Map<string, TTKTerm> | null {
+    const all = this.findAllPatternMatches(term, pattern, definitions);
+    return all.length > 0 ? all[0] : null;
+  }
+
+  /**
+   * Find ALL pattern matches of `pattern` in `term`, returned in tree-traversal order.
+   * Used to retry when the first match produces a no-op rewrite (e.g., mulComm on mul(x,x)).
+   */
+  private findAllPatternMatches(
+    term: TTKTerm,
+    pattern: TTKTerm,
+    definitions?: DefinitionsMap,
+  ): Map<string, TTKTerm>[] {
+    const results: Map<string, TTKTerm>[] = [];
+
     // Try matching at this node
     const bindings = new Map<string, TTKTerm>();
     if (this.tryMatchPattern(pattern, term, bindings, definitions)) {
-      return bindings;
+      results.push(bindings);
     }
 
     // Recurse into subterms
     switch (term.tag) {
       case 'App': {
-        const fnResult = this.findPatternMatch(term.fn, pattern, definitions);
-        if (fnResult) return fnResult;
-        return this.findPatternMatch(term.arg, pattern, definitions);
+        results.push(...this.findAllPatternMatches(term.fn, pattern, definitions));
+        results.push(...this.findAllPatternMatches(term.arg, pattern, definitions));
+        break;
       }
       case 'Binder': {
-        const domResult = this.findPatternMatch(term.domain, pattern, definitions);
-        if (domResult) return domResult;
+        results.push(...this.findAllPatternMatches(term.domain, pattern, definitions));
         // Don't recurse into binder body — pattern vars would have wrong indices
-        return null;
+        break;
       }
       case 'Match': {
-        const scrutResult = this.findPatternMatch(term.scrutinee, pattern, definitions);
-        if (scrutResult) return scrutResult;
+        results.push(...this.findAllPatternMatches(term.scrutinee, pattern, definitions));
         for (const clause of term.clauses) {
-          const rhsResult = this.findPatternMatch(clause.rhs, pattern, definitions);
-          if (rhsResult) return rhsResult;
+          results.push(...this.findAllPatternMatches(clause.rhs, pattern, definitions));
         }
-        return null;
+        break;
       }
-      default:
-        return null;
     }
+
+    return results;
   }
 
   /**
@@ -494,40 +551,122 @@ export class RewriteTactic implements Tactic {
     return { typeA, lhs, rhs };
   }
 
+  /** Collect an App chain into head + args array. */
+  private collectAppSpine(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+    const args: TTKTerm[] = [];
+    let head = term;
+    while (head.tag === 'App') {
+      args.unshift(head.arg);
+      head = head.fn;
+    }
+    return { head, args };
+  }
+
+  /** Look up implicit arg positions for a constant (from namedArgMap). */
+  private getImplicitPositions(headName: string, definitions?: DefinitionsMap): Set<number> | null {
+    if (!definitions) return null;
+    const termDef = definitions.terms.get(headName);
+    if (termDef?.namedArgMap && termDef.namedArgMap.size > 0) {
+      return new Set(termDef.namedArgMap.values());
+    }
+    const indDef = definitions.inductiveTypes.get(headName);
+    if (indDef?.namedArgMap && indDef.namedArgMap.size > 0) {
+      return new Set(indDef.namedArgMap.values());
+    }
+    const indName = definitions.inductiveNameOfConstructor.get(headName);
+    if (indName) {
+      const parentInd = definitions.inductiveTypes.get(indName);
+      if (parentInd) {
+        const ctor = parentInd.constructors.find(c => c.name === headName);
+        if (ctor?.namedArgMap && ctor.namedArgMap.size > 0) {
+          return new Set(ctor.namedArgMap.values());
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Get the head constant name of a term's App chain, or null. */
+  private getTermHeadName(term: TTKTerm): string | null {
+    let current = term;
+    while (current.tag === 'App') current = current.fn;
+    return current.tag === 'Const' ? current.name : null;
+  }
+
   /**
    * Substitute occurrences of `from` with `to` in `term`.
    * When `occurrences` is provided (1-based indices), only replaces at those positions.
-   * Uses WHNF-based matching when definitions are provided, so that
-   * definition aliases (like `radd R` vs `CompleteOrderedField.add (field R)`)
-   * are treated as equal.
+   *
+   * IMPORTANT: When occurrence-targeted, counting is by HEAD CONSTANT NAME
+   * (matching the surface annotator's counting), not by full LHS match.
+   * This ensures that surface occurrence N maps to the same subterm in the kernel.
+   * For example, if the goal has mul(2,a) and mul(1,b) and the LHS is mul(1,?x),
+   * both count as `mul` occurrences (1 and 2), even though only mul(1,b) matches.
    */
   private substitute(
     term: TTKTerm, from: TTKTerm, to: TTKTerm,
     definitions?: DefinitionsMap, occurrences?: number[],
   ): TTKTerm {
     const counter = { value: 0 };
-    return this.substituteImpl(term, from, to, definitions, occurrences, counter);
+    // When occurrence-targeted, compute the LHS head for head-based counting
+    const lhsHead = (occurrences && occurrences.length > 0)
+      ? this.getTermHeadName(from)
+      : null;
+    return this.substituteImpl(term, from, to, definitions, occurrences, counter, lhsHead);
   }
 
   private substituteImpl(
     term: TTKTerm, from: TTKTerm, to: TTKTerm,
     definitions: DefinitionsMap | undefined, occurrences: number[] | undefined,
     counter: { value: number },
+    lhsHead: string | null,
   ): TTKTerm {
+    // When occurrence-targeted with a head constant, use head-based counting.
+    // This counts ALL Apps with the same head as the LHS (matching the surface
+    // annotator), not just full LHS matches.
+    //
+    // IMPORTANT: Uses POST-ORDER counting (children before parent) to match the
+    // surface annotator, which assigns occurrence indices bottom-up during rendering
+    // (children are rendered/annotated before parents in ttermToMathNodes).
+    if (lhsHead && occurrences && term.tag === 'App') {
+      const termHead = this.getTermHeadName(term);
+      if (termHead === lhsHead) {
+        // Post-order: first recurse into children
+        const recursedTerm = this.substituteIntoAppArgs(term, from, to, definitions, occurrences, counter, lhsHead);
+        // Then count this node
+        counter.value++;
+        if (occurrences.includes(counter.value)) {
+          // This is the targeted occurrence — try the full match on ORIGINAL term
+          const isMatch = this.options.enhanced && definitions
+            ? this.termEqualDeep(term, from, definitions)
+            : this.termEqual(term, from);
+          if (isMatch) {
+            return to;
+          }
+          // Head matches but LHS doesn't fully match — return recursed version
+          return recursedTerm;
+        }
+        // Not a targeted occurrence — return recursed version
+        return recursedTerm;
+      }
+    }
+
     // If term matches from, replace with to (respecting occurrence filter)
     // In enhanced mode (erw), use recursive deep definitional equality.
     // In normal mode, use structural equality only — WHNF comparison is too aggressive
     // because unrelated subterms may be definitionally equal to the LHS
     // (e.g., mul(2, sumStartCount(0,1,id)) WHNF≡ sumStartCount(0,1,id) ≡ Zero)
-    const isMatch = this.options.enhanced && definitions
-      ? this.termEqualDeep(term, from, definitions)
-      : this.termEqual(term, from);
-    if (isMatch) {
-      counter.value++;
-      if (!occurrences || occurrences.includes(counter.value)) {
-        return to;
+    if (!lhsHead) {
+      const isMatch = this.options.enhanced && definitions
+        ? this.termEqualDeep(term, from, definitions)
+        : this.termEqual(term, from);
+      if (isMatch) {
+        counter.value++;
+        if (!occurrences || occurrences.includes(counter.value)) {
+          return to;
+        }
+        return term;  // Skip this occurrence
       }
-      return term;  // Skip this occurrence
     }
 
     // In enhanced mode, WHNF the term to expose hidden subterms.
@@ -548,7 +687,7 @@ export class RewriteTactic implements Tactic {
         let headN: TTKTerm = termN;
         while (headN.tag === 'App') headN = headN.fn;
         if (headN.tag !== 'Const' || headN.name !== head.name) {
-          const result = this.substituteImpl(termN, from, to, definitions, occurrences, counter);
+          const result = this.substituteImpl(termN, from, to, definitions, occurrences, counter, lhsHead);
           if (result !== termN) {
             // A substitution occurred in the WHNF'd form — use it
             return result;
@@ -570,16 +709,12 @@ export class RewriteTactic implements Tactic {
       case 'UOmega':
         return term;
 
-      case 'App': {
-        const newFn = this.substituteImpl(term.fn, from, to, definitions, occurrences, counter);
-        const newArg = this.substituteImpl(term.arg, from, to, definitions, occurrences, counter);
-        if (newFn === term.fn && newArg === term.arg) return term;
-        return { tag: 'App', fn: newFn, arg: newArg };
-      }
+      case 'App':
+        return this.substituteIntoAppArgs(term, from, to, definitions, occurrences, counter, lhsHead);
 
       case 'Binder': {
-        const newDomain = this.substituteImpl(term.domain, from, to, definitions, occurrences, counter);
-        const newBody = this.substituteImpl(term.body, from, to, definitions, occurrences, counter);
+        const newDomain = this.substituteImpl(term.domain, from, to, definitions, occurrences, counter, lhsHead);
+        const newBody = this.substituteImpl(term.body, from, to, definitions, occurrences, counter, lhsHead);
         if (newDomain === term.domain && newBody === term.body) return term;
         return {
           tag: 'Binder',
@@ -593,6 +728,46 @@ export class RewriteTactic implements Tactic {
       default:
         return term;
     }
+  }
+
+  /**
+   * Recurse into an App's arguments for substitution.
+   * When occurrence-targeted, skips implicit arg subtrees to match surface counting.
+   */
+  private substituteIntoAppArgs(
+    term: TTKTerm, from: TTKTerm, to: TTKTerm,
+    definitions: DefinitionsMap | undefined, occurrences: number[] | undefined,
+    counter: { value: number }, lhsHead: string | null,
+  ): TTKTerm {
+    // When lhsHead is set (occurrence-targeted with head-based counting),
+    // we MUST collect the App spine and recurse only into args, NOT the fn chain.
+    // Otherwise, App(App(Const("mul"), a), b) would recurse into fn=App(Const("mul"), a),
+    // which is also a mul-headed App, causing double-counting.
+    if (lhsHead && occurrences && occurrences.length > 0) {
+      const { head, args } = this.collectAppSpine(term);
+      const implicitPositions = (head.tag === 'Const' && definitions)
+        ? this.getImplicitPositions(head.name, definitions)
+        : null;
+      let changed = false;
+      const newArgs = args.map((arg, i) => {
+        if (implicitPositions && implicitPositions.has(i)) return arg; // skip implicit subtrees
+        const newArg = this.substituteImpl(arg, from, to, definitions, occurrences, counter, lhsHead);
+        if (newArg !== arg) changed = true;
+        return newArg;
+      });
+      if (!changed) return term;
+      let result: TTKTerm = head;
+      for (const arg of newArgs) {
+        result = { tag: 'App', fn: result, arg };
+      }
+      return result;
+    }
+    // Untargeted — use original recursive descent
+    if (term.tag !== 'App') return term;
+    const newFn = this.substituteImpl(term.fn, from, to, definitions, occurrences, counter, lhsHead);
+    const newArg = this.substituteImpl(term.arg, from, to, definitions, occurrences, counter, lhsHead);
+    if (newFn === term.fn && newArg === term.arg) return term;
+    return { tag: 'App', fn: newFn, arg: newArg };
   }
 
   /**

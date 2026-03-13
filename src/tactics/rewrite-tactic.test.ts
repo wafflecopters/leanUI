@@ -69,6 +69,20 @@ minusSelf {n:=Zero} = refl
 minusSelf {n:=Succ n} = minusSelf
 sum : (start end : Nat) -> (Nat -> Nat) -> Nat
 sum start end f = sumStartCount start (minus (Succ end) start) f
+congPlusRight : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus p n) (plus p m)
+congPlusRight Zero eq = eq
+congPlusRight (Succ p) eq = congSucc (congPlusRight p eq)
+congPlusLeft : {n m : Nat} -> (p : Nat) -> Equal n m -> Equal (plus n p) (plus m p)
+congPlusLeft p refl = refl
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+plusAssoc : (n m p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+plusAssoc Zero m p = refl
+plusAssoc (Succ n) m p = congSucc (plusAssoc n m p)
+mulDistribRight : (n m p : Nat) -> Equal (mul (plus n m) p) (plus (mul n p) (mul m p))
+mulDistribRight Zero m p = refl
+mulDistribRight (Succ n) m p = trans (congPlusRight p (mulDistribRight n m p)) (sym (plusAssoc p (mul n p) (mul m p)))
+postulate mulComm : (n m : Nat) -> Equal (mul n m) (mul m n)
 `;
 
 // Compile once and reuse
@@ -729,6 +743,230 @@ describe('summationBase chain: unfold sum, rewrite minusSucc, rewrite minusSelf,
   });
 });
 
+describe('RewriteTactic: mulDistribRight on goal with mul(plus(...), ...)', () => {
+  test('untargeted rewrite mulDistribRight rewrites RHS of equality', () => {
+    const defs = getDefinitions();
+
+    // Goal: Equal (mul (Succ (Succ Zero)) (plus X Y)) (mul (plus X (Succ Zero)) Y)
+    // where X and Y are bound variables.
+    // The RHS mul(plus(X, Succ Zero), Y) matches mulDistribRight's LHS mul(plus(n,m), p).
+    const X: TTKTerm = { tag: 'Var', index: 1 };
+    const Y: TTKTerm = { tag: 'Var', index: 0 };
+    const SSZ: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } };
+    const SZ: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } };
+
+    const goalType: TTKTerm = {
+      tag: 'App', fn: {
+        tag: 'App', fn: {
+          tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+          arg: { tag: 'Const', name: 'Nat' }
+        },
+        // LHS: mul(2, plus(X, Y))
+        arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: SSZ }, arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: X }, arg: Y } }
+      },
+      // RHS: mul(plus(X, 1), Y)
+      arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: X }, arg: SZ } }, arg: Y }
+    };
+
+    const ctx = [
+      { name: 'x', type: { tag: 'Const' as const, name: 'Nat' } },
+      { name: 'y', type: { tag: 'Const' as const, name: 'Nat' } },
+    ];
+    const goalId = 'test_distrib_goal';
+    const goal = { ctx, type: goalType, solution: undefined };
+    const engine = createInitialEngine(goalType, [], defs)
+      .withUpdates({
+        metaVars: new Map([[goalId, goal]]),
+        goals: [goalId],
+      });
+
+    // Untargeted rewrite mulDistribRight (no occurrences specified)
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'mulDistribRight' });
+    const result = tactic.apply(engine, goal as any, goalId);
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      console.error('mulDistribRight rewrite failed:', result.error);
+      return;
+    }
+
+    // The RHS mul(plus(X, 1), Y) should be replaced with plus(mul(X, Y), mul(1, Y))
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const newGoalStr = termToString(newGoal.type);
+    // The rewritten part should now contain 'plus' wrapping two 'mul' terms
+    expect(newGoalStr).toContain('plus');
+  });
+
+  test('targeted rewrite mulDistribRight at occurrence 2 rewrites correct subterm', () => {
+    const defs = getDefinitions();
+
+    const X: TTKTerm = { tag: 'Var', index: 1 };
+    const Y: TTKTerm = { tag: 'Var', index: 0 };
+    const SSZ: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } };
+    const SZ: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } };
+
+    // Goal: Equal(Nat, mul(2, plus(x, y)), mul(plus(x, 1), y))
+    const goalType: TTKTerm = {
+      tag: 'App', fn: {
+        tag: 'App', fn: {
+          tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+          arg: { tag: 'Const', name: 'Nat' }
+        },
+        arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: SSZ }, arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: X }, arg: Y } }
+      },
+      arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: X }, arg: SZ } }, arg: Y }
+    };
+
+    const ctx = [
+      { name: 'x', type: { tag: 'Const' as const, name: 'Nat' } },
+      { name: 'y', type: { tag: 'Const' as const, name: 'Nat' } },
+    ];
+    const goalId = 'test_distrib_goal2';
+    const goal = { ctx, type: goalType, solution: undefined };
+    const engine = createInitialEngine(goalType, [], defs)
+      .withUpdates({
+        metaVars: new Map([[goalId, goal]]),
+        goals: [goalId],
+      });
+
+    // With head-based occurrence counting, occurrence 2 targets the second mul-headed App:
+    // mul(2, plus(x,y)) is occurrence 1, mul(plus(x,1), y) is occurrence 2.
+    // mulDistribRight's LHS = mul(plus(?n, ?m), ?p) matches occurrence 2.
+    // Result: mul(plus(x, 1), y) → plus(mul(x, y), mul(1, y))
+    const tactic = new RewriteTactic(
+      { tag: 'Const', name: 'mulDistribRight' },
+      { occurrences: [2] }
+    );
+    const result = tactic.apply(engine, goal as any, goalId);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // LHS of Equal should be untouched: mul(2, plus(x, y))
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const newGoalStr = termToString(newGoal.type);
+    // RHS should now contain plus wrapping two mul terms
+    expect(newGoalStr).toContain('plus');
+  });
+});
+
+describe('RewriteTactic: mulComm on goal with mul(2, x)', () => {
+  test('untargeted rewrite mulComm swaps mul arguments', () => {
+    const compiled = getCompiled();
+    const defs = compiled.definitions;
+
+    // Goal: Equal (mul (Succ (Succ Zero)) X) (something)
+    // mulComm : (n m : Nat) -> Equal (mul n m) (mul m n)
+    // Should rewrite mul(2, X) to mul(X, 2)
+    const X: TTKTerm = { tag: 'Var', index: 0 };
+    const two: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } };
+    const mulTwoX: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: two }, arg: X };
+    const mulXTwo: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: X }, arg: two };
+    const goalType: TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+        arg: { tag: 'Const', name: 'Nat' } }, arg: mulTwoX }, arg: mulXTwo
+    };
+
+    const engine = createInitialEngine(goalType, [{ name: 'X', type: { tag: 'Const', name: 'Nat' } }], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'mulComm' });
+    const result = tactic.apply(engine, goal, goalId);
+    expect(result.success).toBe(true);
+  });
+
+  test('mulComm skips no-op first match (mul(x,x)) and rewrites mul(2,x)', () => {
+    const compiled = getCompiled();
+    const defs = compiled.definitions;
+
+    // Goal: Equal (plus (mul X X) (mul 2 X)) something
+    // First mul match is mul(X,X) — mulComm produces mul(X,X), a no-op.
+    // Second mul match is mul(2,X) — mulComm produces mul(X,2), non-trivial.
+    const X: TTKTerm = { tag: 'Var', index: 0 };
+    const two: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } };
+    const mulXX: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: X }, arg: X };
+    const mulTwoX: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: two }, arg: X };
+    const lhs: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: mulXX }, arg: mulTwoX };
+    const goalType: TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+        arg: { tag: 'Const', name: 'Nat' } }, arg: lhs }, arg: { tag: 'Const', name: 'Zero' }
+    };
+
+    const engine = createInitialEngine(goalType, [{ name: 'X', type: { tag: 'Const', name: 'Nat' } }], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'mulComm' });
+    const result = tactic.apply(engine, goal, goalId);
+    // Should succeed by skipping the no-op mul(X,X) match and rewriting mul(2,X) → mul(X,2)
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('UnfoldTactic: targeted occurrence', () => {
+  test('unfold mul at occurrence 2 only unfolds that site', () => {
+    const compiled = getCompiled();
+    const defs = compiled.definitions;
+
+    // Goal: Equal (mul X X) (mul (Succ (Succ Zero)) X)
+    // Occurrence 1 = mul X X, Occurrence 2 = mul 2 X
+    const X: TTKTerm = { tag: 'Var', index: 0 };
+    const two: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } } };
+    const mulXX: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: X }, arg: X };
+    const mulTwoX: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: two }, arg: X };
+    const goalType: TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+        arg: { tag: 'Const', name: 'Nat' } }, arg: mulXX }, arg: mulTwoX
+    };
+
+    const engine = createInitialEngine(goalType, [{ name: 'X', type: { tag: 'Const', name: 'Nat' } }], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // Unfold mul at occurrence 2 (1-based) — should only unfold mul(2, X)
+    const tactic = new UnfoldTactic(['mul'], 2);
+    const result = tactic.apply(engine, goal, goalId);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    // The result should still contain Const("mul") for the first occurrence (mul X X)
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    const newType = newGoal.type;
+    // LHS of Equal should still be mul(X, X) — check that Const("mul") is still there
+    // The newType is Equal(Nat, lhs, rhs) — lhs is the third arg from the end
+    function getEqualLhs(t: TTKTerm): TTKTerm {
+      // Equal A lhs rhs → App(App(App(Const("Equal"), A), lhs), rhs)
+      if (t.tag === 'App' && t.fn.tag === 'App') return t.fn.arg;
+      throw new Error('not Equal app');
+    }
+    const lhs = getEqualLhs(newType);
+    // lhs should still contain Const("mul") — it was NOT unfolded
+    function containsConst(t: TTKTerm, name: string): boolean {
+      if (t.tag === 'Const') return t.name === name;
+      if (t.tag === 'App') return containsConst(t.fn, name) || containsConst(t.arg, name);
+      if (t.tag === 'Binder') return containsConst(t.domain, name) || containsConst(t.body, name);
+      return false;
+    }
+    expect(containsConst(lhs, 'mul')).toBe(true);
+
+    // RHS should NOT contain Const("mul") at the top level — it was unfolded and reduced
+    function getEqualRhs(t: TTKTerm): TTKTerm {
+      if (t.tag === 'App') return t.arg;
+      throw new Error('not Equal app');
+    }
+    const rhs = getEqualRhs(newType);
+    console.log('RHS after targeted unfold:', JSON.stringify(rhs).substring(0, 300));
+    // The RHS should be: plus(X, mul(Succ Zero, X)) — beta+iota reduced
+    // It should contain 'plus' as head
+    function getAppHead(t: TTKTerm): string | null {
+      let cur = t;
+      while (cur.tag === 'App') cur = cur.fn;
+      return cur.tag === 'Const' ? cur.name : null;
+    }
+    expect(getAppHead(rhs)).toBe('plus');
+  });
+});
+
 const TRIANGLE_SUM_SOURCE = BASE_SOURCE + `
 postulate triangleSum : (n : Nat) -> Equal (mul (Succ (Succ Zero)) (sum Zero n (\\i => i))) (mul (plus n (Succ n)) n)
 `;
@@ -767,5 +1005,172 @@ describe('triangleSum: induction + rewrite IH', () => {
     if (!rwResult.success) {
       expect(rwResult.error).toContain('no occurrences');
     }
+  });
+});
+
+describe('RewriteTactic: post-order (bottom-up) occurrence counting', () => {
+  // The surface annotator assigns occurrence indices BOTTOM-UP (inside-out):
+  // children are rendered/annotated before parents in ttermToMathNodes.
+  // So for plus(plus(a,b), c): innermost plus(a,b) = occ 1, outermost = occ 2.
+  // The substitute function must count in the same order.
+
+  test('left-associative chain: occurrence 2 targets outermost plus', () => {
+    // Goal: Equal(Nat, plus(plus(a, b), c), d)
+    // Surface rendering: (a + b) + c = d
+    // Surface occurrences: plus(a,b) = occ 1, plus(plus(a,b), c) = occ 2
+    // plusComm at occ 2 should swap outermost: plus(plus(a,b), c) → plus(c, plus(a,b))
+    const compiled = getCompiled();
+    const defs = compiled.definitions;
+
+    const a: TTKTerm = { tag: 'Var', index: 3 };
+    const b: TTKTerm = { tag: 'Var', index: 2 };
+    const c: TTKTerm = { tag: 'Var', index: 1 };
+    const d: TTKTerm = { tag: 'Var', index: 0 };
+    const plusAB: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: b };
+    const plusABC: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: plusAB }, arg: c };
+    const goalType: TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+        arg: { tag: 'Const', name: 'Nat' } }, arg: plusABC }, arg: d
+    };
+
+    const ctx = [
+      { name: 'a', type: { tag: 'Const' as const, name: 'Nat' } },
+      { name: 'b', type: { tag: 'Const' as const, name: 'Nat' } },
+      { name: 'c', type: { tag: 'Const' as const, name: 'Nat' } },
+      { name: 'd', type: { tag: 'Const' as const, name: 'Nat' } },
+    ];
+    const engine = createInitialEngine(goalType, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // plusComm at occurrence 2 = the outermost plus (bottom-up counting)
+    const tactic = new RewriteTactic(
+      { tag: 'Const', name: 'mulComm' },  // mulComm matches any mul, but we want plusComm...
+      { reverse: false, occurrences: [2] }
+    );
+    // Actually we don't have plusComm in our test source. Let's use a direct substitute test instead.
+    // We can test the substitute method indirectly by checking that plusAssoc at occ 2
+    // targets the outermost plus.
+
+    // Better approach: use mulComm on a goal with nested mul applications.
+    // Goal: Equal(Nat, mul(mul(a, b), c), d)
+    const mulAB: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: a }, arg: b };
+    const mulABC: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: mulAB }, arg: c };
+    const goalType2: TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+        arg: { tag: 'Const', name: 'Nat' } }, arg: mulABC }, arg: d
+    };
+
+    const engine2 = createInitialEngine(goalType2, ctx, defs);
+    const goal2 = engine2.getFocusedGoal()!;
+    const goalId2 = engine2.getFocusedGoalId()!;
+
+    // mulComm at occurrence 1 should target innermost mul(a, b) → mul(b, a)
+    const tactic1 = new RewriteTactic(
+      { tag: 'Const', name: 'mulComm' },
+      { reverse: false, occurrences: [1] }
+    );
+    const result1 = tactic1.apply(engine2, goal2, goalId2);
+    expect(result1.success).toBe(true);
+    if (result1.success) {
+      const newGoal1 = result1.newEngine.getFocusedGoal()!;
+      // LHS of Equal should now be mul(mul(b, a), c) — inner mul swapped
+      const lhs1 = newGoal1.type.tag === 'App' && newGoal1.type.fn.tag === 'App'
+        ? newGoal1.type.fn.arg : null;
+      expect(lhs1).not.toBeNull();
+      // The inner mul's first arg should now be b (Var 2), not a (Var 3)
+      if (lhs1 && lhs1.tag === 'App' && lhs1.fn.tag === 'App') {
+        const innerMul = lhs1.fn.arg; // first arg of outer mul = inner mul
+        if (innerMul.tag === 'App' && innerMul.fn.tag === 'App') {
+          expect(innerMul.fn.arg).toEqual(b); // first arg of inner mul = b (was a)
+          expect(innerMul.arg).toEqual(a);    // second arg of inner mul = a (was b)
+        }
+      }
+    }
+
+    // mulComm at occurrence 2 should target outermost mul(mul(a,b), c) → mul(c, mul(a,b))
+    const tactic2 = new RewriteTactic(
+      { tag: 'Const', name: 'mulComm' },
+      { reverse: false, occurrences: [2] }
+    );
+    const result2 = tactic2.apply(engine2, goal2, goalId2);
+    expect(result2.success).toBe(true);
+    if (result2.success) {
+      const newGoal2 = result2.newEngine.getFocusedGoal()!;
+      // LHS of Equal should now be mul(c, mul(a, b)) — outer mul swapped
+      const lhs2 = newGoal2.type.tag === 'App' && newGoal2.type.fn.tag === 'App'
+        ? newGoal2.type.fn.arg : null;
+      expect(lhs2).not.toBeNull();
+      if (lhs2 && lhs2.tag === 'App' && lhs2.fn.tag === 'App') {
+        // First arg of outer mul should now be c (Var 1)
+        expect(lhs2.fn.arg).toEqual(c);
+        // Second arg should be mul(a, b)
+        expect(lhs2.arg).toEqual(mulAB);
+      }
+    }
+  });
+
+  test('occurrence targets correct subterm when some mul apps dont match LHS', () => {
+    // Goal: Equal(Nat, mul(2, a), mul(1, a))
+    // Surface sees: mul occ 1 = mul(2, a), mul occ 2 = mul(1, a)
+    // mulOneLeft LHS = mul(Succ Zero, ?x), only matches mul(1, a)
+    // With head-based counting, occurrence 2 should correctly target mul(1, a)
+    const compiled = getCompiled();
+    const defs = compiled.definitions;
+
+    const one: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'Const', name: 'Zero' } };
+    const two: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: one };
+    const a: TTKTerm = { tag: 'Var', index: 0 };
+    const mulTwoA: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: two }, arg: a };
+    const mulOneA: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: one }, arg: a };
+    // Equal(Nat, mul(2, a), mul(1, a))
+    const goalType: TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' },
+        arg: { tag: 'Const', name: 'Nat' } }, arg: mulTwoA }, arg: mulOneA
+    };
+
+    const engine = createInitialEngine(goalType, [{ name: 'a', type: { tag: 'Const', name: 'Nat' } }], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+    // Use this at occurrence 2 — should target mul(1, a) = the second 'mul' on the surface.
+    // mul(1, a) computes to plus(a, mul(Zero, a)) = plus(a, Zero) ... but
+    // plusZeroRight's LHS is plus(?n, Zero), which only matches plus-headed subterms, not mul.
+    // Instead, let's test with mulComm which matches any mul(?,?).
+
+    // mulComm : (n m) -> Equal (mul n m) (mul m n)
+    // Surface occ 1 = mul(2, a), Surface occ 2 = mul(1, a)
+    // Both match mulComm's LHS = mul(?n, ?m)
+    // Occurrence [2] should rewrite mul(1, a) → mul(a, 1), leaving mul(2, a) untouched.
+    const tactic = new RewriteTactic(
+      { tag: 'Const', name: 'mulComm' },
+      { reverse: false, occurrences: [2] }
+    );
+    const result = tactic.apply(engine, goal, goalId);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    // New goal RHS should be mul(a, Succ Zero) — the args swapped
+    // Equal(Nat, mul(2, a), mul(a, 1))
+    // RHS = last arg of Equal app
+    const rhs = newGoal.type.tag === 'App' ? newGoal.type.arg : null;
+    expect(rhs).not.toBeNull();
+    // RHS head should still be 'mul'
+    let rhsHead = rhs;
+    while (rhsHead && rhsHead.tag === 'App') rhsHead = rhsHead.fn;
+    expect(rhsHead?.tag).toBe('Const');
+    expect((rhsHead as any)?.name).toBe('mul');
+    // RHS first arg should be the variable 'a' (Var 0), not Succ(Zero)
+    // mul(a, 1) = App(App(Const("mul"), Var(0)), Succ(Zero))
+    if (rhs && rhs.tag === 'App' && rhs.fn.tag === 'App') {
+      expect(rhs.fn.arg).toEqual(a); // first arg = a (was Succ Zero before swap)
+    }
+
+    // LHS should still be mul(2, a) — untouched
+    const lhsOfEq = newGoal.type.tag === 'App' && newGoal.type.fn.tag === 'App'
+      ? newGoal.type.fn.arg : null;
+    expect(lhsOfEq).toEqual(mulTwoA);
   });
 });

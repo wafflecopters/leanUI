@@ -509,7 +509,17 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
     return transform(term.index, context);
   } else if (term.tag === 'Binder') {
     const bodyTTKContext = [...context, { name: term.name, type: term.domain }];
-    return { tag: 'Binder', name: term.name, binderKind: term.binderKind, domain: transformVarsInTermAcc(term.domain, transform, context), body: transformVarsInTermAcc(term.body, transform, bodyTTKContext) };
+    const newDomain = transformVarsInTermAcc(term.domain, transform, context);
+    const newBody = transformVarsInTermAcc(term.body, transform, bodyTTKContext);
+    // For BLet, the defVal is in the OUTER context (same as domain), not the body context
+    let newBinderKind: typeof term.binderKind;
+    if (term.binderKind.tag === 'BLet') {
+      const newDefVal = transformVarsInTermAcc(term.binderKind.defVal, transform, context);
+      newBinderKind = { tag: 'BLet', defVal: newDefVal };
+    } else {
+      newBinderKind = term.binderKind;
+    }
+    return { tag: 'Binder', name: term.name, binderKind: newBinderKind, domain: newDomain, body: newBody };
   } else if (term.tag === 'App') {
     return { tag: 'App', fn: transformVarsInTermAcc(term.fn, transform, context), arg: transformVarsInTermAcc(term.arg, transform, context) };
   } else if (term.tag === 'Const') {

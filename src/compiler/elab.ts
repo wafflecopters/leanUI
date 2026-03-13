@@ -1094,25 +1094,36 @@ function transformRhsForVariablePatterns(
           ...(t.argName ? { argName: t.argName } : {})
         };
 
-      case 'Binder':
+      case 'Binder': {
+        // For BLetTT, the defVal is in the OUTER scope (same depth as domain)
+        let binderKind = t.binderKind;
+        if (t.binderKind.tag === 'BLetTT') {
+          binderKind = { ...t.binderKind, defVal: transform(t.binderKind.defVal, depth) };
+        }
         return {
           tag: 'Binder',
           name: t.name,
-          binderKind: t.binderKind,
+          binderKind,
           domain: t.domain ? transform(t.domain, depth) : undefined,
           body: transform(t.body, depth + 1),
           ...(t.named !== undefined ? { named: t.named } : {})
         };
+      }
 
-      case 'MultiBinder':
+      case 'MultiBinder': {
+        let binderKind = t.binderKind;
+        if (t.binderKind.tag === 'BLetTT') {
+          binderKind = { ...t.binderKind, defVal: transform(t.binderKind.defVal, depth) };
+        }
         return {
           tag: 'MultiBinder',
           names: t.names,
-          binderKind: t.binderKind,
+          binderKind,
           domain: transform(t.domain, depth),
           body: transform(t.body, depth + t.names.length),
           ...(t.named !== undefined ? { named: t.named } : {})
         };
+      }
 
       case 'Match':
         return {
@@ -1187,25 +1198,36 @@ function transformRhsForConstructorPatterns(
           ...(t.argName ? { argName: t.argName } : {})
         };
 
-      case 'Binder':
+      case 'Binder': {
+        // For BLetTT, the defVal is in the OUTER scope (same depth as domain)
+        let binderKind = t.binderKind;
+        if (t.binderKind.tag === 'BLetTT') {
+          binderKind = { ...t.binderKind, defVal: transform(t.binderKind.defVal, depth) };
+        }
         return {
           tag: 'Binder',
           name: t.name,
-          binderKind: t.binderKind,
+          binderKind,
           domain: t.domain ? transform(t.domain, depth) : undefined,
           body: transform(t.body, depth + 1),
           ...(t.named !== undefined ? { named: t.named } : {})
         };
+      }
 
-      case 'MultiBinder':
+      case 'MultiBinder': {
+        let binderKind = t.binderKind;
+        if (t.binderKind.tag === 'BLetTT') {
+          binderKind = { ...t.binderKind, defVal: transform(t.binderKind.defVal, depth) };
+        }
         return {
           tag: 'MultiBinder',
           names: t.names,
-          binderKind: t.binderKind,
+          binderKind,
           domain: transform(t.domain, depth),
           body: transform(t.body, depth + t.names.length),
           ...(t.named !== undefined ? { named: t.named } : {})
         };
+      }
 
       case 'Match':
         return {
@@ -1331,12 +1353,19 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
     case 'WithClause':
       return term;
 
-    case 'Binder':
+    case 'Binder': {
+      // For BLetTT, the defVal is in the OUTER scope (same depth as domain)
+      let binderKind = term.binderKind;
+      if (term.binderKind.tag === 'BLetTT') {
+        binderKind = { ...term.binderKind, defVal: applyVarPermutation(term.binderKind.defVal, permutation, depth) };
+      }
       return {
         ...term,
+        binderKind,
         domain: term.domain ? applyVarPermutation(term.domain, permutation, depth) : undefined,
         body: applyVarPermutation(term.body, permutation, depth + 1)
       };
+    }
 
     case 'MultiBinder':
       return {
