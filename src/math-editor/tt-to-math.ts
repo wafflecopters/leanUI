@@ -10,8 +10,11 @@ import { TTerm, TPattern, shiftSurfaceTerm, occursInTT } from '../compiler/surfa
 import { SyntaxRegistry, SyntaxEntry, PatternElement } from './syntax-registry';
 import {
   MathNode, MathRow,
-  mkRow, mkSymbol, mkHole, mkSup, mkSub, mkBigOp, mkFrac, mkAccent, mkDelimiter, mkText,
+  mkRow, mkSymbol, mkHole, mkSup, mkSub, mkBigOp, mkFrac, mkAccent, mkDelimiter, mkText, mkGroup,
 } from './types';
+
+/** Callback that wraps MathNode[] for a subterm with annotation (e.g., \htmlId). */
+export type SubtermAnnotator = (nodes: MathNode[], term: TTerm, ctx: string[]) => MathNode[];
 
 // ============================================================================
 // Reverse Registry
@@ -244,7 +247,13 @@ function flattenApp(term: TTerm): { fn: TTerm; args: TTerm[] } {
   return { fn: current, args };
 }
 
-export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[]): MathNode[] {
+export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[], annotate?: SubtermAnnotator): MathNode[] {
+  const raw = ttermToMathNodesRaw(term, rev, ctx, annotate);
+  return annotate ? annotate(raw, term, ctx) : raw;
+}
+
+/** Core rendering logic — returns unannotated nodes for this level (children may be annotated). */
+function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], annotate?: SubtermAnnotator): MathNode[] {
   switch (term.tag) {
     case 'Const': {
       const visual = rev.sourceToVisual.get(term.name);
@@ -264,7 +273,7 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
       if (fn.tag === 'Const') {
         const entry = rev.nameToEntry.get(fn.name);
         if (entry) {
-          const captures = buildCaptureMap(entry, args, rev, ctx);
+          const captures = buildCaptureMap(entry, args, rev, ctx, annotate);
           if (captures) {
             return buildFromPattern(entry.pattern, captures);
           }
@@ -279,19 +288,19 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
         const argNodes: MathNode[] = [];
         for (let i = 0; i < args.length; i++) {
           if (i > 0) argNodes.push(mkSymbol(','));
-          argNodes.push(...ttermToMathNodes(args[i], rev, ctx));
+          argNodes.push(...ttermToMathNodes(args[i], rev, ctx, annotate));
         }
         return [fnNode, mkDelimiter('(', ')', mkRow(argNodes))];
       }
 
       // Non-const function (e.g., variable applied to args)
-      const fnNodes = ttermToMathNodes(fn, rev, ctx);
+      const fnNodes = ttermToMathNodes(fn, rev, ctx, annotate);
       if (args.length === 0) return fnNodes;
 
       const argNodes: MathNode[] = [];
       for (let i = 0; i < args.length; i++) {
         if (i > 0) argNodes.push(mkSymbol(','));
-        argNodes.push(...ttermToMathNodes(args[i], rev, ctx));
+        argNodes.push(...ttermToMathNodes(args[i], rev, ctx, annotate));
       }
       return [...fnNodes, mkDelimiter('(', ')', mkRow(argNodes))];
     }
@@ -299,13 +308,13 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
     case 'Binder': {
       if (term.binderKind.tag === 'BLamTT') {
         const bodyCtx = [term.name, ...ctx];
-        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx, annotate);
         return [mkSymbol(term.name), mkSymbol('\\to'), ...bodyNodes];
       }
       if (term.binderKind.tag === 'BPiTT') {
-        const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx) : [mkHole()];
+        const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx, annotate) : [mkHole()];
         const bodyCtx = [term.name, ...ctx];
-        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx, annotate);
         // Named dependent binder: render as (name : domain) → body
         if (term.name !== '_' && term.name !== '' && occursInTT(0, term.body)) {
           return [
@@ -320,9 +329,9 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
 
     case 'MultiBinder': {
       if (term.binderKind.tag === 'BPiTT') {
-        const domainNodes = ttermToMathNodes(term.domain, rev, ctx);
+        const domainNodes = ttermToMathNodes(term.domain, rev, ctx, annotate);
         const bodyCtx = [...[...term.names].reverse(), ...ctx];
-        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx);
+        const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx, annotate);
         return [...domainNodes, mkSymbol('\\to'), ...bodyNodes];
       }
       return [mkHole()];
@@ -335,24 +344,20 @@ export function ttermToMathNodes(term: TTerm, rev: ReverseRegistry, ctx: string[
       return [mkHole()];
 
     case 'Annot':
-      return ttermToMathNodes(term.term, rev, ctx);
+      // Delegate to the annotated call (not raw) so the inner term gets its own annotation
+      return ttermToMathNodes(term.term, rev, ctx, annotate);
 
     case 'Match': {
-      // Render as: match scrutinee { pat1 → rhs1 | pat2 → rhs2 | ... }
-      // This appears when unfolding pattern-matching definitions where the
-      // scrutinee is a variable (stuck iota-reduction).
-      // Skip Hole scrutinees (implementation detail of compiled pattern-matching functions).
       const scrutNodes = term.scrutinee.tag === 'Hole'
-        ? [] : [...ttermToMathNodes(term.scrutinee, rev, ctx), mkSymbol('\\,')];
+        ? [] : [...ttermToMathNodes(term.scrutinee, rev, ctx, annotate), mkSymbol('\\,')];
       const clauseNodes: MathNode[] = [];
       for (let i = 0; i < term.clauses.length; i++) {
         if (i > 0) clauseNodes.push(mkSymbol('\\mid'));
         const clause = term.clauses[i];
         const patStr = clause.patterns.map(p => renderPattern(p)).join(',\\,');
-        // Extend context with pattern-bound variables
         const patVars = collectTPatternVars(clause.patterns);
         const clauseCtx = [...[...patVars].reverse(), ...ctx];
-        const rhsNodes = ttermToMathNodes(clause.rhs, rev, clauseCtx);
+        const rhsNodes = ttermToMathNodes(clause.rhs, rev, clauseCtx, annotate);
         clauseNodes.push(mkSymbol(patStr), mkSymbol('\\Rightarrow'), ...rhsNodes);
       }
       return [
@@ -421,6 +426,7 @@ function buildCaptureMap(
   args: TTerm[],
   rev: ReverseRegistry,
   ctx: string[],
+  annotate?: SubtermAnnotator,
 ): Map<string, MathNode[]> | null {
   const slots = parseTemplateSlots(entry.template);
   const captures = new Map<string, MathNode[]>();
@@ -433,7 +439,7 @@ function buildCaptureMap(
         break;
       case 'direct':
         if (argIdx >= args.length) return null;
-        captures.set(slot.capture, ttermToMathNodes(args[argIdx], rev, ctx));
+        captures.set(slot.capture, ttermToMathNodes(args[argIdx], rev, ctx, annotate));
         argIdx++;
         break;
       case 'lambda':
@@ -443,11 +449,8 @@ function buildCaptureMap(
           if (arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
             captures.set(slot.binderCapture, [mkSymbol(arg.name)]);
             const bodyCtx = [arg.name, ...ctx];
-            captures.set(slot.bodyCapture, ttermToMathNodes(arg.body, rev, bodyCtx));
+            captures.set(slot.bodyCapture, ttermToMathNodes(arg.body, rev, bodyCtx, annotate));
           } else {
-            // Non-lambda arg (e.g., a variable `f`) — eta-expand for rendering:
-            // treat `f` as `\x => f(x)`, using a fresh binder name.
-            // Shift arg's de Bruijn indices up by 1 since we place it under a new binder.
             const binderName = chooseFreshName('x', ctx);
             captures.set(slot.binderCapture, [mkSymbol(binderName)]);
             const shiftedArg = shiftSurfaceTerm(1, arg, 0);
@@ -457,7 +460,7 @@ function buildCaptureMap(
               arg: { tag: 'Var', index: 0 },
             };
             const bodyCtx = [binderName, ...ctx];
-            captures.set(slot.bodyCapture, ttermToMathNodes(syntheticBody, rev, bodyCtx));
+            captures.set(slot.bodyCapture, ttermToMathNodes(syntheticBody, rev, bodyCtx, annotate));
           }
         }
         argIdx++;

@@ -39,7 +39,8 @@ export type MathNode =
   | BigOpNode
   | AccentNode
   | DelimiterNode
-  | TextNode;
+  | TextNode
+  | GroupNode;
 
 export interface SymbolNode {
   readonly tag: 'Symbol';
@@ -118,6 +119,14 @@ export interface TextNode {
   readonly content: string;
 }
 
+/** Wrapper node that annotates children with an HTML id for interactive selection. */
+export interface GroupNode {
+  readonly tag: 'Group';
+  readonly id: NodeId;
+  readonly htmlId: string;
+  readonly children: readonly MathNode[];
+}
+
 // ============================================================================
 // Cursor and Editor State
 // ============================================================================
@@ -187,6 +196,10 @@ export function mkDelimiter(open: string, close: string, inner: MathRow): Delimi
 
 export function mkText(content: string): TextNode {
   return { tag: 'Text', id: freshId(), content };
+}
+
+export function mkGroup(htmlId: string, children: readonly MathNode[]): GroupNode {
+  return { tag: 'Group', id: freshId(), htmlId, children };
 }
 
 /** Create a fresh empty editor state */

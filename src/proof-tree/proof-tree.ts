@@ -74,6 +74,8 @@ export interface RewriteNode {
   readonly name: string;
   /** If true, rewrite right-to-left (replace RHS with LHS). */
   readonly reverse: boolean;
+  /** 1-based occurrence indices to rewrite (if undefined, rewrite all). */
+  readonly occurrences?: readonly number[];
   readonly child: ProofNode;
 }
 
@@ -168,8 +170,10 @@ export function mkUnfold(name: string, child: ProofNode): UnfoldNode {
   return { tag: 'unfold', id: freshProofId(), name, child };
 }
 
-export function mkRewrite(name: string, child: ProofNode, reverse = false): RewriteNode {
-  return { tag: 'rewrite', id: freshProofId(), name, reverse, child };
+export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[]): RewriteNode {
+  const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
+  if (occurrences !== undefined) (node as any).occurrences = occurrences;
+  return node;
 }
 
 export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode {
@@ -510,12 +514,14 @@ export function applyUnfold(state: ProofTreeState, name: string): ProofTreeState
 }
 
 /** Apply rewrite at the cursor (must be a hole). Replaces the hole with a rewrite node + child hole. */
-export function applyRewrite(state: ProofTreeState, name: string, reverse = false): ProofTreeState | null {
+export function applyRewrite(
+  state: ProofTreeState, name: string, reverse = false, occurrences?: readonly number[],
+): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
   const childHole = mkHole();
-  const rewrite = mkRewrite(name, childHole, reverse);
+  const rewrite = mkRewrite(name, childHole, reverse, occurrences);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, rewrite);
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }

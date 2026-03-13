@@ -144,6 +144,9 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
     });
   };
 
+  // Expanded (fullscreen) declaration index
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+
   return (
     <div style={{
       height: '100%',
@@ -166,82 +169,134 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
       </h3>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px 16px' }}>
-      {declarations.map((decl, i) => (
-        <div key={i} style={{
-          marginBottom: '12px',
-          border: '1px solid #30363d',
-          borderRadius: '6px',
-          overflow: 'hidden',
-          backgroundColor: '#161b22',
-        }}>
-          {/* Header: kind badge + editable name */}
-          <div style={{
+      {declarations.map((decl, i) => {
+        const isExpanded = expandedIndex === i;
+        const card = (
+          <div key={i} style={{
+            marginBottom: isExpanded ? 0 : '12px',
+            border: '1px solid #30363d',
+            borderRadius: isExpanded ? 0 : '6px',
+            overflow: 'hidden',
+            backgroundColor: '#161b22',
             display: 'flex',
-            alignItems: 'center',
-            padding: '6px 10px',
-            backgroundColor: '#21262d',
-            borderBottom: '1px solid #30363d',
-            gap: '8px',
+            flexDirection: 'column' as const,
+            ...(isExpanded ? { height: '100%' } : { height: '500px' }),
           }}>
-            <span style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              color: declKindColor(decl),
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
+            {/* Header: kind badge + editable name + expand button */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              padding: '6px 10px',
+              backgroundColor: '#21262d',
+              borderBottom: '1px solid #30363d',
+              gap: '8px',
               flexShrink: 0,
             }}>
-              definition
-            </span>
-            <input
-              type="text"
-              value={localNames[i] ?? decl.name ?? ''}
-              onChange={(e) => handleNameChange(i, e.target.value)}
-              spellCheck={false}
-              style={{
-                flex: 1,
-                background: 'none',
-                border: 'none',
-                outline: 'none',
-                color: '#e6edf3',
-                fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
-                fontSize: '13px',
-                fontWeight: 500,
-                padding: '2px 4px',
-                borderRadius: '3px',
-              }}
-              onFocus={(e) => {
-                e.currentTarget.style.backgroundColor = '#0d1117';
-              }}
-              onBlur={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-            />
-          </div>
-
-          {/* Structured math editors (type + proof) */}
-          <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d' }}>
-            <SyntaxReferencePanel registry={registries[i]} />
-            <DualMathEditor placeholder="type signature" registry={registries[i]} initialTypeRoot={initialTypeRoots[i]} />
-          </div>
-
-          {/* Structured proof tree editor */}
-          <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d' }}>
-            <div style={{ fontSize: '10px', color: '#484f58', marginBottom: '4px', letterSpacing: '0.03em' }}>
-              PROOF
+              <span style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                color: declKindColor(decl),
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                flexShrink: 0,
+              }}>
+                definition
+              </span>
+              <input
+                type="text"
+                value={localNames[i] ?? decl.name ?? ''}
+                onChange={(e) => handleNameChange(i, e.target.value)}
+                spellCheck={false}
+                style={{
+                  flex: 1,
+                  background: 'none',
+                  border: 'none',
+                  outline: 'none',
+                  color: '#e6edf3',
+                  fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+                  fontSize: '13px',
+                  fontWeight: 500,
+                  padding: '2px 4px',
+                  borderRadius: '3px',
+                }}
+                onFocus={(e) => {
+                  e.currentTarget.style.backgroundColor = '#0d1117';
+                }}
+                onBlur={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              />
+              <button
+                onClick={() => setExpandedIndex(isExpanded ? null : i)}
+                title={isExpanded ? 'Shrink' : 'Expand'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#8b949e',
+                  fontSize: '14px',
+                  padding: '2px 4px',
+                  lineHeight: 1,
+                  flexShrink: 0,
+                }}
+              >
+                {isExpanded ? '\u2716' : '\u2922'}
+              </button>
             </div>
-            <ProofTreeEditor
-              history={proofHistories[i] ?? createHistory(createInitialState())}
-              onHistoryChange={(h) => handleProofHistoryChange(i, h)}
-              surfaceType={decl.surfaceType}
-              kernelType={decl.kernelType}
-              definitions={definitionsMap}
-              registry={registries[i]}
-              inductiveMap={inductiveMap}
-            />
+
+            {/* Structured math editors (type + proof) */}
+            <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d', flexShrink: 0 }}>
+              <SyntaxReferencePanel registry={registries[i]} />
+              <DualMathEditor placeholder="type signature" registry={registries[i]} initialTypeRoot={initialTypeRoots[i]} />
+            </div>
+
+            {/* Structured proof tree editor */}
+            <div style={{
+              padding: '6px 10px',
+              borderTop: '1px solid #30363d',
+              flex: 1,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}>
+              <div style={{ fontSize: '10px', color: '#484f58', marginBottom: '4px', letterSpacing: '0.03em', flexShrink: 0 }}>
+                PROOF
+              </div>
+              <ProofTreeEditor
+                history={proofHistories[i] ?? createHistory(createInitialState())}
+                onHistoryChange={(h) => handleProofHistoryChange(i, h)}
+                surfaceType={decl.surfaceType}
+                kernelType={decl.kernelType}
+                definitions={definitionsMap}
+                registry={registries[i]}
+                inductiveMap={inductiveMap}
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        );
+
+        if (isExpanded) {
+          return (
+            <div key={i} style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 1000,
+              backgroundColor: '#0d1117',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+            }}>
+              {card}
+            </div>
+          );
+        }
+
+        return card;
+      })}
       </div>
     </div>
   );

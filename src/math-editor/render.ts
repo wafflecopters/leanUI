@@ -179,6 +179,11 @@ function renderNodeInner(node: MathNode, cursor: CursorState, currentPath: RowPa
 
     case 'Text':
       return `\\;\\text{${node.content}}\\;`;
+
+    case 'Group': {
+      const inner = node.children.map(c => renderNode(c, cursor, currentPath)).join('');
+      return `\\htmlId{${node.htmlId}}{${inner}}`;
+    }
   }
 }
 
@@ -276,5 +281,7 @@ function renderNodeStatic(node: MathNode): string {
       return `\\left${node.open}${renderRowStatic(node.inner)}\\right${node.close}`;
     case 'Text':
       return `\\;\\text{${node.content}}\\;`;
+    case 'Group':
+      return `\\htmlId{${node.htmlId}}{${node.children.map(c => renderNodeStatic(c)).join('')}}`;
   }
 }

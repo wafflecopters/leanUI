@@ -75,6 +75,7 @@ function flattenNode(node: MathNode): string {
     }
     case 'Delimiter': return `${node.open}${flattenRow(node.inner)}${node.close}`;
     case 'Accent': return `${node.accent}(${flattenRow(node.body)})`;
+    case 'Group': return node.children.map(c => flattenNode(c)).join('');
   }
 }
 

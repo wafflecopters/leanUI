@@ -1,11 +1,13 @@
 /**
  * InteractiveGoalView — renders a goal with clickable subterms.
  *
- * Uses KaTeX \htmlId annotations to make each Pi binder and the body
+ * Uses KaTeX \htmlId annotations to make each subterm
  * individually selectable. Clicking a subterm highlights it and triggers
  * the onSelectPath callback.
  *
- * Follows the overlay pattern from MathJaxExpressionRenderer.tsx.
+ * Hover shows an outline of what would be selected.
+ * Nested subterms are handled via z-index by bounding-rect area
+ * (smaller = higher z-index = clickable over larger parents).
  */
 
 import React, { useRef, useEffect, useCallback } from 'react';
@@ -19,20 +21,12 @@ export interface InteractiveGoalViewProps {
   readonly style?: React.CSSProperties;
 }
 
-/** Parse a goal element ID into a GoalPath. */
-function parseGoalId(id: string): GoalPath | null {
-  const str = id.replace('goal-', '');
-  if (str === 'root') return [];
-  if (str === 'body') return [-1] as unknown as GoalPath; // Special sentinel for body
-  const parts = str.split('-').map(Number);
-  if (parts.some(isNaN)) return null;
-  return parts;
-}
-
-function pathsEqual(a: GoalPath | null, b: GoalPath | null): boolean {
-  if (a === null || b === null) return a === b;
-  if (a.length !== b.length) return false;
-  return a.every((v, i) => v === b[i]);
+/** Extract the goal ID from an element's id attribute, skipping the root. */
+function extractGoalId(elementId: string): string | null {
+  if (!elementId.startsWith('goal-')) return null;
+  // Skip root — we don't want to select the entire goal
+  if (elementId === 'goal-root') return null;
+  return elementId;
 }
 
 export function InteractiveGoalView({ goal, selectedPath, onSelectPath, style }: InteractiveGoalViewProps) {
@@ -73,13 +67,14 @@ export function InteractiveGoalView({ goal, selectedPath, onSelectPath, style }:
     const goalElements = container.querySelectorAll('[id^="goal-"]');
 
     goalElements.forEach(element => {
-      const path = parseGoalId(element.id);
-      if (path === null) return;
-      // Skip the root element — we only want individual binders and body
-      if (path.length === 0) return;
+      const goalId = extractGoalId(element.id);
+      if (goalId === null) return;
 
       const rect = element.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
+
+      // Skip zero-size elements
+      if (rect.width < 1 || rect.height < 1) return;
 
       const overlay = document.createElement('div');
       overlay.className = 'goal-overlay';
@@ -89,26 +84,30 @@ export function InteractiveGoalView({ goal, selectedPath, onSelectPath, style }:
       overlay.style.width = `${rect.width}px`;
       overlay.style.height = `${rect.height}px`;
       overlay.style.cursor = 'pointer';
-      overlay.style.zIndex = '10';
       overlay.style.borderRadius = '2px';
-      overlay.dataset.goalPath = path.join('-');
+      overlay.dataset.goalId = goalId;
 
-      // Hover effect
+      // Z-index by area: smaller overlays (inner subterms) get higher z-index
+      const area = rect.width * rect.height;
+      overlay.style.zIndex = String(10 + Math.max(0, Math.round(10000 / Math.max(area, 1))));
+
+      // Hover: outline around what would be selected
       overlay.addEventListener('mouseenter', () => {
-        overlay.style.backgroundColor = 'rgba(88, 166, 255, 0.12)';
+        overlay.style.outline = '1.5px solid rgba(88, 166, 255, 0.5)';
+        overlay.style.outlineOffset = '1px';
       });
       overlay.addEventListener('mouseleave', () => {
-        overlay.style.backgroundColor = '';
+        overlay.style.outline = '';
+        overlay.style.outlineOffset = '';
       });
 
-      // Click handler
+      // Click handler — toggle selection
       overlay.addEventListener('click', (e) => {
         e.stopPropagation();
-        // Toggle: click same → deselect
-        if (pathsEqual(selectedPath, path)) {
+        if (selectedPath === goalId) {
           onSelectPath(null);
         } else {
-          onSelectPath(path);
+          onSelectPath(goalId);
         }
       });
 
@@ -133,10 +132,7 @@ export function InteractiveGoalView({ goal, selectedPath, onSelectPath, style }:
 
     // Apply highlight to selected
     if (selectedPath !== null) {
-      const id = selectedPath.length === 0
-        ? 'goal-root'
-        : (selectedPath[0] === -1 ? 'goal-body' : `goal-${selectedPath.join('-')}`);
-      const el = container.querySelector(`#${id}`) as HTMLElement | null;
+      const el = container.querySelector(`#${CSS.escape(selectedPath)}`) as HTMLElement | null;
       if (el) {
         el.style.backgroundColor = 'rgba(88, 166, 255, 0.25)';
         el.style.borderRadius = '2px';

@@ -40,6 +40,7 @@ export function getSlots(node: MathNode): readonly SlotInfo[] {
     case 'Symbol':
     case 'Hole':
     case 'Text':
+    case 'Group':
       return [];
   }
 }

@@ -35,7 +35,7 @@ export class RewriteTactic implements Tactic {
 
   constructor(
     public readonly equalityProof: TTKTerm,
-    public readonly options: { enhanced?: boolean; reverse?: boolean } = {}
+    public readonly options: { enhanced?: boolean; reverse?: boolean; occurrences?: number[] } = {}
   ) {}
 
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
@@ -126,7 +126,8 @@ export class RewriteTactic implements Tactic {
       // 5. Replace LHS with RHS in the goal type
       //    Uses WHNF-based matching to handle definition aliases
       //    (e.g., `radd R` matching `CompleteOrderedField.add (field R)`)
-      const newGoalType = this.substitute(goalType, lhs, rhs, engine.definitions);
+      const occurrences = this.options.occurrences;
+      const newGoalType = this.substitute(goalType, lhs, rhs, engine.definitions, occurrences);
 
       // 5b. Check if anything changed
       if (this.termEqual(goalType, newGoalType)) {
@@ -139,9 +140,10 @@ export class RewriteTactic implements Tactic {
       // 6. Build the motive: \z => goal.type[lhs := z]
       //    Shift goal type and lhs into the lambda body scope (depth +1),
       //    then replace shifted lhs with Var(0).
+      //    When occurrences are specified, abstract over only those occurrences.
       const shiftedGoal = shiftTerm(goalType, 1, 0);
       const shiftedLhs = shiftTerm(lhs, 1, 0);
-      const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 }, engine.definitions);
+      const motiveBody = this.substitute(shiftedGoal, shiftedLhs, { tag: 'Var', index: 0 }, engine.definitions, occurrences);
       const motive: TTKTerm = {
         tag: 'Binder',
         binderKind: { tag: 'BLam' },
@@ -488,13 +490,26 @@ export class RewriteTactic implements Tactic {
   }
 
   /**
-   * Substitute all occurrences of `from` with `to` in `term`.
+   * Substitute occurrences of `from` with `to` in `term`.
+   * When `occurrences` is provided (1-based indices), only replaces at those positions.
    * Uses WHNF-based matching when definitions are provided, so that
    * definition aliases (like `radd R` vs `CompleteOrderedField.add (field R)`)
    * are treated as equal.
    */
-  private substitute(term: TTKTerm, from: TTKTerm, to: TTKTerm, definitions?: DefinitionsMap): TTKTerm {
-    // If term matches from, replace with to
+  private substitute(
+    term: TTKTerm, from: TTKTerm, to: TTKTerm,
+    definitions?: DefinitionsMap, occurrences?: number[],
+  ): TTKTerm {
+    const counter = { value: 0 };
+    return this.substituteImpl(term, from, to, definitions, occurrences, counter);
+  }
+
+  private substituteImpl(
+    term: TTKTerm, from: TTKTerm, to: TTKTerm,
+    definitions: DefinitionsMap | undefined, occurrences: number[] | undefined,
+    counter: { value: number },
+  ): TTKTerm {
+    // If term matches from, replace with to (respecting occurrence filter)
     // In enhanced mode (erw), use recursive deep definitional equality
     // In normal mode, use structural equality only — WHNF comparison is too aggressive
     // because unrelated subterms may be definitionally equal to the LHS
@@ -503,7 +518,11 @@ export class RewriteTactic implements Tactic {
       ? this.termEqualDeep(term, from, definitions)
       : this.termEqual(term, from);
     if (isMatch) {
-      return to;
+      counter.value++;
+      if (!occurrences || occurrences.includes(counter.value)) {
+        return to;
+      }
+      return term;  // Skip this occurrence
     }
 
     // In enhanced mode, WHNF the term to expose hidden subterms.
@@ -524,7 +543,7 @@ export class RewriteTactic implements Tactic {
         let headN: TTKTerm = termN;
         while (headN.tag === 'App') headN = headN.fn;
         if (headN.tag !== 'Const' || headN.name !== head.name) {
-          const result = this.substitute(termN, from, to, definitions);
+          const result = this.substituteImpl(termN, from, to, definitions, occurrences, counter);
           if (result !== termN) {
             // A substitution occurred in the WHNF'd form — use it
             return result;
@@ -547,15 +566,15 @@ export class RewriteTactic implements Tactic {
         return term;
 
       case 'App': {
-        const newFn = this.substitute(term.fn, from, to, definitions);
-        const newArg = this.substitute(term.arg, from, to, definitions);
+        const newFn = this.substituteImpl(term.fn, from, to, definitions, occurrences, counter);
+        const newArg = this.substituteImpl(term.arg, from, to, definitions, occurrences, counter);
         if (newFn === term.fn && newArg === term.arg) return term;
         return { tag: 'App', fn: newFn, arg: newArg };
       }
 
       case 'Binder': {
-        const newDomain = this.substitute(term.domain, from, to, definitions);
-        const newBody = this.substitute(term.body, from, to, definitions);
+        const newDomain = this.substituteImpl(term.domain, from, to, definitions, occurrences, counter);
+        const newBody = this.substituteImpl(term.body, from, to, definitions, occurrences, counter);
         if (newDomain === term.domain && newBody === term.body) return term;
         return {
           tag: 'Binder',

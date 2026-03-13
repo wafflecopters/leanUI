@@ -22,7 +22,7 @@ export interface ProseItem {
 }
 
 export type ProseItemKind =
-  | { tag: 'intro'; latex: string }
+  | { tag: 'intro'; latex: string; goalLatex?: string }
   | { tag: 'unfold'; name: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
@@ -176,7 +176,8 @@ export function generateProofProse(
         const parentHyps = info?.hypotheses ?? [];
         const childHyps = childInfo?.hypotheses ?? [];
         const latex = renderIntroLatex(parentHyps, childHyps);
-        emit(node.id, depth, { tag: 'intro', latex: latex || node.names.join(', ') });
+        const childGoalLatex = childInfo?.goalLatex;
+        emit(node.id, depth, { tag: 'intro', latex: latex || node.names.join(', '), goalLatex: childGoalLatex });
         walk(node.child, depth);
         break;
       }
@@ -250,11 +251,13 @@ export function generateProofProse(
       }
 
       case 'simp': {
+        const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
         emit(node.id, depth, {
           tag: 'simp',
           lemmas: node.lemmas,
           stepCount: node.steps.length,
           preGoalLatex: info?.goalLatex,
+          goalLatex: childGoalLatex,
         });
         // Steps are already replayed by the engine; just recurse into child
         walk(node.child, depth);

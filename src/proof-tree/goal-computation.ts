@@ -19,7 +19,7 @@ import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap } from '../c
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
-import { ReverseRegistry, buildReverseRegistry, ttermToMathNodes } from '../math-editor/tt-to-math';
+import { ReverseRegistry, buildReverseRegistry, ttermToMathNodes, SubtermAnnotator } from '../math-editor/tt-to-math';
 import { mkRow } from '../math-editor/types';
 import { renderStaticLatex } from '../math-editor/render';
 import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
@@ -232,6 +232,12 @@ function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngi
 /** Render a TTerm expression to LaTeX using the structured math editor pipeline. */
 export function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): string {
   const nodes = ttermToMathNodes(term, rev, ctx);
+  return renderStaticLatex(mkRow(nodes));
+}
+
+/** Render a surface term to LaTeX with subterm annotations via the annotate callback. */
+export function renderTermAnnotated(term: TTerm, ctx: string[], rev: ReverseRegistry, annotate: SubtermAnnotator): string {
+  const nodes = ttermToMathNodes(term, rev, ctx, annotate);
   return renderStaticLatex(mkRow(nodes));
 }
 
@@ -854,7 +860,7 @@ function replayProofTree(
 
       const tactic = new RewriteTactic(
         resolveNameInGoal(node.name, goal),
-        { reverse: node.reverse },
+        { reverse: node.reverse, occurrences: node.occurrences ? [...node.occurrences] : undefined },
       );
       const result = tactic.apply(engine, goal, goalId);
 
@@ -1024,7 +1030,7 @@ function replayProofTree(
         if (step.tag === 'rewrite') {
           const tactic = new RewriteTactic(
             resolveNameInGoal(step.name, stepGoal),
-            { reverse: step.reverse },
+            { reverse: step.reverse, occurrences: step.occurrences ? [...step.occurrences] : undefined },
           );
           const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
           if (result.success) {
@@ -1419,7 +1425,7 @@ export function replayEntireTree(
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const tactic = new RewriteTactic(
           resolveNameInGoal(node.name, goal),
-          { reverse: node.reverse },
+          { reverse: node.reverse, occurrences: node.occurrences ? [...node.occurrences] : undefined },
         );
         const tacResult = tactic.apply(eng, goal, gId);
         // Capture the unified equation and attach it to this node's info
@@ -1574,7 +1580,7 @@ export function replayEntireTree(
           if (step.tag === 'rewrite') {
             const tactic = new RewriteTactic(
               resolveNameInGoal(step.name, stepGoal),
-              { reverse: step.reverse },
+              { reverse: step.reverse, occurrences: step.occurrences ? [...step.occurrences] : undefined },
             );
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
             if (stepResult.success) {

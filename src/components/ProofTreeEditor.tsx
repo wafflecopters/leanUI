@@ -34,9 +34,17 @@ import {
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
 import { ProseItem, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
-import { computeTacticSuggestions, TacticSuggestion } from '../proof-tree/tactic-suggestions';
+import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { InteractiveGoalView } from './InteractiveGoalView';
 import SplitPane from './SplitPane';
+
+// Inject spinner keyframes for rewrite progress indicator
+if (typeof document !== 'undefined' && !document.getElementById('proof-tree-spinner-style')) {
+  const style = document.createElement('style');
+  style.id = 'proof-tree-spinner-style';
+  style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+  document.head.appendChild(style);
+}
 
 // ============================================================================
 // Props
@@ -70,7 +78,9 @@ const containerStyle: React.CSSProperties = {
   fontFamily: FONT_UI,
   color: '#c9d1d9',
   lineHeight: '1.6',
-  height: '400px',
+  flex: 1,
+  minHeight: 0,
+  height: '100%',
 };
 
 const INITIAL_PANE_SIZES = [
@@ -178,11 +188,30 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     }
   }, [typedContext?.kernelGoal, typedContext?.validation]);
 
-  // Compute tactic suggestions from selection
-  const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+  // Compute tactic suggestions from selection (synchronous: intro, unfold, induction)
+  const syncSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
     if (!interactiveGoal || !goalSelectedPath) return [];
-    return computeTacticSuggestions(goalSelectedPath, interactiveGoal);
-  }, [goalSelectedPath, interactiveGoal]);
+    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions);
+  }, [goalSelectedPath, interactiveGoal, definitions]);
+
+  // Incremental rewrite suggestions (scan hypotheses, try targeted rewrites)
+  const [rewriteProgress, setRewriteProgress] = useState<RewriteProgress | null>(null);
+  const rewriteSuggestions = rewriteProgress?.suggestions ?? [];
+  useEffect(() => {
+    setRewriteProgress(null);
+    if (!goalSelectedPath || !interactiveGoal || !typedContext?.kernelGoal) return;
+    const cancel = computeRewriteSuggestionsIncremental(
+      goalSelectedPath, interactiveGoal, typedContext.kernelGoal,
+      (progress) => setRewriteProgress(progress),
+    );
+    return cancel;
+  }, [goalSelectedPath, interactiveGoal, typedContext?.kernelGoal]);
+
+  // Merge all suggestions
+  const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    if (syncSuggestions.length === 0 && rewriteSuggestions.length === 0) return [];
+    return [...syncSuggestions, ...rewriteSuggestions];
+  }, [syncSuggestions, rewriteSuggestions]);
 
   // Reset goal selection when cursor changes
   useEffect(() => {
@@ -347,6 +376,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 onEditingNames={setGoalEditingNames}
                 editingSuggestionId={goalEditingSuggestionId}
                 onEditingSuggestionId={setGoalEditingSuggestionId}
+                rewriteProgress={rewriteProgress}
               />
             )}
           </div>
@@ -365,6 +395,9 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
           onEditingNames={setGoalEditingNames}
           editingSuggestionId={goalEditingSuggestionId}
           onEditingSuggestionId={setGoalEditingSuggestionId}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          rewriteProgress={rewriteProgress}
         />
       </SplitPane>
     </div>
@@ -393,6 +426,13 @@ interface GoalInteractionProps {
   /** Fallback LaTeX when interactive goal is unavailable. */
   fallbackGoalLatex?: string;
   validation?: ValidationResult;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
+  typedContext?: TypedProofContext | null;
+  /** Progress of incremental rewrite suggestion scanning. */
+  rewriteProgress?: RewriteProgress | null;
+  /** Font size for the interactive goal display (default '11px'). */
+  goalFontSize?: string;
 }
 
 function GoalInteraction({
@@ -402,12 +442,36 @@ function GoalInteraction({
   editingSuggestionId, onEditingSuggestionId,
   state, onPushChange,
   fallbackGoalLatex, validation,
+  inductiveMap, registry, typedContext,
+  rewriteProgress, goalFontSize,
 }: GoalInteractionProps) {
   const handleApplySuggestion = (suggestion: TacticSuggestion) => {
-    const names = editingSuggestionId === suggestion.id && editingNames
-      ? editingNames
-      : [...(suggestion.proposedNames ?? [])];
-    const result = applyIntros(state, names);
+    let result: ProofTreeState | null = null;
+
+    if (suggestion.id.startsWith('unfold-')) {
+      const name = suggestion.id.slice('unfold-'.length);
+      result = applyUnfold(state, name);
+    } else if (suggestion.id.startsWith('induction-')) {
+      const scrutinee = suggestion.id.slice('induction-'.length);
+      // Look up the inductive type info for the variable's type
+      const typeHead = interactiveGoal?.contextVarTypes.get(scrutinee);
+      const indInfo = typeHead && inductiveMap ? inductiveMap.get(typeHead) : undefined;
+      if (indInfo) {
+        const rev = registry ? buildReverseRegistry(registry) : undefined;
+        const ctxNames = typedContext?.hypotheses.map(h => h.name);
+        const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
+        result = applyInductionWithCtors(state, scrutinee, ctorInfos);
+      }
+    } else if (suggestion.id.startsWith('rewrite-')) {
+      const rw = suggestion as RewriteSuggestion;
+      result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences);
+    } else {
+      const names = editingSuggestionId === suggestion.id && editingNames
+        ? editingNames
+        : [...(suggestion.proposedNames ?? [])];
+      result = applyIntros(state, names);
+    }
+
     if (result) {
       onPushChange(result);
       onSelectPath(null);
@@ -447,7 +511,7 @@ function GoalInteraction({
           goal={interactiveGoal}
           selectedPath={selectedPath}
           onSelectPath={onSelectPath}
-          style={{ fontSize: '11px' }}
+          style={{ fontSize: goalFontSize ?? '11px' }}
         />
       ) : (
         <>
@@ -481,9 +545,31 @@ function GoalInteraction({
       )}
 
       {/* Tactic suggestions */}
-      {suggestions.length > 0 && (
+      {(suggestions.length > 0 || (rewriteProgress && !rewriteProgress.done)) && (
         <div style={{ marginTop: '8px' }}>
           {suggestions.map(s => {
+            const hasNames = s.proposedNames && s.proposedNames.length > 0;
+
+            const btnLabel = s.labelLatex
+              ? <InlineKaTeX latex={s.labelLatex} style={{ fontSize: '11px' }} />
+              : <>{s.label}</>;
+
+            if (!hasNames) {
+              // Simple action button (e.g., Unfold) — just clickable, no inputs
+              return (
+                <div key={s.id} style={{ padding: '3px 0' }}>
+                  <button
+                    style={suggestionBtnStyle}
+                    onClick={() => handleApplySuggestion(s)}
+                    title={s.description}
+                  >
+                    {btnLabel}
+                  </button>
+                </div>
+              );
+            }
+
+            // Intro-style: editable name inputs + Apply
             const isEditing = editingSuggestionId === s.id;
             const names = isEditing && editingNames ? editingNames : [...(s.proposedNames ?? [])];
             return (
@@ -499,7 +585,7 @@ function GoalInteraction({
                   onClick={() => handleStartEditing(s)}
                   title={s.description}
                 >
-                  {s.label}
+                  {btnLabel}
                 </button>
                 {names.map((name, i) => (
                   <input
@@ -529,6 +615,28 @@ function GoalInteraction({
               </div>
             );
           })}
+          {/* Rewrite scanning progress */}
+          {rewriteProgress && !rewriteProgress.done && (
+            <div style={{
+              padding: '3px 0',
+              fontSize: '10px',
+              color: '#484f58',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}>
+              <span style={{
+                display: 'inline-block',
+                width: '10px',
+                height: '10px',
+                border: '1.5px solid #484f58',
+                borderTopColor: '#58a6ff',
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+              checking rewrites ({rewriteProgress.checked}/{rewriteProgress.total})
+            </div>
+          )}
         </div>
       )}
     </>
@@ -542,6 +650,7 @@ function GoalInteraction({
 function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedPath, onSelectPath, editingNames, onEditingNames,
   editingSuggestionId, onEditingSuggestionId,
+  inductiveMap, registry, rewriteProgress,
 }: {
   context: TypedProofContext | null;
   state?: ProofTreeState;
@@ -554,6 +663,9 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   onEditingNames: (n: string[] | null) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
+  rewriteProgress?: RewriteProgress | null;
 }) {
   if (!context) return null;
 
@@ -621,6 +733,10 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
             onPushChange={onPushChange}
             fallbackGoalLatex={goal}
             validation={validation}
+            inductiveMap={inductiveMap}
+            registry={registry}
+            typedContext={context}
+            rewriteProgress={rewriteProgress}
           />
         ) : (
           <div style={{
@@ -1475,6 +1591,7 @@ interface ProseViewProps {
   onEditingNames: (n: string[] | null) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  rewriteProgress?: RewriteProgress | null;
 }
 
 function ProofProseView({
@@ -1482,10 +1599,30 @@ function ProofProseView({
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
+  rewriteProgress,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
   }
+
+  // Find the last goal-showing step before the active cursor hole.
+  // This step will render its goal interactively instead of as plain LaTeX.
+  const lastGoalStepIdx = (() => {
+    // Find cursor hole
+    const holeIdx = items.findIndex(it => it.isCursor && it.kind.tag === 'hole');
+    if (holeIdx < 0) return -1;
+    // Walk backwards to find the last goal-showing step
+    for (let i = holeIdx - 1; i >= 0; i--) {
+      const k = items[i].kind;
+      if (k.tag === 'unfold' || k.tag === 'rewrite' || k.tag === 'simp') return i;
+      if (k.tag === 'intro' && k.goalLatex) return i;
+      if (k.tag === 'apply') return i;
+      // Stop at structural boundaries
+      if (k.tag === 'caseHeader' || k.tag === 'inductionHeader') break;
+      if (k.tag === 'hole' || k.tag === 'qed' || k.tag === 'exact') break;
+    }
+    return -1;
+  })();
 
   return (
     <div>
@@ -1504,6 +1641,8 @@ function ProofProseView({
             key={`${item.nodeId}-${idx}`}
             item={item}
             prevItem={idx > 0 ? items[idx - 1] : undefined}
+            isLastGoalStep={idx === lastGoalStepIdx}
+
             onClick={() => onClickNode(item.nodeId)}
             onDelete={handleDelete}
             state={state}
@@ -1524,6 +1663,7 @@ function ProofProseView({
             onEditingNames={onEditingNames}
             editingSuggestionId={editingSuggestionId}
             onEditingSuggestionId={onEditingSuggestionId}
+            rewriteProgress={rewriteProgress}
           />
         );
       })}
@@ -1538,6 +1678,9 @@ function ProofProseView({
 interface ProseItemViewProps {
   item: ProseItem;
   prevItem?: ProseItem;
+  /** True if this is the last goal-showing step before the active hole. */
+  isLastGoalStep?: boolean;
+
   onClick: () => void;
   onDelete?: () => void;
   state: ProofTreeState;
@@ -1559,6 +1702,7 @@ interface ProseItemViewProps {
   onEditingNames: (n: string[] | null) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  rewriteProgress?: RewriteProgress | null;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -1577,10 +1721,11 @@ const eqBlockStyle: React.CSSProperties = {
 };
 
 function ProseItemView({
-  item, prevItem, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  item, prevItem, isLastGoalStep, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
+  rewriteProgress,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -1609,7 +1754,9 @@ function ProseItemView({
   const prevShowedGoal = prevItem && (
     (prevItem.kind.tag === 'unfold' && prevItem.kind.goalLatex) ||
     (prevItem.kind.tag === 'rewrite' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'apply' && (prevItem.kind.subgoalLatex?.length ?? 0) <= 1 && prevItem.kind.subgoalLatex?.[0])
+    (prevItem.kind.tag === 'apply' && (prevItem.kind.subgoalLatex?.length ?? 0) <= 1 && prevItem.kind.subgoalLatex?.[0]) ||
+    (prevItem.kind.tag === 'simp' && prevItem.kind.goalLatex) ||
+    (prevItem.kind.tag === 'intro' && prevItem.kind.goalLatex)
   );
 
   // "We must show [goal]" prefix for steps where no prior goal is visible
@@ -1666,13 +1813,28 @@ function ProseItemView({
     onMouseLeave: () => setHovered(false),
   };
 
+  /** Render a goal section — plain LaTeX, or suppressed on the last step (hole shows it interactively). */
+  function renderGoalSection(goalLatex: string | undefined, prefix: string): React.ReactNode {
+    if (!goalLatex) return <span style={prose}>.</span>;
+    // Last step before hole: suppress plain goal here — the hole renders it interactively
+    if (isLastGoalStep) return <span style={prose}>{prefix}</span>;
+    return (
+      <>
+        <span style={prose}>{prefix}</span>
+        <span style={eqBlockStyle}>
+          <InlineKaTeX latex={goalLatex} displayMode />
+        </span>
+      </>
+    );
+  }
+
   switch (kind.tag) {
     case 'intro':
       return (
         <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>Let{' '}</span>
           <InlineKaTeX latex={kind.latex} style={{ fontSize: '13px' }} />
-          <span style={prose}>.</span>
+          {kind.goalLatex ? renderGoalSection(kind.goalLatex, '. We must show') : <span style={prose}>.</span>}
           {deleteBtn}
         </div>
       );
@@ -1684,16 +1846,7 @@ function ProseItemView({
           <span style={prose}>which is true, by definition of{' '}</span>
           <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
           {errorSuffix}
-          {kind.goalLatex ? (
-            <>
-              <span style={prose}>, if</span>
-              <span style={eqBlockStyle}>
-                <InlineKaTeX latex={kind.goalLatex} displayMode />
-              </span>
-            </>
-          ) : (
-            <span style={prose}>.</span>
-          )}
+          {renderGoalSection(kind.goalLatex, ', if')}
           {deleteBtn}
         </div>
       );
@@ -1719,16 +1872,7 @@ function ProseItemView({
             </>
           )}
           {errorSuffix}
-          {kind.goalLatex ? (
-            <>
-              <span style={prose}>, if</span>
-              <span style={eqBlockStyle}>
-                <InlineKaTeX latex={kind.goalLatex} displayMode />
-              </span>
-            </>
-          ) : (
-            <span style={prose}>.</span>
-          )}
+          {renderGoalSection(kind.goalLatex, ', if')}
           {deleteBtn}
         </div>
       );
@@ -1755,16 +1899,7 @@ function ProseItemView({
               </>
             )}
             {errorSuffix}
-            {subgoals[0] ? (
-              <>
-                <span style={prose}>, if</span>
-                <span style={eqBlockStyle}>
-                  <InlineKaTeX latex={subgoals[0]} displayMode />
-                </span>
-              </>
-            ) : (
-              <span style={prose}>.</span>
-            )}
+            {renderGoalSection(subgoals[0], ', if')}
             {deleteBtn}
           </div>
         );
@@ -1850,6 +1985,7 @@ function ProseItemView({
     case 'simp':
       return (
         <div style={rowStyle} {...rowHandlers}>
+          {mustShowPrefix(kind.preGoalLatex)}
           <span style={prose}>Simplifying using{' '}</span>
           {kind.lemmas.map((lemma, i) => (
             <React.Fragment key={i}>
@@ -1857,7 +1993,8 @@ function ProseItemView({
               <InlineKaTeX latex={texNameForProse(lemma)} style={{ fontSize: '13px' }} />
             </React.Fragment>
           ))}
-          <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''}).</span>
+          <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
+          {renderGoalSection(kind.goalLatex, ', we get')}
           {deleteBtn}
         </div>
       );
@@ -1884,6 +2021,7 @@ function ProseItemView({
           nodeId={item.nodeId}
           depth={item.depth}
           goalLatex={kind.goalLatex}
+
           state={state}
           tacticMode={tacticMode}
           onTacticMode={onTacticMode}
@@ -1902,6 +2040,7 @@ function ProseItemView({
           onEditingNames={onEditingNames}
           editingSuggestionId={editingSuggestionId}
           onEditingSuggestionId={onEditingSuggestionId}
+          rewriteProgress={rewriteProgress}
         />
       );
     }
@@ -1928,6 +2067,7 @@ interface HoleProseViewProps {
   nodeId: ProofNodeId;
   depth: number;
   goalLatex?: string;
+
   state: ProofTreeState;
   tacticMode: TacticMode;
   onTacticMode: (m: TacticMode) => void;
@@ -1947,6 +2087,7 @@ interface HoleProseViewProps {
   onEditingNames: (n: string[] | null) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  rewriteProgress?: RewriteProgress | null;
 }
 
 function HoleProseView({
@@ -1954,6 +2095,7 @@ function HoleProseView({
   onClickNode, typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
+  rewriteProgress,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -2068,9 +2210,8 @@ function HoleProseView({
 
   return (
     <div style={rowStyle} onClick={() => onClickNode(nodeId)}>
-      {/* Goal display — shared interactive goal component */}
-      <div style={{ marginBottom: '4px' }}>
-        <span style={{ color: '#484f58', fontSize: '11px', display: 'block', marginBottom: '2px' }}>Remaining to show:</span>
+      {/* Interactive goal display — centered and large */}
+      <div style={{ marginBottom: '6px', textAlign: 'center' }}>
         <GoalInteraction
           interactiveGoal={interactiveGoal}
           suggestions={suggestions}
@@ -2083,6 +2224,11 @@ function HoleProseView({
           state={state}
           onPushChange={onPushChange}
           fallbackGoalLatex={goalLatex}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          typedContext={typedContext}
+          rewriteProgress={rewriteProgress}
+          goalFontSize="16px"
         />
       </div>
 
