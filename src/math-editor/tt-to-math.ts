@@ -498,6 +498,8 @@ function nodesMinPrec(nodes: readonly MathNode[]): number {
       const p = SYMBOL_PREC.get(n.value);
       if (p !== undefined && p < minPrec) minPrec = p;
     }
+    // Look inside Group (htmlId annotation wrapper) to find operators
+    if (n.tag === 'Group') minPrec = Math.min(minPrec, nodesMinPrec(n.children));
     // BigOp body extends ambiguously — treat as lowest arithmetic precedence
     if (n.tag === 'BigOp') minPrec = Math.min(minPrec, PREC_ADDITIVE - 1);
   }

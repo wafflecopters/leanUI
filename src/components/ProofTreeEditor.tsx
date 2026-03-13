@@ -191,8 +191,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   // Compute tactic suggestions from selection (synchronous: intro, unfold, induction)
   const syncSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
     if (!interactiveGoal || !goalSelectedPath) return [];
-    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions);
-  }, [goalSelectedPath, interactiveGoal, definitions]);
+    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions, typedContext?.kernelGoal ?? undefined);
+  }, [goalSelectedPath, interactiveGoal, definitions, typedContext?.kernelGoal]);
 
   // Incremental rewrite suggestions (scan hypotheses, try targeted rewrites)
   const [rewriteProgress, setRewriteProgress] = useState<RewriteProgress | null>(null);

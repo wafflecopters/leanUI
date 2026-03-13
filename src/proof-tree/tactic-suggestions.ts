@@ -9,6 +9,7 @@ import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
 import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar } from '../compiler/term';
 import { TacticEngine } from '../tactics/tacticsEngine';
+import { ExactTactic } from '../tactics/tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
 
 // ============================================================================
@@ -43,10 +44,31 @@ export function computeTacticSuggestions(
   selectedPath: GoalPath | null,
   goal: InteractiveGoal,
   definitions?: DefinitionsMap,
+  kernelGoal?: KernelGoalInfo,
 ): readonly TacticSuggestion[] {
   if (!selectedPath) return [];
 
   const suggestions: TacticSuggestion[] = [];
+
+  // Try `exact refl` — if the goal is `Equal a a`, this closes it immediately
+  if (kernelGoal) {
+    const { engine, goal: metaGoal } = kernelGoal;
+    const goalId = engine.getFocusedGoalId();
+    if (goalId) {
+      try {
+        const reflTactic = new ExactTactic({ tag: 'Const', name: 'refl' });
+        const result = reflTactic.apply(engine, metaGoal, goalId);
+        if (result.success) {
+          suggestions.push({
+            id: 'exact-refl',
+            label: 'refl',
+            labelLatex: '\\textbf{refl}',
+            description: 'Both sides are equal — close with refl',
+          });
+        }
+      } catch { /* refl doesn't apply */ }
+    }
+  }
 
   // Check if a Pi binder is selected (path = "goal-N" where N is a valid binder index)
   const binderMatch = selectedPath.match(/^goal-(\d+)$/);
@@ -61,14 +83,17 @@ export function computeTacticSuggestions(
   if (definitions) {
     const subtermInfo = goal.subtermMap.get(selectedPath);
     if (subtermInfo) {
-      // Unfold: selected subterm is an App of a term definition
+      // Unfold: selected subterm is an App of a term definition (not inductive type or constructor)
       if (subtermInfo.isAppOfConst && subtermInfo.headName) {
-        if (definitions.terms.has(subtermInfo.headName)) {
+        const name = subtermInfo.headName;
+        if (definitions.terms.has(name)
+          && !definitions.inductiveTypes.has(name)
+          && !definitions.inductiveNameOfConstructor.has(name)) {
           suggestions.push({
-            id: `unfold-${subtermInfo.headName}`,
-            label: `Unfold ${subtermInfo.headName}`,
-            labelLatex: `\\text{Unfold } \\textbf{${texEscape(subtermInfo.headName)}}`,
-            description: `Unfold the definition of ${subtermInfo.headName}`,
+            id: `unfold-${name}`,
+            label: `Unfold ${name}`,
+            labelLatex: `\\text{Unfold } \\textbf{${texEscape(name)}}`,
+            description: `Unfold the definition of ${name}`,
           });
         }
       }
@@ -226,15 +251,17 @@ function tryRewrite(
   occurrences: number[],
 ): RewriteSuggestion | null {
   try {
-    const tactic = new RewriteTactic(proofTerm, { reverse, occurrences });
+    const opts = occurrences.length > 0 ? { reverse, occurrences } : { reverse };
+    const tactic = new RewriteTactic(proofTerm, opts);
     const result = tactic.apply(engine, goal, goalId);
     if (!result.success) return null;
     const arrow = reverse ? '\\leftarrow' : '';
+    const occDesc = occurrences.length > 0 ? ` at occurrence ${occurrences.join(', ')}` : '';
     return {
       id: `rewrite-${reverse ? 'rev-' : ''}${hypName}-occ${occurrences.join(',')}`,
       label: `rw${reverse ? '\u2190' : ''} ${hypName}`,
       labelLatex: `\\text{rw}${arrow}\\; \\textbf{${texEscape(hypName)}}`,
-      description: `Rewrite${reverse ? ' (reverse)' : ''} using ${hypName} at occurrence ${occurrences.join(', ')}`,
+      description: `Rewrite${reverse ? ' (reverse)' : ''} using ${hypName}${occDesc}`,
       rewriteName: hypName,
       reverse,
       occurrences,
@@ -252,16 +279,22 @@ export interface RewriteProgress {
   readonly done: boolean;
 }
 
+
 /**
  * Collect candidate equalities from hypotheses and definitions.
- * Each candidate is a { proofTerm, name, eqArgs } triple ready to try.
+ * Each candidate is a { proofTerm, name, reverse } triple ready to try.
+ *
+ * When `selectedHead` is provided, filters by equality head constant (fast path).
+ * When `broadSearch` is true, collects ALL equalities (for Var selections where
+ * head-based filtering isn't possible).
  */
 function collectRewriteCandidates(
-  selectedHead: string,
   metaGoal: MetaVar,
   definitions: DefinitionsMap,
+  filter: { selectedHead: string } | { broadSearch: true },
 ): Array<{ proofTerm: TTKTerm; name: string; reverse: boolean }> {
   const candidates: Array<{ proofTerm: TTKTerm; name: string; reverse: boolean }> = [];
+  const headFilter = 'selectedHead' in filter ? filter.selectedHead : null;
 
   // Scan hypotheses (goal context) for equality types
   const ctx = metaGoal.ctx;
@@ -272,15 +305,16 @@ function collectRewriteCandidates(
 
     const debruijnIdx = ctx.length - 1 - i;
     const proofTerm: TTKTerm = { tag: 'Var', index: debruijnIdx };
-    const hypName = entry.name;
 
-    const lhsHead = getKernelHeadName(eqArgs.lhs);
-    if (lhsHead === selectedHead) {
-      candidates.push({ proofTerm, name: hypName, reverse: false });
-    }
-    const rhsHead = getKernelHeadName(eqArgs.rhs);
-    if (rhsHead === selectedHead) {
-      candidates.push({ proofTerm, name: hypName, reverse: true });
+    if (headFilter) {
+      const lhsHead = getKernelHeadName(eqArgs.lhs);
+      if (lhsHead === headFilter) candidates.push({ proofTerm, name: entry.name, reverse: false });
+      const rhsHead = getKernelHeadName(eqArgs.rhs);
+      if (rhsHead === headFilter) candidates.push({ proofTerm, name: entry.name, reverse: true });
+    } else {
+      // Broad search: try both directions
+      candidates.push({ proofTerm, name: entry.name, reverse: false });
+      candidates.push({ proofTerm, name: entry.name, reverse: true });
     }
   }
 
@@ -292,12 +326,13 @@ function collectRewriteCandidates(
 
     const proofTerm: TTKTerm = { tag: 'Const', name };
 
-    const lhsHead = getKernelHeadName(eqArgs.lhs);
-    if (lhsHead === selectedHead) {
+    if (headFilter) {
+      const lhsHead = getKernelHeadName(eqArgs.lhs);
+      if (lhsHead === headFilter) candidates.push({ proofTerm, name, reverse: false });
+      const rhsHead = getKernelHeadName(eqArgs.rhs);
+      if (rhsHead === headFilter) candidates.push({ proofTerm, name, reverse: true });
+    } else {
       candidates.push({ proofTerm, name, reverse: false });
-    }
-    const rhsHead = getKernelHeadName(eqArgs.rhs);
-    if (rhsHead === selectedHead) {
       candidates.push({ proofTerm, name, reverse: true });
     }
   }
@@ -329,7 +364,15 @@ export function computeRewriteSuggestionsIncremental(
   }
 
   const subtermInfo = goal.subtermMap.get(selectedPath);
-  if (!subtermInfo || !subtermInfo.headName || !subtermInfo.occurrenceIndex) {
+  if (!subtermInfo) {
+    onProgress({ checked: 0, total: 0, suggestions: [], done: true });
+    return cancel;
+  }
+
+  // Need either a head constant name or a variable name to search for rewrites
+  const hasHead = subtermInfo.headName && subtermInfo.occurrenceIndex;
+  const hasVar = subtermInfo.varName;
+  if (!hasHead && !hasVar) {
     onProgress({ checked: 0, total: 0, suggestions: [], done: true });
     return cancel;
   }
@@ -342,8 +385,13 @@ export function computeRewriteSuggestionsIncremental(
   }
   const goalId = maybeGoalId;
 
-  const selectedOcc = subtermInfo.occurrenceIndex;
-  const candidates = collectRewriteCandidates(subtermInfo.headName, metaGoal, kernelGoal.definitions);
+  // For Const-headed subterms: filter by head name, use targeted occurrence
+  // For Vars: broad search (try all equalities), no occurrence targeting
+  const selectedOcc = hasHead ? subtermInfo.occurrenceIndex! : undefined;
+  const filter = hasHead
+    ? { selectedHead: subtermInfo.headName! } as const
+    : { broadSearch: true } as const;
+  const candidates = collectRewriteCandidates(metaGoal, kernelGoal.definitions, filter);
   const total = candidates.length;
 
   if (total === 0) {
@@ -368,7 +416,8 @@ export function computeRewriteSuggestionsIncremental(
     for (let i = startIdx; i < endIdx; i++) {
       if (cancelled) return;
       const c = candidates[i];
-      const s = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, [selectedOcc]);
+      const occs = selectedOcc !== undefined ? [selectedOcc] : [];
+      const s = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, occs);
       if (s) suggestions.push(s);
       checked++;
     }

@@ -103,7 +103,7 @@ export class RewriteTactic implements Tactic {
       //     - Delta-reducing would expose internal match structures, making subterm
       //       matching impossible (e.g., plus(Succ(x), y) → match x with ...)
       const emptyDefs = createDefinitionsMap();
-      const goalType = fullNormalize(goal.type, emptyDefs);
+      let goalType = fullNormalize(goal.type, emptyDefs);
 
       // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.
@@ -120,6 +120,12 @@ export class RewriteTactic implements Tactic {
           lhs = this.applyMetaBindings(lhs, bindings);
           rhs = this.applyMetaBindings(rhs, bindings);
           typeA = this.applyMetaBindings(typeA, bindings);
+
+          // 4e. Delta-normalize the LHS and goal so they use the same form for
+          //     simple aliases like `one` (= Succ Zero). Uses WHNF on leaf constants
+          //     to expand definitions without unfolding recursive functions.
+          lhs = this.shallowDeltaNormalize(lhs, engine.definitions);
+          goalType = this.shallowDeltaNormalize(goalType, engine.definitions);
         }
       }
 
@@ -510,7 +516,7 @@ export class RewriteTactic implements Tactic {
     counter: { value: number },
   ): TTKTerm {
     // If term matches from, replace with to (respecting occurrence filter)
-    // In enhanced mode (erw), use recursive deep definitional equality
+    // In enhanced mode (erw), use recursive deep definitional equality.
     // In normal mode, use structural equality only — WHNF comparison is too aggressive
     // because unrelated subterms may be definitionally equal to the LHS
     // (e.g., mul(2, sumStartCount(0,1,id)) WHNF≡ sumStartCount(0,1,id) ≡ Zero)
@@ -729,6 +735,47 @@ export class RewriteTactic implements Tactic {
 
       default:
         return false;
+    }
+  }
+
+  /**
+   * Shallow delta-normalize: expand simple (non-recursive) definitions throughout a term
+   * so that aliases like `one` → `Succ(Zero)` are resolved. Does NOT expand functions
+   * defined by pattern matching (whose values contain Match), preserving structure.
+   */
+  private shallowDeltaNormalize(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
+    switch (term.tag) {
+      case 'Const': {
+        const def = definitions.terms.get(term.name);
+        if (def?.value && !this.containsMatch(def.value)) {
+          return this.shallowDeltaNormalize(def.value, definitions);
+        }
+        return term;
+      }
+      case 'App': {
+        const newFn = this.shallowDeltaNormalize(term.fn, definitions);
+        const newArg = this.shallowDeltaNormalize(term.arg, definitions);
+        if (newFn === term.fn && newArg === term.arg) return term;
+        return { tag: 'App', fn: newFn, arg: newArg };
+      }
+      case 'Binder': {
+        const newDomain = this.shallowDeltaNormalize(term.domain, definitions);
+        const newBody = this.shallowDeltaNormalize(term.body, definitions);
+        if (newDomain === term.domain && newBody === term.body) return term;
+        return { ...term, domain: newDomain, body: newBody };
+      }
+      default:
+        return term;
+    }
+  }
+
+  /** Check if a term contains a Match node (indicating a pattern-matching definition). */
+  private containsMatch(term: TTKTerm): boolean {
+    switch (term.tag) {
+      case 'Match': return true;
+      case 'App': return this.containsMatch(term.fn) || this.containsMatch(term.arg);
+      case 'Binder': return this.containsMatch(term.domain) || this.containsMatch(term.body);
+      default: return false;
     }
   }
 
