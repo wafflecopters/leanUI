@@ -64,6 +64,8 @@ export interface UnfoldNode {
   readonly id: ProofNodeId;
   /** The definition name to unfold (e.g., 'plus', 'sum'). */
   readonly name: string;
+  /** When set, only unfold the Nth occurrence (1-based) of the head constant. */
+  readonly occurrence?: number;
   readonly child: ProofNode;
 }
 
@@ -76,6 +78,8 @@ export interface RewriteNode {
   readonly reverse: boolean;
   /** 1-based occurrence indices to rewrite (if undefined, rewrite all). */
   readonly occurrences?: readonly number[];
+  /** Head constant name of the target subterm (for occurrence-targeted rewrites). */
+  readonly targetHead?: string;
   readonly child: ProofNode;
 }
 
@@ -166,13 +170,14 @@ export function mkExact(expr: string): ExactNode {
   return { tag: 'exact', id: freshProofId(), expr };
 }
 
-export function mkUnfold(name: string, child: ProofNode): UnfoldNode {
-  return { tag: 'unfold', id: freshProofId(), name, child };
+export function mkUnfold(name: string, child: ProofNode, occurrence?: number): UnfoldNode {
+  return { tag: 'unfold', id: freshProofId(), name, child, occurrence };
 }
 
-export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[]): RewriteNode {
+export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string): RewriteNode {
   const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
   if (occurrences !== undefined) (node as any).occurrences = occurrences;
+  if (targetHead !== undefined) (node as any).targetHead = targetHead;
   return node;
 }
 
@@ -503,25 +508,25 @@ export function applyInductionWithCtors(
 }
 
 /** Apply unfold at the cursor (must be a hole). Replaces the hole with an unfold node + child hole. */
-export function applyUnfold(state: ProofTreeState, name: string): ProofTreeState | null {
+export function applyUnfold(state: ProofTreeState, name: string, occurrence?: number): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
   const childHole = mkHole();
-  const unfold = mkUnfold(name, childHole);
+  const unfold = mkUnfold(name, childHole, occurrence);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, unfold);
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
 /** Apply rewrite at the cursor (must be a hole). Replaces the hole with a rewrite node + child hole. */
 export function applyRewrite(
-  state: ProofTreeState, name: string, reverse = false, occurrences?: readonly number[],
+  state: ProofTreeState, name: string, reverse = false, occurrences?: readonly number[], targetHead?: string,
 ): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
   const childHole = mkHole();
-  const rewrite = mkRewrite(name, childHole, reverse, occurrences);
+  const rewrite = mkRewrite(name, childHole, reverse, occurrences, targetHead);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, rewrite);
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }

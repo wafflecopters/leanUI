@@ -148,7 +148,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 
   // Ephemeral tactic input mode (not part of immutable state)
   const [tacticMode, setTacticMode] = useState<TacticMode>(null);
-  const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('tactics');
+  const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('proof');
 
   // Goal interaction state (shared between GoalPanel and prose view)
   const [goalSelectedPath, setGoalSelectedPath] = useState<GoalPath | null>(null);
@@ -315,7 +315,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
         <div style={{ minWidth: 0, overflowY: 'auto', height: '100%', display: 'flex', flexDirection: 'column' }}>
           {/* Tab bar */}
           <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid #21262d', flexShrink: 0 }}>
-            {(['tactics', 'proof'] as const).map(tab => (
+            {(['proof', 'tactics'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -452,7 +452,7 @@ function GoalInteraction({
       result = applyExact(state, 'refl');
     } else if (suggestion.id.startsWith('unfold-')) {
       const name = suggestion.id.slice('unfold-'.length);
-      result = applyUnfold(state, name);
+      result = applyUnfold(state, name, suggestion.unfoldOccurrence);
     } else if (suggestion.id.startsWith('induction-')) {
       const scrutinee = suggestion.id.slice('induction-'.length);
       // Look up the inductive type info for the variable's type
@@ -466,7 +466,7 @@ function GoalInteraction({
       }
     } else if (suggestion.id.startsWith('rewrite-')) {
       const rw = suggestion as RewriteSuggestion;
-      result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences);
+      result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences, rw.targetHead);
     } else {
       const names = editingSuggestionId === suggestion.id && editingNames
         ? editingNames
@@ -549,31 +549,38 @@ function GoalInteraction({
       {/* Tactic suggestions */}
       {(suggestions.length > 0 || (rewriteProgress && !rewriteProgress.done)) && (
         <div style={{ marginTop: '8px' }}>
-          {suggestions.map(s => {
-            const hasNames = s.proposedNames && s.proposedNames.length > 0;
-
-            const btnLabel = s.labelLatex
-              ? <InlineKaTeX latex={s.labelLatex} style={{ fontSize: '11px' }} />
-              : <>{s.label}</>;
-
-            if (!hasNames) {
-              // Simple action button (e.g., Unfold) — just clickable, no inputs
-              return (
-                <div key={s.id} style={{ padding: '3px 0' }}>
+          {/* Simple action buttons (unfold, rewrite, etc.) — flow in a grid */}
+          {suggestions.some(s => !(s.proposedNames && s.proposedNames.length > 0)) && (
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '4px',
+              marginBottom: '4px',
+            }}>
+              {suggestions.filter(s => !(s.proposedNames && s.proposedNames.length > 0)).map(s => {
+                const btnLabel = s.labelLatex
+                  ? <InlineKaTeX latex={s.labelLatex} style={{ fontSize: '11px' }} />
+                  : <>{s.label}</>;
+                return (
                   <button
+                    key={s.id}
                     style={suggestionBtnStyle}
                     onClick={() => handleApplySuggestion(s)}
                     title={s.description}
                   >
                     {btnLabel}
                   </button>
-                </div>
-              );
-            }
-
-            // Intro-style: editable name inputs + Apply
+                );
+              })}
+            </div>
+          )}
+          {/* Intro-style suggestions with editable name inputs — one per row */}
+          {suggestions.filter(s => s.proposedNames && s.proposedNames.length > 0).map(s => {
             const isEditing = editingSuggestionId === s.id;
             const names = isEditing && editingNames ? editingNames : [...(s.proposedNames ?? [])];
+            const btnLabel = s.labelLatex
+              ? <InlineKaTeX latex={s.labelLatex} style={{ fontSize: '11px' }} />
+              : <>{s.label}</>;
             return (
               <div key={s.id} style={{
                 display: 'flex',
@@ -1961,6 +1968,7 @@ function ProseItemView({
     case 'exact':
       return (
         <div style={rowStyle} {...rowHandlers}>
+          {mustShowPrefix(kind.goalLatex)}
           {kind.solved ? (
             <>
               <span style={prose}>The result follows from{' '}</span>

@@ -14,12 +14,14 @@ import {
 } from './proof-tree';
 import {
   computeTypedContext,
+  replayEntireTree,
   InductiveMap, InductiveInfo,
   extractTypeHead, peelConstructorParams, generateCaseInfos,
   kernelTypeToSurface,
   replaceVar,
   computeCaseGoalDirect,
 } from './goal-computation';
+import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { TTerm } from '../compiler/surface';
 
 beforeEach(() => {
@@ -473,6 +475,126 @@ describe('computeTypedContext with TacticEngine', () => {
     // After unfolding, goal should not contain 'plus' (reduced away)
     expect(ctx!.goal).toContain('Equal');
     expect(ctx!.goal).not.toContain('plus');
+  });
+
+  test('unfold mul on mul(2, x0) does not show raw match expression', () => {
+    let defs = makeNatDefs();
+
+    // plus : Nat -> Nat -> Nat (pattern matching)
+    const plusBody: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkVar(1),
+      clauses: [
+        { patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }], rhs: mkVar(0) },
+        {
+          patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'k' }] }],
+          rhs: mkApp(mkConst('Succ'), mkApp(mkApp(mkConst('plus'), mkVar(0)), mkVar(1))),
+        },
+      ],
+    };
+    defs = addDefinition(defs, 'plus',
+      mkPi(mkConst('Nat'), mkPi(mkConst('Nat'), mkConst('Nat'), 'm'), 'n'),
+      mkLambda(mkConst('Nat'), mkLambda(mkConst('Nat'), plusBody, 'm'), 'n'),
+    );
+
+    // mul : Nat -> Nat -> Nat (pattern matching)
+    const mulBody: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkVar(1),
+      clauses: [
+        { patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }], rhs: mkConst('Zero') },
+        {
+          patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'k' }] }],
+          rhs: mkApp(mkApp(mkConst('plus'), mkVar(1)), mkApp(mkApp(mkConst('mul'), mkVar(0)), mkVar(1))),
+        },
+      ],
+    };
+    defs = addDefinition(defs, 'mul',
+      mkPi(mkConst('Nat'), mkPi(mkConst('Nat'), mkConst('Nat'), 'm'), 'n'),
+      mkLambda(mkConst('Nat'), mkLambda(mkConst('Nat'), mulBody, 'm'), 'n'),
+    );
+
+    // two = Succ(Succ(Zero))
+    const two = mkApp(mkConst('Succ'), mkApp(mkConst('Succ'), mkConst('Zero')));
+    defs = addDefinition(defs, 'two', mkConst('Nat'), two);
+
+    // Goal: Equal (mul two x0) something — with x0 as Var(0) in a context with one Nat binder
+    // Kernel type: (x0 : Nat) -> Equal (mul two x0) x0
+    const kernelGoal = mkPi(mkConst('Nat'),
+      mkApp(mkApp(mkConst('Equal'), mkApp(mkApp(mkConst('mul'), mkConst('two')), mkVar(0))), mkVar(0)),
+      'x0',
+    );
+    const surfaceGoal = mkPiTT(Nat,
+      mkAppTT(mkAppTT(mkConstTT('Equal'), mkAppTT(mkAppTT(mkConstTT('mul'), mkConstTT('two')), mkVarTT(0))), mkVarTT(0)),
+      'x0',
+    );
+
+    // Build proof tree: intros x0 → unfold mul → hole
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('mul', childHole);
+    const intros = mkIntros(['x0'], unfold);
+
+    const ctx = computeTypedContext(
+      intros, childHole.id, surfaceGoal, emptyRegistry,
+      undefined, kernelGoal, defs,
+    );
+    expect(ctx).not.toBeNull();
+    // After unfolding mul on mul(two, x0), the match on Succ(Succ(Zero)) should
+    // iota-reduce. The displayed goal must NOT contain a raw match expression.
+    expect(ctx!.goal).not.toContain('match');
+    expect(ctx!.goal).not.toContain('\\{');
+    expect(ctx!.goal).not.toContain('Rightarrow');
+    // It SHOULD still contain 'plus' (from the unfolded result)
+    expect(ctx!.goal).toContain('Equal');
+  });
+
+  test('unfold plus on plus(one, one) does not show raw match expression', () => {
+    let defs = makeNatDefs();
+
+    // plus : Nat -> Nat -> Nat (pattern matching on first arg)
+    const plusBody: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkVar(1),
+      clauses: [
+        { patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }], rhs: mkVar(0) },
+        {
+          patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'k' }] }],
+          rhs: mkApp(mkConst('Succ'), mkApp(mkApp(mkConst('plus'), mkVar(0)), mkVar(1))),
+        },
+      ],
+    };
+    defs = addDefinition(defs, 'plus',
+      mkPi(mkConst('Nat'), mkPi(mkConst('Nat'), mkConst('Nat'), 'm'), 'n'),
+      mkLambda(mkConst('Nat'), mkLambda(mkConst('Nat'), plusBody, 'm'), 'n'),
+    );
+
+    // one = Succ(Zero)
+    const one = mkApp(mkConst('Succ'), mkConst('Zero'));
+    defs = addDefinition(defs, 'one', mkConst('Nat'), one);
+
+    // Goal: Equal (plus one one) two — using defined constants
+    const kernelGoal = mkApp(
+      mkApp(mkConst('Equal'), mkApp(mkApp(mkConst('plus'), mkConst('one')), mkConst('one'))),
+      mkConst('two'),
+    );
+    const surfaceGoal = mkAppTT(
+      mkAppTT(mkConstTT('Equal'), mkAppTT(mkAppTT(mkConstTT('plus'), mkConstTT('one')), mkConstTT('one'))),
+      mkConstTT('two'),
+    );
+
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('plus', childHole);
+
+    const ctx = computeTypedContext(
+      unfold, childHole.id, surfaceGoal, emptyRegistry,
+      undefined, kernelGoal, defs,
+    );
+    expect(ctx).not.toBeNull();
+    // After unfolding plus on plus(one, one), the match on Succ(Zero) should
+    // iota-reduce. The displayed goal must NOT contain a raw match expression.
+    expect(ctx!.goal).not.toContain('\\{');
+    expect(ctx!.goal).not.toContain('Rightarrow');
+    expect(ctx!.goal).toContain('Equal');
   });
 
   test('unfold on cursor node itself shows pre-unfold goal', () => {
@@ -1443,5 +1565,88 @@ minusSucc (LeqSucc l) = minusSucc l
     expect(ctx!.goal).toContain('Equal');
     // The goal should NOT contain 'minus' applied to 'Succ' (the unrewritten pattern)
     // It should have Succ applied to minus instead
+  });
+});
+
+// ============================================================================
+// End-to-end: unfold display via replayEntireTree (prose rendering path)
+// ============================================================================
+
+describe('unfold display via replayEntireTree', () => {
+  function compileNatMath() {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+one : Nat
+one = Succ Zero
+
+two : Nat
+two = Succ (Succ Zero)
+
+-- Theorem with plus(one, one) in the goal
+plusOneOne : Equal (plus one one) two
+plusOneOne = ?TODO
+
+-- Theorem with mul(two, x0) in the goal
+mulTwoX : (x0 : Nat) -> Equal (mul two x0) (plus x0 (plus x0 Zero))
+mulTwoX = ?TODO
+`;
+    return compileTTFromText(source);
+  }
+
+  test('unfold plus on plus(one,one): no raw match in prose goalLatex', () => {
+    const result = compileNatMath();
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'plusOneOne');
+    expect(decl).toBeDefined();
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree: unfold plus → hole
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('plus', childHole);
+
+    const goalMap = replayEntireTree(unfold, kernelType, definitions, rev);
+    const childGoalInfo = goalMap.get(childHole.id);
+    expect(childGoalInfo).toBeDefined();
+    // The post-unfold goal must NOT contain raw match expressions
+    expect(childGoalInfo!.goalLatex).not.toContain('\\{');
+    expect(childGoalInfo!.goalLatex).not.toContain('Rightarrow');
+    expect(childGoalInfo!.goalLatex).toContain('Equal');
+  });
+
+  test('unfold mul on mul(two,x0): no raw match in prose goalLatex', () => {
+    const result = compileNatMath();
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'mulTwoX');
+    expect(decl).toBeDefined();
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree: intros x0 → unfold mul → hole
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('mul', childHole);
+    const intros = mkIntros(['x0'], unfold);
+
+    const goalMap = replayEntireTree(intros, kernelType, definitions, rev);
+    const childGoalInfo = goalMap.get(childHole.id);
+    expect(childGoalInfo).toBeDefined();
+    // The post-unfold goal must NOT contain raw match expressions
+    expect(childGoalInfo!.goalLatex).not.toContain('\\{');
+    expect(childGoalInfo!.goalLatex).not.toContain('Rightarrow');
+    expect(childGoalInfo!.goalLatex).toContain('Equal');
   });
 });

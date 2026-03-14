@@ -88,6 +88,13 @@ succInj refl = refl
 plusCancelLeft : {a b c : Nat} -> Equal (plus a b) (plus a c) -> Equal b c
 plusCancelLeft {a:=Zero} {b} {c} eq = eq
 plusCancelLeft {a:=Succ a} {b} {c} eq = let k = succInj eq in plusCancelLeft k
+one : Nat
+one = Succ Zero
+two : Nat
+two = Succ (Succ Zero)
+mulOneRight : (n : Nat) -> Equal (mul n one) n
+mulOneRight Zero = refl
+mulOneRight (Succ n) = congSucc (mulOneRight n)
 `;
 
 // Compile once and reuse
@@ -1241,5 +1248,144 @@ describe('RewriteTactic with premise-carrying lemmas', () => {
     expect(equalBC.fn.fn.tag).toBe('App'); // Equal Nat
     expect(equalBC.fn.fn.fn).toEqual({ tag: 'Const', name: 'Equal' });
     expect(equalBC.fn.fn.arg).toEqual(Nat);
+  });
+});
+
+// =============================================================================
+// Tests for unfold + iota reduction
+// =============================================================================
+
+describe('UnfoldTactic iota-reduction', () => {
+  test('unfold plus on plus(Succ(Zero), Succ(Zero)) should iota-reduce', () => {
+    // Goal: Equal (plus (Succ Zero) (Succ Zero)) ?something
+    // After unfold plus: the match on Succ should iota-reduce to Succ(plus Zero (Succ Zero))
+    const definitions = getDefinitions();
+    const Nat: TTKTerm = { tag: 'Const', name: 'Nat' };
+    const zero: TTKTerm = { tag: 'Const', name: 'Zero' };
+    const one: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: zero };
+    const plusOneOne: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: one }, arg: one };
+
+    // Equal (plus 1 1) (plus 1 1)
+    const goalType: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: Nat }, arg: plusOneOne },
+      arg: plusOneOne
+    };
+
+    const engine = createInitialEngine(goalType, [], definitions);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const result = new UnfoldTactic(['plus']).apply(engine, goal, goalId);
+    if (!result.success) throw new Error(`unfold plus failed: ${result.error}`);
+
+    const newEngine = result.newEngine;
+    const newGoalId = newEngine.goals[newEngine.focusIndex];
+    const newGoal = newEngine.metaVars.get(newGoalId)!;
+
+    // After unfold + iota: plus(Succ(Zero), Succ(Zero)) should become Succ(plus(Zero, Succ(Zero)))
+    // The result should NOT contain a Match node at the top level
+    const newType = newGoal.type;
+    const containsMatch = JSON.stringify(newType).includes('"Match"');
+    expect(containsMatch).toBe(false);
+  });
+
+  test('unfold mul on mul(Succ(Succ(Zero)), x) should iota-reduce', () => {
+    const definitions = getDefinitions();
+    const Nat: TTKTerm = { tag: 'Const', name: 'Nat' };
+    const zero: TTKTerm = { tag: 'Const', name: 'Zero' };
+    const two: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: { tag: 'App', fn: { tag: 'Const', name: 'Succ' }, arg: zero } };
+    const x: TTKTerm = { tag: 'Var', index: 0 };
+    const mulTwoX: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: two }, arg: x };
+
+    // Equal (mul 2 x) ?something
+    const goalType: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: Nat }, arg: mulTwoX },
+      arg: mulTwoX
+    };
+
+    const ctx = [{ name: 'x', type: Nat }];
+    const engine = createInitialEngine(goalType, ctx, definitions);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const result = new UnfoldTactic(['mul']).apply(engine, goal, goalId);
+    if (!result.success) throw new Error(`unfold mul failed: ${result.error}`);
+
+    const newEngine = result.newEngine;
+    const newGoalId = newEngine.goals[newEngine.focusIndex];
+    const newGoal = newEngine.metaVars.get(newGoalId)!;
+
+    // After unfold + iota: should NOT contain Match
+    const newType = newGoal.type;
+    const containsMatch = JSON.stringify(newType).includes('"Match"');
+    expect(containsMatch).toBe(false);
+  });
+});
+
+// =============================================================================
+// Tests for reverse rewrite with bare-Meta LHS (occurrence-targeted)
+// =============================================================================
+
+describe('RewriteTactic reverse with occurrence targeting', () => {
+  test('rewrite← mulOneRight at occurrence 1 replaces only that subterm, not the whole goal', () => {
+    // Goal: Equal (plus two (mul two x)) (plus (plus one one) (plus x x))
+    // User clicks on first `two` and picks rewrite← mulOneRight
+    // mulOneRight : Equal (mul n one) n, reverse: replace n with mul(n, one)
+    // Expected: first `two` becomes mul(two, one), rest unchanged
+    const definitions = getDefinitions();
+    const Nat: TTKTerm = { tag: 'Const', name: 'Nat' };
+    const one: TTKTerm = { tag: 'Const', name: 'one' };
+    const two: TTKTerm = { tag: 'Const', name: 'two' };
+    const x: TTKTerm = { tag: 'Var', index: 0 };
+
+    const mkPlus = (a: TTKTerm, b: TTKTerm): TTKTerm =>
+      ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'plus' }, arg: a }, arg: b });
+    const mkMul = (a: TTKTerm, b: TTKTerm): TTKTerm =>
+      ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'mul' }, arg: a }, arg: b });
+    const mkEqual = (a: TTKTerm, b: TTKTerm): TTKTerm =>
+      ({ tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: Nat }, arg: a }, arg: b });
+
+    // Goal: Equal (plus two (mul two x)) (plus (plus one one) (plus x x))
+    const goalType = mkEqual(
+      mkPlus(two, mkMul(two, x)),
+      mkPlus(mkPlus(one, one), mkPlus(x, x))
+    );
+
+    const ctx = [{ name: 'x', type: Nat }];
+    const engine = createInitialEngine(goalType, ctx, definitions);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // rewrite← mulOneRight at occurrence 1 of 'two' (the first `two`)
+    // targetHead='two' tells the tactic to only resolve the bare Meta against
+    // subterms with head constant 'two', matching the surface annotator's counting.
+    const result = new RewriteTactic(
+      { tag: 'Const', name: 'mulOneRight' },
+      { reverse: true, occurrences: [1], targetHead: 'two' }
+    ).apply(engine, goal, goalId);
+
+    if (!result.success) throw new Error(`rewrite← mulOneRight failed: ${result.error}`);
+
+    const newEngine = result.newEngine;
+    const newGoalId = newEngine.goals[newEngine.focusIndex];
+    const newGoal = newEngine.metaVars.get(newGoalId)!;
+    const newType = newGoal.type;
+
+    // The new goal should NOT wrap the entire original goal in mul(..., one)
+    // It should replace only the first `two` with `mul two one`
+    // Verify it's still an equality
+    expect(newType.tag).toBe('App');
+    const outerApp = newType as any;
+    expect(outerApp.fn.fn.fn).toEqual({ tag: 'Const', name: 'Equal' });
+
+    // The RHS of the equality should be unchanged (only occurrence 1 = the first `two` is rewritten)
+    expect(outerApp.arg).toEqual(mkPlus(mkPlus(one, one), mkPlus(x, x)));
+
+    // The LHS should have mul(two, one) replacing the first `two`
+    // Expected LHS: plus(mul(two, one), mul(two, x))
+    const lhsOfEq = outerApp.fn.arg;
+    expect(lhsOfEq).toEqual(mkPlus(mkMul(two, one), mkMul(two, x)));
   });
 });

@@ -631,9 +631,13 @@ const INFIX_SYMBOLS = new Set([
   '\\implies', '\\iff', '\\subset', '\\subseteq',
 ]);
 
-/** Check if a list of MathNodes contains an infix operator at the top level. */
+/** Check if a list of MathNodes contains an infix operator (looks inside Groups). */
 function containsInfix(nodes: readonly MathNode[]): boolean {
-  return nodes.some(n => n.tag === 'Symbol' && INFIX_SYMBOLS.has(n.value));
+  return nodes.some(n =>
+    n.tag === 'Symbol' ? INFIX_SYMBOLS.has(n.value) :
+    n.tag === 'Group' ? containsInfix(n.children) :
+    false
+  );
 }
 
 /**

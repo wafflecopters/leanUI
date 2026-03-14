@@ -206,18 +206,96 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
  */
 
 /**
+ * Collect the App spine: App(App(f, a), b) → { head: f, args: [a, b] }
+ */
+function collectSpine(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+  const args: TTKTerm[] = [];
+  let current = term;
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+  return { head: current, args };
+}
+
+function rebuildApp(head: TTKTerm, args: TTKTerm[]): TTKTerm {
+  let result = head;
+  for (const arg of args) {
+    result = { tag: 'App', fn: result, arg };
+  }
+  return result;
+}
+
+/**
+ * Prepare Match terms for iota-reduction by WHNF-ing critical positions
+ * with real definitions, without delta-reducing other constants.
+ *
+ * Handles two patterns:
+ * 1. Single-scrutinee: `Match(Const("one"), ...)` → whnf scrutinee
+ * 2. Multi-arg (Hole scrutinee): `App(App(Match(Hole, ...), one), one)`
+ *    → whnf each applied arg to expose constructors
+ */
+function prepareMatchesForIota(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
+  switch (term.tag) {
+    case 'Match': {
+      const scrut = prepareMatchesForIota(term.scrutinee, definitions);
+      const whnfScrut = (scrut.tag === 'Const') ? whnf(scrut, { definitions }) : scrut;
+      const newClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: prepareMatchesForIota(c.rhs, definitions),
+      }));
+      if (whnfScrut === term.scrutinee && newClauses.every((c, i) => c.rhs === term.clauses[i].rhs))
+        return term;
+      return { ...term, scrutinee: whnfScrut, clauses: newClauses };
+    }
+    case 'App': {
+      // Check for multi-arg Match pattern: App(App(Match(Hole, ...), arg1), arg2)
+      const { head, args } = collectSpine(term);
+      if (head.tag === 'Match' && head.scrutinee.tag === 'Hole') {
+        // WHNF each arg with real definitions to expose constructors
+        const newArgs = args.map(a => {
+          const prepared = prepareMatchesForIota(a, definitions);
+          // Only whnf Const args (value aliases like `one`, `two`)
+          if (prepared.tag === 'Const') return whnf(prepared, { definitions });
+          // Also handle App(Const("Succ"), Const("Zero")) etc. already reduced
+          return prepared;
+        });
+        const newHead = prepareMatchesForIota(head, definitions);
+        const changed = newHead !== head || newArgs.some((a, i) => a !== args[i]);
+        return changed ? rebuildApp(newHead, newArgs) : term;
+      }
+      // Regular App — just recurse
+      const newFn = prepareMatchesForIota(term.fn, definitions);
+      const newArg = prepareMatchesForIota(term.arg, definitions);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+    case 'Binder': {
+      const newDomain = prepareMatchesForIota(term.domain, definitions);
+      const newBody = prepareMatchesForIota(term.body, definitions);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+    default:
+      return term;
+  }
+}
+
+/**
  * Normalize a MetaVar's goal type after unfold and update the engine.
  * Returns a new engine with the goal's type replaced by the normalized version.
+ *
+ * Two-step approach:
+ * 1. prepareMatchesForIota: WHNF Match scrutinees and multi-arg Match applied args
+ *    with real definitions to expose constructors (e.g., `one` → `Succ(Zero)`)
+ * 2. fullNormalize with empty definitions: beta+iota only, no delta on other constants
  */
 function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngine {
   const goal = engine.metaVars.get(goalId);
   if (!goal) return engine;
 
-  // Use empty definitions so fullNormalize only does beta/iota reduction,
-  // not delta-reduction of other constants. UnfoldTactic already replaced
-  // the target constant with its lambda body — we just need to beta-reduce
-  // the resulting (\x => body)(arg) redexes.
-  const normalized = fullNormalize(goal.type, createDefinitionsMap());
+  const prepared = prepareMatchesForIota(goal.type, engine.definitions);
+  const normalized = fullNormalize(prepared, createDefinitionsMap());
   if (normalized === goal.type) return engine;
 
   const newMetaVars = new Map(engine.metaVars);
@@ -826,7 +904,7 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const tactic = new UnfoldTactic([node.name]);
+      const tactic = new UnfoldTactic([node.name], node.occurrence);
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
@@ -860,7 +938,7 @@ function replayProofTree(
 
       const tactic = new RewriteTactic(
         resolveNameInGoal(node.name, goal),
-        { reverse: node.reverse, occurrences: node.occurrences ? [...node.occurrences] : undefined },
+        { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
       );
       const result = tactic.apply(engine, goal, goalId);
 
@@ -1030,7 +1108,7 @@ function replayProofTree(
         if (step.tag === 'rewrite') {
           const tactic = new RewriteTactic(
             resolveNameInGoal(step.name, stepGoal),
-            { reverse: step.reverse, occurrences: step.occurrences ? [...step.occurrences] : undefined },
+            { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
           );
           const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
           if (result.success) {
@@ -1219,8 +1297,9 @@ export function renderGoalLatex(
   rev: ReverseRegistry,
 ): string {
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
-  // Beta-normalize to clean up redexes like (\i => i)(0) → 0
-  const normalized = betaNormalize(zonked);
+  // Full-normalize (beta + iota) to reduce redexes like (\i => i)(0) → 0
+  // and Match expressions from unfold (e.g., match Zero { ... } → result)
+  const normalized = fullNormalize(zonked, createDefinitionsMap());
   const surface = kernelTypeToSurface(normalized, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
@@ -1402,7 +1481,7 @@ export function replayEntireTree(
         recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
-        const tactic = new UnfoldTactic([node.name]);
+        const tactic = new UnfoldTactic([node.name], node.occurrence);
         const tacResult = tactic.apply(eng, goal, gId);
         if (tacResult.success) {
           const newGoalId = tacResult.newEngine!.getFocusedGoalId();
@@ -1425,7 +1504,7 @@ export function replayEntireTree(
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const tactic = new RewriteTactic(
           resolveNameInGoal(node.name, goal),
-          { reverse: node.reverse, occurrences: node.occurrences ? [...node.occurrences] : undefined },
+          { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
         );
         const tacResult = tactic.apply(eng, goal, gId);
         // Capture the unified equation and attach it to this node's info
@@ -1580,7 +1659,7 @@ export function replayEntireTree(
           if (step.tag === 'rewrite') {
             const tactic = new RewriteTactic(
               resolveNameInGoal(step.name, stepGoal),
-              { reverse: step.reverse, occurrences: step.occurrences ? [...step.occurrences] : undefined },
+              { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
             );
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
             if (stepResult.success) {

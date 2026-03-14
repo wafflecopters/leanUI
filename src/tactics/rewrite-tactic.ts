@@ -35,7 +35,7 @@ export class RewriteTactic implements Tactic {
 
   constructor(
     public readonly equalityProof: TTKTerm,
-    public readonly options: { enhanced?: boolean; reverse?: boolean; occurrences?: number[] } = {}
+    public readonly options: { enhanced?: boolean; reverse?: boolean; occurrences?: number[]; targetHead?: string } = {}
   ) {}
 
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
@@ -176,7 +176,7 @@ export class RewriteTactic implements Tactic {
           }
         }
       } else if (instantiated) {
-        const allMatches = this.findAllPatternMatches(goalType, lhs, engine.definitions);
+        let allMatches = this.findAllPatternMatches(goalType, lhs, engine.definitions);
 
         for (const bindings of allMatches) {
           if (bindings.size === 0) continue;
@@ -190,8 +190,30 @@ export class RewriteTactic implements Tactic {
           const candidateLhs = this.applyMetaBindings(lhs, bindings);
           const candidateRhs = this.applyMetaBindings(rhs, bindings);
 
+          // 4e. When targetHead is specified (from clicking a specific subterm in the UI),
+          //     only accept matches whose resolved LHS has the matching head constant.
+          //     This prevents bare-Meta LHS (from reverse rewrites) from resolving to
+          //     wrong subterms like Const("Nat") instead of the clicked Const("two").
+          if (this.options.targetHead && occurrences && occurrences.length > 0) {
+            const resolvedHead = this.getTermHeadName(candidateLhs);
+            if (resolvedHead !== this.options.targetHead) continue;
+          }
+
           // 5. Replace LHS with RHS in the goal type
           let candidateGoal = this.substitute(goalType, candidateLhs, candidateRhs, engine.definitions, occurrences);
+
+          // 5-sanity. Reject pathological rewrites that change the goal's head.
+          //   When LHS is a bare Meta (from reverse rewrite), pattern matching can
+          //   resolve ?n to the entire goal, producing mul(Equal(...), one) instead
+          //   of replacing a specific subterm. Reject rewrites that change the goal's
+          //   outermost head constant (e.g., Equal → mul is nonsensical).
+          if (!this.termEqual(goalType, candidateGoal)) {
+            const goalHead = this.getTermHeadName(goalType);
+            const newHead = this.getTermHeadName(candidateGoal);
+            if (goalHead && newHead !== goalHead) {
+              continue; // Skip this pathological match, try the next one
+            }
+          }
 
           // 5a. If no match, try delta-normalizing the LHS for simple aliases
           if (this.termEqual(goalType, candidateGoal)) {
@@ -698,8 +720,9 @@ export class RewriteTactic implements Tactic {
     definitions?: DefinitionsMap, occurrences?: number[],
   ): TTKTerm {
     const counter = { value: 0 };
-    // When occurrence-targeted, compute the LHS head for head-based counting
-    const lhsHead = (occurrences && occurrences.length > 0)
+    // Only use head-based counting when `from` is an App — bare Consts/Vars
+    // don't form App spines, so head-based counting would skip them entirely
+    const lhsHead = (occurrences && occurrences.length > 0 && from.tag === 'App')
       ? this.getTermHeadName(from)
       : null;
     return this.substituteImpl(term, from, to, definitions, occurrences, counter, lhsHead);

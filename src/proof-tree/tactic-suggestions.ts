@@ -24,6 +24,8 @@ export interface TacticSuggestion {
   readonly description: string;
   /** For intro tactics: proposed variable names (editable by user). */
   readonly proposedNames?: readonly string[];
+  /** For unfold tactics: which occurrence (0-based) of the head to unfold. */
+  readonly unfoldOccurrence?: number;
 }
 
 /** Escape a name for use in LaTeX (wrap multi-char names in \text{}). */
@@ -97,6 +99,7 @@ export function computeTacticSuggestions(
             label: `Unfold ${name}`,
             labelLatex: `\\text{Unfold } \\textbf{${texEscape(name)}}`,
             description: `Unfold the definition of ${name}`,
+            unfoldOccurrence: subtermInfo.occurrenceIndex,
           });
         }
       }
@@ -190,6 +193,8 @@ export interface RewriteSuggestion extends TacticSuggestion {
   readonly rewriteName: string;
   readonly reverse: boolean;
   readonly occurrences: readonly number[];
+  /** Head constant name of the clicked subterm (for occurrence-targeted rewrites). */
+  readonly targetHead?: string;
 }
 
 /** Kernel-level goal info needed for rewrite suggestions. */
@@ -252,22 +257,27 @@ function tryRewrite(
   hypName: string,
   reverse: boolean,
   occurrences: number[],
+  targetHead?: string,
 ): RewriteSuggestion | null {
   try {
-    const opts = occurrences.length > 0 ? { reverse, occurrences } : { reverse };
+    const opts: any = occurrences.length > 0 ? { reverse, occurrences } : { reverse };
+    if (targetHead) opts.targetHead = targetHead;
     const tactic = new RewriteTactic(proofTerm, opts);
     const result = tactic.apply(engine, goal, goalId);
     if (!result.success) return null;
     const arrow = reverse ? '\\leftarrow' : '';
-    const occDesc = occurrences.length > 0 ? ` at occurrence ${occurrences.join(', ')}` : '';
+    // Normalize: empty occurrences means "all" — store as empty array (same as no restriction)
+    const effectiveOcc = occurrences.length > 0 ? occurrences : [];
+    const occDesc = effectiveOcc.length > 0 ? ` at occurrence ${effectiveOcc.join(', ')}` : '';
     return {
-      id: `rewrite-${reverse ? 'rev-' : ''}${hypName}-occ${occurrences.join(',')}`,
+      id: `rewrite-${reverse ? 'rev-' : ''}${hypName}-occ${effectiveOcc.join(',')}`,
       label: `rw${reverse ? '\u2190' : ''} ${hypName}`,
       labelLatex: `\\text{rw}${arrow}\\; \\textbf{${texEscape(hypName)}}`,
       description: `Rewrite${reverse ? ' (reverse)' : ''} using ${hypName}${occDesc}`,
       rewriteName: hypName,
       reverse,
-      occurrences,
+      occurrences: effectiveOcc,
+      targetHead,
     };
   } catch {
     return null;
@@ -373,7 +383,7 @@ export function computeRewriteSuggestionsIncremental(
   }
 
   // Need either a head constant name or a variable name to search for rewrites
-  const hasHead = subtermInfo.headName && subtermInfo.occurrenceIndex;
+  const hasHead = subtermInfo.headName && subtermInfo.occurrenceIndex !== undefined;
   const hasVar = subtermInfo.varName;
   if (!hasHead && !hasVar) {
     onProgress({ checked: 0, total: 0, suggestions: [], done: true });
@@ -419,9 +429,17 @@ export function computeRewriteSuggestionsIncremental(
     for (let i = startIdx; i < endIdx; i++) {
       if (cancelled) return;
       const c = candidates[i];
-      const occs = selectedOcc !== undefined ? [selectedOcc] : [];
-      const s = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, occs);
-      if (s) suggestions.push(s);
+      if (selectedOcc !== undefined) {
+        // Only try targeted rewrite at the clicked occurrence — don't fall back
+        // to untargeted, which would rewrite a DIFFERENT subterm than selected
+        const targeted = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, [selectedOcc], subtermInfo?.headName);
+        if (targeted) {
+          suggestions.push(targeted);
+        }
+      } else {
+        const s = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, []);
+        if (s) suggestions.push(s);
+      }
       checked++;
     }
 
