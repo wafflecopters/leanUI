@@ -1388,6 +1388,7 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
       <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>unfold </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        {node.occurrence != null && <span style={mutedStyle}> #{node.occurrence}</span>}
         <span style={mutedStyle}>,</span>
       </TacticRow>
       <ProofNodeView
@@ -1429,6 +1430,7 @@ function FoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>fold </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        {node.occurrence != null && <span style={mutedStyle}> #{node.occurrence}</span>}
         <span style={mutedStyle}>,</span>
       </TacticRow>
       <ProofNodeView
@@ -1470,6 +1472,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
       <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>{node.reverse ? 'rewrite\u2190 ' : 'rewrite '}</span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        {node.occurrences && node.occurrences.length > 0 && <span style={mutedStyle}> #{node.occurrences.join(',')}</span>}
         <span style={mutedStyle}>,</span>
       </TacticRow>
       <ProofNodeView

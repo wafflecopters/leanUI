@@ -23,9 +23,9 @@ export interface ProseItem {
 
 export type ProseItemKind =
   | { tag: 'intro'; latex: string; goalLatex?: string }
-  | { tag: 'unfold'; name: string; preGoalLatex?: string; goalLatex?: string; error?: string }
-  | { tag: 'fold'; name: string; preGoalLatex?: string; goalLatex?: string; error?: string }
-  | { tag: 'rewrite'; name: string; reverse?: boolean; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'unfold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
   | { tag: 'inductionHeader'; scrutinee: string }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean }
@@ -40,6 +40,10 @@ export interface ChainStep {
   readonly type: 'unfold' | 'fold' | 'rewrite';
   readonly name: string;
   readonly reverse?: boolean;
+  /** For unfold/fold: 1-based occurrence index (if targeting a specific occurrence). */
+  readonly occurrence?: number;
+  /** For rewrite: 1-based occurrence indices (if targeting specific occurrences). */
+  readonly occurrences?: readonly number[];
   /** For rewrite steps: the unified equation rendered as LaTeX (e.g., "a + 0 = a"). */
   readonly equationLatex?: string;
 }
@@ -122,15 +126,16 @@ function collectChain(
   while (isChainNode(current)) {
     const nodeInfo = goalMap.get(current.id);
     if (current.tag === 'unfold') {
-      steps.push({ nodeId: current.id, type: 'unfold', name: current.name });
+      steps.push({ nodeId: current.id, type: 'unfold', name: current.name, occurrence: current.occurrence });
     } else if (current.tag === 'fold') {
-      steps.push({ nodeId: current.id, type: 'fold', name: current.name });
+      steps.push({ nodeId: current.id, type: 'fold', name: current.name, occurrence: current.occurrence });
     } else {
       steps.push({
         nodeId: current.id,
         type: 'rewrite',
         name: current.name,
         reverse: current.reverse,
+        occurrences: current.occurrences,
         equationLatex: nodeInfo?.unifiedEquationLatex,
       });
     }
@@ -206,14 +211,15 @@ export function generateProofProse(
             : undefined;
           const stepError = goalMap.get(step.nodeId)?.tacticError;
           if (step.type === 'unfold') {
-            emit(step.nodeId, depth, { tag: 'unfold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
+            emit(step.nodeId, depth, { tag: 'unfold', name: step.name, occurrence: step.occurrence, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
           } else if (step.type === 'fold') {
-            emit(step.nodeId, depth, { tag: 'fold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
+            emit(step.nodeId, depth, { tag: 'fold', name: step.name, occurrence: step.occurrence, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
           } else {
             emit(step.nodeId, depth, {
               tag: 'rewrite',
               name: step.name,
               reverse: step.reverse,
+              occurrences: step.occurrences,
               equationLatex: step.equationLatex,
               preGoalLatex,
               goalLatex: nextGoalLatex,
