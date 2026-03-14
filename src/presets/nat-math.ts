@@ -22,7 +22,7 @@ mul : Nat -> Nat -> Nat
 mul Zero m = Zero
 mul (Succ n) m = plus m (mul n m)
 
-@syntax 1 @becomes Succ Zero
+@syntax 1 @becomes one
 one : Nat
 one = Succ Zero
 
@@ -178,6 +178,10 @@ plusMinusCancel : {i n : Nat} -> Leq i n -> Equal (plus i (minus n i)) n
 plusMinusCancel LeqZero = refl
 plusMinusCancel (LeqSucc l) = congSucc (plusMinusCancel l)
 
+plusCancelLeft : {a b c : Nat} -> Equal (plus a b) (plus a c) -> Equal b c
+plusCancelLeft {a:=Zero} {b} {c} eq = eq
+plusCancelLeft {a:=Succ a} {b} {c} eq = plusCancelLeft (succInj eq)
+
 minusSelf : {n : Nat} -> Equal (minus n n) Zero
 minusSelf {n:=Zero} = refl
 minusSelf {n:=Succ n} = trans (sym minusEqSuccMinusSucc) minusSelf
@@ -238,7 +242,7 @@ summationBase : (i : Nat) -> (f : Nat -> Nat) -> Equal (sum i i f) (f i) := by
   rewrite sumStartCountOne
   exact refl
 
-@syntax 2 @becomes Succ (Succ Zero)
+@syntax 2 @becomes two
 two : Nat
 two = Succ (Succ Zero)
 

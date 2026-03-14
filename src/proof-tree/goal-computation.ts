@@ -26,6 +26,7 @@ import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
 import { TacticEngine, createInitialEngine } from '../tactics/tacticsEngine';
 import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
+import { FoldTactic } from '../tactics/fold-tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
 
 // ============================================================================
@@ -931,6 +932,31 @@ function replayProofTree(
       );
     }
 
+    case 'fold': {
+      // Apply FoldTactic — replace definition body occurrences with Const(name)
+      const goal = engine.getFocusedGoal();
+      if (!goal) return null;
+
+      const tactic = new FoldTactic([node.name], node.occurrence);
+      const result = tactic.apply(engine, goal, goalId);
+
+      if (!result.success) {
+        const childResult = replayProofTree(
+          node.child, cursorId, engine,
+          caseLabel, caseLabelLatex, inductionVar,
+        );
+        if (childResult) {
+          childResult.tacticError = `fold ${node.name}: ${result.error ?? 'failed'}`;
+        }
+        return childResult;
+      }
+
+      return replayProofTree(
+        node.child, cursorId, result.newEngine,
+        caseLabel, caseLabelLatex, inductionVar,
+      );
+    }
+
     case 'rewrite': {
       // Apply RewriteTactic — resolve name against context first (for hypotheses like IH)
       const goal = engine.getFocusedGoal();
@@ -1371,6 +1397,7 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
       return null;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       return findNodeById(node.child, id);
     case 'apply':
@@ -1493,6 +1520,22 @@ export function replayEntireTree(
           // Tag the node with error info
           const existing = result.get(node.id);
           if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
+          walk(node.child, eng, caseLabelLatex);
+        }
+        break;
+      }
+
+      case 'fold': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const foldTactic = new FoldTactic([node.name], node.occurrence);
+        const foldResult = foldTactic.apply(eng, goal, gId);
+        if (foldResult.success) {
+          walk(node.child, foldResult.newEngine!, caseLabelLatex);
+        } else {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: foldResult.error });
           walk(node.child, eng, caseLabelLatex);
         }
         break;
@@ -1753,6 +1796,7 @@ function walkTreeSurface(
     }
 
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       // No kernel type — can't process, pass through
       return walkTreeSurface(node.child, cursorId, currentType, hypotheses, nameCtx, rev);

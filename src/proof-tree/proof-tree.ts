@@ -29,6 +29,7 @@ export type ProofNode =
   | InductionNode
   | ExactNode
   | UnfoldNode
+  | FoldNode
   | RewriteNode
   | ApplyNode
   | SimpNode;
@@ -65,6 +66,16 @@ export interface UnfoldNode {
   /** The definition name to unfold (e.g., 'plus', 'sum'). */
   readonly name: string;
   /** When set, only unfold the Nth occurrence (1-based) of the head constant. */
+  readonly occurrence?: number;
+  readonly child: ProofNode;
+}
+
+export interface FoldNode {
+  readonly tag: 'fold';
+  readonly id: ProofNodeId;
+  /** The definition name to fold (e.g., 'two', 'myZero'). */
+  readonly name: string;
+  /** When set, only fold the Nth occurrence (1-based) of the definition body. */
   readonly occurrence?: number;
   readonly child: ProofNode;
 }
@@ -174,6 +185,10 @@ export function mkUnfold(name: string, child: ProofNode, occurrence?: number): U
   return { tag: 'unfold', id: freshProofId(), name, child, occurrence };
 }
 
+export function mkFold(name: string, child: ProofNode, occurrence?: number): FoldNode {
+  return { tag: 'fold', id: freshProofId(), name, child, occurrence };
+}
+
 export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string): RewriteNode {
   const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
   if (occurrences !== undefined) (node as any).occurrences = occurrences;
@@ -219,6 +234,7 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
       return null;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       return findNode(root.child, id);
     case 'apply':
@@ -251,6 +267,7 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
       return null;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       return findCase(root.child, id);
     case 'apply':
@@ -285,6 +302,7 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
       return false;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       return isCursorInSubtree(node.child, cursorId);
     case 'apply':
@@ -323,6 +341,7 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
       break;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       linearizeImpl(node.child, depth + 1, out);
       break;
@@ -365,6 +384,7 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
       return root;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
@@ -413,6 +433,7 @@ export function updateCase(
       return root;
     case 'intros':
     case 'unfold':
+    case 'fold':
     case 'rewrite': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
@@ -515,6 +536,17 @@ export function applyUnfold(state: ProofTreeState, name: string, occurrence?: nu
   const childHole = mkHole();
   const unfold = mkUnfold(name, childHole, occurrence);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, unfold);
+  return { root: newRoot, cursor: { nodeId: childHole.id } };
+}
+
+/** Apply fold at the cursor (must be a hole). Replaces the hole with a fold node + child hole. */
+export function applyFold(state: ProofTreeState, name: string, occurrence?: number): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const childHole = mkHole();
+  const fold = mkFold(name, childHole, occurrence);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, fold);
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
@@ -820,6 +852,7 @@ function computeContextImpl(
     }
 
     case 'unfold':
+    case 'fold':
     case 'rewrite':
       return computeContextImpl(node.child, cursorId, hypotheses);
 

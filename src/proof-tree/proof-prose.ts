@@ -24,11 +24,12 @@ export interface ProseItem {
 export type ProseItemKind =
   | { tag: 'intro'; latex: string; goalLatex?: string }
   | { tag: 'unfold'; name: string; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'fold'; name: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
   | { tag: 'inductionHeader'; scrutinee: string }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean }
-  | { tag: 'exact'; exprLatex: string; solved: boolean; error?: string }
+  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string }
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'qed' };
@@ -36,7 +37,7 @@ export type ProseItemKind =
 /** A single step in an unfold/rewrite chain. */
 export interface ChainStep {
   readonly nodeId: ProofNodeId;
-  readonly type: 'unfold' | 'rewrite';
+  readonly type: 'unfold' | 'fold' | 'rewrite';
   readonly name: string;
   readonly reverse?: boolean;
   /** For rewrite steps: the unified equation rendered as LaTeX (e.g., "a + 0 = a"). */
@@ -103,8 +104,8 @@ function texName(name: string): string {
 // Chain Detection
 // ============================================================================
 
-function isChainNode(node: ProofNode): node is (ProofNode & { tag: 'unfold' | 'rewrite' }) {
-  return node.tag === 'unfold' || node.tag === 'rewrite';
+function isChainNode(node: ProofNode): node is (ProofNode & { tag: 'unfold' | 'fold' | 'rewrite' }) {
+  return node.tag === 'unfold' || node.tag === 'fold' || node.tag === 'rewrite';
 }
 
 /**
@@ -122,6 +123,8 @@ function collectChain(
     const nodeInfo = goalMap.get(current.id);
     if (current.tag === 'unfold') {
       steps.push({ nodeId: current.id, type: 'unfold', name: current.name });
+    } else if (current.tag === 'fold') {
+      steps.push({ nodeId: current.id, type: 'fold', name: current.name });
     } else {
       steps.push({
         nodeId: current.id,
@@ -163,7 +166,7 @@ export function generateProofProse(
       case 'exact': {
         const solved = info?.validation?.status === 'solved';
         const error = info?.validation?.status === 'error' ? info.validation.message : undefined;
-        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, error });
+        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error });
         if (solved) {
           emit(node.id, depth, { tag: 'qed' });
         }
@@ -183,8 +186,9 @@ export function generateProofProse(
       }
 
       case 'unfold':
+      case 'fold':
       case 'rewrite': {
-        // Collect chain of consecutive unfold/rewrite, emit each as its own item.
+        // Collect chain of consecutive unfold/fold/rewrite, emit each as its own item.
         // Each step shows the goal AFTER that step (= the next node's goal).
         // The first step also carries preGoalLatex (the goal before the chain).
         const { steps, tail } = collectChain(node, goalMap);
@@ -203,6 +207,8 @@ export function generateProofProse(
           const stepError = goalMap.get(step.nodeId)?.tacticError;
           if (step.type === 'unfold') {
             emit(step.nodeId, depth, { tag: 'unfold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
+          } else if (step.type === 'fold') {
+            emit(step.nodeId, depth, { tag: 'fold', name: step.name, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
           } else {
             emit(step.nodeId, depth, {
               tag: 'rewrite',

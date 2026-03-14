@@ -1650,3 +1650,134 @@ mulTwoX = ?TODO
     expect(childGoalInfo!.goalLatex).toContain('Equal');
   });
 });
+
+// ============================================================================
+// Unfold plus bug reproduction: unfold plus should not collapse the goal
+// ============================================================================
+
+describe('unfold plus on complex goals', () => {
+  function compileTriangleSum() {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mul : Nat -> Nat -> Nat
+mul Zero m = Zero
+mul (Succ n) m = plus m (mul n m)
+
+one : Nat
+one = Succ Zero
+
+two : Nat
+two = Succ (Succ Zero)
+
+sum : Nat -> Nat -> (Nat -> Nat) -> Nat
+sum start end f = Zero
+
+-- Goal contains plus, mul, sum
+testThm : (n : Nat) -> Equal (mul two (sum Zero n (\\i => i))) (mul (plus n one) n)
+testThm = ?TODO
+`;
+    return compileTTFromText(source);
+  }
+
+  test('unfold plus preserves sum and mul in goal', () => {
+    const result = compileTriangleSum();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testThm');
+    expect(decl).toBeDefined();
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree: intros n → unfold plus → hole
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('plus', childHole);
+    const intros = mkIntros(['x0'], unfold);
+
+    const goalMap = replayEntireTree(intros, kernelType, definitions, rev);
+    const childGoalInfo = goalMap.get(childHole.id);
+    expect(childGoalInfo).toBeDefined();
+
+    // After unfolding plus, the goal should still contain mul and sum
+    // It should NOT have collapsed to a completely different equation
+    const goalLatex = childGoalInfo!.goalLatex ?? '';
+    expect(goalLatex).toContain('Equal');
+
+    // The 'sum' and 'mul' should still appear (not delta-reduced away)
+    // If unfold over-normalizes, these will disappear
+    expect(goalLatex).toContain('sum');
+    expect(goalLatex).toContain('mul');
+  });
+
+  test('unfold plus on nat-math triangleSum after induction does not collapse goal', () => {
+    const result = compileTTFromText(NAT_MATH_CODE);
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'triangleSum');
+    expect(decl).toBeDefined();
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree: intros x0 → unfold plus → hole
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('plus', childHole);
+    const intros = mkIntros(['x0'], unfold);
+
+    const goalMap = replayEntireTree(intros, kernelType, definitions, rev);
+    const childGoalInfo = goalMap.get(childHole.id);
+    expect(childGoalInfo).toBeDefined();
+
+    const goalLatex = childGoalInfo!.goalLatex ?? '';
+    // Should still have x0 in the goal (from intros), NOT n
+    // If the replay fails and falls back, it would show 'n' instead
+    expect(goalLatex).toContain('x');
+    // Should still contain mul and sum (not over-reduced)
+    expect(goalLatex).toContain('mul');
+  });
+
+  test('unfold plus after induction Succ case does not throw', () => {
+    const result = compileTTFromText(NAT_MATH_CODE);
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'triangleSum');
+    expect(decl).toBeDefined();
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree: intros x0 → induction x0 → Succ case → unfold plus → hole
+    const childHole = mkTreeHole();
+    const unfold = mkUnfold('plus', childHole);
+    const zeroHole = mkTreeHole();
+    const induction = mkInduction('x0', [
+      mkCase('Zero', zeroHole, 'Zero'),
+      mkCase('Succ', unfold, 'Succ', ['n', 'ih']),
+    ]);
+    const intros = mkIntros(['x0'], induction);
+
+    const goalMap = replayEntireTree(intros, kernelType, definitions, rev);
+
+    // The unfold and child nodes should both be recorded
+    const unfoldGoalInfo = goalMap.get(unfold.id);
+    expect(unfoldGoalInfo).toBeDefined();
+    const childGoalInfo = goalMap.get(childHole.id);
+    expect(childGoalInfo).toBeDefined();
+    // After unfold plus on Succ case, plus(Succ(x0), one) should reduce to Succ(plus(x0, one))
+    const goalLatex = childGoalInfo!.goalLatex ?? '';
+    expect(goalLatex).toContain('Equal');
+    // Should still contain mul and sum (not over-reduced)
+    expect(goalLatex).toContain('mul');
+    expect(goalLatex).toContain('sum');
+    // Should have x0 (from intros), not show raw match expressions
+    expect(goalLatex).toContain('x');
+    expect(goalLatex).not.toContain('Rightarrow');
+  });
+});

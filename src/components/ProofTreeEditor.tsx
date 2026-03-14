@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyRewrite, applyApplyTactic, applySimp,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode,
@@ -133,6 +133,7 @@ type TacticMode =
   | { tactic: 'induction' }
   | { tactic: 'exact' }
   | { tactic: 'unfold' }
+  | { tactic: 'fold' }
   | { tactic: 'rewrite' }
   | { tactic: 'rewrite_rev' }
   | { tactic: 'apply' }
@@ -464,6 +465,9 @@ function GoalInteraction({
         const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
         result = applyInductionWithCtors(state, scrutinee, ctorInfos);
       }
+    } else if (suggestion.id.startsWith('fold-')) {
+      const name = suggestion.foldName ?? suggestion.id.slice('fold-'.length);
+      result = applyFold(state, name, suggestion.foldOccurrence);
     } else if (suggestion.id.startsWith('rewrite-')) {
       const rw = suggestion as RewriteSuggestion;
       result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences, rw.targetHead);
@@ -839,6 +843,7 @@ function ProofNodeView(props: NodeViewProps) {
     case 'induction': return <InductionView {...props} />;
     case 'exact': return <ExactView {...props} />;
     case 'unfold': return <UnfoldView {...props} />;
+    case 'fold': return <FoldView {...props} />;
     case 'rewrite': return <RewriteView {...props} />;
     case 'apply': return <ApplyView {...props} />;
     case 'simp': return <SimpView {...props} />;
@@ -1001,6 +1006,11 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
         if (name) result = applyUnfold(state, name);
         break;
       }
+      case 'fold': {
+        const name = value.trim();
+        if (name) result = applyFold(state, name);
+        break;
+      }
       case 'rewrite': {
         const name = value.trim();
         if (name) result = applyRewrite(state, name);
@@ -1075,6 +1085,9 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'unfold' }); }}>
             Unfold...
           </button>
+          <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'fold' }); }}>
+            Fold...
+          </button>
           <button style={btnStyle} onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic: 'rewrite' }); }}>
             Rewrite...
           </button>
@@ -1096,6 +1109,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
             {activeTactic === 'intros' ? 'Given' :
              activeTactic === 'induction' ? 'Induct on' :
              activeTactic === 'unfold' ? 'Unfold' :
+             activeTactic === 'fold' ? 'Fold' :
              activeTactic === 'rewrite' ? 'Rewrite' :
              activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
              activeTactic === 'apply' ? 'Apply' :
@@ -1110,6 +1124,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               activeTactic === 'intros' ? 'n, m, f' :
               activeTactic === 'induction' ? 'variable name' :
               activeTactic === 'unfold' ? 'definition name' :
+              activeTactic === 'fold' ? 'definition name' :
               activeTactic === 'rewrite' ? 'lemma name' :
               activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
@@ -1372,6 +1387,47 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
     <>
       <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
         <span style={keywordStyle}>unfold </span>
+        <span style={{ color: '#79c0ff' }}>{node.name}</span>
+        <span style={mutedStyle}>,</span>
+      </TacticRow>
+      <ProofNodeView
+        node={node.child}
+        depth={depth + 1}
+        cursorId={cursorId}
+        state={state}
+        tacticMode={tacticMode}
+        onTacticMode={onTacticMode}
+        onPushChange={onPushChange}
+        onClickNode={onClickNode}
+        typedContext={typedContext}
+        inductiveMap={inductiveMap}
+        registry={registry}
+        kernelType={kernelType}
+        definitions={definitions}
+        goalMap={goalMap}
+      />
+    </>
+  );
+}
+
+// ============================================================================
+// FoldView — renders "fold <name>,"
+// ============================================================================
+
+function FoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPushChange, onClickNode, typedContext, inductiveMap, registry, kernelType, definitions, goalMap }: NodeViewProps) {
+  if (node.tag !== 'fold') return null;
+  const isFocused = cursorId === node.id;
+  const hasError = !!goalMap?.get(node.id)?.tacticError;
+
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
+  return (
+    <>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete} hasError={hasError}>
+        <span style={keywordStyle}>fold </span>
         <span style={{ color: '#79c0ff' }}>{node.name}</span>
         <span style={mutedStyle}>,</span>
       </TacticRow>
@@ -1860,6 +1916,18 @@ function ProseItemView({
         </div>
       );
 
+    case 'fold':
+      return (
+        <div style={rowStyle} {...rowHandlers}>
+          {mustShowPrefix(kind.preGoalLatex)}
+          <span style={prose}>which matches the definition of{' '}</span>
+          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+          {errorSuffix}
+          {renderGoalSection(kind.goalLatex, ', if')}
+          {deleteBtn}
+        </div>
+      );
+
     case 'rewrite': {
       const arrow = kind.reverse ? ' (\u2190)' : '';
       return (
@@ -2153,6 +2221,11 @@ function HoleProseView({
         if (name) result = applyUnfold(state, name);
         break;
       }
+      case 'fold': {
+        const name = value.trim();
+        if (name) result = applyFold(state, name);
+        break;
+      }
       case 'rewrite': {
         const name = value.trim();
         if (name) result = applyRewrite(state, name);
@@ -2251,6 +2324,7 @@ function HoleProseView({
             { tactic: 'induction' as const, label: 'Induction' },
             { tactic: 'exact' as const, label: 'Exact' },
             { tactic: 'unfold' as const, label: 'Unfold' },
+            { tactic: 'fold' as const, label: 'Fold' },
             { tactic: 'rewrite' as const, label: 'Rewrite' },
             { tactic: 'rewrite_rev' as const, label: 'Rewrite\u2190' },
             { tactic: 'apply' as const, label: 'Apply' },
@@ -2271,6 +2345,7 @@ function HoleProseView({
             {activeTactic === 'intros' ? 'Given' :
              activeTactic === 'induction' ? 'Induct on' :
              activeTactic === 'unfold' ? 'Unfold' :
+             activeTactic === 'fold' ? 'Fold' :
              activeTactic === 'rewrite' ? 'Rewrite' :
              activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
              activeTactic === 'apply' ? 'Apply' :

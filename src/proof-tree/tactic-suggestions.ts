@@ -7,10 +7,12 @@
 
 import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
 import { TTKTerm } from '../compiler/kernel';
-import { DefinitionsMap, MetaVar } from '../compiler/term';
+import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
+import { fullNormalize } from '../compiler/whnf';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic } from '../tactics/tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
+import { ttkTermsEqual } from '../tactics/fold-tactic';
 
 // ============================================================================
 // Types
@@ -24,8 +26,12 @@ export interface TacticSuggestion {
   readonly description: string;
   /** For intro tactics: proposed variable names (editable by user). */
   readonly proposedNames?: readonly string[];
-  /** For unfold tactics: which occurrence (0-based) of the head to unfold. */
+  /** For unfold tactics: which occurrence (1-based) of the head to unfold. */
   readonly unfoldOccurrence?: number;
+  /** For fold tactics: which occurrence (1-based) of the definition body to fold. */
+  readonly foldOccurrence?: number;
+  /** For fold tactics: the definition name to fold. */
+  readonly foldName?: string;
 }
 
 /** Escape a name for use in LaTeX (wrap multi-char names in \text{}). */
@@ -101,6 +107,36 @@ export function computeTacticSuggestions(
             description: `Unfold the definition of ${name}`,
             unfoldOccurrence: subtermInfo.occurrenceIndex,
           });
+        }
+      }
+
+      // Fold: check if any term definition's normalized body matches the selected subterm
+      // Only try for constructor-headed subterms (e.g., Succ(Succ(Zero)))
+      if (kernelGoal && subtermInfo.headName) {
+        const selectedHead = subtermInfo.headName;
+        // Only suggest fold for constructor applications (not function definitions)
+        if (definitions.inductiveNameOfConstructor.has(selectedHead) || selectedHead === 'Zero') {
+          const emptyDefs = createDefinitionsMap();
+          for (const [defName, termDef] of definitions.terms) {
+            if (!termDef.value) continue;
+            // Skip function definitions (lambdas) — only fold closed terms
+            if (termDef.value.tag === 'Binder' && termDef.value.binderKind.tag === 'BLam') continue;
+            // Normalize the definition body
+            const normalizedBody = fullNormalize(termDef.value, emptyDefs);
+            // Check if the head matches (fast filter)
+            const bodyHead = getKernelHeadName(normalizedBody);
+            if (bodyHead !== selectedHead) continue;
+            // TODO: could check structural equality against the kernel subterm here
+            // For now, suggest fold and let the tactic validate
+            suggestions.push({
+              id: `fold-${defName}`,
+              label: `Fold ${defName}`,
+              labelLatex: `\\text{Fold } \\textbf{${texEscape(defName)}}`,
+              description: `Replace with ${defName}`,
+              foldName: defName,
+              foldOccurrence: subtermInfo.occurrenceIndex,
+            });
+          }
         }
       }
 
