@@ -1184,7 +1184,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
       </TacticRow>
       <ProofNodeView
         node={node.child}
-        depth={depth + 1}
+        depth={depth}
         cursorId={cursorId}
         state={state}
         tacticMode={tacticMode}
@@ -1393,7 +1393,7 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
       </TacticRow>
       <ProofNodeView
         node={node.child}
-        depth={depth + 1}
+        depth={depth}
         cursorId={cursorId}
         state={state}
         tacticMode={tacticMode}
@@ -1435,7 +1435,7 @@ function FoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
       </TacticRow>
       <ProofNodeView
         node={node.child}
-        depth={depth + 1}
+        depth={depth}
         cursorId={cursorId}
         state={state}
         tacticMode={tacticMode}
@@ -1477,7 +1477,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
       </TacticRow>
       <ProofNodeView
         node={node.child}
-        depth={depth + 1}
+        depth={depth}
         cursorId={cursorId}
         state={state}
         tacticMode={tacticMode}
