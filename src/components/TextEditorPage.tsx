@@ -926,7 +926,14 @@ export function TextEditorPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
-  const [code, setCode] = useState(PRESETS[0].code);
+  const [code, setCode] = useState(() => {
+    const presetParam = searchParams.get('preset');
+    if (presetParam) {
+      const preset = PRESETS.find(p => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') === presetParam);
+      if (preset) return preset.code;
+    }
+    return PRESETS[0].code;
+  });
   const [editorReady, setEditorReady] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [showLatex, setShowLatex] = useState(false);
@@ -956,23 +963,24 @@ export function TextEditorPage() {
     event: import('monaco-editor').IEvent<void>;
   } | null>(null);
 
-  // Load preset from URL parameter on mount
-  useEffect(() => {
-    const presetParam = searchParams.get('preset');
-    if (presetParam) {
-      const preset = PRESETS.find(p => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') === presetParam);
-      if (preset) {
-        setCode(preset.code);
+  // Set editor value imperatively (for external changes like preset loading).
+  // This preserves cursor position better than feeding value back through React props.
+  const setEditorValue = useCallback((newCode: string) => {
+    setCode(newCode);
+    const editor = editorRef.current;
+    if (editor) {
+      const model = editor.getModel();
+      if (model && model.getValue() !== newCode) {
+        model.setValue(newCode);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run on mount
+  }, []);
 
   // Helper function to load a preset and update URL
   const loadPreset = useCallback((presetName: string) => {
     const preset = PRESETS.find(p => p.name === presetName);
     if (preset) {
-      setCode(preset.code);
+      setEditorValue(preset.code);
       // Convert preset name to URL-friendly format: "Nat Math (Tactics)" -> "nat-math-tactics"
       const urlSafePresetName = preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       setSearchParams(prev => {
@@ -982,7 +990,7 @@ export function TextEditorPage() {
       }, { replace: true });
       setPresetMenuOpen(false);
     }
-  }, [setSearchParams]);
+  }, [setSearchParams, setEditorValue]);
 
   // Sync editor/symbol URL params when they change
   const updateEditorParams = useCallback((editor: boolean, symbol: string | null) => {
@@ -1065,8 +1073,8 @@ export function TextEditorPage() {
     const line = lines[absLine];
     // SourcePos.col is 1-based
     lines[absLine] = line.slice(0, nameRange.start.col - 1) + newName + line.slice(nameRange.end.col - 1);
-    setCode(lines.join('\n'));
-  }, [compiledDeclsWithSource, code]);
+    setEditorValue(lines.join('\n'));
+  }, [compiledDeclsWithSource, code, setEditorValue]);
 
   // All declarations (for building syntax registry from @syntax annotations)
   const allCompiledDeclarations = useMemo(() => {
@@ -1747,7 +1755,7 @@ export function TextEditorPage() {
               <Editor
                 height="100%"
                 defaultLanguage="tt"
-                value={code}
+                defaultValue={code}
                 onChange={handleEditorChange}
                 onMount={handleEditorDidMount}
                 options={{

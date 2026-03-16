@@ -264,8 +264,11 @@ export interface ConvertResult {
  * Convert a sequence of MathNodes to TT source using the syntax registry.
  * Tries patterns in priority order, falls back to per-node conversion.
  */
-export function convertToSource(registry: SyntaxRegistry, nodes: readonly MathNode[]): ConvertResult {
+export function convertToSource(registry: SyntaxRegistry, nodes: readonly MathNode[], depth: number = 0): ConvertResult {
   if (nodes.length === 0) return { source: '?', needsR: false };
+  // Guard against infinite recursion from degenerate patterns (e.g., a single capture
+  // that matches everything and recurses with the same nodes)
+  if (depth > 50) return convertNodesFallback(registry, nodes);
 
   // Try row-level patterns in priority order
   const sorted = getSortedEntries(registry);
@@ -277,7 +280,7 @@ export function convertToSource(registry: SyntaxRegistry, nodes: readonly MathNo
       const convertedBindings = new Map<string, string>();
 
       for (const [name, capturedNodes] of bindings) {
-        const result = convertToSource(registry, capturedNodes);
+        const result = convertToSource(registry, capturedNodes, depth + 1);
         convertedBindings.set(name, result.source);
         if (result.needsR) needsR = true;
       }
