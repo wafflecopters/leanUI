@@ -123,7 +123,8 @@ export function computeTacticSuggestions(
         const name = subtermInfo.headName;
         if (definitions.terms.has(name)
           && !definitions.inductiveTypes.has(name)
-          && !definitions.inductiveNameOfConstructor.has(name)) {
+          && !definitions.inductiveNameOfConstructor.has(name)
+          && name !== kernelGoal?.currentDeclName) {
           let resultGoalLatex: string | undefined;
           if (kernelGoal) {
             try {
@@ -158,6 +159,8 @@ export function computeTacticSuggestions(
           const emptyDefs = createDefinitionsMap();
           for (const [defName, termDef] of definitions.terms) {
             if (!termDef.value) continue;
+            // Skip self-references (folding yourself is circular)
+            if (defName === kernelGoal.currentDeclName) continue;
             // Skip function definitions (lambdas) — only fold closed terms
             if (termDef.value.tag === 'Binder' && termDef.value.binderKind.tag === 'BLam') continue;
             // Normalize the definition body
@@ -293,6 +296,8 @@ export interface KernelGoalInfo {
   readonly goal: MetaVar;
   readonly definitions: DefinitionsMap;
   readonly rev?: ReverseRegistry;
+  /** Name of the declaration currently being proved (to filter self-references). */
+  readonly currentDeclName?: string;
 }
 
 /**
@@ -398,12 +403,13 @@ export interface RewriteProgress {
  * When `broadSearch` is true, collects ALL equalities (for Var selections where
  * head-based filtering isn't possible).
  */
-function collectRewriteCandidates(
+export function collectRewriteCandidates(
   metaGoal: MetaVar,
   definitions: DefinitionsMap,
   filter: { selectedHead: string } | { broadSearch: true },
-): Array<{ proofTerm: TTKTerm; name: string; reverse: boolean }> {
-  const candidates: Array<{ proofTerm: TTKTerm; name: string; reverse: boolean }> = [];
+  currentDeclName?: string,
+): Array<{ proofTerm: TTKTerm; name: string; reverse: boolean; isSelfReference?: boolean }> {
+  const candidates: Array<{ proofTerm: TTKTerm; name: string; reverse: boolean; isSelfReference?: boolean }> = [];
   const headFilter = 'selectedHead' in filter ? filter.selectedHead : null;
 
   // Scan hypotheses (goal context) for equality types
@@ -433,6 +439,23 @@ function collectRewriteCandidates(
     if (!termDef.type) continue;
     const eqArgs = extractEqualityArgs(termDef.type);
     if (!eqArgs) continue;
+
+    // Self-referential candidates: skip outside induction, tag inside induction
+    if (name === currentDeclName) {
+      if (!metaGoal.caseTag) continue; // Outside induction case — circular, skip
+      // Inside induction case — include but tag for structural check
+      const proofTerm: TTKTerm = { tag: 'Const', name };
+      if (headFilter) {
+        const lhsHead = getKernelHeadName(eqArgs.lhs);
+        if (lhsHead === headFilter) candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
+        const rhsHead = getKernelHeadName(eqArgs.rhs);
+        if (rhsHead === headFilter) candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
+      } else {
+        candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
+        candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
+      }
+      continue;
+    }
 
     const proofTerm: TTKTerm = { tag: 'Const', name };
 
@@ -501,7 +524,7 @@ export function computeRewriteSuggestionsIncremental(
   const filter = hasHead
     ? { selectedHead: subtermInfo.headName! } as const
     : { broadSearch: true } as const;
-  const candidates = collectRewriteCandidates(metaGoal, kernelGoal.definitions, filter);
+  const candidates = collectRewriteCandidates(metaGoal, kernelGoal.definitions, filter, kernelGoal.currentDeclName);
   const total = candidates.length;
 
   if (total === 0) {

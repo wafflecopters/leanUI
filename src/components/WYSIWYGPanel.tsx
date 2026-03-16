@@ -323,6 +323,7 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
                     definitions={definitionsMap}
                     registry={registries[i]}
                     inductiveMap={inductiveMap}
+                    currentDeclName={decl.name}
                   />
                 </div>
               </>

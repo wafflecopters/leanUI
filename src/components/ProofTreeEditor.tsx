@@ -63,6 +63,8 @@ export interface ProofTreeEditorProps {
   registry?: SyntaxRegistry;
   /** Map of inductive type names to their constructors — enables case-specific goals */
   inductiveMap?: InductiveMap;
+  /** Name of the declaration being proved — used to filter self-referential suggestions */
+  currentDeclName?: string;
 }
 
 // ============================================================================
@@ -143,7 +145,7 @@ type TacticMode =
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -189,24 +191,31 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     }
   }, [typedContext?.kernelGoal, typedContext?.validation]);
 
+  // Augment kernelGoal with currentDeclName for self-reference filtering
+  const kernelGoalWithDeclName = useMemo(() => {
+    if (!typedContext?.kernelGoal) return undefined;
+    if (!currentDeclName) return typedContext.kernelGoal;
+    return { ...typedContext.kernelGoal, currentDeclName };
+  }, [typedContext?.kernelGoal, currentDeclName]);
+
   // Compute tactic suggestions from selection (synchronous: intro, unfold, induction)
   const syncSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
     if (!interactiveGoal || !goalSelectedPath) return [];
-    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions, typedContext?.kernelGoal ?? undefined);
-  }, [goalSelectedPath, interactiveGoal, definitions, typedContext?.kernelGoal]);
+    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName);
+  }, [goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName]);
 
   // Incremental rewrite suggestions (scan hypotheses, try targeted rewrites)
   const [rewriteProgress, setRewriteProgress] = useState<RewriteProgress | null>(null);
   const rewriteSuggestions = rewriteProgress?.suggestions ?? [];
   useEffect(() => {
     setRewriteProgress(null);
-    if (!goalSelectedPath || !interactiveGoal || !typedContext?.kernelGoal) return;
+    if (!goalSelectedPath || !interactiveGoal || !kernelGoalWithDeclName) return;
     const cancel = computeRewriteSuggestionsIncremental(
-      goalSelectedPath, interactiveGoal, typedContext.kernelGoal,
+      goalSelectedPath, interactiveGoal, kernelGoalWithDeclName,
       (progress) => setRewriteProgress(progress),
     );
     return cancel;
-  }, [goalSelectedPath, interactiveGoal, typedContext?.kernelGoal]);
+  }, [goalSelectedPath, interactiveGoal, kernelGoalWithDeclName]);
 
   // Merge all suggestions
   const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
