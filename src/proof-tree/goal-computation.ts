@@ -1323,9 +1323,12 @@ export function renderGoalLatex(
   rev: ReverseRegistry,
 ): string {
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
-  // Full-normalize (beta + iota) to reduce redexes like (\i => i)(0) → 0
-  // and Match expressions from unfold (e.g., match Zero { ... } → result)
-  const normalized = fullNormalize(zonked, createDefinitionsMap());
+  // 1. Prepare Match scrutinees for iota-reduction by WHNF-ing with real definitions
+  //    (e.g., `match one { ... }` → `match Succ(Zero) { ... }` so iota fires)
+  const prepared = prepareMatchesForIota(zonked, definitions);
+  // 2. Full-normalize (beta + iota) to reduce redexes like (\i => i)(0) → 0
+  //    and Match expressions from unfold (e.g., match Zero { ... } → result)
+  const normalized = fullNormalize(prepared, createDefinitionsMap());
   const surface = kernelTypeToSurface(normalized, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
