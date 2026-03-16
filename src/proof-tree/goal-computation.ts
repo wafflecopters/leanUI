@@ -14,7 +14,7 @@
  */
 
 import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
-import { TTKTerm, TTKPattern } from '../compiler/kernel';
+import { TTKTerm, TTKPattern, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
@@ -1331,6 +1331,19 @@ export function renderGoalLatex(
   const normalized = fullNormalize(prepared, createDefinitionsMap());
   const surface = kernelTypeToSurface(normalized, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
+}
+
+/** Render a kernel subterm to LaTeX (for previewing what a subterm becomes after a tactic). */
+export function renderSubtermLatex(
+  term: TTKTerm,
+  ctx: TTKContext,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+): string {
+  const prepared = prepareMatchesForIota(term, definitions);
+  const normalized = fullNormalize(prepared, createDefinitionsMap());
+  const surface = kernelTypeToSurface(normalized, definitions);
+  return renderTerm(surface, buildNameCtx(ctx), rev);
 }
 
 /**

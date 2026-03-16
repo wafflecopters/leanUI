@@ -6,7 +6,7 @@
  */
 
 import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
-import { renderGoalLatex } from './goal-computation';
+import { renderGoalLatex, renderSubtermLatex } from './goal-computation';
 import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { fullNormalize } from '../compiler/whnf';
@@ -59,6 +59,58 @@ function renderResultGoal(
     const newGoal = newEngine.metaVars.get(newGoalId);
     if (!newGoal) return undefined;
     return renderGoalLatex(newEngine, newGoal, definitions, rev);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Find the first subterm that differs between two terms.
+ * Returns the differing subterm from `newTerm`, or the whole `newTerm` if
+ * the terms have different structure at the root.
+ */
+function findChangedSubterm(oldTerm: TTKTerm, newTerm: TTKTerm): TTKTerm {
+  if (ttkTermsEqual(oldTerm, newTerm)) return newTerm;
+  // If same tag and structure, recurse to find the specific changed subtree
+  if (oldTerm.tag === 'App' && newTerm.tag === 'App') {
+    if (!ttkTermsEqual(oldTerm.fn, newTerm.fn))
+      return findChangedSubterm(oldTerm.fn, newTerm.fn);
+    if (!ttkTermsEqual(oldTerm.arg, newTerm.arg))
+      return findChangedSubterm(oldTerm.arg, newTerm.arg);
+  }
+  if (oldTerm.tag === 'Binder' && newTerm.tag === 'Binder'
+    && oldTerm.binderKind.tag === newTerm.binderKind.tag) {
+    if (!ttkTermsEqual(oldTerm.domain, newTerm.domain))
+      return findChangedSubterm(oldTerm.domain, newTerm.domain);
+    if (!ttkTermsEqual(oldTerm.body, newTerm.body))
+      return findChangedSubterm(oldTerm.body, newTerm.body);
+  }
+  // Root-level difference — return the new term
+  return newTerm;
+}
+
+/**
+ * Render just the changed subterm after a tactic application.
+ * Compares old goal with new goal, finds the divergent subtree, renders it.
+ */
+function renderChangedSubterm(
+  oldGoal: MetaVar,
+  newEngine: TacticEngine,
+  definitions: DefinitionsMap,
+  rev?: ReverseRegistry,
+): string | undefined {
+  if (!rev) return undefined;
+  try {
+    const newGoalId = newEngine.getFocusedGoalId();
+    if (!newGoalId) return undefined;
+    const newGoal = newEngine.metaVars.get(newGoalId);
+    if (!newGoal) return undefined;
+    // Normalize both old and new goal types the same way
+    const emptyDefs = createDefinitionsMap();
+    const oldNorm = fullNormalize(oldGoal.type, emptyDefs);
+    const newNorm = fullNormalize(newGoal.type, emptyDefs);
+    const changed = findChangedSubterm(oldNorm, newNorm);
+    return renderSubtermLatex(changed, newGoal.ctx, definitions, rev);
   } catch {
     return undefined;
   }
@@ -134,7 +186,7 @@ export function computeTacticSuggestions(
                 const tactic = new UnfoldTactic([name], subtermInfo.occurrenceIndex);
                 const res = tactic.apply(engine, metaGoal, gId);
                 if (res.success) {
-                  resultGoalLatex = renderResultGoal(res.newEngine, definitions, kernelGoal.rev);
+                  resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
                 }
               }
             } catch { /* ignore */ }
@@ -179,7 +231,7 @@ export function computeTacticSuggestions(
                   const tactic = new FoldTactic([defName], subtermInfo.occurrenceIndex);
                   const res = tactic.apply(engine, metaGoal, gId);
                   if (res.success) {
-                    foldResultLatex = renderResultGoal(res.newEngine, definitions, kernelGoal.rev);
+                    foldResultLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
                   }
                 }
               } catch { /* ignore */ }
@@ -367,9 +419,16 @@ function tryRewrite(
     // Normalize: empty occurrences means "all" — store as empty array (same as no restriction)
     const effectiveOcc = occurrences.length > 0 ? occurrences : [];
     const occDesc = effectiveOcc.length > 0 ? ` at occurrence ${effectiveOcc.join(', ')}` : '';
-    const resultGoalLatex = definitions
-      ? renderResultGoal(result.newEngine, definitions, rev)
-      : undefined;
+    // Render just the replacement subterm (what the selected subterm becomes),
+    // not the full goal after rewrite. The unifiedEquation.rhs IS the replacement.
+    let resultGoalLatex: string | undefined;
+    if (definitions && rev && result.unifiedEquation) {
+      try {
+        resultGoalLatex = renderSubtermLatex(
+          result.unifiedEquation.rhs, goal.ctx, definitions, rev
+        );
+      } catch { /* ignore */ }
+    }
     return {
       id: `rewrite-${reverse ? 'rev-' : ''}${hypName}-occ${effectiveOcc.join(',')}`,
       label: `rw${reverse ? '\u2190' : ''} ${hypName}`,
