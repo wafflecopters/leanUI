@@ -6,13 +6,17 @@
  */
 
 import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
+import { renderGoalLatex } from './goal-computation';
 import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { fullNormalize } from '../compiler/whnf';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic } from '../tactics/tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
+import { UnfoldTactic } from '../tactics/unfold-tactic';
+import { FoldTactic } from '../tactics/fold-tactic';
 import { ttkTermsEqual } from '../tactics/fold-tactic';
+import { ReverseRegistry } from '../math-editor/tt-to-math';
 
 // ============================================================================
 // Types
@@ -32,12 +36,32 @@ export interface TacticSuggestion {
   readonly foldOccurrence?: number;
   /** For fold tactics: the definition name to fold. */
   readonly foldName?: string;
+  /** LaTeX preview of the goal after this tactic is applied. */
+  readonly resultGoalLatex?: string;
 }
 
 /** Escape a name for use in LaTeX (wrap multi-char names in \text{}). */
 function texEscape(name: string): string {
   if (name.length === 1) return name;
   return `\\text{${name}}`;
+}
+
+/** Render the result goal LaTeX after applying a tactic. Returns undefined if not possible. */
+function renderResultGoal(
+  newEngine: TacticEngine,
+  definitions: DefinitionsMap,
+  rev?: ReverseRegistry,
+): string | undefined {
+  if (!rev) return undefined;
+  try {
+    const newGoalId = newEngine.getFocusedGoalId();
+    if (!newGoalId) return undefined;
+    const newGoal = newEngine.metaVars.get(newGoalId);
+    if (!newGoal) return undefined;
+    return renderGoalLatex(newEngine, newGoal, definitions, rev);
+  } catch {
+    return undefined;
+  }
 }
 
 // ============================================================================
@@ -100,12 +124,27 @@ export function computeTacticSuggestions(
         if (definitions.terms.has(name)
           && !definitions.inductiveTypes.has(name)
           && !definitions.inductiveNameOfConstructor.has(name)) {
+          let resultGoalLatex: string | undefined;
+          if (kernelGoal) {
+            try {
+              const { engine, goal: metaGoal } = kernelGoal;
+              const gId = engine.getFocusedGoalId();
+              if (gId) {
+                const tactic = new UnfoldTactic([name], subtermInfo.occurrenceIndex);
+                const res = tactic.apply(engine, metaGoal, gId);
+                if (res.success) {
+                  resultGoalLatex = renderResultGoal(res.newEngine, definitions, kernelGoal.rev);
+                }
+              }
+            } catch { /* ignore */ }
+          }
           suggestions.push({
             id: `unfold-${name}`,
             label: `Unfold ${name}`,
             labelLatex: `\\text{Unfold } \\textbf{${texEscape(name)}}`,
             description: `Unfold the definition of ${name}`,
             unfoldOccurrence: subtermInfo.occurrenceIndex,
+            resultGoalLatex,
           });
         }
       }
@@ -128,6 +167,20 @@ export function computeTacticSuggestions(
             if (bodyHead !== selectedHead) continue;
             // TODO: could check structural equality against the kernel subterm here
             // For now, suggest fold and let the tactic validate
+            let foldResultLatex: string | undefined;
+            if (kernelGoal) {
+              try {
+                const { engine, goal: metaGoal } = kernelGoal;
+                const gId = engine.getFocusedGoalId();
+                if (gId) {
+                  const tactic = new FoldTactic([defName], subtermInfo.occurrenceIndex);
+                  const res = tactic.apply(engine, metaGoal, gId);
+                  if (res.success) {
+                    foldResultLatex = renderResultGoal(res.newEngine, definitions, kernelGoal.rev);
+                  }
+                }
+              } catch { /* ignore */ }
+            }
             suggestions.push({
               id: `fold-${defName}`,
               label: `Fold ${defName}`,
@@ -135,6 +188,7 @@ export function computeTacticSuggestions(
               description: `Replace with ${defName}`,
               foldName: defName,
               foldOccurrence: subtermInfo.occurrenceIndex,
+              resultGoalLatex: foldResultLatex,
             });
           }
         }
@@ -238,6 +292,7 @@ export interface KernelGoalInfo {
   readonly engine: TacticEngine;
   readonly goal: MetaVar;
   readonly definitions: DefinitionsMap;
+  readonly rev?: ReverseRegistry;
 }
 
 /**
@@ -294,6 +349,8 @@ function tryRewrite(
   reverse: boolean,
   occurrences: number[],
   targetHead?: string,
+  definitions?: DefinitionsMap,
+  rev?: ReverseRegistry,
 ): RewriteSuggestion | null {
   try {
     const opts: any = occurrences.length > 0 ? { reverse, occurrences } : { reverse };
@@ -305,6 +362,9 @@ function tryRewrite(
     // Normalize: empty occurrences means "all" — store as empty array (same as no restriction)
     const effectiveOcc = occurrences.length > 0 ? occurrences : [];
     const occDesc = effectiveOcc.length > 0 ? ` at occurrence ${effectiveOcc.join(', ')}` : '';
+    const resultGoalLatex = definitions
+      ? renderResultGoal(result.newEngine, definitions, rev)
+      : undefined;
     return {
       id: `rewrite-${reverse ? 'rev-' : ''}${hypName}-occ${effectiveOcc.join(',')}`,
       label: `rw${reverse ? '\u2190' : ''} ${hypName}`,
@@ -314,6 +374,7 @@ function tryRewrite(
       reverse,
       occurrences: effectiveOcc,
       targetHead,
+      resultGoalLatex,
     };
   } catch {
     return null;
@@ -468,12 +529,12 @@ export function computeRewriteSuggestionsIncremental(
       if (selectedOcc !== undefined) {
         // Only try targeted rewrite at the clicked occurrence — don't fall back
         // to untargeted, which would rewrite a DIFFERENT subterm than selected
-        const targeted = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, [selectedOcc], subtermInfo?.headName);
+        const targeted = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, [selectedOcc], subtermInfo?.headName, kernelGoal.definitions, kernelGoal.rev);
         if (targeted) {
           suggestions.push(targeted);
         }
       } else {
-        const s = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, []);
+        const s = tryRewrite(engine, metaGoal, goalId, c.proofTerm, c.name, c.reverse, [], undefined, kernelGoal.definitions, kernelGoal.rev);
         if (s) suggestions.push(s);
       }
       checked++;

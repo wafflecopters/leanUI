@@ -565,6 +565,21 @@ function GoalInteraction({
                 const btnLabel = s.labelLatex
                   ? <InlineKaTeX latex={s.labelLatex} style={{ fontSize: '11px' }} />
                   : <>{s.label}</>;
+                if (s.resultGoalLatex) {
+                  return (
+                    <button
+                      key={s.id}
+                      style={suggestionPreviewBtnStyle}
+                      onClick={() => handleApplySuggestion(s)}
+                      title={s.description}
+                    >
+                      <InlineKaTeX latex={s.resultGoalLatex} style={{ fontSize: '12px' }} />
+                      <span style={{ fontSize: '9px', color: '#484f58', marginTop: '2px' }}>
+                        {btnLabel}
+                      </span>
+                    </button>
+                  );
+                }
                 return (
                   <button
                     key={s.id}
@@ -789,6 +804,19 @@ const suggestionBtnStyle: React.CSSProperties = {
   cursor: 'pointer',
   fontFamily: 'system-ui, -apple-system, sans-serif',
   fontWeight: 500,
+};
+
+const suggestionPreviewBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: '1px solid #30363d',
+  borderRadius: '6px',
+  color: '#e6edf3',
+  padding: '6px 12px',
+  cursor: 'pointer',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '0',
 };
 
 const nameInputStyle: React.CSSProperties = {
