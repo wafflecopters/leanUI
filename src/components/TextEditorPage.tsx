@@ -1002,19 +1002,37 @@ export function TextEditorPage() {
   }, [code]);
 
   // Flatten compiled declarations for WYSIWYG panel (excluding with-clause auxiliaries)
-  const compiledDeclarations = useMemo(() => {
+  const compiledDeclsWithSource = useMemo(() => {
     if (!showWYSIWYG) return [];
-    const decls: import('../compiler/compile').CompiledDeclaration[] = [];
+    const result: { decl: import('../compiler/compile').CompiledDeclaration; blockSource: string; blockStartLine: number }[] = [];
     for (const block of compileResult.blocks) {
+      const blockSource = block.sourceLines.join('\n');
       for (const d of block.declarations) {
-        // TODO: temporary filter — only show specific terms for WYSIWYG development
-        if (!d.isWithAuxiliary && (d.name === 'limitAdd' || d.name === 'triangleSum')) {
-          decls.push(d);
+        if (!d.isWithAuxiliary) {
+          result.push({ decl: d, blockSource, blockStartLine: block.startLine });
         }
       }
     }
-    return decls;
+    return result;
   }, [showWYSIWYG, compileResult]);
+  const compiledDeclarations = useMemo(() => compiledDeclsWithSource.map(e => e.decl), [compiledDeclsWithSource]);
+  const declarationSources = useMemo(() => compiledDeclsWithSource.map(e => e.blockSource), [compiledDeclsWithSource]);
+
+  // Handle name changes from WYSIWYG panel — write back to TT source
+  const handleWYSIWYGNameChange = useCallback((declIndex: number, newName: string) => {
+    const entry = compiledDeclsWithSource[declIndex];
+    if (!entry) return;
+    const nameRange = entry.decl.sourceMap?.get('name');
+    if (!nameRange) return;
+    // SourcePos.line is 1-based, blockStartLine is 0-based
+    const absLine = entry.blockStartLine + nameRange.start.line - 1;
+    const lines = code.split('\n');
+    if (absLine < 0 || absLine >= lines.length) return;
+    const line = lines[absLine];
+    // SourcePos.col is 1-based
+    lines[absLine] = line.slice(0, nameRange.start.col - 1) + newName + line.slice(nameRange.end.col - 1);
+    setCode(lines.join('\n'));
+  }, [compiledDeclsWithSource, code]);
 
   // All declarations (for building syntax registry from @syntax annotations)
   const allCompiledDeclarations = useMemo(() => {
@@ -1881,6 +1899,8 @@ export function TextEditorPage() {
             <WYSIWYGPanel
               declarations={compiledDeclarations}
               allDeclarations={allCompiledDeclarations}
+              onNameChange={handleWYSIWYGNameChange}
+              declarationSources={declarationSources}
             />
           </div>
         )}

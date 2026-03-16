@@ -9,12 +9,17 @@ import { surfaceTypeToMathRow } from '../math-editor/tt-to-math';
 import { MathRow } from '../math-editor/types';
 import { ProofTreeHistory, createHistory, createInitialState } from '../proof-tree/proof-tree';
 import { InductiveMap, InductiveInfo } from '../proof-tree/goal-computation';
+import { tacticCommandsToProofTree, findFirstHole } from '../proof-tree/tactic-to-tree';
 
 export interface WYSIWYGPanelProps {
   /** Compiled declarations for display (zonked kernel terms — no unsolved metas) */
   declarations: CompiledDeclaration[];
   /** All compiled declarations (for building syntax registry from @syntax annotations) */
   allDeclarations: CompiledDeclaration[];
+  /** Called when the user submits a name change (Enter key) */
+  onNameChange?: (declIndex: number, newName: string) => void;
+  /** Source text per declaration (for readonly view of inductives/records) */
+  declarationSources?: string[];
 }
 
 /** Color for the declaration kind badge */
@@ -45,7 +50,15 @@ function extractAnnotations(decls: CompiledDeclaration[]): SyntaxAnnotation[] {
   return annotations;
 }
 
-export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProps) {
+/** Label for the declaration kind badge */
+function declKindLabel(decl: CompiledDeclaration): string {
+  if (decl.kind === 'inductive') {
+    return decl.isRecord ? 'record' : 'inductive';
+  }
+  return 'definition';
+}
+
+export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, declarationSources }: WYSIWYGPanelProps) {
   // Build per-declaration registries scoped to syntax defined BEFORE each declaration
   const registries = useMemo(() => {
     const allAnnotations = extractAnnotations(allDeclarations);
@@ -132,9 +145,16 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
     });
   };
 
-  // Per-declaration proof tree history
+  // Per-declaration proof tree history — pre-populate from tactic proofs when available
   const [proofHistories, setProofHistories] = useState<ProofTreeHistory[]>(() =>
-    declarations.map(() => createHistory(createInitialState()))
+    declarations.map(decl => {
+      if (decl.surfaceValue?.tag === 'TacticBlock' && decl.surfaceValue.tactics.length > 0) {
+        const root = tacticCommandsToProofTree(decl.surfaceValue.tactics);
+        const firstHole = findFirstHole(root);
+        return createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } });
+      }
+      return createHistory(createInitialState());
+    })
   );
   const handleProofHistoryChange = (index: number, h: ProofTreeHistory) => {
     setProofHistories(prev => {
@@ -180,7 +200,7 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
             backgroundColor: '#161b22',
             display: 'flex',
             flexDirection: 'column' as const,
-            ...(isExpanded ? { height: '100%' } : { height: '500px' }),
+            ...(isExpanded ? { height: '100%' } : decl.kind === 'inductive' ? {} : { height: '500px' }),
           }}>
             {/* Header: kind badge + editable name + expand button */}
             <div style={{
@@ -200,12 +220,21 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
                 letterSpacing: '0.04em',
                 flexShrink: 0,
               }}>
-                definition
+                {declKindLabel(decl)}
               </span>
               <input
                 type="text"
                 value={localNames[i] ?? decl.name ?? ''}
                 onChange={(e) => handleNameChange(i, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.blur();
+                    const newName = localNames[i]?.trim();
+                    if (newName && newName !== decl.name && onNameChange) {
+                      onNameChange(i, newName);
+                    }
+                  }
+                }}
                 spellCheck={false}
                 style={{
                   flex: 1,
@@ -244,35 +273,60 @@ export function WYSIWYGPanel({ declarations, allDeclarations }: WYSIWYGPanelProp
               </button>
             </div>
 
-            {/* Structured math editors (type + proof) */}
-            <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d', flexShrink: 0 }}>
-              <SyntaxReferencePanel registry={registries[i]} />
-              <DualMathEditor placeholder="type signature" registry={registries[i]} initialTypeRoot={initialTypeRoots[i]} />
-            </div>
-
-            {/* Structured proof tree editor */}
-            <div style={{
-              padding: '6px 10px',
-              borderTop: '1px solid #30363d',
-              flex: 1,
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              minHeight: 0,
-            }}>
-              <div style={{ fontSize: '10px', color: '#484f58', marginBottom: '4px', letterSpacing: '0.03em', flexShrink: 0 }}>
-                PROOF
+            {decl.kind === 'inductive' ? (
+              /* Readonly source view for inductives/records */
+              <div style={{
+                padding: '6px 10px',
+                borderTop: '1px solid #30363d',
+                flex: 1,
+                overflow: 'auto',
+                minHeight: 0,
+              }}>
+                <pre style={{
+                  margin: 0,
+                  fontFamily: '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace',
+                  fontSize: '12px',
+                  color: '#8b949e',
+                  lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}>
+                  {declarationSources?.[i] ?? ''}
+                </pre>
               </div>
-              <ProofTreeEditor
-                history={proofHistories[i] ?? createHistory(createInitialState())}
-                onHistoryChange={(h) => handleProofHistoryChange(i, h)}
-                surfaceType={decl.surfaceType}
-                kernelType={decl.kernelType}
-                definitions={definitionsMap}
-                registry={registries[i]}
-                inductiveMap={inductiveMap}
-              />
-            </div>
+            ) : (
+              <>
+                {/* Structured math editors (type + proof) */}
+                <div style={{ padding: '6px 10px', borderTop: '1px solid #30363d', flexShrink: 0 }}>
+                  <SyntaxReferencePanel registry={registries[i]} />
+                  <DualMathEditor placeholder="type signature" registry={registries[i]} initialTypeRoot={initialTypeRoots[i]} />
+                </div>
+
+                {/* Structured proof tree editor */}
+                <div style={{
+                  padding: '6px 10px',
+                  borderTop: '1px solid #30363d',
+                  flex: 1,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                }}>
+                  <div style={{ fontSize: '10px', color: '#484f58', marginBottom: '4px', letterSpacing: '0.03em', flexShrink: 0 }}>
+                    PROOF
+                  </div>
+                  <ProofTreeEditor
+                    history={proofHistories[i] ?? createHistory(createInitialState())}
+                    onHistoryChange={(h) => handleProofHistoryChange(i, h)}
+                    surfaceType={decl.surfaceType}
+                    kernelType={decl.kernelType}
+                    definitions={definitionsMap}
+                    registry={registries[i]}
+                    inductiveMap={inductiveMap}
+                  />
+                </div>
+              </>
+            )}
           </div>
         );
 
