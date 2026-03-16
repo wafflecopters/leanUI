@@ -1741,12 +1741,23 @@ function ProofProseView({
           if (result) onPushChange(result);
         } : undefined;
 
+        // Find the next hole's nodeId so clicking the goal can focus it
+        const nextHoleNodeId = (() => {
+          for (let j = idx + 1; j < items.length; j++) {
+            if (items[j].kind.tag === 'hole') return items[j].nodeId;
+            // Stop at structural boundaries
+            if (items[j].kind.tag === 'caseHeader' || items[j].kind.tag === 'inductionHeader') break;
+          }
+          return undefined;
+        })();
+
         return (
           <ProseItemView
             key={`${item.nodeId}-${idx}`}
             item={item}
             prevItem={idx > 0 ? items[idx - 1] : undefined}
             isLastGoalStep={idx === lastGoalStepIdx}
+            nextHoleNodeId={nextHoleNodeId}
 
             onClick={() => onClickNode(item.nodeId)}
             onDelete={handleDelete}
@@ -1785,6 +1796,8 @@ interface ProseItemViewProps {
   prevItem?: ProseItem;
   /** True if this is the last goal-showing step before the active hole. */
   isLastGoalStep?: boolean;
+  /** NodeId of the next hole after this step (for click-to-focus on goal). */
+  nextHoleNodeId?: ProofNodeId;
 
   onClick: () => void;
   onDelete?: () => void;
@@ -1826,7 +1839,7 @@ const eqBlockStyle: React.CSSProperties = {
 };
 
 function ProseItemView({
-  item, prevItem, isLastGoalStep, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  item, prevItem, isLastGoalStep, nextHoleNodeId, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
@@ -1923,10 +1936,15 @@ function ProseItemView({
     if (!goalLatex) return <span style={prose}>.</span>;
     // Last step before hole: suppress plain goal here — the hole renders it interactively
     if (isLastGoalStep) return <span style={prose}>{prefix}</span>;
+    // When there's a next hole, clicking the goal focuses it (feels like editing the goal)
+    const goalClick = nextHoleNodeId ? (e: React.MouseEvent) => {
+      e.stopPropagation();
+      onClickNode(nextHoleNodeId);
+    } : undefined;
     return (
       <>
         <span style={prose}>{prefix}</span>
-        <span style={eqBlockStyle}>
+        <span style={{ ...eqBlockStyle, cursor: goalClick ? 'pointer' : undefined }} onClick={goalClick}>
           <InlineKaTeX latex={goalLatex} displayMode />
         </span>
       </>
