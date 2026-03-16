@@ -20,6 +20,10 @@ export interface WYSIWYGPanelProps {
   onNameChange?: (declIndex: number, newName: string) => void;
   /** Source text per declaration (for readonly view of inductives/records) */
   declarationSources?: string[];
+  /** Currently expanded symbol name (controlled by parent for URL sync) */
+  expandedSymbol?: string | null;
+  /** Called when expanded symbol changes */
+  onExpandedSymbolChange?: (symbol: string | null) => void;
 }
 
 /** Color for the declaration kind badge */
@@ -58,7 +62,7 @@ function declKindLabel(decl: CompiledDeclaration): string {
   return 'definition';
 }
 
-export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, declarationSources }: WYSIWYGPanelProps) {
+export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, declarationSources, expandedSymbol, onExpandedSymbolChange }: WYSIWYGPanelProps) {
   // Build per-declaration registries scoped to syntax defined BEFORE each declaration
   const registries = useMemo(() => {
     const allAnnotations = extractAnnotations(allDeclarations);
@@ -164,8 +168,15 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
     });
   };
 
-  // Expanded (fullscreen) declaration index
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  // Expanded (fullscreen) declaration — derived from symbol name prop or internal state
+  const rawIdx = expandedSymbol != null
+    ? declarations.findIndex(d => d.name === expandedSymbol)
+    : -1;
+  const expandedIndex = rawIdx >= 0 ? rawIdx : null;
+  const setExpandedIndex = (idx: number | null) => {
+    const name = idx != null ? declarations[idx]?.name ?? null : null;
+    onExpandedSymbolChange?.(name);
+  };
 
   return (
     <div style={{

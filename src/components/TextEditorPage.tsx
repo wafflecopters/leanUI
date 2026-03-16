@@ -930,7 +930,8 @@ export function TextEditorPage() {
   const [editorReady, setEditorReady] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [showLatex, setShowLatex] = useState(false);
-  const [showWYSIWYG, setShowWYSIWYG] = useState(false);
+  const [showWYSIWYG, setShowWYSIWYG] = useState(() => searchParams.get('editor') === 'true');
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(() => searchParams.get('symbol'));
   // Rendering options for pretty-printed output
   const [showNamedArgsWithLabels, setShowNamedArgsWithLabels] = useState(true);
   const [showNamedParamsWithBraces, setShowNamedParamsWithBraces] = useState(false);
@@ -974,10 +975,43 @@ export function TextEditorPage() {
       setCode(preset.code);
       // Convert preset name to URL-friendly format: "Nat Math (Tactics)" -> "nat-math-tactics"
       const urlSafePresetName = preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      setSearchParams({ preset: urlSafePresetName });
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev);
+        next.set('preset', urlSafePresetName);
+        return next;
+      }, { replace: true });
       setPresetMenuOpen(false);
     }
   }, [setSearchParams]);
+
+  // Sync editor/symbol URL params when they change
+  const updateEditorParams = useCallback((editor: boolean, symbol: string | null) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (editor) next.set('editor', 'true');
+      else next.delete('editor');
+      if (symbol) next.set('symbol', symbol);
+      else next.delete('symbol');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const handleToggleWYSIWYG = useCallback(() => {
+    const nextShow = !showWYSIWYG;
+    setShowWYSIWYG(nextShow);
+    if (!nextShow) {
+      setShowLatex(false);
+      setExpandedSymbol(null);
+      updateEditorParams(false, null);
+    } else {
+      updateEditorParams(true, expandedSymbol);
+    }
+  }, [showWYSIWYG, expandedSymbol, updateEditorParams]);
+
+  const handleExpandedSymbolChange = useCallback((symbol: string | null) => {
+    setExpandedSymbol(symbol);
+    updateEditorParams(showWYSIWYG, symbol);
+  }, [showWYSIWYG, updateEditorParams]);
 
   // Inject Monaco widget z-index styles on mount
   useEffect(() => {
@@ -1612,7 +1646,7 @@ export function TextEditorPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
-            onClick={() => { setShowWYSIWYG(!showWYSIWYG); if (!showWYSIWYG) setShowLatex(false); }}
+            onClick={handleToggleWYSIWYG}
             style={{
               background: showWYSIWYG ? '#238636' : '#21262d',
               color: showWYSIWYG ? '#ffffff' : '#c9d1d9',
@@ -1627,7 +1661,7 @@ export function TextEditorPage() {
             {showWYSIWYG ? 'Hide WYSIWYG' : 'Show WYSIWYG'}
           </button>
           <button
-            onClick={() => { setShowLatex(!showLatex); if (!showLatex) setShowWYSIWYG(false); }}
+            onClick={() => { setShowLatex(!showLatex); if (!showLatex) { setShowWYSIWYG(false); setExpandedSymbol(null); updateEditorParams(false, null); } }}
             style={{
               background: showLatex ? '#238636' : '#21262d',
               color: showLatex ? '#ffffff' : '#c9d1d9',
@@ -1901,6 +1935,8 @@ export function TextEditorPage() {
               allDeclarations={allCompiledDeclarations}
               onNameChange={handleWYSIWYGNameChange}
               declarationSources={declarationSources}
+              expandedSymbol={expandedSymbol}
+              onExpandedSymbolChange={handleExpandedSymbolChange}
             />
           </div>
         )}
