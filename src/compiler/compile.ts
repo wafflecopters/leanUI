@@ -500,7 +500,17 @@ export function extractSemanticTokens(result: CompileResult, source?: string): S
     }
   }
 
-  return tokens;
+  // Deduplicate overlapping tokens (same line+column — e.g., declaration name vs clause defName)
+  const seen = new Set<string>();
+  const deduped: SemanticToken[] = [];
+  for (const t of tokens) {
+    const key = `${t.line}:${t.column}:${t.length}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(t);
+    }
+  }
+  return deduped;
 }
 
 /**

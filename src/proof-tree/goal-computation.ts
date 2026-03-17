@@ -15,7 +15,7 @@
 
 import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext } from '../compiler/kernel';
-import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap } from '../compiler/term';
+import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -482,6 +482,87 @@ function findVarIndex(name: string, ctx: ReadonlyArray<{ name: string; type: TTK
     }
   }
   return null;
+}
+
+/**
+ * Tokenize an exact expression string into a flat array of tokens.
+ * Handles parentheses and whitespace-separated identifiers.
+ */
+function tokenizeExactExpr(expr: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < expr.length) {
+    if (expr[i] === ' ' || expr[i] === '\t') { i++; continue; }
+    if (expr[i] === '(' || expr[i] === ')') {
+      tokens.push(expr[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < expr.length && expr[j] !== ' ' && expr[j] !== '\t' && expr[j] !== '(' && expr[j] !== ')') j++;
+    tokens.push(expr.slice(i, j));
+    i = j;
+  }
+  return tokens;
+}
+
+/**
+ * Parse an exact expression into a TTKTerm.
+ * Supports: single names, function application (f x y), parenthesized groups.
+ * Names are resolved as context variables first, then as constants.
+ * When definitions are provided, implicit argument Holes are inserted automatically.
+ */
+function parseExactExpr(
+  expr: string,
+  ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
+  definitions?: DefinitionsMap,
+): TTKTerm | null {
+  const tokens = tokenizeExactExpr(expr);
+  if (tokens.length === 0) return null;
+
+  const namedArgLookup = definitions ? createNamedArgLookup(definitions) : undefined;
+
+  let pos = 0;
+
+  function parseAtom(): TTKTerm | null {
+    if (pos >= tokens.length) return null;
+    if (tokens[pos] === '(') {
+      pos++; // skip '('
+      const inner = parseApp();
+      if (pos < tokens.length && tokens[pos] === ')') pos++; // skip ')'
+      return inner;
+    }
+    if (tokens[pos] === ')') return null;
+    const name = tokens[pos++];
+    const varIdx = findVarIndex(name, ctx);
+    if (varIdx !== null) return { tag: 'Var', index: varIdx };
+    // For constants, insert Holes for implicit args (matching elaboration behavior)
+    let result: TTKTerm = { tag: 'Const', name };
+    if (namedArgLookup) {
+      const namedArgs = namedArgLookup(name);
+      if (namedArgs) {
+        for (const [paramName] of namedArgs) {
+          result = { tag: 'App', fn: result, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+        }
+      }
+    }
+    return result;
+  }
+
+  function parseApp(): TTKTerm | null {
+    let result = parseAtom();
+    if (!result) return null;
+    while (pos < tokens.length && tokens[pos] !== ')') {
+      const arg = parseAtom();
+      if (!arg) break;
+      result = { tag: 'App', fn: result, arg };
+    }
+    return result;
+  }
+
+  const result = parseApp();
+  if (result && pos < tokens.length) return null; // leftover tokens = parse error
+  return result;
 }
 
 /**
@@ -1256,11 +1337,11 @@ function validateExactNode(
   const goal = engine.metaVars.get(goalId);
   if (!goal) return { status: 'error', message: 'No goal' };
 
-  // Resolve expression: try as context variable first, then as constant
-  const varIdx = findVarIndex(expr, goal.ctx);
-  const term: TTKTerm = varIdx !== null
-    ? { tag: 'Var', index: varIdx }
-    : { tag: 'Const', name: expr };
+  // Parse expression (supports application, parens, name resolution, and implicit arg insertion)
+  const term = parseExactExpr(expr, goal.ctx, engine.definitions);
+  if (!term) {
+    return { status: 'error', message: `Cannot parse expression: ${expr}` };
+  }
 
   const tactic = new ExactTactic(term);
   const result = tactic.apply(engine, goal, goalId);

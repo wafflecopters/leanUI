@@ -137,36 +137,73 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
     return map;
   }, [allDeclarations]);
 
-  // Per-box editable name
-  const [localNames, setLocalNames] = useState<string[]>(() =>
-    declarations.map(d => d.name || '')
-  );
+  // Per-box editable name — keyed by declaration name for stability across recompiles
+  const [localNamesMap, setLocalNamesMap] = useState<Map<string, string>>(() => {
+    const map = new Map<string, string>();
+    for (const decl of declarations) {
+      if (decl.name) map.set(decl.name, decl.name);
+    }
+    return map;
+  });
   const handleNameChange = (index: number, value: string) => {
-    setLocalNames(prev => {
-      const next = [...prev];
-      next[index] = value;
-      return next;
-    });
+    const name = declarations[index]?.name;
+    if (!name) return;
+    setLocalNamesMap(prev => new Map(prev).set(name, value));
   };
 
-  // Per-declaration proof tree history — pre-populate from tactic proofs when available
-  const [proofHistories, setProofHistories] = useState<ProofTreeHistory[]>(() =>
-    declarations.map(decl => {
+  // Per-declaration proof tree history — keyed by declaration name for stability
+  const [proofHistoriesMap, setProofHistoriesMap] = useState<Map<string, ProofTreeHistory>>(() => {
+    const map = new Map<string, ProofTreeHistory>();
+    for (const decl of declarations) {
+      if (!decl.name) continue;
       if (decl.surfaceValue?.tag === 'TacticBlock' && decl.surfaceValue.tactics.length > 0) {
         const root = tacticCommandsToProofTree(decl.surfaceValue.tactics);
         const firstHole = findFirstHole(root);
-        return createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } });
+        map.set(decl.name, createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } }));
+      } else {
+        map.set(decl.name, createHistory(createInitialState()));
       }
-      return createHistory(createInitialState());
-    })
-  );
+    }
+    return map;
+  });
   const handleProofHistoryChange = (index: number, h: ProofTreeHistory) => {
-    setProofHistories(prev => {
-      const next = [...prev];
-      next[index] = h;
-      return next;
-    });
+    const name = declarations[index]?.name;
+    if (!name) return;
+    setProofHistoriesMap(prev => new Map(prev).set(name, h));
   };
+
+  // Sync maps when declarations change (new declarations get default entries)
+  useEffect(() => {
+    setLocalNamesMap(prev => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const decl of declarations) {
+        if (decl.name && !next.has(decl.name)) {
+          next.set(decl.name, decl.name);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    setProofHistoriesMap(prev => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const decl of declarations) {
+        if (!decl.name) continue;
+        if (!next.has(decl.name)) {
+          if (decl.surfaceValue?.tag === 'TacticBlock' && decl.surfaceValue.tactics.length > 0) {
+            const root = tacticCommandsToProofTree(decl.surfaceValue.tactics);
+            const firstHole = findFirstHole(root);
+            next.set(decl.name, createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } }));
+          } else {
+            next.set(decl.name, createHistory(createInitialState()));
+          }
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [declarations]);
 
   // Expanded (fullscreen) declaration — derived from symbol name prop or internal state
   const rawIdx = expandedSymbol != null
@@ -235,12 +272,12 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
               </span>
               <input
                 type="text"
-                value={localNames[i] ?? decl.name ?? ''}
+                value={(decl.name ? localNamesMap.get(decl.name) : undefined) ?? decl.name ?? ''}
                 onChange={(e) => handleNameChange(i, e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.currentTarget.blur();
-                    const newName = localNames[i]?.trim();
+                    const newName = (decl.name ? localNamesMap.get(decl.name) : undefined)?.trim();
                     if (newName && newName !== decl.name && onNameChange) {
                       onNameChange(i, newName);
                     }
@@ -327,7 +364,7 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
                     PROOF
                   </div>
                   <ProofTreeEditor
-                    history={proofHistories[i] ?? createHistory(createInitialState())}
+                    history={(decl.name ? proofHistoriesMap.get(decl.name) : undefined) ?? createHistory(createInitialState())}
                     onHistoryChange={(h) => handleProofHistoryChange(i, h)}
                     surfaceType={decl.surfaceType}
                     kernelType={decl.kernelType}
