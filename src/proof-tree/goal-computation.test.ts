@@ -1776,8 +1776,8 @@ testThm = ?TODO
     // Should still contain mul and sum (not over-reduced)
     expect(goalLatex).toContain('mul');
     expect(goalLatex).toContain('sum');
-    // Should have x0 (from intros), not show raw match expressions
-    expect(goalLatex).toContain('x');
+    // Should have n (from constructorParamNames), not show raw match expressions
+    expect(goalLatex).toContain('n');
     expect(goalLatex).not.toContain('Rightarrow');
   });
 });

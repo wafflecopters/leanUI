@@ -1775,7 +1775,7 @@ export function replayEntireTree(
             continue;
           }
           const caseGoalId = `${gId}_case_${c.constructorName}`;
-          const caseMeta = computeCaseGoalDirect(goal, scrutineeIdx, ctor, inductiveName, eng.definitions);
+          const caseMeta = computeCaseGoalDirect(goal, scrutineeIdx, ctor, inductiveName, eng.definitions, c.constructorParamNames);
           const caseMetaVars = new Map(eng.metaVars);
           caseMetaVars.set(caseGoalId, caseMeta);
           const caseGoals = [...eng.goals];
