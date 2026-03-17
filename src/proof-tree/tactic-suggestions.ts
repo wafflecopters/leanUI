@@ -282,7 +282,7 @@ function computeBinderSuggestions(
   const upToSelected = collectExplicitBinders(binders, 0, selectedIndex);
 
   if (upToSelected.length > 0) {
-    const names = upToSelected.map(proposeName);
+    const names = freshenNames(upToSelected.map(proposeName));
     const introLabel = upToSelected.length === 1 ? 'Intro' : 'Intro up to here';
     suggestions.push({
       id: 'intro-up-to',
@@ -296,7 +296,7 @@ function computeBinderSuggestions(
   // "Intro all" — all explicit binders
   const allExplicit = collectExplicitBinders(binders, 0, binders.length - 1);
   if (allExplicit.length > upToSelected.length) {
-    const allNames = allExplicit.map(proposeName);
+    const allNames = freshenNames(allExplicit.map(proposeName));
     suggestions.push({
       id: 'intro-all',
       label: 'Intro all',
@@ -328,6 +328,21 @@ function collectExplicitBinders(
 function proposeName(binder: GoalBinderInfo): string {
   if (binder.name && binder.name !== '_') return binder.name;
   return 'x';
+}
+
+/** Freshen duplicate names by appending numeric suffixes. */
+function freshenNames(names: string[]): string[] {
+  const used = new Set<string>();
+  return names.map(name => {
+    let fresh = name;
+    if (used.has(fresh)) {
+      let i = 1;
+      while (used.has(`${name}${i}`)) i++;
+      fresh = `${name}${i}`;
+    }
+    used.add(fresh);
+    return fresh;
+  });
 }
 
 // ============================================================================
