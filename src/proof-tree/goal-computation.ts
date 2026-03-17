@@ -714,6 +714,7 @@ export function computeCaseGoalDirect(
   ctor: { name: string; type: TTKTerm; namedArgMap?: NamedArgMap },
   inductiveName: string,
   definitions: DefinitionsMap,
+  userParamNames?: readonly string[],
 ): MetaVar {
   // Extract type args from scrutinee type for implicit param substitution
   const s = goal.ctx.length - 1 - scrutineeIdx; // scrutinee array position
@@ -723,7 +724,7 @@ export function computeCaseGoalDirect(
   // Count constructor parameters (skip implicit ones)
   const numImplicit = ctor.namedArgMap?.size ?? 0;
   const { params, hasRecursiveParam, recursiveParamLocalIdx } = peelCtorParams(
-    ctor.type, numImplicit, typeArgs, inductiveName, definitions
+    ctor.type, numImplicit, typeArgs, inductiveName, definitions, userParamNames
   );
 
   const numParams = params.length;
@@ -822,7 +823,9 @@ export function computeCaseGoalDirect(
       goal.type, scrutineeIdx, recursiveParamRef, numParams, 0
     );
 
-    newCtx.push({ name: 'IH', type: ihType });
+    // Use user-provided IH name if available (comes after constructor params in userParamNames)
+    const ihName = userParamNames?.[numParams] ?? 'IH';
+    newCtx.push({ name: ihName, type: ihType });
   }
 
   return {
@@ -851,6 +854,7 @@ function peelCtorParams(
   typeArgs: TTKTerm[],
   inductiveName: string,
   definitions: DefinitionsMap,
+  userParamNames?: readonly string[],
 ): {
   params: Array<{ name: string; type: TTKTerm }>;
   hasRecursiveParam: boolean;
@@ -873,9 +877,12 @@ function peelCtorParams(
   let paramIdx = 0;
 
   while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
-    const name = (currentType.name && currentType.name !== '_')
-      ? currentType.name
-      : `x${paramIdx}`;
+    const userName = userParamNames?.[paramIdx];
+    const name = (userName && userName !== '_')
+      ? userName
+      : (currentType.name && currentType.name !== '_')
+        ? currentType.name
+        : `x${paramIdx}`;
 
     // Check if recursive
     const domainWhnf = whnf(currentType.domain, { definitions });
@@ -1164,7 +1171,8 @@ function replayProofTree(
         // Compute case-specific goal with proper variable substitution
         const caseGoalId = `${goalId}_case_${c.constructorName}`;
         const caseMeta = computeCaseGoalDirect(
-          goal, scrutineeIdx, ctor, inductiveName, engine.definitions
+          goal, scrutineeIdx, ctor, inductiveName, engine.definitions,
+          c.constructorParamNames
         );
 
         // Create engine with this case goal
