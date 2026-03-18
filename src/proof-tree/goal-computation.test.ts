@@ -950,6 +950,155 @@ describe('computeCaseGoalDirect', () => {
       mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkConst('Zero')), mkVar(1))
     );
   });
+
+  test('refl case: index unification forces y = x', () => {
+    // Equal is an indexed inductive type: Equal : {A : Type} -> A -> A -> Type
+    // Constructor: refl : {A : Type} -> {a : A} -> Equal A a a
+    // In the refl case, scrutinee `eq : Equal A x y` forces y = x.
+
+    let defs = createDefinitionsMap();
+
+    // Equal : {A : Type} -> A -> A -> Type
+    // In the kernel, implicit is tracked via namedArgMap, not in the Pi binder
+    const equalType = mkPi(
+      mkSort(mkULit(0)),  // A : Type
+      mkPi(
+        mkVar(0),          // x : A
+        mkPi(
+          mkVar(1),        // y : A
+          mkSort(mkULit(0)),
+          'y',
+        ),
+        'x',
+      ),
+      'A',
+    );
+    defs = addInductiveDefinition(defs, 'Equal', equalType, [
+      {
+        name: 'refl',
+        type: mkPi(
+          mkSort(mkULit(0)),  // {A : Type}
+          mkPi(
+            mkVar(0),          // {a : A}
+            mkApp(mkApp(mkApp(mkConst('Equal'), mkVar(1)), mkVar(0)), mkVar(0)),  // Equal A a a
+            'a',
+          ),
+          'A',
+        ),
+        namedArgMap: new Map([['A', 0], ['a', 1]]),
+      },
+    ], [1, 2]);  // index positions: args 1 and 2 of Equal are indices
+
+    // Context: [A : Type, x : A, y : A, eq : Equal A x y]
+    // De Bruijn (in goal scope): eq=Var(0), y=Var(1), x=Var(2), A=Var(3)
+    // Goal: Equal A (f x) (f y) = Equal(A, App(f, x), App(f, y))
+    const goal = {
+      ctx: [
+        { name: 'A', type: mkSort(mkULit(0)) as TTKTerm },
+        { name: 'x', type: mkVar(0) as TTKTerm },          // x : A
+        { name: 'y', type: mkVar(1) as TTKTerm },          // y : A (Var(1) = A)
+        {
+          name: 'eq',
+          type: mkApp(mkApp(mkApp(mkConst('Equal'), mkVar(2)), mkVar(1)), mkVar(0)) as TTKTerm,
+          // Equal(A, x, y) where A=Var(2), x=Var(1), y=Var(0) in eq's scope
+        },
+      ],
+      type: mkApp(
+        mkApp(mkApp(mkConst('Equal'), mkVar(3)),  // Equal A
+          mkApp(mkConst('f'), mkVar(2))),          // f(x)
+        mkApp(mkConst('f'), mkVar(1)),             // f(y)
+      ),
+      solution: undefined,
+    };
+
+    const reflCtor = defs.inductiveTypes.get('Equal')!.constructors[0];
+    // Scrutinee is eq at de Bruijn index 0
+    const result = computeCaseGoalDirect(goal, 0, reflCtor, 'Equal', defs);
+
+    // After refl case:
+    // - Index unification: y is forced to equal x (removed from context)
+    // - eq (scrutinee) is removed
+    // - refl has no explicit params
+    // Context should be: [A : Type, x : A]
+    expect(result.ctx).toHaveLength(2);
+    expect(result.ctx[0].name).toBe('A');
+    expect(result.ctx[1].name).toBe('x');
+
+    // Goal should be Equal A (f x) (f x) — y replaced by x
+    // De Bruijn: A=Var(1), x=Var(0)
+    expect(result.type).toEqual(
+      mkApp(
+        mkApp(mkApp(mkConst('Equal'), mkVar(1)),   // Equal A
+          mkApp(mkConst('f'), mkVar(0))),            // f(x)
+        mkApp(mkConst('f'), mkVar(0)),               // f(x)  — was f(y), now f(x)
+      )
+    );
+  });
+
+  test('refl case: index unification adjusts dependent context entries', () => {
+    // Verify that entries AFTER the unified variable also get substituted
+    let defs = createDefinitionsMap();
+
+    const equalType = mkPi(
+      mkSort(mkULit(0)),
+      mkPi(mkVar(0), mkPi(mkVar(1), mkSort(mkULit(0)), 'y'), 'x'),
+      'A',
+    );
+    defs = addInductiveDefinition(defs, 'Equal', equalType, [
+      {
+        name: 'refl',
+        type: mkPi(
+          mkSort(mkULit(0)),
+          mkPi(
+            mkVar(0),
+            mkApp(mkApp(mkApp(mkConst('Equal'), mkVar(1)), mkVar(0)), mkVar(0)),
+            'a',
+          ),
+          'A',
+        ),
+        namedArgMap: new Map([['A', 0], ['a', 1]]),
+      },
+    ], [1, 2]);
+
+    // Context: [x : Nat, y : Nat, eq : Equal Nat x y, h : P y]
+    // After refl: y removed, h becomes P x
+    const goal = {
+      ctx: [
+        { name: 'x', type: mkConst('Nat') as TTKTerm },
+        { name: 'y', type: mkConst('Nat') as TTKTerm },
+        {
+          name: 'eq',
+          type: mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkVar(1)), mkVar(0)) as TTKTerm,
+          // Equal Nat x y where x=Var(1), y=Var(0)
+        },
+        {
+          name: 'h',
+          type: mkApp(mkConst('P'), mkVar(1)) as TTKTerm,
+          // P(y) where y=Var(1) in h's scope (ctx: [x, y, eq])
+        },
+      ],
+      type: mkApp(mkConst('Q'), mkVar(2)) as TTKTerm,
+      // Q(y) where y=Var(2) in goal scope
+      solution: undefined,
+    };
+
+    const reflCtor = defs.inductiveTypes.get('Equal')!.constructors[0];
+    // Scrutinee is eq at de Bruijn index 1 (eq is ctx[2], goal de Bruijn = 4-1-2 = 1)
+    const result = computeCaseGoalDirect(goal, 1, reflCtor, 'Equal', defs);
+
+    // After refl: y removed, eq removed
+    // Context should be: [x : Nat, h : P(x)]
+    expect(result.ctx).toHaveLength(2);
+    expect(result.ctx[0].name).toBe('x');
+    expect(result.ctx[1].name).toBe('h');
+    // h's type should be P(x) where x=Var(0)
+    expect(result.ctx[1].type).toEqual(mkApp(mkConst('P'), mkVar(0)));
+
+    // Goal should be Q(x) where x=Var(1)... wait:
+    // After removing y and eq: ctx = [x, h], de Bruijn: h=Var(0), x=Var(1)
+    // Goal Q(y) → Q(x) = Q(Var(1))
+    expect(result.type).toEqual(mkApp(mkConst('Q'), mkVar(1)));
+  });
 });
 
 // ============================================================================

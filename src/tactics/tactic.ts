@@ -105,13 +105,19 @@ export class ExactTactic implements Tactic {
       // Check term has expected type
       const checkedEnv = checkType(env, zonkedGoalType);
 
+      // Solve constraints to detect meta conflicts (e.g., ?a := f(x) and ?a := f(y)
+      // from `exact refl` on goal `f(x) = f(y)` where x ≠ y).
+      // Without this, conflicting constraints are deferred and never validated,
+      // allowing unsound proofs like `refl` for non-definitionally-equal sides.
+      const solvedEnv = checkedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
       // Zonk the checked term (resolve any new metas)
-      const solution = checkedEnv.zonkTerm(checkedEnv.elaboratedTerm ?? this.term);
+      const solution = solvedEnv.zonkTerm(solvedEnv.elaboratedTerm ?? checkedEnv.elaboratedTerm ?? this.term);
 
       // Assign solution to goal
-      // Merge checkedEnv.metaVars to capture any new metas created during type checking
+      // Merge solvedEnv.metaVars to capture any new metas created during type checking
       // (e.g., implicit argument metas for constructors like Nil : {A : Type} -> List A)
-      const newMetaVars = new Map(checkedEnv.metaVars);
+      const newMetaVars = new Map(solvedEnv.metaVars);
       newMetaVars.set(goalId, { ...goal, solution });
 
       // Remove goal from goal list
@@ -129,7 +135,7 @@ export class ExactTactic implements Tactic {
         success: true,
         newEngine: engine.withUpdates({
           metaVars: newMetaVars,
-          constraints: checkedEnv.constraints,
+          constraints: solvedEnv.constraints,
           goals: newGoals,
           focusIndex: newFocusIndex
         }).solveConstraints()

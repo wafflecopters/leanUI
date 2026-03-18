@@ -701,12 +701,178 @@ function countPatternVars(pat: import('../compiler/kernel').TTKPattern): number 
 }
 
 /**
+ * Structural equality check for TTKTerms (no normalization).
+ * Used for comparing type args during index unification.
+ */
+function ttermStructEqual(a: TTKTerm, b: TTKTerm): boolean {
+  if (a === b) return true;
+  if (a.tag !== b.tag) return false;
+  switch (a.tag) {
+    case 'Var': return b.tag === 'Var' && a.index === b.index;
+    case 'Const': return b.tag === 'Const' && a.name === b.name;
+    case 'App':
+      return b.tag === 'App' && ttermStructEqual(a.fn, b.fn) && ttermStructEqual(a.arg, b.arg);
+    case 'Binder':
+      return b.tag === 'Binder' && a.binderKind.tag === (b as any).binderKind.tag
+        && ttermStructEqual(a.domain, (b as any).domain) && ttermStructEqual(a.body, (b as any).body);
+    default: return false;
+  }
+}
+
+/**
+ * Index unification for indexed inductive types (e.g., Equal).
+ *
+ * When case-splitting on a scrutinee of type `I params indices`, a constructor
+ * like `refl : {A} -> {a : A} -> Equal A a a` constrains the indices.
+ * For `eq : Equal A x y` in the `refl` case, the constructor forces y = x.
+ *
+ * This function detects such index constraints and applies substitutions to
+ * the goal, removing the unified variables from the context.
+ *
+ * Returns the modified goal and adjusted scrutineeIdx.
+ */
+function applyIndexUnification(
+  goal: MetaVar,
+  scrutineeIdx: number,
+  ctorType: TTKTerm,
+  numImplicit: number,
+  typeArgs: TTKTerm[],
+): { goal: MetaVar; scrutineeIdx: number } {
+  // Compute constructor return type by substituting implicits and peeling explicit params
+  let returnType = ctorType;
+  for (let i = 0; i < numImplicit; i++) {
+    if (returnType.tag === 'Binder' && returnType.binderKind.tag === 'BPi') {
+      const arg = typeArgs[i] || { tag: 'Hole' as const, id: '_implicit_' + i };
+      returnType = subst(0, arg, returnType.body);
+    }
+  }
+  let numExplicit = 0;
+  while (returnType.tag === 'Binder' && returnType.binderKind.tag === 'BPi') {
+    returnType = returnType.body;
+    numExplicit++;
+  }
+
+  // For constructors with explicit params, the return type has Var references
+  // to explicit params (Var(0..numExplicit-1)). We handle only the case where
+  // the return type indices don't reference explicit params (e.g., Equal/refl).
+  // TODO: Handle Vec-like cases where indices reference constructor params.
+  const ctorRetArgs = extractTypeArgsFromType(returnType);
+
+  const s = goal.ctx.length - 1 - scrutineeIdx;
+
+  // Find index mismatches: positions where scrutinee type arg differs from constructor return type arg
+  // Only handle cases where the scrutinee arg is a simple Var (can be substituted away)
+  interface IndexSubst {
+    scrVarIdx: number;   // De Bruijn index in scrutinee's type scope
+    ctxArrayPos: number; // Position in goal.ctx array
+    replacement: TTKTerm; // Replacement term in scrutinee's type scope
+  }
+  const substs: IndexSubst[] = [];
+
+  for (let i = 0; i < Math.min(typeArgs.length, ctorRetArgs.length); i++) {
+    const scrArg = typeArgs[i];
+    let ctorArg = ctorRetArgs[i];
+
+    // Skip if constructor return type arg references explicit params
+    if (numExplicit > 0 && containsVarBelow(ctorArg, numExplicit)) continue;
+
+    // Shift constructor return type arg from (scrScope + numExplicit) to scrScope
+    if (numExplicit > 0) {
+      ctorArg = shiftTerm(ctorArg, -numExplicit, 0);
+    }
+
+    if (scrArg.tag === 'Var' && !ttermStructEqual(scrArg, ctorArg)) {
+      const ctxArrayPos = s - 1 - scrArg.index;
+      if (ctxArrayPos >= 0 && ctxArrayPos < goal.ctx.length && ctxArrayPos !== s) {
+        substs.push({ scrVarIdx: scrArg.index, ctxArrayPos, replacement: ctorArg });
+      }
+    }
+  }
+
+  if (substs.length === 0) return { goal, scrutineeIdx };
+
+  // Sort by ctxArrayPos descending so removals from the end don't shift earlier positions
+  substs.sort((a, b) => b.ctxArrayPos - a.ctxArrayPos);
+
+  let currentGoal = goal;
+  let currentScrutIdx = scrutineeIdx;
+
+  for (const sub of substs) {
+    const n = currentGoal.ctx.length;
+    const s_cur = n - 1 - currentScrutIdx;
+    const ap = sub.ctxArrayPos;
+    // Recompute: the variable being removed is at de Bruijn index (n - 1 - ap) in the goal
+    const goalVarIdx = n - 1 - ap;
+
+    // Convert replacement from scrutinee's type scope to goal scope.
+    // scrScope Var(v) maps to goalScope Var(v + currentScrutIdx + 1)
+    const repInGoalScope = shiftTerm(sub.replacement, currentScrutIdx + 1, 0);
+
+    // For subst: replacement must be in the scope AFTER removing goalVarIdx.
+    // After removal, Var(k) for k > goalVarIdx shifts to Var(k-1).
+    // So adjust the replacement accordingly.
+    const adjRep = shiftTerm(repInGoalScope, -1, goalVarIdx);
+
+    // Apply substitution to goal type
+    const newGoalType = subst(goalVarIdx, adjRep, currentGoal.type);
+
+    // Apply substitution to context entries
+    const newCtx: Array<{ name: string; type: TTKTerm }> = [];
+    for (let j = 0; j < n; j++) {
+      if (j === ap) continue; // remove the unified variable
+
+      const entry = currentGoal.ctx[j];
+      if (j > ap) {
+        // This entry references the removed variable.
+        // In entry j's type scope, the removed variable is at de Bruijn index (j - 1 - ap).
+        const varInEntry = j - 1 - ap;
+
+        // Convert replacement from scrScope to entry j's type scope:
+        // scrScope has s_cur entries, entry j has j entries.
+        // scrScope Var(v) → entry scope Var(v + (j - s_cur))
+        const repInEntry = shiftTerm(sub.replacement, j - s_cur, 0);
+        const adjRepEntry = shiftTerm(repInEntry, -1, varInEntry);
+        const newType = subst(varInEntry, adjRepEntry, entry.type);
+        newCtx.push({ name: entry.name, type: newType });
+      } else {
+        newCtx.push(entry);
+      }
+    }
+
+    // Adjust scrutineeIdx: if we removed an entry AFTER the scrutinee in the array
+    // (i.e., BEFORE it in de Bruijn order), the scrutinee's de Bruijn index decreases.
+    if (ap > s_cur) {
+      currentScrutIdx = currentScrutIdx - 1;
+    }
+    // If ap < s_cur: both array position and length decrease by 1, so de Bruijn is unchanged.
+
+    currentGoal = { ...currentGoal, ctx: newCtx, type: newGoalType };
+  }
+
+  return { goal: currentGoal, scrutineeIdx: currentScrutIdx };
+}
+
+/** Check if a term contains any Var with index < threshold. */
+function containsVarBelow(term: TTKTerm, threshold: number): boolean {
+  switch (term.tag) {
+    case 'Var': return term.index < threshold;
+    case 'App': return containsVarBelow(term.fn, threshold) || containsVarBelow(term.arg, threshold);
+    case 'Binder': return containsVarBelow(term.domain, threshold) || containsVarBelow(term.body, threshold + 1);
+    default: return false;
+  }
+}
+
+/**
  * Compute a case-specific goal by directly substituting the constructor
  * pattern for the scrutinee variable in the goal type.
  *
  * After intros [i, n, f], context is [i:ℕ, n:ℕ, f:ℕ→ℕ] and goal is G(i,n,f).
  * For Zero case: goal becomes G(i,0,f), context extends with nothing.
  * For Succ case: goal becomes G(i,Succ(n'),f), context extends with [n':ℕ, IH:P(n')].
+ *
+ * For indexed inductive types (e.g., Equal), also performs index unification:
+ * the constructor's return type constrains index positions, and variables at
+ * those positions are substituted and removed from the context.
  */
 export function computeCaseGoalDirect(
   goal: MetaVar,
@@ -716,13 +882,27 @@ export function computeCaseGoalDirect(
   definitions: DefinitionsMap,
   userParamNames?: readonly string[],
 ): MetaVar {
-  // Extract type args from scrutinee type for implicit param substitution
-  const s = goal.ctx.length - 1 - scrutineeIdx; // scrutinee array position
-  const scrutineeType = goal.ctx[s].type;
+  // --- Index unification (preprocessing) ---
+  // For indexed inductive types, the constructor constrains index values.
+  // E.g., refl : Equal A a a constrains both index positions to be equal.
+  // We detect and apply these substitutions before the main restructuring.
+  const numImplicit = ctor.namedArgMap?.size ?? 0;
+  const s_orig = goal.ctx.length - 1 - scrutineeIdx;
+  const scrutineeTypeOrig = goal.ctx[s_orig].type;
+  const typeArgsOrig = extractTypeArgsFromType(scrutineeTypeOrig);
+
+  const unified = applyIndexUnification(goal, scrutineeIdx, ctor.type, numImplicit, typeArgsOrig);
+
+  // Use the unified goal and adjusted scrutineeIdx for the rest
+  const uGoal = unified.goal;
+  const uScrutIdx = unified.scrutineeIdx;
+
+  // Extract type args from (possibly modified) scrutinee type
+  const s = uGoal.ctx.length - 1 - uScrutIdx; // scrutinee array position
+  const scrutineeType = uGoal.ctx[s].type;
   const typeArgs = extractTypeArgsFromType(scrutineeType);
 
-  // Count constructor parameters (skip implicit ones)
-  const numImplicit = ctor.namedArgMap?.size ?? 0;
+  // Count constructor parameters (skip implicit ones) — numImplicit already computed above
   const { params, hasRecursiveParam, recursiveParamLocalIdx } = peelCtorParams(
     ctor.type, numImplicit, typeArgs, inductiveName, definitions, userParamNames
   );
@@ -740,7 +920,7 @@ export function computeCaseGoalDirect(
 
   // 1. Entries before scrutinee (positions 0..s-1): unchanged
   for (let j = 0; j < s; j++) {
-    newCtx.push(goal.ctx[j]);
+    newCtx.push(uGoal.ctx[j]);
   }
 
   // 2. Constructor params (at positions s..s+numParams-1, replacing the scrutinee)
@@ -752,8 +932,8 @@ export function computeCaseGoalDirect(
   // 3. Entries after scrutinee: substitute scrutinee var with ctor app.
   //    Use replaceVar (not subst) FIRST to avoid index collisions,
   //    then shift for the extra params.
-  for (let j = s + 1; j < goal.ctx.length; j++) {
-    let entryType = goal.ctx[j].type;
+  for (let j = s + 1; j < uGoal.ctx.length; j++) {
+    let entryType = uGoal.ctx[j].type;
     const scrutVarInEntry = j - 1 - s; // scrutinee's de Bruijn index in this entry's type
 
     // Build ctor app for this entry's scope. After restructuring:
@@ -778,30 +958,30 @@ export function computeCaseGoalDirect(
     if (netShift !== 0) {
       entryType = shiftTerm(entryType, netShift, j - s);
     }
-    newCtx.push({ name: goal.ctx[j].name, type: entryType });
+    newCtx.push({ name: uGoal.ctx[j].name, type: entryType });
   }
 
   // Build goal type using remapScrutineeVars: a custom variable remapping that
   // correctly handles the restructured context (scrutinee removed, params inserted).
   //
   // Original var mapping → new index:
-  //   Var(k) for k < scrutineeIdx  → Var(k + ihOffset)              [near entries]
-  //   Var(scrutineeIdx)            → ctorApp                         [scrutinee replaced]
-  //   Var(k) for k > scrutineeIdx  → Var(k + numParams - 1 + ihOffset) [far entries]
+  //   Var(k) for k < uScrutIdx  → Var(k + ihOffset)              [near entries]
+  //   Var(uScrutIdx)            → ctorApp                         [scrutinee replaced]
+  //   Var(k) for k > uScrutIdx  → Var(k + numParams - 1 + ihOffset) [far entries]
 
   // Build ctorApp for goal scope with FINAL indices:
-  //   param[i] at position s+i → Var(scrutineeIdx + numParams - 1 + ihOffset - i)
+  //   param[i] at position s+i → Var(uScrutIdx + numParams - 1 + ihOffset - i)
   let ctorAppGoal: TTKTerm = { tag: 'Const', name: ctor.name };
   for (let i = 0; i < numParams; i++) {
     ctorAppGoal = {
       tag: 'App',
       fn: ctorAppGoal,
-      arg: { tag: 'Var', index: scrutineeIdx + numParams - 1 + ihOffset - i },
+      arg: { tag: 'Var', index: uScrutIdx + numParams - 1 + ihOffset - i },
     };
   }
 
   const caseGoalType = remapScrutineeVars(
-    goal.type, scrutineeIdx, ctorAppGoal, numParams, ihOffset
+    uGoal.type, uScrutIdx, ctorAppGoal, numParams, ihOffset
   );
 
   // Add induction hypothesis if recursive
@@ -812,15 +992,15 @@ export function computeCaseGoalDirect(
     // But IH is about to be pushed, making newCtx.length = n + numParams - 1 + 1.
     // From IH's scope (depth = n + numParams - 1, not counting itself):
     //   param[recursiveParamLocalIdx] at position s + recursiveParamLocalIdx
-    //   → Var(scrutineeIdx + numParams - 1 - recursiveParamLocalIdx)
+    //   → Var(uScrutIdx + numParams - 1 - recursiveParamLocalIdx)
     const recursiveParamRef: TTKTerm = {
       tag: 'Var',
-      index: scrutineeIdx + numParams - 1 - recursiveParamLocalIdx,
+      index: uScrutIdx + numParams - 1 - recursiveParamLocalIdx,
     };
 
     // Remap with ihOffset=0 since IH doesn't count itself
     const ihType = remapScrutineeVars(
-      goal.type, scrutineeIdx, recursiveParamRef, numParams, 0
+      uGoal.type, uScrutIdx, recursiveParamRef, numParams, 0
     );
 
     // Use user-provided IH name if available (comes after constructor params in userParamNames)

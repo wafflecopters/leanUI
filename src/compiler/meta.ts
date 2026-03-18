@@ -851,22 +851,75 @@ export function solveConstraints(
         // E.g., if solution is Succ(?m) and rhs is Succ(x), this creates ?m := x.
         // Both sides are at effectiveContext depth after normalization.
         //
+        // IMPORTANT: flexibleVars must be FALSE here. Context variables are rigid —
+        // they represent universally quantified parameters, not pattern variables.
+        // With flexibleVars: true, Var(x) vs Var(y) would "succeed" by creating a
+        // substitution that gets discarded, masking real conflicts like
+        // f(x) vs f(y) from `exact refl` on goal `f(x) = f(y)`.
+        // Meta decomposition still works because Meta handling in unifyTerms is
+        // independent of flexibleVars.
+        //
         // Try structural unification FIRST (no definitions/WHNF) to handle cases
         // where both sides have function applications that would become stuck
         // Match expressions after delta reduction (e.g., `plus X Y` vs `plus ?m ?n`).
         // Structural matching can decompose these directly.
         let unifyResult = unifyTerms(meta.solution, resolvedRhs, {
           mode: 'pattern',
-          flexibleVars: true,
+          flexibleVars: false,
           definitions: undefined,
         });
         if (!unifyResult.success) {
           // Fall back to full unification with definitions
           unifyResult = unifyTerms(meta.solution, resolvedRhs, {
             mode: 'pattern',
-            flexibleVars: true,
+            flexibleVars: false,
             definitions,
           });
+        }
+        // Pattern mode with rigid vars treats Var(x) vs Var(y) as a "refinement"
+        // (success with substitutions). In conflict detection, substitutions between
+        // named rigid in-scope variables indicate genuinely different terms
+        // (e.g., f(x) vs f(y) produces substitution [3, Var(2)]).
+        // Only reject when BOTH sides of a substitution refer to named rigid
+        // in-scope variables — not wildcards, not out-of-scope references.
+        if (unifyResult.success && unifyResult.substitutions.length > 0) {
+          const isWildcard = (name: string) => name.startsWith('?') || name.startsWith('_');
+          for (const [fromIdx, toTerm] of unifyResult.substitutions) {
+            if (toTerm.tag !== 'Var') continue;
+            const toIdx = toTerm.index;
+            // Both must be in-scope
+            if (fromIdx >= effectiveContext.length || toIdx >= effectiveContext.length) continue;
+            const fromBinding = effectiveContext[effectiveContext.length - 1 - fromIdx];
+            const toBinding = effectiveContext[effectiveContext.length - 1 - toIdx];
+            if (!fromBinding || !toBinding) continue;
+            // Both must be named (not wildcards)
+            if (isWildcard(fromBinding.name) || isWildcard(toBinding.name)) continue;
+            // Both vars must have the same type. Different types mean imprecise
+            // constraint propagation (e.g., R : Real vs a : Carrier R).
+            // Context entry types use de Bruijn indices relative to their entry
+            // position, so we must shift both to the full context depth before
+            // comparing: entry at de Bruijn index i stores type at depth D-1-i,
+            // shifting by i+1 brings it to full depth D.
+            const fromType = shiftTerm(fromBinding.type, fromIdx + 1, 0);
+            const toType = shiftTerm(toBinding.type, toIdx + 1, 0);
+            if (!isDefinitionallyEqual(fromType, toType)) continue;
+            // Check meta type isn't Sort or unsolved Meta
+            let resolvedMetaType2 = meta.type;
+            while (resolvedMetaType2.tag === 'Meta') {
+              const typeMeta = newMetaVars.get(resolvedMetaType2.id);
+              if (typeMeta?.solution) resolvedMetaType2 = typeMeta.solution;
+              else break;
+            }
+            if (resolvedMetaType2.tag === 'Sort' || resolvedMetaType2.tag === 'Meta') continue;
+            // Real conflict — named rigid vars with same type at different positions
+            const tolerateConflict =
+              (meta.isPatternSolved && normConstraint.isPatternSolution !== true) ||
+              normConstraint.isPatternSolution === false;
+            if (!tolerateConflict) {
+              unifyResult = { success: false, reason: 'conflict' };
+              break;
+            }
+          }
         }
         if (!unifyResult.success) {
           // Try case inversion: if the solution is a constructor application and
