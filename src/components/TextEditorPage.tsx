@@ -12,8 +12,6 @@ import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
 import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { GoalState } from '../tactics/proof-state';
-import { convertToLatex, makeDefaultNotations } from '../compiler/latex-converter';
-import { LaTeXPanel } from './LaTeXPanel';
 import { WYSIWYGPanel } from './WYSIWYGPanel';
 import { PRESETS } from '../presets';
 
@@ -936,7 +934,6 @@ export function TextEditorPage() {
   });
   const [editorReady, setEditorReady] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
-  const [showLatex, setShowLatex] = useState(false);
   const [showWYSIWYG, setShowWYSIWYG] = useState(() => searchParams.get('editor') === 'true');
   const [expandedSymbol, setExpandedSymbol] = useState<string | null>(() => searchParams.get('symbol'));
   // Rendering options for pretty-printed output
@@ -1008,7 +1005,6 @@ export function TextEditorPage() {
     const nextShow = !showWYSIWYG;
     setShowWYSIWYG(nextShow);
     if (!nextShow) {
-      setShowLatex(false);
       setExpandedSymbol(null);
       updateEditorParams(false, null);
     } else {
@@ -1081,13 +1077,6 @@ export function TextEditorPage() {
     if (!showWYSIWYG) return [];
     return compileResult.blocks.flatMap(b => b.declarations);
   }, [showWYSIWYG, compileResult]);
-
-  // Convert to LaTeX document when panel is shown
-  const latexNotations = useMemo(() => makeDefaultNotations(), []);
-  const latexDocument = useMemo(() => {
-    if (!showLatex) return null;
-    return convertToLatex(compileResult, latexNotations);
-  }, [showLatex, compileResult, latexNotations]);
 
   // Extract wildcard hints from compile result
   const wildcardHints = useMemo(() => {
@@ -1668,21 +1657,6 @@ export function TextEditorPage() {
           >
             {showWYSIWYG ? 'Hide WYSIWYG' : 'Show WYSIWYG'}
           </button>
-          <button
-            onClick={() => { setShowLatex(!showLatex); if (!showLatex) { setShowWYSIWYG(false); setExpandedSymbol(null); updateEditorParams(false, null); } }}
-            style={{
-              background: showLatex ? '#238636' : '#21262d',
-              color: showLatex ? '#ffffff' : '#c9d1d9',
-              border: `1px solid ${showLatex ? '#238636' : '#30363d'}`,
-              borderRadius: '6px',
-              padding: '6px 12px',
-              fontSize: '13px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap' as const,
-            }}
-          >
-            {showLatex ? 'Hide LaTeX' : 'Show LaTeX'}
-          </button>
           <div style={{ position: 'relative' as const }}>
             <button
               onClick={() => setPresetMenuOpen(!presetMenuOpen)}
@@ -1738,7 +1712,7 @@ export function TextEditorPage() {
 
       <div style={{
         ...styles.mainContent,
-        flexDirection: (showLatex || showWYSIWYG) ? 'row' as const : 'column' as const,
+        flexDirection: showWYSIWYG ? 'row' as const : 'column' as const,
       }}>
         {/* Left side: editor + type info + results */}
         <div style={{
@@ -1913,19 +1887,6 @@ export function TextEditorPage() {
             </div>
           </div>
         </div>{/* end left side */}
-
-        {/* Right side: LaTeX panel */}
-        {showLatex && (
-          <div style={{
-            flex: 1,
-            borderLeft: '1px solid #30363d',
-            overflowY: 'auto' as const,
-            backgroundColor: '#0d1117',
-            minWidth: 0,
-          }}>
-            <LaTeXPanel document={latexDocument} />
-          </div>
-        )}
 
         {/* Right side: WYSIWYG panel */}
         {showWYSIWYG && (
