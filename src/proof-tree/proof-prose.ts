@@ -44,7 +44,7 @@ export type ProseItemKind =
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
   | { tag: 'inductionHeader'; scrutinee: string }
-  | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean }
+  | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string }
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
@@ -308,6 +308,9 @@ export function generateProofProse(
             tag: 'caseHeader',
             labelLatex: c.labelLatex ?? c.label,
             isBaseCase,
+            constructorParamNames: c.constructorParamNames,
+            constructorName: c.constructorName,
+            scrutinee: node.scrutinee,
           });
           walk(c.body, depth + 2);
         }

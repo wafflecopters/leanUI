@@ -22,7 +22,7 @@ import {
   applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
-  clearNode, editIntroName,
+  clearNode, editIntroName, editCaseParamName,
   pushState, updateCurrent, undo, redo,
 } from '../proof-tree/proof-tree';
 import { runSimp } from '../tactics/simp-tactic';
@@ -1981,6 +1981,120 @@ function IntroProseItem({
   );
 }
 
+// ============================================================================
+// CaseHeaderProseItem — case header with clickable pattern variable names
+// ============================================================================
+
+function CaseHeaderProseItem({
+  item, kind, rowStyle, rowHandlers, prose,
+  state, onPushChange,
+}: {
+  item: ProseItem;
+  kind: Extract<ProseItemKind, { tag: 'caseHeader' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: { onClick: () => void; onMouseEnter: () => void; onMouseLeave: () => void };
+  prose: React.CSSProperties;
+  state: ProofTreeState;
+  onPushChange: (s: ProofTreeState) => void;
+}) {
+  const [selectedParamIndex, setSelectedParamIndex] = useState<number | null>(null);
+
+  const paramNames = kind.constructorParamNames;
+  const hasParams = paramNames && paramNames.length > 0;
+
+  const handleParamClick = (idx: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedParamIndex(prev => prev === idx ? null : idx);
+  };
+
+  const handleRename = (newName: string) => {
+    if (selectedParamIndex === null) return;
+    const trimmed = newName.trim();
+    if (!trimmed || !paramNames || trimmed === paramNames[selectedParamIndex]) return;
+    const result = editCaseParamName(state, item.nodeId, selectedParamIndex, trimmed);
+    if (result) onPushChange(result);
+  };
+
+  // Render the label with clickable param names.
+  // The label looks like "aOrB = Left(x)" — we break it into:
+  //   scrutinee "=" constructorName "(" param1 "," param2 ")"
+  const renderLabelWithClickableParams = () => {
+    if (!hasParams || !kind.constructorName || !kind.scrutinee) {
+      // No params or missing data — render as before
+      return <InlineKaTeX latex={kind.labelLatex} style={{ fontSize: '12px' }} />;
+    }
+
+    const scrutineeTex = texNameForProse(kind.scrutinee);
+    const ctorTex = texNameForProse(kind.constructorName);
+
+    return (
+      <>
+        <InlineKaTeX latex={`${scrutineeTex} = ${ctorTex}\\,(`} style={{ fontSize: '12px' }} />
+        {paramNames!.map((name, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <InlineKaTeX latex=",\," style={{ fontSize: '12px' }} />}
+            <span
+              onClick={e => handleParamClick(i, e)}
+              style={{
+                cursor: 'pointer',
+                borderBottom: selectedParamIndex === i
+                  ? '2px solid #58a6ff'
+                  : '1px dotted rgba(201, 209, 217, 0.4)',
+                paddingBottom: '1px',
+              }}
+            >
+              <InlineKaTeX latex={texNameForProse(name)} style={{ fontSize: '12px' }} />
+            </span>
+          </React.Fragment>
+        ))}
+        <InlineKaTeX latex=")" style={{ fontSize: '12px' }} />
+      </>
+    );
+  };
+
+  return (
+    <>
+      <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
+        <span style={{ color: kind.isBaseCase ? '#d2a8ff' : '#79c0ff' }}>
+          {kind.isBaseCase ? 'Base case' : 'Inductive step'}
+        </span>
+        <span style={prose}> (</span>
+        {renderLabelWithClickableParams()}
+        <span style={prose}>):</span>
+      </div>
+      {/* Inline rename for selected param — same style as tactic suggestions */}
+      {selectedParamIndex !== null && paramNames && (
+        <div style={{
+          paddingLeft: `${item.depth * 20 + 24}px`,
+          paddingTop: '2px',
+          paddingBottom: '4px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
+            {paramNames[selectedParamIndex]}:
+          </span>
+          <input
+            key={`${item.nodeId}-${selectedParamIndex}`}
+            defaultValue={paramNames[selectedParamIndex]}
+            onBlur={e => handleRename(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); handleRename((e.target as HTMLInputElement).value); }
+              if (e.key === 'Escape') { e.preventDefault(); setSelectedParamIndex(null); }
+            }}
+            onClick={e => e.stopPropagation()}
+            placeholder="rename"
+            style={nameInputStyle}
+            autoFocus
+          />
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Style for a centered display-mode equation block */
 const eqBlockStyle: React.CSSProperties = {
   display: 'block',
@@ -2239,14 +2353,15 @@ function ProseItemView({
 
     case 'caseHeader':
       return (
-        <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
-          <span style={{ color: kind.isBaseCase ? '#d2a8ff' : '#79c0ff' }}>
-            {kind.isBaseCase ? 'Base case' : 'Inductive step'}
-          </span>
-          <span style={prose}> (</span>
-          <InlineKaTeX latex={kind.labelLatex} style={{ fontSize: '12px' }} />
-          <span style={prose}>):</span>
-        </div>
+        <CaseHeaderProseItem
+          item={item}
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          state={state}
+          onPushChange={onPushChange}
+        />
       );
 
     case 'exact':
