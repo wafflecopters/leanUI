@@ -190,6 +190,14 @@ export class RewriteTactic implements Tactic {
           const candidateLhs = this.applyMetaBindings(lhs, bindings);
           const candidateRhs = this.applyMetaBindings(rhs, bindings);
 
+          // 4d-sanity. Reject matches with unsolved Metas in LHS or RHS.
+          //   After Pi instantiation and pattern matching, unsolved Metas mean
+          //   some Pi arguments couldn't be resolved (e.g., absOfNonneg needs
+          //   {R : Real} which can't be found). Such rewrites are type-incorrect.
+          if (this.containsMeta(candidateLhs) || this.containsMeta(candidateRhs)) {
+            continue;
+          }
+
           // 4e. When targetHead is specified (from clicking a specific subterm in the UI),
           //     only accept matches whose resolved LHS has the matching head constant.
           //     This prevents bare-Meta LHS (from reverse rewrites) from resolving to
@@ -703,6 +711,18 @@ export class RewriteTactic implements Tactic {
     let current = term;
     while (current.tag === 'App') current = current.fn;
     return current.tag === 'Const' ? current.name : null;
+  }
+
+  /** Check if a term contains any Meta nodes (unsolved Pi instantiation args). */
+  private containsMeta(term: TTKTerm): boolean {
+    switch (term.tag) {
+      case 'Meta': return true;
+      case 'App': return this.containsMeta(term.fn) || this.containsMeta(term.arg);
+      case 'Binder': return this.containsMeta(term.domain) || this.containsMeta(term.body);
+      case 'Match': return this.containsMeta(term.scrutinee) ||
+        term.clauses.some(c => this.containsMeta(c.rhs));
+      default: return false;
+    }
   }
 
   /**
