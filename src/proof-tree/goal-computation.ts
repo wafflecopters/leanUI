@@ -924,9 +924,11 @@ export function computeCaseGoalDirect(
   }
 
   // 2. Constructor params (at positions s..s+numParams-1, replacing the scrutinee)
+  // After peelCtorParams substitutes implicit type args (from the scrutinee's scope
+  // at depth s), the param types already have correct de Bruijn indices for depth s.
+  // No additional shift is needed — shifting would double the offset.
   for (let i = 0; i < numParams; i++) {
-    const shiftedType = shiftTerm(params[i].type, s, 0);
-    newCtx.push({ name: params[i].name, type: shiftedType });
+    newCtx.push({ name: params[i].name, type: params[i].type });
   }
 
   // 3. Entries after scrutinee: substitute scrutinee var with ctor app.

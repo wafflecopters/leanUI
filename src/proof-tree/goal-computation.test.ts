@@ -1099,6 +1099,170 @@ describe('computeCaseGoalDirect', () => {
     // Goal Q(y) → Q(x) = Q(Var(1))
     expect(result.type).toEqual(mkApp(mkConst('Q'), mkVar(1)));
   });
+
+  test('Either/Left case: param type references implicit type arg correctly', () => {
+    // Bug: after peelCtorParams substitutes implicit type args (A, B) from
+    // the scrutinee type into the Left constructor, the explicit param's type
+    // already has correct de Bruijn indices for the scrutinee's scope.
+    // An additional shiftTerm(params[i].type, s, 0) doubles the offset,
+    // turning e.g. Var(1) (A) into Var(3) (nonexistent → ?v9).
+
+    let defs = createDefinitionsMap();
+
+    // Either : {A : Type} -> {B : Type} -> Type
+    const eitherType = mkPi(mkSort(mkULit(0)), mkPi(mkSort(mkULit(0)), mkSort(mkULit(0)), 'B'), 'A');
+    // Left : {A : Type} -> {B : Type} -> A -> Either A B
+    const leftType = mkPi(
+      mkSort(mkULit(0)),  // A : Type
+      mkPi(
+        mkSort(mkULit(0)),  // B : Type
+        mkPi(
+          mkVar(1),  // a : A (under A, B binders: A = Var(1))
+          mkApp(mkApp(mkConst('Either'), mkVar(2)), mkVar(1)),  // Either A B
+          'a',
+        ),
+        'B',
+      ),
+      'A',
+    );
+    // Right : {A : Type} -> {B : Type} -> B -> Either A B
+    const rightType = mkPi(
+      mkSort(mkULit(0)),
+      mkPi(
+        mkSort(mkULit(0)),
+        mkPi(
+          mkVar(0),  // b : B (under A, B binders: B = Var(0))
+          mkApp(mkApp(mkConst('Either'), mkVar(2)), mkVar(1)),
+          'b',
+        ),
+        'B',
+      ),
+      'A',
+    );
+    defs = addInductiveDefinition(defs, 'Either', eitherType, [
+      { name: 'Left', type: leftType, namedArgMap: new Map([['A', 0], ['B', 1]]) },
+      { name: 'Right', type: rightType, namedArgMap: new Map([['A', 0], ['B', 1]]) },
+    ], []);
+
+    // Context: [A : Type, B : Type, x2 : Either A B]
+    // De Bruijn: x2=Var(0), B=Var(1), A=Var(2)
+    // x2's type at depth 2: Either(Var(1), Var(0)) = Either(A, B)
+    const goal = {
+      ctx: [
+        { name: 'A', type: mkSort(mkULit(0)) as TTKTerm },
+        { name: 'B', type: mkSort(mkULit(0)) as TTKTerm },
+        {
+          name: 'x2',
+          type: mkApp(mkApp(mkConst('Either'), mkVar(1)), mkVar(0)) as TTKTerm,
+        },
+      ],
+      type: mkApp(mkConst('P'), mkVar(0)) as TTKTerm,  // P(x2)
+      solution: undefined,
+    };
+
+    // Left case: scrutinee x2 at de Bruijn index 0, array position s=2
+    const leftCtor = defs.inductiveTypes.get('Either')!.constructors[0];
+    const result = computeCaseGoalDirect(goal, 0, leftCtor, 'Either', defs);
+
+    // After Left case:
+    // - x2 removed, replaced by param x3 : A
+    // - Context: [A : Type, B : Type, x3 : A]
+    expect(result.ctx).toHaveLength(3);
+    expect(result.ctx[0].name).toBe('A');
+    expect(result.ctx[1].name).toBe('B');
+    expect(result.ctx[2].name).toBe('a');
+
+    // KEY ASSERTION: param type should be A = Var(1) (pointing to ctx[0])
+    // Bug: was Var(3) due to incorrect shiftTerm(Var(1), 2, 0)
+    expect(result.ctx[2].type).toEqual(mkVar(1));
+  });
+
+  test('Either/Right case: param type references implicit type arg correctly', () => {
+    let defs = createDefinitionsMap();
+
+    const eitherType = mkPi(mkSort(mkULit(0)), mkPi(mkSort(mkULit(0)), mkSort(mkULit(0)), 'B'), 'A');
+    const leftType = mkPi(mkSort(mkULit(0)), mkPi(mkSort(mkULit(0)), mkPi(mkVar(1),
+      mkApp(mkApp(mkConst('Either'), mkVar(2)), mkVar(1)), 'a'), 'B'), 'A');
+    const rightType = mkPi(mkSort(mkULit(0)), mkPi(mkSort(mkULit(0)), mkPi(mkVar(0),
+      mkApp(mkApp(mkConst('Either'), mkVar(2)), mkVar(1)), 'b'), 'B'), 'A');
+    defs = addInductiveDefinition(defs, 'Either', eitherType, [
+      { name: 'Left', type: leftType, namedArgMap: new Map([['A', 0], ['B', 1]]) },
+      { name: 'Right', type: rightType, namedArgMap: new Map([['A', 0], ['B', 1]]) },
+    ], []);
+
+    // Context: [A : Type, B : Type, x2 : Either A B]
+    const goal = {
+      ctx: [
+        { name: 'A', type: mkSort(mkULit(0)) as TTKTerm },
+        { name: 'B', type: mkSort(mkULit(0)) as TTKTerm },
+        {
+          name: 'x2',
+          type: mkApp(mkApp(mkConst('Either'), mkVar(1)), mkVar(0)) as TTKTerm,
+        },
+      ],
+      type: mkApp(mkConst('P'), mkVar(0)) as TTKTerm,
+      solution: undefined,
+    };
+
+    // Right case: param type should be B = Var(0)
+    const rightCtor = defs.inductiveTypes.get('Either')!.constructors[1];
+    const result = computeCaseGoalDirect(goal, 0, rightCtor, 'Either', defs);
+
+    expect(result.ctx).toHaveLength(3);
+    expect(result.ctx[2].name).toBe('b');
+    // B = Var(0) at position s=2 (pointing to ctx[1])
+    expect(result.ctx[2].type).toEqual(mkVar(0));
+  });
+
+  test('Pair case: both param types reference implicit type args correctly', () => {
+    let defs = createDefinitionsMap();
+
+    // Pair : {A : Type} -> {B : Type} -> Type
+    const pairType = mkPi(mkSort(mkULit(0)), mkPi(mkSort(mkULit(0)), mkSort(mkULit(0)), 'B'), 'A');
+    // MkPair : {A : Type} -> {B : Type} -> A -> B -> Pair A B
+    const mkPairType = mkPi(
+      mkSort(mkULit(0)),
+      mkPi(mkSort(mkULit(0)),
+        mkPi(mkVar(1),           // fst : A
+          mkPi(mkVar(1),         // snd : B (under A,B,fst: B = Var(1))
+            mkApp(mkApp(mkConst('Pair'), mkVar(3)), mkVar(2)),
+            'snd'),
+          'fst'),
+        'B'),
+      'A');
+    defs = addInductiveDefinition(defs, 'Pair', pairType, [
+      { name: 'MkPair', type: mkPairType, namedArgMap: new Map([['A', 0], ['B', 1]]) },
+    ], []);
+
+    // Context: [A : Type, B : Type, p : Pair A B]
+    const goal = {
+      ctx: [
+        { name: 'A', type: mkSort(mkULit(0)) as TTKTerm },
+        { name: 'B', type: mkSort(mkULit(0)) as TTKTerm },
+        {
+          name: 'p',
+          type: mkApp(mkApp(mkConst('Pair'), mkVar(1)), mkVar(0)) as TTKTerm,
+        },
+      ],
+      type: mkApp(mkConst('P'), mkVar(0)) as TTKTerm,
+      solution: undefined,
+    };
+
+    const mkPairCtor = defs.inductiveTypes.get('Pair')!.constructors[0];
+    const result = computeCaseGoalDirect(goal, 0, mkPairCtor, 'Pair', defs);
+
+    // Context: [A : Type, B : Type, fst : A, snd : B]
+    expect(result.ctx).toHaveLength(4);
+    expect(result.ctx[2].name).toBe('fst');
+    expect(result.ctx[3].name).toBe('snd');
+
+    // fst's type: A = Var(1) at position s=2 (pointing to ctx[0])
+    expect(result.ctx[2].type).toEqual(mkVar(1));
+    // snd's type: B = Var(1) at position s+1=3 (pointing to ctx[1], with fst at Var(0))
+    // After peelCtorParams: under the fst binder, B was Var(1). From position 3:
+    //   Var(0) = fst (ctx[2]), Var(1) = B (ctx[1]). ✓
+    expect(result.ctx[3].type).toEqual(mkVar(1));
+  });
 });
 
 // ============================================================================
