@@ -9,6 +9,7 @@
 
 import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
 import { NodeGoalInfo, TypedHypothesis } from './goal-computation';
+import { TTerm } from '../compiler/surface';
 
 // ============================================================================
 // Data Model
@@ -21,8 +22,23 @@ export interface ProseItem {
   readonly isCursor: boolean;
 }
 
+/** A single clickable variable token in an intro line. */
+export interface IntroToken {
+  readonly name: string;        // e.g., "n"
+  readonly nameLatex: string;   // e.g., "n" or "\\mathit{ih}"
+  readonly nameIndex: number;   // index into IntrosNode.names (for editIntroName)
+  readonly typeLatex: string;   // shared type LaTeX for the group
+  readonly rawType?: TTerm;     // for extractTypeHead → induction check
+}
+
+/** A group of variables sharing the same type in an intro line. */
+export interface IntroGroup {
+  readonly tokens: readonly IntroToken[];
+  readonly typeLatex: string;
+}
+
 export type ProseItemKind =
-  | { tag: 'intro'; latex: string; goalLatex?: string }
+  | { tag: 'intro'; latex: string; goalLatex?: string; groups?: readonly IntroGroup[] }
   | { tag: 'unfold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
@@ -94,6 +110,36 @@ function renderIntroLatex(
 
   if (parts.length === 1) return parts[0];
   return parts.slice(0, -1).join(', ') + ' \\text{ and } ' + parts[parts.length - 1];
+}
+
+/**
+ * Build structured intro groups with per-variable metadata for clickable tokens.
+ * Each group contains variables sharing the same type, with rawType for induction checks.
+ */
+function buildIntroGroups(
+  parentHyps: readonly TypedHypothesis[],
+  childHyps: readonly TypedHypothesis[],
+): IntroGroup[] {
+  const newHyps = childHyps.slice(parentHyps.length);
+  if (newHyps.length === 0) return [];
+
+  const groups = groupHypotheses(newHyps);
+  let nameIdx = 0;
+  return groups.map(g => ({
+    tokens: g.names.map(name => {
+      const hyp = newHyps[nameIdx];
+      const token: IntroToken = {
+        name,
+        nameLatex: texName(name),
+        nameIndex: nameIdx,
+        typeLatex: g.typeLatex,
+        rawType: hyp?.rawType,
+      };
+      nameIdx++;
+      return token;
+    }),
+    typeLatex: g.typeLatex,
+  }));
 }
 
 /** Render a variable name for LaTeX (italicize single chars, textify multi-char). */
@@ -184,8 +230,14 @@ export function generateProofProse(
         const parentHyps = info?.hypotheses ?? [];
         const childHyps = childInfo?.hypotheses ?? [];
         const latex = renderIntroLatex(parentHyps, childHyps);
+        const groups = buildIntroGroups(parentHyps, childHyps);
         const childGoalLatex = childInfo?.goalLatex;
-        emit(node.id, depth, { tag: 'intro', latex: latex || node.names.join(', '), goalLatex: childGoalLatex });
+        emit(node.id, depth, {
+          tag: 'intro',
+          latex: latex || node.names.join(', '),
+          goalLatex: childGoalLatex,
+          groups: groups.length > 0 ? groups : undefined,
+        });
         walk(node.child, depth);
         break;
       }

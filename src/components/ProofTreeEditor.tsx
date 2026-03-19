@@ -22,7 +22,7 @@ import {
   applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
-  clearNode,
+  clearNode, editIntroName,
   pushState, updateCurrent, undo, redo,
 } from '../proof-tree/proof-tree';
 import { runSimp } from '../tactics/simp-tactic';
@@ -32,7 +32,7 @@ import {
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
-import { ProseItem, generateProofProse } from '../proof-tree/proof-prose';
+import { ProseItem, ProseItemKind, IntroToken, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { InteractiveGoalView } from './InteractiveGoalView';
@@ -1838,6 +1838,149 @@ const proseStyle: React.CSSProperties = {
   textAlign: 'left',
 };
 
+// ============================================================================
+// IntroProseItem — intro line with clickable variable tokens
+// ============================================================================
+
+function IntroProseItem({
+  item, kind, rowStyle, rowHandlers, prose, deleteBtn, renderGoalSection,
+  state, onPushChange, inductiveMap, registry, typedContext,
+}: {
+  item: ProseItem;
+  kind: Extract<ProseItemKind, { tag: 'intro' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: { onClick: () => void; onMouseEnter: () => void; onMouseLeave: () => void };
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  renderGoalSection: (goalLatex: string | undefined, prefix: string) => React.ReactNode;
+  state: ProofTreeState;
+  onPushChange: (s: ProofTreeState) => void;
+  inductiveMap?: InductiveMap;
+  registry?: SyntaxRegistry;
+  typedContext: TypedProofContext | null;
+}) {
+  const [selectedToken, setSelectedToken] = useState<IntroToken | null>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  // Find the token object by nameIndex (selectedToken may be stale after re-render)
+  const allTokens = kind.groups?.flatMap(g => g.tokens);
+
+  const handleTokenClick = (token: IntroToken, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedToken(prev => prev?.nameIndex === token.nameIndex ? null : token);
+  };
+
+  const handleRename = (newName: string) => {
+    if (!selectedToken) return;
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === selectedToken.name) return;
+    const result = editIntroName(state, item.nodeId, selectedToken.nameIndex, trimmed);
+    if (result) onPushChange(result);
+  };
+
+  const handleInduction = (token: IntroToken) => {
+    setSelectedToken(null);
+    const headName = token.rawType ? extractTypeHead(token.rawType) : null;
+    const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
+    if (indInfo) {
+      const rev = registry ? buildReverseRegistry(registry) : undefined;
+      const ctxNames = typedContext?.hypotheses.map(h => h.name);
+      const ctorInfos = generateCaseInfos(token.name, indInfo, rev, ctxNames);
+      const result = applyInductionWithCtors(state, token.name, ctorInfos);
+      if (result) onPushChange(result);
+    }
+  };
+
+  // Check if selected token's type is inductive
+  const selectedIsInductive = selectedToken?.rawType
+    ? (() => {
+        const head = extractTypeHead(selectedToken.rawType!);
+        return !!(head && inductiveMap?.has(head));
+      })()
+    : false;
+
+  const groups = kind.groups;
+
+  return (
+    <>
+      <div style={rowStyle} {...rowHandlers}>
+        <span style={prose}>Let{' '}</span>
+        {groups ? (
+          groups.map((group, gi) => (
+            <React.Fragment key={gi}>
+              {gi > 0 && (
+                gi === groups.length - 1
+                  ? <span style={prose}>{' '}and{' '}</span>
+                  : <span style={prose}>,{' '}</span>
+              )}
+              {group.tokens.map((token, ti) => (
+                <React.Fragment key={ti}>
+                  {ti > 0 && <span style={prose}>,{' '}</span>}
+                  <span
+                    onClick={e => handleTokenClick(token, e)}
+                    style={{
+                      cursor: 'pointer',
+                      borderBottom: selectedToken?.nameIndex === token.nameIndex
+                        ? '2px solid #58a6ff'
+                        : '1px dotted rgba(201, 209, 217, 0.4)',
+                      paddingBottom: '1px',
+                    }}
+                  >
+                    <InlineKaTeX latex={token.nameLatex} style={{ fontSize: '13px' }} />
+                  </span>
+                </React.Fragment>
+              ))}
+              <span style={prose}>{' '}: </span>
+              <InlineKaTeX latex={group.typeLatex} style={{ fontSize: '13px' }} />
+            </React.Fragment>
+          ))
+        ) : (
+          <InlineKaTeX latex={kind.latex} style={{ fontSize: '13px' }} />
+        )}
+        {kind.goalLatex ? renderGoalSection(kind.goalLatex, '. We must show') : <span style={prose}>.</span>}
+        {deleteBtn}
+      </div>
+      {/* Inline actions for selected token — same style as tactic suggestions */}
+      {selectedToken && (
+        <div style={{
+          paddingLeft: `${item.depth * 20 + 24}px`,
+          paddingTop: '2px',
+          paddingBottom: '4px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
+            {selectedToken.name}:
+          </span>
+          <input
+            ref={renameInputRef}
+            key={selectedToken.nameIndex}
+            defaultValue={selectedToken.name}
+            onBlur={e => handleRename(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); handleRename((e.target as HTMLInputElement).value); }
+              if (e.key === 'Escape') { e.preventDefault(); setSelectedToken(null); }
+            }}
+            onClick={e => e.stopPropagation()}
+            placeholder="rename"
+            style={nameInputStyle}
+          />
+          {selectedIsInductive && (
+            <button
+              style={suggestionBtnStyle}
+              onClick={e => { e.stopPropagation(); handleInduction(selectedToken); }}
+            >
+              Induction on {selectedToken.name}
+            </button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** Style for a centered display-mode equation block */
 const eqBlockStyle: React.CSSProperties = {
   display: 'block',
@@ -1961,12 +2104,20 @@ function ProseItemView({
   switch (kind.tag) {
     case 'intro':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          <span style={prose}>Let{' '}</span>
-          <InlineKaTeX latex={kind.latex} style={{ fontSize: '13px' }} />
-          {kind.goalLatex ? renderGoalSection(kind.goalLatex, '. We must show') : <span style={prose}>.</span>}
-          {deleteBtn}
-        </div>
+        <IntroProseItem
+          item={item}
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          renderGoalSection={renderGoalSection}
+          state={state}
+          onPushChange={onPushChange}
+          inductiveMap={inductiveMap}
+          registry={registry}
+          typedContext={typedContext}
+        />
       );
 
     case 'unfold':
