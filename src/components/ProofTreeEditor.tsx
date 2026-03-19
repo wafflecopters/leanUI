@@ -477,6 +477,13 @@ function GoalInteraction({
     } else if (suggestion.id.startsWith('fold-')) {
       const name = suggestion.foldName ?? suggestion.id.slice('fold-'.length);
       result = applyFold(state, name, suggestion.foldOccurrence);
+    } else if (suggestion.id.startsWith('exact-hyp-')) {
+      const name = suggestion.id.slice('exact-hyp-'.length);
+      result = applyExact(state, name);
+    } else if (suggestion.id.startsWith('apply-hyp-')) {
+      const name = suggestion.id.slice('apply-hyp-'.length);
+      const numSubgoals = suggestion.numSubgoals ?? 1;
+      result = applyApplyTactic(state, name, numSubgoals);
     } else if (suggestion.id.startsWith('rewrite-')) {
       const rw = suggestion as RewriteSuggestion;
       result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences, rw.targetHead);

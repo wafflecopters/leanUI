@@ -11,7 +11,7 @@ import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { fullNormalize } from '../compiler/whnf';
 import { TacticEngine } from '../tactics/tacticsEngine';
-import { ExactTactic } from '../tactics/tactic';
+import { ExactTactic, ApplyTactic } from '../tactics/tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
@@ -38,6 +38,8 @@ export interface TacticSuggestion {
   readonly foldName?: string;
   /** LaTeX preview of the goal after this tactic is applied. */
   readonly resultGoalLatex?: string;
+  /** For apply tactics: number of subgoals created. */
+  readonly numSubgoals?: number;
 }
 
 /** Escape a name for use in LaTeX (wrap multi-char names in \text{}). */
@@ -264,6 +266,11 @@ export function computeTacticSuggestions(
     }
   }
 
+  // Try exact/apply on each hypothesis — for any non-binder selection
+  if (!binderMatch && kernelGoal) {
+    suggestions.push(...computeHypothesisSuggestions(kernelGoal));
+  }
+
   return suggestions;
 }
 
@@ -343,6 +350,71 @@ function freshenNames(names: string[]): string[] {
     used.add(fresh);
     return fresh;
   });
+}
+
+// ============================================================================
+// Hypothesis suggestions (exact / apply on context entries)
+// ============================================================================
+
+/**
+ * When the whole goal body is selected, try `exact` and `apply` on each
+ * hypothesis in the context. Returns suggestions for any that succeed.
+ */
+function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggestion[] {
+  const suggestions: TacticSuggestion[] = [];
+  const { engine, goal: metaGoal } = kernelGoal;
+  const goalId = engine.getFocusedGoalId();
+  if (!goalId) return suggestions;
+
+  const ctx = metaGoal.ctx;
+
+  for (let i = 0; i < ctx.length; i++) {
+    const entry = ctx[i];
+    const name = entry.name;
+    // Skip unnamed/wildcard entries
+    if (!name || name === '_' || name.startsWith('?')) continue;
+
+    const debruijnIdx = ctx.length - 1 - i;
+    const varTerm: TTKTerm = { tag: 'Var', index: debruijnIdx };
+
+    // Try exact
+    try {
+      const exactTactic = new ExactTactic(varTerm);
+      const result = exactTactic.apply(engine, metaGoal, goalId);
+      if (result.success) {
+        suggestions.push({
+          id: `exact-hyp-${name}`,
+          label: `exact ${name}`,
+          labelLatex: `\\text{exact}\\; \\textbf{${texEscape(name)}}`,
+          description: `Close goal with hypothesis ${name}`,
+        });
+        continue; // If exact works, no need to try apply
+      }
+    } catch { /* doesn't apply */ }
+
+    // Try apply
+    try {
+      const applyTactic = new ApplyTactic(varTerm);
+      const result = applyTactic.apply(engine, metaGoal, goalId);
+      if (result.success) {
+        // Count the new subgoals (unsolved explicit args)
+        const numSubgoals = result.newEngine
+          ? result.newEngine.goals.length - engine.goals.length + 1
+          : 1;
+        suggestions.push({
+          id: `apply-hyp-${name}`,
+          label: `apply ${name}`,
+          labelLatex: `\\text{apply}\\; \\textbf{${texEscape(name)}}`,
+          description: numSubgoals > 0
+            ? `Apply ${name}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
+            : `Apply ${name}`,
+          numSubgoals,
+        });
+      }
+    } catch { /* doesn't apply */ }
+  }
+
+  return suggestions;
 }
 
 // ============================================================================

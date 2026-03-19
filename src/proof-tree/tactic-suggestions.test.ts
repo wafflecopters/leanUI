@@ -1,7 +1,11 @@
 import { describe, test, expect } from 'vitest';
 import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, MetaVar } from '../compiler/term';
-import { collectRewriteCandidates } from './tactic-suggestions';
+import { collectRewriteCandidates, computeTacticSuggestions, KernelGoalInfo } from './tactic-suggestions';
+import { compileTTFromText } from '../compiler/compile';
+import { createInitialEngine } from '../tactics/tacticsEngine';
+import { IntrosTactic } from '../tactics/tactic';
+import { InteractiveGoal } from './interactive-goal';
 
 // ============================================================================
 // Helpers
@@ -183,5 +187,182 @@ describe('collectRewriteCandidates', () => {
     const candidates = collectRewriteCandidates(goal, defs, { selectedHead: 'mul' }, 'triangleSum');
     const names = candidates.map(c => c.name);
     expect(names).not.toContain('triangleSum');
+  });
+});
+
+// ============================================================================
+// Hypothesis suggestions (exact / apply)
+// ============================================================================
+
+describe('computeTacticSuggestions — hypothesis exact/apply on goal-body', () => {
+  /** Minimal InteractiveGoal for testing (not used for rendering, just structure). */
+  function minimalGoal(): InteractiveGoal {
+    return {
+      latex: '',
+      binders: [],
+      subtermMap: new Map(),
+      contextVarTypes: new Map(),
+    };
+  }
+
+  test('suggests exact on hypothesis whose type matches goal', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+goal : Nat -> Nat -> Nat
+goal x y = ?hole
+`;
+    const result = compileTTFromText(source);
+    const goalDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'goal')!;
+    const defs = result.definitions;
+
+    let engine = createInitialEngine(goalDecl.kernelType!, [], defs);
+    const intros = new IntrosTactic(['x', 'y']);
+    const introsResult = intros.apply(engine, engine.metaVars.get(engine.goals[0])!, engine.goals[0]);
+    expect(introsResult.success).toBe(true);
+    if (!introsResult.success) return;
+    engine = introsResult.newEngine;
+
+    const goalId = engine.goals[0];
+    const goal = engine.metaVars.get(goalId)!;
+
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs };
+    const suggestions = computeTacticSuggestions('goal-body', minimalGoal(), defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+    // Both x and y have type Nat, which matches the goal type Nat
+    expect(ids).toContain('exact-hyp-x');
+    expect(ids).toContain('exact-hyp-y');
+  });
+
+  test('suggests apply on hypothesis whose return type matches goal', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+goal : (f : Nat -> Nat) -> Nat -> Nat
+goal f x = ?hole
+`;
+    const result = compileTTFromText(source);
+    const goalDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'goal')!;
+    const defs = result.definitions;
+
+    let engine = createInitialEngine(goalDecl.kernelType!, [], defs);
+    const intros = new IntrosTactic(['f', 'x']);
+    const introsResult = intros.apply(engine, engine.metaVars.get(engine.goals[0])!, engine.goals[0]);
+    expect(introsResult.success).toBe(true);
+    if (!introsResult.success) return;
+    engine = introsResult.newEngine;
+
+    const goalId = engine.goals[0];
+    const goal = engine.metaVars.get(goalId)!;
+
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs };
+    const suggestions = computeTacticSuggestions('goal-body', minimalGoal(), defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+    // x : Nat matches goal Nat → exact
+    expect(ids).toContain('exact-hyp-x');
+    // f : Nat → Nat, return type matches goal → apply (not exact, since it needs an argument)
+    expect(ids).toContain('apply-hyp-f');
+    // f should NOT have an exact suggestion (it's a function, not the goal type)
+    expect(ids).not.toContain('exact-hyp-f');
+  });
+
+  test('does not suggest exact/apply on non-matching hypotheses', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+goal : Bool -> Nat
+goal b = ?hole
+`;
+    const result = compileTTFromText(source);
+    const goalDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'goal')!;
+    const defs = result.definitions;
+
+    let engine = createInitialEngine(goalDecl.kernelType!, [], defs);
+    const intros = new IntrosTactic(['b']);
+    const introsResult = intros.apply(engine, engine.metaVars.get(engine.goals[0])!, engine.goals[0]);
+    expect(introsResult.success).toBe(true);
+    if (!introsResult.success) return;
+    engine = introsResult.newEngine;
+
+    const goalId = engine.goals[0];
+    const goal = engine.metaVars.get(goalId)!;
+
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs };
+    const suggestions = computeTacticSuggestions('goal-body', minimalGoal(), defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+    // b : Bool doesn't match goal Nat
+    expect(ids).not.toContain('exact-hyp-b');
+    expect(ids).not.toContain('apply-hyp-b');
+  });
+
+  test('suggestions shown on subterm selection (goal-tN), not just goal-body', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+goal : Nat -> Nat
+goal x = ?hole
+`;
+    const result = compileTTFromText(source);
+    const goalDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'goal')!;
+    const defs = result.definitions;
+
+    let engine = createInitialEngine(goalDecl.kernelType!, [], defs);
+    const intros = new IntrosTactic(['x']);
+    const introsResult = intros.apply(engine, engine.metaVars.get(engine.goals[0])!, engine.goals[0]);
+    expect(introsResult.success).toBe(true);
+    if (!introsResult.success) return;
+    engine = introsResult.newEngine;
+
+    const goalId = engine.goals[0];
+    const goal = engine.metaVars.get(goalId)!;
+
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs };
+    // Selecting a specific subterm should also show hypothesis suggestions
+    const suggestions = computeTacticSuggestions('goal-t0', minimalGoal(), defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+    expect(ids).toContain('exact-hyp-x');
+  });
+
+  test('no hypothesis suggestions on binder selection', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+goal : Nat -> Nat
+goal x = ?hole
+`;
+    const result = compileTTFromText(source);
+    const goalDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'goal')!;
+    const defs = result.definitions;
+
+    const engine = createInitialEngine(goalDecl.kernelType!, [], defs);
+    const goalId = engine.goals[0];
+    const goal = engine.metaVars.get(goalId)!;
+
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs };
+    // Selecting a binder (goal-0) should NOT show hypothesis suggestions
+    const ig = minimalGoal();
+    // Need binders for the binder path to be recognized
+    const igWithBinders: InteractiveGoal = {
+      ...ig,
+      binders: [{ index: 0, name: 'x', domainLatex: 'Nat', isImplicit: false }],
+    };
+    const suggestions = computeTacticSuggestions('goal-0', igWithBinders, defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+    // Binder selection gives intro suggestions, not hypothesis suggestions
+    expect(ids).not.toContain('exact-hyp-x');
   });
 });
