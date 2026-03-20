@@ -362,23 +362,6 @@ function peelPi(type: TTerm): { name: string; domain: TTerm; body: TTerm; isImpl
 }
 
 /**
- * Peel ALL Pi binder names (including implicit) from a type, in de Bruijn order (reversed).
- * Used to build a context for resolving Var references in explicit param domains.
- */
-function peelAllPiNames(type: TTerm): string[] {
-  const names: string[] = [];
-  let t = type;
-  while (true) {
-    const pi = peelPi(t);
-    if (!pi) break;
-    names.push(pi.name);
-    t = pi.body;
-  }
-  // De Bruijn order: innermost first
-  return names.reverse();
-}
-
-/**
  * Peel explicit (non-implicit) Pi binders from a constructor type.
  * Used for generating case node options in the UI.
  */
@@ -428,22 +411,33 @@ export function generateCaseInfos(
   contextNames?: readonly string[],
 ): ConstructorCaseInfo[] {
   return inductiveInfo.constructors.map(ctor => {
-    // Build binder context from ALL Pi binders (including implicit) for Var resolution
-    const binderCtx = peelAllPiNames(ctor.type);
-    const params = peelConstructorParams(ctor.type);
     const usedNames = new Set(contextNames ?? []);
-    const paramNames = params.map((p) => {
+    const paramNames: string[] = [];
+    // Peel constructor type, building de Bruijn context incrementally
+    // so Var references in each param's domain resolve correctly
+    const binderNames: string[] = []; // peeling order (outermost first)
+    let ctorBody = ctor.type;
+    while (true) {
+      const pi = peelPi(ctorBody);
+      if (!pi) break;
+      if (pi.isImplicit) {
+        binderNames.push(pi.name);
+        ctorBody = pi.body;
+        continue;
+      }
+      // De Bruijn ctx at this point: binders peeled so far, reversed
+      const ctx = [...binderNames].reverse();
       let name: string;
-      if (p.name !== '_') {
-        name = freshenName(p.name, usedNames);
+      if (pi.name !== '_') {
+        name = freshenName(pi.name, usedNames);
       } else {
-        // Build ctx at this param's position: names of all binders above it (de Bruijn order)
-        // The binderCtx has all names in order; explicit param i has some offset from implicit params
-        name = proposeVarName(p.domain, usedNames, rev, binderCtx);
+        name = proposeVarName(pi.domain, usedNames, rev, ctx);
       }
       usedNames.add(name);
-      return name;
-    });
+      paramNames.push(name);
+      binderNames.push(pi.name);
+      ctorBody = pi.body;
+    }
 
     let label = `${scrutinee} = ${ctor.name}`;
     if (paramNames.length > 0) {
