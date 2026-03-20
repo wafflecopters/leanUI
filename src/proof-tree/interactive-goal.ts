@@ -265,7 +265,11 @@ export function renderInteractiveGoal(
     if (!c.isDependent) {
       // Non-dependent arrow: render as "domain →"
       const domainLatex = renderTermAnnotated(c.binder.domain, c.ctxAtBinder, rev, annotate);
-      parts.push(`\\htmlId{goal-${c.index}}{${domainLatex} \\to}`);
+      // Wrap in parens when domain is a function type to avoid ambiguity
+      // e.g., (A → C) → not A → C →
+      const needsParens = c.binder.domain.tag === 'Binder' && c.binder.domain.binderKind.tag === 'BPiTT';
+      const wrapped = needsParens ? `(${domainLatex})` : domainLatex;
+      parts.push(`\\htmlId{goal-${c.index}}{${wrapped} \\to}`);
       pos++;
       continue;
     }

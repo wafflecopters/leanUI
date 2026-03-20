@@ -322,6 +322,11 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
             mkSymbol('\\to'), ...bodyNodes,
           ];
         }
+        // Wrap domain in parens when it's a function type to avoid ambiguity
+        // e.g., (A → C) → (B → C) → C, not A → C → B → C → C
+        if (term.domain && term.domain.tag === 'Binder' && term.domain.binderKind.tag === 'BPiTT') {
+          return [mkDelimiter('(', ')', mkRow(domainNodes)), mkSymbol('\\to'), ...bodyNodes];
+        }
         return [...domainNodes, mkSymbol('\\to'), ...bodyNodes];
       }
       return [mkHole()];
