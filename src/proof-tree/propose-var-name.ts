@@ -133,7 +133,15 @@ function proposeBaseName(
     return headName.charAt(0).toLowerCase();
   }
 
-  // 4. Fallback
+  // 4. Var reference — resolve via context to get type name
+  if (domain.tag === 'Var' && ctx && domain.index < ctx.length) {
+    const resolved = ctx[domain.index];
+    if (resolved && resolved !== '_') {
+      return resolved.charAt(0).toLowerCase();
+    }
+  }
+
+  // 5. Fallback
   return 'x';
 }
 
