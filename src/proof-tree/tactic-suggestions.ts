@@ -118,6 +118,28 @@ function renderChangedSubterm(
   }
 }
 
+/**
+ * Check if unfolding produces a Match at the top of the changed subterm.
+ * We suppress unfold suggestions for pattern-matching definitions when the
+ * scrutinee is a variable (iota can't fire), since the result is an opaque
+ * match expression that makes the goal harder to read.
+ */
+function unfoldResultIsMatch(oldGoal: MetaVar, newEngine: TacticEngine): boolean {
+  try {
+    const newGoalId = newEngine.getFocusedGoalId();
+    if (!newGoalId) return false;
+    const newGoal = newEngine.metaVars.get(newGoalId);
+    if (!newGoal) return false;
+    const emptyDefs = createDefinitionsMap();
+    const oldNorm = fullNormalize(oldGoal.type, emptyDefs);
+    const newNorm = fullNormalize(newGoal.type, emptyDefs);
+    const changed = findChangedSubterm(oldNorm, newNorm);
+    return changed.tag === 'Match';
+  } catch {
+    return false;
+  }
+}
+
 // ============================================================================
 // Main entry point
 // ============================================================================
@@ -180,6 +202,7 @@ export function computeTacticSuggestions(
           && !definitions.inductiveNameOfConstructor.has(name)
           && name !== kernelGoal?.currentDeclName) {
           let resultGoalLatex: string | undefined;
+          let unfoldProducesMatch = false;
           if (kernelGoal) {
             try {
               const { engine, goal: metaGoal } = kernelGoal;
@@ -188,19 +211,24 @@ export function computeTacticSuggestions(
                 const tactic = new UnfoldTactic([name], subtermInfo.occurrenceIndex);
                 const res = tactic.apply(engine, metaGoal, gId);
                 if (res.success) {
-                  resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
+                  unfoldProducesMatch = unfoldResultIsMatch(metaGoal, res.newEngine!);
+                  if (!unfoldProducesMatch) {
+                    resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
+                  }
                 }
               }
             } catch { /* ignore */ }
           }
-          suggestions.push({
-            id: `unfold-${name}`,
-            label: `Unfold ${name}`,
-            labelLatex: `\\text{Unfold } \\textbf{${texEscape(name)}}`,
-            description: `Unfold the definition of ${name}`,
-            unfoldOccurrence: subtermInfo.occurrenceIndex,
-            resultGoalLatex,
-          });
+          if (!unfoldProducesMatch) {
+            suggestions.push({
+              id: `unfold-${name}`,
+              label: `Unfold ${name}`,
+              labelLatex: `\\text{Unfold } \\textbf{${texEscape(name)}}`,
+              description: `Unfold the definition of ${name}`,
+              unfoldOccurrence: subtermInfo.occurrenceIndex,
+              resultGoalLatex,
+            });
+          }
         }
       }
 
