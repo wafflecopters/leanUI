@@ -778,7 +778,7 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
               gap: '4px',
               flexWrap: 'wrap',
             }}>
-              <InlineKaTeX latex={textToLatex(h.name)} style={{ fontSize: '12px' }} />
+              <InlineKaTeX latex={texNameForProse(h.name)} style={{ fontSize: '12px' }} />
               {h.type && (
                 <>
                   <span style={{ color: '#484f58', fontSize: '11px' }}>:</span>
@@ -1250,7 +1250,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
 
   // Build a single KaTeX expression for all names with Oxford comma
   const namesLatex = (names: readonly string[]): string => {
-    const parts = names.map(n => textToLatex(n));
+    const parts = names.map(n => texNameForProse(n));
     if (parts.length === 0) return '';
     if (parts.length === 1) return parts[0];
     if (parts.length === 2) return `${parts[0]} \\text{ and } ${parts[1]}`;
@@ -1325,7 +1325,7 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
         </span>
         <span style={keywordStyle}>induct on </span>
         <InlineKaTeX
-          latex={textToLatex(node.scrutinee)}
+          latex={texNameForProse(node.scrutinee)}
           style={{ fontSize: '13px' }}
         />
         <span style={mutedStyle}>:</span>

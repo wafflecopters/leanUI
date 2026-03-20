@@ -1657,10 +1657,24 @@ function computeWithTacticEngine(
     validation = { status: 'error', message: replay.tacticError };
   }
 
+  // Generate caseLabelLatex using the real renderer when missing
+  let caseLabelLatex = replay.caseLabelLatex;
+  if (!caseLabelLatex && replay.caseLabel) {
+    const caseInfo = findCaseAncestor(root, cursorId);
+    if (caseInfo) {
+      const paramNames = caseInfo.caseNode.constructorParamNames ?? [];
+      const ctorApp = buildConstructorApp(caseInfo.caseNode.constructorName!, [...paramNames]);
+      const ctx = [...paramNames].reverse();
+      const rhsLatex = renderTerm(ctorApp, ctx, rev);
+      const scrutineeName = caseInfo.scrutinee;
+      caseLabelLatex = `${renderTerm(mkVarTT(0), [scrutineeName], rev)} = ${rhsLatex}`;
+    }
+  }
+
   return {
     hypotheses,
     caseLabel: replay.caseLabel,
-    caseLabelLatex: replay.caseLabelLatex,
+    caseLabelLatex,
     inductionVar: replay.inductionVar,
     goal: goalLatex,
     validation,
@@ -1708,6 +1722,48 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
       return findNodeById(node.child, id);
     }
   }
+}
+
+/**
+ * Find the CaseNode ancestor that contains the given cursor ID,
+ * plus its scrutinee name from the parent InductionNode.
+ */
+function findCaseAncestor(
+  node: ProofNode, targetId: ProofNodeId,
+): { caseNode: CaseNode; scrutinee: string } | null {
+  switch (node.tag) {
+    case 'hole':
+    case 'exact':
+      return null;
+    case 'intros':
+    case 'unfold':
+    case 'fold':
+    case 'rewrite':
+      return findCaseAncestor(node.child, targetId);
+    case 'apply':
+      for (const child of node.children) {
+        const found = findCaseAncestor(child, targetId);
+        if (found) return found;
+      }
+      return null;
+    case 'induction':
+      for (const c of node.cases) {
+        if (c.id === targetId || containsNodeId(c.body, targetId)) {
+          return c.constructorName ? { caseNode: c, scrutinee: node.scrutinee } : null;
+        }
+      }
+      return null;
+    case 'simp':
+      for (const step of node.steps) {
+        const found = findCaseAncestor(step, targetId);
+        if (found) return found;
+      }
+      return findCaseAncestor(node.child, targetId);
+  }
+}
+
+function containsNodeId(node: ProofNode, id: ProofNodeId): boolean {
+  return findNodeById(node, id) !== null;
 }
 
 // ============================================================================
