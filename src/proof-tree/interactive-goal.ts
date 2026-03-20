@@ -32,6 +32,7 @@ export type GoalPath = string;
 export interface GoalBinderInfo {
   readonly index: number;
   readonly name: string;
+  readonly domain: TTerm;
   readonly domainLatex: string;
   readonly isImplicit: boolean;
 }
@@ -259,6 +260,7 @@ export function renderInteractiveGoal(
     binderInfos.push({
       index: i,
       name: b.name,
+      domain: b.domain,
       domainLatex: domainKey,
       isImplicit: b.isImplicit,
     });

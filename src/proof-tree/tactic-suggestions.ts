@@ -17,6 +17,7 @@ import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { ttkTermsEqual } from '../tactics/fold-tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
+import { proposeVarName, freshenName } from './propose-var-name';
 
 // ============================================================================
 // Types
@@ -186,14 +187,14 @@ export function computeTacticSuggestions(
   if (binderMatch && goal.binders.length > 0) {
     const binderIndex = parseInt(binderMatch[1], 10);
     if (binderIndex >= 0 && binderIndex < goal.binders.length) {
-      suggestions.push(...computeBinderSuggestions(binderIndex, goal));
+      suggestions.push(...computeBinderSuggestions(binderIndex, goal, kernelGoal?.rev));
     }
   }
 
   // If a subterm within a binder's domain is clicked, also offer intro suggestions
   const subtermInfo = goal.subtermMap.get(selectedPath);
   if (subtermInfo?.binderIndex !== undefined && !binderMatch) {
-    suggestions.push(...computeBinderSuggestions(subtermInfo.binderIndex, goal));
+    suggestions.push(...computeBinderSuggestions(subtermInfo.binderIndex, goal, kernelGoal?.rev));
   }
 
   // Check subterm-level suggestions
@@ -314,6 +315,7 @@ export function computeTacticSuggestions(
 function computeBinderSuggestions(
   selectedIndex: number,
   goal: InteractiveGoal,
+  rev?: ReverseRegistry,
 ): TacticSuggestion[] {
   const { binders } = goal;
   const suggestions: TacticSuggestion[] = [];
@@ -322,7 +324,7 @@ function computeBinderSuggestions(
   const upToSelected = collectExplicitBinders(binders, 0, selectedIndex);
 
   if (upToSelected.length > 0) {
-    const names = freshenNames(upToSelected.map(proposeName));
+    const names = proposeBinderNames(upToSelected, rev);
     const introLabel = upToSelected.length === 1 ? 'Intro' : 'Intro up to here';
     suggestions.push({
       id: 'intro-up-to',
@@ -336,7 +338,7 @@ function computeBinderSuggestions(
   // "Intro all" — all explicit binders
   const allExplicit = collectExplicitBinders(binders, 0, binders.length - 1);
   if (allExplicit.length > upToSelected.length) {
-    const allNames = freshenNames(allExplicit.map(proposeName));
+    const allNames = proposeBinderNames(allExplicit, rev);
     suggestions.push({
       id: 'intro-all',
       label: 'Intro all',
@@ -347,6 +349,21 @@ function computeBinderSuggestions(
   }
 
   return suggestions;
+}
+
+/** Propose names for a list of binders, using smart naming and freshening. */
+function proposeBinderNames(binders: GoalBinderInfo[], rev?: ReverseRegistry): string[] {
+  const usedNames = new Set<string>();
+  return binders.map(b => {
+    let name: string;
+    if (b.name && b.name !== '_') {
+      name = freshenName(b.name, usedNames);
+    } else {
+      name = proposeVarName(b.domain, usedNames, rev);
+    }
+    usedNames.add(name);
+    return name;
+  });
 }
 
 /** Collect explicit (non-implicit) binders from index `from` to `to` (inclusive). */
@@ -362,27 +379,6 @@ function collectExplicitBinders(
     }
   }
   return result;
-}
-
-/** Propose a name for a binder. Uses the binder name if meaningful, else 'x'. */
-function proposeName(binder: GoalBinderInfo): string {
-  if (binder.name && binder.name !== '_') return binder.name;
-  return 'x';
-}
-
-/** Freshen duplicate names by appending numeric suffixes. */
-function freshenNames(names: string[]): string[] {
-  const used = new Set<string>();
-  return names.map(name => {
-    let fresh = name;
-    if (used.has(fresh)) {
-      let i = 1;
-      while (used.has(`${name}${i}`)) i++;
-      fresh = `${name}${i}`;
-    }
-    used.add(fresh);
-    return fresh;
-  });
 }
 
 // ============================================================================

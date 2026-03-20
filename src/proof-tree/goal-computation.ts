@@ -28,6 +28,7 @@ import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
+import { proposeVarName, freshenName } from './propose-var-name';
 
 // ============================================================================
 // Types
@@ -415,21 +416,9 @@ export function generateCaseInfos(
     const paramNames = params.map((p) => {
       let name: string;
       if (p.name !== '_') {
-        name = p.name;
-        if (usedNames.has(name)) {
-          // If the binder's own name is taken, freshen it
-          let i = 1;
-          while (usedNames.has(`${name}${i}`)) i++;
-          name = `${name}${i}`;
-        }
+        name = freshenName(p.name, usedNames);
       } else {
-        // Pick 'x', 'x1', 'x2', ... avoiding conflicts
-        name = 'x';
-        if (usedNames.has(name)) {
-          let i = 1;
-          while (usedNames.has(`x${i}`)) i++;
-          name = `x${i}`;
-        }
+        name = proposeVarName(p.domain, usedNames, rev);
       }
       usedNames.add(name);
       return name;

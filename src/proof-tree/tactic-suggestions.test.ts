@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, MetaVar } from '../compiler/term';
+import { mkConstTT } from '../compiler/surface';
 import { collectRewriteCandidates, computeTacticSuggestions, KernelGoalInfo } from './tactic-suggestions';
 import { compileTTFromText } from '../compiler/compile';
 import { createInitialEngine } from '../tactics/tacticsEngine';
@@ -358,7 +359,7 @@ goal x = ?hole
     // Need binders for the binder path to be recognized
     const igWithBinders: InteractiveGoal = {
       ...ig,
-      binders: [{ index: 0, name: 'x', domainLatex: 'Nat', isImplicit: false }],
+      binders: [{ index: 0, name: 'x', domain: mkConstTT('Nat'), domainLatex: 'Nat', isImplicit: false }],
     };
     const suggestions = computeTacticSuggestions('goal-0', igWithBinders, defs, kernelGoal);
     const ids = suggestions.map(s => s.id);
