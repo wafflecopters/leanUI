@@ -16,6 +16,8 @@ export interface WYSIWYGPanelProps {
   declarations: CompiledDeclaration[];
   /** All compiled declarations (for building syntax registry from @syntax annotations) */
   allDeclarations: CompiledDeclaration[];
+  /** Full definitions map from compiler (includes projections, etc.) */
+  compilerDefinitions?: DefinitionsMap;
   /** Called when the user submits a name change (Enter key) */
   onNameChange?: (declIndex: number, newName: string) => void;
   /** Source text per declaration (for readonly view of inductives/records) */
@@ -62,7 +64,7 @@ function declKindLabel(decl: CompiledDeclaration): string {
   return 'definition';
 }
 
-export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, declarationSources, expandedSymbol, onExpandedSymbolChange }: WYSIWYGPanelProps) {
+export function WYSIWYGPanel({ declarations, allDeclarations, compilerDefinitions, onNameChange, declarationSources, expandedSymbol, onExpandedSymbolChange }: WYSIWYGPanelProps) {
   // Build per-declaration registries scoped to syntax defined BEFORE each declaration
   const registries = useMemo(() => {
     const allAnnotations = extractAnnotations(allDeclarations);
@@ -97,8 +99,9 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
     });
   }, [declarations, registries]);
 
-  // Build DefinitionsMap from all compiled declarations (for unfold tactic)
+  // Use compiler's definitions map (includes projections, etc.) or rebuild from declarations
   const definitionsMap = useMemo<DefinitionsMap>(() => {
+    if (compilerDefinitions) return compilerDefinitions;
     let defs = createDefinitionsMap();
     for (const decl of allDeclarations) {
       if (!decl.name) continue;
@@ -121,7 +124,7 @@ export function WYSIWYGPanel({ declarations, allDeclarations, onNameChange, decl
       }
     }
     return defs;
-  }, [allDeclarations]);
+  }, [compilerDefinitions, allDeclarations]);
 
   // Build InductiveMap from all compiled declarations
   const inductiveMap = useMemo<InductiveMap>(() => {

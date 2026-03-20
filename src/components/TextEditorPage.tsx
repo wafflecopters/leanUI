@@ -1902,6 +1902,7 @@ export function TextEditorPage() {
             <WYSIWYGPanel
               declarations={compiledDeclarations}
               allDeclarations={allCompiledDeclarations}
+              compilerDefinitions={compileResult.definitions}
               onNameChange={handleWYSIWYGNameChange}
               declarationSources={declarationSources}
               expandedSymbol={expandedSymbol}
