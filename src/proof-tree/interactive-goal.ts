@@ -255,7 +255,9 @@ export function renderInteractiveGoal(
     ctx = [b.name, ...ctx];
   }
 
-  // 6. Render binders as \forall groups + arrow types
+  // 6. Render binders as \forall groups + "and"-separated hypotheses
+  //    Matches the surfaceTypeToMathRow pattern:
+  //      ∀ A, B, C ∈ Type and A → C and B → C and A ∨ B, then C
   const parts: string[] = [];
   let pos = 0;
 
@@ -263,13 +265,9 @@ export function renderInteractiveGoal(
     const c = classified[pos];
 
     if (!c.isDependent) {
-      // Non-dependent arrow: render as "domain →"
+      // Non-dependent hypothesis: render just the domain (no arrow)
       const domainLatex = renderTermAnnotated(c.binder.domain, c.ctxAtBinder, rev, annotate);
-      // Wrap in parens when domain is a function type to avoid ambiguity
-      // e.g., (A → C) → not A → C →
-      const needsParens = c.binder.domain.tag === 'Binder' && c.binder.domain.binderKind.tag === 'BPiTT';
-      const wrapped = needsParens ? `(${domainLatex})` : domainLatex;
-      parts.push(`\\htmlId{goal-${c.index}}{${wrapped} \\to}`);
+      parts.push(`\\htmlId{goal-${c.index}}{${domainLatex}}`);
       pos++;
       continue;
     }
@@ -296,7 +294,7 @@ export function renderInteractiveGoal(
       subgroups.push({ entries: group, separator: sep });
     }
 
-    // Render: \forall name₁, name₂ ∈ domain, name₃ : domain₂, ...
+    // Render: \forall name₁, name₂ ∈ domain, name₃ : domain₂
     let forallLatex = '\\forall \\,';
     const groupParts: string[] = [];
     for (const sg of subgroups) {
@@ -310,16 +308,20 @@ export function renderInteractiveGoal(
       groupParts.push(`${names} ${sg.separator} ${domainLatex}`);
     }
     forallLatex += groupParts.join(',\\,');
-    forallLatex += ',\\,';
     parts.push(forallLatex);
   }
 
   // 7. Render body with annotations
   const bodyLatex = renderTermAnnotated(body, ctx, rev, annotate);
-  parts.push(`\\htmlId{goal-body}{${bodyLatex}}`);
 
-  // 8. Wrap everything
-  const fullLatex = `\\htmlId{goal-root}{${parts.join(' ')}}`;
+  // 8. Assemble: join parts with " and ", body after ", then"
+  let fullLatex: string;
+  if (parts.length > 0) {
+    const joined = parts.join(' \\text{ and } ');
+    fullLatex = `\\htmlId{goal-root}{${joined}\\text{, then } \\htmlId{goal-body}{${bodyLatex}}}`;
+  } else {
+    fullLatex = `\\htmlId{goal-root}{\\htmlId{goal-body}{${bodyLatex}}}`;
+  }
 
   return {
     latex: fullLatex,
