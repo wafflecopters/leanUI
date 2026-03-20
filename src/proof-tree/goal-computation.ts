@@ -1125,6 +1125,73 @@ function resolveNameInGoal(name: string, goal: MetaVar): TTKTerm {
 }
 
 /**
+ * Tokenize a parenthesized expression string, respecting nested parens.
+ * E.g. "addComm (field R) a" → ["addComm", "(field R)", "a"]
+ */
+function tokenizeExpr(s: string): string[] {
+  const tokens: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')') depth--;
+    else if (s[i] === ' ' && depth === 0) {
+      if (i > start) tokens.push(s.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (start < s.length) tokens.push(s.slice(start));
+  return tokens;
+}
+
+/**
+ * Resolve an expression string (from surfaceTermToString) against the goal context.
+ * Handles parenthesized applications like "(addComm (field R) (rzero R) a)"
+ * and simple names like "plusComm".
+ */
+function resolveExprInGoal(expr: string, goal: MetaVar): TTKTerm {
+  expr = expr.trim();
+
+  // Var format from surfaceTermToString: v0, v1, ...
+  if (/^v\d+$/.test(expr)) {
+    return { tag: 'Var', index: parseInt(expr.slice(1)) };
+  }
+
+  // Parenthesized expression: (head arg1 arg2 ...)
+  if (expr.startsWith('(') && expr.endsWith(')')) {
+    const inner = expr.slice(1, -1).trim();
+
+    // Lambda: (\name => body)
+    if (inner.startsWith('\\')) {
+      const arrowIdx = inner.indexOf('=>');
+      if (arrowIdx !== -1) {
+        const body = resolveExprInGoal(inner.slice(arrowIdx + 2).trim(), goal);
+        return {
+          tag: 'Binder',
+          name: '_',
+          binderKind: { tag: 'BLam' },
+          domain: { tag: 'Hole', id: '_' },
+          body,
+        };
+      }
+    }
+
+    // Application: (f a b c) → App(App(App(f, a), b), c)
+    const tokens = tokenizeExpr(inner);
+    if (tokens.length === 0) return { tag: 'Const', name: expr };
+
+    let result = resolveExprInGoal(tokens[0], goal);
+    for (let i = 1; i < tokens.length; i++) {
+      result = { tag: 'App', fn: result, arg: resolveExprInGoal(tokens[i], goal) };
+    }
+    return result;
+  }
+
+  // Simple name — resolve against context
+  return resolveNameInGoal(expr, goal);
+}
+
+/**
  * Replay the proof tree against a TacticEngine, applying real tactics
  * at each node until we reach the cursor. Returns the engine state
  * at the cursor position.
@@ -1237,7 +1304,7 @@ function replayProofTree(
       if (!goal) return null;
 
       const tactic = new RewriteTactic(
-        resolveNameInGoal(node.name, goal),
+        resolveExprInGoal(node.name, goal),
         { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
       );
       const result = tactic.apply(engine, goal, goalId);
@@ -1265,7 +1332,7 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const tactic = new ApplyTactic(resolveNameInGoal(node.name, goal));
+      const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal));
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
@@ -1408,7 +1475,7 @@ function replayProofTree(
 
         if (step.tag === 'rewrite') {
           const tactic = new RewriteTactic(
-            resolveNameInGoal(step.name, stepGoal),
+            resolveExprInGoal(step.name, stepGoal),
             { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
           );
           const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
@@ -1893,7 +1960,7 @@ export function replayEntireTree(
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const tactic = new RewriteTactic(
-          resolveNameInGoal(node.name, goal),
+          resolveExprInGoal(node.name, goal),
           { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
         );
         const tacResult = tactic.apply(eng, goal, gId);
@@ -1929,7 +1996,7 @@ export function replayEntireTree(
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
-        const tactic = new ApplyTactic(resolveNameInGoal(node.name, goal));
+        const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal));
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
           const existing = result.get(node.id);
@@ -2048,7 +2115,7 @@ export function replayEntireTree(
 
           if (step.tag === 'rewrite') {
             const tactic = new RewriteTactic(
-              resolveNameInGoal(step.name, stepGoal),
+              resolveExprInGoal(step.name, stepGoal),
               { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
             );
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
