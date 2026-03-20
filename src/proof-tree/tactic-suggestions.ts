@@ -418,6 +418,92 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
 }
 
 // ============================================================================
+// Binder suggestions (clickable token → tactic suggestions in goal area)
+// ============================================================================
+
+/**
+ * Compute tactic suggestions for a clicked binder in the proof prose view.
+ * Returns standard TacticSuggestion[] so they render in GoalInteraction
+ * and dispatch through the existing handleApplySuggestion.
+ *
+ * Checks:
+ * - 'exact' if the hypothesis exactly solves the current goal
+ * - 'apply' if the hypothesis's return type matches the goal
+ * - 'induction' if the hypothesis type is inductive
+ */
+export function computeSelectedBinderSuggestions(
+  name: string,
+  kernelGoal: KernelGoalInfo | undefined,
+  isInductive: boolean,
+): TacticSuggestion[] {
+  const suggestions: TacticSuggestion[] = [];
+
+  // Check exact/apply if we have a kernel goal
+  if (kernelGoal) {
+    const { engine, goal: metaGoal } = kernelGoal;
+    const goalId = engine.getFocusedGoalId();
+    if (goalId) {
+      const ctx = metaGoal.ctx;
+      // Find this hypothesis by name in the context
+      for (let i = 0; i < ctx.length; i++) {
+        if (ctx[i].name === name) {
+          const debruijnIdx = ctx.length - 1 - i;
+          const varTerm: TTKTerm = { tag: 'Var', index: debruijnIdx };
+
+          // Try exact
+          try {
+            const exactTactic = new ExactTactic(varTerm);
+            const result = exactTactic.apply(engine, metaGoal, goalId);
+            if (result.success) {
+              suggestions.push({
+                id: `exact-hyp-${name}`,
+                label: `exact ${name}`,
+                labelLatex: `\\text{exact}\\; \\textbf{${texEscape(name)}}`,
+                description: `Close goal with hypothesis ${name}`,
+              });
+              break; // exact subsumes apply
+            }
+          } catch { /* doesn't apply */ }
+
+          // Try apply
+          try {
+            const applyTactic = new ApplyTactic(varTerm);
+            const result = applyTactic.apply(engine, metaGoal, goalId);
+            if (result.success) {
+              const numSubgoals = result.newEngine
+                ? result.newEngine.goals.length - engine.goals.length + 1
+                : 1;
+              suggestions.push({
+                id: `apply-hyp-${name}`,
+                label: `apply ${name}`,
+                labelLatex: `\\text{apply}\\; \\textbf{${texEscape(name)}}`,
+                description: numSubgoals > 0
+                  ? `Apply ${name}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
+                  : `Apply ${name}`,
+                numSubgoals,
+              });
+            }
+          } catch { /* doesn't apply */ }
+
+          break; // found the hypothesis
+        }
+      }
+    }
+  }
+
+  // Induction — available if the type is inductive
+  if (isInductive) {
+    suggestions.push({
+      id: `induction-${name}`,
+      label: `Induction on ${name}`,
+      description: `Proceed by induction on ${name}`,
+    });
+  }
+
+  return suggestions;
+}
+
+// ============================================================================
 // Rewrite suggestions (async — scans hypotheses and tries rewrites)
 // ============================================================================
 

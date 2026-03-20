@@ -34,7 +34,7 @@ import {
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
 import { ProseItem, ProseItemKind, IntroToken, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
-import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
+import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { InteractiveGoalView } from './InteractiveGoalView';
 import SplitPane from './SplitPane';
 
@@ -65,6 +65,12 @@ export interface ProofTreeEditorProps {
   inductiveMap?: InductiveMap;
   /** Name of the declaration being proved — used to filter self-referential suggestions */
   currentDeclName?: string;
+}
+
+/** A binder selected by clicking a variable name in the proof prose view. */
+interface SelectedBinder {
+  readonly token: IntroToken;
+  readonly introNodeId: ProofNodeId;
 }
 
 // ============================================================================
@@ -158,6 +164,26 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const [goalEditingNames, setGoalEditingNames] = useState<string[] | null>(null);
   const [goalEditingSuggestionId, setGoalEditingSuggestionId] = useState<string | null>(null);
 
+  // Selected binder from prose view (mutually exclusive with goalSelectedPath)
+  const [selectedBinder, setSelectedBinderRaw] = useState<SelectedBinder | null>(null);
+
+  // Mutual exclusion: selecting a binder clears goal path and vice versa
+  const handleSelectBinder = useCallback((binder: SelectedBinder | null) => {
+    setSelectedBinderRaw(binder);
+    if (binder) {
+      setGoalSelectedPath(null);
+      setGoalEditingNames(null);
+      setGoalEditingSuggestionId(null);
+    }
+  }, []);
+
+  const handleSelectGoalPath = useCallback((path: GoalPath | null) => {
+    setGoalSelectedPath(path);
+    if (path) {
+      setSelectedBinderRaw(null);
+    }
+  }, []);
+
   const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
 
   // Compute typed context at cursor position (uses surface type when available)
@@ -217,17 +243,31 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     return cancel;
   }, [goalSelectedPath, interactiveGoal, kernelGoalWithDeclName]);
 
-  // Merge all suggestions
+  // Compute binder-specific suggestions when a binder is selected in the prose view
+  const binderSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    if (!selectedBinder) return [];
+    const isInductive = selectedBinder.token.rawType
+      ? (() => {
+          const head = extractTypeHead(selectedBinder.token.rawType!);
+          return !!(head && inductiveMap?.has(head));
+        })()
+      : false;
+    return computeSelectedBinderSuggestions(selectedBinder.token.name, kernelGoalWithDeclName, isInductive);
+  }, [selectedBinder, kernelGoalWithDeclName, inductiveMap]);
+
+  // Merge all suggestions — binder suggestions take priority when active
   const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    if (binderSuggestions.length > 0) return binderSuggestions;
     if (syncSuggestions.length === 0 && rewriteSuggestions.length === 0) return [];
     return [...syncSuggestions, ...rewriteSuggestions];
-  }, [syncSuggestions, rewriteSuggestions]);
+  }, [binderSuggestions, syncSuggestions, rewriteSuggestions]);
 
-  // Reset goal selection when cursor changes
+  // Reset goal selection and binder selection when cursor changes
   useEffect(() => {
     setGoalSelectedPath(null);
     setGoalEditingNames(null);
     setGoalEditingSuggestionId(null);
+    setSelectedBinderRaw(null);
   }, [state.cursor.nodeId]);
 
   // Compute goal map for prose view (replays entire tree, not just to cursor)
@@ -254,6 +294,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const pushChange = useCallback((newState: ProofTreeState) => {
     onHistoryChange(pushState(history, newState));
     setTacticMode(null);
+    setSelectedBinderRaw(null);
   }, [history, onHistoryChange]);
 
   // Dispatch a cursor-only move (does NOT go on undo stack)
@@ -381,12 +422,14 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 interactiveGoal={interactiveGoal}
                 suggestions={goalSuggestions}
                 selectedPath={goalSelectedPath}
-                onSelectPath={setGoalSelectedPath}
+                onSelectPath={handleSelectGoalPath}
                 editingNames={goalEditingNames}
                 onEditingNames={setGoalEditingNames}
                 editingSuggestionId={goalEditingSuggestionId}
                 onEditingSuggestionId={setGoalEditingSuggestionId}
                 rewriteProgress={rewriteProgress}
+                selectedBinder={selectedBinder}
+                onSelectBinder={handleSelectBinder}
               />
             )}
           </div>
@@ -400,7 +443,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
           interactiveGoal={interactiveGoal}
           suggestions={goalSuggestions}
           selectedPath={goalSelectedPath}
-          onSelectPath={setGoalSelectedPath}
+          onSelectPath={handleSelectGoalPath}
           editingNames={goalEditingNames}
           onEditingNames={setGoalEditingNames}
           editingSuggestionId={goalEditingSuggestionId}
@@ -1704,6 +1747,9 @@ interface ProseViewProps {
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
   rewriteProgress?: RewriteProgress | null;
+  // Binder selection from clickable tokens in prose
+  selectedBinder: SelectedBinder | null;
+  onSelectBinder: (b: SelectedBinder | null) => void;
 }
 
 function ProofProseView({
@@ -1711,7 +1757,7 @@ function ProofProseView({
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
-  rewriteProgress,
+  rewriteProgress, selectedBinder, onSelectBinder,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -1787,6 +1833,8 @@ function ProofProseView({
             editingSuggestionId={editingSuggestionId}
             onEditingSuggestionId={onEditingSuggestionId}
             rewriteProgress={rewriteProgress}
+            selectedBinder={selectedBinder}
+            onSelectBinder={onSelectBinder}
           />
         );
       })}
@@ -1828,6 +1876,9 @@ interface ProseItemViewProps {
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
   rewriteProgress?: RewriteProgress | null;
+  // Binder selection from clickable tokens in prose
+  selectedBinder: SelectedBinder | null;
+  onSelectBinder: (b: SelectedBinder | null) => void;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -1844,7 +1895,7 @@ const proseStyle: React.CSSProperties = {
 
 function IntroProseItem({
   item, kind, rowStyle, rowHandlers, prose, deleteBtn, renderGoalSection,
-  state, onPushChange, inductiveMap, registry, typedContext,
+  state, onPushChange, selectedBinder, onSelectBinder,
 }: {
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'intro' }>;
@@ -1855,49 +1906,30 @@ function IntroProseItem({
   renderGoalSection: (goalLatex: string | undefined, prefix: string) => React.ReactNode;
   state: ProofTreeState;
   onPushChange: (s: ProofTreeState) => void;
-  inductiveMap?: InductiveMap;
-  registry?: SyntaxRegistry;
-  typedContext: TypedProofContext | null;
+  selectedBinder: SelectedBinder | null;
+  onSelectBinder: (b: SelectedBinder | null) => void;
 }) {
-  const [selectedToken, setSelectedToken] = useState<IntroToken | null>(null);
-  const renameInputRef = useRef<HTMLInputElement>(null);
+  const isTokenSelected = (token: IntroToken) =>
+    selectedBinder?.introNodeId === item.nodeId && selectedBinder?.token.nameIndex === token.nameIndex;
 
-  // Find the token object by nameIndex (selectedToken may be stale after re-render)
-  const allTokens = kind.groups?.flatMap(g => g.tokens);
+  const selectedToken = selectedBinder?.introNodeId === item.nodeId ? selectedBinder.token : null;
 
   const handleTokenClick = (token: IntroToken, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSelectedToken(prev => prev?.nameIndex === token.nameIndex ? null : token);
+    if (isTokenSelected(token)) {
+      onSelectBinder(null);
+    } else {
+      onSelectBinder({ token, introNodeId: item.nodeId });
+    }
   };
 
-  const handleRename = (newName: string) => {
+  const handleRename = useCallback((newName: string) => {
     if (!selectedToken) return;
     const trimmed = newName.trim();
     if (!trimmed || trimmed === selectedToken.name) return;
     const result = editIntroName(state, item.nodeId, selectedToken.nameIndex, trimmed);
     if (result) onPushChange(result);
-  };
-
-  const handleInduction = (token: IntroToken) => {
-    setSelectedToken(null);
-    const headName = token.rawType ? extractTypeHead(token.rawType) : null;
-    const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
-    if (indInfo) {
-      const rev = registry ? buildReverseRegistry(registry) : undefined;
-      const ctxNames = typedContext?.hypotheses.map(h => h.name);
-      const ctorInfos = generateCaseInfos(token.name, indInfo, rev, ctxNames);
-      const result = applyInductionWithCtors(state, token.name, ctorInfos);
-      if (result) onPushChange(result);
-    }
-  };
-
-  // Check if selected token's type is inductive
-  const selectedIsInductive = selectedToken?.rawType
-    ? (() => {
-        const head = extractTypeHead(selectedToken.rawType!);
-        return !!(head && inductiveMap?.has(head));
-      })()
-    : false;
+  }, [selectedToken, state, item.nodeId, onPushChange]);
 
   const groups = kind.groups;
 
@@ -1920,7 +1952,7 @@ function IntroProseItem({
                     onClick={e => handleTokenClick(token, e)}
                     style={{
                       cursor: 'pointer',
-                      borderBottom: selectedToken?.nameIndex === token.nameIndex
+                      borderBottom: isTokenSelected(token)
                         ? '2px solid #58a6ff'
                         : '1px dotted rgba(201, 209, 217, 0.4)',
                       paddingBottom: '1px',
@@ -1940,41 +1972,31 @@ function IntroProseItem({
         {kind.goalLatex ? renderGoalSection(kind.goalLatex, '. We must show') : <span style={prose}>.</span>}
         {deleteBtn}
       </div>
-      {/* Inline actions for selected token — same style as tactic suggestions */}
+      {/* Inline rename for selected token */}
       {selectedToken && (
-        <div style={{
+        <div data-token-rename style={{
           paddingLeft: `${item.depth * 20 + 24}px`,
           paddingTop: '2px',
           paddingBottom: '4px',
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
-          flexWrap: 'wrap',
         }}>
           <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
             {selectedToken.name}:
           </span>
           <input
-            ref={renameInputRef}
             key={selectedToken.nameIndex}
             defaultValue={selectedToken.name}
             onBlur={e => handleRename(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter') { e.preventDefault(); handleRename((e.target as HTMLInputElement).value); }
-              if (e.key === 'Escape') { e.preventDefault(); setSelectedToken(null); }
+              if (e.key === 'Escape') { e.preventDefault(); onSelectBinder(null); }
             }}
             onClick={e => e.stopPropagation()}
             placeholder="rename"
             style={nameInputStyle}
           />
-          {selectedIsInductive && (
-            <button
-              style={suggestionBtnStyle}
-              onClick={e => { e.stopPropagation(); handleInduction(selectedToken); }}
-            >
-              Induction on {selectedToken.name}
-            </button>
-          )}
         </div>
       )}
     </>
@@ -1998,6 +2020,7 @@ function CaseHeaderProseItem({
   onPushChange: (s: ProofTreeState) => void;
 }) {
   const [selectedParamIndex, setSelectedParamIndex] = useState<number | null>(null);
+  const caseContainerRef = useRef<HTMLDivElement>(null);
 
   const paramNames = kind.constructorParamNames;
   const hasParams = paramNames && paramNames.length > 0;
@@ -2007,13 +2030,23 @@ function CaseHeaderProseItem({
     setSelectedParamIndex(prev => prev === idx ? null : idx);
   };
 
-  const handleRename = (newName: string) => {
+  const handleRename = useCallback((newName: string) => {
     if (selectedParamIndex === null) return;
     const trimmed = newName.trim();
     if (!trimmed || !paramNames || trimmed === paramNames[selectedParamIndex]) return;
     const result = editCaseParamName(state, item.nodeId, selectedParamIndex, trimmed);
     if (result) onPushChange(result);
-  };
+  }, [selectedParamIndex, paramNames, state, item.nodeId, onPushChange]);
+
+  // Dismiss selection when focus leaves the container
+  const handleCaseContainerBlur = useCallback((e: React.FocusEvent) => {
+    if (caseContainerRef.current?.contains(e.relatedTarget as Node)) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement) {
+      handleRename(active.value);
+    }
+    setSelectedParamIndex(null);
+  }, [handleRename]);
 
   // Render the label with clickable param names.
   // The label looks like "aOrB = Left(x)" — we break it into:
@@ -2053,7 +2086,7 @@ function CaseHeaderProseItem({
   };
 
   return (
-    <>
+    <div ref={caseContainerRef} onBlur={handleCaseContainerBlur} tabIndex={-1} style={{ outline: 'none' }}>
       <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
         <span style={{ color: kind.isBaseCase ? '#d2a8ff' : '#79c0ff' }}>
           {kind.isBaseCase ? 'Base case' : 'Inductive step'}
@@ -2091,7 +2124,7 @@ function CaseHeaderProseItem({
           />
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -2107,7 +2140,7 @@ function ProseItemView({
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
-  rewriteProgress,
+  rewriteProgress, selectedBinder, onSelectBinder,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -2228,9 +2261,8 @@ function ProseItemView({
           renderGoalSection={renderGoalSection}
           state={state}
           onPushChange={onPushChange}
-          inductiveMap={inductiveMap}
-          registry={registry}
-          typedContext={typedContext}
+          selectedBinder={selectedBinder}
+          onSelectBinder={onSelectBinder}
         />
       );
 
