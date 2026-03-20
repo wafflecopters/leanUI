@@ -48,6 +48,8 @@ export interface SubtermInfo {
   readonly varName?: string;
   /** 1-based occurrence index of this headName in the goal body (for targeted rewriting). */
   readonly occurrenceIndex?: number;
+  /** If this subterm is within a Pi binder's domain, the binder index. */
+  readonly binderIndex?: number;
 }
 
 /** Result of rendering an interactive goal. */
@@ -122,8 +124,13 @@ function getAppHeadName(term: TTerm): string | null {
 }
 
 /** Create a SubtermAnnotator that assigns unique IDs and collects SubtermInfo. */
-function createAnnotator(): { annotate: SubtermAnnotator; subtermMap: Map<string, SubtermInfo> } {
+function createAnnotator(): {
+  annotate: SubtermAnnotator;
+  subtermMap: Map<string, SubtermInfo>;
+  setCurrentBinder: (index: number | undefined) => void;
+} {
   let nextId = 0;
+  let currentBinderIndex: number | undefined;
   const subtermMap = new Map<string, SubtermInfo>();
   // Count occurrences per headName for targeted rewriting (1-based)
   const headOccurrences = new Map<string, number>();
@@ -145,11 +152,16 @@ function createAnnotator(): { annotate: SubtermAnnotator; subtermMap: Map<string
       headName: headName ?? undefined,
       varName,
       occurrenceIndex,
+      binderIndex: currentBinderIndex,
     });
     return [mkGroup(htmlId, nodes)];
   };
 
-  return { annotate, subtermMap };
+  return {
+    annotate,
+    subtermMap,
+    setCurrentBinder: (index: number | undefined) => { currentBinderIndex = index; },
+  };
 }
 
 // ============================================================================
@@ -217,7 +229,7 @@ export function renderInteractiveGoal(
   }
 
   // 4. Create annotator for subterm tracking
-  const { annotate, subtermMap } = createAnnotator();
+  const { annotate, subtermMap, setCurrentBinder } = createAnnotator();
 
   // 4. Extract Pi spine
   const { binders, body } = extractSurfacePiSpine(surface);
@@ -266,7 +278,9 @@ export function renderInteractiveGoal(
 
     if (!c.isDependent) {
       // Non-dependent hypothesis: render just the domain (no arrow)
+      setCurrentBinder(c.index);
       const domainLatex = renderTermAnnotated(c.binder.domain, c.ctxAtBinder, rev, annotate);
+      setCurrentBinder(undefined);
       parts.push(`\\htmlId{goal-${c.index}}{${domainLatex}}`);
       pos++;
       continue;
@@ -302,9 +316,12 @@ export function renderInteractiveGoal(
         `\\htmlId{goal-${e.index}}{${e.nameLatex}}`
       ).join(', ');
       // Render domain ONCE with annotations (using first entry's context)
+      // Tag subterms with the last binder in the group (for intro suggestions)
+      setCurrentBinder(sg.entries[sg.entries.length - 1].index);
       const domainLatex = renderTermAnnotated(
         sg.entries[0].binder.domain, sg.entries[0].ctxAtBinder, rev, annotate,
       );
+      setCurrentBinder(undefined);
       groupParts.push(`${names} ${sg.separator} ${domainLatex}`);
     }
     forallLatex += groupParts.join(',\\,');

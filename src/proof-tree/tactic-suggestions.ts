@@ -190,9 +190,14 @@ export function computeTacticSuggestions(
     }
   }
 
+  // If a subterm within a binder's domain is clicked, also offer intro suggestions
+  const subtermInfo = goal.subtermMap.get(selectedPath);
+  if (subtermInfo?.binderIndex !== undefined && !binderMatch) {
+    suggestions.push(...computeBinderSuggestions(subtermInfo.binderIndex, goal));
+  }
+
   // Check subterm-level suggestions
   if (definitions) {
-    const subtermInfo = goal.subtermMap.get(selectedPath);
     if (subtermInfo) {
       // Unfold: selected subterm is an App of a term definition (not inductive type or constructor)
       if (subtermInfo.isAppOfConst && subtermInfo.headName) {
