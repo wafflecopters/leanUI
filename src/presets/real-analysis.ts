@@ -9,6 +9,7 @@ inductive Void : Type where
 
 absurd : {A : Type} -> Void -> A
 
+@syntax $0 =_{$A} $1 @becomes Equal $$0 $$1
 inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {a : A} -> Equal a a
 
@@ -25,6 +26,7 @@ cong f refl = refl
 replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
 replace P refl px = px
 
+@syntax $0 \\vee $1 @becomes Either $$0 $$1
 inductive Either : Type -> Type -> Type where
   Left : {A B : Type} -> A -> Either A B
   Right : {A B : Type} -> B -> Either A B
@@ -37,6 +39,7 @@ eitherElimDep : {A B : Type} -> (C : Either A B -> Type) -> ((a : A) -> C (Left 
 eitherElimDep C f g (Left a) = f a
 eitherElimDep C f g (Right b) = g b
 
+@syntax $0 \\wedge $1 @becomes Pair $$0 $$1
 record Pair (A B : Type) where
   constructor MkPair
   fst : A
