@@ -2094,3 +2094,77 @@ testThm = ?TODO
     expect(goalLatex).not.toContain('Rightarrow');
   });
 });
+
+// ============================================================================
+// erw replay: enhanced rewrite with record projections
+// ============================================================================
+
+describe('erw replay with record projections', () => {
+  // Minimal source: a record with fields, an alias, and an erw proof
+  function compileErwSource() {
+    const source = `
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+record Monoid (A : Type) where
+  e : A
+  op : A -> A -> A
+  idLeft : (x : A) -> Equal (op e x) x
+  idRight : (x : A) -> Equal (op x e) x
+  comm : (x y : A) -> Equal (op x y) (op y x)
+
+-- Alias that wraps the record projection
+myOp : {A : Type} -> Monoid A -> A -> A -> A
+myOp m a b = Monoid.op m a b
+
+-- Proof using erw (enhanced rewrite through alias)
+addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e m) a) a := by
+  intros A m a
+  erw (Monoid.comm m (Monoid.e m) a), (Monoid.idRight m a)
+`;
+    return compileTTFromText(source);
+  }
+
+  test('addZeroLeft compiles successfully with erw', () => {
+    const result = compileErwSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+  });
+
+  test('erw replay resolves record projection expressions in proof tree', () => {
+    const result = compileErwSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree matching the erw tactic:
+    // intros [A, m, a] → erw (Monoid.comm m (Monoid.e m) a) → erw (Monoid.idRight m a) → hole
+    const hole = mkTreeHole();
+    const rewrite2 = mkRewrite('(Monoid.idRight v1 v0)', hole, false, undefined, undefined, true);
+    const rewrite1 = mkRewrite('(Monoid.comm v1 (Monoid.e v1) v0)', rewrite2, false, undefined, undefined, true);
+    const intros = mkIntros(['A', 'm', 'a'], rewrite1);
+
+    const goalMap = replayEntireTree(intros, kernelType, definitions, rev);
+
+    // The rewrite nodes should succeed (no tactic error)
+    const rw1Info = goalMap.get(rewrite1.id);
+    expect(rw1Info).toBeDefined();
+    expect(rw1Info!.tacticError).toBeUndefined();
+
+    const rw2Info = goalMap.get(rewrite2.id);
+    expect(rw2Info).toBeDefined();
+    expect(rw2Info!.tacticError).toBeUndefined();
+
+    // The final hole should have a goal
+    const holeInfo = goalMap.get(hole.id);
+    expect(holeInfo).toBeDefined();
+  });
+});

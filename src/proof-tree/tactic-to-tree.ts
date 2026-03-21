@@ -103,8 +103,10 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
     }
 
     case 'rw':
+      return buildRewriteChain(cmd.args, tacticCommandsToProofTree(rest), false);
+
     case 'erw':
-      return buildRewriteChain(cmd.args, tacticCommandsToProofTree(rest));
+      return buildRewriteChain(cmd.args, tacticCommandsToProofTree(rest), true);
 
     case 'unfold':
       return buildUnfoldChain(cmd.args, tacticCommandsToProofTree(rest));
@@ -136,12 +138,12 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
   return mkInduction(scrutinee, cases);
 }
 
-/** Build a chain of RewriteNodes from multiple rw arguments. */
-function buildRewriteChain(args: readonly TTerm[], continuation: ProofNode): ProofNode {
+/** Build a chain of RewriteNodes from multiple rw/erw arguments. */
+function buildRewriteChain(args: readonly TTerm[], continuation: ProofNode, enhanced: boolean): ProofNode {
   if (args.length === 0) return continuation;
   let result = continuation;
   for (let i = args.length - 1; i >= 0; i--) {
-    result = mkRewrite(surfaceTermToString(args[i]), result);
+    result = mkRewrite(surfaceTermToString(args[i]), result, false, undefined, undefined, enhanced);
   }
   return result;
 }

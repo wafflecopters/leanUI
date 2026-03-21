@@ -85,6 +85,8 @@ export interface RewriteNode {
   readonly id: ProofNodeId;
   /** The equality lemma name (e.g., 'plusComm'). */
   readonly name: string;
+  /** If true, use deep definitional equality for matching (erw vs rw). */
+  readonly enhanced?: boolean;
   /** If true, rewrite right-to-left (replace RHS with LHS). */
   readonly reverse: boolean;
   /** 1-based occurrence indices to rewrite (if undefined, rewrite all). */
@@ -189,10 +191,11 @@ export function mkFold(name: string, child: ProofNode, occurrence?: number): Fol
   return { tag: 'fold', id: freshProofId(), name, child, occurrence };
 }
 
-export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string): RewriteNode {
+export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean): RewriteNode {
   const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
   if (occurrences !== undefined) (node as any).occurrences = occurrences;
   if (targetHead !== undefined) (node as any).targetHead = targetHead;
+  if (enhanced) (node as any).enhanced = true;
   return node;
 }
 

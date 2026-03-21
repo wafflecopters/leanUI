@@ -1340,7 +1340,7 @@ function replayProofTree(
 
       const tactic = new RewriteTactic(
         resolveExprInGoal(node.name, goal, engine.definitions),
-        { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
+        { reverse: node.reverse, enhanced: node.enhanced, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
       );
       const result = tactic.apply(engine, goal, goalId);
 
@@ -1511,7 +1511,7 @@ function replayProofTree(
         if (step.tag === 'rewrite') {
           const tactic = new RewriteTactic(
             resolveExprInGoal(step.name, stepGoal, currentEngine.definitions),
-            { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
+            { reverse: step.reverse, enhanced: step.enhanced, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
           );
           const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
           if (result.success) {
@@ -1996,7 +1996,7 @@ export function replayEntireTree(
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const tactic = new RewriteTactic(
           resolveExprInGoal(node.name, goal, eng.definitions),
-          { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
+          { reverse: node.reverse, enhanced: node.enhanced, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
         );
         const tacResult = tactic.apply(eng, goal, gId);
         // Capture the unified equation and attach it to this node's info
@@ -2151,7 +2151,7 @@ export function replayEntireTree(
           if (step.tag === 'rewrite') {
             const tactic = new RewriteTactic(
               resolveExprInGoal(step.name, stepGoal, currentEngine.definitions),
-              { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
+              { reverse: step.reverse, enhanced: step.enhanced, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
             );
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
             if (stepResult.success) {
