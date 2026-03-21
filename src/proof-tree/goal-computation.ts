@@ -1147,9 +1147,10 @@ function tokenizeExpr(s: string): string[] {
 /**
  * Resolve an expression string (from surfaceTermToString) against the goal context.
  * Handles parenthesized applications like "(addComm (field R) (rzero R) a)"
- * and simple names like "plusComm".
+ * and simple names like "plusComm". Inserts Hole placeholders at implicit
+ * argument positions using the namedArgMap from definitions.
  */
-function resolveExprInGoal(expr: string, goal: MetaVar): TTKTerm {
+function resolveExprInGoal(expr: string, goal: MetaVar, definitions?: DefinitionsMap): TTKTerm {
   expr = expr.trim();
 
   // Var format from surfaceTermToString: v0, v1, ...
@@ -1165,7 +1166,7 @@ function resolveExprInGoal(expr: string, goal: MetaVar): TTKTerm {
     if (inner.startsWith('\\')) {
       const arrowIdx = inner.indexOf('=>');
       if (arrowIdx !== -1) {
-        const body = resolveExprInGoal(inner.slice(arrowIdx + 2).trim(), goal);
+        const body = resolveExprInGoal(inner.slice(arrowIdx + 2).trim(), goal, definitions);
         return {
           tag: 'Binder',
           name: '_',
@@ -1180,15 +1181,49 @@ function resolveExprInGoal(expr: string, goal: MetaVar): TTKTerm {
     const tokens = tokenizeExpr(inner);
     if (tokens.length === 0) return { tag: 'Const', name: expr };
 
-    let result = resolveExprInGoal(tokens[0], goal);
-    for (let i = 1; i < tokens.length; i++) {
-      result = { tag: 'App', fn: result, arg: resolveExprInGoal(tokens[i], goal) };
+    const head = resolveExprInGoal(tokens[0], goal, definitions);
+    const userArgs = tokens.slice(1).map(t => resolveExprInGoal(t, goal, definitions));
+
+    // Insert Holes at implicit positions if the head has a namedArgMap
+    const resolvedArgs = insertImplicitHoles(head, userArgs, definitions);
+
+    let result = head;
+    for (const arg of resolvedArgs) {
+      result = { tag: 'App', fn: result, arg };
     }
     return result;
   }
 
   // Simple name — resolve against context
   return resolveNameInGoal(expr, goal);
+}
+
+/**
+ * Insert Hole placeholders at implicit argument positions.
+ * If the head is Const and has a namedArgMap in definitions, implicit positions
+ * get Holes and user args fill explicit positions.
+ */
+function insertImplicitHoles(head: TTKTerm, userArgs: TTKTerm[], definitions?: DefinitionsMap): TTKTerm[] {
+  if (!definitions || head.tag !== 'Const') return userArgs;
+
+  const lookup = createNamedArgLookup(definitions);
+  const namedArgMap = lookup(head.name);
+  if (!namedArgMap || namedArgMap.size === 0) return userArgs;
+
+  const implicitPositions = new Set(namedArgMap.values());
+  const result: TTKTerm[] = [];
+  let userIdx = 0;
+  let pos = 0;
+  while (userIdx < userArgs.length) {
+    if (implicitPositions.has(pos)) {
+      result.push({ tag: 'Hole', id: `_implicit${pos}` });
+    } else {
+      result.push(userArgs[userIdx]);
+      userIdx++;
+    }
+    pos++;
+  }
+  return result;
 }
 
 /**
@@ -1304,7 +1339,7 @@ function replayProofTree(
       if (!goal) return null;
 
       const tactic = new RewriteTactic(
-        resolveExprInGoal(node.name, goal),
+        resolveExprInGoal(node.name, goal, engine.definitions),
         { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
       );
       const result = tactic.apply(engine, goal, goalId);
@@ -1332,7 +1367,7 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal));
+      const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal, engine.definitions));
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
@@ -1475,7 +1510,7 @@ function replayProofTree(
 
         if (step.tag === 'rewrite') {
           const tactic = new RewriteTactic(
-            resolveExprInGoal(step.name, stepGoal),
+            resolveExprInGoal(step.name, stepGoal, currentEngine.definitions),
             { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
           );
           const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
@@ -1960,7 +1995,7 @@ export function replayEntireTree(
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const tactic = new RewriteTactic(
-          resolveExprInGoal(node.name, goal),
+          resolveExprInGoal(node.name, goal, eng.definitions),
           { reverse: node.reverse, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
         );
         const tacResult = tactic.apply(eng, goal, gId);
@@ -1996,7 +2031,7 @@ export function replayEntireTree(
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
-        const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal));
+        const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal, eng.definitions));
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
           const existing = result.get(node.id);
@@ -2115,7 +2150,7 @@ export function replayEntireTree(
 
           if (step.tag === 'rewrite') {
             const tactic = new RewriteTactic(
-              resolveExprInGoal(step.name, stepGoal),
+              resolveExprInGoal(step.name, stepGoal, currentEngine.definitions),
               { reverse: step.reverse, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
             );
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
