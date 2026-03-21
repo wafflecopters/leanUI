@@ -14,7 +14,7 @@
  */
 
 import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
-import { TTKTerm, TTKPattern, TTKContext } from '../compiler/kernel';
+import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
 import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
@@ -275,6 +275,117 @@ function prepareMatchesForIota(term: TTKTerm, definitions: DefinitionsMap): TTKT
     case 'Binder': {
       const newDomain = prepareMatchesForIota(term.domain, definitions);
       const newBody = prepareMatchesForIota(term.body, definitions);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+    default:
+      return term;
+  }
+}
+
+/**
+ * Build a map from (constructorName, fieldPosition) → projectionName.
+ * Used to fold projection-like Match expressions back to their Const form.
+ *
+ * A projection value looks like: λ params... λ r. match r { Ctor(_, _, PVar, _, ...) => Var(0) }
+ * where only one pattern arg is PVar (the projected field) and the rest are PWild.
+ */
+function buildProjectionFoldMap(definitions: DefinitionsMap): Map<string, Map<number, string>> {
+  const map = new Map<string, Map<number, string>>();
+  for (const [name, def] of definitions.terms) {
+    if (!name.includes('.') || !def.value) continue;
+    // Strip lambda binders to find the innermost body
+    let body = def.value;
+    while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') {
+      body = body.body;
+    }
+    // Must be Match(Var(0), [single clause]) — matching on the record arg
+    if (body.tag !== 'Match' || body.scrutinee.tag !== 'Var' || body.scrutinee.index !== 0) continue;
+    if (body.clauses.length !== 1) continue;
+    const clause = body.clauses[0];
+    if (clause.patterns.length !== 1 || clause.patterns[0].tag !== 'PCtor') continue;
+    const pctor = clause.patterns[0];
+    // RHS must be Var(0) — the single PVar binding
+    if (clause.rhs.tag !== 'Var' || clause.rhs.index !== 0) continue;
+    // Find the PVar position (exactly one PVar expected)
+    let pvarFieldPos = -1;
+    let pvarCount = 0;
+    for (let i = 0; i < pctor.args.length; i++) {
+      if (pctor.args[i].tag === 'PVar') {
+        pvarFieldPos = i;
+        pvarCount++;
+      }
+    }
+    if (pvarCount !== 1 || pvarFieldPos < 0) continue;
+    // Register: (ctorName, fieldPosition) → projectionName
+    let ctorMap = map.get(pctor.name);
+    if (!ctorMap) {
+      ctorMap = new Map();
+      map.set(pctor.name, ctorMap);
+    }
+    ctorMap.set(pvarFieldPos, name);
+  }
+  return map;
+}
+
+/**
+ * Fold projection-like Match expressions back to their Const projection form.
+ *
+ * When erw (enhanced rewrite) unfolds definitions, record projections become
+ * Match(scrutinee, [Clause([PCtor(ctor, ...PWild, PVar, PWild...)], Var(0))]).
+ * These can't be iota-reduced when the scrutinee is a variable.
+ * This function replaces them with App(Const(projName), scrutinee).
+ */
+function foldProjectionMatches(
+  term: TTKTerm,
+  projMap: Map<string, Map<number, string>>,
+): TTKTerm {
+  switch (term.tag) {
+    case 'Match': {
+      // First, recursively fold sub-terms
+      const foldedScrutinee = foldProjectionMatches(term.scrutinee, projMap);
+      const foldedClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: foldProjectionMatches(c.rhs, projMap),
+      }));
+      // Check if this Match is a projection pattern
+      if (foldedClauses.length === 1) {
+        const clause = foldedClauses[0];
+        if (clause.patterns.length === 1 && clause.patterns[0].tag === 'PCtor') {
+          const pctor = clause.patterns[0];
+          if (clause.rhs.tag === 'Var' && clause.rhs.index === 0) {
+            // Find PVar position
+            let pvarPos = -1;
+            let pvarCount = 0;
+            for (let i = 0; i < pctor.args.length; i++) {
+              if (pctor.args[i].tag === 'PVar') { pvarPos = i; pvarCount++; }
+            }
+            if (pvarCount === 1 && pvarPos >= 0) {
+              const ctorMap = projMap.get(pctor.name);
+              if (ctorMap) {
+                const projName = ctorMap.get(pvarPos);
+                if (projName) {
+                  return mkApp(mkConst(projName), foldedScrutinee);
+                }
+              }
+            }
+          }
+        }
+      }
+      // Not a projection — return with folded sub-terms
+      const changed = foldedScrutinee !== term.scrutinee ||
+        foldedClauses.some((c, i) => c.rhs !== term.clauses[i].rhs);
+      return changed ? { ...term, scrutinee: foldedScrutinee, clauses: foldedClauses } : term;
+    }
+    case 'App': {
+      const newFn = foldProjectionMatches(term.fn, projMap);
+      const newArg = foldProjectionMatches(term.arg, projMap);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+    case 'Binder': {
+      const newDomain = foldProjectionMatches(term.domain, projMap);
+      const newBody = foldProjectionMatches(term.body, projMap);
       if (newDomain === term.domain && newBody === term.body) return term;
       return { ...term, domain: newDomain, body: newBody };
     }
@@ -1902,6 +2013,7 @@ export function replayEntireTree(
 ): Map<ProofNodeId, NodeGoalInfo> {
   const result = new Map<ProofNodeId, NodeGoalInfo>();
   const engine = createInitialEngine(kernelType, [], definitions);
+  const projMap = buildProjectionFoldMap(definitions);
 
   function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string): void {
     const goal = eng.metaVars.get(gId);
@@ -2003,11 +2115,13 @@ export function replayEntireTree(
         if (tacResult.success && tacResult.unifiedEquation) {
           const newEngine = tacResult.newEngine!;
           const { lhs: rawLhs, rhs: rawRhs } = tacResult.unifiedEquation;
-          // Zonk to resolve metas, normalize (beta + iota) to reduce Match redexes
+          // Zonk, normalize (beta + iota), fold projections back to Const form
           const lhsZonked = newEngine.zonkTerm(rawLhs, goal.ctx.length);
           const rhsZonked = newEngine.zonkTerm(rawRhs, goal.ctx.length);
-          const lhs = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
-          const rhs = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
+          const lhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
+          const rhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
+          const lhs = foldProjectionMatches(lhsNorm, projMap);
+          const rhs = foldProjectionMatches(rhsNorm, projMap);
           const nameCtx = buildNameCtx(goal.ctx);
           const lhsSurface = kernelTypeToSurface(lhs, definitions);
           const rhsSurface = kernelTypeToSurface(rhs, definitions);

@@ -2166,5 +2166,15 @@ addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e
     // The final hole should have a goal
     const holeInfo = goalMap.get(hole.id);
     expect(holeInfo).toBeDefined();
+
+    // Equation LaTeX should use projection names, not raw Match/constructor patterns
+    if (rw1Info!.unifiedEquationLatex) {
+      expect(rw1Info!.unifiedEquationLatex).not.toContain('MkMonoid');
+      expect(rw1Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+    }
+    if (rw2Info!.unifiedEquationLatex) {
+      expect(rw2Info!.unifiedEquationLatex).not.toContain('MkMonoid');
+      expect(rw2Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+    }
   });
 });
