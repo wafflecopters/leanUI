@@ -2003,9 +2003,11 @@ export function replayEntireTree(
         if (tacResult.success && tacResult.unifiedEquation) {
           const newEngine = tacResult.newEngine!;
           const { lhs: rawLhs, rhs: rawRhs } = tacResult.unifiedEquation;
-          // Zonk to resolve metas, then beta-normalize to clean up redexes
-          const lhs = betaNormalize(newEngine.zonkTerm(rawLhs, goal.ctx.length));
-          const rhs = betaNormalize(newEngine.zonkTerm(rawRhs, goal.ctx.length));
+          // Zonk to resolve metas, normalize (beta + iota) to reduce Match redexes
+          const lhsZonked = newEngine.zonkTerm(rawLhs, goal.ctx.length);
+          const rhsZonked = newEngine.zonkTerm(rawRhs, goal.ctx.length);
+          const lhs = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
+          const rhs = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
           const nameCtx = buildNameCtx(goal.ctx);
           const lhsSurface = kernelTypeToSurface(lhs, definitions);
           const rhsSurface = kernelTypeToSurface(rhs, definitions);
