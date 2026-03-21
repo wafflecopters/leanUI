@@ -44,7 +44,7 @@ export function surfaceTermToString(term: TTerm): string {
       }
       return '?';
     case 'Var':
-      return `#${term.index}`;
+      return `v${term.index}`;
     case 'Hole':
       return '_';
     default:

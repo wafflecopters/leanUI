@@ -5,6 +5,7 @@ import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, addInductiveDefinition, DefinitionsMap } from '../compiler/term';
 import { compileTTFromText } from '../compiler/compile';
 import { NAT_MATH_CODE } from '../presets/nat-math';
+import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { resetIds } from '../math-editor/types';
 import {
@@ -2175,6 +2176,62 @@ addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e
     if (rw2Info!.unifiedEquationLatex) {
       expect(rw2Info!.unifiedEquationLatex).not.toContain('MkMonoid');
       expect(rw2Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+    }
+  });
+});
+
+// ============================================================================
+// erw replay: addCancelRight from real-analysis preset (the ACTUAL failing case)
+// ============================================================================
+
+describe('erw replay with addCancelRight (real-analysis)', () => {
+  // Use actual real-analysis preset source (trimmed to addCancelRight)
+  function compileAddCancelRight() {
+    const endMarker = 'addLtBothNe';
+    const idx = REAL_ANALYSIS_CODE.indexOf(endMarker);
+    const source = idx >= 0 ? REAL_ANALYSIS_CODE.slice(0, idx) : REAL_ANALYSIS_CODE;
+    return compileTTFromText(source);
+  }
+
+  test('addCancelRight compiles successfully', () => {
+    const result = compileAddCancelRight();
+    const allDecls = result.blocks.flatMap(b => b.declarations);
+    const decl = allDecls.find(d => d.name === 'addCancelRight');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+  });
+
+  test('addCancelRight erw equation LaTeX has no raw Match expressions', () => {
+    const result = compileAddCancelRight();
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addCancelRight');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree: intros [R,a,b,c,h] → erw sym(addCancelRightHelper a c) → erw h → erw addCancelRightHelper b c → hole
+    const hole = mkTreeHole();
+    // Context after intros [R,a,b,c,h]: R=v4, a=v3, b=v2, c=v1, h=v0
+    const rw3 = mkRewrite('(addCancelRightHelper v2 v1)', hole, false, undefined, undefined, true);
+    const rw2 = mkRewrite('v0', rw3, false, undefined, undefined, true);  // h
+    const rw1 = mkRewrite('(sym (addCancelRightHelper v3 v1))', rw2, false, undefined, undefined, true);
+    const intros = mkIntros(['R', 'a', 'b', 'c', 'h'], rw1);
+
+    const goalMap = replayEntireTree(intros, kernelType, definitions, rev);
+
+    // Check ALL equations for raw constructor names
+    for (const [nodeId, info] of goalMap) {
+      if (info.unifiedEquationLatex) {
+        // Diagnostic: print the equation latex
+        console.log(`Node ${nodeId}: ${info.unifiedEquationLatex}`);
+        expect(info.unifiedEquationLatex).not.toContain('MkDPair');
+        expect(info.unifiedEquationLatex).not.toContain('MkCompleteOrderedField');
+        expect(info.unifiedEquationLatex).not.toContain('Rightarrow');
+      }
+      if (info.tacticError) {
+        console.log(`Node ${nodeId} ERROR: ${info.tacticError}`);
+      }
     }
   });
 });
