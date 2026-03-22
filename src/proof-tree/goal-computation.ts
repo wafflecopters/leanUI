@@ -1277,7 +1277,15 @@ function resolveExprInGoal(expr: string, goal: MetaVar, definitions?: Definition
     if (inner.startsWith('\\')) {
       const arrowIdx = inner.indexOf('=>');
       if (arrowIdx !== -1) {
-        const body = resolveExprInGoal(inner.slice(arrowIdx + 2).trim(), goal, definitions);
+        const binderName = inner.slice(1, arrowIdx).trim();
+        // Extend goal context with lambda binder so name resolution inside the
+        // body produces correctly shifted de Bruijn indices (e.g., "a" at index 3
+        // in the outer context becomes index 4 inside the lambda body).
+        const bodyGoal: MetaVar = {
+          ...goal,
+          ctx: [...goal.ctx, { name: binderName, type: { tag: 'Hole', id: '_' } }],
+        };
+        const body = resolveExprInGoal(inner.slice(arrowIdx + 2).trim(), bodyGoal, definitions);
         return {
           tag: 'Binder',
           name: '_',
