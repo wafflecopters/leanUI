@@ -22,8 +22,11 @@ import {
 /**
  * Render a surface TTerm to a string for display in proof tree nodes.
  * Handles the common cases seen in tactic arguments.
+ * Uses "fun name =>" for lambdas (not "\name =>") to avoid KaTeX
+ * interpreting \name as a LaTeX command.
+ * Tracks binder context so Var nodes render as their binder name.
  */
-export function surfaceTermToString(term: TTerm): string {
+export function surfaceTermToString(term: TTerm, ctx: string[] = []): string {
   switch (term.tag) {
     case 'Const':
       return term.name;
@@ -32,19 +35,20 @@ export function surfaceTermToString(term: TTerm): string {
       const parts: string[] = [];
       let cur: TTerm = term;
       while (cur.tag === 'App') {
-        parts.unshift(surfaceTermToString(cur.arg));
+        parts.unshift(surfaceTermToString(cur.arg, ctx));
         cur = cur.fn;
       }
-      parts.unshift(surfaceTermToString(cur));
+      parts.unshift(surfaceTermToString(cur, ctx));
       return `(${parts.join(' ')})`;
     }
     case 'Binder':
       if (term.binderKind.tag === 'BLamTT') {
-        return `(\\${term.name} => ${surfaceTermToString(term.body)})`;
+        const newCtx = [term.name, ...ctx];
+        return `(fun ${term.name} => ${surfaceTermToString(term.body, newCtx)})`;
       }
       return '?';
     case 'Var':
-      return `v${term.index}`;
+      return ctx[term.index] ?? `v${term.index}`;
     case 'Hole':
       return '_';
     default:

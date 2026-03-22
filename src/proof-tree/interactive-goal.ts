@@ -19,7 +19,7 @@ import { betaNormalize } from '../compiler/subst';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { ReverseRegistry, SubtermAnnotator } from '../math-editor/tt-to-math';
 import { MathNode, mkGroup } from '../math-editor/types';
-import { kernelTypeToSurface, buildNameCtx, renderTerm, renderTermAnnotated, extractTypeHead } from './goal-computation';
+import { kernelTypeToSurface, buildNameCtx, renderTerm, renderTermAnnotated, extractTypeHead, buildProjectionFoldMap, foldProjectionMatches, buildAliasFoldMap, foldAliases } from './goal-computation';
 
 // ============================================================================
 // Types
@@ -213,18 +213,24 @@ export function renderInteractiveGoal(
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
 ): InteractiveGoal {
-  // 1. Zonk and normalize
+  // 1. Zonk, normalize, fold projections, and fold aliases
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
   const normalized = betaNormalize(zonked);
+  const projMap = buildProjectionFoldMap(definitions);
+  const aliasMap = buildAliasFoldMap(definitions);
+  let folded = foldProjectionMatches(normalized, projMap);
+  folded = foldAliases(folded, aliasMap);
 
   // 2. Convert to surface
-  const surface = kernelTypeToSurface(normalized, definitions);
+  const surface = kernelTypeToSurface(folded, definitions);
   const nameCtx = buildNameCtx(goal.ctx);
 
   // 3. Compute context variable type heads (for induction suggestions)
   const contextVarTypes = new Map<string, string>();
   for (const entry of goal.ctx) {
-    const surfaceType = kernelTypeToSurface(entry.type, definitions);
+    let foldedType = foldProjectionMatches(entry.type, projMap);
+    foldedType = foldAliases(foldedType, aliasMap);
+    const surfaceType = kernelTypeToSurface(foldedType, definitions);
     const head = extractTypeHead(surfaceType);
     if (head) contextVarTypes.set(entry.name, head);
   }

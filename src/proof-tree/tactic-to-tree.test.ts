@@ -31,7 +31,7 @@ describe('surfaceTermToString', () => {
       tag: 'Binder', name: 'x', binderKind: { tag: 'BLamTT' },
       body: cst('x'),
     };
-    expect(surfaceTermToString(lam)).toBe('(\\x => x)');
+    expect(surfaceTermToString(lam)).toBe('(fun x => x)');
   });
 
   test('Hole', () => {

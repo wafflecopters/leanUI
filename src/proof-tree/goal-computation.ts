@@ -290,7 +290,7 @@ function prepareMatchesForIota(term: TTKTerm, definitions: DefinitionsMap): TTKT
  * A projection value looks like: λ params... λ r. match r { Ctor(_, _, PVar, _, ...) => Var(0) }
  * where only one pattern arg is PVar (the projected field) and the rest are PWild.
  */
-function buildProjectionFoldMap(definitions: DefinitionsMap): Map<string, Map<number, string>> {
+export function buildProjectionFoldMap(definitions: DefinitionsMap): Map<string, Map<number, string>> {
   const map = new Map<string, Map<number, string>>();
   for (const [name, def] of definitions.terms) {
     if (!name.includes('.') || !def.value) continue;
@@ -336,7 +336,7 @@ function buildProjectionFoldMap(definitions: DefinitionsMap): Map<string, Map<nu
  * These can't be iota-reduced when the scrutinee is a variable.
  * This function replaces them with App(Const(projName), scrutinee).
  */
-function foldProjectionMatches(
+export function foldProjectionMatches(
   term: TTKTerm,
   projMap: Map<string, Map<number, string>>,
 ): TTKTerm {
@@ -388,6 +388,169 @@ function foldProjectionMatches(
       const newBody = foldProjectionMatches(term.body, projMap);
       if (newDomain === term.domain && newBody === term.body) return term;
       return { ...term, domain: newDomain, body: newBody };
+    }
+    default:
+      return term;
+  }
+}
+
+// ============================================================================
+// Alias folding — fold delta-expanded projections back to their alias names
+// ============================================================================
+
+/**
+ * Info for folding a projection application back to its alias.
+ * E.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b) → rmul(R, a, b)
+ */
+interface AliasFoldInfo {
+  aliasName: string;
+  numFixedArgs: number;
+  /** For each lambda variable (0..numLambdas-1), how to extract it from actual args. */
+  lambdaExtractions: Array<{ fixedArgIndex: number; path: readonly ('fn' | 'arg')[] }>;
+}
+
+/**
+ * Find the path to Var(varIndex) in a kernel term.
+ * Returns a sequence of 'fn'/'arg' selectors, or null if not found.
+ */
+function findVarPath(term: TTKTerm, varIndex: number): ('fn' | 'arg')[] | null {
+  if (term.tag === 'Var' && term.index === varIndex) return [];
+  if (term.tag === 'App') {
+    const argPath = findVarPath(term.arg, varIndex);
+    if (argPath) return ['arg', ...argPath];
+    const fnPath = findVarPath(term.fn, varIndex);
+    if (fnPath) return ['fn', ...fnPath];
+  }
+  return null;
+}
+
+/** Extract a subterm from a kernel term by following a path of fn/arg selectors. */
+function extractByPath(term: TTKTerm, path: readonly ('fn' | 'arg')[]): TTKTerm | null {
+  let current = term;
+  for (const step of path) {
+    if (current.tag !== 'App') return null;
+    current = step === 'fn' ? current.fn : current.arg;
+  }
+  return current;
+}
+
+/**
+ * Build a map from projection name → alias info for folding delta-expanded projections.
+ *
+ * Scans definitions for aliases like:
+ *   rmul {R} = CompleteOrderedField.mul (field R)
+ * where the value (after stripping lambdas) is a partial application of a projection.
+ *
+ * This allows folding CompleteOrderedField.mul(Carrier(R), field(R), a, b) back to rmul(R, a, b),
+ * which then renders using the notation for rmul (e.g., a · b).
+ */
+export function buildAliasFoldMap(definitions: DefinitionsMap): Map<string, AliasFoldInfo> {
+  const map = new Map<string, AliasFoldInfo>();
+  for (const [name, def] of definitions.terms) {
+    // Only consider non-projection definitions (aliases don't contain '.')
+    if (name.includes('.') || !def.value) continue;
+
+    // Strip lambda binders to find the body
+    let body = def.value;
+    let numBindings = 0;
+    while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') {
+      body = body.body;
+      numBindings++;
+    }
+    // Also handle pattern-matching form: Match(Hole, [single clause with all PVar])
+    // This is how pattern-matching defs like `radd {R} = ...` compile.
+    if (body.tag === 'Match' && body.scrutinee.tag === 'Hole' &&
+        body.clauses.length === 1) {
+      const clause = body.clauses[0];
+      if (clause.patterns.every(p => p.tag === 'PVar')) {
+        numBindings += clause.patterns.length;
+        body = clause.rhs;
+      }
+    }
+    if (numBindings === 0) continue;
+
+    // Body must be a partial application of a projection (name with '.')
+    const { head, args: fixedArgs } = collectAppSpine(body);
+    if (head.tag !== 'Const' || !head.name.includes('.') || fixedArgs.length === 0) continue;
+
+    // Build extraction paths: for each binding var, find it in the fixed args
+    const lambdaExtractions: AliasFoldInfo['lambdaExtractions'] = [];
+    let allFound = true;
+    for (let k = 0; k < numBindings; k++) {
+      let found = false;
+      for (let fi = 0; fi < fixedArgs.length && !found; fi++) {
+        const path = findVarPath(fixedArgs[fi], k);
+        if (path) {
+          lambdaExtractions.push({ fixedArgIndex: fi, path });
+          found = true;
+        }
+      }
+      if (!found) { allFound = false; break; }
+    }
+    if (!allFound) continue;
+
+    // First alias wins (don't overwrite)
+    if (!map.has(head.name)) {
+      map.set(head.name, { aliasName: name, numFixedArgs: fixedArgs.length, lambdaExtractions });
+    }
+  }
+  return map;
+}
+
+/**
+ * Fold delta-expanded projection applications back to their alias names.
+ *
+ * E.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b)
+ *     → rmul(R, a, b)
+ *
+ * Applied after foldProjectionMatches (which handles Match → Const folding).
+ */
+export function foldAliases(term: TTKTerm, aliasMap: Map<string, AliasFoldInfo>): TTKTerm {
+  switch (term.tag) {
+    case 'App': {
+      // First recurse into subterms
+      const newFn = foldAliases(term.fn, aliasMap);
+      const newArg = foldAliases(term.arg, aliasMap);
+      const folded: TTKTerm = (newFn === term.fn && newArg === term.arg)
+        ? term : { ...term, fn: newFn, arg: newArg };
+
+      // Check if head is a projection with an alias
+      const { head, args } = collectAppSpine(folded);
+      if (head.tag !== 'Const') return folded;
+
+      const alias = aliasMap.get(head.name);
+      if (!alias || args.length < alias.numFixedArgs) return folded;
+
+      // Extract lambda-bound values from fixed args
+      const lambdaValues: TTKTerm[] = [];
+      for (const extraction of alias.lambdaExtractions) {
+        const value = extractByPath(args[extraction.fixedArgIndex], extraction.path);
+        if (!value) return folded; // extraction failed — don't fold
+        lambdaValues.push(value);
+      }
+
+      // Rebuild: alias(lambdaValues..., remainingArgs...)
+      const remainingArgs = args.slice(alias.numFixedArgs);
+      let result: TTKTerm = mkConst(alias.aliasName);
+      for (const v of lambdaValues) result = mkApp(result, v);
+      for (const a of remainingArgs) result = mkApp(result, a);
+      return result;
+    }
+    case 'Binder': {
+      const newDomain = foldAliases(term.domain, aliasMap);
+      const newBody = foldAliases(term.body, aliasMap);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+    case 'Match': {
+      const newScrutinee = foldAliases(term.scrutinee, aliasMap);
+      const newClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: foldAliases(c.rhs, aliasMap),
+      }));
+      const changed = newScrutinee !== term.scrutinee ||
+        newClauses.some((c, i) => c.rhs !== term.clauses[i].rhs);
+      return changed ? { ...term, scrutinee: newScrutinee, clauses: newClauses } : term;
     }
     default:
       return term;
@@ -1273,11 +1436,15 @@ function resolveExprInGoal(expr: string, goal: MetaVar, definitions?: Definition
   if (expr.startsWith('(') && expr.endsWith(')')) {
     const inner = expr.slice(1, -1).trim();
 
-    // Lambda: (\name => body)
-    if (inner.startsWith('\\')) {
+    // Lambda: (fun name => body) or legacy (\name => body)
+    const isFunLambda = inner.startsWith('fun ');
+    const isBackslashLambda = inner.startsWith('\\');
+    if (isFunLambda || isBackslashLambda) {
       const arrowIdx = inner.indexOf('=>');
       if (arrowIdx !== -1) {
-        const binderName = inner.slice(1, arrowIdx).trim();
+        const binderName = isFunLambda
+          ? inner.slice(4, arrowIdx).trim()   // skip "fun "
+          : inner.slice(1, arrowIdx).trim();  // skip "\"
         // Extend goal context with lambda binder so name resolution inside the
         // body produces correctly shifted de Bruijn indices (e.g., "a" at index 3
         // in the outer context becomes index 4 inside the lambda body).
@@ -1795,7 +1962,11 @@ function renderHypotheses(
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
+  projMap?: Map<string, Map<number, string>>,
+  aliasMap?: Map<string, AliasFoldInfo>,
 ): TypedHypothesis[] {
+  const pm = projMap ?? buildProjectionFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions);
   const hypotheses: TypedHypothesis[] = [];
   for (let i = 0; i < ctx.length; i++) {
     const entry = ctx[i];
@@ -1804,7 +1975,9 @@ function renderHypotheses(
       nameCtx.push(ctx[j].name);
     }
     const normalizedType = betaNormalize(entry.type);
-    const surfaceHypType = kernelTypeToSurface(normalizedType, definitions);
+    let folded = foldProjectionMatches(normalizedType, pm);
+    folded = foldAliases(folded, am);
+    const surfaceHypType = kernelTypeToSurface(folded, definitions);
     const typeLatex = renderTerm(surfaceHypType, nameCtx, rev);
     hypotheses.push({ name: entry.name, type: typeLatex, rawType: surfaceHypType });
   }
@@ -1817,6 +1990,8 @@ export function renderGoalLatex(
   goal: MetaVar,
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
+  projMap?: Map<string, Map<number, string>>,
+  aliasMap?: Map<string, AliasFoldInfo>,
 ): string {
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
   // 1. Prepare Match scrutinees for iota-reduction by WHNF-ing with real definitions
@@ -1825,7 +2000,15 @@ export function renderGoalLatex(
   // 2. Full-normalize (beta + iota) to reduce redexes like (\i => i)(0) → 0
   //    and Match expressions from unfold (e.g., match Zero { ... } → result)
   const normalized = fullNormalize(prepared, createDefinitionsMap());
-  const surface = kernelTypeToSurface(normalized, definitions);
+  // 3. Fold projection-like Match expressions back to Const form
+  //    (e.g., match x { MkR fields => field_i } → R.field_i(x))
+  const pm = projMap ?? buildProjectionFoldMap(definitions);
+  let folded = foldProjectionMatches(normalized, pm);
+  // 4. Fold delta-expanded projections back to alias names
+  //    (e.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b) → rmul(R, a, b))
+  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  folded = foldAliases(folded, am);
+  const surface = kernelTypeToSurface(folded, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
 
@@ -1835,10 +2018,16 @@ export function renderSubtermLatex(
   ctx: TTKContext,
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
+  projMap?: Map<string, Map<number, string>>,
+  aliasMap?: Map<string, AliasFoldInfo>,
 ): string {
   const prepared = prepareMatchesForIota(term, definitions);
   const normalized = fullNormalize(prepared, createDefinitionsMap());
-  const surface = kernelTypeToSurface(normalized, definitions);
+  const pm = projMap ?? buildProjectionFoldMap(definitions);
+  let folded = foldProjectionMatches(normalized, pm);
+  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  folded = foldAliases(folded, am);
+  const surface = kernelTypeToSurface(folded, definitions);
   return renderTerm(surface, buildNameCtx(ctx), rev);
 }
 
@@ -2022,13 +2211,14 @@ export function replayEntireTree(
   const result = new Map<ProofNodeId, NodeGoalInfo>();
   const engine = createInitialEngine(kernelType, [], definitions);
   const projMap = buildProjectionFoldMap(definitions);
+  const aliasMap = buildAliasFoldMap(definitions);
 
   function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string): void {
     const goal = eng.metaVars.get(gId);
     if (!goal) return;
     result.set(nodeId, {
-      goalLatex: renderGoalLatex(eng, goal, definitions, rev),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev),
+      goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap),
       caseLabelLatex,
     });
   }
@@ -2038,8 +2228,8 @@ export function replayEntireTree(
     if (!goal) return;
     const validation = validateExactNode(expr, eng, gId);
     result.set(nodeId, {
-      goalLatex: renderGoalLatex(eng, goal, definitions, rev),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev),
+      goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap),
       validation,
     });
   }
@@ -2128,8 +2318,10 @@ export function replayEntireTree(
           const rhsZonked = newEngine.zonkTerm(rawRhs, goal.ctx.length);
           const lhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
           const rhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
-          const lhs = foldProjectionMatches(lhsNorm, projMap);
-          const rhs = foldProjectionMatches(rhsNorm, projMap);
+          let lhs = foldProjectionMatches(lhsNorm, projMap);
+          let rhs = foldProjectionMatches(rhsNorm, projMap);
+          lhs = foldAliases(lhs, aliasMap);
+          rhs = foldAliases(rhs, aliasMap);
           const nameCtx = buildNameCtx(goal.ctx);
           const lhsSurface = kernelTypeToSurface(lhs, definitions);
           const rhsSurface = kernelTypeToSurface(rhs, definitions);
@@ -2174,9 +2366,11 @@ export function replayEntireTree(
             if (arg.term.tag === 'Hole' || arg.term.tag === 'Meta') continue; // unsolved
             if (arg.type.tag === 'Sort') continue; // type-level arg (e.g., {A : Type})
             try {
-              // Zonk to resolve any metas, then beta-normalize
+              // Zonk to resolve any metas, beta-normalize, fold projections + aliases
               const zonked = betaNormalize(newEngine.zonkTerm(arg.term, goal.ctx.length));
-              const surface = kernelTypeToSurface(zonked, definitions);
+              let folded = foldProjectionMatches(zonked, projMap);
+              folded = foldAliases(folded, aliasMap);
+              const surface = kernelTypeToSurface(folded, definitions);
               const latex = renderTerm(surface, nameCtx, rev);
               appliedArgsLatex.push(latex);
             } catch {

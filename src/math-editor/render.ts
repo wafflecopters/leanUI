@@ -215,6 +215,9 @@ function renderSymbol(value: string): string {
   if (value.length > 1 && !value.startsWith('\\') && /^[a-zA-Z]{2,}/.test(value)) {
     return `\\operatorname{${value}}`;
   }
+  // Escape underscore: bare _ is the subscript operator in math mode.
+  // Inside \htmlId{...}{_}, KaTeX still interprets _ as subscript, causing errors.
+  if (value === '_') return '\\_';
   return value;
 }
 

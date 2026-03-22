@@ -2227,14 +2227,44 @@ describe('real-analysis preset tactic replay (full flow)', () => {
         if (info.tacticError) {
           errors.push(`${decl.name} node ${nodeId}: TACTIC ERROR: ${info.tacticError}`);
         }
+        const RAW_PATTERNS = [
+          'MkDPair', 'MkCompleteOrderedField', 'Rightarrow', 'MkSemigroup', 'MkMonoid',
+          'CompleteOrderedField.', 'OrderedField.', 'Field.', 'Semigroup.', 'Monoid.',
+        ];
         // Check equation LaTeX for raw constructor/Match content
         if (info.unifiedEquationLatex) {
-          if (info.unifiedEquationLatex.includes('MkDPair') ||
-              info.unifiedEquationLatex.includes('MkCompleteOrderedField') ||
-              info.unifiedEquationLatex.includes('Rightarrow') ||
-              info.unifiedEquationLatex.includes('MkSemigroup') ||
-              info.unifiedEquationLatex.includes('MkMonoid')) {
-            errors.push(`${decl.name} node ${nodeId}: RAW LATEX: ${info.unifiedEquationLatex}`);
+          for (const pat of RAW_PATTERNS) {
+            if (info.unifiedEquationLatex.includes(pat)) {
+              errors.push(`${decl.name} node ${nodeId}: RAW equationLatex (${pat}): ${info.unifiedEquationLatex.slice(0, 200)}`);
+            }
+          }
+        }
+        // Check goal LaTeX for raw constructor/Match content
+        if (info.goalLatex) {
+          for (const pat of RAW_PATTERNS) {
+            if (info.goalLatex.includes(pat)) {
+              errors.push(`${decl.name} node ${nodeId}: RAW goalLatex (${pat}): ${info.goalLatex.slice(0, 200)}`);
+            }
+          }
+        }
+        // Check hypothesis LaTeX for raw constructor/Match content
+        if (info.hypotheses) {
+          for (const hyp of info.hypotheses) {
+            for (const pat of RAW_PATTERNS) {
+              if (hyp.type.includes(pat)) {
+                errors.push(`${decl.name} node ${nodeId} hyp ${hyp.name}: RAW hypothesis (${pat}): ${hyp.type.slice(0, 200)}`);
+              }
+            }
+          }
+        }
+        // Check appliedArgsLatex for raw content
+        if (info.appliedArgsLatex) {
+          for (const argLatex of info.appliedArgsLatex) {
+            for (const pat of RAW_PATTERNS) {
+              if (argLatex.includes(pat)) {
+                errors.push(`${decl.name} node ${nodeId}: RAW appliedArg (${pat}): ${argLatex.slice(0, 200)}`);
+              }
+            }
           }
         }
       }
