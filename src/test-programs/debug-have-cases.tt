@@ -1,0 +1,41 @@
+@test success
+@name "debug: have + cases with exact"
+@import preambles/either.tt
+@import preambles/nat.tt
+@import preambles/equality.tt
+@import preambles/pair.tt
+@import preambles/dpair.tt
+
+Sigma : (A : Type) -> (B : A -> Type) -> Type
+Sigma A B = DPair A B
+
+mkSigma : (A : Type) -> (P : A -> Type) -> (a : A) -> P a -> Sigma A P
+mkSigma A P a pa = MkDPair a pa
+
+postulate helper : Nat -> DPair Nat (\n => Equal n n)
+
+-- Simple test: have + cases + exact
+test1 : (f : Nat -> Nat) -> (x : Nat) -> Either (Equal x Zero) (Equal x (Succ Zero)) -> Equal (f x) (f x) := by
+  intros f x choice
+  cases choice with
+  | Left h => exact refl
+  | Right h => exact refl
+
+-- Add have before cases
+test2 : (f : Nat -> Nat) -> (x : Nat) -> Either (Equal x Zero) (Equal x (Succ Zero)) -> Equal (f x) (f x) := by
+  intros f x choice
+  have h := helper x
+  cases choice with
+  | Left h2 => exact refl
+  | Right h2 => exact refl
+
+-- More complex: exact term that references f
+WitnessType : (f : Nat -> Nat) -> (x : Nat) -> Nat -> Type
+WitnessType f x n = Equal (f x) (f x)
+
+test3 : (f : Nat -> Nat) -> (x : Nat) -> Either (Equal x Zero) (Equal x (Succ Zero)) -> Sigma Nat (WitnessType f x) := by
+  intros f x choice
+  have h := helper x
+  cases choice with
+  | Left h2 => exact (mkSigma Nat (WitnessType f x) Zero refl)
+  | Right h2 => exact (mkSigma Nat (WitnessType f x) Zero refl)

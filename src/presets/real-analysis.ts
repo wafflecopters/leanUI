@@ -507,7 +507,6 @@ lim_const _ _ = refl
 limit_pull_const_add : {R : Real} -> (k : Carrier R) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> (limF : Limit f x0 Lf) -> Equal (radd k (lim f x0 limF)) (lim (\\x => radd k (f x)) x0 (limitAdd (\\_ => k) f x0 k Lf (limitConst k x0) limF))
 limit_pull_const_add _ _ _ _ _ = refl
 
-{-
 ------------------------------------------------------------
 -- DERIVATIVES
 ------------------------------------------------------------
@@ -567,10 +566,6 @@ diffQuotScalarEq : {R : Real} -> (c : Carrier R) -> (f : Carrier R -> Carrier R)
 -- Infrastructure: abs, ordering, and multiplication lemmas
 ------------------------------------------------------------
 
--- a - a = 0
-subSelf : {R : Real} -> (a : Carrier R) -> Equal (rsub a a) (rzero R)
-subSelf {R} a = CompleteOrderedField.negRight (field R) a
-
 -- (a - b) + b = a
 subCancel : {R : Real} -> (a b : Carrier R) -> Equal (radd (rsub a b) b) a := by
   intros R a b
@@ -593,13 +588,6 @@ leToSubNonneg : {R : Real} -> (a b : Carrier R) -> rle a b -> rle (rzero R) (rsu
 -- Proof: 0 <= b-a, so 0 <= c*(b-a) = c*b - c*a, add c*a: c*a <= c*b
 mulLeLeft : {R : Real} -> (c a b : Carrier R) -> rle (rzero R) c -> rle a b -> rle (rmul c a) (rmul c b)
 mulLeLeft {R} c a b hc hab = replace (\\z => rle (rmul c a) z) (subCancel (rmul c b) (rmul c a)) (replace (\\z => rle (rmul c a) (radd z (rmul c a))) (mulSubDistrib c b a) (replace (\\z => rle z (radd (rmul c (rsub b a)) (rmul c a))) (addZeroLeft (rmul c a)) (addLeRight (rzero R) (rmul c (rsub b a)) (rmul c a) (CompleteOrderedField.mulNonneg (field R) c (rsub b a) hc (leToSubNonneg a b hab)))))
-
--- 0 < 1
-zeroLtOne : (R : Real) -> rlt (rzero R) (rone R)
-zeroLtOne R := by
-  constructor
-  · exact (CompleteOrderedField.zeroLeOne (field R))
-  · exact (CompleteOrderedField.zeroNeOne (field R))
 
 -- 1 <= |c| + 1 (used for absPlusOnePos)
 -- From absNonneg: 0 <= |c|. addLeLeft: le (1+0) (1+|c|). Commute to get le 1 (|c|+1).
@@ -842,17 +830,19 @@ ContinuousWitness {R} f x0 target dc = Pair (rlt (rzero R) dc) ((x : Carrier R) 
 absMulBound : {R : Real} -> (a b M eps : Carrier R) -> rle (rabs a) M -> rlt (rabs b) eps -> rlt (rzero R) M -> rlt (rmul (rabs a) (rabs b)) (rmul M eps)
 absMulBound {R} a b M eps hle hlt hM = leLtTrans (rmul (rabs a) (rabs b)) (rmul M (rabs b)) (rmul M eps) (mulLeRight (rabs a) M (rabs b) hle (absNonneg b)) (mulLtLeft M (rabs b) eps hM hlt)
 
+-- Core bound lemma: Given |diffQuot(f)| < M and |x-x0| < eps where M*eps = target,
+-- prove |f(x)-f(x0)| < target. This is stated with simple Pi types to avoid
+-- constraint solver issues with deeply nested ContinuousWitness types.
+continuityBound : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 x Lf target : Carrier R) -> rle (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) -> rlt (rabs (rsub x x0)) (rmul target (rinv (radd (rabs Lf) (rone R)))) -> (Equal (rsub x x0) (rzero R) -> Void) -> rlt (rabs (rsub (f x) (f x0))) target
+continuityBound {R} f x0 x lf target hdq hdelta hne = replace (\\z => rlt z target) (absDiffQuotTimesH f x0 x hne) (replace (\\z => rlt (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) z) (mulInvCancel (radd (rabs lf) (rone R)) target (absPlusOneNe lf)) (absMulBound (diffQuot f x0 x) (rsub x x0) (radd (rabs lf) (rone R)) (rmul target (rinv (radd (rabs lf) (rone R)))) hdq hdelta (absPlusOnePos lf)))
+
 -- Differentiability implies continuity
--- For any target > 0, exists delta > 0, 0 < |x-x0| < delta => |f(x)-f(x0)| < target
--- We need min of two deltas: d1 from diffQuotBounded, d2 = target/(|Lf|+1)
 continuousFromDeriv : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative f x0 Lf -> (target : Carrier R) -> rlt (rzero R) target -> Sigma (Carrier R) (ContinuousWitness f x0 target) := by
   intros R f x0 Lf hf target htarget
   have dqb := diffQuotBounded f x0 Lf hf
   cases (CompleteOrderedField.leTotal (field R) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R))))) with
-  | Left hle =>
-    exact (mkSigma (Carrier R) (ContinuousWitness f x0 target) (DPair.fst dqb) (MkPair (Pair.fst (DPair.snd dqb)) (\\x hx0 hxd => replace (\\z => rlt z target) (absDiffQuotTimesH f x0 x (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0))) (replace (\\z => rlt (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) z) (mulInvCancel (radd (rabs Lf) (rone R)) target (absPlusOneNe Lf)) (absMulBound (diffQuot f x0 x) (rsub x x0) (radd (rabs Lf) (rone R)) (rmul target (rinv (radd (rabs Lf) (rone R)))) (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 hxd)) (ltLeTrans (rabs (rsub x x0)) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R)))) hxd hle) (absPlusOnePos Lf))))))
-  | Right hle =>
-    exact (mkSigma (Carrier R) (ContinuousWitness f x0 target) (rmul target (rinv (radd (rabs Lf) (rone R)))) (MkPair (epsOverMPos target (radd (rabs Lf) (rone R)) htarget (absPlusOnePos Lf)) (\\x hx0 hxd => replace (\\z => rlt z target) (absDiffQuotTimesH f x0 x (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0))) (replace (\\z => rlt (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) z) (mulInvCancel (radd (rabs Lf) (rone R)) target (absPlusOneNe Lf)) (absMulBound (diffQuot f x0 x) (rsub x x0) (radd (rabs Lf) (rone R)) (rmul target (rinv (radd (rabs Lf) (rone R)))) (Pair.snd (DPair.snd dqb) x hx0 (ltLeTrans (rabs (rsub x x0)) (rmul target (rinv (radd (rabs Lf) (rone R)))) (DPair.fst dqb) hxd hle)) hxd (absPlusOnePos Lf))))))
+  | Left hle => exact (mkSigma (Carrier R) (ContinuousWitness f x0 target) (DPair.fst dqb) (MkPair (Pair.fst (DPair.snd dqb)) (\\x hx0 hxd => continuityBound f x0 x Lf target (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 hxd)) (ltLeTrans (rabs (rsub x x0)) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R)))) hxd hle) (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0)))))
+  | Right hle => exact (mkSigma (Carrier R) (ContinuousWitness f x0 target) (rmul target (rinv (radd (rabs Lf) (rone R)))) (MkPair (epsOverMPos target (radd (rabs Lf) (rone R)) htarget (absPlusOnePos Lf)) (\\x hx0 hxd => continuityBound f x0 x Lf target (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 (ltLeTrans (rabs (rsub x x0)) (rmul target (rinv (radd (rabs Lf) (rone R)))) (DPair.fst dqb) hxd hle))) hxd (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0)))))
 
 ------------------------------------------------------------
 -- THE CHAIN RULE: (g . f)'(x0) = g'(f(x0)) . f'(x0)
@@ -926,5 +916,4 @@ derivChain : {R : Real} -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier
   have hSum := limitAdd (chainTermA g f x0 Lg) (\\x => rmul Lg (diffQuot f x0 x)) x0 (rzero R) (rmul Lg Lf) hA hScale
   -- Rewrite 0 + Lg*Lf = Lg*Lf
   exact replace (\\z => Limit (\\x => radd (chainTermA g f x0 Lg x) (rmul Lg (diffQuot f x0 x))) x0 z) (addZeroLeft (rmul Lg Lf)) hSum
--}
 `;

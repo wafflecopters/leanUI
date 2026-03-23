@@ -695,6 +695,7 @@ export function solveConstraints(
             break;
           }
         }
+
         // Check structural conflicts using original contexts (safe for constructor heads)
         if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, constraint.ctx)) {
           const names = effectiveContext.map(c => c.name).reverse();
