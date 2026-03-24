@@ -28,6 +28,8 @@ import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
+import { HaveTactic } from '../tactics/have-tactic';
+import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { proposeVarName, freshenName } from './propose-var-name';
 
 // ============================================================================
@@ -802,6 +804,9 @@ function parseExactExpr(
 
   let pos = 0;
 
+  // Stack of local binder names for resolving Var references inside lambdas
+  const localBinderNames: string[] = [];
+
   function parseAtom(): TTKTerm | null {
     if (pos >= tokens.length) return null;
     if (tokens[pos] === '(') {
@@ -811,9 +816,33 @@ function parseExactExpr(
       return inner;
     }
     if (tokens[pos] === ')') return null;
+    // Lambda: fun name => body
+    if (tokens[pos] === 'fun') {
+      pos++; // skip 'fun'
+      const binderName = pos < tokens.length ? tokens[pos++] : '_';
+      if (pos < tokens.length && tokens[pos] === '=>') pos++; // skip '=>'
+      localBinderNames.push(binderName);
+      const body = parseApp();
+      localBinderNames.pop();
+      if (!body) return null;
+      return {
+        tag: 'Binder',
+        binderKind: { tag: 'BLam' },
+        name: binderName,
+        domain: { tag: 'Hole', id: '_lam_domain' },
+        body,
+      };
+    }
     const name = tokens[pos++];
+    // Check local lambda binders first (innermost first)
+    for (let i = localBinderNames.length - 1; i >= 0; i--) {
+      if (localBinderNames[i] === name) {
+        return { tag: 'Var', index: localBinderNames.length - 1 - i };
+      }
+    }
+    // Then check goal context (shifted by number of local binders)
     const varIdx = findVarIndex(name, ctx);
-    if (varIdx !== null) return { tag: 'Var', index: varIdx };
+    if (varIdx !== null) return { tag: 'Var', index: varIdx + localBinderNames.length };
     // For constants, insert Holes for implicit args (matching elaboration behavior)
     let result: TTKTerm = { tag: 'Const', name };
     if (namedArgLookup) {
@@ -830,7 +859,7 @@ function parseExactExpr(
   function parseApp(): TTKTerm | null {
     let result = parseAtom();
     if (!result) return null;
-    while (pos < tokens.length && tokens[pos] !== ')') {
+    while (pos < tokens.length && tokens[pos] !== ')' && tokens[pos] !== '=>') {
       const arg = parseAtom();
       if (!arg) break;
       result = { tag: 'App', fn: result, arg };
@@ -1653,7 +1682,9 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal, engine.definitions));
+      const tactic = node.name === 'constructor'
+        ? new ConstructorTactic()
+        : new ApplyTactic(resolveExprInGoal(node.name, goal, engine.definitions));
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
@@ -1817,6 +1848,46 @@ function replayProofTree(
 
       return replayProofTree(
         node.child, cursorId, currentEngine,
+        caseLabel, caseLabelLatex, inductionVar,
+      );
+    }
+
+    case 'have': {
+      // Apply HaveTactic — parse proof expression, infer type, extend context
+      const goal = engine.getFocusedGoal();
+      if (!goal) return null;
+
+      const proofTerm = parseExactExpr(node.expr, goal.ctx, engine.definitions);
+      if (!proofTerm) {
+        // Parse failed — continue with unchanged engine
+        if (node.child.id === cursorId) {
+          return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+        }
+        return replayProofTree(
+          node.child, cursorId, engine,
+          caseLabel, caseLabelLatex, inductionVar,
+        );
+      }
+
+      // Use Hole as type — HaveTactic will infer it
+      const holeType: TTKTerm = { tag: 'Hole', id: '_have_type' };
+      const tactic = new HaveTactic(node.name, holeType, proofTerm);
+      const result = tactic.apply(engine, goal, goalId);
+
+      if (!result.success) {
+        // Tactic failed — continue with unchanged engine, propagate error
+        const childResult = replayProofTree(
+          node.child, cursorId, engine,
+          caseLabel, caseLabelLatex, inductionVar,
+        );
+        if (childResult) {
+          childResult.tacticError = `have ${node.name}: ${result.error ?? 'failed'}`;
+        }
+        return childResult;
+      }
+
+      return replayProofTree(
+        node.child, cursorId, result.newEngine,
         caseLabel, caseLabelLatex, inductionVar,
       );
     }
@@ -2114,6 +2185,7 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'unfold':
     case 'fold':
     case 'rewrite':
+    case 'have':
       return findNodeById(node.child, id);
     case 'apply':
       for (const child of node.children) {
@@ -2153,6 +2225,7 @@ function findCaseAncestor(
     case 'unfold':
     case 'fold':
     case 'rewrite':
+    case 'have':
       return findCaseAncestor(node.child, targetId);
     case 'apply':
       for (const child of node.children) {
@@ -2340,6 +2413,20 @@ export function replayEntireTree(
         break;
       }
 
+      case 'have': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const proofTerm = parseExactExpr(node.expr, goal.ctx, eng.definitions);
+        if (!proofTerm) { walk(node.child, eng, caseLabelLatex); break; }
+        const haveTactic = new HaveTactic(node.name, { tag: 'Hole', id: '_have_type' }, proofTerm);
+        const haveResult = haveTactic.apply(eng, goal, gId);
+        // Don't report errors — have is "best effort" (may fail if prior tactics
+        // like constructor were skipped in tree conversion)
+        walk(node.child, haveResult.success ? haveResult.newEngine! : eng, caseLabelLatex);
+        break;
+      }
+
       case 'apply': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
@@ -2347,7 +2434,9 @@ export function replayEntireTree(
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
-        const tactic = new ApplyTactic(resolveExprInGoal(node.name, goal, eng.definitions));
+        const tactic = node.name === 'constructor'
+          ? new ConstructorTactic()
+          : new ApplyTactic(resolveExprInGoal(node.name, goal, eng.definitions));
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
           const existing = result.get(node.id);
@@ -2565,6 +2654,7 @@ function walkTreeSurface(
     case 'unfold':
     case 'fold':
     case 'rewrite':
+    case 'have':
       // No kernel type — can't process, pass through
       return walkTreeSurface(node.child, cursorId, currentType, hypotheses, nameCtx, rev);
 

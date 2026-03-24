@@ -48,6 +48,7 @@ export type ProseItemKind =
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string }
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'have'; name: string; expr: string; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'qed' };
 
 /** A single step in an unfold/rewrite chain. */
@@ -314,6 +315,19 @@ export function generateProofProse(
           });
           walk(c.body, depth + 2);
         }
+        break;
+      }
+
+      case 'have': {
+        const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
+        emit(node.id, depth, {
+          tag: 'have',
+          name: node.name,
+          expr: node.expr,
+          preGoalLatex: info?.goalLatex,
+          goalLatex: childGoalLatex,
+        });
+        walk(node.child, depth);
         break;
       }
 

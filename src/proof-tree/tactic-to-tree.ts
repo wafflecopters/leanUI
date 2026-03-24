@@ -17,6 +17,7 @@ import {
   mkRewrite,
   mkApply,
   mkCase,
+  mkHave,
 } from './proof-tree';
 
 /**
@@ -118,8 +119,25 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
     case 'fold':
       return buildFoldChain(cmd.args, tacticCommandsToProofTree(rest));
 
+    case 'constructor': {
+      // constructor is like apply with the single constructor of the goal type
+      // When followed by focused tactics (· bullets), each becomes a child
+      const children = cmd.focusedTactics && cmd.focusedTactics.length > 0
+        ? cmd.focusedTactics.map(ft => tacticCommandsToProofTree([ft]))
+        : [tacticCommandsToProofTree(rest)];
+      return mkApply('constructor', children);
+    }
+
+    case 'have': {
+      // have name : type := proof → args[0]=name, args[1]=type, args[2]=proof
+      const haveName = cmd.args.length > 0 ? extractName(cmd.args[0]) ?? '_' : '_';
+      // args[2] is the proof expression
+      const haveExpr = cmd.args.length > 2 ? surfaceTermToString(cmd.args[2]) : '?';
+      return mkHave(haveName, haveExpr, tacticCommandsToProofTree(rest));
+    }
+
     default:
-      // Unsupported tactics (have, obtain, suffices, symmetry, reflexivity, etc.)
+      // Unsupported tactics (obtain, suffices, symmetry, reflexivity, etc.)
       // Skip and continue with remaining commands
       return tacticCommandsToProofTree(rest);
   }
@@ -183,6 +201,7 @@ export function findFirstHole(node: ProofNode): ProofNode | null {
     case 'unfold':
     case 'fold':
     case 'rewrite':
+    case 'have':
       return findFirstHole(node.child);
     case 'simp':
       return findFirstHole(node.child);
