@@ -634,13 +634,22 @@ export function createDefaultRegistry(): SyntaxRegistry {
       priority: 45,
     },
 
-    // \frac{a}{b}  →  rmul a (rinv b)
+    // \frac{a}{b}  →  rdiv a b
     {
       name: 'fraction',
       pattern: [pat.frac([pat.capture('a')], [pat.capture('b')])],
-      template: 'rmul $$a (rinv $$b)',
+      template: 'rdiv $$a $$b',
       needsR: true,
       priority: 50,
+    },
+
+    // \frac{1}{b}  →  rinv b  (multiplicative inverse)
+    {
+      name: 'inverse',
+      pattern: [pat.frac([pat.literal('1')], [pat.capture('b')])],
+      template: 'rinv $$b',
+      needsR: true,
+      priority: 55, // higher than fraction so 1/b matches before a/b
     },
 
     // |a|  →  rabs a

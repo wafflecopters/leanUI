@@ -183,6 +183,10 @@ rle {R} = CompleteOrderedField.le (field R)
 rsub : {R : Real} -> Carrier R -> Carrier R -> Carrier R
 rsub {R} a b = radd a (rneg b)
 
+-- Division: a / b = a * inv(b)
+rdiv : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+rdiv {R} a b = rmul a (rinv b)
+
 -- Strict ordering: a < b iff a <= b and a /= b
 rlt : {R : Real} -> Carrier R -> Carrier R -> Type
 rlt {R} a b = Pair (rle a b) (Equal a b -> Void)

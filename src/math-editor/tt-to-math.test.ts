@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll } from 'vitest';
 import { compileTTFromText } from '../compiler/compile';
 import { NAT_MATH_CODE } from '../presets/nat-math';
-import { buildRegistryFromAnnotations, SyntaxAnnotation } from './syntax-registry';
+import { buildRegistryFromAnnotations, SyntaxAnnotation, createDefaultRegistry } from './syntax-registry';
 import {
   buildReverseRegistry,
   decomposePiSpine,
@@ -110,6 +110,7 @@ describe('parseTemplateSlots', () => {
       { kind: 'lambda', binderCapture: '0', bodyCapture: '3' },
     ]);
   });
+
 });
 
 describe('decomposePiSpine', () => {
@@ -468,5 +469,65 @@ describe('operator precedence — parenthesization', () => {
     expect(flat).toContain('+');
     const delimNode = nodes.find(n => n.tag === 'Delimiter');
     expect(delimNode).toBeDefined();
+  });
+});
+
+// ============================================================================
+// rmul/rinv/rdiv rendering — fraction vs multiplication vs inverse
+// ============================================================================
+
+describe('rmul/rinv/rdiv rendering', () => {
+  const defaultReg = createDefaultRegistry();
+  const rev = buildReverseRegistry(defaultReg);
+
+  function mkApp(fn: TTerm, arg: TTerm): TTerm {
+    return { tag: 'App', fn, arg };
+  }
+  function mkConst(name: string): TTerm {
+    return { tag: 'Const', name };
+  }
+  function mkVar(index: number): TTerm {
+    return { tag: 'Var', index };
+  }
+
+  test('rmul c (rsub a b) renders as multiplication (c · (a - b))', () => {
+    const term = mkApp(mkApp(mkConst('rmul'), mkVar(2)), mkApp(mkApp(mkConst('rsub'), mkVar(1)), mkVar(0)));
+    const nodes = ttermToMathNodes(term, rev, ['b', 'a', 'c']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    expect(flat).toContain('\\cdot');
+    expect(flat).not.toContain('frac(');
+  });
+
+  test('rmul a b renders as multiplication (a · b)', () => {
+    const term = mkApp(mkApp(mkConst('rmul'), mkVar(1)), mkVar(0));
+    const nodes = ttermToMathNodes(term, rev, ['b', 'a']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    expect(flat).toContain('\\cdot');
+    expect(flat).not.toContain('frac(');
+  });
+
+  test('rdiv a b renders as fraction (a/b)', () => {
+    const term = mkApp(mkApp(mkConst('rdiv'), mkVar(1)), mkVar(0));
+    const nodes = ttermToMathNodes(term, rev, ['b', 'a']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    expect(flat).toContain('frac(');
+    expect(flat).not.toContain('\\cdot');
+  });
+
+  test('rinv b renders as 1/b', () => {
+    const term = mkApp(mkConst('rinv'), mkVar(0));
+    const nodes = ttermToMathNodes(term, rev, ['b']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    expect(flat).toContain('frac(');
+    expect(flat).toContain('1');
+  });
+
+  test('rmul c (rinv b) renders as c · (1/b), not c/b', () => {
+    const term = mkApp(mkApp(mkConst('rmul'), mkVar(1)), mkApp(mkConst('rinv'), mkVar(0)));
+    const nodes = ttermToMathNodes(term, rev, ['b', 'c']);
+    const flat = flattenRow({ id: 0, children: nodes });
+    // Should be multiplication: c · frac(1|b)
+    expect(flat).toContain('\\cdot');
+    expect(flat).toContain('frac(');
   });
 });

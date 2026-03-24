@@ -315,10 +315,17 @@ describe('convertToSource', () => {
     expect(result.needsR).toBe(true);
   });
 
-  test('fraction: a/b → rmul a (rinv b)', () => {
+  test('fraction: a/b → rdiv a b', () => {
     const frac = mkFrac(mkRow([mkSymbol('a')]), mkRow([mkSymbol('b')]));
     const result = convertToSource(registry, [frac]);
-    expect(result.source).toBe('rmul a (rinv b)');
+    expect(result.source).toBe('rdiv a b');
+    expect(result.needsR).toBe(true);
+  });
+
+  test('fraction: 1/b → rinv b', () => {
+    const frac = mkFrac(mkRow([mkSymbol('1')]), mkRow([mkSymbol('b')]));
+    const result = convertToSource(registry, [frac]);
+    expect(result.source).toBe('rinv b');
     expect(result.needsR).toBe(true);
   });
 
