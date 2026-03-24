@@ -145,7 +145,10 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
 
 /** Build an InductionNode from a cases/induction command with case branches. */
 function buildInductionNode(cmd: TacticCommand): ProofNode {
-  const scrutinee = extractName(cmd.args[0]) ?? '_';
+  // Use full expression string for complex scrutinees (e.g., cases (leTotal ...))
+  const scrutinee = cmd.args.length > 0
+    ? (extractName(cmd.args[0]) ?? surfaceTermToString(cmd.args[0]))
+    : '_';
 
   if (!cmd.caseBranches || cmd.caseBranches.length === 0) {
     // No structured cases — just a hole

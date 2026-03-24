@@ -15,7 +15,8 @@
 
 import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
-import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { DefinitionsMap, NamedArgMap, MetaVar, TCEnv, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { inferType } from '../compiler/checker';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -1740,15 +1741,48 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      // Find scrutinee in context
-      const scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
+      // Find scrutinee in context or infer from expression
+      let scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
+      let effectiveGoal = goal;
+      let effectiveEngine = engine;
+      let effectiveGoalId = goalId;
+
+      // If scrutinee is a complex expression (not in context), try to parse and infer its type
       if (scrutineeIdx === null) {
-        // Scrutinee not in context — search cases with current engine
+        const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, engine.definitions);
+        if (parsedScrutinee) {
+          try {
+            const env = new TCEnv(
+              goal.ctx, engine.definitions, engine.metaVars, engine.constraints,
+              [], [], parsedScrutinee, new Map(), { mode: 'check' as const }
+            );
+            const inferredEnv = inferType(env);
+            const inferredType = inferredEnv.zonkTerm(inferredEnv.value);
+            // Add a temp binding for the scrutinee so computeCaseGoalDirect can remove it
+            const tempName = '_scrut';
+            const extCtx = [...goal.ctx, { name: tempName, type: inferredType }];
+            const extGoalType = shiftTerm(goal.type, 1, 0);
+            const tempGoalId = goalId + '_cases_temp';
+            const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
+            const tempMetaVars = new Map(engine.metaVars);
+            tempMetaVars.set(tempGoalId, tempMeta);
+            const tempGoals = engine.goals.map(g => g === goalId ? tempGoalId : g);
+            effectiveEngine = engine.withUpdates({ metaVars: tempMetaVars, goals: tempGoals });
+            effectiveGoal = tempMeta;
+            effectiveGoalId = tempGoalId;
+            scrutineeIdx = 0; // last entry (de Bruijn 0)
+          } catch {
+            // Inference failed — fall back
+          }
+        }
+      }
+
+      if (scrutineeIdx === null) {
         return searchCasesForCursor(node.cases, cursorId, engine, goalId, node.scrutinee);
       }
 
       // Look up inductive type for constructor info
-      const scrutineeType = goal.ctx[goal.ctx.length - 1 - scrutineeIdx].type;
+      const scrutineeType = effectiveGoal.ctx[effectiveGoal.ctx.length - 1 - scrutineeIdx].type;
       const scrutineeTypeWhnf = whnf(scrutineeType, { definitions: engine.definitions });
       const inductiveName = getInductiveHead(scrutineeTypeWhnf);
       if (!inductiveName) {
@@ -1774,23 +1808,23 @@ function replayProofTree(
         }
 
         // Compute case-specific goal with proper variable substitution
-        const caseGoalId = `${goalId}_case_${c.constructorName}`;
+        const caseGoalId = `${effectiveGoalId}_case_${c.constructorName}`;
         const caseMeta = computeCaseGoalDirect(
-          goal, scrutineeIdx, ctor, inductiveName, engine.definitions,
+          effectiveGoal, scrutineeIdx, ctor, inductiveName, effectiveEngine.definitions,
           c.constructorParamNames
         );
 
         // Create engine with this case goal
-        const caseMetaVars = new Map(engine.metaVars);
+        const caseMetaVars = new Map(effectiveEngine.metaVars);
         caseMetaVars.set(caseGoalId, caseMeta);
-        const caseGoals = [...engine.goals];
-        const focusIdx = caseGoals.indexOf(goalId);
+        const caseGoals = [...effectiveEngine.goals];
+        const focusIdx = caseGoals.indexOf(effectiveGoalId);
         if (focusIdx >= 0) {
           caseGoals[focusIdx] = caseGoalId;
         } else {
           caseGoals.push(caseGoalId);
         }
-        const caseEngine = engine.withUpdates({
+        const caseEngine = effectiveEngine.withUpdates({
           metaVars: caseMetaVars,
           goals: caseGoals,
           focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
@@ -2489,9 +2523,40 @@ export function replayEntireTree(
         const goal = eng.getFocusedGoal();
         if (!goal) break;
 
-        const scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
+        let scrutineeIdx: number | null = findVarIndex(node.scrutinee, goal.ctx);
+        let effGoal = goal;
+        let effEng = eng;
+        let effGId = gId;
+
+        // If scrutinee is a complex expression (not in context), try to parse and infer its type
         if (scrutineeIdx === null) {
-          // Fallback: record each case with unchanged engine
+          const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, eng.definitions);
+          if (parsedScrutinee) {
+            try {
+              const env = new TCEnv(
+                goal.ctx, eng.definitions, eng.metaVars, eng.constraints,
+                [], [], parsedScrutinee, new Map(), { mode: 'check' as const }
+              );
+              const inferredEnv = inferType(env);
+              const inferredType = inferredEnv.zonkTerm(inferredEnv.value);
+              const extCtx = [...goal.ctx, { name: '_scrut', type: inferredType }];
+              const extGoalType = shiftTerm(goal.type, 1, 0);
+              const tempGoalId = gId + '_cases_temp';
+              const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
+              const tempMetaVars = new Map(eng.metaVars);
+              tempMetaVars.set(tempGoalId, tempMeta);
+              const tempGoals = eng.goals.map(g => g === gId ? tempGoalId : g);
+              effEng = eng.withUpdates({ metaVars: tempMetaVars, goals: tempGoals });
+              effGoal = tempMeta;
+              effGId = tempGoalId;
+              scrutineeIdx = 0;
+            } catch {
+              // Inference failed — fall back
+            }
+          }
+        }
+
+        if (scrutineeIdx === null) {
           for (const c of node.cases) {
             recordGoal(c.id, eng, gId, c.labelLatex);
             walk(c.body, eng, c.labelLatex);
@@ -2499,7 +2564,7 @@ export function replayEntireTree(
           break;
         }
 
-        const scrutineeType = goal.ctx[goal.ctx.length - 1 - scrutineeIdx].type;
+        const scrutineeType = effGoal.ctx[effGoal.ctx.length - 1 - scrutineeIdx].type;
         const scrutineeTypeWhnf = whnf(scrutineeType, { definitions: eng.definitions });
         const inductiveName = getInductiveHead(scrutineeTypeWhnf);
         if (!inductiveName) {
@@ -2525,15 +2590,15 @@ export function replayEntireTree(
             walk(c.body, eng, c.labelLatex);
             continue;
           }
-          const caseGoalId = `${gId}_case_${c.constructorName}`;
-          const caseMeta = computeCaseGoalDirect(goal, scrutineeIdx, ctor, inductiveName, eng.definitions, c.constructorParamNames);
-          const caseMetaVars = new Map(eng.metaVars);
+          const caseGoalId = `${effGId}_case_${c.constructorName}`;
+          const caseMeta = computeCaseGoalDirect(effGoal, scrutineeIdx!, ctor, inductiveName, effEng.definitions, c.constructorParamNames);
+          const caseMetaVars = new Map(effEng.metaVars);
           caseMetaVars.set(caseGoalId, caseMeta);
-          const caseGoals = [...eng.goals];
-          const focusIdx = caseGoals.indexOf(gId);
+          const caseGoals = [...effEng.goals];
+          const focusIdx = caseGoals.indexOf(effGId);
           if (focusIdx >= 0) caseGoals[focusIdx] = caseGoalId;
           else caseGoals.push(caseGoalId);
-          const caseEngine = eng.withUpdates({
+          const caseEngine = effEng.withUpdates({
             metaVars: caseMetaVars,
             goals: caseGoals,
             focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
