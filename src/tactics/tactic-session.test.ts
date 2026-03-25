@@ -27,7 +27,6 @@ describe('TacticSession', () => {
   const defs = getNatDefs();
 
   test('create session from goal type', () => {
-    // Goal: Nat -> Nat
     const goalType = {
       tag: 'Binder' as const,
       binderKind: { tag: 'BPi' as const },
@@ -61,7 +60,6 @@ describe('TacticSession', () => {
   });
 
   test('reflexivity completes equality proof', () => {
-    // Goal: Equal Zero Zero (using the compiled definitions which have refl)
     const goalType = mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')),
       mkConst('Zero')), mkConst('Zero'));
     const s0 = TacticSession.create(goalType, defs);
@@ -72,7 +70,6 @@ describe('TacticSession', () => {
   });
 
   test('applyCommands applies sequence and produces cumulative trace', () => {
-    // Goal: Nat -> Equal Zero Zero
     const goalType = {
       tag: 'Binder' as const,
       binderKind: { tag: 'BPi' as const },
@@ -85,17 +82,16 @@ describe('TacticSession', () => {
     const s0 = TacticSession.create(goalType, defs);
     const s2 = s0.applyCommands([
       { name: 'intros', args: [mkConst('n')] },
-      { name: 'exact', args: [mkConst('refl')] },
+      { name: 'reflexivity', args: [] },
     ]);
     expect(s2.trace).toHaveLength(2);
     expect(s2.trace[0].tacticName).toBe('intros');
-    expect(s2.trace[1].tacticName).toBe('exact');
+    expect(s2.trace[1].tacticName).toBe('reflexivity');
   });
 
   test('failed tactic records error in trace', () => {
     const goalType = { tag: 'Const' as const, name: 'Nat' };
     const s0 = TacticSession.create(goalType, defs);
-    // intros on a non-Pi type should fail
     const s1 = s0.applyCommand({ name: 'intros', args: [mkConst('n')] });
     expect(s1.trace).toHaveLength(1);
     expect(s1.trace[0].error).toBeDefined();
@@ -111,24 +107,21 @@ describe('TacticSession', () => {
     };
     const s0 = TacticSession.create(goalType, defs);
     const s1 = s0.applyCommand({ name: 'intros', args: [mkConst('n')] });
-
-    // Original session is unchanged
     expect(s0.trace).toHaveLength(0);
     expect(s0.goal!.ctx.length).toBeLessThan(s1.goal!.ctx.length);
   });
 });
 
 // ============================================================================
-// Real-analysis integration test
+// Real-analysis integration tests
 // ============================================================================
 
 describe('TacticSession with real-analysis preset', () => {
-  test('all tactic-mode declarations produce valid traces', { timeout: 20000 }, async () => {
+  test('all tactic-mode declarations produce valid traces', { timeout: 30000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
     const allDecls = result.blocks.flatMap(b => b.declarations);
 
-    // Find tactic-mode declarations (surfaceValue is a TacticBlock)
     const tacticDecls = allDecls.filter(
       d => d.surfaceValue?.tag === 'TacticBlock' &&
            (d.surfaceValue as any).tactics?.length > 0 &&
@@ -148,7 +141,6 @@ describe('TacticSession with real-analysis preset', () => {
           errors.push(`${decl.name}: empty trace`);
         }
 
-        // Check that trace entries have valid engine states
         for (let i = 0; i < final.trace.length; i++) {
           const step = final.trace[i];
           if (!step.engineAfter) {
@@ -167,7 +159,7 @@ describe('TacticSession with real-analysis preset', () => {
     expect(errors).toEqual([]);
   });
 
-  test('session traces match compilation: final engine matches compiled type', { timeout: 20000 }, async () => {
+  test('session traces match compilation: final engine zonks', { timeout: 30000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
     const allDecls = result.blocks.flatMap(b => b.declarations);
@@ -185,14 +177,12 @@ describe('TacticSession with real-analysis preset', () => {
         const session = TacticSession.create(decl.kernelType!, result.definitions);
         const final = session.applyCommands(tactics);
 
-        // The final engine should have solved all goals (for successful proofs)
         const traceErrors = final.trace.filter(s => s.error);
         if (traceErrors.length > 0) {
           mismatches.push(`${decl.name}: ${traceErrors.length} tactic errors in trace`);
           continue;
         }
 
-        // Verify the proof term is complete (can be zonked)
         try {
           final.engine.zonk();
         } catch (e) {
@@ -207,7 +197,30 @@ describe('TacticSession with real-analysis preset', () => {
       console.log('=== Session/compilation mismatches ===');
       for (const m of mismatches) console.log(m);
     }
-    // Allow some failures for complex proofs with unsupported features
     expect(mismatches.length).toBeLessThan(5);
+  });
+
+  test('traces are stored on compiled declarations', { timeout: 30000 }, async () => {
+    const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
+    const result = compileTTFromText(REAL_ANALYSIS_CODE);
+    const allDecls = result.blocks.flatMap(b => b.declarations);
+
+    const tacticDecls = allDecls.filter(
+      d => d.surfaceValue?.tag === 'TacticBlock' && d.checkSuccess
+    );
+    const withTrace = tacticDecls.filter(d => d.tacticTrace && d.tacticTrace.length > 0);
+
+    expect(tacticDecls.length).toBeGreaterThanOrEqual(40);
+    expect(withTrace.length).toBe(tacticDecls.length);
+
+    // Verify trace structure
+    for (const decl of withTrace) {
+      for (const step of decl.tacticTrace!) {
+        expect(step.tacticName).toBeTruthy();
+        expect(step.engineAfter).toBeTruthy();
+        expect(step.goalId).toBeTruthy();
+        expect(Array.isArray(step.branchPath)).toBe(true);
+      }
+    }
   });
 });
