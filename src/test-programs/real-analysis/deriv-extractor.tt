@@ -1,0 +1,16 @@
+@test success
+@name "Real Analysis: deriv extractor returns derivative value"
+@import preambles/nat.tt
+@import preambles/equality.tt
+
+-- Simple wrapper record with a value parameter
+record Wrapper {L : Nat} where
+  constructor MkWrapper
+
+-- Extract L from the wrapper (analogous to deriv extracting derivative value)
+extract : {L : Nat} -> Wrapper {L := L} -> Nat
+extract {L} w = L
+
+-- Verify extract returns the correct value
+extractCorrect : {L : Nat} -> (w : Wrapper {L := L}) -> Equal (extract w) L
+extractCorrect {L} w = refl

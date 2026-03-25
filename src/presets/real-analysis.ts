@@ -523,6 +523,11 @@ diffQuot {R} f x0 x = rmul (rsub (f x) (f x0)) (rinv (rsub x x0))
 HasDerivative : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> Type
 HasDerivative {R} f x0 L = Limit (diffQuot f x0) x0 L
 
+-- deriv: extract the derivative value from a differentiability proof
+-- Given f, x0, and a proof that f is differentiable at x0 with derivative L, returns L
+deriv : {R : Real} -> {L : Carrier R} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> HasDerivative f x0 L -> Carrier R
+deriv {R} {L} f x0 hf = L
+
 -- limitExt: if f and g agree pointwise, limits transfer
 limitExt : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L : Carrier R) -> ((x : Carrier R) -> Equal (f x) (g x)) -> Limit f x0 L -> Limit g x0 L := by
   intros R f g x0 L ext limF
@@ -920,4 +925,9 @@ derivChain : {R : Real} -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier
   have hSum := limitAdd (chainTermA g f x0 Lg) (\\x => rmul Lg (diffQuot f x0 x)) x0 (rzero R) (rmul Lg Lf) hA hScale
   -- Rewrite 0 + Lg*Lf = Lg*Lf
   exact replace (\\z => Limit (\\x => radd (chainTermA g f x0 Lg x) (rmul Lg (diffQuot f x0 x))) x0 z) (addZeroLeft (rmul Lg Lf)) hSum
+
+-- Chain rule (equational form): deriv(g . f, x0) = deriv(g, f(x0)) * deriv(f, x0)
+-- Proof is refl since deriv just extracts L and derivChain produces rmul Lg Lf
+derivChainEq : {R : Real} -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier R) -> (hf : HasDerivative f x0 Lf) -> (hg : HasDerivative g (f x0) Lg) -> Equal (deriv (\\x => g (f x)) x0 (derivChain g f x0 Lf Lg hf hg)) (rmul (deriv g (f x0) hg) (deriv f x0 hf))
+derivChainEq {R} g f x0 Lf Lg hf hg = refl
 `;

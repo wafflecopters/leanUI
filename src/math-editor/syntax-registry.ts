@@ -661,6 +661,15 @@ export function createDefaultRegistry(): SyntaxRegistry {
       priority: 50,
     },
 
+    // f'(x₀)  →  deriv f x0 (Lagrange prime notation for derivatives)
+    {
+      name: 'derivative',
+      pattern: [pat.sup([pat.capture('f')], [pat.literal("'")]), pat.delimiter('(', ')', [pat.capture('x0')])],
+      template: 'deriv $$f $$x0',
+      needsR: true,
+      priority: 50,
+    },
+
     // \overline{A}  →  closure A
     {
       name: 'closure',
