@@ -46,6 +46,7 @@ import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
 import { elaborateTacticArg, tacticCommandToTactic as sharedTacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
+import { TacticSession } from '../tactics/tactic-session';
 import { extractGoalStates, engineToProofState } from '../tactics/proof-state';
 export type { TotalityResult, CaseTree };
 
@@ -205,6 +206,9 @@ export interface CompiledDeclaration {
 
   // Tactic InfoTree for goal-at-cursor feature
   tacticInfoTree?: TacticInfoTree;
+
+  // Tactic trace: engine state after each tactic step (for proof tree rendering)
+  tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[];
 
   // @syntax annotation pattern string for structured math editor
   syntax?: string;
@@ -2366,6 +2370,20 @@ function checkDeclaration(
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap: typeInfoMap.size > 0 ? typeInfoMap : undefined,
     tacticInfoTree: tacticInfoTree,
+    // Build tactic trace for proof tree rendering (avoids re-running tactics in UI)
+    // tacticTrace is computed in createCompiledDeclaration (the standard path).
+    // This path (checkDeclaration) is for the older compilation flow.
+    tacticTrace: (() => {
+      const sv = decl.surfaceValue as any;
+      if (!checkSuccess || !decl.kernelType || !sv || sv.tag !== 'TacticBlock') return undefined;
+      try {
+        const session = TacticSession.create(decl.kernelType, newDefinitions);
+        const final = session.applyCommands(sv.tactics);
+        return final.trace.length > 0 ? [...final.trace] : undefined;
+      } catch {
+        return undefined;
+      }
+    })(),
     syntax: decl.syntax,
     constructorSyntax: decl.constructorSyntax,
   };
@@ -3324,6 +3342,18 @@ function createCompiledDeclaration(
     withScrutineeExprs: decl.withScrutineeExprs,
     typeInfoMap,
     tacticInfoTree,
+    // Build tactic trace for proof tree rendering
+    tacticTrace: (() => {
+      const sv = (decl.originalSurfaceValue ?? decl.value) as any;
+      if (!checkSuccess || !kernelType || !sv || sv.tag !== 'TacticBlock') return undefined;
+      try {
+        const session = TacticSession.create(kernelType, definitions!);
+        const final = session.applyCommands(sv.tactics);
+        return final.trace.length > 0 ? [...final.trace] : undefined;
+      } catch {
+        return undefined;
+      }
+    })(),
     syntax: decl.syntax,
     constructorSyntax: (() => {
       const cs = decl.constructors?.filter(c => c.syntax !== undefined).map(c => ({ name: c.name, syntax: c.syntax! }));
