@@ -57,6 +57,8 @@ export interface CachedBlockResult {
  */
 export interface IncrementalCache {
   blocks: (CachedBlockResult | undefined)[];
+  /** Cached result from last compilation, for fast early-exit when no block content changed. */
+  lastResult?: import('./compile').CompileResult;
 }
 
 export function createIncrementalCache(): IncrementalCache {

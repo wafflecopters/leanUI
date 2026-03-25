@@ -5860,6 +5860,25 @@ export function compileIncrementalTT(
   cache: IncrementalCache,
   options?: CompileOptions
 ): CompileResult {
+  // 0. Fast path: check if any block content actually changed before parsing.
+  //    groupByIndentation is cheap (string splitting); parsing is expensive (~62ms).
+  //    Edits like inserting blank lines among blank lines shift blocks but don't
+  //    change their content — skip everything in that case.
+  const sourceBlocks = groupByIndentation(source);
+  if (cache.lastResult && sourceBlocks.length === cache.blocks.length) {
+    let allMatch = true;
+    for (let i = 0; i < sourceBlocks.length; i++) {
+      const sourceText = sourceBlocks[i].lines.join('\n');
+      if (!cache.blocks[i] || cache.blocks[i]!.sourceText !== sourceText) {
+        allMatch = false;
+        break;
+      }
+    }
+    if (allMatch) {
+      return cache.lastResult;
+    }
+  }
+
   // Reset counters for fresh compilation
   resetWildcardCounter();
   resetWithCounter();
@@ -5955,7 +5974,7 @@ export function compileIncrementalTT(
   // Trim cache if source has fewer blocks now
   cache.blocks.length = parseResult.blocks.length;
 
-  return {
+  const result: CompileResult = {
     success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
     blocks: compiledBlocks,
     totalParseErrors: parseResult.totalErrors,
@@ -5963,6 +5982,9 @@ export function compileIncrementalTT(
     totalCheckErrors,
     definitions,
   };
+
+  cache.lastResult = result;
+  return result;
 }
 
 // ============================================================================

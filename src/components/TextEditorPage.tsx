@@ -1034,9 +1034,16 @@ export function TextEditorPage() {
     };
   }, []);
 
-  // Compile and type check the source code (incrementally)
-  const compileResult = useMemo<CompileResult>(() => {
+  // Compile and type check the source code (debounced to avoid blocking on every keystroke)
+  const [compileResult, setCompileResult] = useState<CompileResult>(() => {
     return compileIncrementalTT(code, incrementalCacheRef.current);
+  });
+
+  useEffect(() => {
+    const timerId = setTimeout(() => {
+      setCompileResult(compileIncrementalTT(code, incrementalCacheRef.current));
+    }, 300);
+    return () => clearTimeout(timerId);
   }, [code]);
 
   // Flatten compiled declarations for WYSIWYG panel (excluding with-clause auxiliaries)
