@@ -33,7 +33,8 @@ export type ProofNode =
   | RewriteNode
   | ApplyNode
   | SimpNode
-  | HaveNode;
+  | HaveNode
+  | SufficesNode;
 
 export interface HoleNode {
   readonly tag: 'hole';
@@ -130,6 +131,17 @@ export interface HaveNode {
   readonly child: ProofNode;
 }
 
+export interface SufficesNode {
+  readonly tag: 'suffices';
+  readonly id: ProofNodeId;
+  /** The hypothesis name (e.g., 'h'). */
+  readonly name: string;
+  /** The suffices type expression as a string. */
+  readonly typeExpr: string;
+  /** The continuation proof (proves the suffices type). */
+  readonly child: ProofNode;
+}
+
 export interface CaseNode {
   readonly tag: 'case';
   readonly id: ProofNodeId;
@@ -199,6 +211,10 @@ export function mkHave(name: string, expr: string, child: ProofNode): HaveNode {
   return { tag: 'have', id: freshProofId(), name, expr, child };
 }
 
+export function mkSuffices(name: string, typeExpr: string, child: ProofNode): SufficesNode {
+  return { tag: 'suffices', id: freshProofId(), name, typeExpr, child };
+}
+
 export function mkUnfold(name: string, child: ProofNode, occurrence?: number): UnfoldNode {
   return { tag: 'unfold', id: freshProofId(), name, child, occurrence };
 }
@@ -265,6 +281,7 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       return findNode(root.child, id);
     case 'apply':
       for (const child of root.children) {
@@ -299,6 +316,7 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       return findCase(root.child, id);
     case 'apply':
       for (const child of root.children) {
@@ -335,6 +353,7 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       return isCursorInSubtree(node.child, cursorId);
     case 'apply':
       return node.children.some(child => isCursorInSubtree(child, cursorId));
@@ -375,6 +394,7 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       linearizeImpl(node.child, depth + 1, out);
       break;
     case 'apply':
@@ -418,7 +438,8 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
     case 'unfold':
     case 'fold':
     case 'rewrite':
-    case 'have': {
+    case 'have':
+    case 'suffices': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
     }
@@ -468,7 +489,8 @@ export function updateCase(
     case 'unfold':
     case 'fold':
     case 'rewrite':
-    case 'have': {
+    case 'have':
+    case 'suffices': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
     }
@@ -839,6 +861,7 @@ export function editCaseParamName(
       case 'fold':
       case 'rewrite':
       case 'have':
+      case 'suffices':
         return findInductionParent(root.child, targetCaseId);
       case 'apply':
         for (const child of root.children) {
@@ -946,7 +969,8 @@ function computeContextImpl(
     case 'rewrite':
       return computeContextImpl(node.child, cursorId, hypotheses);
 
-    case 'have': {
+    case 'have':
+    case 'suffices': {
       const extended: ContextEntry[] = [
         ...hypotheses,
         { name: node.name, source: 'intro' as const },

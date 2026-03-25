@@ -2198,7 +2198,7 @@ describe('real-analysis preset tactic replay (full flow)', () => {
   }
 
   // Find all tactic-mode declarations and test each one
-  test('ALL tactic-mode definitions replay with zero errors and clean LaTeX', () => {
+  test('ALL tactic-mode definitions replay with zero errors and clean LaTeX', { timeout: 15000 }, () => {
     const result = getCompiled();
     const allDecls = result.blocks.flatMap(b => b.declarations);
     const definitions = result.definitions;

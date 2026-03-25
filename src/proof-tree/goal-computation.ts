@@ -1925,6 +1925,33 @@ function replayProofTree(
         caseLabel, caseLabelLatex, inductionVar,
       );
     }
+
+    case 'suffices': {
+      // Parse the suffices type, create a new goal with that type
+      const goal = engine.getFocusedGoal();
+      if (!goal) return null;
+
+      const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+      if (!typeTerm) {
+        if (node.child.id === cursorId) {
+          return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+        }
+        return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
+      }
+
+      // Create new goal with the suffices type
+      const newGoalId = goalId + '_suffices';
+      const newMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
+      const newMetaVars = new Map(engine.metaVars);
+      newMetaVars.set(newGoalId, newMeta);
+      const newGoals = engine.goals.map(g => g === goalId ? newGoalId : g);
+      const newEngine = engine.withUpdates({ metaVars: newMetaVars, goals: newGoals });
+
+      if (node.child.id === cursorId) {
+        return { engine: newEngine, goalId: newGoalId, caseLabel, caseLabelLatex, inductionVar };
+      }
+      return replayProofTree(node.child, cursorId, newEngine, caseLabel, caseLabelLatex, inductionVar);
+    }
   }
 }
 
@@ -2220,6 +2247,7 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       return findNodeById(node.child, id);
     case 'apply':
       for (const child of node.children) {
@@ -2260,6 +2288,7 @@ function findCaseAncestor(
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       return findCaseAncestor(node.child, targetId);
     case 'apply':
       for (const child of node.children) {
@@ -2458,6 +2487,23 @@ export function replayEntireTree(
         // Don't report errors — have is "best effort" (may fail if prior tactics
         // like constructor were skipped in tree conversion)
         walk(node.child, haveResult.success ? haveResult.newEngine! : eng, caseLabelLatex);
+        break;
+      }
+
+      case 'suffices': {
+        recordGoal(node.id, eng, gId, caseLabelLatex);
+        const goal = eng.getFocusedGoal();
+        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
+        if (!typeTerm) { walk(node.child, eng, caseLabelLatex); break; }
+        // Create new goal with the suffices type
+        const suffGoalId = gId + '_suffices';
+        const suffMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
+        const suffMetaVars = new Map(eng.metaVars);
+        suffMetaVars.set(suffGoalId, suffMeta);
+        const suffGoals = eng.goals.map(g => g === gId ? suffGoalId : g);
+        const suffEngine = eng.withUpdates({ metaVars: suffMetaVars, goals: suffGoals });
+        walk(node.child, suffEngine, caseLabelLatex);
         break;
       }
 
@@ -2720,6 +2766,7 @@ function walkTreeSurface(
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       // No kernel type — can't process, pass through
       return walkTreeSurface(node.child, cursorId, currentType, hypotheses, nameCtx, rev);
 

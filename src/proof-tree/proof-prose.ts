@@ -331,6 +331,19 @@ export function generateProofProse(
         break;
       }
 
+      case 'suffices': {
+        const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
+        emit(node.id, depth, {
+          tag: 'have',
+          name: node.name,
+          expr: node.typeExpr,
+          preGoalLatex: info?.goalLatex,
+          goalLatex: childGoalLatex,
+        });
+        walk(node.child, depth);
+        break;
+      }
+
       case 'simp': {
         const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
         emit(node.id, depth, {

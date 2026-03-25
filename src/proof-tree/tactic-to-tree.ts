@@ -18,6 +18,7 @@ import {
   mkApply,
   mkCase,
   mkHave,
+  mkSuffices,
 } from './proof-tree';
 
 /**
@@ -128,6 +129,14 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
       return mkApply('constructor', children);
     }
 
+    case 'suffices': {
+      // suffices h : T by proof → args[0]=name, args[1]=type
+      // The "by proof" is in focusedTactics (ignored for tree — just changes goal)
+      const suffName = cmd.args.length > 0 ? extractName(cmd.args[0]) ?? 'h' : 'h';
+      const suffType = cmd.args.length > 1 ? surfaceTermToString(cmd.args[1]) : '?';
+      return mkSuffices(suffName, suffType, tacticCommandsToProofTree(rest));
+    }
+
     case 'have': {
       // have name : type := proof → args[0]=name, args[1]=type, args[2]=proof
       const haveName = cmd.args.length > 0 ? extractName(cmd.args[0]) ?? '_' : '_';
@@ -205,6 +214,7 @@ export function findFirstHole(node: ProofNode): ProofNode | null {
     case 'fold':
     case 'rewrite':
     case 'have':
+    case 'suffices':
       return findFirstHole(node.child);
     case 'simp':
       return findFirstHole(node.child);

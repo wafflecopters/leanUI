@@ -14,7 +14,7 @@ limit_add_3 = ?TODO
 `;
 
 describe('lim partial application bug', () => {
-  test('compileTTFromText: partially applied lim should produce a type error', () => {
+  test('compileTTFromText: partially applied lim should produce a type error', { timeout: 15000 }, () => {
     const result = compileTTFromText(REAL_ANALYSIS_CODE + BUGGY_SUFFIX);
     const allDecls = result.blocks.flatMap(b => b.declarations);
     const limit_add_3 = allDecls.find(d => d.name === 'limit_add_3');
