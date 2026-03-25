@@ -1543,6 +1543,115 @@ function insertImplicitHoles(head: TTKTerm, userArgs: TTKTerm[], definitions?: D
 }
 
 /**
+ * Trace-based cursor replay: walk the proof tree advancing through the
+ * pre-computed trace until we reach the cursor node. Returns the engine
+ * state at the cursor position without re-running any tactics.
+ */
+function replayProofTreeFromTrace(
+  root: ProofNode,
+  cursorId: ProofNodeId,
+  initialEngine: TacticEngine,
+  trace: import('../tactics/tactic-session').TacticStepTrace[],
+): ReplayResult | null {
+  let traceIdx = 0;
+
+  function walk(
+    node: ProofNode,
+    currentEngine: TacticEngine,
+    caseLabel?: string,
+    caseLabelLatex?: string,
+    inductionVar?: string,
+  ): ReplayResult | null {
+    const goalId = currentEngine.getFocusedGoalId();
+    if (!goalId) return null;
+
+    // Cursor found — return current engine state
+    if (node.id === cursorId) {
+      return { engine: currentEngine, goalId, caseLabel, caseLabelLatex, inductionVar };
+    }
+
+    switch (node.tag) {
+      case 'hole':
+      case 'exact':
+        return null; // leaf — cursor not here
+
+      case 'intros':
+      case 'unfold':
+      case 'fold':
+      case 'rewrite':
+      case 'have':
+      case 'suffices': {
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (node.child.id === cursorId) {
+          return { engine: nextEngine, goalId: nextEngine.getFocusedGoalId() ?? goalId, caseLabel, caseLabelLatex, inductionVar, tacticError: step?.error };
+        }
+        return walk(node.child, nextEngine, caseLabel, caseLabelLatex, inductionVar);
+      }
+
+      case 'apply': {
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        const baseFocus = nextEngine.focusIndex;
+        for (let i = 0; i < node.children.length; i++) {
+          const childFocusIdx = baseFocus + i;
+          if (childFocusIdx >= nextEngine.goals.length) break;
+          const childEngine = nextEngine.withUpdates({ focusIndex: childFocusIdx });
+          const childGoalId = childEngine.getFocusedGoalId();
+          if (node.children[i].id === cursorId) {
+            return { engine: childEngine, goalId: childGoalId ?? goalId, caseLabel, caseLabelLatex, inductionVar };
+          }
+          const result = walk(node.children[i], childEngine, caseLabel, caseLabelLatex, inductionVar);
+          if (result) return result;
+        }
+        return null;
+      }
+
+      case 'induction': {
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const afterCasesEngine = step?.engineAfter ?? currentEngine;
+
+        for (const c of node.cases) {
+          const matchIdx = afterCasesEngine.goals.findIndex(g => {
+            const meta = afterCasesEngine.metaVars.get(g);
+            return meta?.caseTag === c.constructorName;
+          });
+          if (matchIdx >= 0) {
+            const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
+            if (c.id === cursorId) {
+              return { engine: caseEngine, goalId: caseEngine.getFocusedGoalId() ?? goalId, caseLabel: c.label, caseLabelLatex: c.labelLatex, inductionVar: node.scrutinee };
+            }
+            const result = walk(c.body, caseEngine, c.label, c.labelLatex, node.scrutinee);
+            if (result) return result;
+          } else {
+            if (c.id === cursorId) {
+              return { engine: afterCasesEngine, goalId, caseLabel: c.label, caseLabelLatex: c.labelLatex, inductionVar: node.scrutinee };
+            }
+            const result = walk(c.body, afterCasesEngine, c.label, c.labelLatex, node.scrutinee);
+            if (result) return result;
+          }
+        }
+        return null;
+      }
+
+      case 'simp': {
+        for (const _step of node.steps) {
+          if (traceIdx < trace.length) traceIdx++;
+        }
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (node.child.id === cursorId) {
+          return { engine: nextEngine, goalId: nextEngine.getFocusedGoalId() ?? goalId, caseLabel, caseLabelLatex, inductionVar };
+        }
+        return walk(node.child, nextEngine, caseLabel, caseLabelLatex, inductionVar);
+      }
+    }
+  }
+
+  return walk(root, initialEngine);
+}
+
+/**
  * Replay the proof tree against a TacticEngine, applying real tactics
  * at each node until we reach the cursor. Returns the engine state
  * at the cursor position.
@@ -2027,12 +2136,13 @@ export function computeTypedContext(
   _inductiveMap?: InductiveMap,
   kernelType?: TTKTerm,
   definitions?: DefinitionsMap,
+  tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[],
 ): TypedProofContext | null {
   const rev = buildReverseRegistry(registry);
 
   // If we have kernel type + definitions, use the real TacticEngine
   if (kernelType && definitions) {
-    return computeWithTacticEngine(root, cursorId, kernelType, definitions, rev);
+    return computeWithTacticEngine(root, cursorId, kernelType, definitions, rev, tacticTrace);
   }
 
   // Fallback: surface-only rendering (no tactic engine)
@@ -2172,12 +2282,20 @@ function computeWithTacticEngine(
   kernelType: TTKTerm,
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
+  tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[],
 ): TypedProofContext | null {
   // Create initial engine with the kernel goal type
   const engine = createInitialEngine(kernelType, [], definitions);
 
-  // Replay the proof tree to find cursor position
-  const replay = replayProofTree(root, cursorId, engine);
+  // Fast path: use trace to find engine at cursor without replaying
+  let replay: ReplayResult | null = null;
+  if (tacticTrace && tacticTrace.length > 0) {
+    replay = replayProofTreeFromTrace(root, cursorId, engine, tacticTrace);
+  }
+  // Fallback: replay tactics
+  if (!replay) {
+    replay = replayProofTree(root, cursorId, engine);
+  }
   if (!replay) return null;
 
   // Extract focused goal

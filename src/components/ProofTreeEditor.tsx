@@ -193,7 +193,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     if (surfaceType) {
       return computeTypedContext(
         state.root, state.cursor.nodeId, surfaceType, registry ?? emptyRegistry,
-        inductiveMap, kernelType, definitions,
+        inductiveMap, kernelType, definitions, tacticTrace,
       );
     }
     // Fallback: use untyped context, convert to TypedProofContext shape
