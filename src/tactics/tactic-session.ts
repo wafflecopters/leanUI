@@ -42,6 +42,11 @@ export class TacticSession {
     readonly trace: readonly TacticStepTrace[],
   ) {}
 
+  /** Create a session from an existing engine (e.g., for continuing from a checkpoint). */
+  static fromEngine(engine: TacticEngine, definitions: DefinitionsMap): TacticSession {
+    return new TacticSession(engine, definitions, []);
+  }
+
   /** Create a fresh session from a goal type. */
   static create(
     goalType: TTKTerm,

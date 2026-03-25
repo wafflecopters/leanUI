@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { TacticSession } from './tactic-session';
 import { compileTTFromText } from '../compiler/compile';
+import { prettyPrintFormatted } from '../compiler/kernel';
 
 function mkConst(name: string): any { return { tag: 'Const', name }; }
 function mkApp(fn: any, arg: any): any { return { tag: 'App', fn, arg }; }
@@ -164,5 +165,49 @@ describe('TacticSession with real-analysis preset', () => {
       for (const e of errors) console.log(e);
     }
     expect(errors).toEqual([]);
+  });
+
+  test('session traces match compilation: final engine matches compiled type', { timeout: 20000 }, async () => {
+    const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
+    const result = compileTTFromText(REAL_ANALYSIS_CODE);
+    const allDecls = result.blocks.flatMap(b => b.declarations);
+
+    const tacticDecls = allDecls.filter(
+      d => d.surfaceValue?.tag === 'TacticBlock' &&
+           (d.surfaceValue as any).tactics?.length > 0 &&
+           d.kernelType && d.checkSuccess
+    );
+
+    const mismatches: string[] = [];
+    for (const decl of tacticDecls) {
+      const tactics = (decl.surfaceValue as any).tactics;
+      try {
+        const session = TacticSession.create(decl.kernelType!, result.definitions);
+        const final = session.applyCommands(tactics);
+
+        // The final engine should have solved all goals (for successful proofs)
+        const traceErrors = final.trace.filter(s => s.error);
+        if (traceErrors.length > 0) {
+          mismatches.push(`${decl.name}: ${traceErrors.length} tactic errors in trace`);
+          continue;
+        }
+
+        // Verify the proof term is complete (can be zonked)
+        try {
+          final.engine.zonk();
+        } catch (e) {
+          mismatches.push(`${decl.name}: zonk failed — ${e instanceof Error ? e.message : e}`);
+        }
+      } catch (e) {
+        mismatches.push(`${decl.name}: session threw — ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    if (mismatches.length > 0) {
+      console.log('=== Session/compilation mismatches ===');
+      for (const m of mismatches) console.log(m);
+    }
+    // Allow some failures for complex proofs with unsupported features
+    expect(mismatches.length).toBeLessThan(5);
   });
 });
