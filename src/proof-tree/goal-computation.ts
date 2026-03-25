@@ -2311,7 +2311,20 @@ function computeWithTacticEngine(
   let validation: ValidationResult | undefined;
   if (cursorNode?.tag === 'exact') {
     goalLatex = cursorNode.expr;
-    validation = validateExactNode(cursorNode.expr, replay.engine, replay.goalId);
+    // If we used the trace path, check the trace for exact validation
+    if (tacticTrace && tacticTrace.length > 0) {
+      // Find the trace entry for this exact — it's the last entry (exact is terminal)
+      const exactEntry = tacticTrace.find(s => s.tacticName === 'exact' || s.tacticName === 'reflexivity');
+      if (exactEntry && !exactEntry.error) {
+        validation = { status: 'solved' };
+      } else if (exactEntry?.error) {
+        validation = { status: 'error', message: exactEntry.error };
+      } else {
+        validation = validateExactNode(cursorNode.expr, replay.engine, replay.goalId);
+      }
+    } else {
+      validation = validateExactNode(cursorNode.expr, replay.engine, replay.goalId);
+    }
   } else {
     goalLatex = renderGoalLatex(replay.engine, goal, definitions, rev);
   }
@@ -2507,7 +2520,17 @@ function replayEntireTreeFromTrace(
         break;
 
       case 'exact': {
-        const validation = validateExactNode(node.expr, currentEngine, gId);
+        // The trace already validated this exact — check if it succeeded
+        const exactStep = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        let validation: ValidationResult | undefined;
+        if (exactStep && !exactStep.error) {
+          validation = { status: 'solved' };
+        } else if (exactStep?.error) {
+          validation = { status: 'error', message: exactStep.error };
+        } else {
+          // No trace entry — fall back to re-validation
+          validation = validateExactNode(node.expr, currentEngine, gId);
+        }
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex, validation);
         break;
       }
