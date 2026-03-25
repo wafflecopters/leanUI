@@ -2343,6 +2343,148 @@ export function replayEntireTree(
   kernelType: TTKTerm,
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
+  tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[],
+): Map<ProofNodeId, NodeGoalInfo> {
+  // Fast path: use pre-computed trace from compilation
+  if (tacticTrace && tacticTrace.length > 0) {
+    return replayEntireTreeFromTrace(root, kernelType, definitions, rev, tacticTrace);
+  }
+  // Fallback: re-run tactics (for interactive editing or when trace unavailable)
+  return replayEntireTreeViaWalk(root, kernelType, definitions, rev);
+}
+
+function replayEntireTreeFromTrace(
+  root: ProofNode,
+  kernelType: TTKTerm,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  trace: import('../tactics/tactic-session').TacticStepTrace[],
+): Map<ProofNodeId, NodeGoalInfo> {
+  const result = new Map<ProofNodeId, NodeGoalInfo>();
+  const projMap = buildProjectionFoldMap(definitions);
+  const aliasMap = buildAliasFoldMap(definitions);
+  const initialEngine = createInitialEngine(kernelType, [], definitions);
+
+  function recordFromEngine(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string, validation?: ValidationResult): void {
+    const goal = eng.metaVars.get(gId);
+    if (!goal) return;
+    result.set(nodeId, {
+      goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap),
+      caseLabelLatex,
+      validation,
+    });
+  }
+
+  // Walk the proof tree in the same order as the trace, advancing a cursor through the trace.
+  let traceIdx = 0;
+
+  function walkTrace(node: ProofNode, currentEngine: TacticEngine, caseLabelLatex?: string): void {
+    const gId = currentEngine.getFocusedGoalId();
+    if (!gId) return;
+
+    switch (node.tag) {
+      case 'hole':
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        break;
+
+      case 'exact': {
+        const validation = validateExactNode(node.expr, currentEngine, gId);
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex, validation);
+        break;
+      }
+
+      case 'intros':
+      case 'unfold':
+      case 'fold':
+      case 'rewrite':
+      case 'have':
+      case 'suffices': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        // Advance trace cursor to get engine after this tactic
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (step?.error) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        walkTrace(node.child, nextEngine, caseLabelLatex);
+        break;
+      }
+
+      case 'apply': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        // Advance trace cursor
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (step?.error) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        // Walk children (subgoals from apply)
+        const baseFocus = nextEngine.focusIndex;
+        for (let i = 0; i < node.children.length; i++) {
+          const childFocusIdx = baseFocus + i;
+          if (childFocusIdx >= nextEngine.goals.length) break;
+          const childEngine = nextEngine.withUpdates({ focusIndex: childFocusIdx });
+          walkTrace(node.children[i], childEngine, caseLabelLatex);
+        }
+        break;
+      }
+
+      case 'induction': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        // Cases/induction: trace has steps for the base tactic + each branch's tactics
+        // Advance past the base cases/induction tactic
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const afterCasesEngine = step?.engineAfter ?? currentEngine;
+
+        for (const c of node.cases) {
+          // Find the goal with matching caseTag in the engine after cases
+          const matchIdx = afterCasesEngine.goals.findIndex(g => {
+            const meta = afterCasesEngine.metaVars.get(g);
+            return meta?.caseTag === c.constructorName;
+          });
+          if (matchIdx >= 0) {
+            const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
+            const caseGoalId = caseEngine.getFocusedGoalId();
+            if (caseGoalId) {
+              recordFromEngine(c.id, caseEngine, caseGoalId, c.labelLatex);
+            }
+            walkTrace(c.body, caseEngine, c.labelLatex);
+          } else {
+            // Fallback: use current engine
+            recordFromEngine(c.id, afterCasesEngine, gId, c.labelLatex);
+            walkTrace(c.body, afterCasesEngine, c.labelLatex);
+          }
+        }
+        break;
+      }
+
+      case 'simp': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        // Simp has multiple rewrite steps — each is a trace entry
+        for (const _step of node.steps) {
+          if (traceIdx < trace.length) traceIdx++; // advance past each simp sub-step
+        }
+        // After simp, advance past the simp tactic itself
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        walkTrace(node.child, nextEngine, caseLabelLatex);
+        break;
+      }
+    }
+  }
+
+  walkTrace(root, initialEngine);
+  return result;
+}
+
+function replayEntireTreeViaWalk(
+  root: ProofNode,
+  kernelType: TTKTerm,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
 ): Map<ProofNodeId, NodeGoalInfo> {
   const result = new Map<ProofNodeId, NodeGoalInfo>();
   const engine = createInitialEngine(kernelType, [], definitions);

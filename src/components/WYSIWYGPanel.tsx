@@ -375,6 +375,7 @@ export function WYSIWYGPanel({ declarations, allDeclarations, compilerDefinition
                     registry={registries[i]}
                     inductiveMap={inductiveMap}
                     currentDeclName={decl.name}
+                    tacticTrace={decl.tacticTrace}
                   />
                 </div>
               </>

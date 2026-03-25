@@ -65,6 +65,8 @@ export interface ProofTreeEditorProps {
   inductiveMap?: InductiveMap;
   /** Name of the declaration being proved — used to filter self-referential suggestions */
   currentDeclName?: string;
+  /** Pre-computed tactic trace from compilation — avoids re-running tactics */
+  tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[];
 }
 
 /** A binder selected by clicking a variable name in the proof prose view. */
@@ -151,7 +153,7 @@ type TacticMode =
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -279,11 +281,11 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const goalMap = useMemo<Map<ProofNodeId, NodeGoalInfo>>(() => {
     if (!kernelType || !definitions || !rev) return new Map();
     try {
-      return replayEntireTree(state.root, kernelType, definitions, rev);
+      return replayEntireTree(state.root, kernelType, definitions, rev, tacticTrace);
     } catch {
       return new Map();
     }
-  }, [state.root, kernelType, definitions, rev]);
+  }, [state.root, kernelType, definitions, rev, tacticTrace]);
 
   // Generate prose items from proof tree + goal map
   const proseItems = useMemo<ProseItem[]>(() => {

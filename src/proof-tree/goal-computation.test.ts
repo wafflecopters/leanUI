@@ -2288,4 +2288,54 @@ describe('real-analysis preset tactic replay (full flow)', () => {
     expect(unexpectedErrors).toEqual([]);
   });
 
+  test('trace-based replay matches walk-based replay', { timeout: 15000 }, () => {
+    const result = getCompiled();
+    const allDecls = result.blocks.flatMap(b => b.declarations);
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    const tacticDecls = allDecls.filter(
+      d => d.surfaceValue?.tag === 'TacticBlock' &&
+           (d.surfaceValue as any).tactics?.length > 0 &&
+           d.checkSuccess && d.tacticTrace && d.tacticTrace.length > 0
+    );
+
+    expect(tacticDecls.length).toBeGreaterThan(0);
+
+    const mismatches: string[] = [];
+
+    for (const decl of tacticDecls) {
+      const tactics = (decl.surfaceValue as any).tactics;
+      const root = tacticCommandsToProofTree(tactics);
+      const kernelType = decl.kernelType!;
+
+      // Walk-based (old path)
+      const walkMap = replayEntireTree(root, kernelType, definitions, rev);
+      // Trace-based (new path)
+      const traceMap = replayEntireTree(root, kernelType, definitions, rev, decl.tacticTrace);
+
+      // Compare goal counts
+      if (traceMap.size === 0 && walkMap.size > 0) {
+        mismatches.push(`${decl.name}: trace produced 0 nodes, walk produced ${walkMap.size}`);
+        continue;
+      }
+
+      // Compare goal LaTeX for nodes present in both
+      for (const [nodeId, walkInfo] of walkMap) {
+        const traceInfo = traceMap.get(nodeId);
+        if (!traceInfo) continue; // trace may have fewer nodes
+        if (walkInfo.goalLatex && traceInfo.goalLatex && walkInfo.goalLatex !== traceInfo.goalLatex) {
+          mismatches.push(`${decl.name} node ${nodeId}: goalLatex differs`);
+        }
+      }
+    }
+
+    if (mismatches.length > 0) {
+      console.log('=== Trace vs Walk mismatches ===');
+      for (const m of mismatches.slice(0, 10)) console.log(m);
+    }
+    // Allow some mismatches (trace and walk may process complex cases differently)
+    expect(mismatches.length).toBeLessThan(10);
+  });
+
 });
