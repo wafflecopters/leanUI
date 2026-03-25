@@ -45,6 +45,7 @@ import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock } from './surface';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
+import { elaborateTacticArg, tacticCommandToTactic as sharedTacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
 import { extractGoalStates, engineToProofState } from '../tactics/proof-state';
 export type { TotalityResult, CaseTree };
 
@@ -1512,194 +1513,9 @@ export interface ElabOptions {
 }
 
 /**
- * Convert a tactic command to a Tactic object.
- * Args can be TTerm (un-elaborated) or TTKTerm (elaborated).
+ * Convert a tactic command to a Tactic object — delegates to shared module.
  */
-function tacticCommandToTactic(cmd: { name: string; args: Array<TTerm | TTKTerm>; focusedTactics?: Tactic[] }): Tactic | 'sorry' {
-  switch (cmd.name) {
-    case 'sorry':
-      return 'sorry';
-
-    case 'focus':
-      if (!cmd.focusedTactics || cmd.focusedTactics.length === 0) {
-        throw new Error(`'focus' tactic requires nested tactics`);
-      }
-      return new FocusTactic(cmd.focusedTactics);
-
-    case 'exact':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'exact' tactic requires exactly 1 argument, got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new ExactTactic(cmd.args[0] as TTKTerm);
-
-    case 'assumption':
-      if (cmd.args.length !== 0) {
-        throw new Error(`'assumption' tactic requires no arguments, got ${cmd.args.length}`);
-      }
-      return new AssumptionTactic();
-
-    case 'intro':
-      if (cmd.args.length > 1) {
-        throw new Error(`'intro' tactic requires 0 or 1 arguments, got ${cmd.args.length}`);
-      }
-      const introName = cmd.args.length === 1 && cmd.args[0].tag === 'Const'
-        ? (cmd.args[0] as any).name
-        : undefined;
-      return new IntroTactic(introName);
-
-    case 'intros':
-      // Arguments should all be Const nodes (identifiers)
-      const names = cmd.args.map(arg => {
-        if (arg.tag !== 'Const') {
-          throw new Error(`'intros' tactic arguments must be identifiers, got ${arg.tag}`);
-        }
-        return (arg as any).name;
-      });
-      return new IntrosTactic(names.length > 0 ? names : undefined);
-
-    case 'apply':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'apply' tactic requires exactly 1 argument, got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new ApplyTactic(cmd.args[0] as TTKTerm);
-
-    case 'cases':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'cases' tactic requires exactly 1 argument, got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new CasesTactic(cmd.args[0] as TTKTerm);
-
-    case 'induction':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'induction' tactic requires exactly 1 argument, got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new InductionTactic(cmd.args[0] as TTKTerm);
-
-    case 'reflexivity':
-      if (cmd.args.length !== 0) {
-        throw new Error(`'reflexivity' tactic requires no arguments, got ${cmd.args.length}`);
-      }
-      return new ReflexivityTactic();
-
-    case 'rewrite':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'rewrite' tactic requires exactly 1 argument (an equality proof), got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new RewriteTactic(cmd.args[0] as TTKTerm);
-
-    case 'symmetry':
-      if (cmd.args.length !== 0) {
-        throw new Error(`'symmetry' tactic requires no arguments, got ${cmd.args.length}`);
-      }
-      return new SymmetryTactic();
-
-    case 'transitivity':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'transitivity' tactic requires exactly 1 argument (middle term), got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new TransitivityTactic(cmd.args[0] as TTKTerm);
-
-    case 'cong':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'cong' tactic requires exactly 1 argument (equality proof or function), got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new CongTactic(cmd.args[0] as TTKTerm);
-
-    case 'subst':
-      if (cmd.args.length !== 1) {
-        throw new Error(`'subst' tactic requires exactly 1 argument (equality proof), got ${cmd.args.length}`);
-      }
-      // args[0] is a TTKTerm at this point (elaborated by caller)
-      return new SubstTactic(cmd.args[0] as TTKTerm);
-
-    case 'rw': {
-      // rw h1, h2, h3 = rewrite h1; rewrite h2; rewrite h3; reflexivity
-      if (cmd.args.length === 0) {
-        throw new Error(`'rw' tactic requires at least 1 argument`);
-      }
-      const rewrites = cmd.args.map(arg => new RewriteTactic(arg as TTKTerm));
-      return new TacticSequence('rw', [...rewrites, new ReflexivityTactic()]);
-    }
-
-    case 'erw': {
-      // erw h1, h2, h3 = enhanced rewrite h1; ...; reflexivity (with deep definitional equality)
-      if (cmd.args.length === 0) {
-        throw new Error(`'erw' tactic requires at least 1 argument`);
-      }
-      const enhancedRewrites = cmd.args.map(arg => new RewriteTactic(arg as TTKTerm, { enhanced: true }));
-      return new TacticSequence('erw', [...enhancedRewrites, new ReflexivityTactic()]);
-    }
-
-    case 'constructor':
-      if (cmd.args.length !== 0) {
-        throw new Error(`'constructor' tactic requires no arguments, got ${cmd.args.length}`);
-      }
-      return new ConstructorTactic();
-
-    case 'unfold': {
-      if (cmd.args.length === 0) {
-        throw new Error(`'unfold' tactic requires at least 1 argument`);
-      }
-      // Extract names from Const nodes
-      const unfoldNames = cmd.args.map(arg => {
-        if (arg.tag !== 'Const') {
-          throw new Error(`'unfold' tactic arguments must be identifiers, got ${arg.tag}`);
-        }
-        return (arg as any).name;
-      });
-      return new UnfoldTactic(unfoldNames);
-    }
-
-    case 'have': {
-      // have h : T := proof
-      if (cmd.args.length !== 3) {
-        throw new Error(`'have' tactic requires name, type, and proof (got ${cmd.args.length} args)`);
-      }
-      const haveName = cmd.args[0].tag === 'Const' ? (cmd.args[0] as any).name : '_';
-      return new HaveTactic(haveName, cmd.args[1] as TTKTerm, cmd.args[2] as TTKTerm);
-    }
-
-    case 'obtain': {
-      // obtain (x, y, z) := proof
-      // args[0..N-1] = binding names, args[N] = proof term
-      if (cmd.args.length < 2) {
-        throw new Error(`'obtain' tactic requires at least one name and a proof expression`);
-      }
-      const obtainNames: string[] = [];
-      for (let i = 0; i < cmd.args.length - 1; i++) {
-        const arg = cmd.args[i];
-        obtainNames.push(arg.tag === 'Const' ? (arg as any).name : '_');
-      }
-      const obtainProof = cmd.args[cmd.args.length - 1] as TTKTerm;
-      return new ObtainTactic(obtainNames, obtainProof);
-    }
-
-    case 'suffices': {
-      // suffices h : T by <closing tactics>
-      // args[0] = name, args[1] = type (TTKTerm)
-      // focusedTactics = closing tactics (already compiled with h in scope)
-      if (cmd.args.length !== 2) {
-        throw new Error(`'suffices' tactic requires name and type (got ${cmd.args.length} args)`);
-      }
-      const suffName = cmd.args[0].tag === 'Const' ? (cmd.args[0] as any).name : '_';
-      const closingTactics = cmd.focusedTactics ?? [];
-      if (closingTactics.length === 0) {
-        throw new Error(`'suffices' tactic requires closing tactics after 'by'`);
-      }
-      return new SufficesTactic(suffName, cmd.args[1] as TTKTerm, closingTactics);
-    }
-
-    default:
-      throw new Error(`Unknown tactic: ${cmd.name}`);
-  }
-}
+const tacticCommandToTactic = sharedTacticCommandToTactic;
 
 /**
  * Elaborate a TacticBlock to a kernel term by executing the tactics.
@@ -1715,7 +1531,7 @@ function elaborateTacticBlock(
   tacticBlock: TTacticBlock,
   expectedType: TTKTerm,
   definitions: DefinitionsMap,
-  elabMap: ElabMap,
+  _elabMap: ElabMap,
   sourceMap: SourceMap,
   context: TTKContext = []
 ): { term: TTKTerm; infoTree: TacticInfoTree } {
@@ -1763,48 +1579,6 @@ function elaborateTacticBlock(
     children: []
   };
 
-  // Helper: look up implicit param names for a definition
-  const namedArgLookup = createNamedArgLookup(definitions);
-
-  // Helper: convert a surface App term to kernel, inserting Holes for implicit params.
-  // When the head of an application chain is a Const with implicit params (namedArgMap),
-  // we need to insert Holes so the type checker can create metas for them.
-  // Without this, `Just x` becomes `App(Just, x)` which fails because the type checker
-  // tries to apply `x` to the first (implicit) parameter `{A : Type}`.
-  function insertImplicitHolesForApp(
-    term: TTerm,
-    convertTerm: (t: TTerm, depth: number) => TTKTerm,
-    depth: number
-  ): TTKTerm {
-    // Collect the application spine
-    const args: TTerm[] = [];
-    let head: TTerm = term;
-    while (head.tag === 'App') {
-      args.unshift(head.arg);
-      head = head.fn;
-    }
-
-    // Convert the head
-    let kernelHead = convertTerm(head, depth);
-
-    // If the head is a Const with implicit params, insert Holes for them
-    if (kernelHead.tag === 'Const') {
-      const namedArgs = namedArgLookup(kernelHead.name);
-      if (namedArgs) {
-        for (const [paramName] of namedArgs) {
-          kernelHead = { tag: 'App', fn: kernelHead, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
-        }
-      }
-    }
-
-    // Apply the explicit args
-    let result = kernelHead;
-    for (const arg of args) {
-      result = { tag: 'App', fn: result, arg: convertTerm(arg, depth) };
-    }
-    return result;
-  }
-
   // Execute each tactic, elaborating arguments in the current goal's context
   for (const cmd of tacticBlock.tactics) {
     const goal = engine.getFocusedGoal();
@@ -1814,139 +1588,12 @@ function elaborateTacticBlock(
       throw new Error('Tactic proof: no active goal');
     }
 
-    // Elaborate arguments in the CURRENT goal's context
+    // Elaborate arguments in the CURRENT goal's context using shared elaboration
     const elabArgs: Array<TTerm | TTKTerm> = cmd.args.map((arg, argIndex) => {
-      // For sorry/intro/intros/unfold, keep args as-is (don't elaborate)
-      if (cmd.name === 'sorry' || cmd.name === 'intro' || cmd.name === 'intros' || cmd.name === 'unfold') {
+      if (shouldKeepArgAsName(cmd.name, argIndex, cmd.args.length)) {
         return arg;
       }
-      // For have, args[0] is the hypothesis name — keep as Const
-      if (cmd.name === 'have' && argIndex === 0) {
-        return arg;
-      }
-      // For obtain, args[0..N-1] are binding names — keep as Const, only elaborate the last arg (proof)
-      if (cmd.name === 'obtain' && argIndex < cmd.args.length - 1) {
-        return arg;
-      }
-
-      // For apply/exact/etc, elaborate in the goal's context
-      // Build a name map from context for de Bruijn conversion
-      const nameContext: string[] = goal.ctx.map(binding => binding.name);
-
-      // Helper to recursively convert Const to Var based on context
-      // This walks the surface term and resolves names to de Bruijn indices
-      function surfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
-        switch (term.tag) {
-          case 'Var':
-            // Already a de Bruijn index (shouldn't happen in surface syntax from parser)
-            return { tag: 'Var', index: term.index };
-
-          case 'Const': {
-            // Look up the name in the context (most recent first)
-            for (let i = nameContext.length - 1; i >= 0; i--) {
-              if (nameContext[i] === term.name) {
-                // Found in local context! Convert to de Bruijn index
-                const index = nameContext.length - 1 - i + depth;
-                return { tag: 'Var', index };
-              }
-            }
-            // Not found in context, keep as Const (global definition)
-            return { tag: 'Const', name: term.name };
-          }
-
-          case 'App': {
-            // Insert Holes for implicit params when head is a Const with namedArgMap
-            return insertImplicitHolesForApp(term, surfaceToKernel, depth);
-          }
-
-          case 'Sort': {
-            // Elaborate the level
-            return {
-              tag: 'Sort',
-              level: surfaceToKernel(term.level, depth) as any
-            };
-          }
-
-          case 'Hole':
-            return { tag: 'Hole', id: term.id };
-
-          case 'ULevel':
-            return { tag: 'ULevel' };
-
-          case 'ULit':
-            return { tag: 'ULit', n: term.n };
-
-          case 'UOmega':
-            return { tag: 'UOmega' };
-
-          case 'Binder': {
-            // Handle lambdas, pi, let in tactic arguments
-            // This allows e.g. `rw (cong (\z => plus x z) h)` where x is a tactic context var
-            const domain = term.domain ? surfaceToKernel(term.domain, depth) : undefined;
-            let binderKind: import('./kernel').TTKBinderKind;
-            if (term.binderKind.tag === 'BLetTT') {
-              binderKind = { tag: 'BLet', defVal: surfaceToKernel(term.binderKind.defVal, depth) };
-            } else if (term.binderKind.tag === 'BLamTT') {
-              binderKind = { tag: 'BLam' };
-            } else {
-              binderKind = { tag: 'BPi' };
-            }
-            // Extend name context for body resolution
-            nameContext.push(term.name);
-            const body = surfaceToKernel(term.body, depth);
-            nameContext.pop();
-            return {
-              tag: 'Binder',
-              binderKind,
-              name: term.name,
-              domain: domain ?? { tag: 'Hole', id: '_' },
-              body
-            };
-          }
-
-          case 'MultiBinder': {
-            // Multi-name binder: (a b c : T) -> body
-            const domain = surfaceToKernel(term.domain, depth);
-            const binderKind: import('./kernel').TTKBinderKind = term.binderKind.tag === 'BLamTT'
-              ? { tag: 'BLam' }
-              : term.binderKind.tag === 'BPiTT'
-              ? { tag: 'BPi' }
-              : { tag: 'BLet', defVal: surfaceToKernel((term.binderKind as any).defVal, depth) };
-            // Desugar into nested single binders, extending name context
-            let result: import('./kernel').TTKTerm;
-            for (const name of term.names) {
-              nameContext.push(name);
-            }
-            result = surfaceToKernel(term.body, depth);
-            // Build nested binders from inside out
-            for (let i = term.names.length - 1; i >= 0; i--) {
-              nameContext.pop();
-              result = {
-                tag: 'Binder',
-                binderKind,
-                name: term.names[i],
-                domain,
-                body: result
-              };
-            }
-            return result;
-          }
-
-          case 'Annot': {
-            // Type annotation: (term : type)
-            // Just elaborate both parts; the annotation will be checked during type checking
-            const annotTerm = surfaceToKernel(term.term, depth);
-            const annotType = surfaceToKernel(term.type, depth);
-            return { tag: 'Annot' as any, term: annotTerm, type: annotType };
-          }
-
-          // For complex terms (Match, etc.), use standard elaboration
-          default:
-            return elabToKernelWithMap(term, elabMap, [], []);
-        }
-      }
-
-      return surfaceToKernel(arg);
+      return elaborateTacticArg(arg, goal.ctx, definitions);
     });
 
     // Elaborate focused tactics (for bullet syntax and suffices closing tactics)
@@ -1959,65 +1606,17 @@ function elaborateTacticBlock(
 
       elabFocusedTactics = cmd.focusedTactics.map(focusedCmd => {
         // Recursively elaborate each focused tactic
-        const focusedElabArgs: Array<TTerm | TTKTerm> = focusedCmd.args.map(arg => {
-          if (focusedCmd.name === 'intro' || focusedCmd.name === 'intros') {
+        // For suffices, extend context with hypothesis name
+        const focusedCtx = sufficesHypName
+          ? [...goal.ctx, { name: sufficesHypName, type: { tag: 'Hole' as const, id: '_suffices_type' } }]
+          : goal.ctx;
+        const focusedElabArgs: Array<TTerm | TTKTerm> = focusedCmd.args.map((arg, i) => {
+          if (shouldKeepArgAsName(focusedCmd.name, i, focusedCmd.args.length)) {
             return arg;
           }
-          const nameContext: string[] = goal.ctx.map(binding => binding.name);
-          // For suffices closing tactics, h is in scope (will be Var(0) = last in context)
-          if (sufficesHypName) {
-            nameContext.push(sufficesHypName);
-          }
-          function surfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
-            switch (term.tag) {
-              case 'Var':
-                return { tag: 'Var', index: term.index };
-              case 'Const': {
-                for (let i = nameContext.length - 1; i >= 0; i--) {
-                  if (nameContext[i] === term.name) {
-                    const index = nameContext.length - 1 - i + depth;
-                    return { tag: 'Var', index };
-                  }
-                }
-                return { tag: 'Const', name: term.name };
-              }
-              case 'App':
-                return insertImplicitHolesForApp(term, surfaceToKernel, depth);
-              case 'Sort':
-                return { tag: 'Sort', level: surfaceToKernel(term.level, depth) as any };
-              case 'Hole':
-                return { tag: 'Hole', id: term.id };
-              case 'ULevel':
-                return { tag: 'ULevel' };
-              case 'ULit':
-                return { tag: 'ULit', n: term.n };
-              case 'UOmega':
-                return { tag: 'UOmega' };
-              case 'Binder': {
-                const domain = term.domain ? surfaceToKernel(term.domain, depth) : undefined;
-                let binderKind: import('./kernel').TTKBinderKind;
-                if (term.binderKind.tag === 'BLetTT') {
-                  binderKind = { tag: 'BLet', defVal: surfaceToKernel(term.binderKind.defVal, depth) };
-                } else if (term.binderKind.tag === 'BLamTT') {
-                  binderKind = { tag: 'BLam' };
-                } else {
-                  binderKind = { tag: 'BPi' };
-                }
-                nameContext.push(term.name);
-                const body = surfaceToKernel(term.body, depth);
-                nameContext.pop();
-                return {
-                  tag: 'Binder', binderKind, name: term.name,
-                  domain: domain ?? { tag: 'Hole', id: '_' }, body
-                };
-              }
-              default:
-                return elabToKernelWithMap(term, elabMap, [], []);
-            }
-          }
-          return surfaceToKernel(arg);
+          return elaborateTacticArg(arg, focusedCtx, definitions);
         });
-        const t = tacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs });
+        const t = sharedTacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs });
         if (t === 'sorry') {
           hasSorry = true;
           // Return a no-op tactic that leaves the goal unsolved
@@ -2032,7 +1631,7 @@ function elaborateTacticBlock(
     const position = indexPathToSourcePosition(cmd.indexPath, sourceMap);
 
     // Convert command to Tactic object with elaborated args
-    const tactic = tacticCommandToTactic({ name: cmd.name, args: elabArgs, focusedTactics: elabFocusedTactics });
+    const tactic = sharedTacticCommandToTactic({ name: cmd.name, args: elabArgs, focusedTactics: elabFocusedTactics });
 
     // sorry tactic: leave goal unsolved (produces a Hole in the proof term)
     if (tactic === 'sorry') {
@@ -2131,105 +1730,17 @@ function elaborateTacticBlock(
             throw new Error(`Structured cases: no active goal for constructor '${branch.constructor}'`);
           }
 
-          // Rebuild name context from current goal (may have grown via intro)
-          const branchNameContext: string[] = branchGoal.ctx.map(b => b.name);
-
-          function branchSurfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
-            switch (term.tag) {
-              case 'Var':
-                return { tag: 'Var', index: term.index };
-
-              case 'Const': {
-                // First check if this is a pattern param name
-                const mappedName = paramNameMap.get(term.name);
-                const lookupName = mappedName || term.name;
-
-                for (let i = branchNameContext.length - 1; i >= 0; i--) {
-                  if (branchNameContext[i] === lookupName) {
-                    const index = branchNameContext.length - 1 - i + depth;
-                    return { tag: 'Var', index };
-                  }
-                }
-                return { tag: 'Const', name: term.name };
-              }
-
-              case 'App':
-                return insertImplicitHolesForApp(term, branchSurfaceToKernel, depth);
-
-              case 'Sort':
-                return { tag: 'Sort', level: branchSurfaceToKernel(term.level, depth) as any };
-              case 'Hole':
-                return { tag: 'Hole', id: term.id };
-              case 'ULevel':
-                return { tag: 'ULevel' };
-              case 'ULit':
-                return { tag: 'ULit', n: term.n };
-              case 'UOmega':
-                return { tag: 'UOmega' };
-
-              case 'Binder': {
-                const domain = term.domain ? branchSurfaceToKernel(term.domain, depth) : undefined;
-                let binderKind: import('./kernel').TTKBinderKind;
-                if (term.binderKind.tag === 'BLetTT') {
-                  binderKind = { tag: 'BLet', defVal: branchSurfaceToKernel(term.binderKind.defVal, depth) };
-                } else if (term.binderKind.tag === 'BLamTT') {
-                  binderKind = { tag: 'BLam' };
-                } else {
-                  binderKind = { tag: 'BPi' };
-                }
-                branchNameContext.push(term.name);
-                const body = branchSurfaceToKernel(term.body, depth);
-                branchNameContext.pop();
-                return {
-                  tag: 'Binder', binderKind, name: term.name,
-                  domain: domain ?? { tag: 'Hole', id: '_' }, body
-                };
-              }
-
-              case 'MultiBinder': {
-                const domain = branchSurfaceToKernel(term.domain, depth);
-                const binderKind: import('./kernel').TTKBinderKind = term.binderKind.tag === 'BLamTT'
-                  ? { tag: 'BLam' }
-                  : term.binderKind.tag === 'BPiTT'
-                  ? { tag: 'BPi' }
-                  : { tag: 'BLet', defVal: branchSurfaceToKernel((term.binderKind as any).defVal, depth) };
-                let result: import('./kernel').TTKTerm;
-                for (const name of term.names) {
-                  branchNameContext.push(name);
-                }
-                result = branchSurfaceToKernel(term.body, depth);
-                for (let i = term.names.length - 1; i >= 0; i--) {
-                  branchNameContext.pop();
-                  result = {
-                    tag: 'Binder', binderKind, name: term.names[i],
-                    domain, body: result
-                  };
-                }
-                return result;
-              }
-
-              case 'Annot': {
-                const annotTerm = branchSurfaceToKernel(term.term, depth);
-                const annotType = branchSurfaceToKernel(term.type, depth);
-                return { tag: 'Annot' as any, term: annotTerm, type: annotType };
-              }
-
-              default:
-                return elabToKernelWithMap(term, elabMap, [], []);
-            }
-          }
-
-          const branchElabArgs: Array<TTerm | TTKTerm> = branchTactic.args.map(arg => {
-            if (branchTactic.name === 'sorry' || branchTactic.name === 'intro' || branchTactic.name === 'intros') {
+          const branchElabArgs: Array<TTerm | TTKTerm> = branchTactic.args.map((arg, i) => {
+            if (shouldKeepArgAsName(branchTactic.name, i, branchTactic.args.length)) {
               return arg;
             }
-            return branchSurfaceToKernel(arg);
+            return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
           });
 
           // Get goals before applying tactic
           const branchGoalsBefore = extractGoalStates(engineToProofState(engine));
 
-          const branchTacticObj = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
+          const branchTacticObj = sharedTacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
 
           // sorry: leave goal unsolved
           if (branchTacticObj === 'sorry') {
@@ -2292,13 +1803,9 @@ function elaborateTacticBlock(
                   throw new Error(`Structured cases: no active goal for nested constructor '${nestedBranch.constructor}'`);
                 }
 
-                // Build name context with nested pattern param mapping
+                // Build nested param name mapping (include parent branch params)
                 const nestedNameContext: string[] = nestedGoal.ctx.map(b => b.name);
-                const nestedParamNameMap = new Map<string, string>();
-                // Include parent branch params
-                for (const [k, v] of paramNameMap) {
-                  nestedParamNameMap.set(k, v);
-                }
+                const nestedParamNameMap = new Map<string, string>(paramNameMap);
                 for (let i = 0; i < nestedBranch.params.length; i++) {
                   const patternParamName = nestedBranch.params[i];
                   const ctxIndex = nestedNameContext.length - nestedBranch.params.length + i;
@@ -2307,90 +1814,14 @@ function elaborateTacticBlock(
                   }
                 }
 
-                function nestedSurfaceToKernel(term: TTerm, depth: number = 0): TTKTerm {
-                  switch (term.tag) {
-                    case 'Var':
-                      return { tag: 'Var', index: term.index };
-                    case 'Const': {
-                      const mappedName = nestedParamNameMap.get(term.name);
-                      const lookupName = mappedName || term.name;
-                      for (let i = nestedNameContext.length - 1; i >= 0; i--) {
-                        if (nestedNameContext[i] === lookupName) {
-                          const index = nestedNameContext.length - 1 - i + depth;
-                          return { tag: 'Var', index };
-                        }
-                      }
-                      return { tag: 'Const', name: term.name };
-                    }
-                    case 'App':
-                      return insertImplicitHolesForApp(term, nestedSurfaceToKernel, depth);
-                    case 'Sort':
-                      return { tag: 'Sort', level: nestedSurfaceToKernel(term.level, depth) as any };
-                    case 'Hole':
-                      return { tag: 'Hole', id: term.id };
-                    case 'ULevel':
-                      return { tag: 'ULevel' };
-                    case 'ULit':
-                      return { tag: 'ULit', n: term.n };
-                    case 'UOmega':
-                      return { tag: 'UOmega' };
-                    case 'Binder': {
-                      const domain = term.domain ? nestedSurfaceToKernel(term.domain, depth) : undefined;
-                      let binderKind: import('./kernel').TTKBinderKind;
-                      if (term.binderKind.tag === 'BLetTT') {
-                        binderKind = { tag: 'BLet', defVal: nestedSurfaceToKernel(term.binderKind.defVal, depth) };
-                      } else if (term.binderKind.tag === 'BLamTT') {
-                        binderKind = { tag: 'BLam' };
-                      } else {
-                        binderKind = { tag: 'BPi' };
-                      }
-                      nestedNameContext.push(term.name);
-                      const body = nestedSurfaceToKernel(term.body, depth);
-                      nestedNameContext.pop();
-                      return {
-                        tag: 'Binder', binderKind, name: term.name,
-                        domain: domain ?? { tag: 'Hole', id: '_' }, body
-                      };
-                    }
-                    case 'MultiBinder': {
-                      const domain = nestedSurfaceToKernel(term.domain, depth);
-                      const binderKind: import('./kernel').TTKBinderKind = term.binderKind.tag === 'BLamTT'
-                        ? { tag: 'BLam' }
-                        : term.binderKind.tag === 'BPiTT'
-                        ? { tag: 'BPi' }
-                        : { tag: 'BLet', defVal: nestedSurfaceToKernel((term.binderKind as any).defVal, depth) };
-                      let result: import('./kernel').TTKTerm;
-                      for (const name of term.names) {
-                        nestedNameContext.push(name);
-                      }
-                      result = nestedSurfaceToKernel(term.body, depth);
-                      for (let i = term.names.length - 1; i >= 0; i--) {
-                        nestedNameContext.pop();
-                        result = {
-                          tag: 'Binder', binderKind, name: term.names[i],
-                          domain, body: result
-                        };
-                      }
-                      return result;
-                    }
-                    case 'Annot': {
-                      const annotTerm = nestedSurfaceToKernel(term.term, depth);
-                      const annotType = nestedSurfaceToKernel(term.type, depth);
-                      return { tag: 'Annot' as any, term: annotTerm, type: annotType };
-                    }
-                    default:
-                      return elabToKernelWithMap(term, elabMap, [], []);
-                  }
-                }
-
-                const nestedElabArgs: Array<TTerm | TTKTerm> = nestedTactic.args.map(arg => {
-                  if (nestedTactic.name === 'sorry' || nestedTactic.name === 'intro' || nestedTactic.name === 'intros') {
+                const nestedElabArgs: Array<TTerm | TTKTerm> = nestedTactic.args.map((arg, i) => {
+                  if (shouldKeepArgAsName(nestedTactic.name, i, nestedTactic.args.length)) {
                     return arg;
                   }
-                  return nestedSurfaceToKernel(arg);
+                  return elaborateTacticArg(arg, nestedGoal.ctx, definitions, 0, nestedParamNameMap);
                 });
 
-                const nestedTacticObj = tacticCommandToTactic({ name: nestedTactic.name, args: nestedElabArgs });
+                const nestedTacticObj = sharedTacticCommandToTactic({ name: nestedTactic.name, args: nestedElabArgs });
 
                 // sorry: leave goal unsolved
                 if (nestedTacticObj === 'sorry') {
