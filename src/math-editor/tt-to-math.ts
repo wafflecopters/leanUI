@@ -242,6 +242,7 @@ const CARRIER_CONST_SYMBOLS = new Map<string, string>([
   ['rzero', '0'],
   ['rone', '1'],
   ['Carrier', '\\mathbb{R}'],
+  ['rneg', '-'],
 ]);
 
 // ============================================================================
