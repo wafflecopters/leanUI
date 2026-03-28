@@ -478,7 +478,12 @@ function buildCaptureMap(
 ): Map<string, MathNode[]> | null {
   const slots = parseTemplateSlots(entry.template);
   const captures = new Map<string, MathNode[]>();
-  let argIdx = 0;
+  // Count direct + lambda slots (args that need to be consumed)
+  const consumableSlots = slots.filter(s => s.kind === 'direct' || s.kind === 'lambda').length;
+  // For needsR entries: if there are more args than slots, skip leading carrier args.
+  // This handles the case where implicit {R} appears explicitly in the surface term
+  // (kernel→surface doesn't strip implicit args).
+  let argIdx = (entry.needsR && args.length > consumableSlots) ? args.length - consumableSlots : 0;
 
   for (const slot of slots) {
     switch (slot.kind) {
@@ -528,6 +533,8 @@ const PREC_ADDITIVE = 1;   // +, -
 const PREC_MULTIPLICATIVE = 2; // ·, ×
 const PREC_ATOM = 100;     // no infix operator
 
+type Assoc = 'left' | 'right' | 'none';
+
 const SYMBOL_PREC = new Map<string, number>([
   ['=', PREC_RELATION], ['\\le', PREC_RELATION], ['\\leq', PREC_RELATION],
   ['\\ge', PREC_RELATION], ['\\geq', PREC_RELATION],
@@ -536,6 +543,13 @@ const SYMBOL_PREC = new Map<string, number>([
   ['\\to', PREC_RELATION], ['\\implies', PREC_RELATION],
   ['+', PREC_ADDITIVE], ['-', PREC_ADDITIVE],
   ['\\cdot', PREC_MULTIPLICATIVE], ['\\times', PREC_MULTIPLICATIVE],
+]);
+
+/** Associativity of infix operators. Default is 'left' if not listed. */
+const SYMBOL_ASSOC = new Map<string, Assoc>([
+  ['\\to', 'right'],
+  ['\\implies', 'right'],
+  // All arithmetic operators are left-associative by default
 ]);
 
 /** Get the minimum precedence of top-level operators in a node array. */
@@ -566,15 +580,28 @@ function patternPrec(pattern: PatternElement[]): number {
   return minPrec;
 }
 
-/** Check if a capture needs parens due to lower precedence than surrounding pattern. */
+/**
+ * Check if a capture needs parens due to precedence or associativity.
+ * @param position 'left' if this capture is to the LEFT of the infix op, 'right' if to the right.
+ * @param patAssoc associativity of the pattern's operator.
+ */
 function captureNeedsWrap(
   nodes: MathNode[],
   patPrec: number,
   isFollowedByLiteral: boolean,
+  position?: 'left' | 'right',
+  patAssoc?: Assoc,
 ): boolean {
   const capPrec = nodesMinPrec(nodes);
   // Wrap if capture has strictly lower precedence than pattern operator
   if (capPrec < patPrec) return true;
+  // Same precedence: wrap if associativity conflicts with position.
+  // E.g., left-assoc +: a+(b+c) wraps RHS; right-assoc →: (a→b)→c wraps LHS.
+  if (capPrec === patPrec && position) {
+    const assoc = patAssoc ?? 'left';
+    if (assoc === 'left' && position === 'right') return true;
+    if (assoc === 'right' && position === 'left') return true;
+  }
   // BigOp at end of capture followed by more content is always ambiguous
   if (isFollowedByLiteral && nodes.length > 0 && nodes[nodes.length - 1].tag === 'BigOp') return true;
   return false;
@@ -587,6 +614,11 @@ function captureNeedsWrap(
 export function buildFromPattern(pattern: PatternElement[], captures: Map<string, MathNode[]>): MathNode[] {
   const result: MathNode[] = [];
   const pPrec = patternPrec(pattern);
+  // Find the infix operator's associativity (from the first literal in the pattern)
+  const patOp = pattern.find(pe => pe.tag === 'literal' && SYMBOL_PREC.has(pe.symbol));
+  const patAssoc: Assoc = patOp && patOp.tag === 'literal' ? (SYMBOL_ASSOC.get(patOp.symbol) ?? 'left') : 'left';
+  // Find the index of the first literal to determine capture positions
+  const firstLitIdx = pattern.findIndex(pe => pe.tag === 'literal' && SYMBOL_PREC.has(pe.symbol));
 
   for (let pi = 0; pi < pattern.length; pi++) {
     const pe = pattern[pi];
@@ -598,9 +630,12 @@ export function buildFromPattern(pattern: PatternElement[], captures: Map<string
       case 'capture': {
         const nodes = captures.get(pe.name);
         if (nodes && nodes.length > 0) {
-          // Check if next pattern element is a literal (operator follows this capture)
           const nextIsLit = pi + 1 < pattern.length && pattern[pi + 1].tag === 'literal';
-          if (pPrec < PREC_ATOM && captureNeedsWrap(nodes, pPrec, nextIsLit)) {
+          // Determine if this capture is left or right of the infix operator
+          const position: 'left' | 'right' | undefined = firstLitIdx >= 0
+            ? (pi < firstLitIdx ? 'left' : 'right')
+            : undefined;
+          if (pPrec < PREC_ATOM && captureNeedsWrap(nodes, pPrec, nextIsLit, position, patAssoc)) {
             result.push(mkDelimiter('(', ')', mkRow(nodes)));
           } else {
             result.push(...nodes);
