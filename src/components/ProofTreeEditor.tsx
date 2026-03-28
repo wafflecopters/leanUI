@@ -1811,6 +1811,7 @@ function ProofProseView({
             key={`${item.nodeId}-${idx}`}
             item={item}
             prevItem={idx > 0 ? items[idx - 1] : undefined}
+            nextItem={idx < items.length - 1 ? items[idx + 1] : undefined}
             isLastGoalStep={idx === lastGoalStepIdx}
             nextHoleNodeId={nextHoleNodeId}
 
@@ -1851,6 +1852,7 @@ function ProofProseView({
 interface ProseItemViewProps {
   item: ProseItem;
   prevItem?: ProseItem;
+  nextItem?: ProseItem;
   /** True if this is the last goal-showing step before the active hole. */
   isLastGoalStep?: boolean;
   /** NodeId of the next hole after this step (for click-to-focus on goal). */
@@ -2138,7 +2140,7 @@ const eqBlockStyle: React.CSSProperties = {
 };
 
 function ProseItemView({
-  item, prevItem, isLastGoalStep, nextHoleNodeId, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
+  item, prevItem, nextItem, isLastGoalStep, nextHoleNodeId, onClick, onDelete, state, tacticMode, onTacticMode, onPushChange, onClickNode,
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
@@ -2173,7 +2175,9 @@ function ProseItemView({
     (prevItem.kind.tag === 'rewrite' && prevItem.kind.goalLatex) ||
     (prevItem.kind.tag === 'apply' && (prevItem.kind.subgoalLatex?.length ?? 0) <= 1 && prevItem.kind.subgoalLatex?.[0]) ||
     (prevItem.kind.tag === 'simp' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'intro' && prevItem.kind.goalLatex)
+    (prevItem.kind.tag === 'intro' && prevItem.kind.goalLatex) ||
+    (prevItem.kind.tag === 'have' && prevItem.kind.goalLatex) ||
+    (prevItem.kind.tag === 'suffices' && prevItem.kind.goalLatex)
   );
 
   // "We must show [goal]" prefix for steps where no prior goal is visible
@@ -2199,7 +2203,7 @@ function ProseItemView({
   // Deletable items get an (x) button on hover
   const isDeletable = kind.tag === 'intro' || kind.tag === 'unfold' || kind.tag === 'rewrite'
     || kind.tag === 'apply' || kind.tag === 'exact' || kind.tag === 'inductionHeader'
-          || kind.tag === 'simp';
+          || kind.tag === 'simp' || kind.tag === 'have' || kind.tag === 'suffices';
 
   const deleteBtn = isDeletable && onDelete && hovered ? (
     <button
@@ -2438,6 +2442,52 @@ function ProseItemView({
           ))}
           <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
           {renderGoalSection(kind.goalLatex, ', we get')}
+          {deleteBtn}
+        </div>
+      );
+
+    case 'have': {
+      // Only show the goal if this is the last step (still building the proof).
+      // have doesn't mutate the goal, so showing it once continued is noise.
+      const showHaveGoal = !nextItem;
+      // Extract just the lemma name from the expr (drop args).
+      // "chainTermALimit g f x0 Lg Lf hf hg" → "chainTermALimit"
+      const lemmaName = kind.expr.trim().split(/\s+/)[0].replace(/^\(+/, '');
+      return (
+        <div style={rowStyle} {...rowHandlers}>
+          <span style={prose}>We have{' '}</span>
+          {kind.typeLatex ? (
+            <>
+              <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
+              <span style={prose}>{' '}(</span>
+              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+              <span style={prose}>, by{' '}</span>
+              <InlineKaTeX latex={texNameForProse(lemmaName)} style={{ fontSize: '13px' }} />
+              <span style={prose}>).</span>
+            </>
+          ) : (
+            <>
+              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+              <span style={prose}>{' '}:={' '}</span>
+              <InlineKaTeX latex={texNameForProse(kind.expr)} style={{ fontSize: '13px' }} />
+              <span style={prose}>.</span>
+            </>
+          )}
+          {showHaveGoal && renderGoalSection(kind.goalLatex, ' It remains to show')}
+          {deleteBtn}
+        </div>
+      );
+    }
+
+    case 'suffices':
+      return (
+        <div style={rowStyle} {...rowHandlers}>
+          <span style={prose}>It suffices to show</span>
+          {kind.goalLatex && (
+            <div style={{ margin: '6px 0', textAlign: 'center' }}>
+              <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '14px' }} />
+            </div>
+          )}
           {deleteBtn}
         </div>
       );

@@ -48,7 +48,8 @@ export type ProseItemKind =
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string }
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'have'; name: string; expr: string; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'have'; name: string; expr: string; typeLatex?: string; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'suffices'; name: string; goalLatex?: string }
   | { tag: 'qed' };
 
 /** A single step in an unfold/rewrite chain. */
@@ -319,11 +320,15 @@ export function generateProofProse(
       }
 
       case 'have': {
-        const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
+        const childInfo = goalMap.get(node.child.id);
+        const childGoalLatex = childInfo?.goalLatex;
+        // Find the hypothesis type from the child's context (last entry with this name)
+        const hypType = childInfo?.hypotheses.find(h => h.name === node.name)?.type;
         emit(node.id, depth, {
           tag: 'have',
           name: node.name,
           expr: node.expr,
+          typeLatex: hypType,
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
         });
@@ -332,12 +337,12 @@ export function generateProofProse(
       }
 
       case 'suffices': {
-        const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
+        const childInfo = goalMap.get(node.child.id);
+        // The child's goalLatex IS the suffices type, rendered through the math pipeline
+        const childGoalLatex = childInfo?.goalLatex;
         emit(node.id, depth, {
-          tag: 'have',
+          tag: 'suffices',
           name: node.name,
-          expr: node.typeExpr,
-          preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
         });
         walk(node.child, depth);

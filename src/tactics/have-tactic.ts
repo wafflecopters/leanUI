@@ -20,6 +20,7 @@ import { Tactic, TacticResult, freshMetaName } from './tactic';
 import { checkType, inferType } from '../compiler/checker';
 import { shiftTerm } from '../compiler/subst';
 import { TCEnv } from '../compiler/term';
+import { solveConstraints } from '../compiler/meta';
 
 /**
  * HaveTactic: Introduce a local hypothesis
@@ -69,7 +70,29 @@ export class HaveTactic implements Tactic {
         resolvedType = this.hypType;
       }
 
-      const checkedProof = checkedEnv.zonkTerm(checkedEnv.elaboratedTerm ?? this.hypProof);
+      // Solve constraints from type-checking to resolve implicit arg metas
+      // (e.g., {R : Real} in chainTermALimit)
+      const solved = solveConstraints(
+        checkedEnv.metaVars,
+        checkedEnv.constraints,
+        undefined,
+        engine.definitions
+      );
+
+      // Re-zonk using solved state so implicit arg Metas are replaced with solutions
+      const solvedEnvForZonk = new TCEnv(
+        goal.ctx,
+        engine.definitions,
+        solved.metaVars,
+        solved.constraints,
+        [],
+        [],
+        this.hypProof,
+        new Map(),
+        { mode: 'check' }
+      );
+      resolvedType = solvedEnvForZonk.zonkTerm(resolvedType);
+      const checkedProof = solvedEnvForZonk.zonkTerm(checkedEnv.elaboratedTerm ?? this.hypProof);
 
       // 2. Create new goal with extended context (store value for ζ-reduction)
       const newCtx = [...goal.ctx, { name: this.hypName, type: resolvedType, value: checkedProof }];
@@ -92,8 +115,7 @@ export class HaveTactic implements Tactic {
       };
 
       // 4. Update engine state
-      // Merge metaVars from type-checking (may contain solved metas from implicit args)
-      const newMetaVars = new Map(checkedEnv.metaVars);
+      const newMetaVars = new Map(solved.metaVars);
       newMetaVars.set(goalId, { ...goal, solution: letTerm });
       newMetaVars.set(newMetaId, newMeta);
 
@@ -103,7 +125,7 @@ export class HaveTactic implements Tactic {
         success: true,
         newEngine: engine.withUpdates({
           metaVars: newMetaVars,
-          constraints: checkedEnv.constraints,
+          constraints: solved.constraints,
           goals: newGoals
         })
       };

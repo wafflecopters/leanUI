@@ -156,6 +156,7 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
     case 'Sort': return { tag: 'Sort', level: kernelTypeToSurface(t.level, definitions) } as TTerm;
     case 'ULit': return mkULitTT(t.n);
     case 'Hole': return mkHoleTT(t.id, prop);
+    case 'Meta': return mkHoleTT(t.id, prop);
     case 'Binder': {
       if (t.binderKind.tag === 'BPi') {
         return mkPiTT(
@@ -2206,6 +2207,7 @@ function renderHypotheses(
   rev: ReverseRegistry,
   projMap?: Map<string, Map<number, string>>,
   aliasMap?: Map<string, AliasFoldInfo>,
+  engine?: TacticEngine,
 ): TypedHypothesis[] {
   const pm = projMap ?? buildProjectionFoldMap(definitions);
   const am = aliasMap ?? buildAliasFoldMap(definitions);
@@ -2216,7 +2218,11 @@ function renderHypotheses(
     for (let j = i - 1; j >= 0; j--) {
       nameCtx.push(ctx[j].name);
     }
-    const normalizedType = betaNormalize(entry.type);
+    // Zonk before rendering — solved metas must be substituted so they don't
+    // appear as Holes (gray squares) in the UI.  Depth = i because hypothesis i
+    // was formed in the context of entries 0..i-1.
+    const zonked = engine ? engine.zonkTerm(entry.type, i) : entry.type;
+    const normalizedType = betaNormalize(zonked);
     let folded = foldProjectionMatches(normalizedType, pm);
     folded = foldAliases(folded, am);
     const surfaceHypType = kernelTypeToSurface(folded, definitions);
@@ -2303,7 +2309,7 @@ function computeWithTacticEngine(
   if (!goal) return null;
 
   // Render hypotheses and goal using shared helpers
-  const hypotheses = renderHypotheses(goal.ctx, definitions, rev);
+  const hypotheses = renderHypotheses(goal.ctx, definitions, rev, undefined, undefined, replay.engine);
 
   // For exact nodes, show the expression and validate it
   const cursorNode = findNodeById(root, cursorId);
@@ -2501,7 +2507,7 @@ function replayEntireTreeFromTrace(
     if (!goal) return;
     result.set(nodeId, {
       goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
       caseLabelLatex,
       validation,
     });
@@ -2637,7 +2643,7 @@ function replayEntireTreeViaWalk(
     if (!goal) return;
     result.set(nodeId, {
       goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
       caseLabelLatex,
     });
   }
@@ -2648,7 +2654,7 @@ function replayEntireTreeViaWalk(
     const validation = validateExactNode(expr, eng, gId);
     result.set(nodeId, {
       goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
       validation,
     });
   }

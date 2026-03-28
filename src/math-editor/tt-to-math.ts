@@ -234,6 +234,17 @@ export function decomposePiSpine(type: TTerm): { binders: BinderInfo[]; body: TT
 }
 
 // ============================================================================
+// Carrier-parameterized constant symbols (render-only, not bidirectional)
+// ============================================================================
+
+/** Constants whose first arg is a carrier/Real parameter that should be suppressed. */
+const CARRIER_CONST_SYMBOLS = new Map<string, string>([
+  ['rzero', '0'],
+  ['rone', '1'],
+  ['Carrier', '\\mathbb{R}'],
+]);
+
+// ============================================================================
 // Core conversion: TTerm → MathNode[]
 // ============================================================================
 
@@ -271,6 +282,20 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
       const { fn, args } = flattenApp(term);
 
       if (fn.tag === 'Const') {
+        // Carrier-parameterized constants: suppress the carrier arg and render as a symbol.
+        // E.g., rzero(R) → 0,  rone(R) → 1,  Carrier(R) → ℝ
+        const carrierSymbol = CARRIER_CONST_SYMBOLS.get(fn.name);
+        if (carrierSymbol !== undefined && args.length >= 1) {
+          if (args.length === 1) return [mkSymbol(carrierSymbol)];
+          // Overflow args rendered after the symbol: e.g., rhalf(R) → ½ shouldn't happen, but just in case
+          const overflowNodes: MathNode[] = [];
+          for (let i = 1; i < args.length; i++) {
+            if (i > 1) overflowNodes.push(mkSymbol(','));
+            overflowNodes.push(...ttermToMathNodes(args[i], rev, ctx, annotate));
+          }
+          return [mkSymbol(carrierSymbol), mkDelimiter('(', ')', mkRow(overflowNodes))];
+        }
+
         const entry = rev.nameToEntry.get(fn.name);
         if (entry) {
           const captures = buildCaptureMap(entry, args, rev, ctx, annotate);
