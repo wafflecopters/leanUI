@@ -131,10 +131,13 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
 
     case 'suffices': {
       // suffices h : T by proof → args[0]=name, args[1]=type
-      // The "by proof" is in focusedTactics (ignored for tree — just changes goal)
+      // The "by proof" is in focusedTactics — the proof that original goal follows from h
       const suffName = cmd.args.length > 0 ? extractName(cmd.args[0]) ?? 'h' : 'h';
       const suffType = cmd.args.length > 1 ? surfaceTermToString(cmd.args[1]) : '?';
-      return mkSuffices(suffName, suffType, tacticCommandsToProofTree(rest));
+      const byProof = cmd.focusedTactics && cmd.focusedTactics.length > 0
+        ? tacticCommandsToProofTree(cmd.focusedTactics)
+        : undefined;
+      return mkSuffices(suffName, suffType, tacticCommandsToProofTree(rest), byProof);
     }
 
     case 'have': {

@@ -7,9 +7,21 @@
  * produces a flat array of ProseItems for rendering.
  */
 
-import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
+import { ProofNode, ProofNodeId, CaseNode, ExactNode } from './proof-tree';
 import { NodeGoalInfo, TypedHypothesis } from './goal-computation';
 import { TTerm } from '../compiler/surface';
+
+/** Walk a byProof subtree to extract the proof expression string.
+ *  Typically this is a single `exact` node, possibly under intros. */
+function extractByExpr(node?: ProofNode): string | undefined {
+  if (!node) return undefined;
+  switch (node.tag) {
+    case 'exact': return node.expr;
+    case 'intros': return extractByExpr(node.child);
+    case 'have': return extractByExpr(node.child);
+    default: return undefined;
+  }
+}
 
 // ============================================================================
 // Data Model
@@ -49,7 +61,8 @@ export type ProseItemKind =
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'suffices'; name: string; goalLatex?: string }
+  | { tag: 'suffices'; name: string; goalLatex?: string; byExpr?: string }
+  | { tag: 'subgoalHeader'; label: string; goalLatex?: string }
   | { tag: 'qed' };
 
 /** A single step in an unfold/rewrite chain. */
@@ -207,6 +220,12 @@ export function generateProofProse(
     items.push({ nodeId, depth, kind, isCursor: nodeId === cursorId });
   }
 
+  /** Walk a proof branch with a labeled header, indented content. */
+  function walkBranch(parentId: ProofNodeId, label: string, goalLatex: string | undefined, body: ProofNode, depth: number): void {
+    emit(parentId, depth, { tag: 'subgoalHeader', label, goalLatex });
+    walk(body, depth + 1);
+  }
+
   function walk(node: ProofNode, depth: number): void {
     const info = goalMap.get(node.id);
 
@@ -292,11 +311,18 @@ export function generateProofProse(
           return childInfo?.goalLatex ?? '?';
         });
         emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex, error: info?.tacticError });
-        // Only increase depth when there are multiple subgoals (actual branching).
-        // Single-subgoal apply chains stay at the same depth to avoid progressive indentation.
-        const childDepth = node.children.length > 1 ? depth + 1 : depth;
-        for (const child of node.children) {
-          walk(child, childDepth);
+        if (node.children.length > 1) {
+          // Multiple subgoals: use labeled branches with indentation
+          for (let i = 0; i < node.children.length; i++) {
+            const child = node.children[i];
+            const childGoal = goalMap.get(child.id)?.goalLatex;
+            walkBranch(node.id, `Goal ${i + 1}`, childGoal, child, depth);
+          }
+        } else {
+          // Single subgoal: stay at same depth to avoid progressive indentation
+          for (const child of node.children) {
+            walk(child, depth);
+          }
         }
         break;
       }
@@ -340,11 +366,15 @@ export function generateProofProse(
         const childInfo = goalMap.get(node.child.id);
         // The child's goalLatex IS the suffices type, rendered through the math pipeline
         const childGoalLatex = childInfo?.goalLatex;
+        // Extract the "by" expression inline (typically a single exact node)
+        const byExpr = extractByExpr(node.byProof);
         emit(node.id, depth, {
           tag: 'suffices',
           name: node.name,
           goalLatex: childGoalLatex,
+          byExpr,
         });
+        // Suffices replaces the goal — the continuation flows at the same depth (not a fork)
         walk(node.child, depth);
         break;
       }

@@ -936,6 +936,8 @@ function ProofNodeView(props: NodeViewProps) {
     case 'rewrite': return <RewriteView {...props} />;
     case 'apply': return <ApplyView {...props} />;
     case 'simp': return <SimpView {...props} />;
+    case 'have': return <HaveView {...props} />;
+    case 'suffices': return <SufficesView {...props} />;
   }
 }
 
@@ -1723,6 +1725,59 @@ function ExactView({ node, depth, cursorId, state, onPushChange, onClickNode }: 
 }
 
 // ============================================================================
+// HaveView
+// ============================================================================
+
+function HaveView({ node, depth, cursorId, state, onPushChange, onClickNode, ...rest }: NodeViewProps) {
+  if (node.tag !== 'have') return null;
+  const isFocused = cursorId === node.id;
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
+  return (
+    <>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+        <span style={keywordStyle}>have </span>
+        <InlineKaTeX latex={textToLatex(node.name)} style={{ fontSize: '13px' }} />
+        <span style={{ color: '#8b949e' }}> := </span>
+        <InlineKaTeX latex={textToLatex(node.expr)} style={{ fontSize: '13px' }} />
+      </TacticRow>
+      <ProofNodeView {...rest} node={node.child} depth={depth + 1} cursorId={cursorId} state={state} onPushChange={onPushChange} onClickNode={onClickNode} />
+    </>
+  );
+}
+
+// ============================================================================
+// SufficesView
+// ============================================================================
+
+function SufficesView({ node, depth, cursorId, state, onPushChange, onClickNode, ...rest }: NodeViewProps) {
+  if (node.tag !== 'suffices') return null;
+  const isFocused = cursorId === node.id;
+  const handleDelete = useCallback(() => {
+    const result = clearNode(state, node.id);
+    if (result) onPushChange(result);
+  }, [state, node.id, onPushChange]);
+
+  return (
+    <>
+      <TacticRow nodeId={node.id} depth={depth} isFocused={isFocused} onClickNode={onClickNode} onDelete={handleDelete}>
+        <span style={keywordStyle}>suffices </span>
+        <InlineKaTeX latex={textToLatex(node.name)} style={{ fontSize: '13px' }} />
+        <span style={{ color: '#8b949e' }}> : </span>
+        <InlineKaTeX latex={textToLatex(node.typeExpr)} style={{ fontSize: '13px' }} />
+      </TacticRow>
+      {node.byProof && (
+        <ProofNodeView {...rest} node={node.byProof} depth={depth + 1} cursorId={cursorId} state={state} onPushChange={onPushChange} onClickNode={onClickNode} />
+      )}
+      <ProofNodeView {...rest} node={node.child} depth={depth + 1} cursorId={cursorId} state={state} onPushChange={onPushChange} onClickNode={onClickNode} />
+    </>
+  );
+}
+
+// ============================================================================
 // ProofProseView — natural language proof rendering
 // ============================================================================
 
@@ -2402,32 +2457,48 @@ function ProseItemView({
         />
       );
 
-    case 'exact':
+    case 'exact': {
+      // Show lemma name + simple identifier args, filtering out complex expressions
+      const { lemma: exactLemma, simpleArgs: exactArgs } = extractLemmaAndArgs(kind.exprLatex);
       return (
         <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.goalLatex)}
           {kind.solved ? (
             <>
               <span style={prose}>The result follows from{' '}</span>
-              <InlineKaTeX latex={texNameForProse(kind.exprLatex)} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={texNameForProse(exactLemma)} style={{ fontSize: '13px' }} />
+              {exactArgs.length > 0 && (
+                <>
+                  <span style={prose}>{' '}applied to{' '}</span>
+                  {exactArgs.map((arg, i) => (
+                    <React.Fragment key={i}>
+                      {i > 0 && (i === exactArgs.length - 1
+                        ? <span style={prose}>{' '}and{' '}</span>
+                        : <span style={prose}>,{' '}</span>)}
+                      <InlineKaTeX latex={texNameForProse(arg)} style={{ fontSize: '13px' }} />
+                    </React.Fragment>
+                  ))}
+                </>
+              )}
               <span style={prose}>.</span>
             </>
           ) : kind.error ? (
             <>
               <span style={{ color: '#f85149' }}>By{' '}</span>
-              <InlineKaTeX latex={texNameForProse(kind.exprLatex)} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={texNameForProse(exactLemma)} style={{ fontSize: '13px' }} />
               <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>({kind.error})</span>
             </>
           ) : (
             <>
               <span style={prose}>By{' '}</span>
-              <InlineKaTeX latex={texNameForProse(kind.exprLatex)} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={texNameForProse(exactLemma)} style={{ fontSize: '13px' }} />
               <span style={prose}>.</span>
             </>
           )}
           {deleteBtn}
         </div>
       );
+    }
 
     case 'simp':
       return (
@@ -2450,9 +2521,7 @@ function ProseItemView({
       // Only show the goal if this is the last step (still building the proof).
       // have doesn't mutate the goal, so showing it once continued is noise.
       const showHaveGoal = !nextItem;
-      // Extract just the lemma name from the expr (drop args).
-      // "chainTermALimit g f x0 Lg Lf hf hg" → "chainTermALimit"
-      const lemmaName = kind.expr.trim().split(/\s+/)[0].replace(/^\(+/, '');
+      const { lemma: lemmaName, simpleArgs: haveArgs } = extractLemmaAndArgs(kind.expr);
       return (
         <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>We have{' '}</span>
@@ -2479,16 +2548,46 @@ function ProseItemView({
       );
     }
 
-    case 'suffices':
+    case 'suffices': {
+      const { lemma: byLemma, simpleArgs: byArgs } = kind.byExpr
+        ? extractLemmaAndArgs(kind.byExpr)
+        : { lemma: '', simpleArgs: [] as string[] };
       return (
         <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>It suffices to show</span>
           {kind.goalLatex && (
-            <div style={{ margin: '6px 0', textAlign: 'center' }}>
-              <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '14px' }} />
-            </div>
+            <span style={eqBlockStyle}>
+              <InlineKaTeX latex={kind.goalLatex} displayMode />
+            </span>
           )}
+          {byLemma ? (
+            <div style={{ paddingLeft: '20px' }}>
+              <span style={prose}>since the result then follows by{' '}
+                <InlineKaTeX latex={texNameForProse(byLemma)} style={{ fontSize: '13px' }} />
+                {byArgs.length > 0 && (
+                  <>
+                    {' '}applied to{' '}
+                    {byArgs.map((arg, i) => (
+                      <React.Fragment key={i}>
+                        {i > 0 && (i === byArgs.length - 1 ? ' and ' : ', ')}
+                        <InlineKaTeX latex={texNameForProse(arg)} style={{ fontSize: '13px' }} />
+                      </React.Fragment>
+                    ))}
+                  </>
+                )}.
+              </span>
+            </div>
+          ) : null}
           {deleteBtn}
+        </div>
+      );
+    }
+
+    case 'subgoalHeader':
+      return (
+        <div style={{ ...rowStyle, fontWeight: 600, paddingTop: '6px' }} {...rowHandlers}>
+          <span style={{ color: '#79c0ff' }}>{kind.label}</span>
+          <span style={prose}>:</span>
         </div>
       );
 
@@ -2541,6 +2640,46 @@ function ProseItemView({
     default:
       return null;
   }
+}
+
+/**
+ * Extract lemma name + meaningful simple args from a proof expression.
+ * "limitExt (\x => ...) (diffQuot ...) x0 (rmul Lg Lf) (chainAlgId g f x0 Lg) h"
+ *  → { lemma: "limitExt", simpleArgs: ["chainAlgId", "h"] }
+ * Filters out: lambdas, parenthesized sub-expressions, single-char structural vars.
+ */
+function extractLemmaAndArgs(expr: string): { lemma: string; simpleArgs: string[] } {
+  const trimmed = expr.trim();
+  // Tokenize respecting parentheses: split into top-level space-separated chunks
+  const tokens: string[] = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of trimmed) {
+    if (ch === '(' || ch === ')') {
+      depth += ch === '(' ? 1 : -1;
+      current += ch;
+    } else if (ch === ' ' && depth === 0) {
+      if (current) tokens.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current) tokens.push(current);
+
+  const lemma = (tokens[0] ?? '').replace(/^\(+/, '').replace(/\)+$/, '');
+  const simpleArgs: string[] = [];
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    // Skip parenthesized expressions, lambdas
+    if (t.startsWith('(') || t.startsWith('\\') || t.includes('=>')) continue;
+    // Keep identifiers that look like lemma/hypothesis names:
+    // 3+ chars (chainAlgId, addZeroLeft, hSum) or h-prefixed (hA, hf)
+    if (/^[a-zA-Z][a-zA-Z0-9_]*$/.test(t) && (t.length >= 3 || t.startsWith('h'))) {
+      simpleArgs.push(t);
+    }
+  }
+  return { lemma, simpleArgs };
 }
 
 /** Render a variable name for prose inline KaTeX.

@@ -197,10 +197,18 @@ describe('generateProofProse', () => {
     ]);
     const items = generateProofProse(apply, 2, goalMap);
 
-    expect(items).toHaveLength(3);
+    // apply + 2×(subgoalHeader + hole) = 5 items
+    expect(items).toHaveLength(5);
     expect((items[0].kind as any).subgoalLatex).toEqual(['a = b', 'b = c']);
-    expect(items[1].depth).toBe(1);
+    // Subgoal headers at depth 0, holes at depth 1
+    expect(items[1].kind.tag).toBe('subgoalHeader');
+    expect(items[1].depth).toBe(0);
+    expect(items[2].kind.tag).toBe('hole');
     expect(items[2].depth).toBe(1);
+    expect(items[3].kind.tag).toBe('subgoalHeader');
+    expect(items[3].depth).toBe(0);
+    expect(items[4].kind.tag).toBe('hole');
+    expect(items[4].depth).toBe(1);
   });
 
   test('induction with base and inductive cases', () => {
