@@ -238,10 +238,15 @@ export function decomposePiSpine(type: TTerm): { binders: BinderInfo[]; body: TT
 // ============================================================================
 
 /** Constants whose first arg is a carrier/Real parameter that should be suppressed. */
+/** Nullary constants: first arg is carrier (suppressed), no other args. */
 const CARRIER_CONST_SYMBOLS = new Map<string, string>([
   ['rzero', '0'],
   ['rone', '1'],
   ['Carrier', '\\mathbb{R}'],
+]);
+
+/** Prefix operators: first arg may be carrier (suppressed), last arg is the operand. */
+const CARRIER_PREFIX_OPS = new Map<string, string>([
   ['rneg', '-'],
 ]);
 
@@ -288,13 +293,25 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
         const carrierSymbol = CARRIER_CONST_SYMBOLS.get(fn.name);
         if (carrierSymbol !== undefined && args.length >= 1) {
           if (args.length === 1) return [mkSymbol(carrierSymbol)];
-          // Overflow args rendered after the symbol: e.g., rhalf(R) → ½ shouldn't happen, but just in case
           const overflowNodes: MathNode[] = [];
           for (let i = 1; i < args.length; i++) {
             if (i > 1) overflowNodes.push(mkSymbol(','));
             overflowNodes.push(...ttermToMathNodes(args[i], rev, ctx, annotate));
           }
           return [mkSymbol(carrierSymbol), mkDelimiter('(', ')', mkRow(overflowNodes))];
+        }
+
+        // Carrier-parameterized prefix operators: suppress carrier, render as prefix + last arg.
+        // E.g., rneg(R, c) → -(c),  rneg(c) → -(c)  (R may be implicit)
+        const prefixOp = CARRIER_PREFIX_OPS.get(fn.name);
+        if (prefixOp !== undefined && args.length >= 1) {
+          const operand = args[args.length - 1];
+          const operandNodes = ttermToMathNodes(operand, rev, ctx, annotate);
+          // Wrap in parens if the operand is complex (multi-node = infix/app)
+          if (operandNodes.length > 1) {
+            return [mkSymbol(prefixOp), mkDelimiter('(', ')', mkRow(operandNodes))];
+          }
+          return [mkSymbol(prefixOp), ...operandNodes];
         }
 
         const entry = rev.nameToEntry.get(fn.name);

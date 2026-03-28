@@ -2331,6 +2331,37 @@ export function renderSubtermLatex(
 }
 
 /**
+ * Render a UnifiedEquation (lhs/rhs kernel terms) to LaTeX string "lhs = rhs".
+ * Shared by both trace-based and walk-based replay paths.
+ */
+function renderUnifiedEquationLatex(
+  equation: import('../tactics/tactic').UnifiedEquation,
+  engine: TacticEngine,
+  goalCtx: ReadonlyArray<{ name: string; type: TTKTerm }>,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+): string {
+  const { lhs: rawLhs, rhs: rawRhs } = equation;
+  // Zonk, normalize (beta + iota), fold projections back to Const form
+  const lhsZonked = engine.zonkTerm(rawLhs, goalCtx.length);
+  const rhsZonked = engine.zonkTerm(rawRhs, goalCtx.length);
+  const lhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
+  const rhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
+  let lhs = foldProjectionMatches(lhsNorm, projMap);
+  let rhs = foldProjectionMatches(rhsNorm, projMap);
+  lhs = foldAliases(lhs, aliasMap);
+  rhs = foldAliases(rhs, aliasMap);
+  const nameCtx = buildNameCtx(goalCtx);
+  const lhsSurface = kernelTypeToSurface(lhs, definitions);
+  const rhsSurface = kernelTypeToSurface(rhs, definitions);
+  const lhsLatex = renderTerm(lhsSurface, nameCtx, rev);
+  const rhsLatex = renderTerm(rhsSurface, nameCtx, rev);
+  return `${lhsLatex} = ${rhsLatex}`;
+}
+
+/**
  * Compute typed context using the real TacticEngine.
  */
 function computeWithTacticEngine(
@@ -2606,7 +2637,17 @@ function replayEntireTreeFromTrace(
 
       case 'intros':
       case 'unfold':
-      case 'fold':
+      case 'fold': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (step?.error) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        walkTrace(node.child, nextEngine, caseLabelLatex);
+        break;
+      }
       case 'rewrite': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
@@ -2614,6 +2655,18 @@ function replayEntireTreeFromTrace(
         if (step?.error) {
           const existing = result.get(node.id);
           if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        // Render the unified equation from the trace
+        if (step?.unifiedEquation && !step.error) {
+          const goal = currentEngine.metaVars.get(gId);
+          if (goal) {
+            const eqLatex = renderUnifiedEquationLatex(
+              step.unifiedEquation, nextEngine, goal.ctx,
+              definitions, rev, projMap, aliasMap,
+            );
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, unifiedEquationLatex: eqLatex });
+          }
         }
         walkTrace(node.child, nextEngine, caseLabelLatex);
         break;
@@ -2844,25 +2897,13 @@ function replayEntireTreeViaWalk(
         const tacResult = tactic.apply(eng, goal, gId);
         // Capture the unified equation and attach it to this node's info
         if (tacResult.success && tacResult.unifiedEquation) {
-          const newEngine = tacResult.newEngine!;
-          const { lhs: rawLhs, rhs: rawRhs } = tacResult.unifiedEquation;
-          // Zonk, normalize (beta + iota), fold projections back to Const form
-          const lhsZonked = newEngine.zonkTerm(rawLhs, goal.ctx.length);
-          const rhsZonked = newEngine.zonkTerm(rawRhs, goal.ctx.length);
-          const lhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
-          const rhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
-          let lhs = foldProjectionMatches(lhsNorm, projMap);
-          let rhs = foldProjectionMatches(rhsNorm, projMap);
-          lhs = foldAliases(lhs, aliasMap);
-          rhs = foldAliases(rhs, aliasMap);
-          const nameCtx = buildNameCtx(goal.ctx);
-          const lhsSurface = kernelTypeToSurface(lhs, definitions);
-          const rhsSurface = kernelTypeToSurface(rhs, definitions);
-          const lhsLatex = renderTerm(lhsSurface, nameCtx, rev);
-          const rhsLatex = renderTerm(rhsSurface, nameCtx, rev);
+          const eqLatex = renderUnifiedEquationLatex(
+            tacResult.unifiedEquation, tacResult.newEngine!, goal.ctx,
+            definitions, rev, projMap, aliasMap,
+          );
           const existing = result.get(node.id);
           if (existing) {
-            result.set(node.id, { ...existing, unifiedEquationLatex: `${lhsLatex} = ${rhsLatex}` });
+            result.set(node.id, { ...existing, unifiedEquationLatex: eqLatex });
           }
         }
         if (!tacResult.success) {

@@ -9,7 +9,9 @@
 
 import { TacticEngine, createInitialEngine } from './tacticsEngine';
 import { elaborateTacticArg, tacticCommandToTactic, shouldKeepArgAsName } from './elaborate-tactic-arg';
-import { Tactic } from './tactic';
+import { Tactic, UnifiedEquation } from './tactic';
+import { RewriteTactic } from './rewrite-tactic';
+import { ReflexivityTactic } from './reflexivity-tactic';
 import { TacticCommand, TTerm, CaseBranch } from '../compiler/surface';
 import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar } from '../compiler/term';
@@ -29,6 +31,8 @@ export interface TacticStepTrace {
   readonly error?: string;
   /** Branch nesting path for case branches (e.g., ['Left'], ['Right', 'Succ']). */
   readonly branchPath: readonly string[];
+  /** For rewrite tactics: the unified equation (lhs = rhs) with implicit args filled in. */
+  readonly unifiedEquation?: UnifiedEquation;
 }
 
 // ============================================================================
@@ -128,6 +132,14 @@ export class TacticSession {
       ]);
     }
 
+    // 3b. For rw/erw: expand into per-rewrite trace entries so the proof tree
+    //     (which has one rewrite node per arg) aligns 1:1 with trace entries.
+    //     The TacticSequence applies all rewrites + reflexivity as one unit,
+    //     but we need individual engine states for intermediate goal rendering.
+    if ((cmd.name === 'erw' || cmd.name === 'rw') && elabArgs.length > 0) {
+      return this.applyRewriteChain(elabArgs as TTKTerm[], cmd.name === 'erw', branchPath);
+    }
+
     // 4. Apply
     const result = tactic.apply(this.engine, goal, goalId);
     const newEngine = result.success ? result.newEngine! : this.engine;
@@ -139,6 +151,7 @@ export class TacticSession {
       goalId: newGoalId,
       error: result.success ? undefined : result.error,
       branchPath,
+      unifiedEquation: result.success ? result.unifiedEquation : undefined,
     };
 
     let session = new TacticSession(newEngine, this.definitions, [...this.trace, entry]);
@@ -149,6 +162,69 @@ export class TacticSession {
     }
 
     return session;
+  }
+
+  /**
+   * Expand rw/erw into per-rewrite trace entries.
+   * Each rewrite arg gets its own trace entry with the engine state AFTER that
+   * individual rewrite, plus the unifiedEquation from that step.
+   * This aligns 1:1 with the proof tree (which has one rewrite node per arg).
+   */
+  private applyRewriteChain(
+    elabArgs: TTKTerm[],
+    enhanced: boolean,
+    branchPath: readonly string[],
+  ): TacticSession {
+    let currentEngine = this.engine;
+    const newTrace = [...this.trace];
+
+    for (const arg of elabArgs) {
+      const goal = currentEngine.getFocusedGoal();
+      const goalId = currentEngine.getFocusedGoalId();
+      if (!goal || !goalId) {
+        // No more goals — emit error entry for remaining rewrites
+        newTrace.push({
+          tacticName: enhanced ? 'erw' : 'rw',
+          engineAfter: currentEngine,
+          goalId: goalId ?? '',
+          error: 'no focused goal',
+          branchPath,
+        });
+        continue;
+      }
+
+      const tactic = new RewriteTactic(arg, { enhanced });
+      const result = tactic.apply(currentEngine, goal, goalId);
+      const nextEngine = result.success ? result.newEngine! : currentEngine;
+      const nextGoalId = nextEngine.getFocusedGoalId() ?? goalId;
+
+      newTrace.push({
+        tacticName: enhanced ? 'erw' : 'rw',
+        engineAfter: nextEngine,
+        goalId: nextGoalId,
+        error: result.success ? undefined : result.error,
+        branchPath,
+        unifiedEquation: result.success ? result.unifiedEquation : undefined,
+      });
+
+      currentEngine = nextEngine;
+    }
+
+    // Apply the closing reflexivity tactic (doesn't need a trace entry —
+    // it corresponds to no proof tree node)
+    {
+      const goal = currentEngine.getFocusedGoal();
+      const goalId = currentEngine.getFocusedGoalId();
+      if (goal && goalId) {
+        const refl = new ReflexivityTactic();
+        const result = refl.apply(currentEngine, goal, goalId);
+        if (result.success) {
+          currentEngine = result.newEngine;
+        }
+      }
+    }
+
+    return new TacticSession(currentEngine, this.definitions, newTrace);
   }
 
   /**

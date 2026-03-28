@@ -2169,14 +2169,152 @@ addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e
     const holeInfo = goalMap.get(hole.id);
     expect(holeInfo).toBeDefined();
 
-    // Equation LaTeX should use projection names, not raw Match/constructor patterns
-    if (rw1Info!.unifiedEquationLatex) {
-      expect(rw1Info!.unifiedEquationLatex).not.toContain('MkMonoid');
-      expect(rw1Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+    // Equation LaTeX should be defined and should use projection names, not raw Match/constructor patterns
+    expect(rw1Info!.unifiedEquationLatex).toBeDefined();
+    expect(rw1Info!.unifiedEquationLatex).not.toContain('MkMonoid');
+    expect(rw1Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+    expect(rw2Info!.unifiedEquationLatex).toBeDefined();
+    expect(rw2Info!.unifiedEquationLatex).not.toContain('MkMonoid');
+    expect(rw2Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+  });
+});
+
+// ============================================================================
+// Trace-based replay: unifiedEquationLatex for rewrite chains
+// ============================================================================
+
+describe('trace-based replay produces unifiedEquationLatex for rewrite nodes', () => {
+  function compileErwSource() {
+    const source = `
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+record Monoid (A : Type) where
+  e : A
+  op : A -> A -> A
+  idLeft : (x : A) -> Equal (op e x) x
+  idRight : (x : A) -> Equal (op x e) x
+  comm : (x y : A) -> Equal (op x y) (op y x)
+
+-- Alias that wraps the record projection
+myOp : {A : Type} -> Monoid A -> A -> A -> A
+myOp m a b = Monoid.op m a b
+
+-- Proof using erw (enhanced rewrite through alias)
+addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e m) a) a := by
+  intros A m a
+  erw (Monoid.comm m (Monoid.e m) a), (Monoid.idRight m a)
+`;
+    return compileTTFromText(source);
+  }
+
+  test('trace-based path populates unifiedEquationLatex on rewrite nodes', () => {
+    const result = compileErwSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+    expect(decl!.tacticTrace).toBeDefined();
+    expect(decl!.tacticTrace!.length).toBeGreaterThan(0);
+
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Build proof tree from tactic commands (same as UI does)
+    const tactics = (decl!.surfaceValue as any).tactics;
+    const root = tacticCommandsToProofTree(tactics);
+
+    // Use trace-based path (the one used in the UI)
+    const traceMap = replayEntireTree(root, kernelType, definitions, rev, decl!.tacticTrace);
+
+    // Also get walk-based path for comparison
+    const walkMap = replayEntireTree(root, kernelType, definitions, rev);
+
+    // Find rewrite nodes in the tree
+    const rewriteNodes: number[] = [];
+    function findRewrites(node: any) {
+      if (node.tag === 'rewrite') {
+        rewriteNodes.push(node.id);
+        findRewrites(node.child);
+      } else if (node.child) {
+        findRewrites(node.child);
+      }
     }
-    if (rw2Info!.unifiedEquationLatex) {
-      expect(rw2Info!.unifiedEquationLatex).not.toContain('MkMonoid');
-      expect(rw2Info!.unifiedEquationLatex).not.toContain('operatorname{Mk');
+    findRewrites(root);
+    expect(rewriteNodes.length).toBeGreaterThan(0);
+
+    // Each rewrite node should have unifiedEquationLatex in BOTH paths
+    for (const nodeId of rewriteNodes) {
+      const traceInfo = traceMap.get(nodeId);
+      const walkInfo = walkMap.get(nodeId);
+      expect(traceInfo).toBeDefined();
+      expect(walkInfo).toBeDefined();
+
+      // Walk-based path should have equation LaTeX
+      expect(walkInfo!.unifiedEquationLatex).toBeDefined();
+
+      // Trace-based path should ALSO have equation LaTeX (this was the bug)
+      expect(traceInfo!.unifiedEquationLatex).toBeDefined();
+
+      // Both should be identical
+      expect(traceInfo!.unifiedEquationLatex).toBe(walkInfo!.unifiedEquationLatex);
+    }
+  });
+
+  test('trace stores unifiedEquation on rewrite tactic steps', () => {
+    const result = compileErwSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+    expect(decl!.tacticTrace).toBeDefined();
+
+    // Check that the rewrite trace entries have unifiedEquation
+    const rewriteTraces = decl!.tacticTrace!.filter(t =>
+      t.tacticName === 'erw' || t.tacticName === 'rewrite'
+    );
+    expect(rewriteTraces.length).toBeGreaterThan(0);
+    for (const trace of rewriteTraces) {
+      expect(trace.error).toBeUndefined();
+      expect(trace.unifiedEquation).toBeDefined();
+      expect(trace.unifiedEquation!.lhs).toBeDefined();
+      expect(trace.unifiedEquation!.rhs).toBeDefined();
+    }
+  });
+
+  test('intermediate rewrite goals are in the goal map', () => {
+    const result = compileErwSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+
+    const kernelType = decl!.kernelType!;
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    const tactics = (decl!.surfaceValue as any).tactics;
+    const root = tacticCommandsToProofTree(tactics);
+    const goalMap = replayEntireTree(root, kernelType, definitions, rev, decl!.tacticTrace);
+
+    // Collect all node IDs from the tree
+    const allNodeIds: number[] = [];
+    function collectIds(node: any) {
+      allNodeIds.push(node.id);
+      if (node.child) collectIds(node.child);
+      if (node.children) node.children.forEach(collectIds);
+      if (node.cases) node.cases.forEach((c: any) => collectIds(c.body));
+    }
+    collectIds(root);
+
+    // All nodes (except possibly the root intros) should be in the goal map
+    for (const id of allNodeIds) {
+      const info = goalMap.get(id);
+      expect(info).toBeDefined();
+      expect(info!.goalLatex).toBeDefined();
+      expect(info!.goalLatex.length).toBeGreaterThan(0);
     }
   });
 });
@@ -2320,12 +2458,20 @@ describe('real-analysis preset tactic replay (full flow)', () => {
         continue;
       }
 
-      // Compare goal LaTeX for nodes present in both
+      // Compare goal LaTeX and unifiedEquationLatex for nodes present in both
       for (const [nodeId, walkInfo] of walkMap) {
         const traceInfo = traceMap.get(nodeId);
         if (!traceInfo) continue; // trace may have fewer nodes
         if (walkInfo.goalLatex && traceInfo.goalLatex && walkInfo.goalLatex !== traceInfo.goalLatex) {
           mismatches.push(`${decl.name} node ${nodeId}: goalLatex differs`);
+        }
+        // Verify unifiedEquationLatex matches between paths
+        if (walkInfo.unifiedEquationLatex && !traceInfo.unifiedEquationLatex) {
+          mismatches.push(`${decl.name} node ${nodeId}: walk has equationLatex but trace does not`);
+        }
+        if (walkInfo.unifiedEquationLatex && traceInfo.unifiedEquationLatex &&
+            walkInfo.unifiedEquationLatex !== traceInfo.unifiedEquationLatex) {
+          mismatches.push(`${decl.name} node ${nodeId}: equationLatex differs`);
         }
       }
     }
