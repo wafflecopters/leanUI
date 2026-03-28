@@ -61,7 +61,7 @@ export type ProseItemKind =
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'suffices'; name: string; goalLatex?: string; byExpr?: string }
+  | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string }
   | { tag: 'qed' };
 
@@ -366,13 +366,11 @@ export function generateProofProse(
         const childInfo = goalMap.get(node.child.id);
         // The child's goalLatex IS the suffices type, rendered through the math pipeline
         const childGoalLatex = childInfo?.goalLatex;
-        // Extract the "by" expression inline (typically a single exact node)
-        const byExpr = extractByExpr(node.byProof);
         emit(node.id, depth, {
           tag: 'suffices',
           name: node.name,
           goalLatex: childGoalLatex,
-          byExpr,
+          byExprLatex: info?.sufficesByLatex,
         });
         // Suffices replaces the goal — the continuation flows at the same depth (not a fork)
         walk(node.child, depth);

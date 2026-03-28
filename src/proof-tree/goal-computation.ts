@@ -593,6 +593,47 @@ export function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): st
   return renderStaticLatex(mkRow(nodes));
 }
 
+/**
+ * Render a suffices "by" proof expression through the math pipeline.
+ * Walks the byProof tree to find the exact expression, parses it,
+ * and renders via kernelTypeToSurface → renderTerm.
+ */
+function renderByProofExpr(
+  byProof: ProofNode,
+  engine: TacticEngine,
+  goalId: string,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap?: Map<string, Map<number, string>>,
+  aliasMap?: Map<string, AliasFoldInfo>,
+): string | undefined {
+  // Walk the byProof tree to find the exact expression
+  const expr = extractByExprFromTree(byProof);
+  if (!expr) return undefined;
+  const goal = engine.metaVars.get(goalId);
+  if (!goal) return undefined;
+  // Parse the expression in the current goal's context
+  const term = parseExactExpr(expr, goal.ctx, definitions);
+  if (!term) return undefined;
+  // Render through the math pipeline
+  const pm = projMap ?? buildProjectionFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  let folded = foldProjectionMatches(term, pm);
+  folded = foldAliases(folded, am);
+  const surface = kernelTypeToSurface(folded, definitions);
+  return renderTerm(surface, buildNameCtx(goal.ctx), rev);
+}
+
+/** Extract the exact expression string from a byProof subtree. */
+function extractByExprFromTree(node: ProofNode): string | undefined {
+  switch (node.tag) {
+    case 'exact': return node.expr;
+    case 'intros': return extractByExprFromTree(node.child);
+    case 'have': return extractByExprFromTree(node.child);
+    default: return undefined;
+  }
+}
+
 /** Render a surface term to LaTeX with subterm annotations via the annotate callback. */
 export function renderTermAnnotated(term: TTerm, ctx: string[], rev: ReverseRegistry, annotate: SubtermAnnotator): string {
   const nodes = ttermToMathNodes(term, rev, ctx, annotate);
@@ -2468,6 +2509,8 @@ export interface NodeGoalInfo {
   readonly appliedArgsLatex?: string[];
   /** Error message when this tactic (unfold/rewrite/apply) failed. */
   readonly tacticError?: string;
+  /** For suffices nodes: LaTeX of the "by" proof expression, rendered through math pipeline. */
+  readonly sufficesByLatex?: string;
 }
 
 /**
@@ -2545,15 +2588,32 @@ function replayEntireTreeFromTrace(
       case 'unfold':
       case 'fold':
       case 'rewrite':
-      case 'have':
-      case 'suffices': {
+      case 'have': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
-        // Advance trace cursor to get engine after this tactic
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
         const nextEngine = step?.engineAfter ?? currentEngine;
         if (step?.error) {
           const existing = result.get(node.id);
           if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        walkTrace(node.child, nextEngine, caseLabelLatex);
+        break;
+      }
+      case 'suffices': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (step?.error) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        // Render the byProof expression through the math pipeline
+        if (node.byProof) {
+          const byLatex = renderByProofExpr(node.byProof, currentEngine, gId, definitions, rev, projMap, aliasMap);
+          if (byLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, sufficesByLatex: byLatex });
+          }
         }
         walkTrace(node.child, nextEngine, caseLabelLatex);
         break;
@@ -2785,6 +2845,14 @@ function replayEntireTreeViaWalk(
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
         const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
         if (!typeTerm) { walk(node.child, eng, caseLabelLatex); break; }
+        // Render the byProof expression through the math pipeline
+        if (node.byProof) {
+          const byLatex = renderByProofExpr(node.byProof, eng, gId, definitions, rev, projMap, aliasMap);
+          if (byLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, sufficesByLatex: byLatex });
+          }
+        }
         // Create new goal with the suffices type
         const suffGoalId = gId + '_suffices';
         const suffMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };

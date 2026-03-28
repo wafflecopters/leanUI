@@ -2548,10 +2548,7 @@ function ProseItemView({
       );
     }
 
-    case 'suffices': {
-      const { lemma: byLemma, simpleArgs: byArgs } = kind.byExpr
-        ? extractLemmaAndArgs(kind.byExpr)
-        : { lemma: '', simpleArgs: [] as string[] };
+    case 'suffices':
       return (
         <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>It suffices to show</span>
@@ -2560,28 +2557,16 @@ function ProseItemView({
               <InlineKaTeX latex={kind.goalLatex} displayMode />
             </span>
           )}
-          {byLemma ? (
+          {kind.byExprLatex ? (
             <div style={{ paddingLeft: '20px' }}>
-              <span style={prose}>since the result then follows by{' '}
-                <InlineKaTeX latex={texNameForProse(byLemma)} style={{ fontSize: '13px' }} />
-                {byArgs.length > 0 && (
-                  <>
-                    {' '}applied to{' '}
-                    {byArgs.map((arg, i) => (
-                      <React.Fragment key={i}>
-                        {i > 0 && (i === byArgs.length - 1 ? ' and ' : ', ')}
-                        <InlineKaTeX latex={texNameForProse(arg)} style={{ fontSize: '13px' }} />
-                      </React.Fragment>
-                    ))}
-                  </>
-                )}.
-              </span>
+              <span style={prose}>since the result then follows from{' '}</span>
+              <InlineKaTeX latex={kind.byExprLatex} style={{ fontSize: '13px' }} />
+              <span style={prose}>.</span>
             </div>
           ) : null}
           {deleteBtn}
         </div>
       );
-    }
 
     case 'subgoalHeader':
       return (
@@ -2667,7 +2652,11 @@ function extractLemmaAndArgs(expr: string): { lemma: string; simpleArgs: string[
   }
   if (current) tokens.push(current);
 
-  const lemma = (tokens[0] ?? '').replace(/^\(+/, '').replace(/\)+$/, '');
+  // Extract the function name: split first token on '(' in case there's no space
+  // e.g., "limitExt(\x=>...)" → "limitExt"
+  const raw0 = (tokens[0] ?? '').replace(/^\(+/, '');
+  const parenIdx = raw0.indexOf('(');
+  const lemma = parenIdx >= 0 ? raw0.slice(0, parenIdx) : raw0.replace(/\)+$/, '');
   const simpleArgs: string[] = [];
   for (let i = 1; i < tokens.length; i++) {
     const t = tokens[i];
