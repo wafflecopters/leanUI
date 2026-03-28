@@ -595,8 +595,6 @@ export function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): st
 
 /**
  * Render a suffices "by" proof expression through the math pipeline.
- * Walks the byProof tree to find the exact expression, parses it,
- * and renders via kernelTypeToSurface → renderTerm.
  */
 function renderByProofExpr(
   byProof: ProofNode,
@@ -607,15 +605,27 @@ function renderByProofExpr(
   projMap?: Map<string, Map<number, string>>,
   aliasMap?: Map<string, AliasFoldInfo>,
 ): string | undefined {
-  // Walk the byProof tree to find the exact expression
   const expr = extractByExprFromTree(byProof);
   if (!expr) return undefined;
   const goal = engine.metaVars.get(goalId);
   if (!goal) return undefined;
-  // Parse the expression in the current goal's context
+  return renderProofExpr(expr, goal, definitions, rev, projMap, aliasMap);
+}
+
+/**
+ * Render a proof expression string through the math pipeline.
+ * Parses the string in the given goal's context and renders via the structured math renderer.
+ */
+function renderProofExpr(
+  expr: string,
+  goal: MetaVar,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap?: Map<string, Map<number, string>>,
+  aliasMap?: Map<string, AliasFoldInfo>,
+): string | undefined {
   const term = parseExactExpr(expr, goal.ctx, definitions);
   if (!term) return undefined;
-  // Render through the math pipeline
   const pm = projMap ?? buildProjectionFoldMap(definitions);
   const am = aliasMap ?? buildAliasFoldMap(definitions);
   let folded = foldProjectionMatches(term, pm);
@@ -2511,6 +2521,8 @@ export interface NodeGoalInfo {
   readonly tacticError?: string;
   /** For suffices nodes: LaTeX of the "by" proof expression, rendered through math pipeline. */
   readonly sufficesByLatex?: string;
+  /** For exact/have nodes: LaTeX of the proof expression, rendered through math pipeline. */
+  readonly proofExprLatex?: string;
 }
 
 /**
@@ -2577,19 +2589,46 @@ function replayEntireTreeFromTrace(
         } else if (exactStep?.error) {
           validation = { status: 'error', message: exactStep.error };
         } else {
-          // No trace entry — fall back to re-validation
           validation = validateExactNode(node.expr, currentEngine, gId);
         }
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex, validation);
+        // Render the proof expression through the math pipeline
+        const exactGoal = currentEngine.metaVars.get(gId);
+        if (exactGoal) {
+          const exprLatex = renderProofExpr(node.expr, exactGoal, definitions, rev, projMap, aliasMap);
+          if (exprLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, proofExprLatex: exprLatex });
+          }
+        }
         break;
       }
 
       case 'intros':
       case 'unfold':
       case 'fold':
-      case 'rewrite':
+      case 'rewrite': {
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const nextEngine = step?.engineAfter ?? currentEngine;
+        if (step?.error) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+        }
+        walkTrace(node.child, nextEngine, caseLabelLatex);
+        break;
+      }
       case 'have': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        // Render the have proof expression through the math pipeline
+        const haveGoal = currentEngine.metaVars.get(gId);
+        if (haveGoal) {
+          const haveLatex = renderProofExpr(node.expr, haveGoal, definitions, rev, projMap, aliasMap);
+          if (haveLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, proofExprLatex: haveLatex });
+          }
+        }
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
         const nextEngine = step?.engineAfter ?? currentEngine;
         if (step?.error) {
@@ -2735,6 +2774,15 @@ function replayEntireTreeViaWalk(
 
       case 'exact': {
         recordExact(node.id, eng, gId, node.expr);
+        // Render the exact proof expression through the math pipeline
+        const exactGoal = eng.metaVars.get(gId);
+        if (exactGoal) {
+          const exprLatex = renderProofExpr(node.expr, exactGoal, definitions, rev, projMap, aliasMap);
+          if (exprLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, proofExprLatex: exprLatex });
+          }
+        }
         break;
       }
 
@@ -2829,12 +2877,16 @@ function replayEntireTreeViaWalk(
         recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        // Render the have proof expression through the math pipeline
+        const haveExprLatex = renderProofExpr(node.expr, goal, definitions, rev, projMap, aliasMap);
+        if (haveExprLatex) {
+          const existing = result.get(node.id);
+          if (existing) result.set(node.id, { ...existing, proofExprLatex: haveExprLatex });
+        }
         const proofTerm = parseExactExpr(node.expr, goal.ctx, eng.definitions);
         if (!proofTerm) { walk(node.child, eng, caseLabelLatex); break; }
         const haveTactic = new HaveTactic(node.name, { tag: 'Hole', id: '_have_type' }, proofTerm);
         const haveResult = haveTactic.apply(eng, goal, gId);
-        // Don't report errors — have is "best effort" (may fail if prior tactics
-        // like constructor were skipped in tree conversion)
         walk(node.child, haveResult.success ? haveResult.newEngine! : eng, caseLabelLatex);
         break;
       }

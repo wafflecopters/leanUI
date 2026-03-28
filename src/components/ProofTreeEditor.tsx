@@ -2458,40 +2458,27 @@ function ProseItemView({
       );
 
     case 'exact': {
-      // Show lemma name + simple identifier args, filtering out complex expressions
-      const { lemma: exactLemma, simpleArgs: exactArgs } = extractLemmaAndArgs(kind.exprLatex);
+      const proofLatex = kind.proofExprLatex;
+      const fallbackLatex = texNameForProse(kind.exprLatex.trim().split(/[\s(]/)[0].replace(/^\(+/, ''));
       return (
         <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.goalLatex)}
           {kind.solved ? (
             <>
               <span style={prose}>The result follows from{' '}</span>
-              <InlineKaTeX latex={texNameForProse(exactLemma)} style={{ fontSize: '13px' }} />
-              {exactArgs.length > 0 && (
-                <>
-                  <span style={prose}>{' '}applied to{' '}</span>
-                  {exactArgs.map((arg, i) => (
-                    <React.Fragment key={i}>
-                      {i > 0 && (i === exactArgs.length - 1
-                        ? <span style={prose}>{' '}and{' '}</span>
-                        : <span style={prose}>,{' '}</span>)}
-                      <InlineKaTeX latex={texNameForProse(arg)} style={{ fontSize: '13px' }} />
-                    </React.Fragment>
-                  ))}
-                </>
-              )}
+              <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
               <span style={prose}>.</span>
             </>
           ) : kind.error ? (
             <>
               <span style={{ color: '#f85149' }}>By{' '}</span>
-              <InlineKaTeX latex={texNameForProse(exactLemma)} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
               <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>({kind.error})</span>
             </>
           ) : (
             <>
               <span style={prose}>By{' '}</span>
-              <InlineKaTeX latex={texNameForProse(exactLemma)} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
               <span style={prose}>.</span>
             </>
           )}
@@ -2518,30 +2505,26 @@ function ProseItemView({
       );
 
     case 'have': {
-      // Only show the goal if this is the last step (still building the proof).
-      // have doesn't mutate the goal, so showing it once continued is noise.
       const showHaveGoal = !nextItem;
-      const { lemma: lemmaName, simpleArgs: haveArgs } = extractLemmaAndArgs(kind.expr);
+      const proofLatex = kind.proofExprLatex;
       return (
         <div style={rowStyle} {...rowHandlers}>
-          <span style={prose}>We have{' '}</span>
+          <span style={prose}>Observe that{' '}</span>
           {kind.typeLatex ? (
-            <>
-              <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
-              <span style={prose}>{' '}(</span>
-              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
-              <span style={prose}>, by{' '}</span>
-              <InlineKaTeX latex={texNameForProse(lemmaName)} style={{ fontSize: '13px' }} />
-              <span style={prose}>).</span>
-            </>
+            <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
           ) : (
-            <>
-              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
-              <span style={prose}>{' '}:={' '}</span>
-              <InlineKaTeX latex={texNameForProse(kind.expr)} style={{ fontSize: '13px' }} />
-              <span style={prose}>.</span>
-            </>
+            <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
           )}
+          <span style={prose}>{' '}(</span>
+          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+          <span style={prose}>)</span>
+          {proofLatex ? (
+            <div style={{ paddingLeft: '20px' }}>
+              <span style={prose}>since{' '}</span>
+              <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
+              <span style={prose}>.</span>
+            </div>
+          ) : <span style={prose}>.</span>}
           {showHaveGoal && renderGoalSection(kind.goalLatex, ' It remains to show')}
           {deleteBtn}
         </div>

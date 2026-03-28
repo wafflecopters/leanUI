@@ -57,10 +57,10 @@ export type ProseItemKind =
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
   | { tag: 'inductionHeader'; scrutinee: string }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string }
-  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string }
+  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string }
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'have'; name: string; expr: string; typeLatex?: string; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string }
   | { tag: 'qed' };
@@ -238,7 +238,7 @@ export function generateProofProse(
       case 'exact': {
         const solved = info?.validation?.status === 'solved';
         const error = info?.validation?.status === 'error' ? info.validation.message : undefined;
-        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error });
+        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error, proofExprLatex: info?.proofExprLatex });
         if (solved) {
           emit(node.id, depth, { tag: 'qed' });
         }
@@ -355,6 +355,7 @@ export function generateProofProse(
           name: node.name,
           expr: node.expr,
           typeLatex: hypType,
+          proofExprLatex: info?.proofExprLatex,
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
         });
