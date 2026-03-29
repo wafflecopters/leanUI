@@ -32,7 +32,7 @@ import {
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
-import { ProseItem, ProseItemKind, IntroToken, generateProofProse } from '../proof-tree/proof-prose';
+import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { InteractiveGoalView } from './InteractiveGoalView';
@@ -2232,7 +2232,8 @@ function ProseItemView({
     (prevItem.kind.tag === 'simp' && prevItem.kind.goalLatex) ||
     (prevItem.kind.tag === 'intro' && prevItem.kind.goalLatex) ||
     (prevItem.kind.tag === 'have' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'suffices' && prevItem.kind.goalLatex)
+    (prevItem.kind.tag === 'suffices' && prevItem.kind.goalLatex) ||
+    (prevItem.kind.tag === 'calcChain')
   );
 
   // "We must show [goal]" prefix for steps where no prior goal is visible
@@ -2503,6 +2504,64 @@ function ProseItemView({
           {deleteBtn}
         </div>
       );
+
+    case 'calcChain': {
+      // Render as aligned equational derivation — each row is a rewrite step
+      const steps = kind.steps;
+      return (
+        <div style={rowStyle} {...rowHandlers}>
+          {mustShowPrefix(kind.preGoalLatex)}
+          <div style={{ paddingLeft: '12px', paddingTop: '4px', paddingBottom: '4px' }}>
+            {steps.map((step, si) => {
+              const isStepCursor = step.nodeId === item.nodeId;
+              const stepStyle: React.CSSProperties = {
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: '8px',
+                paddingTop: si === 0 ? 0 : '2px',
+                paddingBottom: '2px',
+                paddingLeft: '4px',
+                borderLeft: isStepCursor ? '2px solid #58a6ff' : '2px solid transparent',
+                cursor: 'pointer',
+              };
+              const handleStepClick = (e: React.MouseEvent) => {
+                e.stopPropagation();
+                onClickNode(step.nodeId);
+              };
+              const handleStepDelete = (e: React.MouseEvent) => {
+                e.stopPropagation();
+                const result = clearNode(state, step.nodeId);
+                if (result) onPushChange(result);
+              };
+              return (
+                <div key={step.nodeId} style={stepStyle} onClick={handleStepClick}>
+                  <span style={{ color: '#8b949e', minWidth: '16px' }}>=</span>
+                  <span style={{ flex: 1 }}>
+                    {step.goalLatex ? (
+                      <InlineKaTeX latex={step.goalLatex} style={{ fontSize: '13px' }} />
+                    ) : (
+                      <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
+                    )}
+                  </span>
+                  <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                    ({texNameForProse(step.lemmaName)})
+                  </span>
+                  <button
+                    onClick={handleStepDelete}
+                    style={{
+                      background: 'none', border: 'none', color: '#f85149',
+                      cursor: 'pointer', fontSize: '13px', padding: '0 2px',
+                      opacity: 0.5, lineHeight: 1,
+                    }}
+                    title="Delete this step"
+                  >&times;</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
 
     case 'have': {
       const showHaveGoal = !nextItem;

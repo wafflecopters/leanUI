@@ -63,7 +63,21 @@ export type ProseItemKind =
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string }
+  | { tag: 'calcChain'; preGoalLatex?: string; steps: readonly CalcChainStep[] }
   | { tag: 'qed' };
+
+/** A single step in a calc-style equational chain. */
+export interface CalcChainStep {
+  readonly nodeId: ProofNodeId;
+  /** Goal equation AFTER this rewrite step (the new LHS = RHS). */
+  readonly goalLatex?: string;
+  /** The rewrite equation used (e.g., "a + 0 = a"). */
+  readonly equationLatex?: string;
+  /** Lemma name for the justification. */
+  readonly lemmaName: string;
+  /** Error from the tactic engine. */
+  readonly error?: string;
+}
 
 /** A single step in an unfold/rewrite chain. */
 export interface ChainStep {
@@ -266,38 +280,61 @@ export function generateProofProse(
       case 'unfold':
       case 'fold':
       case 'rewrite': {
-        // Collect chain of consecutive unfold/fold/rewrite, emit each as its own item.
-        // Each step shows the goal AFTER that step (= the next node's goal).
-        // The first step also carries preGoalLatex (the goal before the chain).
         const { steps, tail } = collectChain(node, goalMap);
         const tailInfo = goalMap.get(tail.id);
-        for (let si = 0; si < steps.length; si++) {
-          const step = steps[si];
-          // Goal after this step = next step's node goal, or the tail's goal
-          const nextGoalLatex = si + 1 < steps.length
-            ? goalMap.get(steps[si + 1].nodeId)?.goalLatex
-            : tailInfo?.goalLatex;
-          // Pre-goal: only the first step needs it (subsequent steps' pre-goal
-          // was already shown as the previous step's post-goal)
-          const preGoalLatex = si === 0
-            ? goalMap.get(steps[0].nodeId)?.goalLatex
-            : undefined;
-          const stepError = goalMap.get(step.nodeId)?.tacticError;
-          if (step.type === 'unfold') {
-            emit(step.nodeId, depth, { tag: 'unfold', name: step.name, occurrence: step.occurrence, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
-          } else if (step.type === 'fold') {
-            emit(step.nodeId, depth, { tag: 'fold', name: step.name, occurrence: step.occurrence, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
-          } else {
-            emit(step.nodeId, depth, {
-              tag: 'rewrite',
-              name: step.name,
-              reverse: step.reverse,
-              occurrences: step.occurrences,
-              equationLatex: step.equationLatex,
-              preGoalLatex,
+
+        // Count consecutive rewrite-only steps for calc chain rendering
+        const rewriteOnlySteps = steps.filter(s => s.type === 'rewrite');
+        const hasNonRewrite = steps.some(s => s.type !== 'rewrite');
+
+        // If we have 2+ consecutive rewrites with no unfold/fold mixed in,
+        // emit a calc-style equational chain instead of individual items
+        if (rewriteOnlySteps.length >= 2 && !hasNonRewrite) {
+          const preGoalLatex = goalMap.get(steps[0].nodeId)?.goalLatex;
+          const calcSteps: CalcChainStep[] = steps.map((step, si) => {
+            const nextGoalLatex = si + 1 < steps.length
+              ? goalMap.get(steps[si + 1].nodeId)?.goalLatex
+              : tailInfo?.goalLatex;
+            const stepError = goalMap.get(step.nodeId)?.tacticError;
+            // Extract lemma name from the rewrite name
+            const lemmaName = step.name.trim().split(/[\s(]/)[0].replace(/^\(+/, '');
+            return {
+              nodeId: step.nodeId,
               goalLatex: nextGoalLatex,
+              equationLatex: step.equationLatex,
+              lemmaName,
               error: stepError,
-            });
+            };
+          });
+          // Emit the calc chain using the first step's nodeId (for cursor/click)
+          emit(steps[0].nodeId, depth, { tag: 'calcChain', preGoalLatex, steps: calcSteps });
+        } else {
+          // Mixed chain or single step — emit individual items (existing behavior)
+          for (let si = 0; si < steps.length; si++) {
+            const step = steps[si];
+            const nextGoalLatex = si + 1 < steps.length
+              ? goalMap.get(steps[si + 1].nodeId)?.goalLatex
+              : tailInfo?.goalLatex;
+            const preGoalLatex = si === 0
+              ? goalMap.get(steps[0].nodeId)?.goalLatex
+              : undefined;
+            const stepError = goalMap.get(step.nodeId)?.tacticError;
+            if (step.type === 'unfold') {
+              emit(step.nodeId, depth, { tag: 'unfold', name: step.name, occurrence: step.occurrence, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
+            } else if (step.type === 'fold') {
+              emit(step.nodeId, depth, { tag: 'fold', name: step.name, occurrence: step.occurrence, preGoalLatex, goalLatex: nextGoalLatex, error: stepError });
+            } else {
+              emit(step.nodeId, depth, {
+                tag: 'rewrite',
+                name: step.name,
+                reverse: step.reverse,
+                occurrences: step.occurrences,
+                equationLatex: step.equationLatex,
+                preGoalLatex,
+                goalLatex: nextGoalLatex,
+                error: stepError,
+              });
+            }
           }
         }
         walk(tail, depth);
