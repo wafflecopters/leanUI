@@ -2367,7 +2367,7 @@ function ProseItemView({
           ) : (
             <>
               <span style={prose}>of{' '}</span>
-              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+              <InlineKaTeX latex={texNameForProse(extractLemmaAndArgs(kind.name).lemma)} style={{ fontSize: '13px' }} />
               {arrow && <span style={prose}>{arrow}</span>}
             </>
           )}
