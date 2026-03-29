@@ -2295,6 +2295,8 @@ export function renderGoalLatex(
   aliasMap?: Map<string, AliasFoldInfo>,
 ): string {
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
+  const pm = projMap ?? buildProjectionFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions);
   // 1. Prepare Match scrutinees for iota-reduction by WHNF-ing with real definitions
   //    (e.g., `match one { ... }` → `match Succ(Zero) { ... }` so iota fires)
   const prepared = prepareMatchesForIota(zonked, definitions);
@@ -2303,13 +2305,11 @@ export function renderGoalLatex(
   const normalized = fullNormalize(prepared, createDefinitionsMap());
   // 3. Fold projection-like Match expressions back to Const form
   //    (e.g., match x { MkR fields => field_i } → R.field_i(x))
-  const pm = projMap ?? buildProjectionFoldMap(definitions);
-  let folded = foldProjectionMatches(normalized, pm);
+  let term = foldProjectionMatches(normalized, pm);
   // 4. Fold delta-expanded projections back to alias names
   //    (e.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b) → rmul(R, a, b))
-  const am = aliasMap ?? buildAliasFoldMap(definitions);
-  folded = foldAliases(folded, am);
-  const surface = kernelTypeToSurface(folded, definitions);
+  term = foldAliases(term, am);
+  const surface = kernelTypeToSurface(term, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
 
