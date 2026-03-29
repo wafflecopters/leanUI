@@ -296,8 +296,8 @@ export function generateProofProse(
               ? goalMap.get(steps[si + 1].nodeId)?.goalLatex
               : tailInfo?.goalLatex;
             const stepError = goalMap.get(step.nodeId)?.tacticError;
-            // Extract lemma name from the rewrite name
-            const lemmaName = step.name.trim().split(/[\s(]/)[0].replace(/^\(+/, '');
+            // Extract lemma name from the rewrite name — strip leading parens first
+            const lemmaName = step.name.replace(/^\(+/, '').trim().split(/[\s(]/)[0];
             return {
               nodeId: step.nodeId,
               goalLatex: nextGoalLatex,

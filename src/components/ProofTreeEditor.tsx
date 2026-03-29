@@ -2506,7 +2506,6 @@ function ProseItemView({
       );
 
     case 'calcChain': {
-      // Render as aligned equational derivation — each row is a rewrite step
       const steps = kind.steps;
       return (
         <div style={rowStyle} {...rowHandlers}>
@@ -2533,19 +2532,24 @@ function ProseItemView({
                 const result = clearNode(state, step.nodeId);
                 if (result) onPushChange(result);
               };
+              // Show the equation used by this rewrite step, or the resulting goal
+              const stepContent = step.equationLatex ?? step.goalLatex;
+              const justification = step.lemmaName;
               return (
                 <div key={step.nodeId} style={stepStyle} onClick={handleStepClick}>
-                  <span style={{ color: '#8b949e', minWidth: '16px' }}>=</span>
-                  <span style={{ flex: 1 }}>
-                    {step.goalLatex ? (
-                      <InlineKaTeX latex={step.goalLatex} style={{ fontSize: '13px' }} />
-                    ) : (
-                      <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
-                    )}
-                  </span>
-                  <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                    ({texNameForProse(step.lemmaName)})
-                  </span>
+                  <span style={prose}>{si === 0 ? 'by' : 'then'}{' '}</span>
+                  {step.equationLatex ? (
+                    <InlineKaTeX latex={step.equationLatex} style={{ fontSize: '12px' }} />
+                  ) : stepContent ? (
+                    <InlineKaTeX latex={stepContent} style={{ fontSize: '12px' }} />
+                  ) : (
+                    <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
+                  )}
+                  {justification && (
+                    <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap', marginLeft: '4px' }}>
+                      (<InlineKaTeX latex={texNameForProse(justification)} style={{ fontSize: '11px' }} />)
+                    </span>
+                  )}
                   <button
                     onClick={handleStepDelete}
                     style={{
