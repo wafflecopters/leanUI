@@ -217,7 +217,7 @@ export function renderInteractiveGoal(
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
   const normalized = betaNormalize(zonked);
   const projMap = buildProjectionFoldMap(definitions);
-  const aliasMap = buildAliasFoldMap(definitions);
+  const aliasMap = buildAliasFoldMap(definitions, projMap);
   let folded = foldProjectionMatches(normalized, projMap);
   folded = foldAliases(folded, aliasMap);
 

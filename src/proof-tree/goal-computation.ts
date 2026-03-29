@@ -406,11 +406,30 @@ export function foldProjectionMatches(
  * Info for folding a projection application back to its alias.
  * E.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b) → rmul(R, a, b)
  */
-interface AliasFoldInfo {
-  aliasName: string;
+interface AliasFoldExtractionEntry {
   numFixedArgs: number;
   /** For each lambda variable (0..numLambdas-1), how to extract it from actual args. */
   lambdaExtractions: Array<{ fixedArgIndex: number; path: readonly ('fn' | 'arg')[] }>;
+  /**
+   * Cross-validation paths: for each lambda var, all the OTHER positions where it can
+   * also be extracted. Used to verify that a match is genuine (not a false positive from
+   * type params being structurally similar to the scrutinee).
+   */
+  crossValidations: Array<Array<{ fixedArgIndex: number; path: readonly ('fn' | 'arg')[] }>>;
+}
+
+interface AliasFoldInfo {
+  aliasName: string;
+  /**
+   * Extraction entries to try, in order. The first one where the term has
+   * enough args and all lambda vars can be extracted wins.
+   *
+   * Typically has 1 entry for non-projection heads, or 2 entries for projection
+   * heads: [projectionShortForm, fullForm] — where the short form has numFixedArgs=1
+   * (just the scrutinee, as produced by foldProjectionMatches) and the full form has
+   * all universe/type params.
+   */
+  extractions: AliasFoldExtractionEntry[];
 }
 
 /**
@@ -445,10 +464,29 @@ function extractByPath(term: TTKTerm, path: readonly ('fn' | 'arg')[]): TTKTerm 
  *   rmul {R} = CompleteOrderedField.mul (field R)
  * where the value (after stripping lambdas) is a partial application of a projection.
  *
- * This allows folding CompleteOrderedField.mul(Carrier(R), field(R), a, b) back to rmul(R, a, b),
+ * This allows folding CompleteOrderedField.mul(field(R), a, b) back to rmul(R, a, b),
  * which then renders using the notation for rmul (e.g., a · b).
+ *
+ * When `projMap` is provided, the function accounts for the fact that `foldProjectionMatches`
+ * reduces projection applications to short form: `ProjName(scrutinee)` with just 1 arg
+ * (the scrutinee), dropping universe/type params. Without this adjustment, the alias map
+ * would expect the full compiled form (with all params) and fail to match the short form.
  */
-export function buildAliasFoldMap(definitions: DefinitionsMap): Map<string, AliasFoldInfo> {
+export function buildAliasFoldMap(
+  definitions: DefinitionsMap,
+  projMap?: Map<string, Map<number, string>>,
+): Map<string, AliasFoldInfo> {
+  // Build set of known projection names from projMap so we know which heads
+  // will appear in short form (just the scrutinee) after foldProjectionMatches.
+  const projectionNames = new Set<string>();
+  if (projMap) {
+    for (const [, ctorMap] of projMap) {
+      for (const [, projName] of ctorMap) {
+        projectionNames.add(projName);
+      }
+    }
+  }
+
   const map = new Map<string, AliasFoldInfo>();
   for (const [name, def] of definitions.terms) {
     // Only consider non-projection definitions (aliases don't contain '.')
@@ -477,25 +515,53 @@ export function buildAliasFoldMap(definitions: DefinitionsMap): Map<string, Alia
     const { head, args: fixedArgs } = collectAppSpine(body);
     if (head.tag !== 'Const' || !head.name.includes('.') || fixedArgs.length === 0) continue;
 
-    // Build extraction paths: for each binding var, find it in the fixed args
-    const lambdaExtractions: AliasFoldInfo['lambdaExtractions'] = [];
-    let allFound = true;
-    for (let k = 0; k < numBindings; k++) {
-      let found = false;
-      for (let fi = 0; fi < fixedArgs.length && !found; fi++) {
-        const path = findVarPath(fixedArgs[fi], k);
-        if (path) {
-          lambdaExtractions.push({ fixedArgIndex: fi, path });
-          found = true;
+    // Helper: try to build extraction info from a given set of fixed args
+    function tryBuildExtractions(
+      effectiveArgs: TTKTerm[],
+    ): AliasFoldExtractionEntry | null {
+      const lambdaExtractions: AliasFoldExtractionEntry['lambdaExtractions'] = [];
+      const crossValidations: AliasFoldExtractionEntry['crossValidations'] = [];
+      for (let k = 0; k < numBindings; k++) {
+        const allPaths: Array<{ fixedArgIndex: number; path: ('fn' | 'arg')[] }> = [];
+        for (let fi = 0; fi < effectiveArgs.length; fi++) {
+          const path = findVarPath(effectiveArgs[fi], k);
+          if (path) {
+            allPaths.push({ fixedArgIndex: fi, path });
+          }
         }
+        if (allPaths.length === 0) return null;
+        // Primary extraction: first occurrence
+        lambdaExtractions.push(allPaths[0]);
+        // Cross-validations: all OTHER occurrences
+        crossValidations.push(allPaths.slice(1));
       }
-      if (!found) { allFound = false; break; }
+      return { numFixedArgs: effectiveArgs.length, lambdaExtractions, crossValidations };
     }
-    if (!allFound) continue;
+
+    // Build extraction entries. For projection heads, we need both:
+    // 1. Short form (after foldProjectionMatches): ProjName(scrutinee) — just the last arg
+    // 2. Full form (when Consts haven't been delta-expanded): ProjName(u1, u2, ..., scrutinee)
+    const extractions: AliasFoldExtractionEntry[] = [];
+
+    // Always try the full form first (more specific — avoids false matches on type params)
+    const fullEntry = tryBuildExtractions(fixedArgs);
+    if (fullEntry) extractions.push(fullEntry);
+
+    // For projection heads, also add the short form (after foldProjectionMatches,
+    // projections appear as ProjName(scrutinee) with just the last arg).
+    // The short form is tried after the full form so it doesn't accidentally match
+    // type params in unexpanded terms.
+    const isProjectionHead = projectionNames.has(head.name);
+    if (isProjectionHead && fixedArgs.length > 1) {
+      const shortEntry = tryBuildExtractions([fixedArgs[fixedArgs.length - 1]]);
+      if (shortEntry) extractions.push(shortEntry);
+    }
+
+    if (extractions.length === 0) continue;
 
     // First alias wins (don't overwrite)
     if (!map.has(head.name)) {
-      map.set(head.name, { aliasName: name, numFixedArgs: fixedArgs.length, lambdaExtractions });
+      map.set(head.name, { aliasName: name, extractions });
     }
   }
   return map;
@@ -512,33 +578,60 @@ export function buildAliasFoldMap(definitions: DefinitionsMap): Map<string, Alia
 export function foldAliases(term: TTKTerm, aliasMap: Map<string, AliasFoldInfo>): TTKTerm {
   switch (term.tag) {
     case 'App': {
-      // First recurse into subterms
-      const newFn = foldAliases(term.fn, aliasMap);
-      const newArg = foldAliases(term.arg, aliasMap);
-      const folded: TTKTerm = (newFn === term.fn && newArg === term.arg)
-        ? term : { ...term, fn: newFn, arg: newArg };
+      // First try alias matching on the FULL spine BEFORE recursion.
+      // This prevents premature matching at inner App nodes (e.g., matching
+      // COF.add(Carrier(R)) as radd(R) instead of waiting for the full
+      // COF.add(Carrier(R), field(R), x, y) → radd(R, x, y)).
+      const { head: rawHead, args: rawArgs } = collectAppSpine(term);
+      if (rawHead.tag === 'Const') {
+        const alias = aliasMap.get(rawHead.name);
+        if (alias) {
+          for (const entry of alias.extractions) {
+            if (rawArgs.length < entry.numFixedArgs) continue;
 
-      // Check if head is a projection with an alias
-      const { head, args } = collectAppSpine(folded);
-      if (head.tag !== 'Const') return folded;
+            // Recurse into ALL args first (needed for inner alias folding,
+            // e.g., DPair.snd(R) → field(R) inside the args)
+            const foldedArgs = rawArgs.map(a => foldAliases(a, aliasMap));
 
-      const alias = aliasMap.get(head.name);
-      if (!alias || args.length < alias.numFixedArgs) return folded;
+            // Extract lambda-bound values from fixed args
+            const lambdaValues: TTKTerm[] = [];
+            let extractionFailed = false;
+            for (const extraction of entry.lambdaExtractions) {
+              const value = extractByPath(foldedArgs[extraction.fixedArgIndex], extraction.path);
+              if (!value) { extractionFailed = true; break; }
+              lambdaValues.push(value);
+            }
+            if (extractionFailed) continue;
 
-      // Extract lambda-bound values from fixed args
-      const lambdaValues: TTKTerm[] = [];
-      for (const extraction of alias.lambdaExtractions) {
-        const value = extractByPath(args[extraction.fixedArgIndex], extraction.path);
-        if (!value) return folded; // extraction failed — don't fold
-        lambdaValues.push(value);
+            // Cross-validate: verify that each lambda var extracts to the SAME value
+            // from all other fixed arg positions where it appears.
+            let crossCheckFailed = false;
+            for (let k = 0; k < lambdaValues.length && !crossCheckFailed; k++) {
+              for (const cv of entry.crossValidations[k]) {
+                const cvValue = extractByPath(foldedArgs[cv.fixedArgIndex], cv.path);
+                if (!cvValue || !ttermStructEqual(cvValue, lambdaValues[k])) {
+                  crossCheckFailed = true;
+                  break;
+                }
+              }
+            }
+            if (crossCheckFailed) continue;
+
+            // Rebuild: alias(lambdaValues..., remainingArgs...)
+            const remainingArgs = foldedArgs.slice(entry.numFixedArgs);
+            let result: TTKTerm = mkConst(alias.aliasName);
+            for (const v of lambdaValues) result = mkApp(result, v);
+            for (const a of remainingArgs) result = mkApp(result, a);
+            return result;
+          }
+        }
       }
 
-      // Rebuild: alias(lambdaValues..., remainingArgs...)
-      const remainingArgs = args.slice(alias.numFixedArgs);
-      let result: TTKTerm = mkConst(alias.aliasName);
-      for (const v of lambdaValues) result = mkApp(result, v);
-      for (const a of remainingArgs) result = mkApp(result, a);
-      return result;
+      // No alias matched — recurse into subterms normally
+      const newFn = foldAliases(term.fn, aliasMap);
+      const newArg = foldAliases(term.arg, aliasMap);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
     }
     case 'Binder': {
       const newDomain = foldAliases(term.domain, aliasMap);
@@ -627,7 +720,7 @@ function renderProofExpr(
   const term = parseExactExpr(expr, goal.ctx, definitions);
   if (!term) return undefined;
   const pm = projMap ?? buildProjectionFoldMap(definitions);
-  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   let folded = foldProjectionMatches(term, pm);
   folded = foldAliases(folded, am);
   const surface = kernelTypeToSurface(folded, definitions);
@@ -2263,7 +2356,7 @@ function renderHypotheses(
   engine?: TacticEngine,
 ): TypedHypothesis[] {
   const pm = projMap ?? buildProjectionFoldMap(definitions);
-  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   const hypotheses: TypedHypothesis[] = [];
   for (let i = 0; i < ctx.length; i++) {
     const entry = ctx[i];
@@ -2296,7 +2389,7 @@ export function renderGoalLatex(
 ): string {
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
   const pm = projMap ?? buildProjectionFoldMap(definitions);
-  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   // 1. Prepare Match scrutinees for iota-reduction by WHNF-ing with real definitions
   //    (e.g., `match one { ... }` → `match Succ(Zero) { ... }` so iota fires)
   const prepared = prepareMatchesForIota(zonked, definitions);
@@ -2326,7 +2419,7 @@ export function renderSubtermLatex(
   const normalized = fullNormalize(prepared, createDefinitionsMap());
   const pm = projMap ?? buildProjectionFoldMap(definitions);
   let folded = foldProjectionMatches(normalized, pm);
-  const am = aliasMap ?? buildAliasFoldMap(definitions);
+  const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   folded = foldAliases(folded, am);
   const surface = kernelTypeToSurface(folded, definitions);
   return renderTerm(surface, buildNameCtx(ctx), rev);
@@ -2587,7 +2680,7 @@ function replayEntireTreeFromTrace(
 ): Map<ProofNodeId, NodeGoalInfo> {
   const result = new Map<ProofNodeId, NodeGoalInfo>();
   const projMap = buildProjectionFoldMap(definitions);
-  const aliasMap = buildAliasFoldMap(definitions);
+  const aliasMap = buildAliasFoldMap(definitions, projMap);
   const initialEngine = createInitialEngine(kernelType, [], definitions);
 
   function recordFromEngine(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string, validation?: ValidationResult): void {
@@ -2791,7 +2884,7 @@ function replayEntireTreeViaWalk(
   const result = new Map<ProofNodeId, NodeGoalInfo>();
   const engine = createInitialEngine(kernelType, [], definitions);
   const projMap = buildProjectionFoldMap(definitions);
-  const aliasMap = buildAliasFoldMap(definitions);
+  const aliasMap = buildAliasFoldMap(definitions, projMap);
 
   function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string): void {
     const goal = eng.metaVars.get(gId);

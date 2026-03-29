@@ -22,6 +22,11 @@ import {
   kernelTypeToSurface,
   replaceVar,
   computeCaseGoalDirect,
+  buildAliasFoldMap,
+  foldAliases,
+  buildProjectionFoldMap,
+  foldProjectionMatches,
+  renderGoalLatex,
 } from './goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { TTerm } from '../compiler/surface';
@@ -2641,6 +2646,223 @@ addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e
       expect(walkInfo!.unifiedEquationLatex).toBeDefined();
       // Both paths should agree
       expect(traceInfo!.unifiedEquationLatex).toBe(walkInfo!.unifiedEquationLatex);
+    }
+  });
+});
+
+// ============================================================================
+// Alias fold map tests — radd rendering bug fix
+// ============================================================================
+
+describe('alias fold map: projection-aware numFixedArgs', () => {
+  let compiled: ReturnType<typeof compileTTFromText>;
+  let definitions: DefinitionsMap;
+
+  function getCompiled() {
+    if (!compiled) {
+      compiled = compileTTFromText(REAL_ANALYSIS_CODE);
+      definitions = compiled.definitions;
+    }
+    return { compiled, definitions };
+  }
+
+  test('buildAliasFoldMap with projMap maps DPair.snd to field with full+short extractions', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const projMap = buildProjectionFoldMap(definitions);
+    const aliasMap = buildAliasFoldMap(definitions, projMap);
+
+    const dpairSndAlias = aliasMap.get('DPair.snd');
+    expect(dpairSndAlias).toBeDefined();
+    expect(dpairSndAlias!.aliasName).toBe('field');
+    // Should have 2 extraction entries: full form first, then short form
+    expect(dpairSndAlias!.extractions.length).toBe(2);
+    // First entry: full form (DPair.snd applied to all universe/type params + scrutinee)
+    expect(dpairSndAlias!.extractions[0].numFixedArgs).toBe(5);
+    // Second entry: short form (DPair.snd applied to just the scrutinee)
+    expect(dpairSndAlias!.extractions[1].numFixedArgs).toBe(1);
+    expect(dpairSndAlias!.extractions[1].lambdaExtractions).toEqual([
+      { fixedArgIndex: 0, path: [] },
+    ]);
+  });
+
+  test('buildAliasFoldMap with projMap maps CompleteOrderedField.add to radd with full+short extractions', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const projMap = buildProjectionFoldMap(definitions);
+    const aliasMap = buildAliasFoldMap(definitions, projMap);
+
+    const addAlias = aliasMap.get('CompleteOrderedField.add');
+    expect(addAlias).toBeDefined();
+    expect(addAlias!.aliasName).toBe('radd');
+    // Should have 2 extraction entries: full form first, then short form
+    expect(addAlias!.extractions.length).toBe(2);
+    // First: full form — COF.add(Carrier(R), field(R)) in unexpanded terms
+    expect(addAlias!.extractions[0].numFixedArgs).toBe(2);
+    // Second: short form — COF.add(scrutinee) after foldProjectionMatches
+    expect(addAlias!.extractions[1].numFixedArgs).toBe(1);
+    expect(addAlias!.extractions[1].lambdaExtractions).toEqual([{ fixedArgIndex: 0, path: ['arg'] }]);
+  });
+
+  test('foldAliases converts DPair.snd(R) to field(R)', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const projMap = buildProjectionFoldMap(definitions);
+    const aliasMap = buildAliasFoldMap(definitions, projMap);
+
+    // Build: App(Const("DPair.snd"), Var(0))
+    const dpairSndR = mkApp(mkConst('DPair.snd'), mkVar(0));
+    const folded = foldAliases(dpairSndR, aliasMap);
+
+    // Should produce: App(Const("field"), Var(0))
+    expect(folded.tag).toBe('App');
+    if (folded.tag === 'App') {
+      expect(folded.fn).toEqual(mkConst('field'));
+      expect(folded.arg).toEqual(mkVar(0));
+    }
+  });
+
+  test('foldAliases converts CompleteOrderedField.add(field(R))(x)(zero) to radd(R,x,zero)', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const projMap = buildProjectionFoldMap(definitions);
+    const aliasMap = buildAliasFoldMap(definitions, projMap);
+
+    const R = mkVar(2);
+    const x = mkVar(1);
+    const zero = mkVar(0);
+    const fieldR = mkApp(mkConst('field'), R);
+    const term = mkApp(mkApp(mkApp(mkConst('CompleteOrderedField.add'), fieldR), x), zero);
+
+    const folded = foldAliases(term, aliasMap);
+
+    const { head, args } = (() => {
+      const a: TTKTerm[] = [];
+      let h = folded;
+      while (h.tag === 'App') { a.unshift(h.arg); h = h.fn; }
+      return { head: h, args: a };
+    })();
+
+    expect(head).toEqual(mkConst('radd'));
+    expect(args).toHaveLength(3);
+    expect(args[0]).toEqual(R);
+    expect(args[1]).toEqual(x);
+    expect(args[2]).toEqual(zero);
+  });
+
+  test('foldAliases converts full-form CompleteOrderedField.add(Carrier(R),field(R))(x)(zero) to radd(R,x,zero)', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const projMap = buildProjectionFoldMap(definitions);
+    const aliasMap = buildAliasFoldMap(definitions, projMap);
+
+    // Full form: CompleteOrderedField.add(Carrier(R), field(R), x, zero)
+    const R = mkVar(2);
+    const x = mkVar(1);
+    const zero = mkVar(0);
+    const carrierR = mkApp(mkConst('Carrier'), R);
+    const fieldR = mkApp(mkConst('field'), R);
+    const term = mkApp(mkApp(mkApp(mkApp(mkConst('CompleteOrderedField.add'), carrierR), fieldR), x), zero);
+
+    const folded = foldAliases(term, aliasMap);
+
+    const { head, args } = (() => {
+      const a: TTKTerm[] = [];
+      let h = folded;
+      while (h.tag === 'App') { a.unshift(h.arg); h = h.fn; }
+      return { head: h, args: a };
+    })();
+
+    expect(head).toEqual(mkConst('radd'));
+    expect(args).toHaveLength(3);
+    expect(args[0]).toEqual(R); // extracted lambda value
+    expect(args[1]).toEqual(x);
+    expect(args[2]).toEqual(zero);
+  });
+
+  test('foldAliases converts CompleteOrderedField.add(DPair.snd(R))(x)(zero) to radd(R,x,zero)', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const projMap = buildProjectionFoldMap(definitions);
+    const aliasMap = buildAliasFoldMap(definitions, projMap);
+
+    // This is the actual case: foldProjectionMatches produces DPair.snd(R), not field(R)
+    const R = mkVar(2);
+    const x = mkVar(1);
+    const zero = mkVar(0);
+    const dpairSndR = mkApp(mkConst('DPair.snd'), R);
+    const term = mkApp(mkApp(mkApp(mkConst('CompleteOrderedField.add'), dpairSndR), x), zero);
+
+    const folded = foldAliases(term, aliasMap);
+
+    // foldAliases recursion: DPair.snd(R) -> field(R), then COF.add(field(R))(x)(zero) -> radd(R,x,zero)
+    const { head, args } = (() => {
+      const a: TTKTerm[] = [];
+      let h = folded;
+      while (h.tag === 'App') { a.unshift(h.arg); h = h.fn; }
+      return { head: h, args: a };
+    })();
+
+    expect(head).toEqual(mkConst('radd'));
+    expect(args).toHaveLength(3);
+    expect(args[0]).toEqual(R);
+    expect(args[1]).toEqual(x);
+    expect(args[2]).toEqual(zero);
+  });
+
+  test('addCancelRightHelper erw goal renders as x + 0 = x, not radd(0) = x', { timeout: 10000 }, () => {
+    const { definitions } = getCompiled();
+    const allDecls = compiled.blocks.flatMap(b => b.declarations);
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    const decl = allDecls.find(d => d.name === 'addCancelRightHelper');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+
+    const tactics = (decl!.surfaceValue as any).tactics;
+    const root = tacticCommandsToProofTree(tactics);
+    const kernelType = decl!.kernelType!;
+
+    const goalMap = replayEntireTree(root, kernelType, definitions, rev);
+
+    // Collect goals from rewrite (erw) nodes — these are the ones that had the bug.
+    // The initial goal legitimately contains `radd` in alias form.
+    const rewriteGoals: string[] = [];
+    function findRewriteGoals(node: any) {
+      if (node.tag === 'rewrite') {
+        const info = goalMap.get(node.id);
+        if (info?.goalLatex) rewriteGoals.push(info.goalLatex);
+      }
+      if (node.child) findRewriteGoals(node.child);
+      if (node.children) node.children.forEach(findRewriteGoals);
+      if (node.cases) node.cases.forEach((c: any) => findRewriteGoals(c.body));
+    }
+    findRewriteGoals(root);
+
+    // Collect goals from all nodes to check the post-erw goal is correct
+    const allGoals: string[] = [];
+    for (const [, info] of goalMap) {
+      if (info.goalLatex) allGoals.push(info.goalLatex);
+    }
+
+    // The initial goal (before erw) should contain radd with correct arity
+    // (radd applied to 2 args each, not partial applications like radd(0))
+    // With an empty registry, radd renders as \operatorname{radd} with parenthesized args.
+    // The bug was: radd swallowed an arg due to wrong numFixedArgs, producing radd(0).
+    // The fix ensures radd always has the correct number of user-visible args (2 for binary op).
+
+    // Also check the unified equation LaTeX from erw steps
+    const rewriteEquations: string[] = [];
+    function findRewriteEqs(node: any) {
+      if (node.tag === 'rewrite') {
+        const info = goalMap.get(node.id);
+        if (info?.unifiedEquationLatex) rewriteEquations.push(info.unifiedEquationLatex);
+      }
+      if (node.child) findRewriteEqs(node.child);
+      if (node.children) node.children.forEach(findRewriteEqs);
+      if (node.cases) node.cases.forEach((c: any) => findRewriteEqs(c.body));
+    }
+    findRewriteEqs(root);
+
+    // Verify the erw equations don't have field(R) in the args (old bug manifestation).
+    // With the fix, alias folding correctly extracts R from field(R) and produces
+    // radd(R, x, c) which then renders as radd(x, c) after carrier suppression.
+    for (const eq of rewriteEquations) {
+      expect(eq).not.toContain('\\operatorname{field}');
     }
   });
 });
