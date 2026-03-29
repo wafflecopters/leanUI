@@ -159,7 +159,11 @@ export function WYSIWYGPanel({ declarations, allDeclarations, compilerDefinition
     const map = new Map<string, ProofTreeHistory>();
     for (const decl of declarations) {
       if (!decl.name) continue;
-      if (decl.surfaceValue?.tag === 'TacticBlock' && decl.surfaceValue.tactics.length > 0) {
+      if (decl.proofTree) {
+        const root = decl.proofTree;
+        const firstHole = findFirstHole(root);
+        map.set(decl.name, createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } }));
+      } else if (decl.surfaceValue?.tag === 'TacticBlock' && decl.surfaceValue.tactics.length > 0) {
         const root = tacticCommandsToProofTree(decl.surfaceValue.tactics);
         const firstHole = findFirstHole(root);
         map.set(decl.name, createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } }));
