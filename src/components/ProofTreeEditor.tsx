@@ -2532,21 +2532,17 @@ function ProseItemView({
                 const result = clearNode(state, step.nodeId);
                 if (result) onPushChange(result);
               };
-              // Show the resulting goal after this step, with lemma name as justification
               return (
                 <div key={step.nodeId} style={stepStyle} onClick={handleStepClick}>
-                  <span style={{ color: '#8b949e', fontSize: '11px', marginRight: '4px' }}>
-                    {si === 0 ? 'by' : 'then'}
-                  </span>
-                  <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap' }}>
-                    <InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />:
-                  </span>
-                  <span style={{ flex: 1, marginLeft: '6px' }}>
+                  <span style={{ flex: 1 }}>
                     {step.goalLatex ? (
                       <InlineKaTeX latex={step.goalLatex} style={{ fontSize: '13px' }} />
                     ) : (
                       <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
                     )}
+                  </span>
+                  <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap', marginLeft: '12px' }}>
+                    (<InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />)
                   </span>
                   <button
                     onClick={handleStepDelete}
