@@ -108,11 +108,16 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
       return mkRewrite(name, tacticCommandsToProofTree(rest));
     }
 
-    case 'rw':
-      return buildRewriteChain(cmd.args, tacticCommandsToProofTree(rest), false);
+    case 'rw': {
+      // rw/erw auto-close with refl when they're the last tactic
+      const rwCont = rest.length > 0 ? tacticCommandsToProofTree(rest) : mkExact('refl');
+      return buildRewriteChain(cmd.args, rwCont, false);
+    }
 
-    case 'erw':
-      return buildRewriteChain(cmd.args, tacticCommandsToProofTree(rest), true);
+    case 'erw': {
+      const erwCont = rest.length > 0 ? tacticCommandsToProofTree(rest) : mkExact('refl');
+      return buildRewriteChain(cmd.args, erwCont, true);
+    }
 
     case 'unfold':
       return buildUnfoldChain(cmd.args, tacticCommandsToProofTree(rest));
