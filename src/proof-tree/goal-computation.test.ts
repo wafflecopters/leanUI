@@ -2532,3 +2532,115 @@ add (Succ n) m = Succ (add n m)
     expect(decl!.proofTree).toBeUndefined();
   });
 });
+
+// ============================================================================
+// End-to-end: erw chain produces intermediate goals and equation LaTeX
+// ============================================================================
+
+describe('erw chain end-to-end rendering', () => {
+  function compileErwChainSource() {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+record Monoid (A : Type) where
+  e : A
+  op : A -> A -> A
+  idLeft : (x : A) -> Equal (op e x) x
+  idRight : (x : A) -> Equal (op x e) x
+  comm : (x y : A) -> Equal (op x y) (op y x)
+
+myOp : {A : Type} -> Monoid A -> A -> A -> A
+myOp m a b = Monoid.op m a b
+
+addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e m) a) a := by
+  intros A m a
+  erw (Monoid.comm m (Monoid.e m) a), (Monoid.idRight m a)
+`;
+    return compileTTFromText(source);
+  }
+
+  test('erw chain produces intermediate goals and equation LaTeX', () => {
+    const result = compileErwChainSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+    expect(decl!.proofTree).toBeDefined();
+    expect(decl!.tacticTrace).toBeDefined();
+    expect(decl!.tacticTrace!.length).toBeGreaterThan(0);
+
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    const goalMap = replayEntireTree(
+      decl!.proofTree!, decl!.kernelType!, definitions, rev, decl!.tacticTrace
+    );
+
+    // Should have multiple entries with goalLatex (intros node, rewrite nodes, final hole)
+    const entries = Array.from(goalMap.values());
+    const goalsWithLatex = entries.filter(g => g.goalLatex && g.goalLatex.length > 0);
+    expect(goalsWithLatex.length).toBeGreaterThanOrEqual(2);
+
+    // At least one entry should have unifiedEquationLatex (from the erw rewrite steps)
+    const withEquation = entries.filter(g => g.unifiedEquationLatex);
+    expect(withEquation.length).toBeGreaterThanOrEqual(1);
+
+    // No tactic errors should be present on any node
+    for (const entry of entries) {
+      expect(entry.tacticError).toBeUndefined();
+    }
+  });
+
+  test('trace and walk paths agree on equation LaTeX for erw chain', () => {
+    const result = compileErwChainSource();
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroLeft');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+
+    // Trace-based (used by UI)
+    const traceMap = replayEntireTree(
+      decl!.proofTree!, decl!.kernelType!, definitions, rev, decl!.tacticTrace
+    );
+    // Walk-based (fallback)
+    const walkMap = replayEntireTree(
+      decl!.proofTree!, decl!.kernelType!, definitions, rev
+    );
+
+    // Find rewrite nodes in the proof tree
+    const rewriteNodeIds: number[] = [];
+    function findRewrites(node: any) {
+      if (node.tag === 'rewrite') {
+        rewriteNodeIds.push(node.id);
+      }
+      if (node.child) findRewrites(node.child);
+      if (node.children) node.children.forEach(findRewrites);
+      if (node.cases) node.cases.forEach((c: any) => findRewrites(c.body));
+    }
+    findRewrites(decl!.proofTree!);
+    expect(rewriteNodeIds.length).toBeGreaterThan(0);
+
+    // Both paths should produce equation LaTeX for each rewrite node
+    for (const nodeId of rewriteNodeIds) {
+      const traceInfo = traceMap.get(nodeId);
+      const walkInfo = walkMap.get(nodeId);
+      expect(traceInfo).toBeDefined();
+      expect(walkInfo).toBeDefined();
+      expect(traceInfo!.unifiedEquationLatex).toBeDefined();
+      expect(walkInfo!.unifiedEquationLatex).toBeDefined();
+      // Both paths should agree
+      expect(traceInfo!.unifiedEquationLatex).toBe(walkInfo!.unifiedEquationLatex);
+    }
+  });
+});
