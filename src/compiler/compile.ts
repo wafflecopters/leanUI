@@ -48,6 +48,7 @@ import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-
 import { elaborateTacticArg, tacticCommandToTactic as sharedTacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
 import { TacticSession } from '../tactics/tactic-session';
 import { extractGoalStates, engineToProofState } from '../tactics/proof-state';
+import { tacticCommandsToProofTree } from '../proof-tree/tactic-to-tree';
 export type { TotalityResult, CaseTree };
 
 // ============================================================================
@@ -209,6 +210,9 @@ export interface CompiledDeclaration {
 
   // Tactic trace: engine state after each tactic step (for proof tree rendering)
   tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[];
+
+  // Proof tree built from parsed tactic commands (for proof tree rendering)
+  proofTree?: import('../proof-tree/proof-tree').ProofNode;
 
   // @syntax annotation pattern string for structured math editor
   syntax?: string;
@@ -3350,6 +3354,16 @@ function createCompiledDeclaration(
         const session = TacticSession.create(kernelType, definitions!);
         const final = session.applyCommands(sv.tactics);
         return final.trace.length > 0 ? [...final.trace] : undefined;
+      } catch {
+        return undefined;
+      }
+    })(),
+    // Build proof tree from parsed tactic commands (syntax-driven, independent of type checking)
+    proofTree: (() => {
+      const sv = (decl.originalSurfaceValue ?? decl.value) as any;
+      if (!sv || sv.tag !== 'TacticBlock' || !sv.tactics || sv.tactics.length === 0) return undefined;
+      try {
+        return tacticCommandsToProofTree(sv.tactics);
       } catch {
         return undefined;
       }

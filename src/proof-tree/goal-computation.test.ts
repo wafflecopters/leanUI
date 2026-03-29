@@ -2485,3 +2485,50 @@ describe('real-analysis preset tactic replay (full flow)', () => {
   });
 
 });
+
+// ============================================================================
+// CompiledDeclaration.proofTree: tactic declarations get a proofTree
+// ============================================================================
+
+describe('compiled tactic declaration has proofTree', () => {
+  test('proofTree is populated for a tactic-mode declaration', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+addZeroRight : (n : Nat) -> Equal (add n Zero) n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n ih => erw (cong Succ ih)
+                 exact refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'addZeroRight');
+    expect(decl).toBeDefined();
+    expect(decl!.proofTree).toBeDefined();
+    // The tree should start with intros (from "intro n")
+    expect(decl!.proofTree!.tag).toBe('intros');
+  });
+
+  test('non-tactic declarations have no proofTree', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'add');
+    expect(decl).toBeDefined();
+    expect(decl!.proofTree).toBeUndefined();
+  });
+});
