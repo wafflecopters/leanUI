@@ -1608,12 +1608,13 @@ function replayProofTreeFromTrace(
   let traceIdx = 0;
 
   function walk(
-    node: ProofNode,
+    node: ProofNode | undefined,
     currentEngine: TacticEngine,
     caseLabel?: string,
     caseLabelLatex?: string,
     inductionVar?: string,
   ): ReplayResult | null {
+    if (!node) return null;  // Defensive: handle undefined nodes gracefully
     const goalId = currentEngine.getFocusedGoalId();
     if (!goalId) return null;
 
@@ -1709,13 +1710,14 @@ function replayProofTreeFromTrace(
  * at the cursor position.
  */
 function replayProofTree(
-  node: ProofNode,
+  node: ProofNode | undefined,
   cursorId: ProofNodeId,
   engine: TacticEngine,
   caseLabel?: string,
   caseLabelLatex?: string,
   inductionVar?: string,
 ): ReplayResult | null {
+  if (!node) return null;  // Defensive: handle undefined nodes gracefully
   const goalId = engine.getFocusedGoalId();
   if (!goalId) return null;
 
@@ -2602,7 +2604,8 @@ function replayEntireTreeFromTrace(
   // Walk the proof tree in the same order as the trace, advancing a cursor through the trace.
   let traceIdx = 0;
 
-  function walkTrace(node: ProofNode, currentEngine: TacticEngine, caseLabelLatex?: string): void {
+  function walkTrace(node: ProofNode | undefined, currentEngine: TacticEngine, caseLabelLatex?: string): void {
+    if (!node) return;  // Defensive: handle undefined nodes gracefully
     const gId = currentEngine.getFocusedGoalId();
     if (!gId) return;
 
@@ -2812,10 +2815,11 @@ function replayEntireTreeViaWalk(
   }
 
   function walk(
-    node: ProofNode,
+    node: ProofNode | undefined,
     eng: TacticEngine,
     caseLabelLatex?: string,
   ): void {
+    if (!node) return;  // Defensive: handle undefined nodes gracefully
     const gId = eng.getFocusedGoalId();
     if (!gId) return;
 
