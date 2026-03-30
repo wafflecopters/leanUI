@@ -852,8 +852,8 @@ continuousFromDeriv : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 Lf : Car
   intros R f x0 Lf hf target htarget
   have dqb := diffQuotBounded f x0 Lf hf
   cases (CompleteOrderedField.leTotal (field R) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R))))) with
-  | Left hle => exact (mkSigma (Carrier R) (ContinuousWitness f x0 target) (DPair.fst dqb) (MkPair (Pair.fst (DPair.snd dqb)) (\\x hx0 hxd => continuityBound f x0 x Lf target (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 hxd)) (ltLeTrans (rabs (rsub x x0)) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R)))) hxd hle) (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0)))))
-  | Right hle => exact (mkSigma (Carrier R) (ContinuousWitness f x0 target) (rmul target (rinv (radd (rabs Lf) (rone R)))) (MkPair (epsOverMPos target (radd (rabs Lf) (rone R)) htarget (absPlusOnePos Lf)) (\\x hx0 hxd => continuityBound f x0 x Lf target (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 (ltLeTrans (rabs (rsub x x0)) (rmul target (rinv (radd (rabs Lf) (rone R)))) (DPair.fst dqb) hxd hle))) hxd (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0)))))
+  | Left hle => exact (MkDPair (DPair.fst dqb) (MkPair (Pair.fst (DPair.snd dqb)) (\\x hx0 hxd => continuityBound f x0 x Lf target (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 hxd)) (ltLeTrans (rabs (rsub x x0)) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R)))) hxd hle) (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0)))))
+  | Right hle => exact (MkDPair (rmul target (rinv (radd (rabs Lf) (rone R)))) (MkPair (epsOverMPos target (radd (rabs Lf) (rone R)) htarget (absPlusOnePos Lf)) (\\x hx0 hxd => continuityBound f x0 x Lf target (ltToLe (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)) (Pair.snd (DPair.snd dqb) x hx0 (ltLeTrans (rabs (rsub x x0)) (rmul target (rinv (radd (rabs Lf) (rone R)))) (DPair.fst dqb) hxd hle))) hxd (eqOrNeZeroRight (rsub x x0) (Pair.snd hx0)))))
 
 ------------------------------------------------------------
 -- THE CHAIN RULE: (g . f)'(x0) = g'(f(x0)) . f'(x0)
