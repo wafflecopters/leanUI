@@ -6,7 +6,7 @@
  */
 
 import { groupByIndentation } from '../parser/indentation-grouper';
-import { Parser, ParsedDeclaration, ParseError } from '../parser/parser';
+import { Parser, ParsedDeclaration, ParseError, OperatorInfo, DEFAULT_OPERATORS } from '../parser/parser';
 import { elabToKernelWithMap, elabPatternToKernel, elabPatternToKernelWithMap, buildConstructorParamNames, setConstructorParamNames, resetWildcardCounter, extractConstructorParamNames, setCurrentTermParamNames, extractNamedArgMap, extractArgNamedArgInfos, countParameters, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, fixRhsForVariablePatterns, ConstructorParamNames, NamedArgMap, NamedArgElabError } from './elab';
 import { TTKTerm, TTKContext, prettyPrint as prettyPrintTTK, prettyPrintFormatted, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkPi, mkType } from './kernel';
 import { TTerm, TPattern, TClause, mkPiTT, mkTypeTT, mkULitTT, mkConstTT, mkAppTT, mkVarTT, mkPropTT, mkHoleTT, mkSortTT, mkUOmegaTT } from './surface';
@@ -1439,6 +1439,10 @@ export function parseTTSource(source: string): ParseResult {
   // Accumulate declarations for pattern matching detection
   let allPreviousDeclarations: ParsedDeclaration[] = [];
 
+  // Propagate custom operators across blocks so that notation declarations
+  // (e.g., `infixl 65 + := add`) in earlier blocks are available in later blocks.
+  let customOperators: Record<string, OperatorInfo> = { ...DEFAULT_OPERATORS };
+
   for (const block of sourceBlocks) {
     const posOffset = lineToCharOffset(source, block.startLine);
 
@@ -1454,7 +1458,7 @@ export function parseTTSource(source: string): ParseResult {
     }
 
     const blockSource = block.lines.join('\n');
-    const parser = new Parser();
+    const parser = new Parser(customOperators);
 
     // Parse
     let declarations: ParsedDeclaration[] = [];
@@ -1493,6 +1497,20 @@ export function parseTTSource(source: string): ParseResult {
         posOffset
       });
       continue;
+    }
+
+    // Collect notation declarations from this block to propagate to later blocks
+    for (const decl of declarations) {
+      if (decl.kind === 'notation' && decl.symbol && decl.target) {
+        customOperators = { ...customOperators };
+        customOperators[decl.symbol] = {
+          symbol: decl.symbol,
+          precedence: decl.precedence ?? 50,
+          associativity: decl.notationKind === 'infixl' ? 'left' : decl.notationKind === 'infixr' ? 'right' : 'none',
+          constName: decl.target,
+          binding: decl.notationBinding,
+        };
+      }
     }
 
     parsedBlocks.push({

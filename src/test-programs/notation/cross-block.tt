@@ -1,0 +1,16 @@
+@test success
+@name "notation works across declaration blocks"
+@import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+infixl 65 + := add
+
+test : Equal (Succ Zero + Zero) (Succ Zero)
+test = refl
