@@ -1722,6 +1722,66 @@ describe('Parser: Custom Operators', () => {
   });
 });
 
+// ============================================================================
+// Notation Declaration Parsing Tests
+// ============================================================================
+
+describe('Parser: Notation Declarations', () => {
+  test('Parse infixl notation declaration', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('infixl 65 + := radd');
+    expect(decls.length).toBe(1);
+    expect(decls[0].kind).toBe('notation');
+    expect(decls[0].notationKind).toBe('infixl');
+    expect(decls[0].precedence).toBe(65);
+    expect(decls[0].symbol).toBe('+');
+    expect(decls[0].target).toBe('radd');
+  });
+
+  test('Parse infixr notation declaration', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('infixr 40 ** := DPair');
+    expect(decls.length).toBe(1);
+    expect(decls[0].kind).toBe('notation');
+    expect(decls[0].notationKind).toBe('infixr');
+    expect(decls[0].precedence).toBe(40);
+    expect(decls[0].symbol).toBe('**');
+    expect(decls[0].target).toBe('DPair');
+  });
+
+  test('Parse infix notation declaration', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('infix 50 = := Equal');
+    expect(decls.length).toBe(1);
+    expect(decls[0].kind).toBe('notation');
+    expect(decls[0].notationKind).toBe('infix');
+    expect(decls[0].precedence).toBe(50);
+    expect(decls[0].symbol).toBe('=');
+    expect(decls[0].target).toBe('Equal');
+  });
+
+  test('Parse prefix notation declaration', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('prefix 90 - := rneg');
+    expect(decls.length).toBe(1);
+    expect(decls[0].kind).toBe('notation');
+    expect(decls[0].notationKind).toBe('prefix');
+    expect(decls[0].precedence).toBe(90);
+    expect(decls[0].symbol).toBe('-');
+    expect(decls[0].target).toBe('rneg');
+  });
+
+  test('Multiple notation declarations', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('infixl 65 + := radd\ninfixl 70 * := rmul');
+    expect(decls.length).toBe(2);
+    expect(decls[0].kind).toBe('notation');
+    expect(decls[0].symbol).toBe('+');
+    expect(decls[1].kind).toBe('notation');
+    expect(decls[1].symbol).toBe('*');
+  });
+});
+
 describe('Parser: registerOperator', () => {
   test('registerOperator adds operator that can be parsed', () => {
     const parser = new Parser();

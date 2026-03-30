@@ -695,7 +695,7 @@ export interface ParsedRecordParam {
  * Result of parsing a top-level declaration.
  */
 export interface ParsedDeclaration {
-  kind: 'def' | 'expr' | 'inductive' | 'record';
+  kind: 'def' | 'expr' | 'inductive' | 'record' | 'notation';
   name?: string;
   type?: TTerm;
   value?: TTerm;
@@ -724,6 +724,12 @@ export interface ParsedDeclaration {
   withFunctionPatterns?: TPattern[];
   // Postulate: type-only declaration with no value (axiom)
   isPostulate?: boolean;
+  // For notation declarations (infixl, infixr, infix, prefix)
+  notationKind?: 'infixl' | 'infixr' | 'infix' | 'prefix';
+  precedence?: number;
+  symbol?: string;       // operator symbol like '+', '**'
+  target?: string;       // function name like 'radd'
+  notationBinding?: boolean;  // for binding operators
   // Original surface value before with-clause desugaring.
   // Used for semantic token extraction (the desugared value loses WithClause structure).
   originalSurfaceValue?: TTerm;
@@ -761,6 +767,39 @@ export class Parser {
    */
   registerOperator(op: OperatorInfo): void {
     this.operators[op.symbol] = op;
+  }
+
+  /**
+   * Try to resolve an operator starting at the given token, combining adjacent
+   * OPERATOR tokens if needed (e.g., two '*' tokens into '**').
+   * Returns the longest matching registered operator.
+   */
+  private tryResolveOperator(token: Token): { opInfo: OperatorInfo | undefined; symbol: string; tokenCount: number } {
+    // Try combining adjacent OPERATOR tokens for longer operators
+    let combined = token.value;
+    let bestMatch: { opInfo: OperatorInfo | undefined; symbol: string; tokenCount: number } = {
+      opInfo: this.operators[token.value],
+      symbol: token.value,
+      tokenCount: 1,
+    };
+
+    // Look ahead for adjacent OPERATOR tokens (no whitespace gap)
+    let lookPos = this.pos + 1;
+    while (lookPos < this.tokens.length && this.tokens[lookPos].type === 'OPERATOR') {
+      const nextTok = this.tokens[lookPos];
+      // Check adjacency: next token starts right where previous ends
+      const prevTok = this.tokens[lookPos - 1];
+      if (nextTok.pos !== prevTok.pos + prevTok.value.length) break;
+
+      combined += nextTok.value;
+      const opInfo = this.operators[combined];
+      if (opInfo) {
+        bestMatch = { opInfo, symbol: combined, tokenCount: lookPos - this.pos + 1 };
+      }
+      lookPos++;
+    }
+
+    return bestMatch;
   }
 
   /**
@@ -1074,6 +1113,11 @@ export class Parser {
     // Postulate: postulate name : type (axiom with no value)
     if (current.type === 'POSTULATE') {
       return this.parsePostulateDeclaration();
+    }
+
+    // Notation declaration: infixl/infixr/infix/prefix precedence symbol := target
+    if (current.type === 'IDENT' && ['infixl', 'infixr', 'infix', 'prefix'].includes(current.value)) {
+      return this.parseNotationDeclaration();
     }
 
     // Named declaration: name : type  or  name = impl
@@ -1684,6 +1728,83 @@ export class Parser {
     return { kind: 'def', name, type, isPostulate: true };
   }
 
+  /**
+   * Parse a notation declaration:
+   *   infixl 65 + := radd
+   *   infixr 40 ** := DPair
+   *   prefix 90 - := rneg
+   *
+   * Registers the operator immediately so it affects subsequent parsing.
+   */
+  private parseNotationDeclaration(): ParsedDeclaration {
+    // Consume the keyword (infixl/infixr/infix/prefix)
+    const kindToken = this.expect('IDENT');
+    const notationKind = kindToken.value as 'infixl' | 'infixr' | 'infix' | 'prefix';
+
+    // Parse precedence (NUMBER token)
+    const precToken = this.expect('NUMBER');
+    const precedence = parseInt(precToken.value, 10);
+
+    // Parse operator symbol - could be OPERATOR or IDENT token
+    // For multi-char operators like **, the lexer may have tokenized as two separate
+    // OPERATOR tokens if the operator wasn't registered at lex time.
+    let symbol: string;
+    const symToken = this.current();
+    if (symToken.type === 'OPERATOR') {
+      symbol = symToken.value;
+      this.advance();
+      // Check if the next token is also an OPERATOR that's immediately adjacent
+      // (e.g., * followed by * for **). Combine if adjacent with no whitespace.
+      while (this.current().type === 'OPERATOR' &&
+             this.current().pos === symToken.pos + symbol.length) {
+        symbol += this.current().value;
+        this.advance();
+      }
+    } else if (symToken.type === 'IDENT') {
+      // Some operators might be identifiers (e.g., custom operators)
+      symbol = symToken.value;
+      this.advance();
+    } else {
+      throw new ParseError(
+        `Expected operator symbol in notation declaration, got ${symToken.type} '${symToken.value}'`,
+        symToken.line,
+        symToken.col
+      );
+    }
+
+    // Expect := (tokenized as ASSIGN)
+    this.expect('ASSIGN');
+
+    // Parse target function name
+    const targetToken = this.expect('IDENT');
+    const target = targetToken.value;
+
+    // Determine associativity
+    let associativity: Associativity;
+    switch (notationKind) {
+      case 'infixl': associativity = 'left'; break;
+      case 'infixr': associativity = 'right'; break;
+      case 'infix': associativity = 'none'; break;
+      case 'prefix': associativity = 'none'; break;
+    }
+
+    // Register the operator immediately so it affects subsequent parsing
+    this.registerOperator({
+      symbol,
+      precedence,
+      associativity,
+      constName: target,
+    });
+
+    return {
+      kind: 'notation',
+      notationKind,
+      precedence,
+      symbol,
+      target,
+    };
+  }
+
   private parseInductiveDeclaration(): ParsedDeclaration {
     this.expect('INDUCTIVE');
     const nameToken = this.expect('IDENT');
@@ -2079,10 +2200,10 @@ export class Parser {
 
       // Check for infix operators
       if (token.type === 'OPERATOR') {
-        const opInfo = this.operators[token.value];
+        const { opInfo, symbol: combinedSymbol, tokenCount } = this.tryResolveOperator(token);
         if (!opInfo || opInfo.precedence < minPrec) break;
 
-        this.advance();
+        for (let i = 0; i < tokenCount; i++) this.advance();
 
         let rightPrec = opInfo.precedence;
         if (opInfo.associativity === 'left') {
@@ -2093,7 +2214,7 @@ export class Parser {
 
         const right = this.exprUntil(rightPrec, ctx, stopTokens);
 
-        const opConst = mkConstTT(opInfo.constName || token.value);
+        const opConst = mkConstTT(opInfo.constName || combinedSymbol);
         left = mkAppTT(mkAppTT(opConst, left), right);
         continue;
       }
@@ -2243,11 +2364,15 @@ export class Parser {
 
       // Check for infix operators
       if (token.type === 'OPERATOR') {
-        const opInfo = this.operators[token.value];
+        // Try to combine adjacent operator tokens into a multi-char operator
+        // (e.g., two '*' tokens into '**' if ** is registered but wasn't at lex time)
+        const { opInfo: combinedOp, symbol: combinedSymbol, tokenCount } = this.tryResolveOperator(token);
+        const opInfo = combinedOp;
         if (!opInfo || opInfo.precedence < minPrec) break;
 
         didInfixWork = true;
-        this.advance();
+        // Consume all tokens that form this operator
+        for (let i = 0; i < tokenCount; i++) this.advance();
 
         // Calculate right precedence based on associativity
         let rightPrec = opInfo.precedence;
@@ -2261,7 +2386,7 @@ export class Parser {
         const right = this.expr(rightPrec, ctx, path);
 
         // Create binary application: op left right
-        const opConst = mkConstTT(opInfo.constName || token.value);
+        const opConst = mkConstTT(opInfo.constName || combinedSymbol);
         left = mkAppTT(mkAppTT(opConst, left), right);
         continue;
       }
