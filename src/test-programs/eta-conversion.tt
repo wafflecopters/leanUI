@@ -1,0 +1,29 @@
+@test success
+@name "eta conversion: bare function equals lambda-wrapped"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Simple function for testing eta
+double : Nat -> Nat
+double Zero = Zero
+double (Succ n) = Succ (Succ (double n))
+
+-- Eta: Succ equals \x => Succ x
+etaSucc : Equal Succ (\x => Succ x)
+etaSucc = refl
+
+-- Eta with partially applied function: double equals \x => double x
+etaDouble : Equal double (\x => double x)
+etaDouble = refl
+
+-- Eta with application: (add Zero) equals \y => add Zero y
+add : Nat -> Nat -> Nat
+add Zero y = y
+add (Succ x) y = Succ (add x y)
+
+etaAddZero : Equal (add Zero) (\y => add Zero y)
+etaAddZero = refl
+
+-- Eta with bound variable: for any n, (add n) equals \m => add n m
+etaAddN : (n : Nat) -> Equal (add n) (\m => add n m)
+etaAddN n = refl

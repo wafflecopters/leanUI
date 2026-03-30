@@ -286,25 +286,57 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
   }
 
   // Eta conversion for lambdas
-  // λx. f x ≃ f (when x not free in f)
+  //
+  // Two rules:
+  // 1. Eta contraction (fast path): lam x. f x = f (when x not free in f)
+  // 2. Eta expansion (general): lam x. body = f  iff  body = App(shift(f,1,0), Var(0))
+  //    (when one side is a lambda and the other is not, eta-expand the non-lambda)
+  //
+  // Rule 2 subsumes rule 1, but we keep rule 1 as a fast path.
+
   if (n1.tag === 'Binder' && n1.binderKind.tag === 'BLam') {
-    // Check if n1 is of the form λx. f x where x is not free in f
+    // Fast path: eta contraction (lam x. f x = f when x not in FV(f))
     if (n1.body.tag === 'App' && n1.body.arg.tag === 'Var' && n1.body.arg.index === 0) {
       if (!isFreeIn(0, n1.body.fn)) {
-        // Eta contract: compare f with n2 (f needs index shift down)
         const contracted = subst(0, { tag: 'Var', index: 0 }, n1.body.fn);
         return areTypesDefEq(contracted, n2, definitions, typingContext);
       }
     }
+    // General eta expansion: if n2 is NOT a lambda, eta-expand n2
+    // lam x. body = f  iff  body = App(shift(f,1,0), Var(0))
+    if (!(n2.tag === 'Binder' && n2.binderKind.tag === 'BLam')) {
+      const expandedN2Body: TTKTerm = {
+        tag: 'App',
+        fn: shiftTerm(n2, 1, 0),
+        arg: { tag: 'Var', index: 0 },
+      };
+      const bodyCtx = typingContext
+        ? [...typingContext, { name: n1.name, type: n1.domain }]
+        : undefined;
+      return areTypesDefEq(n1.body, expandedN2Body, definitions, bodyCtx);
+    }
   }
 
-  // Symmetric case
+  // Symmetric case: n2 is lambda, n1 is not
   if (n2.tag === 'Binder' && n2.binderKind.tag === 'BLam') {
+    // Fast path: eta contraction
     if (n2.body.tag === 'App' && n2.body.arg.tag === 'Var' && n2.body.arg.index === 0) {
       if (!isFreeIn(0, n2.body.fn)) {
         const contracted = subst(0, { tag: 'Var', index: 0 }, n2.body.fn);
         return areTypesDefEq(n1, contracted, definitions, typingContext);
       }
+    }
+    // General eta expansion: eta-expand n1
+    if (!(n1.tag === 'Binder' && n1.binderKind.tag === 'BLam')) {
+      const expandedN1Body: TTKTerm = {
+        tag: 'App',
+        fn: shiftTerm(n1, 1, 0),
+        arg: { tag: 'Var', index: 0 },
+      };
+      const bodyCtx = typingContext
+        ? [...typingContext, { name: n2.name, type: n2.domain }]
+        : undefined;
+      return areTypesDefEq(expandedN1Body, n2.body, definitions, bodyCtx);
     }
   }
 

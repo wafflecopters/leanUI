@@ -2,7 +2,7 @@ import { TTKTerm, TTKPattern, levelsEqual, prettyPrint, mkLSucc, isDefinitionall
 import { shiftTerm, minFreeVarIndex, subst } from "./subst";
 import { Constraint, DefinitionsMap, MetaVar, TTKContext } from "./term";
 import { unifyTerms } from "./unify";
-import { whnf } from "./whnf";
+import { whnf, areTypesDefEq } from "./whnf";
 
 /**
  * Substitute solved metas in a term using the given metaVars map.
@@ -717,6 +717,12 @@ export function solveConstraints(
           });
         }
         if (!unifyResult.success) {
+          // Before reporting conflict, check definitional equality (which includes
+          // eta conversion, delta reduction, etc.). Unification may fail on terms
+          // like `Succ` vs `\x => Succ x` that are eta-equal.
+          if (areTypesDefEq(meta.solution, resolvedRhs, definitions, effectiveContext)) {
+            // Terms are definitionally equal (e.g., via eta) — no conflict.
+          } else {
           // Don't throw if the RHS contains unsolved metas — the term may be stuck
           // (e.g., `plus ?m ?n` can't reduce to WHNF, making it incomparable with
           // `Succ(...)` even though `?m = Succ(k)` would make them equal).
@@ -737,6 +743,7 @@ export function solveConstraints(
             const names = effectiveContext.map(c => c.name).reverse();
             const metaTypeStr = prettyPrint(meta.type, names);
             throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
+          }
           }
         } else {
           // Do NOT queue sub-constraints from non-normalized unification.
@@ -923,6 +930,14 @@ export function solveConstraints(
           }
         }
         if (!unifyResult.success) {
+          // Before structural conflict checks, try definitional equality which
+          // includes eta conversion and full normalization.
+          if (areTypesDefEq(meta.solution, resolvedRhs, definitions, effectiveContext)) {
+            // Terms are definitionally equal (e.g., via eta) — no conflict.
+            // Fall through to the success path.
+            stillStuck.push(normConstraint);
+            continue;
+          }
           // Try case inversion: if the solution is a constructor application and
           // the RHS is a stuck function application (e.g., `Succ(X) vs plus(?m, ?n)`),
           // WHNF the RHS to get a stuck Match and invert through the matching clause.

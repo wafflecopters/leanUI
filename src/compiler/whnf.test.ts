@@ -556,3 +556,82 @@ describe('isZero function reduction', () => {
     expect(result).toEqual(mkConst('False'));
   });
 });
+
+// ============================================================================
+// Eta Conversion Tests
+// ============================================================================
+
+describe('eta conversion in areTypesDefEq', () => {
+  test('eta contraction: \\x => f x equals f (Const)', () => {
+    const f = mkConst('f');
+    const etaExpanded = mkLam('x', natType, mkApp(f, mkVar(0)));
+    expect(areTypesDefEq(etaExpanded, f)).toBe(true);
+    expect(areTypesDefEq(f, etaExpanded)).toBe(true);
+  });
+
+  test('eta contraction: \\x => Var(1) x equals Var(0) (de Bruijn)', () => {
+    const etaExpanded = mkLam('x', natType, mkApp(mkVar(1), mkVar(0)));
+    expect(areTypesDefEq(etaExpanded, mkVar(0))).toBe(true);
+    expect(areTypesDefEq(mkVar(0), etaExpanded)).toBe(true);
+  });
+
+  test('eta expansion: Const(f) equals \\x => f x', () => {
+    const f = mkConst('f');
+    const etaExpanded = mkLam('x', natType, mkApp(f, mkVar(0)));
+    expect(areTypesDefEq(f, etaExpanded)).toBe(true);
+  });
+
+  test('eta expansion: App(f, a) equals \\x => App(f, a) x', () => {
+    const addZero = mkApp(mkConst('add'), mkConst('Zero'));
+    const etaExpanded = mkLam('x', natType, mkApp(addZero, mkVar(0)));
+    expect(areTypesDefEq(addZero, etaExpanded)).toBe(true);
+    expect(areTypesDefEq(etaExpanded, addZero)).toBe(true);
+  });
+
+  test('eta expansion: nested - \\x => add x equals \\x y => add x y', () => {
+    const add = mkConst('add');
+    const lhs = mkLam('x', natType, mkApp(add, mkVar(0)));
+    const rhs = mkLam('x', natType, mkLam('y', natType, mkApp(mkApp(add, mkVar(1)), mkVar(0))));
+    expect(areTypesDefEq(lhs, rhs)).toBe(true);
+    expect(areTypesDefEq(rhs, lhs)).toBe(true);
+  });
+
+  test('eta expansion: Var equals \\x => Var x', () => {
+    const lhs = mkVar(0);
+    const rhs = mkLam('x', natType, mkApp(mkVar(1), mkVar(0)));
+    expect(areTypesDefEq(lhs, rhs)).toBe(true);
+    expect(areTypesDefEq(rhs, lhs)).toBe(true);
+  });
+
+  test('eta: non-equal terms remain non-equal', () => {
+    const f = mkConst('f');
+    const g = mkConst('g');
+    const etaF = mkLam('x', natType, mkApp(f, mkVar(0)));
+    expect(areTypesDefEq(etaF, g)).toBe(false);
+    expect(areTypesDefEq(g, etaF)).toBe(false);
+  });
+
+  test('eta: \\x => f (g x) should NOT equal f', () => {
+    const f = mkConst('f');
+    const g = mkConst('g');
+    const composed = mkLam('x', natType, mkApp(f, mkApp(g, mkVar(0))));
+    expect(areTypesDefEq(composed, f)).toBe(false);
+    expect(areTypesDefEq(f, composed)).toBe(false);
+  });
+
+  test('eta with definitions: defined function equals its eta-expansion', () => {
+    let defs = createDefinitionsMap();
+    defs = addDefinition(defs, 'myF', mkPi('x', natType, natType), mkConst('f'));
+
+    const etaF = mkLam('x', natType, mkApp(mkConst('f'), mkVar(0)));
+    expect(areTypesDefEq(mkConst('myF'), etaF, defs)).toBe(true);
+    expect(areTypesDefEq(etaF, mkConst('myF'), defs)).toBe(true);
+  });
+
+  test('eta expansion: double - f equals \\x y => f x y', () => {
+    const f = mkConst('f');
+    const rhs = mkLam('x', natType, mkLam('y', natType, mkApp(mkApp(f, mkVar(1)), mkVar(0))));
+    expect(areTypesDefEq(f, rhs)).toBe(true);
+    expect(areTypesDefEq(rhs, f)).toBe(true);
+  });
+});
