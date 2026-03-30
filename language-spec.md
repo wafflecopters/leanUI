@@ -441,6 +441,53 @@ a * b
 a = b                     -- Equality
 ```
 
+## Notation Declarations
+
+Custom infix, prefix, and binding operators can be defined:
+
+```
+infixl <precedence> <symbol> := <function>    -- Left-associative infix
+infixr <precedence> <symbol> := <function>    -- Right-associative infix
+infix  <precedence> <symbol> := <function>    -- Non-associative infix
+prefix <precedence> <symbol> := <function>    -- Prefix operator
+```
+
+### Examples
+
+```
+infixl 65 + := radd       -- a + b  desugars to  radd a b
+infixl 70 * := rmul       -- a * b  desugars to  rmul a b
+prefix 90 - := rneg       -- -a     desugars to  rneg a
+```
+
+### Binding Notation (Sigma Types)
+
+Right-associative operators with the `binding` keyword create dependent binding forms:
+
+```
+infixr 40 ** := DPair binding
+
+-- (x : A ** P x)  desugars to  DPair A (\x => P x)
+myType : Type
+myType = (n : Nat ** Equal n Zero)
+```
+
+When `**` follows a typed binder `(x : A)`, the RHS is wrapped in a lambda binding `x`.
+
+### Precedence
+
+Higher numbers bind tighter. Standard precedences:
+- `->` (Pi type): 25
+- `||` , `∨` : 30
+- `&&` , `∧` : 35
+- `**` (DPair): 40
+- `=` , `<` , `>` , `≤` , `≥` : 50
+- `+` , `-` : 65
+- `*` , `/` : 70
+- `^` : 80
+- prefix `-` : 90
+- function application: 100
+
 ## Syntactic Sugar
 
 ### Multi-Parameter Binders
