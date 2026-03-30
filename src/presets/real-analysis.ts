@@ -139,7 +139,7 @@ record CompleteOrderedField (A : Type) : Type 1 extends OrderedField A where
 -- A "Real" is any type bundled with a complete ordered field structure.
 -- No postulate needed — we just pass the instance around.
 Real : Type 1
-Real = DPair (Type) CompleteOrderedField
+Real = (A : Type ** CompleteOrderedField A)
 
 -- Convenience: extract carrier type and field structure
 Carrier : Real -> Type
