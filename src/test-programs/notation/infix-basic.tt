@@ -1,0 +1,19 @@
+@test success
+@name "infix notation: custom + operator"
+@import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+infixl 65 + := add
+
+test : Equal (add (Succ Zero) (Succ Zero)) (Succ (Succ Zero))
+test = refl
+
+test2 : Equal (Succ Zero + Succ Zero) (Succ (Succ Zero))
+test2 = refl

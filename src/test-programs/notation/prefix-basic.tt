@@ -1,0 +1,16 @@
+@test success
+@name "prefix notation: custom negation"
+@import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+neg : Nat -> Nat
+neg Zero = Zero
+neg (Succ n) = n
+
+prefix 90 ~ := neg
+
+test : Equal (~ Succ Zero) Zero
+test = refl

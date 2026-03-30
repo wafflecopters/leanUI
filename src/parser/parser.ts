@@ -154,6 +154,17 @@ const ARROW_PRECEDENCE = 25; // Low precedence, right-associative
 // Application has a high precedence
 const APPLICATION_PRECEDENCE = 100;
 
+/**
+ * Characters that are always tokenized as OPERATOR, even if not yet registered
+ * in the operators map. This allows notation declarations (e.g., `prefix 90 ~ := neg`)
+ * to introduce new operator symbols that the lexer can tokenize.
+ */
+const OPERATOR_CHARS = new Set('~!@%&');
+
+function isOperatorChar(ch: string): boolean {
+  return OPERATOR_CHARS.has(ch);
+}
+
 // ============================================================================
 // Grammar: Prefix Parselets
 // ============================================================================
@@ -225,6 +236,24 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
     // Record source position for the absurd marker
     p['recordTokenSourcePosition'](t, path);
     return { tag: 'AbsurdMarker' } as TTerm;
+  },
+  'OPERATOR': (p, t, ctx, path) => {
+    // Handle prefix operators: ~ expr => App(Const("neg"), expr)
+    const opInfo = p['operators'][t.value];
+    if (!opInfo) {
+      throw new ParseError(
+        `Unknown operator '${t.value}' in prefix position`,
+        t.line,
+        t.col
+      );
+    }
+    p['advance']();
+    // Parse the operand at the prefix operator's precedence so that
+    // `~ Succ Zero` parses as `neg (Succ Zero)` rather than `neg Succ`.
+    const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
+    const operand = p['expr'](opInfo.precedence, ctx, argPath);
+    const opConst = mkConstTT(opInfo.constName || t.value);
+    return mkAppTT(opConst, operand);
   },
 };
 
@@ -598,8 +627,8 @@ export class Lexer {
       return { type: 'OPERATOR', value: twoChar, pos: startPos, line: startLine, col: startCol };
     }
 
-    // Check for single-character operators
-    if (this.operators[ch]) {
+    // Check for single-character operators (registered or operator-like characters)
+    if (this.operators[ch] || isOperatorChar(ch)) {
       this.pos++; this.col++;
       return { type: 'OPERATOR', value: ch, pos: startPos, line: startLine, col: startCol };
     }

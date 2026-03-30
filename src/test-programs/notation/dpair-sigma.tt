@@ -1,0 +1,18 @@
+@test success
+@name "binding notation: DPair sigma syntax with **"
+@import preambles/equal-simple.tt
+
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive DPair : (A : Type) -> (A -> Type) -> Type where
+  MkDPair : {A : Type} -> {P : A -> Type} -> (fst : A) -> P fst -> DPair A P
+
+infixr 40 ** := DPair binding
+
+myType : Type
+myType = (n : Nat ** Equal n Zero)
+
+myVal : (n : Nat ** Equal n Zero)
+myVal = MkDPair Zero refl
