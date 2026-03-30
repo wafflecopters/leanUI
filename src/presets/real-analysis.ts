@@ -50,6 +50,8 @@ record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) whe
   fst : A
   snd : B fst
 
+infixr 40 ** := DPair binding
+
 -- Sigma: DPair at universe level 0 (avoids parser issue with DPair {0} {0})
 Sigma : (A : Type) -> (B : A -> Type) -> Type
 Sigma A B = DPair A B
