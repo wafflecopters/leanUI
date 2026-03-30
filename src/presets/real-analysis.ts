@@ -52,14 +52,6 @@ record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) whe
 
 infixr 40 ** := DPair binding
 
--- Sigma: DPair at universe level 0 (avoids parser issue with DPair {0} {0})
-Sigma : (A : Type) -> (B : A -> Type) -> Type
-Sigma A B = DPair A B
-
--- mkSigma: construct Sigma with explicit P (avoids implicit P conflict in MkDPair)
-mkSigma : (A : Type) -> (P : A -> Type) -> (a : A) -> P a -> Sigma A P
-mkSigma A P a pa = MkDPair a pa
-
 ------------------------------------------------------------
 -- Order Hierarchy: Preorder -> PartialOrder -> TotalOrder
 ------------------------------------------------------------
