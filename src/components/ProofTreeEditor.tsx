@@ -2382,12 +2382,23 @@ function ProseItemView({
     case 'apply': {
       const subgoals = kind.subgoalLatex ?? [];
       const appliedArgs = kind.appliedArgsLatex ?? [];
+      // "constructor" tactic: "by definition" for single-ctor types, "by construction" otherwise
+      const isConstructor = kind.name === 'constructor';
+      const constructorPhrase = isConstructor
+        ? (subgoals.length <= 1 ? 'by definition' : 'by construction')
+        : null;
       if (subgoals.length <= 1) {
         return (
           <div style={rowStyle} {...rowHandlers}>
             {mustShowPrefix(kind.preGoalLatex)}
-            <span style={prose}>which is true, by{' '}</span>
-            <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+            {constructorPhrase ? (
+              <span style={prose}>which is true, {constructorPhrase}</span>
+            ) : (
+              <>
+                <span style={prose}>which is true, by{' '}</span>
+                <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+              </>
+            )}
             {appliedArgs.length > 0 && (
               <>
                 <span style={prose}>{' '}applied to{' '}</span>
@@ -2409,8 +2420,14 @@ function ProseItemView({
       return (
         <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.preGoalLatex)}
-          <span style={prose}>which is true, by{' '}</span>
-          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+          {constructorPhrase ? (
+            <span style={prose}>which is true, {constructorPhrase}</span>
+          ) : (
+            <>
+              <span style={prose}>which is true, by{' '}</span>
+              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+            </>
+          )}
           {appliedArgs.length > 0 && (
             <>
               <span style={prose}>{' '}applied to{' '}</span>
