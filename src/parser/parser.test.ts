@@ -1782,6 +1782,111 @@ describe('Parser: Notation Declarations', () => {
   });
 });
 
+// ============================================================================
+// Notation Operators in Subsequent Parsing
+// ============================================================================
+
+describe('Parser: Notation operators work in subsequent declarations', () => {
+  test('infixl notation overrides default operator in subsequent expression', () => {
+    const parser = new Parser();  // default operators (+ maps to 'add')
+    const decls = parser.parseDeclarations('infixl 65 + := radd\ntest : Type\ntest = a + b');
+    // The notation should override + to map to 'radd' instead of 'add'
+    const testDecl = decls.find(d => d.name === 'test');
+    expect(testDecl).toBeDefined();
+    const value = testDecl!.value!;
+    // a + b  =>  App(App(Const('radd'), Const('a')), Const('b'))
+    expect(value.tag).toBe('App');
+    if (value.tag === 'App') {
+      expect(value.fn.tag).toBe('App');
+      if (value.fn.tag === 'App') {
+        expect(value.fn.fn.tag).toBe('Const');
+        if (value.fn.fn.tag === 'Const') {
+          expect(value.fn.fn.name).toBe('radd');
+        }
+        expect(value.fn.arg.tag).toBe('Const');
+        if (value.fn.arg.tag === 'Const') {
+          expect(value.fn.arg.name).toBe('a');
+        }
+      }
+      expect(value.arg.tag).toBe('Const');
+      if (value.arg.tag === 'Const') {
+        expect(value.arg.name).toBe('b');
+      }
+    }
+  });
+
+  test('multiple notations with correct precedence', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(
+      'infixl 65 + := radd\ninfixl 70 * := rmul\ntest : Type\ntest = a + b * c'
+    );
+    const testDecl = decls.find(d => d.name === 'test');
+    expect(testDecl).toBeDefined();
+    const value = testDecl!.value!;
+    // a + b * c  =>  radd(a, rmul(b, c))
+    // * has higher precedence (70) than + (65), so b * c binds first
+    expect(value.tag).toBe('App');
+    if (value.tag === 'App') {
+      // Outer is radd
+      if (value.fn.tag === 'App' && value.fn.fn.tag === 'Const') {
+        expect(value.fn.fn.name).toBe('radd');
+      }
+      // Second arg is rmul(b, c)
+      expect(value.arg.tag).toBe('App');
+      if (value.arg.tag === 'App' && value.arg.fn.tag === 'App') {
+        if (value.arg.fn.fn.tag === 'Const') {
+          expect(value.arg.fn.fn.name).toBe('rmul');
+        }
+      }
+    }
+  });
+
+  test('infixr ** notation combines from separate * tokens', () => {
+    // ** is not in DEFAULT_OPERATORS, but * is. The lexer will tokenize ** as two * tokens.
+    // The tryResolveOperator should combine them after the notation registers **.
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(
+      'infixr 40 ** := DPair\ntest : Type\ntest = a ** b'
+    );
+    const testDecl = decls.find(d => d.name === 'test');
+    expect(testDecl).toBeDefined();
+    const value = testDecl!.value!;
+    // a ** b  =>  App(App(Const('DPair'), Const('a')), Const('b'))
+    expect(value.tag).toBe('App');
+    if (value.tag === 'App' && value.fn.tag === 'App' && value.fn.fn.tag === 'Const') {
+      expect(value.fn.fn.name).toBe('DPair');
+    }
+  });
+
+  test('infixr is right-associative', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(
+      'infixr 40 ** := DPair\ntest : Type\ntest = a ** b ** c'
+    );
+    const testDecl = decls.find(d => d.name === 'test');
+    expect(testDecl).toBeDefined();
+    const value = testDecl!.value!;
+    // a ** b ** c  =>  DPair(a, DPair(b, c))  (right-associative)
+    expect(value.tag).toBe('App');
+    if (value.tag === 'App') {
+      // First arg should be 'a'
+      if (value.fn.tag === 'App') {
+        if (value.fn.arg.tag === 'Const') {
+          expect(value.fn.arg.name).toBe('a');
+        }
+        if (value.fn.fn.tag === 'Const') {
+          expect(value.fn.fn.name).toBe('DPair');
+        }
+      }
+      // Second arg should be DPair(b, c)
+      expect(value.arg.tag).toBe('App');
+      if (value.arg.tag === 'App' && value.arg.fn.tag === 'App' && value.arg.fn.fn.tag === 'Const') {
+        expect(value.arg.fn.fn.name).toBe('DPair');
+      }
+    }
+  });
+});
+
 describe('Parser: registerOperator', () => {
   test('registerOperator adds operator that can be parsed', () => {
     const parser = new Parser();
