@@ -107,6 +107,8 @@ export interface OperatorInfo {
   associativity: Associativity;
   // If provided, this is the name of the constant to use
   constName?: string;
+  // If true, this is a binding operator (e.g., DPair's **)
+  binding?: boolean;
 }
 
 /**
@@ -745,9 +747,21 @@ export class Parser {
   private currentPath: IndexPath = [];
   private parenDepth = 0;
 
+  private operators: Record<string, OperatorInfo>;
+
   constructor(
-    private operators: Record<string, OperatorInfo> = DEFAULT_OPERATORS
-  ) { }
+    operators: Record<string, OperatorInfo> = DEFAULT_OPERATORS
+  ) {
+    this.operators = { ...operators };
+  }
+
+  /**
+   * Register a new operator at runtime. This allows notation declarations
+   * to add operators that affect subsequent parsing.
+   */
+  registerOperator(op: OperatorInfo): void {
+    this.operators[op.symbol] = op;
+  }
 
   /**
    * Prefix all paths in the source map that start with `basePath` by adding `suffix`.

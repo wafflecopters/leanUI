@@ -1722,6 +1722,52 @@ describe('Parser: Custom Operators', () => {
   });
 });
 
+describe('Parser: registerOperator', () => {
+  test('registerOperator adds operator that can be parsed', () => {
+    const parser = new Parser();
+    parser.registerOperator({
+      symbol: '⊕',
+      precedence: 60,
+      associativity: 'left',
+      constName: 'xor',
+    });
+    const term = parser.parseExpr('a ⊕ b');
+    assertTermShape(term, 'App');
+    if (term.tag === 'App' && term.fn.tag === 'App' && term.fn.fn.tag === 'Const') {
+      expect(term.fn.fn.name).toBe('xor');
+    }
+  });
+
+  test('registerOperator with binding flag', () => {
+    const parser = new Parser();
+    parser.registerOperator({
+      symbol: '⊗',
+      precedence: 50,
+      associativity: 'right',
+      constName: 'Tensor',
+      binding: true,
+    });
+    const term = parser.parseExpr('a ⊗ b');
+    assertTermShape(term, 'App');
+    if (term.tag === 'App' && term.fn.tag === 'App' && term.fn.fn.tag === 'Const') {
+      expect(term.fn.fn.name).toBe('Tensor');
+    }
+  });
+
+  test('registerOperator does not affect other Parser instances', () => {
+    const parser1 = new Parser();
+    const parser2 = new Parser();
+    parser1.registerOperator({
+      symbol: '⊕',
+      precedence: 60,
+      associativity: 'left',
+      constName: 'xor',
+    });
+    // parser2 should NOT have the operator
+    expect(() => parser2.parseExpr('a ⊕ b')).toThrow();
+  });
+});
+
 // ============================================================================
 // De Bruijn Index Tests
 // ============================================================================
