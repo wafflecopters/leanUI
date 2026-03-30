@@ -215,7 +215,7 @@ EpsDeltaWitness {R} f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier 
 -- for all x, |x - x0| < delta implies |f(x) - L| < epsilon.
 record Limit {R : Real} (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
   eps_delta : (eps : Carrier R) -> rlt (rzero R) eps ->
-              DPair (Carrier R) (EpsDeltaWitness f x0 L eps)
+              (delta : Carrier R ** EpsDeltaWitness f x0 L eps delta)
 
 ------------------------------------------------------------
 -- Algebraic lemmas
@@ -777,7 +777,7 @@ DerivBoundWitness : (R : Real) -> (g : Carrier R -> Carrier R) -> (y0 Lg eta : C
 DerivBoundWitness R g y0 Lg eta dg = Pair (rlt (rzero R) dg) ((y : Carrier R) -> rlt (rabs (rsub y y0)) dg -> rle (rabs (rsub (rsub (g y) (g y0)) (rmul Lg (rsub y y0)))) (rmul eta (rabs (rsub y y0))))
 
 -- Full derivBound: case split on y-y0 = 0 vs y-y0 /= 0
-derivBound : {R : Real} -> (g : Carrier R -> Carrier R) -> (y0 Lg : Carrier R) -> HasDerivative g y0 Lg -> (eta : Carrier R) -> rlt (rzero R) eta -> Sigma (Carrier R) (DerivBoundWitness R g y0 Lg eta) := by
+derivBound : {R : Real} -> (g : Carrier R -> Carrier R) -> (y0 Lg : Carrier R) -> HasDerivative g y0 Lg -> (eta : Carrier R) -> rlt (rzero R) eta -> (delta : Carrier R ** DerivBoundWitness R g y0 Lg eta delta) := by
   intros R g y0 Lg hg eta heta
   constructor
   · exact (DPair.fst (Limit.eps_delta hg eta heta))
@@ -804,7 +804,7 @@ absSubAdd {R} a b = replace (\\z => rle (rabs z) (radd (rabs (rsub a b)) (rabs b
 DiffQuotBoundWitness : (R : Real) -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> Carrier R -> Type
 DiffQuotBoundWitness R f x0 Lf df = Pair (rlt (rzero R) df) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) df -> rlt (rabs (diffQuot f x0 x)) (radd (rabs Lf) (rone R)))
 
-diffQuotBounded : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative f x0 Lf -> Sigma (Carrier R) (DiffQuotBoundWitness R f x0 Lf) := by
+diffQuotBounded : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative f x0 Lf -> (delta : Carrier R ** DiffQuotBoundWitness R f x0 Lf delta) := by
   intros R f x0 Lf hf
   constructor
   · exact (DPair.fst (Limit.eps_delta hf (rone R) (zeroLtOne R)))
@@ -848,7 +848,7 @@ continuityBound : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 x Lf target 
 continuityBound {R} f x0 x lf target hdq hdelta hne = replace (\\z => rlt z target) (absDiffQuotTimesH f x0 x hne) (replace (\\z => rlt (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) z) (mulInvCancel (radd (rabs lf) (rone R)) target (absPlusOneNe lf)) (absMulBound (diffQuot f x0 x) (rsub x x0) (radd (rabs lf) (rone R)) (rmul target (rinv (radd (rabs lf) (rone R)))) hdq hdelta (absPlusOnePos lf)))
 
 -- Differentiability implies continuity
-continuousFromDeriv : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative f x0 Lf -> (target : Carrier R) -> rlt (rzero R) target -> Sigma (Carrier R) (ContinuousWitness f x0 target) := by
+continuousFromDeriv : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 Lf : Carrier R) -> HasDerivative f x0 Lf -> (target : Carrier R) -> rlt (rzero R) target -> (dc : Carrier R ** ContinuousWitness f x0 target dc) := by
   intros R f x0 Lf hf target htarget
   have dqb := diffQuotBounded f x0 Lf hf
   cases (CompleteOrderedField.leTotal (field R) (DPair.fst dqb) (rmul target (rinv (radd (rabs Lf) (rone R))))) with
