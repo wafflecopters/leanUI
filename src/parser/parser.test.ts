@@ -1934,6 +1934,152 @@ describe('Parser: registerOperator', () => {
 });
 
 // ============================================================================
+// Binding Notation (DPair **)
+// ============================================================================
+
+describe('Parser: binding notation (DPair **)', () => {
+  test('** with binding wraps RHS in lambda', () => {
+    const parser = new Parser();
+    parser.registerOperator({
+      symbol: '**',
+      precedence: 40,
+      associativity: 'right',
+      constName: 'DPair',
+      binding: true,
+    });
+    // (x : Nat ** Equal x Zero) should parse as DPair Nat (\x => Equal x Zero)
+    const result = parser.parseExpr('(x : Nat ** Equal x Zero)');
+    // Result: App(App(Const('DPair'), Nat), Binder(BLamTT, 'x', Nat, Equal(Var(0), Zero)))
+    expect(result.tag).toBe('App');
+    const app = result as any;
+    expect(app.fn.tag).toBe('App');
+    expect(app.fn.fn.tag).toBe('Const');
+    expect(app.fn.fn.name).toBe('DPair');
+    // First arg is Nat (the domain type)
+    expect(app.fn.arg.tag).toBe('Const');
+    expect(app.fn.arg.name).toBe('Nat');
+    // Second arg is a lambda
+    expect(app.arg.tag).toBe('Binder');
+    expect(app.arg.binderKind.tag).toBe('BLamTT');
+    expect(app.arg.name).toBe('x');
+    // Lambda domain is Nat
+    expect(app.arg.domain.tag).toBe('Const');
+    expect(app.arg.domain.name).toBe('Nat');
+    // Lambda body: Equal x Zero — x should be Var(0)
+    expect(app.arg.body.tag).toBe('App');
+    // Equal(Var(0), Zero) = App(App(Const('Equal'), Var(0)), Const('Zero'))
+    const eqApp = app.arg.body;
+    expect(eqApp.fn.tag).toBe('App');
+    expect(eqApp.fn.fn.tag).toBe('Const');
+    expect(eqApp.fn.fn.name).toBe('Equal');
+    // First arg to Equal should be Var(0) (bound x)
+    expect(eqApp.fn.arg.tag).toBe('Var');
+    expect(eqApp.fn.arg.index).toBe(0);
+    // Second arg should be Const('Zero')
+    expect(eqApp.arg.tag).toBe('Const');
+    expect(eqApp.arg.name).toBe('Zero');
+  });
+
+  test('binding operator without annotation falls back to non-binding', () => {
+    // When used without (name : type ...) context, ** should work as a normal operator
+    const parser = new Parser();
+    parser.registerOperator({
+      symbol: '**',
+      precedence: 40,
+      associativity: 'right',
+      constName: 'DPair',
+      binding: true,
+    });
+    const result = parser.parseExpr('Nat ** Bool');
+    // Without annotation context, should be DPair(Nat, Bool)
+    expect(result.tag).toBe('App');
+    const app = result as any;
+    expect(app.fn.fn.name).toBe('DPair');
+    expect(app.fn.arg.name).toBe('Nat');
+    // RHS should be Const('Bool'), NOT a lambda
+    expect(app.arg.tag).toBe('Const');
+    expect(app.arg.name).toBe('Bool');
+  });
+
+  test('binding notation via declaration', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(
+      'infixr 40 ** := DPair binding\n\ntest : Type\ntest = (n : Nat ** Equal n Zero)'
+    );
+    const notationDecl = decls.find(d => d.kind === 'notation');
+    expect(notationDecl).toBeDefined();
+    expect(notationDecl!.notationBinding).toBe(true);
+
+    const def = decls.find(d => d.kind !== 'notation');
+    expect(def).toBeDefined();
+    const val = def!.value!;
+    expect(val.tag).toBe('App');
+    expect((val as any).fn.fn.name).toBe('DPair');
+    // Second arg should be a lambda (binding)
+    expect((val as any).arg.tag).toBe('Binder');
+    expect((val as any).arg.binderKind.tag).toBe('BLamTT');
+    expect((val as any).arg.name).toBe('n');
+  });
+
+  test('binding notation with nested dependent pair', () => {
+    const parser = new Parser();
+    parser.registerOperator({
+      symbol: '**',
+      precedence: 40,
+      associativity: 'right',
+      constName: 'DPair',
+      binding: true,
+    });
+    // (x : Nat ** (y : Bool ** P x y)) should nest correctly
+    const result = parser.parseExpr('(x : Nat ** (y : Bool ** P x y))');
+    expect(result.tag).toBe('App');
+    const outer = result as any;
+    expect(outer.fn.fn.name).toBe('DPair');
+    expect(outer.fn.arg.name).toBe('Nat');
+    // Second arg is \x => (inner DPair)
+    expect(outer.arg.tag).toBe('Binder');
+    expect(outer.arg.name).toBe('x');
+    // Lambda body should be DPair(Bool, \y => P x y)
+    const inner = outer.arg.body;
+    expect(inner.tag).toBe('App');
+    expect(inner.fn.fn.name).toBe('DPair');
+    expect(inner.fn.arg.name).toBe('Bool');
+    // Inner lambda: \y => P x y
+    expect(inner.arg.tag).toBe('Binder');
+    expect(inner.arg.name).toBe('y');
+    // In the inner lambda body, y is Var(0) and x is Var(1)
+    const body = inner.arg.body;
+    // P x y = App(App(Const('P'), Var(1)), Var(0))
+    expect(body.tag).toBe('App');
+    expect(body.arg.tag).toBe('Var');
+    expect(body.arg.index).toBe(0); // y
+    expect(body.fn.tag).toBe('App');
+    expect(body.fn.arg.tag).toBe('Var');
+    expect(body.fn.arg.index).toBe(1); // x
+    expect(body.fn.fn.tag).toBe('Const');
+    expect(body.fn.fn.name).toBe('P');
+  });
+
+  test('non-binding ** without annotation is regular infix', () => {
+    // Without the binding flag, ** should be plain infix
+    const parser = new Parser();
+    parser.registerOperator({
+      symbol: '**',
+      precedence: 40,
+      associativity: 'right',
+      constName: 'DPair',
+      // no binding flag
+    });
+    const result = parser.parseExpr('(x : Nat ** Bool)');
+    // This should be Annot(Const('x'), DPair(Nat, Bool)) — not a binding
+    expect(result.tag).toBe('Annot');
+    const annot = result as any;
+    expect(annot.type.tag).toBe('App');
+    expect(annot.type.fn.fn.name).toBe('DPair');
+  });
+});
+
+// ============================================================================
 // De Bruijn Index Tests
 // ============================================================================
 

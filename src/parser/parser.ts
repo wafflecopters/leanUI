@@ -753,6 +753,14 @@ export class Parser {
   private currentPath: IndexPath = [];
   private parenDepth = 0;
 
+  // For binding operators (e.g., DPair's **): when parseParenExpr detects
+  // (name : type ** body), it sets this before calling expr() so the infix
+  // handler can wrap the RHS in a lambda. Cleared after use.
+  private pendingBinderName: string | null = null;
+  // Set to true when a binding operator consumed pendingBinderName, so the
+  // caller knows the result is a complete expression (not just the domain type).
+  private bindingOperatorFired = false;
+
   private operators: Record<string, OperatorInfo>;
 
   constructor(
@@ -1779,6 +1787,13 @@ export class Parser {
     const targetToken = this.expect('IDENT');
     const target = targetToken.value;
 
+    // Check for optional 'binding' keyword after target
+    let isBinding = false;
+    if (this.current().type === 'IDENT' && this.current().value === 'binding') {
+      this.advance();
+      isBinding = true;
+    }
+
     // Determine associativity
     let associativity: Associativity;
     switch (notationKind) {
@@ -1794,6 +1809,7 @@ export class Parser {
       precedence,
       associativity,
       constName: target,
+      binding: isBinding || undefined,
     });
 
     return {
@@ -1802,6 +1818,7 @@ export class Parser {
       precedence,
       symbol,
       target,
+      notationBinding: isBinding || undefined,
     };
   }
 
@@ -2212,6 +2229,20 @@ export class Parser {
           rightPrec = opInfo.precedence + 1;
         }
 
+        // Binding operator support (same as in expr())
+        if (opInfo.binding && this.pendingBinderName !== null) {
+          const binderName = this.pendingBinderName;
+          this.pendingBinderName = null;
+          this.bindingOperatorFired = true;
+
+          const bodyCtx: NameContext = [binderName, ...ctx];
+          const right = this.exprUntil(rightPrec, bodyCtx, stopTokens);
+          const lambda = mkLambdaTT(left, right, binderName);
+          const opConst = mkConstTT(opInfo.constName || combinedSymbol);
+          left = mkAppTT(mkAppTT(opConst, left), lambda);
+          continue;
+        }
+
         const right = this.exprUntil(rightPrec, ctx, stopTokens);
 
         const opConst = mkConstTT(opInfo.constName || combinedSymbol);
@@ -2382,6 +2413,27 @@ export class Parser {
           rightPrec = opInfo.precedence + 1;
         }
         // right-associative uses same precedence
+
+        // Binding operator: (x : A ** B x) => DPair A (\x => B x)
+        // pendingBinderName is set by parseParenExpr when it detects (name : type ...).
+        if (opInfo.binding && this.pendingBinderName !== null) {
+          const binderName = this.pendingBinderName;
+          this.pendingBinderName = null;
+          this.bindingOperatorFired = true;
+
+          // Parse RHS with binder name in context so references resolve to Var
+          const bodyCtx: NameContext = [binderName, ...ctx];
+          const right = this.expr(rightPrec, bodyCtx, path, allowMultilineApp, effectiveBaseColumn);
+
+          // Wrap RHS in a lambda: \binderName => right
+          const lambda = mkLambdaTT(left, right, binderName);
+
+          // Build: OpConst(domainType, \binderName => body)
+          // left is the domain type (e.g., Nat), lambda is \x => body
+          const opConst = mkConstTT(opInfo.constName || combinedSymbol);
+          left = mkAppTT(mkAppTT(opConst, left), lambda);
+          continue;
+        }
 
         const right = this.expr(rightPrec, ctx, path);
 
@@ -2663,20 +2715,46 @@ export class Parser {
             this.pos = startPos;
           }
         } else {
-          // Single name - could be annotation or Pi binder
+          // Single name - could be annotation, Pi binder, or binding operator
+          const binderNameStr = nameTokens[0].type === 'UNDERSCORE' ? '_' : nameTokens[0].value;
           this.advance(); // consume ':'
+
+          // Save and set binding operator state. We save because nested
+          // parseParenExpr calls (e.g., `(x : Nat ** (y : Bool ** P x y))`)
+          // would otherwise clobber our flag.
+          const savedPendingBinder = this.pendingBinderName;
+          const savedBindingFired = this.bindingOperatorFired;
+          this.pendingBinderName = binderNameStr;
+          this.bindingOperatorFired = false;
+
           const domainPath = [...path, { kind: 'field' as const, name: 'domain' }];
           const type = this.expr(0, ctx, domainPath);
+
+          // Capture whether OUR binding operator fired (not a nested one)
+          const ourBindingFired = this.bindingOperatorFired;
+
+          // Restore outer state
+          this.pendingBinderName = savedPendingBinder;
+          this.bindingOperatorFired = savedBindingFired;
+
+          // If a binding operator fired, `type` is already the full expression
+          // (e.g., DPair Nat (\x => Equal x Zero)). Return it directly.
+          if (ourBindingFired) {
+            this.skipNewlines();
+            this.expect('RPAREN');
+            this.parenDepth--;
+            return type;
+          }
+
           this.skipNewlines();
           this.expect('RPAREN');
 
           // Check if followed by arrow - then it's a Pi type
           if (this.current().type === 'ARROW') {
             this.advance();
-            const name = nameTokens[0].type === 'UNDERSCORE' ? '_' : nameTokens[0].value;
 
             // Extend context with the name
-            const newCtx = [name, ...ctx];
+            const newCtx = [binderNameStr, ...ctx];
 
             // Parse the body at path.body
             const bodyPath = [...path, { kind: 'field' as const, name: 'body' }];
@@ -2686,13 +2764,12 @@ export class Parser {
             const namePath = [...path, { kind: 'field' as const, name: 'name' }];
             this.recordRange(namePath, nameTokens[0], nameTokens[0]);
             this.parenDepth--;
-            return mkPiTT(type, body, name);
+            return mkPiTT(type, body, binderNameStr);
           }
 
           // Otherwise it's a type annotation
-          const name = nameTokens[0].type === 'UNDERSCORE' ? '_' : nameTokens[0].value;
-          const idx = ctx.indexOf(name);
-          const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(name);
+          const idx = ctx.indexOf(binderNameStr);
+          const term = idx >= 0 ? mkVarTT(idx) : mkConstTT(binderNameStr);
           this.parenDepth--;
           return { tag: 'Annot', term, type };
         }
