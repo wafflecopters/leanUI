@@ -171,11 +171,13 @@ function buildIntroGroups(
   }));
 }
 
-/** Render a variable name for LaTeX (italicize single chars, textify multi-char). */
+/** Render a variable name for LaTeX (italicize single chars, subscript digits, textify multi-char). */
 function texName(name: string): string {
   if (name.length === 1) return name;
-  // Check if it's a common pattern like n' (primed variable)
   if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
+  // Single letter + digits: subscript (x0 → x_{0}, n12 → n_{12})
+  if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
+  // Multi-letter: upright text
   return `\\mathit{${name}}`;
 }
 

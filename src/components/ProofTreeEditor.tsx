@@ -2714,10 +2714,13 @@ function extractLemmaAndArgs(expr: string): { lemma: string; simpleArgs: string[
 
 /** Render a variable name for prose inline KaTeX.
  *  Single chars stay as math italic (e.g., n, f).
+ *  Single letter + digits: subscript (x0 → x_{0}).
  *  Multi-char names use \textsf for clean sans-serif rendering (e.g., sum, minusSucc). */
 function texNameForProse(name: string): string {
   if (name.length === 1) return name;
   if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
+  // Single letter + digits: subscript (x0 → x_{0}, n12 → n_{12})
+  if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
   return `\\textsf{${name}}`;
 }
 
