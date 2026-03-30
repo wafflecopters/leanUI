@@ -1944,6 +1944,10 @@ export function elabTT(parseResult: ParseResult, _initialContext: TTKContext = [
 
     for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
       const origDecl = block.declarations[declIndex];
+
+      // Notation declarations are parser directives — skip elaboration
+      if (origDecl.kind === 'notation') continue;
+
       // Adjust sourceMap to file-absolute positions
       const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine, block.posOffset);
       // Use resolved declaration if available, otherwise fall back to original
@@ -4929,6 +4933,10 @@ function compileOneBlock(
 
   for (let declIndex = 0; declIndex < block.declarations.length; declIndex++) {
     const origDecl = block.declarations[declIndex];
+
+    // Notation declarations are parser directives — skip elaboration and type checking
+    if (origDecl.kind === 'notation') continue;
+
     const sourceMap = adjustSourceMapToAbsolute(block.sourceMaps[declIndex], block.startLine, block.posOffset);
 
     // Name resolution for this declaration (using current symbol context)
