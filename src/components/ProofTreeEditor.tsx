@@ -2510,6 +2510,7 @@ function ProseItemView({
       return (
         <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.preGoalLatex)}
+          <span style={prose}>By rewriting:</span>
           <div style={{ paddingLeft: '12px', paddingTop: '4px', paddingBottom: '4px' }}>
             {steps.map((step, si) => {
               const isStepCursor = step.nodeId === item.nodeId;
