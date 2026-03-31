@@ -239,6 +239,9 @@ export interface CompiledBlock {
   blockIndex: number;
   sourceLines: string[];
   startLine: number;
+  /** Line number of the first actual code line (skipping comments and @syntax directives).
+   *  Use this for error fallback positions instead of startLine. */
+  codeStartLine: number;
 
   // Parsing
   parseSuccess: boolean;
@@ -304,6 +307,27 @@ function adjustSourceMapToAbsolute(sourceMap: SourceMap, blockStartLine: number,
   }
 
   return adjusted;
+}
+
+/**
+ * Compute the first code line (1-based) in a block, skipping leading comment
+ * and directive lines (e.g., `-- ...`, `@syntax ...`).
+ *
+ * This is used for error fallback positions: when a source-map lookup fails,
+ * we want to highlight the declaration line rather than a preceding comment or
+ * directive line that was attached to the block.
+ */
+function computeCodeStartLine(sourceLines: string[], startLine: number): number {
+  for (let i = 0; i < sourceLines.length; i++) {
+    const trimmed = sourceLines[i].trim();
+    if (trimmed.length === 0) continue;
+    if (trimmed.startsWith('--')) continue;
+    if (trimmed.startsWith('/-')) continue;
+    if (trimmed.startsWith('{-')) continue;
+    if (trimmed.startsWith('@')) continue;
+    return startLine + i;
+  }
+  return startLine;
 }
 
 /**
@@ -3121,6 +3145,7 @@ function checkBlock(
         blockIndex,
         sourceLines: block.sourceLines,
         startLine: block.startLine,
+        codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
         parseSuccess: true,
         parseErrors: [],
         nameResolutionSuccess: true,
@@ -3140,6 +3165,7 @@ function checkBlock(
         blockIndex,
         sourceLines: block.sourceLines,
         startLine: block.startLine,
+        codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
         parseSuccess: false,
         parseErrors: block.errors,
         nameResolutionSuccess: true,
@@ -3169,6 +3195,7 @@ function checkBlock(
       blockIndex,
       sourceLines: block.sourceLines,
       startLine: block.startLine,
+      codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
       parseSuccess: true,
       parseErrors: [],
       nameResolutionSuccess: true,
@@ -3232,6 +3259,7 @@ function checkBlocks(
             blockIndex,
             sourceLines: block.sourceLines,
             startLine: block.startLine,
+            codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
             parseSuccess: true,
             parseErrors: [],
             nameResolutionSuccess: true,
@@ -4921,6 +4949,7 @@ function compileOneBlock(
     return {
       compiled: {
         blockIndex, sourceLines: block.sourceLines, startLine: block.startLine,
+        codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
         parseSuccess: true, parseErrors: [],
         nameResolutionSuccess: true, nameResolutionErrors: [],
         declarations: [], isComment: true
@@ -4936,6 +4965,7 @@ function compileOneBlock(
     return {
       compiled: {
         blockIndex, sourceLines: block.sourceLines, startLine: block.startLine,
+        codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
         parseSuccess: false, parseErrors: block.errors,
         nameResolutionSuccess: true, nameResolutionErrors: [],
         declarations: [], isComment: false
@@ -5157,6 +5187,7 @@ function compileOneBlock(
   return {
     compiled: {
       blockIndex, sourceLines: block.sourceLines, startLine: block.startLine,
+      codeStartLine: computeCodeStartLine(block.sourceLines, block.startLine),
       parseSuccess: true, parseErrors: [],
       nameResolutionSuccess: blockNameErrors.length === 0,
       nameResolutionErrors: blockNameErrors,

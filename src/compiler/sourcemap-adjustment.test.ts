@@ -5,7 +5,8 @@
 
 import { describe, test, expect } from 'vitest';
 import { compileSource, TestBlockResult } from '../test-utils';
-import { SourceRange, SourceMap } from '../types/source-position';
+import { compileTTFromText } from './compile';
+import { SourceRange, SourceMap, serializeIndexPath } from '../types/source-position';
 
 /**
  * Validate that a source range is valid for the given source text
@@ -182,6 +183,219 @@ compose {A} {B} {C} g f x = g (f x)`;
       expect(results.length).toBe(1);
       expect(results[0].checkSuccess).toBe(true);
     });
+  });
+});
+
+describe('@syntax annotation source map offset', () => {
+  test('error range points to declaration line, not @syntax or comment line', () => {
+    // Bug: when @syntax annotation precedes a declaration, error squiggly
+    // appears on the comment/syntax line instead of the declaration line.
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- a comment about limitAdd
+@syntax \\lim(f + g) = L + M
+limitAdd : Nat -> Nat
+limitAdd = Zero`;
+
+    const results = compileSource(source);
+
+    // Find the limitAdd declaration
+    const limitAddResult = results.find(r => r.name === 'limitAdd');
+    expect(limitAddResult).toBeDefined();
+
+    const limitAddDecl = limitAddResult!.declarations.find(d => d.name === 'limitAdd');
+    expect(limitAddDecl).toBeDefined();
+
+    if (limitAddDecl?.sourceMap) {
+      // The 'name' path in the sourceMap should point to line 7 (limitAdd : ...)
+      // NOT line 5 (-- a comment) or line 6 (@syntax)
+      const nameRange = limitAddDecl.sourceMap.get('name');
+      expect(nameRange).toBeDefined();
+
+      const lines = source.split('\n');
+      // Line 7 is "limitAdd : Nat -> Nat"
+      expect(lines[6]).toContain('limitAdd');
+      expect(nameRange!.start.line).toBe(7);
+
+      // Validate all ranges are within bounds
+      validateSourceMap(source, limitAddDecl.sourceMap);
+    }
+  });
+
+  test('codeStartLine with @syntax should point to declaration, not comment', () => {
+    // The compiled block codeStartLine should be useful as a fallback error position.
+    // When @syntax/comments are attached, startLine includes them,
+    // but codeStartLine should point to the DECLARATION line, not the comment.
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- a comment about limitAdd
+@syntax \\lim(f + g) = L + M
+limitAdd : Nat -> Nat
+limitAdd = Zero`;
+
+    const fullResult = compileTTFromText(source);
+
+    // Find the block containing limitAdd
+    const limitAddBlock = fullResult.blocks.find(b =>
+      b.declarations.some(d => d.name === 'limitAdd')
+    );
+    expect(limitAddBlock).toBeDefined();
+
+    const lines = source.split('\n');
+    const commentLine = 5; // "-- a comment about limitAdd"
+    const syntaxLine = 6;  // "@syntax ..."
+    const declLine = 7;    // "limitAdd : Nat -> Nat"
+
+    expect(lines[commentLine - 1]).toContain('-- a comment');
+    expect(lines[syntaxLine - 1]).toContain('@syntax');
+    expect(lines[declLine - 1]).toContain('limitAdd');
+
+    // block.startLine includes the comment (for block bounds / cursor detection)
+    expect(limitAddBlock!.startLine).toBe(commentLine);
+
+    // block.codeStartLine skips comments and @syntax lines (for error fallback)
+    expect(limitAddBlock!.codeStartLine).toBe(declLine);
+  });
+
+  test('type-check error fallback with @syntax uses codeStartLine', () => {
+    // Test that when a type-check error occurs and the source map lookup fails,
+    // the fallback (codeStartLine) points to the declaration, not the comment/@syntax.
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+-- wrong type for myFunc
+@syntax \\text{bad}
+myFunc : Nat -> Bool
+myFunc = True`;
+
+    const fullResult = compileTTFromText(source);
+
+    // Find the block containing myFunc
+    const myFuncBlock = fullResult.blocks.find(b =>
+      b.declarations.some(d => d.name === 'myFunc')
+    );
+    expect(myFuncBlock).toBeDefined();
+
+    const myFuncDecl = myFuncBlock!.declarations.find(d => d.name === 'myFunc');
+    expect(myFuncDecl).toBeDefined();
+    expect(myFuncDecl!.checkSuccess).toBe(false);
+
+    // block.startLine includes the comment (line 9)
+    // block.codeStartLine skips to the declaration (line 11)
+    const lines = source.split('\n');
+    const commentLineIdx = lines.findIndex(l => l.includes('-- wrong type'));
+    const declLineIdx = lines.findIndex(l => l.startsWith('myFunc'));
+    const commentLine = commentLineIdx + 1; // 1-based
+    const declLine = declLineIdx + 1; // 1-based
+
+    expect(myFuncBlock!.startLine).toBe(commentLine);
+    expect(myFuncBlock!.codeStartLine).toBe(declLine);
+    expect(myFuncBlock!.codeStartLine).toBeGreaterThan(myFuncBlock!.startLine);
+  });
+
+  test('tactic error with @syntax points to correct line', () => {
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+-- theorem about equality
+@syntax \\text{bad proof}
+badProof : Equal (Succ Zero) (Succ Zero) := by
+  exact Zero`;
+
+    const result = compileSource(source);
+
+    // Find badProof
+    const badProofResult = result.find(r => r.name === 'badProof');
+    expect(badProofResult).toBeDefined();
+    expect(badProofResult!.checkSuccess).toBe(false);
+
+    const badProofDecl = badProofResult!.declarations.find(d => d.name === 'badProof');
+    expect(badProofDecl).toBeDefined();
+
+    if (badProofDecl?.sourceMap) {
+      // The 'name' path should be on line 10 (badProof : Equal ...)
+      const nameRange = badProofDecl.sourceMap.get('name');
+      expect(nameRange).toBeDefined();
+
+      const lines = source.split('\n');
+      // Line 10 is "badProof : Equal (Succ Zero) (Succ Zero) := by"
+      expect(lines[9]).toContain('badProof');
+      expect(nameRange!.start.line).toBe(10);
+
+      validateSourceMap(source, badProofDecl.sourceMap);
+    }
+  });
+
+  test('declaration without @syntax has correct source map', () => {
+    // Baseline: without @syntax, the source map should already be correct
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- a comment about limitAdd
+limitAdd : Nat -> Nat
+limitAdd = Zero`;
+
+    const results = compileSource(source);
+    const limitAddResult = results.find(r => r.name === 'limitAdd');
+    expect(limitAddResult).toBeDefined();
+
+    const limitAddDecl = limitAddResult!.declarations.find(d => d.name === 'limitAdd');
+    expect(limitAddDecl).toBeDefined();
+
+    if (limitAddDecl?.sourceMap) {
+      const nameRange = limitAddDecl.sourceMap.get('name');
+      expect(nameRange).toBeDefined();
+
+      const lines = source.split('\n');
+      // Line 6 is "limitAdd : Nat -> Nat"
+      expect(lines[5]).toContain('limitAdd');
+      expect(nameRange!.start.line).toBe(6);
+
+      validateSourceMap(source, limitAddDecl.sourceMap);
+    }
+  });
+
+  test('@syntax only (no comment) has correct source map', () => {
+    const source = `inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+@syntax f + g
+myAdd : Nat -> Nat -> Nat
+myAdd x y = x`;
+
+    const results = compileSource(source);
+    const myAddResult = results.find(r => r.name === 'myAdd');
+    expect(myAddResult).toBeDefined();
+
+    const myAddDecl = myAddResult!.declarations.find(d => d.name === 'myAdd');
+    expect(myAddDecl).toBeDefined();
+
+    if (myAddDecl?.sourceMap) {
+      const nameRange = myAddDecl.sourceMap.get('name');
+      expect(nameRange).toBeDefined();
+
+      const lines = source.split('\n');
+      // Line 6 is "myAdd : Nat -> Nat -> Nat"
+      expect(lines[5]).toContain('myAdd');
+      expect(nameRange!.start.line).toBe(6);
+
+      validateSourceMap(source, myAddDecl.sourceMap);
+    }
   });
 });
 

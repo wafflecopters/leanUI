@@ -1270,8 +1270,8 @@ export function TextEditorPage() {
             source: 'TT Name Resolution',
           });
         } else {
-          // Fallback: mark the first line of the block
-          const firstLine = block.startLine;
+          // Fallback: mark the first code line of the block (skip comments/@syntax)
+          const firstLine = block.codeStartLine;
           markers.push({
             severity: monaco.MarkerSeverity.Error,
             message: err.message,
@@ -1313,8 +1313,8 @@ export function TextEditorPage() {
                 source: 'TT Type Checker',
               });
             } else {
-              // Fallback: mark the first line of the block
-              const firstLine = block.startLine;
+              // Fallback: mark the first code line of the block (skip comments/@syntax)
+              const firstLine = block.codeStartLine;
               markers.push({
                 severity: err.severity === 'warning'
                   ? monaco.MarkerSeverity.Warning
@@ -1351,8 +1351,8 @@ export function TextEditorPage() {
                 source: 'TT Type Checker',
               });
             } else {
-              // Fallback: mark the first line of the block
-              const firstLine = block.startLine;
+              // Fallback: mark the first code line of the block (skip comments/@syntax)
+              const firstLine = block.codeStartLine;
               markers.push({
                 severity: monaco.MarkerSeverity.Error,
                 message: err.message,
