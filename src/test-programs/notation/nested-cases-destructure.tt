@@ -1,0 +1,19 @@
+@test success
+@name "cases destructuring: pattern params visible in branch body"
+@import preambles/nat.tt
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+-- Cases destructuring: pattern-bound names are usable in branch body
+myFunc : DPair Nat (\n => Nat) -> Nat := by
+  intro p
+  cases p with
+  | MkDPair n m =>
+    exact (add n m)

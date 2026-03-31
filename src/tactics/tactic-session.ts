@@ -246,6 +246,7 @@ export class TacticSession {
     branches: readonly CaseBranch[],
     parentPath: readonly string[],
     _parentCtx: TTKContext,
+    outerParamNameMap?: Map<string, string>,
   ): TacticSession {
     let session: TacticSession = this;
 
@@ -266,7 +267,8 @@ export class TacticSession {
       if (!branchGoal) continue;
 
       // Build param name mapping (user pattern names → actual context names)
-      const paramNameMap = new Map<string, string>();
+      // Include outer branch mappings so nested cases can reference outer params
+      const paramNameMap = new Map<string, string>(outerParamNameMap);
       const branchCtxNames = branchGoal.ctx.map(b => b.name);
       for (let i = 0; i < branch.params.length; i++) {
         const patternParamName = branch.params[i];
@@ -317,7 +319,7 @@ export class TacticSession {
 
         // Handle nested case branches
         if (branchResult.success && branchTactic.caseBranches && branchTactic.caseBranches.length > 0) {
-          branchSession = branchSession.applyCaseBranches(branchTactic.caseBranches, branchPath, branchGoalNow.ctx);
+          branchSession = branchSession.applyCaseBranches(branchTactic.caseBranches, branchPath, branchGoalNow.ctx, paramNameMap);
         }
       }
 
