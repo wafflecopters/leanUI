@@ -444,15 +444,13 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   intros R f g x0 L M limF limG
   constructor
   intros eps heps
-  cases (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)) with
-  | MkDPair deltaF witnessF =>
-    cases (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)) with
-    | MkDPair deltaG witnessG =>
-      cases (CompleteOrderedField.leTotal (field R) deltaF deltaG) with
-      | Left hle =>
-        exact (MkDPair deltaF (MkPair (Pair.fst witnessF) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd witnessF x hx0 hxd) (Pair.snd witnessG x hx0 (ltLeTrans (rabs (rsub x x0)) deltaF deltaG hxd hle))))))
-      | Right hle =>
-        exact (MkDPair deltaG (MkPair (Pair.fst witnessG) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd witnessF x hx0 (ltLeTrans (rabs (rsub x x0)) deltaG deltaF hxd hle)) (Pair.snd witnessG x hx0 hxd)))))
+  have dF := Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)
+  have dG := Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)
+  cases (CompleteOrderedField.leTotal (field R) (DPair.fst dF) (DPair.fst dG)) with
+  | Left hle =>
+    exact (MkDPair (DPair.fst dF) (MkPair (Pair.fst (DPair.snd dF)) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 hxd) (Pair.snd (DPair.snd dG) x hx0 (ltLeTrans (rabs (rsub x x0)) (DPair.fst dF) (DPair.fst dG) hxd hle))))))
+  | Right hle =>
+    exact (MkDPair (DPair.fst dG) (MkPair (Pair.fst (DPair.snd dG)) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd (DPair.snd dF) x hx0 (ltLeTrans (rabs (rsub x x0)) (DPair.fst dG) (DPair.fst dF) hxd hle)) (Pair.snd (DPair.snd dG) x hx0 hxd)))))
 
 -- lim (f+g+h) = (L+M)+N: three-function limit addition via two applications of limitAdd
 limitAdd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 L M N : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit h x0 N -> Limit (\\x => radd (radd (f x) (g x)) (h x)) x0 (radd (radd L M) N)
