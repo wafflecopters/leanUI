@@ -4188,7 +4188,8 @@ function processRecordDeclaration(
     constructors: [{
       name: constructorName,
       type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName)
-    }]
+    }],
+    syntax: decl.syntax,  // Preserve @syntax from the record declaration
   };
 
   // Generate projections for record fields using ZONKED field types

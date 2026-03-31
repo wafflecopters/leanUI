@@ -45,7 +45,7 @@ record Pair (A B : Type) where
   fst : A
   snd : B
 
-@syntax \\exists $x \\in $$A ,\\, $P @becomes DPair {u} {v} $$A (\$x => $P)
+@syntax \\exists $x \\in $$A ,\\, $P @becomes DPair {u} {v} $$A (\\$x => $P)
 record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
   constructor MkDPair
   fst : A
