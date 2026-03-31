@@ -21,12 +21,12 @@ Building out the proof tree editor UI and tactic engine to support the triangle 
 - The WYSIWYG LaTeX editor that builds terms/tactics
 
 ## Recent Progress
+- Eta conversion in definitional equality (f = \x => f x) with meta solver integration
 - Proof tree editor with immutable state, undo/redo, hover-reveal delete buttons
 - Real TacticEngine integration for goal computation
 - Draggable split pane UI, dual math editor (type + proof)
 - Registry-aware command system for structured editing
 - `lim` projection operator for real analysis
-- Under-application soundness bug detection
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
