@@ -480,10 +480,11 @@ function buildCaptureMap(
   const captures = new Map<string, MathNode[]>();
   // Count direct + lambda slots (args that need to be consumed)
   const consumableSlots = slots.filter(s => s.kind === 'direct' || s.kind === 'lambda').length;
-  // For needsR entries: if there are more args than slots, skip leading carrier args.
-  // This handles the case where implicit {R} appears explicitly in the surface term
-  // (kernel→surface doesn't strip implicit args).
-  let argIdx = (entry.needsR && args.length > consumableSlots) ? args.length - consumableSlots : 0;
+  const implicitSlots = slots.filter(s => s.kind === 'implicit').length;
+  // When surface term has more args than consumable slots (implicit args present
+  // from kernel→surface which doesn't strip them), skip leading args.
+  // This handles both needsR carrier args and implicit universe params like {u} {v}.
+  let argIdx = args.length > consumableSlots ? args.length - consumableSlots : 0;
 
   for (const slot of slots) {
     switch (slot.kind) {
