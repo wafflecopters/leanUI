@@ -1,0 +1,11 @@
+@test success
+@name "cases on DPair (single constructor record type)"
+@import preambles/nat.tt
+@import preambles/dpair.tt
+
+-- DPair has a single constructor MkDPair
+-- cases should produce exactly 1 branch goal
+dpairFst : DPair Nat (\n => Nat) -> Nat := by
+  intro d
+  cases d with
+  | MkDPair x px => exact x

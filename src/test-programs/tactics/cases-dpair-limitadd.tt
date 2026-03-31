@@ -1,0 +1,45 @@
+@test success
+@name "cases on DPair for limitAdd pattern (nested DPair+Either destructuring)"
+@import preambles/nat.tt
+@import preambles/dpair.tt
+@import preambles/pair.tt
+@import preambles/either.tt
+
+-- Simplified version of limitAdd pattern:
+-- have dF : DPair A P
+-- have dG : DPair A P
+-- cases dF with | MkDPair deltaF witnessF =>
+--   cases dG with | MkDPair deltaG witnessG =>
+--     cases (either ...) with | Left => ... | Right => ...
+
+choose : Either Nat Nat -> Nat
+choose (Left n) = n
+choose (Right n) = n
+
+Pair.fst : {A B : Type} -> Pair A B -> A
+Pair.fst (MkPair a b) = a
+
+Pair.snd : {A B : Type} -> Pair A B -> B
+Pair.snd (MkPair a b) = b
+
+-- Wrap in DPair with a simple predicate
+Witness : Nat -> Type
+Witness n = Pair Nat Nat
+
+mkW : Nat -> DPair Nat Witness
+mkW n = MkDPair n (MkPair n n)
+
+pickEither : Nat -> Nat -> Either Nat Nat
+pickEither Zero m = Left Zero
+pickEither (Succ n) m = Right m
+
+-- The actual pattern: have, cases DPair, cases DPair, cases Either
+nestedDPairEither : DPair Nat Witness -> DPair Nat Witness -> Either Nat Nat -> Nat := by
+  intros dF dG e
+  cases dF with
+  | MkDPair deltaF witnessF =>
+    cases dG with
+    | MkDPair deltaG witnessG =>
+      cases e with
+      | Left hle => exact deltaF
+      | Right hle => exact deltaG

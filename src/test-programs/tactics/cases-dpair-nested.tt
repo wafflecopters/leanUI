@@ -1,0 +1,22 @@
+@test success
+@name "nested cases: DPair then Either (single + multi constructor)"
+@import preambles/nat.tt
+@import preambles/dpair.tt
+@import preambles/either.tt
+
+-- Helper
+wrapNat : Nat -> DPair Nat (\n => Nat)
+wrapNat n = MkDPair n n
+
+choose : Either Nat Nat -> Nat
+choose (Left n) = n
+choose (Right n) = n
+
+-- Nested: cases on DPair, then cases on Either inside the DPair branch
+nestedCases : DPair Nat (\n => Nat) -> Either Nat Nat -> Nat := by
+  intros d e
+  cases d with
+  | MkDPair x px =>
+    cases e with
+    | Left n => exact n
+    | Right n => exact x

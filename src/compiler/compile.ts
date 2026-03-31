@@ -1568,6 +1568,129 @@ export interface ElabOptions {
 const tacticCommandToTactic = sharedTacticCommandToTactic;
 
 /**
+ * Recursively apply structured case branches to matching goals.
+ *
+ * This handles arbitrary nesting depth: each branch's tactics are applied,
+ * and if any tactic itself has caseBranches (nested cases/induction),
+ * those are processed recursively.
+ */
+function applyCaseBranchesRecursive(
+  engine: TacticEngine,
+  caseBranches: Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>,
+  definitions: DefinitionsMap,
+  outerParamNameMap: Map<string, string>,
+  parentInfoNode: TacticInfoNode,
+  hasSorry: boolean,
+  indexPathToSourcePosition: (indexPath: IndexPath | undefined, sourceMap: SourceMap) => SourcePosition,
+  sourceMap: SourceMap
+): { engine: TacticEngine; hasSorry: boolean } {
+  for (const branch of caseBranches) {
+    // Find the goal with matching caseTag
+    const branchGoalId = engine.goals.find(gid => {
+      const meta = engine.metaVars.get(gid);
+      return meta && meta.caseTag === branch.constructor;
+    });
+
+    if (!branchGoalId) {
+      throw new Error(`Structured cases: no goal found for constructor '${branch.constructor}'`);
+    }
+
+    // Set focus to this branch goal
+    const branchGoalIndex = engine.goals.indexOf(branchGoalId);
+    engine = engine.withUpdates({ focusIndex: branchGoalIndex });
+
+    // Build paramNameMap once from the initial branch context (before any branch tactics run).
+    // Pattern params (e.g., 'n'' in '| Succ n' IH =>') map to the actual context names
+    // assigned by the cases/induction tactic. This mapping must stay fixed even as later
+    // tactics (like intro) extend the context.
+    // Include outer branch mappings so nested cases can reference outer params.
+    const initialBranchGoal = engine.getFocusedGoal()!;
+    const initialCtx: string[] = initialBranchGoal.ctx.map(b => b.name);
+    const paramNameMap = new Map<string, string>(outerParamNameMap);
+    for (let i = 0; i < branch.params.length; i++) {
+      const patternParamName = branch.params[i];
+      const ctxIndex = initialCtx.length - branch.params.length + i;
+      if (ctxIndex >= 0 && ctxIndex < initialCtx.length) {
+        paramNameMap.set(patternParamName, initialCtx[ctxIndex]);
+      }
+    }
+
+    // Apply the branch's tactics
+    for (const branchTactic of branch.tactics) {
+      const branchGoal = engine.getFocusedGoal();
+      const branchGoalId2 = engine.getFocusedGoalId();
+
+      if (!branchGoal || !branchGoalId2) {
+        throw new Error(`Structured cases: no active goal for constructor '${branch.constructor}'`);
+      }
+
+      const branchElabArgs: Array<TTerm | TTKTerm> = branchTactic.args.map((arg, i) => {
+        if (shouldKeepArgAsName(branchTactic.name, i, branchTactic.args.length)) {
+          return arg;
+        }
+        return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
+      });
+
+      // Get goals before applying tactic
+      const branchGoalsBefore = extractGoalStates(engineToProofState(engine));
+
+      const branchTacticObj = sharedTacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
+
+      // sorry: leave goal unsolved
+      if (branchTacticObj === 'sorry') {
+        hasSorry = true;
+        continue;
+      }
+
+      const branchResult = branchTacticObj.apply(engine, branchGoal, branchGoalId2);
+
+      if (!branchResult.success) {
+        const errorMsg = `Structured cases (${branch.constructor}): tactic '${branchTactic.name}' failed: ${branchResult.error}`;
+        if (branchTactic.indexPath) {
+          const tacticEnv = createTCEnv({ definitions, indexPath: branchTactic.indexPath, options: { mode: 'check' } });
+          throw TCEnvError.create(errorMsg, tacticEnv);
+        } else {
+          throw new Error(errorMsg);
+        }
+      }
+
+      engine = branchResult.newEngine;
+
+      // Get goals after applying tactic
+      const branchGoalsAfter = extractGoalStates(engineToProofState(engine));
+
+      // Get position for this branch tactic
+      const branchPosition = branchTactic.indexPath
+        ? indexPathToSourcePosition(branchTactic.indexPath, sourceMap)
+        : { line: 0, col: 0 };
+
+      // Create InfoTree node for branch tactic and add as child of parent node
+      const branchTacticNode: TacticInfoNode = {
+        position: branchPosition,
+        goalsBefore: branchGoalsBefore,
+        goalsAfter: branchGoalsAfter,
+        tactic: { tag: branchTactic.name } as any,
+        children: []
+      };
+      parentInfoNode.children.push(branchTacticNode);
+
+      // Handle nested structured cases/induction recursively
+      if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && (branchTactic as any).caseBranches) {
+        const nestedBranches = (branchTactic as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
+        const nestedResult = applyCaseBranchesRecursive(
+          engine, nestedBranches, definitions, paramNameMap, branchTacticNode,
+          hasSorry, indexPathToSourcePosition, sourceMap
+        );
+        engine = nestedResult.engine;
+        hasSorry = nestedResult.hasSorry;
+      }
+    }
+  }
+
+  return { engine, hasSorry };
+}
+
+/**
  * Elaborate a TacticBlock to a kernel term by executing the tactics.
  *
  * @param tacticBlock - The surface-level tactic block
@@ -1739,163 +1862,12 @@ function elaborateTacticBlock(
     // Handle structured cases/induction: if cmd has caseBranches, apply each branch's tactics to matching goals
     if ((cmd.name === 'cases' || cmd.name === 'induction') && (cmd as any).caseBranches) {
       const caseBranches = (cmd as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
-
-      for (const branch of caseBranches) {
-        // Find the goal with matching caseTag
-        const branchGoalId = engine.goals.find(gid => {
-          const meta = engine.metaVars.get(gid);
-          return meta && meta.caseTag === branch.constructor;
-        });
-
-        if (!branchGoalId) {
-          throw new Error(`Structured cases: no goal found for constructor '${branch.constructor}'`);
-        }
-
-        // Set focus to this branch goal
-        const branchGoalIndex = engine.goals.indexOf(branchGoalId);
-        engine = engine.withUpdates({ focusIndex: branchGoalIndex });
-
-        // Build paramNameMap once from the initial branch context (before any branch tactics run).
-        // Pattern params (e.g., 'n'' in '| Succ n' IH =>') map to the actual context names
-        // assigned by the cases/induction tactic. This mapping must stay fixed even as later
-        // tactics (like intro) extend the context.
-        {
-          const initialBranchGoal = engine.getFocusedGoal()!;
-          const initialCtx: string[] = initialBranchGoal.ctx.map(b => b.name);
-          const paramNameMap = new Map<string, string>();
-          for (let i = 0; i < branch.params.length; i++) {
-            const patternParamName = branch.params[i];
-            const ctxIndex = initialCtx.length - branch.params.length + i;
-            if (ctxIndex >= 0 && ctxIndex < initialCtx.length) {
-              paramNameMap.set(patternParamName, initialCtx[ctxIndex]);
-            }
-          }
-
-        // Apply the branch's tactics
-        for (const branchTactic of branch.tactics) {
-          const branchGoal = engine.getFocusedGoal();
-          const branchGoalId2 = engine.getFocusedGoalId();
-
-          if (!branchGoal || !branchGoalId2) {
-            throw new Error(`Structured cases: no active goal for constructor '${branch.constructor}'`);
-          }
-
-          const branchElabArgs: Array<TTerm | TTKTerm> = branchTactic.args.map((arg, i) => {
-            if (shouldKeepArgAsName(branchTactic.name, i, branchTactic.args.length)) {
-              return arg;
-            }
-            return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
-          });
-
-          // Get goals before applying tactic
-          const branchGoalsBefore = extractGoalStates(engineToProofState(engine));
-
-          const branchTacticObj = sharedTacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
-
-          // sorry: leave goal unsolved
-          if (branchTacticObj === 'sorry') {
-            hasSorry = true;
-            continue;
-          }
-
-          const branchResult = branchTacticObj.apply(engine, branchGoal, branchGoalId2);
-
-          if (!branchResult.success) {
-            const errorMsg = `Structured cases (${branch.constructor}): tactic '${branchTactic.name}' failed: ${branchResult.error}`;
-            if (branchTactic.indexPath) {
-              const tacticEnv = createTCEnv({ definitions, indexPath: branchTactic.indexPath, options: { mode: 'check' } });
-              throw TCEnvError.create(errorMsg, tacticEnv);
-            } else {
-              throw new Error(errorMsg);
-            }
-          }
-
-          engine = branchResult.newEngine;
-
-          // Get goals after applying tactic
-          const branchGoalsAfter = extractGoalStates(engineToProofState(engine));
-
-          // Get position for this branch tactic
-          const branchPosition = branchTactic.indexPath
-            ? indexPathToSourcePosition(branchTactic.indexPath, sourceMap)
-            : { line: 0, col: 0 };
-
-          // Create InfoTree node for branch tactic and add as child of parent tacticNode
-          const branchTacticNode: TacticInfoNode = {
-            position: branchPosition,
-            goalsBefore: branchGoalsBefore,
-            goalsAfter: branchGoalsAfter,
-            tactic: { tag: branchTactic.name } as any,
-            children: []
-          };
-          tacticNode.children.push(branchTacticNode);
-
-          // Handle nested structured cases/induction: if this branch tactic itself
-          // has caseBranches (e.g., nested `cases n with | Zero => ... | Succ m => ...`),
-          // process them recursively
-          if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && (branchTactic as any).caseBranches) {
-            const nestedBranches = (branchTactic as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
-            for (const nestedBranch of nestedBranches) {
-              const nestedGoalId = engine.goals.find(gid => {
-                const meta = engine.metaVars.get(gid);
-                return meta && meta.caseTag === nestedBranch.constructor;
-              });
-              if (!nestedGoalId) {
-                throw new Error(`Structured cases: no goal found for nested constructor '${nestedBranch.constructor}'`);
-              }
-              const nestedGoalIndex = engine.goals.indexOf(nestedGoalId);
-              engine = engine.withUpdates({ focusIndex: nestedGoalIndex });
-
-              for (const nestedTactic of nestedBranch.tactics) {
-                const nestedGoal = engine.getFocusedGoal();
-                const nestedGoalId2 = engine.getFocusedGoalId();
-                if (!nestedGoal || !nestedGoalId2) {
-                  throw new Error(`Structured cases: no active goal for nested constructor '${nestedBranch.constructor}'`);
-                }
-
-                // Build nested param name mapping (include parent branch params)
-                const nestedNameContext: string[] = nestedGoal.ctx.map(b => b.name);
-                const nestedParamNameMap = new Map<string, string>(paramNameMap);
-                for (let i = 0; i < nestedBranch.params.length; i++) {
-                  const patternParamName = nestedBranch.params[i];
-                  const ctxIndex = nestedNameContext.length - nestedBranch.params.length + i;
-                  if (ctxIndex >= 0 && ctxIndex < nestedNameContext.length) {
-                    nestedParamNameMap.set(patternParamName, nestedNameContext[ctxIndex]);
-                  }
-                }
-
-                const nestedElabArgs: Array<TTerm | TTKTerm> = nestedTactic.args.map((arg, i) => {
-                  if (shouldKeepArgAsName(nestedTactic.name, i, nestedTactic.args.length)) {
-                    return arg;
-                  }
-                  return elaborateTacticArg(arg, nestedGoal.ctx, definitions, 0, nestedParamNameMap);
-                });
-
-                const nestedTacticObj = sharedTacticCommandToTactic({ name: nestedTactic.name, args: nestedElabArgs });
-
-                // sorry: leave goal unsolved
-                if (nestedTacticObj === 'sorry') {
-                  hasSorry = true;
-                  continue;
-                }
-
-                const nestedResult = nestedTacticObj.apply(engine, nestedGoal, nestedGoalId2);
-                if (!nestedResult.success) {
-                  const errorMsg = `Structured cases (${nestedBranch.constructor}): tactic '${nestedTactic.name}' failed: ${nestedResult.error}`;
-                  if (nestedTactic.indexPath) {
-                    const tacticEnv = createTCEnv({ definitions, indexPath: nestedTactic.indexPath, options: { mode: 'check' } });
-                    throw TCEnvError.create(errorMsg, tacticEnv);
-                  } else {
-                    throw new Error(errorMsg);
-                  }
-                }
-                engine = nestedResult.newEngine;
-              }
-            }
-          }
-        }
-        } // close paramNameMap scope
-      }
+      const branchResult = applyCaseBranchesRecursive(
+        engine, caseBranches, definitions, new Map(), tacticNode,
+        hasSorry, indexPathToSourcePosition, sourceMap
+      );
+      engine = branchResult.engine;
+      hasSorry = branchResult.hasSorry;
     }
   }
 
