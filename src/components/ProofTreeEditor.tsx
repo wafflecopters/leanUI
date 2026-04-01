@@ -2459,12 +2459,18 @@ function ProseItemView({
 
     case 'inductionHeader':
       if (kind.isCases) {
-        // cases tactic: "Destructuring:" (single case) or "By cases on X:" (multiple)
-        // We can't easily know the case count here, so we render based on scrutinee
+        // For simple variable names show "By cases on x:", for complex expressions just "By cases:"
+        const isSimpleScrutinee = /^[a-zA-Z_][a-zA-Z0-9_']*$/.test(kind.scrutinee);
         return (
           <div style={rowStyle} {...rowHandlers}>
-            <span style={prose}>By cases on{' '}</span>
-            <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
+            {isSimpleScrutinee ? (
+              <>
+                <span style={prose}>By cases on{' '}</span>
+                <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
+              </>
+            ) : (
+              <span style={prose}>By cases</span>
+            )}
             <span style={prose}>:</span>
             {deleteBtn}
           </div>
