@@ -198,17 +198,17 @@ absElim {R} a C pos neg = eitherElimDep (\\e => C (eitherElim (\\_ => a) (\\_ =>
 -- Limits: the epsilon-delta definition
 ------------------------------------------------------------
 
--- Epsilon-delta witness: given delta, prove delta > 0
+-- Epsilon-delta witness: given δ, prove δ > 0
 -- and the epsilon-delta condition
-EpsDeltaWitness : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (eps : Carrier R) -> Carrier R -> Type
-EpsDeltaWitness {R} f x0 L eps delta = Pair (rlt (rzero R) delta) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) delta -> rlt (rabs (rsub (f x) L)) eps)
+EpsDeltaWitness : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (ε : Carrier R) -> Carrier R -> Type
+EpsDeltaWitness {R} f x0 L ε δ = Pair (rlt (rzero R) δ) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) δ -> rlt (rabs (rsub (f x) L)) ε)
 
 -- A proof that lim_{x -> x0} f(x) = L.
--- For every epsilon > 0, there exists delta > 0 such that
--- for all x, |x - x0| < delta implies |f(x) - L| < epsilon.
+-- For every ε > 0, there exists δ > 0 such that
+-- for all x, |x - x0| < δ implies |f(x) - L| < ε.
 record Limit {R : Real} (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carrier R) where
-  eps_delta : (eps : Carrier R) -> rlt (rzero R) eps ->
-              (delta : Carrier R ** EpsDeltaWitness f x0 L eps delta)
+  eps_delta : (ε : Carrier R) -> rlt (rzero R) ε ->
+              (δ : Carrier R ** EpsDeltaWitness f x0 L ε δ)
 
 ------------------------------------------------------------
 -- Algebraic lemmas
