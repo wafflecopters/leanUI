@@ -213,7 +213,7 @@ function renderSymbol(value: string): string {
   // Multi-letter names (not LaTeX commands) render upright, like \sin or \log.
   // Exclude primed variables (n', x').
   if (value.length > 1 && !value.startsWith('\\') && /^[a-zA-Z]{2,}/.test(value)) {
-    return `\\operatorname{${value}}`;
+    return `\\operatorname{${value.replace(/_/g, '\\_')}}`;
   }
   // Escape underscore: bare _ is the subscript operator in math mode.
   // Inside \htmlId{...}{_}, KaTeX still interprets _ as subscript, causing errors.
