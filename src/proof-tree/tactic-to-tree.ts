@@ -167,9 +167,11 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
     ? (extractName(cmd.args[0]) ?? surfaceTermToString(cmd.args[0]))
     : '_';
 
+  const isCases = cmd.name === 'cases';
+
   if (!cmd.caseBranches || cmd.caseBranches.length === 0) {
     // No structured cases — just a hole
-    return mkInduction(scrutinee, [mkCase('?', mkHole())]);
+    return mkInduction(scrutinee, [mkCase('?', mkHole())], isCases);
   }
 
   const cases = cmd.caseBranches.map(branch => {
@@ -177,7 +179,7 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
     return mkCase(branch.constructor, body, branch.constructor, branch.params);
   });
 
-  return mkInduction(scrutinee, cases);
+  return mkInduction(scrutinee, cases, isCases);
 }
 
 /** Build a chain of RewriteNodes from multiple rw/erw arguments. */

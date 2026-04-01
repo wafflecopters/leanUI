@@ -1327,7 +1327,7 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
         >
           {node.collapsed ? '\u25B6' : '\u25BC'}
         </span>
-        <span style={keywordStyle}>induct on </span>
+        <span style={keywordStyle}>{node.isCases ? 'cases ' : 'induct on '}</span>
         <InlineKaTeX
           latex={texNameForProse(node.scrutinee)}
           style={{ fontSize: '13px' }}
@@ -2108,20 +2108,25 @@ function CaseHeaderProseItem({
   }, [handleRename]);
 
   // Render the label with clickable param names.
-  // The label looks like "aOrB = Left(x)" — we break it into:
-  //   scrutinee "=" constructorName "(" param1 "," param2 ")"
+  // For induction: "scrutinee = Constructor(param1, param2)"
+  // For cases: "Constructor(param1, param2)" (no scrutinee prefix)
   const renderLabelWithClickableParams = () => {
-    if (!hasParams || !kind.constructorName || !kind.scrutinee) {
+    if (!hasParams || !kind.constructorName) {
       // No params or missing data — render as before
       return <InlineKaTeX latex={kind.labelLatex} style={{ fontSize: '12px' }} />;
     }
 
-    const scrutineeTex = texNameForProse(kind.scrutinee);
     const ctorTex = texNameForProse(kind.constructorName);
+    // For cases, omit the "scrutinee = " prefix since it's often a complex expression
+    const prefix = kind.isCases
+      ? `${ctorTex}\\,(`
+      : kind.scrutinee
+        ? `${texNameForProse(kind.scrutinee)} = ${ctorTex}\\,(`
+        : `${ctorTex}\\,(`;
 
     return (
       <>
-        <InlineKaTeX latex={`${scrutineeTex} = ${ctorTex}\\,(`} style={{ fontSize: '12px' }} />
+        <InlineKaTeX latex={prefix} style={{ fontSize: '12px' }} />
         {paramNames!.map((name, i) => (
           <React.Fragment key={i}>
             {i > 0 && <InlineKaTeX latex=",\," style={{ fontSize: '12px' }} />}
@@ -2147,8 +2152,8 @@ function CaseHeaderProseItem({
   return (
     <div ref={caseContainerRef} onBlur={handleCaseContainerBlur} tabIndex={-1} style={{ outline: 'none' }}>
       <div style={{ ...rowStyle, fontWeight: 600 }} {...rowHandlers}>
-        <span style={{ color: kind.isBaseCase ? '#d2a8ff' : '#79c0ff' }}>
-          {kind.isBaseCase ? 'Base case' : 'Inductive step'}
+        <span style={{ color: kind.isCases ? '#79c0ff' : (kind.isBaseCase ? '#d2a8ff' : '#79c0ff') }}>
+          {kind.isCases ? 'Case' : (kind.isBaseCase ? 'Base case' : 'Inductive step')}
         </span>
         <span style={prose}> (</span>
         {renderLabelWithClickableParams()}
@@ -2453,6 +2458,18 @@ function ProseItemView({
     }
 
     case 'inductionHeader':
+      if (kind.isCases) {
+        // cases tactic: "Destructuring:" (single case) or "By cases on X:" (multiple)
+        // We can't easily know the case count here, so we render based on scrutinee
+        return (
+          <div style={rowStyle} {...rowHandlers}>
+            <span style={prose}>By cases on{' '}</span>
+            <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
+            <span style={prose}>:</span>
+            {deleteBtn}
+          </div>
+        );
+      }
       return (
         <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>We proceed by induction on{' '}</span>

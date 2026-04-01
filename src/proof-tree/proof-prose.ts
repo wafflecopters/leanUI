@@ -55,8 +55,8 @@ export type ProseItemKind =
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
-  | { tag: 'inductionHeader'; scrutinee: string }
-  | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string }
+  | { tag: 'inductionHeader'; scrutinee: string; isCases?: boolean }
+  | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string }
   | { tag: 'hole'; goalLatex?: string }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
@@ -367,7 +367,7 @@ export function generateProofProse(
       }
 
       case 'induction': {
-        emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee });
+        emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, isCases: node.isCases });
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
           const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
@@ -378,6 +378,7 @@ export function generateProofProse(
             constructorParamNames: c.constructorParamNames,
             constructorName: c.constructorName,
             scrutinee: node.scrutinee,
+            isCases: node.isCases,
           });
           walk(c.body, depth + 2);
         }

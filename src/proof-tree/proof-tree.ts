@@ -54,6 +54,8 @@ export interface InductionNode {
   readonly scrutinee: string;
   readonly cases: readonly CaseNode[];
   readonly collapsed: boolean;
+  /** true for `cases` tactic (destructuring), false/undefined for `induction` */
+  readonly isCases?: boolean;
 }
 
 export interface ExactNode {
@@ -201,8 +203,8 @@ export function mkIntros(names: readonly string[], child: ProofNode): IntrosNode
   return { tag: 'intros', id: freshProofId(), names, child };
 }
 
-export function mkInduction(scrutinee: string, cases: readonly CaseNode[]): InductionNode {
-  return { tag: 'induction', id: freshProofId(), scrutinee, cases, collapsed: false };
+export function mkInduction(scrutinee: string, cases: readonly CaseNode[], isCases?: boolean): InductionNode {
+  return { tag: 'induction', id: freshProofId(), scrutinee, cases, collapsed: false, isCases };
 }
 
 export function mkExact(expr: string): ExactNode {
