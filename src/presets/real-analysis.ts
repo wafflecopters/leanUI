@@ -444,11 +444,9 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   intros R f g x0 L M limF limG
   constructor
   intros eps heps
-  have dF := Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)
-  have dG := Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)
-  cases dF with
+  cases (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)) with
   | MkDPair deltaF witnessF =>
-    cases dG with
+    cases (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)) with
     | MkDPair deltaG witnessG =>
       cases (CompleteOrderedField.leTotal (field R) deltaF deltaG) with
       | Left hle =>
