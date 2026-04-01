@@ -2752,7 +2752,21 @@ function extractLemmaAndArgs(expr: string): { lemma: string; simpleArgs: string[
  *  Single chars stay as math italic (e.g., n, f).
  *  Single letter + digits: subscript (x0 → x_{0}).
  *  Multi-char names use \textsf for clean sans-serif rendering (e.g., sum, minusSucc). */
+/** Map Unicode Greek → LaTeX for prose rendering. */
+const PROSE_GREEK: Record<string, string> = {
+  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
+  'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
+  'λ': '\\lambda', 'μ': '\\mu', 'π': '\\pi', 'σ': '\\sigma',
+  'φ': '\\varphi', 'ψ': '\\psi', 'ω': '\\omega',
+};
+
 function texNameForProse(name: string): string {
+  // Single Greek letter: δ → \delta
+  if (name.length === 1 && PROSE_GREEK[name]) return PROSE_GREEK[name];
+  // Greek + digits: δ1 → \delta_{1}
+  if (name.length >= 2 && PROSE_GREEK[name[0]] && /^\d+$/.test(name.slice(1))) {
+    return `${PROSE_GREEK[name[0]]}_{${name.slice(1)}}`;
+  }
   if (name.length === 1) return name;
   if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
   // Single letter + digits: subscript (x0 → x_{0}, n12 → n_{12})

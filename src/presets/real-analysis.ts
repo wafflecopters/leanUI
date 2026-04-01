@@ -443,16 +443,16 @@ convertEps {R} eps v hlt = replace (\\z => rlt v z) (halfMulEps eps) hlt
 limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit (\\x => radd (f x) (g x)) x0 (radd L M) := by
   intros R f g x0 L M limF limG
   constructor
-  intros eps heps
-  cases (Limit.eps_delta limF (rmul (rhalf R) eps) (halfMulEpsPos eps heps)) with
-  | MkDPair deltaF witnessF =>
-    cases (Limit.eps_delta limG (rmul (rhalf R) eps) (halfMulEpsPos eps heps)) with
-    | MkDPair deltaG witnessG =>
-      cases (CompleteOrderedField.leTotal (field R) deltaF deltaG) with
+  intros ε hε
+  cases (Limit.eps_delta limF (rmul (rhalf R) ε) (halfMulEpsPos ε hε)) with
+  | MkDPair δF witnessF =>
+    cases (Limit.eps_delta limG (rmul (rhalf R) ε) (halfMulEpsPos ε hε)) with
+    | MkDPair δG witnessG =>
+      cases (CompleteOrderedField.leTotal (field R) δF δG) with
       | Left hle =>
-        exact (MkDPair deltaF (MkPair (Pair.fst witnessF) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd witnessF x hx0 hxd) (Pair.snd witnessG x hx0 (ltLeTrans (rabs (rsub x x0)) deltaF deltaG hxd hle))))))
+        exact (MkDPair δF (MkPair (Pair.fst witnessF) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) ε) x (Pair.snd witnessF x hx0 hxd) (Pair.snd witnessG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle))))))
       | Right hle =>
-        exact (MkDPair deltaG (MkPair (Pair.fst witnessG) (\\x hx0 hxd => convertEps eps (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) eps) x (Pair.snd witnessF x hx0 (ltLeTrans (rabs (rsub x x0)) deltaG deltaF hxd hle)) (Pair.snd witnessG x hx0 hxd)))))
+        exact (MkDPair δG (MkPair (Pair.fst witnessG) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) ε) x (Pair.snd witnessF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (Pair.snd witnessG x hx0 hxd)))))
 
 -- lim (f+g+h) = (L+M)+N: three-function limit addition via two applications of limitAdd
 limitAdd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 L M N : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit h x0 N -> Limit (\\x => radd (radd (f x) (g x)) (h x)) x0 (radd (radd L M) N)

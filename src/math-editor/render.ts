@@ -187,8 +187,34 @@ function renderNodeInner(node: MathNode, cursor: CursorState, currentPath: RowPa
   }
 }
 
+/** Map Unicode Greek letters to LaTeX commands. */
+const GREEK_TO_LATEX: Record<string, string> = {
+  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
+  'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
+  'ι': '\\iota', 'κ': '\\kappa', 'λ': '\\lambda', 'μ': '\\mu',
+  'ν': '\\nu', 'ξ': '\\xi', 'π': '\\pi', 'ρ': '\\rho',
+  'σ': '\\sigma', 'τ': '\\tau', 'υ': '\\upsilon', 'φ': '\\varphi',
+  'χ': '\\chi', 'ψ': '\\psi', 'ω': '\\omega',
+  'Γ': '\\Gamma', 'Δ': '\\Delta', 'Θ': '\\Theta', 'Λ': '\\Lambda',
+  'Ξ': '\\Xi', 'Π': '\\Pi', 'Σ': '\\Sigma', 'Φ': '\\Phi',
+  'Ψ': '\\Psi', 'Ω': '\\Omega',
+};
+
+/** Check if a character is a Unicode Greek letter. */
+function isGreek(ch: string): boolean {
+  return (ch >= 'α' && ch <= 'ω') || (ch >= 'Α' && ch <= 'Ω');
+}
+
 /** Render a symbol value — most are passed through as-is. */
 function renderSymbol(value: string): string {
+  // Unicode Greek letters → LaTeX commands (δ → \delta, ε → \varepsilon)
+  if (value.length === 1 && GREEK_TO_LATEX[value]) {
+    return `${GREEK_TO_LATEX[value]} `;
+  }
+  // Greek letter + digits: subscript (δ1 → \delta_{1}, ε0 → \varepsilon_{0})
+  if (value.length >= 2 && GREEK_TO_LATEX[value[0]] && /^\d+$/.test(value.slice(1))) {
+    return `${GREEK_TO_LATEX[value[0]]}_{${value.slice(1)}}`;
+  }
   // Single chars just pass through: 'x', '+', '2', etc.
   // LaTeX commands like '\alpha', '\in' also pass through
   // Operators that need surrounding spaces for readability
