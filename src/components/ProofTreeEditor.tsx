@@ -2457,20 +2457,15 @@ function ProseItemView({
       );
     }
 
-    case 'inductionHeader':
+    case 'inductionHeader': {
+      const scrutineeDisplay = kind.scrutineeLatex
+        ? <InlineKaTeX latex={kind.scrutineeLatex} style={{ fontSize: '13px' }} />
+        : <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />;
       if (kind.isCases) {
-        // For simple variable names show "By cases on x:", for complex expressions just "By cases:"
-        const isSimpleScrutinee = /^[a-zA-Z_][a-zA-Z0-9_']*$/.test(kind.scrutinee);
         return (
           <div style={rowStyle} {...rowHandlers}>
-            {isSimpleScrutinee ? (
-              <>
-                <span style={prose}>By cases on{' '}</span>
-                <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
-              </>
-            ) : (
-              <span style={prose}>By cases</span>
-            )}
+            <span style={prose}>By cases on{' '}</span>
+            {scrutineeDisplay}
             <span style={prose}>:</span>
             {deleteBtn}
           </div>
@@ -2479,11 +2474,12 @@ function ProseItemView({
       return (
         <div style={rowStyle} {...rowHandlers}>
           <span style={prose}>We proceed by induction on{' '}</span>
-          <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />
+          {scrutineeDisplay}
           <span style={prose}>.</span>
           {deleteBtn}
         </div>
       );
+    }
 
     case 'caseHeader':
       return (

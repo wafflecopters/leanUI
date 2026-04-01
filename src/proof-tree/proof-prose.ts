@@ -55,7 +55,7 @@ export type ProseItemKind =
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
-  | { tag: 'inductionHeader'; scrutinee: string; isCases?: boolean }
+  | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string }
   | { tag: 'hole'; goalLatex?: string }
@@ -367,7 +367,7 @@ export function generateProofProse(
       }
 
       case 'induction': {
-        emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, isCases: node.isCases });
+        emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
           const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;

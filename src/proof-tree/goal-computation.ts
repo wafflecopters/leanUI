@@ -2649,6 +2649,8 @@ export interface NodeGoalInfo {
   readonly sufficesByLatex?: string;
   /** For exact/have nodes: LaTeX of the proof expression, rendered through math pipeline. */
   readonly proofExprLatex?: string;
+  /** For induction/cases nodes: LaTeX of the scrutinee, rendered through math pipeline. */
+  readonly scrutineeLatex?: string;
 }
 
 /**
@@ -2829,6 +2831,15 @@ function replayEntireTreeFromTrace(
 
       case 'induction': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        // Render scrutinee through math pipeline
+        const indGoal = currentEngine.metaVars.get(gId);
+        if (indGoal) {
+          const scrLatex = renderProofExpr(node.scrutinee, indGoal, definitions, rev, projMap, aliasMap);
+          if (scrLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, scrutineeLatex: scrLatex });
+          }
+        }
         // Cases/induction: trace has steps for the base tactic + each branch's tactics
         // Advance past the base cases/induction tactic
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
@@ -3115,6 +3126,14 @@ function replayEntireTreeViaWalk(
         recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
         if (!goal) break;
+        // Render scrutinee through math pipeline
+        {
+          const scrLatex = renderProofExpr(node.scrutinee, goal, definitions, rev, projMap, aliasMap);
+          if (scrLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, scrutineeLatex: scrLatex });
+          }
+        }
 
         let scrutineeIdx: number | null = findVarIndex(node.scrutinee, goal.ctx);
         let effGoal = goal;
