@@ -434,9 +434,21 @@ absMul {R} a b = absElim a (\\va => Equal (rabs (rmul a b)) (rmul va (rabs b))) 
 coreEstimate : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M he : Carrier R) -> (x : Carrier R) -> rlt (rabs (rsub (f x) L)) he -> rlt (rabs (rsub (g x) M)) he -> rlt (rabs (rsub (radd (f x) (g x)) (radd L M))) (radd he he)
 coreEstimate {R} f g x0 L M he x hfx hgx = (leLtTrans (rabs (rsub (radd (f x) (g x)) (radd L M))) (radd (rabs (rsub (f x) L)) (rabs (rsub (g x) M))) (radd he he) (replace (\\z => rle (rabs z) (radd (rabs (rsub (f x) L)) (rabs (rsub (g x) M)))) (sym (subAddSub (f x) (g x) L M)) (absTriangle (rsub (f x) L) (rsub (g x) M))) (addLtBoth (rabs (rsub (f x) L)) he (rabs (rsub (g x) M)) he hfx hgx))
 
--- Convert < (he+he) to < eps via halfMulEps
-convertEps : {R : Real} -> (eps v : Carrier R) -> rlt v (radd (rmul (rhalf R) eps) (rmul (rhalf R) eps)) -> rlt v eps
-convertEps {R} eps v hlt = replace (\\z => rlt v z) (halfMulEps eps) hlt
+-- Bridge: (1/2)*e = e/2 (by mul commutativity)
+halfEqDiv : {R : Real} -> (e : Carrier R) -> Equal (rmul (rhalf R) e) (rdiv e (rtwo R))
+halfEqDiv {R} e = CompleteOrderedField.mulComm (field R) (rhalf R) e
+
+-- 0 < e => 0 < e/2
+divTwoPos : {R : Real} -> (e : Carrier R) -> rlt (rzero R) e -> rlt (rzero R) (rdiv e (rtwo R))
+divTwoPos {R} e hlt = replace (\\z => rlt (rzero R) z) (halfEqDiv e) (halfMulEpsPos e hlt)
+
+-- e/2 + e/2 = e
+divTwoAddEq : {R : Real} -> (e : Carrier R) -> Equal (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) e
+divTwoAddEq {R} e = replace (\\z => Equal (radd z z) e) (halfEqDiv e) (halfMulEps e)
+
+-- Convert < (e/2 + e/2) to < e
+convertEps : {R : Real} -> (ε v : Carrier R) -> rlt v (radd (rdiv ε (rtwo R)) (rdiv ε (rtwo R))) -> rlt v ε
+convertEps {R} ε v hlt = replace (\\z => rlt v z) (divTwoAddEq ε) hlt
 
 -- lim_{x->x0} f(x) = L  and  lim_{x->x0} g(x) = M
 --   =>  lim_{x->x0} (f(x) + g(x)) = L + M
@@ -446,15 +458,15 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   intros R f g x0 L M limF limG
   constructor
   intros ε hε
-  cases (Limit.eps_delta limF (rmul (rhalf R) ε) (halfMulEpsPos ε hε)) with
+  cases (Limit.eps_delta limF (rdiv ε (rtwo R)) (divTwoPos ε hε)) with
   | MkDPair δF witnessF =>
-    cases (Limit.eps_delta limG (rmul (rhalf R) ε) (halfMulEpsPos ε hε)) with
+    cases (Limit.eps_delta limG (rdiv ε (rtwo R)) (divTwoPos ε hε)) with
     | MkDPair δG witnessG =>
       cases (CompleteOrderedField.leTotal (field R) δF δG) with
       | Left hle =>
-        exact (MkDPair δF (MkPair (Pair.fst witnessF) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) ε) x (Pair.snd witnessF x hx0 hxd) (Pair.snd witnessG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle))))))
+        exact (MkDPair δF (MkPair (Pair.fst witnessF) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (Pair.snd witnessF x hx0 hxd) (Pair.snd witnessG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle))))))
       | Right hle =>
-        exact (MkDPair δG (MkPair (Pair.fst witnessG) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rmul (rhalf R) ε) x (Pair.snd witnessF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (Pair.snd witnessG x hx0 hxd)))))
+        exact (MkDPair δG (MkPair (Pair.fst witnessG) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (Pair.snd witnessF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (Pair.snd witnessG x hx0 hxd)))))
 
 -- lim (f+g+h) = (L+M)+N: three-function limit addition via two applications of limitAdd
 limitAdd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 L M N : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit h x0 N -> Limit (\\x => radd (radd (f x) (g x)) (h x)) x0 (radd (radd L M) N)
