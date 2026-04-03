@@ -242,6 +242,7 @@ export function decomposePiSpine(type: TTerm): { binders: BinderInfo[]; body: TT
 const CARRIER_CONST_SYMBOLS = new Map<string, string>([
   ['rzero', '0'],
   ['rone', '1'],
+  ['rtwo', '2'],
   ['Carrier', '\\mathbb{R}'],
 ]);
 

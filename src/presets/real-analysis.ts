@@ -283,7 +283,6 @@ addLtBoth {R} a b c d hab hcd = MkPair (addLeBoth a b c d (Pair.fst hab) (Pair.f
 -- Halving: 1/2 * eps + 1/2 * eps = eps
 ------------------------------------------------------------
 
-@syntax 2
 rtwo : (R : Real) -> Carrier R
 rtwo R = radd (rone R) (rone R)
 
