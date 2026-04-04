@@ -531,3 +531,42 @@ describe('rmul/rinv/rdiv rendering', () => {
     expect(flat).toContain('frac(');
   });
 });
+
+// ============================================================================
+// @syntax @unfold — ReverseRegistry propagation
+// ============================================================================
+
+describe('ReverseRegistry unfoldNames', () => {
+  test('buildReverseRegistry collects unfoldNames from registry', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'EpsDeltaWitness', pattern: '@unfold' },
+      { declName: 'plus', pattern: '$0 + $1' },
+    ]);
+    const rev = buildReverseRegistry(registry);
+    expect(rev.unfoldNames.has('EpsDeltaWitness')).toBe(true);
+    expect(rev.unfoldNames.has('plus')).toBe(false);
+  });
+
+  test('buildReverseRegistry collects unfoldNames from parent chain', () => {
+    const parent = buildRegistryFromAnnotations([
+      { declName: 'ParentAlias', pattern: '@unfold' },
+    ]);
+    const child: import('./syntax-registry').SyntaxRegistry = {
+      entries: [],
+      symbolMap: new Map(),
+      parent,
+      unfoldNames: new Set(['ChildAlias']),
+    };
+    const rev = buildReverseRegistry(child);
+    expect(rev.unfoldNames.has('ParentAlias')).toBe(true);
+    expect(rev.unfoldNames.has('ChildAlias')).toBe(true);
+  });
+
+  test('buildReverseRegistry produces empty set when no unfold names', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'plus', pattern: '$0 + $1' },
+    ]);
+    const rev = buildReverseRegistry(registry);
+    expect(rev.unfoldNames.size).toBe(0);
+  });
+});

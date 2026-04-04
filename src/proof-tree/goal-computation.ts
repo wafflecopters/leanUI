@@ -655,6 +655,67 @@ export function foldAliases(term: TTKTerm, aliasMap: Map<string, AliasFoldInfo>)
 }
 
 /**
+ * Delta-reduce (unfold) applications of constants marked with `@syntax @unfold`.
+ * Only unfolds at the HEAD of an application spine — does not unfold inside args
+ * unless those args themselves have unfold-marked heads.
+ *
+ * The definition's value is typically a lambda chain:
+ *   \arg0 => \arg1 => ... => body
+ * We substitute the application's args into the body and beta-normalize.
+ */
+export function unfoldTransparent(
+  term: TTKTerm,
+  definitions: DefinitionsMap,
+  unfoldNames: Set<string>,
+): TTKTerm {
+  if (unfoldNames.size === 0) return term;
+
+  switch (term.tag) {
+    case 'App': {
+      const { head, args } = collectAppSpine(term);
+      if (head.tag === 'Const' && unfoldNames.has(head.name)) {
+        const defn = definitions.terms.get(head.name);
+        if (defn?.value) {
+          // Apply the definition's lambda body to the arguments
+          let body = defn.value;
+          for (const arg of args) {
+            body = mkApp(body, arg);
+          }
+          // Beta-normalize to reduce the (\x => ..)(arg) redexes
+          const reduced = betaNormalize(body);
+          // Recurse into the result in case the unfolded body contains
+          // more unfold-marked constants
+          return unfoldTransparent(reduced, definitions, unfoldNames);
+        }
+      }
+      // No unfold match — recurse into subterms
+      const newFn = unfoldTransparent(term.fn, definitions, unfoldNames);
+      const newArg = unfoldTransparent(term.arg, definitions, unfoldNames);
+      if (newFn === term.fn && newArg === term.arg) return term;
+      return { ...term, fn: newFn, arg: newArg };
+    }
+    case 'Binder': {
+      const newDomain = unfoldTransparent(term.domain, definitions, unfoldNames);
+      const newBody = unfoldTransparent(term.body, definitions, unfoldNames);
+      if (newDomain === term.domain && newBody === term.body) return term;
+      return { ...term, domain: newDomain, body: newBody };
+    }
+    case 'Match': {
+      const newScrutinee = unfoldTransparent(term.scrutinee, definitions, unfoldNames);
+      const newClauses = term.clauses.map(c => ({
+        ...c,
+        rhs: unfoldTransparent(c.rhs, definitions, unfoldNames),
+      }));
+      const changed = newScrutinee !== term.scrutinee ||
+        newClauses.some((c, i) => c.rhs !== term.clauses[i].rhs);
+      return changed ? { ...term, scrutinee: newScrutinee, clauses: newClauses } : term;
+    }
+    default:
+      return term;
+  }
+}
+
+/**
  * Normalize a MetaVar's goal type after unfold and update the engine.
  * Returns a new engine with the goal's type replaced by the normalized version.
  *
@@ -723,6 +784,10 @@ function renderProofExpr(
   const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   let folded = foldProjectionMatches(term, pm);
   folded = foldAliases(folded, am);
+  // Unfold @syntax @unfold-marked constants
+  if (rev.unfoldNames.size > 0) {
+    folded = unfoldTransparent(folded, definitions, rev.unfoldNames);
+  }
   const surface = kernelTypeToSurface(folded, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
@@ -2371,6 +2436,10 @@ function renderHypotheses(
     const normalizedType = betaNormalize(zonked);
     let folded = foldProjectionMatches(normalizedType, pm);
     folded = foldAliases(folded, am);
+    // Unfold @syntax @unfold-marked constants
+    if (rev.unfoldNames.size > 0) {
+      folded = unfoldTransparent(folded, definitions, rev.unfoldNames);
+    }
     const surfaceHypType = kernelTypeToSurface(folded, definitions);
     const typeLatex = renderTerm(surfaceHypType, nameCtx, rev);
     hypotheses.push({ name: entry.name, type: typeLatex, rawType: surfaceHypType });
@@ -2402,6 +2471,10 @@ export function renderGoalLatex(
   // 4. Fold delta-expanded projections back to alias names
   //    (e.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b) → rmul(R, a, b))
   term = foldAliases(term, am);
+  // 5. Unfold @syntax @unfold-marked constants (e.g., EpsDeltaWitness → Pair(...))
+  if (rev.unfoldNames.size > 0) {
+    term = unfoldTransparent(term, definitions, rev.unfoldNames);
+  }
   const surface = kernelTypeToSurface(term, definitions);
   return renderTerm(surface, buildNameCtx(goal.ctx), rev);
 }
@@ -2421,6 +2494,10 @@ export function renderSubtermLatex(
   let folded = foldProjectionMatches(normalized, pm);
   const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   folded = foldAliases(folded, am);
+  // Unfold @syntax @unfold-marked constants
+  if (rev.unfoldNames.size > 0) {
+    folded = unfoldTransparent(folded, definitions, rev.unfoldNames);
+  }
   const surface = kernelTypeToSurface(folded, definitions);
   return renderTerm(surface, buildNameCtx(ctx), rev);
 }
@@ -2448,6 +2525,11 @@ function renderUnifiedEquationLatex(
   let rhs = foldProjectionMatches(rhsNorm, projMap);
   lhs = foldAliases(lhs, aliasMap);
   rhs = foldAliases(rhs, aliasMap);
+  // Unfold @syntax @unfold-marked constants
+  if (rev.unfoldNames.size > 0) {
+    lhs = unfoldTransparent(lhs, definitions, rev.unfoldNames);
+    rhs = unfoldTransparent(rhs, definitions, rev.unfoldNames);
+  }
   const nameCtx = buildNameCtx(goalCtx);
   const lhsSurface = kernelTypeToSurface(lhs, definitions);
   const rhsSurface = kernelTypeToSurface(rhs, definitions);
@@ -3097,6 +3179,10 @@ function replayEntireTreeViaWalk(
               const zonked = betaNormalize(newEngine.zonkTerm(arg.term, goal.ctx.length));
               let folded = foldProjectionMatches(zonked, projMap);
               folded = foldAliases(folded, aliasMap);
+              // Unfold @syntax @unfold-marked constants
+              if (rev.unfoldNames.size > 0) {
+                folded = unfoldTransparent(folded, definitions, rev.unfoldNames);
+              }
               const surface = kernelTypeToSurface(folded, definitions);
               const latex = renderTerm(surface, nameCtx, rev);
               appliedArgsLatex.push(latex);

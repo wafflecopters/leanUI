@@ -27,6 +27,7 @@ import {
   buildProjectionFoldMap,
   foldProjectionMatches,
   renderGoalLatex,
+  unfoldTransparent,
 } from './goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { TTerm } from '../compiler/surface';
@@ -2864,5 +2865,118 @@ describe('alias fold map: projection-aware numFixedArgs', () => {
     for (const eq of rewriteEquations) {
       expect(eq).not.toContain('\\operatorname{field}');
     }
+  });
+});
+
+// ============================================================================
+// unfoldTransparent — @syntax @unfold
+// ============================================================================
+
+describe('unfoldTransparent', () => {
+  test('unfolds a simple type alias application', () => {
+    // Define: MyNat = Nat (i.e., MyNat := Const("Nat"))
+    const definitions = addDefinition(createDefinitionsMap(),
+      'MyNat',
+      mkSort(mkULit(1)), // type: Type 1
+      mkConst('Nat'),    // value: Nat
+    );
+    const unfoldNames = new Set(['MyNat']);
+    // Input: MyNat (as a bare Const)
+    // unfoldTransparent only unfolds App heads, not bare Const
+    // This is correct: bare Const without App won't be unfolded
+    const constTerm: TTKTerm = mkConst('MyNat');
+    const result = unfoldTransparent(constTerm, definitions, unfoldNames);
+    // Bare Const stays as-is (only App spine heads are unfolded)
+    expect(result.tag).toBe('Const');
+  });
+
+  test('unfolds a function application', () => {
+    // Define: MyId : Nat -> Nat, MyId x = x
+    // value: \(x : Nat) => x  (i.e., Binder(BLam, Nat, Var(0)))
+    // mkLambda(domain, body, name)
+    const definitions = addDefinition(createDefinitionsMap(),
+      'MyId',
+      mkPi(mkConst('Nat'), mkConst('Nat'), 'x'),
+      mkLambda(mkConst('Nat'), mkVar(0), 'x'),
+    );
+    const unfoldNames = new Set(['MyId']);
+    // Input: App(MyId, Const("Zero"))
+    const term: TTKTerm = mkApp(mkConst('MyId'), mkConst('Zero'));
+    const result = unfoldTransparent(term, definitions, unfoldNames);
+    // After unfolding: (\x => x)(Zero) beta-reduces to Zero
+    expect(result.tag).toBe('Const');
+    expect((result as any).name).toBe('Zero');
+  });
+
+  test('unfolds multi-arg function', () => {
+    // Define: MyPair A B = Pair A B
+    // value: \(A : Type) => \(B : Type) => Pair A B
+    // mkLambda(domain, body, name)
+    const definitions = addDefinition(createDefinitionsMap(),
+      'MyPair',
+      mkPi(mkSort(mkULit(0)), mkPi(mkSort(mkULit(0)), mkSort(mkULit(0)), 'B'), 'A'),
+      mkLambda(mkSort(mkULit(0)),
+        mkLambda(mkSort(mkULit(0)),
+          mkApp(mkApp(mkConst('Pair'), mkVar(1)), mkVar(0)), 'B'), 'A'),
+    );
+    const unfoldNames = new Set(['MyPair']);
+    // Input: App(App(MyPair, Const("Nat")), Const("Bool"))
+    const term: TTKTerm = mkApp(mkApp(mkConst('MyPair'), mkConst('Nat')), mkConst('Bool'));
+    const result = unfoldTransparent(term, definitions, unfoldNames);
+    // After unfolding: Pair(Nat, Bool)
+    expect(result.tag).toBe('App');
+    const { fn, arg } = result as any;
+    expect(arg.tag).toBe('Const');
+    expect(arg.name).toBe('Bool');
+    expect(fn.tag).toBe('App');
+    expect(fn.fn.tag).toBe('Const');
+    expect(fn.fn.name).toBe('Pair');
+    expect(fn.arg.tag).toBe('Const');
+    expect(fn.arg.name).toBe('Nat');
+  });
+
+  test('does not unfold non-marked constants', () => {
+    const definitions = addDefinition(createDefinitionsMap(),
+      'plus',
+      mkPi(mkConst('Nat'), mkPi(mkConst('Nat'), mkConst('Nat'), 'b'), 'a'),
+      mkLambda(mkConst('Nat'), mkLambda(mkConst('Nat'), mkVar(0), 'b'), 'a'),
+    );
+    const unfoldNames = new Set(['other']);
+    const term: TTKTerm = mkApp(mkConst('plus'), mkConst('Zero'));
+    const result = unfoldTransparent(term, definitions, unfoldNames);
+    // Should be unchanged
+    expect(result).toBe(term);
+  });
+
+  test('recurses into subterms (Pi body)', () => {
+    const definitions = addDefinition(createDefinitionsMap(),
+      'MyNat',
+      mkSort(mkULit(1)),
+      mkConst('Nat'),
+    );
+    const unfoldNames = new Set(['MyNat']);
+    // Input: Pi(_ : Nat, App(MyNat, x))  — note: MyNat is zero-arg, so App head
+    // Actually for a bare Const, unfoldTransparent won't trigger. Let's use App form.
+    // Define: MyId x = x, then Pi(_ : Nat, MyId(Nat))
+    const defs2 = addDefinition(createDefinitionsMap(),
+      'MyId',
+      mkPi(mkSort(mkULit(0)), mkSort(mkULit(0)), 'x'),
+      mkLambda(mkSort(mkULit(0)), mkVar(0), 'x'),
+    );
+    const unfoldNames2 = new Set(['MyId']);
+    const piTerm: TTKTerm = mkPi(mkConst('Nat'), mkApp(mkConst('MyId'), mkConst('Nat')), '_');
+    const result = unfoldTransparent(piTerm, defs2, unfoldNames2);
+    // Body should be unfolded: MyId(Nat) → Nat
+    expect(result.tag).toBe('Binder');
+    const body = (result as any).body;
+    expect(body.tag).toBe('Const');
+    expect(body.name).toBe('Nat');
+  });
+
+  test('empty unfoldNames returns term unchanged', () => {
+    const definitions = createDefinitionsMap();
+    const term: TTKTerm = mkApp(mkConst('f'), mkConst('x'));
+    const result = unfoldTransparent(term, definitions, new Set());
+    expect(result).toBe(term);
   });
 });

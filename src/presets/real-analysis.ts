@@ -202,6 +202,7 @@ absElim {R} a C pos neg = eitherElimDep (\\e => C (eitherElim (\\_ => a) (\\_ =>
 
 -- Epsilon-delta witness: given δ, prove δ > 0
 -- and the epsilon-delta condition
+@syntax @unfold
 EpsDeltaWitness : {R : Real} -> (f : Carrier R -> Carrier R) -> (x0 : Carrier R) -> (L : Carrier R) -> (ε : Carrier R) -> Carrier R -> Type
 EpsDeltaWitness {R} f x0 L ε δ = Pair (rlt (rzero R) δ) ((x : Carrier R) -> rlt (rzero R) (rabs (rsub x x0)) -> rlt (rabs (rsub x x0)) δ -> rlt (rabs (rsub (f x) L)) ε)
 

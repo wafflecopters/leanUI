@@ -1014,3 +1014,45 @@ describe('isRecord propagation', () => {
     expect(result!.isRecord).toBe(true);
   });
 });
+
+// ============================================================================
+// @syntax @unfold
+// ============================================================================
+
+describe('@syntax @unfold', () => {
+  test('parseSyntaxAnnotation recognizes @unfold', () => {
+    const result = parseSyntaxAnnotation('@unfold', 'EpsDeltaWitness');
+    expect(result.unfold).toBe(true);
+    expect(result.symbolMapping).toBeUndefined();
+    expect(result.entry).toBeUndefined();
+  });
+
+  test('parseSyntaxAnnotation with leading/trailing spaces', () => {
+    const result = parseSyntaxAnnotation('  @unfold  ', 'Foo');
+    expect(result.unfold).toBe(true);
+  });
+
+  test('buildRegistryFromAnnotations collects unfoldNames', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'plus', pattern: '$0 + $1' },
+      { declName: 'EpsDeltaWitness', pattern: '@unfold' },
+      { declName: 'MyAlias', pattern: '@unfold' },
+    ]);
+
+    expect(registry.unfoldNames).toBeDefined();
+    expect(registry.unfoldNames!.has('EpsDeltaWitness')).toBe(true);
+    expect(registry.unfoldNames!.has('MyAlias')).toBe(true);
+    expect(registry.unfoldNames!.has('plus')).toBe(false);
+    // Other annotations should still be processed normally
+    expect(registry.entries).toHaveLength(1);
+    expect(registry.entries[0].name).toBe('plus');
+  });
+
+  test('buildRegistryFromAnnotations omits unfoldNames when none present', () => {
+    const registry = buildRegistryFromAnnotations([
+      { declName: 'plus', pattern: '$0 + $1' },
+    ]);
+
+    expect(registry.unfoldNames).toBeUndefined();
+  });
+});

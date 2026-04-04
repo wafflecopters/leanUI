@@ -59,6 +59,8 @@ export interface SyntaxRegistry {
   entries: SyntaxEntry[];
   symbolMap: Map<string, { source: string; needsR: boolean; isRecord?: boolean }>;
   parent?: SyntaxRegistry;
+  /** Names that should be delta-reduced (unfolded) before rendering */
+  unfoldNames?: Set<string>;
 }
 
 // ============================================================================
@@ -780,6 +782,8 @@ export interface ParsedSyntaxAnnotation {
   symbolMapping?: { symbol: string; source: string };
   /** Pattern entry (has captures): e.g., $0 + $1 → plus $$0 $$1 */
   entry?: SyntaxEntry;
+  /** @syntax @unfold: delta-reduce this definition before rendering */
+  unfold?: boolean;
 }
 
 /**
@@ -803,6 +807,11 @@ export function parseSyntaxAnnotation(
   declName: string,
   priority?: number,
 ): ParsedSyntaxAnnotation {
+  // @unfold directive: delta-reduce this definition before rendering
+  if (patternStr.trim() === '@unfold') {
+    return { unfold: true };
+  }
+
   // Split on @becomes for explicit template override
   const becomesIdx = patternStr.indexOf(' @becomes ');
   const rawPattern = becomesIdx >= 0 ? patternStr.slice(0, becomesIdx) : patternStr;
@@ -1134,12 +1143,17 @@ export interface SyntaxAnnotation {
 export function buildRegistryFromAnnotations(annotations: SyntaxAnnotation[]): SyntaxRegistry {
   const symbolMap = new Map<string, { source: string; needsR: boolean; isRecord?: boolean }>();
   const entries: SyntaxEntry[] = [];
+  const unfoldNames = new Set<string>();
 
   let infixCounter = 5;   // Incrementing: earlier → lower → binds wider
   let structuralCounter = 50; // Incrementing: later → higher → tried first
 
   for (const ann of annotations) {
     const result = parseSyntaxAnnotation(ann.pattern, ann.declName);
+
+    if (result.unfold) {
+      unfoldNames.add(ann.declName);
+    }
 
     if (result.symbolMapping) {
       symbolMap.set(result.symbolMapping.symbol, { source: result.symbolMapping.source, needsR: false, isRecord: ann.isRecord });
@@ -1157,5 +1171,5 @@ export function buildRegistryFromAnnotations(annotations: SyntaxAnnotation[]): S
     }
   }
 
-  return { entries, symbolMap, parent: createDefaultRegistry() };
+  return { entries, symbolMap, parent: createDefaultRegistry(), unfoldNames: unfoldNames.size > 0 ? unfoldNames : undefined };
 }

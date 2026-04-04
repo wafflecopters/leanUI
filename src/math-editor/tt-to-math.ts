@@ -23,6 +23,8 @@ export type SubtermAnnotator = (nodes: MathNode[], term: TTerm, ctx: string[]) =
 export interface ReverseRegistry {
   sourceToVisual: Map<string, string>;   // "Nat" → "\\mathbb{N}"
   nameToEntry: Map<string, SyntaxEntry>; // "plus" → entry with pattern [$0, +, $1]
+  /** Names that should be delta-reduced (unfolded) before rendering */
+  unfoldNames: Set<string>;
 }
 
 /** Extract function name from a template string (first space-delimited token). */
@@ -34,6 +36,7 @@ function templateFunctionName(template: string): string {
 export function buildReverseRegistry(registry: SyntaxRegistry): ReverseRegistry {
   const sourceToVisual = new Map<string, string>();
   const nameToEntry = new Map<string, SyntaxEntry>();
+  const unfoldNames = new Set<string>();
 
   let r: SyntaxRegistry | undefined = registry;
   while (r) {
@@ -50,10 +53,15 @@ export function buildReverseRegistry(registry: SyntaxRegistry): ReverseRegistry 
         nameToEntry.set(fnName, entry);
       }
     }
+    if (r.unfoldNames) {
+      for (const name of r.unfoldNames) {
+        unfoldNames.add(name);
+      }
+    }
     r = r.parent;
   }
 
-  return { sourceToVisual, nameToEntry };
+  return { sourceToVisual, nameToEntry, unfoldNames };
 }
 
 // ============================================================================
