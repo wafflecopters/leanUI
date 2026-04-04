@@ -676,15 +676,15 @@ export function unfoldTransparent(
       if (head.tag === 'Const' && unfoldNames.has(head.name)) {
         const defn = definitions.terms.get(head.name);
         if (defn?.value) {
-          // Apply the definition's lambda body to the arguments
+          // Unfold: apply definition body to args and reduce.
+          // The value may be a lambda chain OR a Match (pattern-matching def).
+          // Use whnf with real definitions to handle both beta and iota reduction.
           let body = defn.value;
           for (const arg of args) {
             body = mkApp(body, arg);
           }
-          // Beta-normalize to reduce the (\x => ..)(arg) redexes
-          const reduced = betaNormalize(body);
-          // Recurse into the result in case the unfolded body contains
-          // more unfold-marked constants
+          const reduced = whnf(body, { definitions });
+          // Recurse in case the unfolded body contains more unfold-marked constants
           return unfoldTransparent(reduced, definitions, unfoldNames);
         }
       }
