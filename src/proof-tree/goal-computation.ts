@@ -676,14 +676,16 @@ export function unfoldTransparent(
       if (head.tag === 'Const' && unfoldNames.has(head.name)) {
         const defn = definitions.terms.get(head.name);
         if (defn?.value) {
-          // Unfold: apply definition body to args and reduce.
-          // The value may be a lambda chain OR a Match (pattern-matching def).
-          // Use whnf with real definitions to handle both beta and iota reduction.
-          let body = defn.value;
+          // Single-step delta reduction: substitute args into this definition only.
+          // Use an isolated definitions map containing ONLY this constant, so whnf
+          // doesn't aggressively unfold other constants (field, Carrier, rlt, etc.)
+          const isolatedDefs = createDefinitionsMap();
+          isolatedDefs.terms.set(head.name, defn);
+          let body: TTKTerm = head;
           for (const arg of args) {
             body = mkApp(body, arg);
           }
-          const reduced = whnf(body, { definitions });
+          const reduced = whnf(body, { definitions: isolatedDefs });
           // Recurse in case the unfolded body contains more unfold-marked constants
           return unfoldTransparent(reduced, definitions, unfoldNames);
         }
