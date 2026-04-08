@@ -8,6 +8,7 @@
 
 import { TTerm, TPattern, shiftSurfaceTerm, occursInTT } from '../compiler/surface';
 import { SyntaxRegistry, SyntaxEntry, PatternElement } from './syntax-registry';
+import { renderStaticLatex } from './render';
 import {
   MathNode, MathRow,
   mkRow, mkSymbol, mkHole, mkSup, mkSub, mkBigOp, mkFrac, mkAccent, mkDelimiter, mkText, mkGroup,
@@ -294,6 +295,15 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
     }
 
     case 'App': {
+      // Beta-reduce lambda applications before rendering:
+      // (\x => body)(arg) → render body with arg in context (visual substitution)
+      if (term.fn.tag === 'Binder' && term.fn.binderKind.tag === 'BLamTT') {
+        const argNodes = ttermToMathNodes(term.arg, rev, ctx, annotate);
+        const argStr = renderStaticLatex(mkRow(argNodes));
+        // Put the rendered arg as the "variable name" so Var(0) in body renders as the arg
+        const bodyCtx = [argStr, ...ctx];
+        return ttermToMathNodes(term.fn.body, rev, bodyCtx, annotate);
+      }
       const { fn, args } = flattenApp(term);
 
       if (fn.tag === 'Const') {
@@ -638,6 +648,10 @@ export function buildFromPattern(pattern: PatternElement[], captures: Map<string
     switch (pe.tag) {
       case 'literal':
         result.push(mkSymbol(pe.symbol));
+        break;
+
+      case 'text':
+        result.push(mkText(pe.content));
         break;
 
       case 'capture': {

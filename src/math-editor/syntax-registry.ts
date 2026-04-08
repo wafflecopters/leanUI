@@ -17,6 +17,7 @@ import { MathNode, MathRow } from './types';
 
 export type PatternElement =
   | { tag: 'literal'; symbol: string }
+  | { tag: 'text'; content: string }
   | { tag: 'capture'; name: string }
   | { tag: 'bigop'; operator: string; below: PatternElement[] | null; above: PatternElement[] | null; body: PatternElement[] | null }
   | { tag: 'frac'; numer: PatternElement[]; denom: PatternElement[] }
@@ -28,6 +29,7 @@ export type PatternElement =
 // Convenience constructors
 export const pat = {
   literal: (symbol: string): PatternElement => ({ tag: 'literal', symbol }),
+  text: (content: string): PatternElement => ({ tag: 'text', content }),
   capture: (name: string): PatternElement => ({ tag: 'capture', name }),
   bigop: (operator: string, below: PatternElement[] | null, above: PatternElement[] | null = null, body: PatternElement[] | null = null): PatternElement =>
     ({ tag: 'bigop', operator, below, above, body }),
@@ -86,6 +88,14 @@ export function matchRow(pattern: PatternElement[], nodes: readonly MathNode[]):
         if (nodeIdx >= nodeArr.length) return null;
         const node = nodeArr[nodeIdx];
         if (node.tag !== 'Symbol' || node.value !== pe.symbol) return null;
+        nodeIdx++;
+        break;
+      }
+
+      case 'text': {
+        if (nodeIdx >= nodeArr.length) return null;
+        const node = nodeArr[nodeIdx];
+        if (node.tag !== 'Text' || node.content !== pe.content) return null;
         nodeIdx++;
         break;
       }
@@ -237,6 +247,7 @@ function findAnchorInNodes(anchor: PatternElement, nodes: readonly MathNode[], s
 function anchorMatchesAt(anchor: PatternElement, node: MathNode): boolean {
   switch (anchor.tag) {
     case 'literal': return node.tag === 'Symbol' && node.value === anchor.symbol;
+    case 'text': return node.tag === 'Text' && node.content === anchor.content;
     case 'bigop': return node.tag === 'BigOp' && node.operator === anchor.operator;
     case 'frac': return node.tag === 'Frac';
     case 'delimiter': return node.tag === 'Delimiter' && node.open === anchor.open;
@@ -559,6 +570,8 @@ function patternElementToLatex(pe: PatternElement): string {
       if (SPACED.has(pe.symbol)) return pe.symbol;
       return pe.symbol;
     }
+    case 'text':
+      return `\\text{${pe.content}}`;
     case 'capture':
       return `\\textcolor{#58a6ff}{${pe.name}}`;
     case 'bigop': {
@@ -921,6 +934,17 @@ export function parsePatternString(input: string): PatternElement[] {
     // LaTeX command: \command
     if (ch === '\\') {
       const cmd = parseLaTeXCommand();
+
+      // \text{...} — upright text
+      if (cmd === '\\text' && i < input.length && input[i] === '{') {
+        i++; // skip {
+        let textContent = '';
+        while (i < input.length && input[i] !== '}') {
+          textContent += input[i]; i++;
+        }
+        if (i < input.length && input[i] === '}') i++; // skip }
+        return applyPostfix(pat.text(textContent));
+      }
 
       // Check if this is a BigOp operator
       if (cmd in BIGOP_OPERATORS) {

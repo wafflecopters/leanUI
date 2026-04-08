@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
-import { resetIds, mkRow, mkSymbol, mkHole, mkDelimiter, mkFrac, mkSub, mkSup, mkBigOp, mkAccent } from './types';
+import { resetIds, mkRow, mkSymbol, mkHole, mkDelimiter, mkFrac, mkSub, mkSup, mkBigOp, mkAccent, mkText } from './types';
 import {
   matchRow, convertToSource, substituteTemplate, patternToDisplayLatex,
   pat, createDefaultRegistry, lookupSymbol,
@@ -88,6 +88,29 @@ describe('matchRow', () => {
   test('leftover input after pattern fails', () => {
     const nodes = [mkSymbol('x'), mkSymbol('y')];
     expect(matchRow([pat.literal('x')], nodes)).toBe(null);
+  });
+
+  test('text element matches Text node', () => {
+    const xSym = mkSymbol('x');
+    const ySym = mkSymbol('y');
+    const nodes = [mkText('choose '), xSym, mkSymbol(','), mkText('then '), ySym];
+    const result = matchRow(
+      [pat.text('choose '), pat.capture('x'), pat.literal(','), pat.text('then '), pat.capture('y')],
+      nodes
+    );
+    expect(result).not.toBe(null);
+    expect(result!.get('x')).toEqual([xSym]);
+    expect(result!.get('y')).toEqual([ySym]);
+  });
+
+  test('text element fails on wrong content', () => {
+    const nodes = [mkText('choose')];
+    expect(matchRow([pat.text('select')], nodes)).toBe(null);
+  });
+
+  test('text element fails on Symbol node', () => {
+    const nodes = [mkSymbol('choose')];
+    expect(matchRow([pat.text('choose')], nodes)).toBe(null);
   });
 });
 
@@ -690,6 +713,17 @@ describe('parsePatternString', () => {
     const result = parsePatternString('\\lim_{$x \\to $a} $body');
     expect(result).toEqual([
       pat.bigop('lim', [pat.capture('x'), pat.literal('\\to'), pat.capture('a')], null, [pat.capture('body')]),
+    ]);
+  });
+
+  test('\\text{...} produces text element', () => {
+    const result = parsePatternString('\\text{choose } $x, \\text{then } $y');
+    expect(result).toEqual([
+      pat.text('choose '),
+      pat.capture('x'),
+      pat.literal(','),
+      pat.text('then '),
+      pat.capture('y'),
     ]);
   });
 });
