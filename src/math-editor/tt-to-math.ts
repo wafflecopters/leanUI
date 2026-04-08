@@ -359,18 +359,20 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
 
     case 'Binder': {
       if (term.binderKind.tag === 'BLamTT') {
-        const bodyCtx = [term.name, ...ctx];
+        const lamName = chooseFreshName(term.name || 'x', ctx);
+        const bodyCtx = [lamName, ...ctx];
         const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx, annotate);
-        return [mkSymbol(term.name), mkSymbol('\\to'), ...bodyNodes];
+        return [mkSymbol(lamName), mkSymbol('\\to'), ...bodyNodes];
       }
       if (term.binderKind.tag === 'BPiTT') {
         const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx, annotate) : [mkHole()];
-        const bodyCtx = [term.name, ...ctx];
+        const piName = (term.name && term.name !== '_') ? chooseFreshName(term.name, ctx) : term.name;
+        const bodyCtx = [piName, ...ctx];
         const bodyNodes = ttermToMathNodes(term.body, rev, bodyCtx, annotate);
         // Named dependent binder: render as (name : domain) → body
-        if (term.name !== '_' && term.name !== '' && occursInTT(0, term.body)) {
+        if (piName !== '_' && piName !== '' && occursInTT(0, term.body)) {
           return [
-            mkDelimiter('(', ')', mkRow([mkSymbol(term.name), mkSymbol(':'), ...domainNodes])),
+            mkDelimiter('(', ')', mkRow([mkSymbol(piName), mkSymbol(':'), ...domainNodes])),
             mkSymbol('\\to'), ...bodyNodes,
           ];
         }
@@ -510,8 +512,9 @@ function buildCaptureMap(
         {
           const arg = args[argIdx];
           if (arg.tag === 'Binder' && arg.binderKind.tag === 'BLamTT') {
-            captures.set(slot.binderCapture, [mkSymbol(arg.name)]);
-            const bodyCtx = [arg.name, ...ctx];
+            const capName = chooseFreshName(arg.name || 'x', ctx);
+            captures.set(slot.binderCapture, [mkSymbol(capName)]);
+            const bodyCtx = [capName, ...ctx];
             captures.set(slot.bodyCapture, ttermToMathNodes(arg.body, rev, bodyCtx, annotate));
           } else {
             const binderName = chooseFreshName('x', ctx);
