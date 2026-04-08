@@ -736,6 +736,7 @@ export interface ParsedDeclaration {
   params?: ParsedRecordParam[];
   fields?: ParsedRecordField[];
   constructorName?: string;  // Optional custom constructor name
+  recordConstructorSyntax?: string;  // @syntax annotation on record constructor
   extends?: string[];        // Names of records to extend
   extendsExprs?: TTerm[];    // Full expressions for extends (e.g., Semigroup A)
   // For with-clause auxiliary functions: number of scrutinee pattern positions.
@@ -2107,8 +2108,15 @@ export class Parser {
     // Skip newlines after 'where'
     this.skipNewlines();
 
-    // Parse optional constructor declaration: constructor CtorName
+    // Parse optional constructor declaration: [@syntax ...] constructor CtorName
     let constructorName: string | undefined;
+    let recordCtorSyntax: string | undefined;
+    // Check for @syntax annotation before constructor
+    if (this.current().type === 'SYNTAX') {
+      recordCtorSyntax = this.current().value;
+      this.advance();
+      this.skipNewlines();
+    }
     if (this.current().type === 'CONSTRUCTOR') {
       this.advance(); // consume 'constructor'
       const ctorNameToken = this.expect('IDENT');
@@ -2119,6 +2127,9 @@ export class Parser {
       this.recordRange(ctorNamePath, ctorNameToken, ctorNameToken);
 
       this.skipNewlines();
+    } else if (recordCtorSyntax !== undefined) {
+      // @syntax was given but no constructor declaration follows — ignore the syntax
+      recordCtorSyntax = undefined;
     }
 
     // Parse fields: name : type
@@ -2200,6 +2211,7 @@ export class Parser {
       params,
       fields,
       constructorName,
+      ...(recordCtorSyntax !== undefined ? { recordConstructorSyntax: recordCtorSyntax } : {}),
       extends: extendsNames,
       extendsExprs
     };

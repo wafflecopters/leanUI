@@ -4165,7 +4165,8 @@ function processRecordDeclaration(
       type: decl.params ? buildSurfaceRecordType(decl.params) : undefined,
       constructors: [{
         name: constructorName,
-        type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName)
+        type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName),
+        ...(decl.recordConstructorSyntax !== undefined ? { syntax: decl.recordConstructorSyntax } : {}),
       }]
     };
     return {
@@ -4187,7 +4188,8 @@ function processRecordDeclaration(
     type: decl.params ? buildSurfaceRecordType(decl.params) : undefined,
     constructors: [{
       name: constructorName,
-      type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName)
+      type: buildSurfaceConstructorType(decl.params || [], decl.fields || [], recordName),
+      ...(decl.recordConstructorSyntax !== undefined ? { syntax: decl.recordConstructorSyntax } : {}),
     }],
     syntax: decl.syntax,  // Preserve @syntax from the record declaration
   };

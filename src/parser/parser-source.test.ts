@@ -223,4 +223,35 @@ plus (Succ m) n = Succ (plus m n)`;
     expect(boolDecl!.syntax).toBeUndefined();
     expect(boolDecl!.constructorSyntax).toBeUndefined();
   });
+
+  test('@syntax on record constructor propagates to CompiledDeclaration', () => {
+    const source = `@syntax \\exists $x \\in $A , $P @becomes DPair {u} {v} $$A (\\$x => $P)
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  @syntax \\text{choose} $x, \\text{then} $y @becomes MkDPair $x $y
+  constructor MkDPair
+  fst : A
+  snd : B fst`;
+
+    const result = compileTTFromText(source);
+    const decls = result.blocks.flatMap(b => b.declarations);
+
+    const dpairDecl = decls.find(d => d.name === 'DPair');
+    expect(dpairDecl).toBeDefined();
+    expect(dpairDecl!.syntax).toBe('\\exists $x \\in $A , $P @becomes DPair {u} {v} $$A (\\$x => $P)');
+    expect(dpairDecl!.constructorSyntax).toEqual([
+      { name: 'MkDPair', syntax: '\\text{choose} $x, \\text{then} $y @becomes MkDPair $x $y' },
+    ]);
+  });
+
+  test('@syntax on record constructor without explicit constructor name', () => {
+    const source = `record Box (A : Type) : Type where
+  unboxed : A`;
+
+    const result = compileTTFromText(source);
+    const decls = result.blocks.flatMap(b => b.declarations);
+
+    const boxDecl = decls.find(d => d.name === 'Box');
+    expect(boxDecl).toBeDefined();
+    expect(boxDecl!.constructorSyntax).toBeUndefined();
+  });
 });
