@@ -460,14 +460,14 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
   constructor
   intros ε hε
   cases (Limit.eps_delta limF (rdiv ε (rtwo R)) (divTwoPos ε hε)) with
-  | MkDPair δF witnessF =>
+  | MkDPair δF (MkPair posF boundF) =>
     cases (Limit.eps_delta limG (rdiv ε (rtwo R)) (divTwoPos ε hε)) with
-    | MkDPair δG witnessG =>
+    | MkDPair δG (MkPair posG boundG) =>
       cases (CompleteOrderedField.leTotal (field R) δF δG) with
       | Left hle =>
-        exact (MkDPair δF (MkPair (Pair.fst witnessF) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (Pair.snd witnessF x hx0 hxd) (Pair.snd witnessG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle))))))
+        exact (MkDPair δF (MkPair posF (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (boundF x hx0 hxd) (boundG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle))))))
       | Right hle =>
-        exact (MkDPair δG (MkPair (Pair.fst witnessG) (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (Pair.snd witnessF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (Pair.snd witnessG x hx0 hxd)))))
+        exact (MkDPair δG (MkPair posG (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (boundF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (boundG x hx0 hxd)))))
 
 -- lim (f+g+h) = (L+M)+N: three-function limit addition via two applications of limitAdd
 limitAdd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 L M N : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit h x0 N -> Limit (\\x => radd (radd (f x) (g x)) (h x)) x0 (radd (radd L M) N)
