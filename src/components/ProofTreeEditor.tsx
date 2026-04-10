@@ -1328,10 +1328,18 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
           {node.collapsed ? '\u25B6' : '\u25BC'}
         </span>
         <span style={keywordStyle}>{node.isCases ? 'cases ' : 'induct on '}</span>
-        <InlineKaTeX
-          latex={texNameForProse(node.scrutinee)}
-          style={{ fontSize: '13px' }}
-        />
+        {(() => {
+          // Prefer rendered scrutineeLatex from goalMap, fall back to plain name
+          const scrutineeLatex = goalMap?.get(node.id)?.scrutineeLatex;
+          if (scrutineeLatex) {
+            return <InlineKaTeX latex={scrutineeLatex} style={{ fontSize: '13px' }} />;
+          }
+          // For simple variable names, use texNameForProse; for complex expressions, plain text
+          const isSimple = /^[a-zA-Z_][a-zA-Z0-9_']*$/.test(node.scrutinee);
+          return isSimple
+            ? <InlineKaTeX latex={texNameForProse(node.scrutinee)} style={{ fontSize: '13px' }} />
+            : <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{node.scrutinee}</span>;
+        })()}
         <span style={mutedStyle}>:</span>
       </TacticRow>
 
