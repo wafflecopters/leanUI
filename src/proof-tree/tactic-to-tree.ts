@@ -6,6 +6,7 @@
  */
 
 import { TacticCommand, TTerm, allPatternVarNames } from '../compiler/surface';
+import { desugarNestedCaseBranch } from '../compiler/case-pattern-desugar';
 import {
   ProofNode,
   mkHole,
@@ -174,7 +175,8 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
     return mkInduction(scrutinee, [mkCase('?', mkHole())], isCases);
   }
 
-  const cases = cmd.caseBranches.map(branch => {
+  const cases = cmd.caseBranches.map(rawBranch => {
+    const branch = desugarNestedCaseBranch(rawBranch);
     const body = tacticCommandsToProofTree(branch.tactics);
     return mkCase(branch.constructor, body, branch.constructor, allPatternVarNames(branch.params));
   });
