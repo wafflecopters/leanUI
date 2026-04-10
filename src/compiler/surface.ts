@@ -277,6 +277,28 @@ export type CasePattern =
   | { tag: 'var'; name: string }
   | { tag: 'ctor'; constructor: string; params: CasePattern[] };
 
+/** Convert a flat string[] of param names to CasePattern[] (all variable bindings). */
+export function flatParamsToCasePatterns(names: readonly string[]): CasePattern[] {
+  return names.map(name => ({ tag: 'var' as const, name }));
+}
+
+/** Extract all variable names bound by a case pattern (recursive). */
+export function patternVarNames(pattern: CasePattern): string[] {
+  if (pattern.tag === 'var') return [pattern.name];
+  const names: string[] = [];
+  for (const sub of pattern.params) {
+    names.push(...patternVarNames(sub));
+  }
+  return names;
+}
+
+/** Extract all variable names from a list of case patterns. */
+export function allPatternVarNames(patterns: readonly CasePattern[]): string[] {
+  const names: string[] = [];
+  for (const p of patterns) names.push(...patternVarNames(p));
+  return names;
+}
+
 /**
  * Case branch for structured cases tactic
  *
