@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, CaseBranch, flatParamsToCasePatterns, mkTacticBlockTT } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, CaseBranch, CasePattern, mkTacticBlockTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -3826,6 +3826,53 @@ export class Parser {
    * - assumption, constructor, reflexivity: no arguments
    * - have: parse identifier ':' term ':=' term
    */
+  /**
+   * Parse a case pattern: either an identifier or a parenthesized constructor application.
+   *
+   * Grammar:
+   *   casePattern := IDENT                          // variable binding
+   *                | '(' IDENT casePattern* ')'     // nested constructor
+   */
+  private parseCasePattern(): CasePattern {
+    if (this.current().type === 'LPAREN') {
+      this.advance(); // consume '('
+      // Expect constructor name
+      if (this.current().type !== 'IDENT') {
+        throw new ParseError(
+          'Expected constructor name after (',
+          this.current().line,
+          this.current().col
+        );
+      }
+      const ctorName = this.current().value;
+      this.advance();
+      // Parse nested params until ')'
+      const nestedParams: CasePattern[] = [];
+      while ((this.current().type as string) !== 'RPAREN' && (this.current().type as string) !== 'EOF') {
+        nestedParams.push(this.parseCasePattern());
+      }
+      if ((this.current().type as string) !== 'RPAREN') {
+        throw new ParseError(
+          'Expected ) to close nested pattern',
+          this.current().line,
+          this.current().col
+        );
+      }
+      this.advance(); // consume ')'
+      return { tag: 'ctor', constructor: ctorName, params: nestedParams };
+    }
+    if (this.current().type === 'IDENT') {
+      const name = this.current().value;
+      this.advance();
+      return { tag: 'var', name };
+    }
+    throw new ParseError(
+      `Expected case pattern (identifier or parenthesized constructor), got ${this.current().type}`,
+      this.current().line,
+      this.current().col
+    );
+  }
+
   private parseTactic(ctx: NameContext, path: IndexPath): TacticCommand {
     // Check for bullet (·) for subgoal focusing
     if (this.current().type === 'BULLET') {
@@ -4101,15 +4148,19 @@ export class Parser {
             const caseBranchPath = [...path, { kind: 'field' as const, name: 'caseBranches' }, { kind: 'array' as const, index: caseBranches.length }];
             this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'constructor' }], ctorToken, ctorToken);
 
-            // Parse optional parameters
-            const rawParams: string[] = [];
-            while (this.current().type === 'IDENT' && this.current().col > tacticToken.col) {
-              const paramToken = this.current();
-              rawParams.push(this.current().value);
-              this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'params' }, { kind: 'array' as const, index: rawParams.length - 1 }], paramToken, paramToken);
-              this.advance();
+            // Parse optional parameters (variables or parenthesized nested constructors)
+            const params: CasePattern[] = [];
+            while ((this.current().type === 'IDENT' || this.current().type === 'LPAREN')
+                   && this.current().col > tacticToken.col) {
+              const paramStartToken = this.current();
+              const pattern = this.parseCasePattern();
+              params.push(pattern);
+              this.recordRange(
+                [...caseBranchPath, { kind: 'field' as const, name: 'params' }, { kind: 'array' as const, index: params.length - 1 }],
+                paramStartToken,
+                paramStartToken,
+              );
             }
-            const params = flatParamsToCasePatterns(rawParams);
 
             // Expect '=>'
             if (this.current().type !== 'FATARROW') {

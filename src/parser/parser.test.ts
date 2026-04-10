@@ -3501,3 +3501,73 @@ test : Nat -> Nat := by
       expect(tokens[0].value).toBe('by');
     });
   });
+
+describe('nested case patterns', () => {
+  test('simple nested pattern: | MkDPair a (MkPair x y) =>', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(`
+test : Nat := by
+  cases p with
+  | MkDPair a (MkPair x y) =>
+    exact a
+`);
+    const def = decls.find(d => d.name === 'test');
+    const tactics = (def?.value as any).tactics;
+    const casesCmd = tactics.find((t: any) => t.name === 'cases');
+    expect(casesCmd.caseBranches).toHaveLength(1);
+    const branch = casesCmd.caseBranches[0];
+    expect(branch.constructor).toBe('MkDPair');
+    expect(branch.params).toHaveLength(2);
+    expect(branch.params[0]).toEqual({ tag: 'var', name: 'a' });
+    expect(branch.params[1]).toEqual({
+      tag: 'ctor',
+      constructor: 'MkPair',
+      params: [
+        { tag: 'var', name: 'x' },
+        { tag: 'var', name: 'y' },
+      ],
+    });
+  });
+
+  test('deeply nested pattern: | A (B (C x)) =>', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(`
+test : Nat := by
+  cases p with
+  | A (B (C x)) =>
+    exact x
+`);
+    const def = decls.find(d => d.name === 'test');
+    const tactics = (def?.value as any).tactics;
+    const casesCmd = tactics.find((t: any) => t.name === 'cases');
+    const branch = casesCmd.caseBranches[0];
+    expect(branch.constructor).toBe('A');
+    expect(branch.params[0]).toEqual({
+      tag: 'ctor',
+      constructor: 'B',
+      params: [{
+        tag: 'ctor',
+        constructor: 'C',
+        params: [{ tag: 'var', name: 'x' }],
+      }],
+    });
+  });
+
+  test('flat pattern still works: | MkPair a b =>', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations(`
+test : Nat := by
+  cases p with
+  | MkPair a b =>
+    exact a
+`);
+    const def = decls.find(d => d.name === 'test');
+    const tactics = (def?.value as any).tactics;
+    const casesCmd = tactics.find((t: any) => t.name === 'cases');
+    const branch = casesCmd.caseBranches[0];
+    expect(branch.params).toEqual([
+      { tag: 'var', name: 'a' },
+      { tag: 'var', name: 'b' },
+    ]);
+  });
+});
