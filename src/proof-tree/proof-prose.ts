@@ -191,8 +191,16 @@ function texName(name: string): string {
   if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
   // Single letter + digits: subscript (x0 → x_{0}, n12 → n_{12})
   if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
-  // Multi-letter: upright text
-  return `\\mathit{${name}}`;
+  // Multi-letter: upright text (escape underscores so KaTeX doesn't read them as subscript)
+  return `\\mathit{${name.replace(/_/g, '\\_')}}`;
+}
+
+/** A synthetic induction inserted by nested-pattern desugaring —
+ *  scrutinee is a fresh `_nested*` var and there is exactly one case. */
+function isSyntheticNestedInduction(node: ProofNode): boolean {
+  return node.tag === 'induction'
+    && node.scrutinee.startsWith('_nested')
+    && node.cases.length === 1;
 }
 
 // ============================================================================
@@ -381,11 +389,16 @@ export function generateProofProse(
       }
 
       case 'induction': {
+        // Synthetic induction inserted by nested-pattern desugaring:
+        // `cases _nested10 with | MkPair posF boundF => ...`
+        // Hide it entirely — the outer case header already shows the user's
+        // original nested pattern, so walking the single case body at the
+        // current depth collapses the two levels back into one.
+        if (isSyntheticNestedInduction(node)) {
+          walk(node.cases[0].body, depth);
+          break;
+        }
         emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
-        // TODO: when a case has a single nested `cases` on a _nested* var,
-        // collapse them into a flat nested pattern for display.
-        // E.g., "MkDPair(δ, _nested1)" followed by "cases _nested1 | MkPair(a, b)"
-        // should render as "MkDPair(δ, MkPair(a, b))".
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
           const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;

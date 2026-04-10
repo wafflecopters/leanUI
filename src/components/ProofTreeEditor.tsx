@@ -2779,7 +2779,8 @@ function texNameForProse(name: string): string {
   if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
   // Single letter + digits: subscript (x0 → x_{0}, n12 → n_{12})
   if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
-  return `\\textsf{${name}}`;
+  // Escape underscores so KaTeX doesn't read them as subscript operators
+  return `\\textsf{${name.replace(/_/g, '\\_')}}`;
 }
 
 // ============================================================================

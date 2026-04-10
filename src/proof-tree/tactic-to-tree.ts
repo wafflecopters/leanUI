@@ -5,7 +5,7 @@
  * uses tactic mode (`:= by ...`).
  */
 
-import { TacticCommand, TTerm, allPatternVarNames } from '../compiler/surface';
+import { TacticCommand, TTerm, CasePattern, allPatternVarNames } from '../compiler/surface';
 import { desugarNestedCaseBranch } from '../compiler/case-pattern-desugar';
 import {
   ProofNode,
@@ -161,6 +161,48 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
   }
 }
 
+/** Map Unicode Greek → LaTeX for case label rendering. */
+const LABEL_GREEK: Record<string, string> = {
+  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
+  'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
+  'λ': '\\lambda', 'μ': '\\mu', 'π': '\\pi', 'σ': '\\sigma',
+  'φ': '\\varphi', 'ψ': '\\psi', 'ω': '\\omega',
+};
+
+/** Render a variable name for a case label, matching texNameForProse conventions. */
+function labelVarName(name: string): string {
+  if (name.length === 1 && LABEL_GREEK[name]) return LABEL_GREEK[name];
+  if (name.length >= 2 && LABEL_GREEK[name[0]] && /^[a-zA-Z0-9]+$/.test(name.slice(1))) {
+    return `${LABEL_GREEK[name[0]]}_{${name.slice(1)}}`;
+  }
+  if (name.length === 1) return name;
+  if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
+  // Escape underscores so KaTeX doesn't read them as subscript
+  return `\\textsf{${name.replace(/_/g, '\\_')}}`;
+}
+
+/** Recursively render a CasePattern to LaTeX. Nested constructor patterns get parenthesized. */
+function formatPatternLatex(p: CasePattern): string {
+  if (p.tag === 'var') return labelVarName(p.name);
+  const ctor = `\\text{${p.constructor}}`;
+  if (p.params.length === 0) return ctor;
+  const inner = p.params.map(formatPatternLatex).join('\\,');
+  return `(${ctor}\\,${inner})`;
+}
+
+/** Format the label for a case branch that has at least one nested constructor pattern. */
+function formatNestedCaseLabelLatex(ctorName: string, patterns: readonly CasePattern[]): string {
+  const ctor = `\\text{${ctorName}}`;
+  if (patterns.length === 0) return ctor;
+  const inner = patterns.map(formatPatternLatex).join('\\,');
+  return `${ctor}\\,${inner}`;
+}
+
+/** Does this case branch contain any nested constructor patterns? */
+function hasNestedPattern(params: readonly CasePattern[]): boolean {
+  return params.some(p => p.tag === 'ctor');
+}
+
 /** Build an InductionNode from a cases/induction command with case branches. */
 function buildInductionNode(cmd: TacticCommand): ProofNode {
   // Use full expression string for complex scrutinees (e.g., cases (leTotal ...))
@@ -178,7 +220,13 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
   const cases = cmd.caseBranches.map(rawBranch => {
     const branch = desugarNestedCaseBranch(rawBranch);
     const body = tacticCommandsToProofTree(branch.tactics);
-    return mkCase(branch.constructor, body, branch.constructor, allPatternVarNames(branch.params));
+    if (hasNestedPattern(rawBranch.params)) {
+      // Nested pattern — show the user's original nesting in the label and skip
+      // flat paramNames (which would leak synthetic `_nested*` names into the UI).
+      const nestedLabel = formatNestedCaseLabelLatex(rawBranch.constructor, rawBranch.params);
+      return mkCase(rawBranch.constructor, body, rawBranch.constructor, undefined, nestedLabel);
+    }
+    return mkCase(rawBranch.constructor, body, rawBranch.constructor, allPatternVarNames(branch.params));
   });
 
   return mkInduction(scrutinee, cases, isCases);
