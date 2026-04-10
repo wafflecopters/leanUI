@@ -5,7 +5,7 @@
  * uses tactic mode (`:= by ...`).
  */
 
-import { TacticCommand, TTerm } from '../compiler/surface';
+import { TacticCommand, TTerm, allPatternVarNames } from '../compiler/surface';
 import {
   ProofNode,
   mkHole,
@@ -176,7 +176,7 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
 
   const cases = cmd.caseBranches.map(branch => {
     const body = tacticCommandsToProofTree(branch.tactics);
-    return mkCase(branch.constructor, body, branch.constructor, branch.params);
+    return mkCase(branch.constructor, body, branch.constructor, allPatternVarNames(branch.params));
   });
 
   return mkInduction(scrutinee, cases, isCases);

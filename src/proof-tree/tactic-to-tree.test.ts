@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import { tacticCommandsToProofTree, surfaceTermToString, findFirstHole } from './tactic-to-tree';
-import { TacticCommand, TTerm } from '../compiler/surface';
+import { TacticCommand, TTerm, flatParamsToCasePatterns } from '../compiler/surface';
 
 // Helper to create a Const TTerm
 const cst = (name: string): TTerm => ({ tag: 'Const', name });
@@ -85,8 +85,8 @@ describe('tacticCommandsToProofTree', () => {
     const tree = tacticCommandsToProofTree([
       tc('induction', [cst('n')], {
         caseBranches: [
-          { constructor: 'Zero', params: [], tactics: [tc('exact', [cst('refl')])] },
-          { constructor: 'Succ', params: ['k', 'IH'], tactics: [tc('exact', [app(cst('congSucc'), cst('IH'))])] },
+          { constructor: 'Zero', params: flatParamsToCasePatterns([]), tactics: [tc('exact', [cst('refl')])] },
+          { constructor: 'Succ', params: flatParamsToCasePatterns(['k', 'IH']), tactics: [tc('exact', [app(cst('congSucc'), cst('IH'))])] },
         ],
       }),
     ]);
@@ -149,11 +149,11 @@ describe('tacticCommandsToProofTree', () => {
       tc('induction', [cst('n')], {
         caseBranches: [
           {
-            constructor: 'Zero', params: [],
+            constructor: 'Zero', params: flatParamsToCasePatterns([]),
             tactics: [tc('intro', [cst('m')]), tc('exact', [cst('refl')])],
           },
           {
-            constructor: 'Succ', params: ['k', 'IH'],
+            constructor: 'Succ', params: flatParamsToCasePatterns(['k', 'IH']),
             tactics: [tc('intro', [cst('m')]), tc('exact', [app(cst('congSucc'), app(cst('IH'), cst('m')))])],
           },
         ],
@@ -204,8 +204,8 @@ describe('findFirstHole', () => {
     const tree = tacticCommandsToProofTree([
       tc('induction', [cst('n')], {
         caseBranches: [
-          { constructor: 'Zero', params: [], tactics: [] },
-          { constructor: 'Succ', params: ['k'], tactics: [tc('exact', [cst('refl')])] },
+          { constructor: 'Zero', params: flatParamsToCasePatterns([]), tactics: [] },
+          { constructor: 'Succ', params: flatParamsToCasePatterns(['k']), tactics: [tc('exact', [cst('refl')])] },
         ],
       }),
     ]);

@@ -25,7 +25,7 @@
  * - Inductive types: inductive Name : Type where | Ctor1 : T1 | Ctor2 : T2
  */
 
-import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, CaseBranch, mkTacticBlockTT } from '../compiler/surface';
+import { TTerm, mkVarTT, mkPiTT, mkLambdaTT, mkLetTT, mkMultiLetTT, mkAppTT, mkConstTT, mkHoleTT, mkPropTT, mkTypeTT, mkSortTT, mkULevelTT, TPattern, TClause, TLetBinding, mkULitTT, mkUOmegaTT, mkUSuccAppTT, mkUMaxAppTT, mkUIMaxAppTT, TNamedPatternArg, TWithClause, TacticCommand, CaseBranch, flatParamsToCasePatterns, mkTacticBlockTT } from '../compiler/surface';
 import {
   SourceMap,
   SourcePos,
@@ -4102,13 +4102,14 @@ export class Parser {
             this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'constructor' }], ctorToken, ctorToken);
 
             // Parse optional parameters
-            const params: string[] = [];
+            const rawParams: string[] = [];
             while (this.current().type === 'IDENT' && this.current().col > tacticToken.col) {
               const paramToken = this.current();
-              params.push(this.current().value);
-              this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'params' }, { kind: 'array' as const, index: params.length - 1 }], paramToken, paramToken);
+              rawParams.push(this.current().value);
+              this.recordRange([...caseBranchPath, { kind: 'field' as const, name: 'params' }, { kind: 'array' as const, index: rawParams.length - 1 }], paramToken, paramToken);
               this.advance();
             }
+            const params = flatParamsToCasePatterns(rawParams);
 
             // Expect '=>'
             if (this.current().type !== 'FATARROW') {

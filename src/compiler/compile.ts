@@ -43,7 +43,7 @@ import { SufficesTactic } from '../tactics/suffices-tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
-import { TacticCommand, TTacticBlock } from './surface';
+import { TacticCommand, TTacticBlock, CaseBranch, allPatternVarNames } from './surface';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
 import { elaborateTacticArg, tacticCommandToTactic as sharedTacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
 import { TacticSession } from '../tactics/tactic-session';
@@ -1576,7 +1576,7 @@ const tacticCommandToTactic = sharedTacticCommandToTactic;
  */
 function applyCaseBranchesRecursive(
   engine: TacticEngine,
-  caseBranches: Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>,
+  caseBranches: readonly CaseBranch[],
   definitions: DefinitionsMap,
   outerParamNameMap: Map<string, string>,
   parentInfoNode: TacticInfoNode,
@@ -1607,9 +1607,12 @@ function applyCaseBranchesRecursive(
     const initialBranchGoal = engine.getFocusedGoal()!;
     const initialCtx: string[] = initialBranchGoal.ctx.map(b => b.name);
     const paramNameMap = new Map<string, string>(outerParamNameMap);
-    for (let i = 0; i < branch.params.length; i++) {
-      const patternParamName = branch.params[i];
-      const ctxIndex = initialCtx.length - branch.params.length + i;
+    // Nested destructuring is handled in a later task; for now collapse
+    // patterns to their flat list of bound variable names.
+    const branchParamNames = allPatternVarNames(branch.params);
+    for (let i = 0; i < branchParamNames.length; i++) {
+      const patternParamName = branchParamNames[i];
+      const ctxIndex = initialCtx.length - branchParamNames.length + i;
       if (ctxIndex >= 0 && ctxIndex < initialCtx.length) {
         paramNameMap.set(patternParamName, initialCtx[ctxIndex]);
       }
@@ -1675,10 +1678,9 @@ function applyCaseBranchesRecursive(
       parentInfoNode.children.push(branchTacticNode);
 
       // Handle nested structured cases/induction recursively
-      if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && (branchTactic as any).caseBranches) {
-        const nestedBranches = (branchTactic as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
+      if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && branchTactic.caseBranches) {
         const nestedResult = applyCaseBranchesRecursive(
-          engine, nestedBranches, definitions, paramNameMap, branchTacticNode,
+          engine, branchTactic.caseBranches, definitions, paramNameMap, branchTacticNode,
           hasSorry, indexPathToSourcePosition, sourceMap
         );
         engine = nestedResult.engine;
@@ -1860,10 +1862,9 @@ function elaborateTacticBlock(
     rootNode.children.push(tacticNode);
 
     // Handle structured cases/induction: if cmd has caseBranches, apply each branch's tactics to matching goals
-    if ((cmd.name === 'cases' || cmd.name === 'induction') && (cmd as any).caseBranches) {
-      const caseBranches = (cmd as any).caseBranches as Array<{ constructor: string; params: string[]; tactics: TacticCommand[] }>;
+    if ((cmd.name === 'cases' || cmd.name === 'induction') && cmd.caseBranches) {
       const branchResult = applyCaseBranchesRecursive(
-        engine, caseBranches, definitions, new Map(), tacticNode,
+        engine, cmd.caseBranches, definitions, new Map(), tacticNode,
         hasSorry, indexPathToSourcePosition, sourceMap
       );
       engine = branchResult.engine;

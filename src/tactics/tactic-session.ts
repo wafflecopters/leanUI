@@ -12,7 +12,7 @@ import { elaborateTacticArg, tacticCommandToTactic, shouldKeepArgAsName } from '
 import { Tactic, UnifiedEquation } from './tactic';
 import { RewriteTactic } from './rewrite-tactic';
 import { ReflexivityTactic } from './reflexivity-tactic';
-import { TacticCommand, TTerm, CaseBranch } from '../compiler/surface';
+import { TacticCommand, TTerm, CaseBranch, allPatternVarNames } from '../compiler/surface';
 import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar } from '../compiler/term';
 
@@ -270,9 +270,12 @@ export class TacticSession {
       // Include outer branch mappings so nested cases can reference outer params
       const paramNameMap = new Map<string, string>(outerParamNameMap);
       const branchCtxNames = branchGoal.ctx.map(b => b.name);
-      for (let i = 0; i < branch.params.length; i++) {
-        const patternParamName = branch.params[i];
-        const ctxIndex = branchCtxNames.length - branch.params.length + i;
+      // For now, collapse patterns to their flat variable names. Nested
+      // destructuring is handled in a later task.
+      const branchParamNames = allPatternVarNames(branch.params);
+      for (let i = 0; i < branchParamNames.length; i++) {
+        const patternParamName = branchParamNames[i];
+        const ctxIndex = branchCtxNames.length - branchParamNames.length + i;
         if (ctxIndex >= 0 && ctxIndex < branchCtxNames.length) {
           paramNameMap.set(patternParamName, branchCtxNames[ctxIndex]);
         }
