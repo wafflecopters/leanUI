@@ -44,6 +44,7 @@ import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { FocusTactic } from '../tactics/focus-tactic';
 import { TacticCommand, TTacticBlock, CaseBranch, allPatternVarNames } from './surface';
+import { desugarNestedCaseBranch } from './case-pattern-desugar';
 import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-tree';
 import { elaborateTacticArg, tacticCommandToTactic as sharedTacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
 import { TacticSession } from '../tactics/tactic-session';
@@ -1584,7 +1585,10 @@ function applyCaseBranchesRecursive(
   indexPathToSourcePosition: (indexPath: IndexPath | undefined, sourceMap: SourceMap) => SourcePosition,
   sourceMap: SourceMap
 ): { engine: TacticEngine; hasSorry: boolean } {
-  for (const branch of caseBranches) {
+  for (const rawBranch of caseBranches) {
+    // Desugar nested constructor patterns into sequential `cases` calls so
+    // downstream logic only sees flat params (all `tag: 'var'`).
+    const branch = desugarNestedCaseBranch(rawBranch);
     // Find the goal with matching caseTag
     const branchGoalId = engine.goals.find(gid => {
       const meta = engine.metaVars.get(gid);
@@ -1607,8 +1611,8 @@ function applyCaseBranchesRecursive(
     const initialBranchGoal = engine.getFocusedGoal()!;
     const initialCtx: string[] = initialBranchGoal.ctx.map(b => b.name);
     const paramNameMap = new Map<string, string>(outerParamNameMap);
-    // Nested destructuring is handled in a later task; for now collapse
-    // patterns to their flat list of bound variable names.
+    // After desugarNestedCaseBranch, branch.params is flat (all `tag: 'var'`),
+    // so collapsing to names matches the context positions directly.
     const branchParamNames = allPatternVarNames(branch.params);
     for (let i = 0; i < branchParamNames.length; i++) {
       const patternParamName = branchParamNames[i];

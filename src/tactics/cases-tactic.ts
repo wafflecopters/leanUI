@@ -15,6 +15,24 @@ import { whnf } from '../compiler/whnf';
 import { subst, shiftTerm } from '../compiler/subst';
 
 /**
+ * Generate a name that does not collide with any name already in `ctx`.
+ * If `desired` is already free, return it unchanged; otherwise append an
+ * incrementing numeric suffix (`foo`, `foo1`, `foo2`, ...).
+ *
+ * Used to keep destructured constructor fields uniquely named in the branch
+ * context, since name-based lookups (paramNameMap in tactic-session) would
+ * otherwise resolve to the wrong binding when nested `cases` destructures a
+ * constructor whose field names clash with an outer binding.
+ */
+function makeUniqueCtxName(desired: string, ctx: TTKContext): string {
+  const taken = new Set(ctx.map(b => b.name));
+  if (!taken.has(desired)) return desired;
+  let i = 1;
+  while (taken.has(desired + i)) i++;
+  return desired + i;
+}
+
+/**
  * CasesTactic: Perform case analysis on an inductive type
  *
  * Usage: cases <term>
@@ -725,8 +743,12 @@ export class CasesTactic implements Tactic {
     let paramIdx = 0;
     while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
       const rawName = currentType.name;
-      const paramName = (rawName && rawName !== '_') ? rawName : ('_arg' + paramIdx);
+      const desiredName = (rawName && rawName !== '_') ? rawName : ('_arg' + paramIdx);
       paramIdx++;
+      // Ensure uniqueness within the branch context: duplicate names would
+      // confuse name-based lookups (e.g., in tactic-session's paramNameMap)
+      // when the same constructor destructures nested through cases.
+      const paramName = makeUniqueCtxName(desiredName, newCtx);
       newCtx.push({
         name: paramName,
         type: currentType.domain

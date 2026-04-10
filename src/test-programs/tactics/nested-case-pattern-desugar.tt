@@ -1,0 +1,18 @@
+@test success
+@name "nested case pattern: Pair in Pair via desugaring"
+@import preambles/nat.tt
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+testPair : Pair Nat (Pair Nat Nat) -> Nat := by
+  intro p
+  cases p with
+  | MkPair n (MkPair a b) =>
+    exact (add n (add a b))

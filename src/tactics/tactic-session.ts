@@ -13,6 +13,7 @@ import { Tactic, UnifiedEquation } from './tactic';
 import { RewriteTactic } from './rewrite-tactic';
 import { ReflexivityTactic } from './reflexivity-tactic';
 import { TacticCommand, TTerm, CaseBranch, allPatternVarNames } from '../compiler/surface';
+import { desugarNestedCaseBranch } from '../compiler/case-pattern-desugar';
 import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar } from '../compiler/term';
 
@@ -250,7 +251,10 @@ export class TacticSession {
   ): TacticSession {
     let session: TacticSession = this;
 
-    for (const branch of branches) {
+    for (const rawBranch of branches) {
+      // Desugar nested constructor patterns into sequential `cases` calls.
+      // After this, `branch.params` is guaranteed to be flat (all `tag: 'var'`).
+      const branch = desugarNestedCaseBranch(rawBranch);
       const branchPath = [...parentPath, branch.constructor];
 
       // Find goal with matching caseTag
@@ -270,8 +274,8 @@ export class TacticSession {
       // Include outer branch mappings so nested cases can reference outer params
       const paramNameMap = new Map<string, string>(outerParamNameMap);
       const branchCtxNames = branchGoal.ctx.map(b => b.name);
-      // For now, collapse patterns to their flat variable names. Nested
-      // destructuring is handled in a later task.
+      // After desugarNestedCaseBranch, branch.params is flat (all tag: 'var'),
+      // so collapsing to names matches the context positions directly.
       const branchParamNames = allPatternVarNames(branch.params);
       for (let i = 0; i < branchParamNames.length; i++) {
         const patternParamName = branchParamNames[i];

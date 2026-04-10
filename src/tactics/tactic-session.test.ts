@@ -223,4 +223,63 @@ describe('TacticSession with real-analysis preset', () => {
       }
     }
   });
+
+  test('nested case patterns compile successfully', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+test : DPair Nat (\\n => Pair Nat Nat) -> Nat := by
+  intro p
+  cases p with
+  | MkDPair n (MkPair a b) =>
+    exact (add n (add a b))
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'test');
+    const errMsgs = (decl?.checkErrors ?? []).map(e => e.message).join(' | ');
+    expect(decl?.checkSuccess, `errors: ${errMsgs}`).toBe(true);
+  });
+
+  test('nested case patterns compile successfully (flat Pair in Pair)', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+test : Pair Nat (Pair Nat Nat) -> Nat := by
+  intro p
+  cases p with
+  | MkPair n (MkPair a b) =>
+    exact (add n (add a b))
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'test');
+    const errMsgs = (decl?.checkErrors ?? []).map(e => e.message).join(' | ');
+    expect(decl?.checkSuccess, `errors: ${errMsgs}`).toBe(true);
+  });
 });
