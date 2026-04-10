@@ -266,6 +266,18 @@ export type TTermConst = { tag: 'Const'; name: string; }
 export type TLetBinding = { name: string; type?: TTerm; value: TTerm };
 
 /**
+ * A pattern in a case branch: either a variable binding or a nested constructor pattern.
+ *
+ * Examples:
+ *   a               → { tag: 'var', name: 'a' }
+ *   (MkPair x y)    → { tag: 'ctor', constructor: 'MkPair', params: [var x, var y] }
+ *   (MkDPair x (MkPair y z)) → nested
+ */
+export type CasePattern =
+  | { tag: 'var'; name: string }
+  | { tag: 'ctor'; constructor: string; params: CasePattern[] };
+
+/**
  * Case branch for structured cases tactic
  *
  * Example:
@@ -274,7 +286,7 @@ export type TLetBinding = { name: string; type?: TTerm; value: TTerm };
  */
 export interface CaseBranch {
   constructor: string;    // Constructor name: 'Zero', 'Succ', etc.
-  params: string[];       // Parameter names bound by the pattern
+  params: CasePattern[];  // Patterns bound by the branch (may be nested)
   tactics: TacticCommand[]; // Tactics to apply for this case
 }
 
