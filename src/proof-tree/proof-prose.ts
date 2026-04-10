@@ -382,6 +382,10 @@ export function generateProofProse(
 
       case 'induction': {
         emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
+        // TODO: when a case has a single nested `cases` on a _nested* var,
+        // collapse them into a flat nested pattern for display.
+        // E.g., "MkDPair(δ, _nested1)" followed by "cases _nested1 | MkPair(a, b)"
+        // should render as "MkDPair(δ, MkPair(a, b))".
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
           const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
