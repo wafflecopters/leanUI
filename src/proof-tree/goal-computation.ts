@@ -2449,6 +2449,61 @@ export function buildNameCtx(ctx: ReadonlyArray<{ name: string }>): string[] {
 }
 
 /** Render hypotheses from a MetaVar's context to TypedHypothesis[]. */
+/** Cosmetic zonk for stale implicit-arg metas.
+ *
+ *  Some tactics (notably `cases` on a scrutinee like `Limit.eps_delta limF ε h`)
+ *  leave metas named `_implicit_<paramName>` unsolved in the engine's metavar
+ *  map — they were created during parseExactExpr for Const's implicit args
+ *  but never got unified because constraint solving isn't run between tactics.
+ *
+ *  These metas are SEMANTICALLY references to the outer context variable with
+ *  the matching name. At display time, resolve them to a Var pointing at that
+ *  context entry so the user sees `Carrier(R)` instead of `Carrier(□)`.
+ *
+ *  `hypIndex` is the index of the hypothesis being rendered; its context is
+ *  `ctx[0..hypIndex-1]`, and de Bruijn Var indices run from 0 (closest) to
+ *  hypIndex-1 (furthest).
+ */
+function cosmeticZonkImplicitMetas(
+  term: TTKTerm,
+  ctx: ReadonlyArray<{ name: string }>,
+  hypIndex: number,
+  depth: number = 0,
+): TTKTerm {
+  if (!term) return term;
+  if (term.tag === 'Meta' && term.id.startsWith('_implicit_')) {
+    // Strip any fresh-meta suffix like `$20` that the elaborator may have appended
+    const paramName = term.id.substring('_implicit_'.length).replace(/\$\d+$/, '');
+    // Search the hypothesis's context (entries 0..hypIndex-1) for a matching name.
+    // Innermost match wins so we shadow correctly.
+    for (let i = hypIndex - 1; i >= 0; i--) {
+      if (ctx[i].name === paramName) {
+        // Var index in the hypothesis's frame: the entry at ctx[i] is
+        // (hypIndex - 1 - i) positions away from the innermost binder.
+        // Under `depth` additional binders (inside Pi/Lam bodies), shift up.
+        return { tag: 'Var', index: (hypIndex - 1 - i) + depth };
+      }
+    }
+    return term;
+  }
+  switch (term.tag) {
+    case 'App':
+      return {
+        tag: 'App',
+        fn: cosmeticZonkImplicitMetas(term.fn, ctx, hypIndex, depth),
+        arg: cosmeticZonkImplicitMetas(term.arg, ctx, hypIndex, depth),
+      };
+    case 'Binder':
+      return {
+        ...term,
+        domain: cosmeticZonkImplicitMetas(term.domain, ctx, hypIndex, depth),
+        body: cosmeticZonkImplicitMetas(term.body, ctx, hypIndex, depth + 1),
+      };
+    default:
+      return term;
+  }
+}
+
 function renderHypotheses(
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
   definitions: DefinitionsMap,
@@ -2470,7 +2525,9 @@ function renderHypotheses(
     // appear as Holes (gray squares) in the UI.  Depth = i because hypothesis i
     // was formed in the context of entries 0..i-1.
     const zonked = engine ? engine.zonkTerm(entry.type, i) : entry.type;
-    const normalizedType = betaNormalize(zonked);
+    // Resolve stale `_implicit_*` metas to the matching outer ctx var.
+    const cosmeticZonked = cosmeticZonkImplicitMetas(zonked, ctx, i);
+    const normalizedType = betaNormalize(cosmeticZonked);
     let folded = foldProjectionMatches(normalizedType, pm);
     folded = foldAliases(folded, am);
     // Unfold @syntax @unfold-marked constants
@@ -2804,12 +2861,30 @@ function replayEntireTreeFromTrace(
   const aliasMap = buildAliasFoldMap(definitions, projMap);
   const initialEngine = createInitialEngine(kernelType, [], definitions);
 
+  // The final trace entry has the most complete metaVars map — all implicit
+  // arg metas have been solved by that point. Using it for hypothesis
+  // zonking at intermediate steps avoids rendering unsolved-yet-to-be-solved
+  // metas as ugly □ holes (e.g., `fst : Carrier(□)` instead of `Carrier(R)`
+  // when `_implicit_R` is solved by a later tactic).
+  const finalMetaVars = trace.length > 0
+    ? trace[trace.length - 1].engineAfter.metaVars
+    : initialEngine.metaVars;
+
+  /** Wrap an engine with the final metaVars map so zonking sees all
+   *  solutions that will eventually be known, not just the ones fixed
+   *  at this step. Context/goal IDs are preserved; only the solution
+   *  map changes. */
+  function withFinalMetas(eng: TacticEngine): TacticEngine {
+    return eng.withUpdates({ metaVars: finalMetaVars });
+  }
+
   function recordFromEngine(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string, validation?: ValidationResult): void {
     const goal = eng.metaVars.get(gId);
     if (!goal) return;
+    const zonkEng = withFinalMetas(eng);
     result.set(nodeId, {
-      goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
+      goalLatex: renderGoalLatex(zonkEng, goal, definitions, rev, projMap, aliasMap),
+      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, zonkEng),
       caseLabelLatex,
       validation,
     });

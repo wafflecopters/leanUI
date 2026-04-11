@@ -47,6 +47,7 @@ record Pair (A B : Type) where
 
 @syntax \\exists $x \\in $A , $P @becomes DPair {u} {v} $$A (\\$x => $P)
 record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  @syntax \\text{witness} $x, \\text{and} $y @becomes MkDPair $x $y
   constructor MkDPair
   fst : A
   snd : B fst
