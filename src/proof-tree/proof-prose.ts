@@ -402,9 +402,12 @@ export function generateProofProse(
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
           const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
+          // Prefer the registry-aware label computed by goal-computation
+          // (so nested `@syntax` like `MkDPair → witness ...` applies).
+          const registryLabel = goalMap.get(c.id)?.caseLabelLatex;
           emit(c.id, depth + 1, {
             tag: 'caseHeader',
-            labelLatex: c.labelLatex ?? c.label,
+            labelLatex: registryLabel ?? c.labelLatex ?? c.label,
             isBaseCase,
             constructorParamNames: c.constructorParamNames,
             constructorName: c.constructorName,

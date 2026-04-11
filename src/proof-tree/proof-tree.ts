@@ -158,6 +158,11 @@ export interface CaseNode {
   readonly constructorParamNames?: readonly string[];
   /** Pre-rendered LaTeX for the case label (e.g., "n = 0" rendered through structured pipeline) */
   readonly labelLatex?: string;
+  /** Original (pre-desugar) nested pattern structure, for branches written like
+   *  `| MkDPair δF (MkPair posF boundF) =>`. Used by the replay layer to render
+   *  the case label through the @syntax registry (so MkDPair can pick up the
+   *  user's `\text{witness} $x, \text{and} $y` notation). */
+  readonly casePatterns?: readonly import('../compiler/surface').CasePattern[];
 }
 
 /** Info needed to create a case with constructor metadata. */
@@ -256,11 +261,13 @@ export function mkCase(
   label: string, body: ProofNode,
   constructorName?: string, constructorParamNames?: readonly string[],
   labelLatex?: string,
+  casePatterns?: readonly import('../compiler/surface').CasePattern[],
 ): CaseNode {
   const node: CaseNode = { tag: 'case', id: freshProofId(), label, body, collapsed: false };
   if (constructorName !== undefined) (node as any).constructorName = constructorName;
   if (constructorParamNames !== undefined) (node as any).constructorParamNames = constructorParamNames;
   if (labelLatex !== undefined) (node as any).labelLatex = labelLatex;
+  if (casePatterns !== undefined) (node as any).casePatterns = casePatterns;
   return node;
 }
 

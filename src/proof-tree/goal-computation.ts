@@ -13,7 +13,7 @@
  * 4. Render to LaTeX via kernelTypeToSurface + ttermToMathNodes
  */
 
-import { TTerm, TPattern, mkConstTT, mkAppTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
+import { TTerm, TPattern, CasePattern, mkConstTT, mkAppTT, mkAppSpineTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
 import { DefinitionsMap, NamedArgMap, MetaVar, TCEnv, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { inferType } from '../compiler/checker';
@@ -747,6 +747,41 @@ function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngi
 export function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): string {
   const nodes = ttermToMathNodes(term, rev, ctx);
   return renderStaticLatex(mkRow(nodes));
+}
+
+/** Convert a CasePattern to a synthetic TTerm, so the math pipeline can
+ *  render it through the @syntax registry. Pattern variables become Const
+ *  nodes (their names render as plain symbols); constructor patterns become
+ *  Const-headed applications (which the registry matches via `nameToEntry`). */
+function casePatternToTTerm(p: CasePattern): TTerm {
+  if (p.tag === 'var') return mkConstTT(p.name);
+  return mkAppSpineTT(mkConstTT(p.constructor), p.params.map(casePatternToTTerm));
+}
+
+/** Render a branch's nested pattern list as a LaTeX label, respecting any
+ *  `@syntax` entries defined for the constructors involved. Used by the
+ *  replay layer to replace the static labelLatex stored on CaseNodes. */
+function renderNestedCaseLabelLatex(
+  ctorName: string,
+  patterns: readonly CasePattern[],
+  rev: ReverseRegistry,
+): string {
+  const term = mkAppSpineTT(mkConstTT(ctorName), patterns.map(casePatternToTTerm));
+  const nodes = ttermToMathNodes(term, rev, []);
+  return renderStaticLatex(mkRow(nodes));
+}
+
+/** Resolve a case node's display label. When the case has `casePatterns`
+ *  (set for nested-pattern branches) AND a registry is available, render
+ *  through the @syntax registry. Otherwise fall back to the static
+ *  `labelLatex` set at tree-build time. `rev` is optional so cursor-replay
+ *  functions (which don't need registry-aware labels) can reuse this
+ *  helper without threading `rev` through every call site. */
+function caseLabelLatexOf(c: CaseNode, rev?: ReverseRegistry): string | undefined {
+  if (rev && c.casePatterns && c.casePatterns.length > 0 && c.constructorName) {
+    return renderNestedCaseLabelLatex(c.constructorName, c.casePatterns, rev);
+  }
+  return c.labelLatex;
 }
 
 /**
@@ -2935,17 +2970,18 @@ function replayEntireTreeFromTrace(
             const meta = afterCasesEngine.metaVars.get(g);
             return meta?.caseTag === c.constructorName;
           });
+          const resolvedLabel = caseLabelLatexOf(c, rev);
           if (matchIdx >= 0) {
             const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
             const caseGoalId = caseEngine.getFocusedGoalId();
             if (caseGoalId) {
-              recordFromEngine(c.id, caseEngine, caseGoalId, c.labelLatex);
+              recordFromEngine(c.id, caseEngine, caseGoalId, resolvedLabel);
             }
-            walkTrace(c.body, caseEngine, c.labelLatex);
+            walkTrace(c.body, caseEngine, resolvedLabel);
           } else {
             // Fallback: use current engine
-            recordFromEngine(c.id, afterCasesEngine, gId, c.labelLatex);
-            walkTrace(c.body, afterCasesEngine, c.labelLatex);
+            recordFromEngine(c.id, afterCasesEngine, gId, resolvedLabel);
+            walkTrace(c.body, afterCasesEngine, resolvedLabel);
           }
         }
         break;
@@ -3258,8 +3294,9 @@ function replayEntireTreeViaWalk(
 
         if (scrutineeIdx === null) {
           for (const c of node.cases) {
-            recordGoal(c.id, eng, gId, c.labelLatex);
-            walk(c.body, eng, c.labelLatex);
+            const resolved = caseLabelLatexOf(c, rev);
+            recordGoal(c.id, eng, gId, resolved);
+            walk(c.body, eng, resolved);
           }
           break;
         }
@@ -3269,25 +3306,28 @@ function replayEntireTreeViaWalk(
         const inductiveName = getInductiveHead(scrutineeTypeWhnf);
         if (!inductiveName) {
           for (const c of node.cases) {
-            recordGoal(c.id, eng, gId, c.labelLatex);
-            walk(c.body, eng, c.labelLatex);
+            const resolved = caseLabelLatexOf(c, rev);
+            recordGoal(c.id, eng, gId, resolved);
+            walk(c.body, eng, resolved);
           }
           break;
         }
         const inductiveDef = eng.definitions.inductiveTypes.get(inductiveName);
         if (!inductiveDef) {
           for (const c of node.cases) {
-            recordGoal(c.id, eng, gId, c.labelLatex);
-            walk(c.body, eng, c.labelLatex);
+            const resolved = caseLabelLatexOf(c, rev);
+            recordGoal(c.id, eng, gId, resolved);
+            walk(c.body, eng, resolved);
           }
           break;
         }
 
         for (const c of node.cases) {
+          const resolved = caseLabelLatexOf(c, rev);
           const ctor = inductiveDef.constructors.find(ct => ct.name === c.constructorName);
           if (!ctor) {
-            recordGoal(c.id, eng, gId, c.labelLatex);
-            walk(c.body, eng, c.labelLatex);
+            recordGoal(c.id, eng, gId, resolved);
+            walk(c.body, eng, resolved);
             continue;
           }
           const caseGoalId = `${effGId}_case_${c.constructorName}`;
@@ -3303,8 +3343,8 @@ function replayEntireTreeViaWalk(
             goals: caseGoals,
             focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
           });
-          recordGoal(c.id, caseEngine, caseGoalId, c.labelLatex);
-          walk(c.body, caseEngine, c.labelLatex);
+          recordGoal(c.id, caseEngine, caseGoalId, resolved);
+          walk(c.body, caseEngine, resolved);
         }
         break;
       }
@@ -3438,7 +3478,7 @@ function walkTreeSurface(
           return {
             hypotheses,
             caseLabel: c.label,
-            caseLabelLatex: c.labelLatex,
+            caseLabelLatex: caseLabelLatexOf(c, rev),
             inductionVar: node.scrutinee,
             goal: renderTerm(currentType, [...nameCtx], rev),
           };
@@ -3448,7 +3488,7 @@ function walkTreeSurface(
           return {
             ...result,
             caseLabel: result.caseLabel ?? c.label,
-            caseLabelLatex: result.caseLabelLatex ?? c.labelLatex,
+            caseLabelLatex: result.caseLabelLatex ?? caseLabelLatexOf(c, rev),
             inductionVar: result.inductionVar ?? node.scrutinee,
           };
         }

@@ -223,8 +223,14 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
     if (hasNestedPattern(rawBranch.params)) {
       // Nested pattern — show the user's original nesting in the label and skip
       // flat paramNames (which would leak synthetic `_nested*` names into the UI).
+      // The static `nestedLabel` is a fallback for contexts without a registry;
+      // goal-computation replaces it with a @syntax-aware version when replaying.
       const nestedLabel = formatNestedCaseLabelLatex(rawBranch.constructor, rawBranch.params);
-      return mkCase(rawBranch.constructor, body, rawBranch.constructor, undefined, nestedLabel);
+      return mkCase(
+        rawBranch.constructor, body,
+        rawBranch.constructor, undefined,
+        nestedLabel, rawBranch.params,
+      );
     }
     return mkCase(rawBranch.constructor, body, rawBranch.constructor, allPatternVarNames(branch.params));
   });
