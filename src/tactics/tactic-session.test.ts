@@ -505,4 +505,42 @@ test : DPair Nat (\\n => Pair Nat Nat) -> Nat := by
     }
     expect(foundX1).toBe(true);
   });
+
+  test('implicit-arg metas are resolved for correct hypothesis types', { timeout: 30000 }, async () => {
+    // When `cases Limit.eps_delta limG …` destructures, the hypothesis
+    // types should reference `g` and `M` (from limG), NOT `f` and `L`
+    // (from the generic parameter name in Limit.eps_delta's type signature).
+    // This verifies that the cases tactic resolves implicit-arg metas
+    // from inferType's constraints before building the branch context.
+    const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
+    const result = compileTTFromText(REAL_ANALYSIS_CODE);
+    const allDecls = result.blocks.flatMap(b => b.declarations);
+    const limitAdd = allDecls.find(d => d.name === 'limitAdd') as any;
+    expect(limitAdd?.checkSuccess).toBe(true);
+
+    const session = TacticSession.create(limitAdd.kernelType, result.definitions);
+    const final = session.applyCommands(limitAdd.surfaceValue.tactics);
+
+    // Find the trace step inside the second MkDPair branch (for limG).
+    // Its context should have `boundG` whose type references `g` (not `f`).
+    const step = final.trace.find(
+      s => s.branchPath.join('/').includes('MkDPair/MkPair/MkDPair/MkPair'),
+    );
+    expect(step).toBeDefined();
+    const eng = step!.engineAfter;
+    const goal = eng.metaVars.get(step!.goalId);
+    expect(goal).toBeDefined();
+
+    // Check that boundG's type does NOT contain any unsolved _implicit_ metas
+    // (which would render as □ or map to the wrong outer var).
+    const boundG = goal!.ctx.find((b: any) => b.name === 'boundG');
+    expect(boundG).toBeDefined();
+
+    function hasUnsolvedImplicitMeta(t: any): boolean {
+      if (!t || typeof t !== 'object') return false;
+      if (t.tag === 'Meta' && t.id?.startsWith('_implicit_')) return true;
+      return Object.values(t).some(v => typeof v === 'object' && v !== null && hasUnsolvedImplicitMeta(v));
+    }
+    expect(hasUnsolvedImplicitMeta(boundG!.type)).toBe(false);
+  });
 });
