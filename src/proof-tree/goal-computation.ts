@@ -416,6 +416,12 @@ interface AliasFoldExtractionEntry {
    * type params being structurally similar to the scrutinee).
    */
   crossValidations: Array<Array<{ fixedArgIndex: number; path: readonly ('fn' | 'arg')[] }>>;
+  /** Head-const names for each fixed arg (used to verify structure before extraction).
+   *  When the full-form extraction has fixedArgs = [Carrier(R), DPair.snd(R)], the
+   *  heads are ['Carrier', 'DPair.snd']. At fold time we check that the actual term's
+   *  head matches — this prevents `rone(R)` from being falsely matched against the
+   *  `DPair.snd(R)` pattern (they have the same `.arg` extraction path but different heads). */
+  fixedArgHeads?: readonly (string | undefined)[];
 }
 
 interface AliasFoldInfo {
@@ -535,7 +541,13 @@ export function buildAliasFoldMap(
         // Cross-validations: all OTHER occurrences
         crossValidations.push(allPaths.slice(1));
       }
-      return { numFixedArgs: effectiveArgs.length, lambdaExtractions, crossValidations };
+      // Record each fixed arg's head Const so we can verify structure at fold time.
+      const fixedArgHeads = effectiveArgs.map(a => {
+        let h = a;
+        while (h.tag === 'App') h = h.fn;
+        return h.tag === 'Const' ? h.name : undefined;
+      });
+      return { numFixedArgs: effectiveArgs.length, lambdaExtractions, crossValidations, fixedArgHeads };
     }
 
     // Build extraction entries. For projection heads, we need both:
@@ -592,6 +604,25 @@ export function foldAliases(term: TTKTerm, aliasMap: Map<string, AliasFoldInfo>)
             // Recurse into ALL args first (needed for inner alias folding,
             // e.g., DPair.snd(R) → field(R) inside the args)
             const foldedArgs = rawArgs.map(a => foldAliases(a, aliasMap));
+
+            // Verify that each fixed arg's head structure matches the expected pattern.
+            // Without this, `rone(R)` can falsely match a `DPair.snd(R)` pattern
+            // (same .arg extraction path, different head), causing the fold to consume
+            // too many args — e.g., `radd(R, 1)` instead of `radd(R, 1, 1)`.
+            if (entry.fixedArgHeads) {
+              let headMismatch = false;
+              for (let fi = 0; fi < entry.numFixedArgs && !headMismatch; fi++) {
+                const expectedHead = entry.fixedArgHeads[fi];
+                if (expectedHead !== undefined) {
+                  let actualHead: TTKTerm = foldedArgs[fi];
+                  while (actualHead.tag === 'App') actualHead = actualHead.fn;
+                  if (actualHead.tag !== 'Const' || actualHead.name !== expectedHead) {
+                    headMismatch = true;
+                  }
+                }
+              }
+              if (headMismatch) continue;
+            }
 
             // Extract lambda-bound values from fixed args
             const lambdaValues: TTKTerm[] = [];
