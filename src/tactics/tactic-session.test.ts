@@ -283,3 +283,226 @@ test : Pair Nat (Pair Nat Nat) -> Nat := by
     expect(decl?.checkSuccess, `errors: ${errMsgs}`).toBe(true);
   });
 });
+
+// ============================================================================
+// Context renaming — user's pattern names flow into the hypothesis panel
+// ============================================================================
+
+const PAIR_CODE = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+inductive Either (A B : Type) : Type where
+  Left : A -> Either A B
+  Right : B -> Either A B
+`;
+
+describe('TacticSession ctx entry renaming', () => {
+  const defs = compileTTFromText(PAIR_CODE).definitions;
+
+  /** Build a session with an intro'd `p : Pair Nat Nat` hypothesis. */
+  function pairSession() {
+    const goalType = {
+      tag: 'Binder' as const,
+      binderKind: { tag: 'BPi' as const },
+      name: 'p',
+      domain: mkApp(mkApp(mkConst('Pair'), mkConst('Nat')), mkConst('Nat')),
+      body: mkConst('Nat'),
+    };
+    return TacticSession
+      .create(goalType, defs)
+      .applyCommand({ name: 'intros', args: [mkConst('p')] });
+  }
+
+  test('flat cases pattern names appear in the ctx (not fst/snd)', () => {
+    const s = pairSession().applyCommand({
+      name: 'cases',
+      args: [mkConst('p')],
+      caseBranches: [
+        {
+          constructor: 'MkPair',
+          params: [
+            { tag: 'var', name: 'myFst' },
+            { tag: 'var', name: 'mySnd' },
+          ],
+          tactics: [{ name: 'exact', args: [mkConst('myFst')] }],
+        },
+      ],
+    });
+
+    // Find the trace step from INSIDE the MkPair branch — it has the renamed ctx.
+    const insideBranch = s.trace.find(
+      step => step.branchPath.length > 0 && step.branchPath[step.branchPath.length - 1] === 'MkPair',
+    );
+    expect(insideBranch).toBeDefined();
+    const ctx = insideBranch!.engineAfter.metaVars.get(insideBranch!.goalId)?.ctx
+      ?? s.engine.metaVars.get(insideBranch!.goalId)?.ctx;
+    expect(ctx).toBeDefined();
+    const names = ctx!.map(b => b.name);
+
+    // The last two entries should be the user's pattern names, NOT the
+    // default field names fst/snd.
+    expect(names.slice(-2)).toEqual(['myFst', 'mySnd']);
+  });
+
+  test('induction branches each get their own pattern names', () => {
+    // Use Nat (Zero/Succ) which is known to compile. cases on Nat
+    // gives two branches, each with their own pattern names.
+    const goalType = {
+      tag: 'Binder' as const,
+      binderKind: { tag: 'BPi' as const },
+      name: 'n',
+      domain: mkConst('Nat'),
+      body: mkConst('Nat'),
+    };
+    const s0 = TacticSession
+      .create(goalType, defs)
+      .applyCommand({ name: 'intros', args: [mkConst('n')] });
+
+    const s = s0.applyCommand({
+      name: 'cases',
+      args: [mkConst('n')],
+      caseBranches: [
+        {
+          constructor: 'Zero',
+          params: [],
+          tactics: [{ name: 'exact', args: [mkConst('Zero')] }],
+        },
+        {
+          constructor: 'Succ',
+          params: [{ tag: 'var', name: 'pred' }],
+          tactics: [{ name: 'exact', args: [mkConst('pred')] }],
+        },
+      ],
+    });
+
+    // The Succ branch should have a renamed param `pred` (not `_arg0` or `n0`).
+    const succStep = s.trace.find(
+      step => step.branchPath[step.branchPath.length - 1] === 'Succ',
+    );
+    expect(succStep).toBeDefined();
+    const eng = succStep!.engineAfter;
+    const hasName = (name: string) => {
+      for (const [, meta] of eng.metaVars) {
+        if (meta.ctx.some(b => b.name === name)) return true;
+      }
+      return false;
+    };
+    expect(hasName('pred')).toBe(true);
+  });
+
+  test('nested destructuring flattens user names into the ctx', () => {
+    // Compile a full source that exercises nested case patterns.
+    // After `| MkDPair myA (MkPair myB myC) => exact (add myA myB)`,
+    // the trace should contain ctx entries named myA, myB, myC.
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add Zero m = m
+add (Succ n) m = Succ (add n m)
+
+record DPair {u v : ULevel} (A : Type u) (B : A -> Type v) : Type (UMax u v) where
+  constructor MkDPair
+  fst : A
+  snd : B fst
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+test : DPair Nat (\\n => Pair Nat Nat) -> Nat := by
+  intro p
+  cases p with
+  | MkDPair myA (MkPair myB myC) =>
+    exact (add myA (add myB myC))
+`;
+    const result = compileTTFromText(source);
+    const testDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'test') as any;
+    expect(testDecl?.checkSuccess).toBe(true);
+    expect(testDecl?.tacticTrace?.length).toBeGreaterThan(0);
+
+    // Check the deepest trace step's ctx for user-provided names.
+    const trace = testDecl.tacticTrace!;
+    const deepest = trace[trace.length - 1];
+    const eng = deepest.engineAfter;
+    // Find a ctx in the engine that has all three user names.
+    let foundAll = false;
+    for (const [, meta] of eng.metaVars) {
+      const names = new Set(meta.ctx.map((b: any) => b.name));
+      if (names.has('myA') && names.has('myB') && names.has('myC')) {
+        foundAll = true;
+        // Confirm fst/snd are NOT present (replaced by user names).
+        expect(names.has('fst')).toBe(false);
+        expect(names.has('snd')).toBe(false);
+        break;
+      }
+    }
+    expect(foundAll).toBe(true);
+  });
+
+  test('pattern name collision with outer ctx is deconflicted with numeric suffix', () => {
+    // Outer ctx has `x : Pair Nat Nat` (from intros). User writes
+    // `| MkPair x y =>` — the new `x` collides with the outer `x`.
+    // Expected: the new entry is renamed to `x1` to avoid shadowing at
+    // the display level.
+    const goalType = {
+      tag: 'Binder' as const,
+      binderKind: { tag: 'BPi' as const },
+      name: 'x',
+      domain: mkApp(mkApp(mkConst('Pair'), mkConst('Nat')), mkConst('Nat')),
+      body: mkConst('Nat'),
+    };
+    const s = TacticSession
+      .create(goalType, defs)
+      .applyCommand({ name: 'intros', args: [mkConst('x')] })
+      .applyCommand({
+        name: 'cases',
+        args: [mkConst('x')],
+        caseBranches: [
+          {
+            constructor: 'MkPair',
+            params: [
+              { tag: 'var', name: 'x' },
+              { tag: 'var', name: 'y' },
+            ],
+            tactics: [{ name: 'exact', args: [mkConst('y')] }],
+          },
+        ],
+      });
+
+    const branchStep = s.trace.find(
+      step => step.branchPath[step.branchPath.length - 1] === 'MkPair',
+    );
+    expect(branchStep).toBeDefined();
+
+    // Find a ctx with the deconflicted name.
+    const eng = branchStep!.engineAfter;
+    let foundX1 = false;
+    for (const [, meta] of eng.metaVars) {
+      const names = meta.ctx.map(b => b.name);
+      if (names.includes('x1') && names.includes('y')) {
+        // Also confirm the original `x` is still in the ctx somewhere.
+        // (There should be exactly one `x` — the outer one.)
+        expect(names.filter(n => n === 'x').length).toBe(1);
+        foundX1 = true;
+        break;
+      }
+    }
+    expect(foundX1).toBe(true);
+  });
+});

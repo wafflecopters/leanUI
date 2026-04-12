@@ -146,6 +146,15 @@ export function elaborateTacticArg(
  * Insert Holes for implicit params when the head of an App chain is a Const
  * with a namedArgMap.
  */
+/** Counter used to uniquify implicit-arg hole IDs per Const occurrence.
+ *  Two calls to the same Const (e.g., `Limit.eps_delta limF …` and
+ *  `Limit.eps_delta limG …`) would otherwise share the same hole IDs
+ *  (`_implicit_R`, `_implicit_f`, …), causing the resulting metas to
+ *  collide in the engine's metaVars map — the second invocation's
+ *  meta overwrites the first. By appending a fresh suffix, each Const
+ *  occurrence gets its own independent set of implicit-arg metas. */
+let insertImplicitHoleCounter = 0;
+
 function insertImplicitHolesForApp(
   term: TTerm,
   convertTerm: (t: TTerm, depth: number) => TTKTerm,
@@ -164,8 +173,9 @@ function insertImplicitHolesForApp(
   if (kernelHead.tag === 'Const') {
     const namedArgs = namedArgLookup(kernelHead.name);
     if (namedArgs) {
+      const suffix = insertImplicitHoleCounter++;
       for (const [paramName] of namedArgs) {
-        kernelHead = { tag: 'App', fn: kernelHead, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+        kernelHead = { tag: 'App', fn: kernelHead, arg: { tag: 'Hole', id: `_implicit_${paramName}_${suffix}` } };
       }
     }
   }

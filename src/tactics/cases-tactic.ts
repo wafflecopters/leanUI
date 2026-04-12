@@ -51,7 +51,11 @@ export class CasesTactic implements Tactic {
       // 1. Infer type of scrutinee
       const env = engine.toTCEnv(goal, this.scrutinee);
       const inferredEnv = inferType(env);
-      const scrutineeType = inferredEnv.value;
+      // Zonk the inferred type so any metas that inferType already solved
+      // get substituted before we extract typeArgs. We intentionally do
+      // NOT run `solveMetasAndConstraints` here — it's too aggressive and
+      // can produce solutions that break downstream tactics.
+      const scrutineeType = inferredEnv.zonkTerm(inferredEnv.value);
 
       // 2. Normalize to find inductive type
       const scrutineeTypeWhnf = whnf(scrutineeType, {

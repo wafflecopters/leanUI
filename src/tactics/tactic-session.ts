@@ -270,23 +270,34 @@ export class TacticSession {
       const branchGoal = focused.getFocusedGoal();
       if (!branchGoal) continue;
 
-      // Build param name mapping (user pattern names → actual context names)
-      // Include outer branch mappings so nested cases can reference outer params
-      const paramNameMap = new Map<string, string>(outerParamNameMap);
-      const branchCtxNames = branchGoal.ctx.map(b => b.name);
-      // After desugarNestedCaseBranch, branch.params is flat (all tag: 'var'),
-      // so collapsing to names matches the context positions directly.
+      // After desugarNestedCaseBranch, branch.params is flat (all tag: 'var').
       const branchParamNames = allPatternVarNames(branch.params);
+
+      // Rename the newly-added context entries (the last N) from the
+      // constructor's field names (fst, snd, fst1, ...) to the user's
+      // pattern names (δF, posF, boundF, ...). De Bruijn indices are
+      // position-based, so renaming is purely cosmetic at the kernel
+      // level — but it makes the hypothesis panel and downstream
+      // elaboration see the names the user actually wrote.
+      const renamedEngine = renameLastCtxEntries(focused, branchParamNames);
+      const renamedGoal = renamedEngine.getFocusedGoal() ?? branchGoal;
+
+      // Build param name mapping — after renaming it's effectively identity
+      // for this branch's own params. Still propagate outerParamNameMap so
+      // nested cases under this branch can look up names from enclosing
+      // scopes (for parts of the code that may bypass the ctx rename).
+      const paramNameMap = new Map<string, string>(outerParamNameMap);
+      const renamedCtxNames = renamedGoal.ctx.map(b => b.name);
       for (let i = 0; i < branchParamNames.length; i++) {
         const patternParamName = branchParamNames[i];
-        const ctxIndex = branchCtxNames.length - branchParamNames.length + i;
-        if (ctxIndex >= 0 && ctxIndex < branchCtxNames.length) {
-          paramNameMap.set(patternParamName, branchCtxNames[ctxIndex]);
+        const ctxIndex = renamedCtxNames.length - branchParamNames.length + i;
+        if (ctxIndex >= 0 && ctxIndex < renamedCtxNames.length) {
+          paramNameMap.set(patternParamName, renamedCtxNames[ctxIndex]);
         }
       }
 
       // Apply branch tactics with param name mapping
-      let branchSession = new TacticSession(focused, this.definitions, session.trace);
+      let branchSession = new TacticSession(renamedEngine, this.definitions, session.trace);
       for (const branchTactic of branch.tactics) {
         const branchGoalNow = branchSession.engine.getFocusedGoal();
         if (!branchGoalNow) break;
@@ -335,4 +346,60 @@ export class TacticSession {
 
     return session;
   }
+}
+
+// ============================================================================
+// Context entry renaming
+// ============================================================================
+
+/**
+ * Rename the last `userNames.length` entries of the focused goal's context
+ * to use the user-provided pattern names. Returns a new engine whose focused
+ * meta has the renamed context; all other metas are preserved.
+ *
+ * Deconflicts against earlier context entries (before the rename window) by
+ * appending a numeric suffix — e.g., if the outer context already has `n`
+ * and the user's pattern also writes `n`, the new entry becomes `n1`. Entries
+ * within the rename window may shadow each other freely; later wins.
+ *
+ * Kernel semantics are unaffected: de Bruijn indices in types reference ctx
+ * entries by position, not by name, so this is purely a display-layer change
+ * that also lets name-based elaboration (see elaborateTacticArg) resolve the
+ * user's pattern names without going through a separate paramNameMap.
+ */
+export function renameLastCtxEntries(
+  engine: TacticEngine,
+  userNames: readonly string[],
+): TacticEngine {
+  if (userNames.length === 0) return engine;
+  const goalId = engine.getFocusedGoalId();
+  const goal = engine.getFocusedGoal();
+  if (!goalId || !goal) return engine;
+
+  const ctx = goal.ctx;
+  const startIdx = ctx.length - userNames.length;
+  if (startIdx < 0) return engine;
+
+  // Names reserved by entries OUTSIDE the rename window — deconflict against these.
+  const reserved = new Set<string>();
+  for (let i = 0; i < startIdx; i++) reserved.add(ctx[i].name);
+
+  const renamedCtx: typeof ctx = ctx.map((entry, i) => {
+    if (i < startIdx) return entry;
+    let desired = userNames[i - startIdx];
+    if (reserved.has(desired)) {
+      let suffix = 1;
+      while (reserved.has(desired + suffix)) suffix++;
+      desired = desired + suffix;
+    }
+    // Entries within the window may themselves be reserved-against for
+    // subsequent renames (so two `n`s in one pattern get distinct names).
+    reserved.add(desired);
+    return { ...entry, name: desired };
+  });
+
+  const renamedGoal: MetaVar = { ...goal, ctx: renamedCtx };
+  const newMetaVars = new Map(engine.metaVars);
+  newMetaVars.set(goalId, renamedGoal);
+  return engine.withUpdates({ metaVars: newMetaVars });
 }

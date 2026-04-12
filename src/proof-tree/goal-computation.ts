@@ -2472,8 +2472,13 @@ function cosmeticZonkImplicitMetas(
 ): TTKTerm {
   if (!term) return term;
   if (term.tag === 'Meta' && term.id.startsWith('_implicit_')) {
-    // Strip any fresh-meta suffix like `$20` that the elaborator may have appended
-    const paramName = term.id.substring('_implicit_'.length).replace(/\$\d+$/, '');
+    // Strip any fresh-meta suffixes. `elaborate-tactic-arg` appends `_<N>`
+    // per Const-occurrence to keep implicit-arg metas unique; the elaborator
+    // may further add `$<N>` as a freshening marker.
+    const paramName = term.id
+      .substring('_implicit_'.length)
+      .replace(/\$\d+$/, '')
+      .replace(/_\d+$/, '');
     // Search the hypothesis's context (entries 0..hypIndex-1) for a matching name.
     // Innermost match wins so we shadow correctly.
     for (let i = hypIndex - 1; i >= 0; i--) {
@@ -2517,6 +2522,12 @@ function renderHypotheses(
   const hypotheses: TypedHypothesis[] = [];
   for (let i = 0; i < ctx.length; i++) {
     const entry = ctx[i];
+    // Skip internal desugaring placeholders. `_nested*` entries are inserted
+    // by nested-case-pattern desugaring (`| MkDPair a (MkPair b c) =>` becomes
+    // `| MkDPair a _nested0 => cases _nested0 with | MkPair b c => ...`) and
+    // the user should never see them in the hypothesis panel — the useful
+    // content is in the subsequent destructured entries.
+    if (entry.name.startsWith('_nested')) continue;
     const nameCtx: string[] = [];
     for (let j = i - 1; j >= 0; j--) {
       nameCtx.push(ctx[j].name);
@@ -2879,9 +2890,13 @@ function replayEntireTreeFromTrace(
   }
 
   function recordFromEngine(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string, validation?: ValidationResult): void {
-    const goal = eng.metaVars.get(gId);
-    if (!goal) return;
     const zonkEng = withFinalMetas(eng);
+    // Look up the goal from the final metaVars so any post-cases renames
+    // (applied by tactic-session.applyCaseBranches inside branch bodies) are
+    // visible when rendering case-branch headers captured from the pre-rename
+    // `engineAfter` of the enclosing cases tactic.
+    const goal = zonkEng.metaVars.get(gId) ?? eng.metaVars.get(gId);
+    if (!goal) return;
     result.set(nodeId, {
       goalLatex: renderGoalLatex(zonkEng, goal, definitions, rev, projMap, aliasMap),
       hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, zonkEng),
