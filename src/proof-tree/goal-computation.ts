@@ -2699,12 +2699,22 @@ function computeWithTacticEngine(
   }
   if (!replay) return null;
 
-  // Extract focused goal
-  const goal = replay.engine.metaVars.get(replay.goalId);
+  // Use the FINAL trace engine's metaVars when available. Branch
+  // renames (e.g., `_arg0` → `hle`) happen inside tactic-session's
+  // applyCaseBranches AFTER the enclosing cases tactic fires, so the
+  // trace engine at the cursor may still have the old name. The final
+  // engine has all renames applied.
+  const finalMetaVars = (tacticTrace && tacticTrace.length > 0)
+    ? tacticTrace[tacticTrace.length - 1].engineAfter.metaVars
+    : replay.engine.metaVars;
+  const goal = finalMetaVars.get(replay.goalId) ?? replay.engine.metaVars.get(replay.goalId);
   if (!goal) return null;
 
-  // Render hypotheses and goal using shared helpers
-  const hypotheses = renderHypotheses(goal.ctx, definitions, rev, undefined, undefined, replay.engine);
+  // Render hypotheses and goal using shared helpers.  Pass a zonk
+  // engine that has the final metaVars so solved metas from later
+  // tactics and branch renames are both visible.
+  const zonkEngine = replay.engine.withUpdates({ metaVars: finalMetaVars });
+  const hypotheses = renderHypotheses(goal.ctx, definitions, rev, undefined, undefined, zonkEngine);
 
   // For exact nodes, show the expression and validate it
   const cursorNode = findNodeById(root, cursorId);
