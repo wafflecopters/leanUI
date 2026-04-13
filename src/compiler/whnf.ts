@@ -475,10 +475,20 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
         // Try to match against clauses with all accumulated arguments
         for (const clause of head.clauses) {
           if (clause.patterns.length <= args.length) {
-            // Reduce all arguments that will be matched
-            const reducedArgs = args.slice(0, clause.patterns.length).map(
-              arg => whnf(arg, nextCtx)
-            );
+            // When ALL patterns are PVar/PWild (a trivial catch-all clause, as
+            // generated for type alias definitions like EpsDeltaWitness),
+            // skip WHNF-reducing the args before binding. Reducing them is
+            // unnecessary (PVar matches anything) and destructive: it
+            // aggressively delta-reduces user-level names like `rdiv`, `rtwo`
+            // into internal forms the rendering pipeline can't fold back.
+            // For clauses with any PCtor, we still reduce all args — some
+            // downstream type operations depend on the reduced forms.
+            const allPVar = clause.patterns.every(p => p.tag === 'PVar' || p.tag === 'PWild');
+            const reducedArgs = allPVar
+              ? args.slice(0, clause.patterns.length)
+              : args.slice(0, clause.patterns.length).map(
+                  arg => whnf(arg, nextCtx)
+                );
             const bindings = matchPatterns(clause.patterns, reducedArgs, nextCtx);
             if (bindings !== null) {
               // Found a match! Substitute bindings into rhs
