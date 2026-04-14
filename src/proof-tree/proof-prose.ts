@@ -54,7 +54,7 @@ export type ProseItemKind =
   | { tag: 'unfold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'fold'; name: string; occurrence?: number; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'rewrite'; name: string; reverse?: boolean; occurrences?: readonly number[]; equationLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
-  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string }
+  | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[] }
   | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string }
@@ -371,6 +371,38 @@ export function generateProofProse(
           const childInfo = goalMap.get(child.id);
           return childInfo?.goalLatex ?? '?';
         });
+
+        // Compact form: when ALL children are simple `exact` nodes, collect
+        // their proof expressions and embed them directly in the apply item.
+        // The component renders these as a tight numbered list instead of
+        // separate "Goal N: We must show TYPE / The result follows from PROOF"
+        // sections — e.g., "(i) δF  (ii) MkPair(posF, ...)" instead of
+        // "Goal 1: We must show ℝ / The result follows from δF".
+        const allChildrenExact = node.children.length > 1 &&
+          node.children.every(c => c.tag === 'exact');
+        if (allChildrenExact) {
+          const proofExprs = node.children.map(child => {
+            const childInfo = goalMap.get(child.id);
+            return childInfo?.proofExprLatex ?? (child as ExactNode).expr;
+          });
+          emit(node.id, depth, {
+            tag: 'apply', name: node.name,
+            preGoalLatex: info?.goalLatex, subgoalLatex,
+            appliedArgsLatex: info?.appliedArgsLatex,
+            error: info?.tacticError,
+            proofExprs,
+          });
+          // Check if all children solved successfully → emit qed
+          const allSolved = node.children.every(child => {
+            const v = goalMap.get(child.id)?.validation;
+            return v?.status === 'solved';
+          });
+          if (allSolved) {
+            emit(node.id, depth, { tag: 'qed' });
+          }
+          break;
+        }
+
         emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex, error: info?.tacticError });
         if (node.children.length > 1) {
           // Multiple subgoals: use labeled branches with indentation

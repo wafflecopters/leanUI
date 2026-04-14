@@ -2400,6 +2400,28 @@ function ProseItemView({
       const constructorPhrase = isConstructor
         ? (subgoals.length <= 1 ? 'by definition' : 'by construction')
         : null;
+
+      // Compact form: all subgoals solved by `exact` — show a tight list
+      // of proof expressions instead of separate "Goal N" sections.
+      // e.g., "The result follows from (i) δF  (ii) MkPair(posF, ...)"
+      if (kind.proofExprs && kind.proofExprs.length > 0) {
+        const ROMAN = ['(i)', '(ii)', '(iii)', '(iv)', '(v)', '(vi)'];
+        return (
+          <div style={rowStyle} {...rowHandlers}>
+            {mustShowPrefix(kind.preGoalLatex)}
+            <span style={prose}>The result follows from</span>
+            {kind.proofExprs.map((expr, i) => (
+              <div key={i} style={{ paddingLeft: `${item.depth * 20 + 24}px`, paddingTop: '1px' }}>
+                <span style={{ color: '#8b949e', fontSize: '12px', marginRight: '4px' }}>{ROMAN[i] ?? `(${i + 1})`}</span>
+                <InlineKaTeX latex={expr} style={{ fontSize: '13px' }} />
+              </div>
+            ))}
+            {errorSuffix}
+            {deleteBtn}
+          </div>
+        );
+      }
+
       if (subgoals.length <= 1) {
         return (
           <div style={rowStyle} {...rowHandlers}>
@@ -2429,7 +2451,7 @@ function ProseItemView({
           </div>
         );
       }
-      // Multiple subgoals
+      // Multiple subgoals (with non-exact children — needs full Goal sections)
       return (
         <div style={rowStyle} {...rowHandlers}>
           {mustShowPrefix(kind.preGoalLatex)}
