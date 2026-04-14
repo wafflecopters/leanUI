@@ -1638,10 +1638,27 @@ function applyCaseBranchesRecursive(
         return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
       });
 
+      // Elaborate focused tactics (· bullets) if present
+      let branchFocused: Tactic[] | undefined;
+      if (branchTactic.focusedTactics && branchTactic.focusedTactics.length > 0) {
+        branchFocused = branchTactic.focusedTactics.map(ft => {
+          const ftArgs: Array<TTerm | TTKTerm> = ft.args.map((arg, i) => {
+            if (shouldKeepArgAsName(ft.name, i, ft.args.length)) return arg;
+            return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
+          });
+          const t = sharedTacticCommandToTactic({ name: ft.name, args: ftArgs });
+          if (t === 'sorry') {
+            hasSorry = true;
+            return { name: 'sorry', apply: (_eng: TacticEngine) => ({ success: true, newEngine: _eng }) } as Tactic;
+          }
+          return t;
+        });
+      }
+
       // Get goals before applying tactic
       const branchGoalsBefore = extractGoalStates(engineToProofState(engine));
 
-      const branchTacticObj = sharedTacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
+      const branchTacticObj = sharedTacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs, focusedTactics: branchFocused });
 
       // sorry: leave goal unsolved
       if (branchTacticObj === 'sorry') {

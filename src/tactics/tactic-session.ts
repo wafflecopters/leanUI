@@ -308,7 +308,22 @@ export class TacticSession {
           return elaborateTacticArg(arg, branchGoalNow.ctx, this.definitions, 0, paramNameMap);
         });
 
-        const t = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs });
+        // Elaborate focused tactics (· bullets) if present
+        let branchFocused: Tactic[] | undefined;
+        if (branchTactic.focusedTactics && branchTactic.focusedTactics.length > 0) {
+          branchFocused = branchTactic.focusedTactics.map(ft => {
+            const ftArgs: Array<TTerm | TTKTerm> = ft.args.map((arg, i) => {
+              if (shouldKeepArgAsName(ft.name, i, ft.args.length)) return arg;
+              return elaborateTacticArg(arg, branchGoalNow.ctx, this.definitions, 0, paramNameMap);
+            });
+            const t = tacticCommandToTactic({ name: ft.name, args: ftArgs });
+            return t === 'sorry'
+              ? { name: 'sorry', apply: (eng: TacticEngine) => ({ success: true, newEngine: eng }) } as Tactic
+              : t;
+          });
+        }
+
+        const t = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs, focusedTactics: branchFocused });
         if (t === 'sorry') {
           branchSession = new TacticSession(branchSession.engine, this.definitions, [
             ...branchSession.trace,
