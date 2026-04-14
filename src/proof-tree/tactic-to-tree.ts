@@ -127,11 +127,33 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
       return buildFoldChain(cmd.args, tacticCommandsToProofTree(rest));
 
     case 'constructor': {
-      // constructor is like apply with the single constructor of the goal type
-      // When followed by focused tactics (· bullets), each becomes a child
-      const children = cmd.focusedTactics && cmd.focusedTactics.length > 0
-        ? cmd.focusedTactics.map(ft => tacticCommandsToProofTree([ft]))
-        : [tacticCommandsToProofTree(rest)];
+      // constructor is like apply with the single constructor of the goal type.
+      // Subgoals can come from:
+      // 1. Inline focusedTactics on the constructor command itself
+      // 2. Separate `focus` commands that follow in `rest`
+      // 3. Neither (single child from remaining commands)
+      let children: ProofNode[];
+      if (cmd.focusedTactics && cmd.focusedTactics.length > 0) {
+        children = cmd.focusedTactics.map(ft => tacticCommandsToProofTree([ft]));
+      } else {
+        // Collect consecutive `focus` commands from rest — these are the
+        // · bullet subgoals parsed as separate tactic commands.
+        const focusCommands: TacticCommand[] = [];
+        let i = 0;
+        while (i < rest.length && rest[i].name === 'focus') {
+          focusCommands.push(rest[i]);
+          i++;
+        }
+        if (focusCommands.length > 0) {
+          const afterFocus = rest.slice(focusCommands.length);
+          children = focusCommands.map(fc => {
+            const inner = fc.focusedTactics ?? [];
+            return tacticCommandsToProofTree([...inner, ...afterFocus]);
+          });
+        } else {
+          children = [tacticCommandsToProofTree(rest)];
+        }
+      }
       return mkApply('constructor', children);
     }
 
