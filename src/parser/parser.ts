@@ -3886,6 +3886,38 @@ export class Parser {
         const tacticPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: 0 }];
         const tactic = this.parseTactic(ctx, tacticPath);
         focusedTactics.push(tactic);
+
+        // After the same-line tactic, check for indented continuation lines.
+        // This handles nested bullets like:
+        //   · constructor
+        //     · exact posF
+        //     · exact boundF
+        // The inner bullets are STRICTLY indented beyond the `·` character.
+        if (this.current().type === 'NEWLINE') {
+          const savedPos = this.pos;
+          this.advance();
+          this.skipNewlines();
+          const continuationIndent = this.current().col;
+          // Only capture continuation if it's STRICTLY indented beyond the
+          // bullet (prevents eating sibling bullets at the same indent)
+          if (continuationIndent > bulletToken.col + 1) {
+            let tacticIndex = 1;
+            while (this.current().type !== 'EOF' && this.current().col >= continuationIndent) {
+              const contPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: tacticIndex }];
+              focusedTactics.push(this.parseTactic(ctx, contPath));
+              tacticIndex++;
+              if (this.current().type === 'NEWLINE') {
+                this.advance();
+                this.skipNewlines();
+              } else {
+                break;
+              }
+            }
+          } else {
+            // Not a continuation — backtrack so the caller sees the newline
+            this.pos = savedPos;
+          }
+        }
       } else if (this.current().type === 'NEWLINE') {
         // Multi-line indented tactics
         this.advance(); // consume newline

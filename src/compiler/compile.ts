@@ -1800,26 +1800,28 @@ function elaborateTacticBlock(
         ? (cmd.args[0] as any).name as string
         : undefined;
 
-      elabFocusedTactics = cmd.focusedTactics.map(focusedCmd => {
-        // Recursively elaborate each focused tactic
-        // For suffices, extend context with hypothesis name
-        const focusedCtx = sufficesHypName
-          ? [...goal.ctx, { name: sufficesHypName, type: { tag: 'Hole' as const, id: '_suffices_type' } }]
-          : goal.ctx;
+      // Recursively elaborate focused tactics (handles nested bullets)
+      function elabOneFocusedTactic(focusedCmd: TacticCommand, ctx: TTKContext): Tactic {
         const focusedElabArgs: Array<TTerm | TTKTerm> = focusedCmd.args.map((arg, i) => {
-          if (shouldKeepArgAsName(focusedCmd.name, i, focusedCmd.args.length)) {
-            return arg;
-          }
-          return elaborateTacticArg(arg, focusedCtx, definitions);
+          if (shouldKeepArgAsName(focusedCmd.name, i, focusedCmd.args.length)) return arg;
+          return elaborateTacticArg(arg, ctx, definitions);
         });
-        const t = sharedTacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs });
+        // Recurse: if this focused tactic itself has focusedTactics, elaborate them
+        let nestedFocused: Tactic[] | undefined;
+        if (focusedCmd.focusedTactics && focusedCmd.focusedTactics.length > 0) {
+          nestedFocused = focusedCmd.focusedTactics.map(ft => elabOneFocusedTactic(ft, ctx));
+        }
+        const t = sharedTacticCommandToTactic({ name: focusedCmd.name, args: focusedElabArgs, focusedTactics: nestedFocused });
         if (t === 'sorry') {
           hasSorry = true;
-          // Return a no-op tactic that leaves the goal unsolved
           return { name: 'sorry', apply: (_eng, _goal, _goalId) => ({ success: true, newEngine: _eng }) } as Tactic;
         }
         return t;
-      });
+      }
+      const focusedCtx = sufficesHypName
+        ? [...goal.ctx, { name: sufficesHypName, type: { tag: 'Hole' as const, id: '_suffices_type' } }]
+        : goal.ctx;
+      elabFocusedTactics = cmd.focusedTactics.map(fc => elabOneFocusedTactic(fc, focusedCtx));
     }
 
     // Record goals before tactic application

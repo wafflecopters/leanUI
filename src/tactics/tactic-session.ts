@@ -108,20 +108,23 @@ export class TacticSession {
         ? [...goal.ctx, { name: sufficesHypName, type: { tag: 'Hole' as const, id: '_suffices_type' } }]
         : goal.ctx;
 
-      focusedTactics = [];
-      for (const ft of cmd.focusedTactics) {
+      const elabFocused = (ft: TacticCommand, ctx: TTKContext): Tactic => {
         const ftArgs: Array<TTerm | TTKTerm> = ft.args.map((arg, i) => {
           if (shouldKeepArgAsName(ft.name, i, ft.args.length)) return arg;
-          return elaborateTacticArg(arg, focusedCtx, this.definitions);
+          return elaborateTacticArg(arg, ctx, this.definitions);
         });
-        const t = tacticCommandToTactic({ name: ft.name, args: ftArgs });
-        if (t === 'sorry') {
-          // sorry in focused tactics — push a no-op
-          focusedTactics.push({ name: 'sorry', apply: (eng) => ({ success: true, newEngine: eng }) } as Tactic);
-        } else {
-          focusedTactics.push(t);
+        // Recurse: if this focused tactic itself has focusedTactics, elaborate them
+        let nested: Tactic[] | undefined;
+        if (ft.focusedTactics && ft.focusedTactics.length > 0) {
+          nested = ft.focusedTactics.map(inner => elabFocused(inner, ctx));
         }
-      }
+        const t = tacticCommandToTactic({ name: ft.name, args: ftArgs, focusedTactics: nested });
+        if (t === 'sorry') {
+          return { name: 'sorry', apply: (eng: TacticEngine) => ({ success: true, newEngine: eng }) } as Tactic;
+        }
+        return t;
+      };
+      focusedTactics = cmd.focusedTactics.map(ft => elabFocused(ft, focusedCtx));
     }
 
     // 3. Create tactic
@@ -308,19 +311,24 @@ export class TacticSession {
           return elaborateTacticArg(arg, branchGoalNow.ctx, this.definitions, 0, paramNameMap);
         });
 
-        // Elaborate focused tactics (· bullets) if present
+        // Elaborate focused tactics (· bullets) recursively if present
+        const elabBranchFocused = (ft: TacticCommand): Tactic => {
+          const ftArgs: Array<TTerm | TTKTerm> = ft.args.map((arg, i) => {
+            if (shouldKeepArgAsName(ft.name, i, ft.args.length)) return arg;
+            return elaborateTacticArg(arg, branchGoalNow.ctx, this.definitions, 0, paramNameMap);
+          });
+          let nested: Tactic[] | undefined;
+          if (ft.focusedTactics && ft.focusedTactics.length > 0) {
+            nested = ft.focusedTactics.map(inner => elabBranchFocused(inner));
+          }
+          const t = tacticCommandToTactic({ name: ft.name, args: ftArgs, focusedTactics: nested });
+          return t === 'sorry'
+            ? { name: 'sorry', apply: (eng: TacticEngine) => ({ success: true, newEngine: eng }) } as Tactic
+            : t;
+        };
         let branchFocused: Tactic[] | undefined;
         if (branchTactic.focusedTactics && branchTactic.focusedTactics.length > 0) {
-          branchFocused = branchTactic.focusedTactics.map(ft => {
-            const ftArgs: Array<TTerm | TTKTerm> = ft.args.map((arg, i) => {
-              if (shouldKeepArgAsName(ft.name, i, ft.args.length)) return arg;
-              return elaborateTacticArg(arg, branchGoalNow.ctx, this.definitions, 0, paramNameMap);
-            });
-            const t = tacticCommandToTactic({ name: ft.name, args: ftArgs });
-            return t === 'sorry'
-              ? { name: 'sorry', apply: (eng: TacticEngine) => ({ success: true, newEngine: eng }) } as Tactic
-              : t;
-          });
+          branchFocused = branchTactic.focusedTactics.map(elabBranchFocused);
         }
 
         const t = tacticCommandToTactic({ name: branchTactic.name, args: branchElabArgs, focusedTactics: branchFocused });

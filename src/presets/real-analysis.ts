@@ -468,11 +468,15 @@ limitAdd : {R : Real} -> (f g : Carrier R -> Carrier R) -> (x0 L M : Carrier R) 
       | Left hle =>
         constructor
         · exact δF
-        · exact (MkPair posF (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (boundF x hx0 hxd) (boundG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle)))))
+        · constructor
+          · exact posF
+          · exact (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (boundF x hx0 hxd) (boundG x hx0 (ltLeTrans (rabs (rsub x x0)) δF δG hxd hle))))
       | Right hle =>
         constructor
         · exact δG
-        · exact (MkPair posG (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (boundF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (boundG x hx0 hxd))))
+        · constructor
+          · exact posG
+          · exact (\\x hx0 hxd => convertEps ε (rabs (rsub (radd (f x) (g x)) (radd L M))) (coreEstimate f g x0 L M (rdiv ε (rtwo R)) x (boundF x hx0 (ltLeTrans (rabs (rsub x x0)) δG δF hxd hle)) (boundG x hx0 hxd)))
 
 -- lim (f+g+h) = (L+M)+N: three-function limit addition via two applications of limitAdd
 limitAdd3 : {R : Real} -> (f g h : Carrier R -> Carrier R) -> (x0 L M N : Carrier R) -> Limit f x0 L -> Limit g x0 M -> Limit h x0 N -> Limit (\\x => radd (radd (f x) (g x)) (h x)) x0 (radd (radd L M) N)
