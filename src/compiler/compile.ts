@@ -1638,21 +1638,26 @@ function applyCaseBranchesRecursive(
         return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
       });
 
-      // Elaborate focused tactics (· bullets) if present
+      // Elaborate focused tactics (· bullets) recursively if present
       let branchFocused: Tactic[] | undefined;
       if (branchTactic.focusedTactics && branchTactic.focusedTactics.length > 0) {
-        branchFocused = branchTactic.focusedTactics.map(ft => {
+        function elabBranchFocused(ft: TacticCommand): Tactic {
           const ftArgs: Array<TTerm | TTKTerm> = ft.args.map((arg, i) => {
             if (shouldKeepArgAsName(ft.name, i, ft.args.length)) return arg;
-            return elaborateTacticArg(arg, branchGoal.ctx, definitions, 0, paramNameMap);
+            return elaborateTacticArg(arg, branchGoal!.ctx, definitions, 0, paramNameMap);
           });
-          const t = sharedTacticCommandToTactic({ name: ft.name, args: ftArgs });
+          let nested: Tactic[] | undefined;
+          if (ft.focusedTactics && ft.focusedTactics.length > 0) {
+            nested = ft.focusedTactics.map(inner => elabBranchFocused(inner));
+          }
+          const t = sharedTacticCommandToTactic({ name: ft.name, args: ftArgs, focusedTactics: nested });
           if (t === 'sorry') {
             hasSorry = true;
             return { name: 'sorry', apply: (_eng: TacticEngine) => ({ success: true, newEngine: _eng }) } as Tactic;
           }
           return t;
-        });
+        }
+        branchFocused = branchTactic.focusedTactics.map(elabBranchFocused);
       }
 
       // Get goals before applying tactic
