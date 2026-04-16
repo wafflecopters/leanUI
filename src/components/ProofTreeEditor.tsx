@@ -2475,13 +2475,7 @@ function ProseItemView({
             </>
           )}
           {errorSuffix}
-          <span style={prose}>, if:</span>
-          {subgoals.map((sg, i) => (
-            <div key={i} style={{ paddingTop: '2px', textAlign: 'center' }}>
-              <span style={prose}>({i + 1}){' '}</span>
-              <InlineKaTeX latex={sg} displayMode />
-            </div>
-          ))}
+          <span style={prose}>, after showing {subgoals.length} subgoals:</span>
           {deleteBtn}
         </div>
       );
