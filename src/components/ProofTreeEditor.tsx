@@ -2265,7 +2265,7 @@ function ProseItemView({
         <>
           <span style={prose}>{lead}{' '}</span>
           <InlineKaTeX latex={preGoalLatex} style={{ fontSize: '13px' }} />
-          <span style={prose}>.</span>
+          <span style={prose}>.{' '}</span>
         </>
       );
     }
