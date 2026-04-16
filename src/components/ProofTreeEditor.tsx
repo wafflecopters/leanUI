@@ -2253,9 +2253,22 @@ function ProseItemView({
   // where no prior goal is visible. The isValueType flag switches to
   // "need a value of type" phrasing when the goal is data (like ℝ or Nat)
   // rather than a proposition.
+  //
+  // Short goals render inline (`We need a value of type ℝ.`); longer ones
+  // break to a centered display block for readability.
   function mustShowPrefix(preGoalLatex?: string, isValueType?: boolean): React.ReactNode {
     if (prevShowedGoal || !preGoalLatex) return null;
     const lead = isValueType ? 'We need a value of type' : 'We must show';
+    const inline = preGoalLatex.length <= 30;
+    if (inline) {
+      return (
+        <>
+          <span style={prose}>{lead}{' '}</span>
+          <InlineKaTeX latex={preGoalLatex} style={{ fontSize: '13px' }} />
+          <span style={prose}>.</span>
+        </>
+      );
+    }
     return (
       <>
         <span style={prose}>{lead}</span>
