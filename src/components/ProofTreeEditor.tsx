@@ -2246,7 +2246,8 @@ function ProseItemView({
     (prevItem.kind.tag === 'intro' && prevItem.kind.goalLatex) ||
     (prevItem.kind.tag === 'have' && prevItem.kind.goalLatex) ||
     (prevItem.kind.tag === 'suffices' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'calcChain')
+    (prevItem.kind.tag === 'calcChain') ||
+    (prevItem.kind.tag === 'subgoalHeader' && prevItem.kind.goalLatex)
   );
 
   // "We must show [goal]" / "We need a value of type [goal]" prefix for steps
@@ -2689,13 +2690,32 @@ function ProseItemView({
         </div>
       );
 
-    case 'subgoalHeader':
+    case 'subgoalHeader': {
+      // Inline short goals right after the label: "Goal 1: We need ℝ. Use δF."
+      const lead = kind.isValueType ? 'We need a value of type' : 'We must show';
+      const short = kind.goalLatex && kind.goalLatex.length <= 30;
       return (
         <div style={{ ...rowStyle, fontWeight: 600, paddingTop: '6px' }} {...rowHandlers}>
           <span style={{ color: '#79c0ff' }}>{kind.label}</span>
           <span style={prose}>:</span>
+          {kind.goalLatex && short && (
+            <>
+              <span style={{ ...prose, fontWeight: 400 }}>{' '}{lead}{' '}</span>
+              <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '13px' }} />
+              <span style={{ ...prose, fontWeight: 400 }}>.</span>
+            </>
+          )}
+          {kind.goalLatex && !short && (
+            <>
+              <span style={{ ...prose, fontWeight: 400 }}>{' '}{lead}</span>
+              <span style={eqBlockStyle}>
+                <InlineKaTeX latex={kind.goalLatex} displayMode />
+              </span>
+            </>
+          )}
         </div>
       );
+    }
 
     case 'qed':
       return (
