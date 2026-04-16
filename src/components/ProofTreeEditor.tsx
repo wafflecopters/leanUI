@@ -2249,12 +2249,16 @@ function ProseItemView({
     (prevItem.kind.tag === 'calcChain')
   );
 
-  // "We must show [goal]" prefix for steps where no prior goal is visible
-  function mustShowPrefix(preGoalLatex?: string): React.ReactNode {
+  // "We must show [goal]" / "We need a value of type [goal]" prefix for steps
+  // where no prior goal is visible. The isValueType flag switches to
+  // "need a value of type" phrasing when the goal is data (like ℝ or Nat)
+  // rather than a proposition.
+  function mustShowPrefix(preGoalLatex?: string, isValueType?: boolean): React.ReactNode {
     if (prevShowedGoal || !preGoalLatex) return null;
+    const lead = isValueType ? 'We need a value of type' : 'We must show';
     return (
       <>
-        <span style={prose}>We must show</span>
+        <span style={prose}>{lead}</span>
         <span style={eqBlockStyle}>
           <InlineKaTeX latex={preGoalLatex} displayMode />
         </span>
@@ -2521,12 +2525,15 @@ function ProseItemView({
     case 'exact': {
       const proofLatex = kind.proofExprLatex;
       const fallbackLatex = texNameForProse(kind.exprLatex.trim().split(/[\s(]/)[0].replace(/^\(+/, ''));
+      // Value-type goals (need data, not a proof): "Use δF." reads naturally.
+      // Propositional goals: "The result follows from posF." reads naturally.
+      const solvedLead = kind.isValueType ? 'Use' : 'The result follows from';
       return (
         <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.goalLatex)}
+          {mustShowPrefix(kind.goalLatex, kind.isValueType)}
           {kind.solved ? (
             <>
-              <span style={prose}>The result follows from{' '}</span>
+              <span style={prose}>{solvedLead}{' '}</span>
               <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
               <span style={prose}>.</span>
             </>

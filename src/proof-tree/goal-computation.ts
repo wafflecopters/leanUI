@@ -774,6 +774,61 @@ function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngi
 // Rendering helpers
 // ============================================================================
 
+/**
+ * Heuristic: is this goal type a VALUE type (need to provide a value) rather
+ * than a PROPOSITION (need to prove a statement)?
+ *
+ * Used by the prose renderer to choose phrasing:
+ *   - Value type: "We need a value of type ℝ.  Use δF."
+ *   - Proposition: "We must show 0 < δF.  The result follows from posF."
+ *
+ * Detection strategy:
+ *   - Known proposition-formers (Equal, rlt, rle, Not, And, Or, Iff, ...)
+ *     → proposition
+ *   - Known value-type constructors (Nat, Bool, Real, Carrier, List, Vec, ...)
+ *     → value type
+ *   - Sort / Type → value type (we're picking a type)
+ *   - Pi chain → follow to the return type and classify that
+ *   - Unknown Const heads → default to PROPOSITION (safer — prop-like
+ *     wording is always grammatical; value-type wording only works when
+ *     we're confident).
+ */
+const PROPOSITION_HEADS = new Set([
+  'Equal', 'Eq',
+  'rlt', 'rle', 'rgt', 'rge', 'rne',
+  'lt', 'le', 'gt', 'ge', 'ne',
+  'Not', 'Void', 'Iff', 'Implies',
+]);
+
+const VALUE_TYPE_HEADS = new Set([
+  'Nat', 'Int', 'Bool', 'Real',
+  'Carrier',
+  'List', 'Vec', 'Array',
+  'String', 'Char', 'Float', 'Double',
+  'Unit', 'Empty',
+]);
+
+export function isValueTypeGoal(term: TTKTerm): boolean {
+  if (!term) return false;
+  // Sort (Type, Prop itself as a value) — picking a type counts as value-like
+  if (term.tag === 'Sort') return true;
+  // Pi type: recurse into the return type
+  if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
+    let body: TTKTerm = term.body;
+    while (body.tag === 'Binder' && body.binderKind.tag === 'BPi') body = body.body;
+    return isValueTypeGoal(body);
+  }
+  // Walk the App spine to the head
+  let head: TTKTerm = term;
+  while (head.tag === 'App') head = head.fn;
+  if (head.tag === 'Const') {
+    if (PROPOSITION_HEADS.has(head.name)) return false;
+    if (VALUE_TYPE_HEADS.has(head.name)) return true;
+  }
+  // Meta / Hole / unknown head → conservative default: proposition
+  return false;
+}
+
 /** Render a TTerm expression to LaTeX using the structured math editor pipeline. */
 export function renderTerm(term: TTerm, ctx: string[], rev: ReverseRegistry): string {
   const nodes = ttermToMathNodes(term, rev, ctx);
@@ -2879,6 +2934,11 @@ export interface NodeGoalInfo {
   readonly proofExprLatex?: string;
   /** For induction/cases nodes: LaTeX of the scrutinee, rendered through math pipeline. */
   readonly scrutineeLatex?: string;
+  /** True when the goal type is a VALUE type (like ℝ, Nat, List A) rather
+   *  than a proposition. Used by the prose renderer to switch phrasing:
+   *  "We need a value of type ℝ. Use δF." vs
+   *  "We must show 0 < δF. The result follows from posF." */
+  readonly isValueType?: boolean;
 }
 
 /**
@@ -2938,11 +2998,13 @@ function replayEntireTreeFromTrace(
     // `engineAfter` of the enclosing cases tactic.
     const goal = zonkEng.metaVars.get(gId) ?? eng.metaVars.get(gId);
     if (!goal) return;
+    const zonkedGoalType = zonkEng.zonkTerm(goal.type, goal.ctx.length);
     result.set(nodeId, {
       goalLatex: renderGoalLatex(zonkEng, goal, definitions, rev, projMap, aliasMap),
       hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, zonkEng),
       caseLabelLatex,
       validation,
+      isValueType: isValueTypeGoal(zonkedGoalType),
     });
   }
 
@@ -3151,10 +3213,12 @@ function replayEntireTreeViaWalk(
   function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string): void {
     const goal = eng.metaVars.get(gId);
     if (!goal) return;
+    const zonkedGoalType = eng.zonkTerm(goal.type, goal.ctx.length);
     result.set(nodeId, {
       goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
       hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
       caseLabelLatex,
+      isValueType: isValueTypeGoal(zonkedGoalType),
     });
   }
 

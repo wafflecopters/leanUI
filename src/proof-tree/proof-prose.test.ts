@@ -315,4 +315,52 @@ describe('generateProofProse', () => {
     const items = generateProofProse(intros, 2, goalMap);
     expect((items[0].kind as any).latex).toBe("n' : \\mathbb{N}");
   });
+
+  // ========================================================================
+  // isValueType flag propagation
+  // ========================================================================
+
+  test('exact item inherits isValueType from its node info', () => {
+    const ex: ProofNode = { tag: 'exact', id: 2, expr: 'δF' };
+    const goalMap = mkGoalMap([
+      [2, { goalLatex: '\\mathbb{R}', isValueType: true, validation: { status: 'solved' } }],
+    ]);
+    const items = generateProofProse(ex, 2, goalMap);
+    const exactItem = items.find(i => i.kind.tag === 'exact');
+    expect(exactItem).toBeDefined();
+    expect((exactItem!.kind as any).isValueType).toBe(true);
+  });
+
+  test('exact item omits isValueType when goal is a proposition', () => {
+    const ex: ProofNode = { tag: 'exact', id: 2, expr: 'refl' };
+    const goalMap = mkGoalMap([
+      [2, { goalLatex: '0 = 0', isValueType: false, validation: { status: 'solved' } }],
+    ]);
+    const items = generateProofProse(ex, 2, goalMap);
+    const exactItem = items.find(i => i.kind.tag === 'exact');
+    expect((exactItem!.kind as any).isValueType).toBe(false);
+  });
+
+  test('hole item carries isValueType flag', () => {
+    const hole: ProofNode = { tag: 'hole', id: 1 };
+    const goalMap = mkGoalMap([[1, { goalLatex: '\\mathbb{R}', isValueType: true }]]);
+    const items = generateProofProse(hole, 1, goalMap);
+    expect((items[0].kind as any).isValueType).toBe(true);
+  });
+
+  test('subgoalHeader (Goal N) carries child isValueType for prose switch', () => {
+    // apply constructor with 2 exact children where subgoal 1 is a value type.
+    const ex1: ProofNode = { tag: 'exact', id: 11, expr: 'δF' };
+    const ex2: ProofNode = { tag: 'exact', id: 12, expr: 'MkPair posF bnd' };
+    const ap: ProofNode = { tag: 'apply', id: 10, name: 'constructor', children: [ex1, ex2] };
+    const goalMap = mkGoalMap([
+      [10, { goalLatex: 'DPair A B' }],
+      [11, { goalLatex: '\\mathbb{R}', isValueType: true, validation: { status: 'solved' } }],
+      [12, { goalLatex: '0 < \\delta_F', isValueType: false, validation: { status: 'solved' } }],
+    ]);
+    const items = generateProofProse(ap, 10, goalMap);
+    // Since all children are `exact`, the compact proofExprs form is used
+    // rather than subgoalHeader — verify no crash and no error.
+    expect(items.length).toBeGreaterThan(0);
+  });
 });

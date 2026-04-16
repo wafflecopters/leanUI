@@ -28,6 +28,7 @@ import {
   foldProjectionMatches,
   renderGoalLatex,
   unfoldTransparent,
+  isValueTypeGoal,
 } from './goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { TTerm } from '../compiler/surface';
@@ -225,6 +226,87 @@ describe('extractTypeHead', () => {
 
   test('returns null for Var', () => {
     expect(extractTypeHead(mkVarTT(0))).toBeNull();
+  });
+});
+
+describe('isValueTypeGoal', () => {
+  test('bare Const type (Nat) → value type', () => {
+    expect(isValueTypeGoal(mkConst('Nat'))).toBe(true);
+  });
+
+  test('bare Const type (Real) → value type', () => {
+    expect(isValueTypeGoal(mkConst('Real'))).toBe(true);
+  });
+
+  test('Carrier applied to arg → value type', () => {
+    expect(isValueTypeGoal(mkApp(mkConst('Carrier'), mkVar(0)))).toBe(true);
+  });
+
+  test('List A → value type', () => {
+    expect(isValueTypeGoal(mkApp(mkConst('List'), mkConst('Nat')))).toBe(true);
+  });
+
+  test('Equal (equality) → proposition', () => {
+    // Equal Nat x x
+    const term = mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkVar(0)), mkVar(0));
+    expect(isValueTypeGoal(term)).toBe(false);
+  });
+
+  test('rlt (strict less-than) → proposition', () => {
+    // rlt R a b
+    const term = mkApp(mkApp(mkApp(mkConst('rlt'), mkVar(0)), mkVar(1)), mkVar(2));
+    expect(isValueTypeGoal(term)).toBe(false);
+  });
+
+  test('rle (less-or-equal) → proposition', () => {
+    expect(isValueTypeGoal(mkApp(mkApp(mkConst('rle'), mkVar(0)), mkVar(1)))).toBe(false);
+  });
+
+  test('Sort (Type itself) → value type', () => {
+    expect(isValueTypeGoal(mkSort(mkULit(0)))).toBe(true);
+  });
+
+  test('Pi ending in value type → value type (function producing values)', () => {
+    // Nat -> Nat
+    const term = mkPi(mkConst('Nat'), mkConst('Nat'), '_');
+    expect(isValueTypeGoal(term)).toBe(true);
+  });
+
+  test('Pi ending in proposition → proposition (forall statement)', () => {
+    // (x : Nat) → Equal Nat x x
+    const body = mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkVar(0)), mkVar(0));
+    const term = mkPi(mkConst('Nat'), body, 'x');
+    expect(isValueTypeGoal(term)).toBe(false);
+  });
+
+  test('Nested Pi chain ending in proposition → proposition', () => {
+    // (x : Nat) → (y : Nat) → Equal ...
+    const eq = mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkVar(1)), mkVar(0));
+    const inner = mkPi(mkConst('Nat'), eq, 'y');
+    const outer = mkPi(mkConst('Nat'), inner, 'x');
+    expect(isValueTypeGoal(outer)).toBe(false);
+  });
+
+  test('Unknown Const head → conservative default (proposition)', () => {
+    // Some unknown type — don't want to confidently assert "value type"
+    // because wrong wording ("Provide a value of type ...") would read badly.
+    expect(isValueTypeGoal(mkConst('SomeUnknownType'))).toBe(false);
+  });
+
+  test('Meta → proposition (unknown)', () => {
+    expect(isValueTypeGoal({ tag: 'Meta', id: '?m' })).toBe(false);
+  });
+
+  test('Hole → proposition (unknown)', () => {
+    expect(isValueTypeGoal({ tag: 'Hole', id: '_' })).toBe(false);
+  });
+
+  test('Not P → proposition', () => {
+    expect(isValueTypeGoal(mkApp(mkConst('Not'), mkConst('P')))).toBe(false);
+  });
+
+  test('Void → proposition', () => {
+    expect(isValueTypeGoal(mkConst('Void'))).toBe(false);
   });
 });
 

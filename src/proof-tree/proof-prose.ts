@@ -57,12 +57,12 @@ export type ProseItemKind =
   | { tag: 'apply'; name: string; preGoalLatex?: string; subgoalLatex?: string[]; appliedArgsLatex?: string[]; error?: string; proofExprs?: readonly string[] }
   | { tag: 'inductionHeader'; scrutinee: string; scrutineeLatex?: string; isCases?: boolean }
   | { tag: 'caseHeader'; labelLatex: string; isBaseCase: boolean; constructorParamNames?: readonly string[]; constructorName?: string; scrutinee?: string; isCases?: boolean }
-  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string }
-  | { tag: 'hole'; goalLatex?: string }
+  | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
+  | { tag: 'hole'; goalLatex?: string; isValueType?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
-  | { tag: 'subgoalHeader'; label: string; goalLatex?: string }
+  | { tag: 'subgoalHeader'; label: string; goalLatex?: string; isValueType?: boolean }
   | { tag: 'calcChain'; preGoalLatex?: string; steps: readonly CalcChainStep[] }
   | { tag: 'qed' };
 
@@ -259,8 +259,8 @@ export function generateProofProse(
   }
 
   /** Walk a proof branch with a labeled header, indented content. */
-  function walkBranch(parentId: ProofNodeId, label: string, goalLatex: string | undefined, body: ProofNode, depth: number): void {
-    emit(parentId, depth, { tag: 'subgoalHeader', label, goalLatex });
+  function walkBranch(parentId: ProofNodeId, label: string, goalLatex: string | undefined, body: ProofNode, depth: number, isValueType?: boolean): void {
+    emit(parentId, depth, { tag: 'subgoalHeader', label, goalLatex, isValueType });
     walk(body, depth + 1);
   }
 
@@ -269,14 +269,14 @@ export function generateProofProse(
 
     switch (node.tag) {
       case 'hole': {
-        emit(node.id, depth, { tag: 'hole', goalLatex: info?.goalLatex });
+        emit(node.id, depth, { tag: 'hole', goalLatex: info?.goalLatex, isValueType: info?.isValueType });
         break;
       }
 
       case 'exact': {
         const solved = info?.validation?.status === 'solved';
         const error = info?.validation?.status === 'error' ? info.validation.message : undefined;
-        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error, proofExprLatex: info?.proofExprLatex });
+        emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error, proofExprLatex: info?.proofExprLatex, isValueType: info?.isValueType });
         if (solved) {
           emit(node.id, depth, { tag: 'qed' });
         }
@@ -408,8 +408,8 @@ export function generateProofProse(
           // Multiple subgoals: use labeled branches with indentation
           for (let i = 0; i < node.children.length; i++) {
             const child = node.children[i];
-            const childGoal = goalMap.get(child.id)?.goalLatex;
-            walkBranch(node.id, `Goal ${i + 1}`, childGoal, child, depth);
+            const childInfo = goalMap.get(child.id);
+            walkBranch(node.id, `Goal ${i + 1}`, childInfo?.goalLatex, child, depth, childInfo?.isValueType);
           }
         } else {
           // Single subgoal: stay at same depth to avoid progressive indentation
