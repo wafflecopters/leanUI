@@ -254,7 +254,11 @@ function buildInductionNode(cmd: TacticCommand): ProofNode {
         nestedLabel, rawBranch.params,
       );
     }
-    return mkCase(rawBranch.constructor, body, rawBranch.constructor, allPatternVarNames(branch.params));
+    const flatParams = allPatternVarNames(branch.params);
+    // Generate a labelLatex so the case header and right-panel CASE section
+    // always have a properly rendered label (not raw text).
+    const flatLabel = formatNestedCaseLabelLatex(rawBranch.constructor, rawBranch.params);
+    return mkCase(rawBranch.constructor, body, rawBranch.constructor, flatParams, flatLabel);
   });
 
   return mkInduction(scrutinee, cases, isCases);
