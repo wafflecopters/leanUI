@@ -23,68 +23,6 @@ function extractByExpr(node?: ProofNode): string | undefined {
   }
 }
 
-/**
- * Produce a compact LaTeX summary of a raw tactic expression string
- * when the full math pipeline rendering is unavailable.
- *
- * Strips nested `fun` wrappers into a `λ x, y, z →` prefix and renders
- * the body's head function names as `\operatorname{...}(…)`.
- *
- * Example: `(fun x => (fun hx0 => (fun hxd => (convertEps ε ...)  (coreEstimate ...))))`
- *       →  `\\lambda x, hx0, hxd \\to \\operatorname{convertEps}(\\varepsilon, \\ldots)`
- */
-function summarizeRawExpr(expr: string): string {
-  let s = expr.trim();
-  // Strip outer parens
-  while (s.startsWith('(') && s.endsWith(')')) {
-    const inner = s.slice(1, -1);
-    // Only strip if balanced
-    let depth = 0, balanced = true;
-    for (const ch of inner) {
-      if (ch === '(') depth++;
-      if (ch === ')') { depth--; if (depth < 0) { balanced = false; break; } }
-    }
-    if (balanced && depth === 0) s = inner.trim(); else break;
-  }
-
-  // Collect lambda params
-  const params: string[] = [];
-  while (s.startsWith('fun ') || s.startsWith('\\')) {
-    const m = s.match(/^(?:fun|\\)\s*(\w+)\s*=>\s*/);
-    if (!m) break;
-    params.push(m[1]);
-    s = s.slice(m[0].length).trim();
-    // Strip wrapping parens from the body
-    while (s.startsWith('(') && s.endsWith(')')) {
-      const inner = s.slice(1, -1);
-      let depth = 0, ok = true;
-      for (const ch of inner) { if (ch === '(') depth++; if (ch === ')') { depth--; if (depth < 0) { ok = false; break; } } }
-      if (ok && depth === 0) s = inner.trim(); else break;
-    }
-  }
-
-  // Extract the head function name from the body — the outermost application
-  const bodyTokens = s.split(/[\s(]+/).filter(Boolean);
-  let headName: string | null = null;
-  for (const tok of bodyTokens) {
-    const clean = tok.replace(/[()]/g, '');
-    if (/^[a-zA-Z]\w*$/.test(clean) && clean.length > 1) {
-      headName = clean;
-      break;
-    }
-  }
-
-  // Build LaTeX
-  const prefix = params.length > 0
-    ? `\\lambda \\, ${params.map(p => texName(p)).join(',\\,')} \\to `
-    : '';
-  const body = headName
-    ? `\\operatorname{${headName}}(\\ldots)`
-    : `\\text{${s.substring(0, 30).replace(/_/g, '\\_')}${s.length > 30 ? '\\ldots' : ''}}`;
-
-  return prefix + body;
-}
-
 // ============================================================================
 // Data Model
 // ============================================================================
@@ -445,7 +383,7 @@ export function generateProofProse(
         if (allChildrenExact) {
           const proofExprs = node.children.map(child => {
             const childInfo = goalMap.get(child.id);
-            return childInfo?.proofExprLatex ?? summarizeRawExpr((child as ExactNode).expr);
+            return childInfo?.proofExprLatex ?? (child as ExactNode).expr;
           });
           emit(node.id, depth, {
             tag: 'apply', name: node.name,

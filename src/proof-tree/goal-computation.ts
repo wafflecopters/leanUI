@@ -3008,6 +3008,40 @@ function replayEntireTreeFromTrace(
     });
   }
 
+  /** Fill in proofExprLatex for exact descendants that the trace walk missed.
+   *  This happens when exact nodes are inside nested constructor+focus bullets
+   *  — the FocusTactic wraps the entire inner sequence into one trace step,
+   *  so the per-node walk can't descend into them.
+   *
+   *  Uses the PARENT goal context (which has the full branch variables) to
+   *  parse and render the exact expressions. */
+  function fillMissingProofExprs(root: ProofNode, parentGoal: MetaVar): void {
+    function visit(n: ProofNode): void {
+      if (n.tag === 'exact') {
+        const existing = result.get(n.id);
+        if (!existing || !existing.proofExprLatex) {
+          const latex = renderProofExpr(n.expr, parentGoal, definitions, rev, projMap, aliasMap);
+          if (latex) {
+            if (existing) {
+              result.set(n.id, { ...existing, proofExprLatex: latex });
+            } else {
+              // Create a minimal entry for nodes the trace walk never visited
+              result.set(n.id, {
+                goalLatex: '',
+                hypotheses: [],
+                proofExprLatex: latex,
+              });
+            }
+          }
+        }
+      }
+      if ('child' in n && (n as any).child) visit((n as any).child);
+      if ('children' in n && (n as any).children) for (const c of (n as any).children) visit(c);
+      if ('cases' in n && (n as any).cases) for (const c of (n as any).cases) visit(c.body);
+    }
+    visit(root);
+  }
+
   // Walk the proof tree in the same order as the trace, advancing a cursor through the trace.
   let traceIdx = 0;
 
@@ -3138,6 +3172,13 @@ function replayEntireTreeFromTrace(
           const childEngine = nextEngine.withUpdates({ focusIndex: childFocusIdx });
           walkTrace(node.children[i], childEngine, caseLabelLatex);
         }
+        // Fill in proofExprLatex for any exact descendants that the trace
+        // walk couldn't reach (e.g., inner exacts inside nested constructor
+        // + focus bullets, where the trace has a single step for the whole
+        // focus block). Uses the PARENT goal context (before the apply) so
+        // branch variables (δF, posF, etc.) are in scope for parsing.
+        const parentGoal = withFinalMetas(currentEngine).metaVars.get(gId);
+        if (parentGoal) fillMissingProofExprs(node, parentGoal);
         break;
       }
 
