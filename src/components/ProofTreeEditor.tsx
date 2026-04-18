@@ -157,6 +157,13 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
+  // Once the user interactively edits the proof tree, the compiled
+  // tacticTrace is stale — it was produced for the ORIGINAL proof tree
+  // and doesn't match the edited one. Using it for replay produces wrong
+  // goals (e.g., ∀ n ∈ ℕ still showing after intros). Invalidate the
+  // trace when the undo stack has entries (= user has made edits).
+  const effectiveTrace = history.undoStack.length > 0 ? undefined : tacticTrace;
+
   // Ephemeral tactic input mode (not part of immutable state)
   const [tacticMode, setTacticMode] = useState<TacticMode>(null);
   const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('proof');
@@ -193,7 +200,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     if (surfaceType) {
       return computeTypedContext(
         state.root, state.cursor.nodeId, surfaceType, registry ?? emptyRegistry,
-        inductiveMap, kernelType, definitions, tacticTrace,
+        inductiveMap, kernelType, definitions, effectiveTrace,
       );
     }
     // Fallback: use untyped context, convert to TypedProofContext shape
@@ -281,11 +288,11 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const goalMap = useMemo<Map<ProofNodeId, NodeGoalInfo>>(() => {
     if (!kernelType || !definitions || !rev) return new Map();
     try {
-      return replayEntireTree(state.root, kernelType, definitions, rev, tacticTrace);
+      return replayEntireTree(state.root, kernelType, definitions, rev, effectiveTrace);
     } catch {
       return new Map();
     }
-  }, [state.root, kernelType, definitions, rev, tacticTrace]);
+  }, [state.root, kernelType, definitions, rev, effectiveTrace]);
 
   // Generate prose items from proof tree + goal map
   const proseItems = useMemo<ProseItem[]>(() => {
