@@ -124,6 +124,12 @@ function renderChangedSubterm(
  * We suppress unfold suggestions for pattern-matching definitions when the
  * scrutinee is a variable (iota can't fire), since the result is an opaque
  * match expression that makes the goal harder to read.
+ *
+ * Uses the engine's definitions for normalization so that constants like
+ * `two` (= Succ(Succ(Zero))) get delta-reduced, exposing constructors
+ * for iota. Without this, `unfold mul` on `mul(two, n)` would produce
+ * a Match with scrutinee `Const(two)` — iota can't fire because
+ * `two` is opaque — and the suggestion would be wrongly suppressed.
  */
 function unfoldResultIsMatch(oldGoal: MetaVar, newEngine: TacticEngine): boolean {
   try {
@@ -131,9 +137,9 @@ function unfoldResultIsMatch(oldGoal: MetaVar, newEngine: TacticEngine): boolean
     if (!newGoalId) return false;
     const newGoal = newEngine.metaVars.get(newGoalId);
     if (!newGoal) return false;
-    const emptyDefs = createDefinitionsMap();
-    const oldNorm = fullNormalize(oldGoal.type, emptyDefs);
-    const newNorm = fullNormalize(newGoal.type, emptyDefs);
+    const defs = newEngine.definitions;
+    const oldNorm = fullNormalize(oldGoal.type, defs);
+    const newNorm = fullNormalize(newGoal.type, defs);
     const changed = findChangedSubterm(oldNorm, newNorm);
     return changed.tag === 'Match';
   } catch {
