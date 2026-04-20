@@ -108,10 +108,11 @@ function renderChangedSubterm(
     if (!newGoalId) return undefined;
     const newGoal = newEngine.metaVars.get(newGoalId);
     if (!newGoal) return undefined;
-    // Normalize both old and new goal types the same way
-    const emptyDefs = createDefinitionsMap();
-    const oldNorm = fullNormalize(oldGoal.type, emptyDefs);
-    const newNorm = fullNormalize(newGoal.type, emptyDefs);
+    // Normalize using actual definitions so constants like `two`
+    // get delta-reduced and iota can fire on pattern-match results.
+    const defs = newEngine.definitions;
+    const oldNorm = fullNormalize(oldGoal.type, defs);
+    const newNorm = fullNormalize(newGoal.type, defs);
     const changed = findChangedSubterm(oldNorm, newNorm);
     return renderSubtermLatex(changed, newGoal.ctx, definitions, rev);
   } catch {
