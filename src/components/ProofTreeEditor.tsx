@@ -536,6 +536,10 @@ function GoalInteraction({
       const name = suggestion.id.slice('apply-hyp-'.length);
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, name, numSubgoals);
+    } else if (suggestion.id.startsWith('construct-')) {
+      const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
+      const numChildren = suggestion.numSubgoals ?? 1;
+      result = applyApplyTactic(state, ctorName, numChildren);
     } else if (suggestion.id.startsWith('rewrite-')) {
       const rw = suggestion as RewriteSuggestion;
       result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences, rw.targetHead);
@@ -2893,46 +2897,7 @@ function HoleProseView({
     }
   }, [activeTactic]);
 
-  // Compute "Construct" buttons for inductive goal types.
-  // If the goal's head is an inductive type, offer one button per constructor
-  // (excluding constructors that fail to unify with the goal).
-  const constructorButtons = useMemo<Array<{ label: string; ctorName: string; numChildren: number }>>(() => {
-    if (!typedContext?.kernelGoal) return [];
-    const { engine, goal: metaGoal, definitions: defs } = typedContext.kernelGoal;
-    const goalId = engine.getFocusedGoalId();
-    if (!goalId) return [];
-
-    // WHNF the goal type to expose the head
-    const { whnf } = require('../compiler/whnf');
-    const goalTypeWhnf = whnf(engine.zonkTerm(metaGoal.type, metaGoal.ctx.length), {
-      definitions: defs, typingContext: metaGoal.ctx,
-    });
-    let head = goalTypeWhnf;
-    while (head.tag === 'App') head = head.fn;
-    if (head.tag !== 'Const') return [];
-
-    const inductiveDef = defs.inductiveTypes.get(head.name);
-    if (!inductiveDef) return [];
-
-    // Try each constructor via ApplyTactic
-    const { ApplyTactic } = require('../tactics/tactic');
-    const buttons: Array<{ label: string; ctorName: string; numChildren: number }> = [];
-    for (const ctor of inductiveDef.constructors) {
-      try {
-        const tactic = new ApplyTactic({ tag: 'Const', name: ctor.name });
-        const res = tactic.apply(engine, metaGoal, goalId);
-        if (res.success) {
-          const numChildren = res.newEngine?.goals.length ?? 1;
-          buttons.push({
-            label: inductiveDef.constructors.length === 1 ? 'Construct' : `Construct ${ctor.name}`,
-            ctorName: ctor.name,
-            numChildren,
-          });
-        }
-      } catch { /* constructor doesn't unify */ }
-    }
-    return buttons;
-  }, [typedContext?.kernelGoal]);
+  // (Constructor suggestions are computed in computeTacticSuggestions)
 
   const handleSubmit = useCallback((value: string) => {
     if (!tacticMode) return;
@@ -3084,19 +3049,6 @@ function HoleProseView({
               key={tactic}
               style={proseBtnStyle}
               onClick={(e) => { e.stopPropagation(); onTacticMode({ tactic }); }}
-            >
-              {label}
-            </button>
-          ))}
-          {constructorButtons.map(({ label, ctorName, numChildren }) => (
-            <button
-              key={`construct-${ctorName}`}
-              style={{ ...proseBtnStyle, color: '#a5d6ff' }}
-              onClick={(e) => {
-                e.stopPropagation();
-                const result = applyApplyTactic(state, ctorName, numChildren);
-                if (result) onPushChange(result);
-              }}
             >
               {label}
             </button>

@@ -9,7 +9,7 @@ import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
 import { renderGoalLatex, renderSubtermLatex } from './goal-computation';
 import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
-import { fullNormalize } from '../compiler/whnf';
+import { fullNormalize, whnf } from '../compiler/whnf';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic, ApplyTactic } from '../tactics/tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
@@ -41,6 +41,8 @@ export interface TacticSuggestion {
   readonly resultGoalLatex?: string;
   /** For apply tactics: number of subgoals created. */
   readonly numSubgoals?: number;
+  /** For construct suggestions: the constructor name to apply. */
+  readonly applyCtorName?: string;
 }
 
 /** Escape a name for use in LaTeX (wrap multi-char names in \text{}). */
@@ -186,6 +188,49 @@ export function computeTacticSuggestions(
           }
         } catch { /* refl doesn't apply */ }
       }
+    }
+  }
+
+  // Constructor suggestions: when the goal's head is an inductive type,
+  // offer "Construct CtorName" for each constructor that unifies.
+  // Single-constructor types just show "Construct".
+  if (kernelGoal && definitions && selectedPath === 'goal-root') {
+    const { engine, goal: metaGoal } = kernelGoal;
+    const gId = engine.getFocusedGoalId();
+    if (gId) {
+      try {
+        const goalTypeWhnf = whnf(engine.zonkTerm(metaGoal.type, metaGoal.ctx.length), {
+          definitions, typingContext: metaGoal.ctx,
+        });
+        let head = goalTypeWhnf;
+        while (head.tag === 'App') head = head.fn;
+        if (head.tag === 'Const') {
+          const inductiveDef = definitions.inductiveTypes.get(head.name);
+          if (inductiveDef) {
+            const isSingle = inductiveDef.constructors.length === 1;
+            for (const ctor of inductiveDef.constructors) {
+              try {
+                const tactic = new ApplyTactic({ tag: 'Const', name: ctor.name });
+                const res = tactic.apply(engine, metaGoal, gId);
+                if (res.success) {
+                  const label = isSingle ? 'Construct' : `Construct ${ctor.name}`;
+                  const numSubgoals = res.newEngine?.goals.length ?? 1;
+                  suggestions.push({
+                    id: `construct-${ctor.name}`,
+                    label,
+                    labelLatex: isSingle
+                      ? '\\text{Construct}'
+                      : `\\text{Construct } \\textbf{${texEscape(ctor.name)}}`,
+                    description: `Apply constructor ${ctor.name}`,
+                    applyCtorName: ctor.name,
+                    numSubgoals,
+                  });
+                }
+              } catch { /* constructor doesn't unify */ }
+            }
+          }
+        }
+      } catch { /* ignore */ }
     }
   }
 
