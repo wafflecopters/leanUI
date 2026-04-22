@@ -191,46 +191,41 @@ export function computeTacticSuggestions(
     }
   }
 
-  // Constructor suggestions: when the goal's head is an inductive type,
-  // offer "Construct CtorName" for each constructor that unifies.
-  // Single-constructor types just show "Construct".
-  if (kernelGoal && definitions && selectedPath === 'goal-root') {
-    const { engine, goal: metaGoal } = kernelGoal;
-    const gId = engine.getFocusedGoalId();
-    if (gId) {
-      try {
-        const goalTypeWhnf = whnf(engine.zonkTerm(metaGoal.type, metaGoal.ctx.length), {
-          definitions, typingContext: metaGoal.ctx,
-        });
-        let head = goalTypeWhnf;
-        while (head.tag === 'App') head = head.fn;
-        if (head.tag === 'Const') {
-          const inductiveDef = definitions.inductiveTypes.get(head.name);
-          if (inductiveDef) {
-            const isSingle = inductiveDef.constructors.length === 1;
-            for (const ctor of inductiveDef.constructors) {
-              try {
-                const tactic = new ApplyTactic({ tag: 'Const', name: ctor.name });
-                const res = tactic.apply(engine, metaGoal, gId);
-                if (res.success) {
-                  const label = isSingle ? 'Construct' : `Construct ${ctor.name}`;
-                  const numSubgoals = res.newEngine?.goals.length ?? 1;
-                  suggestions.push({
-                    id: `construct-${ctor.name}`,
-                    label,
-                    labelLatex: isSingle
-                      ? '\\text{Construct}'
-                      : `\\text{Construct } \\textbf{${texEscape(ctor.name)}}`,
-                    description: `Apply constructor ${ctor.name}`,
-                    applyCtorName: ctor.name,
-                    numSubgoals,
-                  });
-                }
-              } catch { /* constructor doesn't unify */ }
+  // Constructor suggestions: when the selected subterm's head is an inductive
+  // type, offer "Construct CtorName" for each constructor that unifies with
+  // the goal. Single-constructor types just show "Construct".
+  // This triggers on the goal-root subterm (the outermost expression) or any
+  // subterm whose head matches an inductive type definition.
+  if (kernelGoal && definitions) {
+    const selectedInfo = goal.subtermMap.get(selectedPath);
+    const headName = selectedInfo?.headName;
+    if (headName && definitions.inductiveTypes.has(headName)) {
+      const { engine, goal: metaGoal } = kernelGoal;
+      const gId = engine.getFocusedGoalId();
+      if (gId) {
+        const inductiveDef = definitions.inductiveTypes.get(headName)!;
+        const isSingle = inductiveDef.constructors.length === 1;
+        for (const ctor of inductiveDef.constructors) {
+          try {
+            const tactic = new ApplyTactic({ tag: 'Const', name: ctor.name });
+            const res = tactic.apply(engine, metaGoal, gId);
+            if (res.success) {
+              const label = isSingle ? 'Construct' : `Construct ${ctor.name}`;
+              const numSubgoals = res.newEngine?.goals.length ?? 1;
+              suggestions.push({
+                id: `construct-${ctor.name}`,
+                label,
+                labelLatex: isSingle
+                  ? '\\text{Construct}'
+                  : `\\text{Construct } \\textbf{${texEscape(ctor.name)}}`,
+                description: `Apply constructor ${ctor.name}`,
+                applyCtorName: ctor.name,
+                numSubgoals,
+              });
             }
-          }
+          } catch { /* constructor doesn't unify */ }
         }
-      } catch { /* ignore */ }
+      }
     }
   }
 
