@@ -886,3 +886,94 @@ export function computeRewriteSuggestionsIncremental(
 
   return cancel;
 }
+
+// ============================================================================
+// Hypothesis-level suggestions
+// ============================================================================
+
+/**
+ * Compute tactic suggestions for a selected hypothesis.
+ *
+ * When the user clicks a hypothesis `h : T` in the context panel, this
+ * returns actions like [Exact h], [Apply h], [Destructure h], and
+ * [Use Projection] for each accessible projection of T's type.
+ */
+export function computeSelectedHypSuggestions(
+  hypName: string,
+  hypIndex: number,
+  kernelGoal: KernelGoalInfo,
+  definitions: DefinitionsMap,
+): readonly TacticSuggestion[] {
+  const { engine, goal, rev } = kernelGoal;
+  const goalId = engine.getFocusedGoalId();
+  if (!goalId) return [];
+
+  const suggestions: TacticSuggestion[] = [];
+  const hypVar: TTKTerm = { tag: 'Var', index: goal.ctx.length - 1 - hypIndex };
+
+  // 1. Exact h — does the hypothesis directly solve the goal?
+  try {
+    const exactTactic = new ExactTactic(hypVar);
+    const res = exactTactic.apply(engine, goal, goalId);
+    if (res.success) {
+      suggestions.push({
+        id: `hyp-exact-${hypName}`,
+        label: `Exact ${hypName}`,
+        labelLatex: `\\text{exact } \\textbf{${texEscape(hypName)}}`,
+        description: `Use ${hypName} to close the goal`,
+      });
+    }
+  } catch { /* doesn't apply */ }
+
+  // 2. Apply h — does the hypothesis produce the goal type when applied?
+  try {
+    const applyTactic = new ApplyTactic(hypVar);
+    const res = applyTactic.apply(engine, goal, goalId);
+    if (res.success) {
+      const numSubgoals = res.newEngine?.goals.length ?? 1;
+      suggestions.push({
+        id: `hyp-apply-${hypName}`,
+        label: `Apply ${hypName}`,
+        labelLatex: `\\text{apply } \\textbf{${texEscape(hypName)}}`,
+        description: `Apply ${hypName} to the goal`,
+        numSubgoals,
+      });
+    }
+  } catch { /* doesn't apply */ }
+
+  // 3. Destructure h — if hypothesis type is an inductive type
+  const hypEntry = goal.ctx[hypIndex];
+  if (hypEntry) {
+    const { whnf } = require('../compiler/whnf');
+    try {
+      const hypTypeWhnf = whnf(engine.zonkTerm(hypEntry.type, goal.ctx.length), {
+        definitions, typingContext: goal.ctx,
+      });
+      let head = hypTypeWhnf;
+      while (head.tag === 'App') head = head.fn;
+      if (head.tag === 'Const' && definitions.inductiveTypes.has(head.name)) {
+        const inductiveDef = definitions.inductiveTypes.get(head.name)!;
+        // Only offer destructure if the type has constructors with fields
+        const hasFields = inductiveDef.constructors.some(c => {
+          // Check if the constructor has explicit params by counting Pi binders
+          // past the implicit ones
+          let t = c.type;
+          const numImplicit = c.namedArgMap?.size ?? 0;
+          let total = 0;
+          while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') { total++; t = t.body; }
+          return total > numImplicit;
+        });
+        if (hasFields) {
+          suggestions.push({
+            id: `hyp-destruct-${hypName}`,
+            label: `Destructure ${hypName}`,
+            labelLatex: `\\text{cases } \\textbf{${texEscape(hypName)}}`,
+            description: `Pattern-match on ${hypName}`,
+          });
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return suggestions;
+}

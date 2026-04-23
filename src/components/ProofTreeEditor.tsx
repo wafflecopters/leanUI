@@ -34,7 +34,7 @@ import {
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
 import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
-import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
+import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { InteractiveGoalView } from './InteractiveGoalView';
 import SplitPane from './SplitPane';
 
@@ -460,6 +460,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
           inductiveMap={inductiveMap}
           registry={registry}
           rewriteProgress={rewriteProgress}
+          definitions={definitions}
         />
       </SplitPane>
     </div>
@@ -750,7 +751,7 @@ function GoalInteraction({
 function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedPath, onSelectPath, editingNames, onEditingNames,
   editingSuggestionId, onEditingSuggestionId,
-  inductiveMap, registry, rewriteProgress,
+  inductiveMap, registry, rewriteProgress, definitions,
 }: {
   context: TypedProofContext | null;
   state?: ProofTreeState;
@@ -761,12 +762,48 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   onSelectPath: (p: GoalPath | null) => void;
   editingNames: string[] | null;
   onEditingNames: (n: string[] | null) => void;
+  definitions?: DefinitionsMap;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
   inductiveMap?: InductiveMap;
   registry?: SyntaxRegistry;
   rewriteProgress?: RewriteProgress | null;
 }) {
+  const [selectedHyp, setSelectedHyp] = useState<number | null>(null);
+
+  // Compute hypothesis-level suggestions when one is selected
+  const hypSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    if (selectedHyp === null || !context?.kernelGoal || !definitions) return [];
+    const hyp = context.hypotheses[selectedHyp];
+    if (!hyp) return [];
+    return computeSelectedHypSuggestions(hyp.name, selectedHyp, context.kernelGoal, definitions);
+  }, [selectedHyp, context?.kernelGoal, definitions, context?.hypotheses]);
+
+  // Handle hypothesis suggestion clicks
+  const handleHypSuggestion = useCallback((suggestion: TacticSuggestion) => {
+    if (!state || !onPushChange) return;
+    let result: ProofTreeState | null = null;
+    const hypName = context?.hypotheses[selectedHyp!]?.name;
+    if (!hypName) return;
+
+    if (suggestion.id.startsWith('hyp-exact-')) {
+      result = applyExact(state, hypName);
+    } else if (suggestion.id.startsWith('hyp-apply-')) {
+      const numSubgoals = suggestion.numSubgoals ?? 1;
+      result = applyApplyTactic(state, hypName, numSubgoals);
+    } else if (suggestion.id.startsWith('hyp-destruct-')) {
+      // Cases on the hypothesis — use cases tactic
+      // For now, apply as a simple cases without structured branches
+      result = applyApplyTactic(state, `cases ${hypName}`, 1);
+      // TODO: use applyInductionWithCtors for structured destructuring
+    }
+
+    if (result) {
+      onPushChange(result);
+      setSelectedHyp(null);
+    }
+  }, [state, onPushChange, context?.hypotheses, selectedHyp]);
+
   if (!context) return null;
 
   const { hypotheses, caseLabel, caseLabelLatex, goal, validation } = context;
@@ -784,13 +821,24 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
         <div style={{ marginBottom: '10px' }}>
           <div style={sectionHeaderStyle}>CONTEXT</div>
           {hypotheses.map((h, i) => (
-            <div key={i} style={{
-              padding: '1px 0',
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: '4px',
-              flexWrap: 'wrap',
-            }}>
+            <div
+              key={i}
+              onClick={() => {
+                setSelectedHyp(prev => prev === i ? null : i);
+                // Deselect goal path when selecting hypothesis
+                onSelectPath(null);
+              }}
+              style={{
+                padding: '2px 4px',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: '4px',
+                flexWrap: 'wrap',
+                cursor: 'pointer',
+                borderRadius: '3px',
+                backgroundColor: selectedHyp === i ? 'rgba(88, 166, 255, 0.12)' : 'transparent',
+                borderLeft: selectedHyp === i ? '2px solid #58a6ff' : '2px solid transparent',
+              }}>
               <InlineKaTeX latex={texNameForProse(h.name)} style={{ fontSize: '12px' }} />
               {h.type && (
                 <>
@@ -800,6 +848,21 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
               )}
             </div>
           ))}
+          {/* Hypothesis action tray */}
+          {selectedHyp !== null && hypSuggestions.length > 0 && (
+            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px', paddingLeft: '4px' }}>
+              {hypSuggestions.map(s => (
+                <button
+                  key={s.id}
+                  style={{ ...suggestionBtnStyle, fontSize: '11px', padding: '2px 8px' }}
+                  onClick={(e) => { e.stopPropagation(); handleHypSuggestion(s); }}
+                  title={s.description}
+                >
+                  <InlineKaTeX latex={s.labelLatex ?? s.label} style={{ fontSize: '11px' }} />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
