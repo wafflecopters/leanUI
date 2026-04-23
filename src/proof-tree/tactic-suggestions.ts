@@ -45,9 +45,10 @@ export interface TacticSuggestion {
   readonly applyCtorName?: string;
 }
 
-/** Escape a name for use in LaTeX (wrap multi-char names in \text{}). */
+/** Escape a name for use in LaTeX (wrap multi-char names in \text{}, escape underscores). */
 function texEscape(name: string): string {
   if (name.length === 1) return name;
+  name = name.replace(/_/g, '\\_');
   return `\\text{${name}}`;
 }
 
