@@ -14,7 +14,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import katex from 'katex';
 import { TTerm } from '../compiler/surface';
 import { TTKTerm } from '../compiler/kernel';
-import { DefinitionsMap } from '../compiler/term';
+import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
@@ -35,6 +35,7 @@ import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math
 import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
+import { computeTermSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
 import { InteractiveGoalView } from './InteractiveGoalView';
 import SplitPane from './SplitPane';
 
@@ -761,7 +762,7 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedPath, onSelectPath, editingNames, onEditingNames,
   editingSuggestionId, onEditingSuggestionId,
   inductiveMap, registry, rewriteProgress, definitions,
-  onOpenHaveWithPrefill,
+  onOpenHaveWithPrefill: _onOpenHaveWithPrefill,
 }: {
   context: TypedProofContext | null;
   state?: ProofTreeState;
@@ -782,6 +783,7 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   rewriteProgress?: RewriteProgress | null;
 }) {
   const [selectedHyp, setSelectedHyp] = useState<number | null>(null);
+  const [termBuilder, setTermBuilder] = useState<TermBuilderState | null>(null);
 
   // Compute hypothesis-level suggestions when one is selected
   const hypSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
@@ -804,13 +806,26 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, hypName, numSubgoals);
     } else if (suggestion.id.startsWith('hyp-proj-')) {
-      // Use projection — open Have input pre-filled with the projection
-      // applied to the hypothesis, so the user can complete the remaining args.
+      // Use projection — open the term builder with the projection
+      // pre-applied to the hypothesis. User fills remaining arg slots.
       const projName = suggestion.applyCtorName; // e.g., "Limit.eps_delta"
-      if (projName && hypName && onOpenHaveWithPrefill) {
-        onOpenHaveWithPrefill(`h := ${projName} ${hypName} `);
-        setSelectedHyp(null);
-        return;
+      if (projName && hypName && context?.kernelGoal && definitions) {
+        const { engine, goal: metaGoal, rev } = context.kernelGoal;
+        // Pre-fill: the hypothesis itself goes into the first explicit arg slot
+        // (after implicit args). Find the right slot index.
+        const namedArgLookup = createNamedArgLookup(definitions);
+        const namedArgMap = namedArgLookup(projName);
+        const numImplicit = namedArgMap?.size ?? 0;
+        const hypVarIdx = metaGoal.ctx.length - 1 - (context.hypotheses.findIndex(h => h.name === hypName));
+        const prefilled = new Map<number, TTKTerm>();
+        prefilled.set(numImplicit, { tag: 'Var', index: hypVarIdx });
+
+        const builder = computeTermSlots(projName, prefilled, engine, metaGoal, definitions, rev);
+        if (builder) {
+          setTermBuilder(builder);
+          setSelectedHyp(null);
+          return;
+        }
       }
     } else if (suggestion.id.startsWith('hyp-destruct-')) {
       // Cases on the hypothesis — generate structured case branches
@@ -899,6 +914,59 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
         </div>
       )}
 
+      {/* Term builder */}
+      {termBuilder && state && onPushChange && (
+        <TermBuilderView
+          builderState={termBuilder}
+          onFillSlot={(slotIndex, value) => {
+            // Parse the value as a name reference or expression
+            const newSlots = [...termBuilder.slots];
+            const slot = newSlots[slotIndex];
+            if (!slot) return;
+            // Try to resolve as a context variable
+            const ctx = context?.kernelGoal?.goal.ctx;
+            let term: TTKTerm = { tag: 'Const', name: value };
+            if (ctx) {
+              for (let i = ctx.length - 1; i >= 0; i--) {
+                if (ctx[i].name === value) {
+                  term = { tag: 'Var', index: ctx.length - 1 - i };
+                  break;
+                }
+              }
+            }
+            newSlots[slotIndex] = { ...slot, value: term, valueLatex: texNameForProse(value) };
+            setTermBuilder({ ...termBuilder, slots: newSlots });
+          }}
+          onConfirm={() => {
+            // Build the full term and create a have node
+            const { buildTermFromSlots } = require('../proof-tree/term-builder');
+            const fullTerm = buildTermFromSlots(termBuilder.fnName, termBuilder.slots);
+            if (fullTerm) {
+              // Serialize the term as a string expression for the have node
+              const exprParts = [termBuilder.fnName];
+              for (const slot of termBuilder.slots) {
+                if (slot.implicit) continue;
+                if (slot.value?.tag === 'Var') {
+                  // Find the name from context
+                  const ctx = context?.kernelGoal?.goal.ctx;
+                  const name = ctx ? ctx[ctx.length - 1 - slot.value.index]?.name : '?';
+                  exprParts.push(name ?? '?');
+                } else if (slot.value?.tag === 'Const') {
+                  exprParts.push(slot.value.name);
+                } else {
+                  exprParts.push(slot.valueLatex ?? '?');
+                }
+              }
+              const expr = exprParts.join(' ');
+              const result = applyHave(state, 'h', expr);
+              if (result) onPushChange(result);
+            }
+            setTermBuilder(null);
+          }}
+          onCancel={() => setTermBuilder(null)}
+        />
+      )}
+
       {/* Case info */}
       {caseLabel && (
         <div style={{ marginBottom: '10px' }}>
@@ -961,6 +1029,173 @@ const sectionHeaderStyle: React.CSSProperties = {
   marginBottom: '4px',
   fontWeight: 600,
 };
+
+// ============================================================================
+// TermBuilderView — interactive slot-filling for function application
+// ============================================================================
+
+function TermBuilderView({
+  builderState,
+  onFillSlot,
+  onConfirm,
+  onCancel,
+}: {
+  builderState: TermBuilderState;
+  onFillSlot: (slotIndex: number, value: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const [activeSlot, setActiveSlot] = useState<number | null>(null);
+  const [inputValue, setInputValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (activeSlot !== null && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [activeSlot]);
+
+  const explicitSlots = builderState.slots.filter(s => !s.implicit);
+  const allFilled = explicitSlots.every(s => s.value !== null);
+
+  return (
+    <div style={{
+      padding: '8px 12px',
+      backgroundColor: 'rgba(88, 166, 255, 0.06)',
+      border: '1px solid rgba(88, 166, 255, 0.2)',
+      borderRadius: '6px',
+      marginBottom: '8px',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+        <span style={{ fontSize: '11px', color: '#8b949e', letterSpacing: '0.03em' }}>
+          BUILDING TERM
+        </span>
+        <button
+          onClick={onCancel}
+          style={{ background: 'none', border: 'none', color: '#f85149', cursor: 'pointer', fontSize: '11px' }}
+        >
+          ✕
+        </button>
+      </div>
+
+      {/* Function name + slots */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px', fontSize: '13px' }}>
+        <InlineKaTeX latex={`\\operatorname{${builderState.fnDisplayName.replace(/_/g, '\\_')}}`} style={{ fontSize: '13px' }} />
+        {explicitSlots.map(slot => (
+          <span
+            key={slot.index}
+            onClick={() => {
+              if (slot.value !== null) return; // already filled
+              setActiveSlot(prev => prev === slot.index ? null : slot.index);
+              setInputValue('');
+            }}
+            style={{
+              display: 'inline-block',
+              padding: '2px 8px',
+              borderRadius: '4px',
+              cursor: slot.value !== null ? 'default' : 'pointer',
+              border: activeSlot === slot.index
+                ? '1px solid #58a6ff'
+                : slot.value !== null
+                  ? '1px solid #238636'
+                  : '1px dashed #484f58',
+              backgroundColor: activeSlot === slot.index
+                ? 'rgba(88, 166, 255, 0.12)'
+                : slot.value !== null
+                  ? 'rgba(35, 134, 54, 0.08)'
+                  : 'rgba(110, 118, 129, 0.06)',
+              fontSize: '12px',
+            }}
+          >
+            {slot.value !== null ? (
+              <InlineKaTeX latex={slot.valueLatex ?? '?'} style={{ fontSize: '12px' }} />
+            ) : (
+              <span style={{ color: '#8b949e' }}>
+                <InlineKaTeX latex={`?\\,{\\small ${slot.typeLatex}}`} style={{ fontSize: '11px', color: '#8b949e' }} />
+              </span>
+            )}
+          </span>
+        ))}
+      </div>
+
+      {/* Active slot: suggestions + input */}
+      {activeSlot !== null && (
+        <div style={{ marginTop: '6px', paddingLeft: '4px' }}>
+          <div style={{ fontSize: '10px', color: '#8b949e', marginBottom: '3px' }}>
+            Fill <strong>{builderState.slots[activeSlot]?.name}</strong>:
+          </div>
+          {/* Suggestion buttons from context */}
+          <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginBottom: '4px' }}>
+            {(builderState.slotSuggestions.get(activeSlot) ?? []).slice(0, 12).map(name => (
+              <button
+                key={name}
+                style={{ ...suggestionBtnStyle, fontSize: '10px', padding: '1px 6px' }}
+                onClick={() => { onFillSlot(activeSlot, name); setActiveSlot(null); }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+          {/* Text input for custom expression */}
+          <input
+            ref={inputRef}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && inputValue.trim()) {
+                onFillSlot(activeSlot, inputValue.trim());
+                setActiveSlot(null);
+                setInputValue('');
+              }
+              if (e.key === 'Escape') setActiveSlot(null);
+            }}
+            placeholder="type expression..."
+            style={{
+              background: '#0d1117',
+              border: '1px solid #30363d',
+              borderRadius: '4px',
+              color: '#c9d1d9',
+              fontSize: '11px',
+              padding: '3px 8px',
+              width: '100%',
+              outline: 'none',
+              fontFamily: FONT_MONO,
+            }}
+          />
+        </div>
+      )}
+
+      {/* Return type preview */}
+      {builderState.returnTypeLatex && (
+        <div style={{ marginTop: '6px', fontSize: '10px', color: '#8b949e' }}>
+          returns: <InlineKaTeX latex={builderState.returnTypeLatex} style={{ fontSize: '10px' }} />
+        </div>
+      )}
+
+      {/* Confirm button */}
+      {allFilled && (
+        <div style={{ marginTop: '6px' }}>
+          <button
+            onClick={onConfirm}
+            style={{
+              background: '#238636',
+              border: '1px solid #2ea043',
+              borderRadius: '4px',
+              color: '#ffffff',
+              fontSize: '11px',
+              padding: '3px 12px',
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            Create have
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const suggestionBtnStyle: React.CSSProperties = {
   background: 'none',
