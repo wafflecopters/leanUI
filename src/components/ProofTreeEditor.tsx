@@ -171,6 +171,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('proof');
   // Pre-fill value for the Have input (set by GoalPanel's "Use projection" action)
   const [havePrefill, setHavePrefill] = useState<string | null>(null);
+  // Interactive term builder state (shown inline at the cursor in the prose view)
+  const [activeTermBuilder, setActiveTermBuilder] = useState<TermBuilderState | null>(null);
 
   // Goal interaction state (shared between GoalPanel and prose view)
   const [goalSelectedPath, setGoalSelectedPath] = useState<GoalPath | null>(null);
@@ -445,6 +447,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 onSelectBinder={handleSelectBinder}
                 havePrefill={havePrefill}
                 onClearHavePrefill={() => setHavePrefill(null)}
+                termBuilder={activeTermBuilder}
+                onSetTermBuilder={setActiveTermBuilder}
               />
             )}
           </div>
@@ -471,6 +475,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
             setHavePrefill(prefill);
             setTacticMode({ tactic: 'have' });
           }}
+          onOpenTermBuilder={(builder) => setActiveTermBuilder(builder)}
         />
       </SplitPane>
     </div>
@@ -763,12 +768,15 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   editingSuggestionId, onEditingSuggestionId,
   inductiveMap, registry, rewriteProgress, definitions,
   onOpenHaveWithPrefill: _onOpenHaveWithPrefill,
+  onOpenTermBuilder,
 }: {
   context: TypedProofContext | null;
   state?: ProofTreeState;
   onPushChange?: (s: ProofTreeState) => void;
   /** Open the Have tactic input pre-filled with the given expression. */
   onOpenHaveWithPrefill?: (prefill: string) => void;
+  /** Open the term builder inline in the prose view. */
+  onOpenTermBuilder?: (builder: TermBuilderState) => void;
   interactiveGoal: InteractiveGoal | null;
   suggestions: readonly TacticSuggestion[];
   selectedPath: GoalPath | null;
@@ -783,7 +791,6 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   rewriteProgress?: RewriteProgress | null;
 }) {
   const [selectedHyp, setSelectedHyp] = useState<number | null>(null);
-  const [termBuilder, setTermBuilder] = useState<TermBuilderState | null>(null);
 
   // Compute hypothesis-level suggestions when one is selected
   const hypSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
@@ -821,8 +828,8 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
         prefilled.set(numImplicit, { tag: 'Var', index: hypVarIdx });
 
         const builder = computeTermSlots(projName, prefilled, engine, metaGoal, definitions, rev);
-        if (builder) {
-          setTermBuilder(builder);
+        if (builder && onOpenTermBuilder) {
+          onOpenTermBuilder(builder);
           setSelectedHyp(null);
           return;
         }
@@ -912,59 +919,6 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
             </div>
           )}
         </div>
-      )}
-
-      {/* Term builder */}
-      {termBuilder && state && onPushChange && (
-        <TermBuilderView
-          builderState={termBuilder}
-          onFillSlot={(slotIndex, value) => {
-            // Parse the value as a name reference or expression
-            const newSlots = [...termBuilder.slots];
-            const slot = newSlots[slotIndex];
-            if (!slot) return;
-            // Try to resolve as a context variable
-            const ctx = context?.kernelGoal?.goal.ctx;
-            let term: TTKTerm = { tag: 'Const', name: value };
-            if (ctx) {
-              for (let i = ctx.length - 1; i >= 0; i--) {
-                if (ctx[i].name === value) {
-                  term = { tag: 'Var', index: ctx.length - 1 - i };
-                  break;
-                }
-              }
-            }
-            newSlots[slotIndex] = { ...slot, value: term, valueLatex: texNameForProse(value) };
-            setTermBuilder({ ...termBuilder, slots: newSlots });
-          }}
-          onConfirm={() => {
-            // Build the full term and create a have node
-            const { buildTermFromSlots } = require('../proof-tree/term-builder');
-            const fullTerm = buildTermFromSlots(termBuilder.fnName, termBuilder.slots);
-            if (fullTerm) {
-              // Serialize the term as a string expression for the have node
-              const exprParts = [termBuilder.fnName];
-              for (const slot of termBuilder.slots) {
-                if (slot.implicit) continue;
-                if (slot.value?.tag === 'Var') {
-                  // Find the name from context
-                  const ctx = context?.kernelGoal?.goal.ctx;
-                  const name = ctx ? ctx[ctx.length - 1 - slot.value.index]?.name : '?';
-                  exprParts.push(name ?? '?');
-                } else if (slot.value?.tag === 'Const') {
-                  exprParts.push(slot.value.name);
-                } else {
-                  exprParts.push(slot.valueLatex ?? '?');
-                }
-              }
-              const expr = exprParts.join(' ');
-              const result = applyHave(state, 'h', expr);
-              if (result) onPushChange(result);
-            }
-            setTermBuilder(null);
-          }}
-          onCancel={() => setTermBuilder(null)}
-        />
       )}
 
       {/* Case info */}
@@ -2160,6 +2114,9 @@ interface ProseViewProps {
   // Have prefill
   havePrefill?: string | null;
   onClearHavePrefill?: () => void;
+  // Inline term builder
+  termBuilder?: TermBuilderState | null;
+  onSetTermBuilder?: (b: TermBuilderState | null) => void;
 }
 
 function ProofProseView({
@@ -2169,6 +2126,7 @@ function ProofProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   rewriteProgress, selectedBinder, onSelectBinder,
   havePrefill, onClearHavePrefill,
+  termBuilder, onSetTermBuilder,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -2249,6 +2207,8 @@ function ProofProseView({
             onSelectBinder={onSelectBinder}
             havePrefill={havePrefill}
             onClearHavePrefill={onClearHavePrefill}
+            termBuilder={termBuilder}
+            onSetTermBuilder={onSetTermBuilder}
           />
         );
       })}
@@ -2297,6 +2257,9 @@ interface ProseItemViewProps {
   // Have prefill (from GoalPanel "Use projection")
   havePrefill?: string | null;
   onClearHavePrefill?: () => void;
+  // Inline term builder
+  termBuilder?: TermBuilderState | null;
+  onSetTermBuilder?: (b: TermBuilderState | null) => void;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -2565,6 +2528,7 @@ function ProseItemView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   rewriteProgress, selectedBinder, onSelectBinder,
   havePrefill, onClearHavePrefill,
+  termBuilder, onSetTermBuilder,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -3113,6 +3077,8 @@ function ProseItemView({
           rewriteProgress={rewriteProgress}
           havePrefill={havePrefill}
           onClearHavePrefill={onClearHavePrefill}
+          termBuilder={termBuilder}
+          onSetTermBuilder={onSetTermBuilder}
         />
       );
     }
@@ -3226,6 +3192,9 @@ interface HoleProseViewProps {
   havePrefill?: string | null;
   /** Clear the prefill after it's been consumed. */
   onClearHavePrefill?: () => void;
+  /** Active term builder (shown inline before the hole). */
+  termBuilder?: TermBuilderState | null;
+  onSetTermBuilder?: (b: TermBuilderState | null) => void;
 }
 
 function HoleProseView({
@@ -3234,6 +3203,7 @@ function HoleProseView({
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   rewriteProgress, havePrefill, onClearHavePrefill: _onClearHavePrefill,
+  termBuilder: inlineTermBuilder, onSetTermBuilder,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -3368,6 +3338,52 @@ function HoleProseView({
 
   return (
     <div style={rowStyle} onClick={() => onClickNode(nodeId)}>
+      {/* Inline term builder (appears above the goal when active) */}
+      {inlineTermBuilder && onSetTermBuilder && (
+        <div style={{ marginBottom: '8px' }}>
+          <TermBuilderView
+            builderState={inlineTermBuilder}
+            onFillSlot={(slotIndex, value) => {
+              const newSlots = [...inlineTermBuilder.slots];
+              const slot = newSlots[slotIndex];
+              if (!slot) return;
+              const ctx = typedContext?.kernelGoal?.goal.ctx;
+              let term: TTKTerm = { tag: 'Const', name: value };
+              if (ctx) {
+                for (let i = ctx.length - 1; i >= 0; i--) {
+                  if (ctx[i].name === value) {
+                    term = { tag: 'Var', index: ctx.length - 1 - i };
+                    break;
+                  }
+                }
+              }
+              newSlots[slotIndex] = { ...slot, value: term, valueLatex: texNameForProse(value) };
+              onSetTermBuilder({ ...inlineTermBuilder, slots: newSlots });
+            }}
+            onConfirm={() => {
+              const exprParts = [inlineTermBuilder.fnName];
+              for (const slot of inlineTermBuilder.slots) {
+                if (slot.implicit) continue;
+                if (slot.value?.tag === 'Var') {
+                  const ctx = typedContext?.kernelGoal?.goal.ctx;
+                  const name = ctx ? ctx[ctx.length - 1 - slot.value.index]?.name : '?';
+                  exprParts.push(`(${name ?? '?'})`);
+                } else if (slot.value?.tag === 'Const') {
+                  exprParts.push(`(${slot.value.name})`);
+                } else {
+                  exprParts.push('?');
+                }
+              }
+              const expr = exprParts.join(' ');
+              const result = applyHave(state, 'h', expr);
+              if (result) onPushChange(result);
+              onSetTermBuilder(null);
+            }}
+            onCancel={() => onSetTermBuilder(null)}
+          />
+        </div>
+      )}
+
       {/* Interactive goal display — centered and large */}
       <div style={{ marginBottom: '6px', textAlign: 'center' }}>
         <GoalInteraction
