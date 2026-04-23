@@ -942,9 +942,9 @@ export function computeSelectedHypSuggestions(
   } catch { /* doesn't apply */ }
 
   // 3. Destructure h — if hypothesis type is an inductive type
+  // 4. Use projection — if hypothesis type is a record with projections
   const hypEntry = goal.ctx[hypIndex];
   if (hypEntry) {
-    const { whnf } = require('../compiler/whnf');
     try {
       const hypTypeWhnf = whnf(engine.zonkTerm(hypEntry.type, goal.ctx.length), {
         definitions, typingContext: goal.ctx,
@@ -952,11 +952,11 @@ export function computeSelectedHypSuggestions(
       let head = hypTypeWhnf;
       while (head.tag === 'App') head = head.fn;
       if (head.tag === 'Const' && definitions.inductiveTypes.has(head.name)) {
-        const inductiveDef = definitions.inductiveTypes.get(head.name)!;
-        // Only offer destructure if the type has constructors with fields
+        const typeName = head.name;
+        const inductiveDef = definitions.inductiveTypes.get(typeName)!;
+
+        // Check if the type has constructors with explicit fields
         const hasFields = inductiveDef.constructors.some(c => {
-          // Check if the constructor has explicit params by counting Pi binders
-          // past the implicit ones
           let t = c.type;
           const numImplicit = c.namedArgMap?.size ?? 0;
           let total = 0;
@@ -970,6 +970,22 @@ export function computeSelectedHypSuggestions(
             labelLatex: `\\text{cases } \\textbf{${texEscape(hypName)}}`,
             description: `Pattern-match on ${hypName}`,
           });
+        }
+
+        // Offer "Use <projection>" for each projection of this type.
+        // Projections are terms named "TypeName.fieldName" in the definitions.
+        for (const [projName] of definitions.terms) {
+          if (projName.startsWith(typeName + '.')) {
+            const fieldName = projName.slice(typeName.length + 1);
+            suggestions.push({
+              id: `hyp-proj-${hypName}-${fieldName}`,
+              label: `Use ${fieldName}`,
+              labelLatex: `\\text{Use } \\textbf{${texEscape(fieldName)}}`,
+              description: `have h := ${projName} ${hypName} ...`,
+              // Store the projection info for the click handler
+              applyCtorName: projName,
+            });
+          }
         }
       }
     } catch { /* ignore */ }

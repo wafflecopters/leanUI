@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode, editIntroName, editCaseParamName,
@@ -147,7 +147,8 @@ type TacticMode =
   | { tactic: 'rewrite' }
   | { tactic: 'rewrite_rev' }
   | { tactic: 'apply' }
-  | { tactic: 'simp' };
+  | { tactic: 'simp' }
+  | { tactic: 'have' };
 
 // ============================================================================
 // Main Component
@@ -791,6 +792,14 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
     } else if (suggestion.id.startsWith('hyp-apply-')) {
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, hypName, numSubgoals);
+    } else if (suggestion.id.startsWith('hyp-proj-')) {
+      // Use projection — create a have node with the projection applied.
+      // The expression is partial (user needs to fill remaining args later),
+      // but it gives them something to work with.
+      const projName = suggestion.applyCtorName; // e.g., "Limit.eps_delta"
+      if (projName && hypName) {
+        result = applyHave(state, 'h', `${projName} ${hypName}`);
+      }
     } else if (suggestion.id.startsWith('hyp-destruct-')) {
       // Cases on the hypothesis — generate structured case branches
       if (context?.kernelGoal && definitions) {
@@ -3039,6 +3048,19 @@ function HoleProseView({
         }
         break;
       }
+      case 'have': {
+        // Format: "name := expression"
+        const trimmed = value.trim();
+        const eqIdx = trimmed.indexOf(':=');
+        if (eqIdx > 0) {
+          const haveName = trimmed.slice(0, eqIdx).trim().split(':')[0].trim();
+          const haveExpr = trimmed.slice(eqIdx + 2).trim();
+          if (haveName && haveExpr) {
+            result = applyHave(state, haveName, haveExpr);
+          }
+        }
+        break;
+      }
       case 'simp': {
         const lemmaStr = value.trim();
         if (lemmaStr && kernelType && definitions) {
@@ -3119,6 +3141,7 @@ function HoleProseView({
             { tactic: 'rewrite_rev' as const, label: 'Rewrite\u2190' },
             { tactic: 'apply' as const, label: 'Apply' },
             { tactic: 'simp' as const, label: 'Simp' },
+            { tactic: 'have' as const, label: 'Have' },
           ].map(({ tactic, label }) => (
             <button
               key={tactic}
@@ -3140,6 +3163,7 @@ function HoleProseView({
              activeTactic === 'rewrite_rev' ? 'Rewrite\u2190' :
              activeTactic === 'apply' ? 'Apply' :
              activeTactic === 'simp' ? 'Simp' :
+             activeTactic === 'have' ? 'Have' :
              'by'}
           </span>
           <input
@@ -3153,6 +3177,7 @@ function HoleProseView({
               activeTactic === 'rewrite' || activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
               activeTactic === 'simp' ? 'lemma1, lemma2, ...' :
+              activeTactic === 'have' ? 'name := expression' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}

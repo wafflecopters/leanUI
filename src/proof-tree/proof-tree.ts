@@ -619,6 +619,17 @@ export function applyInductionWithCtors(
   return { root: newRoot, cursor: { nodeId: cursorId } };
 }
 
+/** Apply have at the cursor (must be a hole). Replaces the hole with a have node + child hole. */
+export function applyHave(state: ProofTreeState, name: string, expr: string): ProofTreeState | null {
+  const node = findNode(state.root, state.cursor.nodeId);
+  if (!node || node.tag !== 'hole') return null;
+
+  const childHole = mkHole();
+  const have = mkHave(name, expr, childHole);
+  const newRoot = replaceNode(state.root, state.cursor.nodeId, have);
+  return { root: newRoot, cursor: { nodeId: childHole.id } };
+}
+
 /** Apply unfold at the cursor (must be a hole). Replaces the hole with an unfold node + child hole. */
 export function applyUnfold(state: ProofTreeState, name: string, occurrence?: number): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
