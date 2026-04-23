@@ -792,10 +792,22 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, hypName, numSubgoals);
     } else if (suggestion.id.startsWith('hyp-destruct-')) {
-      // Cases on the hypothesis — use cases tactic
-      // For now, apply as a simple cases without structured branches
-      result = applyApplyTactic(state, `cases ${hypName}`, 1);
-      // TODO: use applyInductionWithCtors for structured destructuring
+      // Cases on the hypothesis — generate structured case branches
+      if (context?.kernelGoal && definitions) {
+        const hyp = context.hypotheses[selectedHyp!];
+        const rawType = hyp?.rawType;
+        const headName = rawType ? extractTypeHead(rawType) : null;
+        const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
+        if (indInfo) {
+          const r = registry ? buildReverseRegistry(registry) : undefined;
+          const ctxNames = context.hypotheses.map(h => h.name);
+          const ctorInfos = generateCaseInfos(hypName, indInfo, r, ctxNames);
+          result = applyInductionWithCtors(state, hypName, ctorInfos);
+        } else {
+          // Fallback: simple cases without constructor info
+          result = applyInduction(state, hypName, [hypName]);
+        }
+      }
     }
 
     if (result) {
