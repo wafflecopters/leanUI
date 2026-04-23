@@ -168,6 +168,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   // Ephemeral tactic input mode (not part of immutable state)
   const [tacticMode, setTacticMode] = useState<TacticMode>(null);
   const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('proof');
+  // Pre-fill value for the Have input (set by GoalPanel's "Use projection" action)
+  const [havePrefill, setHavePrefill] = useState<string | null>(null);
 
   // Goal interaction state (shared between GoalPanel and prose view)
   const [goalSelectedPath, setGoalSelectedPath] = useState<GoalPath | null>(null);
@@ -440,6 +442,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 rewriteProgress={rewriteProgress}
                 selectedBinder={selectedBinder}
                 onSelectBinder={handleSelectBinder}
+                havePrefill={havePrefill}
+                onClearHavePrefill={() => setHavePrefill(null)}
               />
             )}
           </div>
@@ -462,6 +466,10 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
           registry={registry}
           rewriteProgress={rewriteProgress}
           definitions={definitions}
+          onOpenHaveWithPrefill={(prefill) => {
+            setHavePrefill(prefill);
+            setTacticMode({ tactic: 'have' });
+          }}
         />
       </SplitPane>
     </div>
@@ -753,10 +761,13 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedPath, onSelectPath, editingNames, onEditingNames,
   editingSuggestionId, onEditingSuggestionId,
   inductiveMap, registry, rewriteProgress, definitions,
+  onOpenHaveWithPrefill,
 }: {
   context: TypedProofContext | null;
   state?: ProofTreeState;
   onPushChange?: (s: ProofTreeState) => void;
+  /** Open the Have tactic input pre-filled with the given expression. */
+  onOpenHaveWithPrefill?: (prefill: string) => void;
   interactiveGoal: InteractiveGoal | null;
   suggestions: readonly TacticSuggestion[];
   selectedPath: GoalPath | null;
@@ -793,12 +804,13 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, hypName, numSubgoals);
     } else if (suggestion.id.startsWith('hyp-proj-')) {
-      // Use projection — create a have node with the projection applied.
-      // The expression is partial (user needs to fill remaining args later),
-      // but it gives them something to work with.
+      // Use projection — open Have input pre-filled with the projection
+      // applied to the hypothesis, so the user can complete the remaining args.
       const projName = suggestion.applyCtorName; // e.g., "Limit.eps_delta"
-      if (projName && hypName) {
-        result = applyHave(state, 'h', `${projName} ${hypName}`);
+      if (projName && hypName && onOpenHaveWithPrefill) {
+        onOpenHaveWithPrefill(`h := ${projName} ${hypName} `);
+        setSelectedHyp(null);
+        return;
       }
     } else if (suggestion.id.startsWith('hyp-destruct-')) {
       // Cases on the hypothesis — generate structured case branches
@@ -1910,6 +1922,9 @@ interface ProseViewProps {
   // Binder selection from clickable tokens in prose
   selectedBinder: SelectedBinder | null;
   onSelectBinder: (b: SelectedBinder | null) => void;
+  // Have prefill
+  havePrefill?: string | null;
+  onClearHavePrefill?: () => void;
 }
 
 function ProofProseView({
@@ -1918,6 +1933,7 @@ function ProofProseView({
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   rewriteProgress, selectedBinder, onSelectBinder,
+  havePrefill, onClearHavePrefill,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -1996,6 +2012,8 @@ function ProofProseView({
             rewriteProgress={rewriteProgress}
             selectedBinder={selectedBinder}
             onSelectBinder={onSelectBinder}
+            havePrefill={havePrefill}
+            onClearHavePrefill={onClearHavePrefill}
           />
         );
       })}
@@ -2041,6 +2059,9 @@ interface ProseItemViewProps {
   // Binder selection from clickable tokens in prose
   selectedBinder: SelectedBinder | null;
   onSelectBinder: (b: SelectedBinder | null) => void;
+  // Have prefill (from GoalPanel "Use projection")
+  havePrefill?: string | null;
+  onClearHavePrefill?: () => void;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -2308,6 +2329,7 @@ function ProseItemView({
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   rewriteProgress, selectedBinder, onSelectBinder,
+  havePrefill, onClearHavePrefill,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -2854,6 +2876,8 @@ function ProseItemView({
           editingSuggestionId={editingSuggestionId}
           onEditingSuggestionId={onEditingSuggestionId}
           rewriteProgress={rewriteProgress}
+          havePrefill={havePrefill}
+          onClearHavePrefill={onClearHavePrefill}
         />
       );
     }
@@ -2963,6 +2987,10 @@ interface HoleProseViewProps {
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
   rewriteProgress?: RewriteProgress | null;
+  /** Pre-filled value for the Have input (from GoalPanel "Use projection"). */
+  havePrefill?: string | null;
+  /** Clear the prefill after it's been consumed. */
+  onClearHavePrefill?: () => void;
 }
 
 function HoleProseView({
@@ -2970,7 +2998,7 @@ function HoleProseView({
   onClickNode, typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
-  rewriteProgress,
+  rewriteProgress, havePrefill, onClearHavePrefill: _onClearHavePrefill,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -3169,6 +3197,7 @@ function HoleProseView({
           <input
             ref={inputRef}
             autoFocus
+            defaultValue={activeTactic === 'have' && havePrefill ? havePrefill : undefined}
             style={inputStyle}
             placeholder={
               activeTactic === 'intros' ? 'n, m, f' :
