@@ -36,6 +36,8 @@ import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { computeTermSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
+import { MathEditor, MathEditorHandle } from './MathEditor';
+import { convertToSource } from '../math-editor/syntax-registry';
 import { InteractiveGoalView } from './InteractiveGoalView';
 import SplitPane from './SplitPane';
 
@@ -993,21 +995,16 @@ function TermBuilderView({
   onFillSlot,
   onConfirm,
   onCancel,
+  registry,
 }: {
   builderState: TermBuilderState;
   onFillSlot: (slotIndex: number, value: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
+  registry?: SyntaxRegistry;
 }) {
   const [activeSlot, setActiveSlot] = useState<number | null>(null);
-  const [inputValue, setInputValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (activeSlot !== null && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [activeSlot]);
+  const mathEditorRef = useRef<MathEditorHandle>(null);
 
   const explicitSlots = builderState.slots.filter(s => !s.implicit);
   const allFilled = explicitSlots.every(s => s.value !== null);
@@ -1042,7 +1039,6 @@ function TermBuilderView({
             onClick={() => {
               if (slot.value !== null) return; // already filled
               setActiveSlot(prev => prev === slot.index ? null : slot.index);
-              setInputValue('');
             }}
             style={{
               display: 'inline-block',
@@ -1091,32 +1087,43 @@ function TermBuilderView({
               </button>
             ))}
           </div>
-          {/* Text input for custom expression */}
-          <input
-            ref={inputRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && inputValue.trim()) {
-                onFillSlot(activeSlot, inputValue.trim());
-                setActiveSlot(null);
-                setInputValue('');
-              }
-              if (e.key === 'Escape') setActiveSlot(null);
-            }}
-            placeholder="type expression..."
+          {/* Math editor for typing expressions with LaTeX rendering */}
+          <div
             style={{
               background: '#0d1117',
               border: '1px solid #30363d',
               borderRadius: '4px',
-              color: '#c9d1d9',
-              fontSize: '11px',
-              padding: '3px 8px',
-              width: '100%',
-              outline: 'none',
-              fontFamily: FONT_MONO,
+              padding: '4px 8px',
+              minHeight: '28px',
             }}
-          />
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                // Convert math editor content to source code
+                const editorState = mathEditorRef.current?.getState();
+                if (editorState && registry) {
+                  const result = convertToSource(registry, editorState.root.children);
+                  if (result.source && result.source !== '?') {
+                    onFillSlot(activeSlot, result.source);
+                    setActiveSlot(null);
+                  }
+                }
+              }
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                setActiveSlot(null);
+              }
+            }}
+          >
+            <MathEditor
+              ref={mathEditorRef}
+              registry={registry}
+              placeholder="type expression..."
+              showTypeInference={false}
+              containerStyle={{ fontSize: '13px' }}
+            />
+          </div>
         </div>
       )}
 
@@ -3380,6 +3387,7 @@ function HoleProseView({
               onSetTermBuilder(null);
             }}
             onCancel={() => onSetTermBuilder(null)}
+            registry={registry}
           />
         </div>
       )}
