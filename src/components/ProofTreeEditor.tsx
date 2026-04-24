@@ -1088,19 +1088,46 @@ function TermBuilderView({
             ))}
           </div>
           {/* Math editor for typing expressions with LaTeX rendering */}
-          <div
-            style={{
-              background: '#0d1117',
-              border: '1px solid #30363d',
-              borderRadius: '4px',
-              padding: '4px 8px',
-              minHeight: '28px',
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                e.stopPropagation();
-                // Convert math editor content to source code
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <div
+              style={{
+                flex: 1,
+                background: '#0d1117',
+                border: '1px solid #30363d',
+                borderRadius: '4px',
+                padding: '4px 8px',
+                minHeight: '28px',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const editorState = mathEditorRef.current?.getState();
+                  if (editorState && registry) {
+                    const result = convertToSource(registry, editorState.root.children);
+                    if (result.source && result.source !== '?') {
+                      onFillSlot(activeSlot, result.source);
+                      setActiveSlot(null);
+                    }
+                  }
+                }
+                if (e.key === 'Escape') {
+                  e.stopPropagation();
+                  setActiveSlot(null);
+                }
+              }}
+            >
+              <MathEditor
+                ref={mathEditorRef}
+                registry={registry}
+                placeholder="type expression..."
+                showTypeInference={false}
+                containerStyle={{ fontSize: '13px' }}
+              />
+            </div>
+            {/* Confirm button */}
+            <button
+              onClick={() => {
                 const editorState = mathEditorRef.current?.getState();
                 if (editorState && registry) {
                   const result = convertToSource(registry, editorState.root.children);
@@ -1109,20 +1136,22 @@ function TermBuilderView({
                     setActiveSlot(null);
                   }
                 }
-              }
-              if (e.key === 'Escape') {
-                e.stopPropagation();
-                setActiveSlot(null);
-              }
-            }}
-          >
-            <MathEditor
-              ref={mathEditorRef}
-              registry={registry}
-              placeholder="type expression..."
-              showTypeInference={false}
-              containerStyle={{ fontSize: '13px' }}
-            />
+              }}
+              style={{
+                background: '#238636',
+                border: '1px solid #2ea043',
+                borderRadius: '4px',
+                color: '#fff',
+                fontSize: '13px',
+                padding: '4px 8px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                flexShrink: 0,
+              }}
+              title="Fill this slot (or press Enter)"
+            >
+              ✓
+            </button>
           </div>
         </div>
       )}

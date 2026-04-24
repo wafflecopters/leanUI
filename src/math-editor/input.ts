@@ -300,6 +300,9 @@ function handleChar(state: MathEditorState, char: string): MathEditorState {
     case ']':
       return handleCloseDelimiter(state);
 
+    case '/':
+      return handleSlashFraction(state);
+
     case ' ':
       // Enter text mode
       return { ...state, textBuffer: '' };
@@ -577,6 +580,62 @@ function handleCloseDelimiter(state: MathEditorState): MathEditorState {
   }
   // No enclosing delimiter — do nothing
   return state;
+}
+
+// ============================================================================
+// Slash → fraction
+// ============================================================================
+
+/**
+ * Typing `/` wraps the node(s) to the LEFT of the cursor as the numerator
+ * of a new fraction, placing the cursor in the denominator hole.
+ *
+ *   ε/  →  ε
+ *          ─
+ *          □
+ *
+ * If there's nothing to the left (or only whitespace-like content), just
+ * insert an empty fraction with both slots as holes.
+ */
+function handleSlashFraction(state: MathEditorState): MathEditorState {
+  const row = resolveRow(state.root, state.cursor.path);
+  const offset = state.cursor.offset;
+
+  // Collect the numerator: take the single node to the left of the cursor
+  // (or the entire left side if it's a compound like a delimiter).
+  let numerNodes: MathNode[] = [];
+  let removeFrom = offset;
+
+  if (offset > 0) {
+    const leftNode = row.children[offset - 1];
+    numerNodes = [leftNode];
+    removeFrom = offset - 1;
+  }
+
+  const numerRow = numerNodes.length > 0
+    ? mkRow(numerNodes)
+    : mkRow([mkHole()]);
+  const denomRow = mkRow([mkHole()]);
+  const frac = mkFrac(numerRow, denomRow);
+
+  // Replace the numerator nodes with the fraction
+  const newChildren = [
+    ...row.children.slice(0, removeFrom),
+    frac,
+    ...row.children.slice(offset),
+  ];
+  const newRow: MathRow = { ...row, children: newChildren };
+  const newRoot = replaceRowAtPath(state.root, state.cursor.path, newRow);
+
+  // Place cursor in the denominator
+  return {
+    ...state,
+    root: newRoot,
+    cursor: {
+      path: [...state.cursor.path, { nodeId: frac.id, slot: 'denom' }],
+      offset: 0,
+    },
+  };
 }
 
 // ============================================================================
