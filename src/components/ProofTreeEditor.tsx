@@ -28,7 +28,7 @@ import {
 import { runSimp } from '../tactics/simp-tactic';
 import {
   TypedProofContext, ValidationResult, computeTypedContext, computeApplySubgoalCount,
-  NodeGoalInfo, replayEntireTree, replayToEngine,
+  NodeGoalInfo, replayEntireTree, replayToEngine, parseExactExpr,
   InductiveMap, extractTypeHead, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
@@ -3380,34 +3380,33 @@ function HoleProseView({
           <TermBuilderView
             builderState={inlineTermBuilder}
             onFillSlot={(slotIndex, sourceExpr) => {
-              const newSlots = [...inlineTermBuilder.slots];
-              const slot = newSlots[slotIndex];
-              if (!slot) return;
+              if (!typedContext?.kernelGoal || !definitions) return;
+              const kg = typedContext.kernelGoal;
 
-              // Parse the source expression and render as LaTeX
+              // Parse the source expression to a kernel term
               let term: TTKTerm = { tag: 'Const', name: sourceExpr };
-              let valueLatex = texNameForProse(sourceExpr);
+              try {
+                const parsed = parseExactExpr(sourceExpr, kg.goal.ctx, definitions);
+                if (parsed) term = parsed;
+              } catch { /* fall back to raw Const */ }
 
-              if (typedContext?.kernelGoal && definitions) {
-                const kg = typedContext.kernelGoal;
-                try {
-                  // Parse the source string using the tactic arg parser
-                  // (handles context lookups, implicit args, applications)
-                  const { parseExactExpr } = require('../proof-tree/goal-computation');
-                  const parsed = parseExactExpr(sourceExpr, kg.goal.ctx, definitions);
-                  if (parsed) {
-                    term = parsed;
-                    // Render the parsed kernel term through the math pipeline
-                    if (kg.rev) {
-                      const { renderSubtermLatex } = require('../proof-tree/goal-computation');
-                      valueLatex = renderSubtermLatex(parsed, kg.goal.ctx, definitions, kg.rev);
-                    }
-                  }
-                } catch { /* fall back to raw */ }
+              // Rebuild the prefilled map with ALL currently filled slots + this new one
+              const prefilled = new Map<number, TTKTerm>();
+              for (const s of inlineTermBuilder.slots) {
+                if (s.value !== null) prefilled.set(s.index, s.value);
               }
+              prefilled.set(slotIndex, term);
 
-              newSlots[slotIndex] = { ...slot, value: term, valueLatex };
-              onSetTermBuilder({ ...inlineTermBuilder, slots: newSlots });
+              // Recompute all slots — this re-evaluates dependent types
+              // (e.g., after filling ε, the next slot's type updates from
+              // `0 < □` to `0 < ε/2`)
+              const rebuilt = computeTermSlots(
+                inlineTermBuilder.fnName, prefilled,
+                kg.engine, kg.goal, definitions, kg.rev,
+              );
+              if (rebuilt) {
+                onSetTermBuilder(rebuilt);
+              }
             }}
             onConfirm={() => {
               const exprParts = [inlineTermBuilder.fnName];
