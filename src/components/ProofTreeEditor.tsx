@@ -1091,6 +1091,12 @@ function HaveProseItem({
                 if (src) (slot as any).sourceExpr = src;
               }
               setBuilderState(rebuilt);
+              // Live-update the have expression
+              const expr = buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx);
+              if (expr) {
+                const updated = editHaveExpr(state, item.nodeId, expr);
+                if (updated) onPushChange(updated);
+              }
             }
           }}
           onClearSlot={(slotIndex) => {
@@ -1111,16 +1117,15 @@ function HaveProseItem({
                 if (src) (slot as any).sourceExpr = src;
               }
               setBuilderState(rebuilt);
+              // Live-update the have expression
+              const expr = buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx);
+              if (expr) {
+                const updated = editHaveExpr(state, item.nodeId, expr);
+                if (updated) onPushChange(updated);
+              }
             }
           }}
-          onConfirm={() => {
-            const expr = buildExprFromSlots(builderState.fnName, builderState.slots, builderState.goalCtx);
-            if (expr) {
-              const updated = editHaveExpr(state, item.nodeId, expr);
-              if (updated) onPushChange(updated);
-            }
-            setBuilderState(null);
-          }}
+          onConfirm={() => setBuilderState(null)}
           onCancel={() => setBuilderState(null)}
           registry={_registry}
         />
@@ -1175,7 +1180,7 @@ function TermBuilderView({
   builderState,
   onFillSlot,
   onClearSlot,
-  onConfirm,
+  onConfirm: _onConfirm,
   onCancel,
   registry,
 }: {
@@ -1362,23 +1367,7 @@ function TermBuilderView({
       )}
 
       {/* Confirm button — always visible; unfilled slots become ? */}
-      <div style={{ marginTop: '6px' }}>
-        <button
-          onClick={onConfirm}
-          style={{
-            background: allFilled ? '#238636' : '#30363d',
-            border: `1px solid ${allFilled ? '#2ea043' : '#484f58'}`,
-            borderRadius: '4px',
-            color: allFilled ? '#ffffff' : '#8b949e',
-            fontSize: '11px',
-            padding: '3px 12px',
-            cursor: 'pointer',
-            fontWeight: 600,
-          }}
-        >
-          {allFilled ? 'Create have' : 'Create have (with holes)'}
-          </button>
-        </div>
+      {/* No confirm button — the have updates live on each slot fill */}
     </div>
   );
 }
