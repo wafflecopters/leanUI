@@ -35,6 +35,8 @@ export interface TermSlot {
   readonly metaId: string;
   /** Filled value, or null = hole. */
   value: TTKTerm | null;
+  /** Source expression string (for serializing back to have expression). */
+  sourceExpr?: string;
   /** LaTeX rendering of the filled value. */
   valueLatex?: string;
   /** Error message if the filled value doesn't type-check. */
@@ -259,13 +261,15 @@ export function buildExprFromSlots(
       parts.push('?'); // unfilled slot → hole
       continue;
     }
-    if (slot.value.tag === 'Var') {
+    // Use the stored source expression if available (handles complex terms like rdiv ε (rtwo R))
+    if (slot.sourceExpr) {
+      parts.push(`(${slot.sourceExpr})`);
+    } else if (slot.value.tag === 'Var') {
       const name = ctx[ctx.length - 1 - slot.value.index]?.name ?? '?';
       parts.push(`(${name})`);
     } else if (slot.value.tag === 'Const') {
       parts.push(`(${slot.value.name})`);
     } else {
-      // Complex term — serialize as best we can
       parts.push('(?)');
     }
   }

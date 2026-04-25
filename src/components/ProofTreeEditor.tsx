@@ -3407,31 +3407,52 @@ function HoleProseView({
 
               // Rebuild the prefilled map with ALL currently filled slots + the new one
               const prefilled = new Map<number, TTKTerm>();
+              const sourceExprs = new Map<number, string>();
               for (const s of inlineTermBuilder.slots) {
-                if (s.value !== null) prefilled.set(s.index, s.value);
+                if (s.value !== null) {
+                  prefilled.set(s.index, s.value);
+                  if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
+                }
               }
               prefilled.set(slotIndex, term);
+              sourceExprs.set(slotIndex, sourceExpr);
 
               // Recompute all slots with type checking via the tactic engine
               const rebuilt = computeTermSlots(
                 inlineTermBuilder.fnName, prefilled,
                 kg.engine, kg.goal, definitions, kg.rev,
               );
-              if (rebuilt) onSetTermBuilder(rebuilt);
+              if (rebuilt) {
+                // Restore source expressions on the rebuilt slots
+                for (const slot of rebuilt.slots) {
+                  const src = sourceExprs.get(slot.index);
+                  if (src) (slot as any).sourceExpr = src;
+                }
+                onSetTermBuilder(rebuilt);
+              }
             }}
             onClearSlot={(slotIndex) => {
               if (!typedContext?.kernelGoal || !definitions) return;
               const kg = typedContext.kernelGoal;
-              // Rebuild without the cleared slot
               const prefilled = new Map<number, TTKTerm>();
+              const sourceExprs = new Map<number, string>();
               for (const s of inlineTermBuilder.slots) {
-                if (s.value !== null && s.index !== slotIndex) prefilled.set(s.index, s.value);
+                if (s.value !== null && s.index !== slotIndex) {
+                  prefilled.set(s.index, s.value);
+                  if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
+                }
               }
               const rebuilt = computeTermSlots(
                 inlineTermBuilder.fnName, prefilled,
                 kg.engine, kg.goal, definitions, kg.rev,
               );
-              if (rebuilt) onSetTermBuilder(rebuilt);
+              if (rebuilt) {
+                for (const slot of rebuilt.slots) {
+                  const src = sourceExprs.get(slot.index);
+                  if (src) (slot as any).sourceExpr = src;
+                }
+                onSetTermBuilder(rebuilt);
+              }
             }}
             onConfirm={() => {
               const expr = buildExprFromSlots(
