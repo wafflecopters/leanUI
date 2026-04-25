@@ -20,7 +20,7 @@ import { Tactic, TacticResult, freshMetaName } from './tactic';
 import { checkType, inferType } from '../compiler/checker';
 import { shiftTerm } from '../compiler/subst';
 import { TCEnv } from '../compiler/term';
-import { solveConstraints } from '../compiler/meta';
+// solveConstraints import removed — using solveMetasAndConstraints on TCEnv instead
 
 /**
  * HaveTactic: Introduce a local hypothesis
@@ -71,28 +71,12 @@ export class HaveTactic implements Tactic {
       }
 
       // Solve constraints from type-checking to resolve implicit arg metas
-      // (e.g., {R : Real} in chainTermALimit)
-      const solved = solveConstraints(
-        checkedEnv.metaVars,
-        checkedEnv.constraints,
-        undefined,
-        engine.definitions
-      );
+      // and detect type mismatches (e.g., hε : 0 < ε used where 0 < ε/2 is needed).
+      // Uses solveMetasAndConstraints which throws on conflicting constraints.
+      const solvedEnv = checkedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
 
-      // Re-zonk using solved state so implicit arg Metas are replaced with solutions
-      const solvedEnvForZonk = new TCEnv(
-        goal.ctx,
-        engine.definitions,
-        solved.metaVars,
-        solved.constraints,
-        [],
-        [],
-        this.hypProof,
-        new Map(),
-        { mode: 'check' }
-      );
-      resolvedType = solvedEnvForZonk.zonkTerm(resolvedType);
-      const checkedProof = solvedEnvForZonk.zonkTerm(checkedEnv.elaboratedTerm ?? this.hypProof);
+      resolvedType = solvedEnv.zonkTerm(resolvedType);
+      const checkedProof = solvedEnv.zonkTerm(checkedEnv.elaboratedTerm ?? this.hypProof);
 
       // 2. Create new goal with extended context (store value for ζ-reduction)
       const newCtx = [...goal.ctx, { name: this.hypName, type: resolvedType, value: checkedProof }];
@@ -115,7 +99,7 @@ export class HaveTactic implements Tactic {
       };
 
       // 4. Update engine state
-      const newMetaVars = new Map(solved.metaVars);
+      const newMetaVars = new Map(solvedEnv.metaVars);
       newMetaVars.set(goalId, { ...goal, solution: letTerm });
       newMetaVars.set(newMetaId, newMeta);
 
@@ -125,7 +109,7 @@ export class HaveTactic implements Tactic {
         success: true,
         newEngine: engine.withUpdates({
           metaVars: newMetaVars,
-          constraints: solved.constraints,
+          constraints: solvedEnv.constraints,
           goals: newGoals
         })
       };
