@@ -94,6 +94,30 @@ export function computeTermSlots(
   const namedArgMap = namedArgLookup(fnName);
   const numImplicit = namedArgMap?.size ?? 0;
 
+  // Auto-fill implicit args by inferring from the first explicit arg.
+  // For projections like Limit.eps_delta, if limF : Limit f x0 L is
+  // provided, the implicit args (R, f, x0, L) can be extracted from
+  // the WHNF of limF's type in the context.
+  const firstExplicitIdx = numImplicit; // first explicit = right after implicits
+  const firstExplicitVal = prefilled.get(firstExplicitIdx);
+  if (firstExplicitVal && firstExplicitVal.tag === 'Var') {
+    const entryIdx = goal.ctx.length - 1 - firstExplicitVal.index;
+    if (entryIdx >= 0 && entryIdx < goal.ctx.length) {
+      const hypType = goal.ctx[entryIdx].type;
+      const hypTypeWhnf = whnf(hypType, { definitions, typingContext: goal.ctx });
+      // Extract type args from the WHNF'd type (App spine)
+      const typeArgs: TTKTerm[] = [];
+      let cur = hypTypeWhnf;
+      while (cur.tag === 'App') { typeArgs.unshift(cur.arg); cur = cur.fn; }
+      // Fill implicit slots from the type args
+      for (let i = 0; i < numImplicit && i < typeArgs.length; i++) {
+        if (!prefilled.has(i)) {
+          prefilled.set(i, typeArgs[i]);
+        }
+      }
+    }
+  }
+
   // Unwrap Pi types to get each arg's name, type, and implicit status
   const slots: TermSlot[] = [];
   let currentType = fnType;

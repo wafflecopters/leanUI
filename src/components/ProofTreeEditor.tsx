@@ -1062,7 +1062,7 @@ function TermBuilderView({
               <InlineKaTeX latex={slot.valueLatex ?? '?'} style={{ fontSize: '12px' }} />
             ) : (
               <span style={{ color: '#8b949e' }}>
-                <InlineKaTeX latex={`?\\,{\\small ${slot.typeLatex}}`} style={{ fontSize: '11px', color: '#8b949e' }} />
+                <InlineKaTeX latex={slot.typeLatex} style={{ fontSize: '11px', color: '#8b949e' }} />
               </span>
             )}
           </span>
