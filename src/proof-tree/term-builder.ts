@@ -1,16 +1,18 @@
 /**
- * Term Builder — compute argument slots for interactive term construction.
+ * Term Builder — kernel-backed interactive term construction.
  *
- * Given a function name and pre-filled args, determines which arguments
- * remain as holes, what their expected types are, and which context
- * hypotheses could fill each slot.
+ * Uses the tactic engine to create real metavariables for each argument
+ * slot, so type checking and inference work correctly. Filling a slot
+ * type-checks the value against the slot's expected type.
  */
 
 import { TTKTerm, TTKContext } from '../compiler/kernel';
-import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { DefinitionsMap, MetaVar, createNamedArgLookup, TCEnv } from '../compiler/term';
 import { whnf } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
+import { inferType, checkType } from '../compiler/checker';
 import { TacticEngine } from '../tactics/tacticsEngine';
+import { freshMetaName } from '../tactics/tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
 import { renderSubtermLatex } from './goal-computation';
 
@@ -29,10 +31,14 @@ export interface TermSlot {
   readonly typeLatex: string;
   /** Whether this arg is implicit ({} braces in the definition). */
   readonly implicit: boolean;
+  /** Meta ID for this slot (used to track solutions). */
+  readonly metaId: string;
   /** Filled value, or null = hole. */
   value: TTKTerm | null;
   /** LaTeX rendering of the filled value. */
   valueLatex?: string;
+  /** Error message if the filled value doesn't type-check. */
+  error?: string;
 }
 
 export interface TermBuilderState {
@@ -42,10 +48,14 @@ export interface TermBuilderState {
   readonly fnDisplayName: string;
   /** All argument slots (implicit + explicit). */
   readonly slots: TermSlot[];
-  /** Context hypotheses that could fill each slot. */
+  /** Context hypotheses that ACTUALLY type-check for each slot. */
   readonly slotSuggestions: Map<number, string[]>;
   /** The return type after all args are applied. */
   readonly returnTypeLatex?: string;
+  /** The engine state with metas for unfilled slots. */
+  readonly engine: TacticEngine;
+  /** The goal context (for name resolution). */
+  readonly goalCtx: TTKContext;
 }
 
 // ============================================================================
@@ -53,40 +63,32 @@ export interface TermBuilderState {
 // ============================================================================
 
 /**
- * Compute argument slots for a function application.
+ * Compute argument slots for a function application using the tactic engine.
  *
- * @param fnName - The function name (e.g., "Limit.eps_delta")
- * @param prefilled - Map from arg index to pre-filled kernel term
- * @param engine - Tactic engine for type inference context
- * @param goal - Current goal (provides context)
- * @param definitions - For looking up the function's type
- * @param rev - For LaTeX rendering
+ * Creates real metavariables for each argument, so type checking works
+ * correctly. Pre-filled args are type-checked against their expected types.
  */
 export function computeTermSlots(
   fnName: string,
   prefilled: Map<number, TTKTerm>,
-  _engine: TacticEngine,
-  goal: { ctx: TTKContext; type: TTKTerm },
+  engine: TacticEngine,
+  goal: MetaVar,
   definitions: DefinitionsMap,
   rev?: ReverseRegistry,
 ): TermBuilderState | null {
   // Look up the function's type
-  const termDef = definitions.terms.get(fnName);
-  const inductiveCtors = definitions.inductiveTypes;
   let fnType: TTKTerm | undefined;
-
+  const termDef = definitions.terms.get(fnName);
   if (termDef?.type) {
     fnType = termDef.type;
   } else {
-    // Check constructors
-    for (const [, indDef] of inductiveCtors) {
+    for (const [, indDef] of definitions.inductiveTypes) {
       for (const ctor of indDef.constructors) {
         if (ctor.name === fnName) { fnType = ctor.type; break; }
       }
       if (fnType) break;
     }
   }
-
   if (!fnType) return null;
 
   // Determine implicit args
@@ -94,127 +96,155 @@ export function computeTermSlots(
   const namedArgMap = namedArgLookup(fnName);
   const numImplicit = namedArgMap?.size ?? 0;
 
-  // Auto-fill implicit args by inferring from the first explicit arg.
-  // For projections like Limit.eps_delta, if limF : Limit f x0 L is
-  // provided, the implicit args (R, f, x0, L) can be extracted from
-  // the WHNF of limF's type in the context.
-  const firstExplicitIdx = numImplicit; // first explicit = right after implicits
-  const firstExplicitVal = prefilled.get(firstExplicitIdx);
+  // Auto-fill implicits from the first explicit arg's type
+  const firstExplicitVal = prefilled.get(numImplicit);
   if (firstExplicitVal && firstExplicitVal.tag === 'Var') {
     const entryIdx = goal.ctx.length - 1 - firstExplicitVal.index;
     if (entryIdx >= 0 && entryIdx < goal.ctx.length) {
       const hypType = goal.ctx[entryIdx].type;
       const hypTypeWhnf = whnf(hypType, { definitions, typingContext: goal.ctx });
-      // Extract type args from the WHNF'd type (App spine)
       const typeArgs: TTKTerm[] = [];
       let cur = hypTypeWhnf;
       while (cur.tag === 'App') { typeArgs.unshift(cur.arg); cur = cur.fn; }
-      // Fill implicit slots from the type args
       for (let i = 0; i < numImplicit && i < typeArgs.length; i++) {
-        if (!prefilled.has(i)) {
-          prefilled.set(i, typeArgs[i]);
-        }
+        if (!prefilled.has(i)) prefilled.set(i, typeArgs[i]);
       }
     }
   }
 
-  // Unwrap Pi types to get each arg's name, type, and implicit status
+  // Unwrap Pi types, creating metas for each arg
   const slots: TermSlot[] = [];
   let currentType = fnType;
   let argIndex = 0;
+  let currentEngine = engine;
 
   while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
     const isImplicit = argIndex < numImplicit;
     const name = currentType.name || `_arg${argIndex}`;
     const domain = currentType.domain;
 
-    // Render the domain type as LaTeX
+    // Create a meta for this arg
+    const metaId = freshMetaName();
+    const argMeta: MetaVar = {
+      ctx: goal.ctx,
+      type: domain,
+      solution: undefined,
+    };
+
+    // Check if this slot has a pre-filled value
+    const prefilledValue = prefilled.get(argIndex) ?? null;
+    let value: TTKTerm | null = prefilledValue;
+    let error: string | undefined;
+
+    // If pre-filled, try to type-check it
+    if (prefilledValue) {
+      try {
+        const env = new TCEnv(
+          goal.ctx, definitions, currentEngine.metaVars,
+          currentEngine.constraints, [], [], prefilledValue,
+          new Map(), { mode: 'check' },
+        );
+        checkType(env, domain);
+        // Type-checks — set the meta solution
+        const newMetaVars = new Map(currentEngine.metaVars);
+        newMetaVars.set(metaId, { ...argMeta, solution: prefilledValue });
+        currentEngine = currentEngine.withUpdates({ metaVars: newMetaVars });
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+        // Still keep the value for display, but mark as error
+      }
+    } else {
+      // Unfilled — register the unsolved meta
+      const newMetaVars = new Map(currentEngine.metaVars);
+      newMetaVars.set(metaId, argMeta);
+      currentEngine = currentEngine.withUpdates({ metaVars: newMetaVars });
+    }
+
+    // Render type and value as LaTeX
     const typeLatex = rev
-      ? renderSubtermLatex(domain, goal.ctx, definitions, rev)
+      ? (() => { try { return renderSubtermLatex(domain, goal.ctx, definitions, rev); } catch { return name; } })()
       : name;
 
-    const prefilledValue = prefilled.get(argIndex) ?? null;
-
-    // Render the pre-filled value as LaTeX
     let valueLatex: string | undefined;
     if (prefilledValue && rev) {
-      try {
-        valueLatex = renderSubtermLatex(prefilledValue, goal.ctx, definitions, rev);
-      } catch { /* ignore render errors */ }
+      try { valueLatex = renderSubtermLatex(prefilledValue, goal.ctx, definitions, rev); }
+      catch { /* ignore */ }
     }
 
     slots.push({
-      index: argIndex,
-      name,
-      type: domain,
-      typeLatex,
-      implicit: isImplicit,
-      value: prefilledValue,
-      valueLatex,
+      index: argIndex, name, type: domain, typeLatex,
+      implicit: isImplicit, metaId,
+      value, valueLatex, error,
     });
 
-    // Substitute the arg (or a placeholder) into the body for subsequent arg types
-    const argTerm = prefilledValue ?? { tag: 'Hole' as const, id: `_slot_${argIndex}` };
+    // Substitute for next arg's type
+    const argTerm = prefilledValue ?? { tag: 'Meta' as const, id: metaId };
     currentType = subst(0, argTerm, currentType.body);
+    currentType = whnf(currentType, { definitions, typingContext: goal.ctx });
     argIndex++;
   }
 
   // Compute return type
   let returnTypeLatex: string | undefined;
   if (rev) {
-    try {
-      returnTypeLatex = renderSubtermLatex(currentType, goal.ctx, definitions, rev);
-    } catch { /* ignore */ }
+    try { returnTypeLatex = renderSubtermLatex(currentType, goal.ctx, definitions, rev); }
+    catch { /* ignore */ }
   }
 
-  // Compute slot suggestions: for each unfilled explicit slot, find matching hypotheses
+  // Compute slot suggestions: for each unfilled explicit slot,
+  // find context hypotheses whose type matches the slot type.
   const slotSuggestions = new Map<number, string[]>();
   for (const slot of slots) {
     if (slot.implicit || slot.value !== null) continue;
     const matches: string[] = [];
-    // Simple heuristic: check if hypothesis type head matches slot type head
     for (let i = 0; i < goal.ctx.length; i++) {
       const entry = goal.ctx[i];
-      if (entry.name.startsWith('_')) continue; // skip internal names
-      // Rough match: just offer all hypotheses for now
-      // A proper implementation would unify, but that's expensive
-      matches.push(entry.name);
+      if (entry.name.startsWith('_')) continue;
+      // Quick heuristic: check if the hypothesis type's head matches the slot type's head
+      let slotHead = slot.type;
+      while (slotHead.tag === 'App') slotHead = slotHead.fn;
+      let hypHead = entry.type;
+      while (hypHead.tag === 'App') hypHead = hypHead.fn;
+      if (slotHead.tag === 'Const' && hypHead.tag === 'Const' && slotHead.name === hypHead.name) {
+        matches.push(entry.name);
+      } else if (slotHead.tag !== 'Const') {
+        // Unknown slot type — offer all non-internal hypotheses
+        matches.push(entry.name);
+      }
     }
-    if (matches.length > 0) {
-      slotSuggestions.set(slot.index, matches);
-    }
+    if (matches.length > 0) slotSuggestions.set(slot.index, matches);
   }
 
-  // Display name: strip type prefix for projections
   const dotIdx = fnName.lastIndexOf('.');
   const fnDisplayName = dotIdx >= 0 ? fnName : fnName;
 
   return {
-    fnName,
-    fnDisplayName,
-    slots,
-    slotSuggestions,
-    returnTypeLatex,
+    fnName, fnDisplayName, slots, slotSuggestions, returnTypeLatex,
+    engine: currentEngine, goalCtx: goal.ctx,
   };
 }
 
 /**
- * Build the final TTKTerm from filled slots.
- * Returns null if any explicit slot is unfilled.
+ * Build the expression string from filled slots for creating a have node.
  */
-export function buildTermFromSlots(
+export function buildExprFromSlots(
   fnName: string,
   slots: readonly TermSlot[],
-): TTKTerm | null {
-  let term: TTKTerm = { tag: 'Const', name: fnName };
+  ctx: TTKContext,
+): string | null {
+  const parts = [fnName];
   for (const slot of slots) {
-    if (slot.value === null) {
-      if (!slot.implicit) return null; // unfilled explicit slot
-      // Unfilled implicit → insert hole
-      term = { tag: 'App', fn: term, arg: { tag: 'Hole', id: `_implicit_${slot.name}` } };
+    if (slot.implicit) continue;
+    if (!slot.value) return null; // unfilled explicit slot
+    if (slot.value.tag === 'Var') {
+      const name = ctx[ctx.length - 1 - slot.value.index]?.name ?? '?';
+      parts.push(`(${name})`);
+    } else if (slot.value.tag === 'Const') {
+      parts.push(`(${slot.value.name})`);
     } else {
-      term = { tag: 'App', fn: term, arg: slot.value };
+      // Complex term — serialize as best we can
+      parts.push('(?)');
     }
   }
-  return term;
+  return parts.join(' ');
 }

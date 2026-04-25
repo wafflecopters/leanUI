@@ -35,7 +35,7 @@ import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math
 import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
-import { computeTermSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
+import { computeTermSlots, buildExprFromSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
 import { MathEditor, MathEditorHandle } from './MathEditor';
 import { convertToSource } from '../math-editor/syntax-registry';
 import { InteractiveGoalView } from './InteractiveGoalView';
@@ -1037,24 +1037,28 @@ function TermBuilderView({
           <span
             key={slot.index}
             onClick={() => {
-              if (slot.value !== null) return; // already filled
+              if (slot.value !== null && !slot.error) return; // already filled correctly
               setActiveSlot(prev => prev === slot.index ? null : slot.index);
             }}
             style={{
               display: 'inline-block',
               padding: '2px 8px',
               borderRadius: '4px',
-              cursor: slot.value !== null ? 'default' : 'pointer',
+              cursor: (slot.value !== null && !slot.error) ? 'default' : 'pointer',
               border: activeSlot === slot.index
                 ? '1px solid #58a6ff'
-                : slot.value !== null
-                  ? '1px solid #238636'
-                  : '1px dashed #484f58',
+                : slot.error
+                  ? '1px solid #f85149'
+                  : slot.value !== null
+                    ? '1px solid #238636'
+                    : '1px dashed #484f58',
               backgroundColor: activeSlot === slot.index
                 ? 'rgba(88, 166, 255, 0.12)'
-                : slot.value !== null
-                  ? 'rgba(35, 134, 54, 0.08)'
-                  : 'rgba(110, 118, 129, 0.06)',
+                : slot.error
+                  ? 'rgba(248, 81, 73, 0.08)'
+                  : slot.value !== null
+                    ? 'rgba(35, 134, 54, 0.08)'
+                    : 'rgba(110, 118, 129, 0.06)',
               fontSize: '12px',
             }}
           >
@@ -3390,41 +3394,30 @@ function HoleProseView({
                 if (parsed) term = parsed;
               } catch { /* fall back to raw Const */ }
 
-              // Rebuild the prefilled map with ALL currently filled slots + this new one
+              // Rebuild the prefilled map with ALL currently filled slots + the new one
               const prefilled = new Map<number, TTKTerm>();
               for (const s of inlineTermBuilder.slots) {
                 if (s.value !== null) prefilled.set(s.index, s.value);
               }
               prefilled.set(slotIndex, term);
 
-              // Recompute all slots — this re-evaluates dependent types
-              // (e.g., after filling ε, the next slot's type updates from
-              // `0 < □` to `0 < ε/2`)
+              // Recompute all slots with type checking via the tactic engine
               const rebuilt = computeTermSlots(
                 inlineTermBuilder.fnName, prefilled,
                 kg.engine, kg.goal, definitions, kg.rev,
               );
-              if (rebuilt) {
-                onSetTermBuilder(rebuilt);
-              }
+              if (rebuilt) onSetTermBuilder(rebuilt);
             }}
             onConfirm={() => {
-              const exprParts = [inlineTermBuilder.fnName];
-              for (const slot of inlineTermBuilder.slots) {
-                if (slot.implicit) continue;
-                if (slot.value?.tag === 'Var') {
-                  const ctx = typedContext?.kernelGoal?.goal.ctx;
-                  const name = ctx ? ctx[ctx.length - 1 - slot.value.index]?.name : '?';
-                  exprParts.push(`(${name ?? '?'})`);
-                } else if (slot.value?.tag === 'Const') {
-                  exprParts.push(`(${slot.value.name})`);
-                } else {
-                  exprParts.push('?');
-                }
+              const expr = buildExprFromSlots(
+                inlineTermBuilder.fnName,
+                inlineTermBuilder.slots,
+                inlineTermBuilder.goalCtx,
+              );
+              if (expr) {
+                const result = applyHave(state, 'h', expr);
+                if (result) onPushChange(result);
               }
-              const expr = exprParts.join(' ');
-              const result = applyHave(state, 'h', expr);
-              if (result) onPushChange(result);
               onSetTermBuilder(null);
             }}
             onCancel={() => onSetTermBuilder(null)}
