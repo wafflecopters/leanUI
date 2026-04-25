@@ -994,6 +994,7 @@ const sectionHeaderStyle: React.CSSProperties = {
 function HaveProseItem({
   item, kind, rowStyle, rowHandlers, prose, deleteBtn, renderGoalSection, nextItem,
   state, onPushChange, registry: _registry,
+  definitions, typedContext,
 }: {
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'have' }>;
@@ -1006,81 +1007,124 @@ function HaveProseItem({
   state: ProofTreeState;
   onPushChange: (s: ProofTreeState) => void;
   registry?: SyntaxRegistry;
+  definitions?: DefinitionsMap;
+  typedContext: TypedProofContext | null;
 }) {
-  const [editing, setEditing] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [builderState, setBuilderState] = useState<TermBuilderState | null>(null);
   const showHaveGoal = !nextItem;
   const proofLatex = kind.proofExprLatex;
 
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
-    }
-  }, [editing]);
+  // Open the term builder by parsing the have expression into slots
+  const openBuilder = useCallback(() => {
+    if (!state || !onPushChange) return;
+    // Parse the expression to extract the function name and pre-filled args
+    const tokens = kind.expr.trim().split(/\s+/);
+    const fnName = tokens[0];
+    if (!fnName) return;
 
-  const handleConfirmEdit = useCallback((value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      const updated = editHaveExpr(state, item.nodeId, trimmed);
-      if (updated) onPushChange(updated);
-    }
-    setEditing(false);
-  }, [state, item.nodeId, onPushChange]);
+    // Try to get kernel goal info from the context
+    // We need definitions and engine — get them from the typed context
+    // For now, just open with the function name and parse args
+    const prefilled = new Map<number, TTKTerm>();
+    const { createNamedArgLookup: nAL } = require('../compiler/term');
+    const namedArgMap = definitions ? nAL(definitions)(fnName) : undefined;
+    const numImplicit = namedArgMap?.size ?? 0;
 
-  if (editing) {
+    // Parse each token after the function name as an arg
+    for (let i = 1; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (tok === '?' || tok === '(?)') continue; // unfilled hole — skip
+      // Try to resolve in goal context
+      const ctx = typedContext?.kernelGoal?.goal.ctx;
+      if (ctx) {
+        let found = false;
+        for (let j = ctx.length - 1; j >= 0; j--) {
+          if (ctx[j].name === tok) {
+            prefilled.set(numImplicit + (i - 1), { tag: 'Var', index: ctx.length - 1 - j });
+            found = true;
+            break;
+          }
+        }
+        if (!found && tok !== '?') {
+          prefilled.set(numImplicit + (i - 1), { tag: 'Const', name: tok });
+        }
+      }
+    }
+
+    if (typedContext?.kernelGoal && definitions) {
+      const { engine, goal: metaGoal, rev } = typedContext.kernelGoal;
+      const builder = computeTermSlots(fnName, prefilled, engine, metaGoal, definitions, rev);
+      if (builder) {
+        setBuilderState(builder);
+        return;
+      }
+    }
+  }, [kind.expr, state, onPushChange, definitions, typedContext]);
+
+  if (builderState) {
     return (
-      <div style={{ ...rowStyle, flexDirection: 'column' as const, alignItems: 'stretch' }}>
-        <div style={{ marginBottom: '4px' }}>
-          <span style={prose}>have{' '}</span>
-          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
-          <span style={prose}>{' '}:={' '}</span>
-        </div>
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-          <input
-            ref={inputRef}
-            defaultValue={kind.expr}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                handleConfirmEdit(e.currentTarget.value);
+      <div style={rowStyle}>
+        <TermBuilderView
+          builderState={builderState}
+          onFillSlot={(slotIndex, sourceExpr) => {
+            if (!typedContext?.kernelGoal || !definitions) return;
+            const kg = typedContext.kernelGoal;
+            let term: TTKTerm = { tag: 'Const', name: sourceExpr };
+            try {
+              const parsed = parseExactExpr(sourceExpr, kg.goal.ctx, definitions);
+              if (parsed) term = parsed;
+            } catch { /* fall back */ }
+            const prefilled = new Map<number, TTKTerm>();
+            const sourceExprs = new Map<number, string>();
+            for (const s of builderState.slots) {
+              if (s.value !== null) {
+                prefilled.set(s.index, s.value);
+                if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
               }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setEditing(false);
+            }
+            prefilled.set(slotIndex, term);
+            sourceExprs.set(slotIndex, sourceExpr);
+            const rebuilt = computeTermSlots(builderState.fnName, prefilled, kg.engine, kg.goal, definitions, kg.rev);
+            if (rebuilt) {
+              for (const slot of rebuilt.slots) {
+                const src = sourceExprs.get(slot.index);
+                if (src) (slot as any).sourceExpr = src;
               }
-            }}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              flex: 1,
-              background: '#0d1117',
-              border: '1px solid #58a6ff',
-              borderRadius: '4px',
-              padding: '4px 8px',
-              color: '#c9d1d9',
-              fontSize: '13px',
-              fontFamily: FONT_MONO,
-              outline: 'none',
-            }}
-          />
-          <button
-            onClick={() => inputRef.current && handleConfirmEdit(inputRef.current.value)}
-            style={{
-              background: '#238636', border: '1px solid #2ea043',
-              borderRadius: '4px', color: '#fff', fontSize: '13px',
-              padding: '4px 8px', cursor: 'pointer', fontWeight: 600, flexShrink: 0,
-            }}
-            title="Confirm (Enter)"
-          >✓</button>
-          <button
-            onClick={() => setEditing(false)}
-            style={{
-              background: 'none', border: '1px solid #30363d',
-              borderRadius: '4px', color: '#8b949e', fontSize: '11px',
-              padding: '4px 8px', cursor: 'pointer', flexShrink: 0,
-            }}
-          >Cancel</button>
-        </div>
+              setBuilderState(rebuilt);
+            }
+          }}
+          onClearSlot={(slotIndex) => {
+            if (!typedContext?.kernelGoal || !definitions) return;
+            const kg = typedContext.kernelGoal;
+            const prefilled = new Map<number, TTKTerm>();
+            const sourceExprs = new Map<number, string>();
+            for (const s of builderState.slots) {
+              if (s.value !== null && s.index !== slotIndex) {
+                prefilled.set(s.index, s.value);
+                if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
+              }
+            }
+            const rebuilt = computeTermSlots(builderState.fnName, prefilled, kg.engine, kg.goal, definitions, kg.rev);
+            if (rebuilt) {
+              for (const slot of rebuilt.slots) {
+                const src = sourceExprs.get(slot.index);
+                if (src) (slot as any).sourceExpr = src;
+              }
+              setBuilderState(rebuilt);
+            }
+          }}
+          onConfirm={() => {
+            const expr = buildExprFromSlots(builderState.fnName, builderState.slots, builderState.goalCtx);
+            if (expr) {
+              const updated = editHaveExpr(state, item.nodeId, expr);
+              if (updated) onPushChange(updated);
+            }
+            setBuilderState(null);
+          }}
+          onCancel={() => setBuilderState(null)}
+          registry={_registry}
+        />
+        {deleteBtn}
       </div>
     );
   }
@@ -1100,7 +1144,7 @@ function HaveProseItem({
         <div style={{ paddingLeft: '20px' }}>
           <span style={prose}>since{' '}</span>
           <span
-            onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+            onClick={(e) => { e.stopPropagation(); openBuilder(); }}
             style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
             title="Click to edit expression"
           >
@@ -1110,7 +1154,7 @@ function HaveProseItem({
         </div>
       ) : (
         <span
-          onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+          onClick={(e) => { e.stopPropagation(); openBuilder(); }}
           style={{ cursor: 'pointer', color: '#8b949e', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)', marginLeft: '4px' }}
           title="Click to edit expression"
         >
@@ -3161,6 +3205,8 @@ function ProseItemView({
           state={state}
           onPushChange={onPushChange}
           registry={registry}
+          definitions={definitions}
+          typedContext={typedContext}
         />
       );
 
