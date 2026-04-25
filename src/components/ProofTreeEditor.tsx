@@ -993,7 +993,7 @@ const sectionHeaderStyle: React.CSSProperties = {
 
 function HaveProseItem({
   item, kind, rowStyle, rowHandlers, prose, deleteBtn, renderGoalSection, nextItem,
-  state, onPushChange, registry,
+  state, onPushChange, registry: _registry,
 }: {
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'have' }>;
@@ -1008,35 +1008,25 @@ function HaveProseItem({
   registry?: SyntaxRegistry;
 }) {
   const [editing, setEditing] = useState(false);
-  const editorRef = useRef<MathEditorHandle>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const showHaveGoal = !nextItem;
   const proofLatex = kind.proofExprLatex;
 
-  // Convert the raw expression to a MathEditor initial state when entering edit mode
-  const initialEditorState = useMemo(() => {
-    if (!editing) return undefined;
-    // Import the expr-to-math conversion if available, otherwise use raw text
-    try {
-      const { surfaceTypeToMathRow } = require('../math-editor/tt-to-math');
-      const { createEditorState } = require('../math-editor/types');
-      // For now, just create a fresh editor (user types from scratch or pastes)
-      return createEditorState();
-    } catch {
-      return undefined;
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(inputRef.current.value.length, inputRef.current.value.length);
     }
   }, [editing]);
 
-  const handleConfirmEdit = useCallback(() => {
-    const editorState = editorRef.current?.getState();
-    if (editorState && registry) {
-      const result = convertToSource(registry, editorState.root.children);
-      if (result.source && result.source !== '?') {
-        const updated = editHaveExpr(state, item.nodeId, result.source);
-        if (updated) onPushChange(updated);
-      }
+  const handleConfirmEdit = useCallback((value: string) => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      const updated = editHaveExpr(state, item.nodeId, trimmed);
+      if (updated) onPushChange(updated);
     }
     setEditing(false);
-  }, [state, item.nodeId, onPushChange, registry]);
+  }, [state, item.nodeId, onPushChange]);
 
   if (editing) {
     return (
@@ -1047,38 +1037,34 @@ function HaveProseItem({
           <span style={prose}>{' '}:={' '}</span>
         </div>
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-          <div
+          <input
+            ref={inputRef}
+            defaultValue={kind.expr}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleConfirmEdit(e.currentTarget.value);
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setEditing(false);
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
             style={{
               flex: 1,
               background: '#0d1117',
               border: '1px solid #58a6ff',
               borderRadius: '4px',
               padding: '4px 8px',
-              minHeight: '28px',
+              color: '#c9d1d9',
+              fontSize: '13px',
+              fontFamily: FONT_MONO,
+              outline: 'none',
             }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                e.stopPropagation();
-                handleConfirmEdit();
-              }
-              if (e.key === 'Escape') {
-                e.stopPropagation();
-                setEditing(false);
-              }
-            }}
-          >
-            <MathEditor
-              ref={editorRef}
-              initialState={initialEditorState}
-              registry={registry}
-              placeholder={kind.expr}
-              showTypeInference={false}
-              containerStyle={{ fontSize: '13px' }}
-            />
-          </div>
+          />
           <button
-            onClick={handleConfirmEdit}
+            onClick={() => inputRef.current && handleConfirmEdit(inputRef.current.value)}
             style={{
               background: '#238636', border: '1px solid #2ea043',
               borderRadius: '4px', color: '#fff', fontSize: '13px',
