@@ -630,6 +630,47 @@ export function applyHave(state: ProofTreeState, name: string, expr: string): Pr
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
+/** Edit a have node's expression. Returns new state or null if node not found. */
+export function editHaveExpr(state: ProofTreeState, haveNodeId: ProofNodeId, newExpr: string): ProofTreeState | null {
+  function updateNode(root: ProofNode): ProofNode | null {
+    if (root.id === haveNodeId && root.tag === 'have') {
+      return { ...root, expr: newExpr };
+    }
+    if ('child' in root && (root as any).child) {
+      const newChild = updateNode((root as any).child);
+      if (newChild) return { ...root, child: newChild } as any;
+    }
+    if ('children' in root && (root as any).children) {
+      for (let i = 0; i < (root as any).children.length; i++) {
+        const newChild = updateNode((root as any).children[i]);
+        if (newChild) {
+          const newChildren = [...(root as any).children];
+          newChildren[i] = newChild;
+          return { ...root, children: newChildren } as any;
+        }
+      }
+    }
+    if ('cases' in root && (root as any).cases) {
+      for (let i = 0; i < (root as any).cases.length; i++) {
+        const c = (root as any).cases[i];
+        const newBody = updateNode(c.body);
+        if (newBody) {
+          const newCases = [...(root as any).cases];
+          newCases[i] = { ...c, body: newBody };
+          return { ...root, cases: newCases } as any;
+        }
+      }
+    }
+    if (root.tag === 'suffices' && root.byProof) {
+      const newBy = updateNode(root.byProof);
+      if (newBy) return { ...root, byProof: newBy };
+    }
+    return null;
+  }
+  const newRoot = updateNode(state.root);
+  return newRoot ? { ...state, root: newRoot } : null;
+}
+
 /** Apply unfold at the cursor (must be a hole). Replaces the hole with an unfold node + child hole. */
 export function applyUnfold(state: ProofTreeState, name: string, occurrence?: number): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);

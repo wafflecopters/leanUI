@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode, editIntroName, editCaseParamName,
@@ -986,6 +986,156 @@ const sectionHeaderStyle: React.CSSProperties = {
   marginBottom: '4px',
   fontWeight: 600,
 };
+
+// ============================================================================
+// HaveProseItem — editable have/let in prose view
+// ============================================================================
+
+function HaveProseItem({
+  item, kind, rowStyle, rowHandlers, prose, deleteBtn, renderGoalSection, nextItem,
+  state, onPushChange, registry,
+}: {
+  item: ProseItem;
+  kind: Extract<ProseItemKind, { tag: 'have' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: { onClick: () => void; onMouseEnter: () => void; onMouseLeave: () => void };
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  renderGoalSection: (goalLatex: string | undefined, prefix: string) => React.ReactNode;
+  nextItem?: ProseItem;
+  state: ProofTreeState;
+  onPushChange: (s: ProofTreeState) => void;
+  registry?: SyntaxRegistry;
+}) {
+  const [editing, setEditing] = useState(false);
+  const editorRef = useRef<MathEditorHandle>(null);
+  const showHaveGoal = !nextItem;
+  const proofLatex = kind.proofExprLatex;
+
+  // Convert the raw expression to a MathEditor initial state when entering edit mode
+  const initialEditorState = useMemo(() => {
+    if (!editing) return undefined;
+    // Import the expr-to-math conversion if available, otherwise use raw text
+    try {
+      const { surfaceTypeToMathRow } = require('../math-editor/tt-to-math');
+      const { createEditorState } = require('../math-editor/types');
+      // For now, just create a fresh editor (user types from scratch or pastes)
+      return createEditorState();
+    } catch {
+      return undefined;
+    }
+  }, [editing]);
+
+  const handleConfirmEdit = useCallback(() => {
+    const editorState = editorRef.current?.getState();
+    if (editorState && registry) {
+      const result = convertToSource(registry, editorState.root.children);
+      if (result.source && result.source !== '?') {
+        const updated = editHaveExpr(state, item.nodeId, result.source);
+        if (updated) onPushChange(updated);
+      }
+    }
+    setEditing(false);
+  }, [state, item.nodeId, onPushChange, registry]);
+
+  if (editing) {
+    return (
+      <div style={{ ...rowStyle, flexDirection: 'column' as const, alignItems: 'stretch' }}>
+        <div style={{ marginBottom: '4px' }}>
+          <span style={prose}>have{' '}</span>
+          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+          <span style={prose}>{' '}:={' '}</span>
+        </div>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <div
+            style={{
+              flex: 1,
+              background: '#0d1117',
+              border: '1px solid #58a6ff',
+              borderRadius: '4px',
+              padding: '4px 8px',
+              minHeight: '28px',
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                e.stopPropagation();
+                handleConfirmEdit();
+              }
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                setEditing(false);
+              }
+            }}
+          >
+            <MathEditor
+              ref={editorRef}
+              initialState={initialEditorState}
+              registry={registry}
+              placeholder={kind.expr}
+              showTypeInference={false}
+              containerStyle={{ fontSize: '13px' }}
+            />
+          </div>
+          <button
+            onClick={handleConfirmEdit}
+            style={{
+              background: '#238636', border: '1px solid #2ea043',
+              borderRadius: '4px', color: '#fff', fontSize: '13px',
+              padding: '4px 8px', cursor: 'pointer', fontWeight: 600, flexShrink: 0,
+            }}
+            title="Confirm (Enter)"
+          >✓</button>
+          <button
+            onClick={() => setEditing(false)}
+            style={{
+              background: 'none', border: '1px solid #30363d',
+              borderRadius: '4px', color: '#8b949e', fontSize: '11px',
+              padding: '4px 8px', cursor: 'pointer', flexShrink: 0,
+            }}
+          >Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={rowStyle} {...rowHandlers}>
+      <span style={prose}>Observe that{' '}</span>
+      {kind.typeLatex ? (
+        <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
+      ) : (
+        <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
+      )}
+      <span style={prose}>{' '}(</span>
+      <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+      <span style={prose}>)</span>
+      {proofLatex ? (
+        <div style={{ paddingLeft: '20px' }}>
+          <span style={prose}>since{' '}</span>
+          <span
+            onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+            style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
+            title="Click to edit expression"
+          >
+            <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
+          </span>
+          <span style={prose}>.</span>
+        </div>
+      ) : (
+        <span
+          onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+          style={{ cursor: 'pointer', color: '#8b949e', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)', marginLeft: '4px' }}
+          title="Click to edit expression"
+        >
+          {kind.expr}
+        </span>
+      )}
+      {showHaveGoal && renderGoalSection(kind.goalLatex, ' It remains to show')}
+      {deleteBtn}
+    </div>
+  );
+}
 
 // ============================================================================
 // TermBuilderView — interactive slot-filling for function application
@@ -3011,32 +3161,22 @@ function ProseItemView({
       );
     }
 
-    case 'have': {
-      const showHaveGoal = !nextItem;
-      const proofLatex = kind.proofExprLatex;
+    case 'have':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          <span style={prose}>Observe that{' '}</span>
-          {kind.typeLatex ? (
-            <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
-          ) : (
-            <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-          )}
-          <span style={prose}>{' '}(</span>
-          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
-          <span style={prose}>)</span>
-          {proofLatex ? (
-            <div style={{ paddingLeft: '20px' }}>
-              <span style={prose}>since{' '}</span>
-              <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
-              <span style={prose}>.</span>
-            </div>
-          ) : <span style={prose}>.</span>}
-          {showHaveGoal && renderGoalSection(kind.goalLatex, ' It remains to show')}
-          {deleteBtn}
-        </div>
+        <HaveProseItem
+          item={item}
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          renderGoalSection={renderGoalSection}
+          nextItem={nextItem}
+          state={state}
+          onPushChange={onPushChange}
+          registry={registry}
+        />
       );
-    }
 
     case 'suffices':
       return (
