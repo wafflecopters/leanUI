@@ -3379,21 +3379,34 @@ function HoleProseView({
         <div style={{ marginBottom: '8px' }}>
           <TermBuilderView
             builderState={inlineTermBuilder}
-            onFillSlot={(slotIndex, value) => {
+            onFillSlot={(slotIndex, sourceExpr) => {
               const newSlots = [...inlineTermBuilder.slots];
               const slot = newSlots[slotIndex];
               if (!slot) return;
-              const ctx = typedContext?.kernelGoal?.goal.ctx;
-              let term: TTKTerm = { tag: 'Const', name: value };
-              if (ctx) {
-                for (let i = ctx.length - 1; i >= 0; i--) {
-                  if (ctx[i].name === value) {
-                    term = { tag: 'Var', index: ctx.length - 1 - i };
-                    break;
+
+              // Parse the source expression and render as LaTeX
+              let term: TTKTerm = { tag: 'Const', name: sourceExpr };
+              let valueLatex = texNameForProse(sourceExpr);
+
+              if (typedContext?.kernelGoal && definitions) {
+                const kg = typedContext.kernelGoal;
+                try {
+                  // Parse the source string using the tactic arg parser
+                  // (handles context lookups, implicit args, applications)
+                  const { parseExactExpr } = require('../proof-tree/goal-computation');
+                  const parsed = parseExactExpr(sourceExpr, kg.goal.ctx, definitions);
+                  if (parsed) {
+                    term = parsed;
+                    // Render the parsed kernel term through the math pipeline
+                    if (kg.rev) {
+                      const { renderSubtermLatex } = require('../proof-tree/goal-computation');
+                      valueLatex = renderSubtermLatex(parsed, kg.goal.ctx, definitions, kg.rev);
+                    }
                   }
-                }
+                } catch { /* fall back to raw */ }
               }
-              newSlots[slotIndex] = { ...slot, value: term, valueLatex: texNameForProse(value) };
+
+              newSlots[slotIndex] = { ...slot, value: term, valueLatex };
               onSetTermBuilder({ ...inlineTermBuilder, slots: newSlots });
             }}
             onConfirm={() => {

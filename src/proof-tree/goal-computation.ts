@@ -1126,7 +1126,7 @@ function tokenizeExactExpr(expr: string): string[] {
  * Names are resolved as context variables first, then as constants.
  * When definitions are provided, implicit argument Holes are inserted automatically.
  */
-function parseExactExpr(
+export function parseExactExpr(
   expr: string,
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
   definitions?: DefinitionsMap,
