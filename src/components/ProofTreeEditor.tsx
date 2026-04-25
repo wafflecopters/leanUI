@@ -1180,26 +1180,24 @@ function TermBuilderView({
         </div>
       )}
 
-      {/* Confirm button */}
-      {allFilled && (
-        <div style={{ marginTop: '6px' }}>
-          <button
-            onClick={onConfirm}
-            style={{
-              background: '#238636',
-              border: '1px solid #2ea043',
-              borderRadius: '4px',
-              color: '#ffffff',
-              fontSize: '11px',
-              padding: '3px 12px',
-              cursor: 'pointer',
-              fontWeight: 600,
-            }}
-          >
-            Create have
+      {/* Confirm button — always visible; unfilled slots become ? */}
+      <div style={{ marginTop: '6px' }}>
+        <button
+          onClick={onConfirm}
+          style={{
+            background: allFilled ? '#238636' : '#30363d',
+            border: `1px solid ${allFilled ? '#2ea043' : '#484f58'}`,
+            borderRadius: '4px',
+            color: allFilled ? '#ffffff' : '#8b949e',
+            fontSize: '11px',
+            padding: '3px 12px',
+            cursor: 'pointer',
+            fontWeight: 600,
+          }}
+        >
+          {allFilled ? 'Create have' : 'Create have (with holes)'}
           </button>
         </div>
-      )}
     </div>
   );
 }

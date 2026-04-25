@@ -185,26 +185,53 @@ export function computeTermSlots(
   }
 
   // Compute slot suggestions: for each unfilled explicit slot,
-  // find context hypotheses whose type matches the slot type.
+  // find context hypotheses and definitions that could fill it.
   const slotSuggestions = new Map<number, string[]>();
   for (const slot of slots) {
     if (slot.implicit || slot.value !== null) continue;
     const matches: string[] = [];
+
+    // Get the slot type's head for matching
+    let slotHead = slot.type;
+    while (slotHead.tag === 'App') slotHead = slotHead.fn;
+    const slotHeadName = slotHead.tag === 'Const' ? slotHead.name : undefined;
+
+    // 1. Context hypotheses: exact type match (head matches)
     for (let i = 0; i < goal.ctx.length; i++) {
       const entry = goal.ctx[i];
       if (entry.name.startsWith('_')) continue;
-      // Quick heuristic: check if the hypothesis type's head matches the slot type's head
-      let slotHead = slot.type;
-      while (slotHead.tag === 'App') slotHead = slotHead.fn;
       let hypHead = entry.type;
       while (hypHead.tag === 'App') hypHead = hypHead.fn;
-      if (slotHead.tag === 'Const' && hypHead.tag === 'Const' && slotHead.name === hypHead.name) {
+      if (slotHeadName && hypHead.tag === 'Const' && hypHead.name === slotHeadName) {
         matches.push(entry.name);
-      } else if (slotHead.tag !== 'Const') {
-        // Unknown slot type — offer all non-internal hypotheses
+      } else if (!slotHeadName) {
         matches.push(entry.name);
       }
     }
+
+    // 2. Definitions whose RETURN TYPE head matches the slot type.
+    // Walk the Pi spine to find the final return type and check its head.
+    // This finds things like `divTwoPos : ... -> rlt (rzero R) (rdiv ε ...)`.
+    if (slotHeadName) {
+      for (const [defName, def] of definitions.terms) {
+        if (defName.includes('.') || defName === fnName) continue; // skip projections & self
+        if (!def.type) continue;
+        // Walk to the return type of this definition
+        let retType = def.type;
+        while (retType.tag === 'Binder' && retType.binderKind.tag === 'BPi') {
+          retType = retType.body;
+        }
+        let retHead = retType;
+        while (retHead.tag === 'App') retHead = retHead.fn;
+        if (retHead.tag === 'Const' && retHead.name === slotHeadName) {
+          // Return type head matches — this definition could produce the right type
+          if (!matches.includes(defName)) {
+            matches.push(defName);
+          }
+        }
+      }
+    }
+
     if (matches.length > 0) slotSuggestions.set(slot.index, matches);
   }
 
@@ -228,7 +255,10 @@ export function buildExprFromSlots(
   const parts = [fnName];
   for (const slot of slots) {
     if (slot.implicit) continue;
-    if (!slot.value) return null; // unfilled explicit slot
+    if (!slot.value) {
+      parts.push('?'); // unfilled slot → hole
+      continue;
+    }
     if (slot.value.tag === 'Var') {
       const name = ctx[ctx.length - 1 - slot.value.index]?.name ?? '?';
       parts.push(`(${name})`);
