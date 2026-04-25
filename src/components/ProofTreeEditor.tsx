@@ -173,8 +173,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('proof');
   // Pre-fill value for the Have input (set by GoalPanel's "Use projection" action)
   const [havePrefill, setHavePrefill] = useState<string | null>(null);
-  // Interactive term builder state (shown inline at the cursor in the prose view)
-  const [activeTermBuilder, setActiveTermBuilder] = useState<TermBuilderState | null>(null);
+  // (Term builder removed — projections create have nodes directly)
 
   // Goal interaction state (shared between GoalPanel and prose view)
   const [goalSelectedPath, setGoalSelectedPath] = useState<GoalPath | null>(null);
@@ -449,8 +448,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 onSelectBinder={handleSelectBinder}
                 havePrefill={havePrefill}
                 onClearHavePrefill={() => setHavePrefill(null)}
-                termBuilder={activeTermBuilder}
-                onSetTermBuilder={setActiveTermBuilder}
+                termBuilder={null}
+                onSetTermBuilder={() => {}}
               />
             )}
           </div>
@@ -477,7 +476,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
             setHavePrefill(prefill);
             setTacticMode({ tactic: 'have' });
           }}
-          onOpenTermBuilder={(builder) => setActiveTermBuilder(builder)}
+          onOpenTermBuilder={() => {}}
         />
       </SplitPane>
     </div>
@@ -770,7 +769,7 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   editingSuggestionId, onEditingSuggestionId,
   inductiveMap, registry, rewriteProgress, definitions,
   onOpenHaveWithPrefill: _onOpenHaveWithPrefill,
-  onOpenTermBuilder,
+  onOpenTermBuilder: _onOpenTermBuilder,
 }: {
   context: TypedProofContext | null;
   state?: ProofTreeState;
@@ -815,26 +814,28 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, hypName, numSubgoals);
     } else if (suggestion.id.startsWith('hyp-proj-')) {
-      // Use projection — open the term builder with the projection
-      // pre-applied to the hypothesis. User fills remaining arg slots.
+      // Use projection — directly create a have with ? for unfilled args.
+      // The tactic engine handles type-checking; errors show inline.
       const projName = suggestion.applyCtorName; // e.g., "Limit.eps_delta"
-      if (projName && hypName && context?.kernelGoal && definitions) {
-        const { engine, goal: metaGoal, rev } = context.kernelGoal;
-        // Pre-fill: the hypothesis itself goes into the first explicit arg slot
-        // (after implicit args). Find the right slot index.
+      if (projName && hypName && definitions) {
+        // Count how many explicit args the projection needs AFTER the hypothesis
         const namedArgLookup = createNamedArgLookup(definitions);
         const namedArgMap = namedArgLookup(projName);
         const numImplicit = namedArgMap?.size ?? 0;
-        const hypVarIdx = metaGoal.ctx.length - 1 - (context.hypotheses.findIndex(h => h.name === hypName));
-        const prefilled = new Map<number, TTKTerm>();
-        prefilled.set(numImplicit, { tag: 'Var', index: hypVarIdx });
-
-        const builder = computeTermSlots(projName, prefilled, engine, metaGoal, definitions, rev);
-        if (builder && onOpenTermBuilder) {
-          onOpenTermBuilder(builder);
-          setSelectedHyp(null);
-          return;
+        const termDef = definitions.terms.get(projName);
+        let numExplicit = 0;
+        if (termDef?.type) {
+          let t = termDef.type;
+          let idx = 0;
+          while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+            if (idx >= numImplicit) numExplicit++;
+            t = t.body; idx++;
+          }
         }
+        // Build: "projName hypName ? ? ..." with ? for remaining explicit args
+        const holes = Array(Math.max(0, numExplicit - 1)).fill('?').join(' ');
+        const expr = holes ? `${projName} ${hypName} ${holes}` : `${projName} ${hypName}`;
+        result = applyHave(state, 'h', expr);
       }
     } else if (suggestion.id.startsWith('hyp-destruct-')) {
       // Cases on the hypothesis — generate structured case branches
