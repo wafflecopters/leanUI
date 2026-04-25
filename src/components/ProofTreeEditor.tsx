@@ -993,12 +993,14 @@ const sectionHeaderStyle: React.CSSProperties = {
 function TermBuilderView({
   builderState,
   onFillSlot,
+  onClearSlot,
   onConfirm,
   onCancel,
   registry,
 }: {
   builderState: TermBuilderState;
   onFillSlot: (slotIndex: number, value: string) => void;
+  onClearSlot: (slotIndex: number) => void;
   onConfirm: () => void;
   onCancel: () => void;
   registry?: SyntaxRegistry;
@@ -1037,14 +1039,19 @@ function TermBuilderView({
           <span
             key={slot.index}
             onClick={() => {
-              if (slot.value !== null && !slot.error) return; // already filled correctly
+              if (slot.value !== null && activeSlot !== slot.index) {
+                // Filled slot: clear and re-open for editing
+                onClearSlot(slot.index);
+                setActiveSlot(slot.index);
+                return;
+              }
               setActiveSlot(prev => prev === slot.index ? null : slot.index);
             }}
             style={{
               display: 'inline-block',
               padding: '2px 8px',
               borderRadius: '4px',
-              cursor: (slot.value !== null && !slot.error) ? 'default' : 'pointer',
+              cursor: 'pointer',
               border: activeSlot === slot.index
                 ? '1px solid #58a6ff'
                 : slot.error
@@ -3402,6 +3409,20 @@ function HoleProseView({
               prefilled.set(slotIndex, term);
 
               // Recompute all slots with type checking via the tactic engine
+              const rebuilt = computeTermSlots(
+                inlineTermBuilder.fnName, prefilled,
+                kg.engine, kg.goal, definitions, kg.rev,
+              );
+              if (rebuilt) onSetTermBuilder(rebuilt);
+            }}
+            onClearSlot={(slotIndex) => {
+              if (!typedContext?.kernelGoal || !definitions) return;
+              const kg = typedContext.kernelGoal;
+              // Rebuild without the cleared slot
+              const prefilled = new Map<number, TTKTerm>();
+              for (const s of inlineTermBuilder.slots) {
+                if (s.value !== null && s.index !== slotIndex) prefilled.set(s.index, s.value);
+              }
               const rebuilt = computeTermSlots(
                 inlineTermBuilder.fnName, prefilled,
                 kg.engine, kg.goal, definitions, kg.rev,
