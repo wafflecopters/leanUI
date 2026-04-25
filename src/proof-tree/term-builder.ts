@@ -136,23 +136,30 @@ export function computeTermSlots(
     let value: TTKTerm | null = prefilledValue;
     let error: string | undefined;
 
-    // If pre-filled, try to type-check it
+    // If pre-filled, try to type-check it (skip for implicit args — they're
+    // auto-inferred from the hypothesis type and have Var indices relative to
+    // goal.ctx which don't align with the Pi spine's binder depth).
     if (prefilledValue) {
-      try {
-        const env = new TCEnv(
-          goal.ctx, definitions, currentEngine.metaVars,
-          currentEngine.constraints, [], [], prefilledValue,
-          new Map(), { mode: 'check' },
-        );
-        checkType(env, domain);
-        // Type-checks — set the meta solution
-        const newMetaVars = new Map(currentEngine.metaVars);
-        newMetaVars.set(metaId, { ...argMeta, solution: prefilledValue });
-        currentEngine = currentEngine.withUpdates({ metaVars: newMetaVars });
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
-        // Still keep the value for display, but mark as error
+      if (!isImplicit) {
+        try {
+          const env = new TCEnv(
+            goal.ctx, definitions, currentEngine.metaVars,
+            currentEngine.constraints, [], [], prefilledValue,
+            new Map(), { mode: 'check' },
+          );
+          checkType(env, domain);
+        } catch (e) {
+          error = e instanceof Error
+            ? e.message
+            : (e && typeof e === 'object' && 'message' in e)
+              ? String((e as any).message)
+              : String(e);
+        }
       }
+      // Set the meta solution regardless (for substitution into later slots)
+      const newMetaVars = new Map(currentEngine.metaVars);
+      newMetaVars.set(metaId, { ...argMeta, solution: prefilledValue });
+      currentEngine = currentEngine.withUpdates({ metaVars: newMetaVars });
     } else {
       // Unfilled — register the unsolved meta
       const newMetaVars = new Map(currentEngine.metaVars);

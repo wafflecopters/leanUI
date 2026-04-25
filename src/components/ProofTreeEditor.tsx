@@ -1068,6 +1068,7 @@ function TermBuilderView({
                     : 'rgba(110, 118, 129, 0.06)',
               fontSize: '12px',
             }}
+            title={slot.error ?? undefined}
           >
             {slot.value !== null ? (
               <InlineKaTeX latex={slot.valueLatex ?? '?'} style={{ fontSize: '12px' }} />
@@ -1075,6 +1076,11 @@ function TermBuilderView({
               <span style={{ color: '#8b949e' }}>
                 <InlineKaTeX latex={slot.typeLatex} style={{ fontSize: '11px', color: '#8b949e' }} />
               </span>
+            )}
+            {slot.error && (
+              <div style={{ fontSize: '9px', color: '#f85149', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {slot.error.substring(0, 50)}
+              </div>
             )}
           </span>
         ))}
