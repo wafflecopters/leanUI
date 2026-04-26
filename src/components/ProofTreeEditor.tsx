@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr, insertHaveBefore,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode, editIntroName, editCaseParamName,
@@ -1143,6 +1143,45 @@ function HaveProseItem({
           onConfirm={() => setBuilderState(null)}
           onCancel={() => setBuilderState(null)}
           registry={_registry}
+          onHoistToHave={(slotIndex, fnName) => {
+            if (!definitions || !builderState) return;
+            // Count explicit args the function needs
+            const namedArgMap = createNamedArgLookup(definitions)(fnName);
+            const numImplicit = namedArgMap?.size ?? 0;
+            const termDef = definitions.terms.get(fnName);
+            let numExplicit = 0;
+            if (termDef?.type) {
+              let t = termDef.type;
+              let idx = 0;
+              while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+                if (idx >= numImplicit) numExplicit++;
+                t = t.body; idx++;
+              }
+            }
+            // Generate a fresh name
+            const hoistName = `h_${fnName.replace(/\./g, '_')}`;
+            const holes = Array(numExplicit).fill('?').join(' ');
+            const hoistExpr = holes ? `${fnName} ${holes}` : fnName;
+
+            // 1. Insert have BEFORE the current have node
+            let updated = insertHaveBefore(state, item.nodeId, hoistName, hoistExpr);
+            if (!updated) return;
+
+            // 2. Update the current have's expression: fill the slot with hoistName
+            // Rebuild the slot list with the new fill
+            const newSlots = [...builderState.slots];
+            const slot = newSlots[slotIndex];
+            if (slot) {
+              (newSlots[slotIndex] as any) = { ...slot, value: { tag: 'Const', name: hoistName }, sourceExpr: hoistName, valueLatex: texNameForProse(hoistName) };
+            }
+            const expr = buildExprFromSlots(builderState.fnName, newSlots, builderState.goalCtx);
+            if (expr) {
+              updated = editHaveExpr(updated, item.nodeId, expr) ?? updated;
+            }
+
+            onPushChange(updated);
+            setBuilderState(null);
+          }}
         />
         {deleteBtn}
       </div>
@@ -1206,6 +1245,7 @@ function TermBuilderView({
   onConfirm: _onConfirm,
   onCancel,
   registry,
+  onHoistToHave,
 }: {
   builderState: TermBuilderState;
   onFillSlot: (slotIndex: number, value: string) => void;
@@ -1213,6 +1253,8 @@ function TermBuilderView({
   onConfirm: () => void;
   onCancel: () => void;
   registry?: SyntaxRegistry;
+  /** Hoist a function to a have above: creates `have name := fn ? ?` before the current node. */
+  onHoistToHave?: (slotIndex: number, fnName: string) => void;
 }) {
   const [activeSlot, setActiveSlot] = useState<number | null>(null);
   const mathEditorRef = useRef<MathEditorHandle>(null);
@@ -1301,17 +1343,31 @@ function TermBuilderView({
           <div style={{ fontSize: '10px', color: '#8b949e', marginBottom: '3px' }}>
             Fill <strong>{builderState.slots[activeSlot]?.name}</strong>:
           </div>
-          {/* Suggestion buttons from context */}
+          {/* Suggestion buttons — context vars fill directly, definitions offer hoist */}
           <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginBottom: '4px' }}>
-            {(builderState.slotSuggestions.get(activeSlot) ?? []).slice(0, 12).map(name => (
-              <button
-                key={name}
-                style={{ ...suggestionBtnStyle, fontSize: '10px', padding: '1px 6px' }}
-                onClick={() => { onFillSlot(activeSlot, name); setActiveSlot(null); }}
-              >
-                {name}
-              </button>
-            ))}
+            {(builderState.slotSuggestions.get(activeSlot) ?? []).slice(0, 12).map(name => {
+              const isCtxVar = builderState.goalCtx.some(e => e.name === name);
+              return (
+                <span key={name} style={{ display: 'inline-flex', gap: '1px' }}>
+                  <button
+                    style={{ ...suggestionBtnStyle, fontSize: '10px', padding: '1px 6px' }}
+                    onClick={() => { onFillSlot(activeSlot, name); setActiveSlot(null); }}
+                    title={isCtxVar ? `Use ${name}` : `Use ${name} (may need args)`}
+                  >
+                    {name}
+                  </button>
+                  {!isCtxVar && onHoistToHave && (
+                    <button
+                      style={{ ...suggestionBtnStyle, fontSize: '9px', padding: '1px 4px', color: '#79c0ff' }}
+                      onClick={() => { onHoistToHave(activeSlot, name); setActiveSlot(null); }}
+                      title={`Create 'have' for ${name} above, fill its args separately`}
+                    >
+                      ↑
+                    </button>
+                  )}
+                </span>
+              );
+            })}
           </div>
           {/* Math editor for typing expressions with LaTeX rendering */}
           <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>

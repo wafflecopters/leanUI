@@ -630,6 +630,16 @@ export function applyHave(state: ProofTreeState, name: string, expr: string): Pr
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
+/** Insert a have node BEFORE a target node. The new have wraps the target:
+ *  parent → target  becomes  parent → newHave(name, expr, child: target) */
+export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string): ProofTreeState | null {
+  const target = findNode(state.root, targetNodeId);
+  if (!target) return null;
+  const newHave = mkHave(name, expr, target);
+  const newRoot = replaceNode(state.root, targetNodeId, newHave);
+  return { root: newRoot, cursor: state.cursor };
+}
+
 /** Edit a have node's expression. Returns new state or null if node not found. */
 export function editHaveExpr(state: ProofTreeState, haveNodeId: ProofNodeId, newExpr: string): ProofTreeState | null {
   function updateNode(root: ProofNode): ProofNode | null {
