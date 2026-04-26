@@ -1134,9 +1134,12 @@ function HaveProseItem({
     );
   }
 
+  const hasError = !!kind.error;
+  const errorStyle = hasError ? { color: '#f85149' } : {};
+
   return (
-    <div style={rowStyle} {...rowHandlers}>
-      <span style={prose}>Observe that{' '}</span>
+    <div style={{ ...rowStyle, ...(hasError ? { backgroundColor: 'rgba(248, 81, 73, 0.06)', borderLeft: '2px solid #f85149' } : {}) }} {...rowHandlers}>
+      <span style={{ ...prose, ...errorStyle }}>Observe that{' '}</span>
       {kind.typeLatex ? (
         <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
       ) : (
@@ -1166,7 +1169,12 @@ function HaveProseItem({
           {kind.expr}
         </span>
       )}
-      {showHaveGoal && renderGoalSection(kind.goalLatex, ' It remains to show')}
+      {kind.error && (
+        <div style={{ fontSize: '11px', color: '#f85149', paddingLeft: '20px', paddingTop: '2px' }}>
+          ({kind.error.substring(0, 120)})
+        </div>
+      )}
+      {showHaveGoal && !hasError && renderGoalSection(kind.goalLatex, ' It remains to show')}
       {deleteBtn}
     </div>
   );

@@ -60,7 +60,7 @@ export type ProseItemKind =
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string }
+  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string; isValueType?: boolean }
   | { tag: 'calcChain'; preGoalLatex?: string; steps: readonly CalcChainStep[] }
@@ -464,6 +464,7 @@ export function generateProofProse(
           proofExprLatex: info?.proofExprLatex,
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
+          error: info?.tacticError,
         });
         walk(node.child, depth);
         break;
