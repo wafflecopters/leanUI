@@ -11,6 +11,7 @@ import { DefinitionsMap, MetaVar, createNamedArgLookup, TCEnv } from '../compile
 import { whnf } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
 import { inferType, checkType } from '../compiler/checker';
+import { HaveTactic } from '../tactics/have-tactic';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { freshMetaName } from '../tactics/tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
@@ -141,27 +142,8 @@ export function computeTermSlots(
     let error: string | undefined;
 
     if (prefilledValue) {
-      // Type-check user-filled SIMPLE values (Var, Const) against the
-      // expected domain. Skip complex expressions (App chains) — the Pi
-      // spine's domain types have de Bruijn indices that don't align with
-      // goal.ctx after implicit substitution, causing false type errors
-      // for complex terms. The have tactic catches real errors at replay.
-      if (userFilledIndices?.has(argIndex) && (prefilledValue.tag === 'Var' || prefilledValue.tag === 'Const')) {
-        try {
-          const checkEnv = new TCEnv(
-            goal.ctx, definitions, currentEngine.metaVars,
-            currentEngine.constraints, [], [], prefilledValue,
-            new Map(), { mode: 'check' },
-          );
-          checkType(checkEnv, domain);
-        } catch (e) {
-          error = e instanceof Error
-            ? e.message
-            : (e && typeof e === 'object' && 'message' in e)
-              ? String((e as any).message)
-              : String(e);
-        }
-      }
+      // (Per-slot type checking removed — we validate the full expression
+      // via HaveTactic after all slots are assembled. See below.)
       const newMetaVars = new Map(currentEngine.metaVars);
       newMetaVars.set(metaId, { ...argMeta, solution: prefilledValue });
       currentEngine = currentEngine.withUpdates({ metaVars: newMetaVars });
@@ -194,6 +176,46 @@ export function computeTermSlots(
     currentType = subst(0, argTerm, currentType.body);
     currentType = whnf(currentType, { definitions, typingContext: goal.ctx });
     argIndex++;
+  }
+
+  // Validate the full expression via HaveTactic if all explicit slots are filled.
+  // This handles implicit resolution correctly (HaveTactic uses inferType which
+  // solves {R} from ε : Carrier R, etc.) instead of broken per-slot checking.
+  const allExplicitFilled = slots.filter(s => !s.implicit).every(s => s.value !== null);
+  if (allExplicitFilled && userFilledIndices && userFilledIndices.size > 0) {
+    // Build the full application term
+    let fullTerm: TTKTerm = { tag: 'Const', name: fnName };
+    for (const slot of slots) {
+      const arg = slot.value ?? { tag: 'Hole' as const, id: `_slot_${slot.index}` };
+      fullTerm = { tag: 'App', fn: fullTerm, arg };
+    }
+    // Run HaveTactic to validate
+    try {
+      const holeType: TTKTerm = { tag: 'Hole', id: '_have_type' };
+      const tactic = new HaveTactic('_check', holeType, fullTerm);
+      const goalId = engine.getFocusedGoalId();
+      if (goalId) {
+        const result = tactic.apply(engine, goal, goalId);
+        if (!result.success) {
+          // Mark the most recently filled slot with the error
+          const lastUserFilled = Math.max(...userFilledIndices);
+          const slot = slots.find(s => s.index === lastUserFilled);
+          if (slot) {
+            slot.error = result.error ?? 'Type mismatch';
+          }
+        }
+      }
+    } catch (e) {
+      const lastUserFilled = Math.max(...userFilledIndices);
+      const slot = slots.find(s => s.index === lastUserFilled);
+      if (slot) {
+        slot.error = e instanceof Error
+          ? e.message
+          : (e && typeof e === 'object' && 'message' in e)
+            ? String((e as any).message)
+            : String(e);
+      }
+    }
   }
 
   // Compute return type
