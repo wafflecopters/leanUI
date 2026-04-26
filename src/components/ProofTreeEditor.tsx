@@ -1030,38 +1030,34 @@ function HaveProseItem({
   // Open the term builder by parsing the have expression into slots
   const openBuilder = useCallback(() => {
     if (!state || !onPushChange) return;
-    // Parse the expression to extract the function name and pre-filled args
-    const tokens = kind.expr.trim().split(/\s+/);
-    const fnName = tokens[0];
-    if (!fnName) return;
+    if (!typedContext?.kernelGoal || !definitions) return;
+    const kg = typedContext.kernelGoal;
 
-    // Try to get kernel goal info from the context
-    // We need definitions and engine — get them from the typed context
-    // For now, just open with the function name and parse args
-    const prefilled = new Map<number, TTKTerm>();
-    const { createNamedArgLookup: nAL } = require('../compiler/term');
-    const namedArgMap = definitions ? nAL(definitions)(fnName) : undefined;
+    // Parse the full expression to get a kernel term, then extract the App spine
+    const parsed = parseExactExpr(kind.expr, kg.goal.ctx, definitions);
+    if (!parsed) return;
+
+    // Walk the App spine to extract: head function + explicit args
+    const args: TTKTerm[] = [];
+    let head = parsed;
+    while (head.tag === 'App') {
+      args.unshift(head.arg);
+      head = head.fn;
+    }
+    if (head.tag !== 'Const') return;
+    const fnName = head.name;
+
+    // Determine how many are implicit vs explicit
+    const namedArgMap = createNamedArgLookup(definitions)(fnName);
     const numImplicit = namedArgMap?.size ?? 0;
 
-    // Parse each token after the function name as an arg
-    for (let i = 1; i < tokens.length; i++) {
-      const tok = tokens[i];
-      if (tok === '?' || tok === '(?)') continue; // unfilled hole — skip
-      // Try to resolve in goal context
-      const ctx = typedContext?.kernelGoal?.goal.ctx;
-      if (ctx) {
-        let found = false;
-        for (let j = ctx.length - 1; j >= 0; j--) {
-          if (ctx[j].name === tok) {
-            prefilled.set(numImplicit + (i - 1), { tag: 'Var', index: ctx.length - 1 - j });
-            found = true;
-            break;
-          }
-        }
-        if (!found && tok !== '?') {
-          prefilled.set(numImplicit + (i - 1), { tag: 'Const', name: tok });
-        }
-      }
+    // Build prefilled map: args[0..numImplicit-1] are implicit, rest are explicit
+    const prefilled = new Map<number, TTKTerm>();
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      // Skip Hole args (unfilled slots)
+      if (arg.tag === 'Hole') continue;
+      prefilled.set(i, arg);
     }
 
     if (typedContext?.kernelGoal && definitions) {
