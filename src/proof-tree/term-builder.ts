@@ -15,7 +15,7 @@ import { HaveTactic } from '../tactics/have-tactic';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { freshMetaName } from '../tactics/tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
-import { renderSubtermLatex } from './goal-computation';
+import { renderSubtermLatex, parseExactExpr } from './goal-computation';
 
 // ============================================================================
 // Types
@@ -179,16 +179,14 @@ export function computeTermSlots(
   }
 
   // Validate the full expression via HaveTactic if all explicit slots are filled.
-  // This handles implicit resolution correctly (HaveTactic uses inferType which
-  // solves {R} from ε : Carrier R, etc.) instead of broken per-slot checking.
+  // Only include EXPLICIT args — implicits are auto-resolved by inferType.
+  // Including them with raw Var indices from goal.ctx causes de Bruijn misalignment.
   const allExplicitFilled = slots.filter(s => !s.implicit).every(s => s.value !== null);
   if (allExplicitFilled && userFilledIndices && userFilledIndices.size > 0) {
-    // Build the full application term
-    let fullTerm: TTKTerm = { tag: 'Const', name: fnName };
-    for (const slot of slots) {
-      const arg = slot.value ?? { tag: 'Hole' as const, id: `_slot_${slot.index}` };
-      fullTerm = { tag: 'App', fn: fullTerm, arg };
-    }
+    // Build the expression string and parse it (so implicit arg insertion works)
+    const exprStr = buildExprFromSlots(fnName, slots, goal.ctx);
+    const fullTerm = exprStr ? parseExactExpr(exprStr, goal.ctx, definitions) : null;
+    if (!fullTerm) { /* can't parse — skip validation */ } else {
     // Run HaveTactic to validate
     try {
       const holeType: TTKTerm = { tag: 'Hole', id: '_have_type' };
@@ -216,6 +214,7 @@ export function computeTermSlots(
             : String(e);
       }
     }
+    } // end else (fullTerm parsed)
   }
 
   // Compute return type
