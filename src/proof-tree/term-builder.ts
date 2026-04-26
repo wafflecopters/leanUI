@@ -77,6 +77,8 @@ export function computeTermSlots(
   goal: MetaVar,
   definitions: DefinitionsMap,
   rev?: ReverseRegistry,
+  /** Slot indices that were filled by the user (type-check these). */
+  userFilledIndices?: Set<number>,
 ): TermBuilderState | null {
   // Look up the function's type
   let fnType: TTKTerm | undefined;
@@ -139,12 +141,25 @@ export function computeTermSlots(
     let error: string | undefined;
 
     if (prefilledValue) {
-      // Set the meta solution (for substitution into later slot types).
-      // Type-checking of pre-filled values is deferred — initial pre-fills
-      // (implicit args extracted from the hypothesis type, the hypothesis
-      // itself) have Var indices relative to goal.ctx that don't align
-      // with the Pi spine's binder depth. User-filled values get checked
-      // when the builder state is recomputed via onFillSlot.
+      // Type-check user-filled values against the expected domain.
+      // Skip for auto-filled values (implicit args, initial hypothesis)
+      // which have Var indices that don't align with the Pi spine depth.
+      if (userFilledIndices?.has(argIndex)) {
+        try {
+          const checkEnv = new TCEnv(
+            goal.ctx, definitions, currentEngine.metaVars,
+            currentEngine.constraints, [], [], prefilledValue,
+            new Map(), { mode: 'check' },
+          );
+          checkType(checkEnv, domain);
+        } catch (e) {
+          error = e instanceof Error
+            ? e.message
+            : (e && typeof e === 'object' && 'message' in e)
+              ? String((e as any).message)
+              : String(e);
+        }
+      }
       const newMetaVars = new Map(currentEngine.metaVars);
       newMetaVars.set(metaId, { ...argMeta, solution: prefilledValue });
       currentEngine = currentEngine.withUpdates({ metaVars: newMetaVars });

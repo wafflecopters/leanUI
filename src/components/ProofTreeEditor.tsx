@@ -1084,7 +1084,13 @@ function HaveProseItem({
             }
             prefilled.set(slotIndex, term);
             sourceExprs.set(slotIndex, sourceExpr);
-            const rebuilt = computeTermSlots(builderState.fnName, prefilled, kg.engine, kg.goal, definitions, kg.rev);
+            // Track which slots the user filled (for type-checking)
+            const userFilled = new Set<number>();
+            for (const s of builderState.slots) {
+              if (s.value !== null && s.sourceExpr) userFilled.add(s.index);
+            }
+            userFilled.add(slotIndex);
+            const rebuilt = computeTermSlots(builderState.fnName, prefilled, kg.engine, kg.goal, definitions, kg.rev, userFilled);
             if (rebuilt) {
               for (const slot of rebuilt.slots) {
                 const src = sourceExprs.get(slot.index);
@@ -3587,10 +3593,15 @@ function HoleProseView({
               prefilled.set(slotIndex, term);
               sourceExprs.set(slotIndex, sourceExpr);
 
-              // Recompute all slots with type checking via the tactic engine
+              const userFilled = new Set<number>();
+              for (const s of inlineTermBuilder.slots) {
+                if (s.value !== null && s.sourceExpr) userFilled.add(s.index);
+              }
+              userFilled.add(slotIndex);
+
               const rebuilt = computeTermSlots(
                 inlineTermBuilder.fnName, prefilled,
-                kg.engine, kg.goal, definitions, kg.rev,
+                kg.engine, kg.goal, definitions, kg.rev, userFilled,
               );
               if (rebuilt) {
                 // Restore source expressions on the rebuilt slots
