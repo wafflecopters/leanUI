@@ -125,6 +125,19 @@ function InlineKaTeX({ latex, style, displayMode }: { latex: string; style?: Rea
   return <span ref={ref} style={style} />;
 }
 
+/** Map LaTeX Greek commands back to Unicode source characters. */
+const LATEX_TO_UNICODE: Record<string, string> = {
+  '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ',
+  '\\epsilon': 'ε', '\\varepsilon': 'ε', '\\zeta': 'ζ', '\\eta': 'η',
+  '\\theta': 'θ', '\\lambda': 'λ', '\\mu': 'μ', '\\pi': 'π',
+  '\\sigma': 'σ', '\\varphi': 'φ', '\\psi': 'ψ', '\\omega': 'ω',
+};
+
+/** Convert source from convertToSource (may have LaTeX commands) to Unicode source code. */
+function latexSourceToUnicode(source: string): string {
+  return source.replace(/\\[a-zA-Z]+/g, match => LATEX_TO_UNICODE[match] ?? match);
+}
+
 /** Convert a plain-text math expression to LaTeX. Simple heuristic. */
 function textToLatex(text: string): string {
   return text
@@ -1071,7 +1084,7 @@ function HaveProseItem({
             const kg = typedContext.kernelGoal;
             let term: TTKTerm = { tag: 'Const', name: sourceExpr };
             try {
-              const parsed = parseExactExpr(sourceExpr, kg.goal.ctx, definitions);
+              const parsed = parseExactExpr(latexSourceToUnicode(sourceExpr), kg.goal.ctx, definitions);
               if (parsed) term = parsed;
             } catch { /* fall back */ }
             const prefilled = new Map<number, TTKTerm>();
@@ -3577,7 +3590,7 @@ function HoleProseView({
               // Parse the source expression to a kernel term
               let term: TTKTerm = { tag: 'Const', name: sourceExpr };
               try {
-                const parsed = parseExactExpr(sourceExpr, kg.goal.ctx, definitions);
+                const parsed = parseExactExpr(latexSourceToUnicode(sourceExpr), kg.goal.ctx, definitions);
                 if (parsed) term = parsed;
               } catch { /* fall back to raw Const */ }
 
