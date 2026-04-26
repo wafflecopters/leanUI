@@ -141,10 +141,12 @@ export function computeTermSlots(
     let error: string | undefined;
 
     if (prefilledValue) {
-      // Type-check user-filled values against the expected domain.
-      // Skip for auto-filled values (implicit args, initial hypothesis)
-      // which have Var indices that don't align with the Pi spine depth.
-      if (userFilledIndices?.has(argIndex)) {
+      // Type-check user-filled SIMPLE values (Var, Const) against the
+      // expected domain. Skip complex expressions (App chains) — the Pi
+      // spine's domain types have de Bruijn indices that don't align with
+      // goal.ctx after implicit substitution, causing false type errors
+      // for complex terms. The have tactic catches real errors at replay.
+      if (userFilledIndices?.has(argIndex) && (prefilledValue.tag === 'Var' || prefilledValue.tag === 'Const')) {
         try {
           const checkEnv = new TCEnv(
             goal.ctx, definitions, currentEngine.metaVars,
