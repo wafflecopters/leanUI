@@ -3117,13 +3117,15 @@ function replayEntireTreeFromTrace(
       }
       case 'have': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
-        // Render the have proof expression through the math pipeline
-        const haveGoal = currentEngine.metaVars.get(gId);
-        if (haveGoal) {
-          const haveLatex = renderProofExpr(node.expr, haveGoal, definitions, rev, projMap, aliasMap);
-          if (haveLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, proofExprLatex: haveLatex });
+        // Render the have proof expression through the math pipeline (skip for "?" holes)
+        if (node.expr.trim() !== '?') {
+          const haveGoal = currentEngine.metaVars.get(gId);
+          if (haveGoal) {
+            const haveLatex = renderProofExpr(node.expr, haveGoal, definitions, rev, projMap, aliasMap);
+            if (haveLatex) {
+              const existing = result.get(node.id);
+              if (existing) result.set(node.id, { ...existing, proofExprLatex: haveLatex });
+            }
           }
         }
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
@@ -3382,11 +3384,13 @@ function replayEntireTreeViaWalk(
         recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
-        // Render the have proof expression through the math pipeline
-        const haveExprLatex = renderProofExpr(node.expr, goal, definitions, rev, projMap, aliasMap);
-        if (haveExprLatex) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, proofExprLatex: haveExprLatex });
+        // Render the have proof expression through the math pipeline (skip for "?" holes)
+        if (node.expr.trim() !== '?') {
+          const haveExprLatex = renderProofExpr(node.expr, goal, definitions, rev, projMap, aliasMap);
+          if (haveExprLatex) {
+            const existing = result.get(node.id);
+            if (existing) result.set(node.id, { ...existing, proofExprLatex: haveExprLatex });
+          }
         }
         const proofTerm = parseExactExpr(node.expr, goal.ctx, eng.definitions);
         if (!proofTerm) { walk(node.child, eng, caseLabelLatex); break; }

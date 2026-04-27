@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr, insertHaveBefore,
+  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr, editHaveName, insertHaveBefore,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode, editIntroName, editCaseParamName,
@@ -1024,8 +1024,24 @@ function HaveProseItem({
   typedContext: TypedProofContext | null;
 }) {
   const [builderState, setBuilderState] = useState<TermBuilderState | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [editingExpr, setEditingExpr] = useState(false);
+  const nameCommittedRef = useRef(false);
   const showHaveGoal = !nextItem;
-  const proofLatex = kind.proofExprLatex;
+  // Don't show proofExprLatex if the expr is just "?" (hole) — it can't render
+  const isHole = kind.expr.trim() === '?';
+  const proofLatex = isHole ? undefined : kind.proofExprLatex;
+
+  // Inline name editor — committed flag prevents double-fire from Enter + blur
+  const commitName = useCallback((val: string) => {
+    if (nameCommittedRef.current) return;
+    nameCommittedRef.current = true;
+    if (val && val !== kind.name) {
+      const updated = editHaveName(state, item.nodeId, val);
+      if (updated) onPushChange(updated);
+    }
+    setEditingName(false);
+  }, [kind.name, state, item.nodeId, onPushChange]);
 
   // Open the term builder by parsing the have expression into slots
   const openBuilder = useCallback(() => {
@@ -1148,12 +1164,16 @@ function HaveProseItem({
             const slot = builderState.slots[slotIndex];
             if (!slot) return;
 
-            // Generate a fresh name based on the slot name
-            const hoistName = `${slot.name || 'h'}_proof`;
+            // Generate a fresh name
+            const baseName = (slot.name && slot.name !== '_' && !slot.name.startsWith('_'))
+              ? slot.name
+              : `arg${slotIndex}`;
+            const hoistName = `h_${baseName}`;
 
             // 1. Insert have BEFORE the current have node
             // The hoisted have has a ? proof (user fills it later)
-            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?');
+            // Pass the slot's type LaTeX so the have shows what type is needed
+            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', slot.typeLatex);
             if (!updated) return;
 
             // 2. Fill the current slot with the hoisted name
@@ -1180,19 +1200,106 @@ function HaveProseItem({
 
   const hasError = !!kind.error;
   const errorStyle = hasError ? { color: '#f85149' } : {};
+  // Use typeLatex from child context or explicit type annotation
+  const displayType = kind.typeLatex;
+
+  const nameEditor = editingName ? (
+    <input
+      autoFocus
+      defaultValue={kind.name}
+      style={{
+        background: 'rgba(88, 166, 255, 0.1)', border: '1px solid rgba(88, 166, 255, 0.3)',
+        borderRadius: '3px', color: '#c9d1d9', fontSize: '13px', padding: '0 4px',
+        fontFamily: '"JetBrains Mono", monospace', width: `${Math.max(kind.name.length, 3) + 2}ch`,
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          commitName((e.target as HTMLInputElement).value.trim());
+        } else if (e.key === 'Escape') {
+          nameCommittedRef.current = true;
+          setEditingName(false);
+        }
+      }}
+      onBlur={(e) => commitName(e.target.value.trim())}
+      onClick={(e) => e.stopPropagation()}
+    />
+  ) : (
+    <span
+      onClick={(e) => {
+        e.stopPropagation();
+        nameCommittedRef.current = false;
+        setEditingName(true);
+      }}
+      style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.3)' }}
+      title="Click to rename"
+    >
+      <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+    </span>
+  );
+
+  // Inline expression editor for have proof
+  const exprEditor = editingExpr ? (
+    <input
+      autoFocus
+      defaultValue={kind.expr}
+      style={{
+        background: 'rgba(88, 166, 255, 0.1)', border: '1px solid rgba(88, 166, 255, 0.3)',
+        borderRadius: '3px', color: '#c9d1d9', fontSize: '13px', padding: '1px 6px',
+        fontFamily: '"JetBrains Mono", monospace', minWidth: '120px',
+        width: `${Math.max(kind.expr.length, 10) + 4}ch`,
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const val = (e.target as HTMLInputElement).value.trim();
+          if (val) {
+            const updated = editHaveExpr(state, item.nodeId, latexSourceToUnicode(val));
+            if (updated) onPushChange(updated);
+          }
+          setEditingExpr(false);
+        } else if (e.key === 'Escape') {
+          setEditingExpr(false);
+        }
+      }}
+      onBlur={(e) => {
+        const val = e.target.value.trim();
+        if (val && val !== kind.expr) {
+          const updated = editHaveExpr(state, item.nodeId, latexSourceToUnicode(val));
+          if (updated) onPushChange(updated);
+        }
+        setEditingExpr(false);
+      }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  ) : null;
 
   return (
     <div style={{ ...rowStyle, ...(hasError ? { backgroundColor: 'rgba(248, 81, 73, 0.06)', borderLeft: '2px solid #f85149' } : {}) }} {...rowHandlers}>
       <span style={{ ...prose, ...errorStyle }}>Observe that{' '}</span>
-      {kind.typeLatex ? (
-        <InlineKaTeX latex={kind.typeLatex} style={{ fontSize: '13px' }} />
+      {displayType ? (
+        <InlineKaTeX latex={displayType} style={{ fontSize: '13px' }} />
       ) : (
         <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
       )}
       <span style={prose}>{' '}(</span>
-      <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px', fontWeight: 600 }} />
+      {nameEditor}
       <span style={prose}>)</span>
-      {proofLatex ? (
+      {isHole ? (
+        /* Unfilled have — show "proof needed" or inline expr editor */
+        editingExpr ? (
+          <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
+        ) : (
+          <span
+            onClick={(e) => { e.stopPropagation(); setEditingExpr(true); }}
+            style={{ cursor: 'pointer', color: '#8b949e', fontStyle: 'italic', marginLeft: '6px',
+              borderBottom: '1px dashed rgba(248, 81, 73, 0.4)' }}
+            title="Click to provide proof"
+          >
+            proof needed
+          </span>
+        )
+      ) : proofLatex ? (
         <div style={{ paddingLeft: '20px' }}>
           <span style={prose}>since{' '}</span>
           <span
@@ -1205,13 +1312,18 @@ function HaveProseItem({
           <span style={prose}>.</span>
         </div>
       ) : (
-        <span
-          onClick={(e) => { e.stopPropagation(); openBuilder(); }}
-          style={{ cursor: 'pointer', color: '#8b949e', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)', marginLeft: '4px' }}
-          title="Click to edit expression"
-        >
-          {kind.expr}
-        </span>
+        /* Non-hole expr but no rendered LaTeX — show raw expr, click to edit */
+        editingExpr ? (
+          <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
+        ) : (
+          <span
+            onClick={(e) => { e.stopPropagation(); setEditingExpr(true); }}
+            style={{ cursor: 'pointer', color: '#8b949e', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)', marginLeft: '4px' }}
+            title="Click to edit expression"
+          >
+            {kind.expr}
+          </span>
+        )
       )}
       {kind.error && (
         <div style={{ fontSize: '11px', color: '#f85149', paddingLeft: '20px', paddingTop: '2px' }}>
@@ -2441,7 +2553,8 @@ function ProofProseView({
         // Deletable items: anything except hole, qed, caseHeader
         const isDeletable = item.kind.tag === 'intro' || item.kind.tag === 'unfold'
           || item.kind.tag === 'rewrite' || item.kind.tag === 'apply'
-          || item.kind.tag === 'exact' || item.kind.tag === 'inductionHeader';
+          || item.kind.tag === 'exact' || item.kind.tag === 'inductionHeader'
+          || item.kind.tag === 'have' || item.kind.tag === 'simp' || item.kind.tag === 'suffices';
         const handleDelete = isDeletable ? () => {
           const result = clearNode(state, item.nodeId);
           if (result) onPushChange(result);

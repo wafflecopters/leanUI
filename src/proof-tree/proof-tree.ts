@@ -129,6 +129,8 @@ export interface HaveNode {
   readonly name: string;
   /** The proof expression as a string. */
   readonly expr: string;
+  /** Optional explicit type annotation (e.g., from hoisting a slot obligation). */
+  readonly typeExpr?: string;
   /** The continuation proof after have introduces the binding. */
   readonly child: ProofNode;
 }
@@ -216,8 +218,8 @@ export function mkExact(expr: string): ExactNode {
   return { tag: 'exact', id: freshProofId(), expr };
 }
 
-export function mkHave(name: string, expr: string, child: ProofNode): HaveNode {
-  return { tag: 'have', id: freshProofId(), name, expr, child };
+export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string): HaveNode {
+  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr };
 }
 
 export function mkSuffices(name: string, typeExpr: string, child: ProofNode, byProof?: ProofNode): SufficesNode {
@@ -632,10 +634,10 @@ export function applyHave(state: ProofTreeState, name: string, expr: string): Pr
 
 /** Insert a have node BEFORE a target node. The new have wraps the target:
  *  parent → target  becomes  parent → newHave(name, expr, child: target) */
-export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string): ProofTreeState | null {
+export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string, typeExpr?: string): ProofTreeState | null {
   const target = findNode(state.root, targetNodeId);
   if (!target) return null;
-  const newHave = mkHave(name, expr, target);
+  const newHave = mkHave(name, expr, target, typeExpr);
   const newRoot = replaceNode(state.root, targetNodeId, newHave);
   return { root: newRoot, cursor: state.cursor };
 }
@@ -679,6 +681,78 @@ export function editHaveExpr(state: ProofTreeState, haveNodeId: ProofNodeId, new
   }
   const newRoot = updateNode(state.root);
   return newRoot ? { ...state, root: newRoot } : null;
+}
+
+/** Edit a have node's name. Returns new state or null if node not found. */
+export function editHaveName(state: ProofTreeState, haveNodeId: ProofNodeId, newName: string): ProofTreeState | null {
+  // Find the old name first
+  const haveNode = findNode(state.root, haveNodeId);
+  if (!haveNode || haveNode.tag !== 'have') return null;
+  const oldName = haveNode.name;
+
+  // Replace occurrences of oldName as a token in expression strings throughout the subtree
+  function replaceNameInExpr(expr: string): string {
+    // Replace whole-word occurrences: match oldName bounded by word boundaries or parens/spaces
+    return expr.replace(new RegExp(`(?<=^|[\\s()])${escapeRegExp(oldName)}(?=$|[\\s()])`, 'g'), newName);
+  }
+
+  function rewriteSubtree(node: ProofNode): ProofNode {
+    switch (node.tag) {
+      case 'exact': return { ...node, expr: replaceNameInExpr(node.expr) };
+      case 'have': return { ...node, expr: replaceNameInExpr(node.expr), child: rewriteSubtree(node.child) };
+      case 'intros': return { ...node, child: rewriteSubtree(node.child) };
+      case 'unfold': return { ...node, child: rewriteSubtree(node.child) };
+      case 'fold': return { ...node, child: rewriteSubtree(node.child) };
+      case 'rewrite': return { ...node, child: rewriteSubtree(node.child) };
+      case 'simp': return { ...node, child: rewriteSubtree(node.child) };
+      case 'apply': return { ...node, children: node.children.map(rewriteSubtree) };
+      case 'induction': return { ...node, cases: node.cases.map(c => ({ ...c, body: rewriteSubtree(c.body) })) };
+      case 'suffices': return { ...node, child: rewriteSubtree(node.child), byProof: node.byProof ? rewriteSubtree(node.byProof) : undefined };
+      default: return node;
+    }
+  }
+
+  function updateNode(root: ProofNode): ProofNode | null {
+    if (root.id === haveNodeId && root.tag === 'have') {
+      return { ...root, name: newName, child: rewriteSubtree(root.child) };
+    }
+    if ('child' in root && (root as any).child) {
+      const newChild = updateNode((root as any).child);
+      if (newChild) return { ...root, child: newChild } as any;
+    }
+    if ('children' in root && (root as any).children) {
+      for (let i = 0; i < (root as any).children.length; i++) {
+        const newChild = updateNode((root as any).children[i]);
+        if (newChild) {
+          const newChildren = [...(root as any).children];
+          newChildren[i] = newChild;
+          return { ...root, children: newChildren } as any;
+        }
+      }
+    }
+    if ('cases' in root && (root as any).cases) {
+      for (let i = 0; i < (root as any).cases.length; i++) {
+        const c = (root as any).cases[i];
+        const newBody = updateNode(c.body);
+        if (newBody) {
+          const newCases = [...(root as any).cases];
+          newCases[i] = { ...c, body: newBody };
+          return { ...root, cases: newCases } as any;
+        }
+      }
+    }
+    if (root.tag === 'suffices' && root.byProof) {
+      const newBy = updateNode(root.byProof);
+      if (newBy) return { ...root, byProof: newBy };
+    }
+    return null;
+  }
+  const newRoot = updateNode(state.root);
+  return newRoot ? { ...state, root: newRoot } : null;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** Apply unfold at the cursor (must be a hole). Replaces the hole with an unfold node + child hole. */

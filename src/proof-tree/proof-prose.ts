@@ -455,7 +455,11 @@ export function generateProofProse(
         const childInfo = goalMap.get(node.child.id);
         const childGoalLatex = childInfo?.goalLatex;
         // Find the hypothesis type from the child's context (last entry with this name)
-        const hypType = childInfo?.hypotheses.find(h => h.name === node.name)?.type;
+        let hypType = childInfo?.hypotheses.find(h => h.name === node.name)?.type;
+        // If child doesn't have the hypothesis (e.g., have with ? expr), use the explicit typeExpr annotation
+        if (!hypType && node.typeExpr) {
+          hypType = node.typeExpr;
+        }
         emit(node.id, depth, {
           tag: 'have',
           name: node.name,
