@@ -185,8 +185,11 @@ export function computeTermSlots(
   if (allExplicitFilled && userFilledIndices && userFilledIndices.size > 0) {
     // Build the expression string and parse it (so implicit arg insertion works)
     const exprStr = buildExprFromSlots(fnName, slots, goal.ctx);
-    const fullTerm = exprStr ? parseExactExpr(exprStr, goal.ctx, definitions) : null;
-    if (!fullTerm) { /* can't parse — skip validation */ } else {
+    // Skip validation if the expression has unfilled holes (?)
+    const fullTerm = (exprStr && !exprStr.includes('?'))
+      ? parseExactExpr(exprStr, goal.ctx, definitions)
+      : null;
+    if (!fullTerm) { /* can't parse or has holes — skip validation */ } else {
     // Run HaveTactic to validate
     try {
       const holeType: TTKTerm = { tag: 'Hole', id: '_have_type' };
