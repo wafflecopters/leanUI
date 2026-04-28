@@ -445,6 +445,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
 
   const ctx = metaGoal.ctx;
 
+  // 1. Try context hypotheses via exact/apply
   for (let i = 0; i < ctx.length; i++) {
     const entry = ctx[i];
     const name = entry.name;
@@ -489,6 +490,54 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         });
       }
     } catch { /* doesn't apply */ }
+  }
+
+  // 2. Try definitions in scope whose return type head matches the goal head.
+  // This finds lemmas like `divTwoPos : 0 < ε → 0 < ε/2` for goal `0 < ε/2`.
+  const definitions = engine.definitions;
+  if (definitions) {
+    // Get goal head constant
+    let goalHead = metaGoal.type;
+    while (goalHead.tag === 'App') goalHead = goalHead.fn;
+    const goalHeadName = goalHead.tag === 'Const' ? goalHead.name : undefined;
+
+    if (goalHeadName) {
+      for (const [defName, def] of definitions.terms) {
+        // Skip projections, self-references, and the current declaration
+        if (defName.includes('.') || defName === kernelGoal.currentDeclName) continue;
+        if (!def.type) continue;
+
+        // Walk Pi spine to find return type head
+        let retType = def.type;
+        while (retType.tag === 'Binder' && retType.binderKind.tag === 'BPi') {
+          retType = retType.body;
+        }
+        let retHead = retType;
+        while (retHead.tag === 'App') retHead = retHead.fn;
+        if (retHead.tag !== 'Const' || retHead.name !== goalHeadName) continue;
+
+        // Return type head matches — try apply
+        const constTerm: TTKTerm = { tag: 'Const', name: defName };
+        try {
+          const applyTactic = new ApplyTactic(constTerm);
+          const result = applyTactic.apply(engine, metaGoal, goalId);
+          if (result.success) {
+            const numSubgoals = result.newEngine
+              ? result.newEngine.goals.length - engine.goals.length + 1
+              : 1;
+            suggestions.push({
+              id: `apply-def-${defName}`,
+              label: `apply ${defName}`,
+              labelLatex: `\\text{apply}\\; \\textbf{${texEscape(defName)}}`,
+              description: numSubgoals > 0
+                ? `Apply ${defName}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
+                : `Apply ${defName}`,
+              numSubgoals,
+            });
+          }
+        } catch { /* doesn't apply */ }
+      }
+    }
   }
 
   return suggestions;
