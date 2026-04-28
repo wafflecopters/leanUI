@@ -23,7 +23,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { ReverseRegistry, buildReverseRegistry, ttermToMathNodes, SubtermAnnotator } from '../math-editor/tt-to-math';
 import { mkRow } from '../math-editor/types';
 import { renderStaticLatex } from '../math-editor/render';
-import { ProofNode, ProofNodeId, CaseNode } from './proof-tree';
+import { ProofNode, ProofNodeId, CaseNode, isCursorInSubtree } from './proof-tree';
 import { TacticEngine, createInitialEngine } from '../tactics/tacticsEngine';
 import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
@@ -2331,10 +2331,47 @@ function replayProofTree(
     }
 
     case 'have': {
-      // Apply HaveTactic — parse proof expression, infer type, extend context
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
+      // Interactive proof subtree: proofTree proves typeExpr, then child gets h : T in context
+      if (node.proofTree && node.typeExpr) {
+        const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+        if (!typeTerm) {
+          // Type parse failed — fall through to child
+          return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
+        }
+
+        // Create a subgoal for the proofTree with goal type = typeExpr
+        const proofGoalId = goalId + '_have_proof';
+        const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
+        const proofMetaVars = new Map(engine.metaVars);
+        proofMetaVars.set(proofGoalId, proofMeta);
+        const proofGoals = engine.goals.map(g => g === goalId ? proofGoalId : g);
+        const proofEngine = engine.withUpdates({ metaVars: proofMetaVars, goals: proofGoals });
+
+        // If cursor is in the proofTree subtree, replay there
+        if (isCursorInSubtree(node.proofTree, cursorId)) {
+          return replayProofTree(node.proofTree, cursorId, proofEngine, caseLabel, caseLabelLatex, inductionVar);
+        }
+
+        // Cursor is in child — extend context with h : T
+        const newCtx = [...goal.ctx, { name: node.name, type: typeTerm }];
+        const newGoalType = shiftTerm(goal.type, 1, 0);
+        const childGoalId = goalId + '_have_cont';
+        const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
+        const childMetaVars = new Map(engine.metaVars);
+        childMetaVars.set(childGoalId, childMeta);
+        const childGoals = engine.goals.map(g => g === goalId ? childGoalId : g);
+        const childEngine = engine.withUpdates({ metaVars: childMetaVars, goals: childGoals });
+
+        if (node.child.id === cursorId) {
+          return { engine: childEngine, goalId: childGoalId, caseLabel, caseLabelLatex, inductionVar };
+        }
+        return replayProofTree(node.child, cursorId, childEngine, caseLabel, caseLabelLatex, inductionVar);
+      }
+
+      // Flat expression mode: Apply HaveTactic — parse proof expression, infer type, extend context
       const proofTerm = parseExactExpr(node.expr, goal.ctx, engine.definitions);
       if (!proofTerm) {
         // Parse failed — continue with unchanged engine
@@ -3117,7 +3154,38 @@ function replayEntireTreeFromTrace(
       }
       case 'have': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
-        // Render the have proof expression through the math pipeline (skip for "?" holes)
+
+        // Interactive proof subtree mode — no trace step to consume
+        if (node.proofTree && node.typeExpr) {
+          const haveGoal = currentEngine.metaVars.get(gId);
+          if (haveGoal) {
+            const typeTerm = parseExactExpr(node.typeExpr, haveGoal.ctx, definitions);
+            if (typeTerm) {
+              // Walk proofTree with subgoal
+              const proofGoalId = gId + '_have_proof';
+              const proofMeta: MetaVar = { ctx: haveGoal.ctx, type: typeTerm, solution: undefined };
+              const proofMetaVars = new Map(currentEngine.metaVars);
+              proofMetaVars.set(proofGoalId, proofMeta);
+              const proofGoals = currentEngine.goals.map(g => g === gId ? proofGoalId : g);
+              const proofEngine = currentEngine.withUpdates({ metaVars: proofMetaVars, goals: proofGoals });
+              walkTrace(node.proofTree, proofEngine, caseLabelLatex);
+
+              // Walk child with h : T
+              const newCtx = [...haveGoal.ctx, { name: node.name, type: typeTerm }];
+              const newGoalType = shiftTerm(haveGoal.type, 1, 0);
+              const childGoalId = gId + '_have_cont';
+              const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
+              const childMetaVars = new Map(currentEngine.metaVars);
+              childMetaVars.set(childGoalId, childMeta);
+              const childGoals = currentEngine.goals.map(g => g === gId ? childGoalId : g);
+              const childEngine = currentEngine.withUpdates({ metaVars: childMetaVars, goals: childGoals });
+              walkTrace(node.child, childEngine, caseLabelLatex);
+              break;
+            }
+          }
+        }
+
+        // Flat expression mode
         if (node.expr.trim() !== '?') {
           const haveGoal = currentEngine.metaVars.get(gId);
           if (haveGoal) {
@@ -3384,7 +3452,35 @@ function replayEntireTreeViaWalk(
         recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
-        // Render the have proof expression through the math pipeline (skip for "?" holes)
+
+        // Interactive proof subtree mode
+        if (node.proofTree && node.typeExpr) {
+          const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
+          if (typeTerm) {
+            // Walk proofTree with a subgoal of type typeExpr
+            const proofGoalId = gId + '_have_proof';
+            const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
+            const proofMetaVars = new Map(eng.metaVars);
+            proofMetaVars.set(proofGoalId, proofMeta);
+            const proofGoals = eng.goals.map(g => g === gId ? proofGoalId : g);
+            const proofEngine = eng.withUpdates({ metaVars: proofMetaVars, goals: proofGoals });
+            walk(node.proofTree, proofEngine, caseLabelLatex);
+
+            // Walk child with h : T in context
+            const newCtx = [...goal.ctx, { name: node.name, type: typeTerm }];
+            const newGoalType = shiftTerm(goal.type, 1, 0);
+            const childGoalId = gId + '_have_cont';
+            const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
+            const childMetaVars = new Map(eng.metaVars);
+            childMetaVars.set(childGoalId, childMeta);
+            const childGoals = eng.goals.map(g => g === gId ? childGoalId : g);
+            const childEngine = eng.withUpdates({ metaVars: childMetaVars, goals: childGoals });
+            walk(node.child, childEngine, caseLabelLatex);
+            break;
+          }
+        }
+
+        // Flat expression mode
         if (node.expr.trim() !== '?') {
           const haveExprLatex = renderProofExpr(node.expr, goal, definitions, rev, projMap, aliasMap);
           if (haveExprLatex) {

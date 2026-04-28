@@ -131,6 +131,10 @@ export interface HaveNode {
   readonly expr: string;
   /** Optional explicit type annotation (e.g., from hoisting a slot obligation). */
   readonly typeExpr?: string;
+  /** Optional interactive proof subtree (alternative to flat expr string).
+   *  When present, this subtree proves the have's type interactively via tactics.
+   *  The proofTree's goal is the have's type (typeExpr). */
+  readonly proofTree?: ProofNode;
   /** The continuation proof after have introduces the binding. */
   readonly child: ProofNode;
 }
@@ -218,8 +222,8 @@ export function mkExact(expr: string): ExactNode {
   return { tag: 'exact', id: freshProofId(), expr };
 }
 
-export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string): HaveNode {
-  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr };
+export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode): HaveNode {
+  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree };
 }
 
 export function mkSuffices(name: string, typeExpr: string, child: ProofNode, byProof?: ProofNode): SufficesNode {
@@ -293,8 +297,14 @@ export function findNode(root: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'unfold':
     case 'fold':
     case 'rewrite':
-    case 'have':
       return findNode(root.child, id);
+    case 'have': {
+      if (root.proofTree) {
+        const found = findNode(root.proofTree, id);
+        if (found) return found;
+      }
+      return findNode(root.child, id);
+    }
     case 'suffices': {
       if (root.byProof) {
         const found = findNode(root.byProof, id);
@@ -334,8 +344,14 @@ export function findCase(root: ProofNode, id: ProofNodeId): CaseNode | null {
     case 'unfold':
     case 'fold':
     case 'rewrite':
-    case 'have':
       return findCase(root.child, id);
+    case 'have': {
+      if (root.proofTree) {
+        const found = findCase(root.proofTree, id);
+        if (found) return found;
+      }
+      return findCase(root.child, id);
+    }
     case 'suffices': {
       if (root.byProof) {
         const found = findCase(root.byProof, id);
@@ -377,8 +393,9 @@ export function isCursorInSubtree(node: ProofNode, cursorId: ProofNodeId): boole
     case 'unfold':
     case 'fold':
     case 'rewrite':
-    case 'have':
       return isCursorInSubtree(node.child, cursorId);
+    case 'have':
+      return (!!node.proofTree && isCursorInSubtree(node.proofTree, cursorId)) || isCursorInSubtree(node.child, cursorId);
     case 'suffices':
       return (!!node.byProof && isCursorInSubtree(node.byProof, cursorId)) || isCursorInSubtree(node.child, cursorId);
     case 'apply':
@@ -419,7 +436,10 @@ function linearizeImpl(node: ProofNode, depth: number, out: LinearEntry[]): void
     case 'unfold':
     case 'fold':
     case 'rewrite':
+      linearizeImpl(node.child, depth + 1, out);
+      break;
     case 'have':
+      if (node.proofTree) linearizeImpl(node.proofTree, depth + 1, out);
       linearizeImpl(node.child, depth + 1, out);
       break;
     case 'suffices':
@@ -466,10 +486,14 @@ export function replaceNode(root: ProofNode, targetId: ProofNodeId, replacement:
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
-    case 'have': {
+    case 'rewrite': {
       const newChild = replaceNode(root.child, targetId, replacement);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'have': {
+      const newProof = root.proofTree ? replaceNode(root.proofTree, targetId, replacement) : undefined;
+      const newChild = replaceNode(root.child, targetId, replacement);
+      return newProof === root.proofTree && newChild === root.child ? root : { ...root, proofTree: newProof, child: newChild };
     }
     case 'suffices': {
       const newBy = root.byProof ? replaceNode(root.byProof, targetId, replacement) : undefined;
@@ -521,10 +545,14 @@ export function updateCase(
     case 'intros':
     case 'unfold':
     case 'fold':
-    case 'rewrite':
-    case 'have': {
+    case 'rewrite': {
       const newChild = updateCase(root.child, caseId, updater);
       return newChild === root.child ? root : { ...root, child: newChild };
+    }
+    case 'have': {
+      const newProof = root.proofTree ? updateCase(root.proofTree, caseId, updater) : undefined;
+      const newChild = updateCase(root.child, caseId, updater);
+      return newProof === root.proofTree && newChild === root.child ? root : { ...root, proofTree: newProof, child: newChild };
     }
     case 'suffices': {
       const newBy = root.byProof ? updateCase(root.byProof, caseId, updater) : undefined;
@@ -634,10 +662,10 @@ export function applyHave(state: ProofTreeState, name: string, expr: string): Pr
 
 /** Insert a have node BEFORE a target node. The new have wraps the target:
  *  parent → target  becomes  parent → newHave(name, expr, child: target) */
-export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string, typeExpr?: string): ProofTreeState | null {
+export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string, typeExpr?: string, proofTree?: ProofNode): ProofTreeState | null {
   const target = findNode(state.root, targetNodeId);
   if (!target) return null;
-  const newHave = mkHave(name, expr, target, typeExpr);
+  const newHave = mkHave(name, expr, target, typeExpr, proofTree);
   const newRoot = replaceNode(state.root, targetNodeId, newHave);
   return { root: newRoot, cursor: state.cursor };
 }
@@ -699,7 +727,7 @@ export function editHaveName(state: ProofTreeState, haveNodeId: ProofNodeId, new
   function rewriteSubtree(node: ProofNode): ProofNode {
     switch (node.tag) {
       case 'exact': return { ...node, expr: replaceNameInExpr(node.expr) };
-      case 'have': return { ...node, expr: replaceNameInExpr(node.expr), child: rewriteSubtree(node.child) };
+      case 'have': return { ...node, expr: replaceNameInExpr(node.expr), child: rewriteSubtree(node.child), proofTree: node.proofTree ? rewriteSubtree(node.proofTree) : undefined };
       case 'intros': return { ...node, child: rewriteSubtree(node.child) };
       case 'unfold': return { ...node, child: rewriteSubtree(node.child) };
       case 'fold': return { ...node, child: rewriteSubtree(node.child) };
@@ -1031,8 +1059,14 @@ export function editCaseParamName(
       case 'unfold':
       case 'fold':
       case 'rewrite':
-      case 'have':
         return findInductionParent(root.child, targetCaseId);
+      case 'have': {
+        if (root.proofTree) {
+          const r = findInductionParent(root.proofTree, targetCaseId);
+          if (r) return r;
+        }
+        return findInductionParent(root.child, targetCaseId);
+      }
       case 'suffices': {
         if (root.byProof) {
           const r = findInductionParent(root.byProof, targetCaseId);
@@ -1147,6 +1181,12 @@ function computeContextImpl(
       return computeContextImpl(node.child, cursorId, hypotheses);
 
     case 'have': {
+      // proofTree proves the have's type — h is NOT in scope yet
+      if (node.proofTree) {
+        const ptResult = computeContextImpl(node.proofTree, cursorId, hypotheses);
+        if (ptResult) return ptResult;
+      }
+      // child continues after have — h IS in scope
       const extended: ContextEntry[] = [
         ...hypotheses,
         { name: node.name, source: 'intro' as const },

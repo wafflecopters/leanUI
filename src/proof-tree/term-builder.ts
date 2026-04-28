@@ -288,6 +288,36 @@ export function computeTermSlots(
 }
 
 /**
+ * Convert a kernel term to a source expression string that parseExactExpr can parse back.
+ * Handles Const, Var (using context names), App, and Binder (Pi).
+ */
+export function kernelTermToSource(term: TTKTerm, ctx: TTKContext): string {
+  switch (term.tag) {
+    case 'Const': return term.name;
+    case 'Var': {
+      const entry = ctx[ctx.length - 1 - term.index];
+      return entry?.name ?? `_v${term.index}`;
+    }
+    case 'App': {
+      // Collect the spine
+      const args: TTKTerm[] = [];
+      let head: TTKTerm = term;
+      while (head.tag === 'App') { args.unshift(head.arg); head = head.fn; }
+      const headStr = kernelTermToSource(head, ctx);
+      const argStrs = args.map(a => {
+        const s = kernelTermToSource(a, ctx);
+        return s.includes(' ') ? `(${s})` : s;
+      });
+      return [headStr, ...argStrs].join(' ');
+    }
+    case 'Sort': return 'Type';
+    case 'Hole': return '?';
+    case 'Meta': return '?';
+    default: return '?';
+  }
+}
+
+/**
  * Build the expression string from filled slots for creating a have node.
  */
 export function buildExprFromSlots(

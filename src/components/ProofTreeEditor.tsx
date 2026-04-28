@@ -18,7 +18,7 @@ import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
-  computeContext,
+  computeContext, mkHole,
   applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr, editHaveName, insertHaveBefore,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
@@ -35,7 +35,7 @@ import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math
 import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
-import { computeTermSlots, buildExprFromSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
+import { computeTermSlots, buildExprFromSlots, kernelTermToSource, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
 import { MathEditor, MathEditorHandle } from './MathEditor';
 import { convertToSource } from '../math-editor/syntax-registry';
 import { InteractiveGoalView } from './InteractiveGoalView';
@@ -1171,9 +1171,11 @@ function HaveProseItem({
             const hoistName = `h_${baseName}`;
 
             // 1. Insert have BEFORE the current have node
-            // The hoisted have has a ? proof (user fills it later)
-            // Pass the slot's type LaTeX so the have shows what type is needed
-            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', slot.typeLatex);
+            // The hoisted have gets an interactive proof subtree (proofTree hole)
+            // Store source-level type expression so goal-computation can parse it
+            const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx);
+            const proofHole = mkHole();
+            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', typeSourceExpr, proofHole);
             if (!updated) return;
 
             // 2. Fill the current slot with the hoisted name
@@ -1285,7 +1287,10 @@ function HaveProseItem({
       <span style={prose}>{' '}(</span>
       {nameEditor}
       <span style={prose}>)</span>
-      {isHole ? (
+      {kind.hasProofTree ? (
+        /* Interactive proof subtree — the subgoal is rendered as a child prose item */
+        null
+      ) : isHole ? (
         /* Unfilled have — show "proof needed" or inline expr editor */
         editingExpr ? (
           <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>

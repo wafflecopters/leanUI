@@ -60,7 +60,7 @@ export type ProseItemKind =
   | { tag: 'exact'; exprLatex: string; solved: boolean; goalLatex?: string; error?: string; proofExprLatex?: string; isValueType?: boolean }
   | { tag: 'hole'; goalLatex?: string; isValueType?: boolean }
   | { tag: 'simp'; lemmas: readonly string[]; stepCount: number; preGoalLatex?: string; goalLatex?: string }
-  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string }
+  | { tag: 'have'; name: string; expr: string; typeLatex?: string; proofExprLatex?: string; preGoalLatex?: string; goalLatex?: string; error?: string; hasProofTree?: boolean }
   | { tag: 'suffices'; name: string; goalLatex?: string; byExprLatex?: string }
   | { tag: 'subgoalHeader'; label: string; goalLatex?: string; isValueType?: boolean }
   | { tag: 'calcChain'; preGoalLatex?: string; steps: readonly CalcChainStep[] }
@@ -456,9 +456,10 @@ export function generateProofProse(
         const childGoalLatex = childInfo?.goalLatex;
         // Find the hypothesis type from the child's context (last entry with this name)
         let hypType = childInfo?.hypotheses.find(h => h.name === node.name)?.type;
-        // If child doesn't have the hypothesis (e.g., have with ? expr), use the explicit typeExpr annotation
-        if (!hypType && node.typeExpr) {
-          hypType = node.typeExpr;
+        // If child doesn't have the hypothesis, try the proofTree's goal (which IS the type)
+        if (!hypType && node.proofTree) {
+          const ptInfo = goalMap.get(node.proofTree.id);
+          if (ptInfo?.goalLatex) hypType = ptInfo.goalLatex;
         }
         emit(node.id, depth, {
           tag: 'have',
@@ -469,7 +470,12 @@ export function generateProofProse(
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,
           error: info?.tacticError,
+          hasProofTree: !!node.proofTree,
         });
+        // Walk the proofTree subtree (emits prose items for the interactive proof)
+        if (node.proofTree) {
+          walk(node.proofTree, depth + 1);
+        }
         walk(node.child, depth);
         break;
       }
