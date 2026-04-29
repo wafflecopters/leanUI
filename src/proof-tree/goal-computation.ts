@@ -1230,11 +1230,18 @@ export function elaborateType(
     const inferred = inferType(env);
     const elaborated = inferred.elaboratedTerm;
     if (elaborated) {
-      // Zonk to resolve any metas created during inference
-      return inferred.zonkTerm(elaborated);
+      const result = inferred.zonkTerm(elaborated);
+      // Check if Holes remain
+      const hasHoles = JSON.stringify(result).includes('"Hole"');
+      if (hasHoles) {
+        console.warn('[elaborateType] Holes remain after elaboration');
+      }
+      return result;
     }
+    console.warn('[elaborateType] no elaboratedTerm returned');
     return term;
-  } catch {
+  } catch (e) {
+    console.warn('[elaborateType] threw:', e instanceof Error ? e.message.substring(0, 150) : String(e).substring(0, 150));
     return term; // fallback to unelaborated term
   }
 }
