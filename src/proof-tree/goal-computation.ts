@@ -2339,6 +2339,9 @@ function replayProofTree(
         const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
         if (!typeTerm) {
           // Type parse failed — fall through to child
+          if (typeof console !== 'undefined') {
+            console.warn(`[have-proofTree] parseExactExpr failed for typeExpr="${node.typeExpr}", ctx names=[${goal.ctx.map(e => e.name).join(', ')}]`);
+          }
           return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
         }
 
