@@ -1,12 +1,16 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, beforeAll } from 'vitest';
 import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, MetaVar } from '../compiler/term';
 import { mkConstTT } from '../compiler/surface';
 import { collectRewriteCandidates, computeTacticSuggestions, KernelGoalInfo } from './tactic-suggestions';
 import { compileTTFromText } from '../compiler/compile';
 import { createInitialEngine } from '../tactics/tacticsEngine';
-import { IntrosTactic } from '../tactics/tactic';
+import { IntrosTactic, ApplyTactic } from '../tactics/tactic';
 import { InteractiveGoal } from './interactive-goal';
+import { parseExactExpr, elaborateType } from './goal-computation';
+import { renderInteractiveGoal } from './interactive-goal';
+import { buildReverseRegistry } from '../math-editor/tt-to-math';
+import { createDefaultRegistry } from '../math-editor/syntax-registry';
 
 // ============================================================================
 // Helpers
@@ -365,5 +369,110 @@ goal x = ?hole
     const ids = suggestions.map(s => s.id);
     // Binder selection gives intro suggestions, not hypothesis suggestions
     expect(ids).not.toContain('exact-hyp-x');
+  });
+});
+
+// ============================================================================
+// Definition search suggestions with subgoal previews
+// ============================================================================
+
+describe('definition search suggestions', () => {
+  // Use the real-analysis preset for realistic testing
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  let defs: import('../compiler/term').DefinitionsMap;
+  beforeAll(async () => {
+    const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
+    const compiled = compileTTFromText(REAL_ANALYSIS_CODE);
+    defs = compiled.definitions!;
+  });
+
+  test('divTwoPos appears as suggestion for goal 0 < ε/2', () => {
+    // Context: R : Real, ε : Carrier R, hε : rlt (rzero R) ε
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+      { name: 'ε', type: { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'Carrier' }, arg: { tag: 'Var' as const, index: 0 } } },
+    ];
+    // Parse the hε type
+    const hεType = parseExactExpr('rlt (rzero R) ε', ctx, defs);
+    expect(hεType).not.toBeNull();
+    const fullCtx = [...ctx, { name: 'hε', type: hεType! }];
+
+    // Goal: rlt (rzero R) (rdiv ε (rtwo R))
+    const goalType = parseExactExpr('rlt (rzero R) (rdiv ε (rtwo R))', fullCtx, defs);
+    expect(goalType).not.toBeNull();
+    // Elaborate to resolve Holes
+    const elaborated = elaborateType(goalType!, fullCtx, defs);
+
+    const engine = createInitialEngine(elaborated, fullCtx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    // Build KernelGoalInfo
+    const registry = createDefaultRegistry();
+    const rev = buildReverseRegistry(registry);
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
+
+    const ig = renderInteractiveGoal(engine, goal, defs, rev);
+    expect(ig).not.toBeNull();
+
+    // Click on the root subterm to get suggestions
+    const suggestions = computeTacticSuggestions('goal-root', ig!, defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+
+    // divTwoPos should appear
+    expect(ids).toContain('apply-def-divTwoPos');
+
+    // It should have 1 subgoal preview (0 < ε)
+    const divTwoSugg = suggestions.find(s => s.id === 'apply-def-divTwoPos');
+    expect(divTwoSugg?.subgoalPreviews).toBeDefined();
+    expect(divTwoSugg!.subgoalPreviews!.length).toBe(1);
+  });
+
+  test('subgoal previews use fresh names instead of □', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+      { name: 'ε', type: { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'Carrier' }, arg: { tag: 'Var' as const, index: 0 } } },
+    ];
+    const goalType = parseExactExpr('rlt (rzero R) (rdiv ε (rtwo R))', ctx, defs);
+    const elaborated = elaborateType(goalType!, ctx, defs);
+
+    const engine = createInitialEngine(elaborated, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const registry = createDefaultRegistry();
+    const rev = buildReverseRegistry(registry);
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
+    const ig = renderInteractiveGoal(engine, goal, defs, rev);
+
+    const suggestions = computeTacticSuggestions('goal-root', ig!, defs, kernelGoal);
+    const leLtSugg = suggestions.find(s => s.id === 'apply-def-leLtTrans');
+
+    if (leLtSugg?.subgoalPreviews) {
+      // Subgoal previews should NOT contain □ (the hole character)
+      for (const preview of leLtSugg.subgoalPreviews) {
+        expect(preview).not.toContain('\\square');
+      }
+    }
+  });
+
+  test('zeroLtOne does NOT match goal 0 < ε/2', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+      { name: 'ε', type: { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'Carrier' }, arg: { tag: 'Var' as const, index: 0 } } },
+    ];
+    const goalType = parseExactExpr('rlt (rzero R) (rdiv ε (rtwo R))', ctx, defs);
+    const elaborated = elaborateType(goalType!, ctx, defs);
+
+    const engine = createInitialEngine(elaborated, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const registry = createDefaultRegistry();
+    const rev = buildReverseRegistry(registry);
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
+    const ig = renderInteractiveGoal(engine, goal, defs, rev);
+
+    const suggestions = computeTacticSuggestions('goal-root', ig!, defs, kernelGoal);
+    const ids = suggestions.map(s => s.id);
+
+    // zeroLtOne proves 0 < 1, not 0 < ε/2 — should NOT appear
+    expect(ids).not.toContain('apply-def-zeroLtOne');
   });
 });

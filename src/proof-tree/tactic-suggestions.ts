@@ -54,7 +54,8 @@ function texEscape(name: string): string {
   return `\\text{${name}}`;
 }
 
-/** Render subgoal previews after an apply tactic. Returns LaTeX for each new goal. */
+/** Render subgoal previews after an apply tactic. Returns LaTeX for each new goal.
+ *  Replaces unsolved meta placeholders (□) with fresh variable names. */
 function renderSubgoalPreviews(
   _oldEngine: TacticEngine,
   newEngine: TacticEngine,
@@ -63,11 +64,43 @@ function renderSubgoalPreviews(
 ): string[] | undefined {
   if (!rev) return undefined;
   try {
+    // Build a map of meta IDs → fresh names for display
+    const metaNames = new Map<string, string>();
+    const usedNames = new Set<string>();
+    const namePool = 'abcdkpqrstuvw';
+    let nameIdx = 0;
+    for (const gId of newEngine.goals) {
+      const meta = newEngine.metaVars.get(gId);
+      if (!meta || meta.solution !== undefined) continue;
+      // Try to derive a name from the meta's type head
+      let name: string | undefined;
+      if (meta.type.tag === 'App' || meta.type.tag === 'Const') {
+        // Use a letter from the pool
+        while (nameIdx < namePool.length && usedNames.has(namePool[nameIdx])) nameIdx++;
+        name = nameIdx < namePool.length ? namePool[nameIdx++] : `x${nameIdx++}`;
+      }
+      if (!name) name = nameIdx < namePool.length ? namePool[nameIdx++] : `x${nameIdx++}`;
+      usedNames.add(name);
+      metaNames.set(gId, name);
+    }
+
+    // Replace unsolved metas in goal types with Const(freshName) for display
+    function replaceMetas(t: TTKTerm): TTKTerm {
+      if (t.tag === 'Meta' && metaNames.has(t.id)) {
+        return { tag: 'Const', name: metaNames.get(t.id)! };
+      }
+      if (t.tag === 'App') return { ...t, fn: replaceMetas(t.fn), arg: replaceMetas(t.arg) };
+      if (t.tag === 'Binder') return { ...t, domain: replaceMetas(t.domain), body: replaceMetas(t.body) };
+      return t;
+    }
+
     const previews: string[] = [];
     for (const gId of newEngine.goals) {
       const meta = newEngine.metaVars.get(gId);
       if (!meta) continue;
-      previews.push(renderGoalLatex(newEngine, meta, definitions, rev));
+      // Replace metas in the goal type and render
+      const displayMeta = { ...meta, type: replaceMetas(meta.type) };
+      previews.push(renderGoalLatex(newEngine, displayMeta, definitions, rev));
     }
     return previews.length > 0 ? previews : undefined;
   } catch {

@@ -16,7 +16,7 @@
 import { TTerm, TPattern, CasePattern, mkConstTT, mkAppTT, mkAppSpineTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
 import { DefinitionsMap, NamedArgMap, MetaVar, TCEnv, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
-import { inferType } from '../compiler/checker';
+import { inferType, checkType } from '../compiler/checker';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -1215,34 +1215,34 @@ export function elaborateType(
   term: TTKTerm,
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
   definitions: DefinitionsMap,
-  metaVars?: Map<string, MetaVar>,
+  _metaVars?: Map<string, MetaVar>,
 ): TTKTerm {
   try {
+    // Use a fresh metaVar map to avoid conflicts with existing engine state
     const env = new TCEnv(
       [...ctx],
       definitions,
-      metaVars ?? new Map(),
+      new Map(),
       [], [], [],
       term,
       new Map(),
       { mode: 'check' }
     );
-    const inferred = inferType(env);
-    const elaborated = inferred.elaboratedTerm;
+    // Check the term as a Type (it should have type Sort)
+    const sortType: TTKTerm = { tag: 'Sort', level: { tag: 'Hole', id: '_elab_level' } };
+    const checked = checkType(env, sortType);
+    const elaborated = checked.elaboratedTerm;
     if (elaborated) {
-      const result = inferred.zonkTerm(elaborated);
-      // Check if Holes remain
-      const hasHoles = JSON.stringify(result).includes('"Hole"');
-      if (hasHoles) {
-        console.warn('[elaborateType] Holes remain after elaboration');
+      // Solve constraints to resolve implicit arg metas
+      try {
+        const solved = checked.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        return solved.zonkTerm(elaborated);
+      } catch {
+        return checked.zonkTerm(elaborated);
       }
-      return result;
     }
-    console.warn('[elaborateType] no elaboratedTerm returned');
     return term;
-  } catch (e: any) {
-    const msg = e?.message ?? e?.error ?? JSON.stringify(e);
-    console.warn('[elaborateType] threw:', typeof msg === 'string' ? msg.substring(0, 200) : msg);
+  } catch {
     return term; // fallback to unelaborated term
   }
 }
