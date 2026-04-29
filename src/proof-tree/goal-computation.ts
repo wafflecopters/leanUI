@@ -1240,8 +1240,9 @@ export function elaborateType(
     }
     console.warn('[elaborateType] no elaboratedTerm returned');
     return term;
-  } catch (e) {
-    console.warn('[elaborateType] threw:', e instanceof Error ? e.message.substring(0, 150) : String(e).substring(0, 150));
+  } catch (e: any) {
+    const msg = e?.message ?? e?.error ?? JSON.stringify(e);
+    console.warn('[elaborateType] threw:', typeof msg === 'string' ? msg.substring(0, 200) : msg);
     return term; // fallback to unelaborated term
   }
 }
@@ -2375,13 +2376,16 @@ function replayProofTree(
       if (!goal) return null;
 
       // Interactive proof subtree: proofTree proves typeExpr, then child gets h : T in context
-      if (node.proofTree && node.typeExpr) {
-        const rawTypeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
-        if (!rawTypeTerm) {
+      if (node.proofTree && (node.typeKernel || node.typeExpr)) {
+        // Prefer kernel term (no lossy roundtrip); fall back to parsing source string
+        let typeTerm = node.typeKernel ?? null;
+        if (!typeTerm && node.typeExpr) {
+          const raw = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+          if (raw) typeTerm = elaborateType(raw, goal.ctx, engine.definitions, engine.metaVars);
+        }
+        if (!typeTerm) {
           return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
         }
-        // Elaborate to resolve Holes (implicit args) into real terms
-        const typeTerm = elaborateType(rawTypeTerm, goal.ctx, engine.definitions, engine.metaVars);
 
         // Create a subgoal for the proofTree with goal type = typeExpr
         const proofGoalId = goalId + '_have_proof';
@@ -3197,12 +3201,15 @@ function replayEntireTreeFromTrace(
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
 
         // Interactive proof subtree mode — no trace step to consume
-        if (node.proofTree && node.typeExpr) {
+        if (node.proofTree && (node.typeKernel || node.typeExpr)) {
           const haveGoal = currentEngine.metaVars.get(gId);
           if (haveGoal) {
-            const rawTypeTerm = parseExactExpr(node.typeExpr, haveGoal.ctx, definitions);
-            if (rawTypeTerm) {
-              const typeTerm = elaborateType(rawTypeTerm, haveGoal.ctx, definitions, currentEngine.metaVars);
+            let typeTerm = node.typeKernel ?? null;
+            if (!typeTerm && node.typeExpr) {
+              const raw = parseExactExpr(node.typeExpr, haveGoal.ctx, definitions);
+              if (raw) typeTerm = elaborateType(raw, haveGoal.ctx, definitions, currentEngine.metaVars);
+            }
+            if (typeTerm) {
               // Walk proofTree with subgoal
               const proofGoalId = gId + '_have_proof';
               const proofMeta: MetaVar = { ctx: haveGoal.ctx, type: typeTerm, solution: undefined };
@@ -3496,10 +3503,13 @@ function replayEntireTreeViaWalk(
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
 
         // Interactive proof subtree mode
-        if (node.proofTree && node.typeExpr) {
-          const rawTypeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
-          if (rawTypeTerm) {
-            const typeTerm = elaborateType(rawTypeTerm, goal.ctx, eng.definitions, eng.metaVars);
+        if (node.proofTree && (node.typeKernel || node.typeExpr)) {
+          let typeTerm = node.typeKernel ?? null;
+          if (!typeTerm && node.typeExpr) {
+            const raw = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
+            if (raw) typeTerm = elaborateType(raw, goal.ctx, eng.definitions, eng.metaVars);
+          }
+          if (typeTerm) {
             // Walk proofTree with a subgoal of type typeExpr
             const proofGoalId = gId + '_have_proof';
             const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };

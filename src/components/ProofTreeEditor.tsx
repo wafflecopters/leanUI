@@ -1164,18 +1164,18 @@ function HaveProseItem({
             const slot = builderState.slots[slotIndex];
             if (!slot) return;
 
-            // Generate a fresh name
+            // Generate a fresh name (no underscores — KaTeX renders them as subscripts)
             const baseName = (slot.name && slot.name !== '_' && !slot.name.startsWith('_'))
               ? slot.name
-              : `arg${slotIndex}`;
-            const hoistName = `h_${baseName}`;
+              : `${slotIndex}`;
+            const hoistName = `h${baseName}`;
 
             // 1. Insert have BEFORE the current have node
             // The hoisted have gets an interactive proof subtree (proofTree hole)
-            // Store source-level type expression so goal-computation can parse it
+            // Store both the source expression (for display) and kernel term (for goal creation)
             const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx);
             const proofHole = mkHole();
-            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', typeSourceExpr, proofHole);
+            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', typeSourceExpr, proofHole, slot.type);
             if (!updated) return;
 
             // 2. Fill the current slot with the hoisted name

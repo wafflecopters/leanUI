@@ -129,11 +129,13 @@ export interface HaveNode {
   readonly name: string;
   /** The proof expression as a string. */
   readonly expr: string;
-  /** Optional explicit type annotation (e.g., from hoisting a slot obligation). */
+  /** Optional explicit type annotation as source expression (for display fallback). */
   readonly typeExpr?: string;
+  /** Optional kernel-level type term (avoids lossy string roundtrip for proofTree goals). */
+  readonly typeKernel?: import('../compiler/kernel').TTKTerm;
   /** Optional interactive proof subtree (alternative to flat expr string).
    *  When present, this subtree proves the have's type interactively via tactics.
-   *  The proofTree's goal is the have's type (typeExpr). */
+   *  The proofTree's goal is the have's type (typeKernel or typeExpr). */
   readonly proofTree?: ProofNode;
   /** The continuation proof after have introduces the binding. */
   readonly child: ProofNode;
@@ -222,8 +224,8 @@ export function mkExact(expr: string): ExactNode {
   return { tag: 'exact', id: freshProofId(), expr };
 }
 
-export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode): HaveNode {
-  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree };
+export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode, typeKernel?: import('../compiler/kernel').TTKTerm): HaveNode {
+  return { tag: 'have', id: freshProofId(), name, expr, child, typeExpr, proofTree, typeKernel };
 }
 
 export function mkSuffices(name: string, typeExpr: string, child: ProofNode, byProof?: ProofNode): SufficesNode {
@@ -662,10 +664,10 @@ export function applyHave(state: ProofTreeState, name: string, expr: string): Pr
 
 /** Insert a have node BEFORE a target node. The new have wraps the target:
  *  parent → target  becomes  parent → newHave(name, expr, child: target) */
-export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string, typeExpr?: string, proofTree?: ProofNode): ProofTreeState | null {
+export function insertHaveBefore(state: ProofTreeState, targetNodeId: ProofNodeId, name: string, expr: string, typeExpr?: string, proofTree?: ProofNode, typeKernel?: import('../compiler/kernel').TTKTerm): ProofTreeState | null {
   const target = findNode(state.root, targetNodeId);
   if (!target) return null;
-  const newHave = mkHave(name, expr, target, typeExpr, proofTree);
+  const newHave = mkHave(name, expr, target, typeExpr, proofTree, typeKernel);
   const newRoot = replaceNode(state.root, targetNodeId, newHave);
   return { root: newRoot, cursor: state.cursor };
 }
