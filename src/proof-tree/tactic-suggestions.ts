@@ -496,12 +496,13 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
   // This finds lemmas like `divTwoPos : 0 < ε → 0 < ε/2` for goal `0 < ε/2`.
   const definitions = engine.definitions;
   if (definitions) {
-    // Get goal head constant
+    // Get goal head constant — WHNF first so solved metas are visible
     let goalHead = metaGoal.type;
     while (goalHead.tag === 'App') goalHead = goalHead.fn;
     const goalHeadName = goalHead.tag === 'Const' ? goalHead.name : undefined;
 
     if (goalHeadName) {
+      let matchCount = 0;
       for (const [defName, def] of definitions.terms) {
         // Skip projections, self-references, and the current declaration
         if (defName.includes('.') || defName === kernelGoal.currentDeclName) continue;
@@ -517,6 +518,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         if (retHead.tag !== 'Const' || retHead.name !== goalHeadName) continue;
 
         // Return type head matches — try apply
+        matchCount++;
         const constTerm: TTKTerm = { tag: 'Const', name: defName };
         try {
           const applyTactic = new ApplyTactic(constTerm);
@@ -535,7 +537,15 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
               numSubgoals,
             });
           }
-        } catch { /* doesn't apply */ }
+        } catch (e: unknown) {
+          // Log failures to debug definition search
+          if (typeof console !== 'undefined') {
+            console.debug(`[def-search] apply ${defName} threw:`, e instanceof Error ? e.message.substring(0, 100) : String(e).substring(0, 100));
+          }
+        }
+      }
+      if (typeof console !== 'undefined') {
+        console.debug(`[def-search] goalHead=${goalHeadName}, candidates=${matchCount}, found=${suggestions.filter(s => s.id.startsWith('apply-def-')).length}`);
       }
     }
   }
