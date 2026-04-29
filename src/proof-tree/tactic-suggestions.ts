@@ -441,7 +441,6 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
   const suggestions: TacticSuggestion[] = [];
   const { engine, goal: metaGoal } = kernelGoal;
   const goalId = engine.getFocusedGoalId();
-  console.warn('[hyp-suggestions] called, goalId=', goalId, 'goalHead=', (() => { let h = metaGoal.type; while (h.tag === 'App') h = h.fn; return h.tag === 'Const' ? (h as any).name : h.tag; })(), 'defs.terms.size=', engine.definitions?.terms?.size);
   if (!goalId) return suggestions;
 
   const ctx = metaGoal.ctx;
@@ -503,7 +502,6 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
     const goalHeadName = goalHead.tag === 'Const' ? goalHead.name : undefined;
 
     if (goalHeadName) {
-      let matchCount = 0;
       for (const [defName, def] of definitions.terms) {
         // Skip projections, self-references, and the current declaration
         if (defName.includes('.') || defName === kernelGoal.currentDeclName) continue;
@@ -519,14 +517,10 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         if (retHead.tag !== 'Const' || retHead.name !== goalHeadName) continue;
 
         // Return type head matches — try apply
-        matchCount++;
         const constTerm: TTKTerm = { tag: 'Const', name: defName };
         try {
           const applyTactic = new ApplyTactic(constTerm);
           const result = applyTactic.apply(engine, metaGoal, goalId);
-          if (!result.success) {
-            console.warn(`[def-search] apply ${defName} failed:`, result.error?.substring(0, 150));
-          }
           if (result.success) {
             const numSubgoals = result.newEngine
               ? result.newEngine.goals.length - engine.goals.length + 1
@@ -541,15 +535,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
               numSubgoals,
             });
           }
-        } catch (e: unknown) {
-          // Log failures to debug definition search
-          if (typeof console !== 'undefined') {
-            console.warn(`[def-search] apply ${defName} threw:`, e instanceof Error ? e.message.substring(0, 100) : String(e).substring(0, 100));
-          }
-        }
-      }
-      if (typeof console !== 'undefined') {
-        console.warn(`[def-search] goalHead=${goalHeadName}, candidates=${matchCount}, found=${suggestions.filter(s => s.id.startsWith('apply-def-')).length}`);
+        } catch { /* doesn't apply */ }
       }
     }
   }

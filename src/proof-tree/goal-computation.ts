@@ -1207,6 +1207,39 @@ export function parseExactExpr(
 }
 
 /**
+ * Elaborate a parsed type term to resolve Holes (implicit args) into real terms.
+ * parseExactExpr inserts Hole("_implicit_X") for implicit args — these need to
+ * be resolved by the type checker so that unification/apply can work against them.
+ */
+export function elaborateType(
+  term: TTKTerm,
+  ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
+  definitions: DefinitionsMap,
+  metaVars?: Map<string, MetaVar>,
+): TTKTerm {
+  try {
+    const env = new TCEnv(
+      [...ctx],
+      definitions,
+      metaVars ?? new Map(),
+      [], [], [],
+      term,
+      new Map(),
+      { mode: 'check' }
+    );
+    const inferred = inferType(env);
+    const elaborated = inferred.elaboratedTerm;
+    if (elaborated) {
+      // Zonk to resolve any metas created during inference
+      return inferred.zonkTerm(elaborated);
+    }
+    return term;
+  } catch {
+    return term; // fallback to unelaborated term
+  }
+}
+
+/**
  * Get the head constant name from a (possibly applied) inductive type.
  */
 function getInductiveHead(type: TTKTerm): string | null {
@@ -2336,14 +2369,12 @@ function replayProofTree(
 
       // Interactive proof subtree: proofTree proves typeExpr, then child gets h : T in context
       if (node.proofTree && node.typeExpr) {
-        const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
-        if (!typeTerm) {
-          // Type parse failed — fall through to child
-          if (typeof console !== 'undefined') {
-            console.warn(`[have-proofTree] parseExactExpr failed for typeExpr="${node.typeExpr}", ctx names=[${goal.ctx.map(e => e.name).join(', ')}]`);
-          }
+        const rawTypeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+        if (!rawTypeTerm) {
           return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
         }
+        // Elaborate to resolve Holes (implicit args) into real terms
+        const typeTerm = elaborateType(rawTypeTerm, goal.ctx, engine.definitions, engine.metaVars);
 
         // Create a subgoal for the proofTree with goal type = typeExpr
         const proofGoalId = goalId + '_have_proof';
@@ -3162,8 +3193,9 @@ function replayEntireTreeFromTrace(
         if (node.proofTree && node.typeExpr) {
           const haveGoal = currentEngine.metaVars.get(gId);
           if (haveGoal) {
-            const typeTerm = parseExactExpr(node.typeExpr, haveGoal.ctx, definitions);
-            if (typeTerm) {
+            const rawTypeTerm = parseExactExpr(node.typeExpr, haveGoal.ctx, definitions);
+            if (rawTypeTerm) {
+              const typeTerm = elaborateType(rawTypeTerm, haveGoal.ctx, definitions, currentEngine.metaVars);
               // Walk proofTree with subgoal
               const proofGoalId = gId + '_have_proof';
               const proofMeta: MetaVar = { ctx: haveGoal.ctx, type: typeTerm, solution: undefined };
@@ -3458,8 +3490,9 @@ function replayEntireTreeViaWalk(
 
         // Interactive proof subtree mode
         if (node.proofTree && node.typeExpr) {
-          const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
-          if (typeTerm) {
+          const rawTypeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
+          if (rawTypeTerm) {
+            const typeTerm = elaborateType(rawTypeTerm, goal.ctx, eng.definitions, eng.metaVars);
             // Walk proofTree with a subgoal of type typeExpr
             const proofGoalId = gId + '_have_proof';
             const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
