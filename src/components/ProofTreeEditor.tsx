@@ -682,6 +682,28 @@ function GoalInteraction({
                     </button>
                   );
                 }
+                if (s.subgoalPreviews && s.subgoalPreviews.length > 0) {
+                  return (
+                    <button
+                      key={s.id}
+                      style={suggestionPreviewBtnStyle}
+                      onClick={() => handleApplySuggestion(s)}
+                      title={s.description}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
+                        {s.subgoalPreviews.map((sg, i) => (
+                          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span style={{ fontSize: '9px', color: '#8b949e', minWidth: '12px' }}>{i + 1}.</span>
+                            <InlineKaTeX latex={sg} style={{ fontSize: '11px' }} />
+                          </div>
+                        ))}
+                      </div>
+                      <span style={{ fontSize: '9px', color: '#484f58', marginTop: '2px' }}>
+                        {btnLabel}
+                      </span>
+                    </button>
+                  );
+                }
                 return (
                   <button
                     key={s.id}

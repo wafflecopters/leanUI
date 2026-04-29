@@ -43,6 +43,8 @@ export interface TacticSuggestion {
   readonly numSubgoals?: number;
   /** For construct suggestions: the constructor name to apply. */
   readonly applyCtorName?: string;
+  /** For apply suggestions: LaTeX preview of each subgoal created. */
+  readonly subgoalPreviews?: readonly string[];
 }
 
 /** Escape a name for use in LaTeX (wrap multi-char names in \text{}, escape underscores). */
@@ -50,6 +52,27 @@ function texEscape(name: string): string {
   if (name.length === 1) return name;
   name = name.replace(/_/g, '\\_');
   return `\\text{${name}}`;
+}
+
+/** Render subgoal previews after an apply tactic. Returns LaTeX for each new goal. */
+function renderSubgoalPreviews(
+  _oldEngine: TacticEngine,
+  newEngine: TacticEngine,
+  definitions: DefinitionsMap,
+  rev?: ReverseRegistry,
+): string[] | undefined {
+  if (!rev) return undefined;
+  try {
+    const previews: string[] = [];
+    for (const gId of newEngine.goals) {
+      const meta = newEngine.metaVars.get(gId);
+      if (!meta) continue;
+      previews.push(renderGoalLatex(newEngine, meta, definitions, rev));
+    }
+    return previews.length > 0 ? previews : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Render the result goal LaTeX after applying a tactic. Returns undefined if not possible. */
@@ -479,6 +502,9 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         const numSubgoals = result.newEngine
           ? result.newEngine.goals.length - engine.goals.length + 1
           : 1;
+        const subgoalPreviews = result.newEngine
+          ? renderSubgoalPreviews(engine, result.newEngine, kernelGoal.definitions, kernelGoal.rev)
+          : undefined;
         suggestions.push({
           id: `apply-hyp-${name}`,
           label: `apply ${name}`,
@@ -487,6 +513,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
             ? `Apply ${name}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
             : `Apply ${name}`,
           numSubgoals,
+          subgoalPreviews,
         });
       }
     } catch { /* doesn't apply */ }
@@ -525,6 +552,9 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
             const numSubgoals = result.newEngine
               ? result.newEngine.goals.length - engine.goals.length + 1
               : 1;
+            const subgoalPreviews = result.newEngine
+              ? renderSubgoalPreviews(engine, result.newEngine, kernelGoal.definitions, kernelGoal.rev)
+              : undefined;
             suggestions.push({
               id: `apply-def-${defName}`,
               label: `apply ${defName}`,
@@ -533,6 +563,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
                 ? `Apply ${defName}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
                 : `Apply ${defName}`,
               numSubgoals,
+              subgoalPreviews,
             });
           }
         } catch { /* doesn't apply */ }
