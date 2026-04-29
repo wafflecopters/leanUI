@@ -524,6 +524,9 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         try {
           const applyTactic = new ApplyTactic(constTerm);
           const result = applyTactic.apply(engine, metaGoal, goalId);
+          if (!result.success) {
+            console.warn(`[def-search] apply ${defName} failed:`, result.error?.substring(0, 150));
+          }
           if (result.success) {
             const numSubgoals = result.newEngine
               ? result.newEngine.goals.length - engine.goals.length + 1
