@@ -686,6 +686,101 @@ export function foldAliases(term: TTKTerm, aliasMap: Map<string, AliasFoldInfo>)
 }
 
 /**
+ * Fold simple wrapper definitions back to their names.
+ * Handles definitions like `rtwo R = radd R (rone R) (rone R)` — after alias folding,
+ * the term still contains `radd(R, rone(R), rone(R))` which should fold back to `rtwo(R)`.
+ *
+ * Builds a map of (body structure key → definition name) for definitions whose
+ * bodies are simple applications (no lambdas/matches in the body).
+ */
+let _simpleWrapperCache: { defs: DefinitionsMap; map: Map<string, { name: string; numArgs: number }> } | null = null;
+
+function buildSimpleWrapperMap(definitions: DefinitionsMap): Map<string, { name: string; numArgs: number }> {
+  if (_simpleWrapperCache?.defs === definitions) return _simpleWrapperCache.map;
+  const map = new Map<string, { name: string; numArgs: number }>();
+  for (const [name, def] of definitions.terms) {
+    if (name.includes('.') || !def.value) continue;
+    // Strip lambda binders
+    let body = def.value;
+    let numArgs = 0;
+    while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') { body = body.body; numArgs++; }
+    // Handle pattern-matching form
+    if (body.tag === 'Match' && body.clauses.length === 1 && body.clauses[0].patterns.every(p => p.tag === 'PVar')) {
+      numArgs += body.clauses[0].patterns.length;
+      body = body.clauses[0].rhs;
+    }
+    if (numArgs === 0) continue;
+    // Body must be a simple application (no Binders, no Matches in args)
+    const { head, args } = collectAppSpine(body);
+    if (head.tag !== 'Const') continue;
+    // Skip if body contains complex terms (lambdas, matches)
+    const isSimple = args.every(a => a.tag === 'Var' || a.tag === 'Const' || a.tag === 'App');
+    if (!isSimple) continue;
+    // Build a structural key from the body
+    const key = termStructKey(body, numArgs);
+    if (key) map.set(key, { name, numArgs });
+  }
+  _simpleWrapperCache = { defs: definitions, map };
+  return map;
+}
+
+/** Build a structural key for a term, normalizing Var indices relative to lambda depth. */
+function termStructKey(t: TTKTerm, _depth: number): string | null {
+  switch (t.tag) {
+    case 'Var': return `V${t.index}`;
+    case 'Const': return `C:${t.name}`;
+    case 'App': {
+      const fnKey = termStructKey(t.fn, _depth);
+      const argKey = termStructKey(t.arg, _depth);
+      if (!fnKey || !argKey) return null;
+      return `(${fnKey} ${argKey})`;
+    }
+    default: return null;
+  }
+}
+
+function foldSimpleWrappers(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
+  const wrapperMap = buildSimpleWrapperMap(definitions);
+  if (wrapperMap.size === 0) return term;
+
+  function fold(t: TTKTerm): TTKTerm {
+    // Try to match the current application spine against a wrapper definition
+    if (t.tag === 'App') {
+      const { head, args: spineArgs } = collectAppSpine(t);
+      if (head.tag === 'Const') {
+        // Check each suffix of the spine to see if it matches a wrapper body
+        for (let startIdx = 0; startIdx <= spineArgs.length; startIdx++) {
+          const subArgs = spineArgs.slice(startIdx);
+          // Build app of head + subArgs with Var indices shifted
+          let subTerm: TTKTerm = head;
+          for (const a of subArgs) subTerm = { tag: 'App', fn: subTerm, arg: a };
+          // Build key
+          const key = termStructKey(subTerm, 0);
+          if (key) {
+            const wrapper = wrapperMap.get(key);
+            if (wrapper && wrapper.numArgs === spineArgs.length - startIdx) {
+              // Found a match! Build the folded application: wrapper(prefix_args)
+              let result: TTKTerm = { tag: 'Const', name: wrapper.name };
+              for (let i = 0; i < startIdx; i++) {
+                result = { tag: 'App', fn: result, arg: fold(spineArgs[i]) };
+              }
+              return result;
+            }
+          }
+        }
+      }
+    }
+    // Recurse into subterms
+    switch (t.tag) {
+      case 'App': return { ...t, fn: fold(t.fn), arg: fold(t.arg) };
+      case 'Binder': return { ...t, domain: fold(t.domain), body: fold(t.body) };
+      default: return t;
+    }
+  }
+  return fold(term);
+}
+
+/**
  * Delta-reduce (unfold) applications of constants marked with `@syntax @unfold`.
  * Only unfolds at the HEAD of an application spine — does not unfold inside args
  * unless those args themselves have unfold-marked heads.
@@ -2744,7 +2839,9 @@ export function renderGoalLatex(
   // 4. Fold delta-expanded projections back to alias names
   //    (e.g., CompleteOrderedField.mul(Carrier(R), field(R), a, b) → rmul(R, a, b))
   term = foldAliases(term, am);
-  // 5. Unfold @syntax @unfold-marked constants (e.g., EpsDeltaWitness → Pair(...))
+  // 5. Fold simple wrapper definitions back (e.g., radd(R, rone(R), rone(R)) → rtwo(R))
+  term = foldSimpleWrappers(term, definitions);
+  // 6. Unfold @syntax @unfold-marked constants (e.g., EpsDeltaWitness → Pair(...))
   if (rev.unfoldNames.size > 0) {
     term = unfoldTransparent(term, definitions, rev.unfoldNames);
   }
@@ -2767,6 +2864,8 @@ export function renderSubtermLatex(
   let folded = foldProjectionMatches(normalized, pm);
   const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
   folded = foldAliases(folded, am);
+  // Fold simple wrapper definitions back
+  folded = foldSimpleWrappers(folded, definitions);
   // Unfold @syntax @unfold-marked constants
   if (rev.unfoldNames.size > 0) {
     folded = unfoldTransparent(folded, definitions, rev.unfoldNames);

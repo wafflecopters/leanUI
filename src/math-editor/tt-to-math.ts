@@ -375,6 +375,18 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
         return [mkSymbol(lamName), mkSymbol('\\to'), ...bodyNodes];
       }
       if (term.binderKind.tag === 'BPiTT') {
+        // Negation: A → Void renders as ¬A (or ¬(A) for complex A)
+        if (term.body && term.body.tag === 'Const' && term.body.name === 'Void') {
+          const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx, annotate) : [mkHole()];
+          const needsParens = term.domain && (
+            term.domain.tag === 'Binder' ||
+            (term.domain.tag === 'App' && term.domain.fn.tag === 'App') // multi-arg apps
+          );
+          if (needsParens) {
+            return [mkSymbol('\\neg'), mkDelimiter('(', ')', mkRow(domainNodes))];
+          }
+          return [mkSymbol('\\neg'), ...domainNodes];
+        }
         const domainNodes = term.domain ? ttermToMathNodes(term.domain, rev, ctx, annotate) : [mkHole()];
         const piName = (term.name && term.name !== '_') ? chooseFreshName(term.name, ctx) : term.name;
         const bodyCtx = [piName, ...ctx];
