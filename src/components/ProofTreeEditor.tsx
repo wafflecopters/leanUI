@@ -566,6 +566,10 @@ function GoalInteraction({
       const name = suggestion.id.slice('apply-hyp-'.length);
       const numSubgoals = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, name, numSubgoals);
+    } else if (suggestion.id.startsWith('apply-def-')) {
+      const defName = suggestion.id.slice('apply-def-'.length);
+      const numSubgoals = suggestion.numSubgoals ?? 1;
+      result = applyApplyTactic(state, defName, numSubgoals);
     } else if (suggestion.id.startsWith('construct-')) {
       const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
       const numChildren = suggestion.numSubgoals ?? 1;
