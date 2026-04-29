@@ -21,12 +21,12 @@ Building out the proof tree editor UI and tactic engine to support the triangle 
 - The WYSIWYG LaTeX editor that builds terms/tactics
 
 ## Recent Progress
-- Nested case patterns in tactic mode (`| MkDPair a (MkPair x y) =>`) desugared via shared helper; fixed latent name-collision bug in CasesTactic where duplicate field names shadowed outer bindings
-- Eta conversion in definitional equality (f = \x => f x) with meta solver integration
-- Proof tree editor with immutable state, undo/redo, hover-reveal delete buttons
-- Real TacticEngine integration for goal computation
-- Draggable split pane UI, dual math editor (type + proof)
-- Registry-aware command system for structured editing
+- Interactive proof subtrees for hoisted `have` obligations — subgoals get their own tactic holes instead of text boxes
+- Definition search in apply suggestions — scans all definitions whose return type head matches the goal
+- Subgoal previews with fresh variable names in suggestion buttons (`1. 0 ≤ a  2. a < ε/2`)
+- Hoist-to-have from term builder with rename propagation, delete buttons, type display
+- Term builder slot-filling UI with MathEditor integration and type validation via HaveTactic
+- Clickable hypothesis panel with exact/apply/destructure/use-projection suggestions
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
