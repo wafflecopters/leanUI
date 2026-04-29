@@ -441,6 +441,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
   const suggestions: TacticSuggestion[] = [];
   const { engine, goal: metaGoal } = kernelGoal;
   const goalId = engine.getFocusedGoalId();
+  console.warn('[hyp-suggestions] called, goalId=', goalId, 'goalHead=', (() => { let h = metaGoal.type; while (h.tag === 'App') h = h.fn; return h.tag === 'Const' ? (h as any).name : h.tag; })(), 'defs.terms.size=', engine.definitions?.terms?.size);
   if (!goalId) return suggestions;
 
   const ctx = metaGoal.ctx;
@@ -540,12 +541,12 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         } catch (e: unknown) {
           // Log failures to debug definition search
           if (typeof console !== 'undefined') {
-            console.debug(`[def-search] apply ${defName} threw:`, e instanceof Error ? e.message.substring(0, 100) : String(e).substring(0, 100));
+            console.warn(`[def-search] apply ${defName} threw:`, e instanceof Error ? e.message.substring(0, 100) : String(e).substring(0, 100));
           }
         }
       }
       if (typeof console !== 'undefined') {
-        console.debug(`[def-search] goalHead=${goalHeadName}, candidates=${matchCount}, found=${suggestions.filter(s => s.id.startsWith('apply-def-')).length}`);
+        console.warn(`[def-search] goalHead=${goalHeadName}, candidates=${matchCount}, found=${suggestions.filter(s => s.id.startsWith('apply-def-')).length}`);
       }
     }
   }
