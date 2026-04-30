@@ -602,6 +602,50 @@ describe('definition search suggestions', () => {
     expect(applyHε).toBeUndefined();
   });
 
+  test('parseExactExpr resolves 1→rone(R), 2→rtwo(R), 0→rzero(R)', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+    ];
+
+    const p1 = parseExactExpr('1', ctx, defs);
+    expect(p1).not.toBeNull();
+    // Should be rone(Var(0)) = rone applied to R
+    expect(p1!.tag).toBe('App');
+    expect((p1 as any).fn.tag).toBe('Const');
+    expect((p1 as any).fn.name).toBe('rone');
+    expect((p1 as any).arg.tag).toBe('Var');
+    expect((p1 as any).arg.index).toBe(0);
+
+    const p2 = parseExactExpr('2', ctx, defs);
+    expect(p2).not.toBeNull();
+    expect((p2 as any).fn.tag).toBe('Const');
+    expect((p2 as any).fn.name).toBe('rtwo');
+
+    const p0 = parseExactExpr('0', ctx, defs);
+    expect(p0).not.toBeNull();
+    expect((p0 as any).fn.tag).toBe('Const');
+    expect((p0 as any).fn.name).toBe('rzero');
+  });
+
+  test('exact 1 closes goal Carrier R', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+    ];
+    // Goal: Carrier R
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: { tag: 'Const', name: 'Carrier' }, arg: { tag: 'Var', index: 0 }
+    };
+
+    const engine = createInitialEngine(goalType, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const gId = engine.getFocusedGoalId()!;
+
+    // Parse "1" and apply as exact
+    const term = parseExactExpr('1', ctx, defs)!;
+    const result = new ExactTactic(term).apply(engine, goal, gId);
+    expect(result.success).toBe(true);
+  });
+
   test('computeTermSlots produces correct Var indices for rlt slot type', async () => {
     const { computeTermSlots, kernelTermToSource } = await import('./term-builder');
     const { createInitialEngine } = await import('../tactics/tacticsEngine');
