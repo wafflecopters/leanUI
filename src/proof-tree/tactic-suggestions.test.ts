@@ -475,4 +475,49 @@ describe('definition search suggestions', () => {
     // zeroLtOne proves 0 < 1, not 0 < ε/2 — should NOT appear
     expect(ids).not.toContain('apply-def-zeroLtOne');
   });
+
+  test('unfold rlt preview renders rtwo as 2, not 1+1', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+      { name: 'ε', type: { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'Carrier' }, arg: { tag: 'Var' as const, index: 0 } } },
+    ];
+    // Goal: rlt(R, rzero(R), rdiv(R, ε, rtwo(R))) — 0 < ε/2  (no Holes, manual construction)
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: {
+        tag: 'App', fn: {
+          tag: 'App', fn: { tag: 'Const', name: 'rlt' },
+          arg: { tag: 'Var', index: 1 }
+        },
+        arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'rzero' }, arg: { tag: 'Var', index: 1 } }, arg: { tag: 'Var', index: 1 } }
+      },
+      arg: {
+        tag: 'App', fn: {
+          tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'rdiv' }, arg: { tag: 'Var', index: 1 } },
+          arg: { tag: 'Var', index: 0 }
+        },
+        arg: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'rtwo' }, arg: { tag: 'Var', index: 1 } }, arg: { tag: 'Var', index: 1 } }
+      }
+    };
+
+    const engine = createInitialEngine(goalType, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const gId = engine.getFocusedGoalId()!;
+
+    const registry = createDefaultRegistry();
+    const rev = buildReverseRegistry(registry);
+    const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
+    const ig = renderInteractiveGoal(engine, goal, defs, rev);
+
+    // Find the subterm path for rlt (outermost App head)
+    const rltPath = [...ig!.subtermMap.entries()].find(([, v]) => v.headName === 'rlt')?.[0] ?? 'goal-t3';
+    const suggestions = computeTacticSuggestions(rltPath, ig!, defs, kernelGoal);
+    const unfoldSugg = suggestions.find(s => s.id === 'unfold-rlt');
+
+    expect(unfoldSugg).toBeDefined();
+    expect(unfoldSugg!.resultGoalLatex).toBeDefined();
+    // The preview should contain "2" (from rtwo), not "1+1" or "{R⇒1+1}"
+    expect(unfoldSugg!.resultGoalLatex).toContain('2');
+    expect(unfoldSugg!.resultGoalLatex).not.toContain('1+1');
+    expect(unfoldSugg!.resultGoalLatex).not.toContain('\\Rightarrow');
+  });
 });

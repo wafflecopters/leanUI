@@ -179,7 +179,7 @@ function findChangedSubterm(oldTerm: TTKTerm, newTerm: TTKTerm): TTKTerm {
  * Compares old goal with new goal, finds the divergent subtree, renders it.
  */
 function renderChangedSubterm(
-  oldGoal: MetaVar,
+  _oldGoal: MetaVar,
   newEngine: TacticEngine,
   definitions: DefinitionsMap,
   rev?: ReverseRegistry,
@@ -190,13 +190,9 @@ function renderChangedSubterm(
     if (!newGoalId) return undefined;
     const newGoal = newEngine.metaVars.get(newGoalId);
     if (!newGoal) return undefined;
-    // Normalize using actual definitions so constants like `two`
-    // get delta-reduced and iota can fire on pattern-match results.
-    const defs = newEngine.definitions;
-    const oldNorm = fullNormalize(oldGoal.type, defs);
-    const newNorm = fullNormalize(newGoal.type, defs);
-    const changed = findChangedSubterm(oldNorm, newNorm);
-    return renderSubtermLatex(changed, newGoal.ctx, definitions, rev);
+    // Render the full new goal through the standard pipeline (which handles
+    // alias folding, simple wrapper folding, etc. correctly).
+    return renderGoalLatex(newEngine, newGoal, definitions, rev);
   } catch {
     return undefined;
   }
