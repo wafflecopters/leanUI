@@ -54,32 +54,33 @@ function texEscape(name: string): string {
   return `\\text{${name}}`;
 }
 
-/** Render subgoal previews after an apply tactic. Returns LaTeX for each new goal.
+/** Render subgoal previews after an apply tactic. Returns LaTeX for each NEW goal.
+ *  Only shows goals created by the tactic, not pre-existing ones.
  *  Replaces unsolved meta placeholders (□) with fresh variable names. */
 function renderSubgoalPreviews(
-  _oldEngine: TacticEngine,
+  oldEngine: TacticEngine,
   newEngine: TacticEngine,
   definitions: DefinitionsMap,
   rev?: ReverseRegistry,
 ): string[] | undefined {
   if (!rev) return undefined;
   try {
+    // Only show goals that are NEW (not in the old engine's goal list)
+    const oldGoalSet = new Set(oldEngine.goals);
+    const newGoalIds = newEngine.goals.filter(g => !oldGoalSet.has(g));
+    if (newGoalIds.length === 0) return undefined; // tactic closed the goal, no new subgoals
+
     // Build a map of meta IDs → fresh names for display
     const metaNames = new Map<string, string>();
     const usedNames = new Set<string>();
     const namePool = 'abcdkpqrstuvw';
     let nameIdx = 0;
-    for (const gId of newEngine.goals) {
+    for (const gId of newGoalIds) {
       const meta = newEngine.metaVars.get(gId);
       if (!meta || meta.solution !== undefined) continue;
-      // Try to derive a name from the meta's type head
       let name: string | undefined;
-      if (meta.type.tag === 'App' || meta.type.tag === 'Const') {
-        // Use a letter from the pool
-        while (nameIdx < namePool.length && usedNames.has(namePool[nameIdx])) nameIdx++;
-        name = nameIdx < namePool.length ? namePool[nameIdx++] : `x${nameIdx++}`;
-      }
-      if (!name) name = nameIdx < namePool.length ? namePool[nameIdx++] : `x${nameIdx++}`;
+      while (nameIdx < namePool.length && usedNames.has(namePool[nameIdx])) nameIdx++;
+      name = nameIdx < namePool.length ? namePool[nameIdx++] : `x${nameIdx++}`;
       usedNames.add(name);
       metaNames.set(gId, name);
     }
@@ -95,10 +96,9 @@ function renderSubgoalPreviews(
     }
 
     const previews: string[] = [];
-    for (const gId of newEngine.goals) {
+    for (const gId of newGoalIds) {
       const meta = newEngine.metaVars.get(gId);
       if (!meta) continue;
-      // Replace metas in the goal type and render
       const displayMeta = { ...meta, type: replaceMetas(meta.type) };
       previews.push(renderGoalLatex(newEngine, displayMeta, definitions, rev));
     }
