@@ -1283,7 +1283,32 @@ export function parseExactExpr(
     let name = tokens[pos++];
     // Resolve numeric literals and common symbols to source names
     const symbolAlias = resolveSymbol(name, definitions);
-    if (symbolAlias) name = symbolAlias;
+    if (symbolAlias) {
+      name = symbolAlias;
+      // If the resolved name takes (R : Real) as first arg and R is in context,
+      // auto-apply it (so "1" becomes "rone R" not just "rone")
+      if (definitions) {
+        const defType = definitions.terms.get(name)?.type;
+        if (defType?.tag === 'Binder' && defType.binderKind.tag === 'BPi'
+            && defType.domain.tag === 'Const' && defType.domain.name === 'Real') {
+          const rIdx = findVarIndex('R', ctx);
+          if (rIdx !== null) {
+            let result: TTKTerm = { tag: 'Const', name };
+            // Insert Holes for implicit args first
+            if (namedArgLookup) {
+              const namedArgs = namedArgLookup(name);
+              if (namedArgs) {
+                for (const [paramName] of namedArgs) {
+                  result = { tag: 'App', fn: result, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+                }
+              }
+            }
+            result = { tag: 'App', fn: result, arg: { tag: 'Var', index: rIdx + localBinderNames.length } };
+            return result;
+          }
+        }
+      }
+    }
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {
       if (localBinderNames[i] === name) {
