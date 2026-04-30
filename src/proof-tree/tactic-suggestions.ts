@@ -281,12 +281,14 @@ export function computeTacticSuggestions(
       const { engine, goal: metaGoal } = kernelGoal;
       const gId = engine.getFocusedGoalId();
       if (gId) {
+        // Zonk goal type for constructor matching
+        const zonkedCtorGoal: MetaVar = { ...metaGoal, type: engine.zonkTerm(metaGoal.type, metaGoal.ctx.length) };
         const inductiveDef = definitions.inductiveTypes.get(headName)!;
         const isSingle = inductiveDef.constructors.length === 1;
         for (const ctor of inductiveDef.constructors) {
           try {
             const tactic = new ApplyTactic({ tag: 'Const', name: ctor.name });
-            const res = tactic.apply(engine, metaGoal, gId);
+            const res = tactic.apply(engine, zonkedCtorGoal, gId);
             if (res.success) {
               const label = isSingle ? 'Construct' : `Construct ${ctor.name}`;
               const oldGoalSet = new Set(engine.goals);
@@ -610,8 +612,10 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
   // This finds lemmas like `divTwoPos : 0 < ε → 0 < ε/2` for goal `0 < ε/2`.
   const definitions = engine.definitions;
   if (definitions) {
-    // Get goal head constant — WHNF first so solved metas are visible
-    let goalHead = metaGoal.type;
+    // Zonk the goal type to resolve solved metas before head-matching and apply
+    const zonkedGoalType = engine.zonkTerm(metaGoal.type, ctx.length);
+    const zonkedGoal: MetaVar = { ...metaGoal, type: zonkedGoalType };
+    let goalHead = zonkedGoalType;
     while (goalHead.tag === 'App') goalHead = goalHead.fn;
     const goalHeadName = goalHead.tag === 'Const' ? goalHead.name : undefined;
 
@@ -636,7 +640,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         const constTerm: TTKTerm = { tag: 'Const', name: defName };
         try {
           const applyTactic = new ApplyTactic(constTerm);
-          const result = applyTactic.apply(engine, metaGoal, goalId);
+          const result = applyTactic.apply(engine, zonkedGoal, goalId);
           if (result.success) {
             const numSubgoals = result.newEngine
               ? result.newEngine.goals.length - engine.goals.length + 1

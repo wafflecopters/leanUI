@@ -13,6 +13,44 @@ import { whnf } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
 
+/** Substitute solved metas whose ctx length matches targetCtxLen (no shifting needed). */
+function substituteSameLevelMetas(term: TTKTerm, metaVars: Map<string, MetaVar>, targetCtxLen: number): TTKTerm {
+  switch (term.tag) {
+    case 'Meta': {
+      const meta = metaVars.get(term.id);
+      if (meta?.solution && meta.ctx.length === targetCtxLen) {
+        return substituteSameLevelMetas(meta.solution, metaVars, targetCtxLen);
+      }
+      return term;
+    }
+    case 'App': {
+      const fn = substituteSameLevelMetas(term.fn, metaVars, targetCtxLen);
+      const arg = substituteSameLevelMetas(term.arg, metaVars, targetCtxLen);
+      return fn === term.fn && arg === term.arg ? term : { ...term, fn, arg };
+    }
+    case 'Binder': {
+      const domain = substituteSameLevelMetas(term.domain, metaVars, targetCtxLen);
+      const body = substituteSameLevelMetas(term.body, metaVars, targetCtxLen);
+      return domain === term.domain && body === term.body ? term : { ...term, domain, body };
+    }
+    case 'Sort': {
+      const level = substituteSameLevelMetas(term.level, metaVars, targetCtxLen);
+      return level === term.level ? term : { ...term, level };
+    }
+    case 'Match': {
+      const scrutinee = substituteSameLevelMetas(term.scrutinee, metaVars, targetCtxLen);
+      let changed = scrutinee !== term.scrutinee;
+      const clauses = term.clauses.map(c => {
+        const rhs = substituteSameLevelMetas(c.rhs, metaVars, targetCtxLen);
+        if (rhs !== c.rhs) changed = true;
+        return rhs === c.rhs ? c : { ...c, rhs };
+      });
+      return changed ? { ...term, scrutinee, clauses } : term;
+    }
+    default: return term;
+  }
+}
+
 /** Substitute solved metas in a term. Simple recursive replacement without depth shifting. */
 function substituteSolvedMetas(term: TTKTerm, metaVars: Map<string, MetaVar>): TTKTerm {
   switch (term.tag) {
