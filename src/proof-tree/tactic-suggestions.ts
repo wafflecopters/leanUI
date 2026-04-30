@@ -545,7 +545,22 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
       }
     } catch { /* doesn't apply */ }
 
-    // Try apply (but only if the hypothesis is a function type — Pi-headed)
+    // Try apply — skip if hypothesis type head doesn't match goal type head
+    // (prevents false matches from δ-reduction asymmetries)
+    {
+      const hypType = entry.type;
+      let hypHead: TTKTerm = hypType;
+      while (hypHead.tag === 'App') hypHead = hypHead.fn;
+      // For non-function hypotheses (no Pi binders), skip if heads don't match
+      const isPi = hypType.tag === 'Binder' && hypType.binderKind.tag === 'BPi';
+      let goalHead: TTKTerm = metaGoal.type;
+      while (goalHead.tag === 'App') goalHead = goalHead.fn;
+      if (!isPi && hypHead.tag === 'Const' && goalHead.tag === 'Const'
+          && hypHead.name !== goalHead.name) {
+        // Non-function hyp with different head — can't exact or apply
+        continue;
+      }
+    }
     try {
       const applyTactic = new ApplyTactic(varTerm);
       const result = applyTactic.apply(engine, metaGoal, goalId);
