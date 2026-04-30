@@ -527,6 +527,81 @@ describe('definition search suggestions', () => {
     expect(result.success).toBe(true);
   });
 
+  test('exact hε NOT offered for goal 0<2 after epsOverMPos (E2E)', async () => {
+    const { ConstructorTactic } = await import('../tactics/constructor-tactic');
+    const rev = buildReverseRegistry(createDefaultRegistry());
+
+    // Simulate limitsAdd proof: intros → constructor → intros ε hε → apply epsOverMPos
+    const limType = defs.terms.get('limitAdd')?.type;
+    expect(limType).toBeDefined();
+
+    let engine = createInitialEngine(limType!, [], defs);
+    let goal = engine.getFocusedGoal()!;
+    let gId = engine.getFocusedGoalId()!;
+
+    // Intros
+    let r = new IntrosTactic(['R', 'f', 'g', 'x0', 'L', 'M', 'limF', 'limG']).apply(engine, goal, gId);
+    if (!r.success) throw new Error('intros failed');
+    engine = r.newEngine; goal = engine.getFocusedGoal()!; gId = engine.getFocusedGoalId()!;
+
+    // Constructor
+    r = new ConstructorTactic().apply(engine, goal, gId);
+    if (!r.success) throw new Error('constructor failed');
+    engine = r.newEngine; goal = engine.getFocusedGoal()!; gId = engine.getFocusedGoalId()!;
+
+    // Intros ε, hε
+    r = new IntrosTactic(['ε', 'hε']).apply(engine, goal, gId);
+    if (!r.success) throw new Error('intros 2 failed');
+    engine = r.newEngine; goal = engine.getFocusedGoal()!; gId = engine.getFocusedGoalId()!;
+
+    // Create hoisted have subgoal: 0 < ε/2
+    const parsed = parseExactExpr('rlt (rzero R) (rdiv ε (rtwo R))', goal.ctx, defs)!;
+    const goalType = elaborateType(parsed, goal.ctx, defs);
+    const subId = 'have_proof';
+    const subMeta = { ctx: goal.ctx, type: goalType, solution: undefined as undefined };
+    const subVars = new Map(engine.metaVars);
+    subVars.set(subId, subMeta);
+    const subEngine = engine.withUpdates({ metaVars: subVars, goals: [subId] });
+
+    // Apply epsOverMPos
+    r = new ApplyTactic({ tag: 'Const', name: 'epsOverMPos' }).apply(subEngine, subMeta, subId);
+    if (!r.success) throw new Error('epsOverMPos failed');
+    const epsEngine = r.newEngine;
+
+    // Find the 0 < 2 goal — the second unsolved goal from epsOverMPos
+    const unsolvedGoals = epsEngine.goals.filter(g => {
+      const m = epsEngine.metaVars.get(g);
+      return m && m.solution === undefined;
+    });
+    expect(unsolvedGoals.length).toBeGreaterThanOrEqual(2);
+    const goal2Id = unsolvedGoals[1]; // second subgoal = 0 < M = 0 < 2
+    const goal2 = epsEngine.metaVars.get(goal2Id!)!;
+
+    // Compute suggestions for goal 0 < 2
+    const ig = renderInteractiveGoal(epsEngine, goal2, defs, rev);
+    expect(ig).not.toBeNull();
+
+    // Find rlt subterm path
+    const rltPath = [...ig!.subtermMap.entries()].find(([, v]) => v.headName === 'rlt')?.[0];
+    expect(rltPath).toBeDefined();
+
+    const kernelGoal: KernelGoalInfo = {
+      engine: epsEngine.withUpdates({ goals: [goal2Id!] }),
+      goal: goal2,
+      definitions: defs,
+      rev,
+    };
+    const suggestions = computeTacticSuggestions(rltPath!, ig!, defs, kernelGoal);
+
+    // exact hε should NOT appear (hε proves 0 < ε, not 0 < 2)
+    const exactHε = suggestions.find(s => s.id === 'exact-hyp-hε');
+    expect(exactHε).toBeUndefined();
+
+    // apply hε should NOT appear either
+    const applyHε = suggestions.find(s => s.id === 'apply-hyp-hε');
+    expect(applyHε).toBeUndefined();
+  });
+
   test('computeTermSlots produces correct Var indices for rlt slot type', async () => {
     const { computeTermSlots, kernelTermToSource } = await import('./term-builder');
     const { createInitialEngine } = await import('../tactics/tacticsEngine');

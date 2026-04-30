@@ -10,6 +10,8 @@ import { renderGoalLatex, renderSubtermLatex } from './goal-computation';
 import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import { fullNormalize, whnf } from '../compiler/whnf';
+import { shiftTerm } from '../compiler/subst';
+import { unifyTerms } from '../compiler/unify';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { ExactTactic, ApplyTactic } from '../tactics/tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
@@ -545,20 +547,27 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
       }
     } catch { /* doesn't apply */ }
 
-    // Try apply — skip if hypothesis type head doesn't match goal type head
-    // (prevents false matches from δ-reduction asymmetries)
+    // For non-function hypotheses, verify the type actually matches the goal.
+    // The goal may have unsolved Metas (from prior apply) which match anything —
+    // zonk them away first, then check structural equality after WHNF.
     {
       const hypType = entry.type;
-      let hypHead: TTKTerm = hypType;
-      while (hypHead.tag === 'App') hypHead = hypHead.fn;
-      // For non-function hypotheses (no Pi binders), skip if heads don't match
       const isPi = hypType.tag === 'Binder' && hypType.binderKind.tag === 'BPi';
-      let goalHead: TTKTerm = metaGoal.type;
-      while (goalHead.tag === 'App') goalHead = goalHead.fn;
-      if (!isPi && hypHead.tag === 'Const' && goalHead.tag === 'Const'
-          && hypHead.name !== goalHead.name) {
-        // Non-function hyp with different head — can't exact or apply
-        continue;
+      if (!isPi) {
+        // Shift hypothesis type to account for position in ctx
+        const shift = ctx.length - 1 - i;
+        const shiftedHypType = shift > 0 ? shiftTerm(hypType, shift, 0) : hypType;
+        // Zonk the goal type to resolve any solved metas
+        const zonkedGoalType = engine.zonkTerm(metaGoal.type, ctx.length);
+        // WHNF both and check structural equality
+        const hypW = whnf(shiftedHypType, { definitions: engine.definitions, typingContext: ctx });
+        const goalW = whnf(zonkedGoalType, { definitions: engine.definitions, typingContext: ctx });
+        // Use unifyTerms but ensure Metas DON'T match freely — only structural
+        const testUnify = unifyTerms(hypW, goalW, { mode: 'check', definitions: engine.definitions });
+        // If unification produces meta constraints, it means the match depends on
+        // unsolved metas — reject these (they're not definite matches)
+        if (!testUnify.success) continue;
+        if (testUnify.metaConstraints && testUnify.metaConstraints.length > 0) continue;
       }
     }
     try {

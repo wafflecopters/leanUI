@@ -13,6 +13,37 @@ import { whnf } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
 
+/** Substitute solved metas in a term. Simple recursive replacement without depth shifting. */
+function substituteSolvedMetas(term: TTKTerm, metaVars: Map<string, MetaVar>): TTKTerm {
+  switch (term.tag) {
+    case 'Meta': {
+      const meta = metaVars.get(term.id);
+      if (meta?.solution) return substituteSolvedMetas(meta.solution, metaVars);
+      return term;
+    }
+    case 'App': {
+      const fn = substituteSolvedMetas(term.fn, metaVars);
+      const arg = substituteSolvedMetas(term.arg, metaVars);
+      return fn === term.fn && arg === term.arg ? term : { ...term, fn, arg };
+    }
+    case 'Binder': {
+      const domain = substituteSolvedMetas(term.domain, metaVars);
+      const body = substituteSolvedMetas(term.body, metaVars);
+      return domain === term.domain && body === term.body ? term : { ...term, domain, body };
+    }
+    case 'Sort': {
+      const level = substituteSolvedMetas(term.level, metaVars);
+      return level === term.level ? term : { ...term, level };
+    }
+    case 'Match': {
+      const scrutinee = substituteSolvedMetas(term.scrutinee, metaVars);
+      const clauses = term.clauses.map(c => ({ ...c, rhs: substituteSolvedMetas(c.rhs, metaVars) }));
+      return { ...term, scrutinee, clauses };
+    }
+    default: return term;
+  }
+}
+
 /**
  * TacticResult: Outcome of applying a tactic
  */
@@ -444,28 +475,30 @@ export class ApplyTactic implements Tactic {
         focusIndex: engine.focusIndex
       }).solveConstraints();
 
+      const zonkedEngine = solvedEngine;
+
       // Replace current goal with arg metas that are STILL unsolved after constraint solving
       const newGoalIds = argMetas
         .filter(({ id, implicit }) => {
-          const meta = solvedEngine.metaVars.get(id);
+          const meta = zonkedEngine.metaVars.get(id);
           return meta && meta.solution === undefined && !implicit;
         })
         .map(({ id }) => id);
 
       const newGoals = [
-        ...solvedEngine.goals.slice(0, solvedEngine.focusIndex),
+        ...zonkedEngine.goals.slice(0, zonkedEngine.focusIndex),
         ...newGoalIds,
-        ...solvedEngine.goals.slice(solvedEngine.focusIndex + 1)
+        ...zonkedEngine.goals.slice(zonkedEngine.focusIndex + 1)
       ];
 
       // Adjust focus to first new subgoal (if any)
       const newFocusIndex = newGoalIds.length > 0
-        ? solvedEngine.focusIndex
-        : Math.min(solvedEngine.focusIndex, Math.max(0, newGoals.length - 1));
+        ? zonkedEngine.focusIndex
+        : Math.min(zonkedEngine.focusIndex, Math.max(0, newGoals.length - 1));
 
       // Collect solved args for prose rendering (e.g., "f" in "cong f")
       const solvedArgs: SolvedArg[] = argMetas.map(({ id, meta: origMeta, implicit }) => {
-        const solved = solvedEngine.metaVars.get(id);
+        const solved = zonkedEngine.metaVars.get(id);
         return {
           term: solved?.solution ?? { tag: 'Hole' as const, id: '_' },
           type: origMeta.type,
@@ -475,7 +508,7 @@ export class ApplyTactic implements Tactic {
 
       return {
         success: true,
-        newEngine: solvedEngine.withUpdates({
+        newEngine: zonkedEngine.withUpdates({
           goals: newGoals,
           focusIndex: newFocusIndex
         }),
