@@ -1326,7 +1326,13 @@ export function elaborateType(
     const inferred = inferType(env);
     const elaborated = inferred.elaboratedTerm;
     if (elaborated) {
-      return inferred.zonkTerm(elaborated);
+      // Solve constraints to resolve implicit arg metas (e.g., ?_implicit_R → Var(0))
+      try {
+        const solved = inferred.solveMetasAndConstraints({ liftMetasToFullContext: false });
+        return solved.zonkTerm(elaborated);
+      } catch {
+        return inferred.zonkTerm(elaborated);
+      }
     }
     return term;
   } catch {
