@@ -1221,6 +1221,24 @@ function tokenizeExactExpr(expr: string): string[] {
  * Names are resolved as context variables first, then as constants.
  * When definitions are provided, implicit argument Holes are inserted automatically.
  */
+/** Map numeric/symbol tokens to source names. Checks definitions to pick the right one. */
+function resolveSymbol(name: string, definitions?: DefinitionsMap): string | undefined {
+  if (!definitions) return undefined;
+  // Numeric aliases from @syntax annotations
+  const numericAliases: Record<string, string[]> = {
+    '0': ['rzero', 'Zero'],
+    '1': ['rone'],
+    '2': ['rtwo'],
+  };
+  const candidates = numericAliases[name];
+  if (candidates) {
+    for (const c of candidates) {
+      if (definitions.terms.has(c)) return c;
+    }
+  }
+  return undefined;
+}
+
 export function parseExactExpr(
   expr: string,
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
@@ -1262,7 +1280,10 @@ export function parseExactExpr(
         body,
       };
     }
-    const name = tokens[pos++];
+    let name = tokens[pos++];
+    // Resolve numeric literals and common symbols to source names
+    const symbolAlias = resolveSymbol(name, definitions);
+    if (symbolAlias) name = symbolAlias;
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {
       if (localBinderNames[i] === name) {
