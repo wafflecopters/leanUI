@@ -289,7 +289,11 @@ export function computeTacticSuggestions(
             const res = tactic.apply(engine, metaGoal, gId);
             if (res.success) {
               const label = isSingle ? 'Construct' : `Construct ${ctor.name}`;
-              const numSubgoals = res.newEngine?.goals.length ?? 1;
+              const oldGoalSet = new Set(engine.goals);
+              const newGoalIds = res.newEngine ? res.newEngine.goals.filter(g => !oldGoalSet.has(g)) : [];
+              const subgoalPreviews = res.newEngine
+                ? renderSubgoalPreviews(engine, res.newEngine, kernelGoal!.definitions, kernelGoal!.rev)
+                : undefined;
               suggestions.push({
                 id: `construct-${ctor.name}`,
                 label,
@@ -298,7 +302,8 @@ export function computeTacticSuggestions(
                   : `\\text{Construct } \\textbf{${texEscape(ctor.name)}}`,
                 description: `Apply constructor ${ctor.name}`,
                 applyCtorName: ctor.name,
-                numSubgoals,
+                numSubgoals: newGoalIds.length,
+                subgoalPreviews,
               });
             }
           } catch { /* constructor doesn't unify */ }
@@ -612,8 +617,10 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
 
     if (goalHeadName) {
       for (const [defName, def] of definitions.terms) {
-        // Skip projections, self-references, and the current declaration
+        // Skip projections, self-references, constructors (handled by Construct suggestions),
+        // and the current declaration
         if (defName.includes('.') || defName === kernelGoal.currentDeclName) continue;
+        if (definitions.inductiveNameOfConstructor.has(defName)) continue;
         if (!def.type) continue;
 
         // Walk Pi spine to find return type head
