@@ -100,12 +100,35 @@ function renderSubgoalPreviews(
       const meta = newEngine.metaVars.get(gId);
       if (!meta) continue;
       const displayMeta = { ...meta, type: replaceMetas(meta.type) };
-      previews.push(renderGoalLatex(newEngine, displayMeta, definitions, rev));
+      let latex = renderGoalLatex(newEngine, displayMeta, definitions, rev);
+      // If the goal is a Type/Sort (e.g., ℝ), prefix with "name : " to clarify it's a value
+      const metaName = metaNames.get(gId);
+      if (metaName && isValueGoal(meta.type, definitions)) {
+        latex = `${metaName} : ${latex}`;
+      }
+      previews.push(latex);
     }
     return previews.length > 0 ? previews : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** Check if a goal type is a value type (Type, Carrier R, etc.) rather than a proposition.
+ *  Value-type goals need "name : Type" labeling in previews. */
+function isValueGoal(type: TTKTerm, definitions: DefinitionsMap): boolean {
+  // Sort (Type, Type u) — always a value
+  if (type.tag === 'Sort') return true;
+  // Walk to head
+  let head: TTKTerm = type;
+  while (head.tag === 'App') head = head.fn;
+  if (head.tag === 'Const') {
+    const name = head.name;
+    // Carrier R, Real, Nat, etc. are value types
+    if (name === 'Carrier' || name === 'Type') return true;
+    if (definitions.inductiveTypes.has(name)) return true;
+  }
+  return false;
 }
 
 /** Render the result goal LaTeX after applying a tactic. Returns undefined if not possible. */
@@ -526,28 +549,34 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
       }
     } catch { /* doesn't apply */ }
 
-    // Try apply
+    // Try apply (but only if the hypothesis is a function type — Pi-headed)
     try {
       const applyTactic = new ApplyTactic(varTerm);
       const result = applyTactic.apply(engine, metaGoal, goalId);
       if (result.success) {
-        // Count the new subgoals (unsolved explicit args)
-        const numSubgoals = result.newEngine
-          ? result.newEngine.goals.length - engine.goals.length + 1
-          : 1;
-        const subgoalPreviews = result.newEngine
-          ? renderSubgoalPreviews(engine, result.newEngine, kernelGoal.definitions, kernelGoal.rev)
-          : undefined;
-        suggestions.push({
-          id: `apply-hyp-${name}`,
-          label: `apply ${name}`,
-          labelLatex: `\\text{apply}\\; \\textbf{${texEscape(name)}}`,
-          description: numSubgoals > 0
-            ? `Apply ${name}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
-            : `Apply ${name}`,
-          numSubgoals,
-          subgoalPreviews,
-        });
+        const oldGoalSet = new Set(engine.goals);
+        const newGoalIds = result.newEngine ? result.newEngine.goals.filter(g => !oldGoalSet.has(g)) : [];
+        if (newGoalIds.length === 0) {
+          // Apply with no new subgoals = exact — show as exact
+          suggestions.push({
+            id: `exact-hyp-${name}`,
+            label: `exact ${name}`,
+            labelLatex: `\\text{exact}\\; \\textbf{${texEscape(name)}}`,
+            description: `Close goal with hypothesis ${name}`,
+          });
+        } else {
+          const subgoalPreviews = result.newEngine
+            ? renderSubgoalPreviews(engine, result.newEngine, kernelGoal.definitions, kernelGoal.rev)
+            : undefined;
+          suggestions.push({
+            id: `apply-hyp-${name}`,
+            label: `apply ${name}`,
+            labelLatex: `\\text{apply}\\; \\textbf{${texEscape(name)}}`,
+            description: `Apply ${name}, creating ${newGoalIds.length} subgoal${newGoalIds.length > 1 ? 's' : ''}`,
+            numSubgoals: newGoalIds.length,
+            subgoalPreviews,
+          });
+        }
       }
     } catch { /* doesn't apply */ }
   }
