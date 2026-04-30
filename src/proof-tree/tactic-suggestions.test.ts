@@ -527,6 +527,71 @@ describe('definition search suggestions', () => {
     expect(result.success).toBe(true);
   });
 
+  test('computeTermSlots produces correct Var indices for rlt slot type', async () => {
+    const { computeTermSlots, kernelTermToSource } = await import('./term-builder');
+    const { createInitialEngine } = await import('../tactics/tacticsEngine');
+    const { shiftTerm } = await import('../compiler/subst');
+
+    // Simulate: ctx = [R, f, x0, L, M, limF, ε, hε]
+    // (simplified from the full limitsAdd context)
+    const RType: import('../compiler/kernel').TTKTerm = { tag: 'Const', name: 'Real' };
+    const CarrierR = (rIdx: number): import('../compiler/kernel').TTKTerm =>
+      ({ tag: 'App', fn: { tag: 'Const', name: 'Carrier' }, arg: { tag: 'Var', index: rIdx } });
+    const FnType = (rIdx: number): import('../compiler/kernel').TTKTerm =>
+      ({ tag: 'Binder', binderKind: { tag: 'BPi' }, name: '_', domain: CarrierR(rIdx), body: CarrierR(rIdx + 1) });
+
+    const ctx: import('../compiler/kernel').TTKContext = [
+      { name: 'R', type: RType },
+      { name: 'f', type: FnType(0) },
+      { name: 'x0', type: CarrierR(1) },
+      { name: 'L', type: CarrierR(2) },
+      { name: 'M', type: CarrierR(3) },
+    ];
+    // limF : Limit(R, f, x0, L) — Var indices relative to ctx[0..4]
+    // R=Var(4), f=Var(3), x0=Var(2), L=Var(1)
+    const limFType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: {
+        tag: 'App', fn: { tag: 'Const', name: 'Limit' },
+        arg: { tag: 'Var', index: 4 } },
+        arg: { tag: 'Var', index: 3 } },
+        arg: { tag: 'Var', index: 2 } },
+      arg: { tag: 'Var', index: 1 }
+    };
+    const fullCtx = [...ctx, { name: 'limF', type: limFType }];
+
+    // Goal: some dummy type
+    const goalType: import('../compiler/kernel').TTKTerm = { tag: 'Const', name: 'Type' };
+    const goalMeta = { ctx: fullCtx, type: goalType, solution: undefined as any };
+
+    // Prefill: limF at first explicit position (position 4, since 4 implicits)
+    // limF is at ctx index 5, debruijn = 5 (from end of 6-entry ctx)
+    const prefilled = new Map<number, import('../compiler/kernel').TTKTerm>();
+    prefilled.set(4, { tag: 'Var', index: 0 }); // limF
+
+    const engine = createInitialEngine(goalType, fullCtx, defs);
+    const rev = buildReverseRegistry(createDefaultRegistry());
+
+    const builder = computeTermSlots('Limit.eps_delta', prefilled, engine, goalMeta, defs, rev);
+    expect(builder).not.toBeNull();
+
+    // Find the rlt-typed slot (the last explicit slot, the hε arg)
+    const rltSlot = builder!.slots.find(s => {
+      let h = s.type;
+      while (h.tag === 'App') h = h.fn;
+      return h.tag === 'Const' && h.name === 'rlt';
+    });
+    expect(rltSlot).toBeDefined();
+
+    // The rlt slot's type should reference R (the Real), not L or M
+    // Convert to source and check it mentions R, not L
+    const source = kernelTermToSource(rltSlot!.type, fullCtx, defs);
+    expect(source).toContain('rzero');
+    // Should NOT contain 'L' or 'M' as the Real parameter
+    expect(source).not.toMatch(/\bL\b/);
+    expect(source).not.toMatch(/\bM\b/);
+    expect(source).not.toMatch(/\bf\b/);
+  });
+
   test('unfold rlt preview renders rtwo as 2, not 1+1', () => {
     const ctx = [
       { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },

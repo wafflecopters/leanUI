@@ -9,7 +9,7 @@
 import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createNamedArgLookup, TCEnv } from '../compiler/term';
 import { whnf } from '../compiler/whnf';
-import { subst } from '../compiler/subst';
+import { subst, shiftTerm } from '../compiler/subst';
 import { inferType, checkType } from '../compiler/checker';
 import { HaveTactic } from '../tactics/have-tactic';
 import { TacticEngine } from '../tactics/tacticsEngine';
@@ -111,8 +111,14 @@ export function computeTermSlots(
       const typeArgs: TTKTerm[] = [];
       let cur = hypTypeWhnf;
       while (cur.tag === 'App') { typeArgs.unshift(cur.arg); cur = cur.fn; }
+      // Shift Var indices from hypType's local context to the full goal.ctx.
+      // hypType has Vars relative to entries [0..entryIdx-1], but we need
+      // Vars relative to the full goal.ctx [0..goal.ctx.length-1].
+      const shift = goal.ctx.length - entryIdx;
       for (let i = 0; i < numImplicit && i < typeArgs.length; i++) {
-        if (!prefilled.has(i)) prefilled.set(i, typeArgs[i]);
+        if (!prefilled.has(i)) {
+          prefilled.set(i, shift > 0 ? shiftTerm(typeArgs[i], shift, 0) : typeArgs[i]);
+        }
       }
     }
   }
