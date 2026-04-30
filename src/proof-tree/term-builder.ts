@@ -289,32 +289,45 @@ export function computeTermSlots(
 
 /**
  * Convert a kernel term to a source expression string that parseExactExpr can parse back.
- * Handles Const, Var (using context names), App, and Binder (Pi).
+ * Skips implicit args for Const applications so the roundtrip through parseExactExpr
+ * (which re-inserts Holes for implicits) produces the correct term.
  */
-export function kernelTermToSource(term: TTKTerm, ctx: TTKContext): string {
-  switch (term.tag) {
-    case 'Const': return term.name;
-    case 'Var': {
-      const entry = ctx[ctx.length - 1 - term.index];
-      return entry?.name ?? `_v${term.index}`;
+export function kernelTermToSource(term: TTKTerm, ctx: TTKContext, definitions?: DefinitionsMap): string {
+  const namedArgLookup = definitions ? createNamedArgLookup(definitions) : undefined;
+
+  function convert(t: TTKTerm): string {
+    switch (t.tag) {
+      case 'Const': return t.name;
+      case 'Var': {
+        const entry = ctx[ctx.length - 1 - t.index];
+        return entry?.name ?? `_v${t.index}`;
+      }
+      case 'App': {
+        // Collect the spine
+        const args: TTKTerm[] = [];
+        let head: TTKTerm = t;
+        while (head.tag === 'App') { args.unshift(head.arg); head = head.fn; }
+        const headStr = convert(head);
+        // Skip implicit args (parseExactExpr will re-insert Holes for them)
+        let numImplicit = 0;
+        if (head.tag === 'Const' && namedArgLookup) {
+          const namedArgs = namedArgLookup(head.name);
+          numImplicit = namedArgs?.size ?? 0;
+        }
+        const explicitArgs = args.slice(numImplicit);
+        const argStrs = explicitArgs.map(a => {
+          const s = convert(a);
+          return s.includes(' ') ? `(${s})` : s;
+        });
+        return [headStr, ...argStrs].join(' ');
+      }
+      case 'Sort': return 'Type';
+      case 'Hole': return '?';
+      case 'Meta': return '?';
+      default: return '?';
     }
-    case 'App': {
-      // Collect the spine
-      const args: TTKTerm[] = [];
-      let head: TTKTerm = term;
-      while (head.tag === 'App') { args.unshift(head.arg); head = head.fn; }
-      const headStr = kernelTermToSource(head, ctx);
-      const argStrs = args.map(a => {
-        const s = kernelTermToSource(a, ctx);
-        return s.includes(' ') ? `(${s})` : s;
-      });
-      return [headStr, ...argStrs].join(' ');
-    }
-    case 'Sort': return 'Type';
-    case 'Hole': return '?';
-    case 'Meta': return '?';
-    default: return '?';
   }
+  return convert(term);
 }
 
 /**

@@ -1313,7 +1313,7 @@ export function elaborateType(
   _metaVars?: Map<string, MetaVar>,
 ): TTKTerm {
   try {
-    // Use a fresh metaVar map to avoid conflicts with existing engine state
+    // Use inferType with a fresh metaVar map to resolve Holes (implicit args)
     const env = new TCEnv(
       [...ctx],
       definitions,
@@ -1323,18 +1323,10 @@ export function elaborateType(
       new Map(),
       { mode: 'check' }
     );
-    // Check the term as a Type (it should have type Sort)
-    const sortType: TTKTerm = { tag: 'Sort', level: { tag: 'Hole', id: '_elab_level' } };
-    const checked = checkType(env, sortType);
-    const elaborated = checked.elaboratedTerm;
+    const inferred = inferType(env);
+    const elaborated = inferred.elaboratedTerm;
     if (elaborated) {
-      // Solve constraints to resolve implicit arg metas
-      try {
-        const solved = checked.solveMetasAndConstraints({ liftMetasToFullContext: false });
-        return solved.zonkTerm(elaborated);
-      } catch {
-        return checked.zonkTerm(elaborated);
-      }
+      return inferred.zonkTerm(elaborated);
     }
     return term;
   } catch {
@@ -2471,13 +2463,11 @@ function replayProofTree(
       if (!goal) return null;
 
       // Interactive proof subtree: proofTree proves typeExpr, then child gets h : T in context
-      if (node.proofTree && (node.typeKernel || node.typeExpr)) {
-        // Prefer kernel term (no lossy roundtrip); fall back to parsing source string
-        let typeTerm = node.typeKernel ?? null;
-        if (!typeTerm && node.typeExpr) {
-          const raw = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
-          if (raw) typeTerm = elaborateType(raw, goal.ctx, engine.definitions, engine.metaVars);
-        }
+      if (node.proofTree && node.typeExpr) {
+        // Parse typeExpr in the current goal context (implicit args are re-inserted as Holes
+        // by parseExactExpr, then resolved by elaborateType via checkType)
+        const raw = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+        const typeTerm = raw ? elaborateType(raw, goal.ctx, engine.definitions) : null;
         if (!typeTerm) {
           return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
         }

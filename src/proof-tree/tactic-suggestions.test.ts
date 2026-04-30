@@ -5,7 +5,7 @@ import { mkConstTT } from '../compiler/surface';
 import { collectRewriteCandidates, computeTacticSuggestions, KernelGoalInfo } from './tactic-suggestions';
 import { compileTTFromText } from '../compiler/compile';
 import { createInitialEngine } from '../tactics/tacticsEngine';
-import { IntrosTactic, ApplyTactic } from '../tactics/tactic';
+import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { InteractiveGoal } from './interactive-goal';
 import { parseExactExpr, elaborateType } from './goal-computation';
 import { renderInteractiveGoal } from './interactive-goal';
@@ -474,6 +474,57 @@ describe('definition search suggestions', () => {
 
     // zeroLtOne proves 0 < 1, not 0 < ε/2 — should NOT appear
     expect(ids).not.toContain('apply-def-zeroLtOne');
+  });
+
+  test('elaborateType resolves Holes in parsed rlt expression', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+      { name: 'ε', type: { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'Carrier' }, arg: { tag: 'Var' as const, index: 0 } } },
+    ];
+    // Parse rlt (rzero R) (rdiv ε (rtwo R)) — inserts Holes for implicit args
+    const parsed = parseExactExpr('rlt (rzero R) (rdiv ε (rtwo R))', ctx, defs);
+    expect(parsed).not.toBeNull();
+
+    // Elaborate to resolve Holes
+    const elaborated = elaborateType(parsed!, ctx, defs);
+    expect(elaborated).not.toBe(parsed); // should NOT be the same object
+
+    // No Holes should remain
+    const json = JSON.stringify(elaborated);
+    expect(json).not.toContain('"Hole"');
+
+    // Head should be rlt
+    let h: any = elaborated;
+    while (h.tag === 'App') h = h.fn;
+    expect(h.tag).toBe('Const');
+    expect(h.name).toBe('rlt');
+  });
+
+  test('exact hε works on goal 0 < ε via elaborated typeExpr', async () => {
+    const { shiftTerm } = await import('../compiler/subst');
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+      { name: 'ε', type: { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'Carrier' }, arg: { tag: 'Var' as const, index: 0 } } },
+    ];
+    // Parse and elaborate the goal type: rlt (rzero R) ε
+    const parsed = parseExactExpr('rlt (rzero R) ε', ctx, defs);
+    expect(parsed).not.toBeNull();
+    const goalType = elaborateType(parsed!, ctx, defs);
+
+    // Verify Holes are resolved
+    expect(JSON.stringify(goalType)).not.toContain('"Hole"');
+
+    // hε has the SAME type; shift goal type by 1 since we're adding hε to context
+    const shiftedGoalType = shiftTerm(goalType, 1, 0);
+    const fullCtx = [...ctx, { name: 'hε', type: goalType }];
+    const engine = createInitialEngine(shiftedGoalType, fullCtx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const gId = engine.getFocusedGoalId()!;
+
+    // exact hε (Var index 0 = hε)
+    const hεVar: import('../compiler/kernel').TTKTerm = { tag: 'Var', index: 0 };
+    const result = new ExactTactic(hεVar).apply(engine, goal, gId);
+    expect(result.success).toBe(true);
   });
 
   test('unfold rlt preview renders rtwo as 2, not 1+1', () => {

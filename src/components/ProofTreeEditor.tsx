@@ -1198,10 +1198,10 @@ function HaveProseItem({
 
             // 1. Insert have BEFORE the current have node
             // The hoisted have gets an interactive proof subtree (proofTree hole)
-            // Store both the source expression (for display) and kernel term (for goal creation)
-            const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx);
+            // Store source expression with implicit args skipped (so parseExactExpr roundtrip works)
+            const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx, definitions);
             const proofHole = mkHole();
-            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', typeSourceExpr, proofHole, slot.type);
+            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', typeSourceExpr, proofHole);
             if (!updated) return;
 
             // 2. Fill the current slot with the hoisted name
