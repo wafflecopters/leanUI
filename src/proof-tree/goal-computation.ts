@@ -3449,13 +3449,29 @@ function replayEntireTreeFromTrace(
           const existing = result.get(node.id);
           if (existing) result.set(node.id, { ...existing, tacticError: step.error });
         }
-        // Walk children (subgoals from apply)
+        // Walk children (subgoals from apply), propagating sibling solutions
+        let traceEng = nextEngine;
         const baseFocus = nextEngine.focusIndex;
         for (let i = 0; i < node.children.length; i++) {
           const childFocusIdx = baseFocus + i;
-          if (childFocusIdx >= nextEngine.goals.length) break;
-          const childEngine = nextEngine.withUpdates({ focusIndex: childFocusIdx });
+          if (childFocusIdx >= traceEng.goals.length) break;
+          const childEngine = traceEng.withUpdates({ focusIndex: childFocusIdx });
           walkTrace(node.children[i], childEngine, caseLabelLatex);
+          // Propagate exact solutions to subsequent siblings
+          const child = node.children[i];
+          if (child.tag === 'exact') {
+            const cGoalId = childEngine.getFocusedGoalId();
+            const cGoal = cGoalId ? childEngine.getFocusedGoal() : null;
+            if (cGoal && cGoalId) {
+              const term = parseExactExpr(child.expr, cGoal.ctx, definitions);
+              if (term) {
+                try {
+                  const er = new ExactTactic(term).apply(childEngine, cGoal, cGoalId);
+                  if (er.success) traceEng = traceEng.withUpdates({ metaVars: er.newEngine.metaVars });
+                } catch { /* ignore */ }
+              }
+            }
+          }
         }
         // Fill in proofExprLatex for any exact descendants that the trace
         // walk couldn't reach (e.g., inner exacts inside nested constructor
@@ -3791,12 +3807,31 @@ function replayEntireTreeViaWalk(
           }
         }
 
+        let currentEng = newEngine;
         const baseFocus = newEngine.focusIndex;
         for (let i = 0; i < node.children.length; i++) {
           const childFocusIdx = baseFocus + i;
-          if (childFocusIdx >= newEngine.goals.length) break;
-          const childEngine = newEngine.withUpdates({ focusIndex: childFocusIdx });
+          if (childFocusIdx >= currentEng.goals.length) break;
+          const childEngine = currentEng.withUpdates({ focusIndex: childFocusIdx });
           walk(node.children[i], childEngine, caseLabelLatex);
+          // Propagate meta solutions from this child to subsequent siblings
+          // (e.g., exact 1 solves ?a → sibling goals show 0≤1 not 0≤□)
+          const child = node.children[i];
+          if (child.tag === 'exact') {
+            const childGoalId = childEngine.getFocusedGoalId();
+            const childGoal = childGoalId ? childEngine.getFocusedGoal() : null;
+            if (childGoal && childGoalId) {
+              const term = parseExactExpr(child.expr, childGoal.ctx, childEngine.definitions);
+              if (term) {
+                try {
+                  const er = new ExactTactic(term).apply(childEngine, childGoal, childGoalId);
+                  if (er.success) {
+                    currentEng = currentEng.withUpdates({ metaVars: er.newEngine.metaVars });
+                  }
+                } catch { /* ignore */ }
+              }
+            }
+          }
         }
         break;
       }

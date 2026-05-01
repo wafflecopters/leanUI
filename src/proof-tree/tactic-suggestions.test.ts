@@ -649,22 +649,30 @@ describe('definition search suggestions', () => {
   test('sibling goals show resolved metas after exact on first child', async () => {
     // After apply leLtTransLe (creates 3 subgoals: a:ℝ, 0≤a, a≤2),
     // solving goal 1 with "exact 1" should make siblings show 0≤1 and 1≤2
-    const { mkExact, mkHole, mkApply, replaceNode, freshProofId, resetProofIds } = await import('./proof-tree');
+    const { mkExact, mkHole, mkApply, mkIntros } = await import('./proof-tree');
     const { replayEntireTree } = await import('./goal-computation');
     const rev = buildReverseRegistry(createDefaultRegistry());
 
+    // Goal type: (R : Real) → rle(R, rzero(R), rtwo(R))
+    // Need a Pi binder so intros can introduce R
     const R: import('../compiler/kernel').TTKTerm = { tag: 'Var', index: 0 };
-    const goalType: import('../compiler/kernel').TTKTerm = {
+    const rleGoal: import('../compiler/kernel').TTKTerm = {
       tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'rle' }, arg: R },
         arg: { tag: 'App', fn: { tag: 'Const', name: 'rzero' }, arg: R } },
       arg: { tag: 'App', fn: { tag: 'Const', name: 'rtwo' }, arg: R }
     };
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'Binder', binderKind: { tag: 'BPi' }, name: 'R',
+      domain: { tag: 'Const', name: 'Real' },
+      body: rleGoal,
+    };
 
-    // Build tree: apply leLtTransLe → [exact "1", hole, hole]
+    // Build tree: intros [R] → apply leLtTransLe → [exact "1", hole, hole]
     const child1 = mkExact('1');
     const child2 = mkHole();
     const child3 = mkHole();
-    const root = mkApply('leLtTransLe', [child1, child2, child3]);
+    const applyNode = mkApply('leLtTransLe', [child1, child2, child3]);
+    const root = mkIntros(['R'], applyNode);
 
     const goalMap = replayEntireTree(root, goalType, defs, rev);
 
@@ -674,13 +682,15 @@ describe('definition search suggestions', () => {
     expect(info2).toBeDefined();
     expect(info3).toBeDefined();
 
-    // Goal 2 should show "0 ≤ 1" (not "0 ≤ □")
+    // Goal 2 should NOT contain □ (metas should be resolved to 1)
     if (info2?.goalLatex) {
       expect(info2.goalLatex).not.toContain('\\square');
+      expect(info2.goalLatex).toContain('1');
     }
-    // Goal 3 should show "1 ≤ 2" or "1 < 2" (not "□ ≤ 2")
+    // Goal 3 should NOT contain □
     if (info3?.goalLatex) {
       expect(info3.goalLatex).not.toContain('\\square');
+      expect(info3.goalLatex).toContain('1');
     }
   });
 
