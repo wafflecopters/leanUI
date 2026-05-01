@@ -2359,7 +2359,9 @@ function replayProofTree(
           if (childResult) return childResult;
         } else {
           // Cursor is NOT in this child — replay it to propagate meta solutions
-          // to subsequent sibling goals (e.g., exact 1 solves ?a)
+          // to subsequent sibling goals (e.g., exact 1 solves ?a → siblings show 0≤1 not 0≤□)
+          // Only update metaVars (NOT goals list, since ExactTactic removes the solved goal
+          // and that would break focus indices for subsequent children).
           if (child.tag === 'exact' && childGoalId) {
             const goal = childEngine.getFocusedGoal();
             if (goal) {
@@ -2367,7 +2369,10 @@ function replayProofTree(
               if (term) {
                 try {
                   const er = new ExactTactic(term).apply(childEngine, goal, childGoalId);
-                  if (er.success) currentEngine = er.newEngine;
+                  if (er.success) {
+                    // Propagate ONLY metaVars (solutions), keep original goals list
+                    currentEngine = currentEngine.withUpdates({ metaVars: er.newEngine.metaVars });
+                  }
                 } catch { /* ignore */ }
               }
             }
