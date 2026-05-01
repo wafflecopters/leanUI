@@ -646,6 +646,44 @@ describe('definition search suggestions', () => {
     expect(result.success).toBe(true);
   });
 
+  test('sibling goals show resolved metas after exact on first child', async () => {
+    // After apply leLtTransLe (creates 3 subgoals: a:ℝ, 0≤a, a≤2),
+    // solving goal 1 with "exact 1" should make siblings show 0≤1 and 1≤2
+    const { mkExact, mkHole, mkApply, replaceNode, freshProofId, resetProofIds } = await import('./proof-tree');
+    const { replayEntireTree } = await import('./goal-computation');
+    const rev = buildReverseRegistry(createDefaultRegistry());
+
+    const R: import('../compiler/kernel').TTKTerm = { tag: 'Var', index: 0 };
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'rle' }, arg: R },
+        arg: { tag: 'App', fn: { tag: 'Const', name: 'rzero' }, arg: R } },
+      arg: { tag: 'App', fn: { tag: 'Const', name: 'rtwo' }, arg: R }
+    };
+
+    // Build tree: apply leLtTransLe → [exact "1", hole, hole]
+    const child1 = mkExact('1');
+    const child2 = mkHole();
+    const child3 = mkHole();
+    const root = mkApply('leLtTransLe', [child1, child2, child3]);
+
+    const goalMap = replayEntireTree(root, goalType, defs, rev);
+
+    const info2 = goalMap.get(child2.id);
+    const info3 = goalMap.get(child3.id);
+
+    expect(info2).toBeDefined();
+    expect(info3).toBeDefined();
+
+    // Goal 2 should show "0 ≤ 1" (not "0 ≤ □")
+    if (info2?.goalLatex) {
+      expect(info2.goalLatex).not.toContain('\\square');
+    }
+    // Goal 3 should show "1 ≤ 2" or "1 < 2" (not "□ ≤ 2")
+    if (info3?.goalLatex) {
+      expect(info3.goalLatex).not.toContain('\\square');
+    }
+  });
+
   test('computeTermSlots produces correct Var indices for rlt slot type', async () => {
     const { computeTermSlots, kernelTermToSource } = await import('./term-builder');
     const { createInitialEngine } = await import('../tactics/tacticsEngine');

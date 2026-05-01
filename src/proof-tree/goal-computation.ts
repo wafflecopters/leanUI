@@ -2327,20 +2327,22 @@ function replayProofTree(
         return null;
       }
 
-      // Apply succeeded — match children to subgoals
-      const newEngine = result.newEngine!;
-      const baseFocus = newEngine.focusIndex;
+      // Apply succeeded — match children to subgoals.
+      // Accumulate engine state across children so that solving child 0
+      // (e.g., exact 1) propagates the meta solution to child 1's goal type
+      // (showing 0 ≤ 1 instead of 0 ≤ □).
+      let currentEngine = result.newEngine!;
+      const baseFocus = currentEngine.focusIndex;
 
       for (let i = 0; i < node.children.length; i++) {
         const child = node.children[i];
-        // Focus engine on the i-th subgoal
         const childFocusIdx = baseFocus + i;
-        if (childFocusIdx >= newEngine.goals.length) break;
+        if (childFocusIdx >= currentEngine.goals.length) break;
 
-        const childEngine = newEngine.withUpdates({ focusIndex: childFocusIdx });
+        const childEngine = currentEngine.withUpdates({ focusIndex: childFocusIdx });
+        const childGoalId = childEngine.getFocusedGoalId();
 
         if (child.id === cursorId) {
-          const childGoalId = childEngine.getFocusedGoalId();
           return {
             engine: childEngine,
             goalId: childGoalId!,
@@ -2348,11 +2350,29 @@ function replayProofTree(
           };
         }
 
-        const childResult = replayProofTree(
-          child, cursorId, childEngine,
-          caseLabel, caseLabelLatex, inductionVar,
-        );
-        if (childResult) return childResult;
+        // Check if cursor is inside this child's subtree
+        if (isCursorInSubtree(child, cursorId)) {
+          const childResult = replayProofTree(
+            child, cursorId, childEngine,
+            caseLabel, caseLabelLatex, inductionVar,
+          );
+          if (childResult) return childResult;
+        } else {
+          // Cursor is NOT in this child — replay it to propagate meta solutions
+          // to subsequent sibling goals (e.g., exact 1 solves ?a)
+          if (child.tag === 'exact' && childGoalId) {
+            const goal = childEngine.getFocusedGoal();
+            if (goal) {
+              const term = parseExactExpr(child.expr, goal.ctx, childEngine.definitions);
+              if (term) {
+                try {
+                  const er = new ExactTactic(term).apply(childEngine, goal, childGoalId);
+                  if (er.success) currentEngine = er.newEngine;
+                } catch { /* ignore */ }
+              }
+            }
+          }
+        }
       }
       return null;
     }
