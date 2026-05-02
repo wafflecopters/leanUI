@@ -694,6 +694,31 @@ describe('definition search suggestions', () => {
     }
   });
 
+  test('exact zeroLtOne auto-applies R and closes goal 0<1', () => {
+    const ctx = [
+      { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },
+    ];
+    const R: import('../compiler/kernel').TTKTerm = { tag: 'Var', index: 0 };
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'rlt' }, arg: R },
+        arg: { tag: 'App', fn: { tag: 'Const', name: 'rzero' }, arg: R } },
+      arg: { tag: 'App', fn: { tag: 'Const', name: 'rone' }, arg: R }
+    };
+
+    const engine = createInitialEngine(goalType, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const gId = engine.getFocusedGoalId()!;
+
+    // Parse "zeroLtOne" — should auto-apply R
+    const term = parseExactExpr('zeroLtOne', ctx, defs)!;
+    expect(term).not.toBeNull();
+    // Should be App(Const("zeroLtOne"), Var(0)) — with R applied
+    expect(term.tag).toBe('App');
+
+    const result = new ExactTactic(term).apply(engine, goal, gId);
+    expect(result.success).toBe(true);
+  });
+
   test('computeTermSlots produces correct Var indices for rlt slot type', async () => {
     const { computeTermSlots, kernelTermToSource } = await import('./term-builder');
     const { createInitialEngine } = await import('../tactics/tacticsEngine');

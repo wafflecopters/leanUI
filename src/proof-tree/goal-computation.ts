@@ -1283,32 +1283,7 @@ export function parseExactExpr(
     let name = tokens[pos++];
     // Resolve numeric literals and common symbols to source names
     const symbolAlias = resolveSymbol(name, definitions);
-    if (symbolAlias) {
-      name = symbolAlias;
-      // If the resolved name takes (R : Real) as first arg and R is in context,
-      // auto-apply it (so "1" becomes "rone R" not just "rone")
-      if (definitions) {
-        const defType = definitions.terms.get(name)?.type;
-        if (defType?.tag === 'Binder' && defType.binderKind.tag === 'BPi'
-            && defType.domain.tag === 'Const' && defType.domain.name === 'Real') {
-          const rIdx = findVarIndex('R', ctx);
-          if (rIdx !== null) {
-            let result: TTKTerm = { tag: 'Const', name };
-            // Insert Holes for implicit args first
-            if (namedArgLookup) {
-              const namedArgs = namedArgLookup(name);
-              if (namedArgs) {
-                for (const [paramName] of namedArgs) {
-                  result = { tag: 'App', fn: result, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
-                }
-              }
-            }
-            result = { tag: 'App', fn: result, arg: { tag: 'Var', index: rIdx + localBinderNames.length } };
-            return result;
-          }
-        }
-      }
-    }
+    if (symbolAlias) name = symbolAlias;
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {
       if (localBinderNames[i] === name) {
@@ -1320,11 +1295,34 @@ export function parseExactExpr(
     if (varIdx !== null) return { tag: 'Var', index: varIdx + localBinderNames.length };
     // For constants, insert Holes for implicit args (matching elaboration behavior)
     let result: TTKTerm = { tag: 'Const', name };
+    const numImplicitArgs = namedArgLookup ? (namedArgLookup(name)?.size ?? 0) : 0;
     if (namedArgLookup) {
       const namedArgs = namedArgLookup(name);
       if (namedArgs) {
         for (const [paramName] of namedArgs) {
           result = { tag: 'App', fn: result, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+        }
+      }
+    }
+    // Auto-apply R when the next explicit arg is (R : Real) and R is in context.
+    // This handles both numeric symbols (rone, rtwo) and lemmas (zeroLtOne)
+    // that take R as their first explicit parameter.
+    if (definitions && pos >= tokens.length) {
+      // Only auto-apply when this constant is the LAST token (standalone, not applied to args)
+      const defType = definitions.terms.get(name)?.type;
+      if (defType) {
+        let t = defType;
+        // Skip implicit Pi binders
+        for (let skip = 0; skip < numImplicitArgs && t.tag === 'Binder' && t.binderKind.tag === 'BPi'; skip++) {
+          t = t.body;
+        }
+        // Check if next explicit param is (R : Real)
+        if (t.tag === 'Binder' && t.binderKind.tag === 'BPi'
+            && t.domain.tag === 'Const' && t.domain.name === 'Real') {
+          const rIdx = findVarIndex('R', ctx);
+          if (rIdx !== null) {
+            result = { tag: 'App', fn: result, arg: { tag: 'Var', index: rIdx + localBinderNames.length } };
+          }
         }
       }
     }
