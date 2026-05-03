@@ -1281,6 +1281,30 @@ export function parseExactExpr(
       };
     }
     let name = tokens[pos++];
+    // Handle negative numeric literals: -N → rneg (rN R)
+    if (name.startsWith('-') && name.length > 1 && /^-\d+$/.test(name) && definitions) {
+      const positivePart = name.slice(1);
+      const innerSource = resolveSymbol(positivePart, definitions);
+      if (innerSource && definitions.terms.has('rneg')) {
+        const rIdx = findVarIndex('R', ctx);
+        if (rIdx !== null) {
+          const rVar: TTKTerm = { tag: 'Var', index: rIdx + localBinderNames.length };
+          // innerSource (e.g., rone) takes explicit R: rone R
+          const inner: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: innerSource }, arg: rVar };
+          // rneg has implicit {R}: insert Hole for it
+          let rnegApp: TTKTerm = { tag: 'Const', name: 'rneg' };
+          if (namedArgLookup) {
+            const rnegImplicits = namedArgLookup('rneg');
+            if (rnegImplicits) {
+              for (const [paramName] of rnegImplicits) {
+                rnegApp = { tag: 'App', fn: rnegApp, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+              }
+            }
+          }
+          return { tag: 'App', fn: rnegApp, arg: inner };
+        }
+      }
+    }
     // Resolve numeric literals and common symbols to source names
     const symbolAlias = resolveSymbol(name, definitions);
     if (symbolAlias) name = symbolAlias;

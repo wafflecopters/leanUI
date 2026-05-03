@@ -868,4 +868,23 @@ describe('definition search suggestions', () => {
     const r = new ExactTactic(term!).apply(engine, goal, gId);
     expect(r.success).toBe(true);
   });
+
+  test('parseExactExpr resolves "-1" to rneg(rone(R)) (E2E)', () => {
+    const ctx = [{ name: 'R', type: { tag: 'Const' as const, name: 'Real' } }];
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: { tag: 'Const', name: 'Carrier' }, arg: { tag: 'Var', index: 0 }
+    };
+    const engine = createInitialEngine(goalType, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const gId = engine.getFocusedGoalId()!;
+
+    // Test -1, -2 work as exact on Carrier R goal
+    for (const expr of ['-1', '-2']) {
+      const term = parseExactExpr(expr, ctx, defs);
+      expect(term).not.toBeNull();
+      const elab = elaborateType(term!, ctx, defs);
+      const r = new ExactTactic(elab).apply(engine, goal, gId);
+      expect(r.success).toBe(true);
+    }
+  });
 });
