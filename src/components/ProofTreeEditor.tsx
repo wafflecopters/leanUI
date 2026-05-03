@@ -2479,6 +2479,10 @@ function HaveView({ node, depth, cursorId, state, onPushChange, onClickNode, ...
         <span style={{ color: '#8b949e' }}> := </span>
         <InlineKaTeX latex={textToLatex(node.expr)} style={{ fontSize: '13px' }} />
       </TacticRow>
+      {/* Render the proof subtree (interactive proof of the have's type) */}
+      {node.proofTree && (
+        <ProofNodeView {...rest} node={node.proofTree} depth={depth + 1} cursorId={cursorId} state={state} onPushChange={onPushChange} onClickNode={onClickNode} />
+      )}
       <ProofNodeView {...rest} node={node.child} depth={depth + 1} cursorId={cursorId} state={state} onPushChange={onPushChange} onClickNode={onClickNode} />
     </>
   );
