@@ -274,6 +274,15 @@ addCancelRight : {R : Real} -> (a b c : Carrier R) -> Equal (radd a c) (radd b c
   intros R a b c h
   erw (sym (addCancelRightHelper a c)), h, (addCancelRightHelper b c)
 
+-- Cancellation forms for ordering (for backward reasoning via apply):
+-- "a <= b" goal can be reduced to "a + c <= b + c" by applying these.
+addLeRightCancel : {R : Real} -> (a b c : Carrier R) -> rle (radd a c) (radd b c) -> rle a b
+addLeRightCancel {R} a b c h = (replace (\\z => rle z b) (addCancelRightHelper a c) (replace (\\z => rle (radd (radd a c) (rneg c)) z) (addCancelRightHelper b c) (addLeRight (radd a c) (radd b c) (rneg c) h)))
+
+addLeLeftCancel : {R : Real} -> (a b c : Carrier R) -> rle (radd c a) (radd c b) -> rle a b
+addLeLeftCancel {R} a b c h = (addLeRightCancel a b c (replace (\\z => rle (radd a c) z) (CompleteOrderedField.addComm (field R) c b) (replace (\\z => rle z (radd c b)) (CompleteOrderedField.addComm (field R) c a) h)))
+
+
 -- Strict addition: a < b, c < d => a + c < b + d
 addLtBothNe : {R : Real} -> (a b c d : Carrier R) -> rle a b -> (Equal a b -> Void) -> rle c d -> Equal (radd a c) (radd b d) -> Void
 addLtBothNe {R} a b c d leab neab lecd eq = (neab (addCancelRight a b c (CompleteOrderedField.leAntisym (field R) (radd a c) (radd b c) (addLeRight a b c leab) (CompleteOrderedField.leTrans (field R) (radd b c) (radd b d) (radd a c) (CompleteOrderedField.addLeLeft (field R) c d b lecd) (replace (\\z => rle (radd b d) z) (sym eq) (CompleteOrderedField.leRefl (field R) (radd b d)))))))
