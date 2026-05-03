@@ -125,10 +125,17 @@ function isValueGoal(type: TTKTerm, definitions: DefinitionsMap): boolean {
   let head: TTKTerm = type;
   while (head.tag === 'App') head = head.fn;
   if (head.tag === 'Const') {
-    const name = head.name;
-    // Carrier R, Real, Nat, etc. are value types
-    if (name === 'Carrier' || name === 'Type') return true;
-    if (definitions.inductiveTypes.has(name)) return true;
+    // An inductive type (e.g. Real, Nat, Bool) produces values
+    if (definitions.inductiveTypes.has(head.name)) return true;
+    // A definition whose return type is Sort is a type-former (e.g. record
+    // projections like `Carrier : Real -> Type` or aliases that return Type).
+    // Applications of these produce value types.
+    const def = definitions.terms.get(head.name);
+    if (def?.type) {
+      let ret = def.type;
+      while (ret.tag === 'Binder' && ret.binderKind.tag === 'BPi') ret = ret.body;
+      if (ret.tag === 'Sort') return true;
+    }
   }
   return false;
 }

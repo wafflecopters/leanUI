@@ -99,6 +99,50 @@ If you don't understand what layer you're working in, STOP and read `SYSTEM_OVER
 
 ---
 
+## PURE KERNEL / ENGINE — No Domain Knowledge in Generic Layers
+
+**The kernel, type checker, parser, tactic engine, suggestion system, and goal computation MUST NOT contain hard-coded knowledge about specific domains (Reals, Naturals, etc.) or specific definitions (`rone`, `rzero`, `rtwo`, `rneg`, `Zero`, `Succ`, etc.).**
+
+These layers are GENERIC — they work with any user-supplied preset. Hard-coded names create:
+- Tight coupling: changing the preset breaks the kernel
+- Inconsistency: rules apply to one preset but not others
+- Maintenance burden: every new domain requires kernel edits
+
+### What goes WHERE:
+
+| Layer | Allowed |
+|-------|---------|
+| **Kernel/Engine/Parser** | Term shapes (`App`, `Const`, `Var`), generic algorithms (WHNF, unification, pattern matching), generic protocols (`@syntax`, namedArgMap) |
+| **Preset (.tt or preset .ts)** | Domain definitions, `@syntax` annotations, `@unfold` markers, custom notation entries |
+| **`syntax-registry.ts`** | Generic registry data structures (NotationEntry, symbolMap), NOT domain-specific entries |
+
+### Examples of VIOLATIONS to avoid:
+
+**BAD** — kernel knows about `rone`/`rtwo`:
+```typescript
+// In goal-computation.ts (kernel-level code):
+const numericAliases = { '1': ['rone'], '2': ['rtwo'] };
+if (name === '-1') return rneg(rone(R));  // ← shame!
+```
+
+**GOOD** — preset defines `@syntax`, kernel reads registry:
+```typescript
+// In real-analysis.ts (preset):
+@syntax 1
+rone : (R : Real) -> Carrier R
+
+// In parser (kernel-level):
+const sourceFromSymbol = registry.symbolMap.get('1')?.source;  // generic lookup
+```
+
+### When you find yourself writing hard-coded names:
+
+**STOP.** Ask: "Should this work for Naturals too? For my own preset?" If yes (it should), put it in the preset via `@syntax` and have the kernel read the registry.
+
+If `@syntax` doesn't support what you need, **extend the protocol**, don't hard-code names.
+
+---
+
 ## Language Specification
 
 The file `language-spec.md` documents the surface syntax of the LeanUI language. **When making changes to the parser or surface syntax, update `language-spec.md` to reflect those changes.**

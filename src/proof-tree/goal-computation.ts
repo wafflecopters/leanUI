@@ -1221,24 +1221,6 @@ function tokenizeExactExpr(expr: string): string[] {
  * Names are resolved as context variables first, then as constants.
  * When definitions are provided, implicit argument Holes are inserted automatically.
  */
-/** Map numeric/symbol tokens to source names. Checks definitions to pick the right one. */
-function resolveSymbol(name: string, definitions?: DefinitionsMap): string | undefined {
-  if (!definitions) return undefined;
-  // Numeric aliases from @syntax annotations
-  const numericAliases: Record<string, string[]> = {
-    '0': ['rzero', 'Zero'],
-    '1': ['rone'],
-    '2': ['rtwo'],
-  };
-  const candidates = numericAliases[name];
-  if (candidates) {
-    for (const c of candidates) {
-      if (definitions.terms.has(c)) return c;
-    }
-  }
-  return undefined;
-}
-
 export function parseExactExpr(
   expr: string,
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
@@ -1280,34 +1262,7 @@ export function parseExactExpr(
         body,
       };
     }
-    let name = tokens[pos++];
-    // Handle negative numeric literals: -N → rneg (rN R)
-    if (name.startsWith('-') && name.length > 1 && /^-\d+$/.test(name) && definitions) {
-      const positivePart = name.slice(1);
-      const innerSource = resolveSymbol(positivePart, definitions);
-      if (innerSource && definitions.terms.has('rneg')) {
-        const rIdx = findVarIndex('R', ctx);
-        if (rIdx !== null) {
-          const rVar: TTKTerm = { tag: 'Var', index: rIdx + localBinderNames.length };
-          // innerSource (e.g., rone) takes explicit R: rone R
-          const inner: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: innerSource }, arg: rVar };
-          // rneg has implicit {R}: insert Hole for it
-          let rnegApp: TTKTerm = { tag: 'Const', name: 'rneg' };
-          if (namedArgLookup) {
-            const rnegImplicits = namedArgLookup('rneg');
-            if (rnegImplicits) {
-              for (const [paramName] of rnegImplicits) {
-                rnegApp = { tag: 'App', fn: rnegApp, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
-              }
-            }
-          }
-          return { tag: 'App', fn: rnegApp, arg: inner };
-        }
-      }
-    }
-    // Resolve numeric literals and common symbols to source names
-    const symbolAlias = resolveSymbol(name, definitions);
-    if (symbolAlias) name = symbolAlias;
+    const name = tokens[pos++];
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {
       if (localBinderNames[i] === name) {
@@ -1319,34 +1274,11 @@ export function parseExactExpr(
     if (varIdx !== null) return { tag: 'Var', index: varIdx + localBinderNames.length };
     // For constants, insert Holes for implicit args (matching elaboration behavior)
     let result: TTKTerm = { tag: 'Const', name };
-    const numImplicitArgs = namedArgLookup ? (namedArgLookup(name)?.size ?? 0) : 0;
     if (namedArgLookup) {
       const namedArgs = namedArgLookup(name);
       if (namedArgs) {
         for (const [paramName] of namedArgs) {
           result = { tag: 'App', fn: result, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
-        }
-      }
-    }
-    // Auto-apply R when the next explicit arg is (R : Real) and R is in context.
-    // This handles both numeric symbols (rone, rtwo) and lemmas (zeroLtOne)
-    // that take R as their first explicit parameter.
-    if (definitions && pos >= tokens.length) {
-      // Only auto-apply when this constant is the LAST token (standalone, not applied to args)
-      const defType = definitions.terms.get(name)?.type;
-      if (defType) {
-        let t = defType;
-        // Skip implicit Pi binders
-        for (let skip = 0; skip < numImplicitArgs && t.tag === 'Binder' && t.binderKind.tag === 'BPi'; skip++) {
-          t = t.body;
-        }
-        // Check if next explicit param is (R : Real)
-        if (t.tag === 'Binder' && t.binderKind.tag === 'BPi'
-            && t.domain.tag === 'Const' && t.domain.name === 'Real') {
-          const rIdx = findVarIndex('R', ctx);
-          if (rIdx !== null) {
-            result = { tag: 'App', fn: result, arg: { tag: 'Var', index: rIdx + localBinderNames.length } };
-          }
         }
       }
     }
