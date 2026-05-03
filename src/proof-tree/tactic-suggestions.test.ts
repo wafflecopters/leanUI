@@ -828,4 +828,44 @@ describe('definition search suggestions', () => {
     expect(unfoldSugg!.resultGoalLatex).not.toContain('1+1');
     expect(unfoldSugg!.resultGoalLatex).not.toContain('\\Rightarrow');
   });
+
+  test('parseExactExpr resolves "1" to rone(R) when R in context', () => {
+    const ctx = [{ name: 'R', type: { tag: 'Const' as const, name: 'Real' } }];
+    const parsed = parseExactExpr('1', ctx, defs);
+    expect(parsed).not.toBeNull();
+    // Should be App(Const("rone"), Var(0)) — rone applied to R
+    expect(parsed!.tag).toBe('App');
+    const app = parsed as Extract<import('../compiler/kernel').TTKTerm, { tag: 'App' }>;
+    expect(app.fn.tag).toBe('Const');
+    expect((app.fn as any).name).toBe('rone');
+    expect(app.arg.tag).toBe('Var');
+    expect((app.arg as any).index).toBe(0);
+  });
+
+  test('parseExactExpr resolves "0" to rzero(R) and "2" to rtwo(R)', () => {
+    const ctx = [{ name: 'R', type: { tag: 'Const' as const, name: 'Real' } }];
+    const p0 = parseExactExpr('0', ctx, defs);
+    const p2 = parseExactExpr('2', ctx, defs);
+    expect((p0 as any)?.fn?.name).toBe('rzero');
+    expect((p2 as any)?.fn?.name).toBe('rtwo');
+  });
+
+  test('exact 1 succeeds for goal Carrier R (E2E)', () => {
+    const ctx = [{ name: 'R', type: { tag: 'Const' as const, name: 'Real' } }];
+    // Goal: Carrier R
+    const goalType: import('../compiler/kernel').TTKTerm = {
+      tag: 'App', fn: { tag: 'Const', name: 'Carrier' }, arg: { tag: 'Var', index: 0 }
+    };
+    const engine = createInitialEngine(goalType, ctx, defs);
+    const goal = engine.getFocusedGoal()!;
+    const gId = engine.getFocusedGoalId()!;
+
+    // Parse "1" — should resolve to rone(R)
+    const term = parseExactExpr('1', ctx, defs);
+    expect(term).not.toBeNull();
+
+    // ExactTactic with the resolved term should succeed
+    const r = new ExactTactic(term!).apply(engine, goal, gId);
+    expect(r.success).toBe(true);
+  });
 });
