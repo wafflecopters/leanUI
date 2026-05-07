@@ -109,6 +109,7 @@ export type TTKTerm =
   | { tag: 'Meta'; id: string }                            // Metavariable (instantiated during type checking)
   | { tag: 'Annot'; term: TTKTerm; type: TTKTerm }          // Type annotation
   | { tag: 'Match'; scrutinee: TTKTerm; clauses: TTKClause[] } // Pattern matching
+  | { tag: 'NatLit'; value: bigint }                       // Natural number literal (e.g., 1784) — Phase 1: inert primitive
 
 export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] = []): string {
   const [updatedName, ...rest] = updatedNames
@@ -868,6 +869,9 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
 
     case 'UOmega':
       return term2.tag === 'UOmega';
+
+    case 'NatLit':
+      return term2.tag === 'NatLit' && term1.value === term2.value;
   }
 }
 
@@ -1033,6 +1037,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
     }
+
+    case 'NatLit':
+      return term.value.toString();
   }
 }
 
@@ -1262,6 +1269,9 @@ export function prettyPrintFormatted(
 
       return `(match ${scrutinee}\n${clauses})`;
     }
+
+    case 'NatLit':
+      return term.value.toString();
   }
 }
 
@@ -1465,6 +1475,9 @@ export function prettyPrintLatex(
 
     case 'ULevel':
       return '\\text{Level}';
+
+    case 'NatLit':
+      return term.value.toString();
   }
 }
 
@@ -1528,6 +1541,9 @@ export function occursIn(index: number, term: TTKTerm): boolean {
       return false;
 
     case 'ULevel':
+      return false;
+
+    case 'NatLit':
       return false;
   }
 }
@@ -1662,6 +1678,9 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
       }
       return null;
     }
+
+    case 'NatLit':
+      return null;
   }
 }
 
@@ -1679,6 +1698,7 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
     case 'ULevel':
     case 'ULit':
     case 'UOmega':
+    case 'NatLit':
       return term;
 
     case 'Sort':

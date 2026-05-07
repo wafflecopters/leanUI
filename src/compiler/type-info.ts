@@ -604,6 +604,7 @@ function normSubterms(term: TTKTerm, definitions: DefinitionsMap, fuel: number):
     case 'ULevel':
     case 'ULit':
     case 'UOmega':
+    case 'NatLit':
       return term;
 
     case 'App': {

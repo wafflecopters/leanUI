@@ -540,6 +540,8 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
     return { tag: 'ULit', n: term.n };
   } else if (term.tag === 'UOmega') {
     return { tag: 'UOmega' };
+  } else if (term.tag === 'NatLit') {
+    return { tag: 'NatLit', value: term.value };
   }
 
   const _never: never = term
@@ -581,6 +583,7 @@ function replaceHolesWithMetasInTerm<S>(env: TCEnv<S>, term: TTKTerm): { env: TC
     case 'ULevel':
     case 'ULit':
     case 'UOmega':
+    case 'NatLit':
       return { env, term };
 
     case 'Binder': {
@@ -740,6 +743,7 @@ function substituteLevelMetasInTerm(term: TTKTerm, levelMetas: Map<string, Level
     case 'ULevel':
     case 'ULit':
     case 'UOmega':
+    case 'NatLit':
       return term;
 
     case 'Hole': {

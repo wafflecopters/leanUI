@@ -1263,6 +1263,10 @@ export function parseExactExpr(
       };
     }
     const name = tokens[pos++];
+    // Numeric literal: pure non-negative digit run becomes a NatLit (BigInt)
+    if (/^\d+$/.test(name)) {
+      return { tag: 'NatLit', value: BigInt(name) };
+    }
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {
       if (localBinderNames[i] === name) {
