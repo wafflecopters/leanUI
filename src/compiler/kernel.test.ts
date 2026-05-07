@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import {
-  prettyPrint, prettyPrintFormatted, prettyPrintLatex, isDefinitionallyEqual, fillHole, TTKTerm, TTKClause, mkVar, mkConst, mkType,
+  prettyPrint, prettyPrintFormatted, prettyPrintLatex, occursIn, isDefinitionallyEqual, fillHole, TTKTerm, TTKClause, mkVar, mkConst, mkType,
   mkULit, mkLSucc, mkLMax, mkLIMax, levelLeq, collectLevelVars, levelGeq
 } from './kernel';
 
@@ -176,6 +176,23 @@ describe('prettyPrintLatex', () => {
     expect(latex).toContain('inner\\_arg := x\\_val');
     expect(latex).toContain('named\\_pat := y\\_val');
     expect(latex).toContain('\\Rightarrow y\\_val');
+  });
+});
+
+describe('occursIn', () => {
+  test('accounts for clause binders in match branches', () => {
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [{
+        patterns: [],
+        namedPatterns: [{ name: 'named', pattern: { tag: 'PVar', name: 'named' } }],
+        rhs: mkVar(1),
+      }],
+    };
+
+    expect(occursIn(0, term)).toBe(true);
+    expect(occursIn(1, term)).toBe(false);
   });
 });
 

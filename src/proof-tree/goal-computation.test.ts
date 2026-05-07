@@ -424,6 +424,37 @@ describe('kernelTypeToSurface', () => {
     const result = kernelTypeToSurface(kernel);
     expect(result.tag).toBe('Sort');
   });
+
+  test('preserves named pattern metadata in Match clauses', () => {
+    const kernel: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [{
+        patterns: [{
+          tag: 'PCtor',
+          name: 'Wrap',
+          args: [],
+          namedArgs: [{ name: 'inner', pattern: { tag: 'PVar', name: 'x' } }],
+        }],
+        namedPatterns: [{ name: 'named', pattern: { tag: 'PVar', name: 'y' } }],
+        rhs: mkVar(0),
+      }],
+    };
+
+    const result = kernelTypeToSurface(kernel);
+    expect(result.tag).toBe('Match');
+    if (result.tag !== 'Match') return;
+
+    expect(result.clauses[0].patterns[0]).toEqual({
+      tag: 'PCtor',
+      name: 'Wrap',
+      args: [],
+      namedArgs: [{ name: 'inner', pattern: { tag: 'PVar', name: 'x' } }],
+    });
+    expect(result.clauses[0].namedPatterns).toEqual([
+      { name: 'named', pattern: { tag: 'PVar', name: 'y' } },
+    ]);
+  });
 });
 
 // ============================================================================

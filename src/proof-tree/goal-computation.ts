@@ -122,6 +122,10 @@ function kernelPatternToSurface(p: TTKPattern): TPattern {
       tag: 'PCtor',
       name: p.name,
       args: p.args.map(a => kernelPatternToSurface(a)),
+      namedArgs: p.namedArgs?.map(na => ({
+        name: na.name,
+        pattern: kernelPatternToSurface(na.pattern),
+      })),
     };
   }
 }
@@ -198,6 +202,10 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
         scrutinee: scrut,
         clauses: t.clauses.map(c => ({
           patterns: c.patterns.map(p => kernelPatternToSurface(p)),
+          namedPatterns: c.namedPatterns?.map(np => ({
+            name: np.name,
+            pattern: kernelPatternToSurface(np.pattern),
+          })),
           rhs: kernelTypeToSurface(c.rhs, definitions),
         })),
       } as TTerm;

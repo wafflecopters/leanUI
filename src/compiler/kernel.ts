@@ -1550,7 +1550,7 @@ export function occursIn(index: number, term: TTKTerm): boolean {
     case 'Match':
       if (occursIn(index, term.scrutinee)) return true;
       for (const clause of term.clauses) {
-        if (occursIn(index, clause.rhs)) return true;
+        if (occursIn(index + collectClausePatternVars(clause).length, clause.rhs)) return true;
       }
       return false;
 
