@@ -16,23 +16,24 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 
 ## Current Focus
 Upleveling the core engine while preserving the current language surface:
-- Consolidate pattern-binder accounting across elaboration, unification, substitution, recursion, and proof/tactic replay
-- Keep shrinking duplicated `Match`-walker logic in compiler/tactic/proof-tree code
-- Harden generic kernel transforms around clause binder depth and metadata preservation
-- Expand low-level regressions before doing another round of solver/diagnostic tightening
+- Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
+- Harden generic term utilities so clause metadata and binder depth are preserved everywhere
+- Tighten semantic helpers around stuck `Match` equality and pretty-printing/debug output
+- Expand low-level regressions before another round of solver/diagnostic tightening
 
 ## Recent Progress
 - Added shared `pattern-binders.ts` helpers and pushed them through compile/elab/unify/subst/with-desugar/with-abstraction/record code
-- Fixed generic `Match` term transforms to account for clause binders correctly, including `transformVarsInTerm` and nested substitution/renaming paths
-- Hardened tactic/proof-tree walkers (`induction`, `subst`, goal replay) to use clause-wide binder counts instead of ad-hoc first-pattern logic
+- Fixed generic `Match` term transforms to account for clause binders correctly, including `transformVarsInTerm`, surface substitution/shift, and nested renaming paths
+- Removed clause metadata loss in generic rebuild helpers (`kernel.ts`, `normalize.ts`, `surface.ts`) so named patterns/context data survive helper passes
 - Fixed structural recursion bookkeeping so named constructor arguments participate in variable collection and structurally-smaller analysis
-- Added regression coverage for clause-level named-pattern depth in substitution, generic term var transforms under `Match`, and recursion named-arg traversal
+- Fixed a semantic bug in `isDefinitionallyEqual` for stuck `Match` terms by comparing clause patterns, not only scrutinees and branch RHSs
+- Improved kernel pretty-printing for named pattern arguments / clause named patterns and added focused regressions around these helpers
 - Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` after the deeper pipeline pass
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
 - Improve semantic quality of application/type errors, especially around implicit arguments and partial application
-- Push the same DRY/hardening pass into remaining generic kernel/normalization walkers that still special-case `Match`
+- Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
 - Add more semantic dependency edges to the incremental checker beyond token-level references
 - Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`

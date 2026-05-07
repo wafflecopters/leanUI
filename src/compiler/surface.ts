@@ -22,6 +22,7 @@
  */
 
 import type { IndexPath } from '../types/source-position.js';
+import { countSurfaceClauseBindings } from './pattern-binders';
 
 // ============================================================================
 // Universe Levels (Term-based representation)
@@ -709,7 +710,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
         tag: 'Match',
         scrutinee: replaceHoleTT(term.scrutinee, holeId, replacement),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: replaceHoleTT(c.rhs, holeId, replacement)
         }))
       };
@@ -873,7 +874,7 @@ export function fillHoleWithTT(
         tag: 'Match',
         scrutinee: fillHoleWithTT(term.scrutinee, holeId, generator),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: fillHoleWithTT(c.rhs, holeId, generator)
         }))
       };
@@ -1473,10 +1474,8 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
         tag: 'Match',
         scrutinee: substHelperTT(targetIndex, replacement, term.scrutinee, depth),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          // TODO: when we implement proper pattern binding, we need to account for
-          // variables bound by patterns when substituting in the RHS
-          rhs: substHelperTT(targetIndex, replacement, c.rhs, depth)
+          ...c,
+          rhs: substHelperTT(targetIndex, replacement, c.rhs, depth + countSurfaceClauseBindings(c))
         }))
       };
 
@@ -1579,10 +1578,8 @@ export function shiftSurfaceTerm(amount: number, term: TTerm, cutoff: number): T
         tag: 'Match',
         scrutinee: shiftSurfaceTerm(amount, term.scrutinee, cutoff),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          // TODO: when we implement proper pattern binding, we need to account for
-          // variables bound by patterns when shifting in the RHS
-          rhs: shiftSurfaceTerm(amount, c.rhs, cutoff)
+          ...c,
+          rhs: shiftSurfaceTerm(amount, c.rhs, cutoff + countSurfaceClauseBindings(c))
         }))
       };
 
@@ -2692,7 +2689,7 @@ function fillHoleWithLet(
         tag: 'Match',
         scrutinee: fillHoleWithLet(term.scrutinee, holeId, letName, letType, letValue),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: fillHoleWithLet(c.rhs, holeId, letName, letType, letValue)
         }))
       };

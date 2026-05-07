@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import {
-  prettyPrint, prettyPrintFormatted, TTKTerm, TTKClause, mkVar, mkConst, mkType,
+  prettyPrint, prettyPrintFormatted, isDefinitionallyEqual, fillHole, TTKTerm, TTKClause, mkVar, mkConst, mkType,
   mkULit, mkLSucc, mkLMax, mkLIMax, levelLeq, collectLevelVars, levelGeq
 } from './kernel';
 
@@ -105,6 +105,74 @@ describe('prettyPrint', () => {
     const result = prettyPrint(matchTerm, []);
     // elabArgs[0] = Var(2) = A, elabArgs[1] = Var(0) = h, elabArgs[2] = Var(1) = n
     expect(result).toContain('A h n => result');
+  });
+
+  test('prints named ctor args and clause-level named patterns', () => {
+    const clause: TTKClause = {
+      patterns: [{
+        tag: 'PCtor',
+        name: 'Wrap',
+        args: [],
+        namedArgs: [{ name: 'inner', pattern: { tag: 'PVar', name: 'x' } }],
+      }],
+      namedPatterns: [{ name: 'named', pattern: { tag: 'PVar', name: 'y' } }],
+      rhs: mkVar(0),
+    };
+
+    const result = prettyPrint({
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [clause],
+    }, []);
+
+    expect(result).toContain('Wrap inner := x');
+    expect(result).toContain('named := y');
+    expect(result).toContain('=> y');
+  });
+
+  test('fillHole preserves clause metadata on match terms', () => {
+    const clause: TTKClause = {
+      patterns: [],
+      namedPatterns: [{ name: 'named', pattern: { tag: 'PVar', name: 'y' } }],
+      rhs: { tag: 'Hole', id: 'goal' },
+      contextNames: ['y'],
+    };
+
+    const result = fillHole({
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [clause],
+    }, 'goal', mkConst('done'));
+
+    expect(result.tag).toBe('Match');
+    if (result.tag !== 'Match') return;
+
+    expect(result.clauses[0].rhs).toEqual(mkConst('done'));
+    expect(result.clauses[0].namedPatterns).toEqual(clause.namedPatterns);
+    expect(result.clauses[0].contextNames).toEqual(clause.contextNames);
+  });
+});
+
+describe('isDefinitionallyEqual', () => {
+  test('distinguishes stuck matches with different patterns', () => {
+    const left: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [{
+        patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }],
+        rhs: mkConst('same'),
+      }],
+    };
+    const right: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [{
+        patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] }],
+        rhs: mkConst('same'),
+      }],
+    };
+
+    expect(isDefinitionallyEqual(left, right)).toBe(false);
   });
 
   test('preserves parentheses for function type domains', () => {

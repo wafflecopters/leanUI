@@ -63,7 +63,7 @@ export function normalize(term: TTKTerm): TTKTerm {
     case 'Match': {
       const scrutinee = normalize(term.scrutinee);
       const clauses = term.clauses.map(c => ({
-        patterns: c.patterns,
+        ...c,
         rhs: normalize(c.rhs)
       }));
 

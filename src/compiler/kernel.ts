@@ -858,6 +858,8 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
       if (!isDefinitionallyEqual(term1.scrutinee, term2.scrutinee)) return false;
       if (term1.clauses.length !== term2.clauses.length) return false;
       for (let i = 0; i < term1.clauses.length; i++) {
+        if (!patternsStructurallyEqual(term1.clauses[i].patterns, term2.clauses[i].patterns)) return false;
+        if (!namedPatternsStructurallyEqual(term1.clauses[i].namedPatterns, term2.clauses[i].namedPatterns)) return false;
         if (!isDefinitionallyEqual(term1.clauses[i].rhs, term2.clauses[i].rhs)) return false;
       }
       return true;
@@ -1019,14 +1021,17 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
         // Use stored context names if available (from checking), otherwise derive from patterns
         const clauseContext = c.contextNames
           ? [...c.contextNames, ...context]
-          : [...collectPatternVars(c.patterns).reverse(), ...context];
+          : [...collectClausePatternVars(c).reverse(), ...context];
         // Use clause's metaVars if available (for solved terms), otherwise fall back to outer metaVars
         const clauseMetaVars = c.metaVars ?? metaVars;
 
         // If elabArgs are available, show them (the solved elaboration); otherwise show patterns
         const lhsStr = c.elabArgs
           ? c.elabArgs.map(arg => prettyPrint(arg, clauseContext, clauseMetaVars)).join(' ')
-          : c.patterns.map(p => prettyPrintPatternInternal(p)).join(' ');
+          : [
+            ...c.patterns.map(p => prettyPrintPatternInternal(p)),
+            ...(c.namedPatterns ?? []).map(np => `${np.name} := ${prettyPrintPatternInternal(np.pattern)}`),
+          ].join(' ');
 
         const rhsStr = prettyPrint(c.rhs, clauseContext, clauseMetaVars);
         return `${lhsStr} => ${rhsStr}`;
@@ -1249,12 +1254,15 @@ export function prettyPrintFormatted(
       const clauses = term.clauses.map(c => {
         const clauseContext = c.contextNames
           ? [...c.contextNames, ...context]
-          : [...collectPatternVars(c.patterns).reverse(), ...context];
+          : [...collectClausePatternVars(c).reverse(), ...context];
         const clauseMetaVars = c.metaVars ?? metaVars;
 
         const lhsStr = c.elabArgs
           ? c.elabArgs.map(arg => prettyPrintFormatted(arg, clauseContext, clauseMetaVars, options)).join(' ')
-          : c.patterns.map(p => prettyPrintPatternInternal(p)).join(' ');
+          : [
+            ...c.patterns.map(p => prettyPrintPatternInternal(p)),
+            ...(c.namedPatterns ?? []).map(np => `${np.name} := ${prettyPrintPatternInternal(np.pattern)}`),
+          ].join(' ');
 
         const rhsStr = prettyPrintFormatted(c.rhs, clauseContext, clauseMetaVars, { ...options, indent: nextIndent });
         return `${nextPad}| ${lhsStr} => ${rhsStr}`;
@@ -1272,20 +1280,27 @@ function prettyPrintPatternInternal(pattern: TTKPattern): string {
     case 'PWild':
       // Display wildcards with their generated name visible
       return `_[${pattern.name}]`;
-    case 'PCtor':
-      if (pattern.args.length === 0) {
+    case 'PCtor': {
+      const parts = [
+        ...pattern.args.map(prettyPrintPatternInternal),
+        ...(pattern.namedArgs ?? []).map(na => `${na.name} := ${prettyPrintPatternInternal(na.pattern)}`),
+      ];
+      if (parts.length === 0) {
         return pattern.name;
       }
-      const args = pattern.args.map(prettyPrintPatternInternal).join(' ');
-      return `(${pattern.name} ${args})`;
+      return `(${pattern.name} ${parts.join(' ')})`;
+    }
   }
 }
 
-/** Collect variable names from patterns in left-to-right order */
-function collectPatternVars(patterns: TTKPattern[]): string[] {
+/** Collect variable names from a clause in left-to-right order */
+function collectClausePatternVars(clause: Pick<TTKClause, 'patterns' | 'namedPatterns'>): string[] {
   const vars: string[] = [];
-  for (const p of patterns) {
+  for (const p of clause.patterns) {
     collectPatternVarsHelper(p, vars);
+  }
+  for (const namedPattern of clause.namedPatterns ?? []) {
+    collectPatternVarsHelper(namedPattern.pattern, vars);
   }
   return vars;
 }
@@ -1301,6 +1316,9 @@ function collectPatternVarsHelper(pattern: TTKPattern, vars: string[]): void {
     case 'PCtor':
       for (const arg of pattern.args) {
         collectPatternVarsHelper(arg, vars);
+      }
+      for (const namedArg of pattern.namedArgs ?? []) {
+        collectPatternVarsHelper(namedArg.pattern, vars);
       }
       break;
   }
@@ -1449,13 +1467,16 @@ export function prettyPrintLatex(
       const scrutinee = scrutineeStr;
       const clauses = term.clauses.map(c => {
         // Collect pattern variable names and add to context for RHS and elabArgs
-        const patternVars = collectPatternVars(c.patterns);
+        const patternVars = collectClausePatternVars(c);
         const clauseContext = [...patternVars.reverse(), ...context];
 
         // If elabArgs are available, show them (the solved elaboration); otherwise show patterns
         const lhsStr = c.elabArgs
           ? c.elabArgs.map(arg => prettyPrintLatex(arg, clauseContext, opts)).join('\\; ')
-          : c.patterns.map(p => prettyPrintPatternLatex(p)).join('\\; ');
+          : [
+            ...c.patterns.map(p => prettyPrintPatternLatex(p)),
+            ...(c.namedPatterns ?? []).map(np => `${np.name} := ${prettyPrintPatternLatex(np.pattern)}`),
+          ].join('\\; ');
 
         const rhsStr = prettyPrintLatex(c.rhs, clauseContext, opts);
         return `${lhsStr} \\Rightarrow ${rhsStr}`;
@@ -1477,12 +1498,16 @@ function prettyPrintPatternLatex(pattern: TTKPattern): string {
     case 'PWild':
       // Display wildcards with their generated name visible
       return `\\_{[${escapeName(pattern.name)}]}`;
-    case 'PCtor':
-      if (pattern.args.length === 0) {
+    case 'PCtor': {
+      const parts = [
+        ...pattern.args.map(prettyPrintPatternLatex),
+        ...(pattern.namedArgs ?? []).map(na => `${escapeName(na.name)} := ${prettyPrintPatternLatex(na.pattern)}`),
+      ];
+      if (parts.length === 0) {
         return escapeName(pattern.name);
       }
-      const args = pattern.args.map(prettyPrintPatternLatex).join('\\; ');
-      return `(${escapeName(pattern.name)}\\; ${args})`;
+      return `(${escapeName(pattern.name)}\\; ${parts.join('\\; ')})`;
+    }
   }
 }
 
@@ -1706,9 +1731,40 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
         tag: 'Match',
         scrutinee: fillHole(term.scrutinee, holeId, proofTerm),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: fillHole(c.rhs, holeId, proofTerm)
         }))
       };
+  }
+}
+
+function patternsStructurallyEqual(left: readonly TTKPattern[], right: readonly TTKPattern[]): boolean {
+  return left.length === right.length && left.every((pattern, index) => patternStructurallyEqual(pattern, right[index]));
+}
+
+function namedPatternsStructurallyEqual(
+  left?: readonly TTKNamedPatternArg[],
+  right?: readonly TTKNamedPatternArg[],
+): boolean {
+  const leftPatterns = left ?? [];
+  const rightPatterns = right ?? [];
+  return leftPatterns.length === rightPatterns.length &&
+    leftPatterns.every((pattern, index) =>
+      pattern.name === rightPatterns[index].name &&
+      patternStructurallyEqual(pattern.pattern, rightPatterns[index].pattern));
+}
+
+function patternStructurallyEqual(left: TTKPattern, right: TTKPattern): boolean {
+  if (left.tag !== right.tag) return false;
+  switch (left.tag) {
+    case 'PVar':
+    case 'PWild':
+      return left.name === (right as typeof left).name;
+    case 'PCtor': {
+      const rightCtor = right as typeof left;
+      return left.name === rightCtor.name &&
+        patternsStructurallyEqual(left.args, rightCtor.args) &&
+        namedPatternsStructurallyEqual(left.namedArgs, rightCtor.namedArgs);
+    }
   }
 }
