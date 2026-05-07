@@ -28,6 +28,7 @@ Upleveling the core engine while preserving the current language surface:
 - Fixed structural recursion bookkeeping so named constructor arguments participate in variable collection and structurally-smaller analysis
 - Fixed a semantic bug in `isDefinitionallyEqual` for stuck `Match` terms by comparing clause patterns, not only scrutinees and branch RHSs
 - Improved kernel pretty-printing for named pattern arguments / clause named patterns and added focused regressions around these helpers
+- Fixed hole-to-meta elaboration inside `Match` branches so created metas inherit clause binder context instead of outer context only
 - Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` after the deeper pipeline pass
 
 ## Up Next

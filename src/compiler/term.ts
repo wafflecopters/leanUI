@@ -624,8 +624,12 @@ function replaceHolesWithMetasInTerm<S>(env: TCEnv<S>, term: TTKTerm): { env: TC
       currentEnv = env1;
 
       const clauses = term.clauses.map(c => {
-        const { env: clauseEnv, term: rhs } = replaceHolesWithMetasInTerm(currentEnv, c.rhs);
-        currentEnv = clauseEnv;
+        let clauseEnv = currentEnv;
+        for (let i = 0; i < countKernelClauseBindings(c); i++) {
+          clauseEnv = extendTTKContextInTCEnv(clauseEnv, '_match', { tag: 'Hole', id: '_match_type' });
+        }
+        const { env: updatedClauseEnv, term: rhs } = replaceHolesWithMetasInTerm(clauseEnv, c.rhs);
+        currentEnv = updatedClauseEnv;
         return { ...c, rhs };
       });
 
