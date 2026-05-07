@@ -105,15 +105,55 @@ NatLit (n+1)  ↦  Succ (NatLit n)  (after iota: matches Succ clause, k = NatLit
 
 This is a kernel rule baked into `whnf` when the scrutinee is a `Match` and the head is `NatLit`. The rule fires only when iota would need it — otherwise `NatLit 1784` stays as a literal.
 
-**Caveat**: `NatLit` doesn't know what constructor names exist. The preset's `Nat` inductive type uses `Zero`/`Succ`. The preset's `Int` might use `Pos`/`Neg`. We need a way for the preset to declare:
+### Why not structural detection?
+
+"Just check if the inductive has 1 nullary + 1 unary-recursive constructor" is appealing but has problems:
+
+- **Multiple Nat-shaped types in scope.** If a preset defines both `Nat` (`Zero`/`Succ`) and `BinNat` (`Bzero`/`Bsucc`), structural detection can't pick which one a `NatLit` should iota-reduce to. The choice depends on the Match's expected scrutinee type, which we may not have at WHNF time.
+- **False matches.** Other 1-nullary + 1-unary-recursive shapes exist in the wild (think custom positional encodings). Iota-reducing them as Nat literals would be a soundness disaster.
+- **Surprise factor.** Users get confused when their custom type silently inherits literal coercion. Explicit > implicit.
+
+### Use explicit annotation
+
+The preset declares which inductive type IS the Nat-impl, by name:
 
 ```
-@nat-view-of NatLit
-data Nat = Zero | Succ Nat
-  where ofLit 0 = Zero; ofLit (k+1) = Succ (ofLit k)
+@nat-impl zero=Zero succ=Succ
+inductive Nat : Type where
+  | Zero : Nat
+  | Succ : Nat -> Nat
 ```
 
-For now, keep the rule **simple and built-in for `Nat`-shaped types**: if the scrutinee Match expects `Zero | Succ _` constructors AND the head is `NatLit`, use the iota view. Other types (Int, Real) reach `NatLit` via coercions, not pattern matching.
+The annotation populates a kernel-level **NatImpl registry**:
+
+```typescript
+interface NatImpl {
+  inductiveName: string;     // "Nat"
+  zeroCtor: string;          // "Zero"
+  succCtor: string;          // "Succ"
+}
+```
+
+Multiple `@nat-impl` annotations are allowed — each registers a separate impl. The registry maps `succCtor → NatImpl` and `zeroCtor → NatImpl` for fast lookup.
+
+### Iota rule
+
+When WHNF encounters `Match scrutinee clauses` with `scrutinee = NatLit n`:
+
+1. Walk the Match's clauses to find a constructor pattern (`PCtor name args`).
+2. Look up `name` in the NatImpl registry.
+3. If found:
+   - If `n = 0`: rewrite scrutinee to `Const(zeroCtor)`. Iota fires the `Zero` clause.
+   - If `n > 0`: rewrite scrutinee to `App(Const(succCtor), NatLit (n-1))`. Iota fires the `Succ` clause with the predecessor as the bound variable.
+4. If no clause's constructor is in the registry: leave as `NatLit n` (stuck Match — error reported by checker).
+
+### What if no `@nat-impl` is registered?
+
+A preset without `@nat-impl` still gets the `NatLit` primitive (so the parser can produce literals and the renderer can show them) but iota-reduction never fires. Pattern matching against literals fails — fine, because no preset has Nat-shaped types in this case.
+
+### Future: structural fallback (deferred)
+
+If we later want structural detection as a convenience, gate it behind an opt-in flag (`@nat-auto-detect`) so the kernel default stays explicit-and-safe.
 
 ---
 
@@ -178,12 +218,14 @@ Once `NatLit` is in the kernel, optional performance wins:
 2. **Parser**: recognize digit tokens as `NatLit`.
 3. **Pretty-printer**: render `NatLit n` as `n.toString()`.
 4. **WHNF / unification / subst / shift**: handle `NatLit`.
-5. **Iota view rule** for `Nat`-shaped pattern matches.
-6. **Add `@ofNat` annotation** to the syntax-registry parser.
-7. **Elaborator**: insert coercions for `NatLit` based on expected type.
-8. **Add `@neg`, `@div` annotations** for sign and rational handling.
-9. **Update preset** (`real-analysis.ts`) to register `@ofNat Real`, `@neg Real`, `@div Real`.
-10. **Remove kernel pollution** that hardcoded `0/1/2 → rzero/rone/rtwo` (already done; this plan is the proper replacement).
+5. **Add `@nat-impl` annotation parser** (in syntax-registry) to populate the NatImpl registry.
+6. **Iota view rule**: WHNF Match scrutinee = NatLit lookup against NatImpl registry to expand to `Zero` / `Succ (NatLit (n-1))`.
+7. **Update preset** (`real-analysis.ts`) to add `@nat-impl zero=Zero succ=Succ` to the `Nat` inductive type.
+8. **Add `@ofNat` annotation** to the syntax-registry parser.
+9. **Elaborator**: insert coercions for `NatLit` based on expected type, looking up `@ofNat T` in the registry.
+10. **Add `@neg`, `@div` annotations** for sign and rational handling.
+11. **Update preset** to register `@ofNat Real`, `@neg Real`, `@div Real`.
+12. **Remove kernel pollution** that hardcoded `0/1/2 → rzero/rone/rtwo` (already done; this plan is the proper replacement).
 
 ### Tests (each phase needs):
 
@@ -212,6 +254,31 @@ Once `NatLit` is in the kernel, optional performance wins:
 
 ## Recommended Initial Slice (smallest useful PR)
 
-Phases 1.1 – 1.6 (kernel addition) + Phase 4 (rendering) + a single test that `parseExactExpr("1784")` produces `NatLit(1784n)` and prints back as `"1784"`. No coercion yet — `NatLit` is just an inert primitive that the user's existing `@syntax 1` annotation can still resolve.
+**PR 1 — Phase 1 only**: kernel `NatLit` primitive + parser + render + no-op cases for WHNF/unify/subst/shift. ~6 tests:
 
-This is the foundation. Phases 2-5 are layered on top, each independently shippable.
+- Parser: `parseExactExpr("1784")` → `NatLit(1784n)`
+- Parser: `parseExactExpr("0")` → `NatLit(0n)`
+- Parser: large literal `parseExactExpr("12345678901234567890")` → `NatLit(12345678901234567890n)` (exercises BigInt path)
+- Render: `renderTerm(NatLit(1784n))` → `"1784"`
+- WHNF identity: `whnf(NatLit(5n))` → `NatLit(5n)`
+- Unification: `unifyTerms(NatLit(5n), NatLit(5n))` succeeds; `unifyTerms(NatLit(5n), NatLit(6n))` fails (conflict)
+- Shift identity: `shiftTerm(NatLit(5n), 1, 0)` → `NatLit(5n)` (no free vars)
+- Subst identity: `subst(0, term, NatLit(5n))` → `NatLit(5n)` (no Var refs)
+
+Zero coercion logic, zero iota rules. `NatLit` is just an inert primitive. **This is the foundation.**
+
+**PR 2 — Phase 2**: `@nat-impl` annotation parser + NatImpl registry + iota-view rule. Tests:
+
+- `@nat-impl zero=Zero succ=Succ` parses and registers
+- `match (NatLit 0) { Zero => "z" | Succ _ => "s" }` reduces to `"z"`
+- `match (NatLit 5) { Zero => "z" | Succ k => k }` reduces to `NatLit 4`
+- Match without registered NatImpl leaves `NatLit` stuck (no spurious reduction)
+- Multiple `@nat-impl` annotations: each works independently for its own ctor names
+
+**PR 3 — Phase 3**: `@ofNat` + elaborator integration. Requires reading checker.ts thoroughly first — separate design pass before coding.
+
+**PR 4 — Phase 4**: pretty-print folding for coerced literals.
+
+**PR 5 — Phase 5** (optional): primitive `NatLitAdd`/`NatLitMul`.
+
+Each PR is independently shippable, independently testable, and each one earns the next.
