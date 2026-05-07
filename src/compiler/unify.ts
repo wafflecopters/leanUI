@@ -1,4 +1,4 @@
-import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKTerm, TTKContext, TTKPattern, isDefinitionallyEqual } from "./kernel";
+import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKClause, TTKTerm, TTKContext, TTKPattern, isDefinitionallyEqual } from "./kernel";
 import { DefinitionsMap, extractAppSpine } from "./term";
 import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
@@ -958,9 +958,11 @@ function tryPatternUnify(
 
   // 1. Check spine is a pattern: all args must be distinct Vars
   const varIndices: number[] = [];
+  const seenIndices = new Set<number>();
   for (const arg of spine) {
     if (arg.tag !== 'Var') return null;
-    if (varIndices.includes(arg.index)) return null; // non-linear
+    if (seenIndices.has(arg.index)) return null; // non-linear
+    seenIndices.add(arg.index);
     varIndices.push(arg.index);
   }
 
@@ -1009,7 +1011,7 @@ function usesLambdaVars(term: TTKTerm, numArgs: number, depth: number): boolean 
     case 'Match':
       if (usesLambdaVars(term.scrutinee, numArgs, depth)) return true;
       return term.clauses.some(c => {
-        const patVars = c.patterns.reduce((sum, p) => sum + countPatternBinders(p), 0);
+        const patVars = countClausePatternBindings(c);
         return usesLambdaVars(c.rhs, numArgs, depth + patVars);
       });
     case 'Annot':
@@ -1035,6 +1037,12 @@ function countPatternBinders(pat: TTKPattern): number {
     case 'PCtor': return pat.args.reduce((sum, p) => sum + countPatternBinders(p), 0);
     default: return 0;
   }
+}
+
+function countClausePatternBindings(clause: TTKClause): number {
+  const positional = clause.patterns.reduce((sum, p) => sum + countPatternBinders(p), 0);
+  const named = clause.namedPatterns?.reduce((sum, arg) => sum + countPatternBinders(arg.pattern), 0) ?? 0;
+  return positional + named;
 }
 
 /**
@@ -1129,7 +1137,7 @@ function applyPatternRenaming(
       const clauses = [];
       let changed = scrutinee !== term.scrutinee;
       for (const c of term.clauses) {
-        const patVarCount = countPatternBindings(c.patterns);
+        const patVarCount = countClausePatternBindings(c);
         const clauseRhs = applyPatternRenaming(c.rhs, renaming, numArgs, metaId, depth + patVarCount);
         if (clauseRhs === null) return null;
         if (clauseRhs !== c.rhs) changed = true;
@@ -1139,15 +1147,6 @@ function applyPatternRenaming(
       return { tag: 'Match', scrutinee, clauses };
     }
   }
-}
-
-/** Count the number of variable bindings in a list of patterns. */
-function countPatternBindings(patterns: TTKPattern[]): number {
-  let count = 0;
-  for (const p of patterns) {
-    count += countSinglePatternBindings(p);
-  }
-  return count;
 }
 
 function countSinglePatternBindings(p: TTKPattern): number {

@@ -15,8 +15,9 @@
 
 import { TTerm, TPattern, CasePattern, mkConstTT, mkAppTT, mkAppSpineTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
-import { DefinitionsMap, NamedArgMap, MetaVar, TCEnv, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { inferType, checkType } from '../compiler/checker';
+import { elaborateTermInContext, inferTermTypeInContext } from '../compiler/contextual-inference';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -1312,31 +1313,42 @@ export function elaborateType(
   definitions: DefinitionsMap,
   _metaVars?: Map<string, MetaVar>,
 ): TTKTerm {
+  return elaborateTermInContext({
+    term,
+    context: [...ctx],
+    definitions,
+  });
+}
+
+function extendGoalForComplexScrutinee(
+  engine: TacticEngine,
+  goal: MetaVar,
+  goalId: string,
+  parsedScrutinee: TTKTerm,
+): { engine: TacticEngine; goal: MetaVar; goalId: string; scrutineeIdx: number } | null {
   try {
-    // Use inferType with a fresh metaVar map to resolve Holes (implicit args)
-    const env = new TCEnv(
-      [...ctx],
-      definitions,
-      new Map(),
-      [], [], [],
-      term,
-      new Map(),
-      { mode: 'check' }
-    );
-    const inferred = inferType(env);
-    const elaborated = inferred.elaboratedTerm;
-    if (elaborated) {
-      // Solve constraints to resolve implicit arg metas (e.g., ?_implicit_R → Var(0))
-      try {
-        const solved = inferred.solveMetasAndConstraints({ liftMetasToFullContext: false });
-        return solved.zonkTerm(elaborated);
-      } catch {
-        return inferred.zonkTerm(elaborated);
-      }
-    }
-    return term;
+    const inferredType = inferTermTypeInContext({
+      term: parsedScrutinee,
+      context: goal.ctx,
+      definitions: engine.definitions,
+      metaVars: engine.metaVars,
+      constraints: engine.constraints,
+    });
+    const extCtx = [...goal.ctx, { name: '_scrut', type: inferredType }];
+    const extGoalType = shiftTerm(goal.type, 1, 0);
+    const tempGoalId = goalId + '_cases_temp';
+    const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
+    const tempMetaVars = new Map(engine.metaVars);
+    tempMetaVars.set(tempGoalId, tempMeta);
+    const tempGoals = engine.goals.map(g => g === goalId ? tempGoalId : g);
+    return {
+      engine: engine.withUpdates({ metaVars: tempMetaVars, goals: tempGoals }),
+      goal: tempMeta,
+      goalId: tempGoalId,
+      scrutineeIdx: 0,
+    };
   } catch {
-    return term; // fallback to unelaborated term
+    return null;
   }
 }
 
@@ -2354,28 +2366,12 @@ function replayProofTree(
       if (scrutineeIdx === null) {
         const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, engine.definitions);
         if (parsedScrutinee) {
-          try {
-            const env = new TCEnv(
-              goal.ctx, engine.definitions, engine.metaVars, engine.constraints,
-              [], [], parsedScrutinee, new Map(), { mode: 'check' as const }
-            );
-            const inferredEnv = inferType(env);
-            const inferredType = inferredEnv.zonkTerm(inferredEnv.value);
-            // Add a temp binding for the scrutinee so computeCaseGoalDirect can remove it
-            const tempName = '_scrut';
-            const extCtx = [...goal.ctx, { name: tempName, type: inferredType }];
-            const extGoalType = shiftTerm(goal.type, 1, 0);
-            const tempGoalId = goalId + '_cases_temp';
-            const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
-            const tempMetaVars = new Map(engine.metaVars);
-            tempMetaVars.set(tempGoalId, tempMeta);
-            const tempGoals = engine.goals.map(g => g === goalId ? tempGoalId : g);
-            effectiveEngine = engine.withUpdates({ metaVars: tempMetaVars, goals: tempGoals });
-            effectiveGoal = tempMeta;
-            effectiveGoalId = tempGoalId;
-            scrutineeIdx = 0; // last entry (de Bruijn 0)
-          } catch {
-            // Inference failed — fall back
+          const extended = extendGoalForComplexScrutinee(engine, goal, goalId, parsedScrutinee);
+          if (extended) {
+            effectiveEngine = extended.engine;
+            effectiveGoal = extended.goal;
+            effectiveGoalId = extended.goalId;
+            scrutineeIdx = extended.scrutineeIdx;
           }
         }
       }
@@ -3812,26 +3808,12 @@ function replayEntireTreeViaWalk(
         if (scrutineeIdx === null) {
           const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, eng.definitions);
           if (parsedScrutinee) {
-            try {
-              const env = new TCEnv(
-                goal.ctx, eng.definitions, eng.metaVars, eng.constraints,
-                [], [], parsedScrutinee, new Map(), { mode: 'check' as const }
-              );
-              const inferredEnv = inferType(env);
-              const inferredType = inferredEnv.zonkTerm(inferredEnv.value);
-              const extCtx = [...goal.ctx, { name: '_scrut', type: inferredType }];
-              const extGoalType = shiftTerm(goal.type, 1, 0);
-              const tempGoalId = gId + '_cases_temp';
-              const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
-              const tempMetaVars = new Map(eng.metaVars);
-              tempMetaVars.set(tempGoalId, tempMeta);
-              const tempGoals = eng.goals.map(g => g === gId ? tempGoalId : g);
-              effEng = eng.withUpdates({ metaVars: tempMetaVars, goals: tempGoals });
-              effGoal = tempMeta;
-              effGId = tempGoalId;
-              scrutineeIdx = 0;
-            } catch {
-              // Inference failed — fall back
+            const extended = extendGoalForComplexScrutinee(eng, goal, gId, parsedScrutinee);
+            if (extended) {
+              effEng = extended.engine;
+              effGoal = extended.goal;
+              effGId = extended.goalId;
+              scrutineeIdx = extended.scrutineeIdx;
             }
           }
         }

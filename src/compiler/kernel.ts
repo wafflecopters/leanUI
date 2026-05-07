@@ -1589,23 +1589,6 @@ export class TypeCheckError extends Error {
 }
 
 // ============================================================================
-// Type Inference Stub (TODO: Integrate with compiler/checker.ts)
-// ============================================================================
-
-export type InferResult =
-  | { ok: true; type: TTKTerm }
-  | { ok: false; error: string };
-
-/**
- * Type inference stub. In the future, this should integrate with the
- * proper type checker in compiler/checker.ts.
- */
-export function inferType(_term: TTKTerm, _context: TTKContext): InferResult {
-  // TODO: Implement proper type inference using compiler/checker.ts
-  return { ok: false, error: 'Type inference not yet implemented in new compiler' };
-}
-
-// ============================================================================
 // Hole Utility Functions
 // ============================================================================
 
@@ -1729,4 +1712,3 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
       };
   }
 }
-

@@ -243,6 +243,26 @@ describe('computeRecheckSet', () => {
     expect(result.has(1)).toBe(false); // id doesn't use Nat
   });
 
+  test('comments do not create dependencies', () => {
+    const blocks = [
+      block(0, 'inductive Nat where Zero Succ', ['Nat', 'Zero', 'Succ']),
+      block(1, '-- Nat only appears in this comment\nid x = x', ['id']),
+    ];
+    const result = computeRecheckSet(blocks, new Set([0]));
+    expect(result.has(0)).toBe(true);
+    expect(result.has(1)).toBe(false);
+  });
+
+  test('inline comments do not create dependencies', () => {
+    const blocks = [
+      block(0, 'inductive Nat where Zero Succ', ['Nat', 'Zero', 'Succ']),
+      block(1, 'id x = x -- Nat mentioned only in trailing comment', ['id']),
+    ];
+    const result = computeRecheckSet(blocks, new Set([0]));
+    expect(result.has(0)).toBe(true);
+    expect(result.has(1)).toBe(false);
+  });
+
   test('only backward dependencies matter', () => {
     // Block 0 mentions 'add' (which is defined in block 1).
     // This is a forward reference — should NOT create a dependency.

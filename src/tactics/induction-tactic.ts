@@ -15,9 +15,52 @@ import { TTKTerm, TTKContext, TTKPattern, TTKClause } from '../compiler/kernel';
 import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
-import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
-import { subst } from '../compiler/subst';
+import { shiftTerm, subst } from '../compiler/subst';
+
+function abstractVar(term: TTKTerm, targetIdx: number, replacement: TTKTerm): TTKTerm {
+  switch (term.tag) {
+    case 'Var':
+      return term.index === targetIdx ? replacement : term;
+    case 'App': {
+      const fn = abstractVar(term.fn, targetIdx, replacement);
+      const arg = abstractVar(term.arg, targetIdx, replacement);
+      return fn === term.fn && arg === term.arg ? term : { tag: 'App', fn, arg };
+    }
+    case 'Binder': {
+      const domain = abstractVar(term.domain, targetIdx, replacement);
+      const body = abstractVar(term.body, targetIdx + 1, shiftTerm(replacement, 1, 0));
+      return domain === term.domain && body === term.body ? term : { ...term, domain, body };
+    }
+    case 'Match': {
+      const scrutinee = abstractVar(term.scrutinee, targetIdx, replacement);
+      let changed = scrutinee !== term.scrutinee;
+      const clauses = term.clauses.map(clause => {
+        const numBoundVars = countPatternsBoundVars(clause.patterns);
+        const rhs = abstractVar(clause.rhs, targetIdx + numBoundVars, shiftTerm(replacement, numBoundVars, 0));
+        if (rhs !== clause.rhs) changed = true;
+        return rhs === clause.rhs ? clause : { ...clause, rhs };
+      });
+      return changed ? { ...term, scrutinee, clauses } : term;
+    }
+    default:
+      return term;
+  }
+}
+
+function countPatternBoundVars(pattern: TTKPattern): number {
+  switch (pattern.tag) {
+    case 'PVar':
+    case 'PWild':
+      return 1;
+    case 'PCtor':
+      return pattern.args.reduce((sum, arg) => sum + countPatternBoundVars(arg), 0);
+  }
+}
+
+function countPatternsBoundVars(patterns: readonly TTKPattern[]): number {
+  return patterns.reduce((sum, pattern) => sum + countPatternBoundVars(pattern), 0);
+}
 
 /**
  * Pick a fresh variable name: try `base`, then `base1`, `base2`, etc.
@@ -43,8 +86,7 @@ export class InductionTactic implements Tactic {
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
       // 1. Infer type of scrutinee
-      const env = engine.toTCEnv(goal, this.scrutinee);
-      const inferredEnv = inferType(env);
+      const inferredEnv = engine.inferInGoal(goal, this.scrutinee);
       const scrutineeType = inferredEnv.value;
 
       // 2. Normalize to find inductive type
@@ -176,16 +218,22 @@ export class InductionTactic implements Tactic {
    * The motive wraps the goal type in a lambda, so the scrutinee remains at index 0.
    */
   private buildMotive(goal: MetaVar, _scrutinee: TTKTerm, scrutineeType: TTKTerm): TTKTerm {
-    // Build: λ (x : scrutineeType). goalType
-    // Since scrutinee is at index 0 and the lambda parameter is also at index 0,
-    // the goal type can be used as-is for the lambda body!
+    const body = this.abstractScrutinee(goal.type, this.scrutinee);
     return {
       tag: 'Binder',
       binderKind: { tag: 'BLam' },
       name: 'x',
       domain: scrutineeType,
-      body: goal.type
+      body
     };
+  }
+
+  private abstractScrutinee(goalType: TTKTerm, scrutinee: TTKTerm): TTKTerm {
+    if (scrutinee.tag !== 'Var') {
+      return shiftTerm(goalType, 1, 0);
+    }
+    const shiftedGoalType = shiftTerm(goalType, 1, 0);
+    return abstractVar(shiftedGoalType, scrutinee.index + 1, { tag: 'Var', index: 0 });
   }
 
   /**

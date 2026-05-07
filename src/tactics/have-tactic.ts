@@ -14,12 +14,10 @@
  */
 
 import { TTKTerm } from '../compiler/kernel';
-import { MetaVar } from '../compiler/term';
+import { MetaVar, TCEnv } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
-import { checkType, inferType } from '../compiler/checker';
 import { shiftTerm } from '../compiler/subst';
-import { TCEnv } from '../compiler/term';
 // solveConstraints import removed — using solveMetasAndConstraints on TCEnv instead
 
 /**
@@ -43,30 +41,18 @@ export class HaveTactic implements Tactic {
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
       // 1. Type-check the proof against the declared type
-      const env = new TCEnv(
-        goal.ctx,
-        engine.definitions,
-        engine.metaVars,
-        engine.constraints,
-        [],
-        [],
-        this.hypProof,
-        new Map(),
-        { mode: 'check' }
-      );
-
       // When no explicit type is given, hypType is a Hole. We need the actual inferred type.
       let resolvedType: TTKTerm;
       let checkedEnv: TCEnv<TTKTerm>;
 
       if (this.hypType.tag === 'Hole') {
         // Type inferred: infer the proof's type, then check against it
-        const inferredEnv = inferType(env);
+        const inferredEnv = engine.inferInGoal(goal, this.hypProof);
         resolvedType = inferredEnv.zonkTerm(inferredEnv.value);
-        checkedEnv = inferredEnv as any;
+        checkedEnv = inferredEnv;
       } else {
         // Explicit type given: check proof against it
-        checkedEnv = checkType(env, this.hypType);
+        checkedEnv = engine.checkInGoal(goal, this.hypProof, this.hypType);
         resolvedType = this.hypType;
       }
 

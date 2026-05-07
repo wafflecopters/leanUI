@@ -19,7 +19,6 @@ import { DefinitionsMap, createDefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, UnifiedEquation, freshMetaName } from './tactic';
-import { inferType } from '../compiler/checker';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst } from '../compiler/subst';
 
@@ -41,8 +40,7 @@ export class RewriteTactic implements Tactic {
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
       // 1. Infer type of the equality proof
-      const env = engine.toTCEnv(goal, this.equalityProof);
-      const inferredEnv = inferType(env);
+      const inferredEnv = engine.inferInGoal(goal, this.equalityProof);
       // Solve constraints to resolve implicit argument metas (e.g., for `sym h`)
       let solvedEnv = inferredEnv;
       try {

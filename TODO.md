@@ -1,6 +1,17 @@
 # TODO
 
-## Current Focus: `lim` Projection Operator
+## Current Focus: Engine Uplift + `lim` Follow-Through
+
+Short-term hardening work underway:
+- [x] Tighten incremental invalidation to use extracted identifier references instead of N×M regex scans
+- [x] Ignore comment-only mentions during incremental dependency tracking
+- [x] Move tactic checker-env creation onto `TacticEngine` instead of patching the prototype
+- [x] Remove the fake kernel `inferType` UI path in favor of shared checker-based contextual inference
+- [x] Fix induction tactic motive abstraction for scrutinees away from de Bruijn index `0`
+- [x] Add regression coverage for named-pattern binder depth in pattern unification
+- [ ] Improve application/implicit-argument diagnostics for partially applied dependent functions
+
+## Real Analysis Focus: `lim` Projection Operator
 
 See [LIMIT-DESIGN.md](LIMIT-DESIGN.md) for full design document.
 
@@ -164,7 +175,7 @@ See [TACTICS.md](TACTICS.md) for full documentation.
 
 **Soundness:**
 - [ ] Add Match case to `checkType` so tactic proof terms get end-to-end validation
-- [ ] Fix induction tactic motive construction (currently placeholder)
+- [ ] Unify tactic `cases` / `induction` case-goal computation with proof-tree replay so both use the same generic refinement logic
 
 **New Tactics:**
 - [ ] Multi-tactic branches: `| Succ m => rewrite h; exact refl`

@@ -15,23 +15,26 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 3. **Chain rule**: `d/dx f(g(x)) = f'(g(x))·g'(x)`
 
 ## Current Focus
-Building out the proof tree editor UI and tactic engine to support the triangle numbers proof. Iterating on three parallel tracks:
-- The TT language (Agda-style nested pattern refinement)
-- The tactic engine
-- The WYSIWYG LaTeX editor that builds terms/tactics
+Upleveling the core engine while preserving the current language surface:
+- Tighten incremental checking and cache invalidation
+- Simplify tactic/checker APIs around `TacticEngine` and shared contextual inference helpers
+- Harden unification, diagnostics, and regression coverage without adding new syntax
+- Remove stale UI/kernel API leaks so interactive proof views use the real checker path
 
 ## Recent Progress
-- Interactive proof subtrees for hoisted `have` obligations — subgoals get their own tactic holes instead of text boxes
-- Definition search in apply suggestions — scans all definitions whose return type head matches the goal
-- Subgoal previews with fresh variable names in suggestion buttons (`1. 0 ≤ a  2. a < ε/2`)
-- Hoist-to-have from term builder with rename propagation, delete buttons, type display
-- Term builder slot-filling UI with MathEditor integration and type validation via HaveTactic
-- Clickable hypothesis panel with exact/apply/destructure/use-projection suggestions
+- Added shared checker-context helpers for non-compiler callers (`contextual-inference.ts`) and reused them in proof-tree elaboration
+- Removed the fake kernel `inferType` stub from the interactive math renderer path by extracting a tested pure focused-type helper
+- `TacticEngine` now owns goal-context `infer`/`check` entry points, eliminating more ad-hoc tactic checker setup
+- Fixed induction motive abstraction for scrutinees that are not at de Bruijn index `0`, with regression coverage
+- Incremental dependency invalidation now uses extracted identifier references instead of regexing every block against every known name
+- Comment-only mentions no longer trigger incremental rechecks, reducing false invalidations
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
+- Improve semantic quality of application/type errors, especially around implicit arguments
+- Add more semantic dependency edges to the incremental checker beyond token-level references
+- Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`
-- Infix operator syntax (user-defined operators with precedence)
 - Case-of expressions and nested casing
 - Tactic proof term validation (Match case in `checkType`)
 
