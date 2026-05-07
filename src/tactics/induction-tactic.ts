@@ -12,6 +12,7 @@
  */
 
 import { TTKTerm, TTKContext, TTKPattern, TTKClause } from '../compiler/kernel';
+import { countKernelClauseBindings } from '../compiler/pattern-binders';
 import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
@@ -36,7 +37,7 @@ function abstractVar(term: TTKTerm, targetIdx: number, replacement: TTKTerm): TT
       const scrutinee = abstractVar(term.scrutinee, targetIdx, replacement);
       let changed = scrutinee !== term.scrutinee;
       const clauses = term.clauses.map(clause => {
-        const numBoundVars = countPatternsBoundVars(clause.patterns);
+        const numBoundVars = countKernelClauseBindings(clause);
         const rhs = abstractVar(clause.rhs, targetIdx + numBoundVars, shiftTerm(replacement, numBoundVars, 0));
         if (rhs !== clause.rhs) changed = true;
         return rhs === clause.rhs ? clause : { ...clause, rhs };
@@ -46,20 +47,6 @@ function abstractVar(term: TTKTerm, targetIdx: number, replacement: TTKTerm): TT
     default:
       return term;
   }
-}
-
-function countPatternBoundVars(pattern: TTKPattern): number {
-  switch (pattern.tag) {
-    case 'PVar':
-    case 'PWild':
-      return 1;
-    case 'PCtor':
-      return pattern.args.reduce((sum, arg) => sum + countPatternBoundVars(arg), 0);
-  }
-}
-
-function countPatternsBoundVars(patterns: readonly TTKPattern[]): number {
-  return patterns.reduce((sum, pattern) => sum + countPatternBoundVars(pattern), 0);
 }
 
 /**

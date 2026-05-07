@@ -22,6 +22,7 @@ import { elabToKernel, defaultRecordConstructorName } from './elab';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
+import { countSurfaceClauseBindings } from './pattern-binders';
 import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
 import { BlockContributions, IncrementalCache, extractBlockDepInfo, computeRecheckSet } from './incremental';
@@ -3733,7 +3734,7 @@ function substituteInheritedFieldRefs(
         const newScrutinee = transform(t.scrutinee, depth);
         const newClauses = t.clauses.map(c => ({
           ...c,
-          rhs: transform(c.rhs, depth + countPatternBinders(c.patterns))
+          rhs: transform(c.rhs, depth + countSurfaceClauseBindings(c))
         }));
         return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
       }
@@ -3903,7 +3904,7 @@ function insertFieldImplicitHoles(
     if (t.tag === 'Match') {
       const scrutinee = transform(t.scrutinee, depth, localBinderStack);
       const clauses = t.clauses.map(c => {
-        const binderCount = countPatternBinders(c.patterns);
+        const binderCount = countSurfaceClauseBindings(c);
         // Pattern binders don't have known function types, push nulls
         const clauseStack = [...localBinderStack];
         for (let i = 0; i < binderCount; i++) clauseStack.push(null);
@@ -3932,29 +3933,6 @@ function insertFieldImplicitHoles(
 /**
  * Count the number of binders introduced by a list of patterns.
  */
-function countPatternBinders(patterns: TPattern[]): number {
-  let count = 0;
-  for (const p of patterns) {
-    count += countSinglePatternBinders(p);
-  }
-  return count;
-}
-
-function countSinglePatternBinders(p: TPattern): number {
-  switch (p.tag) {
-    case 'PVar':
-      return 1;
-    case 'PWild':
-      return 1; // Wildcards also bind
-    case 'PCtor':
-      return p.args.reduce((acc, arg) => acc + countSinglePatternBinders(arg), 0);
-    default: {
-      const _exhaustive: never = p;
-      return 0;
-    }
-  }
-}
-
 /**
  * Process a record declaration: elaborate, convert to inductive, and check.
  *

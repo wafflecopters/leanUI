@@ -16,26 +16,27 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 
 ## Current Focus
 Upleveling the core engine while preserving the current language surface:
-- Tighten incremental checking and cache invalidation
-- Simplify tactic/checker APIs around `TacticEngine` and shared contextual inference helpers
-- Harden unification, diagnostics, and regression coverage without adding new syntax
-- Remove stale UI/kernel API leaks so interactive proof views use the real checker path
+- Consolidate pattern-binder accounting across elaboration, unification, substitution, recursion, and proof/tactic replay
+- Keep shrinking duplicated `Match`-walker logic in compiler/tactic/proof-tree code
+- Harden generic kernel transforms around clause binder depth and metadata preservation
+- Expand low-level regressions before doing another round of solver/diagnostic tightening
 
 ## Recent Progress
-- Added shared checker-context helpers for non-compiler callers (`contextual-inference.ts`) and reused them in proof-tree elaboration
-- Removed the fake kernel `inferType` stub from the interactive math renderer path by extracting a tested pure focused-type helper
-- `TacticEngine` now owns goal-context `infer`/`check` entry points, eliminating more ad-hoc tactic checker setup
-- Fixed induction motive abstraction for scrutinees that are not at de Bruijn index `0`, with regression coverage
-- Incremental dependency invalidation now uses extracted identifier references instead of regexing every block against every known name
-- Comment-only mentions no longer trigger incremental rechecks, reducing false invalidations
+- Added shared `pattern-binders.ts` helpers and pushed them through compile/elab/unify/subst/with-desugar/with-abstraction/record code
+- Fixed generic `Match` term transforms to account for clause binders correctly, including `transformVarsInTerm` and nested substitution/renaming paths
+- Hardened tactic/proof-tree walkers (`induction`, `subst`, goal replay) to use clause-wide binder counts instead of ad-hoc first-pattern logic
+- Fixed structural recursion bookkeeping so named constructor arguments participate in variable collection and structurally-smaller analysis
+- Added regression coverage for clause-level named-pattern depth in substitution, generic term var transforms under `Match`, and recursion named-arg traversal
+- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` after the deeper pipeline pass
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
-- Improve semantic quality of application/type errors, especially around implicit arguments
+- Improve semantic quality of application/type errors, especially around implicit arguments and partial application
+- Push the same DRY/hardening pass into remaining generic kernel/normalization walkers that still special-case `Match`
 - Add more semantic dependency edges to the incremental checker beyond token-level references
 - Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`
-- Case-of expressions and nested casing
+- Case-of expressions and nested casing / refinement
 - Tactic proof term validation (Match case in `checkType`)
 
 ## Open Questions

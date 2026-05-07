@@ -122,6 +122,9 @@ function collectPatternVarsHelper(pattern: TTKPattern, vars: string[]): void {
       for (const arg of pattern.args) {
         collectPatternVarsHelper(arg, vars);
       }
+      for (const namedArg of pattern.namedArgs ?? []) {
+        collectPatternVarsHelper(namedArg.pattern, vars);
+      }
       break;
   }
 }
@@ -209,6 +212,16 @@ function collectSmallerVarsFromPattern(
           totalVars,
           result,
           true  // Now we're inside a PCtor
+        );
+      }
+      for (const namedArg of pattern.namedArgs ?? []) {
+        bindingPosition = collectSmallerVarsFromPattern(
+          namedArg.pattern,
+          patternPosition,
+          bindingPosition,
+          totalVars,
+          result,
+          true
         );
       }
       return bindingPosition;

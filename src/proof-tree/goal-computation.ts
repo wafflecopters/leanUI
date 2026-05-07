@@ -15,6 +15,7 @@
 
 import { TTerm, TPattern, CasePattern, mkConstTT, mkAppTT, mkAppSpineTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
+import { countKernelClauseBindings } from '../compiler/pattern-binders';
 import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { inferType, checkType } from '../compiler/checker';
 import { elaborateTermInContext, inferTermTypeInContext } from '../compiler/contextual-inference';
@@ -1393,7 +1394,7 @@ export function replaceVar(term: TTKTerm, targetIdx: number, replacement: TTKTer
       let clausesChanged = false;
       const clauses = term.clauses.map(c => {
         // Each clause binds numPatternVars variables
-        const numVars = countPatternVars(c.patterns[0]);
+        const numVars = countKernelClauseBindings(c);
         const shiftedRepl = shiftTerm(replacement, numVars, 0);
         const rhs = replaceVar(c.rhs, targetIdx + numVars, shiftedRepl);
         if (rhs !== c.rhs) clausesChanged = true;
@@ -1463,7 +1464,7 @@ function remapScrutineeVars(
         const scrutinee = go(t.scrutinee, depth);
         let changed = scrutinee !== t.scrutinee;
         const clauses = t.clauses.map(c => {
-          const numVars = countPatternVars(c.patterns[0]);
+          const numVars = countKernelClauseBindings(c);
           const rhs = go(c.rhs, depth + numVars);
           if (rhs !== c.rhs) changed = true;
           return rhs === c.rhs ? c : { ...c, rhs };
@@ -1476,15 +1477,6 @@ function remapScrutineeVars(
     }
   }
   return go(term, 0);
-}
-
-/** Count the number of binding variables in a pattern. */
-function countPatternVars(pat: import('../compiler/kernel').TTKPattern): number {
-  switch (pat.tag) {
-    case 'PVar': return 1;
-    case 'PWild': return 1;
-    case 'PCtor': return pat.args.reduce((sum, a) => sum + countPatternVars(a), 0);
-  }
 }
 
 /**

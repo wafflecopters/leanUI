@@ -1,4 +1,5 @@
 import { TTKTerm, TTKPattern, levelsEqual, prettyPrint, mkLSucc, isDefinitionallyEqual } from "./kernel";
+import { countKernelClauseBindings, countKernelPatternBindings } from "./pattern-binders";
 import { shiftTerm, minFreeVarIndex, subst } from "./subst";
 import { Constraint, DefinitionsMap, MetaVar, TTKContext } from "./term";
 import { unifyTerms } from "./unify";
@@ -175,13 +176,8 @@ function tryCaseInversion(
     if (pat.tag !== 'PCtor' || pat.name !== solutionHead) continue;
 
     // Count ALL pattern-bound variables across all patterns in this clause.
-    const countPatVars = (p: TTKPattern): number => {
-      if (p.tag === 'PVar') return 1;
-      if (p.tag === 'PCtor') return p.args.reduce((sum, a) => sum + countPatVars(a), 0);
-      return 0; // PWild
-    };
-    const totalPatVars = clause.patterns.reduce((sum, p) => sum + countPatVars(p), 0);
-    const scrutineePatVars = countPatVars(pat);
+    const totalPatVars = countKernelClauseBindings(clause);
+    const scrutineePatVars = countKernelPatternBindings(pat);
 
     // Create fresh metas for ALL pattern-bound variables.
     const freshMetas: string[] = [];
@@ -1147,7 +1143,8 @@ function patternContainsMeta(pattern: TTKPattern): boolean {
     case 'PWild':
       return false;
     case 'PCtor':
-      return pattern.args.some(a => patternContainsMeta(a));
+      return pattern.args.some(a => patternContainsMeta(a)) ||
+        (pattern.namedArgs?.some(na => patternContainsMeta(na.pattern)) ?? false);
     default:
       return false;
   }
@@ -1155,23 +1152,6 @@ function patternContainsMeta(pattern: TTKPattern): boolean {
 
 export function canSolveMeta(meta: MetaVar, rhs: TTKTerm): boolean {
   return canSolveMetaInContext(rhs, meta.ctx.length);
-}
-
-/** Count the total number of variables bound by patterns in a clause */
-function countPatternVarsInClause(patterns: TTKPattern[]): number {
-  let count = 0;
-  for (const p of patterns) count += countPatternVarsInPattern(p);
-  return count;
-}
-
-function countPatternVarsInPattern(pattern: TTKPattern): number {
-  switch (pattern.tag) {
-    case 'PVar':
-    case 'PWild':
-      return 1;
-    case 'PCtor':
-      return pattern.args.reduce((sum, p) => sum + countPatternVarsInPattern(p), 0);
-  }
 }
 
 function canSolveMetaInContext(rhs: TTKTerm, contextLength: number): boolean {
@@ -1216,7 +1196,7 @@ function maxFreeVarIndexAt(term: TTKTerm, depth: number): number {
       return Math.max(maxFreeVarIndexAt(term.term, depth), maxFreeVarIndexAt(term.type, depth));
     case 'Match':
       return Math.max(maxFreeVarIndexAt(term.scrutinee, depth), ...term.clauses.map(c => {
-        const patVars = countPatternVarsInClause(c.patterns);
+        const patVars = countKernelClauseBindings(c);
         return maxFreeVarIndexAt(c.rhs, depth + patVars);
       }));
 

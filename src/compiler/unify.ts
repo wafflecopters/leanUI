@@ -1,4 +1,5 @@
 import { levelsEqual, mkLambda, mkSort, mkULit, mkVar, prettyPrint, TTKClause, TTKTerm, TTKContext, TTKPattern, isDefinitionallyEqual } from "./kernel";
+import { countKernelClauseBindings, countKernelPatternBindings } from "./pattern-binders";
 import { DefinitionsMap, extractAppSpine } from "./term";
 import { shiftTerm } from "./subst";
 import { whnf } from "./whnf";
@@ -125,8 +126,7 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
     case 'Match':
       if (varOccursIn(varIndex, term.scrutinee)) return true;
       for (const clause of term.clauses) {
-        // Conservative: patterns bind variables, shifting indices in RHS
-        if (varOccursIn(varIndex, clause.rhs)) return true;
+        if (varOccursIn(varIndex + countKernelClauseBindings(clause), clause.rhs)) return true;
       }
       return false;
   }
@@ -1011,7 +1011,7 @@ function usesLambdaVars(term: TTKTerm, numArgs: number, depth: number): boolean 
     case 'Match':
       if (usesLambdaVars(term.scrutinee, numArgs, depth)) return true;
       return term.clauses.some(c => {
-        const patVars = countClausePatternBindings(c);
+        const patVars = countKernelClauseBindings(c);
         return usesLambdaVars(c.rhs, numArgs, depth + patVars);
       });
     case 'Annot':
@@ -1027,22 +1027,6 @@ function usesLambdaVars(term: TTKTerm, numArgs: number, depth: number): boolean 
     default:
       return false;
   }
-}
-
-/** Count binders introduced by a pattern (for depth tracking in usesLambdaVars) */
-function countPatternBinders(pat: TTKPattern): number {
-  switch (pat.tag) {
-    case 'PVar': return 1;
-    case 'PWild': return 1;  // PWild also binds a de Bruijn variable (unnamed but occupies a slot)
-    case 'PCtor': return pat.args.reduce((sum, p) => sum + countPatternBinders(p), 0);
-    default: return 0;
-  }
-}
-
-function countClausePatternBindings(clause: TTKClause): number {
-  const positional = clause.patterns.reduce((sum, p) => sum + countPatternBinders(p), 0);
-  const named = clause.namedPatterns?.reduce((sum, arg) => sum + countPatternBinders(arg.pattern), 0) ?? 0;
-  return positional + named;
 }
 
 /**
@@ -1137,7 +1121,7 @@ function applyPatternRenaming(
       const clauses = [];
       let changed = scrutinee !== term.scrutinee;
       for (const c of term.clauses) {
-        const patVarCount = countClausePatternBindings(c);
+        const patVarCount = countKernelClauseBindings(c);
         const clauseRhs = applyPatternRenaming(c.rhs, renaming, numArgs, metaId, depth + patVarCount);
         if (clauseRhs === null) return null;
         if (clauseRhs !== c.rhs) changed = true;
@@ -1150,17 +1134,7 @@ function applyPatternRenaming(
 }
 
 function countSinglePatternBindings(p: TTKPattern): number {
-  switch (p.tag) {
-    case 'PVar': return 1;
-    case 'PWild': return 1;  // PWild also binds a de Bruijn variable (unnamed but occupies a slot)
-    case 'PCtor': {
-      let count = 0;
-      for (const arg of p.args) {
-        count += countSinglePatternBindings(arg);
-      }
-      return count;
-    }
-  }
+  return countKernelPatternBindings(p);
 }
 
 // ============================================================================

@@ -9,6 +9,7 @@
  */
 
 import { TTKRecordDef, TTKTerm, TTKRecordField, TTKRecordParam, mkPi, mkVar, mkConst, mkApp } from './kernel';
+import { countKernelClauseBindings } from './pattern-binders';
 import { InductiveDefinition, RecordInfo, NamedArgMap } from './term';
 import { shiftTerm } from './subst';
 
@@ -104,7 +105,7 @@ function substituteFieldRefsWithProjections(
       case 'Match': {
         // Count pattern binders to adjust depth
         const patternBinderCount = t.clauses.reduce((acc, c) =>
-          Math.max(acc, c.patterns.reduce((a, p) => a + countPatternBinders(p), 0)), 0);
+          Math.max(acc, countKernelClauseBindings(c)), 0);
         const newScrutinee = subst(t.scrutinee, depth);
         const newClauses = t.clauses.map(c => ({
           ...c,
@@ -119,18 +120,6 @@ function substituteFieldRefsWithProjections(
   }
 
   return subst(term, 0);
-}
-
-function countPatternBinders(p: import('./kernel').TTKPattern): number {
-  switch (p.tag) {
-    case 'PVar':
-    case 'PWild':
-      return 1;
-    case 'PCtor':
-      return p.args.reduce((acc, arg) => acc + countPatternBinders(arg), 0);
-    default:
-      return 0;
-  }
 }
 
 // ============================================================================

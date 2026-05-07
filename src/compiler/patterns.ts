@@ -9,6 +9,7 @@
 
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
 import { arraySeg, fieldSeg, IndexPath, serializeIndexPath } from '../types/source-position';
+import { countKernelPatternBindings, countKernelPatternsBindings } from './pattern-binders';
 import { countPiBinders, DefinitionsMap, extractAppSpine, extractPiSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
@@ -772,37 +773,6 @@ function extractBinderSubstitutions(
  * Count the number of variables bound by a pattern.
  * Both PVar and PWild bind variables.
  */
-function countPatternVarsInPattern(pattern: TTKPattern): number {
-  switch (pattern.tag) {
-    case 'PVar':
-    case 'PWild':
-      return 1;
-    case 'PCtor':
-      let count = 0;
-      for (const arg of pattern.args) {
-        count += countPatternVarsInPattern(arg);
-      }
-      // Also count variables in namedArgs
-      if (pattern.namedArgs) {
-        for (const na of pattern.namedArgs) {
-          count += countPatternVarsInPattern(na.pattern);
-        }
-      }
-      return count;
-  }
-}
-
-/**
- * Count total variables bound by all patterns.
- */
-function countPatternVars(patterns: TTKPattern[]): number {
-  let count = 0;
-  for (const p of patterns) {
-    count += countPatternVarsInPattern(p);
-  }
-  return count;
-}
-
 // ============================================================================
 // De Bruijn ↔ Levels Conversion for RHS
 // ============================================================================
@@ -1437,7 +1407,7 @@ export function checkMatchClause(
 
   // Map de Bruijn indices to pattern positions
   // First compute how many vars each pattern binds
-  const varsPerPattern: number[] = originalPatterns.map(countPatternVarsInPattern);
+  const varsPerPattern: number[] = originalPatterns.map(countKernelPatternBindings);
 
   // Build a lookup: for de Bruijn index k, find which pattern it belongs to and get shift
   // De Bruijn indices count from rightmost binding (index 0 = last pattern's last var)
@@ -1501,7 +1471,7 @@ export function checkMatchClause(
     return mkVar(index);
   });
 
-  const paddedContextLength = countPatternVars(paddedPatterns);
+  const paddedContextLength = countKernelPatternsBindings(paddedPatterns);
   const rhsInLevels = deBruijnToLevels(shiftedRhs, paddedContextLength);
 
   if (loggingEnabled) {

@@ -19,6 +19,7 @@
  */
 
 import { TTKTerm, TTKContext, mkVar } from './kernel';
+import { countKernelClauseBindings } from './pattern-binders';
 import { whnf } from './whnf';
 import { shiftTerm } from './subst';
 
@@ -119,14 +120,8 @@ export function findOccurrences(
 
       case 'Match': {
         search(term.scrutinee, depth, [...path, 'scrutinee']);
-        // Count pattern vars
-        const countPatternVars = (pattern: typeof term.clauses[0]['patterns'][0]): number => {
-          if (pattern.tag === 'PVar' || pattern.tag === 'PWild') return 1;
-          if (pattern.tag === 'PCtor') return pattern.args.reduce((sum, arg) => sum + countPatternVars(arg), 0);
-          return 0;
-        };
         term.clauses.forEach((clause, i) => {
-          const patternDepth = depth + clause.patterns.reduce((sum, p) => sum + countPatternVars(p), 0);
+          const patternDepth = depth + countKernelClauseBindings(clause);
           search(clause.rhs, patternDepth, [...path, 'clause', String(i), 'rhs']);
         });
         break;
@@ -292,18 +287,11 @@ export function replaceWithFreshVar(
         };
 
       case 'Match': {
-        // Count pattern vars to determine depth increase
-        const countPatternVars = (pattern: typeof term.clauses[0]['patterns'][0]): number => {
-          if (pattern.tag === 'PVar' || pattern.tag === 'PWild') return 1;
-          if (pattern.tag === 'PCtor') return pattern.args.reduce((sum, arg) => sum + countPatternVars(arg), 0);
-          return 0;
-        };
-
         return {
           tag: 'Match',
           scrutinee: replace(term.scrutinee, [...path, 'scrutinee'], depth),
           clauses: term.clauses.map((clause, i) => {
-            const patternDepth = clause.patterns.reduce((sum, p) => sum + countPatternVars(p), 0);
+            const patternDepth = countKernelClauseBindings(clause);
             return {
               ...clause,
               rhs: replace(

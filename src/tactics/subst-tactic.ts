@@ -13,6 +13,7 @@
  */
 
 import { TTKTerm, TTKContext } from '../compiler/kernel';
+import { countKernelClauseBindings } from '../compiler/pattern-binders';
 import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
@@ -260,8 +261,8 @@ function removeVarHelper(targetIndex: number, term: TTKTerm, depth: number): TTK
     case 'Match': {
       const newScrutinee = removeVarHelper(targetIndex, term.scrutinee, depth);
       const newClauses = term.clauses.map(c => ({
-        patterns: c.patterns,
-        rhs: removeVarHelper(targetIndex, c.rhs, depth + c.patterns.reduce((sum, p) => sum + countPatVars(p), 0))
+        ...c,
+        rhs: removeVarHelper(targetIndex, c.rhs, depth + countKernelClauseBindings(c))
       }));
       return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
     }
@@ -282,15 +283,5 @@ function removeVarHelper(targetIndex: number, term: TTKTerm, depth: number): TTK
 
     default:
       return term;
-  }
-}
-
-function countPatVars(p: import('../compiler/kernel').TTKPattern): number {
-  switch (p.tag) {
-    case 'PVar':
-    case 'PWild':
-      return 1;
-    case 'PCtor':
-      return p.args.reduce((sum, a) => sum + countPatVars(a), 0);
   }
 }
