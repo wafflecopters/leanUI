@@ -6,7 +6,45 @@
  */
 
 import { TTKTerm, TTKBinderKind } from "./kernel";
-import { subst } from "./subst";
+import { subst, substPatternBindings } from "./subst";
+
+function collectAppSpine(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+  const args: TTKTerm[] = [];
+  let current = term;
+  while (current.tag === 'App') {
+    args.unshift(current.arg);
+    current = current.fn;
+  }
+  return { head: current, args };
+}
+
+function matchPattern(pattern: import("./kernel").TTKPattern, term: TTKTerm): TTKTerm[] | null {
+  switch (pattern.tag) {
+    case 'PVar':
+      return [term];
+    case 'PWild':
+      return [];
+    case 'PCtor': {
+      const { head, args } = collectAppSpine(term);
+      if (head.tag !== 'Const' || head.name !== pattern.name) {
+        return null;
+      }
+      if (pattern.args.length !== args.length) {
+        return null;
+      }
+
+      const bindings: TTKTerm[] = [];
+      for (let i = 0; i < pattern.args.length; i++) {
+        const argBindings = matchPattern(pattern.args[i], args[i]);
+        if (argBindings === null) {
+          return null;
+        }
+        bindings.push(...argBindings);
+      }
+      return bindings;
+    }
+  }
+}
 
 /**
  * Fully normalize a term by recursively reducing all redexes.
@@ -67,8 +105,15 @@ export function normalize(term: TTKTerm): TTKTerm {
         rhs: normalize(c.rhs)
       }));
 
-      // TODO: If scrutinee is a constructor, we could reduce the match
-      // For now, just return the normalized match
+      for (const clause of clauses) {
+        if (clause.patterns.length !== 1) continue;
+
+        const bindings = matchPattern(clause.patterns[0], scrutinee);
+        if (bindings !== null) {
+          return normalize(substPatternBindings(bindings, clause.rhs));
+        }
+      }
+
       return { tag: 'Match', scrutinee, clauses };
     }
 

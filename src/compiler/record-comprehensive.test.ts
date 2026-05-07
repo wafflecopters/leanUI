@@ -11,6 +11,8 @@
 
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText, CompiledDeclaration } from './compile';
+import { mkVar } from './kernel';
+import { areTypesDefEq } from './whnf';
 
 // Helper to find a declaration by name across all blocks
 function findDecl(result: ReturnType<typeof compileTTFromText>, name: string): CompiledDeclaration | undefined {
@@ -1199,6 +1201,20 @@ id2 p = MkPoint (Point.x p) (Point.y p)
     const result = compileTTFromText(source);
     expectSuccess(result, 'id1');
     expectSuccess(result, 'id2');
-    // TODO: verify id1 and id2 are definitionally equal
+
+    const id1 = findDecl(result, 'id1');
+    const id2 = findDecl(result, 'id2');
+    expect(id1?.kernelValue).toBeDefined();
+    expect(id2?.kernelValue).toBeDefined();
+    if (id1?.kernelValue && id2?.kernelValue) {
+      const p = mkVar(0);
+      expect(
+        areTypesDefEq(
+          { tag: 'App', fn: id1.kernelValue, arg: p },
+          { tag: 'App', fn: id2.kernelValue, arg: p },
+          result.definitions,
+        ),
+      ).toBe(true);
+    }
   });
 });

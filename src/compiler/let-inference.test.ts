@@ -424,6 +424,22 @@ describe('Let Inference - Type-Level Lets', () => {
 });
 
 describe('Let Inference - Elaboration', () => {
+  test('solveMetasAndConstraints preserves zonked elaborated let', () => {
+    // let x : _ := Zero in x
+    const term = mkLet('x', mkHole('_'), mkConst('Zero'), mkVar(0));
+    const env = createTestEnv(term);
+
+    const result = inferType(env);
+    const solved = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+    expect(solved.elaboratedTerm?.tag).toBe('Binder');
+    if (solved.elaboratedTerm?.tag === 'Binder' && solved.elaboratedTerm.binderKind.tag === 'BLet') {
+      expect(solved.elaboratedTerm.domain).toEqual(mkConst('Nat'));
+      expect(solved.elaboratedTerm.binderKind.defVal).toEqual(mkConst('Zero'));
+      expect(solved.elaboratedTerm.body).toEqual(mkVar(0));
+    }
+  });
+
   test('elaborated let preserves structure', () => {
     // let x : _ := Zero in x
     const term = mkLet('x', mkHole('_'), mkConst('Zero'), mkVar(0));

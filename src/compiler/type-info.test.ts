@@ -1367,11 +1367,7 @@ nth (VCons h tail) (FSucc f) = nth tail f
     }
   });
 
-  // TODO: f in RHS has type A instead of Fin n due to a checker/meta-solving bug:
-  // the typeInfoMap records Var(4)=A as the type for rhs.arg instead of App(Fin, Var(3))=Fin n.
-  // The fn type also shows Fin n -> n instead of Fin n -> A (de Bruijn index off by one).
-  // This is a checker-level issue, not a sourceMap/type-info lookup issue.
-  test.todo('f in RHS (nth tail f) shows Fin type, not A', () => {
+  test('f in RHS (nth tail f) shows Fin type, not A', () => {
     const decl = getNthDecl();
     if (!decl.sourceMap || !decl.typeInfoMap) return;
 
@@ -1393,6 +1389,7 @@ nth (VCons h tail) (FSucc f) = nth tail f
         // f in RHS should have type Fin n, not A
         expect(result.prettyType).not.toBe('A');
         expect(result.prettyType).toContain('Fin');
+        expect(result.kernelPath).toBe('value.clauses[1].rhs.arg');
       }
     }
   });

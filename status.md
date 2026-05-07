@@ -16,28 +16,24 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 
 ## Current Focus
 Upleveling the core engine while preserving the current language surface:
+- Keep converting stale compiler/proof-tree TODOs into real regressions or concrete fixes
+- Tighten solver/elaboration handoff so solved metas preserve usable elaborated structure
+- Harden indexed-case goal computation, especially when constructor indices mention constructor params
 - Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
-- Harden generic term utilities so clause metadata and binder depth are preserved everywhere
-- Tighten semantic helpers around stuck `Match` equality and pretty-printing/debug output
-- Expand low-level regressions before another round of solver/diagnostic tightening
 
 ## Recent Progress
-- Added shared `pattern-binders.ts` helpers and pushed them through compile/elab/unify/subst/with-desugar/with-abstraction/record code
-- Fixed generic `Match` term transforms to account for clause binders correctly, including `transformVarsInTerm`, surface substitution/shift, and nested renaming paths
-- Removed clause metadata loss in generic rebuild helpers (`kernel.ts`, `normalize.ts`, `surface.ts`) so named patterns/context data survive helper passes
-- Fixed TT/TTK `Match` pretty-printing and LaTeX rendering so clause binder context and named pattern arguments are preserved consistently across diagnostics/UI output
-- Fixed proof-tree `kernelTypeToSurface` conversion so interactive goal rendering no longer drops match-clause `namedArgs` / `namedPatterns`
-- Fixed nested `with` type-info remapping so inner pattern variables like `MkDPair count _` keep their own `Nat` type instead of inheriting an outer with-pattern type
-- Fixed structural recursion bookkeeping so named constructor arguments participate in variable collection and structurally-smaller analysis
-- Fixed a semantic bug in `isDefinitionallyEqual` for stuck `Match` terms by comparing clause patterns, not only scrutinees and branch RHSs
-- Improved kernel pretty-printing for named pattern arguments / clause named patterns and added focused regressions around these helpers
-- Fixed hole-to-meta elaboration inside `Match` branches so created metas inherit clause binder context instead of outer context only
-- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` after the deeper pipeline pass
+- Added full-normalization `Match` iota reduction for constructor scrutinees, with focused normalization regressions
+- Fixed `TCEnv.solveMetasAndConstraints` to preserve a zonked `elaboratedTerm`, with regression coverage in let-inference
+- Turned the old `nth tail f` RHS type-info TODO into a real passing regression asserting `Fin` survives through cursor/type-info lookup
+- Closed proof-tree indexed-case TODO by refining index variables against constructor parameters (synthetic `Wrap : Nat -> Type` regression)
+- Converted stale eta/axiom-K TODO scaffolding into real assertions and removed outdated warnings
+- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`139` files, `2830` passing, `9` todo)
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
 - Improve semantic quality of application/type errors, especially around implicit arguments and partial application
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
+- Decide which large remaining TODOs should become real implementation work next: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
 - Add more semantic dependency edges to the incremental checker beyond token-level references
 - Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`

@@ -1639,6 +1639,110 @@ function applyIndexUnification(
   return { goal: currentGoal, scrutineeIdx: currentScrutIdx };
 }
 
+interface GoalScopeIndexSubst {
+  ctxArrayPos: number;
+  replacement: TTKTerm;
+}
+
+function applyGoalScopeIndexSubstitutions(
+  goal: MetaVar,
+  substs: GoalScopeIndexSubst[],
+): MetaVar {
+  if (substs.length === 0) return goal;
+
+  const sorted = [...substs].sort((a, b) => b.ctxArrayPos - a.ctxArrayPos);
+  let currentGoal = goal;
+
+  for (const sub of sorted) {
+    const n = currentGoal.ctx.length;
+    const ap = sub.ctxArrayPos;
+    const goalVarIdx = n - 1 - ap;
+    const adjRep = shiftTerm(sub.replacement, -1, goalVarIdx);
+    const newGoalType = subst(goalVarIdx, adjRep, currentGoal.type);
+
+    const newCtx: Array<{ name: string; type: TTKTerm }> = [];
+    for (let j = 0; j < n; j++) {
+      if (j === ap) continue;
+
+      const entry = currentGoal.ctx[j];
+      if (j > ap) {
+        const varInEntry = j - 1 - ap;
+        const repInEntry = shiftTerm(sub.replacement, j - n, 0);
+        const adjRepEntry = shiftTerm(repInEntry, -1, varInEntry);
+        newCtx.push({
+          name: entry.name,
+          type: subst(varInEntry, adjRepEntry, entry.type),
+        });
+      } else {
+        newCtx.push(entry);
+      }
+    }
+
+    currentGoal = { ...currentGoal, ctx: newCtx, type: newGoalType };
+  }
+
+  return currentGoal;
+}
+
+function remapCtorReturnArgToGoalScope(
+  term: TTKTerm,
+  numExplicit: number,
+  scrutineeIdx: number,
+  numParams: number,
+  ihOffset: number,
+): TTKTerm {
+  switch (term.tag) {
+    case 'Var':
+      if (term.index < numExplicit) {
+        return { tag: 'Var', index: scrutineeIdx + numParams - 1 + ihOffset - term.index };
+      }
+      return {
+        tag: 'Var',
+        index: term.index - numExplicit + scrutineeIdx + numParams + ihOffset,
+      };
+    case 'App':
+      return {
+        tag: 'App',
+        fn: remapCtorReturnArgToGoalScope(term.fn, numExplicit, scrutineeIdx, numParams, ihOffset),
+        arg: remapCtorReturnArgToGoalScope(term.arg, numExplicit, scrutineeIdx, numParams, ihOffset),
+      };
+    case 'Binder': {
+      const domain = remapCtorReturnArgToGoalScope(term.domain, numExplicit, scrutineeIdx, numParams, ihOffset);
+      const body = remapCtorReturnArgToGoalScope(term.body, numExplicit, scrutineeIdx + 1, numParams, ihOffset);
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: term.binderKind,
+        domain,
+        body,
+      };
+    }
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: remapCtorReturnArgToGoalScope(term.term, numExplicit, scrutineeIdx, numParams, ihOffset),
+        type: remapCtorReturnArgToGoalScope(term.type, numExplicit, scrutineeIdx, numParams, ihOffset),
+      };
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: remapCtorReturnArgToGoalScope(term.scrutinee, numExplicit, scrutineeIdx, numParams, ihOffset),
+        clauses: term.clauses.map(clause => ({
+          ...clause,
+          rhs: remapCtorReturnArgToGoalScope(
+            clause.rhs,
+            numExplicit,
+            scrutineeIdx + countKernelClauseBindings(clause),
+            numParams,
+            ihOffset,
+          ),
+        })),
+      };
+    default:
+      return term;
+  }
+}
+
 /** Check if a term contains any Var with index < threshold. */
 function containsVarBelow(term: TTKTerm, threshold: number): boolean {
   switch (term.tag) {
@@ -1693,6 +1797,19 @@ export function computeCaseGoalDirect(
   const { params, hasRecursiveParam, recursiveParamLocalIdx } = peelCtorParams(
     ctor.type, numImplicit, typeArgs, inductiveName, definitions, userParamNames
   );
+  let ctorReturnType = ctor.type;
+  for (let i = 0; i < numImplicit; i++) {
+    if (ctorReturnType.tag === 'Binder' && ctorReturnType.binderKind.tag === 'BPi') {
+      const arg = typeArgs[i] || { tag: 'Hole' as const, id: '_implicit_' + i };
+      ctorReturnType = subst(0, arg, ctorReturnType.body);
+    }
+  }
+  let numExplicit = 0;
+  while (ctorReturnType.tag === 'Binder' && ctorReturnType.binderKind.tag === 'BPi') {
+    ctorReturnType = ctorReturnType.body;
+    numExplicit++;
+  }
+  const ctorRetArgs = extractTypeArgsFromType(ctorReturnType);
 
   const numParams = params.length;
   const ihOffset = hasRecursiveParam ? 1 : 0;
@@ -1797,12 +1914,39 @@ export function computeCaseGoalDirect(
     newCtx.push({ name: ihName, type: ihType });
   }
 
-  return {
+  let resultGoal: MetaVar = {
     ctx: newCtx,
     type: caseGoalType,
     solution: undefined,
     caseTag: ctor.name,
   };
+
+  const deferredIndexSubsts: GoalScopeIndexSubst[] = [];
+  for (let i = 0; i < Math.min(typeArgs.length, ctorRetArgs.length); i++) {
+    const scrArg = typeArgs[i];
+    if (scrArg.tag !== 'Var') continue;
+
+    const ctorArg = ctorRetArgs[i];
+    if (!containsVarBelow(ctorArg, numExplicit)) continue;
+
+    const replacement = remapCtorReturnArgToGoalScope(
+      ctorArg,
+      numExplicit,
+      uScrutIdx,
+      numParams,
+      ihOffset,
+    );
+    if (ttermStructEqual(scrArg, replacement)) continue;
+
+    deferredIndexSubsts.push({
+      ctxArrayPos: s - 1 - scrArg.index,
+      replacement,
+    });
+  }
+
+  resultGoal = applyGoalScopeIndexSubstitutions(resultGoal, deferredIndexSubsts);
+
+  return resultGoal;
 }
 
 /** Extract type arguments from a (possibly applied) type: e.g., List Nat → [Nat] */

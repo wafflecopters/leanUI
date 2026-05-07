@@ -1059,7 +1059,7 @@ export class TCEnv<T> {
       options.liftMetasToFullContext ? this.context : undefined,
       this.definitions
     );
-    return new TCEnv(
+    const solvedEnv = new TCEnv(
       this.context,
       this.definitions,
       metaVars,
@@ -1068,10 +1068,18 @@ export class TCEnv<T> {
       this.valueStack,
       this.value,
       this.levelMetas,
-      this.options
-      // NOTE: elaboratedTerm is intentionally NOT preserved here for now
-      // Preserving it breaks pattern elaboration (replace test).
-      // TODO: investigate why and fix properly.
+      this.options,
+      this.elaboratedTerm,
+    );
+
+    if (this.elaboratedTerm === undefined) {
+      return solvedEnv;
+    }
+
+    // Keep the elaborated term in sync with solved metas so later consumers
+    // can inspect the fully elaborated structure after constraint solving.
+    return solvedEnv.withElaboratedTerm(
+      solvedEnv.zonkTermAtDepth(this.elaboratedTerm, this.context.length),
     );
   }
 
