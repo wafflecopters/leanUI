@@ -113,28 +113,49 @@ This is a kernel rule baked into `whnf` when the scrutinee is a `Match` and the 
 - **False matches.** Other 1-nullary + 1-unary-recursive shapes exist in the wild (think custom positional encodings). Iota-reducing them as Nat literals would be a soundness disaster.
 - **Surprise factor.** Users get confused when their custom type silently inherits literal coercion. Explicit > implicit.
 
-### Use explicit annotation
+### Use a declared role + structural check
 
-The preset declares which inductive type IS the Nat-impl, by name:
+The preset declares the role (just one tag), and the kernel figures out the rest:
 
 ```
-@nat-impl zero=Zero succ=Succ
+@impl=nat
 inductive Nat : Type where
   | Zero : Nat
   | Succ : Nat -> Nat
 ```
 
-The annotation populates a kernel-level **NatImpl registry**:
+The constructor names are NOT in the annotation. The kernel verifies the inductive has the Nat shape and **finds** Zero/Succ structurally:
+
+- Exactly 2 constructors
+- One has 0 args (or only non-recursive args) and returns the inductive — that's the **base** ("Zero")
+- The other has exactly 1 recursive arg of the inductive itself and returns the inductive — that's the **step** ("Succ")
+- If shape doesn't match: compile error on the annotation, "@impl=nat requires Zero-like + Succ-like constructors".
+
+Resulting `NatImpl` (populated by the kernel from the annotation):
 
 ```typescript
 interface NatImpl {
-  inductiveName: string;     // "Nat"
-  zeroCtor: string;          // "Zero"
-  succCtor: string;          // "Succ"
+  inductiveName: string;     // "Nat" (from the annotated decl)
+  zeroCtor: string;          // discovered: e.g. "Zero" or "Z" or "O"
+  succCtor: string;          // discovered: e.g. "Succ" or "S" or "Suc"
 }
 ```
 
-Multiple `@nat-impl` annotations are allowed — each registers a separate impl. The registry maps `succCtor → NatImpl` and `zeroCtor → NatImpl` for fast lookup.
+### Why "@impl=ROLE" instead of "@nat-impl"
+
+The general protocol is `@impl=<role>` where `<role>` is a known kernel-level concept. Future roles slot into the same syntax:
+
+- `@impl=nat` — Peano nat (NatLit literals)
+- `@impl=string` — character list / rope (string literals)
+- `@impl=list` — homogeneous list (list-literal syntax `[a, b, c]`)
+- `@impl=bool` — `True`/`False` (boolean literals)
+- `@impl=int` — signed-integer encoding (lifts NatLit + sign)
+
+Each role has its own structural shape requirement that the kernel checks. Users write the same one-tag annotation regardless.
+
+### Multiple @impl=nat in scope
+
+Allowed but unusual. If both `Nat` and `BinNat` are tagged `@impl=nat`, the kernel registers both NatImpls. At iota time, the Match's pattern constructors disambiguate (each NatImpl owns its own ctor names — Zero/Succ vs Bzero/Bsucc — so the lookup is unique).
 
 ### Iota rule
 
@@ -218,9 +239,9 @@ Once `NatLit` is in the kernel, optional performance wins:
 2. **Parser**: recognize digit tokens as `NatLit`.
 3. **Pretty-printer**: render `NatLit n` as `n.toString()`.
 4. **WHNF / unification / subst / shift**: handle `NatLit`.
-5. **Add `@nat-impl` annotation parser** (in syntax-registry) to populate the NatImpl registry.
+5. **Add `@impl=nat` annotation parser** (in syntax-registry) + structural verification + NatImpl registry population.
 6. **Iota view rule**: WHNF Match scrutinee = NatLit lookup against NatImpl registry to expand to `Zero` / `Succ (NatLit (n-1))`.
-7. **Update preset** (`real-analysis.ts`) to add `@nat-impl zero=Zero succ=Succ` to the `Nat` inductive type.
+7. **Update preset** (`real-analysis.ts`) to add `@impl=nat` to the `Nat` inductive type.
 8. **Add `@ofNat` annotation** to the syntax-registry parser.
 9. **Elaborator**: insert coercions for `NatLit` based on expected type, looking up `@ofNat T` in the registry.
 10. **Add `@neg`, `@div` annotations** for sign and rational handling.
@@ -267,13 +288,15 @@ Once `NatLit` is in the kernel, optional performance wins:
 
 Zero coercion logic, zero iota rules. `NatLit` is just an inert primitive. **This is the foundation.**
 
-**PR 2 — Phase 2**: `@nat-impl` annotation parser + NatImpl registry + iota-view rule. Tests:
+**PR 2 — Phase 2**: `@impl=nat` annotation parser + structural verification + NatImpl registry + iota-view rule. Tests:
 
-- `@nat-impl zero=Zero succ=Succ` parses and registers
+- `@impl=nat` on a valid Nat inductive parses and registers; kernel discovers Zero/Succ ctors structurally
+- `@impl=nat` on a malformed inductive (3 ctors, or wrong arities) fails with a clear error
+- `@impl=nat` works for `Zero`/`Succ` AND for `Z`/`S` (name-independence)
 - `match (NatLit 0) { Zero => "z" | Succ _ => "s" }` reduces to `"z"`
 - `match (NatLit 5) { Zero => "z" | Succ k => k }` reduces to `NatLit 4`
-- Match without registered NatImpl leaves `NatLit` stuck (no spurious reduction)
-- Multiple `@nat-impl` annotations: each works independently for its own ctor names
+- Match without a registered NatImpl leaves `NatLit` stuck (no spurious reduction)
+- Two `@impl=nat` types in scope (Nat + BinNat with different ctor names): each works for its own constructors
 
 **PR 3 — Phase 3**: `@ofNat` + elaborator integration. Requires reading checker.ts thoroughly first — separate design pass before coding.
 
