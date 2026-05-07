@@ -1340,6 +1340,10 @@ const defaultLatexOptions: LatexPrintOptions = {
   showEqTypeSubscript: true,
 };
 
+function escapeLatexName(name: string): string {
+  return name.replace(/_/g, '\\_');
+}
+
 /**
  * Try to match a term against the pattern: Eq A x y
  * Returns { typeArg, lhs, rhs } if matched, otherwise null
@@ -1389,7 +1393,7 @@ export function prettyPrintLatex(
   switch (term.tag) {
     case 'Var':
       if (term.index < context.length) {
-        return context[term.index];
+        return escapeLatexName(context[term.index]);
       }
       return `\\#${term.index}`;
 
@@ -1417,7 +1421,7 @@ export function prettyPrintLatex(
 
     case 'Const':
       // Escape special LaTeX characters in names
-      return term.name.replace(/_/g, '\\_');
+      return escapeLatexName(term.name);
 
     case 'Binder': {
       const domain = prettyPrintLatex(term.domain, context, opts);
@@ -1430,17 +1434,17 @@ export function prettyPrintLatex(
           if (isAnonymous || !occursIn(0, term.body)) {
             return `(${domain} \\to ${body})`;
           }
-          return `(\\Pi\\, (${term.name} : ${domain}),\\, ${body})`;
+          return `(\\Pi\\, (${escapeLatexName(term.name)} : ${domain}),\\, ${body})`;
 
         case 'BLam':
           if (isAnonymous) {
             return `(\\lambda\\, ${domain},\\, ${body})`;
           }
-          return `(\\lambda\\, (${term.name} : ${domain}),\\, ${body})`;
+          return `(\\lambda\\, (${escapeLatexName(term.name)} : ${domain}),\\, ${body})`;
 
         case 'BLet':
           const defVal = prettyPrintLatex(term.binderKind.defVal, context, opts);
-          return `(\\text{let } ${term.name} : ${domain} = ${defVal} \\text{ in } ${body})`;
+          return `(\\text{let } ${escapeLatexName(term.name)} : ${domain} = ${defVal} \\text{ in } ${body})`;
       }
     }
 
@@ -1475,7 +1479,7 @@ export function prettyPrintLatex(
           ? c.elabArgs.map(arg => prettyPrintLatex(arg, clauseContext, opts)).join('\\; ')
           : [
             ...c.patterns.map(p => prettyPrintPatternLatex(p)),
-            ...(c.namedPatterns ?? []).map(np => `${np.name} := ${prettyPrintPatternLatex(np.pattern)}`),
+            ...(c.namedPatterns ?? []).map(np => `${escapeLatexName(np.name)} := ${prettyPrintPatternLatex(np.pattern)}`),
           ].join('\\; ');
 
         const rhsStr = prettyPrintLatex(c.rhs, clauseContext, opts);
@@ -1490,23 +1494,21 @@ export function prettyPrintLatex(
 }
 
 function prettyPrintPatternLatex(pattern: TTKPattern): string {
-  const escapeName = (name: string) => name.replace(/_/g, '\\_');
-
   switch (pattern.tag) {
     case 'PVar':
-      return escapeName(pattern.name);
+      return escapeLatexName(pattern.name);
     case 'PWild':
       // Display wildcards with their generated name visible
-      return `\\_{[${escapeName(pattern.name)}]}`;
+      return `\\_{[${escapeLatexName(pattern.name)}]}`;
     case 'PCtor': {
       const parts = [
         ...pattern.args.map(prettyPrintPatternLatex),
-        ...(pattern.namedArgs ?? []).map(na => `${escapeName(na.name)} := ${prettyPrintPatternLatex(na.pattern)}`),
+        ...(pattern.namedArgs ?? []).map(na => `${escapeLatexName(na.name)} := ${prettyPrintPatternLatex(na.pattern)}`),
       ];
       if (parts.length === 0) {
-        return escapeName(pattern.name);
+        return escapeLatexName(pattern.name);
       }
-      return `(${escapeName(pattern.name)}\\; ${parts.join('\\; ')})`;
+      return `(${escapeLatexName(pattern.name)}\\; ${parts.join('\\; ')})`;
     }
   }
 }

@@ -25,6 +25,7 @@ Upleveling the core engine while preserving the current language surface:
 - Added shared `pattern-binders.ts` helpers and pushed them through compile/elab/unify/subst/with-desugar/with-abstraction/record code
 - Fixed generic `Match` term transforms to account for clause binders correctly, including `transformVarsInTerm`, surface substitution/shift, and nested renaming paths
 - Removed clause metadata loss in generic rebuild helpers (`kernel.ts`, `normalize.ts`, `surface.ts`) so named patterns/context data survive helper passes
+- Fixed TT/TTK `Match` pretty-printing and LaTeX rendering so clause binder context and named pattern arguments are preserved consistently across diagnostics/UI output
 - Fixed structural recursion bookkeeping so named constructor arguments participate in variable collection and structurally-smaller analysis
 - Fixed a semantic bug in `isDefinitionallyEqual` for stuck `Match` terms by comparing clause patterns, not only scrutinees and branch RHSs
 - Improved kernel pretty-printing for named pattern arguments / clause named patterns and added focused regressions around these helpers

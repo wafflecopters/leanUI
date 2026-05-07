@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'vitest';
 import {
-  prettyPrint, prettyPrintFormatted, isDefinitionallyEqual, fillHole, TTKTerm, TTKClause, mkVar, mkConst, mkType,
+  prettyPrint, prettyPrintFormatted, prettyPrintLatex, isDefinitionallyEqual, fillHole, TTKTerm, TTKClause, mkVar, mkConst, mkType,
   mkULit, mkLSucc, mkLMax, mkLIMax, levelLeq, collectLevelVars, levelGeq
 } from './kernel';
 
@@ -150,6 +150,32 @@ describe('prettyPrint', () => {
     expect(result.clauses[0].rhs).toEqual(mkConst('done'));
     expect(result.clauses[0].namedPatterns).toEqual(clause.namedPatterns);
     expect(result.clauses[0].contextNames).toEqual(clause.contextNames);
+  });
+});
+
+describe('prettyPrintLatex', () => {
+  test('escapes context names and named patterns in match clauses', () => {
+    const clause: TTKClause = {
+      patterns: [{
+        tag: 'PCtor',
+        name: 'Wrap_ctor',
+        args: [],
+        namedArgs: [{ name: 'inner_arg', pattern: { tag: 'PVar', name: 'x_val' } }],
+      }],
+      namedPatterns: [{ name: 'named_pat', pattern: { tag: 'PVar', name: 'y_val' } }],
+      rhs: mkVar(0),
+    };
+
+    const latex = prettyPrintLatex({
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [clause],
+    });
+
+    expect(latex).toContain('Wrap\\_ctor');
+    expect(latex).toContain('inner\\_arg := x\\_val');
+    expect(latex).toContain('named\\_pat := y\\_val');
+    expect(latex).toContain('\\Rightarrow y\\_val');
   });
 });
 
