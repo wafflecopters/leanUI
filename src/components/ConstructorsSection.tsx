@@ -26,8 +26,6 @@ export interface Constructor extends NamedTypedItem {
 interface ConstructorsSectionProps {
   constructors: Constructor[];
   onUpdateConstructor: (id: string, updated: Constructor) => void;
-  onAddConstructor: () => void;
-  onDeleteConstructor: (id: string) => void;
 }
 
 // ============================================================================
@@ -37,11 +35,6 @@ interface ConstructorsSectionProps {
 export function ConstructorsSection({
   constructors,
   onUpdateConstructor,
-  // Note: onAddConstructor and onDeleteConstructor are passed via navigation metadata
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  onAddConstructor: _onAddConstructor,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  onDeleteConstructor: _onDeleteConstructor,
 }: ConstructorsSectionProps) {
   return (
     <NamedItemsSection<Constructor>

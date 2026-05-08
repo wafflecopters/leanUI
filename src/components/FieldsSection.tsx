@@ -27,8 +27,6 @@ export interface Field extends NamedTypedItem {
 interface FieldsSectionProps {
   fields: Field[];
   onUpdateField: (id: string, updated: Field) => void;
-  onAddField: () => void;
-  onDeleteField: (id: string) => void;
   /** Names of record params for proper variable rendering */
   paramContext?: string[];
 }
@@ -57,11 +55,6 @@ function createRenderTypeLatex(paramContext: string[]): (type: TTerm) => ReactNo
 export function FieldsSection({
   fields,
   onUpdateField,
-  // Note: onAddField and onDeleteField are passed via navigation metadata
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  onAddField: _onAddField,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  onDeleteField: _onDeleteField,
   paramContext = [],
 }: FieldsSectionProps) {
   const renderTypeLatex = createRenderTypeLatex(paramContext);
@@ -103,4 +96,3 @@ export function createDefaultField(baseName: string): Field {
     type: mkHoleTT(`type_${baseName}`, mkTypeTT(0), []),
   };
 }
-
