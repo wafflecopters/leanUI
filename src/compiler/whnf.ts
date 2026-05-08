@@ -552,6 +552,38 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
       // ι-reduction: reduce pattern matching when scrutinee is a constructor
       const scrut = whnf(term.scrutinee, nextCtx);
 
+      // NatLit iota-view: when scrutinee is a NatLit and the Match's clauses
+      // use constructor patterns from a registered @impl=nat type, expand the
+      // literal so iota can fire normally.
+      //   NatLit 0       → Const(zeroCtor)
+      //   NatLit (n+1)   → App(Const(succCtor), NatLit n)
+      // This is the only "domain-aware" rule in the kernel — but it's
+      // user-driven via @impl=nat annotation, never hardcoded ctor names.
+      if (scrut.tag === 'NatLit' && ctx?.definitions?.natImplByCtor) {
+        const reg = ctx.definitions.natImplByCtor;
+        let impl = null;
+        for (const clause of term.clauses) {
+          const pat = clause.patterns[0];
+          if (pat?.tag === 'PCtor') {
+            const found = reg.get(pat.name);
+            if (found) { impl = found; break; }
+          }
+        }
+        if (impl) {
+          let expanded: TTKTerm;
+          if (scrut.value === 0n) {
+            expanded = { tag: 'Const', name: impl.zeroCtor };
+          } else {
+            expanded = {
+              tag: 'App',
+              fn: { tag: 'Const', name: impl.succCtor },
+              arg: { tag: 'NatLit', value: scrut.value - 1n },
+            };
+          }
+          return whnf({ tag: 'Match', scrutinee: expanded, clauses: term.clauses }, nextCtx);
+        }
+      }
+
       // Pattern matching should only reduce when the scrutinee is a known value.
       // When the scrutinee is unknown (Hole, Var, Meta), the match is "stuck" and
       // should not reduce. This is a fundamental rule in type theory: we can't

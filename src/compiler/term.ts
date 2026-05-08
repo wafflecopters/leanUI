@@ -214,10 +214,29 @@ export type TermDefinition = {
   argNamedArgInfos?: ArgNamedArgInfos,  // Nested implicits for each param's domain
 }
 
+/**
+ * Registered Nat-impl: an inductive type tagged with `@syntax @impl=nat`.
+ * The kernel verifies the inductive has the Nat shape (1 nullary + 1 unary-
+ * recursive constructor) and records the discovered ctor names here.
+ *
+ * Used by the iota-view rule in WHNF: when a Match's scrutinee is `NatLit n`
+ * and a clause's pattern uses one of these ctor names, expand the literal to
+ * `Zero` (n=0) or `App(Succ, NatLit (n-1))` (n>0) so iota can fire.
+ */
+export type NatImpl = {
+  inductiveName: string;     // e.g., "Nat" — name of the @impl=nat-tagged inductive
+  zeroCtor: string;          // discovered nullary ctor (e.g., "Zero" or "Z")
+  succCtor: string;          // discovered unary recursive ctor (e.g., "Succ" or "S")
+}
+
 export type DefinitionsMap = {
   terms: Map<string, TermDefinition>,
   inductiveTypes: Map<string, InductiveDefinition>,
   inductiveNameOfConstructor: Map<string, string>,
+  /** Optional. Map from ctor name (zero or succ) → NatImpl. Both ctors of each
+   *  impl point to the same NatImpl entry. Populated by registerNatImpl when
+   *  the preset declares `@syntax @impl=nat` on an inductive. */
+  natImplByCtor?: Map<string, NatImpl>,
 }
 
 export function createDefinitionsMap(): DefinitionsMap {
@@ -225,7 +244,73 @@ export function createDefinitionsMap(): DefinitionsMap {
     terms: new Map<string, TermDefinition>(),
     inductiveTypes: new Map<string, InductiveDefinition>(),
     inductiveNameOfConstructor: new Map<string, string>(),
+    natImplByCtor: new Map<string, NatImpl>(),
   };
+}
+
+/**
+ * Register an inductive type as a Nat-impl. Verifies the inductive has the
+ * Nat shape and discovers the zero/succ constructors structurally (independent
+ * of their names — `Zero`/`Succ`, `Z`/`S`, `O`/`Suc` all work).
+ *
+ * Returns null on success, or an error message string explaining why the
+ * inductive does not match the Nat shape.
+ *
+ * Required shape:
+ *   - exactly 2 constructors
+ *   - one constructor has type `T` (no args) — the "zero"
+ *   - the other has type `T → T` (one recursive arg) — the "succ"
+ */
+export function registerNatImpl(definitions: DefinitionsMap, inductiveName: string): string | null {
+  const ind = definitions.inductiveTypes.get(inductiveName);
+  if (!ind) return `@impl=nat: inductive type '${inductiveName}' not found`;
+  if (ind.constructors.length !== 2) {
+    return `@impl=nat: inductive '${inductiveName}' must have exactly 2 constructors (found ${ind.constructors.length})`;
+  }
+
+  // Categorize each ctor: either nullary returning self, or unary recursive returning self.
+  // Constructor types may have leading Pi binders for inductive type parameters
+  // (e.g., `Cons : {A : Type} -> A -> List A -> List A`). For this Phase, we
+  // assume Nat is non-parametric: Zero/Succ ctors of `Nat : Type` have type
+  // `Nat` and `Nat -> Nat` respectively. Polymorphic Nat-impls are out of scope.
+  let zeroCtor: string | null = null;
+  let succCtor: string | null = null;
+
+  for (const ctor of ind.constructors) {
+    const t = ctor.type;
+    // Nullary case: type is exactly Const(inductiveName)
+    if (t.tag === 'Const' && t.name === inductiveName) {
+      if (zeroCtor !== null) {
+        return `@impl=nat: inductive '${inductiveName}' has two nullary constructors`;
+      }
+      zeroCtor = ctor.name;
+      continue;
+    }
+    // Unary recursive case: type is Pi(Const(inductiveName), Const(inductiveName))
+    // i.e., domain = self, body = self (no dependency)
+    if (t.tag === 'Binder' && t.binderKind.tag === 'BPi'
+        && t.domain.tag === 'Const' && t.domain.name === inductiveName
+        && t.body.tag === 'Const' && t.body.name === inductiveName) {
+      if (succCtor !== null) {
+        return `@impl=nat: inductive '${inductiveName}' has two unary recursive constructors`;
+      }
+      succCtor = ctor.name;
+      continue;
+    }
+    return `@impl=nat: constructor '${ctor.name}' of '${inductiveName}' has unsupported shape (must be either nullary 'T' or unary recursive 'T -> T')`;
+  }
+
+  if (zeroCtor === null || succCtor === null) {
+    return `@impl=nat: inductive '${inductiveName}' must have one nullary 'T' constructor and one unary recursive 'T -> T' constructor`;
+  }
+
+  const impl: NatImpl = { inductiveName, zeroCtor, succCtor };
+  if (!definitions.natImplByCtor) {
+    definitions.natImplByCtor = new Map<string, NatImpl>();
+  }
+  definitions.natImplByCtor.set(zeroCtor, impl);
+  definitions.natImplByCtor.set(succCtor, impl);
+  return null;
 }
 
 export function addDefinition(
