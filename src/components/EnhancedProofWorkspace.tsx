@@ -913,16 +913,14 @@ function EnhancedProofWorkspaceInner() {
       }
 
       // ====================================================================
-      // OLD: Add transformation to proof elements (only if new system not active)
+      // OLD: Add transformation to proof elements when the focused-hole flow is inactive
       // ====================================================================
-      // If we're in an active proof context (proving a let-claim), add to that claim's proof
-      // BUT: Only use old system if we're not using the new focused-hole system
       if (activeProofContext && !focusedHole) {
         setLetBindings(prev => prev.map(l => {
-          if (l.id === activeProofContext && l.proofElements) {
+          if (l.id === activeProofContext && l.equalityChain) {
             return {
               ...l,
-              proofElements: [...l.proofElements, equationElement]
+              equalityChain: [...l.equalityChain, equationElement]
             };
           }
           return l;

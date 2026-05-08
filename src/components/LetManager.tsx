@@ -169,7 +169,6 @@ export function LetManager({
 
       let expr: ExpressionNode;
       let typeAnnotation: string | undefined;
-      let equalityChain: any[] | undefined;
 
       switch (mode.tag) {
         case 'equality-left':
@@ -178,7 +177,6 @@ export function LetManager({
           expr = mode.startExpr;
           // Type is left as a hole (undefined) for inference
           typeAnnotation = undefined;
-          equalityChain = undefined;  // No equality chain for now
           break;
 
         case 'equality-right':
@@ -187,7 +185,6 @@ export function LetManager({
           expr = mode.startExpr;
           // Type is left as a hole (undefined) for inference
           typeAnnotation = undefined;
-          equalityChain = undefined;  // No equality chain for now
           break;
 
         case 'cases':
@@ -238,16 +235,8 @@ export function LetManager({
         expr,
         typeAnnotation,
         undefined, // derivedFrom
-        false, // isClaim - no longer used
-        undefined, // proofMethod - no longer used
         mode
       );
-
-      // Add equality chain if present
-      if (equalityChain) {
-        letElement.equalityChain = equalityChain;
-        letElement.editorExpanded = true; // Open editor by default
-      }
 
       onAddLet(letElement);
 
@@ -918,7 +907,7 @@ export function LetManager({
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontWeight: 'bold', color: '#495057' }}>
-                    {letBinding.isClaim ? 'claim' : 'let'} {letBinding.name}
+                    let {letBinding.name}
                   </span>
                   <span style={{ color: '#007bff', fontSize: '14px' }}>
                     : {letBinding.typeAnnotation || '?'}
@@ -926,24 +915,6 @@ export function LetManager({
                   <span style={{ color: '#495057' }}>
                     =
                   </span>
-                  {letBinding.isClaim && letBinding.proofStatus && (
-                    <span style={{
-                      padding: '2px 8px',
-                      borderRadius: '4px',
-                      fontSize: '12px',
-                      fontWeight: 'bold',
-                      backgroundColor:
-                        letBinding.proofStatus === 'completed' ? '#d4edda' :
-                          letBinding.proofStatus === 'in-progress' ? '#fff3cd' : '#f8d7da',
-                      color:
-                        letBinding.proofStatus === 'completed' ? '#155724' :
-                          letBinding.proofStatus === 'in-progress' ? '#856404' : '#721c24'
-                    }}>
-                      {letBinding.proofStatus === 'completed' ? '✓ Proved' :
-                        letBinding.proofStatus === 'in-progress' ? '⚡ Proving...' :
-                          '⏳ To Prove'}
-                    </span>
-                  )}
                 </div>
                 {/* Show interactive editor if this let is active for editing */}
                 {activeLetId === letBinding.id && onFocusChange ? (
@@ -976,7 +947,7 @@ export function LetManager({
                 )}
 
                 {/* Inline Term Editor based on editorMode - SIMPLIFIED */}
-                {letBinding.editorMode && letBinding.editorExpanded && (
+                {letBinding.editorExpanded && (
                   <div style={{
                     marginTop: '12px',
                     paddingLeft: '20px',
@@ -1024,42 +995,6 @@ export function LetManager({
                         </div>
                       </div>
                     )}
-                  </div>
-                )}
-
-                {letBinding.isClaim && letBinding.proofMethod && (
-                  <div style={{
-                    marginTop: '4px',
-                    paddingLeft: '20px',
-                    fontSize: '12px',
-                    color: '#6c757d',
-                    fontStyle: 'italic'
-                  }}>
-                    Method: {letBinding.proofMethod === 'induction' ? 'Induction on ℕ' : 'Equality Chaining'}
-                  </div>
-                )}
-                {letBinding.localHypotheses && letBinding.localHypotheses.length > 0 && (
-                  <div style={{
-                    marginTop: '8px',
-                    paddingLeft: '20px',
-                    padding: '8px',
-                    backgroundColor: '#e7f3ff',
-                    borderLeft: '3px solid #007bff',
-                    borderRadius: '4px'
-                  }}>
-                    <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#0056b3', marginBottom: '4px' }}>
-                      Local Hypotheses:
-                    </div>
-                    {letBinding.localHypotheses.map(hyp => (
-                      <div key={hyp.id} style={{ fontSize: '12px', color: '#495057', marginBottom: '2px' }}>
-                        <span style={{ fontWeight: 'bold' }}>{hyp.name}:</span> {hyp.type?.raw ?? '?'}
-                        {hyp.description && hyp.description !== `${hyp.name} : ${hyp.type?.raw ?? '?'}` && (
-                          <span style={{ color: '#6c757d', fontStyle: 'italic', marginLeft: '4px' }}>
-                            ({hyp.description})
-                          </span>
-                        )}
-                      </div>
-                    ))}
                   </div>
                 )}
               </div>

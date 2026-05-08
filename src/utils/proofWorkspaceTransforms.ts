@@ -74,10 +74,7 @@ export function updateLetBindingAfterTransformation(
       ...letBinding,
       value: newExpression,
       content: newExpression,
-      proofElements: [...(letBinding.proofElements ?? []), equationElement],
-      equalityChain: letBinding.equalityChain
-        ? [...letBinding.equalityChain, equationElement]
-        : letBinding.equalityChain,
+      equalityChain: [...(letBinding.equalityChain ?? []), equationElement],
     };
   });
 }

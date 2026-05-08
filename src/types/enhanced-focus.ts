@@ -118,14 +118,6 @@ export interface LetElement extends ProofElement {
 
   // NEW: TT-level equality proof state
   equalityProofState?: import('../compiler/bridge').EqualityProofState;
-
-  // Legacy fields (will be removed as refactor progresses)
-  isClaim?: boolean;              // DEPRECATED: Use editorMode instead
-  proofMethod?: ProofMethod;      // DEPRECATED
-  proofStatus?: 'pending' | 'in-progress' | 'completed';  // DEPRECATED
-  goal?: ExpressionNode;          // DEPRECATED
-  proofElements?: ProofElement[]; // DEPRECATED: Use equalityChain instead
-  localHypotheses?: Assumption[]; // DEPRECATED
 }
 
 
@@ -240,15 +232,12 @@ export function createInductionProofElement(
  * Create a let-binding element.
  *
  * For new code, use the editorMode-based approach.
- * For legacy code, uses isClaim/proofMethod (deprecated).
  */
 export function createLetElement(
   name: string,
   value: ExpressionNode,
   typeAnnotation?: string,
   derivedFrom?: string[],
-  isClaim?: boolean,
-  proofMethod?: ProofMethod,
   editorMode?: TermEditorMode
 ): LetElement {
   // Determine editor mode
@@ -264,11 +253,6 @@ export function createLetElement(
     derivedFrom,
     editorMode: mode,
     editorExpanded: false,
-
-    // Legacy fields (for backward compatibility)
-    isClaim,
-    proofMethod,
-    proofStatus: isClaim ? 'pending' : undefined,
     timestamp: Date.now()
   };
 }

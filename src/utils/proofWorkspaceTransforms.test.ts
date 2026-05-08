@@ -87,11 +87,11 @@ describe('updateLetBindingAfterTransformation', () => {
 
     expect(updated[0].value.raw).toBe('a');
     expect(updated[0].content).toEqual(newExpression);
-    expect(updated[0].proofElements).toEqual([equationElement]);
+    expect(updated[0].equalityChain).toEqual([equationElement]);
     expect(updated[1]).toEqual(second);
   });
 
-  test('appends to existing proof history and equality chain when present', () => {
+  test('appends to existing equality history when present', () => {
     const letBinding = createLetElement('foo', parseExpressionToAST('a + 0'));
     const priorElement = createTransformationEquationElement(
       parseExpressionToAST('a + 0'),
@@ -103,7 +103,6 @@ describe('updateLetBindingAfterTransformation', () => {
       parseExpressionToAST('a'),
       'Later'
     );
-    letBinding.proofElements = [priorElement];
     letBinding.equalityChain = [priorElement];
 
     const updated = updateLetBindingAfterTransformation(
@@ -113,7 +112,6 @@ describe('updateLetBindingAfterTransformation', () => {
       nextElement
     );
 
-    expect(updated[0].proofElements).toEqual([priorElement, nextElement]);
     expect(updated[0].equalityChain).toEqual([priorElement, nextElement]);
   });
 });
