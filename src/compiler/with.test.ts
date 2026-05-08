@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { compileTTFromText, extractHoleLocations } from './compile';
 import { resetWithCounter } from './with-desugar';
 
@@ -83,6 +84,115 @@ isZero (Succ _) = False
 `;
       const { allDecls } = compileAndGetDecls(source);
       expectSuccess(allDecls, 'isZero');
+    });
+
+    test('abstracts computed scrutinee occurring in return type', () => {
+      const source = natBoolPreamble + `
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+isZero : Nat -> Bool
+isZero Zero = True
+isZero (Succ _) = False
+
+sameZero : (n : Nat) -> Equal (isZero n) (isZero n)
+sameZero n with isZero n
+  | True => refl
+  | False => refl
+`;
+      const { allDecls } = compileAndGetDecls(source);
+
+      const auxDecl = allDecls.find((d: any) => d?.name?.startsWith('sameZero-with-'));
+      expect(auxDecl).toBeDefined();
+      expect(auxDecl?.checkSuccess).toBe(true);
+      expect(auxDecl?.prettyType).toContain('Equal');
+      expect(auxDecl?.prettyType).toContain('_scrut0');
+
+      expectSuccess(allDecls, 'sameZero');
+    });
+
+    test('abstracts repeated computed scrutinee occurrences in return type', () => {
+      const source = natBoolPreamble + `
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+isZero : Nat -> Bool
+isZero Zero = True
+isZero (Succ _) = False
+
+pairZero : (n : Nat) -> Equal (isZero n) (isZero n)
+pairZero n with isZero n
+  | True => refl
+  | False => refl
+`;
+      const { allDecls } = compileAndGetDecls(source);
+      const auxDecl = expectSuccess(allDecls, 'pairZero-with-1');
+      expect(auxDecl.prettyType).toContain('_scrut0');
+
+      const firstBinder = auxDecl.surfaceType;
+      expect(firstBinder?.tag).toBe('Binder');
+      const scrutBinder = firstBinder?.tag === 'Binder' ? firstBinder.body : undefined;
+      expect(scrutBinder?.tag).toBe('Binder');
+      expect(scrutBinder?.name).toBe('_scrut0');
+
+      const equalBody = scrutBinder?.tag === 'Binder' ? scrutBinder.body : undefined;
+      expect(equalBody?.tag).toBe('App');
+      if (equalBody?.tag === 'App' && equalBody.fn.tag === 'App') {
+        expect(equalBody.fn.arg).toMatchObject({ tag: 'Var', index: 0 });
+        expect(equalBody.arg).toMatchObject({ tag: 'Var', index: 0 });
+      }
+
+      expectSuccess(allDecls, 'pairZero');
+    });
+
+    test('preserves dependent family binders when computed scrutinee is unrelated', () => {
+      const source = natPreamble + `
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+record DPair (A : Type) (fn : A -> Type) where
+  fst : A
+  snd : fn fst
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+succCong : {u v : Nat} -> Equal u v -> Equal (Succ u) (Succ v)
+succCong refl = refl
+
+leqImpliesSum : (a b : Nat) -> Leq a b -> DPair Nat (\\n => Equal b (plus a n))
+leqImpliesSum Zero b LeqZero = MkDPair b refl
+leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
+  | MkDPair n pf => MkDPair n (succCong pf)
+`;
+      const { allDecls } = compileAndGetDecls(source);
+
+      const auxDecl = expectSuccess(allDecls, 'leqImpliesSum-with-1');
+      expect(auxDecl.prettyType).toContain('DPair Nat');
+      expect(auxDecl.prettyType).not.toContain('plus (Succ a) _scrut0');
+
+      expectSuccess(allDecls, 'leqImpliesSum');
+    });
+
+    test('nested dependent with keeps outer family binders intact', () => {
+      const source = readFileSync(
+        '/tmp/leanui-with-abstraction-sweep/src/test-programs/complex/sigmaSum-nested-with.tt',
+        'utf8'
+      )
+        .split('\n')
+        .filter(line => !line.startsWith('@'))
+        .join('\n');
+      const { allDecls } = compileAndGetDecls(source);
+
+      expectSuccess(allDecls, 'leqImpliesSum-with-1');
+      expectSuccess(allDecls, 'sigmaSum-with-4-with-5');
+      expectSuccess(allDecls, 'sigmaSum-with-4');
+      expectSuccess(allDecls, 'sigmaSum');
     });
   });
 

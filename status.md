@@ -19,19 +19,23 @@ Upleveling the core engine while preserving the current language surface:
 - Keep converting stale compiler/proof-tree TODOs into real regressions or concrete fixes
 - Preserve useful editor/type-info output even when clause checking later fails
 - Keep tightening `with` desugaring/abstraction coverage so helper tests become real end-to-end regressions
+- Keep collapsing the gap between helper-only `with` abstraction logic and the real production desugaring path
 - Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Generalized production `with` return-type abstraction to handle computed scrutinees, not just bare variables, and fixed the binder-shifting bug that surfaced in dependent `DPair` families
+- Added direct regressions for computed-scrutinee abstraction and dependent-family binder preservation in `with.test.ts`, plus kept the nested `sigmaSum` `.tt` repro green end-to-end
+- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`140` files, `2867` passing)
 - Moved clause-pattern type-info recording earlier in `checkMatchClause`, so failing with-clauses still expose useful cursor/type info
 - Turned the old `No neq` with-clause type-info TODOs into real regressions, plus adjacent branch-selection coverage
 - Converted the remaining `with-abstraction.test.ts` `test.todo`s into active regression tests for single/multiple scrutinees, ill-typed abstraction, and implicit binder preservation
 - Replaced the old parser-side `with` WIP smoke test with real assertions, including multi-scrutinee comma syntax coverage
-- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`139` files, `2846` passing, `0` test todos)
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
 - Improve semantic quality of application/type errors, especially around implicit arguments and partial application
+- Wire ill-typed abstraction detection into the real `with` compilation path instead of leaving it helper-only
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
 - Choose the next large implementation TODO to burn down: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
 - Add more semantic dependency edges to the incremental checker beyond token-level references
