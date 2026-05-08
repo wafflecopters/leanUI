@@ -830,7 +830,7 @@ function applySimultaneousSubst(
  * Check if two TTerms are structurally equal (for with-abstraction).
  * Used to find occurrences of scrutinee in the return type.
  */
-function termsEqualTTerm(term1: TTerm, term2: TTerm, depth: number = 0): boolean {
+function termsEqualTTerm(term1: TTerm, term2: TTerm): boolean {
   if (term1.tag !== term2.tag) return false;
 
   switch (term1.tag) {
@@ -842,8 +842,8 @@ function termsEqualTTerm(term1: TTerm, term2: TTerm, depth: number = 0): boolean
 
     case 'App':
       return term2.tag === 'App' &&
-        termsEqualTTerm(term1.fn, term2.fn, depth) &&
-        termsEqualTTerm(term1.arg, term2.arg, depth);
+        termsEqualTTerm(term1.fn, term2.fn) &&
+        termsEqualTTerm(term1.arg, term2.arg);
 
     case 'Binder':
       if (term2.tag !== 'Binder') return false;
@@ -851,20 +851,20 @@ function termsEqualTTerm(term1: TTerm, term2: TTerm, depth: number = 0): boolean
       if (term1.binderKind.tag !== term2.binderKind.tag) return false;
       // Domain might be undefined for let without type annotation
       if (!term1.domain && !term2.domain) {
-        return termsEqualTTerm(term1.body, term2.body, depth + 1);
+        return termsEqualTTerm(term1.body, term2.body);
       }
       if (!term1.domain || !term2.domain) {
         return false;
       }
-      return termsEqualTTerm(term1.domain, term2.domain, depth) &&
-        termsEqualTTerm(term1.body, term2.body, depth + 1);
+      return termsEqualTTerm(term1.domain, term2.domain) &&
+        termsEqualTTerm(term1.body, term2.body);
 
     case 'MultiBinder':
       if (term2.tag !== 'MultiBinder') return false;
       if (term1.names.length !== term2.names.length) return false;
       if (term1.binderKind.tag !== term2.binderKind.tag) return false;
-      return termsEqualTTerm(term1.domain, term2.domain, depth) &&
-        termsEqualTTerm(term1.body, term2.body, depth + term1.names.length);
+      return termsEqualTTerm(term1.domain, term2.domain) &&
+        termsEqualTTerm(term1.body, term2.body);
 
     case 'Sort':
     case 'ULevel':
@@ -876,12 +876,12 @@ function termsEqualTTerm(term1: TTerm, term2: TTerm, depth: number = 0): boolean
 
     case 'Annot':
       return term2.tag === 'Annot' &&
-        termsEqualTTerm(term1.term, term2.term, depth) &&
-        termsEqualTTerm(term1.type, term2.type, depth);
+        termsEqualTTerm(term1.term, term2.term) &&
+        termsEqualTTerm(term1.type, term2.type);
 
     case 'Match':
       // Simplified: just check scrutinee
-      return term2.tag === 'Match' && termsEqualTTerm(term1.scrutinee, term2.scrutinee, depth);
+      return term2.tag === 'Match' && termsEqualTTerm(term1.scrutinee, term2.scrutinee);
 
     case 'AbsurdMarker':
     case 'WithClause':
@@ -907,7 +907,7 @@ function replaceScrutineeInTTerm(
   depth: number = 0
 ): TTerm {
   // Check if this term matches the scrutinee
-  if (termsEqualTTerm(term, scrutinee, depth)) {
+  if (termsEqualTTerm(term, scrutinee)) {
     // Replace with Var 0 (adjusted for depth)
     return mkVarTT(depth);
   }
