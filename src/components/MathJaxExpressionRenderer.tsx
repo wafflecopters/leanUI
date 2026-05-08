@@ -4,24 +4,8 @@ import { findSyntaxRule } from '../config/syntax-mapping';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { expressionNodeToTTerm, expressionPathToTTermPath } from '../compiler/bridge';
-import { asLambdaByExtractingTermAtIndexPaths, prettyPrintTT, TContext, TTerm } from '../compiler/surface';
-import { elabToKernel, elabContextToKernel } from '../compiler/elab';
-import { inferType, prettyPrint as prettyPrintTTK } from '../compiler/kernel';
-
-// Helper to convert TContext to Maps for expressionNodeToTTerm
-function contextToMaps(context: TContext): { varContext: Map<string, number>; typeContext: Map<string, TTerm> } {
-  const varContext = new Map<string, number>();
-  const typeContext = new Map<string, TTerm>();
-
-  context.forEach((binding, index) => {
-    // De Bruijn indices are 0 = most recent, so we reverse the index
-    const debruijnIndex = context.length - 1 - index;
-    varContext.set(binding.name, debruijnIndex);
-    typeContext.set(binding.name, binding.type);
-  });
-
-  return { varContext, typeContext };
-}
+import { asLambdaByExtractingTermAtIndexPaths, prettyPrintTT, TContext } from '../compiler/surface';
+import { getFocusedExpressionType } from './focused-expression-type';
 
 interface MathJaxExpressionRendererProps<T> {
   expression: T;
@@ -177,32 +161,7 @@ export function MathJaxExpressionRendererRaw({ expression, focusPath = [], onFoc
     }
 
     try {
-      // Get the focused node
-      const pathIndices = focusPath.map(p => typeof p === 'string' ? parseInt(p, 10) : p);
-      let focusedNode: ExpressionNode | undefined = exprNode;
-      for (const idx of pathIndices) {
-        if (!focusedNode?.children || idx >= focusedNode.children.length) {
-          return { error: 'Invalid focus path' };
-        }
-        focusedNode = focusedNode.children[idx];
-      }
-
-      if (!focusedNode) {
-        return { error: 'Invalid focus path' };
-      }
-
-      const { varContext, typeContext: typeCtxMap } = contextToMaps(typeContext);
-      const focusedTTerm = expressionNodeToTTerm(focusedNode, varContext, typeCtxMap);
-      // Elaborate to kernel term and context for type inference
-      const focusedTTKTerm = elabToKernel(focusedTTerm);
-      const kernelContext = elabContextToKernel(typeContext);
-      const typeResult = inferType(focusedTTKTerm, kernelContext);
-
-      if (!typeResult.ok) {
-        return { error: typeResult.error };
-      }
-
-      return { type: prettyPrintTTK(typeResult.type) };
+      return getFocusedExpressionType(exprNode, focusPath, typeContext);
     } catch (error) {
       return { error: String(error) };
     }

@@ -15,24 +15,29 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 3. **Chain rule**: `d/dx f(g(x)) = f'(g(x))·g'(x)`
 
 ## Current Focus
-Building out the proof tree editor UI and tactic engine to support the triangle numbers proof. Iterating on three parallel tracks:
-- The TT language (Agda-style nested pattern refinement)
-- The tactic engine
-- The WYSIWYG LaTeX editor that builds terms/tactics
+Upleveling the core engine while preserving the current language surface:
+- Keep converting stale compiler/proof-tree TODOs into real regressions or concrete fixes
+- Preserve useful editor/type-info output even when clause checking later fails
+- Keep tightening `with` desugaring/abstraction coverage so helper tests become real end-to-end regressions
+- Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
+- Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
-- Interactive proof subtrees for hoisted `have` obligations — subgoals get their own tactic holes instead of text boxes
-- Definition search in apply suggestions — scans all definitions whose return type head matches the goal
-- Subgoal previews with fresh variable names in suggestion buttons (`1. 0 ≤ a  2. a < ε/2`)
-- Hoist-to-have from term builder with rename propagation, delete buttons, type display
-- Term builder slot-filling UI with MathEditor integration and type validation via HaveTactic
-- Clickable hypothesis panel with exact/apply/destructure/use-projection suggestions
+- Moved clause-pattern type-info recording earlier in `checkMatchClause`, so failing with-clauses still expose useful cursor/type info
+- Turned the old `No neq` with-clause type-info TODOs into real regressions, plus adjacent branch-selection coverage
+- Converted the remaining `with-abstraction.test.ts` `test.todo`s into active regression tests for single/multiple scrutinees, ill-typed abstraction, and implicit binder preservation
+- Replaced the old parser-side `with` WIP smoke test with real assertions, including multi-scrutinee comma syntax coverage
+- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`139` files, `2846` passing, `0` test todos)
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
+- Improve semantic quality of application/type errors, especially around implicit arguments and partial application
+- Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
+- Choose the next large implementation TODO to burn down: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
+- Add more semantic dependency edges to the incremental checker beyond token-level references
+- Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`
-- Infix operator syntax (user-defined operators with precedence)
-- Case-of expressions and nested casing
+- Case-of expressions and nested casing / refinement
 - Tactic proof term validation (Match case in `checkType`)
 
 ## Open Questions

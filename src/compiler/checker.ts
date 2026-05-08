@@ -370,14 +370,11 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
         // Try to infer the argument's type to show what was actually provided
         let actualType: string | undefined;
-        let innerError: TCEnvError | undefined;
         try {
           const argTypeEnv = inferType(env.inAppArg());
           actualType = env.prettyPrint(argTypeEnv.value);
         } catch (e) {
-          if (e instanceof TCEnvError) {
-            innerError = e;
-          } else {
+          if (!(e instanceof TCEnvError)) {
             throw e;
           }
         }
@@ -385,10 +382,6 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
         const msg = actualType
           ? `${fnName} expects ${expectedType} but was applied to ${actualType}`
           : `${fnName} expects ${expectedType}`;
-
-        if (innerError) {
-          throw innerError
-        }
 
         throw e.wrappedBy(msg);
       }
@@ -1098,4 +1091,3 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     throw e;
   }
 }
-

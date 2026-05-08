@@ -424,6 +424,43 @@ describe('Let Inference - Type-Level Lets', () => {
 });
 
 describe('Let Inference - Elaboration', () => {
+  test('solveMetasAndConstraints preserves zonked elaborated let', () => {
+    // let x : _ := Zero in x
+    const term = mkLet('x', mkHole('_'), mkConst('Zero'), mkVar(0));
+    const env = createTestEnv(term);
+
+    const result = inferType(env);
+    const solved = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+    expect(solved.elaboratedTerm?.tag).toBe('Binder');
+    if (solved.elaboratedTerm?.tag === 'Binder' && solved.elaboratedTerm.binderKind.tag === 'BLet') {
+      expect(solved.elaboratedTerm.domain).toEqual(mkConst('Nat'));
+      expect(solved.elaboratedTerm.binderKind.defVal).toEqual(mkConst('Zero'));
+      expect(solved.elaboratedTerm.body).toEqual(mkVar(0));
+    }
+  });
+
+  test('solveMetasAndConstraints preserves nested elaborated lets', () => {
+    // let x := Zero in let y := x in y
+    const inner = mkLet('y', mkHole('_y'), mkVar(0), mkVar(0));
+    const outer = mkLet('x', mkHole('_x'), mkConst('Zero'), inner);
+    const env = createTestEnv(outer);
+
+    const result = inferType(env);
+    const solved = result.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+    expect(solved.elaboratedTerm?.tag).toBe('Binder');
+    if (solved.elaboratedTerm?.tag === 'Binder' && solved.elaboratedTerm.binderKind.tag === 'BLet') {
+      expect(solved.elaboratedTerm.domain).toEqual(mkConst('Nat'));
+      expect(solved.elaboratedTerm.body.tag).toBe('Binder');
+      if (solved.elaboratedTerm.body.tag === 'Binder' && solved.elaboratedTerm.body.binderKind.tag === 'BLet') {
+        expect(solved.elaboratedTerm.body.domain).toEqual(mkConst('Nat'));
+        expect(solved.elaboratedTerm.body.binderKind.defVal).toEqual(mkVar(0));
+        expect(solved.elaboratedTerm.body.body).toEqual(mkVar(0));
+      }
+    }
+  });
+
   test('elaborated let preserves structure', () => {
     // let x : _ := Zero in x
     const term = mkLet('x', mkHole('_'), mkConst('Zero'), mkVar(0));

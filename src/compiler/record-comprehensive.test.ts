@@ -11,6 +11,7 @@
 
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText, CompiledDeclaration } from './compile';
+import { areTypesDefEq } from './whnf';
 
 // Helper to find a declaration by name across all blocks
 function findDecl(result: ReturnType<typeof compileTTFromText>, name: string): CompiledDeclaration | undefined {
@@ -537,10 +538,7 @@ getStartX (MkLine (MkPoint x _) _) = x
     expectSuccess(result, 'getStartX');
   });
 
-  // FUTURE: Pattern matching on parameterized records needs all args
-  test.todo('pattern match on parameterized record (implicit type args)', () => {
-    // This currently fails because MkPair expects 4 args (A, B, fst, snd)
-    // but pattern matching should infer the type args
+  test('pattern match on parameterized record (implicit type args)', () => {
     const source = NAT_PRELUDE + `
 record Pair (A B : Type) where
   constructor MkPair
@@ -1177,8 +1175,7 @@ pointBox = MkBox (MkPoint Zero Zero)
 // ============================================================================
 
 describe('Eta Equality', () => {
-  // FUTURE: Record eta expansion for definitional equality
-  test.todo('eta expansion: mk (proj1 r) (proj2 r) = r', () => {
+test('eta expansion: mk (proj1 r) (proj2 r) = r', () => {
     const source = NAT_PRELUDE + `
 record Point where
   constructor MkPoint
@@ -1199,6 +1196,12 @@ id2 p = MkPoint (Point.x p) (Point.y p)
     const result = compileTTFromText(source);
     expectSuccess(result, 'id1');
     expectSuccess(result, 'id2');
-    // TODO: verify id1 and id2 are definitionally equal
+
+    const p = { tag: 'Var' as const, index: 0 };
+    const lhs = { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'id1' }, arg: p };
+    const rhs = { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'id2' }, arg: p };
+    expect(areTypesDefEq(lhs, rhs, result.definitions, [
+      { name: 'p', type: { tag: 'Const' as const, name: 'Point' } },
+    ])).toBe(true);
   });
 });

@@ -22,6 +22,7 @@
  */
 
 import type { IndexPath } from '../types/source-position.js';
+import { countSurfaceClauseBindings } from './pattern-binders';
 
 // ============================================================================
 // Universe Levels (Term-based representation)
@@ -709,7 +710,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
         tag: 'Match',
         scrutinee: replaceHoleTT(term.scrutinee, holeId, replacement),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: replaceHoleTT(c.rhs, holeId, replacement)
         }))
       };
@@ -873,7 +874,7 @@ export function fillHoleWithTT(
         tag: 'Match',
         scrutinee: fillHoleWithTT(term.scrutinee, holeId, generator),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: fillHoleWithTT(c.rhs, holeId, generator)
         }))
       };
@@ -1473,10 +1474,8 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
         tag: 'Match',
         scrutinee: substHelperTT(targetIndex, replacement, term.scrutinee, depth),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          // TODO: when we implement proper pattern binding, we need to account for
-          // variables bound by patterns when substituting in the RHS
-          rhs: substHelperTT(targetIndex, replacement, c.rhs, depth)
+          ...c,
+          rhs: substHelperTT(targetIndex, replacement, c.rhs, depth + countSurfaceClauseBindings(c))
         }))
       };
 
@@ -1579,10 +1578,8 @@ export function shiftSurfaceTerm(amount: number, term: TTerm, cutoff: number): T
         tag: 'Match',
         scrutinee: shiftSurfaceTerm(amount, term.scrutinee, cutoff),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
-          // TODO: when we implement proper pattern binding, we need to account for
-          // variables bound by patterns when shifting in the RHS
-          rhs: shiftSurfaceTerm(amount, c.rhs, cutoff)
+          ...c,
+          rhs: shiftSurfaceTerm(amount, c.rhs, cutoff + countSurfaceClauseBindings(c))
         }))
       };
 
@@ -1974,10 +1971,13 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
     case 'Match': {
       const scrutinee = prettyPrintTerseTT(term.scrutinee, context);
       const clauses = term.clauses.map(c => {
-        // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
-        const patternStr = c.patterns.map(p => prettyPrintPatternTT(p)).join(' ');
-        const rhsStr = prettyPrintTerseTT(c.rhs, context);
-        return `${patternStr} => ${rhsStr}`;
+        const clauseContext = [...collectClausePatternVarsTT(c).reverse(), ...context];
+        const lhsStr = [
+          ...c.patterns.map(p => prettyPrintPatternTT(p)),
+          ...(c.namedPatterns ?? []).map(np => `${np.name} := ${prettyPrintPatternTT(np.pattern)}`),
+        ].join(' ');
+        const rhsStr = prettyPrintTerseTT(c.rhs, clauseContext);
+        return `${lhsStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
     }
@@ -2001,12 +2001,16 @@ export function prettyPrintPatternTT(pattern: TPattern): string {
       return pattern.name;
     case 'PWild':
       return '_';
-    case 'PCtor':
-      if (pattern.args.length === 0) {
+    case 'PCtor': {
+      const parts = [
+        ...pattern.args.map(prettyPrintPatternTT),
+        ...(pattern.namedArgs ?? []).map(na => `${na.name} := ${prettyPrintPatternTT(na.pattern)}`),
+      ];
+      if (parts.length === 0) {
         return pattern.name;
       }
-      const args = pattern.args.map(prettyPrintPatternTT).join(' ');
-      return `(${pattern.name} ${args})`;
+      return `(${pattern.name} ${parts.join(' ')})`;
+    }
   }
 }
 
@@ -2016,6 +2020,36 @@ function stripOuterParens(s: string): string {
     return s.slice(1, -1);
   }
   return s;
+}
+
+function collectClausePatternVarsTT(clause: Pick<TClause, 'patterns' | 'namedPatterns'>): string[] {
+  const vars: string[] = [];
+  for (const pattern of clause.patterns) {
+    collectPatternVarsTT(pattern, vars);
+  }
+  for (const namedPattern of clause.namedPatterns ?? []) {
+    collectPatternVarsTT(namedPattern.pattern, vars);
+  }
+  return vars;
+}
+
+function collectPatternVarsTT(pattern: TPattern, vars: string[]): void {
+  switch (pattern.tag) {
+    case 'PVar':
+      vars.push(pattern.name);
+      break;
+    case 'PWild':
+      vars.push('_');
+      break;
+    case 'PCtor':
+      for (const arg of pattern.args) {
+        collectPatternVarsTT(arg, vars);
+      }
+      for (const namedArg of pattern.namedArgs ?? []) {
+        collectPatternVarsTT(namedArg.pattern, vars);
+      }
+      break;
+  }
 }
 
 /**
@@ -2146,10 +2180,13 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
     case 'Match': {
       const scrutinee = prettyPrintTT(term.scrutinee, context);
       const clauses = term.clauses.map(c => {
-        // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
-        const patternStr = c.patterns.map(p => prettyPrintPatternTT(p)).join(' ');
-        const rhsStr = prettyPrintTT(c.rhs, context);
-        return `${patternStr} => ${rhsStr}`;
+        const clauseContext = [...collectClausePatternVarsTT(c).reverse(), ...context];
+        const lhsStr = [
+          ...c.patterns.map(p => prettyPrintPatternTT(p)),
+          ...(c.namedPatterns ?? []).map(np => `${np.name} := ${prettyPrintPatternTT(np.pattern)}`),
+        ].join(' ');
+        const rhsStr = prettyPrintTT(c.rhs, clauseContext);
+        return `${lhsStr} => ${rhsStr}`;
       }).join(' | ');
       return `(match ${scrutinee} | ${clauses})`;
     }
@@ -2179,6 +2216,10 @@ export interface LatexPrintOptions {
 const defaultLatexOptions: LatexPrintOptions = {
   showEqTypeSubscript: true,
 };
+
+function escapeLatexNameTT(name: string): string {
+  return name.replace(/_/g, '\\_');
+}
 
 /**
  * Try to match a term against the pattern: Eq A x y
@@ -2229,7 +2270,7 @@ export function prettyPrintLatexTT(
   switch (term.tag) {
     case 'Var':
       if (term.index < context.length) {
-        return context[term.index];
+        return escapeLatexNameTT(context[term.index]);
       }
       return `\\#${term.index}`;
 
@@ -2248,7 +2289,7 @@ export function prettyPrintLatexTT(
 
     case 'Const':
       // Escape special LaTeX characters in names
-      return term.name.replace(/_/g, '\\_');
+      return escapeLatexNameTT(term.name);
 
     case 'AbsurdMarker':
       return '\\text{\\#absurd}';
@@ -2267,20 +2308,20 @@ export function prettyPrintLatexTT(
           if (isAnonymous || !occursInTT(0, term.body)) {
             return `(${domain} \\to ${body})`;
           }
-          return `(\\Pi\\, (${term.name} : ${domain}),\\, ${body})`;
+          return `(\\Pi\\, (${escapeLatexNameTT(term.name)} : ${domain}),\\, ${body})`;
 
         case 'BLamTT':
           if (isAnonymous) {
             return `(\\lambda\\, ${domain},\\, ${body})`;
           }
-          return `(\\lambda\\, (${term.name} : ${domain}),\\, ${body})`;
+          return `(\\lambda\\, (${escapeLatexNameTT(term.name)} : ${domain}),\\, ${body})`;
 
         case 'BLetTT':
           const defVal = prettyPrintLatexTT(term.binderKind.defVal, context, opts);
           if (domain !== undefined) {
-            return `(\\text{let } ${term.name} : ${domain} = ${defVal} \\text{ in } ${body})`;
+            return `(\\text{let } ${escapeLatexNameTT(term.name)} : ${domain} = ${defVal} \\text{ in } ${body})`;
           }
-          return `(\\text{let } ${term.name} = ${defVal} \\text{ in } ${body})`;
+          return `(\\text{let } ${escapeLatexNameTT(term.name)} = ${defVal} \\text{ in } ${body})`;
       }
     }
 
@@ -2288,7 +2329,7 @@ export function prettyPrintLatexTT(
       const domain = prettyPrintLatexTT(term.domain, context, opts);
       const newContext = [...term.names].reverse().concat(context);
       const body = prettyPrintLatexTT(term.body, newContext, opts);
-      const namesStr = term.names.join('\\, ');
+      const namesStr = term.names.map(escapeLatexNameTT).join('\\, ');
 
       switch (term.binderKind.tag) {
         case 'BPiTT':
@@ -2315,10 +2356,13 @@ export function prettyPrintLatexTT(
     case 'Match': {
       const scrutinee = prettyPrintLatexTT(term.scrutinee, context, opts);
       const clauses = term.clauses.map(c => {
-        // TODO: when we implement proper pattern binding, we need to extend context with pattern vars
-        const patternStr = c.patterns.map(p => prettyPrintPatternLatexTT(p)).join('\\; ');
-        const rhsStr = prettyPrintLatexTT(c.rhs, context, opts);
-        return `${patternStr} \\Rightarrow ${rhsStr}`;
+        const clauseContext = [...collectClausePatternVarsTT(c).reverse(), ...context];
+        const lhsStr = [
+          ...c.patterns.map(p => prettyPrintPatternLatexTT(p)),
+          ...(c.namedPatterns ?? []).map(np => `${escapeLatexNameTT(np.name)} := ${prettyPrintPatternLatexTT(np.pattern)}`),
+        ].join('\\; ');
+        const rhsStr = prettyPrintLatexTT(c.rhs, clauseContext, opts);
+        return `${lhsStr} \\Rightarrow ${rhsStr}`;
       }).join(' \\mid ');
       return `\\text{match}\\; ${scrutinee}\\; \\{\\, ${clauses} \\,\\}`;
     }
@@ -2340,15 +2384,19 @@ function prettyPrintPatternLatexTT(pattern: TPattern): string {
   switch (pattern.tag) {
     case 'PVar':
       // Escape underscores for LaTeX
-      return pattern.name.replace(/_/g, '\\_');
+      return escapeLatexNameTT(pattern.name);
     case 'PWild':
       return '\\_';
-    case 'PCtor':
-      if (pattern.args.length === 0) {
-        return pattern.name.replace(/_/g, '\\_');
+    case 'PCtor': {
+      const parts = [
+        ...pattern.args.map(prettyPrintPatternLatexTT),
+        ...(pattern.namedArgs ?? []).map(na => `${escapeLatexNameTT(na.name)} := ${prettyPrintPatternLatexTT(na.pattern)}`),
+      ];
+      if (parts.length === 0) {
+        return escapeLatexNameTT(pattern.name);
       }
-      const args = pattern.args.map(prettyPrintPatternLatexTT).join('\\; ');
-      return `(${pattern.name.replace(/_/g, '\\_')}\\; ${args})`;
+      return `(${escapeLatexNameTT(pattern.name)}\\; ${parts.join('\\; ')})`;
+    }
   }
 }
 
@@ -2692,7 +2740,7 @@ function fillHoleWithLet(
         tag: 'Match',
         scrutinee: fillHoleWithLet(term.scrutinee, holeId, letName, letType, letValue),
         clauses: term.clauses.map(c => ({
-          patterns: c.patterns,
+          ...c,
           rhs: fillHoleWithLet(c.rhs, holeId, letName, letType, letValue)
         }))
       };
@@ -2868,9 +2916,8 @@ export function occursInTT(index: number, term: TTerm): boolean {
       // Check scrutinee
       if (occursInTT(index, term.scrutinee)) return true;
       // Check all clause RHS terms
-      // TODO: when we implement proper pattern binding, adjust index for pattern-bound vars
       for (const clause of term.clauses) {
-        if (occursInTT(index, clause.rhs)) return true;
+        if (occursInTT(index + countSurfaceClauseBindings(clause), clause.rhs)) return true;
       }
       return false;
 

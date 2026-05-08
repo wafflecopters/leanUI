@@ -1,5 +1,6 @@
 import { arraySeg, fieldSeg, IndexPath, IndexPathSegment, serializeIndexPath } from "../types/source-position";
 import { prettyPrint, TTKClause, TTKPattern, TTKTerm, TTKContext, mkPi, mkLSucc, mkULit, mkMeta, simplifyLevel, isDefinitionallyEqual } from "./kernel";
+import { countKernelClauseBindings } from "./pattern-binders";
 import { normalize as doNormalize } from "./normalize";
 export type { TTKContext } from "./kernel";
 import { solveConstraints } from "./meta";
@@ -533,7 +534,20 @@ function transformVarsInTermAcc(term: TTKTerm, transform: (varIndex: number, con
   } else if (term.tag === 'Annot') {
     return { tag: 'Annot', term: transformVarsInTermAcc(term.term, transform, context), type: transformVarsInTermAcc(term.type, transform, context) };
   } else if (term.tag === 'Match') {
-    return { tag: 'Match', scrutinee: transformVarsInTermAcc(term.scrutinee, transform, context), clauses: term.clauses.map(c => ({ patterns: c.patterns, rhs: transformVarsInTermAcc(c.rhs, transform, context) })) };
+    return {
+      tag: 'Match',
+      scrutinee: transformVarsInTermAcc(term.scrutinee, transform, context),
+      clauses: term.clauses.map(c => {
+        const clauseContext = [...context];
+        for (let i = 0; i < countKernelClauseBindings(c); i++) {
+          clauseContext.push({ name: '_match', type: { tag: 'Hole', id: '_match_type' } });
+        }
+        return {
+          ...c,
+          rhs: transformVarsInTermAcc(c.rhs, transform, clauseContext)
+        };
+      })
+    };
   } else if (term.tag === 'ULevel') {
     return { tag: 'ULevel' };
   } else if (term.tag === 'ULit') {
@@ -613,9 +627,13 @@ function replaceHolesWithMetasInTerm<S>(env: TCEnv<S>, term: TTKTerm): { env: TC
       currentEnv = env1;
 
       const clauses = term.clauses.map(c => {
-        const { env: clauseEnv, term: rhs } = replaceHolesWithMetasInTerm(currentEnv, c.rhs);
-        currentEnv = clauseEnv;
-        return { patterns: c.patterns, rhs };
+        let clauseEnv = currentEnv;
+        for (let i = 0; i < countKernelClauseBindings(c); i++) {
+          clauseEnv = extendTTKContextInTCEnv(clauseEnv, '_match', { tag: 'Hole', id: '_match_type' });
+        }
+        const { env: updatedClauseEnv, term: rhs } = replaceHolesWithMetasInTerm(clauseEnv, c.rhs);
+        currentEnv = updatedClauseEnv;
+        return { ...c, rhs };
       });
 
       return { env: currentEnv, term: { tag: 'Match', scrutinee, clauses } };
@@ -1045,7 +1063,7 @@ export class TCEnv<T> {
       options.liftMetasToFullContext ? this.context : undefined,
       this.definitions
     );
-    return new TCEnv(
+    const solvedEnv = new TCEnv(
       this.context,
       this.definitions,
       metaVars,
@@ -1054,10 +1072,18 @@ export class TCEnv<T> {
       this.valueStack,
       this.value,
       this.levelMetas,
-      this.options
-      // NOTE: elaboratedTerm is intentionally NOT preserved here for now
-      // Preserving it breaks pattern elaboration (replace test).
-      // TODO: investigate why and fix properly.
+      this.options,
+      this.elaboratedTerm,
+    );
+
+    if (this.elaboratedTerm === undefined) {
+      return solvedEnv;
+    }
+
+    // Keep the elaborated term in sync with solved metas so later consumers
+    // can inspect the fully elaborated structure after constraint solving.
+    return solvedEnv.withElaboratedTerm(
+      solvedEnv.zonkTermAtDepth(this.elaboratedTerm, this.context.length),
     );
   }
 
@@ -1167,7 +1193,7 @@ export class TCEnv<T> {
           clauses: term.clauses.map(c => ({
             ...c,
             patterns: c.patterns,
-            rhs: this.zonkAtDepthHelper(c.rhs, targetDepth)
+            rhs: this.zonkAtDepthHelper(c.rhs, targetDepth + countKernelClauseBindings(c))
           }))
         };
       default:

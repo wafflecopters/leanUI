@@ -36,6 +36,7 @@ import type {
 } from './kernel';
 
 import { mkLevelNum, mkMeta, mkHole, mkLSucc, mkLMax, mkLIMax, mkULit, mkUOmega, mkSort, mkVar } from './kernel';
+import { countSurfaceClauseBindings, countSurfacePatternBindings } from './pattern-binders';
 import { shiftTerm } from './subst';
 
 // Counter for generating unique meta IDs for implicit let types
@@ -945,7 +946,7 @@ export function fixRhsForConstructorPatterns(
       varIndex++;
     } else if (pattern.tag === 'PCtor') {
       // PCtor with args - count vars from sub-patterns
-      varIndex += countPatternVars(pattern);
+      varIndex += countSurfacePatternBindings(pattern);
     }
   }
 
@@ -1019,7 +1020,7 @@ export function fixRhsForVariablePatterns(
     } else if (pattern.tag === 'PWild') {
       fullVarIndex++;
     } else if (pattern.tag === 'PCtor') {
-      fullVarIndex += countPatternVars(pattern);
+      fullVarIndex += countSurfacePatternBindings(pattern);
     }
   }
 
@@ -1131,7 +1132,7 @@ function transformRhsForVariablePatterns(
           scrutinee: transform(t.scrutinee, depth),
           clauses: t.clauses.map(c => ({
             ...c,
-            rhs: transform(c.rhs, depth + countClausePatternVars(c.patterns))
+            rhs: transform(c.rhs, depth + countSurfaceClauseBindings(c))
           }))
         };
 
@@ -1235,7 +1236,7 @@ function transformRhsForConstructorPatterns(
           scrutinee: transform(t.scrutinee, depth),
           clauses: t.clauses.map(c => ({
             ...c,
-            rhs: transform(c.rhs, depth + countClausePatternVars(c.patterns))
+            rhs: transform(c.rhs, depth + countSurfaceClauseBindings(c))
           }))
         };
 
@@ -1264,10 +1265,6 @@ function transformRhsForConstructorPatterns(
 /**
  * Count the number of variables bound by a list of patterns.
  */
-function countClausePatternVars(patterns: TPattern[]): number {
-  return patterns.reduce((acc, p) => acc + countPatternVars(p), 0);
-}
-
 // ============================================================================
 // Pattern Reordering for Named Patterns
 // ============================================================================
@@ -1312,17 +1309,6 @@ function collectPatternArgs(patterns: TPattern[]): PatternArg[] {
 /**
  * Count pattern variables in a pattern (for de Bruijn index calculation).
  */
-function countPatternVars(pattern: TPattern): number {
-  switch (pattern.tag) {
-    case 'PVar':
-      return 1;
-    case 'PWild':
-      return 1;
-    case 'PCtor':
-      return pattern.args.reduce((sum, p) => sum + countPatternVars(p), 0);
-  }
-}
-
 /**
  * Apply a permutation to de Bruijn indices in a surface term.
  * Only affects Var nodes within the permutation range (pattern variables).
@@ -1395,7 +1381,7 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
         clauses: term.clauses.map(c => ({
           ...c,
           // Patterns bind new variables, so increase depth by the number of pattern vars
-          rhs: applyVarPermutation(c.rhs, permutation, depth + c.patterns.reduce((sum, p) => sum + countPatternVars(p), 0))
+          rhs: applyVarPermutation(c.rhs, permutation, depth + countSurfaceClauseBindings(c))
         }))
       };
 
@@ -1576,10 +1562,10 @@ export function reorderPatterns(
 
   // Step 1: Count vars per pattern position in original order
   // Include both positional patterns and clause-level named patterns
-  const origVarCounts = patterns.map(p => countPatternVars(p));
+  const origVarCounts = patterns.map(p => countSurfacePatternBindings(p));
   if (clauseNamedPatterns) {
     for (const np of clauseNamedPatterns) {
-      origVarCounts.push(countPatternVars(np.pattern));
+      origVarCounts.push(countSurfacePatternBindings(np.pattern));
     }
   }
   const totalVars = origVarCounts.reduce((a, b) => a + b, 0);
@@ -1597,7 +1583,7 @@ export function reorderPatterns(
 
   // Step 3: For reordered patterns, compute new de Bruijn index range
   // NOTE: Use newTotalVars, not totalVars, because synthetic wildcards add new vars
-  const newVarCounts = ordered.map(p => countPatternVars(p));
+  const newVarCounts = ordered.map(p => countSurfacePatternBindings(p));
   const newTotalVars = newVarCounts.reduce((a, b) => a + b, 0);
   const newPatternStartIndex: number[] = [];
   idx = newTotalVars - 1;

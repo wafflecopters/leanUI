@@ -1,6 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { TTKTerm, mkVar, mkConst, mkApp, mkPi, mkType, TTKContext } from './kernel';
-import { normalizeInContext, findOccurrences, replaceWithFreshVar, OccurrenceInfo } from './with-abstraction';
+import { compileTTFromText } from './compile';
+import { normalizeInContext, findOccurrences, replaceWithFreshVar, OccurrenceInfo, detectIllTypedAbstraction } from './with-abstraction';
 
 describe('With-Abstraction Helpers', () => {
   describe('normalizeInContext', () => {
@@ -462,9 +463,122 @@ describe('Multiple scrutinees', () => {
 });
 
 describe('With-Abstraction Integration', () => {
-  // These tests will verify the full pipeline once we integrate
-  test.todo('abstracts single scrutinee in dependent return type');
-  test.todo('abstracts multiple scrutinees in order');
-  test.todo('detects ill-typed abstraction');
-  test.todo('preserves implicit arguments in auxiliary type');
+  function findAuxDecl(source: string, prefix: string) {
+    const result = compileTTFromText(source);
+    const auxDecl = result.blocks.flatMap(b => b.declarations).find(d => d.name?.startsWith(prefix));
+    expect(auxDecl).toBeDefined();
+    return auxDecl!;
+  }
+
+  function flattenSurfaceBinders(type: any): Array<{ name: string; named: boolean; domain: any }> {
+    const binders: Array<{ name: string; named: boolean; domain: any }> = [];
+    let current = type;
+
+    while (current && (current.tag === 'Binder' || current.tag === 'MultiBinder')) {
+      if (current.tag === 'Binder') {
+        binders.push({ name: current.name, named: !!current.named, domain: current.domain });
+        current = current.body;
+      } else {
+        for (const name of current.names) {
+          binders.push({ name, named: !!current.named, domain: current.domain });
+        }
+        current = current.body;
+      }
+    }
+
+    return binders;
+  }
+
+  test('abstracts single scrutinee in dependent return type', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+simple : {n : Nat} -> Nat -> Equal n n
+simple x with simple x
+  | refl => refl
+`;
+
+    const auxDecl = findAuxDecl(source, 'simple-with');
+    expect(auxDecl.checkSuccess).toBe(true);
+
+    const binders = flattenSurfaceBinders(auxDecl.surfaceType);
+    const scrutineeBinder = binders.find(b => b.name === '_scrut0');
+    expect(scrutineeBinder).toBeDefined();
+    expect(scrutineeBinder?.domain.tag).toBe('App');
+
+    const typeJson = JSON.stringify(auxDecl.surfaceType);
+    expect(typeJson).toContain('_scrut0');
+    expect(typeJson).toContain('Equal');
+  });
+
+  test('abstracts multiple scrutinees in order', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+sameLeft : (x y : Nat) -> Equal x x
+sameLeft x y with x, y
+  | Zero, Zero => refl
+  | Zero, Succ y1 => refl
+  | Succ x1, Zero => refl
+  | Succ x1, Succ y1 => refl
+`;
+
+    const auxDecl = findAuxDecl(source, 'sameLeft-with');
+    expect(auxDecl.checkSuccess).toBe(true);
+
+    const binders = flattenSurfaceBinders(auxDecl.surfaceType);
+    const scrutineeBinders = binders.filter(b => b.name.startsWith('_scrut'));
+    expect(scrutineeBinders.map(b => b.name)).toEqual(['_scrut0', '_scrut1']);
+    expect(scrutineeBinders.every(b => b.domain?.tag === 'Const' && b.domain.name === 'Nat')).toBe(true);
+  });
+
+  test('detects ill-typed abstraction', () => {
+    const context: TTKContext = [
+      { name: 'A', type: mkType() },
+      { name: 'fst_p', type: mkVar(0) },
+      { name: 'snd_p', type: mkApp(mkConst('B'), mkVar(0)) },
+    ];
+    const scrutinee = mkVar(1);
+    const goal = mkApp(
+      mkApp(mkConst('H'), mkVar(1)),
+      mkVar(0)
+    );
+
+    const result = detectIllTypedAbstraction(scrutinee, goal, context);
+    expect(result.isIllTyped).toBe(true);
+    expect(result.problematicVars.map(v => v.varName)).toEqual(['snd_p']);
+    expect(result.errorMessage).toContain('depends on fst_p');
+  });
+
+  test('preserves implicit arguments in auxiliary type', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+simple : {n : Nat} -> Nat -> Equal n n
+simple x with simple x
+  | refl => refl
+`;
+
+    const auxDecl = findAuxDecl(source, 'simple-with');
+    expect(auxDecl.checkSuccess).toBe(true);
+    expect(auxDecl.namedArgMap?.get('n')).toBe(0);
+
+    const binders = flattenSurfaceBinders(auxDecl.surfaceType);
+    expect(binders[0]).toMatchObject({ name: 'n', named: true });
+  });
 });

@@ -13,6 +13,7 @@
 
 import type { TPattern } from './surface';
 import type { TTKPattern } from './kernel';
+import { countSurfaceClauseBindings } from './pattern-binders';
 
 // ============================================================================
 // Types
@@ -481,7 +482,7 @@ export function adjustRhsWithMapping(
           clauses: term.clauses.map(c => ({
             ...c,
             // For nested match, need to count pattern vars
-            rhs: adjust(c.rhs, depth + countPatternVars(c.patterns))
+            rhs: adjust(c.rhs, depth + countSurfaceClauseBindings(c))
           }))
         };
 
@@ -501,17 +502,3 @@ export function adjustRhsWithMapping(
 /**
  * Count pattern variables (for nested match depth calculation).
  */
-function countPatternVars(patterns: TPattern[]): number {
-  function countInPattern(p: TPattern): number {
-    switch (p.tag) {
-      case 'PVar':
-        return 1;
-      case 'PWild':
-        return 1;
-      case 'PCtor':
-        return p.args.reduce((sum, arg) => sum + countInPattern(arg), 0) +
-               (p.namedArgs?.reduce((sum, na) => sum + countInPattern(na.pattern), 0) ?? 0);
-    }
-  }
-  return patterns.reduce((sum, p) => sum + countInPattern(p), 0);
-}

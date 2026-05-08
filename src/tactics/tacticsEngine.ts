@@ -10,6 +10,7 @@
 
 import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { MetaVar, Constraint, DefinitionsMap, TCEnv } from '../compiler/term';
+import { checkType, inferType } from '../compiler/checker';
 import { solveConstraints } from '../compiler/meta';
 
 /**
@@ -35,6 +36,45 @@ export class TacticEngine {
     /** Focus: which goal are we working on? (index into goals) */
     public readonly focusIndex: number
   ) {}
+
+  /**
+   * Build a checker environment for a term in the given goal context.
+   */
+  toTCEnv(goal: MetaVar, term: TTKTerm): TCEnv<TTKTerm> {
+    return new TCEnv(
+      goal.ctx,
+      this.definitions,
+      this.metaVars,
+      this.constraints,
+      [],
+      [],
+      term,
+      new Map(),
+      { mode: 'check' }
+    );
+  }
+
+  inferInGoal(goal: MetaVar, term: TTKTerm): TCEnv<TTKTerm> {
+    return inferType(this.toTCEnv(goal, term));
+  }
+
+  checkInGoal(goal: MetaVar, term: TTKTerm, expectedType: TTKTerm): TCEnv<TTKTerm> {
+    return checkType(this.toTCEnv(goal, term), expectedType);
+  }
+
+  private createZonkEnv(term: TTKTerm): TCEnv<TTKTerm> {
+    return new TCEnv(
+      [],
+      this.definitions,
+      this.metaVars,
+      this.constraints,
+      [],
+      [],
+      term,
+      new Map(),
+      { mode: 'check' }
+    );
+  }
 
   // --- Query Methods ---
 
@@ -86,18 +126,7 @@ export class TacticEngine {
    *   inside a Pi body (depth 10), the solution must be shifted to Var(9).
    */
   zonkTerm(term: TTKTerm, contextDepth: number = 0): TTKTerm {
-    // Create a minimal TCEnv for zonking
-    const env = new TCEnv(
-      [],  // Empty context
-      this.definitions,
-      this.metaVars,
-      this.constraints,
-      [],
-      [],
-      term,
-      new Map(),
-      { mode: 'check' }
-    );
+    const env = this.createZonkEnv(term);
     // Use depth-aware zonking to correctly shift de Bruijn indices
     // when meta solutions cross binder boundaries
     return env.zonkTermAtDepth(term, contextDepth);
@@ -210,22 +239,9 @@ export function createInitialEngine(
 export function getZonkedMetas(engine: TacticEngine): Map<string, TTKTerm | undefined> {
   const zonked = new Map<string, TTKTerm | undefined>();
 
-  // Create a minimal TCEnv for zonking
-  const env = new TCEnv(
-    [],
-    engine.definitions,
-    engine.metaVars,
-    engine.constraints,
-    [],
-    [],
-    { tag: 'Const', name: 'dummy' },
-    new Map(),
-    { mode: 'check' }
-  );
-
   for (const [id, meta] of engine.metaVars.entries()) {
     if (meta.solution) {
-      zonked.set(id, env.zonkTerm(meta.solution));
+      zonked.set(id, engine.zonkTerm(meta.solution));
     } else {
       zonked.set(id, undefined);
     }

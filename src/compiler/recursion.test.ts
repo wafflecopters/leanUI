@@ -33,7 +33,11 @@ import {
 
 const mkPVar = (name: string): TTKPattern => ({ tag: 'PVar', name });
 const mkPWild = (name: string): TTKPattern => ({ tag: 'PWild', name });
-const mkPCtor = (name: string, args: TTKPattern[]): TTKPattern => ({ tag: 'PCtor', name, args });
+const mkPCtor = (
+  name: string,
+  args: TTKPattern[],
+  namedArgs?: Array<{ name: string; pattern: TTKPattern }>
+): TTKPattern => ({ tag: 'PCtor', name, args, namedArgs });
 
 // ============================================================================
 // Tests for collectPatternVars
@@ -90,6 +94,15 @@ describe('collectPatternVars', () => {
     const patterns = [mkPCtor('Cons', [mkPVar('h'), mkPVar('t')])];
     const result = collectPatternVars(patterns);
     expect(result).toEqual(['h', 't']);
+  });
+
+  test('PCtor collects vars from named args in traversal order after positional args', () => {
+    const patterns = [mkPCtor('Wrap', [mkPVar('pos')], [
+      { name: 'lhs', pattern: mkPVar('lhs') },
+      { name: 'rhs', pattern: mkPVar('rhs') },
+    ])];
+    const result = collectPatternVars(patterns);
+    expect(result).toEqual(['pos', 'lhs', 'rhs']);
   });
 });
 
@@ -184,6 +197,16 @@ describe('buildStructurallySmallerMap', () => {
     expect(result.size).toBe(2);
     expect(result.get(1)).toBe(0);  // h (index 1) is smaller than position 0
     expect(result.get(0)).toBe(0);  // t (index 0) is smaller than position 0
+  });
+
+  test('named ctor args are structurally smaller too', () => {
+    const patterns = [mkPCtor('Wrap', [], [
+      { name: 'inner', pattern: mkPVar('x') },
+    ])];
+    const result = buildStructurallySmallerMap(patterns);
+
+    expect(result.size).toBe(1);
+    expect(result.get(0)).toBe(0);
   });
 
   test('Zero m - neither is smaller (Zero has no vars, m is top-level)', () => {

@@ -108,6 +108,27 @@ describe('subst', () => {
     const result = subst(2, Type, mkVar(1));
     assertTermEqual(result, mkVar(1));
   });
+
+  test('respects named-pattern binders under match clauses', () => {
+    const replacement = mkConst('replacement');
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [{
+        patterns: [],
+        namedPatterns: [{ name: 'n', pattern: { tag: 'PVar', name: 'n' } }],
+        // Var(0) is the named pattern binder, Var(1) is the outer variable.
+        rhs: mkVar(1),
+      }],
+    };
+
+    const result = subst(0, replacement, term);
+    expect(result.tag).toBe('Match');
+    if (result.tag !== 'Match') return;
+
+    expect(result.clauses[0].rhs).toEqual(replacement);
+    expect(result.clauses[0].namedPatterns).toEqual(term.clauses[0].namedPatterns);
+  });
 });
 
 // ============================================================================

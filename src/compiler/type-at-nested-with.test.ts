@@ -139,10 +139,10 @@ sigmaSum start end fn with decGeq start end
     );
 
     // EXPECT: Should find type info for count pattern variable
-    // TODO: The type should be Nat, but there's a separate bug where pattern variables
-    // in dependent patterns get the wrong type. For now, just verify we FIND type info.
+    // Regression: nested with-clause remapping must preserve the inner auxiliary's
+    // pattern info instead of letting the outer with-pattern overwrite it.
     expect(result).toBeDefined();
-    // expect(result?.prettyType).toBe('Nat');  // TODO: Fix pattern variable typing bug
+    expect(result?.prettyType).toBe('Nat');
   });
 
   test('type-at for RHS expression in nested with-clause', () => {

@@ -20,6 +20,7 @@
  */
 
 import { TTerm, TPattern, TClause, TWithClause, mkAppTT, mkVarTT, mkConstTT, mkHoleTT, mkPropTT, mkPiTT } from './surface';
+import { countSurfaceClauseBindings, countSurfacePatternsBindings } from './pattern-binders';
 import { ParsedDeclaration } from '../parser/parser';
 
 /**
@@ -314,7 +315,7 @@ function desugarWithClause(
   // Create the call to the auxiliary function
   let call: TTerm = mkConstTT(auxName);
 
-  const numPatternVars = countPatternVars(functionPatterns);
+  const numPatternVars = countSurfacePatternsBindings(functionPatterns);
   let varIndex = numPatternVars;
 
   if (useAgdaStyle) {
@@ -396,27 +397,6 @@ function patternToTerm(pattern: TPattern, nextIndex: number): { term: TTerm; new
 /**
  * Count the number of variables bound by a list of patterns.
  */
-function countPatternVars(patterns: TPattern[]): number {
-  let count = 0;
-  for (const p of patterns) {
-    count += countSinglePatternVars(p);
-  }
-  return count;
-}
-
-function countSinglePatternVars(p: TPattern): number {
-  switch (p.tag) {
-    case 'PVar':
-      return 1;
-    case 'PWild':
-      return 1; // Wildcards also bind
-    case 'PCtor':
-      return p.args.reduce((acc, arg) => acc + countSinglePatternVars(arg), 0);
-    default:
-      return 0;
-  }
-}
-
 /**
  * Compute the type for an auxiliary with-function.
  *
@@ -491,7 +471,7 @@ function computeAuxiliaryType(
   // explicit type args to consume, since the auxiliary function takes
   // ALL function pattern args (including constructor patterns).
   const numPatterns = functionPatterns.length;
-  const numPatternVars = countPatternVars(functionPatterns);
+  const numPatternVars = countSurfacePatternsBindings(functionPatterns);
 
   // CRITICAL FIX for nested with-clauses:
   // functionPatterns may include patterns from outer with scrutinee parameters.
@@ -666,7 +646,7 @@ function shiftVars(term: TTerm, amount: number, cutoff: number = 0): TTerm {
       const newScrutinee = shiftVars(term.scrutinee, amount, cutoff);
       const newClauses = term.clauses.map(c => ({
         ...c,
-        rhs: shiftVars(c.rhs, amount, cutoff + countPatternVars(c.patterns)),
+        rhs: shiftVars(c.rhs, amount, cutoff + countSurfaceClauseBindings(c)),
       }));
       return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
     }
@@ -843,7 +823,7 @@ function applySimultaneousSubst(
       const newScrutinee = applySimultaneousSubst(term.scrutinee, substMap, cutoff);
       const newClauses = term.clauses.map(c => ({
         ...c,
-        rhs: applySimultaneousSubst(c.rhs, substMap, cutoff + countPatternVars(c.patterns)),
+        rhs: applySimultaneousSubst(c.rhs, substMap, cutoff + countSurfaceClauseBindings(c)),
       }));
       return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
     }
@@ -987,7 +967,7 @@ function replaceScrutineeInTTerm(
       const newScrutinee = replaceScrutineeInTTerm(term.scrutinee, scrutinee, depth);
       const newClauses = term.clauses.map(c => ({
         ...c,
-        rhs: replaceScrutineeInTTerm(c.rhs, scrutinee, depth + countPatternVars(c.patterns))
+        rhs: replaceScrutineeInTTerm(c.rhs, scrutinee, depth + countSurfaceClauseBindings(c))
       }));
       return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
     }

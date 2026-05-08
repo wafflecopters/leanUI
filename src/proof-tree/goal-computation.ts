@@ -15,8 +15,10 @@
 
 import { TTerm, TPattern, CasePattern, mkConstTT, mkAppTT, mkAppSpineTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
 import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
-import { DefinitionsMap, NamedArgMap, MetaVar, TCEnv, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { countKernelClauseBindings } from '../compiler/pattern-binders';
+import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { inferType, checkType } from '../compiler/checker';
+import { elaborateTermInContext, inferTermTypeInContext } from '../compiler/contextual-inference';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
@@ -120,6 +122,10 @@ function kernelPatternToSurface(p: TTKPattern): TPattern {
       tag: 'PCtor',
       name: p.name,
       args: p.args.map(a => kernelPatternToSurface(a)),
+      namedArgs: p.namedArgs?.map(na => ({
+        name: na.name,
+        pattern: kernelPatternToSurface(na.pattern),
+      })),
     };
   }
 }
@@ -196,6 +202,10 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
         scrutinee: scrut,
         clauses: t.clauses.map(c => ({
           patterns: c.patterns.map(p => kernelPatternToSurface(p)),
+          namedPatterns: c.namedPatterns?.map(np => ({
+            name: np.name,
+            pattern: kernelPatternToSurface(np.pattern),
+          })),
           rhs: kernelTypeToSurface(c.rhs, definitions),
         })),
       } as TTerm;
@@ -1316,31 +1326,42 @@ export function elaborateType(
   definitions: DefinitionsMap,
   _metaVars?: Map<string, MetaVar>,
 ): TTKTerm {
+  return elaborateTermInContext({
+    term,
+    context: [...ctx],
+    definitions,
+  });
+}
+
+function extendGoalForComplexScrutinee(
+  engine: TacticEngine,
+  goal: MetaVar,
+  goalId: string,
+  parsedScrutinee: TTKTerm,
+): { engine: TacticEngine; goal: MetaVar; goalId: string; scrutineeIdx: number } | null {
   try {
-    // Use inferType with a fresh metaVar map to resolve Holes (implicit args)
-    const env = new TCEnv(
-      [...ctx],
-      definitions,
-      new Map(),
-      [], [], [],
-      term,
-      new Map(),
-      { mode: 'check' }
-    );
-    const inferred = inferType(env);
-    const elaborated = inferred.elaboratedTerm;
-    if (elaborated) {
-      // Solve constraints to resolve implicit arg metas (e.g., ?_implicit_R → Var(0))
-      try {
-        const solved = inferred.solveMetasAndConstraints({ liftMetasToFullContext: false });
-        return solved.zonkTerm(elaborated);
-      } catch {
-        return inferred.zonkTerm(elaborated);
-      }
-    }
-    return term;
+    const inferredType = inferTermTypeInContext({
+      term: parsedScrutinee,
+      context: goal.ctx,
+      definitions: engine.definitions,
+      metaVars: engine.metaVars,
+      constraints: engine.constraints,
+    });
+    const extCtx = [...goal.ctx, { name: '_scrut', type: inferredType }];
+    const extGoalType = shiftTerm(goal.type, 1, 0);
+    const tempGoalId = goalId + '_cases_temp';
+    const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
+    const tempMetaVars = new Map(engine.metaVars);
+    tempMetaVars.set(tempGoalId, tempMeta);
+    const tempGoals = engine.goals.map(g => g === goalId ? tempGoalId : g);
+    return {
+      engine: engine.withUpdates({ metaVars: tempMetaVars, goals: tempGoals }),
+      goal: tempMeta,
+      goalId: tempGoalId,
+      scrutineeIdx: 0,
+    };
   } catch {
-    return term; // fallback to unelaborated term
+    return null;
   }
 }
 
@@ -1385,7 +1406,7 @@ export function replaceVar(term: TTKTerm, targetIdx: number, replacement: TTKTer
       let clausesChanged = false;
       const clauses = term.clauses.map(c => {
         // Each clause binds numPatternVars variables
-        const numVars = countPatternVars(c.patterns[0]);
+        const numVars = countKernelClauseBindings(c);
         const shiftedRepl = shiftTerm(replacement, numVars, 0);
         const rhs = replaceVar(c.rhs, targetIdx + numVars, shiftedRepl);
         if (rhs !== c.rhs) clausesChanged = true;
@@ -1455,7 +1476,7 @@ function remapScrutineeVars(
         const scrutinee = go(t.scrutinee, depth);
         let changed = scrutinee !== t.scrutinee;
         const clauses = t.clauses.map(c => {
-          const numVars = countPatternVars(c.patterns[0]);
+          const numVars = countKernelClauseBindings(c);
           const rhs = go(c.rhs, depth + numVars);
           if (rhs !== c.rhs) changed = true;
           return rhs === c.rhs ? c : { ...c, rhs };
@@ -1468,15 +1489,6 @@ function remapScrutineeVars(
     }
   }
   return go(term, 0);
-}
-
-/** Count the number of binding variables in a pattern. */
-function countPatternVars(pat: import('../compiler/kernel').TTKPattern): number {
-  switch (pat.tag) {
-    case 'PVar': return 1;
-    case 'PWild': return 1;
-    case 'PCtor': return pat.args.reduce((sum, a) => sum + countPatternVars(a), 0);
-  }
 }
 
 /**
@@ -1531,10 +1543,10 @@ function applyIndexUnification(
     numExplicit++;
   }
 
-  // For constructors with explicit params, the return type has Var references
-  // to explicit params (Var(0..numExplicit-1)). We handle only the case where
-  // the return type indices don't reference explicit params (e.g., Equal/refl).
-  // TODO: Handle Vec-like cases where indices reference constructor params.
+  // For constructors with explicit params, the return type may reference those
+  // params directly in its indices (e.g., Wrap n, Vec A (Succ n)). Cases that
+  // don't mention explicit params can be unified eagerly here; constructor-param
+  // references are deferred until the constructor params are in scope.
   const ctorRetArgs = extractTypeArgsFromType(returnType);
 
   const s = goal.ctx.length - 1 - scrutineeIdx;
@@ -1631,6 +1643,110 @@ function applyIndexUnification(
   return { goal: currentGoal, scrutineeIdx: currentScrutIdx };
 }
 
+interface GoalScopeIndexSubst {
+  ctxArrayPos: number;
+  replacement: TTKTerm;
+}
+
+function applyGoalScopeIndexSubstitutions(
+  goal: MetaVar,
+  substs: GoalScopeIndexSubst[],
+): MetaVar {
+  if (substs.length === 0) return goal;
+
+  const sorted = [...substs].sort((a, b) => b.ctxArrayPos - a.ctxArrayPos);
+  let currentGoal = goal;
+
+  for (const sub of sorted) {
+    const n = currentGoal.ctx.length;
+    const ap = sub.ctxArrayPos;
+    const goalVarIdx = n - 1 - ap;
+    const adjRep = shiftTerm(sub.replacement, -1, goalVarIdx);
+    const newGoalType = subst(goalVarIdx, adjRep, currentGoal.type);
+
+    const newCtx: Array<{ name: string; type: TTKTerm }> = [];
+    for (let j = 0; j < n; j++) {
+      if (j === ap) continue;
+
+      const entry = currentGoal.ctx[j];
+      if (j > ap) {
+        const varInEntry = j - 1 - ap;
+        const repInEntry = shiftTerm(sub.replacement, j - n, 0);
+        const adjRepEntry = shiftTerm(repInEntry, -1, varInEntry);
+        newCtx.push({
+          name: entry.name,
+          type: subst(varInEntry, adjRepEntry, entry.type),
+        });
+      } else {
+        newCtx.push(entry);
+      }
+    }
+
+    currentGoal = { ...currentGoal, ctx: newCtx, type: newGoalType };
+  }
+
+  return currentGoal;
+}
+
+function remapCtorReturnArgToGoalScope(
+  term: TTKTerm,
+  numExplicit: number,
+  scrutineeIdx: number,
+  numParams: number,
+  ihOffset: number,
+): TTKTerm {
+  switch (term.tag) {
+    case 'Var':
+      if (term.index < numExplicit) {
+        return { tag: 'Var', index: scrutineeIdx + numParams - 1 + ihOffset - term.index };
+      }
+      return {
+        tag: 'Var',
+        index: term.index - numExplicit + scrutineeIdx + numParams + ihOffset,
+      };
+    case 'App':
+      return {
+        tag: 'App',
+        fn: remapCtorReturnArgToGoalScope(term.fn, numExplicit, scrutineeIdx, numParams, ihOffset),
+        arg: remapCtorReturnArgToGoalScope(term.arg, numExplicit, scrutineeIdx, numParams, ihOffset),
+      };
+    case 'Binder': {
+      const domain = remapCtorReturnArgToGoalScope(term.domain, numExplicit, scrutineeIdx, numParams, ihOffset);
+      const body = remapCtorReturnArgToGoalScope(term.body, numExplicit, scrutineeIdx + 1, numParams, ihOffset);
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind: term.binderKind,
+        domain,
+        body,
+      };
+    }
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: remapCtorReturnArgToGoalScope(term.term, numExplicit, scrutineeIdx, numParams, ihOffset),
+        type: remapCtorReturnArgToGoalScope(term.type, numExplicit, scrutineeIdx, numParams, ihOffset),
+      };
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: remapCtorReturnArgToGoalScope(term.scrutinee, numExplicit, scrutineeIdx, numParams, ihOffset),
+        clauses: term.clauses.map(clause => ({
+          ...clause,
+          rhs: remapCtorReturnArgToGoalScope(
+            clause.rhs,
+            numExplicit,
+            scrutineeIdx + countKernelClauseBindings(clause),
+            numParams,
+            ihOffset,
+          ),
+        })),
+      };
+    default:
+      return term;
+  }
+}
+
 /** Check if a term contains any Var with index < threshold. */
 function containsVarBelow(term: TTKTerm, threshold: number): boolean {
   switch (term.tag) {
@@ -1685,6 +1801,19 @@ export function computeCaseGoalDirect(
   const { params, hasRecursiveParam, recursiveParamLocalIdx } = peelCtorParams(
     ctor.type, numImplicit, typeArgs, inductiveName, definitions, userParamNames
   );
+  let ctorReturnType = ctor.type;
+  for (let i = 0; i < numImplicit; i++) {
+    if (ctorReturnType.tag === 'Binder' && ctorReturnType.binderKind.tag === 'BPi') {
+      const arg = typeArgs[i] || { tag: 'Hole' as const, id: '_implicit_' + i };
+      ctorReturnType = subst(0, arg, ctorReturnType.body);
+    }
+  }
+  let numExplicit = 0;
+  while (ctorReturnType.tag === 'Binder' && ctorReturnType.binderKind.tag === 'BPi') {
+    ctorReturnType = ctorReturnType.body;
+    numExplicit++;
+  }
+  const ctorRetArgs = extractTypeArgsFromType(ctorReturnType);
 
   const numParams = params.length;
   const ihOffset = hasRecursiveParam ? 1 : 0;
@@ -1789,12 +1918,39 @@ export function computeCaseGoalDirect(
     newCtx.push({ name: ihName, type: ihType });
   }
 
-  return {
+  let resultGoal: MetaVar = {
     ctx: newCtx,
     type: caseGoalType,
     solution: undefined,
     caseTag: ctor.name,
   };
+
+  const deferredIndexSubsts: GoalScopeIndexSubst[] = [];
+  for (let i = 0; i < Math.min(typeArgs.length, ctorRetArgs.length); i++) {
+    const scrArg = typeArgs[i];
+    if (scrArg.tag !== 'Var') continue;
+
+    const ctorArg = ctorRetArgs[i];
+    if (!containsVarBelow(ctorArg, numExplicit)) continue;
+
+    const replacement = remapCtorReturnArgToGoalScope(
+      ctorArg,
+      numExplicit,
+      uScrutIdx,
+      numParams,
+      ihOffset,
+    );
+    if (ttermStructEqual(scrArg, replacement)) continue;
+
+    deferredIndexSubsts.push({
+      ctxArrayPos: s - 1 - scrArg.index,
+      replacement,
+    });
+  }
+
+  resultGoal = applyGoalScopeIndexSubstitutions(resultGoal, deferredIndexSubsts);
+
+  return resultGoal;
 }
 
 /** Extract type arguments from a (possibly applied) type: e.g., List Nat → [Nat] */
@@ -2358,28 +2514,12 @@ function replayProofTree(
       if (scrutineeIdx === null) {
         const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, engine.definitions);
         if (parsedScrutinee) {
-          try {
-            const env = new TCEnv(
-              goal.ctx, engine.definitions, engine.metaVars, engine.constraints,
-              [], [], parsedScrutinee, new Map(), { mode: 'check' as const }
-            );
-            const inferredEnv = inferType(env);
-            const inferredType = inferredEnv.zonkTerm(inferredEnv.value);
-            // Add a temp binding for the scrutinee so computeCaseGoalDirect can remove it
-            const tempName = '_scrut';
-            const extCtx = [...goal.ctx, { name: tempName, type: inferredType }];
-            const extGoalType = shiftTerm(goal.type, 1, 0);
-            const tempGoalId = goalId + '_cases_temp';
-            const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
-            const tempMetaVars = new Map(engine.metaVars);
-            tempMetaVars.set(tempGoalId, tempMeta);
-            const tempGoals = engine.goals.map(g => g === goalId ? tempGoalId : g);
-            effectiveEngine = engine.withUpdates({ metaVars: tempMetaVars, goals: tempGoals });
-            effectiveGoal = tempMeta;
-            effectiveGoalId = tempGoalId;
-            scrutineeIdx = 0; // last entry (de Bruijn 0)
-          } catch {
-            // Inference failed — fall back
+          const extended = extendGoalForComplexScrutinee(engine, goal, goalId, parsedScrutinee);
+          if (extended) {
+            effectiveEngine = extended.engine;
+            effectiveGoal = extended.goal;
+            effectiveGoalId = extended.goalId;
+            scrutineeIdx = extended.scrutineeIdx;
           }
         }
       }
@@ -3816,26 +3956,12 @@ function replayEntireTreeViaWalk(
         if (scrutineeIdx === null) {
           const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, eng.definitions);
           if (parsedScrutinee) {
-            try {
-              const env = new TCEnv(
-                goal.ctx, eng.definitions, eng.metaVars, eng.constraints,
-                [], [], parsedScrutinee, new Map(), { mode: 'check' as const }
-              );
-              const inferredEnv = inferType(env);
-              const inferredType = inferredEnv.zonkTerm(inferredEnv.value);
-              const extCtx = [...goal.ctx, { name: '_scrut', type: inferredType }];
-              const extGoalType = shiftTerm(goal.type, 1, 0);
-              const tempGoalId = gId + '_cases_temp';
-              const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
-              const tempMetaVars = new Map(eng.metaVars);
-              tempMetaVars.set(tempGoalId, tempMeta);
-              const tempGoals = eng.goals.map(g => g === gId ? tempGoalId : g);
-              effEng = eng.withUpdates({ metaVars: tempMetaVars, goals: tempGoals });
-              effGoal = tempMeta;
-              effGId = tempGoalId;
-              scrutineeIdx = 0;
-            } catch {
-              // Inference failed — fall back
+            const extended = extendGoalForComplexScrutinee(eng, goal, gId, parsedScrutinee);
+            if (extended) {
+              effEng = extended.engine;
+              effGoal = extended.goal;
+              effGId = extended.goalId;
+              scrutineeIdx = extended.scrutineeIdx;
             }
           }
         }

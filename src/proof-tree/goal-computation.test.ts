@@ -424,6 +424,37 @@ describe('kernelTypeToSurface', () => {
     const result = kernelTypeToSurface(kernel);
     expect(result.tag).toBe('Sort');
   });
+
+  test('preserves named pattern metadata in Match clauses', () => {
+    const kernel: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkConst('scrutinee'),
+      clauses: [{
+        patterns: [{
+          tag: 'PCtor',
+          name: 'Wrap',
+          args: [],
+          namedArgs: [{ name: 'inner', pattern: { tag: 'PVar', name: 'x' } }],
+        }],
+        namedPatterns: [{ name: 'named', pattern: { tag: 'PVar', name: 'y' } }],
+        rhs: mkVar(0),
+      }],
+    };
+
+    const result = kernelTypeToSurface(kernel);
+    expect(result.tag).toBe('Match');
+    if (result.tag !== 'Match') return;
+
+    expect(result.clauses[0].patterns[0]).toEqual({
+      tag: 'PCtor',
+      name: 'Wrap',
+      args: [],
+      namedArgs: [{ name: 'inner', pattern: { tag: 'PVar', name: 'x' } }],
+    });
+    expect(result.clauses[0].namedPatterns).toEqual([
+      { name: 'named', pattern: { tag: 'PVar', name: 'y' } },
+    ]);
+  });
 });
 
 // ============================================================================
@@ -1188,6 +1219,89 @@ describe('computeCaseGoalDirect', () => {
     // After removing y and eq: ctx = [x, h], de Bruijn: h=Var(0), x=Var(1)
     // Goal Q(y) → Q(x) = Q(Var(1))
     expect(result.type).toEqual(mkApp(mkConst('Q'), mkVar(1)));
+  });
+
+  test('indexed constructor params refine goal indices after cases', () => {
+    let defs = createDefinitionsMap();
+
+    // Wrap : Nat -> Type
+    const wrapType = mkPi(mkConst('Nat'), mkSort(mkULit(0)), 'n');
+    // mk : (n : Nat) -> Wrap n
+    const mkWrapType = mkPi(
+      mkConst('Nat'),
+      mkApp(mkConst('Wrap'), mkVar(0)),
+      'n',
+    );
+    defs = addInductiveDefinition(defs, 'Wrap', wrapType, [
+      { name: 'mk', type: mkWrapType },
+    ], [0]);
+
+    // Context: [m : Nat, w : Wrap m, h : P m]
+    // De Bruijn in goal scope: h=Var(0), w=Var(1), m=Var(2)
+    const goal = {
+      ctx: [
+        { name: 'm', type: mkConst('Nat') as TTKTerm },
+        { name: 'w', type: mkApp(mkConst('Wrap'), mkVar(0)) as TTKTerm },
+        { name: 'h', type: mkApp(mkConst('P'), mkVar(1)) as TTKTerm },
+      ],
+      type: mkApp(mkConst('Q'), mkVar(2)) as TTKTerm,
+      solution: undefined,
+    };
+
+    // Scrutinee w is de Bruijn index 1.
+    const wrapCtor = defs.inductiveTypes.get('Wrap')!.constructors[0];
+    const result = computeCaseGoalDirect(goal, 1, wrapCtor, 'Wrap', defs);
+
+    // m is refined to the constructor parameter n and removed from context.
+    expect(result.ctx).toHaveLength(2);
+    expect(result.ctx[0].name).toBe('n');
+    expect(result.ctx[0].type).toEqual(mkConst('Nat'));
+    expect(result.ctx[1].name).toBe('h');
+    expect(result.ctx[1].type).toEqual(mkApp(mkConst('P'), mkVar(0)));
+
+    // Goal Q(m) becomes Q(n).
+    expect(result.type).toEqual(mkApp(mkConst('Q'), mkVar(1)));
+  });
+
+  test('indexed constructor refinement updates repeated dependent occurrences', () => {
+    let defs = createDefinitionsMap();
+
+    const wrapType = mkPi(mkConst('Nat'), mkSort(mkULit(0)), 'n');
+    const mkWrapType = mkPi(
+      mkConst('Nat'),
+      mkApp(mkConst('Wrap'), mkVar(0)),
+      'n',
+    );
+    defs = addInductiveDefinition(defs, 'Wrap', wrapType, [
+      { name: 'mk', type: mkWrapType },
+    ], [0]);
+
+    // Context: [m : Nat, w : Wrap m, h : PairLike m m]
+    // Goal: EqLike m m
+    const goal = {
+      ctx: [
+        { name: 'm', type: mkConst('Nat') as TTKTerm },
+        { name: 'w', type: mkApp(mkConst('Wrap'), mkVar(0)) as TTKTerm },
+        {
+          name: 'h',
+          type: mkApp(mkApp(mkConst('PairLike'), mkVar(1)), mkVar(1)) as TTKTerm,
+        },
+      ],
+      type: mkApp(mkApp(mkConst('EqLike'), mkVar(2)), mkVar(2)) as TTKTerm,
+      solution: undefined,
+    };
+
+    const wrapCtor = defs.inductiveTypes.get('Wrap')!.constructors[0];
+    const result = computeCaseGoalDirect(goal, 1, wrapCtor, 'Wrap', defs);
+
+    expect(result.ctx).toHaveLength(2);
+    expect(result.ctx[0].name).toBe('n');
+    expect(result.ctx[1].type).toEqual(
+      mkApp(mkApp(mkConst('PairLike'), mkVar(0)), mkVar(0)),
+    );
+    expect(result.type).toEqual(
+      mkApp(mkApp(mkConst('EqLike'), mkVar(1)), mkVar(1)),
+    );
   });
 
   test('Either/Left case: param type references implicit type arg correctly', () => {

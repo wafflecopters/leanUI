@@ -128,6 +128,10 @@ compileTTFromText(source)
           └─ checkStructuralRecursion() → Termination
 ```
 
+### Shared Contextual Inference
+
+Non-compiler callers such as proof-tree replay, tactic UI helpers, and focused-expression inspection should still go through the real checker. The small helper layer in `src/compiler/contextual-inference.ts` exists to build `TCEnv` values consistently for those callers, so React hooks and proof tooling do not reintroduce a parallel "kernel stub" inference path.
+
 ---
 
 ## Parsing
@@ -898,9 +902,11 @@ Levels are sometimes `TTKTerm` (general terms) and sometimes special-cased. The 
 
 #### 8. Incremental Type Checking
 
-Currently, changing one declaration re-checks everything after it. For large codebases, incremental checking would improve IDE responsiveness.
+The editor now has a basic incremental path: blocks cache their contributions, and a dependency graph is rebuilt from identifier-like references extracted from each block. This is much cheaper than regex-matching every block against every defined name, and comment-only mentions are ignored.
 
-**Recommendation**: Track dependencies between declarations; invalidate only affected declarations.
+The remaining limitation is semantic precision: dependencies are still name-based rather than elaboration-based, so the cache can be conservative when names are reused or referenced indirectly.
+
+**Recommendation**: Keep the current token-based invalidation as the fast path, then layer semantic dependency edges on top when the compiler has enough information to do so cheaply.
 
 #### 9. Better Totality Diagnostics
 

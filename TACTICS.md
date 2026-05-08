@@ -115,6 +115,14 @@ TacticBlock (parsed)
     → engine.zonk() → final proof term (TTKTerm)
 ```
 
+### Engine Invariants
+
+- `TacticEngine` is immutable. Tactics should return a new engine, never mutate the current one.
+- `TacticEngine.toTCEnv()` is the single entry point for creating checker environments from tactic goals.
+- `TacticEngine.inferInGoal()` / `TacticEngine.checkInGoal()` are the preferred tactic-facing APIs for real checker interaction. Avoid ad-hoc `new TCEnv(...)` construction inside tactics.
+- Meta solving should go through the normal checker / constraint-solver path so tactic proofs stay aligned with kernel behavior.
+- Goal-computation / UI helpers should reuse the same checker pipeline via pure contextual-inference helpers, not a separate kernel-only inference API.
+
 ### Proof Term Construction
 
 - **Simple tactics** (exact, intro, apply): Build lambdas, applications, or direct terms

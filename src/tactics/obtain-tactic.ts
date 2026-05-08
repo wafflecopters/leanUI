@@ -17,7 +17,6 @@ import { TTKTerm, TTKContext, TTKPattern, TTKClause } from '../compiler/kernel';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
-import { inferType } from '../compiler/checker';
 import { whnf } from '../compiler/whnf';
 import { subst, shiftTerm } from '../compiler/subst';
 
@@ -32,8 +31,7 @@ export class ObtainTactic implements Tactic {
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
       // 1. Infer type of proof expression
-      const env = engine.toTCEnv(goal, this.proof);
-      const inferredEnv = inferType(env);
+      const inferredEnv = engine.inferInGoal(goal, this.proof);
       const proofType = inferredEnv.value;
 
       // 2. WHNF to find inductive type

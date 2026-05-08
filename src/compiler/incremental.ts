@@ -3,9 +3,9 @@
  *
  * When source text changes, we identify which blocks changed and compute
  * the set of blocks that need re-typechecking (changed blocks + transitive
- * dependents). Dependencies are detected via literal word-boundary substring
- * matching: block B depends on block A if B's source text contains any name
- * defined by A.
+ * dependents). Dependencies are detected by extracting identifier-like tokens
+ * from each block once, then linking later blocks back to the earlier blocks
+ * that define those names.
  */
 
 import { ParsedDeclaration } from '../parser/parser';
@@ -141,11 +141,40 @@ export function wordBoundaryMatch(sourceText: string, name: string): boolean {
 }
 
 /**
+ * Strip single-line comments from source before dependency extraction.
+ * Dependency invalidation should follow executable code, not prose in comments.
+ */
+function stripLineComments(sourceText: string): string {
+  return sourceText
+    .split('\n')
+    .map(line => {
+      const commentStart = line.indexOf('--');
+      return commentStart === -1 ? line : line.slice(0, commentStart);
+    })
+    .join('\n');
+}
+
+const IDENTIFIER_TOKEN_REGEX = /\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\b/g;
+
+/**
+ * Extract identifier-like references from a block's source text.
+ * This is a conservative approximation used only for incremental invalidation.
+ */
+function collectReferencedNames(sourceText: string): Set<string> {
+  const stripped = stripLineComments(sourceText);
+  const names = new Set<string>();
+  for (const match of stripped.matchAll(IDENTIFIER_TOKEN_REGEX)) {
+    names.add(match[0]);
+  }
+  return names;
+}
+
+/**
  * Compute the set of block indices that need re-typechecking.
  *
  * Algorithm:
  * 1. Build nameToBlock map (which block defines each name)
- * 2. Build forward dependency graph via word-boundary matching
+ * 2. Extract references from each block and build the forward dependency graph
  * 3. BFS from changedIndices through the dependency graph
  * 4. Return union of changed + transitively reachable blocks
  */
@@ -163,24 +192,26 @@ export function computeRecheckSet(
     }
   }
 
-  // Step 2: Build forward dependency graph
+  // Step 2: Extract references and build the forward dependency graph
   // dependents[i] = set of block indices that depend on block i
   const dependents = new Map<number, Set<number>>();
+  const blockReferences = blocks.map(block => collectReferencedNames(block.sourceText));
 
-  for (const block of blocks) {
-    for (const [name, defBlockIdx] of nameToBlock) {
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const references = blockReferences[i];
+    for (const name of references) {
+      const defBlockIdx = nameToBlock.get(name);
       // Only backward dependencies (earlier block defines, later block uses)
       // Skip self-references
-      if (defBlockIdx >= block.index) continue;
+      if (defBlockIdx === undefined || defBlockIdx >= block.index) continue;
 
-      if (wordBoundaryMatch(block.sourceText, name)) {
-        let deps = dependents.get(defBlockIdx);
-        if (!deps) {
-          deps = new Set();
-          dependents.set(defBlockIdx, deps);
-        }
-        deps.add(block.index);
+      let deps = dependents.get(defBlockIdx);
+      if (!deps) {
+        deps = new Set();
+        dependents.set(defBlockIdx, deps);
       }
+      deps.add(block.index);
     }
   }
 
@@ -188,8 +219,8 @@ export function computeRecheckSet(
   const recheckSet = new Set(changedIndices);
   const queue = [...changedIndices];
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
+  for (let queueIndex = 0; queueIndex < queue.length; queueIndex++) {
+    const current = queue[queueIndex];
     const deps = dependents.get(current);
     if (deps) {
       for (const dep of deps) {

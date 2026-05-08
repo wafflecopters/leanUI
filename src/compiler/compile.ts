@@ -22,6 +22,7 @@ import { elabToKernel, defaultRecordConstructorName } from './elab';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
+import { countSurfaceClauseBindings } from './pattern-binders';
 import { desugarWithClauses, resetWithCounter } from './with-desugar';
 import { subst } from './subst';
 import { BlockContributions, IncrementalCache, extractBlockDepInfo, computeRecheckSet } from './incremental';
@@ -2498,6 +2499,7 @@ function remapWithClauseElabMap(
   compiled: CompiledDeclaration,
   sourceMap: SourceMap,
   withScrutineeCount: number,
+  newScrutineeCount: number,
 ): void {
   if (!compiled.elabMap) return;
 
@@ -2533,6 +2535,15 @@ function remapWithClauseElabMap(
   // - value.clauses[N].withClauses[M].rhs.withClauses[K].*
   const withClausePattern = /^value\.clauses\[(\d+)\]\.withClauses\[(\d+)\](.*)/;
 
+  const remapPatternSuffix = (rawSuffix: string, functionPatternCount: number): string => {
+    const patternMatch = rawSuffix.match(/^\.patterns\[(\d+)\](.*)/);
+    if (!patternMatch) return rawSuffix;
+
+    const withPatIdx = parseInt(patternMatch[1]);
+    const patSuffix = patternMatch[2];
+    return `.patterns[${functionPatternCount + withPatIdx}]${patSuffix}`;
+  };
+
   for (const [path] of sourceMap) {
     // Check if this path contains any withClauses segment
     if (!path.includes('.withClauses[')) continue;
@@ -2555,25 +2566,17 @@ function remapWithClauseElabMap(
       const rawSuffix = match[3]; // e.g., '.patterns[0]', '.rhs', '.rhs.fn'
 
       // Offset pattern indices: with-pattern j → kernel pattern (numFunctionPatterns + j)
-      let suffix = rawSuffix;
-      const patternMatch = suffix.match(/^\.patterns\[(\d+)\](.*)/);
-      if (patternMatch) {
-        const withPatIdx = parseInt(patternMatch[1]);
-        const patSuffix = patternMatch[2];
-        suffix = `.patterns[${numFunctionPatterns + withPatIdx}]${patSuffix}`;
-      }
+      const suffix = remapPatternSuffix(rawSuffix, numFunctionPatterns);
 
       const kernelPath = `value.clauses[${withIdx}]${suffix}`;
       compiled.elabMap.set(kernelPath, path);
 
-      // Also map for nested Match structure: with-branches are sub-clauses
-      // inside value.clauses[0].rhs (a Match term). No pattern offset needed
-      // since the nested Match has its own independent pattern indices.
-      if (hasNestedMatch) {
-        const nestedPath = `value.clauses[0].rhs.clauses[${withIdx}]${rawSuffix}`;
-        compiled.elabMap.set(nestedPath, path);
-      }
     } else {
+      // Paths with multiple .withClauses[...] segments belong to a nested auxiliary.
+      // The current auxiliary should only claim them when it already carries
+      // inherited scrutinees from a parent with-clause.
+      if (newScrutineeCount >= withScrutineeCount) continue;
+
       // For nested with-clauses (e.g., value.clauses[0].withClauses[1].rhs.withClauses[2].*),
       // extract the LAST withClauses[N] index and map it to the auxiliary's kernel clauses.
       const lastWithIndex = path.lastIndexOf('.withClauses[');
@@ -2585,22 +2588,11 @@ function remapWithClauseElabMap(
       const rawSuffix = remainderMatch[2];
 
       // Offset pattern indices for nested with-clauses
-      let suffix = rawSuffix;
-      const patternMatch = suffix.match(/^\.patterns\[(\d+)\](.*)/);
-      if (patternMatch) {
-        const withPatIdx = parseInt(patternMatch[1]);
-        const patSuffix = patternMatch[2];
-        suffix = `.patterns[${numFunctionPatterns + withPatIdx}]${patSuffix}`;
-      }
+      const suffix = remapPatternSuffix(rawSuffix, numFunctionPatterns + (withScrutineeCount - newScrutineeCount));
 
       const kernelPath = `value.clauses[${withIdx}]${suffix}`;
       compiled.elabMap.set(kernelPath, path);
 
-      // Also map for nested Match structure
-      if (hasNestedMatch) {
-        const nestedPath = `value.clauses[0].rhs.clauses[${withIdx}]${rawSuffix}`;
-        compiled.elabMap.set(nestedPath, path);
-      }
     }
   }
 
@@ -3733,7 +3725,7 @@ function substituteInheritedFieldRefs(
         const newScrutinee = transform(t.scrutinee, depth);
         const newClauses = t.clauses.map(c => ({
           ...c,
-          rhs: transform(c.rhs, depth + countPatternBinders(c.patterns))
+          rhs: transform(c.rhs, depth + countSurfaceClauseBindings(c))
         }));
         return { tag: 'Match', scrutinee: newScrutinee, clauses: newClauses };
       }
@@ -3903,7 +3895,7 @@ function insertFieldImplicitHoles(
     if (t.tag === 'Match') {
       const scrutinee = transform(t.scrutinee, depth, localBinderStack);
       const clauses = t.clauses.map(c => {
-        const binderCount = countPatternBinders(c.patterns);
+        const binderCount = countSurfaceClauseBindings(c);
         // Pattern binders don't have known function types, push nulls
         const clauseStack = [...localBinderStack];
         for (let i = 0; i < binderCount; i++) clauseStack.push(null);
@@ -3932,29 +3924,6 @@ function insertFieldImplicitHoles(
 /**
  * Count the number of binders introduced by a list of patterns.
  */
-function countPatternBinders(patterns: TPattern[]): number {
-  let count = 0;
-  for (const p of patterns) {
-    count += countSinglePatternBinders(p);
-  }
-  return count;
-}
-
-function countSinglePatternBinders(p: TPattern): number {
-  switch (p.tag) {
-    case 'PVar':
-      return 1;
-    case 'PWild':
-      return 1; // Wildcards also bind
-    case 'PCtor':
-      return p.args.reduce((acc, arg) => acc + countSinglePatternBinders(arg), 0);
-    default: {
-      const _exhaustive: never = p;
-      return 0;
-    }
-  }
-}
-
 /**
  * Process a record declaration: elaborate, convert to inductive, and check.
  *
@@ -5061,7 +5030,12 @@ function compileOneBlock(
 
     for (const auxDecl of auxiliaryDecls) {
       const result = processTermDeclaration(auxDecl, sourceMap, definitions, { allowUnsolvedSigMetas: true, withScrutineeCount: auxDecl.withScrutineeCount, newScrutineeCount: auxDecl.newScrutineeCount, assumeK });
-      remapWithClauseElabMap(result.compiled, sourceMap, auxDecl.withScrutineeCount ?? 0);
+      remapWithClauseElabMap(
+        result.compiled,
+        sourceMap,
+        auxDecl.withScrutineeCount ?? 0,
+        auxDecl.newScrutineeCount ?? auxDecl.withScrutineeCount ?? 0,
+      );
       result.compiled.isWithAuxiliary = true;
       compiledAuxiliaries.push(result.compiled);
       compiledDecls.push(result.compiled);
