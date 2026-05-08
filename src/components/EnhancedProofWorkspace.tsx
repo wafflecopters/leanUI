@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   ExpressionNode,
   FocusPath,
@@ -20,7 +20,6 @@ import { TTViewer } from './TTViewer';
 import { TTerm, createRootProofTerm, mkPropTT, TermDefinition, createRootTermDefinition, mkTypeTT, mkHoleTT, isNameUsed, flattenPiBinders, getFinalReturnType, insertPiBinder, removePiBinder, setFinalReturnType, isBinderUsedDownstream, flattenLetBindings, removeLetBinding, isLetUsedDownstream, hypothesesToPi, replaceHoleTT, findHoleTT, fillHoleWithTT } from '../compiler/surface';
 import {
   LetProofTerm,
-  buildFullProofTerm,
   applyProofStep,
   expressionNodeToTTerm,
   applyEqualityStep
@@ -397,34 +396,8 @@ function EnhancedProofWorkspaceInner() {
   // TT proof terms: Map from let-binding ID to its proof term
   const [letProofTerms, setLetProofTerms] = useState<Map<string, LetProofTerm>>(new Map());
 
-  // Combined TT proof term for display (built from all let-bindings)
-  const [_ttProofTerm, setTtProofTerm] = useState<TTerm | null>(null);
-
-  const proofScrollRef = useRef<HTMLDivElement>(null);
-
   // Get the focused node in the current expression
   const focusedNode = currentExpression ? getNodeAtPath(currentExpression, focusPath) : null;
-
-  // Auto-scroll to bottom when proof steps are added
-  useEffect(() => {
-    if (proofScrollRef.current) {
-      proofScrollRef.current.scrollTop = proofScrollRef.current.scrollHeight;
-    }
-  }, [proofElements.length]);
-
-  // Rebuild combined TT proof term when let-proof-terms change
-  useEffect(() => {
-    const proofs = Array.from(letProofTerms.values());
-    if (proofs.length > 0) {
-      const combined = buildFullProofTerm(proofs);
-      setTtProofTerm(combined);
-    } else {
-      setTtProofTerm(null);
-    }
-  }, [letProofTerms]);
-
-  // Debug info for development
-  console.debug('Proof workspace state:', { steps: steps.length, elements: proofElements.length, assumptions: assumptions.length });
 
   // Helper: Update a let-binding's value in the root definition
   const updateLetValueInRootDefinition = useCallback((term: TTerm, letName: string, newValue: TTerm): TTerm => {

@@ -26,6 +26,7 @@ Upleveling the core engine while preserving the current language surface:
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Trimmed dead proof-workspace migration scaffolding in `EnhancedProofWorkspace`: removed the unused combined TT-proof cache, dead scroll ref, and debug-only churn that no longer fed the UI
 - Replaced the proof-workspace let-value rule `alert(...)` stub with the real focused-expression rewrite path, so active let editors now update their expression, TT let value, and proof-history metadata instead of dead-ending
 - Extracted shared proof-workspace transform helpers and added regressions covering nested focused rewrites, propagated assumptions, and let-proof-history updates
 - Removed the `TTViewer` lambda-binder fallback and added rendering regressions so TT inspection no longer shows `TODO-Binder-BLamTT` for ordinary lambda terms
