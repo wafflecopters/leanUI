@@ -44,6 +44,50 @@ describe('normalize', () => {
     expect(normalize(term)).toEqual(mkConst('Zero'));
   });
 
+  test('reduces nested constructor patterns with bindings in order', () => {
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkCtor('Pair', mkCtor('Succ', mkConst('Zero')), mkConst('True')),
+      clauses: [
+        {
+          patterns: [{
+            tag: 'PCtor',
+            name: 'Pair',
+            args: [
+              { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] },
+              { tag: 'PVar', name: 'b' },
+            ],
+          }],
+          rhs: mkCtor('Pair', mkVar(1), mkVar(0)),
+        },
+      ],
+    };
+
+    expect(normalize(term)).toEqual(mkCtor('Pair', mkConst('Zero'), mkConst('True')));
+  });
+
+  test('keeps match stuck when nested constructor arguments do not match', () => {
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkCtor('Pair', mkConst('Zero'), mkConst('True')),
+      clauses: [
+        {
+          patterns: [{
+            tag: 'PCtor',
+            name: 'Pair',
+            args: [
+              { tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'n' }] },
+              { tag: 'PWild', name: '_' },
+            ],
+          }],
+          rhs: mkConst('Impossible'),
+        },
+      ],
+    };
+
+    expect(normalize(term)).toEqual(term);
+  });
+
   test('keeps stuck matches when no clause matches', () => {
     const clauses: TTKClause[] = [{
       patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }],

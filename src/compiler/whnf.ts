@@ -280,6 +280,23 @@ export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm, definitions?: Definition
 }
 
 export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: DefinitionsMap, typingContext?: TTKContext): boolean {
+  // Record eta can become visible only after δ/β/ι reduction.
+  // Example: `id2 p` WHNFs to `MkPoint (Point.x p) (Point.y p)`, which should
+  // contract to `p` even though the original term was not constructor-headed.
+  const eta1 = tryRecordEtaContract(n1, definitions);
+  if (eta1 !== null) {
+    if (areTypesDefEq(eta1, n2, definitions, typingContext)) {
+      return true;
+    }
+  }
+
+  const eta2 = tryRecordEtaContract(n2, definitions);
+  if (eta2 !== null) {
+    if (areTypesDefEq(n1, eta2, definitions, typingContext)) {
+      return true;
+    }
+  }
+
   // Quick structural check first
   if (isDefinitionallyEqual(n1, n2)) {
     return true;

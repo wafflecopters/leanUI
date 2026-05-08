@@ -1539,10 +1539,10 @@ function applyIndexUnification(
     numExplicit++;
   }
 
-  // For constructors with explicit params, the return type has Var references
-  // to explicit params (Var(0..numExplicit-1)). We handle only the case where
-  // the return type indices don't reference explicit params (e.g., Equal/refl).
-  // TODO: Handle Vec-like cases where indices reference constructor params.
+  // For constructors with explicit params, the return type may reference those
+  // params directly in its indices (e.g., Wrap n, Vec A (Succ n)). Cases that
+  // don't mention explicit params can be unified eagerly here; constructor-param
+  // references are deferred until the constructor params are in scope.
   const ctorRetArgs = extractTypeArgsFromType(returnType);
 
   const s = goal.ctx.length - 1 - scrutineeIdx;

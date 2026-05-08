@@ -36,26 +36,53 @@ describe('with syntax parsing', () => {
     expect(twoDots[1].type).toBe('DOT');
   });
 
-  test('parse basic with clause (WIP)', () => {
-    // This test will initially fail until we implement with parsing
-    // For now, it documents the expected syntax
+  test('parse basic with clause', () => {
     const source = `
 isZero : Nat -> Bool
 isZero n with n
   | Zero => True
   | Succ m => False
 `;
-    // For now, we expect this to parse as much as it can
-    // The 'with' keyword will be treated as an identifier initially
     const parser = new Parser();
-    try {
-      const result = parser.parseDeclarations(source);
-      console.log('Parse result:', JSON.stringify(result, null, 2));
-      // Initially this won't work as expected - we'll implement the parsing
-    } catch (e) {
-      console.log('Parse error (expected until implemented):', e);
-    }
-    // Mark as passing for now - we'll make this a real test later
-    expect(true).toBe(true);
+    const result = parser.parseDeclarations(source);
+
+    expect(result).toHaveLength(1);
+    const decl = result[0];
+    expect(decl.kind).toBe('def');
+    expect(decl.name).toBe('isZero');
+    expect(decl.value?.tag).toBe('Match');
+
+    const clause = (decl.value as any).clauses[0];
+    expect(clause.rhs.tag).toBe('WithClause');
+    expect(clause.rhs.scrutinees).toHaveLength(1);
+    expect(clause.rhs.scrutinees[0]).toMatchObject({ tag: 'Var', index: 0 });
+    expect(clause.rhs.clauses).toHaveLength(2);
+    expect(clause.rhs.clauses[0].patterns[0]).toMatchObject({ tag: 'PCtor', name: 'Zero' });
+    expect(clause.rhs.clauses[1].patterns[0]).toMatchObject({ tag: 'PCtor', name: 'Succ' });
+  });
+
+  test('parse with clause with multiple scrutinees', () => {
+    const source = `
+sameLeft : Nat -> Nat -> Nat
+sameLeft x y with x, y
+  | Zero, Zero => Zero
+  | Zero, Succ y1 => Zero
+  | Succ x1, Zero => Succ x1
+  | Succ x1, Succ y1 => Succ x1
+`;
+    const parser = new Parser();
+    const result = parser.parseDeclarations(source);
+
+    expect(result).toHaveLength(1);
+    const decl = result[0];
+    const clause = (decl.value as any).clauses[0];
+    expect(clause.rhs.tag).toBe('WithClause');
+    expect(clause.rhs.scrutinees).toHaveLength(2);
+    expect(clause.rhs.scrutinees[0]).toMatchObject({ tag: 'Var', index: 1 });
+    expect(clause.rhs.scrutinees[1]).toMatchObject({ tag: 'Var', index: 0 });
+    expect(clause.rhs.clauses).toHaveLength(4);
+    expect(clause.rhs.clauses[0].patterns).toHaveLength(2);
+    expect(clause.rhs.clauses[0].patterns[0]).toMatchObject({ tag: 'PCtor', name: 'Zero' });
+    expect(clause.rhs.clauses[0].patterns[1]).toMatchObject({ tag: 'PCtor', name: 'Zero' });
   });
 });

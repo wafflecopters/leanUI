@@ -1499,6 +1499,12 @@ export function checkMatchClause(
   // (e.g., Equal {A:=_implicit2} v u) that got unified with actual types during pattern matching
   const returnType = result.zonkTerm(rawReturnType);
 
+  // Record pattern type info as soon as LHS refinement has determined it.
+  // This preserves hover/type-at-cursor support for patterns even when later RHS
+  // checking or meta solving fails (for example in a partially broken with-clause).
+  const clausePatternContext = recordPatternTypeInfo(result, paddedEnv, type, holeSolutions, paddedPatterns);
+  fixClauseTypeInfoContextNames(paddedEnv, clausePatternContext, result.context);
+
   // Convert the transformed RHS back to de Bruijn indices using the final context length
   const finalContextLength = result.context.length;
   const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
@@ -1549,144 +1555,14 @@ export function checkMatchClause(
   }
 
 
-  // Record type info for each pattern position.
-  // Walk the function type spine, applying hole solutions and zonking to resolve types.
-  // Use incremental context (not solvedEnv's post-RHS context) so pattern types
-  // are pretty-printed with the correct variable names in scope at each pattern.
-  // patContext is hoisted so it can be used to fix context names for RHS entries below.
-  let patContext = paddedEnv.context; // Base context before patterns
-  {
-    // Apply hole solutions (from constructorDone) to the type before walking
-    let filledType = type;
-    for (const [holeId, solution] of holeSolutions) {
-      filledType = fillHole(filledType, holeId, solution);
-    }
-    let patType = filledType;
-    for (let i = 0; i < paddedPatterns.length; i++) {
-      if (patType.tag === 'Binder' && patType.binderKind.tag === 'BPi') {
-        const patPath: IndexPath = [...paddedEnv.indexPath, { kind: 'field', name: 'patterns' }, { kind: 'array', index: i }];
-        const zonkedDomain = solvedEnv.zonkTerm(patType.domain);
-        solvedEnv.atIndexPath(patPath).recordTypeInfoWithContext(zonkedDomain, patContext);
-        // Also record at the .name sub-path so hovering on a pattern variable name
-        // shows the variable's type (e.g., "n : Nat") rather than walking up to the parent
-        const namePath: IndexPath = [...patPath, { kind: 'field', name: 'name' }];
-        solvedEnv.atIndexPath(namePath).recordTypeInfoWithContext(zonkedDomain, patContext);
-
-        // For PCtor patterns, record type info for each constructor argument
-        // so that hovering on "leq" in (LeqSucc leq) shows "Leq a b" (the instantiated type)
-        // rather than "Leq n m" (the raw constructor type with binder names).
-        // Also record the constructor's full type at the .name sub-path so hovering on
-        // the constructor name shows its type.
-        const pat = paddedPatterns[i];
-        if (pat.tag === 'PCtor' && pat.args.length > 0) {
-          const ctorDef = getTypeDefinition(solvedEnv.definitions, pat.name);
-          if (ctorDef) {
-            // Find the implicit positions for this constructor (padded wildcards)
-            const ctorResult = getConstructorInductive(solvedEnv.definitions, pat.name);
-            const implicitPositions = new Set<number>();
-            if (ctorResult) {
-              const { inductive, ctor } = ctorResult;
-              if (inductive.recordInfo) {
-                for (let p = 0; p < inductive.recordInfo.paramCount; p++) implicitPositions.add(p);
-              } else if (ctor.namedArgMap && ctor.namedArgMap.size > 0) {
-                for (const pos of ctor.namedArgMap.values()) implicitPositions.add(pos);
-              }
-            }
-
-            // Build substitution map by comparing constructor return type with scrutinee type.
-            // The scrutinee type (zonkedDomain) has the correct instantiated values.
-            // E.g., for LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
-            // matched against Leq (Succ a) (Succ b), we want to determine n=a, m=b.
-            // The return type has Var indices referring to binders: Leq (Succ (Var 2)) (Succ (Var 1))
-            // The scrutinee has Var indices referring to context: Leq (Succ (Var X)) (Succ (Var Y))
-            // By comparing args, we can build: binderPos -> contextVar mapping
-            const binderSubstitutions = new Map<number, TTKTerm>();
-            {
-              const scrutineeSpine = extractAppSpine(zonkedDomain);
-              const { binders: ctorBinders, body: ctorBody } = extractPiSpine(ctorDef);
-              const returnSpine = extractAppSpine(ctorBody);
-              const numBinders = ctorBinders.length;
-
-              // Match up args from return type and scrutinee to find substitutions
-              for (let k = 0; k < Math.min(returnSpine.args.length, scrutineeSpine.args.length); k++) {
-                const retArg = returnSpine.args[k];
-                const scrArg = scrutineeSpine.args[k];
-                // Try to extract a variable mapping from nested structures too
-                extractBinderSubstitutions(retArg, scrArg, numBinders, binderSubstitutions);
-              }
-            }
-
-            // Walk the constructor's Pi type, recording at SURFACE arg indices.
-            // After padding, kernel args include implicit wildcards (e.g., {m} {n} neq),
-            // but the sourceMap uses surface indices (e.g., args[0] = neq).
-            // Apply the binderSubstitutions to instantiate types with context variables.
-            const kernelPatKey = serializeIndexPath(patPath);
-            let ctorType = ctorDef;
-            let surfaceArgIdx = 0;
-            const numBinders = pat.args.length;
-            for (let argIdx = 0; argIdx < pat.args.length; argIdx++) {
-              if (ctorType.tag !== 'Binder' || ctorType.binderKind.tag !== 'BPi') break;
-
-              // Get the domain and apply substitutions to replace binder refs with context vars.
-              // Use simultaneous substitution (don't decrement other indices).
-              // At depth argIdx, binders 0..argIdx-1 are in scope with de Bruijn indices argIdx-1..0
-              // binderPos p -> de Bruijn index (argIdx - 1 - p)
-              let argDomain = solvedEnv.zonkTerm(ctorType.domain);
-              argDomain = transformVarsInTerm(argDomain, (varIndex) => {
-                // Convert de Bruijn index to binder position
-                const binderPos = argIdx - 1 - varIndex;
-                if (binderPos >= 0 && binderPos < argIdx && binderSubstitutions.has(binderPos)) {
-                  return binderSubstitutions.get(binderPos)!;
-                }
-                return mkVar(varIndex);
-              });
-
-              if (!implicitPositions.has(argIdx)) {
-                // Record at surface-indexed path (matches what sourceMap produces)
-                // Use patContext (the outer context without constructor binders) for proper names
-                solvedEnv.recordTypeInfoAtKey(
-                  `${kernelPatKey}.args[${surfaceArgIdx}]`, argDomain, patContext);
-                solvedEnv.recordTypeInfoAtKey(
-                  `${kernelPatKey}.args[${surfaceArgIdx}].name`, argDomain, patContext);
-                surfaceArgIdx++;
-              }
-
-              // Move to the body (don't substitute - we handle that via binderSubstitutions)
-              ctorType = ctorType.body;
-            }
-
-            // Record the constructor's full type at the .name sub-path of the PCtor
-            const ctorFullType = solvedEnv.zonkTerm(ctorDef);
-            solvedEnv.atIndexPath(namePath).recordTypeInfoWithContext(ctorFullType, patContext);
-          }
-        }
-
-        // Extend context for next pattern
-        patContext = [...patContext, { name: patType.name, type: patType.domain }];
-        patType = patType.body;
-      }
-    }
-  }
+  recordPatternTypeInfo(solvedEnv, paddedEnv, type, holeSolutions, paddedPatterns);
 
   // Re-zonk all typeInfoMap entries now that all metas are solved.
   // Entries recorded mid-checking may have unsolved metas from implicit arg insertion
   // that were only solved later during argument checking/unification.
   solvedEnv.zonkTypeInfoEntries();
 
-  // Fix context names for entries in this clause.
-  // Merge patContext (Pi binder names) with result.context (elaborated names):
-  // - Pi binder names may be "_" for unnamed params (bad for PVar patterns like "a", "b")
-  // - Elaborated names may be synthetic like "?0" for implicit args the user didn't write
-  // For each position, prefer the elaborated name unless it's synthetic (starts with "?"),
-  // in which case use the Pi binder name (e.g., "B" from {B : Type}).
-  const correctContext = patContext.map((entry, i) => {
-    const elabEntry = result.context[i];
-    if (elabEntry && !elabEntry.name.startsWith('?')) {
-      return { name: elabEntry.name, type: entry.type };
-    }
-    return entry;
-  });
-  paddedEnv.fixTypeInfoContextNames(correctContext);
+  fixClauseTypeInfoContextNames(paddedEnv, clausePatternContext, solvedEnv.context);
 
   // Extract context names for pretty printing (de Bruijn order: index 0 = most recent)
   // TTKContext has oldest at index 0 (appended), but we need most recent at index 0
@@ -1711,6 +1587,106 @@ export function checkMatchClause(
     metaVars: solvedEnv.metaVars
   };
   return result.atIndexPathAndValue(paddedEnv.indexPath, checkedClause);
+}
+
+function recordPatternTypeInfo(
+  zonkEnv: TCEnv<unknown>,
+  paddedEnv: TCEnv<TTKClause>,
+  type: TTKTerm,
+  holeSolutions: Map<string, TTKTerm>,
+  paddedPatterns: TTKPattern[],
+): TTKContext {
+  let patContext = paddedEnv.context;
+  let filledType = type;
+  for (const [holeId, solution] of holeSolutions) {
+    filledType = fillHole(filledType, holeId, solution);
+  }
+
+  let patType = filledType;
+  for (let i = 0; i < paddedPatterns.length; i++) {
+    if (patType.tag !== 'Binder' || patType.binderKind.tag !== 'BPi') break;
+
+    const patPath: IndexPath = [...paddedEnv.indexPath, { kind: 'field', name: 'patterns' }, { kind: 'array', index: i }];
+    const zonkedDomain = zonkEnv.zonkTerm(patType.domain);
+    zonkEnv.atIndexPath(patPath).recordTypeInfoWithContext(zonkedDomain, patContext);
+
+    const namePath: IndexPath = [...patPath, { kind: 'field', name: 'name' }];
+    zonkEnv.atIndexPath(namePath).recordTypeInfoWithContext(zonkedDomain, patContext);
+
+    const pat = paddedPatterns[i];
+    if (pat.tag === 'PCtor' && pat.args.length > 0) {
+      const ctorDef = getTypeDefinition(zonkEnv.definitions, pat.name);
+      if (ctorDef) {
+        const ctorResult = getConstructorInductive(zonkEnv.definitions, pat.name);
+        const implicitPositions = new Set<number>();
+        if (ctorResult) {
+          const { inductive, ctor } = ctorResult;
+          if (inductive.recordInfo) {
+            for (let p = 0; p < inductive.recordInfo.paramCount; p++) implicitPositions.add(p);
+          } else if (ctor.namedArgMap && ctor.namedArgMap.size > 0) {
+            for (const pos of ctor.namedArgMap.values()) implicitPositions.add(pos);
+          }
+        }
+
+        const binderSubstitutions = new Map<number, TTKTerm>();
+        const scrutineeSpine = extractAppSpine(zonkedDomain);
+        const { binders: ctorBinders, body: ctorBody } = extractPiSpine(ctorDef);
+        const returnSpine = extractAppSpine(ctorBody);
+        const numBinders = ctorBinders.length;
+
+        for (let k = 0; k < Math.min(returnSpine.args.length, scrutineeSpine.args.length); k++) {
+          extractBinderSubstitutions(returnSpine.args[k], scrutineeSpine.args[k], numBinders, binderSubstitutions);
+        }
+
+        const kernelPatKey = serializeIndexPath(patPath);
+        let ctorType = ctorDef;
+        let surfaceArgIdx = 0;
+        for (let argIdx = 0; argIdx < pat.args.length; argIdx++) {
+          if (ctorType.tag !== 'Binder' || ctorType.binderKind.tag !== 'BPi') break;
+
+          let argDomain = zonkEnv.zonkTerm(ctorType.domain);
+          argDomain = transformVarsInTerm(argDomain, (varIndex) => {
+            const binderPos = argIdx - 1 - varIndex;
+            if (binderPos >= 0 && binderPos < argIdx && binderSubstitutions.has(binderPos)) {
+              return binderSubstitutions.get(binderPos)!;
+            }
+            return mkVar(varIndex);
+          });
+
+          if (!implicitPositions.has(argIdx)) {
+            zonkEnv.recordTypeInfoAtKey(`${kernelPatKey}.args[${surfaceArgIdx}]`, argDomain, patContext);
+            zonkEnv.recordTypeInfoAtKey(`${kernelPatKey}.args[${surfaceArgIdx}].name`, argDomain, patContext);
+            surfaceArgIdx++;
+          }
+
+          ctorType = ctorType.body;
+        }
+
+        const ctorFullType = zonkEnv.zonkTerm(ctorDef);
+        zonkEnv.atIndexPath(namePath).recordTypeInfoWithContext(ctorFullType, patContext);
+      }
+    }
+
+    patContext = [...patContext, { name: patType.name, type: patType.domain }];
+    patType = patType.body;
+  }
+
+  return patContext;
+}
+
+function fixClauseTypeInfoContextNames(
+  paddedEnv: TCEnv<TTKClause>,
+  patternContext: TTKContext,
+  elaboratedContext: TTKContext,
+): void {
+  const correctContext = patternContext.map((entry, i) => {
+    const elabEntry = elaboratedContext[i];
+    if (elabEntry && !elabEntry.name.startsWith('?')) {
+      return { name: elabEntry.name, type: entry.type };
+    }
+    return entry;
+  });
+  paddedEnv.fixTypeInfoContextNames(correctContext);
 }
 
 /**

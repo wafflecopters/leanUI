@@ -847,13 +847,7 @@ map f (Cons x xs) = Cons (f x) (map f xs)
     }
   });
 
-  test.todo('no unsolved metas with meta chains (lambda + sym + implicit args)', () => {
-    // BLOCKED: _implicit12 is unsolved in clause 2 (Succ x Zero = No (\eq => ...)).
-    // This is a meta/constraint solver issue — the implicit arg meta for `sym`
-    // doesn't propagate through the lambda. Needs meta solver enhancement.
-    // This tests meta chain propagation in the constraint solver.
-    // The lambda body creates metas that chain through other metas (e.g., _10→_14→Succ _12),
-    // and the CONV unification provides concrete values that should propagate through the chain.
+  test('no unsolved metas with lambda + sym + implicit args', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat
@@ -874,16 +868,14 @@ sym refl = refl
 zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
 zeroNeqSucc refl = #absurd
 
-decEqNat : (x y : Nat) -> DecEq x y
-decEqNat Zero Zero = Yes refl
-decEqNat Zero (Succ y) = No zeroNeqSucc
-decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
-decEqNat (Succ x) (Succ y) = Yes refl
+succZeroNeq : (x : Nat) -> DecEq (Succ x) Zero
+succZeroNeq x = No (\\eq => zeroNeqSucc (sym eq))
 `;
     const results = compileSource(source);
-    const block = results.find(r => r.name === 'decEqNat');
+    const block = results.find(r => r.name === 'succZeroNeq');
     expect(block).toBeDefined();
-    const decl = block!.declarations.find(d => d.name === 'decEqNat')!;
+    expect(block!.checkSuccess).toBe(true);
+    const decl = block!.declarations.find(d => d.name === 'succZeroNeq')!;
 
     if (decl.typeInfoMap) {
       for (const [, entry] of decl.typeInfoMap) {
@@ -1394,6 +1386,27 @@ nth (VCons h tail) (FSucc f) = nth tail f
     }
   });
 
+  test('nth tail application keeps function and argument types aligned in RHS', () => {
+    const decl = getNthDecl();
+    if (!decl.typeInfoMap) return;
+
+    const fnEntry = decl.typeInfoMap.get('value.clauses[1].rhs.fn');
+    const tailEntry = decl.typeInfoMap.get('value.clauses[1].rhs.fn.arg');
+    expect(fnEntry).toBeDefined();
+    expect(tailEntry).toBeDefined();
+
+    if (fnEntry && tailEntry) {
+      const fnType = prettyPrint(fnEntry.type, fnEntry.context.map(c => c.name).reverse());
+      const tailType = prettyPrint(tailEntry.type, tailEntry.context.map(c => c.name).reverse());
+      expect(fnType).toContain('Fin');
+      expect(fnType).toContain('-> A');
+      expect(fnType).not.toContain('-> _pad1');
+      expect(tailType).toContain('Vec');
+      expect(tailType).toContain('A');
+      expect(tailType).toContain('_pad1');
+    }
+  });
+
   test('sourceMap positions are file-absolute for multi-block sources', () => {
     const decl = getNthDecl();
     if (!decl.sourceMap) return;
@@ -1574,9 +1587,95 @@ plus (Succ a) b = Succ (plus a b)
 
   // Test with constructor pattern with implicit args (neq in (No neq))
   // Uses DecEq which has implicit {m n : Nat} parameters
-  test.todo('cursor on "neq" in (No neq) shows Equal m n -> Void (blocked by clause 0 meta-solving bug)');
+  const decEqWithFailureSource = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
 
-  test.todo('cursor on "No" in (No neq) shows constructor type (blocked by clause 0 meta-solving bug)');
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductive Void : Type where
+
+inductive DecEq : Nat -> Nat -> Type where
+  Yes : {m n : Nat} -> Equal m n -> DecEq m n
+  No : {m n : Nat} -> (Equal m n -> Void) -> DecEq m n
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
+zeroNeqSucc : {n : Nat} -> Equal Zero (Succ n) -> Void
+zeroNeqSucc refl = #absurd
+
+decEqNat : (m : Nat) -> (n : Nat) -> DecEq m n
+decEqNat Zero Zero = Yes refl
+decEqNat Zero (Succ y) = No zeroNeqSucc
+decEqNat (Succ x) Zero = No (\\eq => zeroNeqSucc (sym eq))
+decEqNat (Succ x) (Succ y) with decEqNat x y
+  | Yes eq => Yes refl
+  | No neq => No neq
+`;
+
+  function getDecEqWithFailureDecl() {
+    const results = compileSource(decEqWithFailureSource);
+    const block = results.find(r => r.declarations.some(d => d.name === 'decEqNat'));
+    expect(block).toBeDefined();
+    expect(block!.checkSuccess).toBe(false);
+    const decl = block!.declarations.find(d => d.name === 'decEqNat');
+    expect(decl).toBeDefined();
+    expect(decl!.sourceMap).toBeDefined();
+    expect(decl!.typeInfoMap).toBeDefined();
+    return decl!;
+  }
+
+  test('cursor on "neq" in failing with-clause branch still shows Equal m n -> Void', () => {
+    const decl = getDecEqWithFailureDecl();
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    const neqPath = 'value.clauses[3].withClauses[1].patterns[0].args[0]';
+    const neqRange = decl.sourceMap.get(neqPath);
+    expect(neqRange).toBeDefined();
+    if (neqRange) {
+      const result = getTypeAtCursor(neqRange.start.pos, decl.sourceMap, decl.elabMap, decl.typeInfoMap);
+      expect(result).toBeDefined();
+      expect(result!.prettyType).toContain('Equal Nat m n');
+      expect(result!.prettyType).toContain('-> Void');
+      expect(result!.context.map(entry => entry.name)).toEqual(['m', 'n']);
+    }
+  });
+
+  test('cursor on "No" in failing with-clause branch still shows constructor type', () => {
+    const decl = getDecEqWithFailureDecl();
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    const noPath = 'value.clauses[3].withClauses[1].patterns[0].name';
+    const noRange = decl.sourceMap.get(noPath);
+    expect(noRange).toBeDefined();
+    if (noRange) {
+      const result = getTypeAtCursor(noRange.start.pos, decl.sourceMap, decl.elabMap, decl.typeInfoMap);
+      expect(result).toBeDefined();
+      expect(result!.prettyType).toContain('Equal Nat');
+      expect(result!.prettyType).toContain('-> Void');
+      expect(result!.prettyType).toContain('DecEq');
+    }
+  });
+
+  test('selecting "(No neq)" in failing with-clause branch shows the matched DecEq type', () => {
+    const decl = getDecEqWithFailureDecl();
+    if (!decl.sourceMap || !decl.typeInfoMap) return;
+
+    const patPath = 'value.clauses[3].withClauses[1].patterns[0]';
+    const patRange = decl.sourceMap.get(patPath);
+    expect(patRange).toBeDefined();
+    if (patRange) {
+      const result = getTypeAtSelection(patRange.start.pos, patRange.end.pos, decl.sourceMap, decl.elabMap, decl.typeInfoMap);
+      expect(result).toBeDefined();
+      expect(result!.prettyType).toContain('DecEq');
+      expect(result!.prettyType).toContain('m');
+      expect(result!.prettyType).toContain('n');
+      expect(result!.context.map(entry => entry.name)).toEqual(['m', 'n']);
+    }
+  });
 });
 
 // ============================================================================

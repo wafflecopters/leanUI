@@ -17,23 +17,23 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 ## Current Focus
 Upleveling the core engine while preserving the current language surface:
 - Keep converting stale compiler/proof-tree TODOs into real regressions or concrete fixes
-- Tighten solver/elaboration handoff so solved metas preserve usable elaborated structure
-- Harden indexed-case goal computation, especially when constructor indices mention constructor params
+- Preserve useful editor/type-info output even when clause checking later fails
+- Keep tightening `with` desugaring/abstraction coverage so helper tests become real end-to-end regressions
 - Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
+- Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
-- Added full-normalization `Match` iota reduction for constructor scrutinees, with focused normalization regressions
-- Fixed `TCEnv.solveMetasAndConstraints` to preserve a zonked `elaboratedTerm`, with regression coverage in let-inference
-- Turned the old `nth tail f` RHS type-info TODO into a real passing regression asserting `Fin` survives through cursor/type-info lookup
-- Closed proof-tree indexed-case TODO by refining index variables against constructor parameters (synthetic `Wrap : Nat -> Type` regression)
-- Converted stale eta/axiom-K TODO scaffolding into real assertions and removed outdated warnings
-- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`139` files, `2830` passing, `9` todo)
+- Moved clause-pattern type-info recording earlier in `checkMatchClause`, so failing with-clauses still expose useful cursor/type info
+- Turned the old `No neq` with-clause type-info TODOs into real regressions, plus adjacent branch-selection coverage
+- Converted the remaining `with-abstraction.test.ts` `test.todo`s into active regression tests for single/multiple scrutinees, ill-typed abstraction, and implicit binder preservation
+- Replaced the old parser-side `with` WIP smoke test with real assertions, including multi-scrutinee comma syntax coverage
+- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`139` files, `2846` passing, `0` test todos)
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
 - Improve semantic quality of application/type errors, especially around implicit arguments and partial application
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
-- Decide which large remaining TODOs should become real implementation work next: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
+- Choose the next large implementation TODO to burn down: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
 - Add more semantic dependency edges to the incremental checker beyond token-level references
 - Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`

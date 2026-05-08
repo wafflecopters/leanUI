@@ -233,4 +233,31 @@ dummy = Zero
 
     expect(areEqual).toBe(true);
   });
+
+  test('definitional equality sees eta after delta reduction', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+record Point : Type where
+  x : Nat
+  y : Nat
+
+id1 : Point -> Point
+id1 p = p
+
+id2 : Point -> Point
+id2 p = MkPoint (Point.x p) (Point.y p)
+`;
+    const result = compileTTFromText(source);
+    const definitions = result.definitions;
+    const p = { tag: 'Var' as const, index: 0 };
+    const lhs = { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'id1' }, arg: p };
+    const rhs = { tag: 'App' as const, fn: { tag: 'Const' as const, name: 'id2' }, arg: p };
+
+    expect(areTypesDefEq(lhs, rhs, definitions, [
+      { name: 'p', type: { tag: 'Const' as const, name: 'Point' } },
+    ])).toBe(true);
+  });
 });
