@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, registerOfNat, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -5256,16 +5256,30 @@ function applyImplAnnotationsForBlock(block: CompiledBlock, definitions: Definit
   const implRegex = /^@impl=([a-zA-Z][a-zA-Z0-9_]*)$/;
   for (const decl of block.declarations) {
     if (!decl.syntax || !decl.name) continue;
-    const m = decl.syntax.trim().match(implRegex);
-    if (!m) continue;
-    const role = m[1];
-    if (role === 'nat') {
-      const err = registerNatImpl(definitions, decl.name);
-      if (err) {
-        console.warn(`@impl=nat verification failed for '${decl.name}': ${err}`);
+    const trimmed = decl.syntax.trim();
+
+    // @impl=ROLE: register inductive as a built-in role implementation
+    const m = trimmed.match(implRegex);
+    if (m) {
+      const role = m[1];
+      if (role === 'nat') {
+        const err = registerNatImpl(definitions, decl.name);
+        if (err) {
+          console.warn(`@impl=nat verification failed for '${decl.name}': ${err}`);
+        }
       }
+      // Future: @impl=string, @impl=list, etc.
+      continue;
     }
-    // Future: @impl=string, @impl=list, etc.
+
+    // @ofNat: register this term definition as a Nat coercion
+    if (trimmed === '@ofNat') {
+      const err = registerOfNat(definitions, decl.name);
+      if (err) {
+        console.warn(`@ofNat verification failed for '${decl.name}': ${err}`);
+      }
+      continue;
+    }
   }
 }
 

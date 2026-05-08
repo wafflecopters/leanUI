@@ -1,0 +1,19 @@
+@test success
+@name "OfNat: NatLit coerces to a custom target type"
+@import preambles/nat.tt
+
+-- Define a wrapper type whose values come via a coercion from Nat
+inductive Wrap : Type where
+  MkWrap : Nat -> Wrap
+
+@syntax @ofNat
+wrapOfNat : Nat -> Wrap
+wrapOfNat n = MkWrap n
+
+-- Now `5 : Wrap` should auto-coerce to `wrapOfNat 5 = MkWrap 5`
+five_wrap : Wrap
+five_wrap = 5
+
+-- And `0 : Wrap` should also work
+zero_wrap : Wrap
+zero_wrap = 0

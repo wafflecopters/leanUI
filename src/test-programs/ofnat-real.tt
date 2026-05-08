@@ -1,0 +1,16 @@
+@test success
+@name "OfNat: NatLit coerces to Carrier R via realOfNat"
+@import preambles/nat.tt
+
+-- Minimal real-like setup
+postulate Real : Type 1
+postulate Carrier : Real -> Type
+postulate defaultValue : (R : Real) -> Carrier R
+
+@syntax @ofNat
+realOfNat : (R : Real) -> Nat -> Carrier R
+realOfNat R n = defaultValue R
+
+-- `1 : Carrier R` should auto-coerce via realOfNat
+test_lit : (R : Real) -> Carrier R
+test_lit R = 1

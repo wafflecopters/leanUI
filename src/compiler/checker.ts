@@ -519,6 +519,50 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 // CHECKING
 
 export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
+  // (NATLIT-COERCE) — when checking a NatLit against a non-Nat target type,
+  // look for a registered @ofNat coercion and rewrite as `App(coerce, ..., NatLit)`.
+  // This is what makes `1 : Carrier R` work when realOfNat is registered
+  // with `@syntax @ofNat`.
+  if (env.value.tag === 'NatLit') {
+    // Walk to the head of the expected type
+    let head = expectedType;
+    while (head.tag === 'App') head = head.fn;
+    if (head.tag === 'Const') {
+      const headName = head.name;
+      // Skip coercion if the target IS a Nat-impl — that's the identity case
+      const reg = env.definitions.natImplByCtor;
+      const isNatImpl = reg && [...reg.values()].some(impl => impl.inductiveName === headName);
+      if (!isNatImpl) {
+        const coerceFn = env.definitions.ofNatByTargetHead?.get(headName);
+        if (coerceFn) {
+          // Build: App(...App(Const(coerceFn), ?meta1), ..., NatLit)
+          // The function takes some args, then a Nat. Insert metas for the
+          // pre-Nat args; let unification solve them from expectedType.
+          const coerceDef = env.definitions.terms.get(coerceFn);
+          if (coerceDef) {
+            // Count Pi binders before the final (Nat) one
+            let argCount = 0;
+            let t = coerceDef.type;
+            while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+              argCount++;
+              t = t.body;
+            }
+            // argCount includes the Nat arg — we want metas for argCount-1 pre-Nat args
+            const numPreArgs = argCount - 1;
+            let appTerm: TTKTerm = { tag: 'Const', name: coerceFn };
+            for (let i = 0; i < numPreArgs; i++) {
+              appTerm = { tag: 'App', fn: appTerm, arg: { tag: 'Hole', id: `_ofNat_arg${i}` } };
+            }
+            appTerm = { tag: 'App', fn: appTerm, arg: env.value };
+            // Now check this synthesized application against expectedType.
+            // The CONV rule handles the unification.
+            return checkType(env.withValue(appTerm), expectedType);
+          }
+        }
+      }
+    }
+  }
+
   // Only use the Lambda-specific rule when expectedType is a Pi.
   // If expectedType is a Meta or something else, fall through to CONV rule
   // which infers the lambda's type and unifies.

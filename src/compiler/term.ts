@@ -237,6 +237,11 @@ export type DefinitionsMap = {
    *  impl point to the same NatImpl entry. Populated by registerNatImpl when
    *  the preset declares `@syntax @impl=nat` on an inductive. */
   natImplByCtor?: Map<string, NatImpl>,
+  /** Optional. Map from target-type head constant → coercion function name.
+   *  E.g., {"Carrier": "realOfNat"} means a NatLit in a `Carrier R` position
+   *  is coerced to `realOfNat ?... NatLit`. Populated by registerOfNat when
+   *  a definition is tagged `@syntax @ofNat`. */
+  ofNatByTargetHead?: Map<string, string>,
 }
 
 export function createDefinitionsMap(): DefinitionsMap {
@@ -245,6 +250,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     inductiveTypes: new Map<string, InductiveDefinition>(),
     inductiveNameOfConstructor: new Map<string, string>(),
     natImplByCtor: new Map<string, NatImpl>(),
+    ofNatByTargetHead: new Map<string, string>(),
   };
 }
 
@@ -310,6 +316,55 @@ export function registerNatImpl(definitions: DefinitionsMap, inductiveName: stri
   }
   definitions.natImplByCtor.set(zeroCtor, impl);
   definitions.natImplByCtor.set(succCtor, impl);
+  return null;
+}
+
+/**
+ * Register a function as an OfNat coercion. The function must have the shape:
+ *   coerce : (Π ...) -> Nat -> T
+ * where T's head constant becomes the dispatch key. When a NatLit appears in
+ * a position expecting a value whose type's head matches this key, the
+ * elaborator inserts an application of this coercion.
+ *
+ * E.g., `realOfNat : (R : Real) -> Nat -> Carrier R` registers under the
+ * "Carrier" key. Then `1 : Carrier R` elaborates to `realOfNat R 1`.
+ *
+ * Returns null on success, or an error string. Required shape:
+ *   - Has at least one Pi binder
+ *   - The LAST Pi binder's domain has head Const(natImplName) (a Nat-impl)
+ *   - The body has a Const head (the dispatch key)
+ */
+export function registerOfNat(definitions: DefinitionsMap, fnName: string): string | null {
+  const def = definitions.terms.get(fnName);
+  if (!def) return `@ofNat: definition '${fnName}' not found`;
+  let t = def.type;
+  // Strip Pi binders, finding the last domain (the Nat arg) and the return type
+  let prevDomainHead: string | null = null;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    prevDomainHead = dom.tag === 'Const' ? dom.name : null;
+    t = t.body;
+  }
+  if (prevDomainHead === null) {
+    return `@ofNat: '${fnName}' must take at least one argument (the Nat)`;
+  }
+  // Check that the last domain (the Nat arg) is actually a registered Nat-impl
+  const isNatImpl = definitions.natImplByCtor
+    && [...definitions.natImplByCtor.values()].some(impl => impl.inductiveName === prevDomainHead);
+  if (!isNatImpl) {
+    return `@ofNat: '${fnName}' final argument must be a @impl=nat-tagged type, got '${prevDomainHead}'`;
+  }
+  // Get the return type's head
+  let retHead = t;
+  while (retHead.tag === 'App') retHead = retHead.fn;
+  if (retHead.tag !== 'Const') {
+    return `@ofNat: '${fnName}' return type must have a Const head (got ${retHead.tag})`;
+  }
+  if (!definitions.ofNatByTargetHead) {
+    definitions.ofNatByTargetHead = new Map<string, string>();
+  }
+  definitions.ofNatByTargetHead.set(retHead.name, fnName);
   return null;
 }
 
