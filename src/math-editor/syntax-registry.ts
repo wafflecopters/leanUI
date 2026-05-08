@@ -797,6 +797,9 @@ export interface ParsedSyntaxAnnotation {
   entry?: SyntaxEntry;
   /** @syntax @unfold: delta-reduce this definition before rendering */
   unfold?: boolean;
+  /** @syntax @impl=ROLE: declare this inductive as the implementation of a
+   *  built-in role (e.g., 'nat' enables NatLit literals via iota-view). */
+  impl?: string;
 }
 
 /**
@@ -823,6 +826,13 @@ export function parseSyntaxAnnotation(
   // @unfold directive: delta-reduce this definition before rendering
   if (patternStr.trim() === '@unfold') {
     return { unfold: true };
+  }
+
+  // @impl=ROLE directive: declare this inductive as a built-in role implementation
+  // E.g., `@syntax @impl=nat` on a `Nat`-shaped inductive enables NatLit literals.
+  const implMatch = patternStr.trim().match(/^@impl=([a-zA-Z][a-zA-Z0-9_]*)$/);
+  if (implMatch) {
+    return { impl: implMatch[1] };
   }
 
   // Split on @becomes for explicit template override

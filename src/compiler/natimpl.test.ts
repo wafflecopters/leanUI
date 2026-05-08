@@ -20,6 +20,7 @@ import {
   registerNatImpl,
 } from './term';
 import { whnf } from './whnf';
+import { compileTTFromText } from './compile';
 
 // ---------------------------------------------------------------------------
 // Helpers: build small inductive types
@@ -273,5 +274,46 @@ describe('iota-view rule: NatLit reduces inside Match', () => {
     };
     const reduced = whnf(matchTerm, { definitions: defs });
     expect(reduced).toEqual({ tag: 'Const', name: 'empty_branch' });
+  });
+});
+
+describe('@impl=nat annotation: end-to-end via compileTTFromText', () => {
+  test('@syntax @impl=nat populates the registry', () => {
+    const result = compileTTFromText(`
+@syntax @impl=nat
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+`);
+    expect(result.success).toBe(true);
+    const reg = result.definitions?.natImplByCtor;
+    expect(reg).toBeDefined();
+    expect(reg!.get('Zero')).toEqual({ inductiveName: 'Nat', zeroCtor: 'Zero', succCtor: 'Succ' });
+    expect(reg!.get('Succ')).toEqual({ inductiveName: 'Nat', zeroCtor: 'Zero', succCtor: 'Succ' });
+  });
+
+  test('Custom Nat impl with non-standard ctor names (Z/S) works', () => {
+    const result = compileTTFromText(`
+@syntax @impl=nat
+inductive Counter : Type where
+  Z : Counter
+  S : Counter -> Counter
+`);
+    expect(result.success).toBe(true);
+    const reg = result.definitions?.natImplByCtor;
+    expect(reg!.get('Z')?.zeroCtor).toBe('Z');
+    expect(reg!.get('S')?.succCtor).toBe('S');
+  });
+
+  test('Without @impl=nat, no registry entries are added', () => {
+    const result = compileTTFromText(`
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+`);
+    expect(result.success).toBe(true);
+    const reg = result.definitions?.natImplByCtor;
+    // Either absent or empty map
+    expect(reg === undefined || reg.size === 0).toBe(true);
   });
 });

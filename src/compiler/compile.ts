@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -5231,6 +5231,10 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
     totalNameErrors += result.nameErrorCount;
   }
 
+  // Process @syntax @impl=ROLE annotations for kernel-level role registration.
+  // E.g., @impl=nat populates the NatImpl registry so iota-view rules apply.
+  applyImplAnnotations(compiledBlocks, definitions);
+
   return {
     success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
     blocks: compiledBlocks,
@@ -5239,6 +5243,32 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
     totalCheckErrors,
     definitions
   };
+}
+
+/**
+ * Scan compiled declarations for `@syntax @impl=ROLE` annotations and apply
+ * them to the kernel registries (e.g., NatImpl for `@impl=nat`).
+ * Mutates `definitions` in place.
+ */
+function applyImplAnnotations(blocks: CompiledBlock[], definitions: DefinitionsMap): void {
+  const implRegex = /^@impl=([a-zA-Z][a-zA-Z0-9_]*)$/;
+  for (const block of blocks) {
+    for (const decl of block.declarations) {
+      if (!decl.syntax || !decl.name) continue;
+      const m = decl.syntax.trim().match(implRegex);
+      if (!m) continue;
+      const role = m[1];
+      if (role === 'nat') {
+        const err = registerNatImpl(definitions, decl.name);
+        if (err) {
+          // Surface as a check error on the declaration's line
+          // For now, just log — the declaration is still valid; only the registry op failed
+          console.warn(`@impl=nat verification failed for '${decl.name}': ${err}`);
+        }
+      }
+      // Future: @impl=string, @impl=list, etc.
+    }
+  }
 }
 
 // ============================================================================
@@ -5335,6 +5365,7 @@ function applyBlockContributions(
     terms: newTerms,
     inductiveTypes: newIndTypes,
     inductiveNameOfConstructor: newCtorMap,
+    natImplByCtor: definitions.natImplByCtor,
   };
 
   if (contributions.symbolNames.length > 0) {
@@ -5483,6 +5514,9 @@ export function compileIncrementalTT(
 
   // Trim cache if source has fewer blocks now
   cache.blocks.length = parseResult.blocks.length;
+
+  // Process @syntax @impl=ROLE annotations for kernel-level role registration.
+  applyImplAnnotations(compiledBlocks, definitions);
 
   const result: CompileResult = {
     success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
