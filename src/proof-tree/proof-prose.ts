@@ -10,6 +10,7 @@
 import { ProofNode, ProofNodeId, CaseNode, ExactNode } from './proof-tree';
 import { NodeGoalInfo, TypedHypothesis } from './goal-computation';
 import { TTerm } from '../compiler/surface';
+import { renderNameLatex } from './name-latex';
 
 /** Walk a byProof subtree to extract the proof expression string.
  *  Typically this is a single `exact` node, possibly under intros. */
@@ -171,28 +172,9 @@ function buildIntroGroups(
   }));
 }
 
-/** Map Unicode Greek → LaTeX. */
-const GREEK_LATEX: Record<string, string> = {
-  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
-  'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
-  'λ': '\\lambda', 'μ': '\\mu', 'π': '\\pi', 'σ': '\\sigma',
-  'φ': '\\varphi', 'ψ': '\\psi', 'ω': '\\omega',
-};
-
 /** Render a variable name for LaTeX (italicize single chars, subscript digits, textify multi-char). */
 function texName(name: string): string {
-  // Single Greek letter: δ → \delta
-  if (name.length === 1 && GREEK_LATEX[name]) return GREEK_LATEX[name];
-  // Greek + digits: δ1 → \delta_{1}
-  if (name.length >= 2 && GREEK_LATEX[name[0]] && /^\d+$/.test(name.slice(1))) {
-    return `${GREEK_LATEX[name[0]]}_{${name.slice(1)}}`;
-  }
-  if (name.length === 1) return name;
-  if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
-  // Single letter + digits: subscript (x0 → x_{0}, n12 → n_{12})
-  if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
-  // Multi-letter: upright text (escape underscores so KaTeX doesn't read them as subscript)
-  return `\\mathit{${name.replace(/_/g, '\\_')}}`;
+  return renderNameLatex(name, 'mathit');
 }
 
 /** A synthetic induction inserted by nested-pattern desugaring —

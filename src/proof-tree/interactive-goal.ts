@@ -20,6 +20,7 @@ import { TacticEngine } from '../tactics/tacticsEngine';
 import { ReverseRegistry, SubtermAnnotator } from '../math-editor/tt-to-math';
 import { MathNode, mkGroup } from '../math-editor/types';
 import { kernelTypeToSurface, buildNameCtx, renderTerm, renderTermAnnotated, extractTypeHead, buildProjectionFoldMap, foldProjectionMatches, buildAliasFoldMap, foldAliases } from './goal-computation';
+import { renderNameLatex } from './name-latex';
 
 // ============================================================================
 // Types
@@ -173,9 +174,7 @@ function createAnnotator(): {
  * Render a variable name for LaTeX (italicize single chars, textify multi-char).
  */
 function binderNameLatex(name: string): string {
-  if (name.length === 1) return name;
-  if (name.length === 2 && name[1] === "'") return `${name[0]}'`;
-  return `\\text{${name}}`;
+  return renderNameLatex(name, 'text');
 }
 
 /**

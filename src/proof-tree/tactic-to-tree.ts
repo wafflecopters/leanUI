@@ -21,6 +21,7 @@ import {
   mkHave,
   mkSuffices,
 } from './proof-tree';
+import { renderNameLatex } from './name-latex';
 
 /**
  * Render a surface TTerm to a string for display in proof tree nodes.
@@ -183,30 +184,20 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
   }
 }
 
-/** Map Unicode Greek → LaTeX for case label rendering. */
-const LABEL_GREEK: Record<string, string> = {
-  'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
-  'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
-  'λ': '\\lambda', 'μ': '\\mu', 'π': '\\pi', 'σ': '\\sigma',
-  'φ': '\\varphi', 'ψ': '\\psi', 'ω': '\\omega',
-};
-
-/** Render a variable name for a case label, matching texNameForProse conventions. */
+/** Render a variable name for a case label. */
 function labelVarName(name: string): string {
-  if (name.length === 1 && LABEL_GREEK[name]) return LABEL_GREEK[name];
-  if (name.length >= 2 && LABEL_GREEK[name[0]] && /^[a-zA-Z0-9]+$/.test(name.slice(1))) {
-    return `${LABEL_GREEK[name[0]]}_{${name.slice(1)}}`;
-  }
-  if (name.length === 1) return name;
-  if (/^[a-zA-Z]\d+$/.test(name)) return `{${name[0]}}_{${name.slice(1)}}`;
-  // Escape underscores so KaTeX doesn't read them as subscript
-  return `\\textsf{${name.replace(/_/g, '\\_')}}`;
+  return renderNameLatex(name, 'textsf');
+}
+
+/** Render a constructor name (Greek-safe). */
+function ctorNameLatex(name: string): string {
+  return renderNameLatex(name, 'text');
 }
 
 /** Recursively render a CasePattern to LaTeX. Nested constructor patterns get parenthesized. */
 function formatPatternLatex(p: CasePattern): string {
   if (p.tag === 'var') return labelVarName(p.name);
-  const ctor = `\\text{${p.constructor}}`;
+  const ctor = ctorNameLatex(p.constructor);
   if (p.params.length === 0) return ctor;
   const inner = p.params.map(formatPatternLatex).join('\\,');
   return `(${ctor}\\,${inner})`;
@@ -214,7 +205,7 @@ function formatPatternLatex(p: CasePattern): string {
 
 /** Format the label for a case branch that has at least one nested constructor pattern. */
 function formatNestedCaseLabelLatex(ctorName: string, patterns: readonly CasePattern[]): string {
-  const ctor = `\\text{${ctorName}}`;
+  const ctor = ctorNameLatex(ctorName);
   if (patterns.length === 0) return ctor;
   const inner = patterns.map(formatPatternLatex).join('\\,');
   return `${ctor}\\,${inner}`;
