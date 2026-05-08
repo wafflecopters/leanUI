@@ -166,6 +166,23 @@ rzero R = CompleteOrderedField.zero (field R)
 rone : (R : Real) -> Carrier R
 rone R = CompleteOrderedField.one (field R)
 
+------------------------------------------------------------
+-- Natural numbers + numeric literal coercion to Carrier R
+------------------------------------------------------------
+
+@syntax @impl=nat
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+-- Coercion: any natural literal becomes a Carrier R value.
+-- realOfNat R 0 = rzero R; realOfNat R (n+1) = rone R + realOfNat R n
+-- This makes \`1 : Carrier R\`, \`2 : Carrier R\` work via @ofNat dispatch.
+@syntax @ofNat
+realOfNat : (R : Real) -> Nat -> Carrier R
+realOfNat R Zero = rzero R
+realOfNat R (Succ n) = radd (rone R) (realOfNat R n)
+
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
 
