@@ -24,10 +24,11 @@ Upleveling the core engine while preserving the current language surface:
 - Keep turning proof-workspace keyboard navigation from placeholder wiring into real selected-item actions
 - Keep replacing placeholder proof-workspace editor actions with the same tested transform path the main expression editor uses
 - Keep collapsing proof-workspace legacy let/claim data so equality-mode and ordinary let editing share one state model
-- Keep trimming dead app-shell/editor surfaces now that the text editor is the only live top-level page
+- Keep trimming dead UI/editor surfaces now that the text editor is the only live top-level page
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Deleted the unrouted proof/inductive/record editor subtree entirely, including the navigation context/footer, proof-workspace helpers, named-item editor helpers, and their tests, after collapsing the app shell to the text editor
 - Collapsed the top-level app shell to the text editor: `/text-editor` and all fallback routes now mount `TextEditorPage`, and the old proof/inductive/record route switchboard is gone with a routing regression in `App.test.tsx`
 - Removed the dead legacy let/claim fields from the structured proof editor path, switched rewrite history over to `equalityChain`, and simplified `createLetElement` to the shape the current UI actually uses
 - Trimmed dead proof-workspace migration scaffolding in `EnhancedProofWorkspace`: removed the unused combined TT-proof cache, dead scroll ref, and debug-only churn that no longer fed the UI
@@ -44,8 +45,7 @@ Upleveling the core engine while preserving the current language surface:
 - Decide whether any remaining ill-typed abstraction cases need dedicated production rejection beyond the current checker/desugaring behavior
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
 - Choose the next large implementation TODO to burn down: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
-- Keep burning down editor-side TODOs and duplicate command plumbing in `EnhancedProofWorkspace`, especially the remaining equality-proof compatibility branch and debug logging in the rule-application path
-- Decide whether the now-unrouted `EnhancedProofWorkspace`, `InductiveTypeEditor`, and `RecordEditor` should be retained as dormant tooling or deleted outright
+- Keep trimming dormant UI/editor-specific code that no longer serves the text editor flow
 - Add more semantic dependency edges to the incremental checker beyond token-level references
 - Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`

@@ -1,6 +1,6 @@
 /**
  * Reusable editable input component for inline editing.
- * Used by HypothesesSection, InductiveTypeEditor constructors, etc.
+ * Shared inline text input for editor widgets that need lightweight rename/edit affordances.
  */
 
 import { useState } from 'react';
