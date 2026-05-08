@@ -188,6 +188,73 @@ describe('With-Abstraction Helpers', () => {
       // Should be unchanged (but free vars shifted)
       expect(replaced.tag).toBe('Const');
     });
+
+    test('preserves binder-local variables while replacing an outer occurrence', () => {
+      const context: TTKContext = [{ name: 'n', type: mkConst('Nat') }];
+      const scrutinee = mkVar(0); // n
+
+      // \(x : Nat) => Equal n x
+      const goal = {
+        tag: 'Binder' as const,
+        name: 'x',
+        binderKind: { tag: 'BLam' as const },
+        domain: mkConst('Nat'),
+        body: mkApp(
+          mkApp(mkConst('Equal'), mkVar(1)), // n under one binder
+          mkVar(0) // x
+        )
+      };
+
+      const occurrences = findOccurrences(scrutinee, goal, context, new Map());
+      const replaced = replaceWithFreshVar(goal, occurrences, 0);
+
+      expect(replaced.tag).toBe('Binder');
+      if (replaced.tag === 'Binder' && replaced.body.tag === 'App' && replaced.body.fn.tag === 'App') {
+        expect(replaced.body.fn.arg).toMatchObject({ tag: 'Var', index: 1 });
+        expect(replaced.body.arg).toMatchObject({ tag: 'Var', index: 0 });
+      }
+    });
+
+    test('preserves dependent family binders when replacing an outer occurrence', () => {
+      const context: TTKContext = [{ name: 'a', type: mkConst('Nat') }];
+      const scrutinee = mkVar(0); // a
+
+      // \(n : Nat) => DPair Nat (\m => Equal a m)
+      const goal = {
+        tag: 'Binder' as const,
+        name: 'n',
+        binderKind: { tag: 'BPi' as const },
+        domain: mkConst('Nat'),
+        body: mkApp(
+          mkApp(mkConst('DPair'), mkConst('Nat')),
+          {
+            tag: 'Binder' as const,
+            name: 'm',
+            binderKind: { tag: 'BLam' as const },
+            domain: mkConst('Nat'),
+            body: mkApp(
+              mkApp(mkConst('Equal'), mkVar(2)), // a under two binders
+              mkVar(0) // m
+            )
+          }
+        )
+      };
+
+      const occurrences = findOccurrences(scrutinee, goal, context, new Map());
+      const replaced = replaceWithFreshVar(goal, occurrences, 0);
+
+      expect(replaced.tag).toBe('Binder');
+      if (
+        replaced.tag === 'Binder' &&
+        replaced.body.tag === 'App' &&
+        replaced.body.arg.tag === 'Binder' &&
+        replaced.body.arg.body.tag === 'App' &&
+        replaced.body.arg.body.fn.tag === 'App'
+      ) {
+        expect(replaced.body.arg.body.fn.arg).toMatchObject({ tag: 'Var', index: 2 });
+        expect(replaced.body.arg.body.arg).toMatchObject({ tag: 'Var', index: 0 });
+      }
+    });
   });
 
   describe('K axiom safety', () => {

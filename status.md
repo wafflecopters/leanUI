@@ -24,9 +24,10 @@ Upleveling the core engine while preserving the current language surface:
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Aligned the kernel-side `with-abstraction` helper with the production fix so binder-local variables are no longer shifted when inserting fresh with-binders under lambdas or dependent families
 - Generalized production `with` return-type abstraction to handle computed scrutinees, not just bare variables, and fixed the binder-shifting bug that surfaced in dependent `DPair` families
 - Added direct regressions for computed-scrutinee abstraction and dependent-family binder preservation in `with.test.ts`, plus kept the nested `sigmaSum` `.tt` repro green end-to-end
-- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`140` files, `2867` passing)
+- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` (`140` files, `2869` passing)
 - Moved clause-pattern type-info recording earlier in `checkMatchClause`, so failing with-clauses still expose useful cursor/type info
 - Turned the old `No neq` with-clause type-info TODOs into real regressions, plus adjacent branch-selection coverage
 - Converted the remaining `with-abstraction.test.ts` `test.todo`s into active regression tests for single/multiple scrutinees, ill-typed abstraction, and implicit binder preservation

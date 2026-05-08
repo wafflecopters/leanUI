@@ -250,9 +250,12 @@ export function replaceWithFreshVar(
     // Otherwise, recurse and shift free variables
     switch (term.tag) {
       case 'Var':
-        // Shift free variables to account for new binder
-        // Variables bound above this point need to shift
-        return mkVar(term.index + 1);
+        // Only shift variables that are free at the current depth. Binder-local
+        // variables must keep their meaning when we insert the new with-binder.
+        if (term.index >= depth) {
+          return mkVar(term.index + 1);
+        }
+        return term;
 
       case 'Const':
       case 'Sort':
