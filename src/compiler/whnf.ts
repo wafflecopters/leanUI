@@ -491,6 +491,20 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
         // β-reduction: (λx. t) s → t[x := s]
         return whnf(subst(0, term.arg, fn.body), nextCtx);
       }
+      // NatLit inverse-iota: Succ(NatLit n) folds back to NatLit (n+1).
+      // This pairs with the iota-view rule (NatLit n → Succ (NatLit (n-1)))
+      // in matchPattern, giving a roundtrip canonical form. Required for
+      // computational facts like plus 5 3 = 8 to reduce LHS all the way to
+      // NatLit 8 instead of stopping at Succ(Succ(...(NatLit 3))).
+      if (fn.tag === 'Const' && ctx?.definitions?.natImplByCtor) {
+        const impl = ctx.definitions.natImplByCtor.get(fn.name);
+        if (impl && fn.name === impl.succCtor) {
+          const arg = whnf(term.arg, nextCtx);
+          if (arg.tag === 'NatLit') {
+            return { tag: 'NatLit', value: arg.value + 1n };
+          }
+        }
+      }
       // δ-reduction: If fn is a Const with a Match definition, try ι-reduction
       // Check deltaDepth to limit unfolding
       if (fn.tag === 'Const' && ctx?.definitions && deltaDepth > 0) {

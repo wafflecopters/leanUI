@@ -1,0 +1,23 @@
+@test success
+@name "NatLit arithmetic: plus reduces literals via inverse-iota"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- 170 + 34 = 204 must be provable by refl: kernel computes both sides
+-- to NatLit canonical form and structural equality holds.
+test_170_34 : Equal {A := Nat} (plus 170 34) 204
+test_170_34 = refl
+
+-- Boundary cases
+test_zero_n : Equal {A := Nat} (plus 0 42) 42
+test_zero_n = refl
+
+test_n_zero : Equal {A := Nat} (plus 42 0) 42
+test_n_zero = refl
+
+test_one_one : Equal {A := Nat} (plus 1 1) 2
+test_one_one = refl

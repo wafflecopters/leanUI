@@ -79,4 +79,27 @@ twoPlusThree R = radd 2 3
     expect(withArith.success).toBe(true);
     expect(withArith.totalCheckErrors).toBe(0);
   });
+
+  // Proof that the abstraction composes: with the literal coercion AND a field
+  // axiom (addZeroLeft), we can prove a "computational" fact on abstract Reals.
+  // This is the simplest non-trivial use of the @ofNat machinery in proofs.
+  let withProof: CompileResult;
+  beforeAll(() => {
+    withProof = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+-- The simplest "computational" fact on abstract Reals:
+--   0 + 1 = 1 (using the addZeroLeft field axiom)
+-- The {A := Carrier R} annotation tells Equal which type its sides
+-- should be in; without it the standalone literal \`1\` defaults to
+-- \`Nat\` and unification fails. Future bidirectional elaboration
+-- could propagate the type from the first arg to the second.
+zero_plus_one : (R : Real) -> Equal {A := Carrier R} (radd 0 1) 1
+zero_plus_one R = addZeroLeft 1
+`);
+  }, COMPILE_TIMEOUT);
+
+  test('proof: 0 + 1 = 1 on abstract Real (literal coercion + field axiom)', () => {
+    expect(withProof.success).toBe(true);
+    expect(withProof.totalCheckErrors).toBe(0);
+  });
 });
