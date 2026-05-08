@@ -30,6 +30,7 @@ import {
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { createApplicationCommandTree } from '../config/navigationCommands';
+import { PROOF_WORKSPACE_KEYS } from '../utils/proofWorkspaceSelection';
 
 interface EnhancedProofStep {
   id: string;
@@ -793,16 +794,6 @@ function EnhancedProofWorkspaceInner() {
   // KEYBOARD NAVIGATION HANDLERS
   // ============================================================================
 
-  // Navigation command handlers
-  // Note: showEditGoal is now derived from navigation path, so these handlers are empty
-  const handleEditGoalCommand = useCallback(() => {
-    // Navigation path is already set by the command itself
-  }, []);
-
-  const handleSetGoalCommand = useCallback(() => {
-    // Navigation path is already set by the command itself
-  }, []);
-
   const handleClearGoalCommand = useCallback(() => {
     setGoalExprNode(null);
     const newType = setFinalReturnType(rootDefinition.type, mkPropTT());
@@ -812,61 +803,24 @@ function EnhancedProofWorkspaceInner() {
     }));
   }, [rootDefinition]);
 
-  const handleAddHypothesisCommand = useCallback(() => {
-    // Navigation path is already set by the command itself
-  }, []);
-
-  const handleEditHypothesisCommand = useCallback(() => {
-    // TODO: Trigger edit hypothesis UI - need to track selected hypothesis
-    console.log('Edit hypothesis');
-  }, []);
-
-  const handleDeleteHypothesisCommand = useCallback(() => {
-    // TODO: Delete selected hypothesis - need to track selected hypothesis
-    console.log('Delete hypothesis');
-  }, []);
-
-  const handleAddLetBindingCommand = useCallback(() => {
-    // Navigation path is already set by the command itself
-  }, []);
-
-  const handleEditLetBindingCommand = useCallback(() => {
-    // TODO: Trigger edit let binding UI - need to track selected let binding
-    console.log('Edit let binding');
-  }, []);
-
-  const handleDeleteLetBindingCommand = useCallback(() => {
-    // TODO: Delete selected let binding - need to track selected let binding
-    console.log('Delete let binding');
-  }, []);
+  const handleEditLetBindingCommand = useCallback((id: string) => {
+    handleActivateLetEditor(id);
+  }, [handleActivateLetEditor]);
 
   // Update navigation metadata with command handlers
   useEffect(() => {
     navigation.updateMetadata({
-      onEditGoal: handleEditGoalCommand,
-      onSetGoal: handleSetGoalCommand,
       onClearGoal: handleClearGoalCommand,
-      onAddHypothesis: handleAddHypothesisCommand,
-      onEditHypothesis: handleEditHypothesisCommand,
-      onDeleteHypothesis: handleDeleteHypothesisCommand,
-      onAddLetBinding: handleAddLetBindingCommand,
-      onEditLetBinding: handleEditLetBindingCommand,
-      onDeleteLetBinding: handleDeleteLetBindingCommand,
-      // Add any selected IDs here
-      selectedHypothesisId: null, // TODO: Track selected hypothesis
-      selectedLetBindingId: null, // TODO: Track selected let binding
+      [PROOF_WORKSPACE_KEYS.onDeleteHypothesis]: handleDeleteHypothesis,
+      [PROOF_WORKSPACE_KEYS.onEditLetBinding]: handleEditLetBindingCommand,
+      [PROOF_WORKSPACE_KEYS.onDeleteLetBinding]: handleDeleteLet,
     });
   }, [
     navigation.updateMetadata,
-    handleEditGoalCommand,
-    handleSetGoalCommand,
     handleClearGoalCommand,
-    handleAddHypothesisCommand,
-    handleEditHypothesisCommand,
-    handleDeleteHypothesisCommand,
-    handleAddLetBindingCommand,
     handleEditLetBindingCommand,
-    handleDeleteLetBindingCommand,
+    handleDeleteHypothesis,
+    handleDeleteLet,
   ]);
 
   const addStep = useCallback((rule: any, params?: any) => {

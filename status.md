@@ -21,17 +21,17 @@ Upleveling the core engine while preserving the current language surface:
 - Keep tightening `with` desugaring/abstraction coverage so helper tests become real end-to-end regressions
 - Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
 - Keep simplifying structured-editor command plumbing so shared metadata/command paths replace editor-specific duplicates
+- Keep turning proof-workspace keyboard navigation from placeholder wiring into real selected-item actions
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Removed dead proof-workspace command plumbing: hypothesis/let keyboard actions now use real selected-item metadata and real workspace callbacks instead of no-op handlers
+- Added shared proof-workspace selection metadata helpers plus focused regressions for command-tree behavior in `navigationCommands.test.ts` and `proofWorkspaceSelection.test.ts`
+- Let-binding rows now publish selection metadata and support keyboard selection, so let edit/delete commands are no longer permanently gated off
 - Deleted the dead `TextEditorPage.tsx.backup` snapshot and removed redundant field/constructor-specific command plumbing in the structured editors
 - Introduced shared named-item command metadata keys, so record/inductive editors and `NamedItemsSection` now use one API instead of ad hoc stringly-typed keys
 - Fixed stale structured-editor selection metadata after item removal by clearing shared selection/type-editing metadata when a section no longer has a selected item
 - Added focused regressions for the shared named-item command API and the stale-selection metadata path in `namedItemCommands.test.ts` and `NamedItemsSection.test.ts`
-- Deleted the unused exploratory `with-abstraction.ts` stack and its helper-only tests, leaving one real production `with` implementation instead of two parallel stories
-- Removed dead / redundant `with` plumbing: dropped the unused compile-side `hasScrutineeParams` helper, removed a stale scrutinee-count parameter from extraction logic, and collapsed no-op depth threading in surface scrutinee matching
-- Generalized production `with` return-type abstraction to handle computed scrutinees, not just bare variables, and fixed the binder-shifting bug that surfaced in dependent `DPair` families
-- Added direct regressions for computed-scrutinee abstraction and dependent-family binder preservation in `with.test.ts`, plus kept the nested `sigmaSum` `.tt` repro green end-to-end
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor

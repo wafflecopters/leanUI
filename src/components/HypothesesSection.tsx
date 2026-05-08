@@ -7,6 +7,7 @@ import { useNavigation } from '../contexts/NavigationContext';
 import { MathJaxExpressionRendererRaw } from './MathJaxExpressionRenderer';
 import { EditableInput } from './EditableInput';
 import { useEffect, useState } from 'react';
+import { buildHypothesisSelectionMetadata } from '../utils/proofWorkspaceSelection';
 
 interface HypothesesSectionProps {
   hypotheses: Assumption[];
@@ -46,20 +47,9 @@ export function HypothesesSection({
 
   // Sync metadata with navigation path (single source of truth)
   useEffect(() => {
-    if (selectedHypothesis && selectedIndex !== null) {
-      navigation.updateMetadata({
-        selectedHypothesisId: selectedHypothesis.id,
-        selectedHypothesisIndex: selectedIndex,
-        selectedHypothesisName: selectedHypothesis.name,
-      });
-    } else if (isInFocusChain && selectedIndex === null) {
-      // At Hypotheses root with no selection - clear metadata
-      navigation.updateMetadata({
-        selectedHypothesisId: null,
-        selectedHypothesisIndex: null,
-        selectedHypothesisName: null,
-      });
-    }
+    navigation.updateMetadata(
+      buildHypothesisSelectionMetadata(selectedHypothesis, selectedIndex, isInFocusChain)
+    );
   }, [selectedHypothesis, selectedIndex, isInFocusChain, navigation]);
 
   // Keyboard handling for digit selection and arrow keys
@@ -291,4 +281,3 @@ export function HypothesesSection({
     </div>
   );
 }
-

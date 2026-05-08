@@ -12,6 +12,7 @@ import {
   buildCommandTree,
   CommandTree,
 } from '../types/commands';
+import { PROOF_WORKSPACE_KEYS } from '../utils/proofWorkspaceSelection';
 
 /**
  * Create commands for the Goals section
@@ -22,16 +23,10 @@ function createGoalsCommands(): Command[] {
       'goals-edit',
       'e',
       'Edit',
-      (context) => {
-        // Trigger edit goal action
-        const onEditGoal = context.metadata?.onEditGoal as (() => void) | undefined;
-        onEditGoal?.();
-
-        return {
-          navigationPath: ['Goals', 'Editor'],
-          preventDefault: true,
-        };
-      },
+      () => ({
+        navigationPath: ['Goals', 'Editor'],
+        preventDefault: true,
+      }),
       {
         description: 'Edit the current goal',
       }
@@ -68,19 +63,13 @@ function createHypothesesCommands(): Command[] {
       'hypotheses-add',
       'a',
       'Add',
-      (context) => {
-        // Trigger add hypothesis action
-        const onAddHypothesis = context.metadata?.onAddHypothesis as (() => void) | undefined;
-        onAddHypothesis?.();
-
-        return {
-          navigationPath: ['Hypotheses', 'Editor'],
-          preventDefault: true,
-        };
-      },
+      () => ({
+        navigationPath: ['Hypotheses', 'Editor'],
+        preventDefault: true,
+      }),
       {
         description: 'Add a new hypothesis',
-        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId == null, // Only when nothing selected
+        isAvailable: (ctx) => ctx.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisId] == null,
       }
     ),
 
@@ -90,7 +79,7 @@ function createHypothesesCommands(): Command[] {
       'n',
       'Name',
       (context) => {
-        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        const index = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisIndex] as number | undefined;
         if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
 
         return {
@@ -100,7 +89,7 @@ function createHypothesesCommands(): Command[] {
       },
       {
         description: 'Edit hypothesis name',
-        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
+        isAvailable: (ctx) => ctx.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisId] != null,
       }
     ),
 
@@ -110,7 +99,7 @@ function createHypothesesCommands(): Command[] {
       'e',
       'Edit',
       (context) => {
-        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        const index = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisIndex] as number | undefined;
         if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
 
         return {
@@ -120,44 +109,31 @@ function createHypothesesCommands(): Command[] {
       },
       {
         description: 'Edit hypothesis expression',
-        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
+        isAvailable: (ctx) => ctx.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisId] != null,
       }
     ),
 
-    // Delete (with usage check) - only when hypothesis selected
+    // Delete - safety checks live in the workspace handler itself
     createCommand(
       'hypotheses-delete',
       'd',
       'Delete',
       (context) => {
-        const index = context.metadata?.selectedHypothesisIndex as number | undefined;
+        const selectedId = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisId] as string | null | undefined;
+        const onDeleteHypothesis = context.metadata?.[PROOF_WORKSPACE_KEYS.onDeleteHypothesis] as ((id: string) => void) | undefined;
+        const index = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisIndex] as number | undefined;
         if (index == null) return { navigationPath: context.navigationPath, preventDefault: true };
-
-        // Check if hypothesis is used
-        const onCheckUsage = context.metadata?.onCheckHypothesisUsage as ((name: string) => boolean) | undefined;
-        const hypothesisName = context.metadata?.selectedHypothesisName as string | undefined;
-
-        if (onCheckUsage && hypothesisName) {
-          const isUsed = onCheckUsage(hypothesisName);
-          if (isUsed) {
-            // Show error - hypothesis is used
-            alert(`Cannot delete hypothesis "${hypothesisName}" because it is used in other hypotheses, the goal, or the proof body.`);
-            return {
-              navigationPath: ['Hypotheses', String(index)],
-              preventDefault: true,
-            };
-          }
+        if (selectedId && onDeleteHypothesis) {
+          onDeleteHypothesis(selectedId);
         }
-
-        // Safe to delete - show confirmation
         return {
-          navigationPath: ['Hypotheses', String(index), 'Confirm Delete'],
+          navigationPath: ['Hypotheses'],
           preventDefault: true,
         };
       },
       {
-        description: 'Delete selected hypothesis (with safety check)',
-        isAvailable: (ctx) => ctx.metadata?.selectedHypothesisId != null,
+        description: 'Delete selected hypothesis',
+        isAvailable: (ctx) => ctx.metadata?.[PROOF_WORKSPACE_KEYS.selectedHypothesisId] != null,
       }
     ),
   ];
@@ -172,16 +148,10 @@ function createLetBindingsCommands(): Command[] {
       'letbindings-add',
       'a',
       'Add',
-      (context) => {
-        // Trigger add let binding action
-        const onAddLetBinding = context.metadata?.onAddLetBinding as (() => void) | undefined;
-        onAddLetBinding?.();
-
-        return {
-          navigationPath: ['Let Bindings', 'Editor'],
-          preventDefault: true,
-        };
-      },
+      () => ({
+        navigationPath: ['Let Bindings', 'Editor'],
+        preventDefault: true,
+      }),
       {
         description: 'Add a new let binding',
       }
@@ -192,20 +162,23 @@ function createLetBindingsCommands(): Command[] {
       'e',
       'Edit',
       (context) => {
-        // Trigger edit let binding action
-        const onEditLetBinding = context.metadata?.onEditLetBinding as (() => void) | undefined;
-        onEditLetBinding?.();
+        const selectedId = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedLetBindingId] as string | null | undefined;
+        const selectedIndex = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedLetBindingIndex] as number | undefined;
+        const onEditLetBinding = context.metadata?.[PROOF_WORKSPACE_KEYS.onEditLetBinding] as ((id: string) => void) | undefined;
+        if (selectedId && onEditLetBinding) {
+          onEditLetBinding(selectedId);
+        }
 
         return {
-          navigationPath: ['Let Bindings', 'Editor'],
+          navigationPath: selectedIndex == null
+            ? context.navigationPath
+            : ['Let Bindings', String(selectedIndex)],
           preventDefault: true,
         };
       },
       {
         description: 'Edit selected let binding',
-        isAvailable: (ctx) => {
-          return ctx.metadata?.selectedLetBindingId != null;
-        },
+        isAvailable: (ctx) => ctx.metadata?.[PROOF_WORKSPACE_KEYS.selectedLetBindingId] != null,
       }
     ),
 
@@ -214,20 +187,20 @@ function createLetBindingsCommands(): Command[] {
       'd',
       'Delete',
       (context) => {
-        // Trigger delete let binding action
-        const onDeleteLetBinding = context.metadata?.onDeleteLetBinding as (() => void) | undefined;
-        onDeleteLetBinding?.();
+        const selectedId = context.metadata?.[PROOF_WORKSPACE_KEYS.selectedLetBindingId] as string | null | undefined;
+        const onDeleteLetBinding = context.metadata?.[PROOF_WORKSPACE_KEYS.onDeleteLetBinding] as ((id: string) => void) | undefined;
+        if (selectedId && onDeleteLetBinding) {
+          onDeleteLetBinding(selectedId);
+        }
 
         return {
-          navigationPath: [],
+          navigationPath: ['Let Bindings'],
           preventDefault: true,
         };
       },
       {
         description: 'Delete selected let binding',
-        isAvailable: (ctx) => {
-          return ctx.metadata?.selectedLetBindingId != null;
-        },
+        isAvailable: (ctx) => ctx.metadata?.[PROOF_WORKSPACE_KEYS.selectedLetBindingId] != null,
       }
     ),
   ];

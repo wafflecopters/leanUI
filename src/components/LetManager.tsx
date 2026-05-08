@@ -13,6 +13,8 @@ import {
 import { MathJaxExpressionRenderer } from './MathJaxExpressionRenderer';
 import { FocusableSection } from './FocusableSection';
 import { HypothesesSection } from './HypothesesSection';
+import { useNavigation } from '../contexts/NavigationContext';
+import { buildLetBindingSelectionMetadata } from '../utils/proofWorkspaceSelection';
 
 interface LetManagerProps {
   letBindings: LetElement[];
@@ -63,6 +65,7 @@ export function LetManager({
   showAddLetExternal,
   onShowAddLetChange,
 }: LetManagerProps) {
+  const navigation = useNavigation();
   const [showAddLetInternal, setShowAddLetInternal] = useState(false);
   const [showAddHypothesisInternal, setShowAddHypothesisInternal] = useState(false);
   const [showEditGoalInternal, setShowEditGoalInternal] = useState(false);
@@ -82,6 +85,15 @@ export function LetManager({
   const [hypothesisName, setHypothesisName] = useState('');
   const [hypothesisExpression, setHypothesisExpression] = useState('');
   const [hypothesisDescription, setHypothesisDescription] = useState('');
+  const navPath = navigation.state.navigationPath;
+  const isLetBindingsInFocusChain = navPath[0] === 'Let Bindings';
+  const isLetBindingsActive = navPath.length === 1 && navPath[0] === 'Let Bindings';
+  const selectedLetBindingIndex = navPath.length >= 2 && navPath[0] === 'Let Bindings' && /^\d+$/.test(navPath[1])
+    ? parseInt(navPath[1], 10)
+    : null;
+  const selectedLetBinding = selectedLetBindingIndex !== null && selectedLetBindingIndex < letBindings.length
+    ? letBindings[selectedLetBindingIndex]
+    : null;
 
   // Auto-focus goal input when opening goal editor and initialize value
   useEffect(() => {
@@ -94,6 +106,54 @@ export function LetManager({
       }, 0);
     }
   }, [showEditGoal, goal]);
+
+  useEffect(() => {
+    navigation.updateMetadata(
+      buildLetBindingSelectionMetadata(selectedLetBinding, selectedLetBindingIndex, isLetBindingsInFocusChain)
+    );
+  }, [navigation, selectedLetBinding, selectedLetBindingIndex, isLetBindingsInFocusChain]);
+
+  useEffect(() => {
+    if (!isLetBindingsActive) {
+      return;
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        if (letBindings.length === 0) return;
+        const newIndex = selectedLetBindingIndex === null ? 0 : (selectedLetBindingIndex + 1) % letBindings.length;
+        navigation.navigateTo(['Let Bindings', String(newIndex)]);
+        e.preventDefault();
+        return;
+      }
+
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        if (letBindings.length === 0) return;
+        const newIndex = selectedLetBindingIndex === null
+          ? letBindings.length - 1
+          : (selectedLetBindingIndex - 1 + letBindings.length) % letBindings.length;
+        navigation.navigateTo(['Let Bindings', String(newIndex)]);
+        e.preventDefault();
+        return;
+      }
+
+      if (/^[0-9]$/.test(e.key)) {
+        const index = parseInt(e.key, 10);
+        if (index >= 0 && index < letBindings.length) {
+          navigation.navigateTo(['Let Bindings', String(index)]);
+        }
+        e.preventDefault();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLetBindingsActive, letBindings.length, navigation, selectedLetBindingIndex]);
 
   const handleAddLetWithMode = (mode: TermEditorMode) => {
     try {
@@ -843,14 +903,16 @@ export function LetManager({
           {letBindings.map(letBinding => (
             <div
               key={letBinding.id}
+              onClick={() => navigation.navigateTo(['Let Bindings', String(letBindings.findIndex(l => l.id === letBinding.id))])}
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
                 padding: '8px',
                 backgroundColor: '#fff',
-                border: '1px solid #dee2e6',
-                borderRadius: '4px'
+                border: selectedLetBinding?.id === letBinding.id ? '2px solid #2845a7' : '1px solid #dee2e6',
+                borderRadius: '4px',
+                cursor: 'pointer'
               }}
             >
               <div style={{ flex: 1 }}>
@@ -899,7 +961,11 @@ export function LetManager({
                 ) : (
                   <div
                     style={{ marginTop: '4px', paddingLeft: '20px', cursor: 'pointer' }}
-                    onClick={() => onActivateLetEditor && onActivateLetEditor(letBinding.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigation.navigateTo(['Let Bindings', String(letBindings.findIndex(l => l.id === letBinding.id))]);
+                      onActivateLetEditor?.(letBinding.id);
+                    }}
                     title="Click to edit this let-binding's value"
                   >
                     <MathJaxExpressionRenderer
