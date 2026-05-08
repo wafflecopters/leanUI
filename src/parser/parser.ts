@@ -4763,9 +4763,11 @@ export class Parser {
    * Parse a number literal - returns a Nat-like constant
    */
   private parseNumberLiteral(value: string): TTerm {
-    // For now, represent numbers as constants
-    // In a full implementation, we'd build Nat.succ chains
-    return mkConstTT(value);
+    // Numeric literals become NatLit (BigInt) — the kernel iota-view rule
+    // expands them to Zero/Succ at use sites if a @impl=nat type is registered.
+    // Implicit coercion to other numeric types (Real, Int, ...) is handled by
+    // the elaborator via @ofNat protocol (Phase 3).
+    return { tag: 'NatLit', value: BigInt(value) };
   }
 
   /**

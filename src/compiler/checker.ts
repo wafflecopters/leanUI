@@ -483,6 +483,36 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     throw TCEnvError.create(`Unknown metavariable: ${env.value.id}`, env);
   }
 
+  if (env.value.tag === 'NatLit') {
+    // ────────────────────────────────────────────────────────────────
+    // (NATLIT) - Natural number literal
+    //
+    // A NatLit infers as the inductive type registered with @impl=nat.
+    // If exactly one is registered, use it directly. If none, error.
+    // (Phase 3 will add @ofNat coercion for non-nat targets.)
+    // ────────────────────────────────────────────────────────────────
+    const reg = env.definitions.natImplByCtor;
+    if (reg && reg.size > 0) {
+      // Collect distinct NatImpls (each impl appears under both ctors)
+      const impls = new Set<string>();
+      for (const impl of reg.values()) impls.add(impl.inductiveName);
+      if (impls.size === 1) {
+        const indName = [...impls][0];
+        const natType: TTKTerm = { tag: 'Const', name: indName };
+        env.recordTypeInfo(natType);
+        return env.withValue(natType);
+      }
+      throw TCEnvError.create(
+        `Cannot infer type for numeric literal ${env.value.value}: multiple @impl=nat types in scope (${[...impls].join(', ')}). Add a type annotation.`,
+        env,
+      );
+    }
+    throw TCEnvError.create(
+      `Cannot infer type for numeric literal ${env.value.value}: no @impl=nat type registered. Declare an inductive with @syntax @impl=nat or use a type annotation.`,
+      env,
+    );
+  }
+
   throw TCEnvError.create(`Inference not implemented for term type ${env.value.tag}`, env)
 }
 

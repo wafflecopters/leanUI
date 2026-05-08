@@ -489,6 +489,9 @@ export function adjustRhsWithMapping(
       case 'TacticBlock':
         return term;
 
+      case 'NatLit':
+        return term;
+
       default: {
         const _never: never = term;
         throw new Error(`Unreachable code: ${_never}`);

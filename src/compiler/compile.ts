@@ -3743,6 +3743,8 @@ function substituteInheritedFieldRefs(
             args: cmd.args.map(arg => transform(arg, depth))
           }))
         };
+      case 'NatLit':
+        return t;
       default: {
         const _exhaustive: never = t;
         return _exhaustive;
@@ -4735,6 +4737,7 @@ function substituteHoles(term: TTerm, substitutions: Map<string, TTerm>): TTerm 
     case 'ULevel':
     case 'ULit':
     case 'UOmega':
+    case 'NatLit':
       return term;
     case 'App':
       return mkAppTT(
@@ -5229,11 +5232,10 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
     constructorParamNames = result.newConstructorParamNames;
     totalCheckErrors += result.checkErrorCount;
     totalNameErrors += result.nameErrorCount;
+    // Register @impl=ROLE annotations EAGERLY (so subsequent blocks can use the
+    // resulting kernel features, e.g., NatLit literals after @impl=nat declared).
+    applyImplAnnotationsForBlock(result.compiled, definitions);
   }
-
-  // Process @syntax @impl=ROLE annotations for kernel-level role registration.
-  // E.g., @impl=nat populates the NatImpl registry so iota-view rules apply.
-  applyImplAnnotations(compiledBlocks, definitions);
 
   return {
     success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
@@ -5246,28 +5248,34 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
 }
 
 /**
- * Scan compiled declarations for `@syntax @impl=ROLE` annotations and apply
- * them to the kernel registries (e.g., NatImpl for `@impl=nat`).
- * Mutates `definitions` in place.
+ * Apply @impl=ROLE annotations from a single compiled block. Called eagerly
+ * after each block compiles so subsequent blocks can use resulting features
+ * (e.g., NatLit literals after @impl=nat is declared).
+ */
+function applyImplAnnotationsForBlock(block: CompiledBlock, definitions: DefinitionsMap): void {
+  const implRegex = /^@impl=([a-zA-Z][a-zA-Z0-9_]*)$/;
+  for (const decl of block.declarations) {
+    if (!decl.syntax || !decl.name) continue;
+    const m = decl.syntax.trim().match(implRegex);
+    if (!m) continue;
+    const role = m[1];
+    if (role === 'nat') {
+      const err = registerNatImpl(definitions, decl.name);
+      if (err) {
+        console.warn(`@impl=nat verification failed for '${decl.name}': ${err}`);
+      }
+    }
+    // Future: @impl=string, @impl=list, etc.
+  }
+}
+
+/**
+ * Apply @impl=ROLE annotations across all blocks. Used by incremental compile
+ * which doesn't drive the per-block loop with fresh registration.
  */
 function applyImplAnnotations(blocks: CompiledBlock[], definitions: DefinitionsMap): void {
-  const implRegex = /^@impl=([a-zA-Z][a-zA-Z0-9_]*)$/;
   for (const block of blocks) {
-    for (const decl of block.declarations) {
-      if (!decl.syntax || !decl.name) continue;
-      const m = decl.syntax.trim().match(implRegex);
-      if (!m) continue;
-      const role = m[1];
-      if (role === 'nat') {
-        const err = registerNatImpl(definitions, decl.name);
-        if (err) {
-          // Surface as a check error on the declaration's line
-          // For now, just log — the declaration is still valid; only the registry op failed
-          console.warn(`@impl=nat verification failed for '${decl.name}': ${err}`);
-        }
-      }
-      // Future: @impl=string, @impl=list, etc.
-    }
+    applyImplAnnotationsForBlock(block, definitions);
   }
 }
 

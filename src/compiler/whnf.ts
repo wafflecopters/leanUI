@@ -90,7 +90,26 @@ function matchPattern(pattern: TTKPattern, term: TTKTerm, ctx?: WhnfContext): TT
 
     case 'PCtor': {
       // Reduce term to whnf and collect spine
-      const reduced = whnf(term, ctx);
+      let reduced = whnf(term, ctx);
+
+      // NatLit iota-view: if the term reduced to a NatLit and this pattern
+      // matches a registered @impl=nat ctor, expand the literal so the
+      // PCtor pattern can match it.
+      if (reduced.tag === 'NatLit' && ctx?.definitions?.natImplByCtor) {
+        const impl = ctx.definitions.natImplByCtor.get(pattern.name);
+        if (impl) {
+          if (reduced.value === 0n) {
+            reduced = { tag: 'Const', name: impl.zeroCtor };
+          } else {
+            reduced = {
+              tag: 'App',
+              fn: { tag: 'Const', name: impl.succCtor },
+              arg: { tag: 'NatLit', value: reduced.value - 1n },
+            };
+          }
+        }
+      }
+
       const { head, args } = collectAppSpine(reduced);
 
       // Constructor pattern matches if head is same constructor

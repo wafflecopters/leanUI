@@ -1,0 +1,7 @@
+@test success
+@name "NatLit: simplest test"
+@import preambles/nat.tt
+
+-- Most basic test: just give 0 a type
+zero_lit : Nat
+zero_lit = 0

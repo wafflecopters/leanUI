@@ -298,6 +298,9 @@ export function prettyPrintTerm(term: TTerm): string {
     case 'TacticBlock':
       return '#tactics';
 
+    case 'NatLit':
+      return term.value.toString();
+
     default: {
       const _never: never = term;
       throw new Error(`Unreachable code: ${_never}`);

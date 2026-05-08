@@ -1388,6 +1388,9 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
     case 'TacticBlock':
       return term;
 
+    case 'NatLit':
+      return term;
+
     default: {
       const _never: never = term;
       throw new Error(`Unreachable code: ${_never}`);
@@ -2002,6 +2005,9 @@ function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTK
     case 'TacticBlock':
       throw new Error('TacticBlock should be elaborated to a kernel term before reaching elabToKernel');
 
+    case 'NatLit':
+      return { tag: 'NatLit', value: term.value };
+
     default: {
       const _never: never = term;
       throw new Error(`Unreachable code: ${_never}`);
@@ -2231,6 +2237,9 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
 
       case 'TacticBlock':
         throw new Error('TacticBlock should be elaborated to a kernel term before reaching elabToKernelWithNamedArgs');
+
+      case 'NatLit':
+        return { tag: 'NatLit', value: t.value };
 
       default: {
         const _never: never = t;
@@ -2778,6 +2787,9 @@ export function elabToKernelWithMap(
 
     case 'TacticBlock':
       throw new Error('TacticBlock should be elaborated to a kernel term before reaching elabToKernelWithMap');
+
+    case 'NatLit':
+      return { tag: 'NatLit', value: term.value };
 
     default: {
       const _never: never = term;

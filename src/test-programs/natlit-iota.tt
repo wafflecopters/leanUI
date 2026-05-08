@@ -1,0 +1,23 @@
+@test success
+@name "NatLit iota: pattern match against literal"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Test that NatLit literals iota-reduce against Zero/Succ patterns.
+-- isZero 0 should reduce to True; isZero (any positive) to False.
+
+inductive Bool : Type where
+  True : Bool
+  False : Bool
+
+isZero : Nat -> Bool
+isZero Zero = True
+isZero (Succ _) = False
+
+-- Test1: isZero 0 = True (NatLit 0 should iota-view as Zero)
+test_zero : Equal (isZero 0) True
+test_zero = refl
+
+-- Test2: isZero 5 = False (NatLit 5 should iota-view through Succ Succ ... Zero to False)
+test_five : Equal (isZero 5) False
+test_five = refl

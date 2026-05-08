@@ -2877,9 +2877,9 @@ describe('PREFIX_PARSELETS Table Dispatch', () => {
 
   test('Table dispatch: NUMBER -> parseNumberLiteral', () => {
     const term = parseExpr('42');
-    assertTermShape(term, 'Const');
-    if (term.tag === 'Const') {
-      expect(term.name).toBe('42');
+    assertTermShape(term, 'NatLit');
+    if (term.tag === 'NatLit') {
+      expect(term.value).toBe(42n);
     }
   });
 
