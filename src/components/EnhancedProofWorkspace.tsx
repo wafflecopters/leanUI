@@ -6,10 +6,8 @@ import {
   Assumption,
   ProofContext,
   getNodeAtPath,
-  setNodeAtPath,
   astToString,
   ENHANCED_FOCUS_RULES,
-  createTransformationEquationElement,
   createCommentElement,
   LetElement,
   parseExpressionToAST,
@@ -31,6 +29,10 @@ import { NavigationProvider, useNavigation } from '../contexts/NavigationContext
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
 import { createApplicationCommandTree } from '../config/navigationCommands';
 import { PROOF_WORKSPACE_KEYS } from '../utils/proofWorkspaceSelection';
+import {
+  applyFocusedExpressionRule,
+  updateLetBindingAfterTransformation,
+} from '../utils/proofWorkspaceTransforms';
 
 interface EnhancedProofStep {
   id: string;
@@ -830,11 +832,15 @@ function EnhancedProofWorkspaceInner() {
     }
 
     try {
-      const result = rule.applyRule(focusedNode, currentExpression, params, metadata);
-      const newExpression = setNodeAtPath(currentExpression, focusPath, result.newNode);
-
-      // Update the raw string of the new expression
-      newExpression.raw = astToString(newExpression);
+      const transformation = applyFocusedExpressionRule(
+        rule,
+        focusedNode,
+        currentExpression,
+        focusPath,
+        metadata,
+        params
+      );
+      const { newExpression, equationElement, newAssumptions, description } = transformation;
 
       const newStep: EnhancedProofStep = {
         id: crypto.randomUUID(),
@@ -842,9 +848,9 @@ function EnhancedProofWorkspaceInner() {
         focusPath: [...focusPath],
         rule,
         ruleParams: params,
-        newAssumptions: result.newAssumptions,
+        newAssumptions,
         timestamp: Date.now(),
-        description: `Applied ${rule.displayName} to "${focusedNode.raw}"`
+        description,
       };
 
       // Update the current expression
@@ -852,13 +858,6 @@ function EnhancedProofWorkspaceInner() {
       setSteps(prev => [...prev, newStep]);
 
       // Create equation element for the transformation
-      const equationElement = createTransformationEquationElement(
-        currentExpression,   // previous expression (the one we transformed)
-        newExpression,      // new expression (after transformation)
-        rule.displayName,
-        rule.id
-      );
-
       // ====================================================================
       // NEW: Apply rule to focused hole using equality proof system
       // ====================================================================
@@ -983,9 +982,9 @@ function EnhancedProofWorkspaceInner() {
       console.log('  New expression:', astToString(newExpression));
 
       // Add new assumptions to context
-      if (result.newAssumptions && result.newAssumptions.length > 0) {
+      if (newAssumptions && newAssumptions.length > 0) {
         // Add each new assumption to the type signature
-        result.newAssumptions.forEach((assumption: Assumption) => {
+        newAssumptions.forEach((assumption: Assumption) => {
           handleAddHypothesis(assumption);
         });
       }
@@ -1140,9 +1139,52 @@ function EnhancedProofWorkspaceInner() {
   }, [letValueExpression, letValueFocusedNode, metadata]);
 
   const handleLetValueRuleApplication = useCallback((rule: ExtendedRule, params?: any) => {
-    // TODO: Apply the rule to transform the let value
-    alert(`TODO: Apply rule "${rule.displayName}" to let value\n\nRule ID: ${rule.id}\nIs Reverse: ${rule.isReverse}\nParams: ${JSON.stringify(params, null, 2)}`);
-  }, []);
+    if (!activeLetBinding || !letValueExpression || !letValueFocusedNode) {
+      alert('No active let-binding focus to apply rule to');
+      return;
+    }
+
+    try {
+      const transformation = applyFocusedExpressionRule(
+        rule,
+        letValueFocusedNode,
+        letValueExpression,
+        focusPath,
+        metadata,
+        params
+      );
+      const { newExpression, equationElement, newAssumptions } = transformation;
+
+      setLetBindings(prev =>
+        updateLetBindingAfterTransformation(prev, activeLetBinding.id, newExpression, equationElement)
+      );
+
+      const newValueTT = expressionNodeToTTerm(newExpression);
+      setRootDefinition(prev => ({
+        ...prev,
+        value: updateLetValueInRootDefinition(prev.value, activeLetBinding.name, newValueTT),
+      }));
+
+      if (newAssumptions && newAssumptions.length > 0) {
+        newAssumptions.forEach((assumption: Assumption) => {
+          handleAddHypothesis(assumption);
+        });
+      }
+    } catch (error) {
+      console.error('Error applying let-binding rule:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const focusedNodeStr = letValueFocusedNode ? astToString(letValueFocusedNode) : 'unknown expression';
+      alert(`Error applying rule "${rule.displayName}" to let-binding "${activeLetBinding.name}" at "${focusedNodeStr}":\n\n${errorMessage}`);
+    }
+  }, [
+    activeLetBinding,
+    focusPath,
+    handleAddHypothesis,
+    letValueExpression,
+    letValueFocusedNode,
+    metadata,
+    updateLetValueInRootDefinition,
+  ]);
 
   return (
     <NavigationFooterSpacer>

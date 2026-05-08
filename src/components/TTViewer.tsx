@@ -341,6 +341,8 @@ function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm,
   // For let bindings without type annotation, use a placeholder type
   const bindingType = binderTerm.domain ?? { tag: 'Hole' as const, id: '_', type: { tag: 'Sort' as const, level: mkULitTT(0) }, context: [] };
   const extendedContext: TContext = [{ name: binderTerm.name, type: bindingType }, ...context];
+  const binderDomain = binderTerm.domain ? <PrintedTerm term={binderTerm.domain} context={context} /> : null;
+  const binderLabel = binderTerm.named ? `{${binderTerm.name}}` : binderTerm.name;
 
   if (binderTerm.binderKind.tag === 'BLetTT') {
     return (
@@ -362,7 +364,27 @@ function PrintedBinderTerm({ binderTerm, context }: { binderTerm: Extract<TTerm,
         </div>
       </div>
     )
-  } else {
-    return <div>{`TODO-Binder-${binderTerm.binderKind.tag}`}</div>
+  } else if (binderTerm.binderKind.tag === 'BLamTT') {
+    return (
+      <div>
+        <div style={{ display: 'flex', flexDirection: 'row', gap: '4px', alignItems: 'center' }}>
+          {binderDomain ? (
+            <>
+              <span>λ({binderLabel} :</span>
+              {binderDomain}
+              <span>) =&gt;</span>
+              <PrintedTerm term={binderTerm.body} context={extendedContext} />
+            </>
+          ) : (
+            <>
+              <span>λ{binderLabel} =&gt;</span>
+              <PrintedTerm term={binderTerm.body} context={extendedContext} />
+            </>
+          )}
+        </div>
+      </div>
+    )
   }
+
+  return null;
 }
