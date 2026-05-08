@@ -703,16 +703,12 @@ function spliceScrutineesIntoType(
       const scrut = scrutinees[i];
       const scrutType = scrutineeTypes[i];
 
-      // Only abstract over variable scrutinees for now
-      // (Complex expression abstraction is future work)
-      if (scrut.tag === 'Var') {
-        // Replace all occurrences of this variable with Var 0 (the fresh binder)
-        // This also shifts other free variables
-        result = replaceScrutineeInTTerm(result, scrut);
-      } else {
-        // For non-variable scrutinees, just shift free vars (no abstraction)
-        result = shiftVars(result, 1);
-      }
+      // Abstract over every scrutinee expression, not just bare variables.
+      // This is the core Agda-style with-abstraction step: occurrences of the
+      // scrutinee in the return type become references to the fresh with-binder.
+      // When the scrutinee does not occur, replaceScrutineeInTTerm still performs
+      // the required free-variable shift for the newly introduced binder.
+      result = replaceScrutineeInTTerm(result, scrut);
 
       // Add the scrutinee binder with correct numbering (offset by existing scrutinees)
       const scrutineeIndex = scrutineeIndexOffset + i;
@@ -751,11 +747,7 @@ function spliceScrutineesIntoType(
     const scrut = scrutinees[i];
     const scrutType = scrutineeTypes[i];
 
-    if (scrut.tag === 'Var') {
-      result = replaceScrutineeInTTerm(result, scrut);
-    } else {
-      result = shiftVars(result, 1);
-    }
+    result = replaceScrutineeInTTerm(result, scrut);
 
     const scrutineeIndex = scrutineeIndexOffset + i;
     result = mkPiTT(scrutType, result, `_scrut${scrutineeIndex}`);
@@ -923,8 +915,12 @@ function replaceScrutineeInTTerm(
   // Otherwise, recurse and shift free variables
   switch (term.tag) {
     case 'Var':
-      // Shift free variables to account for new binder
-      return mkVarTT(term.index + 1);
+      // Only shift variables that are free at the current depth. Variables
+      // bound by surrounding binders must keep their local meaning.
+      if (term.index >= depth) {
+        return mkVarTT(term.index + 1);
+      }
+      return term;
 
     case 'Const':
     case 'Sort':
