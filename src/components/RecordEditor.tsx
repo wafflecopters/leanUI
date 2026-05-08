@@ -21,12 +21,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
-import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
+import { buildCommandTree, createCommand, createEscapeCommand, createSectionCommand, Command } from '../types/commands';
 import { TTerm, mkTypeTT, RecordDef as TTRecordDef, prettyPrintLatexTT as ttPrettyPrintLatex, LatexPrintOptions } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { FieldsSection, Field, createDefaultField } from './FieldsSection';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
+import { createNamedItemCommands, NAMED_ITEM_KEYS } from '../utils/namedItemCommands';
 import { TTExamples, TTExampleRecordTypeName } from '../compiler/examples';
 import { inlineExtension, elabRecordFull, createRecordRegistry, type TTKRecordDef } from '../compiler/elab';
 import { prettyPrintLatex as ttkPrettyPrintLatex } from '../compiler/kernel';
@@ -419,13 +420,8 @@ function RecordEditorInner() {
     const metadata: Record<string, unknown> = {
       onEditName: handleEditName,
       onEditType: handleEditType,
-      typeFocusPath,
-      setTypeFocusPath,
-      recordType: recordDef.type,
-      setRecordType: (newType: TTerm) => setRecordDef(prev => ({ ...prev, type: newType })),
-      // Field handlers
-      onAddField: handleAddField,
-      onDeleteField: handleDeleteField,
+      [NAMED_ITEM_KEYS.onAddItem]: handleAddField,
+      [NAMED_ITEM_KEYS.onDeleteItem]: handleDeleteField,
     };
 
     // Populate TYPE_EDITING_KEYS when editing the record type
@@ -617,8 +613,6 @@ function RecordEditorInner() {
           <FieldsSection
             fields={recordDef.fields}
             onUpdateField={handleUpdateField}
-            onAddField={handleAddField}
-            onDeleteField={handleDeleteField}
             paramContext={recordDef.params.map(p => p.name)}
           />
         </div>
@@ -638,85 +632,10 @@ function RecordEditorInner() {
  * Commands available when in the Fields section
  */
 function createFieldCommands(): Command[] {
-  return [
-    // 'a' - Add field
-    createCommand(
-      'add-field',
-      'a',
-      'Add',
-      (context) => {
-        const onAddField = context.metadata?.onAddField as (() => void) | undefined;
-        onAddField?.();
-        return { preventDefault: true };
-      },
-      {
-        description: 'Add a new field',
-      }
-    ),
-
-    // 'n' - Edit selected field name
-    createCommand(
-      'edit-field-name',
-      'n',
-      'Name',
-      (context) => {
-        const selectedIndex = context.metadata?.selectedItemIndex as number | undefined;
-        if (selectedIndex === undefined) return { preventDefault: true };
-
-        return {
-          navigationPath: ['Fields', String(selectedIndex), 'EditName'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Edit field name',
-        isAvailable: (context) => context.metadata?.selectedItemIndex !== undefined,
-      }
-    ),
-
-    // 't' - Edit selected field type
-    createCommand(
-      'edit-field-type',
-      't',
-      'Type',
-      (context) => {
-        const selectedIndex = context.metadata?.selectedItemIndex as number | undefined;
-        if (selectedIndex === undefined) return { preventDefault: true };
-
-        return {
-          navigationPath: ['Fields', String(selectedIndex), 'Type'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Edit field type',
-        isAvailable: (context) => context.metadata?.selectedItemIndex !== undefined,
-        children: createSharedTypeEditingCommands(),
-      }
-    ),
-
-    // 'd' - Delete selected field
-    createCommand(
-      'delete-field',
-      'd',
-      'Delete',
-      (context) => {
-        const selectedId = context.metadata?.selectedItemId as string | undefined;
-        const onDeleteField = context.metadata?.onDeleteField as ((id: string) => void) | undefined;
-        if (selectedId && onDeleteField) {
-          onDeleteField(selectedId);
-        }
-        return {
-          navigationPath: ['Fields'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Delete selected field',
-        isAvailable: (context) => context.metadata?.selectedItemIndex !== undefined,
-      }
-    ),
-  ];
+  return createNamedItemCommands({
+    itemKind: 'field',
+    sectionName: 'Fields',
+  });
 }
 
 /**
@@ -767,14 +686,11 @@ function createRecordCommandTree() {
     ),
 
     // 'f' - Focus on fields
-    createCommand(
+    createSectionCommand(
       'focus-fields',
       'f',
       'Fields',
-      () => ({
-        navigationPath: ['Fields'],
-        preventDefault: true,
-      }),
+      'Fields',
       {
         description: 'Navigate to fields',
         children: createFieldCommands(),
@@ -802,4 +718,3 @@ export function RecordEditor() {
     </NavigationProvider>
   );
 }
-

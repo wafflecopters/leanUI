@@ -1,12 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { NavigationProvider, useNavigation } from '../contexts/NavigationContext';
 import { NavigationFooter, NavigationFooterSpacer } from './NavigationFooter';
-import { buildCommandTree, createCommand, createEscapeCommand, Command } from '../types/commands';
+import { buildCommandTree, createCommand, createEscapeCommand, createSectionCommand, Command } from '../types/commands';
 import { TTerm, mkTypeTT } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TTermRenderer } from './TTermRenderer';
 import { ConstructorsSection, Constructor, createConstructorForInductive } from './ConstructorsSection';
 import { createTypeEditingCommands as createSharedTypeEditingCommands, TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
+import { createNamedItemCommands, NAMED_ITEM_KEYS } from '../utils/namedItemCommands';
 import { TTExamples, TTExampleTypeName } from '../compiler/examples';
 
 interface InductiveTypeDef {
@@ -119,14 +120,8 @@ function InductiveTypeEditorInner() {
     const metadata: Record<string, unknown> = {
       onEditName: handleEditName,
       onEditType: handleEditType,
-      // Legacy keys (for any remaining old code)
-      typeFocusPath,
-      setTypeFocusPath,
-      inductiveType: inductiveDef.type,
-      setInductiveType: (newType: TTerm) => setInductiveDef(prev => ({ ...prev, type: newType })),
-      // Constructor handlers
-      onAddConstructor: handleAddConstructor,
-      onDeleteConstructor: handleDeleteConstructor,
+      [NAMED_ITEM_KEYS.onAddItem]: handleAddConstructor,
+      [NAMED_ITEM_KEYS.onDeleteItem]: handleDeleteConstructor,
     };
 
     // Only populate TYPE_EDITING_KEYS when we're at the inductive type level
@@ -279,8 +274,6 @@ function InductiveTypeEditorInner() {
           <ConstructorsSection
             constructors={inductiveDef.constructors}
             onUpdateConstructor={handleUpdateConstructor}
-            onAddConstructor={handleAddConstructor}
-            onDeleteConstructor={handleDeleteConstructor}
           />
         </div>
 
@@ -303,85 +296,10 @@ function InductiveTypeEditorInner() {
  * Commands available when in the Constructors section
  */
 function createConstructorCommands(): Command[] {
-  return [
-    // 'a' - Add constructor
-    createCommand(
-      'add-constructor',
-      'a',
-      'Add',
-      (context) => {
-        const onAddConstructor = context.metadata?.onAddConstructor as (() => void) | undefined;
-        onAddConstructor?.();
-        return { preventDefault: true };
-      },
-      {
-        description: 'Add a new constructor',
-      }
-    ),
-
-    // 'n' - Edit selected constructor name
-    createCommand(
-      'edit-constructor-name',
-      'n',
-      'Name',
-      (context) => {
-        const selectedIndex = context.metadata?.selectedConstructorIndex as number | undefined;
-        if (selectedIndex === undefined) return { preventDefault: true };
-
-        return {
-          navigationPath: ['Constructors', String(selectedIndex), 'EditName'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Edit constructor name',
-        isAvailable: (context) => context.metadata?.selectedConstructorIndex !== undefined,
-      }
-    ),
-
-    // 't' - Edit selected constructor type
-    createCommand(
-      'edit-constructor-type',
-      't',
-      'Type',
-      (context) => {
-        const selectedIndex = context.metadata?.selectedConstructorIndex as number | undefined;
-        if (selectedIndex === undefined) return { preventDefault: true };
-
-        return {
-          navigationPath: ['Constructors', String(selectedIndex), 'Type'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Edit constructor type',
-        isAvailable: (context) => context.metadata?.selectedConstructorIndex !== undefined,
-        children: createSharedTypeEditingCommands(),
-      }
-    ),
-
-    // 'd' - Delete selected constructor
-    createCommand(
-      'delete-constructor',
-      'd',
-      'Delete',
-      (context) => {
-        const selectedId = context.metadata?.selectedConstructorId as string | undefined;
-        const onDeleteConstructor = context.metadata?.onDeleteConstructor as ((id: string) => void) | undefined;
-        if (selectedId && onDeleteConstructor) {
-          onDeleteConstructor(selectedId);
-        }
-        return {
-          navigationPath: ['Constructors'],
-          preventDefault: true,
-        };
-      },
-      {
-        description: 'Delete selected constructor',
-        isAvailable: (context) => context.metadata?.selectedConstructorIndex !== undefined,
-      }
-    ),
-  ];
+  return createNamedItemCommands({
+    itemKind: 'constructor',
+    sectionName: 'Constructors',
+  });
 }
 
 
@@ -433,14 +351,11 @@ function createInductiveTypeCommandTree() {
     ),
 
     // 'c' - Focus on constructors
-    createCommand(
+    createSectionCommand(
       'focus-constructors',
       'c',
       'Constructors',
-      () => ({
-        navigationPath: ['Constructors'],
-        preventDefault: true,
-      }),
+      'Constructors',
       {
         description: 'Navigate to constructors',
         children: createConstructorCommands(),

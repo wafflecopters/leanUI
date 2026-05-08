@@ -20,17 +20,18 @@ Upleveling the core engine while preserving the current language surface:
 - Preserve useful editor/type-info output even when clause checking later fails
 - Keep tightening `with` desugaring/abstraction coverage so helper tests become real end-to-end regressions
 - Keep shrinking duplicated `Match`/clause helper logic across kernel, surface, compiler, and tactics
+- Keep simplifying structured-editor command plumbing so shared metadata/command paths replace editor-specific duplicates
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Deleted the dead `TextEditorPage.tsx.backup` snapshot and removed redundant field/constructor-specific command plumbing in the structured editors
+- Introduced shared named-item command metadata keys, so record/inductive editors and `NamedItemsSection` now use one API instead of ad hoc stringly-typed keys
+- Fixed stale structured-editor selection metadata after item removal by clearing shared selection/type-editing metadata when a section no longer has a selected item
+- Added focused regressions for the shared named-item command API and the stale-selection metadata path in `namedItemCommands.test.ts` and `NamedItemsSection.test.ts`
 - Deleted the unused exploratory `with-abstraction.ts` stack and its helper-only tests, leaving one real production `with` implementation instead of two parallel stories
 - Removed dead / redundant `with` plumbing: dropped the unused compile-side `hasScrutineeParams` helper, removed a stale scrutinee-count parameter from extraction logic, and collapsed no-op depth threading in surface scrutinee matching
 - Generalized production `with` return-type abstraction to handle computed scrutinees, not just bare variables, and fixed the binder-shifting bug that surfaced in dependent `DPair` families
 - Added direct regressions for computed-scrutinee abstraction and dependent-family binder preservation in `with.test.ts`, plus kept the nested `sigmaSum` `.tt` repro green end-to-end
-- Re-verified the worktree with full `tsc --noEmit` and full `vitest run src` after the cleanup pass
-- Moved clause-pattern type-info recording earlier in `checkMatchClause`, so failing with-clauses still expose useful cursor/type info
-- Turned the old `No neq` with-clause type-info TODOs into real regressions, plus adjacent branch-selection coverage
-- Replaced the old parser-side `with` WIP smoke test with real assertions, including multi-scrutinee comma syntax coverage
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
@@ -38,6 +39,7 @@ Upleveling the core engine while preserving the current language surface:
 - Decide whether any remaining ill-typed abstraction cases need dedicated production rejection beyond the current checker/desugaring behavior
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts
 - Choose the next large implementation TODO to burn down: `bridge.ts` proof terms, `record.ts` checking, or editor-side tactic workspace gaps
+- Keep burning down editor-side TODOs and duplicate command plumbing in `EnhancedProofWorkspace` and related structured-editor components
 - Add more semantic dependency edges to the incremental checker beyond token-level references
 - Unify `cases` / `induction` case-goal computation between tactics and proof-tree replay
 - Prove `limit_pull_scalar`: `c * lim f = lim (c * f)`

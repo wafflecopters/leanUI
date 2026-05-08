@@ -18,6 +18,7 @@ import { TTermRenderer } from './TTermRenderer';
 import { TTerm } from '../compiler/surface';
 import { TermFocusPath } from '../utils/termNavigation';
 import { TYPE_EDITING_KEYS } from '../utils/typeEditingCommands';
+import { NAMED_ITEM_KEYS } from '../utils/namedItemCommands';
 
 // ============================================================================
 // Types
@@ -79,6 +80,50 @@ interface NamedItemsSectionProps<T extends NamedTypedItem> {
   config: NamedItemsSectionConfig;
 }
 
+interface BuildNamedItemSectionMetadataArgs<T extends NamedTypedItem> {
+  navigationKey: string;
+  onUpdateItem: (id: string, updated: T) => void;
+  selectedIndex: number | null;
+  selectedItem: T | null;
+  setTypeFocusPath: (path: TermFocusPath) => void;
+  typeFocusPath: TermFocusPath;
+}
+
+export function buildNamedItemSectionMetadata<T extends NamedTypedItem>({
+  navigationKey,
+  onUpdateItem,
+  selectedIndex,
+  selectedItem,
+  setTypeFocusPath,
+  typeFocusPath,
+}: BuildNamedItemSectionMetadataArgs<T>): Record<string, unknown> {
+  if (!selectedItem || selectedIndex === null) {
+    return {
+      [NAMED_ITEM_KEYS.selectedItemId]: undefined,
+      [NAMED_ITEM_KEYS.selectedItemIndex]: undefined,
+      [TYPE_EDITING_KEYS.term]: undefined,
+      [TYPE_EDITING_KEYS.focusPath]: undefined,
+      [TYPE_EDITING_KEYS.setTerm]: undefined,
+      [TYPE_EDITING_KEYS.setFocusPath]: undefined,
+      [TYPE_EDITING_KEYS.returnPath]: undefined,
+    };
+  }
+
+  const setItemType = (newType: TTerm) => {
+    onUpdateItem(selectedItem.id, { ...selectedItem, type: newType } as T);
+  };
+
+  return {
+    [NAMED_ITEM_KEYS.selectedItemId]: selectedItem.id,
+    [NAMED_ITEM_KEYS.selectedItemIndex]: selectedIndex,
+    [TYPE_EDITING_KEYS.term]: selectedItem.type,
+    [TYPE_EDITING_KEYS.focusPath]: typeFocusPath,
+    [TYPE_EDITING_KEYS.setTerm]: setItemType,
+    [TYPE_EDITING_KEYS.setFocusPath]: setTypeFocusPath,
+    [TYPE_EDITING_KEYS.returnPath]: [navigationKey, String(selectedIndex), 'Type'],
+  };
+}
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -122,25 +167,18 @@ export function NamedItemsSection<T extends NamedTypedItem>({
 
   // Sync metadata - use stable dependencies
   useEffect(() => {
-    if (selectedItem && selectedIndex !== null) {
-      const setItemType = (newType: TTerm) => {
-        onUpdateItemRef.current(selectedItem.id, { ...selectedItem, type: newType } as T);
-      };
-
-      navigationRef.current.updateMetadata({
-        // Item info for commands
-        selectedItemId: selectedItem.id,
-        selectedItemIndex: selectedIndex,
-        // Standardized TypeEditingContext keys for shared commands
-        [TYPE_EDITING_KEYS.term]: selectedItem.type,
-        [TYPE_EDITING_KEYS.focusPath]: typeFocusPath,
-        [TYPE_EDITING_KEYS.setTerm]: setItemType,
-        [TYPE_EDITING_KEYS.setFocusPath]: setTypeFocusPath,
-        [TYPE_EDITING_KEYS.returnPath]: [config.navigationKey, String(selectedIndex), 'Type'],
-      });
-    }
+    navigationRef.current.updateMetadata(
+      buildNamedItemSectionMetadata({
+        navigationKey: config.navigationKey,
+        onUpdateItem: onUpdateItemRef.current,
+        selectedIndex,
+        selectedItem,
+        setTypeFocusPath,
+        typeFocusPath,
+      })
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedItem?.id, selectedIndex, typeFocusPath, config.navigationKey]);
+  }, [selectedItem, selectedIndex, typeFocusPath, config.navigationKey]);
 
   // Keyboard handling for selection
   useEffect(() => {
@@ -331,4 +369,3 @@ let itemIdCounter = 0;
 export function generateItemId(prefix: string = 'item'): string {
   return `${prefix}_${itemIdCounter++}`;
 }
-
