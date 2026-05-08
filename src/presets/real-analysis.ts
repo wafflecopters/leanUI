@@ -183,6 +183,13 @@ realOfNat : (R : Real) -> Nat -> Carrier R
 realOfNat R Zero = rzero R
 realOfNat R (Succ n) = radd (rone R) (realOfNat R n)
 
+-- Nat addition. Concrete on NatLit via inverse-iota: \`plus 170 34\` reduces
+-- to NatLit 204 in O(n) WHNF steps. Used by addRealOfNat to bridge concrete
+-- nat arithmetic to abstract Real.
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
 
@@ -238,6 +245,21 @@ record Limit {R : Real} (f : Carrier R -> Carrier R) (x0 : Carrier R) (L : Carri
 addZeroLeft : {R : Real} -> (a : Carrier R) -> Equal (radd (rzero R) a) a := by
   intros R a
   erw (CompleteOrderedField.addComm (field R) (rzero R) a), (CompleteOrderedField.addZeroRight (field R) a)
+
+-- nat→Real homomorphism: realOfNat distributes over plus.
+-- THIS is the bridge that lets numeric literal arithmetic work on abstract Real.
+-- Proof sketch (induction on n):
+--   Zero: rzero + realOfNat m = realOfNat m  by addZeroLeft
+--   Succ: ((rone + realOfNat n) + realOfNat m)
+--       = rone + (realOfNat n + realOfNat m)  by addAssoc
+--       = rone + realOfNat (plus n m)         by IH
+--       = realOfNat (Succ (plus n m))         by realOfNat (def-equal)
+--       = realOfNat (plus (Succ n) m)         by plus (def-equal)
+-- Applying \`addRealOfNat R 170 34\` proves \`Equal (radd 170 34) 204\` on Carrier R
+-- because plus 170 34 reduces to NatLit 204 by primitive arithmetic.
+addRealOfNat : (R : Real) -> (n m : Nat) -> Equal (radd (realOfNat R n) (realOfNat R m)) (realOfNat R (plus n m))
+addRealOfNat R Zero m = addZeroLeft (realOfNat R m)
+addRealOfNat R (Succ n) m = trans (CompleteOrderedField.addAssoc (field R) (rone R) (realOfNat R n) (realOfNat R m)) (cong (\\z => radd (rone R) z) (addRealOfNat R n m))
 
 negLeft : {R : Real} -> (a : Carrier R) -> Equal (radd (rneg a) a) (rzero R) := by
   intros R a

@@ -1,0 +1,63 @@
+@test success
+@name "NatLit on abstract Real: nat→real homomorphism + 170+34=204"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Minimal abstract field setup: opaque carrier + axioms.
+-- This validates the proof shape independently of the full real-analysis preset.
+
+postulate Real : Type 1
+postulate Carrier : Real -> Type
+postulate radd : {R : Real} -> Carrier R -> Carrier R -> Carrier R
+postulate rzero : (R : Real) -> Carrier R
+postulate rone : (R : Real) -> Carrier R
+postulate addZeroLeft : {R : Real} -> (a : Carrier R) -> Equal (radd (rzero R) a) a
+postulate addAssoc : {R : Real} -> (a b c : Carrier R) -> Equal (radd (radd a b) c) (radd a (radd b c))
+
+cong : {A B : Type} -> {x y : A} -> (f : A -> B) -> Equal x y -> Equal (f x) (f y)
+cong f refl = refl
+
+trans : {A : Type} -> {x y z : A} -> Equal x y -> Equal y z -> Equal x z
+trans refl refl = refl
+
+@syntax @ofNat
+realOfNat : (R : Real) -> Nat -> Carrier R
+realOfNat R Zero = rzero R
+realOfNat R (Succ n) = radd (rone R) (realOfNat R n)
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+-- The homomorphism: realOfNat distributes over plus.
+-- Proof by induction on n:
+--   Zero case: rzero + realOfNat m = realOfNat m  -- by addZeroLeft
+--   Succ case: ((rone + realOfNat n) + realOfNat m)
+--             = rone + (realOfNat n + realOfNat m)  -- by addAssoc
+--             = rone + realOfNat (plus n m)         -- by IH (cong)
+--             = realOfNat (Succ (plus n m))         -- by realOfNat def
+--             = realOfNat (plus (Succ n) m)         -- by plus def
+addRealOfNat : (R : Real) -> (n m : Nat) -> Equal (radd (realOfNat R n) (realOfNat R m)) (realOfNat R (plus n m))
+addRealOfNat R Zero m = addZeroLeft (realOfNat R m)
+addRealOfNat R (Succ n) m = trans (addAssoc (rone R) (realOfNat R n) (realOfNat R m)) (cong (\z => radd (rone R) z) (addRealOfNat R n m))
+
+-- The payoff: 170 + 34 = 204 on abstract Real, via the homomorphism.
+-- realOfNat R (plus 170 34) reduces to realOfNat R 204 by NatLit primitive
+-- arithmetic, so addRealOfNat R 170 34 has exactly the right type.
+test_170_34 : (R : Real) -> Equal (radd (realOfNat R 170) (realOfNat R 34)) (realOfNat R 204)
+test_170_34 R = addRealOfNat R 170 34
+
+-- Smaller cases for sanity
+test_1_1 : (R : Real) -> Equal (radd (realOfNat R 1) (realOfNat R 1)) (realOfNat R 2)
+test_1_1 R = addRealOfNat R 1 1
+
+test_0_0 : (R : Real) -> Equal (radd (realOfNat R 0) (realOfNat R 0)) (realOfNat R 0)
+test_0_0 R = addRealOfNat R 0 0
+
+test_zero_n : (R : Real) -> Equal (radd (realOfNat R 0) (realOfNat R 7)) (realOfNat R 7)
+test_zero_n R = addRealOfNat R 0 7
+
+-- Auto-coercion test: literals on the LHS coerce automatically via @ofNat.
+-- This requires Equal to know its A is `Carrier R` (we provide it explicitly).
+test_lit_coerce : (R : Real) -> Equal {A := Carrier R} (radd 170 34) (realOfNat R 204)
+test_lit_coerce R = addRealOfNat R 170 34
