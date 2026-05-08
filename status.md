@@ -24,6 +24,7 @@ Upleveling the core engine while preserving the current language surface:
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Removed dead / redundant `with` plumbing: dropped the unused compile-side `hasScrutineeParams` helper, removed a stale scrutinee-count parameter from extraction logic, and collapsed no-op depth threading in surface scrutinee matching
 - Aligned the kernel-side `with-abstraction` helper with the production fix so binder-local variables are no longer shifted when inserting fresh with-binders under lambdas or dependent families
 - Generalized production `with` return-type abstraction to handle computed scrutinees, not just bare variables, and fixed the binder-shifting bug that surfaced in dependent `DPair` families
 - Added direct regressions for computed-scrutinee abstraction and dependent-family binder preservation in `with.test.ts`, plus kept the nested `sigmaSum` `.tt` repro green end-to-end

@@ -4511,7 +4511,7 @@ function resolveWithScrutineeTypes(
   // Extract function parameters from the type to build a context
   // The auxiliary function type is: (param1 : T1) -> ... -> (paramN : TN) -> (scrutinee : _scrut0_type) -> ... -> ReturnType
   // The scrutinee expressions can reference param1...paramN AND pattern variables from outer with-clauses
-  const functionParams = extractFunctionParams(declType, scrutineeExprs.length);
+  const functionParams = extractFunctionParams(declType);
 
   for (let i = 0; i < scrutineeExprs.length; i++) {
     const scrutinee = scrutineeExprs[i];
@@ -4585,29 +4585,6 @@ function resolveWithScrutineeTypes(
 }
 
 /**
- * Check if a type signature contains scrutinee parameters (indicating a nested with-clause).
- */
-function hasScrutineeParams(type: TTerm): boolean {
-  let currentType = type;
-  while (true) {
-    if (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPiTT') {
-      if (currentType.name.startsWith('_scrut')) {
-        return true;
-      }
-      currentType = currentType.body;
-    } else if (currentType.tag === 'MultiBinder' && currentType.binderKind.tag === 'BPiTT') {
-      if (currentType.names.some(name => name.startsWith('_scrut'))) {
-        return true;
-      }
-      currentType = currentType.body;
-    } else {
-      break;
-    }
-  }
-  return false;
-}
-
-/**
  * Count scrutinee parameters that come BEFORE the first Hole domain.
  * These are existing scrutinees from outer with-clauses.
  * Scrutinees with Hole domains are the ones being currently resolved.
@@ -4652,7 +4629,7 @@ function countScrutineesBeforeHoles(type: TTerm): number {
  * Extracts function parameters from a type signature, stopping before scrutinee parameters.
  * Returns the parameter names and types in order.
  */
-function extractFunctionParams(type: TTerm, _scrutineeCount: number): Array<{ name: string; type: TTKTerm }> {
+function extractFunctionParams(type: TTerm): Array<{ name: string; type: TTKTerm }> {
   const params: Array<{ name: string; type: TTKTerm }> = [];
   let currentType = type;
 
