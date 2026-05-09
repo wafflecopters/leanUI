@@ -16,6 +16,7 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 
 ## Current Focus
 Upleveling the core engine while preserving the current language surface:
+- Keep decomposing `TextEditorPage` now that it is the only live top-level UI, starting with pure helpers for preset selection, declaration edits, cursor queries, and source-range mapping
 - Keep converting stale compiler/proof-tree TODOs into real regressions or concrete fixes
 - Preserve useful editor/type-info output even when clause checking later fails
 - Keep tightening `with` desugaring/abstraction coverage so helper tests become real end-to-end regressions
@@ -28,6 +29,7 @@ Upleveling the core engine while preserving the current language surface:
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
+- Extracted the first pure `TextEditorPage` model layer into `src/components/textEditorModel.ts`, moving preset slugging, declaration collection/rename, cursor type-info lookup, and error-path-to-source-range mapping out of the React component, with focused regressions in `textEditorModel.test.ts`
 - Deleted the unrouted proof/inductive/record editor subtree entirely, including the navigation context/footer, proof-workspace helpers, named-item editor helpers, and their tests, after collapsing the app shell to the text editor
 - Collapsed the top-level app shell to the text editor: `/text-editor` and all fallback routes now mount `TextEditorPage`, and the old proof/inductive/record route switchboard is gone with a routing regression in `App.test.tsx`
 - Removed the dead legacy let/claim fields from the structured proof editor path, switched rewrite history over to `equalityChain`, and simplified `createLetElement` to the shape the current UI actually uses
@@ -41,6 +43,7 @@ Upleveling the core engine while preserving the current language surface:
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
+- Keep splitting `TextEditorPage` so Monaco/editor lifecycle glue stays in React while preset/query/marker logic moves into pure helpers
 - Improve semantic quality of application/type errors, especially around implicit arguments and partial application
 - Decide whether any remaining ill-typed abstraction cases need dedicated production rejection beyond the current checker/desugaring behavior
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts

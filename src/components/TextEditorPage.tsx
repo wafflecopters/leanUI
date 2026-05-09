@@ -7,13 +7,22 @@ import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileIncrementalTT, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
 import { createIncrementalCache, IncrementalCache } from '../compiler/incremental';
-import { getTypeAtCursor, getTypeAtSelection, TypeAtCursorResult, CursorQueryResult } from '../compiler/type-info';
-import { serializeIndexPath, IndexPath, SourceRange, ElabMap, SourceMap } from '../types/source-position';
+import type { SourceRange } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
 import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { GoalState } from '../tactics/proof-state';
 import { WYSIWYGPanel } from './WYSIWYGPanel';
 import { PRESETS } from '../presets';
+import {
+  collectAllCompiledDeclarations,
+  collectCompiledDeclEntries,
+  getTypeInfoAtCursor,
+  mapErrorPathToSourceRange,
+  replaceDeclarationNameInSource,
+  resolveInitialEditorCode,
+  slugifyPresetName,
+  type EditorCursorInfo,
+} from './textEditorModel';
 
 // Unicode abbreviations map (Lean-style)
 // Add new abbreviations here - they will be auto-replaced when followed by space/punctuation
@@ -166,100 +175,6 @@ const MONACO_THEME: MonacoEditor.IStandaloneThemeData = {
     'editorWarning.foreground': '#' + SYNTAX_COLORS.hole,
   },
 };
-
-/**
- * Walk up a path trying to find a source range, either directly or via a mapper.
- */
-function findRangeByWalkingPath(
-  path: IndexPath,
-  sourceMap: SourceMap,
-  mapper?: (pathStr: string) => string | undefined
-): SourceRange | null {
-  let currentPath = path;
-  while (currentPath.length >= 0) {
-    const pathStr = serializeIndexPath(currentPath);
-    const lookupKey = mapper ? mapper(pathStr) : pathStr;
-    if (lookupKey) {
-      const range = sourceMap.get(lookupKey);
-      if (range) return range;
-    }
-    if (currentPath.length === 0) break;
-    currentPath = currentPath.slice(0, -1);
-  }
-  return null;
-}
-
-/**
- * Walk up a kernel path to find a prefix in the elabMap, then append the
- * remaining suffix to the mapped surface path and look up in sourceMap.
- *
- * This preserves path precision: if the error path is
- *   kernel: type.body.body.body.domain.fn.arg.arg
- * and the elabMap maps:
- *   type.body.body.body.domain.fn → type.body.body.domain.fn
- * we reconstitute:
- *   type.body.body.domain.fn.arg.arg
- * and look that up in the sourceMap, finding the precise source range.
- *
- * Falls back to findRangeByWalkingPath (without suffix preservation) if
- * the reconstituted path doesn't match in the sourceMap.
- */
-function findRangeViaElabMapWithSuffix(
-  errorPath: IndexPath,
-  elabMap: ElabMap,
-  sourceMap: SourceMap
-): SourceRange | null {
-  // Try progressively shorter prefixes of the error path
-  for (let prefixLen = errorPath.length; prefixLen >= 0; prefixLen--) {
-    const prefix = errorPath.slice(0, prefixLen);
-    const suffix = errorPath.slice(prefixLen);
-    const prefixStr = serializeIndexPath(prefix);
-    const mappedPrefix = elabMap.get(prefixStr);
-    if (mappedPrefix !== undefined) {
-      // Reconstitute: mapped prefix + remaining suffix
-      const suffixStr = serializeIndexPath(suffix);
-      const fullSurfacePath = mappedPrefix + (suffixStr ? '.' + suffixStr : '');
-      // Try the reconstituted path directly
-      const range = sourceMap.get(fullSurfacePath);
-      if (range) return range;
-      // Also try walking up from the reconstituted path
-      // (the sourceMap might have a parent of this path)
-    }
-  }
-  return null;
-}
-
-/**
- * Map an error path to a source range using the elab and source maps.
- * Returns null if mapping fails.
- */
-function mapErrorPathToSourceRange(
-  errorPath: IndexPath,
-  elabMap: ElabMap | undefined,
-  sourceMap: SourceMap | undefined,
-  _blockStartLine: number  // Note: unused - sourceMap already has absolute positions
-): SourceRange | null {
-  if (!sourceMap) return null;
-
-  // Try elabMap-based lookup FIRST (more precise for kernel errors).
-  // The elabMap maps kernel paths to surface paths. By preserving the suffix
-  // after the mapped prefix, we get precise source locations even when the
-  // kernel has more binder levels than the surface (e.g., {x y : Nat} expands
-  // to two kernel binders but is one surface binder).
-  if (elabMap) {
-    const mappedRange = findRangeViaElabMapWithSuffix(errorPath, elabMap, sourceMap);
-    if (mappedRange) return mappedRange;
-    // Fallback: elabMap lookup without suffix preservation
-    const fallbackRange = findRangeByWalkingPath(errorPath, sourceMap, p => elabMap.get(p));
-    if (fallbackRange) return fallbackRange;
-  }
-
-  // Try direct lookup in sourceMap (for elaboration errors where path is already a surface path)
-  const directRange = findRangeByWalkingPath(errorPath, sourceMap);
-  if (directRange) return directRange;
-
-  return null;
-}
 
 /**
  * Extract parameter/index info from an inductive type's kernel type.
@@ -925,12 +840,7 @@ export function TextEditorPage() {
   const editorRef = useRef<IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   const [code, setCode] = useState(() => {
-    const presetParam = searchParams.get('preset');
-    if (presetParam) {
-      const preset = PRESETS.find(p => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') === presetParam);
-      if (preset) return preset.code;
-    }
-    return PRESETS[0].code;
+    return resolveInitialEditorCode(PRESETS, searchParams.get('preset'));
   });
   const [editorReady, setEditorReady] = useState(false);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
@@ -941,11 +851,7 @@ export function TextEditorPage() {
   const [showNamedParamsWithBraces, setShowNamedParamsWithBraces] = useState(false);
   // Cursor position for type-at-cursor panel
   // Cursor/selection position for type-at-cursor panel
-  const [cursorInfo, setCursorInfo] = useState<{
-    lineNumber: number; column: number;
-    selStartLine?: number; selStartCol?: number;
-    selEndLine?: number; selEndCol?: number;
-  } | null>(null);
+  const [cursorInfo, setCursorInfo] = useState<EditorCursorInfo | null>(null);
   // Incremental compilation cache (persists across renders)
   const incrementalCacheRef = useRef<IncrementalCache>(createIncrementalCache());
   // Ref to store current compile result (for hover provider)
@@ -978,11 +884,9 @@ export function TextEditorPage() {
     const preset = PRESETS.find(p => p.name === presetName);
     if (preset) {
       setEditorValue(preset.code);
-      // Convert preset name to URL-friendly format: "Nat Math (Tactics)" -> "nat-math-tactics"
-      const urlSafePresetName = preset.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       setSearchParams(prev => {
         const next = new URLSearchParams(prev);
-        next.set('preset', urlSafePresetName);
+        next.set('preset', slugifyPresetName(preset.name));
         return next;
       }, { replace: true });
       setPresetMenuOpen(false);
@@ -1047,43 +951,24 @@ export function TextEditorPage() {
   }, [code]);
 
   // Flatten compiled declarations for WYSIWYG panel (excluding with-clause auxiliaries)
-  const compiledDeclsWithSource = useMemo(() => {
-    if (!showWYSIWYG) return [];
-    const result: { decl: import('../compiler/compile').CompiledDeclaration; blockSource: string; blockStartLine: number }[] = [];
-    for (const block of compileResult.blocks) {
-      const blockSource = block.sourceLines.join('\n');
-      for (const d of block.declarations) {
-        if (!d.isWithAuxiliary) {
-          result.push({ decl: d, blockSource, blockStartLine: block.startLine });
-        }
-      }
-    }
-    return result;
-  }, [showWYSIWYG, compileResult]);
+  const compiledDeclsWithSource = useMemo(
+    () => collectCompiledDeclEntries(compileResult, showWYSIWYG),
+    [showWYSIWYG, compileResult]
+  );
   const compiledDeclarations = useMemo(() => compiledDeclsWithSource.map(e => e.decl), [compiledDeclsWithSource]);
   const declarationSources = useMemo(() => compiledDeclsWithSource.map(e => e.blockSource), [compiledDeclsWithSource]);
 
   // Handle name changes from WYSIWYG panel — write back to TT source
   const handleWYSIWYGNameChange = useCallback((declIndex: number, newName: string) => {
     const entry = compiledDeclsWithSource[declIndex];
-    if (!entry) return;
-    const nameRange = entry.decl.sourceMap?.get('name');
-    if (!nameRange) return;
-    // SourcePos.line is 1-based, blockStartLine is 0-based
-    const absLine = entry.blockStartLine + nameRange.start.line - 1;
-    const lines = code.split('\n');
-    if (absLine < 0 || absLine >= lines.length) return;
-    const line = lines[absLine];
-    // SourcePos.col is 1-based
-    lines[absLine] = line.slice(0, nameRange.start.col - 1) + newName + line.slice(nameRange.end.col - 1);
-    setEditorValue(lines.join('\n'));
+    setEditorValue(replaceDeclarationNameInSource(code, entry, newName));
   }, [compiledDeclsWithSource, code, setEditorValue]);
 
   // All declarations (for building syntax registry from @syntax annotations)
-  const allCompiledDeclarations = useMemo(() => {
-    if (!showWYSIWYG) return [];
-    return compileResult.blocks.flatMap(b => b.declarations);
-  }, [showWYSIWYG, compileResult]);
+  const allCompiledDeclarations = useMemo(
+    () => collectAllCompiledDeclarations(compileResult, showWYSIWYG),
+    [showWYSIWYG, compileResult]
+  );
 
   // Extract wildcard hints from compile result
   const wildcardHints = useMemo(() => {
@@ -1101,99 +986,10 @@ export function TextEditorPage() {
   }, [compileResult]);
 
   // Compute type info at cursor position or selection
-  const typeInfoAtCursor = useMemo<(CursorQueryResult & { expression?: string }) | undefined>(() => {
-    if (!cursorInfo) return undefined;
-
-    const hasSelection = cursorInfo.selStartLine !== undefined &&
-      cursorInfo.selEndLine !== undefined &&
-      (cursorInfo.selStartLine !== cursorInfo.selEndLine || cursorInfo.selStartCol !== cursorInfo.selEndCol);
-
-    // Find which block the cursor is in
-    const cursorLine = cursorInfo.lineNumber;
-    let targetBlock: CompiledBlock | undefined;
-    let targetDecl: CompiledDeclaration | undefined;
-
-    for (const block of compileResult.blocks) {
-      const blockEndLine = block.startLine + block.sourceLines.length - 1;
-      if (cursorLine >= block.startLine && cursorLine <= blockEndLine) {
-        targetBlock = block;
-        for (const decl of block.declarations) {
-          // Consider declarations with typeInfoMap (for terms) or tacticInfoTree (for tactics)
-          if (decl.sourceMap && (decl.typeInfoMap || decl.tacticInfoTree)) {
-            targetDecl = decl;
-            for (const [, range] of decl.sourceMap) {
-              if (range.start.line <= cursorLine && cursorLine <= range.end.line) {
-                targetDecl = decl;
-                break;
-              }
-            }
-          }
-        }
-        break;
-      }
-    }
-
-    // Need either typeInfoMap (for terms) or tacticInfoTree (for tactics)
-    if (!targetBlock || !targetDecl || !targetDecl.sourceMap) {
-      return undefined;
-    }
-    if (!targetDecl.typeInfoMap && !targetDecl.tacticInfoTree) {
-      return undefined;
-    }
-
-    const lines = code.split('\n');
-
-    // Helper: convert file-absolute line/col to file-absolute character offset
-    // (sourceMap pos values are file-absolute)
-    const toFileOffset = (line: number, col: number) => {
-      let offset = 0;
-      for (let i = 0; i < line - 1; i++) {
-        offset += lines[i].length + 1;
-      }
-      offset += col - 1;
-      return offset;
-    };
-
-    let cursorQueryResult: CursorQueryResult | undefined;
-    try {
-      if (hasSelection) {
-        const startOffset = toFileOffset(cursorInfo.selStartLine!, cursorInfo.selStartCol!);
-        const endOffset = toFileOffset(cursorInfo.selEndLine!, cursorInfo.selEndCol!);
-        cursorQueryResult = getTypeAtSelection(startOffset, endOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, targetDecl.tacticInfoTree, compileResult.definitions, code);
-      }
-      if (!cursorQueryResult) {
-        const cursorOffset = toFileOffset(cursorInfo.lineNumber, cursorInfo.column);
-        cursorQueryResult = getTypeAtCursor(cursorOffset, targetDecl.sourceMap, targetDecl.elabMap, targetDecl.typeInfoMap, targetDecl.tacticInfoTree, compileResult.definitions, code);
-      }
-
-      // Accept both term and tactic results
-      if (!cursorQueryResult) return undefined;
-    } catch (e) {
-      return undefined;
-    }
-
-    // Extract source expression text for term results
-    let expression = '';
-    if (cursorQueryResult.kind === 'term') {
-      const result = cursorQueryResult.info;
-      if (result.sourceRange) {
-        const sr = result.sourceRange;
-        if (sr.start.line === sr.end.line) {
-          expression = lines[sr.start.line - 1].substring(sr.start.col - 1, sr.end.col - 1);
-        } else {
-          const parts: string[] = [];
-          parts.push(lines[sr.start.line - 1].substring(sr.start.col - 1));
-          for (let i = sr.start.line; i < sr.end.line - 1; i++) {
-            parts.push(lines[i]);
-          }
-          parts.push(lines[sr.end.line - 1].substring(0, sr.end.col - 1));
-          expression = parts.join(' ');
-        }
-      }
-    }
-
-    return { ...cursorQueryResult, expression };
-  }, [cursorInfo, compileResult, code]);
+  const typeInfoAtCursor = useMemo(
+    () => getTypeInfoAtCursor(cursorInfo, compileResult, code),
+    [cursorInfo, compileResult, code]
+  );
 
   // Keep the refs in sync with the latest data
   // Monaco's providers will read from these refs when they need to render
@@ -1295,8 +1091,7 @@ export function TextEditorPage() {
             const sourceRange = mapErrorPathToSourceRange(
               err.env.indexPath,
               decl.elabMap,
-              decl.sourceMap,
-              block.startLine
+              decl.sourceMap
             );
 
             if (sourceRange) {
@@ -1337,7 +1132,7 @@ export function TextEditorPage() {
             // withClauseElabMap first. Skip direct sourceMap lookup (it would match wrong
             // entries since the auxiliary's clause indices differ from the main declaration's).
             const sourceRange = (decl.withClauseElabMap && decl.sourceMap)
-              ? findRangeByWalkingPath(err.env.indexPath, decl.sourceMap, p => decl.withClauseElabMap!.get(p))
+              ? mapErrorPathToSourceRange(err.env.indexPath, decl.withClauseElabMap, decl.sourceMap)
               : null;
 
             if (sourceRange) {
