@@ -32,7 +32,7 @@ import {
 /**
  * An inductive type definition.
  *
- * This mirrors the structure used in InductiveTypeEditor but is a pure
+ * This mirrors the old structured inductive editor shape but is a pure
  * data structure without UI concerns.
  */
 export interface InductiveTypeDef {
