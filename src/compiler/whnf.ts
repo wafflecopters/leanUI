@@ -570,6 +570,18 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
     }
 
     case 'Const': {
+      // NatLit zero-fold: Const(zeroCtor) of a registered @impl=nat type
+      // canonicalizes to NatLit 0. This is the dual of the iota-view rule
+      // that expands NatLit n → Const(zeroCtor) | App(Const(succCtor), NatLit (n-1)).
+      // Required so chains like `mult 0 m = Zero; plus k Zero = Succ^k Zero`
+      // canonicalize to `NatLit k` via inverse-iota — without it, multiplication
+      // bottoms out at the Zero constructor and inverse-iota never fires.
+      if (ctx?.definitions?.natImplByCtor) {
+        const impl = ctx.definitions.natImplByCtor.get(term.name);
+        if (impl && term.name === impl.zeroCtor) {
+          return { tag: 'NatLit', value: 0n };
+        }
+      }
       // δ-reduction: unfold named constants
       // Check deltaDepth to limit unfolding and prevent exponential expansion
       if (ctx?.definitions && deltaDepth > 0) {

@@ -1,0 +1,49 @@
+@test success
+@name "NatLit: Zero ctor folds to NatLit 0 (so mult chains canonicalize)"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mult : Nat -> Nat -> Nat
+mult Zero m = Zero
+mult (Succ n) m = plus m (mult n m)
+
+-- Without zeroCtor → NatLit fold, mult chains terminate at the Zero
+-- constructor, breaking inverse-iota propagation. These tests fail
+-- before the fix and pass after.
+
+-- mult 0 m: bottoms out immediately at Zero, must equal NatLit 0
+test_0_5 : Equal {A := Nat} (mult 0 5) 0
+test_0_5 = refl
+
+-- mult 1 1: requires bottom Zero → NatLit 0 then inverse-iota up
+test_1_1 : Equal {A := Nat} (mult 1 1) 1
+test_1_1 = refl
+
+-- mult 7 8 = 56: the user's original target
+test_7_8 : Equal {A := Nat} (mult 7 8) 56
+test_7_8 = refl
+
+-- Bigger: 12 * 11 = 132. With the fix, this should be O(n*m) not exponential.
+test_12_11 : Equal {A := Nat} (mult 12 11) 132
+test_12_11 = refl
+
+-- And the bare Zero ctor should equal NatLit 0 directly
+test_zero : Equal {A := Nat} Zero 0
+test_zero = refl
+
+-- The mixed-iota-view case in unify: Succ ?n unifies with NatLit n>0.
+-- Use case: an indexed datatype Leq has a constructor LeqSucc that takes
+-- LeqZero (which has type `Leq Zero ?k`) and produces `Leq (Succ Zero) (Succ ?k)`.
+-- When this is checked against `Leq (Succ Zero) (Succ (Succ Zero))` (which WHNFs
+-- to `Leq 1 2`), the unifier needs to compare `Succ Zero` (App-shape) with NatLit
+-- 1 and `Succ ?k` (App with meta arg) with NatLit 2.
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {k : Nat} -> Leq Zero k
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+
+test_mixed_iota : Leq (Succ Zero) (Succ (Succ Zero))
+test_mixed_iota = LeqSucc LeqZero

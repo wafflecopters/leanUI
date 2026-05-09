@@ -655,6 +655,50 @@ export function unifyTerms(lhs: TTKTerm, rhs: TTKTerm, options: UnifyOptions): U
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // NATLIT - Numeric literal
+  //
+  // NatLit values are equal iff their BigInt values match. WHNF folds
+  // Const(zeroCtor) → NatLit 0 and Succ(NatLit n) → NatLit (n+1) for
+  // registered @impl=nat types, so closed nat values are canonicalized
+  // before reaching here.
+  //
+  // For "mixed" nat-shape — e.g. `App(Succ, ?meta)` vs `NatLit n>0` — neither
+  // WHNF nor inverse-iota fires (the meta blocks the fold), so we iota-view
+  // the NatLit on the fly: `n>0 ≡ Succ (NatLit (n-1))`. This recovers the
+  // standard inductive comparison and lets unification solve `?meta = n-1`.
+  // ─────────────────────────────────────────────────────────────────────────
+  if (a.tag === 'NatLit' && b.tag === 'NatLit') {
+    if (a.value !== b.value) {
+      return { success: false, reason: 'conflict' };
+    }
+    return emptySuccess;
+  }
+
+  const asSuccApp = (term: TTKTerm): { arg: TTKTerm } | null => {
+    if (term.tag === 'App' && term.fn.tag === 'Const' && options.definitions?.natImplByCtor) {
+      const impl = options.definitions.natImplByCtor.get(term.fn.name);
+      if (impl && term.fn.name === impl.succCtor) {
+        return { arg: term.arg };
+      }
+    }
+    return null;
+  };
+  if (a.tag === 'NatLit') {
+    const succB = asSuccApp(b);
+    if (succB) {
+      if (a.value === 0n) return { success: false, reason: 'conflict' };
+      return unifyTerms({ tag: 'NatLit', value: a.value - 1n }, succB.arg, nextOptions);
+    }
+  }
+  if (b.tag === 'NatLit') {
+    const succA = asSuccApp(a);
+    if (succA) {
+      if (b.value === 0n) return { success: false, reason: 'conflict' };
+      return unifyTerms(succA.arg, { tag: 'NatLit', value: b.value - 1n }, nextOptions);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // APP - Application
   //
   // (f a) vs (g b): unify f with g, then a with b

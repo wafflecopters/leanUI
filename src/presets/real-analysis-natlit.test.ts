@@ -230,6 +230,10 @@ mul_1_n R = mulRealOfNat R 1 4
 
 mul_2_4 : (R : Real) -> Equal (rmul (realOfNat R 2) (realOfNat R 4)) (realOfNat R 8)
 mul_2_4 R = mulRealOfNat R 2 4
+
+-- After zeroCtor → NatLit fold, this works in seconds (was hanging).
+mul_7_8 : (R : Real) -> Equal (rmul (realOfNat R 7) (realOfNat R 8)) (realOfNat R 56)
+mul_7_8 R = mulRealOfNat R 7 8
 `);
 
     // Auto-coerced literals + mul: rmul 3 2 = 6 on Carrier R.
