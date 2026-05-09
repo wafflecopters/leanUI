@@ -7,17 +7,16 @@ import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import { compileIncrementalTT, CompileResult, CompiledBlock, CompiledDeclaration, extractWildcardInlayHints, WildcardInlayHint, extractSemanticTokens, SemanticToken, extractHoleLocations, CaseTree, TotalityResult } from '../compiler/compile';
 import { createIncrementalCache, IncrementalCache } from '../compiler/incremental';
-import type { SourceRange } from '../types/source-position';
 import { TTKTerm, prettyPrint as prettyPrintTTK, prettyPrintFormatted, PrettyPrintOptions, NamedArgMap } from '../compiler/kernel';
 import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { GoalState } from '../tactics/proof-state';
 import { WYSIWYGPanel } from './WYSIWYGPanel';
 import { PRESETS } from '../presets';
+import { buildCompileMarkers } from './textEditorDiagnostics';
 import {
   collectAllCompiledDeclarations,
   collectCompiledDeclEntries,
   getTypeInfoAtCursor,
-  mapErrorPathToSourceRange,
   replaceDeclarationNameInSource,
   resolveInitialEditorCode,
   slugifyPresetName,
@@ -1022,159 +1021,16 @@ export function TextEditorPage() {
     const model = editor.getModel();
     if (!model) return;
 
-    const markers: MonacoEditor.IMarkerData[] = [];
-
-    // Add markers for all block errors
-    for (const block of compileResult.blocks) {
-      // Parse errors
-      for (const error of block.parseErrors) {
-        const lineContent = model.getLineContent(error.line);
-        const endCol = Math.max(error.col + 1, lineContent.length + 1);
-
-        markers.push({
-          severity: monaco.MarkerSeverity.Error,
-          message: (error.message || 'Parse error').replace(/^Parse error at line \d+, col \d+: /, ''),
-          startLineNumber: error.line,
-          startColumn: error.col,
-          endLineNumber: error.line,
-          endColumn: endCol,
-          source: 'TT Parser',
-        });
-      }
-
-      // Name resolution errors
-      for (const err of block.nameResolutionErrors) {
-        let sourceRange: SourceRange | null = null;
-
-        // Try to look up the source range using the path and declaration's sourceMap
-        if (err.path && err.declarationIndex !== undefined) {
-          const decl = block.declarations[err.declarationIndex];
-          if (decl?.sourceMap) {
-            // Name resolution path is already a surface path, look it up directly
-            sourceRange = decl.sourceMap.get(err.path) ?? null;
-          }
-        }
-
-        if (sourceRange) {
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: err.message,
-            startLineNumber: sourceRange.start.line,
-            startColumn: sourceRange.start.col,
-            endLineNumber: sourceRange.end.line,
-            endColumn: sourceRange.end.col,
-            source: 'TT Name Resolution',
-          });
-        } else {
-          // Fallback: mark the first code line of the block (skip comments/@syntax)
-          const firstLine = block.codeStartLine;
-          markers.push({
-            severity: monaco.MarkerSeverity.Error,
-            message: err.message,
-            startLineNumber: firstLine,
-            startColumn: 1,
-            endLineNumber: firstLine,
-            endColumn: model.getLineContent(firstLine).length + 1,
-            source: 'TT Name Resolution',
-          });
-        }
-      }
-
-      // Type check errors from declarations
-      for (const decl of block.declarations) {
-        // Skip auxiliary declarations — their errors are promoted to the main declaration
-        if (decl.isWithAuxiliary) continue;
-
-        if (decl.checkErrors && decl.checkErrors.length > 0) {
-          for (const err of decl.checkErrors) {
-            // Try to map error path to precise source location
-            const sourceRange = mapErrorPathToSourceRange(
-              err.env.indexPath,
-              decl.elabMap,
-              decl.sourceMap
-            );
-
-            if (sourceRange) {
-              // Use the mapped source range
-              markers.push({
-                severity: err.severity === 'warning'
-                  ? monaco.MarkerSeverity.Warning
-                  : monaco.MarkerSeverity.Error,
-                message: err.message,
-                startLineNumber: sourceRange.start.line,
-                startColumn: sourceRange.start.col,
-                endLineNumber: sourceRange.end.line,
-                endColumn: sourceRange.end.col,
-                source: 'TT Type Checker',
-              });
-            } else {
-              // Fallback: mark the first code line of the block (skip comments/@syntax)
-              const firstLine = block.codeStartLine;
-              markers.push({
-                severity: err.severity === 'warning'
-                  ? monaco.MarkerSeverity.Warning
-                  : monaco.MarkerSeverity.Error,
-                message: err.message,
-                startLineNumber: firstLine,
-                startColumn: 1,
-                endLineNumber: firstLine,
-                endColumn: model.getLineContent(firstLine).length + 1,
-                source: 'TT Type Checker',
-              });
-            }
-          }
-        }
-
-        // Also create markers for promoted with-clause errors
-        if (decl.withClauseErrors && decl.withClauseErrors.length > 0) {
-          for (const err of decl.withClauseErrors) {
-            // With-clause error paths are in auxiliary kernel space — must map through
-            // withClauseElabMap first. Skip direct sourceMap lookup (it would match wrong
-            // entries since the auxiliary's clause indices differ from the main declaration's).
-            const sourceRange = (decl.withClauseElabMap && decl.sourceMap)
-              ? mapErrorPathToSourceRange(err.env.indexPath, decl.withClauseElabMap, decl.sourceMap)
-              : null;
-
-            if (sourceRange) {
-              markers.push({
-                severity: monaco.MarkerSeverity.Error,
-                message: err.message,
-                startLineNumber: sourceRange.start.line,
-                startColumn: sourceRange.start.col,
-                endLineNumber: sourceRange.end.line,
-                endColumn: sourceRange.end.col,
-                source: 'TT Type Checker',
-              });
-            } else {
-              // Fallback: mark the first code line of the block (skip comments/@syntax)
-              const firstLine = block.codeStartLine;
-              markers.push({
-                severity: monaco.MarkerSeverity.Error,
-                message: err.message,
-                startLineNumber: firstLine,
-                startColumn: 1,
-                endLineNumber: firstLine,
-                endColumn: model.getLineContent(firstLine).length + 1,
-                source: 'TT Type Checker',
-              });
-            }
-          }
-        }
-      }
-    }
-
-    // Add warning markers for holes (user-created holes are unsound)
-    for (const hole of holeLocations) {
-      markers.push({
-        severity: monaco.MarkerSeverity.Warning,
-        message: `Holes are unsound.`,
-        startLineNumber: hole.line,
-        startColumn: hole.column,
-        endLineNumber: hole.line,
-        endColumn: hole.endColumn,
-        source: 'TT Holes',
-      });
-    }
+    const markers: MonacoEditor.IMarkerData[] = buildCompileMarkers(
+      compileResult,
+      holeLocations,
+      { getLineContent: (lineNumber) => model.getLineContent(lineNumber) }
+    ).map(marker => ({
+      ...marker,
+      severity: marker.severity === 'warning'
+        ? monaco.MarkerSeverity.Warning
+        : monaco.MarkerSeverity.Error,
+    }));
 
     monaco.editor.setModelMarkers(model, 'tt-compiler', markers);
   }, [compileResult, editorReady, holeLocations]);

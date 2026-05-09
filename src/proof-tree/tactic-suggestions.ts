@@ -20,6 +20,7 @@ import { FoldTactic } from '../tactics/fold-tactic';
 import { ttkTermsEqual } from '../tactics/fold-tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
 import { proposeVarName, freshenName } from './propose-var-name';
+import { renderNameLatex } from './name-latex';
 
 // ============================================================================
 // Types
@@ -47,13 +48,6 @@ export interface TacticSuggestion {
   readonly applyCtorName?: string;
   /** For apply suggestions: LaTeX preview of each subgoal created. */
   readonly subgoalPreviews?: readonly string[];
-}
-
-/** Escape a name for use in LaTeX (wrap multi-char names in \text{}, escape underscores). */
-function texEscape(name: string): string {
-  if (name.length === 1) return name;
-  name = name.replace(/_/g, '\\_');
-  return `\\text{${name}}`;
 }
 
 /** Render subgoal previews after an apply tactic. Returns LaTeX for each NEW goal.
@@ -308,7 +302,7 @@ export function computeTacticSuggestions(
                 label,
                 labelLatex: isSingle
                   ? '\\text{Construct}'
-                  : `\\text{Construct } \\textbf{${texEscape(ctor.name)}}`,
+                  : `\\text{Construct } ${renderNameLatex(ctor.name, 'textbf')}`,
                 description: `Apply constructor ${ctor.name}`,
                 applyCtorName: ctor.name,
                 numSubgoals: newGoalIds.length,
@@ -368,7 +362,7 @@ export function computeTacticSuggestions(
             suggestions.push({
               id: `unfold-${name}`,
               label: `Unfold ${name}`,
-              labelLatex: `\\text{Unfold } \\textbf{${texEscape(name)}}`,
+              labelLatex: `\\text{Unfold } ${renderNameLatex(name, 'textbf')}`,
               description: `Unfold the definition of ${name}`,
               unfoldOccurrence: subtermInfo.occurrenceIndex,
               resultGoalLatex,
@@ -414,7 +408,7 @@ export function computeTacticSuggestions(
             suggestions.push({
               id: `fold-${defName}`,
               label: `Fold ${defName}`,
-              labelLatex: `\\text{Fold } \\textbf{${texEscape(defName)}}`,
+              labelLatex: `\\text{Fold } ${renderNameLatex(defName, 'textbf')}`,
               description: `Replace with ${defName}`,
               foldName: defName,
               foldOccurrence: subtermInfo.occurrenceIndex,
@@ -431,7 +425,7 @@ export function computeTacticSuggestions(
           suggestions.push({
             id: `induction-${subtermInfo.varName}`,
             label: `Induction on ${subtermInfo.varName}`,
-            labelLatex: `\\text{Induction on } ${texEscape(subtermInfo.varName)}`,
+            labelLatex: `\\text{Induction on } ${renderNameLatex(subtermInfo.varName)}`,
             description: `Case split / induction on ${subtermInfo.varName} : ${typeHead}`,
           });
         }
@@ -554,7 +548,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         suggestions.push({
           id: `exact-hyp-${name}`,
           label: `exact ${name}`,
-          labelLatex: `\\text{exact}\\; \\textbf{${texEscape(name)}}`,
+          labelLatex: `\\text{exact}\\; ${renderNameLatex(name, 'textbf')}`,
           description: `Close goal with hypothesis ${name}`,
         });
         continue; // If exact works, no need to try apply
@@ -595,7 +589,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
           suggestions.push({
             id: `exact-hyp-${name}`,
             label: `exact ${name}`,
-            labelLatex: `\\text{exact}\\; \\textbf{${texEscape(name)}}`,
+            labelLatex: `\\text{exact}\\; ${renderNameLatex(name, 'textbf')}`,
             description: `Close goal with hypothesis ${name}`,
           });
         } else {
@@ -605,7 +599,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
           suggestions.push({
             id: `apply-hyp-${name}`,
             label: `apply ${name}`,
-            labelLatex: `\\text{apply}\\; \\textbf{${texEscape(name)}}`,
+            labelLatex: `\\text{apply}\\; ${renderNameLatex(name, 'textbf')}`,
             description: `Apply ${name}, creating ${newGoalIds.length} subgoal${newGoalIds.length > 1 ? 's' : ''}`,
             numSubgoals: newGoalIds.length,
             subgoalPreviews,
@@ -658,7 +652,7 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
             suggestions.push({
               id: `apply-def-${defName}`,
               label: `apply ${defName}`,
-              labelLatex: `\\text{apply}\\; \\textbf{${texEscape(defName)}}`,
+              labelLatex: `\\text{apply}\\; ${renderNameLatex(defName, 'textbf')}`,
               description: numSubgoals > 0
                 ? `Apply ${defName}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
                 : `Apply ${defName}`,
@@ -715,7 +709,7 @@ export function computeSelectedBinderSuggestions(
               suggestions.push({
                 id: `exact-hyp-${name}`,
                 label: `exact ${name}`,
-                labelLatex: `\\text{exact}\\; \\textbf{${texEscape(name)}}`,
+                labelLatex: `\\text{exact}\\; ${renderNameLatex(name, 'textbf')}`,
                 description: `Close goal with hypothesis ${name}`,
               });
               break; // exact subsumes apply
@@ -733,7 +727,7 @@ export function computeSelectedBinderSuggestions(
               suggestions.push({
                 id: `apply-hyp-${name}`,
                 label: `apply ${name}`,
-                labelLatex: `\\text{apply}\\; \\textbf{${texEscape(name)}}`,
+                labelLatex: `\\text{apply}\\; ${renderNameLatex(name, 'textbf')}`,
                 description: numSubgoals > 0
                   ? `Apply ${name}, creating ${numSubgoals} subgoal${numSubgoals > 1 ? 's' : ''}`
                   : `Apply ${name}`,
@@ -862,7 +856,7 @@ function tryRewrite(
     return {
       id: `rewrite-${reverse ? 'rev-' : ''}${hypName}-occ${effectiveOcc.join(',')}`,
       label: `rw${reverse ? '\u2190' : ''} ${hypName}`,
-      labelLatex: `\\text{rw}${arrow}\\; \\textbf{${texEscape(hypName)}}`,
+      labelLatex: `\\text{rw}${arrow}\\; ${renderNameLatex(hypName, 'textbf')}`,
       description: `Rewrite${reverse ? ' (reverse)' : ''} using ${hypName}${occDesc}`,
       rewriteName: hypName,
       reverse,
@@ -1100,7 +1094,7 @@ export function computeSelectedHypSuggestions(
       suggestions.push({
         id: `hyp-exact-${hypName}`,
         label: `Exact ${hypName}`,
-        labelLatex: `\\text{exact } \\textbf{${texEscape(hypName)}}`,
+        labelLatex: `\\text{exact } ${renderNameLatex(hypName, 'textbf')}`,
         description: `Use ${hypName} to close the goal`,
       });
     }
@@ -1115,7 +1109,7 @@ export function computeSelectedHypSuggestions(
       suggestions.push({
         id: `hyp-apply-${hypName}`,
         label: `Apply ${hypName}`,
-        labelLatex: `\\text{apply } \\textbf{${texEscape(hypName)}}`,
+        labelLatex: `\\text{apply } ${renderNameLatex(hypName, 'textbf')}`,
         description: `Apply ${hypName} to the goal`,
         numSubgoals,
       });
@@ -1148,7 +1142,7 @@ export function computeSelectedHypSuggestions(
           suggestions.push({
             id: `hyp-destruct-${hypName}`,
             label: `Destructure ${hypName}`,
-            labelLatex: `\\text{cases } \\textbf{${texEscape(hypName)}}`,
+            labelLatex: `\\text{cases } ${renderNameLatex(hypName, 'textbf')}`,
             description: `Pattern-match on ${hypName}`,
           });
         }
@@ -1161,7 +1155,7 @@ export function computeSelectedHypSuggestions(
             suggestions.push({
               id: `hyp-proj-${hypName}-${fieldName}`,
               label: `Use ${fieldName}`,
-              labelLatex: `\\text{Use } \\textbf{${texEscape(fieldName)}}`,
+              labelLatex: `\\text{Use } ${renderNameLatex(fieldName, 'textbf')}`,
               description: `have h := ${projName} ${hypName} ...`,
               // Store the projection info for the click handler
               applyCtorName: projName,
