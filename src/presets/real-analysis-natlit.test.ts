@@ -195,4 +195,85 @@ bridge_wrong R = addRealOfNat R 170 34
     expect(withWrongAnswer.success).toBe(false);
     expect(withWrongAnswer.totalCheckErrors).toBeGreaterThan(0);
   });
+
+  // ----- Multiplication bridge: mulRealOfNat -----
+  // Same shape as addRealOfNat. NOTE: kept to small N (≤ 4) because the
+  // current kernel defeq has a perf cliff around N*M ≈ 25 (tracked separately).
+
+  let withMul3x2: CompileResult,
+      withMul0xN: CompileResult,
+      withMul1xN: CompileResult,
+      withMul2x4: CompileResult,
+      withMulAutoCoerce: CompileResult,
+      withMulWrong: CompileResult;
+
+  beforeAll(() => {
+    withMul3x2 = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+mul_3_2 : (R : Real) -> Equal (rmul (realOfNat R 3) (realOfNat R 2)) (realOfNat R 6)
+mul_3_2 R = mulRealOfNat R 3 2
+`);
+
+    withMul0xN = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+mul_0_n : (R : Real) -> Equal (rmul (realOfNat R 0) (realOfNat R 99)) (realOfNat R 0)
+mul_0_n R = mulRealOfNat R 0 99
+`);
+
+    withMul1xN = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+mul_1_n : (R : Real) -> Equal (rmul (realOfNat R 1) (realOfNat R 4)) (realOfNat R 4)
+mul_1_n R = mulRealOfNat R 1 4
+`);
+
+    withMul2x4 = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+mul_2_4 : (R : Real) -> Equal (rmul (realOfNat R 2) (realOfNat R 4)) (realOfNat R 8)
+mul_2_4 R = mulRealOfNat R 2 4
+`);
+
+    // Auto-coerced literals + mul: rmul 3 2 = 6 on Carrier R.
+    withMulAutoCoerce = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+mul_auto : (R : Real) -> Equal {A := Carrier R} (rmul 3 2) (realOfNat R 6)
+mul_auto R = mulRealOfNat R 3 2
+`);
+
+    // Negative test: 3*2 = 7 must FAIL.
+    withMulWrong = compileTTFromText(REAL_ANALYSIS_CODE + `
+
+mul_wrong : (R : Real) -> Equal (rmul (realOfNat R 3) (realOfNat R 2)) (realOfNat R 7)
+mul_wrong R = mulRealOfNat R 3 2
+`);
+  }, COMPILE_TIMEOUT);
+
+  test('bridge mul: 3 * 2 = 6 on abstract Real via mulRealOfNat', () => {
+    expect(withMul3x2.success).toBe(true);
+    expect(withMul3x2.totalCheckErrors).toBe(0);
+  });
+
+  test('bridge mul: 0 * 99 = 0 (large RHS, instant via Zero case)', () => {
+    expect(withMul0xN.success).toBe(true);
+    expect(withMul0xN.totalCheckErrors).toBe(0);
+  });
+
+  test('bridge mul: 1 * 4 = 4 on abstract Real', () => {
+    expect(withMul1xN.success).toBe(true);
+    expect(withMul1xN.totalCheckErrors).toBe(0);
+  });
+
+  test('bridge mul: 2 * 4 = 8 on abstract Real', () => {
+    expect(withMul2x4.success).toBe(true);
+    expect(withMul2x4.totalCheckErrors).toBe(0);
+  });
+
+  test('bridge mul: auto-coerced — rmul 3 2 = 6 on Carrier R', () => {
+    expect(withMulAutoCoerce.success).toBe(true);
+    expect(withMulAutoCoerce.totalCheckErrors).toBe(0);
+  });
+
+  test('bridge mul: WRONG answer 3 * 2 = 7 is REJECTED', () => {
+    expect(withMulWrong.success).toBe(false);
+    expect(withMulWrong.totalCheckErrors).toBeGreaterThan(0);
+  });
 });

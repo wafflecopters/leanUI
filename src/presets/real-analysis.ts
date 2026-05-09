@@ -190,6 +190,12 @@ plus : Nat -> Nat -> Nat
 plus Zero m = m
 plus (Succ n) m = Succ (plus n m)
 
+-- Nat multiplication. Used by mulRealOfNat (below) to bridge concrete nat
+-- multiplication to abstract Real.
+mult : Nat -> Nat -> Nat
+mult Zero m = Zero
+mult (Succ n) m = plus m (mult n m)
+
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
 
@@ -423,6 +429,25 @@ mulZeroLeft {R} a = addCancelRight (rmul (rzero R) a) (rzero R) (rmul (rzero R) 
 mulZeroRight : {R : Real} -> (c : Carrier R) -> Equal (rmul c (rzero R)) (rzero R) := by
   intros R c
   erw (CompleteOrderedField.mulComm (field R) c (rzero R)), (mulZeroLeft c)
+
+-- nat→Real multiplication homomorphism: realOfNat distributes over mult.
+-- The mul analog of addRealOfNat. Together they bridge any concrete nat
+-- polynomial expression to abstract Real.
+-- Proof (induction on n):
+--   Zero: rmul (rzero R) (realOfNat R m) = rzero R = realOfNat R 0
+--         which is def-equal to realOfNat R (mult 0 m).
+--   Succ: rmul (radd 1 (realOfNat R n)) (realOfNat R m)
+--       = rmul 1 m + rmul (realOfNat R n) (realOfNat R m)        [distribRight]
+--       = realOfNat R m + rmul (realOfNat R n) (realOfNat R m)   [mulOneLeft]
+--       = realOfNat R m + realOfNat R (mult n m)                 [IH/cong]
+--       = realOfNat R (plus m (mult n m))                        [addRealOfNat]
+--       = realOfNat R (mult (Succ n) m)                          [def-equal]
+-- NOTE: type-checking USES of this lemma is currently slow for n*m > ~25
+-- (kernel defeq fully unfolds realOfNat at each step). Soundness is fine;
+-- perf optimization is a separate workstream.
+mulRealOfNat : (R : Real) -> (n m : Nat) -> Equal (rmul (realOfNat R n) (realOfNat R m)) (realOfNat R (mult n m))
+mulRealOfNat R Zero m = mulZeroLeft (realOfNat R m)
+mulRealOfNat R (Succ n) m = trans (CompleteOrderedField.distribRight (field R) (rone R) (realOfNat R n) (realOfNat R m)) (trans (cong (\\z => radd z (rmul (realOfNat R n) (realOfNat R m))) (CompleteOrderedField.mulOneLeft (field R) (realOfNat R m))) (trans (cong (\\z => radd (realOfNat R m) z) (mulRealOfNat R n m)) (addRealOfNat R m (mult n m))))
 
 -- c*(-b) = -(c*b)
 mulNegRight : {R : Real} -> (c b : Carrier R) -> Equal (rmul c (rneg b)) (rneg (rmul c b))
