@@ -505,6 +505,25 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
           }
         }
       }
+      // NatLit primitive nat ops: when fn is registered @natAdd/@natMul and
+      // both args reduce to NatLit, compute via BigInt — O(log N) machine ops
+      // instead of O(N²) reduction steps for the user-defined recursive
+      // plus/mult. The user-supplied function still type-checks and is the
+      // source of truth; this is just a fast path for closed nat values.
+      // Spine shape: App(App(Const(fn), arg1), arg2).
+      if (term.fn.tag === 'App' && term.fn.fn.tag === 'Const' && ctx?.definitions?.natOpByFn) {
+        const op = ctx.definitions.natOpByFn.get(term.fn.fn.name);
+        if (op) {
+          const a = whnf(term.fn.arg, nextCtx);
+          if (a.tag === 'NatLit') {
+            const b = whnf(term.arg, nextCtx);
+            if (b.tag === 'NatLit') {
+              const value = op === 'add' ? a.value + b.value : a.value * b.value;
+              return { tag: 'NatLit', value };
+            }
+          }
+        }
+      }
       // δ-reduction: If fn is a Const with a Match definition, try ι-reduction
       // Check deltaDepth to limit unfolding
       if (fn.tag === 'Const' && ctx?.definitions && deltaDepth > 0) {

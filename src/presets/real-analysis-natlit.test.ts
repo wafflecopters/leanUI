@@ -231,9 +231,12 @@ mul_1_n R = mulRealOfNat R 1 4
 mul_2_4 : (R : Real) -> Equal (rmul (realOfNat R 2) (realOfNat R 4)) (realOfNat R 8)
 mul_2_4 R = mulRealOfNat R 2 4
 
--- After zeroCtor → NatLit fold, this works in seconds (was hanging).
+-- After @natAdd/@natMul primitives, even bigger sizes are O(1) compute.
 mul_7_8 : (R : Real) -> Equal (rmul (realOfNat R 7) (realOfNat R 8)) (realOfNat R 56)
 mul_7_8 R = mulRealOfNat R 7 8
+
+mul_50_50 : (R : Real) -> Equal (rmul (realOfNat R 50) (realOfNat R 50)) (realOfNat R 2500)
+mul_50_50 R = mulRealOfNat R 50 50
 `);
 
     // Auto-coerced literals + mul: rmul 3 2 = 6 on Carrier R.

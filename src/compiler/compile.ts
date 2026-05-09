@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, registerOfNat, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, registerNatOp, registerOfNat, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -5254,6 +5254,23 @@ function applyImplAnnotationsForBlock(block: CompiledBlock, definitions: Definit
       const err = registerOfNat(definitions, decl.name);
       if (err) {
         console.warn(`@ofNat verification failed for '${decl.name}': ${err}`);
+      }
+      continue;
+    }
+
+    // @natAdd / @natMul: register this term as a primitive nat operation
+    // for WHNF fast-path computation on NatLit args.
+    if (trimmed === '@natAdd') {
+      const err = registerNatOp(definitions, decl.name, 'add');
+      if (err) {
+        console.warn(`@natAdd verification failed for '${decl.name}': ${err}`);
+      }
+      continue;
+    }
+    if (trimmed === '@natMul') {
+      const err = registerNatOp(definitions, decl.name, 'mul');
+      if (err) {
+        console.warn(`@natMul verification failed for '${decl.name}': ${err}`);
       }
       continue;
     }

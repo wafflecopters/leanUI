@@ -242,6 +242,12 @@ export type DefinitionsMap = {
    *  is coerced to `realOfNat ?... NatLit`. Populated by registerOfNat when
    *  a definition is tagged `@syntax @ofNat`. */
   ofNatByTargetHead?: Map<string, string>,
+  /** Optional. Map from function name → primitive nat op kind.
+   *  E.g., {"plus": "add", "mult": "mul"} means WHNF can fast-path
+   *  `App(App(plus, NatLit a), NatLit b)` to `NatLit (a+b)` via BigInt
+   *  arithmetic, instead of O(N) reduction steps. Populated by registerNatOp
+   *  when a definition is tagged `@syntax @natAdd` or `@syntax @natMul`. */
+  natOpByFn?: Map<string, 'add' | 'mul'>,
 }
 
 export function createDefinitionsMap(): DefinitionsMap {
@@ -251,6 +257,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     inductiveNameOfConstructor: new Map<string, string>(),
     natImplByCtor: new Map<string, NatImpl>(),
     ofNatByTargetHead: new Map<string, string>(),
+    natOpByFn: new Map<string, 'add' | 'mul'>(),
   };
 }
 
@@ -365,6 +372,63 @@ export function registerOfNat(definitions: DefinitionsMap, fnName: string): stri
     definitions.ofNatByTargetHead = new Map<string, string>();
   }
   definitions.ofNatByTargetHead.set(retHead.name, fnName);
+  return null;
+}
+
+/**
+ * Register a function as a primitive nat operation. Must have shape
+ *   T → T → T   where T is a registered @impl=nat type.
+ * Once registered, WHNF fast-paths `App(App(Const(fnName), NatLit a), NatLit b)`
+ * to `NatLit (op(a, b))` via BigInt arithmetic — O(log N) machine ops instead
+ * of O(N) reduction steps for the user-defined recursive plus/mult.
+ *
+ * Returns null on success, or an error string. The shape check is structural:
+ * we don't verify the function actually computes addition/multiplication —
+ * the user is responsible for providing a correct implementation. The kernel
+ * primitive is just a fast path with the same observable behavior.
+ */
+export function registerNatOp(
+  definitions: DefinitionsMap,
+  fnName: string,
+  kind: 'add' | 'mul'
+): string | null {
+  const def = definitions.terms.get(fnName);
+  if (!def) return `@nat${kind === 'add' ? 'Add' : 'Mul'}: definition '${fnName}' not found`;
+  // Walk the type signature: should be T → T → T for some registered NatImpl T
+  let t = def.type;
+  const domains: string[] = [];
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    if (dom.tag !== 'Const') {
+      return `@nat${kind === 'add' ? 'Add' : 'Mul'}: '${fnName}' has non-Const domain at position ${domains.length}`;
+    }
+    domains.push(dom.name);
+    t = t.body;
+  }
+  if (domains.length !== 2) {
+    return `@nat${kind === 'add' ? 'Add' : 'Mul'}: '${fnName}' must take exactly 2 args, got ${domains.length}`;
+  }
+  // Return type must also be the same Const-head
+  let retHead = t;
+  while (retHead.tag === 'App') retHead = retHead.fn;
+  if (retHead.tag !== 'Const') {
+    return `@nat${kind === 'add' ? 'Add' : 'Mul'}: '${fnName}' return type must have a Const head`;
+  }
+  // Both args and return must be the same registered NatImpl type
+  if (domains[0] !== domains[1] || domains[0] !== retHead.name) {
+    return `@nat${kind === 'add' ? 'Add' : 'Mul'}: '${fnName}' must have type T → T → T (got ${domains[0]} → ${domains[1]} → ${retHead.name})`;
+  }
+  const natImplName = domains[0];
+  const isNatImpl = definitions.natImplByCtor
+    && [...definitions.natImplByCtor.values()].some(impl => impl.inductiveName === natImplName);
+  if (!isNatImpl) {
+    return `@nat${kind === 'add' ? 'Add' : 'Mul'}: '${fnName}' operates on '${natImplName}' which is not a @impl=nat-tagged type`;
+  }
+  if (!definitions.natOpByFn) {
+    definitions.natOpByFn = new Map<string, 'add' | 'mul'>();
+  }
+  definitions.natOpByFn.set(fnName, kind);
   return null;
 }
 

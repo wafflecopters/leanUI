@@ -1,0 +1,55 @@
+@test success
+@name "@natAdd/@natMul: bigint primitives — large nat arithmetic by refl"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Anchor (extractBody skips leading @-lines, so we need a non-@ line here
+-- before the @syntax annotations on plus/mult below take effect).
+inductive _Anchor : Type where
+  _MkAnchor : _Anchor
+
+@syntax @natAdd
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+@syntax @natMul
+mult : Nat -> Nat -> Nat
+mult Zero m = Zero
+mult (Succ n) m = plus m (mult n m)
+
+-- All of these would take O(N²) reduction steps without the @natMul
+-- BigInt fast-path. With it, type-checking is O(1) machine ops.
+
+-- 100*100 = 10000 — would be 10000 inverse-iota steps without primitive
+test_100 : Equal {A := Nat} (mult 100 100) 10000
+test_100 = refl
+
+-- 1000*1000 = 1000000 — clearly impossible without primitive
+test_1000 : Equal {A := Nat} (mult 1000 1000) 1000000
+test_1000 = refl
+
+-- 999 + 1 = 1000 (large add)
+test_add_999 : Equal {A := Nat} (plus 999 1) 1000
+test_add_999 = refl
+
+-- 12345 + 67890 = 80235
+test_big_add : Equal {A := Nat} (plus 12345 67890) 80235
+test_big_add = refl
+
+-- 314 * 159 = 49926 (more interesting non-square)
+test_pi : Equal {A := Nat} (mult 314 159) 49926
+test_pi = refl
+
+-- The user-defined recursive plus/mult is still the source of truth.
+-- The primitive is just a fast path: the same NatLit closed-form result.
+-- E.g., the recursion's Zero base case still applies:
+test_plus_zero_left : Equal {A := Nat} (plus 0 42) 42
+test_plus_zero_left = refl
+
+test_mult_zero_left : Equal {A := Nat} (mult 0 999) 0
+test_mult_zero_left = refl
+
+-- Negative test: a wrong answer is rejected (the primitive doesn't lie)
+-- Wait, this is @test success file so we can't test failures here.
+-- Negative tests live in the unit tests; this file just shows it works.

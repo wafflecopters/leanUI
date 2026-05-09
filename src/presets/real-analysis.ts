@@ -183,15 +183,18 @@ realOfNat : (R : Real) -> Nat -> Carrier R
 realOfNat R Zero = rzero R
 realOfNat R (Succ n) = radd (rone R) (realOfNat R n)
 
--- Nat addition. Concrete on NatLit via inverse-iota: \`plus 170 34\` reduces
--- to NatLit 204 in O(n) WHNF steps. Used by addRealOfNat to bridge concrete
--- nat arithmetic to abstract Real.
+-- Nat addition. The recursive definition is the source of truth; the
+-- @natAdd annotation gives WHNF a BigInt fast-path so closed NatLit args
+-- compute in O(log N) machine ops instead of O(N) reduction steps.
+@syntax @natAdd
 plus : Nat -> Nat -> Nat
 plus Zero m = m
 plus (Succ n) m = Succ (plus n m)
 
--- Nat multiplication. Used by mulRealOfNat (below) to bridge concrete nat
--- multiplication to abstract Real.
+-- Nat multiplication. Same pattern as plus: recursive definition + BigInt
+-- fast-path for closed args. Together with plus, makes 'mult 100 100'
+-- O(log N) instead of O(N²).
+@syntax @natMul
 mult : Nat -> Nat -> Nat
 mult Zero m = Zero
 mult (Succ n) m = plus m (mult n m)
