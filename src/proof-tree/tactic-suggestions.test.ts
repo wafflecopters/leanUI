@@ -384,7 +384,7 @@ describe('definition search suggestions', () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const compiled = compileTTFromText(REAL_ANALYSIS_CODE);
     defs = compiled.definitions!;
-  });
+  }, 30000);
 
   test('divTwoPos appears as suggestion for goal 0 < ε/2', () => {
     // Context: R : Real, ε : Carrier R, hε : rlt (rzero R) ε

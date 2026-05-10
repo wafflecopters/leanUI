@@ -518,6 +518,14 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
 
 // CHECKING
 
+// Module-scoped counter for @ofNat coercion Hole IDs. Each NatLit-coerce site
+// gets a unique block of IDs so multiple coercions in the same proof don't
+// collide. Process-global is fine because IDs only need to be distinct within
+// a single elaboration session; cross-session collisions would just create
+// metas with the same name and no real harm (the meta entries are scoped to
+// the TCEnv map).
+let ofNatHoleCounter = 0;
+
 export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
   // (NATLIT-COERCE) — when checking a NatLit against a non-Nat target type,
   // look for a registered @ofNat coercion and rewrite as `App(coerce, ..., NatLit)`.
@@ -549,9 +557,15 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
             }
             // argCount includes the Nat arg — we want metas for argCount-1 pre-Nat args
             const numPreArgs = argCount - 1;
+            // Use a globally-unique counter so multiple coercions in the same
+            // proof (e.g., two `exact 1` calls, or `0 < 1` with both literals
+            // coerced) don't collide on Hole IDs. Without this, all share
+            // `_ofNat_arg0` and conflict — leaving an unsolved Hole that
+            // renders as □ in the UI.
+            const uniq = ofNatHoleCounter++;
             let appTerm: TTKTerm = { tag: 'Const', name: coerceFn };
             for (let i = 0; i < numPreArgs; i++) {
-              appTerm = { tag: 'App', fn: appTerm, arg: { tag: 'Hole', id: `_ofNat_arg${i}` } };
+              appTerm = { tag: 'App', fn: appTerm, arg: { tag: 'Hole', id: `_ofNat_arg${uniq}_${i}` } };
             }
             appTerm = { tag: 'App', fn: appTerm, arg: env.value };
             // Now check this synthesized application against expectedType.

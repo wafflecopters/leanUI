@@ -1,0 +1,31 @@
+@test success
+@name "exact: multiple NatLit coercions in same proof don't collide"
+@import preambles/nat.tt
+
+inductive Anchor : Type 1 where
+  MkAnchor : Type -> Anchor
+
+field : Anchor -> Type
+field (MkAnchor T) = T
+
+Real : Type 1
+Real = Anchor
+
+Carrier : Real -> Type
+Carrier R = field R
+
+postulate defaultNat : (R : Real) -> Carrier R
+
+@syntax @ofNat
+realOfNat : (R : Real) -> Nat -> Carrier R
+realOfNat R n = defaultNat R
+
+postulate two_args : (R : Real) -> Carrier R -> Carrier R -> Carrier R
+
+-- Two NatLit coercions in the same proof: both must elaborate independently.
+-- Without unique Hole IDs, both reuse `_ofNat_arg0` and the constraint
+-- solver gets two solutions for the same Hole (one per coercion site),
+-- conflicting and leaving holes unsolved. UI symptom: □ in rendered term.
+test_two : (R : Real) -> Carrier R := by
+  intro R
+  exact (two_args R 1 2)
