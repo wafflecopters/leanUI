@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { inferType, checkType } from './checker';
+import { inferType, checkType, buildOfNatCoercionHoleId } from './checker';
 import { TTKTerm, mkVar, mkConst, mkType, mkPi, mkLambda, mkApp, mkULevel, mkLSucc, mkLMax, mkMeta } from './kernel';
 import { TCEnv, DefinitionsMap } from './term';
 import { unifyTerms, UnifyResult } from './unify';
@@ -382,6 +382,36 @@ describe('createMetaForHole: duplicate hole ID handling', () => {
 
     expect(meta1?.ctx.length).toBe(1); // Inside lambda with x bound
     expect(meta2?.ctx.length).toBe(1);
+  });
+});
+
+describe('buildOfNatCoercionHoleId', () => {
+  test('distinguishes different coercion sites deterministically', () => {
+    const left = buildOfNatCoercionHoleId(
+      [{ kind: 'field', name: 'value' }, { kind: 'array', index: 0 }],
+      'Carrier',
+      1,
+      0
+    );
+    const right = buildOfNatCoercionHoleId(
+      [{ kind: 'field', name: 'value' }, { kind: 'array', index: 1 }],
+      'Carrier',
+      1,
+      0
+    );
+
+    expect(left).not.toBe(right);
+    expect(left).toContain('Carrier');
+    expect(left).toContain('value_0_');
+  });
+
+  test('includes context depth so the same path in a different scope stays distinct', () => {
+    const outer = buildOfNatCoercionHoleId([], 'Carrier', 0, 0);
+    const inner = buildOfNatCoercionHoleId([], 'Carrier', 1, 0);
+
+    expect(outer).not.toBe(inner);
+    expect(outer).toContain('_0_root_0');
+    expect(inner).toContain('_1_root_0');
   });
 });
 
