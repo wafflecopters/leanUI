@@ -258,6 +258,10 @@ export type DefinitionsMap = {
    *  Parallel to ofNatByTargetHead. E.g., {"Carrier": "realOfRat"} means a
    *  RatLit in a `Carrier R` position is coerced to `realOfRat ?... RatLit`. */
   ofRatByTargetHead?: Map<string, string>,
+  /** Optional. Map from function name → primitive rat op kind. Parallel to
+   *  natOpByFn. WHNF fast-paths `App(App(Const(fn), RatLit a), RatLit b)`
+   *  to a canonical RatLit via BigInt arithmetic — O(1) machine ops. */
+  ratOpByFn?: Map<string, 'add' | 'mul' | 'sub'>,
 }
 
 /**
@@ -282,6 +286,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     natOpByFn: new Map<string, 'add' | 'mul'>(),
     ratImplByCtor: new Map<string, RatImpl>(),
     ofRatByTargetHead: new Map<string, string>(),
+    ratOpByFn: new Map<string, 'add' | 'mul' | 'sub'>(),
   };
 }
 
@@ -547,6 +552,58 @@ export function registerNatOp(
     definitions.natOpByFn = new Map<string, 'add' | 'mul'>();
   }
   definitions.natOpByFn.set(fnName, kind);
+  return null;
+}
+
+const ratOpDirective = (k: 'add' | 'mul' | 'sub') =>
+  k === 'add' ? '@ratAdd' : k === 'mul' ? '@ratMul' : '@ratSub';
+
+/**
+ * Register a function as a primitive Rat operation. Parallel to
+ * registerNatOp: function shape is T → T → T over a registered @impl=rat T.
+ * WHNF fast-paths `App(App(Const(fnName), RatLit a), RatLit b)` to a
+ * canonical RatLit via BigInt arithmetic.
+ */
+export function registerRatOp(
+  definitions: DefinitionsMap,
+  fnName: string,
+  kind: 'add' | 'mul' | 'sub'
+): string | null {
+  const directive = ratOpDirective(kind);
+  const def = definitions.terms.get(fnName);
+  if (!def) return `${directive}: definition '${fnName}' not found`;
+  let t = def.type;
+  const domains: string[] = [];
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    if (dom.tag !== 'Const') {
+      return `${directive}: '${fnName}' has non-Const domain at position ${domains.length}`;
+    }
+    domains.push(dom.name);
+    t = t.body;
+  }
+  if (domains.length !== 2) {
+    return `${directive}: '${fnName}' must take exactly 2 args, got ${domains.length}`;
+  }
+  let retHead = t;
+  while (retHead.tag === 'App') retHead = retHead.fn;
+  if (retHead.tag !== 'Const') {
+    return `${directive}: '${fnName}' return type must have a Const head`;
+  }
+  if (domains[0] !== domains[1] || domains[0] !== retHead.name) {
+    return `${directive}: '${fnName}' must have type T → T → T (got ${domains[0]} → ${domains[1]} → ${retHead.name})`;
+  }
+  const ratImplName = domains[0];
+  const isRatImpl = definitions.ratImplByCtor
+    && [...definitions.ratImplByCtor.values()].some(impl => impl.inductiveName === ratImplName);
+  if (!isRatImpl) {
+    return `${directive}: '${fnName}' operates on '${ratImplName}' which is not a @impl=rat-tagged type`;
+  }
+  if (!definitions.ratOpByFn) {
+    definitions.ratOpByFn = new Map<string, 'add' | 'mul' | 'sub'>();
+  }
+  definitions.ratOpByFn.set(fnName, kind);
   return null;
 }
 

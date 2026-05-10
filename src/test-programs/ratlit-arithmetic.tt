@@ -1,0 +1,60 @@
+@test success
+@name "@ratAdd/@ratMul/@ratSub: BigInt-fast Rat arithmetic on decimals"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+inductive _Anchor : Type where _MkAnchor : _Anchor
+
+@syntax @impl=rat
+inductive Rat : Type where
+  MkRat : Nat -> Nat -> Rat
+
+-- The recursive defs aren't strictly needed for the @rat* annotations
+-- (the kernel fast-path uses BigInt directly), but they make the
+-- function definitions sound for non-literal arguments.
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+mult : Nat -> Nat -> Nat
+mult Zero m = Zero
+mult (Succ n) m = plus m (mult n m)
+
+minus : Nat -> Nat -> Nat
+minus n Zero = n
+minus Zero (Succ _) = Zero
+minus (Succ n) (Succ m) = minus n m
+
+@syntax @ratAdd
+ratPlus : Rat -> Rat -> Rat
+ratPlus (MkRat a b) (MkRat c d) = MkRat (plus (mult a d) (mult c b)) (mult b d)
+
+@syntax @ratMul
+ratMult : Rat -> Rat -> Rat
+ratMult (MkRat a b) (MkRat c d) = MkRat (mult a c) (mult b d)
+
+@syntax @ratSub
+ratSub : Rat -> Rat -> Rat
+ratSub (MkRat a b) (MkRat c d) = MkRat (minus (mult a d) (mult c b)) (mult b d)
+
+-- Decimal arithmetic, all by refl (BigInt fast-path).
+test_add : Equal {A := Rat} (ratPlus 1.5 0.5) 2.0
+test_add = refl
+
+test_sub : Equal {A := Rat} (ratSub 185.6 85.7) 99.9
+test_sub = refl
+
+test_mul : Equal {A := Rat} (ratMult 1.5 4.0) 6.0
+test_mul = refl
+
+-- Scientific notation works seamlessly.
+test_sci : Equal {A := Rat} (ratMult 3.56e-8 1.2e12) 42720.0
+test_sci = refl
+
+-- Mixed: integer operand + decimal operand.
+test_mix : Equal {A := Rat} (ratPlus 1 0.99) 1.99
+test_mix = refl
+
+-- Composition: (1.5 + 0.5) * 2 = 4
+test_compose : Equal {A := Rat} (ratMult (ratPlus 1.5 0.5) 2.0) 4.0
+test_compose = refl

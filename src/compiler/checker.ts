@@ -577,6 +577,25 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     while (head.tag === 'App') head = head.fn;
     if (head.tag === 'Const') {
       const headName = head.name;
+      // NatLit → @impl=rat: expand `n` to `MkRat n 1`. This is the structural
+      // analog of `1.0 : Rat` working — integer-valued literals canonicalize
+      // to NatLit, but in a Rat context they're still rationals.
+      const ratReg = env.definitions.ratImplByCtor;
+      const ratImpl = ratReg
+        ? [...ratReg.values()].find(impl => impl.inductiveName === headName)
+        : undefined;
+      if (ratImpl) {
+        const expanded: TTKTerm = {
+          tag: 'App',
+          fn: {
+            tag: 'App',
+            fn: { tag: 'Const', name: ratImpl.ratCtor },
+            arg: env.value,
+          },
+          arg: { tag: 'NatLit', value: 1n },
+        };
+        return checkType(env.withValue(expanded), expectedType);
+      }
       // Skip coercion if the target IS a Nat-impl — that's the identity case
       const reg = env.definitions.natImplByCtor;
       const isNatImpl = reg && [...reg.values()].some(impl => impl.inductiveName === headName);

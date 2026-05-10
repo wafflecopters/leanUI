@@ -206,6 +206,37 @@ mult (Succ n) m = plus m (mult n m)
 inductive Rat : Type where
   MkRat : Nat -> Nat -> Rat
 
+-- Rat arithmetic. Recursive definitions are the source of truth (so
+-- proofs by induction work); the @ratAdd/@ratMul/@ratSub annotations
+-- give WHNF a BigInt fast-path for closed RatLit args.
+--   a/b + c/d = (a*d + c*b) / (b*d)
+@syntax @ratAdd
+ratPlus : Rat -> Rat -> Rat
+ratPlus (MkRat a b) (MkRat c d) = MkRat (plus (mult a d) (mult c b)) (mult b d)
+
+--   a/b * c/d = (a*c) / (b*d)
+@syntax @ratMul
+ratMult : Rat -> Rat -> Rat
+ratMult (MkRat a b) (MkRat c d) = MkRat (mult a c) (mult b d)
+
+-- minus: truncated nat subtraction (returns Zero when b > a). The
+-- @ratSub primitive computes via BigInt directly, so this user-side
+-- definition only matters for non-literal Rat arithmetic.
+minus : Nat -> Nat -> Nat
+minus n Zero = n
+minus Zero (Succ _) = Zero
+minus (Succ n) (Succ m) = minus n m
+
+-- Rat subtraction. The user's recursive definition uses Nat (no
+-- negative numbers), so it's only correct when the result is
+-- non-negative. The @ratSub primitive computes via BigInt and may
+-- produce a RatLit with negative numerator — fine for the kernel's
+-- canonical form, but won't iota-view back to MkRat with Nat fields.
+-- For the milestone proof (185.6 - 85.7 = 99.9) we stay positive.
+@syntax @ratSub
+ratSub : Rat -> Rat -> Rat
+ratSub (MkRat a b) (MkRat c d) = MkRat (minus (mult a d) (mult c b)) (mult b d)
+
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
 

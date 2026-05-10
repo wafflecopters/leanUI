@@ -15,6 +15,31 @@ export type WhnfContext = {
 const DEFAULT_FUEL = 1000;
 const DEFAULT_DELTA_DEPTH = 100;  // Limit definition unfolding depth
 
+/** View a term as a rational literal: NatLit n maps to {num: n, den: 1};
+ *  RatLit passes through. Returns null otherwise. Used by the @ratAdd/
+ *  @ratMul/@ratSub fast-path so a NatLit arg (which integer-degenerated
+ *  during canonicalization) still gets the BigInt path. */
+function ratLitView(term: TTKTerm): { num: bigint; den: bigint } | null {
+  if (term.tag === 'RatLit') return { num: term.num, den: term.den };
+  if (term.tag === 'NatLit') return { num: term.value, den: 1n };
+  return null;
+}
+
+/** Canonicalize a num/den pair: gcd-reduce, normalize sign so den > 0,
+ *  collapse to NatLit if integer-valued and non-negative. */
+function canonicalizeRatLit(num: bigint, den: bigint): TTKTerm {
+  if (den === 0n) throw new Error('Rat: division by zero');
+  if (den < 0n) { num = -num; den = -den; }
+  let a = num < 0n ? -num : num;
+  let b = den;
+  while (b !== 0n) { [a, b] = [b, a % b]; }
+  const g = a === 0n ? 1n : a;
+  num = num / g;
+  den = den / g;
+  if (den === 1n && num >= 0n) return { tag: 'NatLit', value: num };
+  return { tag: 'RatLit', num, den };
+}
+
 /**
  * Check if a variable index is free in a term.
  */
@@ -114,18 +139,34 @@ function matchPattern(pattern: TTKPattern, term: TTKTerm, ctx?: WhnfContext): TT
       // RatLit iota-view: when the pattern is a registered @impl=rat ctor
       // and the term reduced to a RatLit, expand the literal to
       // MkRat(NatLit num, NatLit den) so the PCtor pattern can match.
-      if (reduced.tag === 'RatLit' && ctx?.definitions?.ratImplByCtor) {
+      // Also handles the case where the term is NatLit n (an integer-valued
+      // rational that canonicalized to NatLit) — expand to MkRat n 1, so
+      // \`1.0\` (which the parser degenerates to NatLit 1) still pattern-
+      // matches as a Rat.
+      if (ctx?.definitions?.ratImplByCtor) {
         const impl = ctx.definitions.ratImplByCtor.get(pattern.name);
         if (impl && pattern.name === impl.ratCtor) {
-          reduced = {
-            tag: 'App',
-            fn: {
+          if (reduced.tag === 'RatLit') {
+            reduced = {
               tag: 'App',
-              fn: { tag: 'Const', name: impl.ratCtor },
-              arg: { tag: 'NatLit', value: reduced.num },
-            },
-            arg: { tag: 'NatLit', value: reduced.den },
-          };
+              fn: {
+                tag: 'App',
+                fn: { tag: 'Const', name: impl.ratCtor },
+                arg: { tag: 'NatLit', value: reduced.num },
+              },
+              arg: { tag: 'NatLit', value: reduced.den },
+            };
+          } else if (reduced.tag === 'NatLit') {
+            reduced = {
+              tag: 'App',
+              fn: {
+                tag: 'App',
+                fn: { tag: 'Const', name: impl.ratCtor },
+                arg: { tag: 'NatLit', value: reduced.value },
+              },
+              arg: { tag: 'NatLit', value: 1n },
+            };
+          }
         }
       }
 
@@ -541,6 +582,36 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
             if (b.tag === 'NatLit') {
               const value = op === 'add' ? a.value + b.value : a.value * b.value;
               return { tag: 'NatLit', value };
+            }
+          }
+        }
+      }
+      // RatLit primitive Rat ops: when fn is registered @ratAdd/@ratMul/
+      // @ratSub and both args reduce to RatLit, compute via BigInt and
+      // canonicalize via gcd. Parallel to natOpByFn but for rationals.
+      // Sub may produce negative numerator; canonicalization handles that
+      // (sign on num, den always positive).
+      if (term.fn.tag === 'App' && term.fn.fn.tag === 'Const' && ctx?.definitions?.ratOpByFn) {
+        const op = ctx.definitions.ratOpByFn.get(term.fn.fn.name);
+        if (op) {
+          const a = whnf(term.fn.arg, nextCtx);
+          const aRat = ratLitView(a);
+          if (aRat) {
+            const b = whnf(term.arg, nextCtx);
+            const bRat = ratLitView(b);
+            if (bRat) {
+              let num: bigint, den: bigint;
+              if (op === 'add') {
+                num = aRat.num * bRat.den + bRat.num * aRat.den;
+                den = aRat.den * bRat.den;
+              } else if (op === 'mul') {
+                num = aRat.num * bRat.num;
+                den = aRat.den * bRat.den;
+              } else {
+                num = aRat.num * bRat.den - bRat.num * aRat.den;
+                den = aRat.den * bRat.den;
+              }
+              return canonicalizeRatLit(num, den);
             }
           }
         }
