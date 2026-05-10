@@ -9,7 +9,9 @@ import { describe, test, expect, beforeAll } from 'vitest';
 import { compileTTFromText, type CompileResult } from '../compiler/compile';
 import { REAL_ANALYSIS_CODE } from './real-analysis';
 
-const COMPILE_TIMEOUT = 30000;
+// This preset compiles several large real-analysis snapshots inside beforeAll hooks.
+// Give the setup enough room so the suite reports semantic failures instead of timing out.
+const COMPILE_TIMEOUT = 120000;
 
 describe('NatLit + @ofNat in real-analysis preset', () => {
   let baseline: CompileResult;

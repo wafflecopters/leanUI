@@ -58,6 +58,15 @@ proof_cross R = subRealOfRat R 100 0.1
     expect(withMilestones.totalCheckErrors).toBe(0);
   });
 
+  test('rat homomorphism lemmas are present in the preset output', () => {
+    const declarationNames = new Set(
+      withMilestones.blocks.flatMap(b => b.declarations ?? []).map(d => d.name)
+    );
+    expect(declarationNames.has('addRealOfRat')).toBe(true);
+    expect(declarationNames.has('mulRealOfRat')).toBe(true);
+    expect(declarationNames.has('subRealOfRat')).toBe(true);
+  });
+
   test('1.5 + 0.5 = 2.0 on abstract Real (integer-valued result)', () => {
     const decl = withMilestones.blocks
       .flatMap(b => b.declarations ?? [])

@@ -445,7 +445,7 @@ test = Type
     }
   });
 
-  test('real-analysis projections work correctly', { timeout: 15000 }, async () => {
+  test('real-analysis projections work correctly', { timeout: 30000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
 

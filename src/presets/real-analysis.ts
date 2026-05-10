@@ -285,24 +285,9 @@ realOfRat : (R : Real) -> Rat -> Carrier R
 realOfRat R (MkRat n (Succ Zero)) = realOfNat R n
 realOfRat R (MkRat n d) = rdiv (realOfNat R n) (realOfNat R d)
 
-------------------------------------------------------------
--- Rat → Real homomorphism lemmas (currently postulated)
-------------------------------------------------------------
--- These bridge Rat arithmetic (computable via @ratAdd/@ratMul/@ratSub
--- BigInt primitives) to the abstract Real field operations. With them,
--- decimal facts like '185.6 - 85.7 = 99.9' on Carrier R are one-liners.
---
--- TODO: Prove these from field axioms (they follow from addRealOfNat /
--- mulRealOfNat + the cross-multiplication identity 'a/b + c/d =
--- (a*d + c*b)/(b*d)' applied at each ctor case). For the milestone
--- proofs we postulate; soundness rests on the abstract Real being a
--- complete ordered field.
-
-postulate addRealOfRat : (R : Real) -> (a b : Rat) -> Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
-postulate mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
--- subRealOfRat assumes the result is non-negative (matching the
--- truncated-Nat ratSub on the Rat side).
-postulate subRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rsub (realOfRat R a) (realOfRat R b)) (realOfRat R (ratSub a b))
+-- Rat homomorphism lemmas (addRealOfRat, mulRealOfRat, subRealOfRat) are
+-- defined further down — they need addRealOfNat and mulRealOfNat to be in
+-- scope first.
 
 ------------------------------------------------------------
 -- Limits: the epsilon-delta definition
@@ -525,6 +510,14 @@ mulZeroRight : {R : Real} -> (c : Carrier R) -> Equal (rmul c (rzero R)) (rzero 
 mulRealOfNat : (R : Real) -> (n m : Nat) -> Equal (rmul (realOfNat R n) (realOfNat R m)) (realOfNat R (mult n m))
 mulRealOfNat R Zero m = mulZeroLeft (realOfNat R m)
 mulRealOfNat R (Succ n) m = trans (CompleteOrderedField.distribRight (field R) (rone R) (realOfNat R n) (realOfNat R m)) (trans (cong (\\z => radd z (rmul (realOfNat R n) (realOfNat R m))) (CompleteOrderedField.mulOneLeft (field R) (realOfNat R m))) (trans (cong (\\z => radd (realOfNat R m) z) (mulRealOfNat R n m)) (addRealOfNat R m (mult n m))))
+
+-- Rat -> Real homomorphism lemmas. These are still postulated for now, but
+-- they need to live after the Nat homomorphism lemmas they conceptually build on.
+postulate addRealOfRat : (R : Real) -> (a b : Rat) -> Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
+postulate mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
+-- subRealOfRat assumes the result is non-negative, matching the truncated-Nat
+-- ratSub on the Rat side.
+postulate subRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rsub (realOfRat R a) (realOfRat R b)) (realOfRat R (ratSub a b))
 
 -- c*(-b) = -(c*b)
 mulNegRight : {R : Real} -> (c b : Carrier R) -> Equal (rmul c (rneg b)) (rneg (rmul c b))
