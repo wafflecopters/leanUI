@@ -144,6 +144,17 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
       if (definitions) {
         const { head, args } = collectAppSpine(t);
         if (head.tag === 'Const') {
+          // @ofNat coercion fold: a fully-applied registered @ofNat function
+          // wrapping a NatLit is just the literal at the display level.
+          // \`realOfNat R (NatLit 1)\` → \`1\`, hiding the kernel coercion that
+          // makes \`1 : Carrier R\` work.
+          const ofNatReg = definitions.ofNatByTargetHead;
+          if (ofNatReg && [...ofNatReg.values()].includes(head.name)) {
+            const last = args[args.length - 1];
+            if (last && last.tag === 'NatLit') {
+              return { tag: 'NatLit', value: last.value } as TTerm;
+            }
+          }
           const namedArgMap = lookupNamedArgMap(head.name, definitions);
           if (namedArgMap && namedArgMap.size > 0) {
             const implicitPositions = new Set<number>(namedArgMap.values());
