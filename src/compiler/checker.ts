@@ -600,6 +600,12 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       const reg = env.definitions.natImplByCtor;
       const isNatImpl = reg && [...reg.values()].some(impl => impl.inductiveName === headName);
       if (!isNatImpl) {
+        // @ofNat takes priority for NatLit at non-Rat targets, since the Nat
+        // homomorphism lemmas (addRealOfNat, mulRealOfNat) talk about
+        // realOfNat directly. Switching NatLit to a Rat path would break
+        // those proofs. Mixed NatLit-with-RatLit expressions require the
+        // user to write explicit Rat literals (e.g., 2.0 instead of 2) when
+        // composing with @ofRat-based lemmas — see the decimal milestone tests.
         const coerceFn = env.definitions.ofNatByTargetHead?.get(headName);
         if (coerceFn) {
           // Build: App(...App(Const(coerceFn), ?meta1), ..., NatLit)

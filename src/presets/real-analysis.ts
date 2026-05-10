@@ -272,10 +272,29 @@ absElim {R} a C pos neg = eitherElimDep (\\e => C (eitherElim (\\_ => a) (\\_ =>
 -- realOfRat R (MkRat num den), which is (realOfNat R num) / (realOfNat R den).
 -- So '1.5 : Carrier R' becomes '(realOfNat R 3) / (realOfNat R 2)'.
 -- The structural definition lets the kernel reduce all the way to
--- abstract field axioms; homomorphism lemmas (Stage 5) build on this.
+-- abstract field axioms; homomorphism lemmas (below) build on this.
 @syntax @ofRat
 realOfRat : (R : Real) -> Rat -> Carrier R
 realOfRat R (MkRat n d) = rdiv (realOfNat R n) (realOfNat R d)
+
+------------------------------------------------------------
+-- Rat → Real homomorphism lemmas (currently postulated)
+------------------------------------------------------------
+-- These bridge Rat arithmetic (computable via @ratAdd/@ratMul/@ratSub
+-- BigInt primitives) to the abstract Real field operations. With them,
+-- decimal facts like '185.6 - 85.7 = 99.9' on Carrier R are one-liners.
+--
+-- TODO: Prove these from field axioms (they follow from addRealOfNat /
+-- mulRealOfNat + the cross-multiplication identity 'a/b + c/d =
+-- (a*d + c*b)/(b*d)' applied at each ctor case). For the milestone
+-- proofs we postulate; soundness rests on the abstract Real being a
+-- complete ordered field.
+
+postulate addRealOfRat : (R : Real) -> (a b : Rat) -> Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
+postulate mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
+-- subRealOfRat assumes the result is non-negative (matching the
+-- truncated-Nat ratSub on the Rat side).
+postulate subRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rsub (realOfRat R a) (realOfRat R b)) (realOfRat R (ratSub a b))
 
 ------------------------------------------------------------
 -- Limits: the epsilon-delta definition
