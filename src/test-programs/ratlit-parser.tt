@@ -1,9 +1,8 @@
 @test failure
-@name "RatLit: decimal parses but inferType errors (no @impl=rat yet)"
-@error "Inference not implemented"
+@name "RatLit: decimal without @impl=rat fails inference"
+@error "no @impl=rat type registered"
 
--- Phase 6 Stage 1 only adds RatLit at the kernel/parser level.
--- @impl=rat / @ofRat coercions come in later stages. So a bare decimal
--- like `1.5` parses fine but can't be type-inferred yet.
+-- Without an @impl=rat type in scope, a bare decimal can't be inferred.
+-- (With @impl=rat, see ratlit-impl.tt — `1.5` infers to Rat.)
 test : Type
 test = 1.5

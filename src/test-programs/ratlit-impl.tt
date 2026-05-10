@@ -1,0 +1,43 @@
+@test success
+@name "@impl=rat: Rat type registered, RatLit iota expands to MkRat"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Anchor (extractBody skips leading @-lines, so we need a non-@ line here
+-- before the @syntax annotation on Rat below takes effect).
+inductive _Anchor : Type where
+  _MkAnchor : _Anchor
+
+@syntax @impl=rat
+inductive Rat : Type where
+  MkRat : Nat -> Nat -> Rat
+
+-- iota-view: matching `1.5` (kernel RatLit{3, 2}) against `MkRat n d`
+-- expands the literal so the pattern fires.
+ratNum : Rat -> Nat
+ratNum (MkRat n d) = n
+
+ratDen : Rat -> Nat
+ratDen (MkRat n d) = d
+
+-- 1.5 = 3/2 (canonicalized at parse time), so num=3, den=2.
+test_num : Equal {A := Nat} (ratNum 1.5) 3
+test_num = refl
+
+test_den : Equal {A := Nat} (ratDen 1.5) 2
+test_den = refl
+
+-- 185.6 = 1856/10 → reduces by gcd 2 → 928/5
+test_185_num : Equal {A := Nat} (ratNum 185.6) 928
+test_185_num = refl
+
+test_185_den : Equal {A := Nat} (ratDen 185.6) 5
+test_185_den = refl
+
+-- inverse-iota: building `MkRat 3 2` should fold to RatLit{3, 2},
+-- which then equals the literal `1.5` definitionally.
+test_inverse : Equal {A := Rat} (MkRat 3 2) 1.5
+test_inverse = refl
+
+-- And 1.0 elaborates to NatLit (degenerate), so this should fail to
+-- type-check as Rat. We skip that case here; it's by design.

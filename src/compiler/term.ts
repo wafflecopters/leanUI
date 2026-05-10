@@ -248,6 +248,24 @@ export type DefinitionsMap = {
    *  arithmetic, instead of O(N) reduction steps. Populated by registerNatOp
    *  when a definition is tagged `@syntax @natAdd` or `@syntax @natMul`. */
   natOpByFn?: Map<string, 'add' | 'mul'>,
+  /** Optional. Map from ctor name → RatImpl. Populated by registerRatImpl
+   *  when the preset declares `@syntax @impl=rat` on a single-ctor inductive
+   *  whose ctor takes two Nat-impl args (num, den). Used by the WHNF iota
+   *  view (RatLit n/d → MkRat n d) and inverse-iota (MkRat NatLit NatLit →
+   *  RatLit, canonicalized via gcd). */
+  ratImplByCtor?: Map<string, RatImpl>,
+}
+
+/**
+ * Rat-impl shape detected from `@syntax @impl=rat`. The kernel doesn't enforce
+ * the den > 0 invariant — the user's Rat type is responsible for any runtime
+ * validity. RatLit literals are always canonical (gcd=1, den >= 2 since
+ * integer-valued rationals collapse to NatLit).
+ */
+export type RatImpl = {
+  inductiveName: string;     // e.g., "Rat"
+  ratCtor: string;           // single ctor name, e.g., "MkRat"
+  natImplName: string;       // the Nat-impl type used for num/den, e.g., "Nat"
 }
 
 export function createDefinitionsMap(): DefinitionsMap {
@@ -258,6 +276,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     natImplByCtor: new Map<string, NatImpl>(),
     ofNatByTargetHead: new Map<string, string>(),
     natOpByFn: new Map<string, 'add' | 'mul'>(),
+    ratImplByCtor: new Map<string, RatImpl>(),
   };
 }
 
@@ -323,6 +342,61 @@ export function registerNatImpl(definitions: DefinitionsMap, inductiveName: stri
   }
   definitions.natImplByCtor.set(zeroCtor, impl);
   definitions.natImplByCtor.set(succCtor, impl);
+  return null;
+}
+
+/**
+ * Register an inductive type as a Rat-impl. Verifies the shape:
+ *   - exactly 1 constructor
+ *   - constructor type is `T → T → I` where T is a registered @impl=nat
+ *     type and I is the inductive itself.
+ *
+ * The kernel does not enforce den > 0 — that's a user-side invariant. RatLit
+ * literals are always canonicalized at the parser, so any well-formed kernel
+ * RatLit has gcd(num, den) = 1 and den >= 2.
+ *
+ * Returns null on success, or an error message string.
+ */
+export function registerRatImpl(definitions: DefinitionsMap, inductiveName: string): string | null {
+  const ind = definitions.inductiveTypes.get(inductiveName);
+  if (!ind) return `@impl=rat: inductive type '${inductiveName}' not found`;
+  if (ind.constructors.length !== 1) {
+    return `@impl=rat: inductive '${inductiveName}' must have exactly 1 constructor (found ${ind.constructors.length})`;
+  }
+  const ctor = ind.constructors[0];
+  // Walk Pi binders to discover the ctor's arg types
+  const argTypes: string[] = [];
+  let t = ctor.type;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    if (dom.tag !== 'Const') {
+      return `@impl=rat: ctor '${ctor.name}' has non-Const domain at position ${argTypes.length}`;
+    }
+    argTypes.push(dom.name);
+    t = t.body;
+  }
+  let retHead = t;
+  while (retHead.tag === 'App') retHead = retHead.fn;
+  if (retHead.tag !== 'Const' || retHead.name !== inductiveName) {
+    return `@impl=rat: ctor '${ctor.name}' must return '${inductiveName}'`;
+  }
+  if (argTypes.length !== 2) {
+    return `@impl=rat: ctor '${ctor.name}' must take exactly 2 args (num, den), got ${argTypes.length}`;
+  }
+  if (argTypes[0] !== argTypes[1]) {
+    return `@impl=rat: ctor '${ctor.name}' must take same Nat-impl type for both args (got ${argTypes[0]}, ${argTypes[1]})`;
+  }
+  const natImplName = argTypes[0];
+  const isNatImpl = definitions.natImplByCtor
+    && [...definitions.natImplByCtor.values()].some(impl => impl.inductiveName === natImplName);
+  if (!isNatImpl) {
+    return `@impl=rat: '${inductiveName}' uses '${natImplName}' for num/den, but '${natImplName}' is not a @impl=nat-tagged type`;
+  }
+  if (!definitions.ratImplByCtor) {
+    definitions.ratImplByCtor = new Map<string, RatImpl>();
+  }
+  definitions.ratImplByCtor.set(ctor.name, { inductiveName, ratCtor: ctor.name, natImplName });
   return null;
 }
 

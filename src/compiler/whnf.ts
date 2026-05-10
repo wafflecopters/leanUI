@@ -111,6 +111,24 @@ function matchPattern(pattern: TTKPattern, term: TTKTerm, ctx?: WhnfContext): TT
         }
       }
 
+      // RatLit iota-view: when the pattern is a registered @impl=rat ctor
+      // and the term reduced to a RatLit, expand the literal to
+      // MkRat(NatLit num, NatLit den) so the PCtor pattern can match.
+      if (reduced.tag === 'RatLit' && ctx?.definitions?.ratImplByCtor) {
+        const impl = ctx.definitions.ratImplByCtor.get(pattern.name);
+        if (impl && pattern.name === impl.ratCtor) {
+          reduced = {
+            tag: 'App',
+            fn: {
+              tag: 'App',
+              fn: { tag: 'Const', name: impl.ratCtor },
+              arg: { tag: 'NatLit', value: reduced.num },
+            },
+            arg: { tag: 'NatLit', value: reduced.den },
+          };
+        }
+      }
+
       const { head, args } = collectAppSpine(reduced);
 
       // Constructor pattern matches if head is same constructor
@@ -523,6 +541,35 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
             if (b.tag === 'NatLit') {
               const value = op === 'add' ? a.value + b.value : a.value * b.value;
               return { tag: 'NatLit', value };
+            }
+          }
+        }
+      }
+      // RatLit inverse-iota: MkRat(NatLit n, NatLit d) collapses to a
+      // canonical RatLit. Pairs with the iota-view in matchPattern (RatLit
+      // n/d → MkRat (NatLit n) (NatLit d)) for a roundtrip canonical form.
+      // Spine shape: App(App(Const(MkRat), NatLit n), NatLit d). Den=0 is
+      // an error (division by zero), but we let it slide here — the user
+      // bears the same responsibility as their Rat constructor would.
+      if (term.fn.tag === 'App' && term.fn.fn.tag === 'Const' && ctx?.definitions?.ratImplByCtor) {
+        const impl = ctx.definitions.ratImplByCtor.get(term.fn.fn.name);
+        if (impl) {
+          const numTerm = whnf(term.fn.arg, nextCtx);
+          if (numTerm.tag === 'NatLit') {
+            const denTerm = whnf(term.arg, nextCtx);
+            if (denTerm.tag === 'NatLit' && denTerm.value > 0n) {
+              const num = numTerm.value;
+              const den = denTerm.value;
+              // Canonicalize via gcd. RatLit invariant: gcd=1, den >= 2,
+              // or fall back to NatLit when integer-valued.
+              let a = num < 0n ? -num : num;
+              let b = den;
+              while (b !== 0n) { [a, b] = [b, a % b]; }
+              const g = a;
+              const cnum = num / g;
+              const cden = den / g;
+              if (cden === 1n) return { tag: 'NatLit', value: cnum };
+              return { tag: 'RatLit', num: cnum, den: cden };
             }
           }
         }

@@ -513,6 +513,28 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     );
   }
 
+  if (env.value.tag === 'RatLit') {
+    const reg = env.definitions.ratImplByCtor;
+    if (reg && reg.size > 0) {
+      const impls = new Set<string>();
+      for (const impl of reg.values()) impls.add(impl.inductiveName);
+      if (impls.size === 1) {
+        const indName = [...impls][0];
+        const ratType: TTKTerm = { tag: 'Const', name: indName };
+        env.recordTypeInfo(ratType);
+        return env.withValue(ratType);
+      }
+      throw TCEnvError.create(
+        `Cannot infer type for rational literal ${env.value.num}/${env.value.den}: multiple @impl=rat types in scope (${[...impls].join(', ')}). Add a type annotation.`,
+        env,
+      );
+    }
+    throw TCEnvError.create(
+      `Cannot infer type for rational literal ${env.value.num}/${env.value.den}: no @impl=rat type registered. Declare an inductive with @syntax @impl=rat or use a type annotation.`,
+      env,
+    );
+  }
+
   throw TCEnvError.create(`Inference not implemented for term type ${env.value.tag}`, env)
 }
 
