@@ -421,6 +421,12 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
     case 'Sort':
       return [mkSymbol('Type')];
 
+    case 'NatLit':
+      // Numeric literal — render the BigInt value directly. Without this
+      // case, NatLit fell through to the default branch and rendered as
+      // □, e.g. \`@ofNat(R, NatLit 1)\` showed as \`@ofNat(R, □)\`.
+      return [mkSymbol(term.value.toString())];
+
     case 'Hole':
       return [mkHole()];
 
