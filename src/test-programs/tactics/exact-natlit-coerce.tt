@@ -1,0 +1,38 @@
+@test success
+@name "exact: NatLit coerces to @ofNat target type (Carrier R, definitional)"
+@import preambles/nat.tt
+
+-- Mirrors the real-analysis preset structure where `Carrier R` unfolds via
+-- field projection on a record. The unfolding produces a `match` expression,
+-- not a Const-head, which broke the @ofNat lookup in tactic mode.
+inductive Anchor : Type 1 where
+  MkAnchor : Type -> Anchor
+
+field : Anchor -> Type
+field (MkAnchor T) = T
+
+-- Real is parameterized; Carrier R unfolds to the underlying type.
+Real : Type 1
+Real = Anchor
+
+Carrier : Real -> Type
+Carrier R = field R
+
+postulate defaultNat : (R : Real) -> Carrier R
+
+@syntax @ofNat
+realOfNat : (R : Real) -> Nat -> Carrier R
+realOfNat R n = defaultNat R
+
+-- The bug: in tactic mode, `exact 1` against a goal of type `Carrier R`
+-- failed because `exact` WHNF'd the goal type before passing it to checkType,
+-- unfolding `Carrier R` past its Const head (to a `match` expression). After
+-- the fix, checkType's @ofNat branch sees `Carrier` (Const head) and inserts
+-- the coercion. Term mode worked already — tactic mode must match.
+test_tactic_one : (R : Real) -> Carrier R := by
+  intro R
+  exact 1
+
+-- Sanity: same proof in term mode (pre-existing behavior — must not regress).
+test_term_one : (R : Real) -> Carrier R
+test_term_one R = 1

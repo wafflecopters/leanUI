@@ -82,11 +82,20 @@ export class ExactTactic implements Tactic {
   apply(engine: TacticEngine, goal: MetaVar, goalId: string): TacticResult {
     try {
       // Zonk goal type to resolve any solved metas before type checking.
-      // Without this, App(Meta(?P), Meta(?x)) stays as-is and hits the
+      // Without zonking, App(Meta(?P), Meta(?x)) stays as-is and hits the
       // flex-rigid solver, generating a constant-function heuristic that
-      // conflicts with the already-solved pattern. After zonking (and WHNF),
-      // it becomes the concrete type (e.g., Nat) and checks trivially.
-      const zonkedGoalType = whnf(engine.zonkTerm(goal.type, goal.ctx.length), { definitions: engine.definitions, typingContext: goal.ctx });
+      // conflicts with the already-solved pattern. Zonk replaces solved
+      // metas with their solutions; checkType internally normalizes via
+      // unifyTerms when needed.
+      //
+      // We deliberately do NOT WHNF here: that would unfold definitions like
+      // `Carrier R` past their Const head, breaking checkType's @ofNat
+      // coercion lookup (which keys on the head's Const name). The user-
+      // facing impact: tactic-mode `exact 1` against goal `Carrier R` could
+      // not coerce the literal via @ofNat. Term mode worked because the
+      // expected type came from a Pi binder (un-unfolded) — tactic mode now
+      // matches that behavior.
+      const zonkedGoalType = engine.zonkTerm(goal.type, goal.ctx.length);
 
       // Check term has expected type
       const checkedEnv = engine.checkInGoal(goal, this.term, zonkedGoalType);
