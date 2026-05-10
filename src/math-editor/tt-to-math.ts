@@ -455,8 +455,29 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
       ];
     }
 
-    default:
+    // The remaining tags (ULevel, ULit, UOmega, AbsurdMarker, WithClause,
+    // TacticBlock) shouldn't appear in user-facing display: ULevel/UOmega/ULit
+    // live inside Sort terms and are handled in the level pretty-printer;
+    // AbsurdMarker only appears on RHS of pattern clauses; WithClause is
+    // desugared during elaboration; TacticBlock is rewritten to its produced
+    // term. If one slips through, render as □ so it's visible (and the
+    // exhaustiveness check below catches missing tags at compile time).
+    case 'ULevel':
+    case 'ULit':
+    case 'UOmega':
+    case 'AbsurdMarker':
+    case 'WithClause':
+    case 'TacticBlock':
       return [mkHole()];
+
+    default: {
+      // Exhaustiveness check: TypeScript narrows `term` to `never` here. Adding
+      // a new TTerm tag without a case above will produce a compile error,
+      // preventing the silent □ regression that we hit twice with NatLit.
+      const _exhaustive: never = term;
+      void _exhaustive;
+      return [mkHole()];
+    }
   }
 }
 

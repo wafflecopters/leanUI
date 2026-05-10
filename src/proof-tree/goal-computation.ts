@@ -222,7 +222,24 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
         })),
       } as TTerm;
     }
-    default: return mkHoleTT(`_unsupported_${t.tag}`, prop);
+    // Universe-level scaffolding terms shouldn't appear at the type-display
+    // layer (they're flattened by the level printer), but we cover them
+    // explicitly so the exhaustiveness check below stays meaningful.
+    case 'ULevel': return { tag: 'ULevel' } as TTerm;
+    case 'UOmega': return { tag: 'UOmega' } as TTerm;
+    case 'Annot': return {
+      tag: 'Annot',
+      term: kernelTypeToSurface(t.term, definitions),
+      type: kernelTypeToSurface(t.type, definitions),
+    } as TTerm;
+    default: {
+      // Exhaustiveness check: TypeScript narrows `t` to `never` here. Adding
+      // a new TTKTerm tag without a case above will produce a compile error,
+      // catching the silent □ regression that bit us with NatLit twice.
+      const _exhaustive: never = t;
+      void _exhaustive;
+      return mkHoleTT(`_unsupported_${(t as { tag: string }).tag}`, prop);
+    }
   }
 }
 
