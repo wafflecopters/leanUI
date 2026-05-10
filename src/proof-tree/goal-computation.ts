@@ -161,6 +161,7 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
     }
     case 'Sort': return { tag: 'Sort', level: kernelTypeToSurface(t.level, definitions) } as TTerm;
     case 'ULit': return mkULitTT(t.n);
+    case 'NatLit': return { tag: 'NatLit', value: t.value } as TTerm;
     case 'Hole': return mkHoleTT(t.id, prop);
     case 'Meta': return mkHoleTT(t.id, prop);
     case 'Binder': {
