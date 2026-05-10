@@ -25,33 +25,31 @@ const COMPILE_TIMEOUT = 30000;
 describe('Phase 6 milestone: decimal arithmetic on abstract Real', () => {
   let withMilestones: CompileResult;
   beforeAll(() => {
-    // NOTE: every literal here is a non-integer rational so the parser
-    // produces RatLit (not NatLit). Integer-valued decimals like \`2.0\` or
-    // \`100.0\` canonicalize to NatLit and route through @ofNat instead of
-    // @ofRat — they break the @ofRat-based homomorphism path. Mixed paths
-    // are a known limitation; tracked as a separate workstream.
+    // After the realOfRat-d=1 fix and @ofRat-priority routing, integer
+    // and decimal literals coexist in the same expression: \`radd 1.5 2\`
+    // produces compatible kernel terms on both sides of the homomorphism
+    // lemma. Each test below mixes integer + decimal literals freely.
     withMilestones = compileTTFromText(REAL_ANALYSIS_CODE + `
 
--- 1.5 + 0.5 = 2.0 — but we phrase as 1.5 + 0.5 = 2.0 written 2.5/1.25
--- to keep both sides RatLit. (Math: 1.5 + 0.5 = 2.0 = 5/2.5)
-proof_add : (R : Real) -> Equal {A := Carrier R} (radd 1.5 1.25) 2.75
-proof_add R = addRealOfRat R 1.5 1.25
+-- 1.5 + 0.5 = 2.0 (integer-valued result)
+proof_add : (R : Real) -> Equal {A := Carrier R} (radd 1.5 0.5) 2.0
+proof_add R = addRealOfRat R 1.5 0.5
 
 -- 185.6 - 85.7 = 99.9   (THE HEADLINE)
 proof_sub : (R : Real) -> Equal {A := Carrier R} (rsub 185.6 85.7) 99.9
 proof_sub R = subRealOfRat R 185.6 85.7
 
--- 1.5 * 4.5 = 6.75
-proof_mul : (R : Real) -> Equal {A := Carrier R} (rmul 1.5 4.5) 6.75
-proof_mul R = mulRealOfRat R 1.5 4.5
+-- 1.5 * 4 = 6.0 (mixed integer + decimal operand, integer-valued result)
+proof_mul : (R : Real) -> Equal {A := Carrier R} (rmul 1.5 4) 6.0
+proof_mul R = mulRealOfRat R 1.5 4
 
--- 0.99 + 0.99 = 1.98 (decimal addition staying non-integer)
-proof_round : (R : Real) -> Equal {A := Carrier R} (radd 0.99 0.99) 1.98
-proof_round R = addRealOfRat R 0.99 0.99
+-- 0.99 + 0.01 = 1.0 (decimal rounding to integer)
+proof_round : (R : Real) -> Equal {A := Carrier R} (radd 0.99 0.01) 1.0
+proof_round R = addRealOfRat R 0.99 0.01
 
--- 99.99 - 0.1 = 99.89 (decimal boundary, both non-integer)
-proof_cross : (R : Real) -> Equal {A := Carrier R} (rsub 99.99 0.1) 99.89
-proof_cross R = subRealOfRat R 99.99 0.1
+-- 100 - 0.1 = 99.9 (mixed integer-on-LHS + decimal-on-RHS)
+proof_cross : (R : Real) -> Equal {A := Carrier R} (rsub 100 0.1) 99.9
+proof_cross R = subRealOfRat R 100 0.1
 `);
   }, COMPILE_TIMEOUT);
 
@@ -60,7 +58,7 @@ proof_cross R = subRealOfRat R 99.99 0.1
     expect(withMilestones.totalCheckErrors).toBe(0);
   });
 
-  test('1.5 + 1.25 = 2.75 on abstract Real', () => {
+  test('1.5 + 0.5 = 2.0 on abstract Real (integer-valued result)', () => {
     const decl = withMilestones.blocks
       .flatMap(b => b.declarations ?? [])
       .find(d => d.name === 'proof_add');
@@ -74,21 +72,21 @@ proof_cross R = subRealOfRat R 99.99 0.1
     expect(decl?.checkSuccess).toBe(true);
   });
 
-  test('1.5 * 4.5 = 6.75 on abstract Real', () => {
+  test('1.5 * 4 = 6.0 on abstract Real (mixed integer + decimal)', () => {
     const decl = withMilestones.blocks
       .flatMap(b => b.declarations ?? [])
       .find(d => d.name === 'proof_mul');
     expect(decl?.checkSuccess).toBe(true);
   });
 
-  test('0.99 + 0.99 = 1.98 on abstract Real', () => {
+  test('0.99 + 0.01 = 1.0 on abstract Real (decimal rounding to integer)', () => {
     const decl = withMilestones.blocks
       .flatMap(b => b.declarations ?? [])
       .find(d => d.name === 'proof_round');
     expect(decl?.checkSuccess).toBe(true);
   });
 
-  test('99.99 - 0.1 = 99.89 on abstract Real (cross decimal boundary)', () => {
+  test('100 - 0.1 = 99.9 on abstract Real (mixed integer LHS + decimal)', () => {
     const decl = withMilestones.blocks
       .flatMap(b => b.declarations ?? [])
       .find(d => d.name === 'proof_cross');

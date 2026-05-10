@@ -273,8 +273,16 @@ absElim {R} a C pos neg = eitherElimDep (\\e => C (eitherElim (\\_ => a) (\\_ =>
 -- So '1.5 : Carrier R' becomes '(realOfNat R 3) / (realOfNat R 2)'.
 -- The structural definition lets the kernel reduce all the way to
 -- abstract field axioms; homomorphism lemmas (below) build on this.
+-- The d=1 case must come first so realOfRat produces the SAME kernel term
+-- as @ofNat for integer-valued literals: \`realOfRat R (MkRat n 1)\` reduces
+-- to \`realOfNat R n\`, matching what \`realOfNat\` would produce directly.
+-- Without this, mixing integer literals (\`2.0\` → NatLit → @ofNat path) with
+-- decimals (\`1.5\` → RatLit → @ofRat path) would create incompatible kernel
+-- forms (\`realOfNat n\` vs \`rdiv (realOfNat n) (realOfNat 1)\`) that can't be
+-- bridged structurally.
 @syntax @ofRat
 realOfRat : (R : Real) -> Rat -> Carrier R
+realOfRat R (MkRat n (Succ Zero)) = realOfNat R n
 realOfRat R (MkRat n d) = rdiv (realOfNat R n) (realOfNat R d)
 
 ------------------------------------------------------------

@@ -566,127 +566,155 @@ export function buildOfRatCoercionHoleId(
   return `_ofRat_${expectedHeadName}_${contextDepth}_${siteKey}_${preArgIndex}`;
 }
 
-export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
-  // (NATLIT-COERCE) — when checking a NatLit against a non-Nat target type,
-  // look for a registered @ofNat coercion and rewrite as `App(coerce, ..., NatLit)`.
-  // This is what makes `1 : Carrier R` work when realOfNat is registered
-  // with `@syntax @ofNat`.
-  if (env.value.tag === 'NatLit') {
-    // Walk to the head of the expected type
-    let head = expectedType;
-    while (head.tag === 'App') head = head.fn;
-    if (head.tag === 'Const') {
-      const headName = head.name;
-      // NatLit → @impl=rat: expand `n` to `MkRat n 1`. This is the structural
-      // analog of `1.0 : Rat` working — integer-valued literals canonicalize
-      // to NatLit, but in a Rat context they're still rationals.
-      const ratReg = env.definitions.ratImplByCtor;
-      const ratImpl = ratReg
-        ? [...ratReg.values()].find(impl => impl.inductiveName === headName)
-        : undefined;
-      if (ratImpl) {
-        const expanded: TTKTerm = {
-          tag: 'App',
-          fn: {
-            tag: 'App',
-            fn: { tag: 'Const', name: ratImpl.ratCtor },
-            arg: env.value,
-          },
-          arg: { tag: 'NatLit', value: 1n },
-        };
-        return checkType(env.withValue(expanded), expectedType);
-      }
-      // Skip coercion if the target IS a Nat-impl — that's the identity case
-      const reg = env.definitions.natImplByCtor;
-      const isNatImpl = reg && [...reg.values()].some(impl => impl.inductiveName === headName);
-      if (!isNatImpl) {
-        // @ofNat takes priority for NatLit at non-Rat targets, since the Nat
-        // homomorphism lemmas (addRealOfNat, mulRealOfNat) talk about
-        // realOfNat directly. Switching NatLit to a Rat path would break
-        // those proofs. Mixed NatLit-with-RatLit expressions require the
-        // user to write explicit Rat literals (e.g., 2.0 instead of 2) when
-        // composing with @ofRat-based lemmas — see the decimal milestone tests.
-        const coerceFn = env.definitions.ofNatByTargetHead?.get(headName);
-        if (coerceFn) {
-          // Build: App(...App(Const(coerceFn), ?meta1), ..., NatLit)
-          // The function takes some args, then a Nat. Insert metas for the
-          // pre-Nat args; let unification solve them from expectedType.
-          const coerceDef = env.definitions.terms.get(coerceFn);
-          if (coerceDef) {
-            // Count Pi binders before the final (Nat) one
-            let argCount = 0;
-            let t = coerceDef.type;
-            while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
-              argCount++;
-              t = t.body;
-            }
-            // argCount includes the Nat arg — we want metas for argCount-1 pre-Nat args
-            const numPreArgs = argCount - 1;
-            // Use a deterministic per-site Hole ID rather than module-global
-            // mutable state. This keeps multiple NatLit coercion sites distinct
-            // within one proof while avoiding order-dependent test/compiler
-            // behavior across separate elaboration sessions.
-            let appTerm: TTKTerm = { tag: 'Const', name: coerceFn };
-            for (let i = 0; i < numPreArgs; i++) {
-              appTerm = {
-                tag: 'App',
-                fn: appTerm,
-                arg: {
-                  tag: 'Hole',
-                  id: buildOfNatCoercionHoleId(env.indexPath, headName, env.context.length, i),
-                },
-              };
-            }
-            appTerm = { tag: 'App', fn: appTerm, arg: env.value };
-            // Now check this synthesized application against expectedType.
-            // The CONV rule handles the unification.
-            return checkType(env.withValue(appTerm), expectedType);
-          }
-        }
-      }
-    }
-  }
+/** Walk an expected-type's spine to find its Const head name. Returns
+ *  null if the head isn't a Const (e.g., a Meta or Match). */
+function expectedTypeHeadName(expectedType: TTKTerm): string | null {
+  let head = expectedType;
+  while (head.tag === 'App') head = head.fn;
+  return head.tag === 'Const' ? head.name : null;
+}
 
-  // (RATLIT-COERCE) — same shape as NATLIT-COERCE but for RatLit and @ofRat.
-  // E.g., \`1.5 : Carrier R\` → \`realOfRat ?R 1.5\` when realOfRat is registered
-  // \`@syntax @ofRat\`. Identity case (target IS the @impl=rat type) skips the
-  // coercion since the RatLit already has that type via inferType.
+/** Find a registered NatImpl whose inductive type has this Const-head name. */
+function findNatImplForHead(env: TCEnv<TTKTerm>, headName: string): { inductiveName: string } | undefined {
+  const reg = env.definitions.natImplByCtor;
+  if (!reg) return undefined;
+  return [...reg.values()].find(impl => impl.inductiveName === headName);
+}
+
+/** Find a registered RatImpl whose inductive type has this Const-head name. */
+function findRatImplForHead(env: TCEnv<TTKTerm>, headName: string): { ratCtor: string; inductiveName: string } | undefined {
+  const reg = env.definitions.ratImplByCtor;
+  if (!reg) return undefined;
+  return [...reg.values()].find(impl => impl.inductiveName === headName);
+}
+
+/** Count Pi binders in a function type (the number of arguments). */
+function countFunctionArity(fnType: TTKTerm): number {
+  let n = 0;
+  let t = fnType;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    n++;
+    t = t.body;
+  }
+  return n;
+}
+
+/** Build `Const(fnName) ?h0 ?h1 ... ?h(numHoles-1) finalArg`, where each
+ *  hole gets a deterministic per-site id from `holeIdFor(i)`. Used to
+ *  insert @ofNat / @ofRat coercion applications: the holes stand for the
+ *  function's pre-literal implicit args (e.g., the `R : Real` of
+ *  `realOfNat R n`), to be solved by unification against expectedType. */
+function buildCoercionApp(
+  fnName: string,
+  finalArg: TTKTerm,
+  numHoles: number,
+  holeIdFor: (i: number) => string,
+): TTKTerm {
+  let app: TTKTerm = { tag: 'Const', name: fnName };
+  for (let i = 0; i < numHoles; i++) {
+    app = { tag: 'App', fn: app, arg: { tag: 'Hole', id: holeIdFor(i) } };
+  }
+  return { tag: 'App', fn: app, arg: finalArg };
+}
+
+/** `MkRat n 1` term — the structural Rat embedding of an integer literal. */
+function natLitAsRatExpr(natLit: TTKTerm, ratCtor: string): TTKTerm {
+  return {
+    tag: 'App',
+    fn: { tag: 'App', fn: { tag: 'Const', name: ratCtor }, arg: natLit },
+    arg: { tag: 'NatLit', value: 1n },
+  };
+}
+
+/** Try the @ofRat path: when `headName` has a registered @ofRat coercion,
+ *  wrap `ratExpr` as `coerceFn ?h0 ... ratExpr` and re-check. Returns the
+ *  result env, or null if no @ofRat is registered for this target. */
+function tryCoerceViaOfRat(
+  env: TCEnv<TTKTerm>,
+  expectedType: TTKTerm,
+  headName: string,
+  ratExpr: TTKTerm,
+): TCEnv<TTKTerm> | null {
+  const coerceFn = env.definitions.ofRatByTargetHead?.get(headName);
+  if (!coerceFn) return null;
+  const coerceDef = env.definitions.terms.get(coerceFn);
+  if (!coerceDef) return null;
+  const arity = countFunctionArity(coerceDef.type);
+  const app = buildCoercionApp(coerceFn, ratExpr, arity - 1, i =>
+    buildOfRatCoercionHoleId(env.indexPath, headName, env.context.length, i)
+  );
+  return checkType(env.withValue(app), expectedType);
+}
+
+/** Try the @ofNat path: when `headName` has a registered @ofNat coercion,
+ *  wrap `natLit` as `coerceFn ?h0 ... natLit` and re-check. Returns the
+ *  result env, or null if no @ofNat is registered for this target. */
+function tryCoerceViaOfNat(
+  env: TCEnv<TTKTerm>,
+  expectedType: TTKTerm,
+  headName: string,
+  natLit: TTKTerm,
+): TCEnv<TTKTerm> | null {
+  const coerceFn = env.definitions.ofNatByTargetHead?.get(headName);
+  if (!coerceFn) return null;
+  const coerceDef = env.definitions.terms.get(coerceFn);
+  if (!coerceDef) return null;
+  const arity = countFunctionArity(coerceDef.type);
+  const app = buildCoercionApp(coerceFn, natLit, arity - 1, i =>
+    buildOfNatCoercionHoleId(env.indexPath, headName, env.context.length, i)
+  );
+  return checkType(env.withValue(app), expectedType);
+}
+
+/** NatLit-against-non-Nat-target coercion: try @ofRat first (its d=1 case
+ *  produces the same kernel form as @ofNat for integer literals, while
+ *  also unifying mixed integer/decimal expressions), then @ofNat. The
+ *  identity case (NatLit at a Nat-impl target) needs no coercion. */
+function tryCoerceNatLit(env: TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType: TTKTerm): TCEnv<TTKTerm> | null {
+  const headName = expectedTypeHeadName(expectedType);
+  if (headName === null) return null;
+  // NatLit at a registered @impl=rat target: expand to MkRat n 1.
+  const ratImpl = findRatImplForHead(env, headName);
+  if (ratImpl) {
+    const expanded = natLitAsRatExpr(env.value, ratImpl.ratCtor);
+    return checkType(env.withValue(expanded), expectedType);
+  }
+  // Skip coercion if the target IS a Nat-impl — identity case.
+  if (findNatImplForHead(env, headName)) return null;
+  // Otherwise: prefer @ofRat (consistent with decimal literals), fall back to @ofNat.
+  const anyRatImpl = env.definitions.ratImplByCtor
+    ? [...env.definitions.ratImplByCtor.values()][0]
+    : undefined;
+  if (anyRatImpl) {
+    const ratExpr = natLitAsRatExpr(env.value, anyRatImpl.ratCtor);
+    const viaRat = tryCoerceViaOfRat(env, expectedType, headName, ratExpr);
+    if (viaRat) return viaRat;
+  }
+  return tryCoerceViaOfNat(env, expectedType, headName, env.value);
+}
+
+/** RatLit-against-non-Rat-target coercion: only the @ofRat path applies.
+ *  The identity case (RatLit at a Rat-impl target) needs no coercion since
+ *  inferType already gives RatLit that type. */
+function tryCoerceRatLit(env: TCEnv<TTKTerm & { tag: 'RatLit' }>, expectedType: TTKTerm): TCEnv<TTKTerm> | null {
+  const headName = expectedTypeHeadName(expectedType);
+  if (headName === null) return null;
+  if (findRatImplForHead(env, headName)) return null;
+  return tryCoerceViaOfRat(env, expectedType, headName, env.value);
+}
+
+export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
+  // Numeric literal coercions: when checking a NatLit / RatLit against a
+  // type whose head matches a registered @ofNat / @ofRat coercion, rewrite
+  // the literal as the coercion application and re-check. This is what
+  // makes \`1 : Carrier R\` and \`1.5 : Carrier R\` work.
+  if (env.value.tag === 'NatLit') {
+    const coerced = tryCoerceNatLit(env as TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType);
+    if (coerced) return coerced;
+  }
   if (env.value.tag === 'RatLit') {
-    let head = expectedType;
-    while (head.tag === 'App') head = head.fn;
-    if (head.tag === 'Const') {
-      const headName = head.name;
-      const reg = env.definitions.ratImplByCtor;
-      const isRatImpl = reg && [...reg.values()].some(impl => impl.inductiveName === headName);
-      if (!isRatImpl) {
-        const coerceFn = env.definitions.ofRatByTargetHead?.get(headName);
-        if (coerceFn) {
-          const coerceDef = env.definitions.terms.get(coerceFn);
-          if (coerceDef) {
-            let argCount = 0;
-            let t = coerceDef.type;
-            while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
-              argCount++;
-              t = t.body;
-            }
-            const numPreArgs = argCount - 1;
-            let appTerm: TTKTerm = { tag: 'Const', name: coerceFn };
-            for (let i = 0; i < numPreArgs; i++) {
-              appTerm = {
-                tag: 'App',
-                fn: appTerm,
-                arg: {
-                  tag: 'Hole',
-                  id: buildOfRatCoercionHoleId(env.indexPath, headName, env.context.length, i),
-                },
-              };
-            }
-            appTerm = { tag: 'App', fn: appTerm, arg: env.value };
-            return checkType(env.withValue(appTerm), expectedType);
-          }
-        }
-      }
-    }
+    const coerced = tryCoerceRatLit(env as TCEnv<TTKTerm & { tag: 'RatLit' }>, expectedType);
+    if (coerced) return coerced;
   }
 
   // Only use the Lambda-specific rule when expectedType is a Pi.
