@@ -107,6 +107,7 @@ function varOccursIn(varIndex: number, term: TTKTerm): boolean {
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return false;
 
     case 'App':
@@ -1117,6 +1118,7 @@ function applyPatternRenaming(
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return term;
 
     case 'Sort': {

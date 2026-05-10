@@ -3744,6 +3744,7 @@ function substituteInheritedFieldRefs(
           }))
         };
       case 'NatLit':
+    case 'RatLit':
         return t;
       default: {
         const _exhaustive: never = t;
@@ -4715,6 +4716,7 @@ function substituteHoles(term: TTerm, substitutions: Map<string, TTerm>): TTerm 
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return term;
     case 'App':
       return mkAppTT(

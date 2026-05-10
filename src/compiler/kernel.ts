@@ -110,6 +110,7 @@ export type TTKTerm =
   | { tag: 'Annot'; term: TTKTerm; type: TTKTerm }          // Type annotation
   | { tag: 'Match'; scrutinee: TTKTerm; clauses: TTKClause[] } // Pattern matching
   | { tag: 'NatLit'; value: bigint }                       // Natural number literal (e.g., 1784) — Phase 1: inert primitive
+  | { tag: 'RatLit'; num: bigint; den: bigint }            // Rational literal (decimals): num/den, gcd-reduced, den > 0. e.g., 1.5 = {num:3, den:2}.
 
 export function prettyPrintPattern(pattern: TTKPattern, updatedNames: string[] = []): string {
   const [updatedName, ...rest] = updatedNames
@@ -227,6 +228,30 @@ export function mkHole(id: string): TTKTerm {
  */
 export function mkMeta(id: string): TTKTerm {
   return { tag: 'Meta', id };
+}
+
+/**
+ * Create a canonicalized rational literal. Reduces num/den by gcd and
+ * normalizes sign so den > 0. Returns NatLit if the result is integral
+ * (den == 1) — a RatLit invariant: num/den is in lowest terms with den >= 2,
+ * or it's a NatLit. This ensures structural equality coincides with
+ * mathematical equality for rationals.
+ *
+ * Throws if den == 0.
+ */
+export function mkRatLit(num: bigint, den: bigint): TTKTerm {
+  if (den === 0n) throw new Error('RatLit: division by zero');
+  if (den < 0n) { num = -num; den = -den; }
+  const g = bigintGcd(num < 0n ? -num : num, den);
+  num = num / g;
+  den = den / g;
+  if (den === 1n && num >= 0n) return { tag: 'NatLit', value: num };
+  return { tag: 'RatLit', num, den };
+}
+
+function bigintGcd(a: bigint, b: bigint): bigint {
+  while (b !== 0n) { [a, b] = [b, a % b]; }
+  return a;
 }
 
 // ============================================================================
@@ -874,6 +899,8 @@ export function isDefinitionallyEqual(term1: TTKTerm, term2: TTKTerm): boolean {
 
     case 'NatLit':
       return term2.tag === 'NatLit' && term1.value === term2.value;
+    case 'RatLit':
+      return term2.tag === 'RatLit' && term1.num === term2.num && term1.den === term2.den;
   }
 }
 
@@ -1045,6 +1072,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      // Render as 'num/den' (canonicalized: gcd=1, den >= 2 since integer-valued became NatLit).
+      return `${term.num}/${term.den}`;
   }
 }
 
@@ -1280,6 +1310,9 @@ export function prettyPrintFormatted(
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      // Render as 'num/den' (canonicalized: gcd=1, den >= 2 since integer-valued became NatLit).
+      return `${term.num}/${term.den}`;
   }
 }
 
@@ -1503,6 +1536,9 @@ export function prettyPrintLatex(
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      // Render as 'num/den' (canonicalized: gcd=1, den >= 2 since integer-valued became NatLit).
+      return `${term.num}/${term.den}`;
   }
 }
 
@@ -1571,6 +1607,7 @@ export function occursIn(index: number, term: TTKTerm): boolean {
       return false;
 
     case 'NatLit':
+    case 'RatLit':
       return false;
   }
 }
@@ -1690,6 +1727,7 @@ export function findHole(term: TTKTerm, holeId: string): TTKTerm | null {
     }
 
     case 'NatLit':
+    case 'RatLit':
       return null;
   }
 }
@@ -1709,6 +1747,7 @@ export function fillHole(term: TTKTerm, holeId: string, proofTerm: TTKTerm): TTK
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return term;
 
     case 'Sort':

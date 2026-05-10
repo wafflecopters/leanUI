@@ -295,6 +295,7 @@ function PrintedTerm({ term, context = [] }: { term: TTerm; context?: TContext }
       AbsurdMarker: () => <span style={{ color: '#888', fontStyle: 'italic' }}>#absurd</span>,
       WithClause: () => <span style={{ color: '#888', fontStyle: 'italic' }}>#with</span>,
       NatLit: (term) => <span>{term.value.toString()}</span>,
+      RatLit: (term) => <span>{`${term.num}/${term.den}`}</span>,
       TacticBlock: (term) => <div style={{ paddingLeft: '1em' }}>
         <div style={{ fontWeight: 'bold', color: '#0066cc' }}>by</div>
         {term.tactics.map((tactic, i) => (

@@ -1389,6 +1389,7 @@ export function applyVarPermutation(term: TTerm, permutation: number[], depth: n
       return term;
 
     case 'NatLit':
+    case 'RatLit':
       return term;
 
     default: {
@@ -2007,6 +2008,8 @@ function elabToKernelWithScope(term: TTerm, levelNamesInScope: Set<string>): TTK
 
     case 'NatLit':
       return { tag: 'NatLit', value: term.value };
+    case 'RatLit':
+      return { tag: 'RatLit', num: term.num, den: term.den };
 
     default: {
       const _never: never = term;
@@ -2240,6 +2243,8 @@ export function elabToKernelWithNamedArgs(term: TTerm, lookup: NamedArgInfoLooku
 
       case 'NatLit':
         return { tag: 'NatLit', value: t.value };
+      case 'RatLit':
+        return { tag: 'RatLit', num: t.num, den: t.den };
 
       default: {
         const _never: never = t;
@@ -2790,6 +2795,8 @@ export function elabToKernelWithMap(
 
     case 'NatLit':
       return { tag: 'NatLit', value: term.value };
+    case 'RatLit':
+      return { tag: 'RatLit', num: term.num, den: term.den };
 
     default: {
       const _never: never = term;

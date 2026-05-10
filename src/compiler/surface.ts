@@ -366,6 +366,7 @@ export type TTerm =
   | { tag: 'Match'; scrutinee: TTerm; clauses: TClause[] } // Pattern matching (case/match)
   | { tag: 'AbsurdMarker' }                               // #absurd marker for absurd cases
   | { tag: 'NatLit'; value: bigint }                      // Natural number literal (e.g., 1784) — elaborates to kernel NatLit
+  | { tag: 'RatLit'; num: bigint; den: bigint }           // Rational literal (decimals 1.5, 0.99, 3.56e-8): elaborates to kernel RatLit
   | TWithClause                                           // With-clause (desugared before elaboration)
   | TTacticBlock                                          // Tactic block (proof by tactics)
 
@@ -653,6 +654,7 @@ export function replaceHoleTT(term: TTerm, holeId: string, replacement: TTerm): 
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return term;
 
@@ -745,6 +747,7 @@ export function findHoleTT(term: TTerm, holeId: string): TTerm | null {
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return null;
 
@@ -828,6 +831,7 @@ export function fillHoleWithTT(
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return term;
 
@@ -1009,6 +1013,8 @@ export function isDefinitionallyEqualTT(term1: TTerm, term2: TTerm): boolean {
 
     case 'NatLit':
       return term2.tag === 'NatLit' && term1.value === term2.value;
+    case 'RatLit':
+      return term2.tag === 'RatLit' && term1.num === term2.num && term1.den === term2.den;
 
     default: {
       const _never: never = term1;
@@ -1044,6 +1050,7 @@ export function getSubtermAtPath(term: TTerm, path: number[]): TTerm | null {
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       // Leaf nodes have no children
       return null;
@@ -1117,6 +1124,7 @@ export function replaceSubtermAtPath(term: TTerm, path: number[], newSubterm: TT
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       // Leaf nodes have no children
       return null;
@@ -1319,6 +1327,7 @@ export function isNameUsed(name: string, term: TTerm): boolean {
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       // No names to check
       return false;
@@ -1417,6 +1426,7 @@ function substHelperTT(targetIndex: number, replacement: TTerm, term: TTerm, dep
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return term;
 
@@ -1525,6 +1535,7 @@ export function shiftSurfaceTerm(amount: number, term: TTerm, cutoff: number): T
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return term;
 
@@ -1628,6 +1639,7 @@ export function expandMultiBinders(term: TTerm): TTerm {
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return term;
 
@@ -2000,6 +2012,8 @@ export function prettyPrintTerseTT(term: TTerm, context: string[] = []): string 
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      return `${term.num}/${term.den}`;
 
     default: {
       const _never: never = term;
@@ -2212,6 +2226,8 @@ export function prettyPrintTT(term: TTerm, context: string[] = []): string {
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      return `${term.num}/${term.den}`;
 
     default: {
       const _never: never = term;
@@ -2391,6 +2407,8 @@ export function prettyPrintLatexTT(
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      return `${term.num}/${term.den}`;
 
     default: {
       const _never: never = term;
@@ -2709,6 +2727,7 @@ function fillHoleWithLet(
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return term;
 
@@ -2916,6 +2935,7 @@ export function occursInTT(index: number, term: TTerm): boolean {
     case 'UOmega':
     case 'AbsurdMarker':
     case 'NatLit':
+    case 'RatLit':
     case 'WithClause':
       return false;
     case 'Binder': {

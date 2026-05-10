@@ -531,9 +531,33 @@ export class Lexer {
       throw new Error(`Unknown syntax: #${name} at line ${startLine}, column ${startCol}`);
     }
 
-    // Numbers
+    // Numbers — integer, decimal, or scientific notation.
+    // Captured forms: 1234, 1.5, 185.6, 3.56e-8, 1e10, 0.99
+    // The decimal point only consumes when followed by a digit to avoid
+    // ambiguity with projection syntax like Point.x. Scientific exponent
+    // requires e/E followed by optional sign + digits.
     if (this.isDigit(ch)) {
-      const num = this.readWhile(c => this.isDigit(c));
+      let num = this.readWhile(c => this.isDigit(c));
+      // Decimal point: only consume if followed by a digit
+      if (this.input[this.pos] === '.' && this.isDigit(this.input[this.pos + 1])) {
+        num += this.input[this.pos++];
+        this.col++;
+        num += this.readWhile(c => this.isDigit(c));
+      }
+      // Scientific suffix: e/E [+-]? digits
+      const expCh = this.input[this.pos];
+      if (expCh === 'e' || expCh === 'E') {
+        let look = this.pos + 1;
+        if (this.input[look] === '+' || this.input[look] === '-') look++;
+        if (look < this.input.length && this.isDigit(this.input[look])) {
+          num += this.input[this.pos++]; this.col++;
+          const sign = this.input[this.pos];
+          if (sign === '+' || sign === '-') {
+            num += this.input[this.pos++]; this.col++;
+          }
+          num += this.readWhile(c => this.isDigit(c));
+        }
+      }
       return { type: 'NUMBER', value: num, pos: startPos, line: startLine, col: startCol };
     }
 
@@ -776,6 +800,11 @@ export interface ParsedDeclarationWithSource {
 /**
  * Pratt parser for the TT language.
  */
+function bigintGcd(a: bigint, b: bigint): bigint {
+  while (b !== 0n) { [a, b] = [b, a % b]; }
+  return a;
+}
+
 export class Parser {
   private tokens: Token[] = [];
   private pos = 0;
@@ -4760,14 +4789,51 @@ export class Parser {
   }
 
   /**
-   * Parse a number literal - returns a Nat-like constant
+   * Parse a number literal — returns NatLit for integers, RatLit for
+   * decimals or scientific notation.
+   *
+   * Examples:
+   *   "42"       → NatLit 42
+   *   "1.5"      → RatLit { num: 3, den: 2 }       (canonical form via gcd)
+   *   "185.6"    → RatLit { num: 928, den: 5 }      (1856/10 reduced)
+   *   "3.56e-8"  → RatLit { num: 89, den: 25_000_000 } (356/100/10^8 reduced)
+   *   "0.99"     → RatLit { num: 99, den: 100 }
+   *
+   * Integer-valued decimals (e.g., "1.0", "5e2" = 500) canonicalize to
+   * NatLit since RatLit is reserved for non-integer rationals (mkRatLit
+   * downgrades den=1 to NatLit).
    */
   private parseNumberLiteral(value: string): TTerm {
-    // Numeric literals become NatLit (BigInt) — the kernel iota-view rule
-    // expands them to Zero/Succ at use sites if a @impl=nat type is registered.
-    // Implicit coercion to other numeric types (Real, Int, ...) is handled by
-    // the elaborator via @ofNat protocol (Phase 3).
-    return { tag: 'NatLit', value: BigInt(value) };
+    // Pure integer: NatLit fast path
+    if (!/[.eE]/.test(value)) {
+      return { tag: 'NatLit', value: BigInt(value) };
+    }
+    // Decimal/scientific: parse num/exp and build RatLit
+    // Form: <integerPart>(.<fracPart>)?(e[+-]?<exp>)?
+    const m = value.match(/^(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/);
+    if (!m) throw new Error(`Invalid numeric literal: ${value}`);
+    const intPart = m[1];
+    const fracPart = m[2] ?? '';
+    const expStr = m[3] ?? '0';
+    const exp = parseInt(expStr, 10);
+    // num = intPart concat fracPart (treated as integer);
+    // den_pow = 10^fracPart.length / 10^exp = 10^(fracPart.length - exp)
+    let num = BigInt(intPart + fracPart);
+    let den = 1n;
+    const denPow = fracPart.length - exp;
+    if (denPow > 0) {
+      for (let i = 0; i < denPow; i++) den *= 10n;
+    } else if (denPow < 0) {
+      for (let i = 0; i < -denPow; i++) num *= 10n;
+    }
+    // Canonicalize via gcd. mkRatLit (in kernel) returns NatLit when den=1.
+    // We can't import the kernel helper here (parser is purely surface),
+    // so we duplicate the canonicalization in surface form.
+    const g = bigintGcd(num < 0n ? -num : num, den);
+    num = num / g;
+    den = den / g;
+    if (den === 1n) return { tag: 'NatLit', value: num };
+    return { tag: 'RatLit', num, den };
   }
 
   /**

@@ -1,0 +1,9 @@
+@test failure
+@name "RatLit: decimal parses but inferType errors (no @impl=rat yet)"
+@error "Inference not implemented"
+
+-- Phase 6 Stage 1 only adds RatLit at the kernel/parser level.
+-- @impl=rat / @ofRat coercions come in later stages. So a bare decimal
+-- like `1.5` parses fine but can't be type-inferred yet.
+test : Type
+test = 1.5

@@ -729,6 +729,8 @@ function termsEqual(a: TTerm, b: TTerm): boolean {
 
     case 'NatLit':
       return b.tag === 'NatLit' && a.value === b.value;
+    case 'RatLit':
+      return b.tag === 'RatLit' && a.num === b.num && a.den === b.den;
 
     default: {
       const _never: never = a;

@@ -1204,6 +1204,7 @@ function maxFreeVarIndexAt(term: TTKTerm, depth: number): number {
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return -1;
   }
 }

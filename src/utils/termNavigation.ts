@@ -300,6 +300,8 @@ export function prettyPrintTerm(term: TTerm): string {
 
     case 'NatLit':
       return term.value.toString();
+    case 'RatLit':
+      return `${term.num}/${term.den}`;
 
     default: {
       const _never: never = term;

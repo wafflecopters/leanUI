@@ -62,6 +62,7 @@ export function normalize(term: TTKTerm): TTKTerm {
     case 'Hole':
     case 'Meta':
     case 'NatLit':
+    case 'RatLit':
       return term;
 
     case 'App': {

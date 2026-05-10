@@ -50,6 +50,7 @@ function isFreeIn(index: number, term: TTKTerm): boolean {
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return false;
   }
 }
@@ -440,6 +441,8 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
 
     case 'NatLit':
       return n2.tag === 'NatLit' && n1.value === n2.value;
+    case 'RatLit':
+      return n2.tag === 'RatLit' && n1.num === n2.num && n1.den === n2.den;
   }
 }
 
@@ -739,6 +742,7 @@ export function fullNormalize(term: TTKTerm, definitions: DefinitionsMap, fuel =
     case 'ULit':
     case 'UOmega':
     case 'NatLit':
+    case 'RatLit':
       return reduced;
 
     case 'Sort':

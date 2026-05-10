@@ -490,6 +490,7 @@ export function adjustRhsWithMapping(
         return term;
 
       case 'NatLit':
+    case 'RatLit':
         return term;
 
       default: {

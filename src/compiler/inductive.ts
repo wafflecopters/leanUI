@@ -24,6 +24,7 @@ function checkTermOnlyContainsValidConstructors(env: TCEnv<TTKTerm>): TCEnvError
         Match: 'Pattern matching',
         Binder: undefined,
         NatLit: 'Natural number literal',
+        RatLit: 'Rational number literal',
       }[term.tag] ?? (
           term.tag === 'Binder' ? term.binderKind.tag === 'BLam' ? 'Lambda Expression' : 'Let Expression' : undefined
         ) ?? 'Other syntax'
@@ -868,6 +869,8 @@ function termsEqualK(t1: TTKTerm, t2: TTKTerm): boolean {
 
     case 'NatLit':
       return t2.tag === 'NatLit' && t1.value === t2.value;
+    case 'RatLit':
+      return t2.tag === 'RatLit' && t1.num === t2.num && t1.den === t2.den;
 
     default:
       const _exhaustive: never = t1;
