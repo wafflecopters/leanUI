@@ -1,0 +1,34 @@
+@test success
+@name "@ofRat: RatLit coerces to Carrier R via realOfRat"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+-- Anchor (extractBody skips leading @-lines)
+inductive _Anchor : Type where
+  _MkAnchor : _Anchor
+
+@syntax @impl=rat
+inductive Rat : Type where
+  MkRat : Nat -> Nat -> Rat
+
+postulate Real : Type 1
+postulate Carrier : Real -> Type
+postulate defaultValue : (R : Real) -> Carrier R
+
+@syntax @ofRat
+realOfRat : (R : Real) -> Rat -> Carrier R
+realOfRat R r = defaultValue R
+
+-- `1.5 : Carrier R` should auto-coerce via realOfRat
+test_lit : (R : Real) -> Carrier R
+test_lit R = 1.5
+
+-- And `185.6` (canonicalized to 928/5) should also coerce
+test_big : (R : Real) -> Carrier R
+test_big R = 185.6
+
+-- Negative test: bare 1.5 still has type Rat (from inferType), not Carrier R.
+-- So @ofRat needs to fire ONLY at check-against-Carrier sites — verify that
+-- the inferred path didn't break.
+test_rat_direct : Rat
+test_rat_direct = 1.5

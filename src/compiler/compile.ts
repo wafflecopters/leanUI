@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, registerNatOp, registerOfNat, registerRatImpl, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, getTermDefinition, InductiveDefinition, MatchPartIndex, registerNatImpl, registerNatOp, registerOfNat, registerOfRat, registerRatImpl, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { recordToInductiveDefinition, generateProjections } from './record';
 import { TTKRecordDef, TTKRecordField, TTKRecordParam } from './kernel';
@@ -5261,6 +5261,15 @@ function applyImplAnnotationsForBlock(block: CompiledBlock, definitions: Definit
       const err = registerOfNat(definitions, decl.name);
       if (err) {
         console.warn(`@ofNat verification failed for '${decl.name}': ${err}`);
+      }
+      continue;
+    }
+
+    // @ofRat: register this term definition as a Rat coercion
+    if (trimmed === '@ofRat') {
+      const err = registerOfRat(definitions, decl.name);
+      if (err) {
+        console.warn(`@ofRat verification failed for '${decl.name}': ${err}`);
       }
       continue;
     }

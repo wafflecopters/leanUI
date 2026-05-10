@@ -254,6 +254,10 @@ export type DefinitionsMap = {
    *  view (RatLit n/d → MkRat n d) and inverse-iota (MkRat NatLit NatLit →
    *  RatLit, canonicalized via gcd). */
   ratImplByCtor?: Map<string, RatImpl>,
+  /** Optional. Map from target-type head constant → @ofRat coercion fn name.
+   *  Parallel to ofNatByTargetHead. E.g., {"Carrier": "realOfRat"} means a
+   *  RatLit in a `Carrier R` position is coerced to `realOfRat ?... RatLit`. */
+  ofRatByTargetHead?: Map<string, string>,
 }
 
 /**
@@ -277,6 +281,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     ofNatByTargetHead: new Map<string, string>(),
     natOpByFn: new Map<string, 'add' | 'mul'>(),
     ratImplByCtor: new Map<string, RatImpl>(),
+    ofRatByTargetHead: new Map<string, string>(),
   };
 }
 
@@ -446,6 +451,45 @@ export function registerOfNat(definitions: DefinitionsMap, fnName: string): stri
     definitions.ofNatByTargetHead = new Map<string, string>();
   }
   definitions.ofNatByTargetHead.set(retHead.name, fnName);
+  return null;
+}
+
+/**
+ * Register a function as an OfRat coercion. Parallel to registerOfNat:
+ * function shape is `(Π ...) -> Rat -> T` where Rat is a registered
+ * @impl=rat type. The return type's head Const becomes the dispatch key.
+ *
+ * E.g., \`realOfRat : (R : Real) -> Rat -> Carrier R\` registers under the
+ * "Carrier" key. Then \`1.5 : Carrier R\` elaborates to \`realOfRat R 1.5\`.
+ */
+export function registerOfRat(definitions: DefinitionsMap, fnName: string): string | null {
+  const def = definitions.terms.get(fnName);
+  if (!def) return `@ofRat: definition '${fnName}' not found`;
+  let t = def.type;
+  let prevDomainHead: string | null = null;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    prevDomainHead = dom.tag === 'Const' ? dom.name : null;
+    t = t.body;
+  }
+  if (prevDomainHead === null) {
+    return `@ofRat: '${fnName}' must take at least one argument (the Rat)`;
+  }
+  const isRatImpl = definitions.ratImplByCtor
+    && [...definitions.ratImplByCtor.values()].some(impl => impl.inductiveName === prevDomainHead);
+  if (!isRatImpl) {
+    return `@ofRat: '${fnName}' final argument must be a @impl=rat-tagged type, got '${prevDomainHead}'`;
+  }
+  let retHead = t;
+  while (retHead.tag === 'App') retHead = retHead.fn;
+  if (retHead.tag !== 'Const') {
+    return `@ofRat: '${fnName}' return type must have a Const head (got ${retHead.tag})`;
+  }
+  if (!definitions.ofRatByTargetHead) {
+    definitions.ofRatByTargetHead = new Map<string, string>();
+  }
+  definitions.ofRatByTargetHead.set(retHead.name, fnName);
   return null;
 }
 

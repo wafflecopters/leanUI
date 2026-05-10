@@ -553,6 +553,19 @@ export function buildOfNatCoercionHoleId(
   return `_ofNat_${expectedHeadName}_${contextDepth}_${siteKey}_${preArgIndex}`;
 }
 
+export function buildOfRatCoercionHoleId(
+  indexPath: IndexPath,
+  expectedHeadName: string,
+  contextDepth: number,
+  preArgIndex: number
+): string {
+  const serializedPath = serializeIndexPath(indexPath);
+  const siteKey = serializedPath === ''
+    ? 'root'
+    : serializedPath.replace(/[^A-Za-z0-9_]+/g, '_');
+  return `_ofRat_${expectedHeadName}_${contextDepth}_${siteKey}_${preArgIndex}`;
+}
+
 export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
   // (NATLIT-COERCE) — when checking a NatLit against a non-Nat target type,
   // look for a registered @ofNat coercion and rewrite as `App(coerce, ..., NatLit)`.
@@ -602,6 +615,48 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
             appTerm = { tag: 'App', fn: appTerm, arg: env.value };
             // Now check this synthesized application against expectedType.
             // The CONV rule handles the unification.
+            return checkType(env.withValue(appTerm), expectedType);
+          }
+        }
+      }
+    }
+  }
+
+  // (RATLIT-COERCE) — same shape as NATLIT-COERCE but for RatLit and @ofRat.
+  // E.g., \`1.5 : Carrier R\` → \`realOfRat ?R 1.5\` when realOfRat is registered
+  // \`@syntax @ofRat\`. Identity case (target IS the @impl=rat type) skips the
+  // coercion since the RatLit already has that type via inferType.
+  if (env.value.tag === 'RatLit') {
+    let head = expectedType;
+    while (head.tag === 'App') head = head.fn;
+    if (head.tag === 'Const') {
+      const headName = head.name;
+      const reg = env.definitions.ratImplByCtor;
+      const isRatImpl = reg && [...reg.values()].some(impl => impl.inductiveName === headName);
+      if (!isRatImpl) {
+        const coerceFn = env.definitions.ofRatByTargetHead?.get(headName);
+        if (coerceFn) {
+          const coerceDef = env.definitions.terms.get(coerceFn);
+          if (coerceDef) {
+            let argCount = 0;
+            let t = coerceDef.type;
+            while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+              argCount++;
+              t = t.body;
+            }
+            const numPreArgs = argCount - 1;
+            let appTerm: TTKTerm = { tag: 'Const', name: coerceFn };
+            for (let i = 0; i < numPreArgs; i++) {
+              appTerm = {
+                tag: 'App',
+                fn: appTerm,
+                arg: {
+                  tag: 'Hole',
+                  id: buildOfRatCoercionHoleId(env.indexPath, headName, env.context.length, i),
+                },
+              };
+            }
+            appTerm = { tag: 'App', fn: appTerm, arg: env.value };
             return checkType(env.withValue(appTerm), expectedType);
           }
         }

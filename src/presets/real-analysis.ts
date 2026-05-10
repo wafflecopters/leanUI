@@ -199,6 +199,13 @@ mult : Nat -> Nat -> Nat
 mult Zero m = Zero
 mult (Succ n) m = plus m (mult n m)
 
+-- Rat declared early so that decimal literals like \`1.5\` parse and
+-- inferType resolves them to Rat. The realOfRat coercion (which depends
+-- on rdiv) is defined further down once rdiv is in scope.
+@syntax @impl=rat
+inductive Rat : Type where
+  MkRat : Nat -> Nat -> Rat
+
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
 
@@ -229,6 +236,15 @@ rabs {R} a = eitherElim (\\_ => a) (\\_ => rneg a) (CompleteOrderedField.leTotal
 -- Dependent elimination for abs: to prove C(|a|), prove C(a) when 0<=a and C(-a) when a<=0
 absElim : {R : Real} -> (a : Carrier R) -> (C : Carrier R -> Type) -> (rle (rzero R) a -> C a) -> (rle a (rzero R) -> C (rneg a)) -> C (rabs a)
 absElim {R} a C pos neg = eitherElimDep (\\e => C (eitherElim (\\_ => a) (\\_ => rneg a) e)) (\\h => pos h) (\\h => neg h) (CompleteOrderedField.leTotal (field R) (rzero R) a)
+
+-- Coercion: a decimal literal in a 'Carrier R' position elaborates to
+-- realOfRat R (MkRat num den), which is (realOfNat R num) / (realOfNat R den).
+-- So '1.5 : Carrier R' becomes '(realOfNat R 3) / (realOfNat R 2)'.
+-- The structural definition lets the kernel reduce all the way to
+-- abstract field axioms; homomorphism lemmas (Stage 5) build on this.
+@syntax @ofRat
+realOfRat : (R : Real) -> Rat -> Carrier R
+realOfRat R (MkRat n d) = rdiv (realOfNat R n) (realOfNat R d)
 
 ------------------------------------------------------------
 -- Limits: the epsilon-delta definition
