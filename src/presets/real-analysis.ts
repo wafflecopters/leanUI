@@ -511,8 +511,40 @@ mulRealOfNat : (R : Real) -> (n m : Nat) -> Equal (rmul (realOfNat R n) (realOfN
 mulRealOfNat R Zero m = mulZeroLeft (realOfNat R m)
 mulRealOfNat R (Succ n) m = trans (CompleteOrderedField.distribRight (field R) (rone R) (realOfNat R n) (realOfNat R m)) (trans (cong (\\z => radd z (rmul (realOfNat R n) (realOfNat R m))) (CompleteOrderedField.mulOneLeft (field R) (realOfNat R m))) (trans (cong (\\z => radd (realOfNat R m) z) (mulRealOfNat R n m)) (addRealOfNat R m (mult n m))))
 
--- Rat -> Real homomorphism lemmas. These are still postulated for now, but
--- they need to live after the Nat homomorphism lemmas they conceptually build on.
+-- Foundational field-algebra lemmas. Building blocks for the Rat
+-- homomorphisms below — derived from CompleteOrderedField axioms, no
+-- postulates.
+
+-- 1 != 0 (flip of zeroNeOne)
+oneNeZero : (R : Real) -> Equal (rone R) (rzero R) -> Void
+oneNeZero R eq = CompleteOrderedField.zeroNeOne (field R) (sym eq)
+
+-- 1/1 = 1: the multiplicative inverse of one is one.
+-- Proof: 1 = 1*(1/1) by mulOneLeft^{-1}, and 1*(1/1) = 1 by mulInvRight.
+invOne : (R : Real) -> Equal (rinv (rone R)) (rone R)
+invOne R = trans (sym (CompleteOrderedField.mulOneLeft (field R) (rinv (rone R)))) (CompleteOrderedField.mulInvRight (field R) (rone R) (oneNeZero R))
+
+-- a/1 = a: dividing by one is the identity.
+divOne : {R : Real} -> (a : Carrier R) -> Equal (rdiv a (rone R)) a
+divOne {R} a = trans (cong (\\z => rmul a z) (invOne R)) (CompleteOrderedField.mulOneRight (field R) a)
+
+-- a * (b/c) = (a*b)/c — multiplication absorbs into the numerator
+-- (just associativity unfolded; no non-zero needed).
+mulDivAssoc : {R : Real} -> (a b c : Carrier R) -> Equal (rmul a (rdiv b c)) (rdiv (rmul a b) c)
+mulDivAssoc {R} a b c = sym (CompleteOrderedField.mulAssoc (field R) a b (rinv c))
+
+-- (a/b) * c = (a*c)/b — symmetric to mulDivAssoc.
+divMulRight : {R : Real} -> (a b c : Carrier R) -> Equal (rmul (rdiv a b) c) (rdiv (rmul a c) b)
+divMulRight {R} a b c = trans (CompleteOrderedField.mulAssoc (field R) a (rinv b) c) (trans (cong (\\z => rmul a z) (CompleteOrderedField.mulComm (field R) (rinv b) c)) (sym (CompleteOrderedField.mulAssoc (field R) a c (rinv b))))
+
+-- Rat -> Real homomorphism lemmas. These are still postulated for now,
+-- but they need to live after the Nat homomorphism lemmas they
+-- conceptually build on. TODO: prove from field axioms using the
+-- helper lemmas above + a cross-multiplication identity that requires
+-- denominator-non-zero (provable for canonical Rats once Rat is
+-- refactored to bundle the positivity proof). Tracked as a separate
+-- workstream — current postulates are sound (consequences of the
+-- CompleteOrderedField axioms) but unverified by the kernel.
 postulate addRealOfRat : (R : Real) -> (a b : Rat) -> Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
 postulate mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
 -- subRealOfRat assumes the result is non-negative, matching the truncated-Nat
