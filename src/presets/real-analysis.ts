@@ -573,6 +573,40 @@ realOfNatSuccPos R n = ltLeTrans (rzero R) (rone R) (realOfNat R (Succ n)) (zero
 realOfNatSuccNeZero : (R : Real) -> (n : Nat) -> Equal (realOfNat R (Succ n)) (rzero R) -> Void
 realOfNatSuccNeZero R n eq = Pair.snd (realOfNatSuccPos R n) (sym eq)
 
+-- a≠0 ∧ b≠0 → a*b ≠ 0. By contradiction: if a*b = 0 and a ≠ 0, then
+-- b = 1*b = (1/a · a)*b = 1/a · (a*b) = 1/a · 0 = 0 — contradicting b ≠ 0.
+-- (Same shape as the existing mulLtLeftNe cancellation proof.)
+mulNeZero : {R : Real} -> (a b : Carrier R) -> (Equal a (rzero R) -> Void) -> (Equal b (rzero R) -> Void) -> Equal (rmul a b) (rzero R) -> Void := by
+  intros R a b ane bne eq
+  apply bne
+  erw (sym (CompleteOrderedField.mulOneLeft (field R) b)), (cong (\\z => rmul z b) (sym (trans (CompleteOrderedField.mulComm (field R) (rinv a) a) (CompleteOrderedField.mulInvRight (field R) a ane)))), (CompleteOrderedField.mulAssoc (field R) (rinv a) a b), (cong (\\z => rmul (rinv a) z) eq), (mulZeroRight (rinv a))
+
+-- (a*b) * (inv a * inv b) = 1. Five associativity/commutativity shuffles
+-- bring matched a/inv-a and b/inv-b adjacent, then mulInvRight closes each.
+-- Building block for invMul.
+mulInvMulInv : {R : Real} -> (a b : Carrier R) -> (Equal a (rzero R) -> Void) -> (Equal b (rzero R) -> Void) -> Equal (rmul (rmul a b) (rmul (rinv a) (rinv b))) (rone R) := by
+  intros R a b ane bne
+  erw (CompleteOrderedField.mulAssoc (field R) a b (rmul (rinv a) (rinv b))), (sym (CompleteOrderedField.mulAssoc (field R) b (rinv a) (rinv b))), (CompleteOrderedField.mulComm (field R) b (rinv a)), (CompleteOrderedField.mulAssoc (field R) (rinv a) b (rinv b)), (CompleteOrderedField.mulInvRight (field R) b bne), (CompleteOrderedField.mulOneRight (field R) (rinv a)), (CompleteOrderedField.mulInvRight (field R) a ane)
+
+-- 1/(a*b) = (1/a)*(1/b). By uniqueness of inverse: both sides are the
+-- multiplicative inverse of (a*b). Specifically:
+--   1/(a*b) = 1/(a*b) * 1
+--          = 1/(a*b) * ((a*b) * (1/a * 1/b))     [via mulInvMulInv]
+--          = (1/(a*b) * (a*b)) * (1/a * 1/b)     [mulAssoc]
+--          = 1 * (1/a * 1/b)                     [mulInvRight, needs a*b ≠ 0]
+--          = 1/a * 1/b                           [mulOneLeft]
+invMul : {R : Real} -> (a b : Carrier R) -> (Equal a (rzero R) -> Void) -> (Equal b (rzero R) -> Void) -> Equal (rinv (rmul a b)) (rmul (rinv a) (rinv b)) := by
+  intros R a b ane bne
+  erw (sym (CompleteOrderedField.mulOneRight (field R) (rinv (rmul a b)))), (cong (\\z => rmul (rinv (rmul a b)) z) (sym (mulInvMulInv a b ane bne))), (sym (CompleteOrderedField.mulAssoc (field R) (rinv (rmul a b)) (rmul a b) (rmul (rinv a) (rinv b)))), (CompleteOrderedField.mulComm (field R) (rinv (rmul a b)) (rmul a b)), (CompleteOrderedField.mulInvRight (field R) (rmul a b) (mulNeZero a b ane bne)), (CompleteOrderedField.mulOneLeft (field R) (rmul (rinv a) (rinv b)))
+
+-- (a/b)*(c/d) = (a*c)/(b*d). The standard rational-multiplication identity.
+-- Needs b ≠ 0 and d ≠ 0 (for invMul). The proof is mostly associativity
+-- and commutativity to bring matched terms together, then sym-invMul
+-- combines 1/b * 1/d into 1/(b*d).
+mulDivDiv : {R : Real} -> (a b c d : Carrier R) -> (Equal b (rzero R) -> Void) -> (Equal d (rzero R) -> Void) -> Equal (rmul (rdiv a b) (rdiv c d)) (rdiv (rmul a c) (rmul b d)) := by
+  intros R a b c d bne dne
+  erw (CompleteOrderedField.mulAssoc (field R) a (rinv b) (rmul c (rinv d))), (sym (CompleteOrderedField.mulAssoc (field R) (rinv b) c (rinv d))), (CompleteOrderedField.mulComm (field R) (rinv b) c), (CompleteOrderedField.mulAssoc (field R) c (rinv b) (rinv d)), (sym (CompleteOrderedField.mulAssoc (field R) a c (rmul (rinv b) (rinv d)))), (cong (\\z => rmul (rmul a c) z) (sym (invMul b d bne dne)))
+
 -- Rat -> Real homomorphism lemmas. These are still postulated for now,
 -- but they need to live after the Nat homomorphism lemmas they
 -- conceptually build on. TODO: prove from field axioms using the
