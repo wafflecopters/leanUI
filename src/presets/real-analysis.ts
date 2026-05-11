@@ -537,6 +537,42 @@ mulDivAssoc {R} a b c = sym (CompleteOrderedField.mulAssoc (field R) a b (rinv c
 divMulRight : {R : Real} -> (a b c : Carrier R) -> Equal (rmul (rdiv a b) c) (rdiv (rmul a c) b)
 divMulRight {R} a b c = trans (CompleteOrderedField.mulAssoc (field R) a (rinv b) c) (trans (cong (\\z => rmul a z) (CompleteOrderedField.mulComm (field R) (rinv b) c)) (sym (CompleteOrderedField.mulAssoc (field R) a c (rinv b))))
 
+-- realOfNat R 1 = 1: in any field, "one" as a Nat coerces to the
+-- field's multiplicative identity. Reduces via realOfNat's Succ case:
+-- realOfNat 1 = 1 + realOfNat 0 = 1 + 0, then addZeroRight closes it.
+realOfNatOne : (R : Real) -> Equal (realOfNat R 1) (rone R)
+realOfNatOne R = CompleteOrderedField.addZeroRight (field R) (rone R)
+
+-- 0 < 1: the field's foundational positivity. Used by realOfNatSuccPos
+-- (below) and the limit/derivative proofs (further down).
+zeroLtOne : (R : Real) -> rlt (rzero R) (rone R) := by
+  intros R
+  constructor
+  · exact (CompleteOrderedField.zeroLeOne (field R))
+  · exact (CompleteOrderedField.zeroNeOne (field R))
+
+-- realOfNat R n is non-negative for every Nat n. Induction on n:
+-- base (Zero): 0 ≤ 0 by reflexivity. Step (Succ): 0 + 0 ≤ 1 + n by
+-- addLeBoth(zeroLeOne, IH); rewrite 0+0 to 0 via addZeroRight.
+realOfNatNonneg : (R : Real) -> (n : Nat) -> rle (rzero R) (realOfNat R n)
+realOfNatNonneg R Zero = CompleteOrderedField.leRefl (field R) (rzero R)
+realOfNatNonneg R (Succ n) = replace (\\z => rle z (radd (rone R) (realOfNat R n))) (CompleteOrderedField.addZeroRight (field R) (rzero R)) (addLeBoth (rzero R) (rone R) (rzero R) (realOfNat R n) (CompleteOrderedField.zeroLeOne (field R)) (realOfNatNonneg R n))
+
+-- 1 ≤ realOfNat R (Succ n) for every Nat n. Follows from realOfNatNonneg:
+-- 1+0 ≤ 1+n by addLeLeft(realOfNatNonneg); rewrite 1+0 to 1 via addZeroRight.
+oneLeRealOfNatSucc : (R : Real) -> (n : Nat) -> rle (rone R) (realOfNat R (Succ n))
+oneLeRealOfNatSucc R n = replace (\\z => rle z (radd (rone R) (realOfNat R n))) (CompleteOrderedField.addZeroRight (field R) (rone R)) (CompleteOrderedField.addLeLeft (field R) (rzero R) (realOfNat R n) (rone R) (realOfNatNonneg R n))
+
+-- 0 < realOfNat R (Succ n): transitivity of 0 < 1 ≤ realOfNat (Succ n).
+realOfNatSuccPos : (R : Real) -> (n : Nat) -> rlt (rzero R) (realOfNat R (Succ n))
+realOfNatSuccPos R n = ltLeTrans (rzero R) (rone R) (realOfNat R (Succ n)) (zeroLtOne R) (oneLeRealOfNatSucc R n)
+
+-- realOfNat R (Succ n) ≠ 0: the load-bearing non-zero proof for canonical
+-- Rat denominators. From realOfNatSuccPos = Pair (0 ≤ x) (0 ≠ x); take
+-- the second arg and flip via sym.
+realOfNatSuccNeZero : (R : Real) -> (n : Nat) -> Equal (realOfNat R (Succ n)) (rzero R) -> Void
+realOfNatSuccNeZero R n eq = Pair.snd (realOfNatSuccPos R n) (sym eq)
+
 -- Rat -> Real homomorphism lemmas. These are still postulated for now,
 -- but they need to live after the Nat homomorphism lemmas they
 -- conceptually build on. TODO: prove from field axioms using the
@@ -666,12 +702,8 @@ limitAdd3 {R} f g h x0 L M N limF limG limH = limitAdd (\\x => radd (f x) (g x))
 subSelf : {R : Real} -> (a : Carrier R) -> Equal (rsub a a) (rzero R)
 subSelf {R} a = CompleteOrderedField.negRight (field R) a
 
--- 0 < 1
-zeroLtOne : (R : Real) -> rlt (rzero R) (rone R) := by
-  intros R
-  constructor
-  · exact (CompleteOrderedField.zeroLeOne (field R))
-  · exact (CompleteOrderedField.zeroNeOne (field R))
+-- zeroLtOne moved earlier (above the Rat homomorphism section) so the
+-- positivity lemmas there can use it.
 
 -- The limit of a constant function: lim_{x->x0} k = k
 -- Proof: For any eps > 0, pick delta = 1. Then |k - k| = 0 < eps.
