@@ -542,6 +542,21 @@ negRealOfInt R (IntOfNat Zero) = negZero R
 negRealOfInt R (IntOfNat (Succ n)) = refl
 negRealOfInt R (IntNegSucc n) = negNeg (radd (rone R) (realOfNat R n))
 
+-- Nat lemma: plus m (Succ n) = Succ (plus m n). Standard, induction on m.
+plusSuccRight : (m n : Nat) -> Equal {A := Nat} (plus m (Succ n)) (Succ (plus m n))
+plusSuccRight Zero n = refl
+plusSuccRight (Succ m) n = cong Succ (plusSuccRight m n)
+
+-- Field-algebra: (1+a) + (1+b) = 1 + (1 + realOfNat (plus m n)) when
+-- a = realOfNat m, b = realOfNat n. Five assoc/comm/addRealOfNat shuffles.
+-- Helper for the (IntNegSucc m, IntNegSucc n) case of addRealOfInt.
+addOnePlusOneShuffle : (R : Real) -> (m n : Nat) -> Equal (radd (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n))) (radd (rone R) (radd (rone R) (realOfNat R (plus m n)))) := by
+  intros R m n
+  erw (CompleteOrderedField.addAssoc (field R) (rone R) (realOfNat R m) (radd (rone R) (realOfNat R n))), (cong (\\z => radd (rone R) z) (sym (CompleteOrderedField.addAssoc (field R) (realOfNat R m) (rone R) (realOfNat R n)))), (cong (\\z => radd (rone R) (radd z (realOfNat R n))) (CompleteOrderedField.addComm (field R) (realOfNat R m) (rone R))), (cong (\\z => radd (rone R) z) (CompleteOrderedField.addAssoc (field R) (rone R) (realOfNat R m) (realOfNat R n))), (cong (\\z => radd (rone R) (radd (rone R) z)) (addRealOfNat R m n))
+
+-- subSuccSucc, subNatNatLemma, addRealOfInt: defined further down,
+-- after subAddSub / subSelf / subZeroRight are in scope.
+
 ------------------------------------------------------------
 -- (a+b)-(c+d) = (a-c)+(b-d)
 ------------------------------------------------------------
@@ -1021,6 +1036,37 @@ derivScalar {R} c hcnz f x0 L hf = limitExt (\\x => rmul c (diffQuot f x0 x)) (d
 subZeroRight : {R : Real} -> (a : Carrier R) -> Equal (rsub a (rzero R)) a := by
   intros R a
   erw (negZero R), (CompleteOrderedField.addZeroRight (field R) a)
+
+------------------------------------------------------------
+-- Int -> Real arithmetic homomorphisms
+------------------------------------------------------------
+
+-- Field-algebra: a - b = (1+a) - (1+b). From subAddSub + subSelf:
+-- (1+a) - (1+b) = (1-1) + (a-b) = 0 + (a-b) = a-b. Helper for
+-- subNatNatLemma's recursive case.
+subSuccSucc : {R : Real} -> (a b : Carrier R) -> Equal (rsub a b) (rsub (radd (rone R) a) (radd (rone R) b)) := by
+  intros R a b
+  erw (sym (addZeroLeft (rsub a b))), (cong (\\z => radd z (rsub a b)) (sym (subSelf (rone R)))), (sym (subAddSub (rone R) a (rone R) b))
+
+-- subNatNat homomorphism: realOfInt R (subNatNat m n) = realOfNat R m - realOfNat R n.
+-- Four pattern cases mirroring subNatNat's definition. The recursive case
+-- uses subSuccSucc to bridge (1+m)-(1+n) and m-n.
+subNatNatLemma : (R : Real) -> (m n : Nat) -> Equal (realOfInt R (subNatNat m n)) (rsub (realOfNat R m) (realOfNat R n))
+subNatNatLemma R Zero Zero = sym (subZeroRight (rzero R))
+subNatNatLemma R (Succ m) Zero = sym (subZeroRight (realOfNat R (Succ m)))
+subNatNatLemma R Zero (Succ n) = sym (addZeroLeft (rneg (radd (rone R) (realOfNat R n))))
+subNatNatLemma R (Succ m) (Succ n) = trans (subNatNatLemma R m n) (subSuccSucc (realOfNat R m) (realOfNat R n))
+
+-- Int -> Real addition homomorphism: 4 cases by pattern on both Ints.
+--   ofNat   + ofNat   : addRealOfNat directly
+--   ofNat   + negSucc : sym subNatNatLemma (rsub form matches LHS)
+--   negSucc + ofNat   : addComm to flip the sign + sym subNatNatLemma
+--   negSucc + negSucc : negAdd + the (1+m,1+n) shuffle
+addRealOfInt : (R : Real) -> (a b : Int) -> Equal (radd (realOfInt R a) (realOfInt R b)) (realOfInt R (intAdd a b))
+addRealOfInt R (IntOfNat m) (IntOfNat n) = addRealOfNat R m n
+addRealOfInt R (IntOfNat m) (IntNegSucc n) = sym (subNatNatLemma R m (Succ n))
+addRealOfInt R (IntNegSucc m) (IntOfNat n) = trans (CompleteOrderedField.addComm (field R) (rneg (radd (rone R) (realOfNat R m))) (realOfNat R n)) (sym (subNatNatLemma R n (Succ m)))
+addRealOfInt R (IntNegSucc m) (IntNegSucc n) = trans (sym (negAdd (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n)))) (cong rneg (addOnePlusOneShuffle R m n))
 
 -- |a * b| = |a| * |b| (convenience alias)
 absOfMul : {R : Real} -> (a b : Carrier R) -> Equal (rabs (rmul a b)) (rmul (rabs a) (rabs b))
