@@ -199,6 +199,62 @@ mult : Nat -> Nat -> Nat
 mult Zero m = Zero
 mult (Succ n) m = plus m (mult n m)
 
+------------------------------------------------------------
+-- Integers (Lean-style two-constructor representation)
+------------------------------------------------------------
+-- Int avoids the dual-zero problem of (sign, magnitude) by using:
+--   IntOfNat n   represents  n     (n >= 0)
+--   IntNegSucc n represents  -(n+1)   (strictly negative)
+-- So 0 is uniquely IntOfNat Zero, and -1 = IntNegSucc Zero.
+inductive Int : Type where
+  IntOfNat : Nat -> Int
+  IntNegSucc : Nat -> Int
+
+-- Smart constructor: -n as an Int. Handles n=0 specially (-0 = 0).
+negOfNat : Nat -> Int
+negOfNat Zero = IntOfNat Zero
+negOfNat (Succ n) = IntNegSucc n
+
+intZero : Int
+intZero = IntOfNat Zero
+
+intOne : Int
+intOne = IntOfNat (Succ Zero)
+
+-- Negation: total, no edge cases (0 negates to 0).
+intNeg : Int -> Int
+intNeg (IntOfNat Zero) = IntOfNat Zero
+intNeg (IntOfNat (Succ n)) = IntNegSucc n
+intNeg (IntNegSucc n) = IntOfNat (Succ n)
+
+-- subNatNat m n represents m - n as a signed Int. Recursive on both
+-- args; no conditionals needed.
+subNatNat : Nat -> Nat -> Int
+subNatNat Zero Zero = IntOfNat Zero
+subNatNat (Succ m) Zero = IntOfNat (Succ m)
+subNatNat Zero (Succ n) = IntNegSucc n
+subNatNat (Succ m) (Succ n) = subNatNat m n
+
+-- Int addition: case-split on signs, use subNatNat for mixed.
+intAdd : Int -> Int -> Int
+intAdd (IntOfNat m) (IntOfNat n) = IntOfNat (plus m n)
+intAdd (IntOfNat m) (IntNegSucc n) = subNatNat m (Succ n)
+intAdd (IntNegSucc m) (IntOfNat n) = subNatNat n (Succ m)
+intAdd (IntNegSucc m) (IntNegSucc n) = IntNegSucc (Succ (plus m n))
+
+-- Int multiplication: case-split, use negOfNat to handle the (zero,
+-- negative) case correctly (0 * -k = 0, not "negative zero").
+intMul : Int -> Int -> Int
+intMul (IntOfNat m) (IntOfNat n) = IntOfNat (mult m n)
+intMul (IntOfNat m) (IntNegSucc n) = negOfNat (mult m (Succ n))
+intMul (IntNegSucc m) (IntOfNat n) = negOfNat (mult (Succ m) n)
+intMul (IntNegSucc m) (IntNegSucc n) = IntOfNat (mult (Succ m) (Succ n))
+
+intSub : Int -> Int -> Int
+intSub a b = intAdd a (intNeg b)
+
+-- realOfInt is defined after rneg comes into scope (search "realOfInt :")
+
 -- Rat declared early so that decimal literals like \`1.5\` parse and
 -- inferType resolves them to Rat. The realOfRat coercion (which depends
 -- on rdiv) is defined further down once rdiv is in scope.
@@ -239,6 +295,13 @@ ratSub (MkRat a b) (MkRat c d) = MkRat (minus (mult a d) (mult c b)) (mult b d)
 
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
+
+-- Coercion: Int -> Carrier R. Mirrors realOfNat, with the negative case
+-- using rneg on the abstract field. \`IntNegSucc n\` represents -(n+1), so
+-- it maps to -(1 + realOfNat n) = -(realOfNat (Succ n)).
+realOfInt : (R : Real) -> Int -> Carrier R
+realOfInt R (IntOfNat n) = realOfNat R n
+realOfInt R (IntNegSucc n) = rneg (radd (rone R) (realOfNat R n))
 
 rinv : {R : Real} -> Carrier R -> Carrier R
 rinv {R} = CompleteOrderedField.inv (field R)
