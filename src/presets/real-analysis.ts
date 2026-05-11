@@ -720,18 +720,9 @@ mulDivDiv : {R : Real} -> (a b c d : Carrier R) -> (Equal b (rzero R) -> Void) -
   intros R a b c d bne dne
   erw (CompleteOrderedField.mulAssoc (field R) a (rinv b) (rmul c (rinv d))), (sym (CompleteOrderedField.mulAssoc (field R) (rinv b) c (rinv d))), (CompleteOrderedField.mulComm (field R) (rinv b) c), (CompleteOrderedField.mulAssoc (field R) c (rinv b) (rinv d)), (sym (CompleteOrderedField.mulAssoc (field R) a c (rmul (rinv b) (rinv d)))), (cong (\\z => rmul (rmul a c) z) (sym (invMul b d bne dne)))
 
--- Rat -> Real homomorphism lemmas. These are still postulated for now,
--- but they need to live after the Nat homomorphism lemmas they
--- conceptually build on. TODO: prove from field axioms using the
--- helper lemmas above + a cross-multiplication identity that requires
--- denominator-non-zero (provable for canonical Rats once Rat is
--- refactored to bundle the positivity proof). Tracked as a separate
--- workstream — current postulates are sound (consequences of the
--- CompleteOrderedField axioms) but unverified by the kernel.
+-- addRealOfRat, mulRealOfRat, subRealOfRat are defined further down,
+-- after mulRealOfInt (their proofs depend on the Int homomorphisms).
 postulate addRealOfRat : (R : Real) -> (a b : Rat) -> Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
-postulate mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
--- subRealOfRat assumes the result is non-negative, matching the truncated-Nat
--- ratSub on the Rat side.
 postulate subRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rsub (realOfRat R a) (realOfRat R b)) (realOfRat R (ratSub a b))
 
 -- c*(-b) = -(c*b)
@@ -1107,6 +1098,24 @@ mulRealOfInt R (IntOfNat m) (IntOfNat n) = mulRealOfNat R m n
 mulRealOfInt R (IntOfNat m) (IntNegSucc n) = trans (mulNegRight (realOfNat R m) (radd (rone R) (realOfNat R n))) (trans (cong rneg (mulRealOfNat R m (Succ n))) (negOfNatLemma R (mult m (Succ n))))
 mulRealOfInt R (IntNegSucc m) (IntOfNat n) = trans (mulNegLeft (radd (rone R) (realOfNat R m)) (realOfNat R n)) (trans (cong rneg (mulRealOfNat R (Succ m) n)) (negOfNatLemma R (mult (Succ m) n)))
 mulRealOfInt R (IntNegSucc m) (IntNegSucc n) = trans (negMulNeg (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n))) (mulRealOfNat R (Succ m) (Succ n))
+
+-- Nat right-identities, needed for mulRealOfRat denominator manipulation.
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n
+plusZeroRight Zero = refl
+plusZeroRight (Succ k) = cong Succ (plusZeroRight k)
+
+multOneRight : (n : Nat) -> Equal (mult n (Succ Zero)) n
+multOneRight Zero = refl
+multOneRight (Succ k) = cong Succ (multOneRight k)
+
+-- Rat -> Real multiplication homomorphism. Proved by case-split on each
+-- denominator (Succ Zero vs Succ (Succ _)) so realOfRat fires its correct
+-- clause on each side, then bridged via mulDivAssoc / divMulRight / mulDivDiv.
+mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
+mulRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ Zero) pc) = mulRealOfInt R a c
+mulRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ (Succ d1)) pd) = trans (mulDivAssoc (realOfInt R a) (realOfInt R c) (realOfNat R (Succ (Succ d1)))) (trans (cong (\\z => rdiv z (realOfNat R (Succ (Succ d1)))) (mulRealOfInt R a c)) (cong (\\z => rdiv (realOfInt R (intMul a c)) (realOfNat R (Succ (Succ z)))) (sym (plusZeroRight d1))))
+mulRealOfRat R (MkRat a (Succ (Succ b1)) pb) (MkRat c (Succ Zero) pc) = trans (divMulRight (realOfInt R a) (realOfNat R (Succ (Succ b1))) (realOfInt R c)) (trans (cong (\\z => rdiv z (realOfNat R (Succ (Succ b1)))) (mulRealOfInt R a c)) (cong (\\z => rdiv (realOfInt R (intMul a c)) (realOfNat R (Succ (Succ z)))) (sym (multOneRight b1))))
+mulRealOfRat R (MkRat a (Succ (Succ b1)) pb) (MkRat c (Succ (Succ d1)) pd) = trans (mulDivDiv (realOfInt R a) (realOfNat R (Succ (Succ b1))) (realOfInt R c) (realOfNat R (Succ (Succ d1))) (realOfNatSuccNeZero R (Succ b1)) (realOfNatSuccNeZero R (Succ d1))) (trans (cong (\\z => rdiv z (rmul (realOfNat R (Succ (Succ b1))) (realOfNat R (Succ (Succ d1))))) (mulRealOfInt R a c)) (cong (\\z => rdiv (realOfInt R (intMul a c)) z) (mulRealOfNat R (Succ (Succ b1)) (Succ (Succ d1)))))
 
 -- |a * b| = |a| * |b| (convenience alias)
 absOfMul : {R : Real} -> (a b : Carrier R) -> Equal (rabs (rmul a b)) (rmul (rabs a) (rabs b))
