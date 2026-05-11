@@ -237,6 +237,10 @@ export type DefinitionsMap = {
    *  impl point to the same NatImpl entry. Populated by registerNatImpl when
    *  the preset declares `@syntax @impl=nat` on an inductive. */
   natImplByCtor?: Map<string, NatImpl>,
+  /** Optional. Map from ctor name → IntImpl. Both ctors of each impl
+   *  point to the same IntImpl entry. Populated by registerIntImpl when
+   *  the preset declares `@syntax @impl=int` on an inductive. */
+  intImplByCtor?: Map<string, IntImpl>,
   /** Optional. Map from target-type head constant → coercion function name.
    *  E.g., {"Carrier": "realOfNat"} means a NatLit in a `Carrier R` position
    *  is coerced to `realOfNat ?... NatLit`. Populated by registerOfNat when
@@ -270,6 +274,18 @@ export type DefinitionsMap = {
  * validity. RatLit literals are always canonical (gcd=1, den >= 2 since
  * integer-valued rationals collapse to NatLit).
  */
+/**
+ * Int-impl detected from `@syntax @impl=int`. The Lean-style two-ctor
+ * representation: one ctor takes a Nat (the non-negative form `IntOfNat n`),
+ * the other takes a Nat (the negative form `IntNegSucc n` meaning -(n+1)).
+ */
+export type IntImpl = {
+  inductiveName: string;     // e.g., "Int"
+  ofNatCtor: string;         // discovered ctor: Nat -> Int (non-negative)
+  negSuccCtor: string;       // discovered ctor: Nat -> Int (-(n+1))
+  natImplName: string;       // the Nat-impl type used for both ctors
+}
+
 export type RatImpl = {
   inductiveName: string;     // e.g., "Rat"
   ratCtor: string;           // single ctor name, e.g., "MkRat"
@@ -293,6 +309,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     inductiveTypes: new Map<string, InductiveDefinition>(),
     inductiveNameOfConstructor: new Map<string, string>(),
     natImplByCtor: new Map<string, NatImpl>(),
+    intImplByCtor: new Map<string, IntImpl>(),
     ofNatByTargetHead: new Map<string, string>(),
     natOpByFn: new Map<string, 'add' | 'mul'>(),
     ratImplByCtor: new Map<string, RatImpl>(),
@@ -378,6 +395,71 @@ export function registerNatImpl(definitions: DefinitionsMap, inductiveName: stri
  *
  * Returns null on success, or an error message string.
  */
+/**
+ * Register an inductive type as an Int-impl. Verifies the Lean-style
+ * two-constructor shape: each ctor takes a single Nat-impl arg and returns
+ * the inductive itself. The two ctors map to non-negative (IntOfNat) and
+ * strictly-negative (IntNegSucc) integers; we don't try to distinguish
+ * which is which structurally — both have shape `Nat -> Int`, and the
+ * @impl=int annotation user-side names them (e.g. IntOfNat, IntNegSucc).
+ *
+ * Order convention: the first ctor in the inductive's declaration is taken
+ * as the IntOfNat (non-negative) ctor, and the second as IntNegSucc. This
+ * matches Lean's convention.
+ *
+ * Returns null on success, or an error string.
+ */
+export function registerIntImpl(definitions: DefinitionsMap, inductiveName: string): string | null {
+  const ind = definitions.inductiveTypes.get(inductiveName);
+  if (!ind) return `@impl=int: inductive type '${inductiveName}' not found`;
+  if (ind.constructors.length !== 2) {
+    return `@impl=int: inductive '${inductiveName}' must have exactly 2 constructors (found ${ind.constructors.length})`;
+  }
+  const checkCtor = (idx: number): string | { ctorName: string; argType: string } => {
+    const ctor = ind.constructors[idx];
+    const t = ctor.type;
+    if (t.tag !== 'Binder' || t.binderKind.tag !== 'BPi') {
+      return `@impl=int: ctor '${ctor.name}' must be Nat-impl → ${inductiveName}`;
+    }
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    if (dom.tag !== 'Const') {
+      return `@impl=int: ctor '${ctor.name}' has non-Const arg type`;
+    }
+    let retHead = t.body;
+    while (retHead.tag === 'App') retHead = retHead.fn;
+    if (retHead.tag !== 'Const' || retHead.name !== inductiveName) {
+      return `@impl=int: ctor '${ctor.name}' must return '${inductiveName}'`;
+    }
+    return { ctorName: ctor.name, argType: dom.name };
+  };
+  const c0 = checkCtor(0);
+  if (typeof c0 === 'string') return c0;
+  const c1 = checkCtor(1);
+  if (typeof c1 === 'string') return c1;
+  if (c0.argType !== c1.argType) {
+    return `@impl=int: both ctors must use the same Nat-impl arg type (got ${c0.argType}, ${c1.argType})`;
+  }
+  const natImplName = c0.argType;
+  const isNatImpl = definitions.natImplByCtor
+    && [...definitions.natImplByCtor.values()].some(impl => impl.inductiveName === natImplName);
+  if (!isNatImpl) {
+    return `@impl=int: arg type '${natImplName}' is not a @impl=nat-tagged type`;
+  }
+  const impl: IntImpl = {
+    inductiveName,
+    ofNatCtor: c0.ctorName,
+    negSuccCtor: c1.ctorName,
+    natImplName,
+  };
+  if (!definitions.intImplByCtor) {
+    definitions.intImplByCtor = new Map<string, IntImpl>();
+  }
+  definitions.intImplByCtor.set(c0.ctorName, impl);
+  definitions.intImplByCtor.set(c1.ctorName, impl);
+  return null;
+}
+
 export function registerRatImpl(definitions: DefinitionsMap, inductiveName: string): string | null {
   const ind = definitions.inductiveTypes.get(inductiveName);
   if (!ind) return `@impl=rat: inductive type '${inductiveName}' not found`;

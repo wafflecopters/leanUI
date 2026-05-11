@@ -14,7 +14,7 @@ import { validateDeclarations, emptySymbolContext, SymbolContext } from '../type
 import { resolvePatternsInDeclarations } from '../parser/pattern-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath, deserializeIndexPath } from '../types/source-position'
 import { checkType, inferType } from './checker';
-import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, MatchPartIndex, registerNatImpl, registerNatOp, registerOfNat, registerOfRat, registerRatImpl, registerRatOp, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinition, addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createNamedArgInfoLookup, createNamedArgLookup, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, MatchPartIndex, registerIntImpl, registerNatImpl, registerNatOp, registerOfNat, registerOfRat, registerRatImpl, registerRatOp, setDefinitionValueInTCEnv, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkInductiveDeclaration } from './inductive';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
@@ -2569,6 +2569,11 @@ function applyImplAnnotationsForBlock(block: CompiledBlock, definitions: Definit
         const err = registerNatImpl(definitions, decl.name);
         if (err) {
           console.warn(`@impl=nat verification failed for '${decl.name}': ${err}`);
+        }
+      } else if (role === 'int') {
+        const err = registerIntImpl(definitions, decl.name);
+        if (err) {
+          console.warn(`@impl=int verification failed for '${decl.name}': ${err}`);
         }
       } else if (role === 'rat') {
         const err = registerRatImpl(definitions, decl.name);

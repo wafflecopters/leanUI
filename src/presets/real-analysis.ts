@@ -206,6 +206,7 @@ mult (Succ n) m = plus m (mult n m)
 --   IntOfNat n   represents  n     (n >= 0)
 --   IntNegSucc n represents  -(n+1)   (strictly negative)
 -- So 0 is uniquely IntOfNat Zero, and -1 = IntNegSucc Zero.
+@syntax @impl=int
 inductive Int : Type where
   IntOfNat : Nat -> Int
   IntNegSucc : Nat -> Int
