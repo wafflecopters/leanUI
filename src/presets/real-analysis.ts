@@ -1068,6 +1068,23 @@ addRealOfInt R (IntOfNat m) (IntNegSucc n) = sym (subNatNatLemma R m (Succ n))
 addRealOfInt R (IntNegSucc m) (IntOfNat n) = trans (CompleteOrderedField.addComm (field R) (rneg (radd (rone R) (realOfNat R m))) (realOfNat R n)) (sym (subNatNatLemma R n (Succ m)))
 addRealOfInt R (IntNegSucc m) (IntNegSucc n) = trans (sym (negAdd (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n)))) (cong rneg (addOnePlusOneShuffle R m n))
 
+-- Helper: rneg (realOfNat R k) = realOfInt R (negOfNat k). Two cases
+-- by pattern on k. The Zero case needs negZero; the Succ case is rfl.
+negOfNatLemma : (R : Real) -> (k : Nat) -> Equal (rneg (realOfNat R k)) (realOfInt R (negOfNat k))
+negOfNatLemma R Zero = negZero R
+negOfNatLemma R (Succ p) = refl
+
+-- Int -> Real multiplication homomorphism: 4 cases by pattern on both Ints.
+--   ofNat   * ofNat   : mulRealOfNat directly
+--   ofNat   * negSucc : mulNegRight + mulRealOfNat + negOfNatLemma
+--   negSucc * ofNat   : mulNegLeft  + mulRealOfNat + negOfNatLemma
+--   negSucc * negSucc : negMulNeg (the negs cancel) + mulRealOfNat
+mulRealOfInt : (R : Real) -> (a b : Int) -> Equal (rmul (realOfInt R a) (realOfInt R b)) (realOfInt R (intMul a b))
+mulRealOfInt R (IntOfNat m) (IntOfNat n) = mulRealOfNat R m n
+mulRealOfInt R (IntOfNat m) (IntNegSucc n) = trans (mulNegRight (realOfNat R m) (radd (rone R) (realOfNat R n))) (trans (cong rneg (mulRealOfNat R m (Succ n))) (negOfNatLemma R (mult m (Succ n))))
+mulRealOfInt R (IntNegSucc m) (IntOfNat n) = trans (mulNegLeft (radd (rone R) (realOfNat R m)) (realOfNat R n)) (trans (cong rneg (mulRealOfNat R (Succ m) n)) (negOfNatLemma R (mult (Succ m) n)))
+mulRealOfInt R (IntNegSucc m) (IntNegSucc n) = trans (negMulNeg (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n))) (mulRealOfNat R (Succ m) (Succ n))
+
 -- |a * b| = |a| * |b| (convenience alias)
 absOfMul : {R : Real} -> (a b : Carrier R) -> Equal (rabs (rmul a b)) (rmul (rabs a) (rabs b))
 absOfMul {R} a b = absMul a b
