@@ -255,9 +255,36 @@ intSub a b = intAdd a (intNeg b)
 
 -- realOfInt is defined after rneg comes into scope (search "realOfInt :")
 
+-- NotZero — the proof-bundled positivity predicate. NotZero (Succ k) has
+-- the canonical inhabitant IsSucc k; NotZero Zero is uninhabited (no
+-- pattern matches). Foundation for the upcoming Rat refactor: when we
+-- change MkRat to take a (d : Nat) and a NotZero d proof, the kernel
+-- can pattern-match away the d=0 case automatically.
+inductive NotZero : Nat -> Type where
+  IsSucc : (n : Nat) -> NotZero (Succ n)
+
+-- (Succ m) * (Succ n) is always Succ-shaped (mult's Succ case +
+-- plus's Succ case). The Succ-of-something gives the NotZero proof.
+mulSuccSuccNotZero : (m n : Nat) -> NotZero (mult (Succ m) (Succ n))
+mulSuccSuccNotZero m n = IsSucc (plus n (mult m (Succ n)))
+
+-- Given NotZero d1 and NotZero d2, mult d1 d2 is also non-zero. The
+-- pattern match forces both inputs to have shape (Succ k), reducing
+-- to mulSuccSuccNotZero. The d=Zero case is RULED OUT structurally —
+-- no IsSucc constructor matches NotZero Zero.
+mulNotZero : (d1 d2 : Nat) -> NotZero d1 -> NotZero d2 -> NotZero (mult d1 d2)
+mulNotZero (Succ k1) (Succ k2) (IsSucc _) (IsSucc _) = mulSuccSuccNotZero k1 k2
+
 -- Rat declared early so that decimal literals like \`1.5\` parse and
 -- inferType resolves them to Rat. The realOfRat coercion (which depends
 -- on rdiv) is defined further down once rdiv is in scope.
+--
+-- TODO (Path 1 — Lean-style refactor in progress):
+--   inductive Rat : Type where
+--     MkRat : Int -> (d : Nat) -> NotZero d -> Rat
+-- Will use Int for the numerator (so subtraction is total) and bundle
+-- a NotZero proof for the denominator. Pending: kernel @impl=rat
+-- verifier update, parser/iota-view changes, and downstream rewrites.
 @syntax @impl=rat
 inductive Rat : Type where
   MkRat : Nat -> Nat -> Rat
