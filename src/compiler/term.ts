@@ -274,6 +274,17 @@ export type RatImpl = {
   inductiveName: string;     // e.g., "Rat"
   ratCtor: string;           // single ctor name, e.g., "MkRat"
   natImplName: string;       // the Nat-impl type used for num/den, e.g., "Nat"
+  // Path-1 (Lean-style) fields, OPTIONAL: populated when the user's Rat
+  // ctor takes a signed-Int numerator plus a positivity proof for the
+  // denominator. The current shape `MkRat : Nat -> Nat -> Rat` leaves
+  // these unset; the future `MkRat : Int -> (d : Nat) -> NotZero d -> Rat`
+  // shape sets them, and the kernel iota-view uses them to generate the
+  // third (proof) argument when expanding RatLits.
+  intImplName?: string;        // e.g., "Int", when numerator is signed
+  intOfNatCtor?: string;       // e.g., "IntOfNat"   (non-negative Int)
+  intNegSuccCtor?: string;     // e.g., "IntNegSucc" (-(n+1) form)
+  notZeroTypeName?: string;    // e.g., "NotZero"
+  notZeroSuccCtor?: string;    // e.g., "IsSucc"     -- ctor : (k : Nat) -> NotZero (Succ k)
 }
 
 export function createDefinitionsMap(): DefinitionsMap {
