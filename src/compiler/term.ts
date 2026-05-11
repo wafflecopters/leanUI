@@ -467,16 +467,20 @@ export function registerRatImpl(definitions: DefinitionsMap, inductiveName: stri
     return `@impl=rat: inductive '${inductiveName}' must have exactly 1 constructor (found ${ind.constructors.length})`;
   }
   const ctor = ind.constructors[0];
-  // Walk Pi binders to discover the ctor's arg types
-  const argTypes: string[] = [];
+  // Walk Pi binders. Each binder records: the head Const-name of the
+  // domain (if any), and the full domain (so we can inspect arg-3 which
+  // is structurally `NotZero <Var-referring-to-arg-2>`).
+  const binderHeads: string[] = [];
+  const binderDomains: TTKTerm[] = [];
   let t = ctor.type;
   while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    binderDomains.push(t.domain);
     let dom = t.domain;
     while (dom.tag === 'App') dom = dom.fn;
     if (dom.tag !== 'Const') {
-      return `@impl=rat: ctor '${ctor.name}' has non-Const domain at position ${argTypes.length}`;
+      return `@impl=rat: ctor '${ctor.name}' has non-Const head at position ${binderHeads.length}`;
     }
-    argTypes.push(dom.name);
+    binderHeads.push(dom.name);
     t = t.body;
   }
   let retHead = t;
@@ -484,23 +488,73 @@ export function registerRatImpl(definitions: DefinitionsMap, inductiveName: stri
   if (retHead.tag !== 'Const' || retHead.name !== inductiveName) {
     return `@impl=rat: ctor '${ctor.name}' must return '${inductiveName}'`;
   }
-  if (argTypes.length !== 2) {
-    return `@impl=rat: ctor '${ctor.name}' must take exactly 2 args (num, den), got ${argTypes.length}`;
+
+  const isNatImpl = (name: string) => definitions.natImplByCtor
+    && [...definitions.natImplByCtor.values()].some(impl => impl.inductiveName === name);
+
+  // SHAPE A (legacy): Nat -> Nat -> Rat
+  if (binderHeads.length === 2) {
+    if (binderHeads[0] !== binderHeads[1]) {
+      return `@impl=rat: ctor '${ctor.name}' must take same Nat-impl type for both args (got ${binderHeads[0]}, ${binderHeads[1]})`;
+    }
+    const natImplName = binderHeads[0];
+    if (!isNatImpl(natImplName)) {
+      return `@impl=rat: '${inductiveName}' uses '${natImplName}' for num/den, but '${natImplName}' is not a @impl=nat-tagged type`;
+    }
+    if (!definitions.ratImplByCtor) {
+      definitions.ratImplByCtor = new Map<string, RatImpl>();
+    }
+    definitions.ratImplByCtor.set(ctor.name, { inductiveName, ratCtor: ctor.name, natImplName });
+    return null;
   }
-  if (argTypes[0] !== argTypes[1]) {
-    return `@impl=rat: ctor '${ctor.name}' must take same Nat-impl type for both args (got ${argTypes[0]}, ${argTypes[1]})`;
+
+  // SHAPE B (Path-1 Lean-style): Int -> (d : Nat) -> NotZero d -> Rat
+  if (binderHeads.length === 3) {
+    const intImplName = binderHeads[0];
+    const natImplName = binderHeads[1];
+    const notZeroHead = binderHeads[2];
+    // Arg 1 must be an @impl=int-tagged type.
+    const intImpl = definitions.intImplByCtor
+      ? [...definitions.intImplByCtor.values()].find(i => i.inductiveName === intImplName)
+      : undefined;
+    if (!intImpl) {
+      return `@impl=rat: '${inductiveName}' arg 1 type '${intImplName}' is not a @impl=int-tagged type`;
+    }
+    if (!isNatImpl(natImplName)) {
+      return `@impl=rat: '${inductiveName}' arg 2 type '${natImplName}' is not a @impl=nat-tagged type`;
+    }
+    // Arg 3 must be `<NotZeroHead> (Var 0)` — i.e., NotZero applied to arg 2.
+    // After the 3-arg ctor's Pi, arg 2 is at de Bruijn index 0 from arg 3's perspective.
+    const arg3Domain = binderDomains[2];
+    if (arg3Domain.tag !== 'App' || arg3Domain.fn.tag !== 'Const' || arg3Domain.fn.name !== notZeroHead || arg3Domain.arg.tag !== 'Var' || arg3Domain.arg.index !== 0) {
+      return `@impl=rat: ctor '${ctor.name}' arg 3 must be '${notZeroHead}' applied to arg 2`;
+    }
+    // NotZero must be a 1-ctor inductive with shape `(k : Nat) -> NotZero (Succ k)`.
+    const notZeroInd = definitions.inductiveTypes.get(notZeroHead);
+    if (!notZeroInd) {
+      return `@impl=rat: NotZero type '${notZeroHead}' not found`;
+    }
+    if (notZeroInd.constructors.length !== 1) {
+      return `@impl=rat: NotZero type '${notZeroHead}' must have exactly 1 constructor`;
+    }
+    const notZeroSuccCtor = notZeroInd.constructors[0].name;
+    if (!definitions.ratImplByCtor) {
+      definitions.ratImplByCtor = new Map<string, RatImpl>();
+    }
+    definitions.ratImplByCtor.set(ctor.name, {
+      inductiveName,
+      ratCtor: ctor.name,
+      natImplName,
+      intImplName,
+      intOfNatCtor: intImpl.ofNatCtor,
+      intNegSuccCtor: intImpl.negSuccCtor,
+      notZeroTypeName: notZeroHead,
+      notZeroSuccCtor,
+    });
+    return null;
   }
-  const natImplName = argTypes[0];
-  const isNatImpl = definitions.natImplByCtor
-    && [...definitions.natImplByCtor.values()].some(impl => impl.inductiveName === natImplName);
-  if (!isNatImpl) {
-    return `@impl=rat: '${inductiveName}' uses '${natImplName}' for num/den, but '${natImplName}' is not a @impl=nat-tagged type`;
-  }
-  if (!definitions.ratImplByCtor) {
-    definitions.ratImplByCtor = new Map<string, RatImpl>();
-  }
-  definitions.ratImplByCtor.set(ctor.name, { inductiveName, ratCtor: ctor.name, natImplName });
-  return null;
+
+  return `@impl=rat: ctor '${ctor.name}' must have either 2 args (Nat, Nat) or 3 args (Int, Nat, NotZero); got ${binderHeads.length}`;
 }
 
 /**

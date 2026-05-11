@@ -276,19 +276,13 @@ mulSuccSuccNotZero m n = IsSucc (plus n (mult m (Succ n)))
 mulNotZero : (d1 d2 : Nat) -> NotZero d1 -> NotZero d2 -> NotZero (mult d1 d2)
 mulNotZero (Succ k1) (Succ k2) (IsSucc _) (IsSucc _) = mulSuccSuccNotZero k1 k2
 
--- Rat declared early so that decimal literals like \`1.5\` parse and
--- inferType resolves them to Rat. The realOfRat coercion (which depends
--- on rdiv) is defined further down once rdiv is in scope.
---
--- TODO (Path 1 — Lean-style refactor in progress):
---   inductive Rat : Type where
---     MkRat : Int -> (d : Nat) -> NotZero d -> Rat
--- Will use Int for the numerator (so subtraction is total) and bundle
--- a NotZero proof for the denominator. Pending: kernel @impl=rat
--- verifier update, parser/iota-view changes, and downstream rewrites.
+-- Rat — Lean-style proof-bundled rational. The numerator is a signed
+-- Int (so subtraction is total), the denominator is a Nat with a bundled
+-- NotZero proof. This rules out 1/0 structurally and lets pattern
+-- matching auto-discharge the d ≠ 0 hypothesis everywhere div appears.
 @syntax @impl=rat
 inductive Rat : Type where
-  MkRat : Nat -> Nat -> Rat
+  MkRat : Int -> (d : Nat) -> NotZero d -> Rat
 
 -- Rat arithmetic. Recursive definitions are the source of truth (so
 -- proofs by induction work); the @ratAdd/@ratMul/@ratSub annotations
@@ -296,30 +290,27 @@ inductive Rat : Type where
 --   a/b + c/d = (a*d + c*b) / (b*d)
 @syntax @ratAdd
 ratPlus : Rat -> Rat -> Rat
-ratPlus (MkRat a b) (MkRat c d) = MkRat (plus (mult a d) (mult c b)) (mult b d)
+ratPlus (MkRat a b pb) (MkRat c d pd) = MkRat (intAdd (intMul a (IntOfNat d)) (intMul c (IntOfNat b))) (mult b d) (mulNotZero b d pb pd)
 
 --   a/b * c/d = (a*c) / (b*d)
 @syntax @ratMul
 ratMult : Rat -> Rat -> Rat
-ratMult (MkRat a b) (MkRat c d) = MkRat (mult a c) (mult b d)
+ratMult (MkRat a b pb) (MkRat c d pd) = MkRat (intMul a c) (mult b d) (mulNotZero b d pb pd)
 
--- minus: truncated nat subtraction (returns Zero when b > a). The
--- @ratSub primitive computes via BigInt directly, so this user-side
--- definition only matters for non-literal Rat arithmetic.
+-- minus: truncated nat subtraction (returns Zero when b > a). Kept for
+-- generic Nat code; ratSub uses intSub on signed Int numerators instead.
 minus : Nat -> Nat -> Nat
 minus n Zero = n
 minus Zero (Succ _) = Zero
 minus (Succ n) (Succ m) = minus n m
 
--- Rat subtraction. The user's recursive definition uses Nat (no
--- negative numbers), so it's only correct when the result is
--- non-negative. The @ratSub primitive computes via BigInt and may
--- produce a RatLit with negative numerator — fine for the kernel's
--- canonical form, but won't iota-view back to MkRat with Nat fields.
--- For the milestone proof (185.6 - 85.7 = 99.9) we stay positive.
+-- Rat subtraction. With signed Int numerators, this is total — the
+-- result can be a negative rational. The @ratSub primitive computes
+-- via BigInt; the iota-view canonicalizes the kernel form.
+--   a/b - c/d = (a*d - c*b) / (b*d)
 @syntax @ratSub
 ratSub : Rat -> Rat -> Rat
-ratSub (MkRat a b) (MkRat c d) = MkRat (minus (mult a d) (mult c b)) (mult b d)
+ratSub (MkRat a b pb) (MkRat c d pd) = MkRat (intSub (intMul a (IntOfNat d)) (intMul c (IntOfNat b))) (mult b d) (mulNotZero b d pb pd)
 
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
@@ -374,9 +365,13 @@ absElim {R} a C pos neg = eitherElimDep (\\e => C (eitherElim (\\_ => a) (\\_ =>
 -- forms (\`realOfNat n\` vs \`rdiv (realOfNat n) (realOfNat 1)\`) that can't be
 -- bridged structurally.
 @syntax @ofRat
+-- NOTE: use named pattern vars (\`p\`) for the NotZero proof instead of \`_\`.
+-- The kernel's PWild handling has a known bug (substPatternBindings counts
+-- only PVar bindings, but the compiled RHS uses indices counting both).
+-- With \`p\`, indices line up correctly.
 realOfRat : (R : Real) -> Rat -> Carrier R
-realOfRat R (MkRat n (Succ Zero)) = realOfNat R n
-realOfRat R (MkRat n d) = rdiv (realOfNat R n) (realOfNat R d)
+realOfRat R (MkRat n (Succ Zero) p) = realOfInt R n
+realOfRat R (MkRat n d p) = rdiv (realOfInt R n) (realOfNat R d)
 
 -- Rat homomorphism lemmas (addRealOfRat, mulRealOfRat, subRealOfRat) are
 -- defined further down — they need addRealOfNat and mulRealOfNat to be in

@@ -581,8 +581,10 @@ function findNatImplForHead(env: TCEnv<TTKTerm>, headName: string): { inductiveN
   return [...reg.values()].find(impl => impl.inductiveName === headName);
 }
 
-/** Find a registered RatImpl whose inductive type has this Const-head name. */
-function findRatImplForHead(env: TCEnv<TTKTerm>, headName: string): { ratCtor: string; inductiveName: string } | undefined {
+/** Find a registered RatImpl whose inductive type has this Const-head name.
+ *  Returns the full RatImpl so callers can dispatch on legacy vs. Path-1
+ *  shape via the optional intOfNatCtor/notZeroSuccCtor fields. */
+function findRatImplForHead(env: TCEnv<TTKTerm>, headName: string): { ratCtor: string; inductiveName: string; intOfNatCtor?: string; intNegSuccCtor?: string; notZeroSuccCtor?: string } | undefined {
   const reg = env.definitions.ratImplByCtor;
   if (!reg) return undefined;
   return [...reg.values()].find(impl => impl.inductiveName === headName);
@@ -617,13 +619,26 @@ function buildCoercionApp(
   return { tag: 'App', fn: app, arg: finalArg };
 }
 
-/** `MkRat n 1` term — the structural Rat embedding of an integer literal. */
-function natLitAsRatExpr(natLit: TTKTerm, ratCtor: string): TTKTerm {
-  return {
+/** Structural Rat embedding of an integer literal — \`MkRat n 1 [proof]\`.
+ *  For legacy 2-arg RatImpl, builds \`MkRat (NatLit n) (NatLit 1)\`. For
+ *  Path-1 3-arg RatImpl, wraps the literal via IntOfNat and supplies the
+ *  NotZero-of-1 proof via the recorded NotZeroSucc ctor (= IsSucc 0). */
+function natLitAsRatExpr(natLit: TTKTerm, ratImpl: { ratCtor: string; intOfNatCtor?: string; notZeroSuccCtor?: string }): TTKTerm {
+  const isPath1 = ratImpl.intOfNatCtor !== undefined && ratImpl.notZeroSuccCtor !== undefined;
+  const numArg: TTKTerm = isPath1
+    ? { tag: 'App', fn: { tag: 'Const', name: ratImpl.intOfNatCtor! }, arg: natLit }
+    : natLit;
+  let app: TTKTerm = {
     tag: 'App',
-    fn: { tag: 'App', fn: { tag: 'Const', name: ratCtor }, arg: natLit },
+    fn: { tag: 'App', fn: { tag: 'Const', name: ratImpl.ratCtor }, arg: numArg },
     arg: { tag: 'NatLit', value: 1n },
   };
+  if (isPath1) {
+    // den = 1 = Succ Zero; the NotZero proof is notZeroSuccCtor 0.
+    const proof: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: ratImpl.notZeroSuccCtor! }, arg: { tag: 'NatLit', value: 0n } };
+    app = { tag: 'App', fn: app, arg: proof };
+  }
+  return app;
 }
 
 /** Try the @ofRat path: when `headName` has a registered @ofRat coercion,
@@ -676,7 +691,7 @@ function tryCoerceNatLit(env: TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType: 
   // NatLit at a registered @impl=rat target: expand to MkRat n 1.
   const ratImpl = findRatImplForHead(env, headName);
   if (ratImpl) {
-    const expanded = natLitAsRatExpr(env.value, ratImpl.ratCtor);
+    const expanded = natLitAsRatExpr(env.value, ratImpl);
     return checkType(env.withValue(expanded), expectedType);
   }
   // Skip coercion if the target IS a Nat-impl — identity case.
@@ -686,7 +701,7 @@ function tryCoerceNatLit(env: TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType: 
     ? [...env.definitions.ratImplByCtor.values()][0]
     : undefined;
   if (anyRatImpl) {
-    const ratExpr = natLitAsRatExpr(env.value, anyRatImpl.ratCtor);
+    const ratExpr = natLitAsRatExpr(env.value, anyRatImpl);
     const viaRat = tryCoerceViaOfRat(env, expectedType, headName, ratExpr);
     if (viaRat) return viaRat;
   }

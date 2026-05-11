@@ -137,35 +137,47 @@ function matchPattern(pattern: TTKPattern, term: TTKTerm, ctx?: WhnfContext): TT
       }
 
       // RatLit iota-view: when the pattern is a registered @impl=rat ctor
-      // and the term reduced to a RatLit, expand the literal to
-      // MkRat(NatLit num, NatLit den) so the PCtor pattern can match.
-      // Also handles the case where the term is NatLit n (an integer-valued
-      // rational that canonicalized to NatLit) — expand to MkRat n 1, so
-      // \`1.0\` (which the parser degenerates to NatLit 1) still pattern-
-      // matches as a Rat.
+      // and the term reduced to a RatLit (or integer-valued NatLit), expand
+      // the literal to a MkRat application so the PCtor pattern can match.
+      //
+      // The expansion uses one of two shapes depending on the registered
+      // RatImpl:
+      //   - LEGACY 2-arg: MkRat (NatLit num) (NatLit den)
+      //     (num must be non-negative — pre-Path-1 contract)
+      //   - PATH-1 3-arg: MkRat <IntCtor (NatLit |num|)> (NatLit den)
+      //                          <NotZeroCtor (NatLit (den-1))>
+      //     Wraps num via IntOfNat or IntNegSucc depending on sign, builds
+      //     the den-positivity proof from NotZero's Succ-form constructor.
       if (ctx?.definitions?.ratImplByCtor) {
         const impl = ctx.definitions.ratImplByCtor.get(pattern.name);
         if (impl && pattern.name === impl.ratCtor) {
+          const isPath1 = impl.intOfNatCtor !== undefined
+            && impl.intNegSuccCtor !== undefined
+            && impl.notZeroSuccCtor !== undefined;
+          const buildIntArg = (num: bigint): TTKTerm => {
+            if (!isPath1) return { tag: 'NatLit', value: num };
+            if (num >= 0n) {
+              return { tag: 'App', fn: { tag: 'Const', name: impl.intOfNatCtor! }, arg: { tag: 'NatLit', value: num } };
+            }
+            return { tag: 'App', fn: { tag: 'Const', name: impl.intNegSuccCtor! }, arg: { tag: 'NatLit', value: -num - 1n } };
+          };
+          const buildNotZeroArg = (den: bigint): TTKTerm => {
+            // den is canonical (>= 1), so den = Succ (den-1). The proof is
+            // notZeroSuccCtor applied to (den - 1).
+            return { tag: 'App', fn: { tag: 'Const', name: impl.notZeroSuccCtor! }, arg: { tag: 'NatLit', value: den - 1n } };
+          };
           if (reduced.tag === 'RatLit') {
-            reduced = {
-              tag: 'App',
-              fn: {
-                tag: 'App',
-                fn: { tag: 'Const', name: impl.ratCtor },
-                arg: { tag: 'NatLit', value: reduced.num },
-              },
-              arg: { tag: 'NatLit', value: reduced.den },
-            };
+            const numArg = buildIntArg(reduced.num);
+            const denArg: TTKTerm = { tag: 'NatLit', value: reduced.den };
+            let expanded: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: impl.ratCtor }, arg: numArg }, arg: denArg };
+            if (isPath1) expanded = { tag: 'App', fn: expanded, arg: buildNotZeroArg(reduced.den) };
+            reduced = expanded;
           } else if (reduced.tag === 'NatLit') {
-            reduced = {
-              tag: 'App',
-              fn: {
-                tag: 'App',
-                fn: { tag: 'Const', name: impl.ratCtor },
-                arg: { tag: 'NatLit', value: reduced.value },
-              },
-              arg: { tag: 'NatLit', value: 1n },
-            };
+            const numArg = buildIntArg(reduced.value);
+            const denArg: TTKTerm = { tag: 'NatLit', value: 1n };
+            let expanded: TTKTerm = { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: impl.ratCtor }, arg: numArg }, arg: denArg };
+            if (isPath1) expanded = { tag: 'App', fn: expanded, arg: buildNotZeroArg(1n) };
+            reduced = expanded;
           }
         }
       }
@@ -616,31 +628,60 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
           }
         }
       }
-      // RatLit inverse-iota: MkRat(NatLit n, NatLit d) collapses to a
-      // canonical RatLit. Pairs with the iota-view in matchPattern (RatLit
-      // n/d → MkRat (NatLit n) (NatLit d)) for a roundtrip canonical form.
-      // Spine shape: App(App(Const(MkRat), NatLit n), NatLit d). Den=0 is
-      // an error (division by zero), but we let it slide here — the user
-      // bears the same responsibility as their Rat constructor would.
+      // RatLit inverse-iota: a fully-applied MkRat with closed args
+      // collapses to a canonical RatLit. Pairs with the matchPattern
+      // iota-view for a roundtrip canonical form.
+      //
+      // Spine shapes (legacy + Path-1):
+      //   App(App(MkRat, NatLit n), NatLit d)                                  -- legacy
+      //   App(App(App(MkRat, IntCtor (NatLit k)), NatLit d), <proof>)          -- Path-1
+      //
+      // For Path-1: IntCtor is either IntOfNat (signed value = k) or
+      // IntNegSucc (signed value = -(k+1)). The proof arg is ignored (we
+      // trust the RatImpl invariant that it exists; the canonical form
+      // depends only on num and den).
+      const canonRat = (num: bigint, den: bigint): TTKTerm => {
+        let a = num < 0n ? -num : num;
+        let b = den;
+        while (b !== 0n) { [a, b] = [b, a % b]; }
+        const g = a;
+        const cnum = num / g;
+        const cden = den / g;
+        if (cden === 1n && cnum >= 0n) return { tag: 'NatLit', value: cnum };
+        return { tag: 'RatLit', num: cnum, den: cden };
+      };
+      // Legacy 2-arg: App(App(Const MkRat, NatLit), NatLit)
       if (term.fn.tag === 'App' && term.fn.fn.tag === 'Const' && ctx?.definitions?.ratImplByCtor) {
         const impl = ctx.definitions.ratImplByCtor.get(term.fn.fn.name);
-        if (impl) {
+        if (impl && impl.intImplName === undefined) {
           const numTerm = whnf(term.fn.arg, nextCtx);
           if (numTerm.tag === 'NatLit') {
             const denTerm = whnf(term.arg, nextCtx);
             if (denTerm.tag === 'NatLit' && denTerm.value > 0n) {
-              const num = numTerm.value;
-              const den = denTerm.value;
-              // Canonicalize via gcd. RatLit invariant: gcd=1, den >= 2,
-              // or fall back to NatLit when integer-valued.
-              let a = num < 0n ? -num : num;
-              let b = den;
-              while (b !== 0n) { [a, b] = [b, a % b]; }
-              const g = a;
-              const cnum = num / g;
-              const cden = den / g;
-              if (cden === 1n) return { tag: 'NatLit', value: cnum };
-              return { tag: 'RatLit', num: cnum, den: cden };
+              return canonRat(numTerm.value, denTerm.value);
+            }
+          }
+        }
+      }
+      // Path-1 3-arg: App(App(App(Const MkRat, IntCtor (NatLit k)), NatLit), <proof>)
+      if (term.fn.tag === 'App' && term.fn.fn.tag === 'App' && term.fn.fn.fn.tag === 'Const'
+          && ctx?.definitions?.ratImplByCtor) {
+        const impl = ctx.definitions.ratImplByCtor.get(term.fn.fn.fn.name);
+        if (impl && impl.intOfNatCtor !== undefined) {
+          // Decode the Int arg
+          const intArg = whnf(term.fn.fn.arg, nextCtx);
+          let num: bigint | null = null;
+          if (intArg.tag === 'App' && intArg.fn.tag === 'Const') {
+            const inner = whnf(intArg.arg, nextCtx);
+            if (inner.tag === 'NatLit') {
+              if (intArg.fn.name === impl.intOfNatCtor) num = inner.value;
+              else if (intArg.fn.name === impl.intNegSuccCtor) num = -(inner.value + 1n);
+            }
+          }
+          if (num !== null) {
+            const denTerm = whnf(term.fn.arg, nextCtx);
+            if (denTerm.tag === 'NatLit' && denTerm.value > 0n) {
+              return canonRat(num, denTerm.value);
             }
           }
         }
