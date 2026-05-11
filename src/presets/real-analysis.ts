@@ -303,6 +303,8 @@ realOfInt : (R : Real) -> Int -> Carrier R
 realOfInt R (IntOfNat n) = realOfNat R n
 realOfInt R (IntNegSucc n) = rneg (radd (rone R) (realOfNat R n))
 
+-- negRealOfInt is defined further down, once negZero and negNeg are in scope.
+
 rinv : {R : Real} -> Carrier R -> Carrier R
 rinv {R} = CompleteOrderedField.inv (field R)
 
@@ -529,6 +531,16 @@ negAdd : {R : Real} -> (a b : Carrier R) -> Equal (rneg (radd a b)) (radd (rneg 
 -- --a = a
 negNeg : {R : Real} -> (a : Carrier R) -> Equal (rneg (rneg a)) a
 negNeg {R} a = sym (negUnique (rneg a) a (negLeft a))
+
+-- Int -> Real negation homomorphism. Three pattern cases (the two Int
+-- ctors plus IntOfNat split by Zero/Succ for the (-0 = 0) edge):
+--   IntOfNat 0      ->  neg(0) = 0       via negZero
+--   IntOfNat (S n)  ->  rfl              definitionally equal
+--   IntNegSucc n    ->  neg(neg x) = x   via negNeg
+negRealOfInt : (R : Real) -> (a : Int) -> Equal (rneg (realOfInt R a)) (realOfInt R (intNeg a))
+negRealOfInt R (IntOfNat Zero) = negZero R
+negRealOfInt R (IntOfNat (Succ n)) = refl
+negRealOfInt R (IntNegSucc n) = negNeg (radd (rone R) (realOfNat R n))
 
 ------------------------------------------------------------
 -- (a+b)-(c+d) = (a-c)+(b-d)
