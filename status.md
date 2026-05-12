@@ -26,11 +26,11 @@ Upleveling the core engine while preserving the current language surface:
 - Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
-- Kept the compiler architecture pass going and drove `src/compiler/compile.ts` down to 2878 lines by extracting more real subsystems instead of just moving helpers around
-- Moved record declaration orchestration into `src/compiler/compile-record-processing.ts`, with direct regressions for inherited-field extraction, binder-aware field substitution, and implicit-hole insertion, plus reruns of the heavy record/extends suites
-- Moved inductive declaration orchestration into `src/compiler/compile-inductive-processing.ts`, with direct regressions for current-inductive named-arg lookup and adjacent constructor elaboration cases that still have to see existing named-arg definitions
-- Extracted shared declaration/result shaping into `src/compiler/compile-declaration-result.ts`, deleted the temporary callback seam between `compile.ts` and the new declaration modules, and added direct regressions for named-arg metadata preservation and elaboration-error path mapping
-- Hardened two long-running real-analysis/proof-tree regressions by widening their timeouts after proving they were resource-sensitive full-suite failures rather than semantic bugs, so the compiler/test harness now runs green under full `npm test`
+- Eliminated all 3 Rat→Real homomorphism postulates (addRealOfRat, mulRealOfRat, subRealOfRat). Each proved by 4-case denominator split (Succ Zero vs Succ (Succ _)) with cross-multiplication helpers derived from CompleteOrderedField axioms. The decimal milestone (`185.6 - 85.7 = 99.9` and 6 others) now compiles with zero postulates.
+- Built supporting infrastructure: divCancel, addDivSame, divDenomExpand, addDivDiv, addCommonDenom/Left + sub-side counterparts (negDivLeft, subDivSame, subDivDiv, etc.); Nat right-identities (plusZeroRight, multOneRight); Int gaps (intMulOneRight, subRealOfInt).
+- Lean-style Rat refactor landed earlier: `MkRat : Int -> (d : Nat) -> NotZero d -> Rat`, with kernel iota-view / inverse-iota handling both legacy 2-arg and Path-1 3-arg shapes.
+- Continued compiler architecture pass: `src/compiler/compile.ts` down to ~2878 lines; record/inductive orchestration extracted to dedicated modules with direct regressions.
+- Hardened two long-running real-analysis/proof-tree regressions by widening their timeouts after proving they were resource-sensitive full-suite failures rather than semantic bugs.
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
