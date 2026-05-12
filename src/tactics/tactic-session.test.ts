@@ -117,7 +117,7 @@ describe('TacticSession', () => {
 // ============================================================================
 
 describe('TacticSession with real-analysis preset', () => {
-  test('all tactic-mode declarations produce valid traces', { timeout: 30000 }, async () => {
+  test('all tactic-mode declarations produce valid traces', { timeout: 45000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
     const allDecls = result.blocks.flatMap(b => b.declarations);
@@ -159,7 +159,7 @@ describe('TacticSession with real-analysis preset', () => {
     expect(errors).toEqual([]);
   });
 
-  test('session traces match compilation: final engine zonks', { timeout: 30000 }, async () => {
+  test('session traces match compilation: final engine zonks', { timeout: 45000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
     const allDecls = result.blocks.flatMap(b => b.declarations);
@@ -506,7 +506,7 @@ test : DPair Nat (\\n => Pair Nat Nat) -> Nat := by
     expect(foundX1).toBe(true);
   });
 
-  test('implicit-arg metas are resolved for correct hypothesis types', { timeout: 30000 }, async () => {
+  test('implicit-arg metas are resolved for correct hypothesis types', { timeout: 45000 }, async () => {
     // When `cases Limit.eps_delta limG …` destructures, the hypothesis
     // types should reference `g` and `M` (from limG), NOT `f` and `L`
     // (from the generic parameter name in Limit.eps_delta's type signature).

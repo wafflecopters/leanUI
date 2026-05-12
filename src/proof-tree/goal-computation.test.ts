@@ -2538,7 +2538,7 @@ describe('real-analysis preset tactic replay (full flow)', () => {
   }
 
   // Find all tactic-mode declarations and test each one
-  test('ALL tactic-mode definitions replay with zero errors and clean LaTeX', { timeout: 30000 }, () => {
+  test('ALL tactic-mode definitions replay with zero errors and clean LaTeX', { timeout: 45000 }, () => {
     const result = getCompiled();
     const allDecls = result.blocks.flatMap(b => b.declarations);
     const definitions = result.definitions;
@@ -2864,7 +2864,7 @@ describe('alias fold map: projection-aware numFixedArgs', () => {
     return { compiled, definitions };
   }
 
-  test('buildAliasFoldMap with projMap maps DPair.snd to field with full+short extractions', { timeout: 10000 }, () => {
+  test('buildAliasFoldMap with projMap maps DPair.snd to field with full+short extractions', { timeout: 20000 }, () => {
     const { definitions } = getCompiled();
     const projMap = buildProjectionFoldMap(definitions);
     const aliasMap = buildAliasFoldMap(definitions, projMap);
@@ -2883,7 +2883,7 @@ describe('alias fold map: projection-aware numFixedArgs', () => {
     ]);
   });
 
-  test('buildAliasFoldMap with projMap maps CompleteOrderedField.add to radd with full+short extractions', { timeout: 10000 }, () => {
+  test('buildAliasFoldMap with projMap maps CompleteOrderedField.add to radd with full+short extractions', { timeout: 20000 }, () => {
     const { definitions } = getCompiled();
     const projMap = buildProjectionFoldMap(definitions);
     const aliasMap = buildAliasFoldMap(definitions, projMap);

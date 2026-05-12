@@ -16,26 +16,27 @@ Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG edi
 
 ## Current Focus
 Upleveling the core engine while preserving the current language surface:
-- Keep shrinking `src/compiler/compile.ts` into explicit declaration-processing and result-shaping subsystems instead of a giant mixed-responsibility module
-- Keep extracting pure compiler helpers with direct unit tests plus end-to-end regressions, especially around inductive/record processing, clause checking, and editor-facing compile data
-- Keep deleting dead parallel compiler paths and temporary callback seams when a cleaner shared production module can own the behavior
+- Keep shrinking `src/compiler/compile.ts` into a thin driver over explicit subsystems; the live block compiler, impl annotation registration, and incremental-state replay are now split, and the next seam is the remaining top-level full/incremental loop orchestration
+- Keep extracting pure compiler helpers with direct unit tests plus end-to-end regressions, especially around block compilation, incremental contribution replay, declaration assembly, and editor-facing compile data
+- Keep deleting dead parallel compiler paths and temporary callback seams when a cleaner shared production module can own the behavior, including old elaboration/checking stories that no longer drive production compilation
 - Keep improving semantic quality of application/type errors, especially around implicit arguments, partial application, and unsolved constraints
 - Keep tightening `with` desugaring/abstraction coverage so non-variable scrutinees, nested withs, and dependent return types stay protected by regressions
 - Keep shrinking duplicated `Match` / clause-context logic across kernel, surface, compiler, proof-tree, and tactics
 - Preserve useful editor/type-info output even when clause checking later fails
-- Decide which remaining large implementation TODO should be next: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
+- Decide which remaining large implementation TODO should be next after the term/block cleanup settles: `bridge.ts`, `record.ts`, or tactic-workspace/editor gaps
 
 ## Recent Progress
-- Eliminated all 3 Rat→Real homomorphism postulates (addRealOfRat, mulRealOfRat, subRealOfRat). Each proved by 4-case denominator split (Succ Zero vs Succ (Succ _)) with cross-multiplication helpers derived from CompleteOrderedField axioms. The decimal milestone (`185.6 - 85.7 = 99.9` and 6 others) now compiles with zero postulates.
-- Built supporting infrastructure: divCancel, addDivSame, divDenomExpand, addDivDiv, addCommonDenom/Left + sub-side counterparts (negDivLeft, subDivSame, subDivDiv, etc.); Nat right-identities (plusZeroRight, multOneRight); Int gaps (intMulOneRight, subRealOfInt).
-- Lean-style Rat refactor landed earlier: `MkRat : Int -> (d : Nat) -> NotZero d -> Rat`, with kernel iota-view / inverse-iota handling both legacy 2-arg and Path-1 3-arg shapes.
-- Continued compiler architecture pass: `src/compiler/compile.ts` down to ~2878 lines; record/inductive orchestration extracted to dedicated modules with direct regressions.
-- Hardened two long-running real-analysis/proof-tree regressions by widening their timeouts after proving they were resource-sensitive full-suite failures rather than semantic bugs.
+- Kept the compiler architecture pass going and drove `src/compiler/compile.ts` down to 818 lines by extracting the live block compiler into `src/compiler/compile-block-processing.ts` and deleting the dead older `elabTT` / block-checking pipeline
+- Split the shared compile vocabulary out of `src/compiler/compile.ts` into `src/compiler/compile-types.ts`, so helper modules no longer type-import from the monolithic top-level driver just to talk about parsed blocks, elaborated declarations, and compiled results
+- Preserved and expanded extracted impl registration in `src/compiler/compile-impl-annotations.ts`, including `@impl=int` support with focused regression coverage, so the slimmer compiler driver did not lose newer preset behavior during merge cleanup
+- Added direct regressions in `compile-block-processing.test.ts`, `compile-impl-annotations.test.ts`, and `compile-incremental-state.test.ts`, alongside the earlier term-declaration seam tests, so this refactor is pinned by unit tests rather than only end-to-end coverage
+- Eliminated all 3 Rat→Real homomorphism postulates (addRealOfRat, mulRealOfRat, subRealOfRat). Each proved by denominator case splits plus cross-multiplication helpers, and the decimal milestone (`185.6 - 85.7 = 99.9` and related checks) now compiles with zero postulates
+- Built supporting arithmetic infrastructure for the Rat→Real path, including `divCancel`, common-denominator helpers, Nat right-identities, and the remaining Int-side lemmas needed to close the preset without postulates
 
 ## Up Next
 - Get triangle numbers proof working end-to-end in WYSIWYG editor
-- Keep splitting `src/compiler/compile.ts` so the remaining term-declaration and block-orchestration paths stop mixing pure helpers with top-level pipeline control
-- Pull the next clean compiler seam out of `checkTermDeclaration` / `processTermDeclaration`, likely signature elaboration + simple-value checking or another declaration-prep module with direct unit coverage
+- Keep splitting `src/compiler/compile.ts` so the remaining full/incremental compile loops stop mixing cache orchestration, block traversal, and policy decisions in one file
+- Pull the next clean compiler seam out of the shared block-loop orchestration now that term declarations, block compilation, impl registration, and incremental replay are all split into dedicated modules
 - Improve semantic quality of application/type errors, especially around implicit arguments and partial application
 - Decide whether any remaining ill-typed abstraction cases need dedicated production rejection beyond the current checker/desugaring behavior
 - Push the same DRY/hardening pass into the remaining generic kernel/solver walkers that still special-case `Match` or clause contexts

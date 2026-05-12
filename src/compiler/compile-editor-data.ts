@@ -1,4 +1,4 @@
-import type { CompileResult } from './compile';
+import type { CompileResult } from './compile-types';
 import type { ElabMap, SourceMap } from '../types/source-position';
 import type { TPattern, TTerm, TacticCommand } from './surface';
 import type { TTKPattern, TTKTerm } from './kernel';

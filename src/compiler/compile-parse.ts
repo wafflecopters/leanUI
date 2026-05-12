@@ -7,7 +7,7 @@ import {
   Parser,
 } from '../parser/parser';
 import type { SourceMap } from '../types/source-position';
-import type { ParsedBlock, ParseResult } from './compile';
+import type { ParsedBlock, ParseResult } from './compile-types';
 import { lineToCharOffset } from './compile-source-utils';
 
 export function parseTTSource(source: string): ParseResult {
