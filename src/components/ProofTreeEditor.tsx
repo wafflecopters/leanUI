@@ -579,7 +579,10 @@ function GoalInteraction({
       const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
       const numChildren = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, ctorName, numChildren);
-    } else if (suggestion.id.startsWith('rewrite-')) {
+    } else if (suggestion.id.startsWith('rewrite-') || suggestion.id.startsWith('simp-')) {
+      // @simp suggestions are just curated rewrites; they reuse the same
+      // dispatch and the RewriteSuggestion shape, just with a distinct id
+      // prefix and label so the UI can render them differently.
       const rw = suggestion as RewriteSuggestion;
       result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences, rw.targetHead);
     } else {

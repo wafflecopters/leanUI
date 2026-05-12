@@ -273,6 +273,13 @@ export type DefinitionsMap = {
    *  natOpByFn. WHNF fast-paths `App(App(Const(fn), RatLit a), RatLit b)`
    *  to a canonical RatLit via BigInt arithmetic — O(1) machine ops. */
   ratOpByFn?: Map<string, 'add' | 'mul' | 'sub'>,
+  /** Optional. Set of definition names marked `@syntax @simp`. Used by the
+   *  suggestion system to auto-propose subterm-targeted rewrites: when a
+   *  user clicks a subterm, each registered @simp lemma is tried as a
+   *  left-to-right rewrite at that occurrence, and any that produces a
+   *  strictly-simpler subterm becomes a one-click suggestion. The set is
+   *  insertion-ordered so the preset's preferred priority is preserved. */
+  simpLemmas?: Set<string>,
 }
 
 /**
@@ -322,6 +329,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     ratImplByCtor: new Map<string, RatImpl>(),
     ofRatByTargetHead: new Map<string, string>(),
     ofIntByTargetHead: new Map<string, string>(),
+    simpLemmas: new Set<string>(),
     ratOpByFn: new Map<string, 'add' | 'mul' | 'sub'>(),
   };
 }
@@ -650,6 +658,35 @@ export function registerOfRat(definitions: DefinitionsMap, fnName: string): stri
     definitions.ofRatByTargetHead = new Map<string, string>();
   }
   definitions.ofRatByTargetHead.set(retHead.name, fnName);
+  return null;
+}
+
+/**
+ * Register a definition as a @simp lemma. The function's *return type*
+ * must be an `Equal A lhs rhs` proposition — that's what makes it usable
+ * as a rewrite rule. We don't enforce confluence or termination; the
+ * suggestion system filters lemmas at use-time by the "does it actually
+ * make the selected subterm simpler" check.
+ *
+ * Returns null on success, or an error string when the declaration's
+ * return type isn't structurally an Equal (e.g. wrong-arity application,
+ * not headed by the Equal constant). The check is lightweight — we walk
+ * the Pi spine, then look for an Equal head on the return type.
+ */
+export function registerSimp(definitions: DefinitionsMap, fnName: string): string | null {
+  const def = definitions.terms.get(fnName);
+  if (!def) return `@simp: definition '${fnName}' not found`;
+  let t = def.type;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') t = t.body;
+  let head = t;
+  while (head.tag === 'App') head = head.fn;
+  if (head.tag !== 'Const' || head.name !== 'Equal') {
+    return `@simp: '${fnName}' return type must be an Equal proposition (got head ${head.tag === 'Const' ? `Const(${head.name})` : head.tag})`;
+  }
+  if (!definitions.simpLemmas) {
+    definitions.simpLemmas = new Set<string>();
+  }
+  definitions.simpLemmas.add(fnName);
   return null;
 }
 

@@ -1038,6 +1038,17 @@ export class RewriteTactic implements Tactic {
           return this.termEqual(clause.rhs, other.rhs);
         });
 
+      case 'NatLit':
+        return b.tag === 'NatLit' && a.value === b.value;
+
+      case 'RatLit':
+        return b.tag === 'RatLit' && a.num === b.num && a.den === b.den;
+
+      case 'Annot':
+        return b.tag === 'Annot'
+          && this.termEqual(a.term, b.term)
+          && this.termEqual(a.type, b.type);
+
       default:
         return false;
     }

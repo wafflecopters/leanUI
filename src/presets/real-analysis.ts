@@ -1165,6 +1165,9 @@ intMulOneRight (IntNegSucc m) = cong IntNegSucc (multOneRight m)
 -- Rat -> Real multiplication homomorphism. Proved by case-split on each
 -- denominator (Succ Zero vs Succ (Succ _)) so realOfRat fires its correct
 -- clause on each side, then bridged via mulDivAssoc / divMulRight / mulDivDiv.
+-- Tagged @simp so clicking \`a * b\` where both operands are literal coercions
+-- offers a one-click reduction via @ratMul (the kernel BigInt fast path).
+@syntax @simp
 mulRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
 mulRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ Zero) pc) = mulRealOfInt R a c
 mulRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ (Succ d1)) pd) = trans (mulDivAssoc (realOfInt R a) (realOfInt R c) (realOfNat R (Succ (Succ d1)))) (trans (cong (\\z => rdiv z (realOfNat R (Succ (Succ d1)))) (mulRealOfInt R a c)) (cong (\\z => rdiv (realOfInt R (intMul a c)) (realOfNat R (Succ (Succ z)))) (sym (plusZeroRight d1))))
@@ -1176,6 +1179,9 @@ mulRealOfRat R (MkRat a (Succ (Succ b1)) pb) (MkRat c (Succ (Succ d1)) pd) = tra
 -- general case (Succ(Succ _), Succ(Succ _)) uses addDivDiv (cross-mult), the
 -- mixed cases use addCommonDenom / addCommonDenomLeft, and (1,1) reduces to
 -- addRealOfInt directly.
+-- Tagged @simp so \`1 + (-1)\`, \`2 + (-1)\`, etc. reduce in one click via
+-- the kernel's @ratAdd BigInt fast path (no axiom chasing needed).
+@syntax @simp
 addRealOfRat : (R : Real) -> (a b : Rat) -> Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
 addRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ Zero) pc) = trans (addRealOfInt R a c) (cong (realOfInt R) (trans (cong (\\z => intAdd z c) (sym (intMulOneRight a))) (cong (\\z => intAdd (intMul a (IntOfNat (Succ Zero))) z) (sym (intMulOneRight c)))))
 addRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ (Succ d1)) pd) = trans (addCommonDenom (realOfInt R a) (realOfInt R c) (realOfNat R (Succ (Succ d1))) (realOfNatSuccNeZero R (Succ d1))) (trans (cong (\\z => rdiv z (realOfNat R (Succ (Succ d1)))) (trans (cong (\\z => radd z (realOfInt R c)) (mulRealOfInt R a (IntOfNat (Succ (Succ d1))))) (trans (addRealOfInt R (intMul a (IntOfNat (Succ (Succ d1)))) c) (cong (\\z => realOfInt R (intAdd (intMul a (IntOfNat (Succ (Succ d1)))) z)) (sym (intMulOneRight c)))))) (cong (\\z => rdiv (realOfInt R (intAdd (intMul a (IntOfNat (Succ (Succ d1)))) (intMul c (IntOfNat (Succ Zero))))) (realOfNat R (Succ (Succ z)))) (sym (plusZeroRight d1))))
@@ -1185,6 +1191,8 @@ addRealOfRat R (MkRat a (Succ (Succ b1)) pb) (MkRat c (Succ (Succ d1)) pd) = tra
 -- Rat -> Real subtraction homomorphism. Same 4-case structure as addRealOfRat,
 -- with subCommonDenom / subCommonDenomLeft / subDivDiv on the Carrier side and
 -- subRealOfInt collapsing the numerator.
+-- Tagged @simp so \`185.6 - 85.7\`, etc. reduce in one click via @ratSub.
+@syntax @simp
 subRealOfRat : (R : Real) -> (a b : Rat) -> Equal (rsub (realOfRat R a) (realOfRat R b)) (realOfRat R (ratSub a b))
 subRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ Zero) pc) = trans (subRealOfInt R a c) (cong (realOfInt R) (trans (cong (\\z => intSub z c) (sym (intMulOneRight a))) (cong (\\z => intSub (intMul a (IntOfNat (Succ Zero))) z) (sym (intMulOneRight c)))))
 subRealOfRat R (MkRat a (Succ Zero) pa) (MkRat c (Succ (Succ d1)) pd) = trans (subCommonDenom (realOfInt R a) (realOfInt R c) (realOfNat R (Succ (Succ d1))) (realOfNatSuccNeZero R (Succ d1))) (trans (cong (\\z => rdiv z (realOfNat R (Succ (Succ d1)))) (trans (cong (\\z => rsub z (realOfInt R c)) (mulRealOfInt R a (IntOfNat (Succ (Succ d1))))) (trans (subRealOfInt R (intMul a (IntOfNat (Succ (Succ d1)))) c) (cong (\\z => realOfInt R (intSub (intMul a (IntOfNat (Succ (Succ d1)))) z)) (sym (intMulOneRight c)))))) (cong (\\z => rdiv (realOfInt R (intSub (intMul a (IntOfNat (Succ (Succ d1)))) (intMul c (IntOfNat (Succ Zero))))) (realOfNat R (Succ (Succ z)))) (sym (plusZeroRight d1))))
