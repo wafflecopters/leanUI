@@ -566,6 +566,19 @@ export function buildOfRatCoercionHoleId(
   return `_ofRat_${expectedHeadName}_${contextDepth}_${siteKey}_${preArgIndex}`;
 }
 
+export function buildOfIntCoercionHoleId(
+  indexPath: IndexPath,
+  expectedHeadName: string,
+  contextDepth: number,
+  preArgIndex: number
+): string {
+  const serializedPath = serializeIndexPath(indexPath);
+  const siteKey = serializedPath === ''
+    ? 'root'
+    : serializedPath.replace(/[^A-Za-z0-9_]+/g, '_');
+  return `_ofInt_${expectedHeadName}_${contextDepth}_${siteKey}_${preArgIndex}`;
+}
+
 /** Walk an expected-type's spine to find its Const head name. Returns
  *  null if the head isn't a Const (e.g., a Meta or Match). */
 function expectedTypeHeadName(expectedType: TTKTerm): string | null {
@@ -586,6 +599,15 @@ function findNatImplForHead(env: TCEnv<TTKTerm>, headName: string): { inductiveN
  *  shape via the optional intOfNatCtor/notZeroSuccCtor fields. */
 function findRatImplForHead(env: TCEnv<TTKTerm>, headName: string): { ratCtor: string; inductiveName: string; intOfNatCtor?: string; intNegSuccCtor?: string; notZeroSuccCtor?: string } | undefined {
   const reg = env.definitions.ratImplByCtor;
+  if (!reg) return undefined;
+  return [...reg.values()].find(impl => impl.inductiveName === headName);
+}
+
+/** Find a registered IntImpl whose inductive type has this Const-head name.
+ *  Used to expand integer-shaped literals (NatLit n, or RatLit{n,1}) into
+ *  the user's two-ctor `IntOfNat`/`IntNegSucc` representation. */
+function findIntImplForHead(env: TCEnv<TTKTerm>, headName: string): { ofNatCtor: string; negSuccCtor: string; inductiveName: string } | undefined {
+  const reg = env.definitions.intImplByCtor;
   if (!reg) return undefined;
   return [...reg.values()].find(impl => impl.inductiveName === headName);
 }
@@ -641,6 +663,37 @@ function natLitAsRatExpr(natLit: TTKTerm, ratImpl: { ratCtor: string; intOfNatCt
   return app;
 }
 
+/** Structural Int embedding of an integer-valued literal — the user's
+ *  two-ctor @impl=int representation. For value v ≥ 0 produces
+ *  `IntOfNat (NatLit v)`; for v < 0 produces `IntNegSucc (NatLit (|v|-1))`,
+ *  matching the Lean-style sign-aware encoding (no dual zero). */
+function intValueAsIntExpr(value: bigint, intImpl: { ofNatCtor: string; negSuccCtor: string }): TTKTerm {
+  if (value >= 0n) {
+    return { tag: 'App', fn: { tag: 'Const', name: intImpl.ofNatCtor }, arg: { tag: 'NatLit', value } };
+  }
+  // value < 0: store as IntNegSucc (|value|-1), since IntNegSucc n means -(n+1).
+  return { tag: 'App', fn: { tag: 'Const', name: intImpl.negSuccCtor }, arg: { tag: 'NatLit', value: -value - 1n } };
+}
+
+/** Try the @ofInt path: when `headName` has a registered @ofInt coercion,
+ *  wrap `intExpr` as `coerceFn ?h0 ... intExpr` and re-check. */
+function tryCoerceViaOfInt(
+  env: TCEnv<TTKTerm>,
+  expectedType: TTKTerm,
+  headName: string,
+  intExpr: TTKTerm,
+): TCEnv<TTKTerm> | null {
+  const coerceFn = env.definitions.ofIntByTargetHead?.get(headName);
+  if (!coerceFn) return null;
+  const coerceDef = env.definitions.terms.get(coerceFn);
+  if (!coerceDef) return null;
+  const arity = countFunctionArity(coerceDef.type);
+  const app = buildCoercionApp(coerceFn, intExpr, arity - 1, i =>
+    buildOfIntCoercionHoleId(env.indexPath, headName, env.context.length, i)
+  );
+  return checkType(env.withValue(app), expectedType);
+}
+
 /** Try the @ofRat path: when `headName` has a registered @ofRat coercion,
  *  wrap `ratExpr` as `coerceFn ?h0 ... ratExpr` and re-check. Returns the
  *  result env, or null if no @ofRat is registered for this target. */
@@ -681,10 +734,13 @@ function tryCoerceViaOfNat(
   return checkType(env.withValue(app), expectedType);
 }
 
-/** NatLit-against-non-Nat-target coercion: try @ofRat first (its d=1 case
- *  produces the same kernel form as @ofNat for integer literals, while
- *  also unifying mixed integer/decimal expressions), then @ofNat. The
- *  identity case (NatLit at a Nat-impl target) needs no coercion. */
+/** NatLit-against-non-Nat-target coercion. Promotion ladder:
+ *    Nat-impl identity → @impl=rat (MkRat n 1) → @ofRat → @ofInt → @ofNat.
+ *  @ofRat is tried before @ofInt because RatLit-targeted expressions tend
+ *  to mix integer and decimal literals, and routing both through @ofRat
+ *  keeps their kernel forms compatible. @ofInt is the narrower target
+ *  (e.g. Group/Ring without fractions) and only fires when @ofRat is
+ *  unavailable. */
 function tryCoerceNatLit(env: TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType: TTKTerm): TCEnv<TTKTerm> | null {
   const headName = expectedTypeHeadName(expectedType);
   if (headName === null) return null;
@@ -694,9 +750,15 @@ function tryCoerceNatLit(env: TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType: 
     const expanded = natLitAsRatExpr(env.value, ratImpl);
     return checkType(env.withValue(expanded), expectedType);
   }
+  // NatLit at a registered @impl=int target: expand to IntOfNat n.
+  const intImpl = findIntImplForHead(env, headName);
+  if (intImpl) {
+    const expanded = intValueAsIntExpr(env.value.value, intImpl);
+    return checkType(env.withValue(expanded), expectedType);
+  }
   // Skip coercion if the target IS a Nat-impl — identity case.
   if (findNatImplForHead(env, headName)) return null;
-  // Otherwise: prefer @ofRat (consistent with decimal literals), fall back to @ofNat.
+  // Otherwise: prefer @ofRat, fall back to @ofInt, fall back to @ofNat.
   const anyRatImpl = env.definitions.ratImplByCtor
     ? [...env.definitions.ratImplByCtor.values()][0]
     : undefined;
@@ -705,17 +767,52 @@ function tryCoerceNatLit(env: TCEnv<TTKTerm & { tag: 'NatLit' }>, expectedType: 
     const viaRat = tryCoerceViaOfRat(env, expectedType, headName, ratExpr);
     if (viaRat) return viaRat;
   }
+  const anyIntImpl = env.definitions.intImplByCtor
+    ? [...env.definitions.intImplByCtor.values()][0]
+    : undefined;
+  if (anyIntImpl) {
+    const intExpr = intValueAsIntExpr(env.value.value, anyIntImpl);
+    const viaInt = tryCoerceViaOfInt(env, expectedType, headName, intExpr);
+    if (viaInt) return viaInt;
+  }
   return tryCoerceViaOfNat(env, expectedType, headName, env.value);
 }
 
-/** RatLit-against-non-Rat-target coercion: only the @ofRat path applies.
- *  The identity case (RatLit at a Rat-impl target) needs no coercion since
- *  inferType already gives RatLit that type. */
+/** RatLit-against-non-Rat-target coercion. Integer-shaped RatLits (den=1,
+ *  necessarily with negative num — the positive case collapses to NatLit)
+ *  also try the @impl=int / @ofInt path, supporting `-1 : Group` where the
+ *  group registers @ofInt but not @ofRat. True rationals (den ≥ 2) only
+ *  route via @ofRat. */
 function tryCoerceRatLit(env: TCEnv<TTKTerm & { tag: 'RatLit' }>, expectedType: TTKTerm): TCEnv<TTKTerm> | null {
   const headName = expectedTypeHeadName(expectedType);
   if (headName === null) return null;
   if (findRatImplForHead(env, headName)) return null;
-  return tryCoerceViaOfRat(env, expectedType, headName, env.value);
+
+  const isInteger = env.value.den === 1n;
+  if (isInteger) {
+    // RatLit{n,1} at a registered @impl=int target: expand to the user's
+    // Int representation directly (sign-aware).
+    const intImpl = findIntImplForHead(env, headName);
+    if (intImpl) {
+      const expanded = intValueAsIntExpr(env.value.num, intImpl);
+      return checkType(env.withValue(expanded), expectedType);
+    }
+  }
+  // Prefer @ofRat — handles both integer- and fraction-shaped RatLits.
+  const viaRat = tryCoerceViaOfRat(env, expectedType, headName, env.value);
+  if (viaRat) return viaRat;
+  // Integer-shaped RatLit can still land via @ofInt when @ofRat is absent.
+  if (isInteger) {
+    const anyIntImpl = env.definitions.intImplByCtor
+      ? [...env.definitions.intImplByCtor.values()][0]
+      : undefined;
+    if (anyIntImpl) {
+      const intExpr = intValueAsIntExpr(env.value.num, anyIntImpl);
+      const viaInt = tryCoerceViaOfInt(env, expectedType, headName, intExpr);
+      if (viaInt) return viaInt;
+    }
+  }
+  return null;
 }
 
 export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTKTerm> {
