@@ -1365,31 +1365,20 @@ export function parseExactExpr(
     if (decimalMatch) {
       return makeRatLitFromDecimal(decimalMatch[1], decimalMatch[2], false);
     }
-    // Negative literal: -digits or -digits.digits → rneg(<positive literal>).
-    // Wraps the positive form in `rneg` with implicit args (R) inserted as
-    // Holes — the elaborator solves R from the goal type. Works whenever the
-    // target type's preset provides an `rneg` function (e.g., Carrier R for
-    // CompleteOrderedField); for non-Carrier targets it bottoms out at a
-    // clearer "type definition not found: rneg" error.
+    // Negative numeric literal: emit a signed kernel literal directly. The
+    // elaborator's coercion ladder routes integer-shaped values via @ofInt
+    // (preferred) or @ofRat (fallback), so no hardcoded negation function
+    // name appears here. Decimals always emit RatLit; integers emit
+    // RatLit{-n,1} (signed-integer shape — kernel.mkRatLit preserves
+    // negative-num RatLits with den=1 rather than collapsing to NatLit).
     const negMatch = name.match(/^-(\d+(?:\.\d+)?)$/);
     if (negMatch) {
       const inner = negMatch[1];
-      const innerTerm: TTKTerm = /^\d+$/.test(inner)
-        ? { tag: 'NatLit', value: BigInt(inner) }
-        : (() => {
-            const [whole, frac] = inner.split('.');
-            return makeRatLitFromDecimal(whole, frac, false);
-          })();
-      let head: TTKTerm = { tag: 'Const', name: 'rneg' };
-      if (namedArgLookup) {
-        const namedArgs = namedArgLookup('rneg');
-        if (namedArgs) {
-          for (const [paramName] of namedArgs) {
-            head = { tag: 'App', fn: head, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
-          }
-        }
+      if (/^\d+$/.test(inner)) {
+        return { tag: 'RatLit', num: -BigInt(inner), den: 1n };
       }
-      return { tag: 'App', fn: head, arg: innerTerm };
+      const [whole, frac] = inner.split('.');
+      return makeRatLitFromDecimal(whole, frac, true);
     }
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {

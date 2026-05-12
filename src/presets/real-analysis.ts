@@ -317,7 +317,10 @@ rneg {R} = CompleteOrderedField.neg (field R)
 
 -- Coercion: Int -> Carrier R. Mirrors realOfNat, with the negative case
 -- using rneg on the abstract field. \`IntNegSucc n\` represents -(n+1), so
--- it maps to -(1 + realOfNat n) = -(realOfNat (Succ n)).
+-- it maps to -(1 + realOfNat n) = -(realOfNat (Succ n)). Registered as
+-- @ofInt so signed integer literals (e.g. \`-1 : Carrier R\` in tactic
+-- input) elaborate through this function instead of a hardcoded \`rneg\`.
+@syntax @ofInt
 realOfInt : (R : Real) -> Int -> Carrier R
 realOfInt R (IntOfNat n) = realOfNat R n
 realOfInt R (IntNegSucc n) = rneg (radd (rone R) (realOfNat R n))

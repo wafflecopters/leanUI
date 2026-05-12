@@ -24,25 +24,24 @@ describe('parseExactExpr — numeric literals', () => {
     expect(term?.den).toBe(2n);
   });
 
-  test('negative integer → rneg(_R, NatLit N)', () => {
+  test('negative integer → signed RatLit{-N, 1}', () => {
     const term: any = parseExactExpr('-1', [], definitions);
-    expect(term?.tag).toBe('App');
-    // Inner positive value:
-    expect(term?.arg?.tag).toBe('NatLit');
-    expect(term?.arg?.value).toBe(1n);
-    // Head spine: rneg with one implicit hole inserted
-    expect(term?.fn?.tag).toBe('App');
-    expect(term?.fn?.fn?.tag).toBe('Const');
-    expect(term?.fn?.fn?.name).toBe('rneg');
-    expect(term?.fn?.arg?.tag).toBe('Hole');
+    expect(term?.tag).toBe('RatLit');
+    expect(term?.num).toBe(-1n);
+    expect(term?.den).toBe(1n);
   });
 
-  test('negative decimal → rneg(_R, RatLit N/D)', () => {
+  test('negative multi-digit integer → signed RatLit{-N, 1}', () => {
+    const term: any = parseExactExpr('-42', [], definitions);
+    expect(term?.tag).toBe('RatLit');
+    expect(term?.num).toBe(-42n);
+    expect(term?.den).toBe(1n);
+  });
+
+  test('negative decimal → signed RatLit{-N, D} (gcd-reduced)', () => {
     const term: any = parseExactExpr('-1.5', [], definitions);
-    expect(term?.tag).toBe('App');
-    expect(term?.arg?.tag).toBe('RatLit');
-    expect(term?.arg?.num).toBe(3n);
-    expect(term?.arg?.den).toBe(2n);
-    expect(term?.fn?.fn?.name).toBe('rneg');
+    expect(term?.tag).toBe('RatLit');
+    expect(term?.num).toBe(-3n);
+    expect(term?.den).toBe(2n);
   });
 });
