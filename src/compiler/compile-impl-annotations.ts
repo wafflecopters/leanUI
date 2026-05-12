@@ -1,4 +1,4 @@
-import { registerIntImpl, registerNatImpl, registerNatOp, registerOfNat, registerOfRat, registerRatImpl, registerRatOp, type DefinitionsMap } from './term';
+import { registerIntImpl, registerNatImpl, registerNatOp, registerOfInt, registerOfNat, registerOfRat, registerRatImpl, registerRatOp, type DefinitionsMap } from './term';
 import type { CompiledBlock } from './compile-types';
 
 /**
@@ -37,6 +37,12 @@ export function applyImplAnnotationsForBlock(block: CompiledBlock, definitions: 
     if (trimmed === '@ofRat') {
       const err = registerOfRat(definitions, decl.name);
       if (err) console.warn(`@ofRat verification failed for '${decl.name}': ${err}`);
+      continue;
+    }
+
+    if (trimmed === '@ofInt') {
+      const err = registerOfInt(definitions, decl.name);
+      if (err) console.warn(`@ofInt verification failed for '${decl.name}': ${err}`);
       continue;
     }
 

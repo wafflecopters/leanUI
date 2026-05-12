@@ -262,6 +262,13 @@ export type DefinitionsMap = {
    *  Parallel to ofNatByTargetHead. E.g., {"Carrier": "realOfRat"} means a
    *  RatLit in a `Carrier R` position is coerced to `realOfRat ?... RatLit`. */
   ofRatByTargetHead?: Map<string, string>,
+  /** Optional. Map from target-type head constant → @ofInt coercion fn name.
+   *  Routes integer-shaped literals (kernel NatLit n or RatLit{n,1}) into
+   *  targets that accept signed integers but not full rationals — e.g., a
+   *  Group registers @ofInt without @ofRat so `-1 : Group` works but
+   *  `1.5 : Group` is rejected. Sits between @ofNat (monoid) and @ofRat
+   *  (field) in the promotion ladder. */
+  ofIntByTargetHead?: Map<string, string>,
   /** Optional. Map from function name → primitive rat op kind. Parallel to
    *  natOpByFn. WHNF fast-paths `App(App(Const(fn), RatLit a), RatLit b)`
    *  to a canonical RatLit via BigInt arithmetic — O(1) machine ops. */
@@ -314,6 +321,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     natOpByFn: new Map<string, 'add' | 'mul'>(),
     ratImplByCtor: new Map<string, RatImpl>(),
     ofRatByTargetHead: new Map<string, string>(),
+    ofIntByTargetHead: new Map<string, string>(),
     ratOpByFn: new Map<string, 'add' | 'mul' | 'sub'>(),
   };
 }
@@ -642,6 +650,49 @@ export function registerOfRat(definitions: DefinitionsMap, fnName: string): stri
     definitions.ofRatByTargetHead = new Map<string, string>();
   }
   definitions.ofRatByTargetHead.set(retHead.name, fnName);
+  return null;
+}
+
+/**
+ * Register a function as an OfInt coercion. Structurally parallel to
+ * registerOfRat: shape is `(Π ...) -> Int -> T` where Int is a registered
+ * @impl=int type. The return type's head Const becomes the dispatch key.
+ *
+ * E.g., `realOfInt : (R : Real) -> Int -> Carrier R` registers under the
+ * "Carrier" key. Integer-shaped literals (kernel NatLit, or RatLit{n,1})
+ * in a `Carrier R` position can be routed via this coercion when an
+ * @ofRat coercion is unavailable.
+ *
+ * Returns null on success or an error message string.
+ */
+export function registerOfInt(definitions: DefinitionsMap, fnName: string): string | null {
+  const def = definitions.terms.get(fnName);
+  if (!def) return `@ofInt: definition '${fnName}' not found`;
+  let t = def.type;
+  let prevDomainHead: string | null = null;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    let dom = t.domain;
+    while (dom.tag === 'App') dom = dom.fn;
+    prevDomainHead = dom.tag === 'Const' ? dom.name : null;
+    t = t.body;
+  }
+  if (prevDomainHead === null) {
+    return `@ofInt: '${fnName}' must take at least one argument (the Int)`;
+  }
+  const isIntImpl = definitions.intImplByCtor
+    && [...definitions.intImplByCtor.values()].some(impl => impl.inductiveName === prevDomainHead);
+  if (!isIntImpl) {
+    return `@ofInt: '${fnName}' final argument must be a @impl=int-tagged type, got '${prevDomainHead}'`;
+  }
+  let retHead = t;
+  while (retHead.tag === 'App') retHead = retHead.fn;
+  if (retHead.tag !== 'Const') {
+    return `@ofInt: '${fnName}' return type must have a Const head (got ${retHead.tag})`;
+  }
+  if (!definitions.ofIntByTargetHead) {
+    definitions.ofIntByTargetHead = new Map<string, string>();
+  }
+  definitions.ofIntByTargetHead.set(retHead.name, fnName);
   return null;
 }
 

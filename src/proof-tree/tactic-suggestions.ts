@@ -260,8 +260,10 @@ function unfoldResultIsMatch(oldGoal: MetaVar, newEngine: TacticEngine): boolean
     const defs = newEngine.definitions;
     const oldNorm = fullNormalize(oldGoal.type, defs);
     const newNorm = fullNormalize(newGoal.type, defs);
-    const changed = findChangedSubterm(oldNorm, newNorm);
-    return changed.tag === 'Match';
+    const change = extractChangedSubterm(oldNorm, newNorm, newGoal.ctx);
+    // No change (oldNorm === newNorm) — definitely not a Match.
+    if (!change) return false;
+    return change.new.tag === 'Match';
   } catch {
     return false;
   }
