@@ -1294,6 +1294,26 @@ function tokenizeExactExpr(expr: string): string[] {
  * Names are resolved as context variables first, then as constants.
  * When definitions are provided, implicit argument Holes are inserted automatically.
  */
+/**
+ * Build a canonical Rat/Nat literal from a decimal source like "1.5".
+ * Computes (whole*10^|frac| + frac) / 10^|frac|, gcd-reduces, and collapses
+ * to NatLit when den=1 and num >= 0.
+ */
+function makeRatLitFromDecimal(whole: string, frac: string, negative: boolean): TTKTerm {
+  const tenPow = 10n ** BigInt(frac.length);
+  let num = BigInt(whole) * tenPow + BigInt(frac);
+  if (negative) num = -num;
+  let den = tenPow;
+  let a = num < 0n ? -num : num;
+  let b = den;
+  while (b !== 0n) { [a, b] = [b, a % b]; }
+  const g = a === 0n ? 1n : a;
+  const cnum = num / g;
+  const cden = den / g;
+  if (cden === 1n && cnum >= 0n) return { tag: 'NatLit', value: cnum };
+  return { tag: 'RatLit', num: cnum, den: cden };
+}
+
 export function parseExactExpr(
   expr: string,
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
@@ -1339,6 +1359,37 @@ export function parseExactExpr(
     // Numeric literal: pure non-negative digit run becomes a NatLit (BigInt)
     if (/^\d+$/.test(name)) {
       return { tag: 'NatLit', value: BigInt(name) };
+    }
+    // Decimal literal: digits.digits → RatLit (canonicalized via gcd).
+    const decimalMatch = name.match(/^(\d+)\.(\d+)$/);
+    if (decimalMatch) {
+      return makeRatLitFromDecimal(decimalMatch[1], decimalMatch[2], false);
+    }
+    // Negative literal: -digits or -digits.digits → rneg(<positive literal>).
+    // Wraps the positive form in `rneg` with implicit args (R) inserted as
+    // Holes — the elaborator solves R from the goal type. Works whenever the
+    // target type's preset provides an `rneg` function (e.g., Carrier R for
+    // CompleteOrderedField); for non-Carrier targets it bottoms out at a
+    // clearer "type definition not found: rneg" error.
+    const negMatch = name.match(/^-(\d+(?:\.\d+)?)$/);
+    if (negMatch) {
+      const inner = negMatch[1];
+      const innerTerm: TTKTerm = /^\d+$/.test(inner)
+        ? { tag: 'NatLit', value: BigInt(inner) }
+        : (() => {
+            const [whole, frac] = inner.split('.');
+            return makeRatLitFromDecimal(whole, frac, false);
+          })();
+      let head: TTKTerm = { tag: 'Const', name: 'rneg' };
+      if (namedArgLookup) {
+        const namedArgs = namedArgLookup('rneg');
+        if (namedArgs) {
+          for (const [paramName] of namedArgs) {
+            head = { tag: 'App', fn: head, arg: { tag: 'Hole', id: '_implicit_' + paramName } };
+          }
+        }
+      }
+      return { tag: 'App', fn: head, arg: innerTerm };
     }
     // Check local lambda binders first (innermost first)
     for (let i = localBinderNames.length - 1; i >= 0; i--) {
