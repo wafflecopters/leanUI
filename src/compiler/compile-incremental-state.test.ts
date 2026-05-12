@@ -38,6 +38,12 @@ describe('incremental contribution helpers', () => {
 
   test('applyBlockContributions replays captured state into fresh accumulators', () => {
     const baseDefs = createDefinitionsMap();
+    baseDefs.intImplByCtor?.set('OfNat', {
+      inductiveName: 'Int',
+      ofNatCtor: 'OfNat',
+      negSuccCtor: 'NegSucc',
+      natImplName: 'Nat',
+    });
     const contributions = {
       terms: [['foo', { name: 'foo', type: { tag: 'Const', name: 'Nat' } as any }]] as [string, any][],
       inductiveTypes: [[
@@ -64,6 +70,7 @@ describe('incremental contribution helpers', () => {
     expect(replayed.definitions.terms.has('foo')).toBe(true);
     expect(replayed.definitions.inductiveTypes.has('Nat')).toBe(true);
     expect(replayed.definitions.inductiveNameOfConstructor.get('Zero')).toBe('Nat');
+    expect(replayed.definitions.intImplByCtor?.get('OfNat')?.inductiveName).toBe('Int');
     expect(replayed.symbolContext.has('foo')).toBe(true);
     expect(replayed.symbolContext.has('Nat')).toBe(true);
     expect(replayed.constructorParamNames.has('Zero')).toBe(true);

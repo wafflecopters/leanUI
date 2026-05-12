@@ -88,18 +88,10 @@ export function applyBlockContributions(
   // so e.g. @impl=nat from an earlier block disappears for the current
   // block and NatLit inference reverts to "no @impl=nat registered".
   definitions = {
+    ...definitions,
     terms: newTerms,
     inductiveTypes: newIndTypes,
     inductiveNameOfConstructor: newCtorMap,
-    natImplByCtor: definitions.natImplByCtor,
-    intImplByCtor: definitions.intImplByCtor,
-    ofNatByTargetHead: definitions.ofNatByTargetHead,
-    natOpByFn: definitions.natOpByFn,
-    ratImplByCtor: definitions.ratImplByCtor,
-    ofRatByTargetHead: definitions.ofRatByTargetHead,
-    ofIntByTargetHead: definitions.ofIntByTargetHead,
-    ratOpByFn: definitions.ratOpByFn,
-    simpLemmas: definitions.simpLemmas,
   };
 
   if (contributions.symbolNames.length > 0) {

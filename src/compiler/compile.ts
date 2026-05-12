@@ -5,21 +5,19 @@
  * to elaborated kernel terms (TTK).
  */
 
-import { groupByIndentation } from '../parser/indentation-grouper';
 import { ParsedDeclaration, ParseError } from '../parser/parser';
-import { elabPatternToKernel, elabPatternToKernelWithMap, resetWildcardCounter, extractConstructorParamNames, setConstructorParamNames, setCurrentTermParamNames, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, fixRhsForVariablePatterns, ConstructorParamNames, NamedArgMap, elabToKernel } from './elab';
+import { elabPatternToKernel, elabPatternToKernelWithMap, resetWildcardCounter, extractConstructorParamNames, setConstructorParamNames, setCurrentTermParamNames, reorderPatterns, hasNamedPatterns, applyVarPermutation, fixRhsForConstructorPatterns, fixRhsForVariablePatterns, NamedArgMap, elabToKernel } from './elab';
 import { TTKTerm, TTKContext, TTKClause, TTKPattern, prettyPrintPattern, prettyPrintPatternList, mkType } from './kernel';
 import { TTerm, TPattern, TClause, mkULitTT, mkSortTT, mkUOmegaTT } from './surface';
-import { emptySymbolContext, SymbolContext } from '../types/name-resolution';
 import { arraySeg, fieldSeg, appendPath, ElabMap, IndexPath, SourceMap, serializeIndexPath } from '../types/source-position'
 import { inferType } from './checker';
-import { addDefinitionInTCEnv, countPiBinders, createDefinitionsMap, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, MatchPartIndex, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
+import { addDefinitionInTCEnv, countPiBinders, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, MatchPartIndex, TCEnv, TCEnvError, TermDefinition, TermDefinitionPartIndex, validateTermNameNotDefined } from './term';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkTotality, TotalityResult, CaseTree } from './totality';
 import { checkStructuralRecursion } from './recursion';
 import { resetWithCounter } from './with-desugar';
 import { subst } from './subst';
-import { BlockContributions, IncrementalCache, extractBlockDepInfo, computeRecheckSet } from './incremental';
+import { IncrementalCache } from './incremental';
 import { whnf } from './whnf';
 import type { TypeInfoMap } from './type-info';
 import { createInitialEngine, TacticEngine } from '../tactics/tacticsEngine';
@@ -44,17 +42,10 @@ import { TacticInfoTree, TacticInfoNode, SourcePosition } from '../tactics/info-
 import { elaborateTacticArg, tacticCommandToTactic as sharedTacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
 import { extractGoalStates, engineToProofState } from '../tactics/proof-state';
 import { parseTTSource } from './compile-parse';
-import { applyImplAnnotations, applyImplAnnotationsForBlock } from './compile-impl-annotations';
-import { applyBlockContributions, computeBlockContributions } from './compile-incremental-state';
 import type {
   CompileOptions,
   CompileResult,
-  CompiledBlock,
-  CompiledDeclaration,
   ElabDeclaration,
-  NameResolutionErrorWithRange,
-  ParseResult,
-  ParsedBlock,
   ProcessDeclarationResult,
 } from './compile-types';
 import {
@@ -69,7 +60,11 @@ import {
 } from './compile-bridge';
 import { tryCaseSplitsInSearchOfAbsurdity } from './compile-term-value';
 import { resolveWithScrutineeTypes } from './compile-with-scrutinee-resolution';
-import { compileOneBlock } from './compile-block-processing';
+import {
+  compileParsedBlocks,
+  compileParsedBlocksIncrementally,
+  reuseLastIncrementalResult,
+} from './compile-loop-orchestration';
 export type {
   CompileOptions,
   CompileResult,
@@ -612,47 +607,12 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
   // 1. Parse the source file (parser skips directive lines)
   const parseResult = parseTTSource(source);
 
-  // 2. For each block, for each definition...
-  // We build context incrementally as we process declarations
-  let definitions = createDefinitionsMap();
-  let constructorParamNames: ConstructorParamNames = new Map();
-  let symbolContext: SymbolContext = emptySymbolContext();
-  const compiledBlocks: CompiledBlock[] = [];
-  let totalCheckErrors = 0;
-  let totalNameErrors = 0;
-
-  for (let blockIndex = 0; blockIndex < parseResult.blocks.length; blockIndex++) {
-    const block = parseResult.blocks[blockIndex];
-    const result = compileOneBlock(
-      block,
-      blockIndex,
-      definitions,
-      symbolContext,
-      constructorParamNames,
-      assumeK,
-      elaborateTacticBlock,
-      recheckZonkedTerm,
-      options,
-    );
-    compiledBlocks.push(result.compiled);
-    definitions = result.newDefinitions;
-    symbolContext = result.newSymbolContext;
-    constructorParamNames = result.newConstructorParamNames;
-    totalCheckErrors += result.checkErrorCount;
-    totalNameErrors += result.nameErrorCount;
-    // Register @impl=ROLE annotations EAGERLY (so subsequent blocks can use the
-    // resulting kernel features, e.g., NatLit literals after @impl=nat declared).
-    applyImplAnnotationsForBlock(result.compiled, definitions);
-  }
-
-  return {
-    success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
-    blocks: compiledBlocks,
-    totalParseErrors: parseResult.totalErrors,
-    totalNameErrors,
-    totalCheckErrors,
-    definitions
-  };
+  return compileParsedBlocks(parseResult, {
+    assumeK,
+    elaborateTacticBlock,
+    recheckZonkedTerm,
+    options,
+  });
 }
 // ============================================================================
 // Incremental compilation
@@ -675,23 +635,9 @@ export function compileIncrementalTT(
   cache: IncrementalCache,
   options?: CompileOptions
 ): CompileResult {
-  // 0. Fast path: check if any block content actually changed before parsing.
-  //    groupByIndentation is cheap (string splitting); parsing is expensive (~62ms).
-  //    Edits like inserting blank lines among blank lines shift blocks but don't
-  //    change their content — skip everything in that case.
-  const sourceBlocks = groupByIndentation(source);
-  if (cache.lastResult && sourceBlocks.length === cache.blocks.length) {
-    let allMatch = true;
-    for (let i = 0; i < sourceBlocks.length; i++) {
-      const sourceText = sourceBlocks[i].lines.join('\n');
-      if (!cache.blocks[i] || cache.blocks[i]!.sourceText !== sourceText) {
-        allMatch = false;
-        break;
-      }
-    }
-    if (allMatch) {
-      return cache.lastResult;
-    }
+  const reusableResult = reuseLastIncrementalResult(source, cache);
+  if (reusableResult) {
+    return reusableResult;
   }
 
   // Reset counters for fresh compilation
@@ -704,120 +650,12 @@ export function compileIncrementalTT(
   // 1. Parse the source
   const parseResult = parseTTSource(source);
 
-  // 2. Find changed blocks by comparing source text with cache
-  const changedIndices = new Set<number>();
-  for (let i = 0; i < parseResult.blocks.length; i++) {
-    const block = parseResult.blocks[i];
-    const sourceText = block.sourceLines.join('\n');
-    const cached = cache.blocks[i];
-    if (!cached || cached.sourceText !== sourceText) {
-      changedIndices.add(i);
-    }
-  }
-
-  // 3. Compute dependency DAG and recheck set
-  const blockInfos = parseResult.blocks.map((block, i) => extractBlockDepInfo(block, i));
-  const recheckSet = computeRecheckSet(blockInfos, changedIndices);
-
-  // 4. Walk blocks: replay cached or recompile
-  let definitions = createDefinitionsMap();
-  let constructorParamNames: ConstructorParamNames = new Map();
-  let symbolContext: SymbolContext = emptySymbolContext();
-  const compiledBlocks: CompiledBlock[] = [];
-  let totalCheckErrors = 0;
-  let totalNameErrors = 0;
-
-  for (let blockIndex = 0; blockIndex < parseResult.blocks.length; blockIndex++) {
-    const block = parseResult.blocks[blockIndex];
-
-    if (!recheckSet.has(blockIndex) && cache.blocks[blockIndex]) {
-      // Replay cached result
-      const cached = cache.blocks[blockIndex]!;
-      compiledBlocks.push(cached.compiledBlock);
-
-      const applied = applyBlockContributions(
-        definitions, symbolContext, constructorParamNames,
-        cached.contributions
-      );
-      definitions = applied.definitions;
-      symbolContext = applied.symbolContext;
-      constructorParamNames = applied.constructorParamNames;
-
-      // Keep global constructor param state in sync
-      setConstructorParamNames(constructorParamNames);
-
-      totalCheckErrors += cached.checkErrorCount;
-      totalNameErrors += cached.nameErrorCount;
-    } else {
-      // Ensure global constructor param state is current before compiling
-      setConstructorParamNames(constructorParamNames);
-
-      const beforeDefs = definitions;
-      const beforeSymbols = symbolContext;
-      const beforeCtorParams = constructorParamNames;
-
-      const result = compileOneBlock(
-        block,
-        blockIndex,
-        definitions,
-        symbolContext,
-        constructorParamNames,
-        assumeK,
-        elaborateTacticBlock,
-        recheckZonkedTerm,
-        options,
-      );
-
-      compiledBlocks.push(result.compiled);
-      definitions = result.newDefinitions;
-      symbolContext = result.newSymbolContext;
-      constructorParamNames = result.newConstructorParamNames;
-      totalCheckErrors += result.checkErrorCount;
-      totalNameErrors += result.nameErrorCount;
-
-      // Register impl/coercion/simp annotations EAGERLY (so later blocks in
-      // the same fresh-compile pass can use the resulting kernel features —
-      // e.g., \`realOfNat R 1\` in a block defined after @impl=nat needs the
-      // Nat impl already registered before its NatLit elaborates).
-      applyImplAnnotationsForBlock(result.compiled, definitions);
-
-      // Compute and cache contributions
-      const contributions = computeBlockContributions(
-        beforeDefs, definitions,
-        beforeSymbols, symbolContext,
-        beforeCtorParams, constructorParamNames
-      );
-
-      const sourceText = block.sourceLines.join('\n');
-      cache.blocks[blockIndex] = {
-        sourceText,
-        compiledBlock: result.compiled,
-        contributions,
-        checkErrorCount: result.checkErrorCount,
-        nameErrorCount: result.nameErrorCount,
-      };
-    }
-  }
-
-  // Trim cache if source has fewer blocks now
-  cache.blocks.length = parseResult.blocks.length;
-
-  // Final pass — re-applies idempotent annotation registrations. Mostly
-  // covers blocks taken from cache (whose contributions don't carry the
-  // registry side-effects forward by themselves).
-  applyImplAnnotations(compiledBlocks, definitions);
-
-  const result: CompileResult = {
-    success: parseResult.totalErrors === 0 && totalNameErrors === 0 && totalCheckErrors === 0,
-    blocks: compiledBlocks,
-    totalParseErrors: parseResult.totalErrors,
-    totalNameErrors,
-    totalCheckErrors,
-    definitions,
-  };
-
-  cache.lastResult = result;
-  return result;
+  return compileParsedBlocksIncrementally(parseResult, cache, {
+    assumeK,
+    elaborateTacticBlock,
+    recheckZonkedTerm,
+    options,
+  });
 }
 
 // ============================================================================
