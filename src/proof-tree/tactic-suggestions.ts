@@ -157,32 +157,58 @@ function renderResultGoal(
  * Returns the differing subterm from `newTerm`, or the whole `newTerm` if
  * the terms have different structure at the root.
  */
-function findChangedSubterm(oldTerm: TTKTerm, newTerm: TTKTerm): TTKTerm {
-  if (ttkTermsEqual(oldTerm, newTerm)) return newTerm;
-  // If same tag and structure, recurse to find the specific changed subtree
+/**
+ * Walk two kernel terms in lockstep and return the smallest divergent subtree,
+ * along with the kernel context at that point (extended for any binders we
+ * descended through). Returns null when the terms are equal (no change).
+ *
+ * "Smallest" = deepest position where the two sides still differ. Used to
+ * preview only the part of the goal a tactic actually rewrote, not the whole
+ * goal restated.
+ */
+export function extractChangedSubterm(
+  oldTerm: TTKTerm,
+  newTerm: TTKTerm,
+  ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
+): { old: TTKTerm; new: TTKTerm; ctx: ReadonlyArray<{ name: string; type: TTKTerm }> } | null {
+  if (ttkTermsEqual(oldTerm, newTerm)) return null;
+
   if (oldTerm.tag === 'App' && newTerm.tag === 'App') {
-    if (!ttkTermsEqual(oldTerm.fn, newTerm.fn))
-      return findChangedSubterm(oldTerm.fn, newTerm.fn);
-    if (!ttkTermsEqual(oldTerm.arg, newTerm.arg))
-      return findChangedSubterm(oldTerm.arg, newTerm.arg);
+    const fnEq = ttkTermsEqual(oldTerm.fn, newTerm.fn);
+    const argEq = ttkTermsEqual(oldTerm.arg, newTerm.arg);
+    // Only descend when EXACTLY one side changed — otherwise the divergence
+    // straddles both fn and arg, so this App node is the smallest containing
+    // subtree.
+    if (fnEq && !argEq) return extractChangedSubterm(oldTerm.arg, newTerm.arg, ctx);
+    if (!fnEq && argEq) return extractChangedSubterm(oldTerm.fn, newTerm.fn, ctx);
   }
+
   if (oldTerm.tag === 'Binder' && newTerm.tag === 'Binder'
     && oldTerm.binderKind.tag === newTerm.binderKind.tag) {
-    if (!ttkTermsEqual(oldTerm.domain, newTerm.domain))
-      return findChangedSubterm(oldTerm.domain, newTerm.domain);
-    if (!ttkTermsEqual(oldTerm.body, newTerm.body))
-      return findChangedSubterm(oldTerm.body, newTerm.body);
+    const domEq = ttkTermsEqual(oldTerm.domain, newTerm.domain);
+    const bodyEq = ttkTermsEqual(oldTerm.body, newTerm.body);
+    if (!domEq && bodyEq) return extractChangedSubterm(oldTerm.domain, newTerm.domain, ctx);
+    if (domEq && !bodyEq) {
+      const extCtx = [...ctx, { name: oldTerm.name, type: oldTerm.domain }];
+      return extractChangedSubterm(oldTerm.body, newTerm.body, extCtx);
+    }
   }
-  // Root-level difference — return the new term
-  return newTerm;
+
+  return { old: oldTerm, new: newTerm, ctx };
 }
 
 /**
- * Render just the changed subterm after a tactic application.
- * Compares old goal with new goal, finds the divergent subtree, renders it.
+ * Render the subterm that changed between old and new goal — NOT the full new
+ * goal. The preview shown next to a suggestion should be the user-visible
+ * delta ("what does my click turn into?"), not a restatement of the whole
+ * proposition with one substitution.
+ *
+ * Returns undefined when the change is invisible at the surface level (e.g.,
+ * an unfold whose result is immediately re-folded by alias-fold), so callers
+ * can suppress those suggestions.
  */
 function renderChangedSubterm(
-  _oldGoal: MetaVar,
+  oldGoal: MetaVar,
   newEngine: TacticEngine,
   definitions: DefinitionsMap,
   rev?: ReverseRegistry,
@@ -193,9 +219,21 @@ function renderChangedSubterm(
     if (!newGoalId) return undefined;
     const newGoal = newEngine.metaVars.get(newGoalId);
     if (!newGoal) return undefined;
-    // Render the full new goal through the standard pipeline (which handles
-    // alias folding, simple wrapper folding, etc. correctly).
-    return renderGoalLatex(newEngine, newGoal, definitions, rev);
+
+    // Zonk both sides so meta-resolution doesn't masquerade as a structural change.
+    const oldType = newEngine.zonkTerm(oldGoal.type, oldGoal.ctx.length);
+    const newType = newEngine.zonkTerm(newGoal.type, newGoal.ctx.length);
+
+    const change = extractChangedSubterm(oldType, newType, newGoal.ctx);
+    if (!change) return undefined;
+
+    // Render both sides via the subterm pipeline (handles alias-fold etc.).
+    // If they render the same string, the change isn't visible to the user
+    // and we should suppress the suggestion entirely.
+    const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, rev);
+    const newLatex = renderSubtermLatex(change.new, change.ctx as any, definitions, rev);
+    if (oldLatex === newLatex) return undefined;
+    return newLatex;
   } catch {
     return undefined;
   }
@@ -341,7 +379,7 @@ export function computeTacticSuggestions(
           && !definitions.inductiveNameOfConstructor.has(name)
           && name !== kernelGoal?.currentDeclName) {
           let resultGoalLatex: string | undefined;
-          let unfoldProducesMatch = false;
+          let suppress = false;
           if (kernelGoal) {
             try {
               const { engine, goal: metaGoal } = kernelGoal;
@@ -350,15 +388,22 @@ export function computeTacticSuggestions(
                 const tactic = new UnfoldTactic([name], subtermInfo.occurrenceIndex);
                 const res = tactic.apply(engine, metaGoal, gId);
                 if (res.success) {
-                  unfoldProducesMatch = unfoldResultIsMatch(metaGoal, res.newEngine!);
-                  if (!unfoldProducesMatch) {
+                  // Match-producing unfolds (e.g., on a Var scrutinee) are opaque — skip.
+                  if (unfoldResultIsMatch(metaGoal, res.newEngine!)) {
+                    suppress = true;
+                  } else {
+                    // Render only the localized change. If the surface delta is
+                    // invisible (alias-fold reverses unfold), drop the suggestion.
                     resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
+                    if (resultGoalLatex === undefined) suppress = true;
                   }
+                } else {
+                  suppress = true;
                 }
               }
             } catch { /* ignore */ }
           }
-          if (!unfoldProducesMatch) {
+          if (!suppress) {
             suggestions.push({
               id: `unfold-${name}`,
               label: `Unfold ${name}`,
@@ -389,9 +434,11 @@ export function computeTacticSuggestions(
             // Check if the head matches (fast filter)
             const bodyHead = getKernelHeadName(normalizedBody);
             if (bodyHead !== selectedHead) continue;
-            // TODO: could check structural equality against the kernel subterm here
-            // For now, suggest fold and let the tactic validate
+            // Run the fold tactic to get the localized result. Skip if the
+            // tactic fails (no actual occurrence) or the surface delta is
+            // empty (already-folded view of the same kernel structure).
             let foldResultLatex: string | undefined;
+            let suppress = true;
             if (kernelGoal) {
               try {
                 const { engine, goal: metaGoal } = kernelGoal;
@@ -401,10 +448,12 @@ export function computeTacticSuggestions(
                   const res = tactic.apply(engine, metaGoal, gId);
                   if (res.success) {
                     foldResultLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
+                    if (foldResultLatex !== undefined) suppress = false;
                   }
                 }
               } catch { /* ignore */ }
             }
+            if (suppress) continue;
             suggestions.push({
               id: `fold-${defName}`,
               label: `Fold ${defName}`,

@@ -58,6 +58,14 @@ export function ttkTermsEqual(a: TTKTerm, b: TTKTerm): boolean {
         if (c.patterns.length !== bc.patterns.length) return false;
         return ttkTermsEqual(c.rhs, bc.rhs);
       });
+    case 'NatLit':
+      return b.tag === 'NatLit' && a.value === b.value;
+    case 'RatLit':
+      return b.tag === 'RatLit' && a.num === b.num && a.den === b.den;
+    case 'Annot':
+      return b.tag === 'Annot'
+        && ttkTermsEqual(a.term, b.term)
+        && ttkTermsEqual(a.type, b.type);
     default:
       return false;
   }
