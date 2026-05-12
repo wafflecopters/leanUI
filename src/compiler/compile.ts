@@ -775,6 +775,12 @@ export function compileIncrementalTT(
       totalCheckErrors += result.checkErrorCount;
       totalNameErrors += result.nameErrorCount;
 
+      // Register impl/coercion/simp annotations EAGERLY (so later blocks in
+      // the same fresh-compile pass can use the resulting kernel features —
+      // e.g., \`realOfNat R 1\` in a block defined after @impl=nat needs the
+      // Nat impl already registered before its NatLit elaborates).
+      applyImplAnnotationsForBlock(result.compiled, definitions);
+
       // Compute and cache contributions
       const contributions = computeBlockContributions(
         beforeDefs, definitions,
@@ -796,7 +802,9 @@ export function compileIncrementalTT(
   // Trim cache if source has fewer blocks now
   cache.blocks.length = parseResult.blocks.length;
 
-  // Process @syntax @impl=ROLE annotations for kernel-level role registration.
+  // Final pass — re-applies idempotent annotation registrations. Mostly
+  // covers blocks taken from cache (whose contributions don't carry the
+  // registry side-effects forward by themselves).
   applyImplAnnotations(compiledBlocks, definitions);
 
   const result: CompileResult = {

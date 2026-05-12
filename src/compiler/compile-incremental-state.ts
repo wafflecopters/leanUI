@@ -82,16 +82,24 @@ export function applyBlockContributions(
     }
   }
 
+  // Carry forward ALL impl/coercion/op registries (incl. the recently-added
+  // intImplByCtor / ofIntByTargetHead / simpLemmas). Forgetting any of these
+  // here silently drops a registration when the cached-block path replays,
+  // so e.g. @impl=nat from an earlier block disappears for the current
+  // block and NatLit inference reverts to "no @impl=nat registered".
   definitions = {
     terms: newTerms,
     inductiveTypes: newIndTypes,
     inductiveNameOfConstructor: newCtorMap,
     natImplByCtor: definitions.natImplByCtor,
+    intImplByCtor: definitions.intImplByCtor,
     ofNatByTargetHead: definitions.ofNatByTargetHead,
     natOpByFn: definitions.natOpByFn,
     ratImplByCtor: definitions.ratImplByCtor,
     ofRatByTargetHead: definitions.ofRatByTargetHead,
+    ofIntByTargetHead: definitions.ofIntByTargetHead,
     ratOpByFn: definitions.ratOpByFn,
+    simpLemmas: definitions.simpLemmas,
   };
 
   if (contributions.symbolNames.length > 0) {
