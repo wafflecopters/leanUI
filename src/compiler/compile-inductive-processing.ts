@@ -10,7 +10,7 @@ import {
 import type { TTKTerm } from './kernel';
 import { createCompiledDeclaration, createElabErrorResult } from './compile-declaration-result';
 import { checkInductiveDeclaration } from './inductive';
-import type { ProcessDeclarationResult } from './compile';
+import type { ProcessDeclarationResult } from './compile-types';
 import {
   createNamedArgInfoLookup,
   createTCEnv,

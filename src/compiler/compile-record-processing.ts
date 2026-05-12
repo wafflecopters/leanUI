@@ -13,7 +13,7 @@ import {
 } from './compile-record-utils';
 import { createCompiledDeclaration, createElabErrorResult } from './compile-declaration-result';
 import { generateProjections, recordToInductiveDefinition } from './record';
-import type { ProcessDeclarationResult } from './compile';
+import type { ProcessDeclarationResult } from './compile-types';
 import {
   addDefinition,
   countPiBinders,

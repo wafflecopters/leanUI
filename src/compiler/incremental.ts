@@ -9,7 +9,7 @@
  */
 
 import { ParsedDeclaration } from '../parser/parser';
-import { ParsedBlock, CompiledBlock } from './compile';
+import type { ParsedBlock, CompiledBlock } from './compile-types';
 import { TermDefinition, InductiveDefinition } from './term';
 
 // ============================================================================

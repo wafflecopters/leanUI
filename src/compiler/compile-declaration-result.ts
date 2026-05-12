@@ -11,7 +11,7 @@ import type { TotalityResult } from './totality';
 import type { TacticInfoTree } from '../tactics/info-tree';
 import { TacticSession } from '../tactics/tactic-session';
 import { tacticCommandsToProofTree } from '../proof-tree/tactic-to-tree';
-import type { CompiledDeclaration, ProcessDeclarationResult } from './compile';
+import type { CompiledDeclaration, ProcessDeclarationResult } from './compile-types';
 
 export function createCompiledDeclaration(
   decl: ParsedDeclaration,
