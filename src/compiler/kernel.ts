@@ -1073,8 +1073,9 @@ export function prettyPrint(term: TTKTerm, context: string[] = [], metaVars?: Pr
     case 'NatLit':
       return term.value.toString();
     case 'RatLit':
-      // Render as 'num/den' (canonicalized: gcd=1, den >= 2 since integer-valued became NatLit).
-      return `${term.num}/${term.den}`;
+      // Canonical RatLit: den=1 only for signed-negative integers (positive
+      // collapse to NatLit); den≥2 for true rationals.
+      return term.den === 1n ? term.num.toString() : `${term.num}/${term.den}`;
   }
 }
 
@@ -1311,8 +1312,9 @@ export function prettyPrintFormatted(
     case 'NatLit':
       return term.value.toString();
     case 'RatLit':
-      // Render as 'num/den' (canonicalized: gcd=1, den >= 2 since integer-valued became NatLit).
-      return `${term.num}/${term.den}`;
+      // Canonical RatLit: den=1 only for signed-negative integers (positive
+      // collapse to NatLit); den≥2 for true rationals.
+      return term.den === 1n ? term.num.toString() : `${term.num}/${term.den}`;
   }
 }
 
@@ -1537,8 +1539,9 @@ export function prettyPrintLatex(
     case 'NatLit':
       return term.value.toString();
     case 'RatLit':
-      // Render as 'num/den' (canonicalized: gcd=1, den >= 2 since integer-valued became NatLit).
-      return `${term.num}/${term.den}`;
+      // Canonical RatLit: den=1 only for signed-negative integers (positive
+      // collapse to NatLit); den≥2 for true rationals.
+      return term.den === 1n ? term.num.toString() : `${term.num}/${term.den}`;
   }
 }
 

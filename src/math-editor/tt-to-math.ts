@@ -13,9 +13,13 @@ import { renderStaticLatex } from './render';
 /** Pretty-print a canonical RatLit. If `den` is a positive power of 10,
  *  format as a decimal (e.g., 928/5 reduces to ... actually no, prefer
  *  decimal when den ∈ {1, 2, 4, 5, 8, 10, 20, 25, 50, 100, ...}). For
- *  brevity we just check power-of-10 here. */
+ *  brevity we just check power-of-10 here. The integer case (den=1) only
+ *  arises for signed integers — non-negative collapses to NatLit upstream. */
 function prettyPrintRatLit(num: bigint, den: bigint): string {
-  // Check if den is a power of 10
+  // den=1 → render as plain integer (no decimal point). Reached for
+  // negative integer literals (positive ones become NatLit via mkRatLit).
+  if (den === 1n) return num.toString();
+  // Check if den is a higher power of 10 → decimal representation.
   let d = den;
   let dec = 0;
   while (d > 1n && d % 10n === 0n) { d = d / 10n; dec++; }
