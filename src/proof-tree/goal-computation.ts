@@ -155,6 +155,22 @@ export function kernelTypeToSurface(t: TTKTerm, definitions?: DefinitionsMap): T
               return { tag: 'NatLit', value: last.value } as TTerm;
             }
           }
+          // @ofRat coercion fold: parallel to @ofNat. A registered @ofRat
+          // function wrapping a NatLit or RatLit is just the literal — the
+          // kernel inverse-iota collapses MkRat with closed args to a
+          // canonical literal, so e.g. \`realOfRat R (MkRat (IntOfNat 1) 1 _)\`
+          // first whnfs the arg to \`NatLit 1\`, then this fold hides the
+          // \`realOfRat R _\` wrapper.
+          const ofRatReg = definitions.ofRatByTargetHead;
+          if (ofRatReg && [...ofRatReg.values()].includes(head.name)) {
+            const last = args[args.length - 1];
+            if (last && last.tag === 'NatLit') {
+              return { tag: 'NatLit', value: last.value } as TTerm;
+            }
+            if (last && last.tag === 'RatLit') {
+              return { tag: 'RatLit', num: last.num, den: last.den } as TTerm;
+            }
+          }
           const namedArgMap = lookupNamedArgMap(head.name, definitions);
           if (namedArgMap && namedArgMap.size > 0) {
             const implicitPositions = new Set<number>(namedArgMap.values());
@@ -884,20 +900,37 @@ export function unfoldTransparent(
 }
 
 /**
+ * Build a "renderer-safe" definitions map: copies impl/op registries (so
+ * Nat/Int/Rat literal inverse-iota fires — e.g., MkRat (IntOfNat 1) 1 _ folds
+ * to NatLit 1) but leaves `terms` empty (no δ-reduction of user constants).
+ * Used when normalizing for DISPLAY, not for type checking.
+ */
+function definitionsForRendering(definitions: DefinitionsMap): DefinitionsMap {
+  const stripped = createDefinitionsMap();
+  if (definitions.natImplByCtor) stripped.natImplByCtor = definitions.natImplByCtor;
+  if (definitions.intImplByCtor) stripped.intImplByCtor = definitions.intImplByCtor;
+  if (definitions.ratImplByCtor) stripped.ratImplByCtor = definitions.ratImplByCtor;
+  if (definitions.natOpByFn) stripped.natOpByFn = definitions.natOpByFn;
+  if (definitions.ratOpByFn) stripped.ratOpByFn = definitions.ratOpByFn;
+  return stripped;
+}
+
+/**
  * Normalize a MetaVar's goal type after unfold and update the engine.
  * Returns a new engine with the goal's type replaced by the normalized version.
  *
  * Two-step approach:
  * 1. prepareMatchesForIota: WHNF Match scrutinees and multi-arg Match applied args
  *    with real definitions to expose constructors (e.g., `one` → `Succ(Zero)`)
- * 2. fullNormalize with empty definitions: beta+iota only, no delta on other constants
+ * 2. fullNormalize with renderer-safe definitions: beta+iota+literal inverse-iota,
+ *    but no δ-reduction of user constants
  */
 function normalizeGoalInEngine(engine: TacticEngine, goalId: string): TacticEngine {
   const goal = engine.metaVars.get(goalId);
   if (!goal) return engine;
 
   const prepared = prepareMatchesForIota(goal.type, engine.definitions);
-  const normalized = fullNormalize(prepared, createDefinitionsMap());
+  const normalized = fullNormalize(prepared, definitionsForRendering(engine.definitions));
   if (normalized === goal.type) return engine;
 
   const newMetaVars = new Map(engine.metaVars);
@@ -3027,7 +3060,7 @@ export function renderGoalLatex(
   const prepared = prepareMatchesForIota(zonked, definitions);
   // 2. Full-normalize (beta + iota) to reduce redexes like (\i => i)(0) → 0
   //    and Match expressions from unfold (e.g., match Zero { ... } → result)
-  const normalized = fullNormalize(prepared, createDefinitionsMap());
+  const normalized = fullNormalize(prepared, definitionsForRendering(definitions));
   // 3. Fold projection-like Match expressions back to Const form
   //    (e.g., match x { MkR fields => field_i } → R.field_i(x))
   let term = foldProjectionMatches(normalized, pm);
@@ -3054,7 +3087,7 @@ export function renderSubtermLatex(
   aliasMap?: Map<string, AliasFoldInfo>,
 ): string {
   const prepared = prepareMatchesForIota(term, definitions);
-  const normalized = fullNormalize(prepared, createDefinitionsMap());
+  const normalized = fullNormalize(prepared, definitionsForRendering(definitions));
   const pm = projMap ?? buildProjectionFoldMap(definitions);
   let folded = foldProjectionMatches(normalized, pm);
   const am = aliasMap ?? buildAliasFoldMap(definitions, pm);
