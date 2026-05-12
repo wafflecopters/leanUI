@@ -542,13 +542,28 @@ export function computeTacticSuggestions(
     }
   }
 
-  // Try exact/apply on each hypothesis and definition — only when the user
-  // has selected the WHOLE goal (root or body). exact/apply target the goal
-  // as a unit, so offering them when the user has clicked an interior
-  // subterm (e.g. `1 + (-1)` inside `1 + (-1) ≤ 2 + (-1)`) misleads — the
-  // suggested transformation rewrites the whole proposition, not the
-  // selected subterm.
-  const isWholeGoalSelection = selectedPath === 'goal-root' || selectedPath === 'goal-body';
+  // Try exact/apply on each hypothesis and definition — only when the
+  // selected subterm IS the goal as a unit. That covers three cases:
+  //   - the special root/body wrappers (\htmlId{goal-root}/{goal-body}),
+  //   - the outermost body subterm itself (a click on `0 < ε/2` registers
+  //     on a goal-tN subterm whose head matches the body's head and which
+  //     is the first occurrence) — this is the common case after intros,
+  //     where the body has no binders so clicks land on its root subterm,
+  //   - never when the user clicked an interior subterm
+  //     (e.g. the LHS `1 + (-1)` of `1 + (-1) ≤ 2 + (-1)`).
+  let isWholeGoalSelection = selectedPath === 'goal-root' || selectedPath === 'goal-body';
+  if (!isWholeGoalSelection && kernelGoal && subtermInfo && !subtermInfo.binderIndex
+      && subtermInfo.headName && subtermInfo.occurrenceIndex === 1) {
+    let bodyType = kernelGoal.goal.type;
+    while (bodyType.tag === 'Binder' && bodyType.binderKind.tag === 'BPi') {
+      bodyType = bodyType.body;
+    }
+    let bodyHead = bodyType;
+    while (bodyHead.tag === 'App') bodyHead = bodyHead.fn;
+    if (bodyHead.tag === 'Const' && bodyHead.name === subtermInfo.headName) {
+      isWholeGoalSelection = true;
+    }
+  }
   if (!binderMatch && kernelGoal && isWholeGoalSelection) {
     suggestions.push(...computeHypothesisSuggestions(kernelGoal));
   }
@@ -966,6 +981,16 @@ function tryRewrite(
         resultGoalLatex = renderSubtermLatex(
           result.unifiedEquation.rhs, goal.ctx, definitions, rev
         );
+        // Auto-suggest filter: drop rewrites that DON'T strictly simplify.
+        // Without this, reverse rewrites flood the suggestion strip with
+        // expansions like `x \u2192 0 + x` (rw\u2190 addZeroLeft), `0 \u2192 -0`
+        // (rw\u2190 negZero), `x \u2192 |x|` (rw\u2190 absOfNonneg) \u2014 valid equations but
+        // they make the goal worse. Compare rendered lengths; require strict
+        // shrinkage.
+        const lhsLatex = renderSubtermLatex(
+          result.unifiedEquation.lhs, goal.ctx, definitions, rev,
+        );
+        if (resultGoalLatex.length >= lhsLatex.length) return null;
       } catch { /* ignore */ }
     }
     return {
