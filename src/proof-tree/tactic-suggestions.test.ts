@@ -310,7 +310,12 @@ goal b = ?hole
     expect(ids).not.toContain('apply-hyp-b');
   });
 
-  test('suggestions shown on subterm selection (goal-tN), not just goal-body', () => {
+  test('hypothesis exact/apply suggestions are hidden on interior subterm selection', () => {
+    // exact/apply target the goal as a unit. When the user selects an
+    // interior subterm (goal-tN), offering "exact h" implies the action
+    // affects what they clicked — but it actually closes the whole goal.
+    // Only surface these suggestions when the WHOLE goal is selected
+    // (goal-root or goal-body).
     const source = `
 inductive Nat : Type where
   Zero : Nat
@@ -334,10 +339,16 @@ goal x = ?hole
     const goal = engine.metaVars.get(goalId)!;
 
     const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs };
-    // Selecting a specific subterm should also show hypothesis suggestions
-    const suggestions = computeTacticSuggestions('goal-t0', minimalGoal(), defs, kernelGoal);
-    const ids = suggestions.map(s => s.id);
-    expect(ids).toContain('exact-hyp-x');
+
+    // Subterm selection: no hypothesis suggestions
+    const subtermSuggestions = computeTacticSuggestions('goal-t0', minimalGoal(), defs, kernelGoal);
+    const subtermIds = subtermSuggestions.map(s => s.id);
+    expect(subtermIds).not.toContain('exact-hyp-x');
+
+    // Whole-goal selection: hypothesis suggestions appear
+    const rootSuggestions = computeTacticSuggestions('goal-body', minimalGoal(), defs, kernelGoal);
+    const rootIds = rootSuggestions.map(s => s.id);
+    expect(rootIds).toContain('exact-hyp-x');
   });
 
   test('no hypothesis suggestions on binder selection', () => {

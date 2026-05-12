@@ -433,8 +433,14 @@ export function computeTacticSuggestions(
     }
   }
 
-  // Try exact/apply on each hypothesis — for any non-binder selection
-  if (!binderMatch && kernelGoal) {
+  // Try exact/apply on each hypothesis and definition — only when the user
+  // has selected the WHOLE goal (root or body). exact/apply target the goal
+  // as a unit, so offering them when the user has clicked an interior
+  // subterm (e.g. `1 + (-1)` inside `1 + (-1) ≤ 2 + (-1)`) misleads — the
+  // suggested transformation rewrites the whole proposition, not the
+  // selected subterm.
+  const isWholeGoalSelection = selectedPath === 'goal-root' || selectedPath === 'goal-body';
+  if (!binderMatch && kernelGoal && isWholeGoalSelection) {
     suggestions.push(...computeHypothesisSuggestions(kernelGoal));
   }
 
