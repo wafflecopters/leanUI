@@ -297,7 +297,7 @@ function rebuildApp(head: TTKTerm, args: TTKTerm[]): TTKTerm {
  * 2. Multi-arg (Hole scrutinee): `App(App(Match(Hole, ...), one), one)`
  *    → whnf each applied arg to expose constructors
  */
-function prepareMatchesForIota(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
+export function prepareMatchesForIota(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
   switch (term.tag) {
     case 'Match': {
       const scrut = prepareMatchesForIota(term.scrutinee, definitions);
@@ -905,7 +905,7 @@ export function unfoldTransparent(
  * to NatLit 1) but leaves `terms` empty (no δ-reduction of user constants).
  * Used when normalizing for DISPLAY, not for type checking.
  */
-function definitionsForRendering(definitions: DefinitionsMap): DefinitionsMap {
+export function definitionsForRendering(definitions: DefinitionsMap): DefinitionsMap {
   const stripped = createDefinitionsMap();
   if (definitions.natImplByCtor) stripped.natImplByCtor = definitions.natImplByCtor;
   if (definitions.intImplByCtor) stripped.intImplByCtor = definitions.intImplByCtor;

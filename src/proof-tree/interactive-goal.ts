@@ -15,11 +15,11 @@
 import { TTKTerm } from '../compiler/kernel';
 import { TTerm, occursInTT } from '../compiler/surface';
 import { MetaVar, DefinitionsMap } from '../compiler/term';
-import { betaNormalize } from '../compiler/subst';
+import { fullNormalize } from '../compiler/whnf';
 import { TacticEngine } from '../tactics/tacticsEngine';
 import { ReverseRegistry, SubtermAnnotator } from '../math-editor/tt-to-math';
 import { MathNode, mkGroup } from '../math-editor/types';
-import { kernelTypeToSurface, buildNameCtx, renderTerm, renderTermAnnotated, extractTypeHead, buildProjectionFoldMap, foldProjectionMatches, buildAliasFoldMap, foldAliases } from './goal-computation';
+import { kernelTypeToSurface, buildNameCtx, renderTerm, renderTermAnnotated, extractTypeHead, buildProjectionFoldMap, foldProjectionMatches, buildAliasFoldMap, foldAliases, prepareMatchesForIota, definitionsForRendering } from './goal-computation';
 import { renderNameLatex } from './name-latex';
 
 // ============================================================================
@@ -212,9 +212,12 @@ export function renderInteractiveGoal(
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
 ): InteractiveGoal {
-  // 1. Zonk, normalize, fold projections, and fold aliases
+  // 1. Zonk, normalize (beta + literal inverse-iota for Nat/Rat — collapses
+  //    e.g. MkRat(IntOfNat 1, 1, IsSucc 0) to NatLit 1), fold projections,
+  //    and fold aliases.
   const zonked = engine.zonkTerm(goal.type, goal.ctx.length);
-  const normalized = betaNormalize(zonked);
+  const prepared = prepareMatchesForIota(zonked, definitions);
+  const normalized = fullNormalize(prepared, definitionsForRendering(definitions));
   const projMap = buildProjectionFoldMap(definitions);
   const aliasMap = buildAliasFoldMap(definitions, projMap);
   let folded = foldProjectionMatches(normalized, projMap);
