@@ -71,7 +71,7 @@ export function runSimp(
 
   // Record initial goal
   const initGoal = engine.getFocusedGoal();
-  if (initGoal) seenGoals.add(JSON.stringify(initGoal.type));
+  if (initGoal) seenGoals.add(JSON.stringify(initGoal.type, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v));
 
   for (let iteration = 0; iteration < MAX_SIMP_STEPS; iteration++) {
     let changed = false;
@@ -88,7 +88,7 @@ export function runSimp(
       if (rwResult.success) {
         // Check for cycles: if the new goal was already seen, skip this rewrite
         const newGoal = rwResult.newEngine.getFocusedGoal();
-        const newGoalKey = newGoal ? JSON.stringify(newGoal.type) : null;
+        const newGoalKey = newGoal ? JSON.stringify(newGoal.type, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v) : null;
         if (newGoalKey && seenGoals.has(newGoalKey)) {
           continue; // This rewrite leads back to a previously seen goal
         }
@@ -103,7 +103,7 @@ export function runSimp(
       const unfoldResult = new UnfoldTactic([lemma]).apply(currentEngine, goal, goalId);
       if (unfoldResult.success) {
         const newGoal = unfoldResult.newEngine.getFocusedGoal();
-        const newGoalKey = newGoal ? JSON.stringify(newGoal.type) : null;
+        const newGoalKey = newGoal ? JSON.stringify(newGoal.type, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v) : null;
         if (newGoalKey && seenGoals.has(newGoalKey)) {
           continue;
         }

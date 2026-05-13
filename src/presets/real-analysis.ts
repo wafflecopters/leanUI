@@ -676,11 +676,11 @@ realOfNatOne R = CompleteOrderedField.addZeroRight (field R) (rone R)
 -- suggestion strip canonicalize them to bare \`rone R\` in one click,
 -- after which the structural simp lemmas line up.
 @syntax @simp
-realOfIntOne : (R : Real) -> Equal (realOfInt R (IntOfNat (Succ Zero))) (rone R)
+realOfIntOne : (R : Real) -> Equal (realOfInt R (IntOfNat 1)) (rone R)
 realOfIntOne R = realOfNatOne R
 
 @syntax @simp
-realOfRatOne : (R : Real) -> Equal (realOfRat R (MkRat (IntOfNat (Succ Zero)) (Succ Zero) (IsSucc Zero))) (rone R)
+realOfRatOne : (R : Real) -> Equal (realOfRat R (MkRat (IntOfNat 1) 1 (IsSucc 0))) (rone R)
 realOfRatOne R = realOfNatOne R
 
 -- 0 < 1: the field's foundational positivity. Used by realOfNatSuccPos

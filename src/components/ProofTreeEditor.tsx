@@ -579,6 +579,16 @@ function GoalInteraction({
       const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
       const numChildren = suggestion.numSubgoals ?? 1;
       result = applyApplyTactic(state, ctorName, numChildren);
+    } else if (suggestion.id === 'simp-auto') {
+      // Compound simp: run the full @simp set via runSimp.
+      if (typedContext?.kernelGoal) {
+        const { engine, definitions: defs } = typedContext.kernelGoal;
+        const lemmas = [...(defs.simpLemmas ?? [])];
+        const simpResult = runSimp(engine, lemmas);
+        if (simpResult.success) {
+          result = applySimp(state, lemmas, simpResult.proofNodes);
+        }
+      }
     } else if (suggestion.id.startsWith('rewrite-') || suggestion.id.startsWith('simp-')) {
       // @simp suggestions are just curated rewrites; they reuse the same
       // dispatch and the RewriteSuggestion shape, just with a distinct id

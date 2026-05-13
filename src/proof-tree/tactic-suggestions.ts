@@ -18,6 +18,7 @@ import { RewriteTactic } from '../tactics/rewrite-tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { ttkTermsEqual } from '../tactics/fold-tactic';
+import { runSimp } from '../tactics/simp-tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
 import { proposeVarName, freshenName } from './propose-var-name';
 import { renderNameLatex } from './name-latex';
@@ -549,6 +550,49 @@ export function computeTacticSuggestions(
           // Inner pass: try the lemma anywhere in the goal — catches
           // bridge lemmas whose LHS lives below the clicked subterm.
           trySimp(lemmaName, { reverse: false, occurrences: [] });
+        }
+        // Compound "Simp" suggestion: iterate runSimp over the entire
+        // @simp set until fixed point. Catches cases where no single
+        // lemma produces a visible change, but a CHAIN does (e.g.
+        // realOfRatOne canonicalizes \`realOfRat R (MkRat …)\` to
+        // \`rone R\`, then addNegRight collapses \`radd (rone R) (rneg (rone R))\`
+        // to \`rzero R\`, then realOfNatZero or similar renders as \`0\`).
+        if (gId) {
+          try {
+            const all = [...definitions.simpLemmas];
+            const simpRes = runSimp(engine, all);
+            if (simpRes.success && simpRes.steps.length > 0) {
+              const resultGoalLatex = renderChangedSubterm(metaGoal, simpRes.engine, definitions, kernelGoal.rev);
+              if (resultGoalLatex !== undefined) {
+                const change = extractChangedSubterm(
+                  engine.zonkTerm(metaGoal.type, metaGoal.ctx.length),
+                  simpRes.engine.zonkTerm(simpRes.engine.metaVars.get(simpRes.engine.getFocusedGoalId()!)!.type, metaGoal.ctx.length),
+                  metaGoal.ctx,
+                );
+                let strictlyShorter = true;
+                if (change && kernelGoal.rev) {
+                  const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, kernelGoal.rev);
+                  if (resultGoalLatex.length >= oldLatex.length) strictlyShorter = false;
+                }
+                if (strictlyShorter) {
+                  // Use the first step's name in the id (so dispatch via
+                  // applyRewrite still works for single-step cases). For
+                  // multi-step chains, the user clicks once and runSimp
+                  // re-fires server-side via the Simp toolbar button.
+                  // Suggestion id 'simp-auto' is the compound form.
+                  suggestions.push({
+                    id: `simp-auto`,
+                    label: simpRes.steps.length === 1 ? `Simp ${simpRes.steps[0].name}` : `Simp (${simpRes.steps.length} steps)`,
+                    labelLatex: simpRes.steps.length === 1
+                      ? `\\text{Simp } ${renderNameLatex(simpRes.steps[0].name, 'textbf')}`
+                      : `\\text{Simp (${simpRes.steps.length} steps)}`,
+                    description: `Apply @simp lemmas: ${simpRes.steps.map(s => s.name).join(' → ')}`,
+                    resultGoalLatex,
+                  } as any);
+                }
+              }
+            }
+          } catch { /* ignore */ }
         }
       }
     }
