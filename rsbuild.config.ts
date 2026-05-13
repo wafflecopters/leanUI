@@ -3,7 +3,16 @@ import { pluginReact } from '@rsbuild/plugin-react';
 import { pluginTypeCheck } from '@rsbuild/plugin-type-check';
 
 export default defineConfig({
-  plugins: [pluginReact(), pluginTypeCheck()],
+  plugins: [
+    pluginReact(),
+    pluginTypeCheck({
+      tsCheckerOptions: {
+        typescript: {
+          configFile: './tsconfig.build.json',
+        },
+      },
+    }),
+  ],
   html: {
     template: './src/index.html',
   },
