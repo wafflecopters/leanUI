@@ -3985,9 +3985,17 @@ function replayEntireTreeViaWalk(
             if (arg.term.tag === 'Hole' || arg.term.tag === 'Meta') continue; // unsolved
             if (arg.type.tag === 'Sort') continue; // type-level arg (e.g., {A : Type})
             try {
-              // Zonk to resolve any metas, beta-normalize, fold projections + aliases
-              const zonked = betaNormalize(newEngine.zonkTerm(arg.term, goal.ctx.length));
-              let folded = foldProjectionMatches(zonked, projMap);
+              // Match the goal-latex pipeline: zonk + prepareMatchesForIota +
+              // fullNormalize with the renderer-safe definitions map. That
+              // fires the kernel inverse-iota for Nat/Rat literals so that
+              // \`MkRat (IntOfNat 1) 1 (IsSucc 0)\` collapses to a bare
+              // literal — letting the @ofRat fold in kernelTypeToSurface
+              // strip the coercion wrapper and the user sees \`1\` instead
+              // of the raw \`@ofRat(R, MkRat(IntOfNat(1), 1, IsSucc(0)))\`.
+              const zonked = newEngine.zonkTerm(arg.term, goal.ctx.length);
+              const prepared = prepareMatchesForIota(zonked, definitions);
+              const normalized = fullNormalize(prepared, definitionsForRendering(definitions));
+              let folded = foldProjectionMatches(normalized, projMap);
               folded = foldAliases(folded, aliasMap);
               // Unfold @syntax @unfold-marked constants
               if (rev.unfoldNames.size > 0) {
