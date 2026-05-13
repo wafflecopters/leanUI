@@ -1469,4 +1469,13 @@ derivChain : {R : Real} -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier
 -- Proof is refl since deriv just extracts L and derivChain produces rmul Lg Lf
 derivChainEq : {R : Real} -> (g f : Carrier R -> Carrier R) -> (x0 Lf Lg : Carrier R) -> (hf : HasDerivative f x0 Lf) -> (hg : HasDerivative g (f x0) Lg) -> Equal (deriv (\\x => g (f x)) x0 (derivChain g f x0 Lf Lg hf hg)) (rmul (deriv g (f x0) hg) (deriv f x0 hf))
 derivChainEq {R} g f x0 Lf Lg hf hg = refl
+
+------------------------------------------------------------
+-- Demo / scratch goal for testing the @simp suggestion strip.
+-- Click on subterms (1 + -1, 0 < ε/2, etc.) and see what
+-- suggestions surface. The hole \`?TODO\` keeps the proof open
+-- so the suggestion strip is always available.
+------------------------------------------------------------
+demoTestLiterals : (R : Real) -> rle 1 2
+demoTestLiterals R = ?TODO
 `;
