@@ -452,12 +452,25 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
       // □, e.g. \`@ofNat(R, NatLit 1)\` showed as \`@ofNat(R, □)\`.
       return [mkSymbol(term.value.toString())];
 
-    case 'RatLit':
+    case 'RatLit': {
       // Rational literal — render as decimal when den is a power of 10
       // (the typical case for parsed decimals like 1.5 → 3/2 or 185.6 →
       // 928/5). Otherwise fall back to fraction form. Sign goes on the
       // numerator since canonical form has den > 0.
-      return [mkSymbol(prettyPrintRatLit(term.num, term.den))];
+      //
+      // For negative literals, emit the `-` as a SEPARATE Symbol node
+      // instead of a single Symbol("-1"). That lets the precedence-based
+      // parenthesizer see the leading `-` as an additive-precedence
+      // operator and wrap the literal in parens when it's the RHS of a
+      // `+` / `-` (e.g. \`1 + (-1)\` instead of the ambiguous \`1 + -1\`).
+      // Without this split, the whole string is one atomic symbol and
+      // captureNeedsWrap thinks it has PREC_ATOM.
+      const s = prettyPrintRatLit(term.num, term.den);
+      if (term.num < 0n && s.startsWith('-')) {
+        return [mkSymbol('-'), mkSymbol(s.slice(1))];
+      }
+      return [mkSymbol(s)];
+    }
 
     case 'Hole':
       return [mkHole()];
