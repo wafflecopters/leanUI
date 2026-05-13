@@ -1,58 +1,63 @@
 # LeanUI
 
-> **Note on use:** This repository is public solely so prospective employers,
-> collaborators, and reviewers can inspect the author's work. **No license is
-> granted to use, copy, modify, or redistribute this code.** See
-> [`LICENSE`](./LICENSE) for the full notice.
+A browser-based proof assistant that renders **formal proofs as real-looking
+mathematics**. Write a Lean-style script and watch it appear as typeset LaTeX
+in a WYSIWYG editor; edit the rendered form and the underlying dependently-
+typed term stays in sync, fully checked.
 
-A bridge between Overleaf and Lean: write LaTeX-like math with proof correctness,
-or write Lean-style code that renders as real-looking LaTeX in a WYSIWYG editor.
+Built end-to-end in TypeScript, no external prover: a custom dependently-typed
+surface language (TT) and kernel (TTK), bidirectional elaborator, constraint-
+solving unifier, tactic engine, proof-tree UI, totality and structural-
+recursion checks, and a LaTeX renderer — all running client-side.
 
-LeanUI ships its own dependently-typed language (TT), an elaborator and kernel
-type checker, a tactic engine, a proof-tree UI, and a LaTeX renderer — all
-running in the browser.
+## Milestone proofs
 
-## Vision
+The near-term target is a live demo of three proofs, each shown as ordinary
+math with autocomplete and tactic suggestions running underneath:
 
-The near-term goal is a live demo of three milestone proofs, each presented as
-real-looking math with autocomplete and tactic suggestions under the hood:
-
-1. **Triangle numbers** — `∑_{i=0}^{n} i = n(n+1)/2` (current target)
+1. **Triangle numbers** — `∑_{i=0}^{n} i = n(n+1)/2`  *(current target)*
 2. **Limits add** — `lim f + lim g = lim (f + g)`
-3. **Chain rule** — `d/dx f(g(x)) = f'(g(x))·g'(x)`
+3. **Chain rule** — `d/dx f(g(x)) = f'(g(x)) · g'(x)`
 
-See `status.md` for current focus, recent progress, and open work.
+See [`status.md`](./status.md) for what's working today and what's next.
 
 ## Architecture
 
 ```
-Source Text
-    ↓ Parser + indentation grouper
-TT (surface syntax) + SourceMap
-    ↓ Elaboration  (named vars → de Bruijn, holes → metas, sugar → core)
-TTK (kernel syntax) + ElabMap
-    ↓ Bidirectional type checker  (metas, constraint solving, unification)
+Source text
+    │  Indentation-aware parser
+    ▼
+TT  (surface syntax, named vars)  + SourceMap
+    │  Elaboration  (names → de Bruijn, holes → metas, sugar → core)
+    ▼
+TTK (kernel syntax, fully explicit) + ElabMap
+    │  Bidirectional type checker  (metas, constraint solving, unification)
+    ▼
 Checked TTK
-    ↓ Totality + structural recursion checks
-CompiledDeclaration  →  LaTeX renderer / proof tree UI
+    │  Totality + structural recursion
+    ▼
+CompiledDeclaration  →  LaTeX renderer / proof-tree UI
 ```
 
-All verification runs on **TTK** (kernel terms), never on **TT** (surface).
+All verification runs on **TTK**, never on the surface **TT**. The kernel,
+unifier, parser, and tactic engine are domain-agnostic; numeric literals,
+record sugar, real-analysis primitives, and similar concerns live in
+*presets* exposed through a notation registry (`@syntax` / `@unfold`).
 
-Top-level source layout:
+### Source layout
 
 | Path | What lives there |
 |------|------------------|
-| `src/parser/` | Indentation-aware parser, produces TT + source map |
-| `src/compiler/` | Elaboration pipeline, incremental compile driver, LaTeX converter |
-| `src/types/` | `tt-core.ts` (TT), `tt-kernel.ts` (TTK), context types |
-| `src/tactics/` | Tactic engine, `TacticSession`, individual tactics (intro, rewrite, …) |
-| `src/proof-tree/` | Proof-tree view + tactic suggestion system |
-| `src/math-editor/` | WYSIWYG math editor surface |
-| `src/components/` | React UI |
-| `src/presets/` | Built-in preludes (Reals, Nats, equality, …) |
-| `src/test-programs/` | `.tt` end-to-end test files; see "Tests" below |
-| `server/` | Small Express server for editor persistence |
+| `src/parser/`        | Indentation-aware parser, produces TT + source map |
+| `src/compiler/`      | Elaboration pipeline, incremental compile driver, LaTeX converter |
+| `src/types/`         | `tt-core.ts` (TT), `tt-kernel.ts` (TTK), context types |
+| `src/tactics/`       | Tactic engine, `TacticSession`, individual tactics |
+| `src/proof-tree/`    | Proof-tree view + tactic suggestion system |
+| `src/math-editor/`   | WYSIWYG math editor surface |
+| `src/components/`    | React UI |
+| `src/presets/`       | Built-in preludes (Reals, Nats, equality, …) |
+| `src/test-programs/` | `.tt` end-to-end test files |
+| `server/`            | Small Express server for editor persistence |
 
 ## Running
 
@@ -66,6 +71,8 @@ npm test -- -t "name"  # run a single test by substring
 npm run build          # production build
 ```
 
+Always run `npx tsc --noEmit && npm test` before declaring a change done.
+
 ## Tests
 
 Two complementary styles:
@@ -73,65 +80,49 @@ Two complementary styles:
 - **Unit tests** (`*.test.ts` next to source) — exercise individual passes
   (parser, elaborator, unifier, WHNF, tactics, …).
 - **`.tt` program tests** — full source files in `src/test-programs/` with
-  `@test success|failure` / `@name "..."` / `@import` / `@error` directives.
+  `@test success|failure`, `@name "..."`, `@import`, and `@error` directives.
   The runner (`src/test-programs/tt-runner.test.ts`) compiles each file and
-  asserts. Prefer this style for any "does this code compile?" check.
+  asserts the expected outcome. Preferred for any "does this code compile?"
+  check.
 
 ```bash
-# Run one .tt test:
+# Run one .tt test by name:
 npx vitest run src/test-programs/tt-runner.test.ts -t "sym: Equal u v"
 ```
 
-Always run `npx tsc --noEmit && npm test` before claiming a change is done.
+## Where to read more
 
-## Documentation Index
+Start with **[`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md)** — it covers the
+type theory, the elaboration pipeline, and the key algorithms in one place.
 
-Start with `SYSTEM_OVERVIEW.md`. Everything else is either reference material
-or a design note for a specific subsystem.
-
-### Read first
-- **`SYSTEM_OVERVIEW.md`** — architecture, type-checking rules, key algorithms
-- **`language-spec.md`** — surface-syntax specification
-- **`status.md`** — current focus, recent progress, up-next, open questions
-- **`TODO.md`** — what is and isn't implemented yet
-
-### Algorithm reference (`ALGORITHMS/`)
-- `IMPLICIT_RESOLUTION.md` — implicit argument insertion
-- `PATTERN_ELABORATION.md`, `PATTERN_LHS_CHECKING.md`, `PATTERN_RHS_CHECKING.md` — pattern matching pipeline
-- `TOTALITY_CHECKING.md` — coverage and termination
-- `WITH_ABSTRACTION.md` — `with`-clause desugaring
-
-### Subsystem deep-dives (`docs/`)
-- `eliminator-generation.md` — how recursors are generated for inductives
-- `meta-constraint-analysis.md` — constraint solver internals
-- `parameter-index-inference.md` — inferring inductive parameters vs indices
-- `structural-recursion.md` — termination checker
-- `README.md` — index of the deep-dives
-
-### Design notes (project root)
-- `RECORDS.md` — records elaborate to inductives
-- `IMPLICITS-DESIGN.md` — implicit-argument design
-- `PARSER-DESIGN.md` — indentation handling, multi-line expressions
-- `TACTICS.md` — tactic engine overview
-- `LIMIT-DESIGN.md` — limits in the real-analysis preset
-- `NUMERIC_LITERALS_PLAN.md`, `PATTERN-UNIFICATION-PLAN.md`,
-  `WITH_CLAUSE_IMPLICIT_ARGS_PLAN.md`, `zonk_checking_plan.md` — staged plans
-- `AXIOM_K.md`, `K_TEST_AUDIT.md`, `DELETION_RULE_ANALYSIS.md` — equality / K
-- `PADDING_HOLES_FIX.md`, `whnf-match-fix-summary.md` — post-mortems on tricky bugs
-- `structured_editor_overview.md` — editor UX notes
-
-### For contributors
-- **`CLAUDE.md` / `AGENTS.md`** — coding guidelines, debugging strategy, what
-  belongs in the kernel vs. in a preset, how to add `.tt` tests. Read these
-  before making non-trivial changes.
+| Document | Purpose |
+|----------|---------|
+| [`SYSTEM_OVERVIEW.md`](./SYSTEM_OVERVIEW.md) | Architecture, type-checking rules, key algorithms |
+| [`language-spec.md`](./language-spec.md)    | Surface-syntax specification |
+| [`status.md`](./status.md)                   | Current focus, recent progress, open questions |
+| [`TODO.md`](./TODO.md)                       | What is and isn't implemented yet |
+| [`ALGORITHMS/`](./ALGORITHMS/)               | Implicit resolution, pattern elaboration, totality, `with`-abstraction |
+| [`docs/`](./docs/)                           | Subsystem deep-dives (eliminator generation, meta-constraint analysis, structural recursion, parameter / index inference) |
+| [`TACTICS.md`](./TACTICS.md)                 | Tactic engine overview |
+| [`RECORDS.md`](./RECORDS.md), [`IMPLICITS-DESIGN.md`](./IMPLICITS-DESIGN.md), [`PARSER-DESIGN.md`](./PARSER-DESIGN.md), [`LIMIT-DESIGN.md`](./LIMIT-DESIGN.md) | Design notes per subsystem |
+| [`AXIOM_K.md`](./AXIOM_K.md), [`K_TEST_AUDIT.md`](./K_TEST_AUDIT.md), [`DELETION_RULE_ANALYSIS.md`](./DELETION_RULE_ANALYSIS.md) | Equality / Axiom K analysis |
+| [`CLAUDE.md`](./CLAUDE.md), [`AGENTS.md`](./AGENTS.md) | Coding guidelines, debugging strategy, what belongs in the kernel vs. a preset |
 
 ## Key invariants
 
 - Verification operates only on TTK, never on surface TT.
-- Kernel / engine / parser / tactic engine **must not** hard-code
-  domain-specific names (`rone`, `Zero`, `Succ`, …). Domain knowledge lives in
-  presets and is exposed via `@syntax` / `@unfold` / the notation registry.
+- Kernel, engine, parser, and tactic engine **must not** hard-code
+  domain-specific names (`rone`, `Zero`, `Succ`, …). Domain knowledge lives
+  in presets and is exposed via `@syntax` / `@unfold` / the notation registry.
 - Major data structures (`TCEnv`, `TTKTerm`, `TTerm`, `TTKContext`) are
-  immutable. Methods return new instances; never mutate in place.
-- Fix bugs at the lowest layer that reproduces them; add a unit test or `.tt`
+  immutable; methods return new instances rather than mutating in place.
+- Fix bugs at the lowest layer that reproduces them, and add a unit or `.tt`
   regression test before declaring done.
+
+## License
+
+This repository is public solely so that prospective employers,
+collaborators, and reviewers may inspect the author's work. **No license is
+granted to use, fork, modify, redistribute, or train ML models on this
+code.** See [`LICENSE`](./LICENSE) for the full terms. Licensing inquiries:
+`wcopters@gmail.com`.
