@@ -489,54 +489,66 @@ export function computeTacticSuggestions(
       // simplifications targeted to exactly what they clicked, and the noise
       // floor stays low because non-simplifying rewrites are suppressed.
       if (kernelGoal && definitions.simpLemmas && definitions.simpLemmas.size > 0) {
+        // @simp suggestion strategy: for each @simp lemma, try TWO matches
+        // against the selected subterm:
+        //   (1) outer-head match — the lemma's LHS shares the user's
+        //       clicked head (e.g. addNegRight on a \`radd\` click).
+        //   (2) inner match — anywhere in the goal. Catches bridge
+        //       lemmas like realOfRatOne whose LHS head is INSIDE the
+        //       clicked subterm (e.g. \`realOfRat R (MkRat …)\` nested
+        //       under a \`radd\`). renderChangedSubterm narrows the
+        //       preview to the smallest visible delta either way.
+        // Both passes filter via "rendered change must be strictly
+        // shorter" — kills permutations (commutativity, associativity)
+        // and reverse rewrites that expand.
         const occ = subtermInfo.occurrenceIndex ?? 1;
         const targetHead = subtermInfo.headName;
         const { engine, goal: metaGoal } = kernelGoal;
         const gId = engine.getFocusedGoalId();
-        if (gId) {
-          for (const lemmaName of definitions.simpLemmas) {
-            try {
-              const lemmaTerm: TTKTerm = { tag: 'Const', name: lemmaName };
-              // Pass targetHead so occurrence counting filters to subterms
-              // whose head matches the user's selection (the same trick
-              // the regular rewrite-suggestion path uses).
-              const opts: { reverse: boolean; occurrences: number[]; targetHead?: string } = {
-                reverse: false,
-                occurrences: [occ],
-              };
-              if (targetHead) opts.targetHead = targetHead;
-              const tactic = new RewriteTactic(lemmaTerm, opts);
-              const res = tactic.apply(engine, metaGoal, gId);
-              if (!res.success) continue;
-              const resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
-              if (resultGoalLatex === undefined) continue;
-              // Suppress when the rewrite doesn't strictly shorten the
-              // rendered subterm. Without this filter @simp lemmas that
-              // permute (commutativity, associativity) clutter the suggestion
-              // strip with sideways rewrites.
-              const change = extractChangedSubterm(
-                engine.zonkTerm(metaGoal.type, metaGoal.ctx.length),
-                res.newEngine.zonkTerm(res.newEngine.metaVars.get(res.newEngine.getFocusedGoalId()!)!.type, metaGoal.ctx.length),
-                metaGoal.ctx,
-              );
-              if (change) {
-                const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, kernelGoal.rev!);
-                if (resultGoalLatex.length >= oldLatex.length) continue;
-              }
-              const rw: RewriteSuggestion = {
-                id: `simp-${lemmaName}-occ${occ}`,
-                label: `Simp ${lemmaName}`,
-                labelLatex: `\\text{Simp } ${renderNameLatex(lemmaName, 'textbf')}`,
-                description: `Simplify via ${lemmaName}`,
-                rewriteName: lemmaName,
-                reverse: false,
-                occurrences: [occ],
-                targetHead,
-                resultGoalLatex,
-              };
-              suggestions.push(rw);
-            } catch { /* ignore */ }
-          }
+        const offered = new Set<string>();
+        const trySimp = (lemmaName: string, opts: { reverse: boolean; occurrences: number[]; targetHead?: string }): void => {
+          try {
+            if (!gId) return;
+            const tactic = new RewriteTactic({ tag: 'Const', name: lemmaName }, opts);
+            const res = tactic.apply(engine, metaGoal, gId);
+            if (!res.success) return;
+            const resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
+            if (resultGoalLatex === undefined) return;
+            // Strict-shorter filter.
+            const change = extractChangedSubterm(
+              engine.zonkTerm(metaGoal.type, metaGoal.ctx.length),
+              res.newEngine.zonkTerm(res.newEngine.metaVars.get(res.newEngine.getFocusedGoalId()!)!.type, metaGoal.ctx.length),
+              metaGoal.ctx,
+            );
+            if (change && kernelGoal.rev) {
+              const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, kernelGoal.rev);
+              if (resultGoalLatex.length >= oldLatex.length) return;
+            }
+            const id = `simp-${lemmaName}`;
+            if (offered.has(id)) return;
+            offered.add(id);
+            const rw: RewriteSuggestion = {
+              id: `${id}-occ${opts.occurrences[0] ?? 1}`,
+              label: `Simp ${lemmaName}`,
+              labelLatex: `\\text{Simp } ${renderNameLatex(lemmaName, 'textbf')}`,
+              description: `Simplify via ${lemmaName}`,
+              rewriteName: lemmaName,
+              reverse: false,
+              occurrences: opts.occurrences,
+              targetHead: opts.targetHead,
+              resultGoalLatex,
+            };
+            suggestions.push(rw);
+          } catch { /* ignore */ }
+        };
+        for (const lemmaName of definitions.simpLemmas) {
+          // Outer pass: head-matched, occurrence-targeted at user's click.
+          trySimp(lemmaName, targetHead
+            ? { reverse: false, occurrences: [occ], targetHead }
+            : { reverse: false, occurrences: [occ] });
+          // Inner pass: try the lemma anywhere in the goal — catches
+          // bridge lemmas whose LHS lives below the clicked subterm.
+          trySimp(lemmaName, { reverse: false, occurrences: [] });
         }
       }
     }

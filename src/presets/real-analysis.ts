@@ -668,6 +668,21 @@ divMulRight {R} a b c = trans (CompleteOrderedField.mulAssoc (field R) a (rinv b
 realOfNatOne : (R : Real) -> Equal (realOfNat R 1) (rone R)
 realOfNatOne R = CompleteOrderedField.addZeroRight (field R) (rone R)
 
+-- Bridge lemmas: the @ofRat / @ofInt elaboration ladders wrap an integer
+-- literal \`1 : Carrier R\` as \`realOfRat R (MkRat (IntOfNat 1) 1 _)\` or
+-- \`realOfInt R (IntOfNat 1)\` — both of which are definitionally equal to
+-- \`rone R\` but structurally distinct, so simp lemmas keyed on \`rone R\`
+-- (like addNegRight) don't fire. Tagging these as @simp lets the
+-- suggestion strip canonicalize them to bare \`rone R\` in one click,
+-- after which the structural simp lemmas line up.
+@syntax @simp
+realOfIntOne : (R : Real) -> Equal (realOfInt R (IntOfNat (Succ Zero))) (rone R)
+realOfIntOne R = realOfNatOne R
+
+@syntax @simp
+realOfRatOne : (R : Real) -> Equal (realOfRat R (MkRat (IntOfNat (Succ Zero)) (Succ Zero) (IsSucc Zero))) (rone R)
+realOfRatOne R = realOfNatOne R
+
 -- 0 < 1: the field's foundational positivity. Used by realOfNatSuccPos
 -- (below) and the limit/derivative proofs (further down).
 zeroLtOne : (R : Real) -> rlt (rzero R) (rone R) := by
