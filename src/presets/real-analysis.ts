@@ -420,9 +420,17 @@ addRealOfNat : (R : Real) -> (n m : Nat) -> Equal (radd (realOfNat R n) (realOfN
 addRealOfNat R Zero m = addZeroLeft (realOfNat R m)
 addRealOfNat R (Succ n) m = trans (CompleteOrderedField.addAssoc (field R) (rone R) (realOfNat R n) (realOfNat R m)) (cong (\\z => radd (rone R) z) (addRealOfNat R n m))
 
+@syntax @simp
 negLeft : {R : Real} -> (a : Carrier R) -> Equal (radd (rneg a) a) (rzero R) := by
   intros R a
   erw (CompleteOrderedField.addComm (field R) (rneg a) a), (CompleteOrderedField.negRight (field R) a)
+
+-- a + (-a) = 0. The CompleteOrderedField axiom exposed as a top-level
+-- lemma so the suggestion strip can offer it as a one-click @simp on
+-- patterns like \`1 + (-1)\` (which match \`radd a (rneg a)\`).
+@syntax @simp
+addNegRight : {R : Real} -> (a : Carrier R) -> Equal (radd a (rneg a)) (rzero R)
+addNegRight {R} a = CompleteOrderedField.negRight (field R) a
 
 addLeRight : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle (radd a c) (radd b c)
 addLeRight {R} a b c h = (replace (\\z => rle z (radd b c)) (CompleteOrderedField.addComm (field R) c a) (replace (\\z => rle (radd c a) z) (CompleteOrderedField.addComm (field R) c b) (CompleteOrderedField.addLeLeft (field R) a b c h)))
@@ -653,6 +661,7 @@ mulDivAssoc {R} a b c = sym (CompleteOrderedField.mulAssoc (field R) a b (rinv c
 divMulRight : {R : Real} -> (a b c : Carrier R) -> Equal (rmul (rdiv a b) c) (rdiv (rmul a c) b)
 divMulRight {R} a b c = trans (CompleteOrderedField.mulAssoc (field R) a (rinv b) c) (trans (cong (\\z => rmul a z) (CompleteOrderedField.mulComm (field R) (rinv b) c)) (sym (CompleteOrderedField.mulAssoc (field R) a c (rinv b))))
 
+@syntax @simp
 -- realOfNat R 1 = 1: in any field, "one" as a Nat coerces to the
 -- field's multiplicative identity. Reduces via realOfNat's Succ case:
 -- realOfNat 1 = 1 + realOfNat 0 = 1 + 0, then addZeroRight closes it.
