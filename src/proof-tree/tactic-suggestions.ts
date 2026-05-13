@@ -288,6 +288,23 @@ export function computeTacticSuggestions(
 
   const suggestions: TacticSuggestion[] = [];
 
+  const dbgInfo = goal.subtermMap.get(selectedPath);
+  // eslint-disable-next-line no-console
+  console.log('[cts-debug] entry', {
+    selectedPath,
+    hasKernelGoal: !!kernelGoal,
+    hasDefinitions: !!definitions,
+    subtermInfo: dbgInfo && {
+      headName: dbgInfo.headName,
+      isAppOfConst: dbgInfo.isAppOfConst,
+      occurrenceIndex: dbgInfo.occurrenceIndex,
+      binderIndex: dbgInfo.binderIndex,
+      varName: dbgInfo.varName,
+      termTag: (dbgInfo.term as any)?.tag,
+    },
+    paths: [...goal.subtermMap.keys()],
+  });
+
   // Try `exact refl` — only when clicking on an Equal(...) subterm
   if (kernelGoal) {
     const subtermInfo = goal.subtermMap.get(selectedPath);
@@ -489,6 +506,8 @@ export function computeTacticSuggestions(
       // visually identical / longer result, drop it. The user gets one-click
       // simplifications targeted to exactly what they clicked, and the noise
       // floor stays low because non-simplifying rewrites are suppressed.
+      // eslint-disable-next-line no-console
+      console.log('[cts-debug] inside subtermInfo block, will try simp:', !!kernelGoal && !!definitions.simpLemmas && (definitions.simpLemmas?.size ?? 0) > 0);
       if (kernelGoal && definitions.simpLemmas && definitions.simpLemmas.size > 0) {
         // @simp suggestion strategy: for each @simp lemma, try TWO matches
         // against the selected subterm:
