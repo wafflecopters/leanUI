@@ -522,7 +522,7 @@ describe('Record to Inductive Conversion', () => {
             expect(clause.patterns[0].name).toBe('MkPoint');
             expect(clause.patterns[0].args).toHaveLength(2);
           }
-          // RHS should be Var(0) — only 1 PVar binding per projection
+          // RHS should target the x field's constructor position.
           expect(clause.rhs.tag).toBe('Var');
           if (clause.rhs.tag === 'Var') {
             expect(clause.rhs.index).toBe(0);
@@ -546,7 +546,7 @@ describe('Record to Inductive Conversion', () => {
       const projections = generateProjections(record);
       const yProj = projections[1];
 
-      // Point.y should return Var(0) — only 1 PVar binding per projection
+      // Point.y should target the y field's constructor position
       expect(yProj.value.tag).toBe('Binder');
       if (yProj.value.tag === 'Binder' && yProj.value.body.tag === 'Match') {
         const clause = yProj.value.body.clauses[0];
@@ -647,7 +647,7 @@ describe('Record to Inductive Conversion', () => {
         if (clause.patterns[0].tag === 'PCtor') {
           expect(clause.patterns[0].args).toHaveLength(4);
         }
-        // RHS for fst should be Var(0) — only 1 PVar binding per projection
+        // RHS for fst should target the fst field's constructor position
         expect(clause.rhs.tag).toBe('Var');
         if (clause.rhs.tag === 'Var') {
           expect(clause.rhs.index).toBe(0);

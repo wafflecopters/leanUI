@@ -3,6 +3,7 @@ import { elaborateTacticArg, tacticCommandToTactic, shouldKeepArgAsName } from '
 import { createDefinitionsMap, addDefinition } from '../compiler/term';
 import { TTKTerm } from '../compiler/kernel';
 import { TTerm } from '../compiler/surface';
+import { compileTTFromText } from '../compiler/compile';
 
 const natType: TTKTerm = { tag: 'Const', name: 'Nat' };
 
@@ -32,6 +33,25 @@ describe('elaborateTacticArg', () => {
     const result = elaborateTacticArg({ tag: 'Const', name: 'Succ' }, ctx, createDefinitionsMap());
     expect(result.tag).toBe('Const');
     expect((result as any).name).toBe('Succ');
+  });
+
+  test('inserts implicit holes for bare Const with namedArgMap', () => {
+    let defs = createDefinitionsMap();
+    const leqZeroType: TTKTerm = {
+      tag: 'Binder', binderKind: { tag: 'BPi' }, name: 'n',
+      domain: { tag: 'Const', name: 'Nat' },
+      body: {
+        tag: 'App',
+        fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Const', name: 'Zero' } },
+        arg: { tag: 'Var', index: 0 },
+      },
+    };
+    defs = addDefinition(defs, 'LeqZero', leqZeroType, undefined, new Map([['n', 0]]));
+
+    const result = elaborateTacticArg({ tag: 'Const', name: 'LeqZero' }, [], defs);
+    expect(result.tag).toBe('App');
+    expect((result as any).fn).toEqual({ tag: 'Const', name: 'LeqZero' });
+    expect((result as any).arg.tag).toBe('Hole');
   });
 
   test('elaborates App with context resolution', () => {
@@ -101,6 +121,39 @@ describe('elaborateTacticArg', () => {
     expect((result as any).arg.name).toBe('Zero');
     expect((result as any).fn.tag).toBe('App');
     expect((result as any).fn.arg.tag).toBe('Hole');
+  });
+
+  test('preserves user-defined implicit metadata for tactic applications', () => {
+    const compiled = compileTTFromText(`
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+congSucc : {n m : Nat} -> Equal n m -> Equal (Succ n) (Succ m)
+congSucc refl = refl
+`);
+
+    const term: TTerm = {
+      tag: 'App',
+      fn: { tag: 'Const', name: 'congSucc' },
+      arg: { tag: 'Const', name: 'IH' },
+    };
+    const ctx = [
+      { name: 'n', type: natType },
+      { name: 'IH', type: { tag: 'Hole', id: '_ih_type' } as TTKTerm },
+    ];
+
+    const result = elaborateTacticArg(term, ctx, compiled.definitions) as any;
+    expect(result.tag).toBe('App');
+    expect(result.arg).toEqual({ tag: 'Var', index: 0 });
+    expect(result.fn.tag).toBe('App');
+    expect(result.fn.arg.tag).toBe('Hole');
+    expect(result.fn.fn.tag).toBe('App');
+    expect(result.fn.fn.arg.tag).toBe('Hole');
+    expect(result.fn.fn.fn).toEqual({ tag: 'Const', name: 'congSucc' });
   });
 
   test('Hole passes through', () => {

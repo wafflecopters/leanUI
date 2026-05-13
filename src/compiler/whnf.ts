@@ -686,25 +686,36 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
           }
         }
       }
-      // δ-reduction: If fn is a Const with a Match definition, try ι-reduction
-      // Check deltaDepth to limit unfolding
-      if (fn.tag === 'Const' && ctx?.definitions && deltaDepth > 0) {
-        const def = getTermDefinition(ctx.definitions, fn.name);
-        if (def?.value?.tag === 'Match') {
-          // We have `f a` where f is defined by pattern matching
-          // Try to reduce Match by applying the argument
-          const matchTerm = def.value;
-          return whnf({
-            tag: 'App',
-            fn: matchTerm,
-            arg: term.arg
-          }, { ...nextCtx, deltaDepth: deltaDepth - 1 });
-        }
-      }
       // Build the full application and check if head is a Match term
       // This handles nested applications like App(App(Match, arg1), arg2)
       const fullApp: TTKTerm = { tag: 'App', fn, arg: term.arg };
       const { head, args } = collectAppSpine(fullApp);
+
+      // δ-reduction for match-defined functions should only happen once the
+      // application has enough arguments to fire a clause. Under-applied
+      // functions must stay as applications of the original constant; turning
+      // `plus m` into `(match _ ...) m` corrupts later inference and
+      // unification.
+      if (head.tag === 'Const' && ctx?.definitions && deltaDepth > 0) {
+        const def = getTermDefinition(ctx.definitions, head.name);
+        if (def?.value?.tag === 'Match') {
+          const requiredArgs = def.value.clauses[0]?.patterns.length ?? 0;
+          if (args.length >= requiredArgs) {
+            const allCatchAll = def.value.clauses.every(clause =>
+              clause.patterns.every(pattern => pattern.tag === 'PVar' || pattern.tag === 'PWild'),
+            );
+            const scrutinee = whnf(args[0], nextCtx);
+            const scrutineeKnown = scrutinee.tag !== 'Hole' && scrutinee.tag !== 'Meta' && scrutinee.tag !== 'Var';
+            if (allCatchAll || scrutineeKnown) {
+              const unfolded = args.reduce<TTKTerm>(
+                (fnTerm, argTerm) => ({ tag: 'App', fn: fnTerm, arg: argTerm }),
+                def.value,
+              );
+              return whnf(unfolded, { ...nextCtx, deltaDepth: deltaDepth - 1 });
+            }
+          }
+        }
+      }
 
       if (head.tag === 'Match') {
         // Try to match against clauses with all accumulated arguments
@@ -767,6 +778,9 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
       // Check deltaDepth to limit unfolding and prevent exponential expansion
       if (ctx?.definitions && deltaDepth > 0) {
         const def = getTermDefinition(ctx.definitions, term.name);
+        if (def?.value?.tag === 'Match') {
+          return term;
+        }
         if (def?.value) {
           return whnf(def.value, { ...nextCtx, deltaDepth: deltaDepth - 1 });
         }
@@ -848,6 +862,62 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
     default:
       return term;
   }
+}
+
+/**
+ * Unfold only the outermost named definition once, without recursively
+ * normalizing the unfolded result.
+ *
+ * This is useful for tactics like `erw` that need to expose hidden subterms
+ * under aliases such as `sub a b := add a (neg b)` without over-reducing the
+ * result all the way past the occurrence they are trying to rewrite.
+ */
+export function unfoldHeadOnce(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
+  const definitions = ctx?.definitions;
+  const deltaDepth = ctx?.deltaDepth ?? DEFAULT_DELTA_DEPTH;
+  if (!definitions || deltaDepth <= 0) return term;
+
+  if (term.tag === 'Const') {
+    const def = getTermDefinition(definitions, term.name);
+    return def?.value ?? term;
+  }
+
+  if (term.tag !== 'App') return term;
+
+  const { head, args } = collectAppSpine(term);
+  if (head.tag !== 'Const') return term;
+
+  const def = getTermDefinition(definitions, head.name);
+  if (!def?.value) return term;
+
+  if (def.value.tag !== 'Match') {
+    let expanded: TTKTerm = def.value;
+    for (const arg of args) {
+      expanded = { tag: 'App', fn: expanded, arg };
+    }
+    return expanded;
+  }
+
+  for (const clause of def.value.clauses) {
+    if (clause.patterns.length > args.length) continue;
+
+    const allPVar = clause.patterns.every(p => p.tag === 'PVar' || p.tag === 'PWild');
+    const candidateArgs = allPVar
+      ? args.slice(0, clause.patterns.length)
+      : args.slice(0, clause.patterns.length).map(arg =>
+          whnf(arg, { ...ctx, deltaDepth: deltaDepth - 1 })
+        );
+    const bindings = matchPatterns(clause.patterns, candidateArgs, ctx);
+    if (bindings === null) continue;
+
+    let result = substPatternBindings(bindings, clause.rhs);
+    for (let i = clause.patterns.length; i < args.length; i++) {
+      result = { tag: 'App', fn: result, arg: args[i] };
+    }
+    return result;
+  }
+
+  return term;
 }
 
 /**

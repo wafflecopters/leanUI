@@ -12,6 +12,7 @@ import { TTKTerm, TTKContext } from '../compiler/kernel';
 import { MetaVar, Constraint, DefinitionsMap, TCEnv } from '../compiler/term';
 import { checkType, inferType } from '../compiler/checker';
 import { solveConstraints } from '../compiler/meta';
+import { prepareKernelGoalType } from '../compiler/prepare-kernel-goal-type';
 
 /**
  * TacticEngine: Immutable proof state
@@ -29,6 +30,9 @@ export class TacticEngine {
 
     /** Global definitions (inductive types, constants) */
     public readonly definitions: DefinitionsMap,
+
+    /** Name of the declaration currently being constructed, when available. */
+    public readonly recursiveTermName: string | undefined,
 
     /** Ordered list of goal IDs (unsolved metas) */
     public readonly goals: string[],
@@ -149,6 +153,7 @@ export class TacticEngine {
       updates.metaVars ?? this.metaVars,
       updates.constraints ?? this.constraints,
       this.definitions,
+      this.recursiveTermName,
       updates.goals ?? this.goals,
       updates.focusIndex ?? this.focusIndex
     );
@@ -215,11 +220,13 @@ export function createInitialEngine(
   goalType: TTKTerm,
   context: TTKContext,
   definitions: DefinitionsMap,
-  goalId: string = '?goal0'
+  goalId: string = '?goal0',
+  recursiveTermName?: string,
 ): TacticEngine {
+  const preparedGoalType = prepareKernelGoalType(goalType, context, definitions);
   const initialGoal: MetaVar = {
     ctx: context,
-    type: goalType,
+    type: preparedGoalType,
     solution: undefined
   };
 
@@ -228,6 +235,7 @@ export function createInitialEngine(
     new Map([[goalId, initialGoal]]),
     [],
     definitions,
+    recursiveTermName,
     [goalId],
     0
   );

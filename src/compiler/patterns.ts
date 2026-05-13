@@ -10,11 +10,11 @@
 import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
 import { arraySeg, fieldSeg, IndexPath, serializeIndexPath } from '../types/source-position';
 import { countKernelPatternBindings, countKernelPatternsBindings } from './pattern-binders';
-import { countPiBinders, DefinitionsMap, extractAppSpine, extractPiSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
+import { countPiBinders, DefinitionsMap, extractAppSpine, extractPiSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition, updateTTKContextInTCEnv } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq, whnf, whnfToPi } from './whnf';
-import { checkType } from './checker';
+import { checkType, inferType } from './checker';
 
 // ============================================================================
 // Logging
@@ -782,23 +782,237 @@ function extractBinderSubstitutions(
  * Level 0 = first binder (outermost), like elabStack uses.
  * De Bruijn 0 = most recent binder (innermost).
  *
- * Conversion: level = contextLength - 1 - deBruijnIndex
+ * `baseContextLength` is the number of surrounding binders already in scope at
+ * the root of `term`. As we recurse under binders and nested match clauses, we
+ * must account for those extra local binders too; otherwise nested RHS terms
+ * can silently retarget outer variables.
+ *
+ * Conversion at a node with `localBinderDepth` extra binders:
+ *   level = (baseContextLength + localBinderDepth) - 1 - deBruijnIndex
  */
-function deBruijnToLevels(term: TTKTerm, contextLength: number): TTKTerm {
-  return transformVarsInTerm(term, (index) => {
-    return mkVar(contextLength - 1 - index);
+function deBruijnToLevels(term: TTKTerm, baseContextLength: number): TTKTerm {
+  return transformVarsInTerm(term, (index, context) => {
+    return mkVar(baseContextLength + context.length - 1 - index);
   });
 }
 
 /**
  * Convert levels back to de Bruijn indices.
  *
- * Conversion: deBruijnIndex = contextLength - 1 - level
+ * Conversion at a node with `localBinderDepth` extra binders:
+ *   deBruijnIndex = (baseContextLength + localBinderDepth) - 1 - level
  */
-function levelsToDeBruijn(term: TTKTerm, contextLength: number): TTKTerm {
-  return transformVarsInTerm(term, (level) => {
-    return mkVar(contextLength - 1 - level);
+function levelsToDeBruijn(term: TTKTerm, baseContextLength: number): TTKTerm {
+  return transformVarsInTerm(term, (level, context) => {
+    return mkVar(baseContextLength + context.length - 1 - level);
   });
+}
+
+function liftContextEntryTypeToFullContext(context: TTKContext, arrayIndex: number): TTKTerm {
+  const entry = context[arrayIndex];
+  const shiftAmount = context.length - arrayIndex;
+  return shiftAmount > 0 ? shiftTerm(entry.type, shiftAmount, 0) : entry.type;
+}
+
+function liftContextEntryValueToFullContext(context: TTKContext, arrayIndex: number): TTKTerm | undefined {
+  const entry = context[arrayIndex];
+  if (entry.value === undefined) return undefined;
+  const shiftAmount = context.length - arrayIndex;
+  return shiftAmount > 0 ? shiftTerm(entry.value, shiftAmount, 0) : entry.value;
+}
+
+function remapFullContextTerm(term: TTKTerm, oldToNewDeBruijn: Map<number, number>): TTKTerm {
+  return transformVarsInTerm(term, (index, localContext) => {
+    if (index < localContext.length) {
+      return mkVar(index);
+    }
+    const freeIndex = index - localContext.length;
+    const replacement = oldToNewDeBruijn.get(freeIndex);
+    return mkVar(localContext.length + (replacement ?? freeIndex));
+  });
+}
+
+function dependsOnYoungestBinders(term: TTKTerm, binderCount: number): boolean {
+  let dependent = false;
+  transformVarsInTerm(term, (index, localContext) => {
+    if (index >= localContext.length) {
+      const freeIndex = index - localContext.length;
+      if (freeIndex < binderCount) {
+        dependent = true;
+      }
+    }
+    return mkVar(index);
+  });
+  return dependent;
+}
+
+type FullContextEntry = {
+  name: string;
+  type: TTKTerm;
+  value?: TTKTerm;
+};
+
+export type AppliedSubstitution = {
+  varIndex: number;
+  value: TTKTerm;
+};
+
+function lowerFullContextTermToPrefix(
+  term: TTKTerm,
+  contextLength: number,
+  arrayIndex: number,
+): TTKTerm {
+  const removedSuffixSize = contextLength - arrayIndex;
+  return removedSuffixSize > 0 ? shiftTerm(term, -removedSuffixSize, 0) : term;
+}
+
+function remapContextRelativeTerm(
+  term: TTKTerm,
+  termContextLength: number,
+  fullContextLength: number,
+  oldToNewDeBruijn: Map<number, number>,
+): TTKTerm {
+  const lifted = fullContextLength > termContextLength
+    ? shiftTerm(term, fullContextLength - termContextLength, 0)
+    : term;
+  const remapped = remapFullContextTerm(lifted, oldToNewDeBruijn);
+  return fullContextLength > termContextLength
+    ? shiftTerm(remapped, -(fullContextLength - termContextLength), 0)
+    : remapped;
+}
+
+export function recomputeRefinedClauseContext(
+  originalContext: TTKContext,
+  substitutions: AppliedSubstitution[],
+  patternBinderCount: number,
+): {
+  context: TTKContext;
+  oldToNewDeBruijn: Map<number, number>;
+} {
+  if (originalContext.length === 0) {
+    return { context: originalContext, oldToNewDeBruijn: new Map() };
+  }
+
+  let currentLength = originalContext.length;
+  let remainingPatternBinderCount = Math.min(patternBinderCount, currentLength);
+  let currentEntries: FullContextEntry[] = originalContext.map((entry, arrayIndex) => ({
+    name: entry.name,
+    type: liftContextEntryTypeToFullContext(originalContext, arrayIndex),
+    value: liftContextEntryValueToFullContext(originalContext, arrayIndex),
+  }));
+
+  for (const { varIndex, value } of substitutions) {
+    if (currentLength === 0) break;
+    const cutoff = currentLength - varIndex - 1;
+    if (cutoff < 0 || cutoff >= currentLength) continue;
+
+    const removedWasPatternBinder = cutoff >= currentLength - remainingPatternBinderCount;
+    if (removedWasPatternBinder && remainingPatternBinderCount > 0) {
+      remainingPatternBinderCount--;
+    }
+
+    const adjustedValue = transformVarsInTerm(value, (index) => {
+      if (index > varIndex) {
+        return mkVar(index - 1);
+      }
+      return mkVar(index);
+    });
+
+    const nextEntries: FullContextEntry[] = [];
+    for (let i = 0; i < currentEntries.length; i++) {
+      if (i === cutoff) continue;
+      const entry = currentEntries[i];
+      nextEntries.push({
+        ...entry,
+        type: subst(varIndex, adjustedValue, entry.type),
+        value: entry.value !== undefined ? subst(varIndex, adjustedValue, entry.value) : undefined,
+      });
+    }
+    currentEntries = nextEntries;
+    currentLength--;
+  }
+
+  if (remainingPatternBinderCount <= 0 || remainingPatternBinderCount >= currentEntries.length) {
+    const context = currentEntries.map((entry, arrayIndex) => ({
+      name: entry.name,
+      type: lowerFullContextTermToPrefix(entry.type, currentEntries.length, arrayIndex),
+      value: entry.value !== undefined
+        ? lowerFullContextTermToPrefix(entry.value, currentEntries.length, arrayIndex)
+        : undefined,
+    }));
+    return { context, oldToNewDeBruijn: new Map() };
+  }
+
+  const splitIndex = currentEntries.length - remainingPatternBinderCount;
+  const ambientEntries = currentEntries.slice(0, splitIndex).map((entry, arrayIndex) => ({ entry, arrayIndex }));
+  const patternEntries = currentEntries.slice(splitIndex).map((entry, offset) => ({ entry, arrayIndex: splitIndex + offset }));
+
+  const ambientBefore = new Set<number>();
+  for (const pattern of patternEntries) {
+    const patternRefs = new Set<number>();
+    transformVarsInTerm(pattern.entry.type, (index, localContext) => {
+      if (index >= localContext.length) {
+        patternRefs.add(index - localContext.length);
+      }
+      return mkVar(index);
+    });
+    if (pattern.entry.value !== undefined) {
+      transformVarsInTerm(pattern.entry.value, (index, localContext) => {
+        if (index >= localContext.length) {
+          patternRefs.add(index - localContext.length);
+        }
+        return mkVar(index);
+      });
+    }
+    for (const ambient of ambientEntries) {
+      const ambientDeBruijn = currentEntries.length - 1 - ambient.arrayIndex;
+      if (patternRefs.has(ambientDeBruijn)) {
+        ambientBefore.add(ambient.arrayIndex);
+      }
+    }
+  }
+
+  const keptBeforeEntries = ambientEntries.filter(ambient => ambientBefore.has(ambient.arrayIndex));
+  const keptAfterEntries = ambientEntries.filter(ambient => !ambientBefore.has(ambient.arrayIndex));
+
+  if (keptBeforeEntries.length === ambientEntries.length) {
+    const context = currentEntries.map((entry, arrayIndex) => ({
+      name: entry.name,
+      type: lowerFullContextTermToPrefix(entry.type, currentEntries.length, arrayIndex),
+      value: entry.value !== undefined
+        ? lowerFullContextTermToPrefix(entry.value, currentEntries.length, arrayIndex)
+        : undefined,
+    }));
+    return { context, oldToNewDeBruijn: new Map() };
+  }
+
+  const reorderedEntries = [...keptBeforeEntries, ...patternEntries, ...keptAfterEntries];
+  const oldToNewDeBruijn = new Map<number, number>();
+  for (let newArrayIndex = 0; newArrayIndex < reorderedEntries.length; newArrayIndex++) {
+    const oldArrayIndex = reorderedEntries[newArrayIndex].arrayIndex;
+    oldToNewDeBruijn.set(
+      currentEntries.length - 1 - oldArrayIndex,
+      currentEntries.length - 1 - newArrayIndex,
+    );
+  }
+
+  const reorderedContext: TTKContext = [];
+  for (let newArrayIndex = 0; newArrayIndex < reorderedEntries.length; newArrayIndex++) {
+    const { entry, arrayIndex: oldArrayIndex } = reorderedEntries[newArrayIndex];
+    const remappedFullType = remapFullContextTerm(entry.type, oldToNewDeBruijn);
+    const remappedFullValue = entry.value !== undefined
+      ? remapFullContextTerm(entry.value, oldToNewDeBruijn)
+      : undefined;
+    reorderedContext.push({
+      name: entry.name,
+      type: lowerFullContextTermToPrefix(remappedFullType, currentEntries.length, newArrayIndex),
+      value: remappedFullValue !== undefined
+        ? lowerFullContextTermToPrefix(remappedFullValue, currentEntries.length, newArrayIndex)
+        : undefined,
+    });
+  }
+
+  return { context: reorderedContext, oldToNewDeBruijn };
 }
 
 // ============================================================================
@@ -838,6 +1052,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   // Function parameters are at indices >= numPatternLocalBindings. These should be rigid.
   // We use nextCheckTypeEntry.ctxLength because that's the context BEFORE wildcards were added.
   const numPatternLocalBindings = workEnv.context.length - nextCheckTypeEntry.ctxLength
+  const originalContext = workEnv.context;
 
   const unifyResult = unifyTerms(unifyLeft, unifyRight, {
     flexibleVars: true,
@@ -970,7 +1185,9 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
 
   checkStack.push({ type: subst(shiftAmount, adjustedElabTerm, adjustedBody), ctxLength: updatedEnv.context.length })
 
-  for (const { varIndex, value } of enumerateAppliedSubstitutions(unifyResult.substitutions)) {
+  const appliedSubstitutions = [...enumerateAppliedSubstitutions(unifyResult.substitutions)];
+
+  for (const { varIndex, value } of appliedSubstitutions) {
     logInfo(() => `    Apply: ${updatedEnv.prettyPrint(mkVar(varIndex))} -> ${updatedEnv.prettyPrint(value)}`)
 
     // Check if this substitution binds a function parameter to a concrete value
@@ -1018,7 +1235,42 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
   // - Self-unifiability is checked before constructor injectivity
 
   // Solve metas and constraints
-  return updatedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+  let solvedEnv = updatedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+  if (numPatternLocalBindings > 0 && appliedSubstitutions.length > 0) {
+    const reordered = recomputeRefinedClauseContext(originalContext, appliedSubstitutions, numPatternLocalBindings);
+    if (reordered.oldToNewDeBruijn.size > 0) {
+      const fullContextLength = solvedEnv.context.length;
+      solvedEnv = updateTTKContextInTCEnv(solvedEnv, () => reordered.context);
+      for (let i = 0; i < checkStack.length; i++) {
+        checkStack[i] = {
+          ...checkStack[i],
+          type: remapContextRelativeTerm(
+            checkStack[i].type,
+            checkStack[i].ctxLength,
+            fullContextLength,
+            reordered.oldToNewDeBruijn,
+          ),
+        };
+      }
+      for (let i = 0; i < elabStack.length; i++) {
+        elabStack[i] = remapFullContextTerm(elabStack[i], reordered.oldToNewDeBruijn);
+      }
+      rhsContainer.rhsInLevels = transformVarsInTerm(rhsContainer.rhsInLevels, (level, localContext) => {
+        if (level >= fullContextLength) {
+          return mkVar(level);
+        }
+        const oldDeBruijn = fullContextLength - 1 - level;
+        const mapped = reordered.oldToNewDeBruijn.get(oldDeBruijn);
+        if (mapped === undefined) {
+          return mkVar(level);
+        }
+        return mkVar(fullContextLength - 1 - mapped);
+      });
+    }
+  }
+
+  return solvedEnv;
 }
 
 /**
@@ -1347,6 +1599,7 @@ export function checkMatchClause(
   type: TTKTerm,
   namedArgMap?: NamedArgMap,
   totalArity?: number,
+  options?: { rhsAlreadyElaborated?: boolean },
 ): TCEnv<TTKClause> {
 
   // Get the original RHS and patterns
@@ -1366,8 +1619,12 @@ export function checkMatchClause(
   // 2. Constructor-level: missing named constructor arguments (recursive)
   const paddedPatterns = padPatternsForMissingNamedArgs(originalPatterns, namedArgMap, totalArity, env.definitions, padCtx);
 
-  // The RHS was parsed with de Bruijn indices based on the ORIGINAL patterns.
-  // When we pad patterns with wildcards for named params, we need to adjust RHS indices.
+  // The RHS was elaborated against the ORIGINAL patterns. When we pad patterns
+  // with wildcards for named or implicit params, we need to adjust RHS indices.
+  //
+  // This applies both to parsed clauses and to tactic-produced kernel clauses:
+  // the latter may also reference an OUTER ambient context, which is accounted
+  // for separately in `rhsBaseContextLength`.
   //
   // Two types of padding can occur:
   // 1. TOP-LEVEL: wildcards prepended for missing named function parameters
@@ -1388,16 +1645,8 @@ export function checkMatchClause(
   //
   // We compute the shift for each pattern position as the sum of wildcards added
   // to all LATER patterns, then apply that shift to the RHS variables.
-
-  // Compute wildcards added to each pattern
   const wildcardsPerPattern: number[] = originalPatterns.map(p => countWildcardsAddedToPattern(p, env.definitions));
-
-  // Compute var index mappings for patterns (handles namedArgs reordering and nested wildcards)
   const indexMappingsPerPattern: (number[] | undefined)[] = originalPatterns.map(p => computePatternVarIndexMapping(p, env.definitions));
-
-  // Compute the shift for each original de Bruijn index.
-  // Variables in pattern i need to shift by the sum of wildcards in patterns i+1, i+2, ...
-  // First, compute cumulative sums from right to left
   const shiftPerPattern: number[] = new Array(originalPatterns.length).fill(0);
   let cumulativeWildcards = 0;
   for (let i = originalPatterns.length - 1; i >= 0; i--) {
@@ -1405,13 +1654,8 @@ export function checkMatchClause(
     cumulativeWildcards += wildcardsPerPattern[i];
   }
 
-  // Map de Bruijn indices to pattern positions
-  // First compute how many vars each pattern binds
   const varsPerPattern: number[] = originalPatterns.map(countKernelPatternBindings);
 
-  // Build a lookup: for de Bruijn index k, find which pattern it belongs to and get shift
-  // De Bruijn indices count from rightmost binding (index 0 = last pattern's last var)
-  // Traverse patterns right to left, accumulating index ranges
   if (loggingEnabled) {
     console.log('\n[RHS SHIFT] originalPatterns:', originalPatterns.length);
     console.log('[RHS SHIFT] varsPerPattern:', varsPerPattern);
@@ -1421,62 +1665,52 @@ export function checkMatchClause(
     console.log('[RHS SHIFT] originalRhs:', prettyPrintTTK(originalRhs));
     console.log('[RHS SHIFT] originalRhs JSON:', JSON.stringify(originalRhs, null, 2).slice(0, 2000));
   }
+
   const shiftedRhs = transformVarsInTerm(originalRhs, (index, context) => {
-    // Account for binder depth: variables inside lambdas/lets have indices
-    // offset by the number of enclosing binders. We only remap pattern variables,
-    // not locally-bound variables (lambda params, let bindings, etc.).
     const binderDepth = context.length;
     if (index < binderDepth) {
-      // Locally-bound variable (e.g., lambda parameter) — don't remap
       return mkVar(index);
     }
 
-    // Adjust index to refer to pattern variables (subtract binder depth)
     const patternIndex = index - binderDepth;
-
-    // Find which pattern this index belongs to
     let accum = 0;
     for (let i = originalPatterns.length - 1; i >= 0; i--) {
       if (patternIndex < accum + varsPerPattern[i]) {
-        // Index belongs to pattern i
-        const localIndex = patternIndex - accum;  // Index within this pattern (0 = rightmost var in pattern)
+        const localIndex = patternIndex - accum;
         const indexMapping = indexMappingsPerPattern[i];
 
         let newPatternIndex: number;
         if (indexMapping && localIndex < indexMapping.length) {
-          // Apply index mapping for namedArgs reordering and nested wildcards
-          // The mapping converts local indices, then we add accum and shift
           const newLocalIndex = indexMapping[localIndex];
           newPatternIndex = accum + newLocalIndex + shiftPerPattern[i];
           if (loggingEnabled) {
             console.log(`[RHS SHIFT] index ${index} (binderDepth=${binderDepth}, patIdx=${patternIndex}) -> pattern ${i}, local ${localIndex} -> ${newLocalIndex}, accum ${accum}, shift ${shiftPerPattern[i]} -> ${newPatternIndex + binderDepth}`);
           }
         } else {
-          // No permutation needed, just apply the shift
           newPatternIndex = patternIndex + shiftPerPattern[i];
           if (loggingEnabled) {
             console.log(`[RHS SHIFT] index ${index} (binderDepth=${binderDepth}, patIdx=${patternIndex}) -> pattern ${i}, shift ${shiftPerPattern[i]} -> ${newPatternIndex + binderDepth}`);
           }
         }
 
-        // Add binder depth back to get the actual de Bruijn index
         return mkVar(newPatternIndex + binderDepth);
       }
       accum += varsPerPattern[i];
     }
-    // Index is beyond our patterns (shouldn't happen, but return as-is)
     if (loggingEnabled) {
-      console.log(`[RHS SHIFT] index ${index} -> beyond patterns, no shift`);
+      console.log(`[RHS SHIFT] index ${index} -> beyond patterns, shift outer ref by ${cumulativeWildcards} -> ${index + cumulativeWildcards}`);
     }
-    return mkVar(index);
+    return mkVar(index + cumulativeWildcards);
   });
 
   const paddedContextLength = countKernelPatternsBindings(paddedPatterns);
-  const rhsInLevels = deBruijnToLevels(shiftedRhs, paddedContextLength);
+  const rhsBaseContextLength = (options?.rhsAlreadyElaborated ? env.context.length : 0) + paddedContextLength;
+  const rhsInLevels = deBruijnToLevels(shiftedRhs, rhsBaseContextLength);
 
   if (loggingEnabled) {
     console.log('[RHS SHIFT] shiftedRhs:', prettyPrintTTK(shiftedRhs));
     console.log('[RHS SHIFT] paddedContextLength:', paddedContextLength);
+    console.log('[RHS SHIFT] rhsBaseContextLength:', rhsBaseContextLength);
     console.log('[RHS SHIFT] rhsInLevels:', prettyPrintTTK(rhsInLevels));
   }
 
@@ -1507,7 +1741,7 @@ export function checkMatchClause(
 
   // Convert the transformed RHS back to de Bruijn indices using the final context length
   const finalContextLength = result.context.length;
-  const transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
+  let transformedRhs = levelsToDeBruijn(transformedRhsInLevels, finalContextLength);
 
   if (loggingEnabled) {
     console.log('[RHS SHIFT] finalContextLength:', finalContextLength);
@@ -1522,11 +1756,68 @@ export function checkMatchClause(
   const elabArgs = zonkedElabStack.map(term => levelsToDeBruijn(term, finalContextLength));
 
   // Type check the transformed RHS
-  const baseEnv = result
+  const zonkedClauseContext = result.context.map(entry => ({
+    ...entry,
+    type: result.zonkTerm(entry.type),
+    value: entry.value ? result.zonkTerm(entry.value) : undefined,
+  }));
+  let resultWithZonkedContext = updateTTKContextInTCEnv(result, () => zonkedClauseContext);
+  let normalizedReturnType = returnType;
+
+  const solvedPaddingEntries = Array.from(holeSolutions.entries())
+    .map(([holeId, solution]) => {
+      const match = /^(_pad\d+)_\d+$/.exec(holeId);
+      if (!match) return null;
+      return {
+        holeName: match[1],
+        solution: resultWithZonkedContext.zonkTerm(solution),
+      };
+    })
+    .filter((entry): entry is { holeName: string; solution: TTKTerm } => entry !== null)
+    .sort((a, b) => {
+      const indexA = resultWithZonkedContext.context.findIndex(entry => entry.name === a.holeName);
+      const indexB = resultWithZonkedContext.context.findIndex(entry => entry.name === b.holeName);
+      return indexB - indexA;
+    });
+
+  if (loggingEnabled) {
+    console.log('[RHS CHECK] holeSolutions:', Array.from(holeSolutions.entries()).map(([holeId, solution]) => ({
+      holeId,
+      solution: prettyPrintTTK(solution),
+    })));
+    console.log('[RHS CHECK] solvedPaddingEntries:', solvedPaddingEntries.map(({ holeName, solution }) => ({
+      holeName,
+      solution: prettyPrintTTK(solution),
+      ctxIndex: resultWithZonkedContext.context.findIndex(entry => entry.name === holeName),
+    })));
+  }
+
+  for (const { holeName, solution } of solvedPaddingEntries) {
+    const ctxIndex = resultWithZonkedContext.context.findIndex(entry => entry.name === holeName);
+    if (ctxIndex < 0) continue;
+    const varIndex = resultWithZonkedContext.context.length - 1 - ctxIndex;
+    if (loggingEnabled) {
+      console.log('[RHS CHECK] applying solved padding substitution:', {
+        holeName,
+        ctxIndex,
+        varIndex,
+        solution: prettyPrintTTK(solution),
+      });
+      console.log('[RHS CHECK] context before substitution:', resultWithZonkedContext.context.map((entry, i) => `${i}:${entry.name} : ${prettyPrintTTK(entry.type)}`));
+    }
+    transformedRhs = subst(varIndex, solution, transformedRhs);
+    normalizedReturnType = subst(varIndex, solution, normalizedReturnType);
+    resultWithZonkedContext = resultWithZonkedContext.applySubstitutionToContextMetasAndConstraints(varIndex, solution);
+    if (loggingEnabled) {
+      console.log('[RHS CHECK] context after substitution:', resultWithZonkedContext.context.map((entry, i) => `${i}:${entry.name} : ${prettyPrintTTK(entry.type)}`));
+    }
+  }
+
+  const baseEnv = resultWithZonkedContext
     .atIndexPathAndValue([...paddedEnv.indexPath, ClausePartIndex.Rhs], transformedRhs)
     .withCheckingMode('check');
   // Register any remaining Holes in returnType as Metas (in case zonking didn't resolve them all)
-  const checkEnv = registerHolesInTermAsMetas(baseEnv, returnType);
+  const checkEnv = registerHolesInTermAsMetas(baseEnv, normalizedReturnType);
 
   if (loggingEnabled) {
     console.log('[RHS CHECK] About to type-check RHS:', prettyPrintTTK(transformedRhs));
@@ -1534,12 +1825,27 @@ export function checkMatchClause(
     console.log('[RHS CHECK] Context types (stored in bindings):');
     checkEnv.context.forEach((s, i) => {
       console.log(`  ${i}:${s.name} : ${prettyPrintTTK(s.type)}`);
+      console.log(`    raw=${JSON.stringify(s.type)}`);
     });
-    console.log('[RHS CHECK] Expected type:', checkEnv.prettyPrint(returnType));
+    console.log('[RHS CHECK] Expected type:', checkEnv.prettyPrint(normalizedReturnType));
+    if (transformedRhs.tag === 'App') {
+      try {
+        const rhsInferred = inferType(checkEnv.withValue(transformedRhs));
+        console.log('[RHS CHECK] Whole RHS inferred type:', rhsInferred.prettyPrint(rhsInferred.value));
+      } catch (error) {
+        console.log('[RHS CHECK] Whole RHS infer failed:', error instanceof Error ? error.message : String(error), error);
+      }
+      try {
+        const argInferred = inferType(checkEnv.withValue(transformedRhs.arg));
+        console.log('[RHS CHECK] RHS argument inferred type:', argInferred.prettyPrint(argInferred.value));
+      } catch (error) {
+        console.log('[RHS CHECK] RHS argument infer failed:', error instanceof Error ? error.message : String(error), error);
+      }
+    }
   }
 
   // Type check the transformed RHS
-  const checkedEnv = checkType(checkEnv, returnType);
+  const checkedEnv = checkType(checkEnv, normalizedReturnType);
 
   // Solve any constraints from RHS checking to populate meta solutions
   let solvedEnv: typeof checkedEnv;

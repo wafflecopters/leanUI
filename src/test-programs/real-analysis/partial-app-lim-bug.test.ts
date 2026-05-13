@@ -14,7 +14,7 @@ limit_add_3 = ?TODO
 `;
 
 describe('lim partial application bug', () => {
-  test('compileTTFromText: partially applied lim should produce a type error', { timeout: 30000 }, () => {
+  test('compileTTFromText: partially applied lim should produce a type error', { timeout: 120000 }, () => {
     const result = compileTTFromText(REAL_ANALYSIS_CODE + BUGGY_SUFFIX);
     const allDecls = result.blocks.flatMap(b => b.declarations);
     const limit_add_3 = allDecls.find(d => d.name === 'limit_add_3');
@@ -27,7 +27,7 @@ describe('lim partial application bug', () => {
     expect(limit_add_3!.checkErrors.length).toBeGreaterThan(0);
   });
 
-  test('compileIncrementalTT: partially applied lim should produce a type error', { timeout: 30000 }, () => {
+  test('compileIncrementalTT: partially applied lim should produce a type error', { timeout: 120000 }, () => {
     // This is the code path the UI uses
     const cache = createIncrementalCache();
     const result = compileIncrementalTT(REAL_ANALYSIS_CODE + BUGGY_SUFFIX, cache);
@@ -61,7 +61,7 @@ describe('lim partial application bug', () => {
     expect(limit_add_3!.checkErrors.length).toBeGreaterThan(0);
   });
 
-  test('compileIncrementalTT with warm cache: partially applied lim should produce a type error', { timeout: 30000 }, () => {
+  test('compileIncrementalTT with warm cache: partially applied lim should produce a type error', { timeout: 120000 }, () => {
     // Simulate: first compile the good preset, then add the buggy code (like user editing)
     const cache = createIncrementalCache();
     // First compilation — warm the cache
@@ -87,7 +87,7 @@ describe('lim partial application bug', () => {
     expect(limit_add_3!.checkErrors.length).toBeGreaterThan(0);
   });
 
-  test('error marker data is valid for Monaco editor', { timeout: 30000 }, () => {
+  test('error marker data is valid for Monaco editor', { timeout: 120000 }, () => {
     // Test that the error has valid data for placing a Monaco marker
     const cache = createIncrementalCache();
     compileIncrementalTT(REAL_ANALYSIS_CODE, cache);

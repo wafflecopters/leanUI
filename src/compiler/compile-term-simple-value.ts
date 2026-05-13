@@ -2,6 +2,7 @@ import type { ElabDeclaration } from './compile-types';
 import { elabToKernelWithMap, type NamedArgMap } from './elab';
 import type { TTKTerm } from './kernel';
 import { checkType } from './checker';
+import { prepareKernelGoalType } from './prepare-kernel-goal-type';
 import type { TacticInfoTree } from '../tactics/info-tree';
 import type { TTacticBlock } from './surface';
 import { createNamedArgInfoLookup, setDefinitionValueInTCEnv, type DefinitionsMap, type TCEnv, TCEnvError, type TermDefinition } from './term';
@@ -19,6 +20,7 @@ export type ElaborateTacticBlockFn = (
   elabMap: ElabMap,
   sourceMap: SourceMap,
   context: Array<{ name: string; type: TTKTerm }>,
+  recursiveTermName?: string,
 ) => TacticBlockElaborationResult;
 
 function containsSelfReference(term: TTKTerm, name: string): boolean {
@@ -35,6 +37,34 @@ function containsSelfReference(term: TTKTerm, name: string): boolean {
       return containsSelfReference(term.term, name) || containsSelfReference(term.type, name);
     case 'Match':
       return term.clauses.some(clause => containsSelfReference(clause.rhs, name));
+    default:
+      return false;
+  }
+}
+
+function containsUnsolvedMeta(term: TTKTerm, metaVars: Map<string, { solution?: TTKTerm }>): boolean {
+  switch (term.tag) {
+    case 'Meta': {
+      const meta = metaVars.get(term.id);
+      if (meta) return !meta.solution;
+      // Implicit-argument placeholders are inserted during elaboration and are
+      // not always tracked in metaVars. They behave like omitted implicit args,
+      // not like trusted proof obligations for the final kernel term.
+      return !term.id.startsWith('_implicit');
+    }
+    case 'App':
+      return containsUnsolvedMeta(term.fn, metaVars) || containsUnsolvedMeta(term.arg, metaVars);
+    case 'Binder':
+      return containsUnsolvedMeta(term.domain, metaVars) ||
+        containsUnsolvedMeta(term.body, metaVars) ||
+        (term.binderKind.tag === 'BLet' && containsUnsolvedMeta(term.binderKind.defVal, metaVars));
+    case 'Sort':
+      return containsUnsolvedMeta(term.level, metaVars);
+    case 'Annot':
+      return containsUnsolvedMeta(term.term, metaVars) || containsUnsolvedMeta(term.type, metaVars);
+    case 'Match':
+      return containsUnsolvedMeta(term.scrutinee, metaVars) ||
+        term.clauses.some(clause => containsUnsolvedMeta(clause.rhs, metaVars));
     default:
       return false;
   }
@@ -57,8 +87,17 @@ export function checkSimpleTermValue(
 
   let kernelValue: TTKTerm;
   let tacticInfoTree: TacticInfoTree | undefined;
+  const preparedKernelType = prepareKernelGoalType(
+    zonkedKernelType,
+    termEnv.context,
+    termEnv.definitions,
+  );
   if (decl.surfaceValue.tag === 'TacticBlock') {
     try {
+      // Let the tactic engine prepare the goal type exactly once when it
+      // creates the initial proof state. Passing a pre-prepared theorem type
+      // here would double-prepare dependent Pi bodies and skew de Bruijn
+      // references during the intro/cases pipeline.
       const tacticResult = elaborateTacticBlock(
         decl.surfaceValue,
         zonkedKernelType,
@@ -66,6 +105,7 @@ export function checkSimpleTermValue(
         decl.elabMap ?? new Map(),
         decl.sourceMap ?? new Map(),
         [],
+        termName,
       );
       kernelValue = tacticResult.term;
       tacticInfoTree = tacticResult.infoTree;
@@ -87,20 +127,9 @@ export function checkSimpleTermValue(
     );
   }
 
-  if (decl.surfaceValue.tag === 'TacticBlock') {
-    const resultEnv = setDefinitionValueInTCEnv(termEnv, termName, kernelValue);
-    return {
-      success: true,
-      definitions: resultEnv.definitions,
-      checkedValue: kernelValue,
-      zonkedType: zonkedKernelType,
-      tacticInfoTree,
-    };
-  }
-
   try {
     const valueEnv = termEnv.withValue(kernelValue);
-    const result = checkType(valueEnv, zonkedKernelType);
+    const result = checkType(valueEnv, preparedKernelType);
 
     let solvedResult: typeof result;
     try {
@@ -112,8 +141,8 @@ export function checkSimpleTermValue(
       throw error;
     }
 
-    const unsolvedMetas = Array.from(solvedResult.metaVars.values()).filter(meta => !meta.solution && !meta.isHole);
-    if (unsolvedMetas.length > 0) {
+    const zonkedType = solvedResult.zonkTerm(preparedKernelType);
+    if (containsUnsolvedMeta(solvedResult.value, solvedResult.metaVars) || containsUnsolvedMeta(zonkedType, solvedResult.metaVars)) {
       return {
         success: false,
         errors: [TCEnvError.create('Checking the value produced unsolved metas.', termEnv)],
@@ -138,7 +167,8 @@ export function checkSimpleTermValue(
       success: true,
       definitions: resultEnv.definitions,
       checkedValue: zonkedValue,
-      zonkedType: zonkedKernelType,
+      zonkedType,
+      tacticInfoTree,
     };
   } catch (error) {
     if (error instanceof TCEnvError) {

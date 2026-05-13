@@ -33,6 +33,7 @@ import { processRecordDeclaration } from './compile-record-processing';
 import { processTermDeclaration } from './compile-term-declaration';
 import { computeCodeStartLine } from './compile-source-utils';
 import type { ElaborateTacticBlockFn } from './compile-term-simple-value';
+import type { RecheckZonkedTermFn } from './compile-zonk-recheck';
 import { adjustSourceMapToAbsolute } from './compile-source-utils';
 
 import type {
@@ -51,12 +52,6 @@ export interface CompileOneBlockResult {
   checkErrorCount: number;
   nameErrorCount: number;
 }
-
-type RecheckZonkedTermFn = (
-  term: TTKTerm,
-  definitions: DefinitionsMap,
-  label: string,
-) => string | undefined;
 
 function appendZonkRecheckError(
   compiled: CompiledDeclaration,

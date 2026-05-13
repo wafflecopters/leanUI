@@ -638,6 +638,31 @@ describe('applySubstitutionToMetaVars', () => {
     assertTermEqual(m.type, Nat);  // Type unchanged (was constant)
   });
 
+  test('pattern-mode substitutions may keep outer-scope references in metavar values', () => {
+    const Nat = mkConst('Nat');
+    const Succ = mkConst('Succ');
+
+    const metaCtx: TTKContext = [
+      { name: 'A', type: Type },
+      { name: 'B', type: Type },
+    ];
+    const metaType = mkVar(0);  // References B
+
+    const metaVars = new Map<string, MetaVar>([
+      ['?m0', { ctx: metaCtx, type: metaType }],
+    ]);
+
+    const escapingValue = mkApp(Succ, mkVar(2));
+
+    expect(() =>
+      applySubstitutionToMetaVars(metaVars, 5, 3, escapingValue)
+    ).toThrow(/Escaping variable/);
+
+    expect(() =>
+      applySubstitutionToMetaVars(metaVars, 5, 3, escapingValue, { allowEscapingVars: true })
+    ).not.toThrow();
+  });
+
   test('multiple metavars with different context sizes', () => {
     // Main sig length: 5
     // ?m0 has ctx length 1 → variable 3 not in scope

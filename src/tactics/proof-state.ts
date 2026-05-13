@@ -192,6 +192,7 @@ export function proofStateToEngine(state: ProofState): TacticEngine {
     state.metaVars,
     state.constraints,
     state.definitions,
+    undefined,
     state.goals,
     state.focusIndex
   );

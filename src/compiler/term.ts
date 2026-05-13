@@ -38,7 +38,20 @@ export type MetaVar = {
   /** True if this meta was created from an explicit user hole (e.g., ?sorry) */
   isHole?: boolean,
   /** Constructor tag for case branches (e.g., 'Zero', 'Succ') */
-  caseTag?: string
+  caseTag?: string,
+  /** Current context-entry names corresponding to the branch's explicit pattern params. */
+  branchParamNames?: string[],
+  /**
+   * Optional embedding for branch-local de Bruijn vars when this meta is later
+   * substituted into a match-clause RHS.
+   *
+   * Indexed `cases` goals often live in a reduced/refined context that is not a
+   * simple suffix of the surrounding term context. Blindly shifting a solved
+   * branch proof by a depth difference can therefore retarget free variables to
+   * the wrong outer binders. When present, this map rewrites branch-local free
+   * vars into the clause-RHS scope directly during zonking.
+   */
+  rhsVarMap?: Map<number, TTKTerm>
 }
 
 export type TCEnvOptions = {
@@ -1648,7 +1661,13 @@ export class TCEnv<T> {
 
   applySubstitutionToContextMetasAndConstraints(varIndex: number, value: TTKTerm): TCEnv<T> {
     const newTTKContext = applySubstitutionToContext(this.context, varIndex, value);
-    const newMetaVars = applySubstitutionToMetaVars(this.metaVars, this.context.length, varIndex, value);
+    const newMetaVars = applySubstitutionToMetaVars(
+      this.metaVars,
+      this.context.length,
+      varIndex,
+      value,
+      { allowEscapingVars: this.options?.mode === 'pattern' }
+    );
     // In pattern mode, allow escaping variables since pattern vars from outer scopes are legitimate
     const newConstraints = applySubstitutionToConstraints(
       this.constraints,
@@ -1733,17 +1752,21 @@ export class TCEnv<T> {
       case 'Meta': {
         const metaVar = this.metaVars.get(term.id);
         if (metaVar?.solution) {
-          const depthDiff = metaVar.ctx.length - targetDepth;
-          let solution = metaVar.solution;
-          if (depthDiff > 0) {
-            // Solution was set at a deeper context — shift indices down
-            const minIdx = minFreeVarIndex(solution);
-            if (minIdx >= depthDiff) {
+          let solution = metaVar.rhsVarMap
+            ? this.remapMetaSolutionToRhsScope(metaVar.solution, metaVar.rhsVarMap)
+            : metaVar.solution;
+          if (!metaVar.rhsVarMap) {
+            const depthDiff = metaVar.ctx.length - targetDepth;
+            if (depthDiff > 0) {
+              // Solution was set at a deeper context — shift indices down
+              const minIdx = minFreeVarIndex(solution);
+              if (minIdx >= depthDiff) {
+                solution = shiftTerm(solution, -depthDiff, 0);
+              }
+            } else if (depthDiff < 0) {
+              // Solution was set at a shallower context — shift indices up
               solution = shiftTerm(solution, -depthDiff, 0);
             }
-          } else if (depthDiff < 0) {
-            // Solution was set at a shallower context — shift indices up
-            solution = shiftTerm(solution, -depthDiff, 0);
           }
           return this.zonkAtDepthHelper(solution, targetDepth);
         }
@@ -1760,15 +1783,19 @@ export class TCEnv<T> {
         }
         const metaVar = this.metaVars.get(term.id);
         if (metaVar?.solution) {
-          const depthDiff = metaVar.ctx.length - targetDepth;
-          let solution = metaVar.solution;
-          if (depthDiff > 0) {
-            const minIdx = minFreeVarIndex(solution);
-            if (minIdx >= depthDiff) {
+          let solution = metaVar.rhsVarMap
+            ? this.remapMetaSolutionToRhsScope(metaVar.solution, metaVar.rhsVarMap)
+            : metaVar.solution;
+          if (!metaVar.rhsVarMap) {
+            const depthDiff = metaVar.ctx.length - targetDepth;
+            if (depthDiff > 0) {
+              const minIdx = minFreeVarIndex(solution);
+              if (minIdx >= depthDiff) {
+                solution = shiftTerm(solution, -depthDiff, 0);
+              }
+            } else if (depthDiff < 0) {
               solution = shiftTerm(solution, -depthDiff, 0);
             }
-          } else if (depthDiff < 0) {
-            solution = shiftTerm(solution, -depthDiff, 0);
           }
           return this.zonkAtDepthHelper(solution, targetDepth);
         }
@@ -1899,6 +1926,23 @@ export class TCEnv<T> {
         // This should cover all cases, but in case we miss one, return as-is
         return term;
     }
+  }
+
+  private remapMetaSolutionToRhsScope(
+    solution: TTKTerm,
+    rhsVarMap: Map<number, TTKTerm>,
+  ): TTKTerm {
+    return transformVarsInTerm(solution, (index, context) => {
+      if (index < context.length) {
+        return { tag: 'Var', index };
+      }
+      const freeIndex = index - context.length;
+      const mapped = rhsVarMap.get(freeIndex);
+      if (!mapped) {
+        return { tag: 'Var', index };
+      }
+      return shiftTerm(mapped, context.length, 0);
+    });
   }
 
   /**

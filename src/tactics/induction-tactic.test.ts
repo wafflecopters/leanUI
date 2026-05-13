@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { TTKTerm } from '../compiler/kernel';
 import { DefinitionsMap } from '../compiler/term';
 import { whnf } from '../compiler/whnf';
+import { compileTTFromText } from '../compiler/compile';
 import { createInitialEngine } from './tacticsEngine';
 import { IntrosTactic } from './tactic';
 import { InductionTactic } from './induction-tactic';
@@ -146,5 +147,101 @@ describe('InductionTactic', () => {
     if (lhsTerm.tag !== 'App') return;
 
     expect(lhsTerm.arg).toEqual({ tag: 'Const', name: 'Zero' });
+  });
+
+  test('removes the scrutinee binding and adds a correctly typed induction hypothesis', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+plusZeroRight : (n : Nat) -> Equal (plus n Zero) n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ n' IH => exact IH
+`;
+
+    const compiled = compileTTFromText(source);
+    const decl = compiled.blocks.flatMap((b: any) => b.declarations).find((d: any) => d.name === 'plusZeroRight');
+    const engine = createInitialEngine(decl.kernelType, [], compiled.definitions);
+    const introResult = new IntrosTactic(['n']).apply(engine, engine.getFocusedGoal()!, engine.getFocusedGoalId()!);
+    expect(introResult.success).toBe(true);
+    if (!introResult.success) return;
+
+    const inductionResult = new InductionTactic({ tag: 'Var', index: 0 }).apply(
+      introResult.newEngine,
+      introResult.newEngine.getFocusedGoal()!,
+      introResult.newEngine.getFocusedGoalId()!,
+    );
+    expect(inductionResult.success).toBe(true);
+    if (!inductionResult.success) return;
+
+    const succGoalId = inductionResult.newEngine.goals[1];
+    const succGoal = inductionResult.newEngine.metaVars.get(succGoalId)!;
+
+    expect(succGoal.ctx).toHaveLength(2);
+    expect(succGoal.ctx[1].name).toBe('IH');
+    expect(whnf(succGoal.type, { definitions: compiled.definitions, typingContext: succGoal.ctx }).tag).toBe('App');
+
+    const ihEntry = succGoal.ctx[1];
+    expect(ihEntry.name).toBe('IH');
+    expect(whnf(ihEntry.type, { definitions: compiled.definitions, typingContext: succGoal.ctx.slice(0, 1) }).tag).toBe('App');
+  });
+
+  test('preserves remaining Pi binders after substituting the scrutinee in each branch', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+
+goal : (n : Nat) -> (m : Nat) -> (p : Nat) -> Equal (plus (plus n m) p) (plus n (plus m p))
+goal n m p = ?hole
+`;
+
+    const compiled = compileTTFromText(source);
+    const decl = compiled.blocks.flatMap((b: any) => b.declarations).find((d: any) => d.name === 'goal');
+    let engine = createInitialEngine(decl.kernelType, [], compiled.definitions);
+
+    const introResult = new IntrosTactic(['n']).apply(engine, engine.getFocusedGoal()!, engine.getFocusedGoalId()!);
+    expect(introResult.success).toBe(true);
+    if (!introResult.success) return;
+    engine = introResult.newEngine;
+
+    const inductionResult = new InductionTactic({ tag: 'Var', index: 0 }).apply(
+      engine,
+      engine.getFocusedGoal()!,
+      engine.getFocusedGoalId()!,
+    );
+    expect(inductionResult.success).toBe(true);
+    if (!inductionResult.success) return;
+
+    const zeroGoal = inductionResult.newEngine.metaVars.get(inductionResult.newEngine.goals[0])!;
+    expect(zeroGoal.ctx).toHaveLength(0);
+
+    const zeroGoalWhnf = whnf(zeroGoal.type, {
+      definitions: compiled.definitions,
+      typingContext: zeroGoal.ctx,
+    });
+    expect(zeroGoalWhnf.tag).toBe('Binder');
+    if (zeroGoalWhnf.tag !== 'Binder') return;
+    expect(zeroGoalWhnf.name).toBe('m');
+    expect(zeroGoalWhnf.body.tag).toBe('Binder');
+    if (zeroGoalWhnf.body.tag !== 'Binder') return;
+    expect(zeroGoalWhnf.body.name).toBe('p');
   });
 });

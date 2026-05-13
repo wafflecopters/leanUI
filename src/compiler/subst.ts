@@ -689,7 +689,8 @@ export function applySubstitutionToMetaVars(
   metaVars: Map<string, MetaVar>,
   mainSigLength: number,
   varIndex: number,
-  value: TTKTerm
+  value: TTKTerm,
+  options?: { allowEscapingVars?: boolean }
 ): Map<string, MetaVar> {
   const result = new Map<string, MetaVar>();
 
@@ -726,14 +727,16 @@ export function applySubstitutionToMetaVars(
       if (typeNeedsValue || solutionNeedsValue || ctxNeedsValue) {
         // Check for escaping variables: value must not reference variables
         // outside the metavar's scope (indices < mainSigLength - m)
-        const minFreeVar = minFreeVarIndex(value);
-        const contextBoundary = mainSigLength - m;
-        if (minFreeVar < contextBoundary) {
-          throw new Error(
-            `Escaping variable in substitution for metavar ${name}: ` +
-            `value references Var(${minFreeVar}) but metavar context only has ` +
-            `variables with index >= ${contextBoundary}`
-          );
+        if (!options?.allowEscapingVars) {
+          const minFreeVar = minFreeVarIndex(value);
+          const contextBoundary = mainSigLength - m;
+          if (minFreeVar < contextBoundary) {
+            throw new Error(
+              `Escaping variable in substitution for metavar ${name}: ` +
+              `value references Var(${minFreeVar}) but metavar context only has ` +
+              `variables with index >= ${contextBoundary}`
+            );
+          }
         }
       }
 

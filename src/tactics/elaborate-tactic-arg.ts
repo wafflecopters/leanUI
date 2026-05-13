@@ -67,7 +67,7 @@ export function elaborateTacticArg(
             return { tag: 'Var', index: nameContext.length - 1 - i + depth };
           }
         }
-        return { tag: 'Const', name: term.name };
+        return insertImplicitHolesForConstHead({ tag: 'Const', name: term.name }, namedArgLookup);
       }
 
       case 'App':
@@ -170,19 +170,32 @@ function insertImplicitHolesForApp(
 
   let kernelHead = convertTerm(head, depth);
 
-  if (kernelHead.tag === 'Const') {
-    const namedArgs = namedArgLookup(kernelHead.name);
-    if (namedArgs) {
-      const suffix = insertImplicitHoleCounter++;
-      for (const [paramName] of namedArgs) {
-        kernelHead = { tag: 'App', fn: kernelHead, arg: { tag: 'Hole', id: `_implicit_${paramName}_${suffix}` } };
-      }
-    }
-  }
+  kernelHead = insertImplicitHolesForConstHead(kernelHead, namedArgLookup);
 
   let result = kernelHead;
   for (const arg of args) {
     result = { tag: 'App', fn: result, arg: convertTerm(arg, depth) };
+  }
+  return result;
+}
+
+function insertImplicitHolesForConstHead(
+  kernelHead: TTKTerm,
+  namedArgLookup: (name: string) => NamedArgMap | undefined,
+): TTKTerm {
+  if (kernelHead.tag !== 'Const') return kernelHead;
+
+  const namedArgs = namedArgLookup(kernelHead.name);
+  if (!namedArgs) return kernelHead;
+
+  const suffix = insertImplicitHoleCounter++;
+  let result = kernelHead;
+  for (const [paramName] of namedArgs) {
+    result = {
+      tag: 'App',
+      fn: result,
+      arg: { tag: 'Hole', id: `_implicit_${paramName}_${suffix}` },
+    };
   }
   return result;
 }

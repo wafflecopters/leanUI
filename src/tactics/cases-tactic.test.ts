@@ -6,8 +6,11 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { CasesTactic } from './cases-tactic';
 import { createInitialEngine } from './tacticsEngine';
 import { resetMetaCounter } from './tactic';
+import { ExactTactic } from './tactic';
+import { IntrosTactic } from './tactic';
+import { elaborateTacticArg } from './elaborate-tactic-arg';
 import { applyTactic } from './apply-tactic';
-import { TTKTerm } from '../compiler/kernel';
+import { TTKTerm, prettyPrint, prettyPrintFormatted } from '../compiler/kernel';
 import { DefinitionsMap } from '../compiler/term';
 
 // Test helper: Create Nat definitions
@@ -462,9 +465,11 @@ describe('CasesTactic with indexed types (dependent cases)', () => {
     // LeqZero branch: goal should be Leq Zero c (not Leq a c)
     // The first index 'a' should be refined to Zero
     expect(leqZeroGoal.caseTag).toBe('LeqZero');
+    expect(prettyPrint(leqZeroGoal.type, leqZeroGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq Zero c)');
 
     // LeqSucc branch: goal should be Leq (Succ n') c
     expect(leqSuccGoal.caseTag).toBe('LeqSucc');
+    expect(prettyPrint(leqSuccGoal.type, leqSuccGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq (Succ n) c)');
   });
 
   test('detects impossible branches (Leq (Succ n) Zero)', () => {
@@ -538,5 +543,418 @@ describe('CasesTactic with indexed types (dependent cases)', () => {
     const leqZeroGoal = result.newEngine.metaVars.get(result.newEngine.goals[0])!;
     const contextNames = leqZeroGoal.ctx.map(e => e.name);
     expect(contextNames).toContain('c');
+  });
+
+  test('preserves kept hypothesis types when refining indexed branches', () => {
+    const definitions = createLeqDefinitions();
+
+    const context = [
+      { name: 'a', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      { name: 'b', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      { name: 'c', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      {
+        name: 'hab', type: {
+          tag: 'App',
+          fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+          arg: { tag: 'Var', index: 1 }
+        } as TTKTerm
+      },
+      {
+        name: 'hbc', type: {
+          tag: 'App',
+          fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+          arg: { tag: 'Var', index: 1 }
+        } as TTKTerm
+      }
+    ];
+
+    const goalType: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 4 } },
+      arg: { tag: 'Var', index: 2 }
+    };
+
+    const engine = createInitialEngine(goalType, context, definitions);
+    const result = new CasesTactic({ tag: 'Var', index: 1 }).apply(
+      engine,
+      engine.getFocusedGoal()!,
+      engine.getFocusedGoalId()!,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const succGoalId = result.newEngine.goals.find(id => result.newEngine.metaVars.get(id)?.caseTag === 'LeqSucc');
+    expect(succGoalId).toBeDefined();
+    const succGoal = result.newEngine.metaVars.get(succGoalId!)!;
+    const zeroGoalId = result.newEngine.goals.find(id => result.newEngine.metaVars.get(id)?.caseTag === 'LeqZero');
+    expect(zeroGoalId).toBeDefined();
+    const zeroGoal = result.newEngine.metaVars.get(zeroGoalId!)!;
+    expect(prettyPrint(zeroGoal.type, zeroGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq Zero c)');
+    const hbcEntry = succGoal.ctx.find(entry => entry.name === 'hbc');
+    expect(hbcEntry).toBeDefined();
+    const hbcIndex = succGoal.ctx.findIndex(entry => entry.name === 'hbc');
+    const prefixNames = succGoal.ctx.slice(0, hbcIndex).map(entry => entry.name).reverse();
+    expect(prettyPrint(hbcEntry!.type, prefixNames)).toBe('(Leq (Succ m) c)');
+  });
+
+  test('LeqZero branch can be closed by exact LeqZero after dependent cases refinement', () => {
+    const definitions = createLeqDefinitions();
+
+    const context = [
+      { name: 'a', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      { name: 'b', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      { name: 'c', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      {
+        name: 'hab', type: {
+          tag: 'App',
+          fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+          arg: { tag: 'Var', index: 1 }
+        } as TTKTerm
+      },
+      {
+        name: 'hbc', type: {
+          tag: 'App',
+          fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+          arg: { tag: 'Var', index: 1 }
+        } as TTKTerm
+      }
+    ];
+
+    const goalType: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 4 } },
+      arg: { tag: 'Var', index: 2 }
+    };
+
+    const engine = createInitialEngine(goalType, context, definitions);
+    const casesResult = new CasesTactic({ tag: 'Var', index: 1 }).apply(
+      engine,
+      engine.getFocusedGoal()!,
+      engine.getFocusedGoalId()!,
+    );
+
+    expect(casesResult.success).toBe(true);
+    if (!casesResult.success) return;
+
+    const zeroGoalIndex = casesResult.newEngine.goals.findIndex(
+      id => casesResult.newEngine.metaVars.get(id)?.caseTag === 'LeqZero',
+    );
+    expect(zeroGoalIndex).toBeGreaterThanOrEqual(0);
+
+    const zeroEngine = casesResult.newEngine.focusGoalAt(zeroGoalIndex);
+    const zeroGoal = zeroEngine.getFocusedGoal()!;
+    const zeroGoalId = zeroEngine.getFocusedGoalId()!;
+    expect(prettyPrint(zeroGoal.type, zeroGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq Zero c)');
+
+    const elaboratedLeqZero = elaborateTacticArg({ tag: 'Const', name: 'LeqZero' } as any, zeroGoal.ctx, definitions);
+    const exactResult = new ExactTactic(elaboratedLeqZero).apply(
+      zeroEngine,
+      zeroGoal,
+      zeroGoalId,
+    );
+
+    expect(exactResult.success).toBe(true);
+  });
+
+  test('LeqZero branch goal stays at Leq Zero c when scrutinee is the innermost hypothesis', () => {
+    const definitions = createLeqDefinitions();
+
+    const context = [
+      { name: 'b', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      { name: 'c', type: { tag: 'Const', name: 'Nat' } as TTKTerm },
+      {
+        name: 'h0', type: {
+          tag: 'App',
+          fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Const', name: 'Zero' } },
+          arg: { tag: 'Var', index: 1 }
+        } as TTKTerm
+      },
+    ];
+
+    const goalType: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Const', name: 'Zero' } },
+      arg: { tag: 'Var', index: 1 }
+    };
+
+    const engine = createInitialEngine(goalType, context, definitions);
+    const result = new CasesTactic({ tag: 'Var', index: 0 }).apply(
+      engine,
+      engine.getFocusedGoal()!,
+      engine.getFocusedGoalId()!,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const zeroGoalId = result.newEngine.goals.find(id => result.newEngine.metaVars.get(id)?.caseTag === 'LeqZero');
+    expect(zeroGoalId).toBeDefined();
+    const zeroGoal = result.newEngine.metaVars.get(zeroGoalId!)!;
+    expect(prettyPrint(zeroGoal.type, zeroGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq Zero c)');
+  });
+
+  test('full intro -> cases -> exact flow preserves LeqZero branch goal', () => {
+    const definitions = createLeqDefinitions();
+
+    const theoremType: TTKTerm = {
+      tag: 'Binder',
+      name: 'b',
+      binderKind: { tag: 'BPi' },
+      domain: { tag: 'Const', name: 'Nat' },
+      body: {
+        tag: 'Binder',
+        name: 'c',
+        binderKind: { tag: 'BPi' },
+        domain: { tag: 'Const', name: 'Nat' },
+        body: {
+          tag: 'Binder',
+          name: 'h0',
+          binderKind: { tag: 'BPi' },
+          domain: {
+            tag: 'App',
+            fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Const', name: 'Zero' } },
+            arg: { tag: 'Var', index: 1 }
+          },
+          body: {
+            tag: 'App',
+            fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Const', name: 'Zero' } },
+            arg: { tag: 'Var', index: 1 }
+          }
+        }
+      }
+    };
+
+    const initial = createInitialEngine(theoremType, [], definitions);
+    const introResult = new IntrosTactic(['b', 'c', 'h0']).apply(
+      initial,
+      initial.getFocusedGoal()!,
+      initial.getFocusedGoalId()!,
+    );
+
+    expect(introResult.success).toBe(true);
+    if (!introResult.success) return;
+
+    const afterIntros = introResult.newEngine;
+    const casesResult = new CasesTactic({ tag: 'Var', index: 0 }).apply(
+      afterIntros,
+      afterIntros.getFocusedGoal()!,
+      afterIntros.getFocusedGoalId()!,
+    );
+
+    expect(casesResult.success).toBe(true);
+    if (!casesResult.success) return;
+
+    const zeroGoalId = casesResult.newEngine.goals.find(id => casesResult.newEngine.metaVars.get(id)?.caseTag === 'LeqZero');
+    expect(zeroGoalId).toBeDefined();
+    const zeroGoalIndex = casesResult.newEngine.goals.findIndex(id => id === zeroGoalId);
+    const zeroEngine = casesResult.newEngine.focusGoalAt(zeroGoalIndex);
+    const zeroGoal = zeroEngine.getFocusedGoal()!;
+    expect(prettyPrint(zeroGoal.type, zeroGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq Zero c)');
+
+    const elaboratedLeqZero = elaborateTacticArg({ tag: 'Const', name: 'LeqZero' } as any, zeroGoal.ctx, definitions);
+    const exactResult = new ExactTactic(elaboratedLeqZero).apply(
+      zeroEngine,
+      zeroGoal,
+      zeroEngine.getFocusedGoalId()!,
+    );
+    expect(exactResult.success).toBe(true);
+  });
+
+  test('zonked indexed cases term keeps branch outer vars aligned', () => {
+    const definitions = createLeqDefinitions();
+
+    const theoremType: TTKTerm = {
+      tag: 'Binder',
+      name: 'a',
+      binderKind: { tag: 'BPi' },
+      domain: { tag: 'Const', name: 'Nat' },
+      body: {
+        tag: 'Binder',
+        name: 'b',
+        binderKind: { tag: 'BPi' },
+        domain: { tag: 'Const', name: 'Nat' },
+        body: {
+          tag: 'Binder',
+          name: 'c',
+          binderKind: { tag: 'BPi' },
+          domain: { tag: 'Const', name: 'Nat' },
+          body: {
+            tag: 'Binder',
+            name: 'hab',
+            binderKind: { tag: 'BPi' },
+            domain: {
+              tag: 'App',
+              fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+              arg: { tag: 'Var', index: 1 }
+            },
+            body: {
+              tag: 'Binder',
+              name: 'hbc',
+              binderKind: { tag: 'BPi' },
+              domain: {
+                tag: 'App',
+                fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+                arg: { tag: 'Var', index: 1 }
+              },
+              body: {
+                tag: 'App',
+                fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 4 } },
+                arg: { tag: 'Var', index: 2 }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    const initial = createInitialEngine(theoremType, [], definitions, '?goal0', 'leqTrans');
+    const introResult = new IntrosTactic(['a', 'b', 'c', 'hab', 'hbc']).apply(
+      initial,
+      initial.getFocusedGoal()!,
+      initial.getFocusedGoalId()!,
+    );
+
+    expect(introResult.success).toBe(true);
+    if (!introResult.success) return;
+
+    const afterIntros = introResult.newEngine;
+    const casesResult = new CasesTactic({ tag: 'Var', index: 1 }).apply(
+      afterIntros,
+      afterIntros.getFocusedGoal()!,
+      afterIntros.getFocusedGoalId()!,
+    );
+
+    expect(casesResult.success).toBe(true);
+    if (!casesResult.success) return;
+
+    const zeroGoalId = casesResult.newEngine.goals.find(id => casesResult.newEngine.metaVars.get(id)?.caseTag === 'LeqZero');
+    expect(zeroGoalId).toBeDefined();
+    const zeroGoalIndex = casesResult.newEngine.goals.findIndex(id => id === zeroGoalId);
+    const zeroEngine = casesResult.newEngine.focusGoalAt(zeroGoalIndex);
+    const zeroGoal = zeroEngine.getFocusedGoal()!;
+
+    const elaboratedLeqZero = elaborateTacticArg({ tag: 'Const', name: 'LeqZero' } as any, zeroGoal.ctx, definitions);
+    const exactResult = new ExactTactic(elaboratedLeqZero).apply(
+      zeroEngine,
+      zeroGoal,
+      zeroEngine.getFocusedGoalId()!,
+    );
+
+    expect(exactResult.success).toBe(true);
+    if (!exactResult.success) return;
+
+    const zonked = prettyPrintFormatted(exactResult.newEngine.zonk());
+    expect(zonked).toContain('(LeqZero c)');
+    expect(zonked).not.toContain('(LeqZero b)');
+  });
+
+  test('nested indexed cases identify existing indices instead of inventing padding binders', () => {
+    const definitions = createLeqDefinitions();
+
+    const theoremType: TTKTerm = {
+      tag: 'Binder',
+      name: 'a',
+      binderKind: { tag: 'BPi' },
+      domain: { tag: 'Const', name: 'Nat' },
+      body: {
+        tag: 'Binder',
+        name: 'b',
+        binderKind: { tag: 'BPi' },
+        domain: { tag: 'Const', name: 'Nat' },
+        body: {
+          tag: 'Binder',
+          name: 'c',
+          binderKind: { tag: 'BPi' },
+          domain: { tag: 'Const', name: 'Nat' },
+          body: {
+            tag: 'Binder',
+            name: 'hab',
+            binderKind: { tag: 'BPi' },
+            domain: {
+              tag: 'App',
+              fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+              arg: { tag: 'Var', index: 1 }
+            },
+            body: {
+              tag: 'Binder',
+              name: 'hbc',
+              binderKind: { tag: 'BPi' },
+              domain: {
+                tag: 'App',
+                fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 2 } },
+                arg: { tag: 'Var', index: 1 }
+              },
+              body: {
+                tag: 'App',
+                fn: { tag: 'App', fn: { tag: 'Const', name: 'Leq' }, arg: { tag: 'Var', index: 4 } },
+                arg: { tag: 'Var', index: 2 }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    const initial = createInitialEngine(theoremType, [], definitions, '?goal0', 'leqTrans');
+    const introResult = new IntrosTactic(['a', 'b', 'c', 'hab', 'hbc']).apply(
+      initial,
+      initial.getFocusedGoal()!,
+      initial.getFocusedGoalId()!,
+    );
+
+    expect(introResult.success).toBe(true);
+    if (!introResult.success) return;
+
+    const afterIntrosGoal = introResult.newEngine.getFocusedGoal()!;
+    const inferredIntroHbc = introResult.newEngine.inferInGoal(afterIntrosGoal, { tag: 'Var', index: 0 });
+    expect(prettyPrint(inferredIntroHbc.value, afterIntrosGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq b c)');
+
+    const outerCases = new CasesTactic({ tag: 'Var', index: 1 }).apply(
+      introResult.newEngine,
+      introResult.newEngine.getFocusedGoal()!,
+      introResult.newEngine.getFocusedGoalId()!,
+    );
+
+    expect(outerCases.success).toBe(true);
+    if (!outerCases.success) return;
+
+    const outerSuccId = outerCases.newEngine.goals.find(
+      id => outerCases.newEngine.metaVars.get(id)?.caseTag === 'LeqSucc',
+    );
+    expect(outerSuccId).toBeDefined();
+    const outerSuccEngine = outerCases.newEngine.focusGoalAt(
+      outerCases.newEngine.goals.findIndex(id => id === outerSuccId),
+    );
+
+    const outerSuccGoal = outerSuccEngine.getFocusedGoal()!;
+    const hbcArrayIndex = outerSuccGoal.ctx.findIndex(entry => entry.name === 'hbc');
+    expect(hbcArrayIndex).toBeGreaterThanOrEqual(0);
+    const hbcDeBruijn = outerSuccGoal.ctx.length - 1 - hbcArrayIndex;
+    const inferredHbc = outerSuccEngine.inferInGoal(outerSuccGoal, { tag: 'Var', index: hbcDeBruijn });
+    expect(prettyPrint(inferredHbc.value, outerSuccGoal.ctx.map(entry => entry.name).reverse())).toBe('(Leq (Succ m) c)');
+
+    const innerCases = new CasesTactic({ tag: 'Var', index: hbcDeBruijn }).apply(
+      outerSuccEngine,
+      outerSuccGoal,
+      outerSuccEngine.getFocusedGoalId()!,
+    );
+
+    expect(innerCases.success).toBe(true);
+    if (!innerCases.success) return;
+
+    const innerSuccId = innerCases.newEngine.goals.find(
+      id => innerCases.newEngine.metaVars.get(id)?.caseTag === 'LeqSucc',
+    );
+    expect(innerSuccId).toBeDefined();
+    const innerSuccGoal = innerCases.newEngine.metaVars.get(innerSuccId!)!;
+
+    expect(innerSuccGoal.ctx.map(entry => entry.name)).not.toContain('_pad0');
+
+    const proofEntries = innerSuccGoal.ctx.filter(entry => entry.name === 'h' || entry.name === "h'");
+    expect(proofEntries).toHaveLength(2);
+    const latestProofIndex = innerSuccGoal.ctx.findLastIndex(entry => entry.name === "h'");
+    const prefixNames = innerSuccGoal.ctx.slice(0, latestProofIndex).map(entry => entry.name).reverse();
+    expect(prettyPrint(innerSuccGoal.ctx[latestProofIndex]!.type, prefixNames)).toBe('(Leq m m\')');
   });
 });

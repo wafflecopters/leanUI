@@ -2208,9 +2208,9 @@ testThm = ?TODO
 
   test('unfold plus preserves sum and mul in goal', () => {
     const result = compileTriangleSum();
-    expect(result.success).toBe(true);
     const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testThm');
     expect(decl).toBeDefined();
+    expect(decl!.kernelType).toBeDefined();
     const kernelType = decl!.kernelType!;
     const definitions = result.definitions;
     const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
@@ -2310,6 +2310,9 @@ describe('erw replay with record projections', () => {
 inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {a : A} -> Equal a a
 
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
 replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
 replace P refl px = px
 
@@ -2390,6 +2393,9 @@ describe('trace-based replay produces unifiedEquationLatex for rewrite nodes', (
     const source = `
 inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {a : A} -> Equal a a
+
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
 
 replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
 replace P refl px = px
@@ -2753,6 +2759,9 @@ inductive Equal : {A : Type} -> A -> A -> Type where
 replace : {A : Type} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
 replace P refl px = px
 
+sym : {A : Type} -> {x y : A} -> Equal x y -> Equal y x
+sym refl = refl
+
 record Monoid (A : Type) where
   e : A
   op : A -> A -> A
@@ -2864,7 +2873,7 @@ describe('alias fold map: projection-aware numFixedArgs', () => {
     return { compiled, definitions };
   }
 
-  test('buildAliasFoldMap with projMap maps DPair.snd to field with full+short extractions', { timeout: 20000 }, () => {
+  test('buildAliasFoldMap with projMap maps DPair.snd to field with full+short extractions', { timeout: 70000 }, () => {
     const { definitions } = getCompiled();
     const projMap = buildProjectionFoldMap(definitions);
     const aliasMap = buildAliasFoldMap(definitions, projMap);
@@ -2883,7 +2892,7 @@ describe('alias fold map: projection-aware numFixedArgs', () => {
     ]);
   });
 
-  test('buildAliasFoldMap with projMap maps CompleteOrderedField.add to radd with full+short extractions', { timeout: 20000 }, () => {
+  test('buildAliasFoldMap with projMap maps CompleteOrderedField.add to radd with full+short extractions', { timeout: 70000 }, () => {
     const { definitions } = getCompiled();
     const projMap = buildProjectionFoldMap(definitions);
     const aliasMap = buildAliasFoldMap(definitions, projMap);

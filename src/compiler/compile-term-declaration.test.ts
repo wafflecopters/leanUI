@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { parseTTSource } from './compile-parse';
 import { compileTTFromText } from './compile';
 import { processTermDeclaration } from './compile-term-declaration';
+import { TacticInfoTree } from '../tactics/info-tree';
 
 function parseFirstDeclaration(source: string) {
   const parsed = parseTTSource(source);
@@ -60,5 +61,44 @@ x : Nat
     expect(result.success).toBe(false);
     expect(result.compiled.checkSuccess).toBe(false);
     expect(result.compiled.checkErrors[0].message).toContain('Type definition not found: Nat');
+  });
+
+  test('processTermDeclaration rejects tactic elaboration output that fails kernel checking', () => {
+    const definitions = compileTTFromText(`
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+`).definitions;
+    const { declaration, sourceMap } = parseFirstDeclaration(`
+badBy : Nat
+badBy := by
+  exact Zero
+`);
+
+    const result = processTermDeclaration(
+      declaration,
+      sourceMap,
+      definitions,
+      () => ({
+        term: {
+          tag: 'Binder',
+          name: 'x',
+          binderKind: { tag: 'BLam' },
+          domain: { tag: 'Const', name: 'Nat' },
+          body: { tag: 'Var', index: 0 },
+        },
+        infoTree: new TacticInfoTree({
+          position: { line: 1, col: 1, endLine: 1, endCol: 1 },
+          goalsBefore: [],
+          goalsAfter: [],
+          tactic: { tag: 'Exact', term: { tag: 'Const', name: 'Zero' } },
+          children: [],
+        }),
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.compiled.checkSuccess).toBe(false);
+    expect(result.compiled.checkErrors[0]?.fullMessage).toContain('Nat');
   });
 });

@@ -11,6 +11,7 @@ import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult } from './tactic';
 import { whnf } from '../compiler/whnf';
+import { ExactTactic } from './tactic';
 
 /**
  * ReflexivityTactic: Solve goals where both sides of equality are definitionally equal
@@ -70,28 +71,10 @@ export class ReflexivityTactic implements Tactic {
         };
       }
 
-      // Sides are equal! Apply refl
-      // refl has type: {A : Type} -> {a : A} -> Equal a a
-      // We need to provide: refl {A := type_of_lhs} {a := lhs}
-
-      // For now, let's use a simple refl constant application
-      // The type checker should be able to infer the implicit arguments
-      const reflTerm: TTKTerm = { tag: 'Const', name: 'refl' };
-
-      // Solve the goal with refl
-      const newMetaVars = new Map(engine.metaVars);
-      newMetaVars.set(goalId, { ...goal, solution: reflTerm });
-
-      // Remove this goal from the goal list
-      const newGoals = engine.goals.filter(g => g !== goalId);
-
-      return {
-        success: true,
-        newEngine: engine.withUpdates({
-          metaVars: newMetaVars,
-          goals: newGoals
-        })
-      };
+      // Delegate actual proof construction to ExactTactic so reflexivity
+      // relies on the kernel checker/inference path instead of installing
+      // a bare `refl` term by hand.
+      return new ExactTactic({ tag: 'Const', name: 'refl' }).apply(engine, goal, goalId);
     } catch (e) {
       const errorMsg = e instanceof Error ? e.message : String(e);
       return {

@@ -16,12 +16,7 @@ import {
 } from './compile-incremental-state';
 import type { ElaborateTacticBlockFn } from './compile-term-simple-value';
 import type { CompileOptions, CompileResult, ParseResult } from './compile-types';
-
-type RecheckZonkedTermFn = (
-  term: TTKTerm,
-  definitions: DefinitionsMap,
-  label: string,
-) => string | undefined;
+import type { RecheckZonkedTermFn } from './compile-zonk-recheck';
 
 export interface CompileLoopServices {
   assumeK: boolean;

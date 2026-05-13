@@ -1,23 +1,23 @@
 import { describe, test, expect } from 'vitest';
 import { whnf } from './whnf';
 import { compileTTFromText } from './compile';
-import { mkApp, mkConst, mkVar, TTKTerm } from './kernel';
+import { mkApp, mkConst, mkVar, prettyPrintFormatted, TTKTerm } from './kernel';
 
 /**
  * Tests for record projection iota-reduction.
  *
- * Record projections are elaborated as lambda-wrapped Match terms with
- * PWild for non-target fields and a single PVar for the target field.
- * Since PWild does NOT produce bindings during WHNF reduction,
- * the RHS must always be Var(0) (the single PVar binding).
+ * Record projections are elaborated as lambda-wrapped Match terms whose RHS
+ * must point at the target field's constructor position in the full argument
+ * list. For a record with fields [f1, f2, ..., fn], the projection for fi
+ * should return Var(n - 1 - i).
  *
- * Bug regression: buildProjectionValue previously computed
- *   fieldVarIdx = numFields - 1 - fieldIdx
- * which assumed all patterns produce bindings (ALL-bindings convention).
- * But WHNF uses PVar-only convention, so this was wrong. Fixed to Var(0).
+ * Bug regression: buildProjectionValue previously returned Var(0) for every
+ * projection, which makes large-record projections drift to the final field
+ * (`CompleteOrderedField.add` projected `supLeast`).
  */
 
 const mkULit = (n: number): TTKTerm => ({ tag: 'ULit', n });
+const prettyProjection = (term: TTKTerm) => prettyPrintFormatted(term);
 
 describe('record projection iota-reduction via WHNF', () => {
 
@@ -440,35 +440,18 @@ test = Type
       const proj = mkApp(mkApp(mkConst(projName), A), big);
       const reduced = whnf(proj, { definitions: defs });
       const expected = mkVar(4 - i); // f1=Var(4), f2=Var(3), ..., f5=Var(0)
-      console.log(`${projName}: expected Var(${4 - i}), got ${JSON.stringify(reduced)}`);
-      // Don't assert for now, just log
+      expect(reduced).toEqual(expected);
     }
   });
 
-  test('real-analysis projections work correctly', { timeout: 30000 }, async () => {
+  test('real-analysis projections work correctly', { timeout: 70000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
 
-    const defs = ['addZeroLeft', 'addSumNeg', 'negAddCancel', 'negUnique', 'negAdd', 'subAddSub'];
-    for (const block of result.blocks) {
-      for (const decl of block.declarations) {
-        if (decl.name && defs.includes(decl.name)) {
-          if (!decl.checkSuccess) {
-            console.log(`${decl.name}: FAIL`);
-            if (decl.checkErrors && decl.checkErrors.length > 0) {
-              for (const e of decl.checkErrors) {
-                console.log(`  Error: ${String(e.message || e).slice(0, 500)}`);
-              }
-            } else {
-              console.log(`  (no checkErrors)`);
-            }
-          } else {
-            console.log(`${decl.name}: OK`);
-          }
-        }
-      }
-    }
-    // Just log, don't assert for now
+    const addProj = result.definitions.terms.get('CompleteOrderedField.add');
+    const zeroProj = result.definitions.terms.get('CompleteOrderedField.zero');
+    expect(addProj?.value ? prettyProjection(addProj.value) : '').toContain('=> add');
+    expect(zeroProj?.value ? prettyProjection(zeroProj.value) : '').toContain('=> zero');
   });
 
   test('eitherElim kernel RHS uses PVar-only de Bruijn indices', () => {

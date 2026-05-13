@@ -106,13 +106,23 @@ export class ExactTactic implements Tactic {
       // allowing unsound proofs like `refl` for non-definitionally-equal sides.
       const solvedEnv = checkedEnv.solveMetasAndConstraints({ liftMetasToFullContext: false });
 
-      // Zonk the checked term (resolve any new metas)
-      const solution = solvedEnv.zonkTerm(solvedEnv.elaboratedTerm ?? checkedEnv.elaboratedTerm ?? this.term);
+      // Keep the elaborated term with its solved metas rather than eagerly
+      // zonking it here. In indexed case branches, fresh implicit metas created
+      // during `exact` need the branch's RHS-embedding metadata before they can
+      // be safely zonked back into the surrounding match term.
+      const solution = solvedEnv.elaboratedTerm ?? checkedEnv.elaboratedTerm ?? this.term;
 
       // Assign solution to goal
       // Merge solvedEnv.metaVars to capture any new metas created during type checking
       // (e.g., implicit argument metas for constructors like Nil : {A : Type} -> List A)
       const newMetaVars = new Map(solvedEnv.metaVars);
+      if (goal.rhsVarMap) {
+        for (const [id, meta] of newMetaVars) {
+          if (engine.metaVars.has(id)) continue;
+          if (meta.ctx.length !== goal.ctx.length) continue;
+          newMetaVars.set(id, { ...meta, rhsVarMap: goal.rhsVarMap });
+        }
+      }
       newMetaVars.set(goalId, { ...goal, solution });
 
       // Remove goal from goal list

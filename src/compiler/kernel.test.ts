@@ -130,6 +130,29 @@ describe('prettyPrint', () => {
     expect(result).toContain('=> y');
   });
 
+  test('prints match RHS using only PVar clause binders, not wildcard placeholders', () => {
+    const clause: TTKClause = {
+      patterns: [{
+        tag: 'PCtor',
+        name: 'MkPair',
+        args: [
+          { tag: 'PWild', name: '_fst' },
+          { tag: 'PVar', name: 'snd' },
+        ],
+      }],
+      rhs: mkVar(0),
+    };
+
+    const result = prettyPrint({
+      tag: 'Match',
+      scrutinee: mkConst('pair'),
+      clauses: [clause],
+    });
+
+    expect(result).toContain('=> snd');
+    expect(result).not.toContain('=> _fst');
+  });
+
   test('fillHole preserves clause metadata on match terms', () => {
     const clause: TTKClause = {
       patterns: [],

@@ -19,7 +19,7 @@ import { DefinitionsMap, createDefinitionsMap } from '../compiler/term';
 import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, UnifiedEquation, freshMetaName } from './tactic';
-import { whnf, fullNormalize } from '../compiler/whnf';
+import { whnf, fullNormalize, unfoldHeadOnce } from '../compiler/whnf';
 import { shiftTerm, subst } from '../compiler/subst';
 
 /**
@@ -54,9 +54,14 @@ export class RewriteTactic implements Tactic {
       // (inside the lambda) to depth D (outside). zonkTermAtDepth adjusts the
       // meta solution's de Bruijn indices for the depth change.
       const proofType = solvedEnv.zonkTermAtDepth(solvedEnv.value, goal.ctx.length);
+      const elaboratedProof = solvedEnv.zonkTermAtDepth(
+        solvedEnv.elaboratedTerm ?? this.equalityProof,
+        goal.ctx.length,
+      );
 
       // 2. Normalize to find equality type
-      const proofTypeWhnf = whnf(proofType, { definitions: engine.definitions, typingContext: goal.ctx });
+      const emptyDefs = createDefinitionsMap();
+      const proofTypeWhnf = fullNormalize(proofType, emptyDefs);
 
       // 3. Check that it's an equality type and extract type param, LHS, and RHS.
       //    If the proof type is a Pi (function type like minusSucc : {i n} -> Leq i n -> Equal ...),
@@ -125,8 +130,7 @@ export class RewriteTactic implements Tactic {
       //     - After unfold, goals have match redexes that need iota-reducing
       //     - Delta-reducing would expose internal match structures, making subterm
       //       matching impossible (e.g., plus(Succ(x), y) → match x with ...)
-      const emptyDefs = createDefinitionsMap();
-      const goalType = fullNormalize(goal.type, emptyDefs);
+      const goalType = fullNormalize(engine.zonkTerm(goal.type, goal.ctx.length), emptyDefs);
 
       // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.
@@ -308,7 +312,7 @@ export class RewriteTactic implements Tactic {
         };
 
         // Build: lemma {a} {b} {c} ?premiseMeta
-        let appliedProof: TTKTerm = this.equalityProof;
+        let appliedProof: TTKTerm = elaboratedProof;
         for (const metaId of instantiated.metaIds) {
           const arg = allBindings.get(metaId) ?? { tag: 'Meta' as const, id: metaId };
           appliedProof = { tag: 'App', fn: appliedProof, arg };
@@ -323,7 +327,7 @@ export class RewriteTactic implements Tactic {
         // and the engine tracks that the lemma connects old→new.
         // For the engine, we set the old goal's solution to a Hole placeholder that
         // records the premise-driven connection.
-        proofTerm = { tag: 'Hole', id: `_premise_driven_${this.termToString(this.equalityProof)}` };
+        proofTerm = { tag: 'Hole', id: `_premise_driven_${this.termToString(elaboratedProof)}` };
       } else {
         // Standard rewrite: build replace-based proof term.
         //
@@ -341,7 +345,7 @@ export class RewriteTactic implements Tactic {
 
         // 8. Build the proof term: replace motive eqProof ?newGoal
         //    replace : {A} -> {x y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
-        let appliedProof: TTKTerm = this.equalityProof;
+        let appliedProof: TTKTerm = elaboratedProof;
         if (instantiated && allBindings) {
           for (const metaId of instantiated.metaIds) {
             const arg = allBindings.get(metaId) ?? { tag: 'Meta' as const, id: metaId };
@@ -350,7 +354,22 @@ export class RewriteTactic implements Tactic {
         }
         const eqProof: TTKTerm = this.options.reverse
           ? appliedProof
-          : { tag: 'App', fn: { tag: 'Const', name: 'sym' }, arg: appliedProof };
+          : {
+            tag: 'App',
+            fn: {
+              tag: 'App',
+              fn: {
+                tag: 'App',
+                fn: { tag: 'Const', name: 'sym' },
+                arg: typeA,
+              },
+              arg: lhs,
+            },
+            arg: rhs,
+          };
+        const eqProofApplied: TTKTerm = this.options.reverse
+          ? eqProof
+          : { tag: 'App', fn: eqProof, arg: appliedProof };
 
         proofTerm = {
           tag: 'App',
@@ -358,10 +377,22 @@ export class RewriteTactic implements Tactic {
             tag: 'App',
             fn: {
               tag: 'App',
-              fn: { tag: 'Const', name: 'replace' },
+              fn: {
+                tag: 'App',
+                fn: {
+                  tag: 'App',
+                  fn: {
+                    tag: 'App',
+                    fn: { tag: 'Const', name: 'replace' },
+                    arg: typeA,
+                  },
+                  arg: rhs,
+                },
+                arg: lhs,
+              },
               arg: motive
             },
-            arg: eqProof
+            arg: eqProofApplied
           },
           arg: { tag: 'Meta', id: newMetaId }
         };
@@ -800,13 +831,12 @@ export class RewriteTactic implements Tactic {
       }
     }
 
-    // In enhanced mode, WHNF the term to expose hidden subterms.
-    // E.g., `rsub R a (rzero R)` WHNF's to `radd R a (rneg R (rzero R))`,
-    // exposing `rneg R (rzero R)` which can then be matched and replaced.
-    // Only attempt when the App head is a defined constant (δ-reduction target),
-    // and only recurse if WHNF actually changes the head (prevents infinite loop
-    // since whnf always creates new App objects even when nothing reduces).
-    // IMPORTANT: Only keep the WHNF'd result if a substitution actually occurred
+    // In enhanced mode, unfold only the outermost alias layer to expose hidden
+    // subterms without normalizing them away. For example:
+    //   sub a Zero := add a (neg Zero)
+    // should expose `neg Zero` for rewriting, but full WHNF would continue to
+    // reduce all the way to `a`, erasing the occurrence before the rewrite sees it.
+    // IMPORTANT: Only keep the unfolded result if a substitution actually occurred
     // within it (detected via reference identity). Otherwise, fall through to the
     // normal recursive descent on the original term to preserve its structural form
     // for subsequent rewrite steps.
@@ -814,10 +844,14 @@ export class RewriteTactic implements Tactic {
       let head: TTKTerm = term;
       while (head.tag === 'App') head = head.fn;
       if (head.tag === 'Const') {
-        const termN = whnf(term, { definitions });
+        const termN = unfoldHeadOnce(term, { definitions });
         let headN: TTKTerm = termN;
         while (headN.tag === 'App') headN = headN.fn;
-        if (headN.tag !== 'Const' || headN.name !== head.name) {
+        // Avoid rewriting through projection/iota-expanded Match heads.
+        // They are harder for the checker to re-infer and tend to leak raw
+        // kernel case trees into otherwise simple proof terms. We still allow
+        // alias-like unfolding when the normalized form remains Const-headed.
+        if (termN !== term && headN.tag === 'Const') {
           const result = this.substituteImpl(termN, from, to, definitions, occurrences, counter, lhsHead);
           if (result !== termN) {
             // A substitution occurred in the WHNF'd form — use it

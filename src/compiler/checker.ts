@@ -5,6 +5,8 @@ import { subst, shiftTerm, minFreeVarIndex, containsVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap, BinderPartSegment } from "./term";
 import { IndexPath, serializeIndexPath } from "../types/source-position";
 import { unifyTerms } from "./unify";
+import { checkMatchClause } from "./patterns";
+import { countKernelClauseBindings } from "./pattern-binders";
 
 /**
  * Get the namedArgMap for a constructor by searching all inductive types.
@@ -194,7 +196,7 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     const elaboratedLambda: TTKTerm = {
       tag: 'Binder',
       name: env.value.name,
-      binderKind: env.value.binderKind,
+      binderKind: { tag: 'BLam' },
       domain: elaboratedDomain,
       body: bodyEnv.elaboratedTerm ?? env.value.body
     };
@@ -612,6 +614,75 @@ function findIntImplForHead(env: TCEnv<TTKTerm>, headName: string): { ofNatCtor:
   return [...reg.values()].find(impl => impl.inductiveName === headName);
 }
 
+function abstractContextVarForMatch(term: TTKTerm, targetIndex: number, depth = 0): TTKTerm {
+  switch (term.tag) {
+    case 'Var': {
+      if (term.index < depth) return term;
+      const localIndex = term.index - depth;
+      if (localIndex === targetIndex) {
+        return { tag: 'Var', index: depth };
+      }
+      // The synthetic match motive inserts a fresh binder at the current depth
+      // while keeping the original goal context in scope. Every free variable
+      // other than the abstracted scrutinee therefore shifts out by one.
+      return { tag: 'Var', index: term.index + 1 };
+    }
+    case 'Sort':
+      return { tag: 'Sort', level: abstractContextVarForMatch(term.level, targetIndex, depth) };
+    case 'Binder': {
+      const binderKind = term.binderKind.tag === 'BLet'
+        ? { tag: 'BLet' as const, defVal: abstractContextVarForMatch(term.binderKind.defVal, targetIndex, depth) }
+        : term.binderKind;
+      return {
+        tag: 'Binder',
+        name: term.name,
+        binderKind,
+        domain: abstractContextVarForMatch(term.domain, targetIndex, depth),
+        body: abstractContextVarForMatch(term.body, targetIndex, depth + 1),
+      };
+    }
+    case 'App':
+      return {
+        tag: 'App',
+        fn: abstractContextVarForMatch(term.fn, targetIndex, depth),
+        arg: abstractContextVarForMatch(term.arg, targetIndex, depth),
+      };
+    case 'Annot':
+      return {
+        tag: 'Annot',
+        term: abstractContextVarForMatch(term.term, targetIndex, depth),
+        type: abstractContextVarForMatch(term.type, targetIndex, depth),
+      };
+    case 'Match':
+      return {
+        tag: 'Match',
+        scrutinee: abstractContextVarForMatch(term.scrutinee, targetIndex, depth),
+        clauses: term.clauses.map(clause => ({
+          ...clause,
+          rhs: abstractContextVarForMatch(
+            clause.rhs,
+            targetIndex,
+            depth + countKernelClauseBindings(clause),
+          ),
+        })),
+      };
+    default:
+      return term;
+  }
+}
+
+function abstractScrutineeForMatch(expectedType: TTKTerm, scrutinee: TTKTerm): TTKTerm {
+  if (scrutinee.tag === 'Var') {
+    return abstractContextVarForMatch(expectedType, scrutinee.index);
+  }
+  // Non-variable scrutinees are bound by the synthetic match motive as the
+  // newest local. When the expected type does not mention the scrutinee
+  // directly, shifting is sufficient and keeps the kernel-side match checker
+  // small. This is enough for tactic-generated `cases (f x)` proofs where the
+  // branch goal is independent of the exact scrutinee term.
+  return shiftTerm(expectedType, 1, 0);
+}
+
 /** Count Pi binders in a function type (the number of arguments). */
 function countFunctionArity(fnType: TTKTerm): number {
   let n = 0;
@@ -829,6 +900,61 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     if (coerced) return coerced;
   }
 
+  if (env.isMatchTerm()) {
+    const scrutineeTypeEnv = inferType(env.withValue(env.value.scrutinee));
+    const abstractedExpectedType = abstractScrutineeForMatch(expectedType, env.value.scrutinee);
+    const syntheticMatchType = mkPi(scrutineeTypeEnv.value, abstractedExpectedType, '_match');
+
+    let workingEnv = env.withMetasConstraintsLevelMetasFrom(scrutineeTypeEnv);
+    const checkedClauses = [];
+    for (const clause of env.value.clauses) {
+      const outerMetaIds = new Set(workingEnv.metaVars.keys());
+      const outerLevelMetaIds = new Set(workingEnv.levelMetas.keys());
+      const checkedClauseEnv = checkMatchClause(
+        '_match',
+        workingEnv.atIndexPathAndValue(workingEnv.indexPath, clause),
+        syntheticMatchType,
+        undefined,
+        undefined,
+        { rhsAlreadyElaborated: true },
+      );
+      checkedClauses.push(checkedClauseEnv.value);
+      const projectedMetaVars = new Map(workingEnv.metaVars);
+      for (const id of outerMetaIds) {
+        const updated = checkedClauseEnv.metaVars.get(id);
+        if (updated) {
+          projectedMetaVars.set(id, updated);
+        }
+      }
+      const projectedConstraints = checkedClauseEnv.constraints.filter(constraint => outerMetaIds.has(constraint.meta));
+      const projectedLevelMetas = new Map(workingEnv.levelMetas);
+      for (const id of outerLevelMetaIds) {
+        if (checkedClauseEnv.levelMetas.has(id)) {
+          projectedLevelMetas.set(id, checkedClauseEnv.levelMetas.get(id));
+        }
+      }
+      workingEnv = new TCEnv(
+        workingEnv.context,
+        workingEnv.definitions,
+        projectedMetaVars,
+        projectedConstraints,
+        workingEnv.indexPath,
+        workingEnv.valueStack,
+        workingEnv.value,
+        projectedLevelMetas,
+        workingEnv.options,
+      );
+    }
+
+    const elaboratedMatch: TTKTerm = {
+      tag: 'Match',
+      scrutinee: env.value.scrutinee,
+      clauses: checkedClauses,
+    };
+    env.recordTypeInfo(expectedType);
+    return workingEnv.withValue(elaboratedMatch).withElaboratedTerm(elaboratedMatch);
+  }
+
   // Only use the Lambda-specific rule when expectedType is a Pi.
   // If expectedType is a Meta or something else, fall through to CONV rule
   // which infers the lambda's type and unifies.
@@ -845,18 +971,23 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     assertIsPi(expectedType)
 
     let lambdaEnv: typeof env | undefined = undefined
+    const lambdaDomain = expectedType.domain;
 
-    try {
-      lambdaEnv = env.unifyTerms(env.value.domain, expectedType.domain)
-    } catch (e) {
-      if (e instanceof TCEnvError) {
-        debugger
-        throw e.wrappedBy(`Lambda parameter '${env.value.name}' has type ${e.env.prettyPrint(env.value.domain)} but expected ${e.env.prettyPrint(expectedType.domain)}`);
+    if (env.value.binderKind.tag === 'BLam') {
+      try {
+        lambdaEnv = env.unifyTerms(env.value.domain, expectedType.domain)
+      } catch (e) {
+        if (e instanceof TCEnvError) {
+          debugger
+          throw e.wrappedBy(`Lambda parameter '${env.value.name}' has type ${e.env.prettyPrint(env.value.domain)} but expected ${e.env.prettyPrint(expectedType.domain)}`);
+        }
+        throw e;
       }
-      throw e;
+    } else {
+      lambdaEnv = env;
     }
 
-    const bodyEnv = lambdaEnv.inBinderLambdaBodyWithDomain(expectedType.domain)
+    const bodyEnv = lambdaEnv.inBinderLambdaBodyWithDomain(lambdaDomain)
     const checkedBodyEnv = checkType(bodyEnv, expectedType.body)
 
     // Reconstruct the Lambda with the elaborated domain and body
@@ -868,8 +999,8 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     const elaboratedLambda: TTKTerm = {
       tag: 'Binder',
       name: env.value.name,
-      binderKind: env.value.binderKind,
-      domain: expectedType.domain,  // Use expected type's domain (concrete, not a Hole)
+      binderKind: { tag: 'BLam' },
+      domain: lambdaDomain,  // Use expected type's domain (concrete, not a Hole)
       body: checkedBodyEnv.value
     };
     // Record the lambda's Pi type at the lambda's path (env.indexPath), not the body's path.
@@ -878,7 +1009,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     // Also record the lambda parameter's type at the .name sub-path
     // so hovering on the parameter name shows its type (e.g., "x : A").
     const nameIndexPath: IndexPath = [...env.indexPath, { kind: 'field', name: 'name' }];
-    lambdaEnv.atIndexPath(nameIndexPath).recordTypeInfo(expectedType.domain);
+    lambdaEnv.atIndexPath(nameIndexPath).recordTypeInfo(lambdaDomain);
     // Return at the OUTER context depth (lambdaEnv), not the body's depth (checkedBodyEnv).
     // The lambda body extends the context by 1, but after checking the body we leave that scope.
     // Returning at the outer depth ensures that subsequent type comparisons (e.g., CONV rule
@@ -1036,11 +1167,7 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       // This prevents interfering with normal function application
       const isConstructor = !!getConstructorNamedArgMap(env.definitions, constName);
 
-      // WHITELIST: Only run for specific constructors known to need this feature
-      // This prevents interfering with other constructors that work fine with normal implicit handling
-      const isWhitelisted = constName === 'MkDPair' || constName === 'MkSigma';
-
-      if (implicitParams.length > 0 && hasEnoughArgs && !expectedIsSort && firstArgsAreHoles && isConstructor && isWhitelisted) {
+      if (implicitParams.length > 0 && hasEnoughArgs && !expectedIsSort && firstArgsAreHoles && isConstructor) {
         try {
 
           // The first N args should be for the N implicit parameters

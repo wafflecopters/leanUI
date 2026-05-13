@@ -3,6 +3,7 @@ import { inferType, checkType, buildOfNatCoercionHoleId } from './checker';
 import { TTKTerm, mkVar, mkConst, mkType, mkPi, mkLambda, mkApp, mkULevel, mkLSucc, mkLMax, mkMeta } from './kernel';
 import { TCEnv, DefinitionsMap } from './term';
 import { unifyTerms, UnifyResult } from './unify';
+import { compileTTFromText } from './compile';
 
 // Helper to create a minimal TCEnv for testing
 function createTestEnv(term: TTKTerm, context: { name: string; type: TTKTerm }[] = []): TCEnv<TTKTerm> {
@@ -16,6 +17,36 @@ function createTestEnv(term: TTKTerm, context: { name: string; type: TTKTerm }[]
   definitions.terms.set('Nat', { name: 'Nat', type: mkType() });
   definitions.terms.set('Zero', { name: 'Zero', type: mkConst('Nat') });
   definitions.terms.set('Succ', { name: 'Succ', type: mkPi(mkConst('Nat'), mkConst('Nat'), '_') });
+  definitions.terms.set('Bool', { name: 'Bool', type: mkType() });
+  definitions.terms.set('True', { name: 'True', type: mkConst('Bool') });
+  definitions.terms.set('False', { name: 'False', type: mkConst('Bool') });
+  const pairType = mkPi(mkType(), mkPi(mkType(), mkType(), 'B'), 'A');
+  const mkPairType = mkPi(
+    mkType(),
+    mkPi(
+      mkType(),
+      mkPi(
+        mkVar(1),
+        mkPi(
+          mkVar(1),
+          mkApp(mkApp(mkConst('Pair'), mkVar(3)), mkVar(2)),
+          'snd',
+        ),
+        'fst',
+      ),
+      'B',
+    ),
+    'A',
+  );
+  definitions.terms.set('Pair', { name: 'Pair', type: pairType });
+  definitions.terms.set('MkPair', { name: 'MkPair', type: mkPairType });
+  definitions.inductiveTypes.set('Pair', {
+    name: 'Pair',
+    type: pairType,
+    constructors: [{ name: 'MkPair', type: mkPairType }],
+    indexPositions: [],
+  });
+  definitions.inductiveNameOfConstructor.set('MkPair', 'Pair');
 
   // Add a simple identity function for testing
   // id : (A : Type) -> A -> A
@@ -48,6 +79,26 @@ describe('inferType', () => {
     expect(result.value).toEqual(mkConst('Nat'));
   });
 
+  test('Var lifts a non-innermost binder type through newer context entries', () => {
+    const fullType = mkVar(2);
+    const term: TTKTerm = mkVar(1);
+    const env = createTestEnv(term, [
+      { name: 'A', type: mkType() },
+      { name: 'x', type: mkVar(0) },
+      {
+        name: 'h',
+        type: mkApp(
+          mkApp(mkConst('Pair'), mkVar(1)),
+          mkVar(0),
+        ),
+      },
+    ]);
+
+    const result = inferType(env);
+
+    expect(result.value).toEqual(fullType);
+  });
+
   test('Const returns its type from definitions', () => {
     const term: TTKTerm = mkConst('Zero');
     const env = createTestEnv(term);
@@ -67,6 +118,77 @@ describe('inferType', () => {
     expect(result.value).toEqual(mkConst('Nat'));
   });
 
+  test('App does not double-insert an implicit argument when elaboration already supplied a hole', () => {
+    const equalType = mkPi(
+      mkType(),
+      mkPi(
+        mkVar(0),
+        mkPi(mkVar(1), mkType(), 'rhs'),
+        'lhs',
+      ),
+      'A',
+    );
+    const definitions: DefinitionsMap = {
+      terms: new Map([
+        ['Nat', { name: 'Nat', type: mkType() }],
+        ['Zero', { name: 'Zero', type: mkConst('Nat') }],
+        ['Equal', { name: 'Equal', type: equalType, namedArgMap: new Map([['A', 0]]) }],
+      ]),
+      inductiveTypes: new Map(),
+      inductiveNameOfConstructor: new Map(),
+    };
+    const env = new TCEnv(
+      [{ name: 'x', type: mkConst('Nat') }],
+      definitions,
+      new Map(),
+      [],
+      [],
+      [],
+      mkApp(mkApp(mkApp(mkConst('Equal'), { tag: 'Hole', id: '_A' }), mkVar(0)), mkVar(0)),
+      new Map(),
+      { mode: 'check' },
+    );
+
+    const result = inferType(env);
+
+    expect(result.value).toEqual(mkType());
+  });
+
+  test('App can infer terms that explicitly provide an implicit argument', () => {
+    const equalType = mkPi(
+      mkType(),
+      mkPi(
+        mkVar(0),
+        mkPi(mkVar(1), mkType(), 'rhs'),
+        'lhs',
+      ),
+      'A',
+    );
+    const definitions: DefinitionsMap = {
+      terms: new Map([
+        ['Nat', { name: 'Nat', type: mkType() }],
+        ['Equal', { name: 'Equal', type: equalType, namedArgMap: new Map([['A', 0]]) }],
+      ]),
+      inductiveTypes: new Map(),
+      inductiveNameOfConstructor: new Map(),
+    };
+    const env = new TCEnv(
+      [{ name: 'x', type: mkConst('Nat') }],
+      definitions,
+      new Map(),
+      [],
+      [],
+      [],
+      mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkVar(0)), mkVar(0)),
+      new Map(),
+      { mode: 'check' },
+    );
+
+    const result = inferType(env);
+
+    expect(result.value).toEqual(mkType());
+  });
+
   test('Hole in infer mode creates a Meta', () => {
     const term: TTKTerm = { tag: 'Hole', id: '_' };
     const env = createTestEnv(term);
@@ -77,6 +199,7 @@ describe('inferType', () => {
     // Actually, createMetaForHole returns the meta term, so result.value should be a Meta
     expect(result.value.tag).toBe('Meta');
   });
+
 });
 
 describe('checkType', () => {
@@ -142,6 +265,26 @@ describe('checkType', () => {
     expect(result.metaVars.size).toBe(1);
   });
 
+  test('Lambda checking against an expected Pi uses the expected domain when the annotation is a hole', () => {
+    const term: TTKTerm = {
+      tag: 'Binder',
+      name: 'z',
+      binderKind: { tag: 'BLam' },
+      domain: { tag: 'Hole', id: '_lam_domain' },
+      body: mkConst('True'),
+    };
+    const expectedType = mkPi(mkConst('Nat'), mkConst('Bool'), 'z');
+    const env = createTestEnv(term);
+
+    const result = checkType(env, expectedType);
+
+    expect(result.value.tag).toBe('Binder');
+    if (result.value.tag === 'Binder') {
+      expect(result.value.binderKind.tag).toBe('BLam');
+      expect(result.value.domain).toEqual(mkConst('Nat'));
+    }
+  });
+
   test('Nested App with multiple Holes returns all Metas', () => {
     // id _ _ where both _ should become metas
     // id : (A : Type) -> A -> A
@@ -184,6 +327,141 @@ describe('checkType', () => {
 
     // Const stays as Const - no elaboration needed
     expect(result.value).toEqual(mkConst('Zero'));
+  });
+
+  test('Match checking validates clauses against the expected type', () => {
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkVar(0),
+      clauses: [
+        { patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }], rhs: mkConst('Zero') },
+        { patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'm' }] }], rhs: mkVar(0) },
+      ],
+    };
+    const env = createTestEnv(term, [{ name: 'n', type: mkConst('Nat') }]);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    expect(result.value.tag).toBe('Match');
+    expect(result.elaboratedTerm?.tag).toBe('Match');
+  });
+
+  test('Match checking rejects branches whose RHS does not match the expected type', () => {
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkVar(0),
+      clauses: [
+        { patterns: [{ tag: 'PCtor', name: 'Zero', args: [] }], rhs: mkConst('True') },
+        { patterns: [{ tag: 'PCtor', name: 'Succ', args: [{ tag: 'PVar', name: 'm' }] }], rhs: mkConst('False') },
+      ],
+    };
+    const env = createTestEnv(term, [{ name: 'n', type: mkConst('Nat') }]);
+
+    expect(() => checkType(env, mkConst('Nat'))).toThrow(/Nat|Bool/);
+  });
+
+  test('Match checking preserves outer clause binders inside nested matches', () => {
+    const pairNatNat = mkApp(mkApp(mkConst('Pair'), mkConst('Nat')), mkConst('Nat'));
+    const pairNatPair = mkApp(mkApp(mkConst('Pair'), mkConst('Nat')), pairNatNat);
+    const term: TTKTerm = {
+      tag: 'Match',
+      scrutinee: mkVar(0),
+      clauses: [{
+        patterns: [{
+          tag: 'PCtor',
+          name: 'MkPair',
+          args: [
+            { tag: 'PWild', name: '_A' },
+            { tag: 'PWild', name: '_B' },
+            { tag: 'PVar', name: 'n' },
+            { tag: 'PVar', name: 'pair' },
+          ],
+        }],
+        rhs: {
+          tag: 'Match',
+          scrutinee: mkVar(0),
+          clauses: [{
+            patterns: [{
+              tag: 'PCtor',
+              name: 'MkPair',
+              args: [
+                { tag: 'PWild', name: '_A' },
+                { tag: 'PWild', name: '_B' },
+                { tag: 'PVar', name: 'a' },
+                { tag: 'PVar', name: 'b' },
+              ],
+            }],
+            rhs: mkVar(1),
+          }],
+        },
+      }],
+    };
+    const env = createTestEnv(term, [{ name: 'p', type: pairNatPair }]);
+
+    const result = checkType(env, mkConst('Nat'));
+
+    expect(result.value.tag).toBe('Match');
+    expect(result.elaboratedTerm?.tag).toBe('Match');
+  });
+
+  test('replace with an untyped lambda motive compiles end-to-end', () => {
+    const source = `
+inductive Equal : Type -> Type -> Type where
+  refl : {a : Type} -> Equal a a
+
+replace : {x y : Type} -> (P : Type -> Type) -> Equal x y -> P x -> P y
+replace P refl px = px
+
+sym2 : (x y : Type) -> Equal x y -> Equal y x
+sym2 x y h = replace (\\z => Equal z x) h refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(block => block.declarations).find(d => d.name === 'sym2');
+
+    expect(result.success).toBe(true);
+    expect(decl?.checkSuccess).toBe(true);
+  });
+
+  test('extracts implicit constructor args for MkPair from the expected type', () => {
+    const pairNatNat = mkApp(mkApp(mkConst('Pair'), mkConst('Nat')), mkConst('Nat'));
+    const term: TTKTerm = {
+      tag: 'App',
+      fn: {
+        tag: 'App',
+        fn: {
+          tag: 'App',
+          fn: {
+            tag: 'App',
+            fn: mkConst('MkPair'),
+            arg: { tag: 'Hole', id: '_A' },
+          },
+          arg: { tag: 'Hole', id: '_B' },
+        },
+        arg: mkConst('Zero'),
+      },
+      arg: mkConst('Zero'),
+    };
+    const env = createTestEnv(term);
+
+    const result = checkType(env, pairNatNat).solveMetasAndConstraints({ liftMetasToFullContext: false });
+
+    expect(result.value.tag).toBe('App');
+    expect(result.elaboratedTerm?.tag).toBe('App');
+    const elaborated = result.zonkTerm(result.elaboratedTerm!) as TTKTerm;
+    expect(elaborated.tag).toBe('App');
+    if (elaborated.tag !== 'App') return;
+    const level3 = elaborated.fn;
+    expect(level3.tag).toBe('App');
+    if (level3.tag !== 'App') return;
+    const level2 = level3.fn;
+    expect(level2.tag).toBe('App');
+    if (level2.tag !== 'App') return;
+    const level1 = level2.fn;
+    expect(level1.tag).toBe('App');
+    if (level1.tag !== 'App') return;
+    expect(level1.fn).toEqual(mkConst('MkPair'));
+    expect(level1.arg).toEqual(mkConst('Nat'));
+    expect(level2.arg).toEqual(mkConst('Nat'));
   });
 });
 

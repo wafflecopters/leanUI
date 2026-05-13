@@ -7,7 +7,7 @@
  */
 
 import { TTKTerm, TTKContext, TTKPattern, TTKClause } from '../compiler/kernel';
-import { MetaVar, Constraint, DefinitionsMap, InductiveDefinition } from '../compiler/term';
+import { MetaVar, Constraint, DefinitionsMap, InductiveDefinition, transformVarsInTerm } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, freshMetaName } from './tactic';
 import { whnf } from '../compiler/whnf';
@@ -145,6 +145,7 @@ export class CasesTactic implements Tactic {
         ctor: string;
         meta: MetaVar;
         explicitParamNames: string[];
+        namedPatternArgs: Array<{ name: string; patternName: string }>;
       }> = [];
 
       for (const ctor of inductiveDef.constructors) {
@@ -165,10 +166,11 @@ export class CasesTactic implements Tactic {
           ctx: branchCtx,
           type: branchGoalType,
           solution: undefined,
-          caseTag: ctor.name
+          caseTag: ctor.name,
+          branchParamNames: paramNames,
         };
 
-        branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta, explicitParamNames: paramNames });
+        branchMetas.push({ id: branchId, ctor: ctor.name, meta: branchMeta, explicitParamNames: paramNames, namedPatternArgs: [] });
       }
 
       const elimTerm = this.buildMatchTerm(this.scrutinee, branchMetas);
@@ -219,6 +221,7 @@ export class CasesTactic implements Tactic {
       ctor: string;
       meta: MetaVar;
       explicitParamNames: string[];
+      namedPatternArgs: Array<{ name: string; patternName: string }>;
     }> = [];
 
     for (const ctor of inductiveDef.constructors) {
@@ -237,14 +240,17 @@ export class CasesTactic implements Tactic {
         ctx: branchResult.ctx,
         type: branchResult.goalType,
         solution: undefined,
-        caseTag: ctor.name
+        caseTag: ctor.name,
+        branchParamNames: branchResult.explicitParamNames,
+        rhsVarMap: branchResult.rhsVarMap,
       };
 
       branchMetas.push({
         id: branchId,
         ctor: ctor.name,
         meta: branchMeta,
-        explicitParamNames: branchResult.explicitParamNames
+        explicitParamNames: branchResult.explicitParamNames,
+        namedPatternArgs: branchResult.namedPatternArgs,
       });
     }
 
@@ -330,7 +336,7 @@ export class CasesTactic implements Tactic {
     allTypeArgs: TTKTerm[],
     indexPositions: number[],
     definitions: DefinitionsMap
-  ): { ctx: TTKContext; goalType: TTKTerm; explicitParamNames: string[] } | null {
+  ): { ctx: TTKContext; goalType: TTKTerm; explicitParamNames: string[]; namedPatternArgs: Array<{ name: string; patternName: string }>; rhsVarMap: Map<number, TTKTerm> } | null {
     const oldCtxSize = goal.ctx.length;
     const totalCtorParams = ctorInfo.totalParams;
 
@@ -398,53 +404,129 @@ export class CasesTactic implements Tactic {
     }
 
     const numImplicitNew = implicitNewParams.length;
-    const numKept = keptEntries.length;
     const numExplicitNew = explicitNewParams.length;
-    const newCtxSize = numImplicitNew + numKept + numExplicitNew;
+    const numPatternParams = numImplicitNew + numExplicitNew;
+    const numKept = keptEntries.length;
+    const newCtxSize = numPatternParams + numKept;
 
-    // New layout: [implicit_new..., kept..., explicit_new...]
-    // Array positions:
-    //   implicit_new[j] at position j                              (j = 0..numImplicitNew-1)
-    //   kept[k]         at position numImplicitNew + k             (k = 0..numKept-1)
-    //   explicit_new[e] at position numImplicitNew + numKept + e   (e = 0..numExplicitNew-1)
+    const collectReferencedFreeVars = (term: TTKTerm): Set<number> => {
+      const refs = new Set<number>();
+      transformVarsInTerm(term, (index, ctx) => {
+        if (index >= ctx.length) {
+          refs.add(index - ctx.length);
+        }
+        return { tag: 'Var', index };
+      });
+      return refs;
+    };
+    const liftOldGoalVarIntoCurrentRhsScope = (oldDeBruijn: number): TTKTerm => {
+      const base = goal.rhsVarMap?.get(oldDeBruijn) ?? ({ tag: 'Var', index: oldDeBruijn } as TTKTerm);
+      return shiftTerm(base, numPatternParams, 0);
+    };
 
-    // Phase 3: Build de Bruijn remaps
-
-    // 3a: ctorParamRemap for new ctor params (full new-context de Bruijn)
-    const ctorParamRemap = new Map<number, TTKTerm>();
-
+    // First build provisional maps with layout [implicit_new..., explicit_new..., kept...]
+    // so we can detect which kept hypotheses must stay before or after the new
+    // constructor params to keep all context-entry types well scoped.
+    const provisionalCtorParamRemap = new Map<number, TTKTerm>();
     for (let j = 0; j < numImplicitNew; j++) {
       const ctorDeBruijn = totalCtorParams - 1 - implicitNewParams[j].ctorIdx;
       const newArrayPos = j;
+      const newDeBruijn = newCtxSize - 1 - newArrayPos;
+      provisionalCtorParamRemap.set(ctorDeBruijn, { tag: 'Var', index: newDeBruijn });
+    }
+    for (let e = 0; e < numExplicitNew; e++) {
+      const ctorDeBruijn = totalCtorParams - 1 - explicitNewParams[e].ctorIdx;
+      const newArrayPos = numImplicitNew + e;
+      const newDeBruijn = newCtxSize - 1 - newArrayPos;
+      provisionalCtorParamRemap.set(ctorDeBruijn, { tag: 'Var', index: newDeBruijn });
+    }
+
+    const provisionalGoalVarRemap = new Map<number, TTKTerm>();
+    for (let k = 0; k < numKept; k++) {
+      const oldArrayPos = keptEntries[k].oldArrayPos;
+      const oldDeBruijn = oldCtxSize - 1 - oldArrayPos;
+      const newArrayPos = numPatternParams + k;
+      const newDeBruijn = newCtxSize - 1 - newArrayPos;
+      provisionalGoalVarRemap.set(oldDeBruijn, { tag: 'Var', index: newDeBruijn });
+    }
+    for (const [ctorDeBruijn, goalExpr] of ctorParamBindings) {
+      provisionalCtorParamRemap.set(ctorDeBruijn, this.remapVars(goalExpr, provisionalGoalVarRemap));
+    }
+    for (const [goalVarIdx, ctorIdxExpr] of goalSubstitutions) {
+      provisionalGoalVarRemap.set(goalVarIdx, this.translateCtorExpr(ctorIdxExpr, provisionalCtorParamRemap));
+    }
+
+    const keptBefore = new Set<number>();
+    const provisionalKeptDeBruijnByIndex = new Map<number, number>();
+    const provisionalNewDeBruijns = new Set<number>();
+    for (let k = 0; k < numKept; k++) {
+      const oldArrayPos = keptEntries[k].oldArrayPos;
+      const oldDeBruijn = oldCtxSize - 1 - oldArrayPos;
+      const mapped = provisionalGoalVarRemap.get(oldDeBruijn);
+      if (mapped?.tag === 'Var') {
+        provisionalKeptDeBruijnByIndex.set(k, mapped.index);
+      }
+    }
+    for (const mapped of provisionalCtorParamRemap.values()) {
+      if (mapped.tag === 'Var') {
+        provisionalNewDeBruijns.add(mapped.index);
+      }
+    }
+
+    for (const { ctorIdx, param } of [...implicitNewParams, ...explicitNewParams]) {
+      const fullCtorType = shiftTerm(param.type, totalCtorParams - ctorIdx, 0);
+      const translatedType = this.translateCtorExpr(fullCtorType, provisionalCtorParamRemap);
+      const refs = collectReferencedFreeVars(translatedType);
+      for (const [k, keptDeBruijn] of provisionalKeptDeBruijnByIndex.entries()) {
+        if (refs.has(keptDeBruijn)) {
+          keptBefore.add(k);
+        }
+      }
+    }
+
+    const keptBeforeEntries = keptEntries.filter((_, k) => keptBefore.has(k));
+    const keptAfterEntries = keptEntries.filter((_, k) => !keptBefore.has(k));
+    const numKeptBefore = keptBeforeEntries.length;
+
+    // Final layout: [kept_before..., implicit_new..., explicit_new..., kept_after...]
+    const ctorParamRemap = new Map<number, TTKTerm>();
+    const goalVarRemap = new Map<number, TTKTerm>();
+
+    for (let k = 0; k < keptBeforeEntries.length; k++) {
+      const oldArrayPos = keptBeforeEntries[k].oldArrayPos;
+      const oldDeBruijn = oldCtxSize - 1 - oldArrayPos;
+      const newArrayPos = k;
+      const newDeBruijn = newCtxSize - 1 - newArrayPos;
+      goalVarRemap.set(oldDeBruijn, { tag: 'Var', index: newDeBruijn });
+    }
+
+    for (let j = 0; j < numImplicitNew; j++) {
+      const ctorDeBruijn = totalCtorParams - 1 - implicitNewParams[j].ctorIdx;
+      const newArrayPos = numKeptBefore + j;
       const newDeBruijn = newCtxSize - 1 - newArrayPos;
       ctorParamRemap.set(ctorDeBruijn, { tag: 'Var', index: newDeBruijn });
     }
 
     for (let e = 0; e < numExplicitNew; e++) {
       const ctorDeBruijn = totalCtorParams - 1 - explicitNewParams[e].ctorIdx;
-      const newArrayPos = numImplicitNew + numKept + e;
+      const newArrayPos = numKeptBefore + numImplicitNew + e;
       const newDeBruijn = newCtxSize - 1 - newArrayPos;
       ctorParamRemap.set(ctorDeBruijn, { tag: 'Var', index: newDeBruijn });
     }
 
-    // 3b: goalVarRemap for kept variables (full new-context de Bruijn)
-    const goalVarRemap = new Map<number, TTKTerm>();
-
-    for (let k = 0; k < numKept; k++) {
-      const oldArrayPos = keptEntries[k].oldArrayPos;
+    for (let k = 0; k < keptAfterEntries.length; k++) {
+      const oldArrayPos = keptAfterEntries[k].oldArrayPos;
       const oldDeBruijn = oldCtxSize - 1 - oldArrayPos;
-      const newArrayPos = numImplicitNew + k;
+      const newArrayPos = numKeptBefore + numPatternParams + k;
       const newDeBruijn = newCtxSize - 1 - newArrayPos;
       goalVarRemap.set(oldDeBruijn, { tag: 'Var', index: newDeBruijn });
     }
 
-    // 3c: Identified ctor params → translate goal-scope binding to branch scope
     for (const [ctorDeBruijn, goalExpr] of ctorParamBindings) {
       const branchExpr = this.remapVars(goalExpr, goalVarRemap);
       ctorParamRemap.set(ctorDeBruijn, branchExpr);
     }
 
-    // 3d: Eliminated goal variables → translate ctor index expressions to branch scope
     for (const [goalVarIdx, ctorIdxExpr] of goalSubstitutions) {
       const translated = this.translateCtorExpr(ctorIdxExpr, ctorParamRemap);
       goalVarRemap.set(goalVarIdx, translated);
@@ -452,6 +534,7 @@ export class CasesTactic implements Tactic {
 
     // Phase 4: Build context and remap goal type
     const branchGoalType = this.remapVars(goal.type, goalVarRemap);
+    const rhsVarMap = new Map<number, TTKTerm>();
 
     const newCtx: TTKContext = [];
 
@@ -462,7 +545,27 @@ export class CasesTactic implements Tactic {
       usedNames.add(entry.name);
     }
 
-    // 4a: Implicit new ctor params
+    // 4a: Kept entries that constructor param types depend on
+    for (let k = 0; k < keptBeforeEntries.length; k++) {
+      const { oldArrayPos, entry } = keptBeforeEntries[k];
+      const shiftToFull = oldCtxSize - oldArrayPos;
+      const fullOldType = shiftTerm(entry.type, shiftToFull, 0);
+      const remappedType = this.remapVars(fullOldType, goalVarRemap);
+      const prefixSize = newCtx.length;
+      const removedSuffixSize = newCtxSize - prefixSize;
+      const typePrefixRelative = removedSuffixSize > 0
+        ? shiftTerm(remappedType, -removedSuffixSize, 0)
+        : remappedType;
+      newCtx.push({ name: entry.name, type: typePrefixRelative });
+
+      const branchArrayPos = k;
+      const branchDeBruijn = newCtxSize - 1 - branchArrayPos;
+      const oldDeBruijn = oldCtxSize - 1 - oldArrayPos;
+      rhsVarMap.set(branchDeBruijn, liftOldGoalVarIntoCurrentRhsScope(oldDeBruijn));
+    }
+
+    // 4b: Implicit new ctor params
+    const namedPatternArgs: Array<{ name: string; patternName: string }> = [];
     for (const { ctorIdx, param } of implicitNewParams) {
       // Param type is in partial ctor scope (ctorIdx binders above).
       // Shift to full ctor scope, then translate to branch scope.
@@ -470,16 +573,45 @@ export class CasesTactic implements Tactic {
       const translatedType = this.translateCtorExpr(fullCtorType, ctorParamRemap);
       // Convert from full new-context to prefix-relative
       const prefixSize = newCtx.length;
-      const typePrefixRelative = prefixSize < newCtxSize
-        ? shiftTerm(translatedType, -(newCtxSize - prefixSize), 0)
+      const removedSuffixSize = newCtxSize - prefixSize;
+      const typePrefixRelative = removedSuffixSize > 0
+        ? shiftTerm(translatedType, -removedSuffixSize, 0)
         : translatedType;
       const baseName = (param.name && param.name !== '_') ? param.name : ('_impl' + newCtx.length);
       const paramName = this.deconflictName(baseName, usedNames);
       newCtx.push({ name: paramName, type: typePrefixRelative });
+      namedPatternArgs.push({ name: param.name, patternName: paramName });
     }
 
-    // 4b: Kept entries with remapped types
-    for (const { oldArrayPos, entry } of keptEntries) {
+    // 4c: Explicit new ctor params
+    const explicitParamNames: string[] = [];
+    for (let e = 0; e < explicitNewParams.length; e++) {
+      const { ctorIdx, param } = explicitNewParams[e];
+      const fullCtorType = shiftTerm(param.type, totalCtorParams - ctorIdx, 0);
+      const translatedType = this.translateCtorExpr(fullCtorType, ctorParamRemap);
+      const prefixSize = newCtx.length;
+      const removedSuffixSize = newCtxSize - prefixSize;
+      const typePrefixRelative = removedSuffixSize > 0
+        ? shiftTerm(translatedType, -removedSuffixSize, 0)
+        : translatedType;
+      const baseName = (param.name && param.name !== '_') ? param.name : ('_arg' + explicitParamNames.length);
+      const paramName = this.deconflictName(baseName, usedNames);
+      newCtx.push({ name: paramName, type: typePrefixRelative });
+      explicitParamNames.push(paramName);
+
+      const branchArrayPos = numKeptBefore + numImplicitNew + e;
+      const branchDeBruijn = newCtxSize - 1 - branchArrayPos;
+      // Kernel clause RHS terms are elaborated against the ORIGINAL clause
+      // pattern scope, where positional args are traversed before named args.
+      // That means named pattern vars occupy the youngest de Bruijn slots,
+      // and explicit positional vars sit above them.
+      const rhsDeBruijn = numPatternParams - 1 - e;
+      rhsVarMap.set(branchDeBruijn, { tag: 'Var', index: rhsDeBruijn });
+    }
+
+    // 4d: Remaining kept entries whose refined types may mention new params
+    for (let k = 0; k < keptAfterEntries.length; k++) {
+      const { oldArrayPos, entry } = keptAfterEntries[k];
       // Convert prefix-relative → full old-context
       const shiftToFull = oldCtxSize - oldArrayPos;
       const fullOldType = shiftTerm(entry.type, shiftToFull, 0);
@@ -487,28 +619,26 @@ export class CasesTactic implements Tactic {
       const remappedType = this.remapVars(fullOldType, goalVarRemap);
       // Convert new full-context → prefix-relative at current position
       const prefixSize = newCtx.length;
-      const typePrefixRelative = prefixSize < newCtxSize
-        ? shiftTerm(remappedType, -(newCtxSize - prefixSize), 0)
+      const removedSuffixSize = newCtxSize - prefixSize;
+      const typePrefixRelative = removedSuffixSize > 0
+        ? shiftTerm(remappedType, -removedSuffixSize, 0)
         : remappedType;
       newCtx.push({ name: entry.name, type: typePrefixRelative });
+
+      const branchArrayPos = numKeptBefore + numPatternParams + k;
+      const branchDeBruijn = newCtxSize - 1 - branchArrayPos;
+      const oldDeBruijn = oldCtxSize - 1 - oldArrayPos;
+      rhsVarMap.set(branchDeBruijn, liftOldGoalVarIntoCurrentRhsScope(oldDeBruijn));
     }
 
-    // 4c: Explicit new ctor params
-    const explicitParamNames: string[] = [];
-    for (const { ctorIdx, param } of explicitNewParams) {
-      const fullCtorType = shiftTerm(param.type, totalCtorParams - ctorIdx, 0);
-      const translatedType = this.translateCtorExpr(fullCtorType, ctorParamRemap);
-      const prefixSize = newCtx.length;
-      const typePrefixRelative = prefixSize < newCtxSize
-        ? shiftTerm(translatedType, -(newCtxSize - prefixSize), 0)
-        : translatedType;
-      const baseName = (param.name && param.name !== '_') ? param.name : ('_arg' + explicitParamNames.length);
-      const paramName = this.deconflictName(baseName, usedNames);
-      newCtx.push({ name: paramName, type: typePrefixRelative });
-      explicitParamNames.push(paramName);
+    for (let j = 0; j < numImplicitNew; j++) {
+      const branchArrayPos = numKeptBefore + j;
+      const branchDeBruijn = newCtxSize - 1 - branchArrayPos;
+      const rhsDeBruijn = numImplicitNew - 1 - j;
+      rhsVarMap.set(branchDeBruijn, { tag: 'Var', index: rhsDeBruijn });
     }
 
-    return { ctx: newCtx, goalType: branchGoalType, explicitParamNames };
+    return { ctx: newCtx, goalType: branchGoalType, explicitParamNames, namedPatternArgs, rhsVarMap };
   }
 
   /**
@@ -819,9 +949,9 @@ export class CasesTactic implements Tactic {
    */
   private buildMatchTerm(
     scrutinee: TTKTerm,
-    branchMetas: Array<{ id: string; ctor: string; explicitParamNames: string[] }>
+    branchMetas: Array<{ id: string; ctor: string; explicitParamNames: string[]; namedPatternArgs: Array<{ name: string; patternName: string }> }>
   ): TTKTerm {
-    const clauses: TTKClause[] = branchMetas.map(({ id, ctor, explicitParamNames }) => {
+    const clauses: TTKClause[] = branchMetas.map(({ id, ctor, explicitParamNames, namedPatternArgs }) => {
       const patternArgs: TTKPattern[] = explicitParamNames.map(name => ({
         tag: 'PVar' as const,
         name
@@ -830,7 +960,11 @@ export class CasesTactic implements Tactic {
       const pattern: TTKPattern = {
         tag: 'PCtor',
         name: ctor,
-        args: patternArgs
+        args: patternArgs,
+        namedArgs: namedPatternArgs.map(({ name, patternName }) => ({
+          name,
+          pattern: { tag: 'PVar' as const, name: patternName },
+        })),
       };
 
       return {

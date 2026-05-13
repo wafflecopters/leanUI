@@ -1,7 +1,8 @@
 import { describe, test, expect } from 'vitest';
-import { whnf, areTypesDefEq, WhnfContext } from './whnf';
+import { whnf, areTypesDefEq, WhnfContext, unfoldHeadOnce } from './whnf';
 import { TTKTerm, TTKClause, mkVar, mkConst } from './kernel';
 import { DefinitionsMap, createDefinitionsMap, addDefinition } from './term';
+import { compileTTFromText } from './compile';
 
 // Helper to create a lambda: λname:domain. body
 function mkLam(name: string, domain: TTKTerm, body: TTKTerm): TTKTerm {
@@ -148,6 +149,68 @@ describe('whnf δ-reduction (unfold definitions)', () => {
     const term = mkConst('a');
     const result = whnf(term, { definitions: defs });
     expect(result).toEqual(mkConst('Zero'));
+  });
+
+  test('unfoldHeadOnce exposes one alias layer without normalizing away nested redexes', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add a Zero = a
+add a (Succ b) = Succ (add a b)
+
+neg : Nat -> Nat
+neg Zero = Zero
+neg (Succ a) = Succ a
+
+sub : Nat -> Nat -> Nat
+sub a b = add a (neg b)
+`;
+    const defs = compileTTFromText(source).definitions;
+    const term = mkApp(mkApp(mkConst('sub'), mkConst('Zero')), mkConst('Zero'));
+
+    expect(unfoldHeadOnce(term, { definitions: defs })).toEqual(
+      mkApp(mkApp(mkConst('add'), mkConst('Zero')), mkApp(mkConst('neg'), mkConst('Zero')))
+    );
+    expect(whnf(term, { definitions: defs })).toEqual(mkConst('Zero'));
+  });
+
+  test('does not unfold under-applied match-defined functions into malformed match spines', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+`;
+    const defs = compileTTFromText(source).definitions;
+    const partial = mkApp(mkConst('plus'), mkConst('Zero'));
+
+    expect(whnf(partial, { definitions: defs })).toEqual(partial);
+    expect(whnf(mkApp(partial, mkConst('Zero')), { definitions: defs })).toEqual(mkConst('Zero'));
+  });
+
+  test('keeps fully-applied pattern-matching functions opaque when the scrutinee is unknown', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+`;
+    const defs = compileTTFromText(source).definitions;
+    const term = mkApp(mkApp(mkConst('plus'), mkVar(0)), mkConst('Zero'));
+
+    expect(whnf(term, {
+      definitions: defs,
+      typingContext: [{ name: 'n', type: mkConst('Nat') }],
+    })).toEqual(term);
   });
 });
 

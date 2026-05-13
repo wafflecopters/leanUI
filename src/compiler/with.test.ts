@@ -181,7 +181,7 @@ leqImpliesSum (Succ a) (Succ b) (LeqSucc leq) with leqImpliesSum a b leq
 
     test('nested dependent with keeps outer family binders intact', () => {
       const source = readFileSync(
-        'src/test-programs/complex/sigmaSum-nested-with.tt',
+        new URL('../test-programs/complex/sigmaSum-nested-with.tt', import.meta.url),
         'utf8'
       )
         .split('\n')

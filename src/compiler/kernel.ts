@@ -1356,7 +1356,6 @@ function collectPatternVarsHelper(pattern: TTKPattern, vars: string[]): void {
       vars.push(pattern.name);
       break;
     case 'PWild':
-      vars.push(pattern.name);
       break;
     case 'PCtor':
       for (const arg of pattern.args) {
