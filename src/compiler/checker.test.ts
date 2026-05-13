@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'vitest';
 import { inferType, checkType, buildOfNatCoercionHoleId } from './checker';
-import { TTKTerm, mkVar, mkConst, mkType, mkPi, mkLambda, mkApp, mkULevel, mkLSucc, mkLMax, mkMeta } from './kernel';
-import { TCEnv, DefinitionsMap } from './term';
+import { TTKTerm, mkVar, mkConst, mkType, mkPi, mkLambda, mkApp, mkULevel, mkLSucc, mkLMax, mkMeta, prettyPrintFormatted } from './kernel';
+import { TCEnv, DefinitionsMap, createTCEnv } from './term';
 import { unifyTerms, UnifyResult } from './unify';
 import { compileTTFromText } from './compile';
 
@@ -462,6 +462,184 @@ sym2 x y h = replace (\\z => Equal z x) h refl
     expect(level1.fn).toEqual(mkConst('MkPair'));
     expect(level1.arg).toEqual(mkConst('Nat'));
     expect(level2.arg).toEqual(mkConst('Nat'));
+  });
+
+  test('does not eagerly extract indexed constructor implicits for refl', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+add : Nat -> Nat -> Nat
+add a Zero = a
+add a (Succ b) = Succ (add a b)
+
+addZeroRight : (a : Nat) -> Equal (add a Zero) a
+addZeroRight a = refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(block => block.declarations).find(d => d.name === 'addZeroRight');
+
+    expect(result.success).toBe(true);
+    expect(decl?.checkSuccess).toBe(true);
+    expect(decl?.checkErrors ?? []).toHaveLength(0);
+  });
+
+  test('inferType solves omitted projection implicits from explicit receiver arguments', () => {
+    const source = `
+inductive Void : Type where
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+record Cmp (A : Type) where
+  le : A -> A -> Type
+  zero : A
+  one : A
+  zeroLeOne : le zero one
+
+record Wrap where
+  constructor MkWrap
+  Carrier : Type
+  cmp : Cmp Carrier
+
+field : (R : Wrap) -> Cmp (Wrap.Carrier R)
+field R = Wrap.cmp R
+`;
+    const result = compileTTFromText(source);
+    expect(result.success).toBe(true);
+
+    const term: TTKTerm = {
+      tag: 'App',
+      fn: {
+        tag: 'App',
+        fn: { tag: 'Const', name: 'Cmp.zeroLeOne' },
+        arg: { tag: 'Hole', id: '_A' },
+      },
+      arg: {
+        tag: 'App',
+        fn: { tag: 'Const', name: 'field' },
+        arg: { tag: 'Var', index: 0 },
+      },
+    };
+
+    const env = createTCEnv({
+      definitions: result.definitions,
+      context: [{ name: 'R', type: { tag: 'Const', name: 'Wrap' } }],
+      options: { mode: 'check' },
+    }).withValue(term);
+
+    const inferred = inferType(env);
+    const solvedMeta = inferred.metaVars.get('_A')?.solution;
+    expect(solvedMeta).toBeDefined();
+    expect(prettyPrintFormatted(inferred.zonkTerm(solvedMeta!))).toBe('(Wrap.Carrier #0)');
+    expect(prettyPrintFormatted(inferred.zonkTerm(inferred.value))).toContain('(Wrap.Carrier #0)');
+  });
+
+  test('non-dependent constructor implicit extraction tolerates alias-vs-unfolded proposition types', () => {
+    const source = `
+inductive Void : Type where
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+record Cmp (A : Type) where
+  le : A -> A -> Type
+  zero : A
+  one : A
+  zeroLeOne : le zero one
+  zeroNeOne : Equal zero one -> Void
+
+record Wrap where
+  constructor MkWrap
+  Carrier : Type
+  cmp : Cmp Carrier
+
+field : (R : Wrap) -> Cmp (Wrap.Carrier R)
+field R = Wrap.cmp R
+
+rle : {R : Wrap} -> Wrap.Carrier R -> Wrap.Carrier R -> Type
+rle {R} = Cmp.le (field R)
+
+rzero : (R : Wrap) -> Wrap.Carrier R
+rzero R = Cmp.zero (field R)
+
+rone : (R : Wrap) -> Wrap.Carrier R
+rone R = Cmp.one (field R)
+
+rlt : {R : Wrap} -> Wrap.Carrier R -> Wrap.Carrier R -> Type
+rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
+
+zeroLtOneTerm : (R : Wrap) -> rlt (rzero R) (rone R)
+zeroLtOneTerm R = MkPair (Cmp.zeroLeOne (field R)) (Cmp.zeroNeOne (field R))
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(block => block.declarations).find(d => d.name === 'zeroLtOneTerm');
+
+    expect(result.success).toBe(true);
+    expect(decl?.checkSuccess).toBe(true);
+    expect(decl?.checkErrors ?? []).toHaveLength(0);
+  });
+
+  test('constructor tactic on aliased Pair goals keeps the original proposition components', () => {
+    const source = `
+inductive Void : Type where
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+record Pair (A B : Type) where
+  constructor MkPair
+  fst : A
+  snd : B
+
+record Cmp (A : Type) where
+  le : A -> A -> Type
+  zero : A
+  one : A
+  zeroLeOne : le zero one
+  zeroNeOne : Equal zero one -> Void
+
+record Wrap where
+  constructor MkWrap
+  Carrier : Type
+  cmp : Cmp Carrier
+
+field : (R : Wrap) -> Cmp (Wrap.Carrier R)
+field R = Wrap.cmp R
+
+rle : {R : Wrap} -> Wrap.Carrier R -> Wrap.Carrier R -> Type
+rle {R} = Cmp.le (field R)
+
+rzero : (R : Wrap) -> Wrap.Carrier R
+rzero R = Cmp.zero (field R)
+
+rone : (R : Wrap) -> Wrap.Carrier R
+rone R = Cmp.one (field R)
+
+rlt : {R : Wrap} -> Wrap.Carrier R -> Wrap.Carrier R -> Type
+rlt {R} a b = Pair (rle a b) (Equal a b -> Void)
+
+zeroLtOneTactic : (R : Wrap) -> rlt (rzero R) (rone R) := by
+  intros R
+  constructor
+  · exact (Cmp.zeroLeOne (field R))
+  · exact (Cmp.zeroNeOne (field R))
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(block => block.declarations).find(d => d.name === 'zeroLtOneTactic');
+
+    expect(result.success).toBe(true);
+    expect(decl?.checkSuccess).toBe(true);
+    expect(decl?.checkErrors ?? []).toHaveLength(0);
   });
 });
 

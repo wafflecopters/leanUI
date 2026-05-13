@@ -1403,7 +1403,9 @@ nth (VCons h tail) (FSucc f) = nth tail f
       expect(fnType).not.toContain('-> _pad1');
       expect(tailType).toContain('Vec');
       expect(tailType).toContain('A');
-      expect(tailType).toContain('_pad1');
+      expect(tailType).toContain('n');
+      expect(tailType).not.toContain('_pad1');
+      expect(tailType).not.toContain('?');
     }
   });
 

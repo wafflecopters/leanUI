@@ -1524,6 +1524,26 @@ head2 (VCons h (VCons _ _)) = h`;
       expect(result!.checkSuccess).toBe(true);
     });
 
+    test('Nested constructor patterns keep inner binder types aligned after implicit padding', () => {
+      const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Vec : Type -> Nat -> Type where
+  VNil : {A: Type} -> Vec A Zero
+  VCons : {A : Type} -> {n : Nat} -> A -> Vec A n -> Vec A (Succ n)
+
+second2 : {A : Type} -> {n : Nat} -> Vec A (Succ (Succ n)) -> A
+second2 (VCons _ (VCons x _)) = x`;
+
+      const results = compileSource(source);
+      const result = results.find(r => r.name === 'second2');
+      expect(result).toBeDefined();
+      expect(result!.parseSuccess).toBe(true);
+      expect(result!.checkSuccess).toBe(true);
+    });
+
     test('Multiple clauses with varying implicit patterns', () => {
       const source = `
 inductive Nat : Type where

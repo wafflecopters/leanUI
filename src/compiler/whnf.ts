@@ -701,18 +701,24 @@ export function whnf(term: TTKTerm, ctx?: WhnfContext): TTKTerm {
         if (def?.value?.tag === 'Match') {
           const requiredArgs = def.value.clauses[0]?.patterns.length ?? 0;
           if (args.length >= requiredArgs) {
-            const allCatchAll = def.value.clauses.every(clause =>
-              clause.patterns.every(pattern => pattern.tag === 'PVar' || pattern.tag === 'PWild'),
+            const unfolded = args.reduce<TTKTerm>(
+              (fnTerm, argTerm) => ({ tag: 'App', fn: fnTerm, arg: argTerm }),
+              def.value,
             );
-            const scrutinee = whnf(args[0], nextCtx);
-            const scrutineeKnown = scrutinee.tag !== 'Hole' && scrutinee.tag !== 'Meta' && scrutinee.tag !== 'Var';
-            if (allCatchAll || scrutineeKnown) {
-              const unfolded = args.reduce<TTKTerm>(
-                (fnTerm, argTerm) => ({ tag: 'App', fn: fnTerm, arg: argTerm }),
-                def.value,
-              );
+            const canReduce = def.value.clauses.some(clause => {
+              if (clause.patterns.length > args.length) return false;
+              const allCatchAll = clause.patterns.every(pattern => pattern.tag === 'PVar' || pattern.tag === 'PWild');
+              const candidateArgs = allCatchAll
+                ? args.slice(0, clause.patterns.length)
+                : args.slice(0, clause.patterns.length).map(arg =>
+                    whnf(arg, { ...nextCtx, deltaDepth: deltaDepth - 1 })
+                  );
+              return matchPatterns(clause.patterns, candidateArgs, ctx) !== null;
+            });
+            if (canReduce) {
               return whnf(unfolded, { ...nextCtx, deltaDepth: deltaDepth - 1 });
             }
+            return unfolded;
           }
         }
       }

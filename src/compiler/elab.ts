@@ -992,7 +992,8 @@ export function fixRhsForConstructorPatterns(
 export function fixRhsForVariablePatterns(
   patterns: TPattern[],
   rhs: TTerm,
-  _definitions: DefinitionsMap
+  _definitions: DefinitionsMap,
+  forcedVariableNames: Set<string> = new Set(),
 ): TTerm {
   // Replicate the parser's collectPatternVars heuristic to identify which
   // PVar patterns the parser would NOT have bound as variables.
@@ -1005,6 +1006,11 @@ export function fixRhsForVariablePatterns(
   for (const pattern of patterns) {
     if (pattern.tag === 'PVar') {
       const name = pattern.name;
+      if (forcedVariableNames.has(name)) {
+        missedVars.push({ name, fullVarIndex });
+        fullVarIndex++;
+        continue;
+      }
       const firstChar = name[0];
       const isLowercase = firstChar === firstChar.toLowerCase() && firstChar !== firstChar.toUpperCase();
       const isSingleUppercase = name.length === 1 && firstChar === firstChar.toUpperCase();
@@ -1040,6 +1046,29 @@ export function fixRhsForVariablePatterns(
   // For existing Var references: shift up based on how many missed variables
   // have de Bruijn indices <= the existing index
   return transformRhsForVariablePatterns(rhs, missedDeBruijn);
+}
+
+export function collectSyntheticPatternVariableNames(
+  patterns: TPattern[],
+  sourceIndexMap: (number | null)[] | undefined,
+  excludedNames: ReadonlySet<string> = new Set(),
+): Set<string> {
+  const names = new Set<string>();
+  if (!sourceIndexMap) {
+    return names;
+  }
+
+  for (let i = 0; i < sourceIndexMap.length; i++) {
+    if (sourceIndexMap[i] !== null) {
+      continue;
+    }
+    const pattern = patterns[i];
+    if (pattern?.tag === 'PVar' && !excludedNames.has(pattern.name)) {
+      names.add(pattern.name);
+    }
+  }
+
+  return names;
 }
 
 /**
@@ -1527,13 +1556,16 @@ export function reorderPatterns(
     return { error: `Too many positional patterns: ${extraCount} extra pattern(s) cannot fill named parameter positions` };
   }
 
-  // Fill missing named parameters with wildcards (implicit patterns)
-  // Named positions that are NOT filled get a synthetic wildcard
+  // Fill missing named parameters with synthetic binders.
+  // These omitted implicit parameters still need to bind their original names
+  // so the RHS can reference them (e.g. `foo x = Either A B`).
   let syntheticWildcardIndex = patterns.length + (clauseNamedPatterns?.length ?? 0);
-  for (const [_name, pos] of namedMap) {
+  for (const [name, pos] of namedMap) {
     if (result[pos] === null) {
-      // Insert a wildcard pattern for the missing named parameter
-      result[pos] = { pattern: { tag: 'PWild' }, originalIndex: syntheticWildcardIndex++ };
+      result[pos] = {
+        pattern: { tag: 'PVar', name, named: true },
+        originalIndex: syntheticWildcardIndex++,
+      };
     }
   }
 

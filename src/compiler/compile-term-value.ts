@@ -1,5 +1,5 @@
 import { arraySeg, appendPath, fieldSeg, serializeIndexPath, type ElabMap, type IndexPath } from '../types/source-position';
-import { elabPatternToKernelWithMap, elabToKernelWithMap, fixRhsForConstructorPatterns, fixRhsForVariablePatterns, hasNamedPatterns, reorderPatterns, applyVarPermutation, type NamedArgMap } from './elab';
+import { applyVarPermutation, collectSyntheticPatternVariableNames, elabPatternToKernelWithMap, elabToKernelWithMap, fixRhsForConstructorPatterns, fixRhsForVariablePatterns, hasNamedPatterns, reorderPatterns, type NamedArgMap } from './elab';
 import { type TClause } from './surface';
 import { checkMatchClause, arePatternsAbsurd } from './patterns';
 import { checkStructuralRecursion } from './recursion';
@@ -257,8 +257,23 @@ function checkMatchClauseFromSurface(
     }
   }
 
+  const explicitClauseNamedPatternNames = new Set(
+    (surfaceClause.namedPatterns ?? [])
+      .flatMap(({ pattern }) => pattern.tag === 'PVar' ? [pattern.name] : []),
+  );
+  const forcedVariableNames = collectSyntheticPatternVariableNames(
+    patternsToElab,
+    sourceIndexMap,
+    explicitClauseNamedPatternNames,
+  );
+
   rhsToElab = fixRhsForConstructorPatterns(patternsToElab, rhsToElab, termEnv.definitions);
-  rhsToElab = fixRhsForVariablePatterns(patternsToElab, rhsToElab, termEnv.definitions);
+  rhsToElab = fixRhsForVariablePatterns(
+    patternsToElab,
+    rhsToElab,
+    termEnv.definitions,
+    forcedVariableNames,
+  );
 
   const kernelPatterns: TTKPattern[] = patternsToElab.map((pattern, patternIndex) => {
     const sourcePatternIndex = sourceIndexMap?.[patternIndex] ?? patternIndex;
@@ -312,8 +327,14 @@ function checkMatchClauseFromSurface(
     [...termEnv.indexPath, TermDefinitionPartIndex.Value, MatchPartIndex.Clauses, arraySeg(clauseIndex)],
     fullKernelClause
   );
-  const checkedClauseEnv = checkMatchClause(termName, clauseEnv, type);
-
+  const checkedClauseEnv = checkMatchClause(
+    termName,
+    clauseEnv,
+    type,
+    namedArgMap,
+    totalArity,
+    { topLevelPatternsAlreadyPadded: true },
+  );
   return checkedClauseEnv.value;
 }
 

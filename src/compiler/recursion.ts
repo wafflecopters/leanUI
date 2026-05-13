@@ -427,7 +427,7 @@ export function checkRecursiveCallSite(
   args: TTKTerm[],
   smallerMap: StructurallySmallerMap,
   contextNames: string[],
-  binderDepth: number = 0
+  binderDepth: number = 0,
 ): CallSiteCheckResult {
   // Check each argument position
   for (let i = 0; i < args.length; i++) {
@@ -449,7 +449,7 @@ export function checkRecursiveCallSite(
         if (smallerThanPos === i) {
           return {
             isValid: true,
-            decreasingArgPosition: i
+            decreasingArgPosition: i,
           };
         }
       }
@@ -462,6 +462,47 @@ export function checkRecursiveCallSite(
     isValid: false,
     error: `Recursive call with arguments (${argsStr}) is not structurally decreasing. No argument is smaller than the corresponding pattern position.`
   };
+}
+
+function termContainsVarAtIndex(term: TTKTerm, targetIndex: number, binderDepth: number = 0): boolean {
+  switch (term.tag) {
+    case 'Var':
+      return term.index === targetIndex + binderDepth;
+    case 'App':
+      return termContainsVarAtIndex(term.fn, targetIndex, binderDepth)
+        || termContainsVarAtIndex(term.arg, targetIndex, binderDepth);
+    case 'Binder':
+      return termContainsVarAtIndex(term.domain, targetIndex, binderDepth)
+        || termContainsVarAtIndex(term.body, targetIndex, binderDepth + 1)
+        || (term.binderKind.tag === 'BLet'
+          && termContainsVarAtIndex(term.binderKind.defVal, targetIndex, binderDepth));
+    case 'Annot':
+      return termContainsVarAtIndex(term.term, targetIndex, binderDepth)
+        || termContainsVarAtIndex(term.type, targetIndex, binderDepth);
+    case 'Match':
+      return termContainsVarAtIndex(term.scrutinee, targetIndex, binderDepth)
+        || term.clauses.some(clause =>
+          termContainsVarAtIndex(clause.rhs, targetIndex, binderDepth + collectPatternVars(clause.patterns).length)
+        );
+    default:
+      return false;
+  }
+}
+
+function remapSmallerMapToElabArgs(
+  smallerMap: StructurallySmallerMap,
+  elabArgs: TTKTerm[] | undefined,
+): StructurallySmallerMap {
+  if (!elabArgs || elabArgs.length === 0) {
+    return smallerMap;
+  }
+
+  const remapped: StructurallySmallerMap = new Map();
+  for (const [varIndex, originalPosition] of smallerMap.entries()) {
+    const elabArgPosition = elabArgs.findIndex(arg => termContainsVarAtIndex(arg, varIndex));
+    remapped.set(varIndex, elabArgPosition >= 0 ? elabArgPosition : originalPosition);
+  }
+  return remapped;
 }
 
 // ============================================================================
@@ -504,7 +545,10 @@ export function checkClauseRecursion(
   clauseIndex: number,
   functionName: string
 ): ClauseRecursionResult {
-  const smallerMap = buildStructurallySmallerMap(clause.patterns);
+  const smallerMap = remapSmallerMapToElabArgs(
+    buildStructurallySmallerMap(clause.patterns),
+    clause.elabArgs,
+  );
   const callSites = findRecursiveCallSites(clause.rhs, functionName);
   const errors: RecursionError[] = [];
   const contextNames = clause.contextNames ?? collectPatternVars(clause.patterns).reverse();

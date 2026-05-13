@@ -1,6 +1,7 @@
 import type { ElabDeclaration } from './compile-types';
 import { elabToKernelWithMap, type NamedArgMap } from './elab';
 import type { TTKTerm } from './kernel';
+import { countKernelClauseBindings } from './pattern-binders';
 import { checkType } from './checker';
 import { prepareKernelGoalType } from './prepare-kernel-goal-type';
 import type { TacticInfoTree } from '../tactics/info-tree';
@@ -68,6 +69,110 @@ function containsUnsolvedMeta(term: TTKTerm, metaVars: Map<string, { solution?: 
     default:
       return false;
   }
+}
+
+type RecursiveVarOrigin =
+  | { kind: 'original'; argPosition: number }
+  | { kind: 'smaller'; argPosition: number }
+  | { kind: 'local' };
+
+function collectLeadingLambdas(term: TTKTerm): { arity: number; body: TTKTerm } {
+  let arity = 0;
+  let body = term;
+  while (body.tag === 'Binder' && body.binderKind.tag === 'BLam') {
+    arity++;
+    body = body.body;
+  }
+  return { arity, body };
+}
+
+function collectAppSpine(term: TTKTerm): { head: TTKTerm; args: TTKTerm[] } {
+  const args: TTKTerm[] = [];
+  let head = term;
+  while (head.tag === 'App') {
+    args.push(head.arg);
+    head = head.fn;
+  }
+  args.reverse();
+  return { head, args };
+}
+
+function prependOrigins(
+  origins: RecursiveVarOrigin[],
+  count: number,
+  origin: RecursiveVarOrigin,
+): RecursiveVarOrigin[] {
+  return [...Array.from({ length: count }, () => origin), ...origins];
+}
+
+function isRecursiveCallStructurallySmaller(
+  args: TTKTerm[],
+  origins: RecursiveVarOrigin[],
+  requiredArity: number,
+): boolean {
+  if (args.length < requiredArity) {
+    return true;
+  }
+  for (let argPosition = 0; argPosition < args.length; argPosition++) {
+    const arg = args[argPosition];
+    if (arg.tag !== 'Var') continue;
+    const origin = origins[arg.index];
+    if (origin?.kind === 'smaller' && origin.argPosition === argPosition) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMatchGuardedStructuralRecursion(term: TTKTerm, recursiveName: string): boolean {
+  const { arity, body } = collectLeadingLambdas(term);
+  if (arity === 0) return false;
+
+  const initialOrigins: RecursiveVarOrigin[] = Array.from(
+    { length: arity },
+    (_, deBruijn) => ({ kind: 'original', argPosition: arity - 1 - deBruijn }),
+  );
+
+  let sawRecursiveCall = false;
+
+  const visit = (current: TTKTerm, origins: RecursiveVarOrigin[]): boolean => {
+    const { head, args } = collectAppSpine(current);
+    if (head.tag === 'Const' && head.name === recursiveName) {
+      sawRecursiveCall = true;
+      if (!isRecursiveCallStructurallySmaller(args, origins, arity)) {
+        return false;
+      }
+    }
+
+    switch (current.tag) {
+      case 'App':
+        return visit(current.fn, origins) && visit(current.arg, origins);
+      case 'Binder': {
+        const withLocal = prependOrigins(origins, 1, { kind: 'local' });
+        return visit(current.domain, origins)
+          && (current.binderKind.tag !== 'BLet' || visit(current.binderKind.defVal, origins))
+          && visit(current.body, withLocal);
+      }
+      case 'Sort':
+        return visit(current.level, origins);
+      case 'Annot':
+        return visit(current.term, origins) && visit(current.type, origins);
+      case 'Match': {
+        if (!visit(current.scrutinee, origins)) return false;
+        const scrutineeOrigin = current.scrutinee.tag === 'Var' ? origins[current.scrutinee.index] : undefined;
+        const clauseOrigin = scrutineeOrigin && scrutineeOrigin.kind !== 'local'
+          ? { kind: 'smaller' as const, argPosition: scrutineeOrigin.argPosition }
+          : { kind: 'local' as const };
+        return current.clauses.every(clause =>
+          visit(clause.rhs, prependOrigins(origins, countKernelClauseBindings(clause), clauseOrigin)),
+        );
+      }
+      default:
+        return true;
+    }
+  };
+
+  return visit(body, initialOrigins) && sawRecursiveCall;
 }
 
 export function checkSimpleTermValue(
@@ -151,6 +256,18 @@ export function checkSimpleTermValue(
 
     const zonkedValue = solvedResult.zonkTerm(solvedResult.value);
     if (containsSelfReference(zonkedValue, termName)) {
+      const allowsStructuredRecursion = decl.surfaceValue.tag === 'TacticBlock'
+        && isMatchGuardedStructuralRecursion(zonkedValue, termName);
+      if (allowsStructuredRecursion) {
+        const resultEnv = setDefinitionValueInTCEnv(termEnv, termName, zonkedValue);
+        return {
+          success: true,
+          definitions: resultEnv.definitions,
+          checkedValue: zonkedValue,
+          zonkedType,
+          tacticInfoTree,
+        };
+      }
       return {
         success: false,
         errors: [

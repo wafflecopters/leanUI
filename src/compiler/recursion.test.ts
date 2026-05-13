@@ -671,6 +671,24 @@ describe('checkClauseRecursion', () => {
     expect(result.callSites.length).toBe(1);
   });
 
+  test('uses elaborated argument positions when recursive calls include leading implicits', () => {
+    const clause: TTKClause = {
+      patterns: [mkPCtor('Succ', [mkPVar('n')])],
+      elabArgs: [
+        mkConst('A'),
+        mkApp(mkConst('Succ'), mkVar(0)),
+      ],
+      rhs: mkApp(mkApp(mkConst('f'), mkConst('A')), mkVar(0)),
+      contextNames: ['n'],
+    };
+
+    const result = checkClauseRecursion(clause, 0, 'f');
+
+    expect(result.isValid).toBe(true);
+    expect(result.callSites).toHaveLength(1);
+    expect(result.errors).toHaveLength(0);
+  });
+
   test('invalid - recursion with args swapped', () => {
     // | (Succ n) m => (add m n)  -- args swapped!
     // n (index 1) is smaller than position 0

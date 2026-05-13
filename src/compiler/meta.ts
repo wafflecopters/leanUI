@@ -88,6 +88,38 @@ function containsUnsolvedMeta(term: TTKTerm, metaVars: Map<string, MetaVar>): bo
   }
 }
 
+function termsConflictAfterDefEqCheck(
+  lhs: TTKTerm,
+  rhs: TTKTerm,
+  definitions: DefinitionsMap | undefined,
+  lhsCtx: TTKContext,
+  rhsCtx: TTKContext,
+): boolean {
+  let alignedRhs = rhs;
+  let compareCtxA = lhsCtx;
+  let compareCtxB = rhsCtx;
+
+  if (lhsCtx !== rhsCtx) {
+    const depthDiff = rhsCtx.length - lhsCtx.length;
+    if (depthDiff > 0) {
+      const minIdx = minFreeVarIndex(rhs);
+      if (minIdx < depthDiff) {
+        return true;
+      }
+      alignedRhs = shiftTerm(rhs, -depthDiff, 0);
+      compareCtxB = lhsCtx;
+    } else if (depthDiff < 0) {
+      alignedRhs = shiftTerm(rhs, -depthDiff, 0);
+      compareCtxB = lhsCtx;
+    }
+  }
+
+  if (!areTermsDefinitelyDifferent(lhs, alignedRhs, definitions, compareCtxA, compareCtxB)) {
+    return false;
+  }
+  return !areTypesDefEq(lhs, alignedRhs, definitions, lhsCtx);
+}
+
 /**
  * Extract the head constructor name from a term in WHNF.
  * E.g., App(App(Const("Equal"), Nat), Succ(x)) → head is "Equal" if fully applied,
@@ -693,7 +725,7 @@ export function solveConstraints(
         }
 
         // Check structural conflicts using original contexts (safe for constructor heads)
-        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, constraint.ctx)) {
+        if (termsConflictAfterDefEqCheck(meta.solution, resolvedRhs, definitions, effectiveContext, constraint.ctx)) {
           const names = effectiveContext.map(c => c.name).reverse();
           const metaTypeStr = prettyPrint(meta.type, names);
           throw new Error(`Implicit argument conflict for ${constraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, constraint.ctx.map(c => c.name).reverse())}`);
@@ -780,7 +812,7 @@ export function solveConstraints(
         // After normalization, both solution and resolvedRhs are at effectiveContext depth.
         // Skip this check if the RHS contains unsolved metas — stuck terms can't be
         // reduced to WHNF, so head comparisons may give false positives.
-        if (areTermsDefinitelyDifferent(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
+        if (termsConflictAfterDefEqCheck(meta.solution, resolvedRhs, definitions, effectiveContext, effectiveContext)) {
           // Tolerate when pattern-solved meta conflicts with non-pattern constraint,
           // or when the conflict comes from a constant-function heuristic (dummy domains),
           // or when both solutions are compatible constant functions.

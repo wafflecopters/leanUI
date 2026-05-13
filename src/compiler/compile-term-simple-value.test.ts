@@ -289,6 +289,77 @@ loopBy := by
     expect(result.errors[0].message).toContain('simple definitions cannot be recursive');
   });
 
+  test('accepts tactic-generated structural recursion guarded by match branches', () => {
+    const { definitions, decl } = buildTermDeclaration(`
+leqTrans : {a b c : Nat} -> Leq a b -> Leq b c -> Leq a c := by
+  intros a b c hab hbc
+  cases hab with
+  | LeqZero => exact LeqZero
+  | LeqSucc p =>
+    cases hbc with
+    | LeqSucc q => exact (LeqSucc (leqTrans p q))
+`, `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Leq : Nat -> Nat -> Type where
+  LeqZero : {n : Nat} -> Leq Zero n
+  LeqSucc : {n m : Nat} -> Leq n m -> Leq (Succ n) (Succ m)
+`);
+    const signatureResult = prepareTermSignature(decl, definitions);
+    expect(signatureResult.success).toBe(true);
+    if (!signatureResult.success) {
+      throw new Error('expected signature preparation to succeed');
+    }
+
+    const result = checkSimpleTermValue(
+      decl,
+      'leqTrans',
+      signatureResult.prepared.termEnv,
+      signatureResult.prepared.zonkedKernelType,
+      signatureResult.prepared.namedArgMap,
+      elaborateTacticBlock,
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      throw new Error(result.errors.map(error => error.fullMessage).join('\n\n'));
+    }
+    expect(prettyPrintFormatted(result.checkedValue)).toContain('match');
+    expect(prettyPrintFormatted(result.checkedValue)).toContain('leqTrans');
+  });
+
+  test('rejects tactic-generated recursion when the recursive argument does not get smaller', () => {
+    const { definitions, decl } = buildTermDeclaration(`
+badRec : Nat -> Nat := by
+  intro n
+  cases n with
+  | Zero => exact Zero
+  | Succ k => exact (badRec n)
+`, NAT_PRELUDE);
+    const signatureResult = prepareTermSignature(decl, definitions);
+    expect(signatureResult.success).toBe(true);
+    if (!signatureResult.success) {
+      throw new Error('expected signature preparation to succeed');
+    }
+
+    const result = checkSimpleTermValue(
+      decl,
+      'badRec',
+      signatureResult.prepared.termEnv,
+      signatureResult.prepared.zonkedKernelType,
+      signatureResult.prepared.namedArgMap,
+      elaborateTacticBlock,
+    );
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      throw new Error('expected non-decreasing recursive tactic output to be rejected');
+    }
+    expect(result.errors[0].message).toContain('simple definitions cannot be recursive');
+  });
+
   test('accepts checked tactic output even when unrelated universe metas remain in the environment', () => {
     const { definitions, decl } = buildTermDeclaration(`
 pairSum : Pair Nat (Pair Nat Nat) -> Nat := by

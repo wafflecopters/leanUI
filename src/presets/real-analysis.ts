@@ -832,7 +832,7 @@ absOfNonneg : {R : Real} -> (a : Carrier R) -> rle (rzero R) a -> Equal (rabs a)
 absOfNonneg {R} a h = absElim a (\\x => Equal x a) (\\_ => refl) (\\h2 => trans (cong (\\z => rneg z) (sym (CompleteOrderedField.leAntisym (field R) (rzero R) a h h2))) (trans (negZero R) (CompleteOrderedField.leAntisym (field R) (rzero R) a h h2)))
 
 absOfNonpos : {R : Real} -> (a : Carrier R) -> rle a (rzero R) -> Equal (rabs a) (rneg a)
-absOfNonpos {R} a h = absElim a (\\x => Equal x (rneg a)) (\\h2 => trans (sym (CompleteOrderedField.leAntisym (field R) (rzero R) a h2 h)) (sym (trans (negZero R) (CompleteOrderedField.leAntisym (field R) (rzero R) a h2 h)))) (\\_ => refl)
+absOfNonpos {R} a h = absElim a (\\x => Equal x (rneg a)) (\\h2 => trans (sym (CompleteOrderedField.leAntisym (field R) (rzero R) a h2 h)) (trans (sym (negZero R)) (cong (\\z => rneg z) (CompleteOrderedField.leAntisym (field R) (rzero R) a h2 h)))) (\\_ => refl)
 
 negMulNeg : {R : Real} -> (a b : Carrier R) -> Equal (rmul (rneg a) (rneg b)) (rmul a b)
 negMulNeg {R} a b = trans (mulNegLeft a (rneg b)) (trans (cong (\\z => rneg z) (mulNegRight a b)) (negNeg (rmul a b)))
@@ -914,11 +914,8 @@ subSelf {R} a = CompleteOrderedField.negRight (field R) a
 
 -- The limit of a constant function: lim_{x->x0} k = k
 -- Proof: For any eps > 0, pick delta = 1. Then |k - k| = 0 < eps.
-limitConst : {R : Real} -> (k x0 : Carrier R) -> Limit (\\_ => k) x0 k := by
-  intros R k x0
-  constructor
-  intros eps heps
-  exact (MkDPair (rone R) (MkPair (zeroLtOne R) (\\x hx0 hxd => replace (\\z => rlt (rabs z) eps) (sym (subSelf k)) (replace (\\z => rlt z eps) (sym (absZero R)) heps))))
+limitConst : {R : Real} -> (k x0 : Carrier R) -> Limit (\\_ => k) x0 k
+limitConst {R} k x0 = MkLimit (\\eps => \\heps => MkDPair (rone R) (MkPair (zeroLtOne R) (\\x => \\hx0 => \\hxd => replace (\\z => rlt (rabs z) eps) (sym (subSelf k)) (replace (\\z => rlt z eps) (sym (absZero R)) heps))))
 
 -- lim: extract the limit value from a convergence proof
 -- Given f, x0, and a proof that lim_{x->x0} f(x) = L, returns L
@@ -1054,11 +1051,8 @@ mulLtLeftNe : {R : Real} -> (c a b : Carrier R) -> rle (rzero R) c -> (Equal c (
   intros R c a b hc hcne hab heq
   erw (sym (CompleteOrderedField.mulOneLeft (field R) a)), (cong (\\z => rmul z a) (sym (trans (CompleteOrderedField.mulComm (field R) (rinv c) c) (CompleteOrderedField.mulInvRight (field R) c hcne)))), (CompleteOrderedField.mulAssoc (field R) (rinv c) c a), (cong (\\z => rmul (rinv c) z) heq), (sym (CompleteOrderedField.mulAssoc (field R) (rinv c) c b)), (cong (\\z => rmul z b) (trans (CompleteOrderedField.mulComm (field R) (rinv c) c) (CompleteOrderedField.mulInvRight (field R) c hcne))), (CompleteOrderedField.mulOneLeft (field R) b)
 
-mulLtLeft : {R : Real} -> (c a b : Carrier R) -> rlt (rzero R) c -> rlt a b -> rlt (rmul c a) (rmul c b) := by
-  intros R c a b hc hab
-  constructor
-  · exact (mulLeLeft c a b (Pair.fst hc) (Pair.fst hab))
-  · exact (\\heq => Pair.snd hab (mulLtLeftNe c a b (Pair.fst hc) (Pair.snd hc) (Pair.fst hab) heq))
+mulLtLeft : {R : Real} -> (c a b : Carrier R) -> rlt (rzero R) c -> rlt a b -> rlt (rmul c a) (rmul c b)
+mulLtLeft {R} c a b hc hab = MkPair (mulLeLeft c a b (Pair.fst hc) (Pair.fst hab)) (\\heq => Pair.snd hab (mulLtLeftNe c a b (Pair.fst hc) (Pair.snd hc) (Pair.fst hab) heq))
 
 -- a <= b, 0 <= c => a*c <= b*c (right multiplication variant)
 mulLeRight : {R : Real} -> (a b c : Carrier R) -> rle a b -> rle (rzero R) c -> rle (rmul a c) (rmul b c)
@@ -1075,11 +1069,8 @@ mulInvCancel : {R : Real} -> (M a : Carrier R) -> (Equal M (rzero R) -> Void) ->
 
 -- 0 < eps, 0 < M => 0 < eps * inv(M)
 -- Proof: le part from mulNonneg + invPos; ne part from eps * inv(M) = 0 => eps = 0
-epsOverMPos : {R : Real} -> (eps M : Carrier R) -> rlt (rzero R) eps -> rlt (rzero R) M -> rlt (rzero R) (rmul eps (rinv M)) := by
-  intros R eps M heps hM
-  constructor
-  · exact (CompleteOrderedField.mulNonneg (field R) eps (rinv M) (Pair.fst heps) (CompleteOrderedField.invPos (field R) M (Pair.fst hM) (Pair.snd hM)))
-  · exact (\\heq => Pair.snd heps (trans heq (trans (cong (\\z => rmul z (rinv M)) (sym (mulZeroLeft (rinv M)))) (sym (CompleteOrderedField.mulAssoc (field R) (rzero R) (rinv M) (rinv M))))))
+epsOverMPos : {R : Real} -> (eps M : Carrier R) -> rlt (rzero R) eps -> rlt (rzero R) M -> rlt (rzero R) (rmul eps (rinv M))
+epsOverMPos {R} eps M heps hM = MkPair (CompleteOrderedField.mulNonneg (field R) eps (rinv M) (Pair.fst heps) (CompleteOrderedField.invPos (field R) M (Pair.fst hM) (Pair.snd hM))) (\\heq => Pair.snd heps (trans heq (trans (cong (\\z => rmul z (rinv M)) (sym (mulZeroLeft (rinv M)))) (sym (CompleteOrderedField.mulAssoc (field R) (rzero R) (rinv M) (rinv M))))))
 
 ------------------------------------------------------------
 -- Scalar multiplication of limits (proved)

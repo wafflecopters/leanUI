@@ -280,6 +280,52 @@ describe('Name Resolution', () => {
         expect(result.errors[0].symbolName).toBe('Foo');
       }
     });
+
+    test('allows omitted named top-level clause binders in RHS scope', () => {
+      const declType = {
+        tag: 'MultiBinder' as const,
+        names: ['A', 'B'],
+        binderKind: { tag: 'BPiTT' as const },
+        domain: mkTypeTT(0),
+        body: mkPiTT(
+          {
+            tag: 'App' as const,
+            fn: {
+              tag: 'App' as const,
+              fn: mkConstTT('Either'),
+              arg: mkVarTT(1),
+            },
+            arg: mkVarTT(0),
+          },
+          mkTypeTT(0),
+          '_',
+        ),
+        named: true,
+      };
+      const declValue = {
+        tag: 'Match' as const,
+        scrutinee: { tag: 'Hole' as const, id: '_scrutinee', type: mkTypeTT(0), context: [] },
+        clauses: [
+          {
+            patterns: [{ tag: 'PVar' as const, name: 'x' }],
+            rhs: {
+              tag: 'App' as const,
+              fn: {
+                tag: 'App' as const,
+                fn: mkConstTT('Either'),
+                arg: mkConstTT('A'),
+              },
+              arg: mkConstTT('B'),
+            },
+          },
+        ],
+      };
+      let ctx = emptySymbolContext();
+      ctx = addSymbol(ctx, 'Either');
+
+      const result = validateDeclaration('foo', declType, declValue, undefined, ctx);
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('Multiple Declarations', () => {

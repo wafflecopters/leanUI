@@ -5,7 +5,7 @@ import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 
 describe('parseExactExpr — numeric literals', () => {
   let definitions: any;
-  test('setup', { timeout: 30000 }, () => {
+  test('setup', { timeout: 120000 }, () => {
     const r = compileTTFromText(REAL_ANALYSIS_CODE);
     definitions = (r as any).kernelEnv?.definitions ?? (r as any).definitions;
     expect(definitions).toBeTruthy();

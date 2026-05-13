@@ -458,7 +458,7 @@ export function padPatternsForMissingNamedArgs(
   ctx: PadContext
 ): TTKPattern[] {
   // Step 1: Pad constructor patterns recursively (this always happens)
-  const paddedConstructorPatterns = patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions, ctx));
+  const paddedConstructorPatterns = padConstructorPatternsRecursively(patterns, definitions, ctx);
 
   // Step 2: Determine how many top-level implicit params are missing
   if (!namedArgMap || namedArgMap.size === 0 || totalArity === undefined) {
@@ -486,12 +486,24 @@ export function padPatternsForMissingNamedArgs(
   const wildcardCountToInsert = Math.max(0, Math.min(leadingNamedCount, missingCount));
 
   // Step 3: Insert leading wildcards for missing named params
+  const leadingNamedEntries = [...namedArgMap.entries()]
+    .sort(([, leftPos], [, rightPos]) => leftPos - rightPos)
+    .slice(0, wildcardCountToInsert);
+
   const leadingWildcards: TTKPattern[] = [];
-  for (let i = 0; i < wildcardCountToInsert; i++) {
-    leadingWildcards.push({ tag: 'PWild', name: freshPaddingWildcardName(ctx) });
+  for (const [paramName] of leadingNamedEntries) {
+    leadingWildcards.push({ tag: 'PVar', name: paramName });
   }
 
   return [...leadingWildcards, ...paddedConstructorPatterns];
+}
+
+function padConstructorPatternsRecursively(
+  patterns: TTKPattern[],
+  definitions: DefinitionsMap,
+  ctx: PadContext,
+): TTKPattern[] {
+  return patterns.map(p => padPCtorPatternWithNamedWildcards(p, definitions, ctx));
 }
 
 /**
@@ -881,6 +893,70 @@ function remapContextRelativeTerm(
     : remapped;
 }
 
+function collectRuntimePatternVarNames(patterns: readonly TTKPattern[]): string[] {
+  const names: string[] = [];
+  const visit = (pattern: TTKPattern) => {
+    switch (pattern.tag) {
+      case 'PVar':
+        names.push(pattern.name);
+        return;
+      case 'PWild':
+        return;
+      case 'PCtor':
+        for (const arg of pattern.args) visit(arg);
+        if (pattern.namedArgs) {
+          for (const namedArg of pattern.namedArgs) visit(namedArg.pattern);
+        }
+        return;
+    }
+  };
+  for (const pattern of patterns) visit(pattern);
+  return names;
+}
+
+function remapClauseTermToRuntimeContext(
+  term: TTKTerm,
+  runtimeVarNames: readonly string[],
+  originalOuterContext: TTKContext,
+  currentContext: TTKContext,
+): TTKTerm {
+  const currentToRuntime = new Map<number, number>();
+  const claimedCurrentIndices = new Set<number>();
+
+  for (let i = 0; i < runtimeVarNames.length; i++) {
+    const name = runtimeVarNames[i];
+    const currentArrayIndex = currentContext.findIndex(entry => entry.name === name);
+    if (currentArrayIndex < 0) continue;
+    const currentDeBruijn = currentContext.length - 1 - currentArrayIndex;
+    claimedCurrentIndices.add(currentDeBruijn);
+    currentToRuntime.set(currentDeBruijn, runtimeVarNames.length - 1 - i);
+  }
+
+  for (let originalArrayIndex = 0; originalArrayIndex < originalOuterContext.length; originalArrayIndex++) {
+    const name = originalOuterContext[originalArrayIndex]!.name;
+    const currentArrayIndex = currentContext.findIndex((entry, idx) => {
+      const currentDeBruijn = currentContext.length - 1 - idx;
+      return !claimedCurrentIndices.has(currentDeBruijn) && entry.name === name;
+    });
+    if (currentArrayIndex < 0) continue;
+    const currentDeBruijn = currentContext.length - 1 - currentArrayIndex;
+    claimedCurrentIndices.add(currentDeBruijn);
+    currentToRuntime.set(
+      currentDeBruijn,
+      runtimeVarNames.length + (originalOuterContext.length - 1 - originalArrayIndex),
+    );
+  }
+
+  return transformVarsInTerm(term, (index, localContext) => {
+    if (index < localContext.length) {
+      return mkVar(index);
+    }
+    const freeIndex = index - localContext.length;
+    const replacement = currentToRuntime.get(freeIndex);
+    return mkVar(localContext.length + (replacement ?? freeIndex));
+  });
+}
+
 export function recomputeRefinedClauseContext(
   originalContext: TTKContext,
   substitutions: AppliedSubstitution[],
@@ -1243,6 +1319,9 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
       const fullContextLength = solvedEnv.context.length;
       solvedEnv = updateTTKContextInTCEnv(solvedEnv, () => reordered.context);
       for (let i = 0; i < checkStack.length; i++) {
+        if (checkStack[i].ctxLength !== fullContextLength) {
+          continue;
+        }
         checkStack[i] = {
           ...checkStack[i],
           type: remapContextRelativeTerm(
@@ -1256,7 +1335,7 @@ function constructorDone(pattern: TTKPattern, arity: number, checkTypeEntry: Che
       for (let i = 0; i < elabStack.length; i++) {
         elabStack[i] = remapFullContextTerm(elabStack[i], reordered.oldToNewDeBruijn);
       }
-      rhsContainer.rhsInLevels = transformVarsInTerm(rhsContainer.rhsInLevels, (level, localContext) => {
+      rhsContainer.rhsInLevels = transformVarsInTerm(rhsContainer.rhsInLevels, (level) => {
         if (level >= fullContextLength) {
           return mkVar(level);
         }
@@ -1599,7 +1678,7 @@ export function checkMatchClause(
   type: TTKTerm,
   namedArgMap?: NamedArgMap,
   totalArity?: number,
-  options?: { rhsAlreadyElaborated?: boolean },
+  options?: { rhsAlreadyElaborated?: boolean; topLevelPatternsAlreadyPadded?: boolean },
 ): TCEnv<TTKClause> {
 
   // Get the original RHS and patterns
@@ -1617,7 +1696,9 @@ export function checkMatchClause(
   // This handles both:
   // 1. Top-level: missing named function parameters
   // 2. Constructor-level: missing named constructor arguments (recursive)
-  const paddedPatterns = padPatternsForMissingNamedArgs(originalPatterns, namedArgMap, totalArity, env.definitions, padCtx);
+  const paddedPatterns = options?.topLevelPatternsAlreadyPadded
+    ? padConstructorPatternsRecursively(originalPatterns, env.definitions, padCtx)
+    : padPatternsForMissingNamedArgs(originalPatterns, namedArgMap, totalArity, env.definitions, padCtx);
 
   // The RHS was elaborated against the ORIGINAL patterns. When we pad patterns
   // with wildcards for named or implicit params, we need to adjust RHS indices.
@@ -1878,6 +1959,30 @@ export function checkMatchClause(
   // This is called "zonking" in GHC terminology - we apply all meta solutions
   const zonkedRhs = solvedEnv.zonkTerm(solvedEnv.value);
   const zonkedElabArgs = elabArgs.map(arg => solvedEnv.zonkTerm(arg));
+  const runtimeVarNames = collectRuntimePatternVarNames(paddedPatterns);
+  const runtimeContextNames = [
+    ...runtimeVarNames.slice().reverse(),
+    ...env.context.map(entry => entry.name).reverse(),
+  ];
+  const needsRuntimeRemap =
+    runtimeContextNames.length > 0
+    && (
+      runtimeContextNames.length !== contextNames.length
+      || runtimeContextNames.some((name, index) => contextNames[index] !== name)
+    );
+  const emittedRhs = needsRuntimeRemap
+    ? remapClauseTermToRuntimeContext(
+        zonkedRhs,
+        runtimeVarNames,
+        env.context,
+        solvedEnv.context,
+      )
+    : zonkedRhs;
+  const emittedElabArgs = needsRuntimeRemap
+    ? zonkedElabArgs.map(arg =>
+        remapClauseTermToRuntimeContext(arg, runtimeVarNames, env.context, solvedEnv.context),
+      )
+    : zonkedElabArgs;
 
   // Return the checked clause with paddedPatterns and the zonked RHS.
   // NOTE: We use paddedPatterns (not elaborated patterns) because:
@@ -1887,9 +1992,9 @@ export function checkMatchClause(
   // 2. The elabArgs field preserves the elaborated terms for other uses
   const checkedClause: TTKClause = {
     patterns: paddedPatterns,
-    rhs: zonkedRhs,
-    elabArgs: zonkedElabArgs,
-    contextNames,
+    rhs: emittedRhs,
+    elabArgs: emittedElabArgs,
+    contextNames: needsRuntimeRemap ? runtimeContextNames : contextNames,
     metaVars: solvedEnv.metaVars
   };
   return result.atIndexPathAndValue(paddedEnv.indexPath, checkedClause);
@@ -1985,9 +2090,11 @@ function fixClauseTypeInfoContextNames(
   patternContext: TTKContext,
   elaboratedContext: TTKContext,
 ): void {
+  const isSyntheticName = (name: string): boolean =>
+    name === '_' || name.startsWith('?') || name.startsWith('_pad');
   const correctContext = patternContext.map((entry, i) => {
     const elabEntry = elaboratedContext[i];
-    if (elabEntry && !elabEntry.name.startsWith('?')) {
+    if (elabEntry && !isSyntheticName(elabEntry.name) && isSyntheticName(entry.name)) {
       return { name: elabEntry.name, type: entry.type };
     }
     return entry;

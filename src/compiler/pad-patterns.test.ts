@@ -92,19 +92,34 @@ describe('padPatternsForMissingNamedArgs', () => {
         { tag: 'PCtor', name: 'Nil', args: [] }
       ];
 
-      // Expected: [_, (Nil _)]
-      // - Insert wildcard for {A : Type} at position 0
+      // Expected: [A, (Nil _)]
+      // - Insert a binding for the omitted implicit {A : Type} at position 0
       // - Nil gets a wildcard for its named A param
       const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
       expect(result.length).toBe(2);
-      expect(isPaddingWildcard(result[0])).toBe(true);
+      expect(result[0]).toEqual({ tag: 'PVar', name: 'A' });
       expect(result[1].tag).toBe('PCtor');
       if (result[1].tag === 'PCtor') {
         expect(result[1].name).toBe('Nil');
         expect(result[1].args.length).toBe(1);
         expect(isPaddingWildcard(result[1].args[0])).toBe(true);
       }
+    });
+
+    it('preserves omitted implicit binder names so the RHS can reference them', () => {
+      const definitions = createTestDefinitions();
+      const namedArgMap: NamedArgMap = new Map([['A', 0]]);
+      const totalArity = 2;
+
+      const inputPatterns: TTKPattern[] = [
+        { tag: 'PCtor', name: 'Nil', args: [] }
+      ];
+
+      const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
+
+      expect(result[0]).toEqual({ tag: 'PVar', name: 'A' });
+      expect(result[1].tag).toBe('PCtor');
     });
 
     it('should not pad when all named params are provided', () => {
@@ -236,9 +251,9 @@ describe('padPatternsForMissingNamedArgs', () => {
 
       const result = padPatternsForMissingNamedArgs(inputPatterns, namedArgMap, totalArity, definitions, createPadContext());
 
-      // Should become: [_pad0, (Cons _pad1 x xs)]
+      // Should become: [A, (Cons _pad1 x xs)]
       expect(result.length).toBe(2);
-      expect(isPaddingWildcard(result[0])).toBe(true);
+      expect(result[0]).toEqual({ tag: 'PVar', name: 'A' });
       expect(result[1].tag).toBe('PCtor');
       if (result[1].tag === 'PCtor') {
         expect(result[1].name).toBe('Cons');

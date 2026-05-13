@@ -172,7 +172,7 @@ function insertImplicitHolesForApp(
 
   kernelHead = insertImplicitHolesForConstHead(kernelHead, namedArgLookup);
 
-  let result = kernelHead;
+  let result: TTKTerm = kernelHead;
   for (const arg of args) {
     result = { tag: 'App', fn: result, arg: convertTerm(arg, depth) };
   }
@@ -189,7 +189,7 @@ function insertImplicitHolesForConstHead(
   if (!namedArgs) return kernelHead;
 
   const suffix = insertImplicitHoleCounter++;
-  let result = kernelHead;
+  let result: TTKTerm = kernelHead;
   for (const [paramName] of namedArgs) {
     result = {
       tag: 'App',

@@ -61,6 +61,34 @@ function collectSinglePatternVarNames(pattern: TPattern): string[] {
   }
 }
 
+function collectNamedClauseBinderNamesFromType(type: TTerm | undefined): string[] {
+  const names: string[] = [];
+  let current = type;
+
+  while (current && (current.tag === 'Binder' || current.tag === 'MultiBinder')) {
+    if (current.tag === 'Binder') {
+      if (current.binderKind.tag !== 'BPiTT') break;
+      if (current.named && current.name !== '_') {
+        names.push(current.name);
+      }
+      current = current.body;
+      continue;
+    }
+
+    if (current.binderKind.tag !== 'BPiTT') break;
+    if (current.named) {
+      for (const name of current.names) {
+        if (name !== '_') {
+          names.push(name);
+        }
+      }
+    }
+    current = current.body;
+  }
+
+  return names;
+}
+
 // ============================================================================
 // Reserved Names
 // ============================================================================
@@ -345,7 +373,11 @@ export function validateDeclaration(
 
   // Validate value if present
   if (declValue) {
-    const valueResult = validateTerm(declValue, newCtx, [{ kind: 'field', name: 'value' }]);
+    let valueCtx = newCtx;
+    for (const name of collectNamedClauseBinderNamesFromType(declType)) {
+      valueCtx = addSymbol(valueCtx, name);
+    }
+    const valueResult = validateTerm(declValue, valueCtx, [{ kind: 'field', name: 'value' }]);
     if (!valueResult.success) {
       errors.push(...valueResult.errors);
     }

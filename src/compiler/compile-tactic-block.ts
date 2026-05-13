@@ -5,6 +5,7 @@ import {
   renameCtxEntriesByCurrentNames,
   renameLastCtxEntries,
 } from '../tactics/branch-context';
+import { ReflexivityTactic } from '../tactics/reflexivity-tactic';
 import { createRootInfoNode, type SourcePosition, TacticInfoTree, type TacticInfoNode } from '../tactics/info-tree';
 import { extractGoalStates, engineToProofState } from '../tactics/proof-state';
 import { elaborateTacticArg, tacticCommandToTactic, shouldKeepArgAsName } from '../tactics/elaborate-tactic-arg';
@@ -88,6 +89,29 @@ function elaborateFocusedTactics(
   }
 
   return focusedTactics.map(ft => elaborateOne(ft, goalCtx));
+}
+
+function closeReflexiveGoals(engine: TacticEngine): TacticEngine {
+  let current = engine;
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < current.goals.length; i++) {
+      const focused = current.withUpdates({ focusIndex: i });
+      const goal = focused.getFocusedGoal();
+      const goalId = focused.getFocusedGoalId();
+      if (!goal || !goalId) continue;
+      const result = new ReflexivityTactic().apply(focused, goal, goalId);
+      if (result.success) {
+        current = result.newEngine;
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return current;
 }
 
 function applyCaseBranchesRecursive(
@@ -184,7 +208,7 @@ function applyCaseBranchesRecursive(
       const branchNode = createTacticNode(position, goalsBefore, goalsAfter, branchTactic.name);
       parentInfoNode.children.push(branchNode);
 
-      if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && branchTactic.caseBranches) {
+      if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && branchTactic.caseBranches && branchTactic.caseBranches.length > 0) {
         engine = applyCaseBranchesRecursive(
           engine,
           branchTactic.caseBranches,
@@ -194,6 +218,8 @@ function applyCaseBranchesRecursive(
           hasSorryRef,
           sourceMap,
         );
+      } else if ((branchTactic.name === 'cases' || branchTactic.name === 'induction') && branchTactic.caseBranches?.length === 0) {
+        engine = closeReflexiveGoals(engine);
       }
     }
   }
@@ -269,7 +295,7 @@ export function elaborateTacticBlock(
     const tacticNode = createTacticNode(position, goalsBefore, goalsAfter, cmd.name);
     rootNode.children.push(tacticNode);
 
-    if ((cmd.name === 'cases' || cmd.name === 'induction') && cmd.caseBranches) {
+    if ((cmd.name === 'cases' || cmd.name === 'induction') && cmd.caseBranches && cmd.caseBranches.length > 0) {
       engine = applyCaseBranchesRecursive(
         engine,
         cmd.caseBranches,
@@ -279,6 +305,8 @@ export function elaborateTacticBlock(
         hasSorryRef,
         sourceMap,
       );
+    } else if ((cmd.name === 'cases' || cmd.name === 'induction') && cmd.caseBranches?.length === 0) {
+      engine = closeReflexiveGoals(engine);
     }
   }
 

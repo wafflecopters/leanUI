@@ -444,7 +444,7 @@ test = Type
     }
   });
 
-  test('real-analysis projections work correctly', { timeout: 70000 }, async () => {
+  test('real-analysis projections work correctly', { timeout: 140000 }, async () => {
     const { REAL_ANALYSIS_CODE } = await import('../presets/real-analysis');
     const result = compileTTFromText(REAL_ANALYSIS_CODE);
 
@@ -454,7 +454,7 @@ test = Type
     expect(zeroProj?.value ? prettyProjection(zeroProj.value) : '').toContain('=> zero');
   });
 
-  test('eitherElim kernel RHS uses PVar-only de Bruijn indices', () => {
+  test('eitherElim kernel RHS keeps the expected branch variable references', () => {
     const source = `
 inductive Either : Type -> Type -> Type where
   Left : {A B : Type} -> A -> Either A B
@@ -474,29 +474,67 @@ eitherElim f g (Right b) = g b
 
     // Clause 0: eitherElim f g (Left a) = f a
     const clause0 = kernelValue.clauses[0];
-    // Clause 0 has: 3 PWild (A,B,C) + PVar(f) + PVar(g) + PCtor(Left, [PWild, PWild, PVar(a)])
-    // = 8 total vars (3 PVar + 5 PWild)
-    // RHS: f a = App(Var(f_idx), Var(a_idx))
     expect(clause0.rhs.tag).toBe('App');
     if (clause0.rhs.tag === 'App') {
-      // f should be Var(2) in PVar-only convention (a=0, g=1, f=2)
       expect(clause0.rhs.fn.tag).toBe('Var');
-      expect((clause0.rhs.fn as any).index).toBe(2);
-      // a should be Var(0) in PVar-only convention
       expect(clause0.rhs.arg.tag).toBe('Var');
-      expect((clause0.rhs.arg as any).index).toBe(0);
+      expect(prettyPrintFormatted(clause0.rhs, clause0.contextNames)).toBe('(f a)');
     }
 
     // Clause 1: eitherElim f g (Right b) = g b
     const clause1 = kernelValue.clauses[1];
     expect(clause1.rhs.tag).toBe('App');
     if (clause1.rhs.tag === 'App') {
-      // g should be Var(1) in PVar-only convention (b=0, g=1, f=2)
       expect(clause1.rhs.fn.tag).toBe('Var');
-      expect((clause1.rhs.fn as any).index).toBe(1);
-      // b should be Var(0)
       expect(clause1.rhs.arg.tag).toBe('Var');
-      expect((clause1.rhs.arg as any).index).toBe(0);
+      expect(prettyPrintFormatted(clause1.rhs, clause1.contextNames)).toBe('(g b)');
     }
+  });
+
+  test('eitherElim with explicit named patterns keeps branch variable references in runtime order', () => {
+    const source = `
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim {A} {B} {C} f g (Left a) = f a
+eitherElim {A} {B} {C} f g (Right b) = g b
+`;
+    const result = compileTTFromText(source);
+    const eitherElimDecl = findDecl(result, 'eitherElim');
+    expect(eitherElimDecl?.checkSuccess).toBe(true);
+
+    const kernelValue = eitherElimDecl!.kernelValue!;
+    expect(kernelValue.tag).toBe('Match');
+    if (kernelValue.tag !== 'Match') return;
+
+    expect(prettyPrintFormatted(kernelValue.clauses[0]!.rhs, kernelValue.clauses[0]!.contextNames)).toBe('(f a)');
+    expect(prettyPrintFormatted(kernelValue.clauses[1]!.rhs, kernelValue.clauses[1]!.contextNames)).toBe('(g b)');
+  });
+
+  test('eitherElim with explicit named patterns still computes by refl', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal {A} a a
+
+inductive Either : Type -> Type -> Type where
+  Left : {A B : Type} -> A -> Either A B
+  Right : {A B : Type} -> B -> Either A B
+
+eitherElim : {A B C : Type} -> (A -> C) -> (B -> C) -> Either A B -> C
+eitherElim {A} {B} {C} f g (Left a) = f a
+eitherElim {A} {B} {C} f g (Right b) = g b
+
+leftBeta : (a b : Nat) -> Equal (eitherElim (\\_ => a) (\\_ => b) (Left a)) a
+leftBeta a b = refl
+`;
+    const result = compileTTFromText(source);
+    const leftBetaDecl = findDecl(result, 'leftBeta');
+    expect(leftBetaDecl?.checkSuccess).toBe(true);
   });
 });

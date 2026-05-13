@@ -30,6 +30,17 @@ function getInductiveNamedArgMap(definitions: DefinitionsMap, typeName: string):
   return inductive?.namedArgMap;
 }
 
+function shouldExtractConstructorImplicitsFromExpectedType(
+  definitions: DefinitionsMap,
+  ctorName: string,
+): boolean {
+  const inductiveName = definitions.inductiveNameOfConstructor.get(ctorName);
+  if (!inductiveName) return false;
+  const inductive = definitions.inductiveTypes.get(inductiveName);
+  if (!inductive) return false;
+  return (inductive.indexPositions?.length ?? 0) === 0;
+}
+
 /**
  * Get a readable name for a function being applied.
  * Used to provide helpful error context like "while checking argument to 'Succ'".
@@ -398,10 +409,19 @@ export function inferType(env: TCEnv<TTKTerm>): TCEnv<TTKTerm> {
     // Construct the elaborated App with the elaborated function (with implicits) and argument
     const elaboratedApp: TTKTerm = { tag: 'App', fn: currentFnTerm, arg: elaboratedArg };
 
-    const appResult = argEnv.withValue(resultType).withElaboratedTerm(elaboratedApp);
-    // Record at the APP's indexPath (env.indexPath), using argEnv's metaVars for zonking
-    argEnv.atIndexPath(env.indexPath).recordTypeInfo(resultType);
-    return appResult;
+    const appResult = argEnv.withValue(resultType).withElaboratedTerm(elaboratedApp)
+      .solveMetasAndConstraints({ liftMetasToFullContext: false });
+    const zonkedResultType = appResult.zonkTermAtDepth(appResult.value, env.context.length);
+    const zonkedElaboratedApp = appResult.elaboratedTerm
+      ? appResult.zonkTermAtDepth(appResult.elaboratedTerm, env.context.length)
+      : undefined;
+    // Record at the APP's indexPath after solving constraints so omitted
+    // implicit parameters determined by later explicit args (for example
+    // `Cmp.zeroLeOne (field R)`) show their concrete instantiated result type.
+    appResult.atIndexPath(env.indexPath).recordTypeInfo(zonkedResultType);
+    return appResult
+      .withValue(zonkedResultType)
+      .withElaboratedTerm(zonkedElaboratedApp);
   }
 
   if (env.isBinderTerm()) {
@@ -1166,8 +1186,9 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       // ADDITIONAL SAFETY: Only run for constructors, not for arbitrary functions
       // This prevents interfering with normal function application
       const isConstructor = !!getConstructorNamedArgMap(env.definitions, constName);
+      const shouldExtractCtorImplicits = shouldExtractConstructorImplicitsFromExpectedType(env.definitions, constName);
 
-      if (implicitParams.length > 0 && hasEnoughArgs && !expectedIsSort && firstArgsAreHoles && isConstructor) {
+      if (implicitParams.length > 0 && hasEnoughArgs && !expectedIsSort && firstArgsAreHoles && shouldExtractCtorImplicits) {
         try {
 
           // The first N args should be for the N implicit parameters
@@ -1514,8 +1535,9 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
     // Use unifiedEnv for recordTypeInfo so zonking has access to solved metas
     // IMPORTANT: Record at env.indexPath (the original expression path), not unifiedEnv's
     // indexPath which may have drifted (e.g., inferType for App returns with arg's path).
+    const zonkedCurrentTerm = unifiedEnv.zonkTermAtDepth(currentTerm, env.context.length);
     unifiedEnv.atIndexPath(env.indexPath).recordTypeInfo(inferredEnv.value, expectedType);
-    return unifiedEnv.withValue(currentTerm).withElaboratedTerm(currentTerm);
+    return unifiedEnv.withValue(zonkedCurrentTerm).withElaboratedTerm(zonkedCurrentTerm);
   } catch (e) {
     // Even when unification fails, record type info so the user can see
     // both the inferred type and the expected type at the cursor.

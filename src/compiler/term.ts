@@ -1548,6 +1548,7 @@ export class TCEnv<T> {
   fixTypeInfoContextNames(correctContext: TTKContext): void {
     if (!_typeInfoCollector) return;
     const clausePrefix = serializeIndexPath(this.indexPath);
+    const isSyntheticName = (name: string): boolean => name.startsWith('?') || name.startsWith('_pad');
     for (const [key, entry] of _typeInfoCollector) {
       if (!key.startsWith(clausePrefix)) continue;
       if (entry.context.length < correctContext.length) continue;
@@ -1571,12 +1572,33 @@ export class TCEnv<T> {
           break;
         }
       }
+      let fixedContext = entry.context;
       if (needsFix) {
-        const fixedContext: TTKContext = [
+        fixedContext = [
           ...correctContext.slice(0, fixUpTo),
           ...entry.context.slice(fixUpTo),
         ];
-        _typeInfoCollector.set(key, { ...entry, context: fixedContext });
+      }
+
+      const repairedContext = fixedContext.map((ctxEntry) => {
+        if (!isSyntheticName(ctxEntry.name)) return ctxEntry;
+
+        const matchingCandidates = correctContext.filter(candidate =>
+          !isSyntheticName(candidate.name) && isDefinitionallyEqual(ctxEntry.type, candidate.type)
+        );
+        if (matchingCandidates.length !== 1) return ctxEntry;
+
+        const candidate = matchingCandidates[0];
+        if (candidate.name === ctxEntry.name) return ctxEntry;
+        return { ...ctxEntry, name: candidate.name };
+      });
+
+      const repairedChanged = repairedContext.some((ctxEntry, index) => ctxEntry !== fixedContext[index]);
+      if (needsFix || repairedChanged) {
+        _typeInfoCollector.set(key, {
+          ...entry,
+          context: repairedChanged ? repairedContext : fixedContext,
+        });
       }
     }
   }

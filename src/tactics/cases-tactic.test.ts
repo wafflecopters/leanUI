@@ -953,7 +953,14 @@ describe('CasesTactic with indexed types (dependent cases)', () => {
 
     const proofEntries = innerSuccGoal.ctx.filter(entry => entry.name === 'h' || entry.name === "h'");
     expect(proofEntries).toHaveLength(2);
-    const latestProofIndex = innerSuccGoal.ctx.findLastIndex(entry => entry.name === "h'");
+    let latestProofIndex = -1;
+    for (let i = innerSuccGoal.ctx.length - 1; i >= 0; i--) {
+      if (innerSuccGoal.ctx[i]?.name === "h'") {
+        latestProofIndex = i;
+        break;
+      }
+    }
+    expect(latestProofIndex).toBeGreaterThanOrEqual(0);
     const prefixNames = innerSuccGoal.ctx.slice(0, latestProofIndex).map(entry => entry.name).reverse();
     expect(prettyPrint(innerSuccGoal.ctx[latestProofIndex]!.type, prefixNames)).toBe('(Leq m m\')');
   });

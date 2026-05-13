@@ -1,9 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
-import { mkApp, mkConst, mkVar, prettyPrint } from './kernel';
+import { mkApp, mkConst, mkVar, prettyPrint, type TTKContext, type TTKTerm } from './kernel';
 import { recomputeRefinedClauseContext, type AppliedSubstitution } from './patterns';
 import { enumerateAppliedSubstitutions } from './subst';
-import type { TTKContext, TTKTerm } from './term';
 
 function leq(lhs: TTKTerm, rhs: TTKTerm): TTKTerm {
   return mkApp(mkApp(mkConst('Leq'), lhs), rhs);

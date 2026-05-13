@@ -194,7 +194,7 @@ plus (Succ n) m = Succ (plus n m)
     expect(whnf(mkApp(partial, mkConst('Zero')), { definitions: defs })).toEqual(mkConst('Zero'));
   });
 
-  test('keeps fully-applied pattern-matching functions opaque when the scrutinee is unknown', () => {
+  test('exposes a stuck match for fully-applied pattern-matching functions when the scrutinee is unknown', () => {
     const source = `
 inductive Nat : Type where
   Zero : Nat
@@ -206,11 +206,69 @@ plus (Succ n) m = Succ (plus n m)
 `;
     const defs = compileTTFromText(source).definitions;
     const term = mkApp(mkApp(mkConst('plus'), mkVar(0)), mkConst('Zero'));
+    const result = whnf(term, {
+      definitions: defs,
+      typingContext: [{ name: 'n', type: mkConst('Nat') }],
+    });
+
+    expect(result.tag).toBe('App');
+    if (result.tag === 'App') {
+      expect(result.fn.tag).toBe('App');
+      if (result.fn.tag === 'App') {
+        expect(result.fn.fn.tag).toBe('Match');
+      }
+      expect(result.arg).toEqual(mkConst('Zero'));
+    }
+  });
+
+  test('preserves a stuck match spine for later case inversion when the scrutinee is unsolved', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+plus : Nat -> Nat -> Nat
+plus Zero m = m
+plus (Succ n) m = Succ (plus n m)
+`;
+    const defs = compileTTFromText(source).definitions;
+    const term = mkApp(mkApp(mkConst('plus'), { tag: 'Meta', id: '?m' }), { tag: 'Meta', id: '?n' });
+    const result = whnf(term, { definitions: defs });
+
+    expect(result.tag).toBe('App');
+    if (result.tag === 'App') {
+      expect(result.fn.tag).toBe('App');
+      if (result.fn.tag === 'App' && result.fn.fn.tag === 'Match') {
+        expect(result.fn.fn.scrutinee.tag).toBe('Hole');
+        expect(result.fn.arg).toEqual({ tag: 'Meta', id: '?m' });
+      }
+      expect(result.arg).toEqual({ tag: 'Meta', id: '?n' });
+    }
+  });
+
+  test('unfolds match-defined functions when a later argument determines the matching clause', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+add : Nat -> Nat -> Nat
+add a Zero = a
+add a (Succ b) = Succ (add a b)
+`;
+    const defs = compileTTFromText(source).definitions;
+    const term = mkApp(mkApp(mkConst('add'), mkVar(0)), mkConst('Zero'));
 
     expect(whnf(term, {
       definitions: defs,
-      typingContext: [{ name: 'n', type: mkConst('Nat') }],
-    })).toEqual(term);
+      typingContext: [{ name: 'a', type: mkConst('Nat') }],
+    })).toEqual(mkVar(0));
+    expect(areTypesDefEq(
+      term,
+      mkVar(0),
+      defs,
+      [{ name: 'a', type: mkConst('Nat') }],
+    )).toBe(true);
   });
 });
 
