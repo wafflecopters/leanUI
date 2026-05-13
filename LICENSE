@@ -1,0 +1,57 @@
+Copyright (c) 2026 wafflecopters (Ari Grant)
+All rights reserved.
+
+
+PURPOSE OF PUBLIC VISIBILITY
+
+This repository is published publicly solely so that prospective
+employers, collaborators, and reviewers may inspect the author's
+work. Public visibility does not grant any license to use, copy,
+modify, or distribute the contents of this repository.
+
+
+YOU MAY
+
+  - View the source code via this repository's web interface for
+    personal, educational, or evaluation purposes (for example,
+    assessing the author for hiring, consulting, or collaboration).
+
+  - Reference small, attributed excerpts in technical discussion
+    (such as a code review, blog post, or interview), provided that
+    no working portion of the software is reconstructed from those
+    excerpts.
+
+
+YOU MAY NOT, WITHOUT PRIOR WRITTEN PERMISSION FROM THE COPYRIGHT HOLDER
+
+  - Use, copy, fork, mirror, merge, publish, redistribute, sublicense,
+    or sell any part of this repository or its commit history.
+
+  - Modify the code or create derivative works.
+
+  - Incorporate any part of this code, in source or compiled form,
+    into another project — personal, academic, internal, or commercial.
+
+  - Train, fine-tune, or otherwise build machine-learning models or
+    datasets that include the contents of this repository.
+
+  - Operate, host, or distribute an instance of any software in this
+    repository for purposes other than the author's own use.
+
+  - Remove or alter this notice.
+
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM,
+OUT OF, OR IN CONNECTION WITH THE SOFTWARE.
+
+
+CONTACT
+
+For licensing inquiries or to request permission for any use
+prohibited by this notice, contact: wcopters@gmail.com
