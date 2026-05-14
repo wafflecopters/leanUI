@@ -8,7 +8,7 @@
 import { TTKTerm } from '../compiler/kernel';
 import { MetaVar, createNamedArgLookup } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
-import { whnf } from '../compiler/whnf';
+import { whnf, areTypesDefEq } from '../compiler/whnf';
 import { subst } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
 
@@ -374,11 +374,30 @@ export class ApplyTactic implements Tactic {
       // `plus (Succ n') X`), making structural matching with the function's return
       // type impossible. Instead, keep metas in the goal and let unification
       // produce meta constraints that the solver resolves.
-      const unifyResult = unifyTerms(currentType, goal.type, {
+      let unifyResult = unifyTerms(currentType, goal.type, {
         mode: 'check',
         definitions: engine.definitions,
         flexibleVars: false
       });
+
+      // Retry via definitional-equality check when the structural unify
+      // fails. Catches cases where the lemma's return type and the goal
+      // are definitionally equal but syntactically distinct — e.g. the
+      // lemma returns \`rle (rzero R) (rone R)\` while the goal is
+      // \`rle (realOfRat R 0) (realOfRat R 1)\` (literal coercions
+      // unfold to rzero/rone but the structural unifier doesn't δ-reduce).
+      // areTypesDefEq does whnf with full definitions on both sides
+      // recursively, so it sees through aliases/coercions. We can't
+      // recover meta solutions from a defEq pass — but for the apply
+      // path we just need to know whether the goal IS the candidate
+      // up to reduction; if so, the candidate's metas can be left
+      // unsolved (no fresh constraints needed) and the engine fills
+      // them via unification on the application term later.
+      if (!unifyResult.success) {
+        if (areTypesDefEq(currentType, goal.type, engine.definitions, goal.ctx)) {
+          unifyResult = { success: true, metaConstraints: [] } as any;
+        }
+      }
 
       if (!unifyResult.success) {
         return {

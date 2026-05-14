@@ -1893,14 +1893,21 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
         break;
       }
       case 'simp': {
-        const lemmaStr = value.trim();
-        if (lemmaStr && kernelType && definitions) {
-          const lemmas = lemmaStr.split(/[\s,]+/).filter(Boolean);
-          const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
-          if (engine) {
-            const simpResult = runSimp(engine, lemmas);
-            if (simpResult.success) {
-              result = applySimp(state, lemmas, simpResult.proofNodes);
+        if (kernelType && definitions) {
+          const lemmaStr = value.trim();
+          // Empty input → use every @simp-tagged lemma in scope. Lets
+          // the user click "Simp" with no input and have the curated
+          // set run automatically.
+          const lemmas = lemmaStr
+            ? lemmaStr.split(/[\s,]+/).filter(Boolean)
+            : [...(definitions.simpLemmas ?? [])];
+          if (lemmas.length > 0) {
+            const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
+            if (engine) {
+              const simpResult = runSimp(engine, lemmas);
+              if (simpResult.success) {
+                result = applySimp(state, lemmas, simpResult.proofNodes);
+              }
             }
           }
         }
@@ -3744,14 +3751,18 @@ function HoleProseView({
         break;
       }
       case 'simp': {
-        const lemmaStr = value.trim();
-        if (lemmaStr && kernelType && definitions) {
-          const lemmas = lemmaStr.split(/[\s,]+/).filter(Boolean);
-          const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
-          if (engine) {
-            const simpResult = runSimp(engine, lemmas);
-            if (simpResult.success) {
-              result = applySimp(state, lemmas, simpResult.proofNodes);
+        if (kernelType && definitions) {
+          const lemmaStr = value.trim();
+          const lemmas = lemmaStr
+            ? lemmaStr.split(/[\s,]+/).filter(Boolean)
+            : [...(definitions.simpLemmas ?? [])];
+          if (lemmas.length > 0) {
+            const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
+            if (engine) {
+              const simpResult = runSimp(engine, lemmas);
+              if (simpResult.success) {
+                result = applySimp(state, lemmas, simpResult.proofNodes);
+              }
             }
           }
         }
