@@ -1905,7 +1905,11 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
             const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
             if (engine) {
               const simpResult = runSimp(engine, lemmas);
-              if (simpResult.success) {
+              // Only commit the simp node when something actually fired —
+              // a zero-step success means "ran but no lemma matched the
+              // goal", which would otherwise insert a no-op simp node
+              // and silently confuse the user.
+              if (simpResult.success && simpResult.steps.length > 0) {
                 result = applySimp(state, lemmas, simpResult.proofNodes);
               }
             }
@@ -1993,7 +1997,7 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
               activeTactic === 'rewrite' ? 'lemma name' :
               activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
-              activeTactic === 'simp' ? 'lemma1, lemma2, ...' :
+              activeTactic === 'simp' ? '(empty = all @simp lemmas)' :
               'proof expression'
             }
             onKeyDown={handleKeyDown}
@@ -3760,7 +3764,11 @@ function HoleProseView({
             const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
             if (engine) {
               const simpResult = runSimp(engine, lemmas);
-              if (simpResult.success) {
+              // Only commit the simp node when something actually fired —
+              // a zero-step success means "ran but no lemma matched the
+              // goal", which would otherwise insert a no-op simp node
+              // and silently confuse the user.
+              if (simpResult.success && simpResult.steps.length > 0) {
                 result = applySimp(state, lemmas, simpResult.proofNodes);
               }
             }
@@ -3958,7 +3966,7 @@ function HoleProseView({
               activeTactic === 'unfold' ? 'definition name' :
               activeTactic === 'rewrite' || activeTactic === 'rewrite_rev' ? 'lemma name' :
               activeTactic === 'apply' ? 'lemma name' :
-              activeTactic === 'simp' ? 'lemma1, lemma2, ...' :
+              activeTactic === 'simp' ? '(empty = all @simp lemmas)' :
               activeTactic === 'have' ? 'name := expression' :
               'proof expression'
             }
