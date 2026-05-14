@@ -683,6 +683,22 @@ realOfIntOne R = realOfNatOne R
 realOfRatOne : (R : Real) -> Equal (realOfRat R (MkRat (IntOfNat 1) 1 (IsSucc 0))) (rone R)
 realOfRatOne R = realOfNatOne R
 
+-- Zero-side bridge lemmas, parallel to the One-side ones. Tagged @simp so
+-- \`0 : Carrier R\` literal-coerced through @ofNat / @ofInt / @ofRat
+-- collapses to \`rzero R\` and field axioms like
+-- \`CompleteOrderedField.zeroLeOne : rle (rzero R) (rone R)\` can apply.
+@syntax @simp
+realOfNatZero : (R : Real) -> Equal (realOfNat R 0) (rzero R)
+realOfNatZero R = refl
+
+@syntax @simp
+realOfIntZero : (R : Real) -> Equal (realOfInt R (IntOfNat 0)) (rzero R)
+realOfIntZero R = refl
+
+@syntax @simp
+realOfRatZero : (R : Real) -> Equal (realOfRat R (MkRat (IntOfNat 0) 1 (IsSucc 0))) (rzero R)
+realOfRatZero R = refl
+
 -- 0 < 1: the field's foundational positivity. Used by realOfNatSuccPos
 -- (below) and the limit/derivative proofs (further down).
 zeroLtOne : (R : Real) -> rlt (rzero R) (rone R) := by
