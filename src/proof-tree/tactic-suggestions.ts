@@ -835,11 +835,44 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
     while (goalHead.tag === 'App') goalHead = goalHead.fn;
     const goalHeadName = goalHead.tag === 'Const' ? goalHead.name : undefined;
 
+    // Compute the goal-head's δ-expanded form too — aliases like \`rle\`
+    // expand to \`CompleteOrderedField.le …\`, and we want to match
+    // structure-axiom projections (e.g. \`CompleteOrderedField.zeroLeOne\`
+    // which returns \`CompleteOrderedField.le …\`) against goals on the
+    // aliased form. Aliases with implicit args are compiled as Match
+    // clauses (\`match _ | R => ...\`), so peel both Lam binders and
+    // single-clause Match bodies before extracting the head.
+    let goalHeadExpanded: string | undefined;
+    if (goalHeadName) {
+      const aliasDef = definitions.terms.get(goalHeadName);
+      let body: TTKTerm | undefined = aliasDef?.value;
+      // Walk through layers of Lam / single-clause Match to reach the body's head.
+      for (let i = 0; i < 8 && body; i++) {
+        if (body.tag === 'Binder' && body.binderKind.tag === 'BLam') body = body.body;
+        else if (body.tag === 'Match' && body.clauses.length === 1) body = body.clauses[0].rhs;
+        else break;
+      }
+      if (body) {
+        let bodyHead: TTKTerm = body;
+        while (bodyHead.tag === 'App') bodyHead = bodyHead.fn;
+        if (bodyHead.tag === 'Const' && bodyHead.name !== goalHeadName) {
+          goalHeadExpanded = bodyHead.name;
+        }
+      }
+    }
+
     if (goalHeadName) {
       for (const [defName, def] of definitions.terms) {
-        // Skip projections, self-references, constructors (handled by Construct suggestions),
-        // and the current declaration
-        if (defName.includes('.') || defName === kernelGoal.currentDeclName) continue;
+        // Skip self-references, constructors (handled by Construct suggestions).
+        // DO NOT skip dotted names — record/structure projections like
+        // \`CompleteOrderedField.zeroLeOne\` ARE legitimate apply targets,
+        // since field axioms are exactly the kind of lemma you'd want
+        // surfaced for goals like \`0 ≤ 1\` on \`Carrier R\`. The
+        // return-type head filter below already prunes irrelevant
+        // projections aggressively (only ones whose return type ends in
+        // the goal's head OR its δ-expanded head are tried), so the
+        // noise floor stays low.
+        if (defName === kernelGoal.currentDeclName) continue;
         if (definitions.inductiveNameOfConstructor.has(defName)) continue;
         if (!def.type) continue;
 
@@ -850,7 +883,9 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
         }
         let retHead = retType;
         while (retHead.tag === 'App') retHead = retHead.fn;
-        if (retHead.tag !== 'Const' || retHead.name !== goalHeadName) continue;
+        if (retHead.tag !== 'Const') continue;
+        const retHeadName = retHead.name;
+        if (retHeadName !== goalHeadName && retHeadName !== goalHeadExpanded) continue;
 
         // Return type head matches — try apply
         const constTerm: TTKTerm = { tag: 'Const', name: defName };
