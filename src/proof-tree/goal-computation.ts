@@ -3156,11 +3156,17 @@ function renderUnifiedEquationLatex(
   aliasMap: Map<string, AliasFoldInfo>,
 ): string {
   const { lhs: rawLhs, rhs: rawRhs } = equation;
-  // Zonk, normalize (beta + iota), fold projections back to Const form
+  // Zonk, normalize (beta + iota), fold projections back to Const form.
+  // Use definitionsForRendering so the kernel inverse-iota for Nat/Rat
+  // fires — without it, \`MkRat (IntOfNat 1) 1 (IsSucc 0)\` stays in raw
+  // constructor form and the @ofRat fold can't strip the coercion
+  // wrapper, leaving the user with the verbose \`@ofRat(R, MkRat(...))\`
+  // form in the "which is true, because LHS = RHS" reasoning prose.
   const lhsZonked = engine.zonkTerm(rawLhs, goalCtx.length);
   const rhsZonked = engine.zonkTerm(rawRhs, goalCtx.length);
-  const lhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(lhsZonked), definitions), createDefinitionsMap());
-  const rhsNorm = fullNormalize(prepareMatchesForIota(betaNormalize(rhsZonked), definitions), createDefinitionsMap());
+  const renderDefs = definitionsForRendering(definitions);
+  const lhsNorm = fullNormalize(prepareMatchesForIota(lhsZonked, definitions), renderDefs);
+  const rhsNorm = fullNormalize(prepareMatchesForIota(rhsZonked, definitions), renderDefs);
   let lhs = foldProjectionMatches(lhsNorm, projMap);
   let rhs = foldProjectionMatches(rhsNorm, projMap);
   lhs = foldAliases(lhs, aliasMap);

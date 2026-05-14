@@ -285,11 +285,37 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     return computeSelectedBinderSuggestions(selectedBinder.token.name, kernelGoalWithDeclName, isInductive);
   }, [selectedBinder, kernelGoalWithDeclName, inductiveMap]);
 
-  // Merge all suggestions — binder suggestions take priority when active
+  // Merge all suggestions — binder suggestions take priority when active.
+  // Dedupe by resultGoalLatex: when a simp lemma and the underlying rewrite
+  // produce the same visible result (e.g. \`Simp addRealOfRat → 1\` and
+  // \`rw addRealOfRat → 1\`), keep one. Prefer simp-* over rewrite-* since
+  // simp suggestions are curated. Suggestions without resultGoalLatex
+  // (apply / construct / unfold-as-fallback) aren't deduped.
   const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
     if (binderSuggestions.length > 0) return binderSuggestions;
     if (syncSuggestions.length === 0 && rewriteSuggestions.length === 0) return [];
-    return [...syncSuggestions, ...rewriteSuggestions];
+    const merged = [...syncSuggestions, ...rewriteSuggestions];
+    const seenByPreview = new Map<string, TacticSuggestion>();
+    const ordered: TacticSuggestion[] = [];
+    for (const s of merged) {
+      if (!s.resultGoalLatex) { ordered.push(s); continue; }
+      const existing = seenByPreview.get(s.resultGoalLatex);
+      if (!existing) {
+        seenByPreview.set(s.resultGoalLatex, s);
+        ordered.push(s);
+        continue;
+      }
+      // Replace if current has higher priority (simp- beats rewrite-).
+      const curIsSimp = s.id.startsWith('simp-');
+      const exIsSimp = existing.id.startsWith('simp-');
+      if (curIsSimp && !exIsSimp) {
+        const idx = ordered.indexOf(existing);
+        if (idx >= 0) ordered[idx] = s;
+        seenByPreview.set(s.resultGoalLatex, s);
+      }
+      // else: drop the duplicate
+    }
+    return ordered;
   }, [binderSuggestions, syncSuggestions, rewriteSuggestions]);
 
   // Reset goal selection and binder selection when cursor changes
