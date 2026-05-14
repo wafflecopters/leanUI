@@ -125,8 +125,17 @@ export class RewriteTactic implements Tactic {
       //     - After unfold, goals have match redexes that need iota-reducing
       //     - Delta-reducing would expose internal match structures, making subterm
       //       matching impossible (e.g., plus(Succ(x), y) → match x with ...)
+      //
+      //     ALSO: zonk before normalizing. After an apply that introduced
+      //     tactic metas resolved by sibling-subgoal exacts, goal.type
+      //     still holds raw \`?_tactic_meta_N\` placeholders. Pattern
+      //     matching the lemma's LHS \`radd (realOfRat ?a) (realOfRat ?b)\`
+      //     against a bare meta fails. zonkTerm collapses solved metas to
+      //     their values so the user-visible substituted form is what we
+      //     match against — same form they see in the goal display.
       const emptyDefs = createDefinitionsMap();
-      const goalType = fullNormalize(goal.type, emptyDefs);
+      const zonkedGoalType = engine.zonkTerm(goal.type, goal.ctx.length);
+      const goalType = fullNormalize(zonkedGoalType, emptyDefs);
 
       // 4c. If LHS/RHS contain Meta placeholders (from Pi instantiation), try to
       //     match the LHS pattern against subterms of the goal to solve the Metas.

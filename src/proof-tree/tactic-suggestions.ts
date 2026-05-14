@@ -563,12 +563,24 @@ export function computeTacticSuggestions(
           trySimp(lemmaName, { reverse: false, occurrences: [] });
         }
         // Compound "Simp" suggestion: iterate runSimp over the entire
-        // @simp set until fixed point. Catches cases where no single
-        // lemma produces a visible change, but a CHAIN does (e.g.
-        // realOfRatOne canonicalizes \`realOfRat R (MkRat …)\` to
-        // \`rone R\`, then addNegRight collapses \`radd (rone R) (rneg (rone R))\`
-        // to \`rzero R\`, then realOfNatZero or similar renders as \`0\`).
-        if (gId) {
+        // @simp set until fixed point. Only offered when the user clicked
+        // the WHOLE goal (root / body / body-head subterm). For interior
+        // subterm clicks, runSimp would simplify parts of the goal OUTSIDE
+        // the user's selection (e.g. clicking \`1 + (-1)\` and seeing
+        // \`1 + (-1) ≤ 1\` as the preview because the OTHER side also
+        // simplified) — confusing. Interior selections get only the
+        // focused single-step simp suggestions above.
+        let simpAutoAllowed = selectedPath === 'goal-root' || selectedPath === 'goal-body';
+        if (!simpAutoAllowed && subtermInfo.headName && subtermInfo.occurrenceIndex === 1 && !subtermInfo.binderIndex) {
+          let bodyType = zonkedGoal.type;
+          while (bodyType.tag === 'Binder' && bodyType.binderKind.tag === 'BPi') bodyType = bodyType.body;
+          let bodyHead = bodyType;
+          while (bodyHead.tag === 'App') bodyHead = bodyHead.fn;
+          if (bodyHead.tag === 'Const' && bodyHead.name === subtermInfo.headName) {
+            simpAutoAllowed = true;
+          }
+        }
+        if (simpAutoAllowed && gId) {
           try {
             const all = [...definitions.simpLemmas];
             // Patch the engine's focused-goal meta with the zonked type so

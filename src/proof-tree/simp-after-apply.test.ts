@@ -20,8 +20,7 @@ import { compileTTFromText } from '../compiler/compile';
 import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { createInitialEngine } from '../tactics/tacticsEngine';
 import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
-import { parseExactExpr, computeTacticSuggestions } from './tactic-suggestions';
-
+import { computeTacticSuggestions } from './tactic-suggestions';
 import { renderInteractiveGoal } from './interactive-goal';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { parseExactExpr as parseExpr } from './goal-computation';
