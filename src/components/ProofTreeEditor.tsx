@@ -208,8 +208,6 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   }, []);
 
   const handleSelectGoalPath = useCallback((path: GoalPath | null) => {
-    // eslint-disable-next-line no-console
-    console.log('[click-debug] handleSelectGoalPath called with path:', path);
     setGoalSelectedPath(path);
     if (path) {
       setSelectedBinderRaw(null);
@@ -258,22 +256,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 
   // Compute tactic suggestions from selection (synchronous: intro, unfold, induction)
   const syncSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
-    // eslint-disable-next-line no-console
-    console.log('[suggest-debug] recompute', {
-      hasInteractiveGoal: !!interactiveGoal,
-      goalSelectedPath,
-      hasKernelGoal: !!kernelGoalWithDeclName,
-      hasDefinitions: !!definitions,
-      simpLemmaCount: definitions?.simpLemmas?.size,
-    });
-    if (!interactiveGoal || !goalSelectedPath) {
-      console.log('[suggest-debug] early-return (no interactive goal or path)');
-      return [];
-    }
-    const result = computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName);
-    // eslint-disable-next-line no-console
-    console.log('[suggest-debug] computeTacticSuggestions returned', result.length, 'suggestions:', result.map(s => s.id));
-    return result;
+    if (!interactiveGoal || !goalSelectedPath) return [];
+    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName);
   }, [goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName]);
 
   // Incremental rewrite suggestions (scan hypotheses, try targeted rewrites)

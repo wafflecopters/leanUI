@@ -104,8 +104,6 @@ export function InteractiveGoalView({ goal, selectedPath, onSelectPath, style }:
       // Click handler — toggle selection
       overlay.addEventListener('click', (e) => {
         e.stopPropagation();
-        // eslint-disable-next-line no-console
-        console.log('[click-debug] InteractiveGoalView clicked, goalId:', goalId, 'currently-selected:', selectedPath);
         if (selectedPath === goalId) {
           onSelectPath(null);
         } else {

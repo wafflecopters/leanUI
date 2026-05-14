@@ -288,23 +288,6 @@ export function computeTacticSuggestions(
 
   const suggestions: TacticSuggestion[] = [];
 
-  const dbgInfo = goal.subtermMap.get(selectedPath);
-  // eslint-disable-next-line no-console
-  console.log('[cts-debug] entry', {
-    selectedPath,
-    hasKernelGoal: !!kernelGoal,
-    hasDefinitions: !!definitions,
-    subtermInfo: dbgInfo && {
-      headName: dbgInfo.headName,
-      isAppOfConst: dbgInfo.isAppOfConst,
-      occurrenceIndex: dbgInfo.occurrenceIndex,
-      binderIndex: dbgInfo.binderIndex,
-      varName: dbgInfo.varName,
-      termTag: (dbgInfo.term as any)?.tag,
-    },
-    paths: [...goal.subtermMap.keys()],
-  });
-
   // Try `exact refl` — only when clicking on an Equal(...) subterm
   if (kernelGoal) {
     const subtermInfo = goal.subtermMap.get(selectedPath);
@@ -506,8 +489,6 @@ export function computeTacticSuggestions(
       // visually identical / longer result, drop it. The user gets one-click
       // simplifications targeted to exactly what they clicked, and the noise
       // floor stays low because non-simplifying rewrites are suppressed.
-      // eslint-disable-next-line no-console
-      console.log('[cts-debug] inside subtermInfo block, will try simp:', !!kernelGoal && !!definitions.simpLemmas && (definitions.simpLemmas?.size ?? 0) > 0);
       if (kernelGoal && definitions.simpLemmas && definitions.simpLemmas.size > 0) {
         // @simp suggestion strategy: for each @simp lemma, try TWO matches
         // against the selected subterm:
@@ -525,20 +506,31 @@ export function computeTacticSuggestions(
         const targetHead = subtermInfo.headName;
         const { engine, goal: metaGoal } = kernelGoal;
         const gId = engine.getFocusedGoalId();
+        // CRITICAL: zonk the goal type before pattern-matching simp lemmas.
+        // After an apply, the goal still holds unsolved tactic metas; the
+        // exact subgoals on sibling holes resolve those metas, but the
+        // resolution lives in the engine's substitution table — the raw
+        // metaGoal.type still references \`?tactic_meta_N\`. RewriteTactic
+        // pattern-matches structurally and rejects any goal that contains
+        // bare metas where the lemma expects a Const head. Zonking
+        // collapses solved metas to their values (e.g. \`realOfRat R 1\`
+        // for the c-witness \`?tactic_meta_972\`) so the lemma's LHS
+        // actually has something to match against.
+        const zonkedGoal: MetaVar = { ...metaGoal, type: engine.zonkTerm(metaGoal.type, metaGoal.ctx.length) };
         const offered = new Set<string>();
         const trySimp = (lemmaName: string, opts: { reverse: boolean; occurrences: number[]; targetHead?: string }): void => {
           try {
             if (!gId) return;
             const tactic = new RewriteTactic({ tag: 'Const', name: lemmaName }, opts);
-            const res = tactic.apply(engine, metaGoal, gId);
+            const res = tactic.apply(engine, zonkedGoal, gId);
             if (!res.success) return;
-            const resultGoalLatex = renderChangedSubterm(metaGoal, res.newEngine, definitions, kernelGoal.rev);
+            const resultGoalLatex = renderChangedSubterm(zonkedGoal, res.newEngine, definitions, kernelGoal.rev);
             if (resultGoalLatex === undefined) return;
-            // Strict-shorter filter.
+            // Strict-shorter filter — also against zonked, for consistency.
             const change = extractChangedSubterm(
-              engine.zonkTerm(metaGoal.type, metaGoal.ctx.length),
-              res.newEngine.zonkTerm(res.newEngine.metaVars.get(res.newEngine.getFocusedGoalId()!)!.type, metaGoal.ctx.length),
-              metaGoal.ctx,
+              zonkedGoal.type,
+              res.newEngine.zonkTerm(res.newEngine.metaVars.get(res.newEngine.getFocusedGoalId()!)!.type, zonkedGoal.ctx.length),
+              zonkedGoal.ctx,
             );
             if (change && kernelGoal.rev) {
               const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, kernelGoal.rev);
@@ -579,14 +571,20 @@ export function computeTacticSuggestions(
         if (gId) {
           try {
             const all = [...definitions.simpLemmas];
-            const simpRes = runSimp(engine, all);
+            // Patch the engine's focused-goal meta with the zonked type so
+            // runSimp's per-iteration RewriteTactic sees the substituted
+            // form (same fix as the per-lemma trySimp above).
+            const patchedMetaVars = new Map(engine.metaVars);
+            patchedMetaVars.set(gId, zonkedGoal);
+            const zonkedEngine = engine.withUpdates({ metaVars: patchedMetaVars });
+            const simpRes = runSimp(zonkedEngine, all);
             if (simpRes.success && simpRes.steps.length > 0) {
-              const resultGoalLatex = renderChangedSubterm(metaGoal, simpRes.engine, definitions, kernelGoal.rev);
+              const resultGoalLatex = renderChangedSubterm(zonkedGoal, simpRes.engine, definitions, kernelGoal.rev);
               if (resultGoalLatex !== undefined) {
                 const change = extractChangedSubterm(
-                  engine.zonkTerm(metaGoal.type, metaGoal.ctx.length),
-                  simpRes.engine.zonkTerm(simpRes.engine.metaVars.get(simpRes.engine.getFocusedGoalId()!)!.type, metaGoal.ctx.length),
-                  metaGoal.ctx,
+                  zonkedEngine.zonkTerm(zonkedGoal.type, zonkedGoal.ctx.length),
+                  simpRes.engine.zonkTerm(simpRes.engine.metaVars.get(simpRes.engine.getFocusedGoalId()!)!.type, zonkedGoal.ctx.length),
+                  zonkedGoal.ctx,
                 );
                 let strictlyShorter = true;
                 if (change && kernelGoal.rev) {
