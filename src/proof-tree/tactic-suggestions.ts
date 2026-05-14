@@ -67,12 +67,38 @@ function renderSubgoalPreviews(
     const newGoalIds = newEngine.goals.filter(g => !oldGoalSet.has(g));
     if (newGoalIds.length === 0) return undefined; // tactic closed the goal, no new subgoals
 
-    // Build a map of meta IDs → fresh names for display
+    // First pass: collect which new-subgoal meta IDs are referenced from
+    // OTHER subgoals' types. Only those need a visible name — the rest
+    // are leaves whose label \`b : 1 ≤ a\` adds noise without payoff.
+    const usedMetaIds = new Set<string>();
+    function collectReferencedMetas(t: TTKTerm, out: Set<string>): void {
+      if (t.tag === 'Meta') { out.add(t.id); return; }
+      if (t.tag === 'App') { collectReferencedMetas(t.fn, out); collectReferencedMetas(t.arg, out); return; }
+      if (t.tag === 'Binder') { collectReferencedMetas(t.domain, out); collectReferencedMetas(t.body, out); return; }
+      if (t.tag === 'Match') {
+        collectReferencedMetas(t.scrutinee, out);
+        for (const c of t.clauses) collectReferencedMetas(c.rhs, out);
+      }
+    }
+    const newGoalSet = new Set(newGoalIds);
+    for (const gId of newGoalIds) {
+      const meta = newEngine.metaVars.get(gId);
+      if (!meta) continue;
+      const refs = new Set<string>();
+      collectReferencedMetas(meta.type, refs);
+      for (const ref of refs) {
+        if (ref !== gId && newGoalSet.has(ref)) usedMetaIds.add(ref);
+      }
+    }
+
+    // Build a map of meta IDs → fresh names for display — ONLY for the
+    // meta IDs that other subgoals reference. Leaf subgoals stay nameless.
     const metaNames = new Map<string, string>();
     const usedNames = new Set<string>();
     const namePool = 'abcdkpqrstuvw';
     let nameIdx = 0;
     for (const gId of newGoalIds) {
+      if (!usedMetaIds.has(gId)) continue;
       const meta = newEngine.metaVars.get(gId);
       if (!meta || meta.solution !== undefined) continue;
       let name: string | undefined;
@@ -82,7 +108,8 @@ function renderSubgoalPreviews(
       metaNames.set(gId, name);
     }
 
-    // Replace unsolved metas in goal types with Const(freshName) for display
+    // Replace referenced metas with Const(freshName); leave unreferenced
+    // metas as bare placeholders (renderer will show □).
     function replaceMetas(t: TTKTerm): TTKTerm {
       if (t.tag === 'Meta' && metaNames.has(t.id)) {
         return { tag: 'Const', name: metaNames.get(t.id)! };
@@ -98,7 +125,10 @@ function renderSubgoalPreviews(
       if (!meta) continue;
       const displayMeta = { ...meta, type: replaceMetas(meta.type) };
       let latex = renderGoalLatex(newEngine, displayMeta, definitions, rev);
-      // If the goal is a Type/Sort (e.g., ℝ), prefix with "name : " to clarify it's a value
+      // Only label value-type goals THAT ARE REFERENCED ELSEWHERE — those
+      // need a name so the references in other subgoals are readable.
+      // Unreferenced value-type goals (or proposition subgoals in general)
+      // render as a bare type.
       const metaName = metaNames.get(gId);
       if (metaName && isValueGoal(meta.type, definitions)) {
         latex = `${metaName} : ${latex}`;
