@@ -11,6 +11,107 @@ import { TacticEngine } from './tacticsEngine';
 import { whnf, areTypesDefEq } from '../compiler/whnf';
 import type { DefinitionsMap } from '../compiler/term';
 
+/**
+ * Walk a term, replacing each \`Hole\` with a context Var when the hole's
+ * expected type (inferred from the App position it appears in) matches
+ * EXACTLY ONE context variable's type. Used after IntrosTactic to fix
+ * elaborator-leftover holes (e.g. \`rle\`'s implicit \`{R}\` when the
+ * source was \`(R : Real) -> rle 1 2\`).
+ *
+ * The hole-id-to-Var mapping is computed once (first pass) by examining
+ * \`App(fn, hole)\` positions to determine expected types from \`fn\`'s
+ * Pi signature. Then a substitution pass rewrites holes accordingly.
+ */
+function pinHolesToCtxVars(
+  type: TTKTerm,
+  ctx: import('../compiler/term').TTKContext,
+  definitions: DefinitionsMap,
+): TTKTerm {
+  // Build map of hole id → unique context Var index, or null if ambiguous.
+  const holePins = new Map<string, TTKTerm | null>();
+  const stringify = (t: TTKTerm) => JSON.stringify(t, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v);
+
+  function inferExpectedTypeForArg(fn: TTKTerm, argPosFromHead: number): TTKTerm | null {
+    // For App(...App(Const(c), a0), a1) ..., the head is the Const and
+    // \`argPosFromHead\` is which arg position (0-indexed) we want the
+    // expected type of. Walk the Const's type's Pi spine.
+    let head: TTKTerm = fn;
+    while (head.tag === 'App') head = head.fn;
+    if (head.tag !== 'Const') return null;
+    const def = definitions.terms.get(head.name);
+    if (!def?.type) return null;
+    let t: TTKTerm = def.type;
+    for (let i = 0; i < argPosFromHead; i++) {
+      if (t.tag !== 'Binder' || t.binderKind.tag !== 'BPi') return null;
+      t = t.body;
+    }
+    if (t.tag !== 'Binder' || t.binderKind.tag !== 'BPi') return null;
+    return t.domain;
+  }
+
+  function visit(t: TTKTerm): void {
+    if (t.tag === 'App') {
+      // Determine position of t.arg in the spine: walk down t.fn counting Apps.
+      let spineLen = 0;
+      let cur: TTKTerm = t.fn;
+      while (cur.tag === 'App') { spineLen++; cur = cur.fn; }
+      // t.arg is at position spineLen (0-indexed).
+      if (t.arg.tag === 'Hole') {
+        const expected = inferExpectedTypeForArg(t.fn, spineLen);
+        if (expected) {
+          const expectedKey = stringify(expected);
+          // Find context vars with matching type.
+          const matches: number[] = [];
+          for (let i = 0; i < ctx.length; i++) {
+            if (stringify(ctx[i].type) === expectedKey) matches.push(ctx.length - 1 - i);
+          }
+          if (matches.length === 1) {
+            // Set or refine pin: if already set to different Var, mark ambiguous.
+            const existing = holePins.get(t.arg.id);
+            const newPin: TTKTerm = { tag: 'Var', index: matches[0] };
+            if (existing === undefined) holePins.set(t.arg.id, newPin);
+            else if (existing && stringify(existing) !== stringify(newPin)) holePins.set(t.arg.id, null);
+          }
+        }
+      }
+      visit(t.fn);
+      visit(t.arg);
+    } else if (t.tag === 'Binder') {
+      visit(t.domain);
+      visit(t.body);
+    } else if (t.tag === 'Match') {
+      visit(t.scrutinee);
+      for (const c of t.clauses) visit(c.rhs);
+    }
+  }
+  visit(type);
+
+  if (holePins.size === 0) return type;
+
+  function subst(t: TTKTerm): TTKTerm {
+    if (t.tag === 'Hole') {
+      const pin = holePins.get(t.id);
+      if (pin) return pin;
+      return t;
+    }
+    if (t.tag === 'App') {
+      const fn = subst(t.fn); const arg = subst(t.arg);
+      if (fn === t.fn && arg === t.arg) return t;
+      return { tag: 'App', fn, arg };
+    }
+    if (t.tag === 'Binder') {
+      const domain = subst(t.domain); const body = subst(t.body);
+      if (domain === t.domain && body === t.body) return t;
+      return { ...t, domain, body };
+    }
+    if (t.tag === 'Match') {
+      return { ...t, scrutinee: subst(t.scrutinee), clauses: t.clauses.map(c => ({ ...c, rhs: subst(c.rhs) })) };
+    }
+    return t;
+  }
+  return subst(type);
+}
+
 // Memoize the "definitions minus record projections" map per definitions
 // instance. Used by ApplyTactic's spine-shape fallback to whnf with
 // projection unfolding disabled. Recomputing per-candidate (called 100×
@@ -324,6 +425,23 @@ export class IntrosTactic implements Tactic {
         const introResult = new IntroTactic().apply(current, currentGoal, currentGoalId);
         if (!introResult.success) break;
         current = introResult.newEngine;
+      }
+    }
+
+    // Post-intros: pin elaborator-leftover Holes in the goal type to
+    // compatible context vars. When the source writes \`(R : Real) -> rle 1 2\`,
+    // the elaborator creates a Hole for \`rle\`'s implicit \`{R}\`. After
+    // intros R brings R into scope, that Hole could be unified with the
+    // bound R but isn't automatically. This makes subgoal-preview rendering
+    // show \`field(R)\` instead of \`field(□)\` (image #34).
+    const finalGoal = current.getFocusedGoal();
+    const finalGoalId = current.getFocusedGoalId();
+    if (finalGoal && finalGoalId) {
+      const pinnedType = pinHolesToCtxVars(finalGoal.type, finalGoal.ctx, current.definitions);
+      if (pinnedType !== finalGoal.type) {
+        const newMetaVars = new Map(current.metaVars);
+        newMetaVars.set(finalGoalId, { ...finalGoal, type: pinnedType });
+        current = current.withUpdates({ metaVars: newMetaVars });
       }
     }
 

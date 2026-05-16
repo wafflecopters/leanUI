@@ -170,6 +170,42 @@ testImg29 R = ?h`);
     expect(zeroLeOneSug!.numSubgoals).toBe(0);
   });
 
+  test('REGRESSION (image #34): apply leTrans subgoal previews resolve field-implicit to bound R (no `field(□)`)', { timeout: 30000 }, () => {
+    // Image #34: subgoal previews for \`apply CompleteOrderedField.leTrans\`
+    // on \`rle 0 1\` showed \`CompleteOrderedField.le (field (□), 0, a)\`
+    // — the \`□\` was an unsolved elaborator Hole (the implicit \`{R}\` of
+    // \`rle 0 1\`) that wasn't pinned to the bound \`R\` after intros R.
+    // Fix: IntroTactic now pins compatible Holes to context vars when
+    // there's a unique type match. Subgoal previews must NOT contain \`□\`.
+    const { r, decl } = compileTop('testFieldBox', `testFieldBox : (R : Real) -> rle 0 1
+testFieldBox R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(['R'], leafHole);
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal!, r.definitions, rev);
+    let rlePath: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'rle' && info.occurrenceIndex === 1) { rlePath = p; break; }
+    }
+    const sugs = computeTacticSuggestions(rlePath!, ig, r.definitions, {
+      engine, goal: focusedGoal!, definitions: r.definitions, rev,
+    });
+    const leTransSug = sugs.find(s => s.id.includes('leTrans'));
+    expect(leTransSug).toBeDefined();
+    // No subgoal preview LaTeX should contain a placeholder for unsolved
+    // metas — that's the `□` symbol (rendered as `\square` or similar) or
+    // the kernel meta-marker `??`.
+    const previews = leTransSug!.subgoalPreviews ?? [];
+    for (const p of previews) {
+      expect(p).not.toContain('\\square');
+      expect(p).not.toMatch(/□|\?\?/);
+    }
+  });
+
   test('REGRESSION (image #32): full simp+apply chain replays without "return type mismatch (conflict)"', { timeout: 30000 }, async () => {
     // Image #32: user reached `0 ≤ 1` via intros + apply addLeRightCancel
     // + exact -1 + 2 rewrites with addRealOfRat + simp. They clicked
