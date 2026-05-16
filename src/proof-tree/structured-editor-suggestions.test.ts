@@ -170,6 +170,40 @@ testImg29 R = ?h`);
     expect(zeroLeOneSug!.numSubgoals).toBe(0);
   });
 
+  test('REGRESSION (image #35): clicking a collapsed literal (`2`) does NOT surface simp rewrites of its parent', { timeout: 30000 }, () => {
+    // Image #35: user clicked just `2` (which renders from
+    // \`realOfRat R MkRat2\` via @ofRat-fold), but saw \`Simp addRealOfRat
+    // → 1\` — a rewrite of the PARENT \`2 + (-1)\`. Clicking a literal
+    // shouldn't surface rewrites that operate on a wider subterm.
+    const { r, decl } = compileTop('testFocus2', `testFocus2 : (R : Real) -> rle 1 2
+testFocus2 R = ?h`);
+    const leaf = mkHole();
+    const tree: ProofNode = mkIntros(['R'], mkApply('addLeRightCancel', [
+      mkExact('-1'),
+      mkRewrite('addRealOfRat', leaf),
+    ]));
+    const engine = replayToEngine(tree, leaf.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal()!;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    // Find a subterm path whose rendered term is a literal (head undefined,
+    // term tag NatLit/RatLit/Hole or term that the renderer treats as
+    // collapsed literal).
+    let literalPath: string | null = null;
+    for (const [path, info] of ig.subtermMap) {
+      if (info.headName === undefined && info.term.tag !== 'Var') { literalPath = path; break; }
+    }
+    expect(literalPath).not.toBeNull();
+    const sugs = computeTacticSuggestions(literalPath!, ig, r.definitions, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    });
+    // No \`simp-*\` suggestion should fire on a literal click.
+    const simpSugs = sugs.filter(s => s.id.startsWith('simp-'));
+    expect(simpSugs.length).toBe(0);
+  });
+
   test('REGRESSION (image #34): apply leTrans subgoal previews resolve field-implicit to bound R (no `field(□)`)', { timeout: 30000 }, () => {
     // Image #34: subgoal previews for \`apply CompleteOrderedField.leTrans\`
     // on \`rle 0 1\` showed \`CompleteOrderedField.le (field (□), 0, a)\`

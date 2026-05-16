@@ -519,7 +519,23 @@ export function computeTacticSuggestions(
       // visually identical / longer result, drop it. The user gets one-click
       // simplifications targeted to exactly what they clicked, and the noise
       // floor stays low because non-simplifying rewrites are suppressed.
-      if (kernelGoal && definitions.simpLemmas && definitions.simpLemmas.size > 0) {
+      // Skip simp suggestions entirely when the user clicked a collapsed
+      // literal (e.g. \`2\` rendered from \`realOfRat R MkRat2\` via @ofRat
+      // fold). Without a head name to constrain \`targetHead\`, the
+      // per-lemma scanner falls back to occurrences=[1] which can match
+      // ANY parent containing the literal — surfacing rewrites that
+      // operate on the PARENT subterm (e.g. \`Simp addRealOfRat → 1\` for
+      // a click on just \`2\` when the parent is \`2 + (-1)\`). That's
+      // wrong UX: the suggestion should reflect what the user clicked.
+      const clickedIsCollapsedLiteral =
+        subtermInfo.headName === undefined
+        && (subtermInfo.term.tag === 'NatLit' || subtermInfo.term.tag === 'RatLit'
+            // Also catch terms rendered as a single literal token (e.g.
+            // \`realOfRat R MkRat2\` after @ofRat-fold rendering). The
+            // subterm's interactive-goal entry has no headName because
+            // the renderer collapsed the App into a literal token.
+            || (subtermInfo.term as any).tag === 'Hole');
+      if (kernelGoal && definitions.simpLemmas && definitions.simpLemmas.size > 0 && !clickedIsCollapsedLiteral) {
         // @simp suggestion strategy: for each @simp lemma, try TWO matches
         // against the selected subterm:
         //   (1) outer-head match — the lemma's LHS shares the user's
