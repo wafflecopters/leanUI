@@ -9,7 +9,7 @@ import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
 import { renderGoalLatex, renderSubtermLatex } from './goal-computation';
 import { TTKTerm, prettyPrint as kernelPrettyPrint } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
-import { fullNormalize, whnf } from '../compiler/whnf';
+import { fullNormalize, whnf, areTypesDefEq } from '../compiler/whnf';
 import { shiftTerm } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
 import { TacticEngine } from '../tactics/tacticsEngine';
@@ -564,7 +564,13 @@ export function computeTacticSuggestions(
             );
             if (change && kernelGoal.rev) {
               const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, kernelGoal.rev);
-              if (resultGoalLatex.length >= oldLatex.length) return;
+              // Drop rewrites that EXPAND (rendered result strictly longer)
+              // or that render IDENTICALLY (truly no-op at the user's level).
+              // Equal-length but different rewrites (e.g. \`addComm\` swapping
+              // operands) ARE useful — the user may want commutativity to
+              // align with a hypothesis or expose a different head. Keep them.
+              if (resultGoalLatex.length > oldLatex.length) return;
+              if (resultGoalLatex === oldLatex) return;
             }
             const id = `simp-${lemmaName}`;
             if (offered.has(id)) return;
@@ -583,14 +589,30 @@ export function computeTacticSuggestions(
             suggestions.push(rw);
           } catch { /* ignore */ }
         };
+        // Gate the "inner pass" (try lemma ANYWHERE in goal) to whole-goal
+        // selections only. For an interior subterm click (e.g. \`(-1)\` in
+        // \`1 + (-1) ≤ 2 + (-1)\`), the inner pass would otherwise surface a
+        // rewrite that changes the OTHER side of the inequality — disjoint
+        // from what the user clicked. That's the bug behind image #21:
+        // clicking \`(-1)\` showed \`Simp addRealOfRat → 0\` because the
+        // rewrite simplified \`1 + (-1)\` (a parent), not \`(-1)\` itself.
+        let allowInnerPass = selectedPath === 'goal-root' || selectedPath === 'goal-body';
+        if (!allowInnerPass && subtermInfo.headName && subtermInfo.occurrenceIndex === 1 && !subtermInfo.binderIndex) {
+          let bodyT = zonkedGoal.type;
+          while (bodyT.tag === 'Binder' && bodyT.binderKind.tag === 'BPi') bodyT = bodyT.body;
+          let bodyH = bodyT;
+          while (bodyH.tag === 'App') bodyH = bodyH.fn;
+          if (bodyH.tag === 'Const' && bodyH.name === subtermInfo.headName) allowInnerPass = true;
+        }
         for (const lemmaName of definitions.simpLemmas) {
           // Outer pass: head-matched, occurrence-targeted at user's click.
           trySimp(lemmaName, targetHead
             ? { reverse: false, occurrences: [occ], targetHead }
             : { reverse: false, occurrences: [occ] });
-          // Inner pass: try the lemma anywhere in the goal — catches
-          // bridge lemmas whose LHS lives below the clicked subterm.
-          trySimp(lemmaName, { reverse: false, occurrences: [] });
+          // Inner pass: only on whole-goal selections.
+          if (allowInnerPass) {
+            trySimp(lemmaName, { reverse: false, occurrences: [] });
+          }
         }
         // Compound "Simp" suggestion: iterate runSimp over the entire
         // @simp set until fixed point. Only offered when the user clicked
@@ -621,34 +643,43 @@ export function computeTacticSuggestions(
             const zonkedEngine = engine.withUpdates({ metaVars: patchedMetaVars });
             const simpRes = runSimp(zonkedEngine, all);
             if (simpRes.success && simpRes.steps.length > 0) {
-              const resultGoalLatex = renderChangedSubterm(zonkedGoal, simpRes.engine, definitions, kernelGoal.rev);
-              if (resultGoalLatex !== undefined) {
-                const change = extractChangedSubterm(
-                  zonkedEngine.zonkTerm(zonkedGoal.type, zonkedGoal.ctx.length),
-                  simpRes.engine.zonkTerm(simpRes.engine.metaVars.get(simpRes.engine.getFocusedGoalId()!)!.type, zonkedGoal.ctx.length),
-                  zonkedGoal.ctx,
-                );
-                let strictlyShorter = true;
-                if (change && kernelGoal.rev) {
-                  const oldLatex = renderSubtermLatex(change.old, change.ctx as any, definitions, kernelGoal.rev);
-                  if (resultGoalLatex.length >= oldLatex.length) strictlyShorter = false;
+              // Compute the result preview and only emit when the visible
+              // LaTeX actually changes. Kernel-only canonicalization (e.g.
+              // \`realOfRat R MkRat0\` → \`rzero R\` — both render as \`0\`)
+              // would otherwise look like a no-op to the user. The downstream
+              // \`simp-then-apply-def-X\` suggestion handles the case where
+              // the canonicalization is the enabler for a one-click close,
+              // so we don't need simp-auto to fire on invisible changes.
+              const changedSubterm = renderChangedSubterm(zonkedGoal, simpRes.engine, definitions, kernelGoal.rev);
+              let fullGoalLatex: string | undefined;
+              try {
+                const newGoalId = simpRes.engine.getFocusedGoalId();
+                if (newGoalId && kernelGoal.rev) {
+                  const newMeta = simpRes.engine.metaVars.get(newGoalId);
+                  if (newMeta) {
+                    fullGoalLatex = renderGoalLatex(simpRes.engine, newMeta, definitions, kernelGoal.rev);
+                  }
                 }
-                if (strictlyShorter) {
-                  // Use the first step's name in the id (so dispatch via
-                  // applyRewrite still works for single-step cases). For
-                  // multi-step chains, the user clicks once and runSimp
-                  // re-fires server-side via the Simp toolbar button.
-                  // Suggestion id 'simp-auto' is the compound form.
-                  suggestions.push({
-                    id: `simp-auto`,
-                    label: simpRes.steps.length === 1 ? `Simp ${simpRes.steps[0].name}` : `Simp (${simpRes.steps.length} steps)`,
-                    labelLatex: simpRes.steps.length === 1
-                      ? `\\text{Simp } ${renderNameLatex(simpRes.steps[0].name, 'textbf')}`
-                      : `\\text{Simp (${simpRes.steps.length} steps)}`,
-                    description: `Apply @simp lemmas: ${simpRes.steps.map(s => s.name).join(' → ')}`,
-                    resultGoalLatex,
-                  } as any);
-                }
+              } catch { /* ignore */ }
+              // Compare against the original full-goal rendering. If both
+              // are defined and equal, the simp is invisible — suppress.
+              let origGoalLatex: string | undefined;
+              try {
+                if (kernelGoal.rev) origGoalLatex = renderGoalLatex(engine, zonkedGoal, definitions, kernelGoal.rev);
+              } catch { /* ignore */ }
+              const visiblyChanged = (changedSubterm !== undefined)
+                || (fullGoalLatex !== undefined && origGoalLatex !== undefined && fullGoalLatex !== origGoalLatex);
+              if (visiblyChanged) {
+                const resultGoalLatex = changedSubterm ?? fullGoalLatex;
+                suggestions.push({
+                  id: `simp-auto`,
+                  label: simpRes.steps.length === 1 ? `Simp ${simpRes.steps[0].name}` : `Simp (${simpRes.steps.length} steps)`,
+                  labelLatex: simpRes.steps.length === 1
+                    ? `\\text{Simp } ${renderNameLatex(simpRes.steps[0].name, 'textbf')}`
+                    : `\\text{Simp (${simpRes.steps.length} steps)}`,
+                  description: `Apply @simp lemmas: ${simpRes.steps.map(s => s.name).join(' → ')}`,
+                  resultGoalLatex,
+                } as any);
               }
             }
           } catch { /* ignore */ }
@@ -892,6 +923,72 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
     }
 
     if (goalHeadName) {
+      // Cache simp result once — same regardless of which candidate we try.
+      // Used as a fallback engine when direct apply fails: many field axioms
+      // like `zeroLtOne : rlt R (rzero R) (rone R)` don't match goals whose
+      // 0/1 are in @ofRat literal form. Simp canonicalizes literals first.
+      let simpCached: import('../tactics/simp-tactic').SimpResult | null | undefined = undefined;
+      const getSimpResult = (): import('../tactics/simp-tactic').SimpResult | null => {
+        if (simpCached !== undefined) return simpCached;
+        const simpLemmas = definitions.simpLemmas;
+        if (!simpLemmas || simpLemmas.size === 0) { simpCached = null; return null; }
+        try {
+          const r = runSimp(engine, [...simpLemmas]);
+          simpCached = (r.success && r.steps.length > 0) ? r : null;
+        } catch { simpCached = null; }
+        return simpCached;
+      };
+
+      // An apply tactic can "succeed" while leaving unsolved metas dangling
+      // (e.g. \`leRefl : a ≤ a\` on \`0 ≤ 1\` solves both \`a\` positions but
+      // leaves a stuck constraint behind). Detect this by zonking the
+      // original goal's solution and checking it's ground (no Meta tags
+      // beyond goals we explicitly track as new subgoals).
+      const hasMetaNotInSet = (t: TTKTerm, allowedGoals: Set<string>, eng: TacticEngine, visited: Set<string>): boolean => {
+        if (t.tag === 'Meta') {
+          if (allowedGoals.has(t.id)) return false;
+          if (visited.has(t.id)) return false; // cycle through solved metas — not dangling
+          visited.add(t.id);
+          const m = eng.metaVars.get(t.id);
+          if (m?.solution !== undefined) return hasMetaNotInSet(m.solution, allowedGoals, eng, visited);
+          return true; // unsolved
+        }
+        if (t.tag === 'App') return hasMetaNotInSet(t.fn, allowedGoals, eng, visited) || hasMetaNotInSet(t.arg, allowedGoals, eng, visited);
+        if (t.tag === 'Binder') return hasMetaNotInSet(t.domain, allowedGoals, eng, visited) || hasMetaNotInSet(t.body, allowedGoals, eng, visited);
+        if (t.tag === 'Match') {
+          if (hasMetaNotInSet(t.scrutinee, allowedGoals, eng, visited)) return true;
+          for (const c of t.clauses) if (hasMetaNotInSet(c.rhs, allowedGoals, eng, visited)) return true;
+        }
+        return false;
+      };
+      // An apply is "clean" iff (1) the zonked proof term has no dangling
+      // metas beyond the new subgoals, AND (2) the proof's TYPE is
+      // definitionally equal to the original goal's type. The constraint
+      // solver can silently keep the first of two conflicting solutions
+      // for the same meta (e.g. \`leRefl: a ≤ a\` on \`0 ≤ 1\` gets \`?a :=
+      // 0\` from position 2 and \`?a := 1\` from position 3; first wins,
+      // producing a proof of \`0 ≤ 0\` — ground but wrong-typed). The
+      // type-check catches that.
+      const isCleanApply = (beforeEng: TacticEngine, afterEng: TacticEngine | undefined, _goalId: string, _goalType: TTKTerm): boolean => {
+        if (!afterEng) return false;
+        const oldGoalSet = new Set(beforeEng.goals);
+        const newSubgoals = new Set(afterEng.goals.filter(g => !oldGoalSet.has(g)));
+        try {
+          const zonked = afterEng.zonk();
+          if (hasMetaNotInSet(zonked, newSubgoals, afterEng, new Set())) return false;
+          // For closed-goal applies (no new subgoals), verify the proof's
+          // inferred type matches the goal type. Catches the constraint
+          // solver's silent first-wins behavior — e.g. \`leRefl: a ≤ a\` on
+          // \`0 ≤ 1\` accepts \`?a := 0\` from pos 2, drops the conflicting
+          // \`?a := 1\` from pos 3, and produces a ground proof of \`0 ≤ 0\`
+          // which is type-incorrect for the goal. Without this check the
+          // bogus suggestion surfaces (image #30).
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       for (const [defName, def] of definitions.terms) {
         // Skip self-references, constructors (handled by Construct suggestions).
         // DO NOT skip dotted names — record/structure projections like
@@ -919,10 +1016,12 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
 
         // Return type head matches — try apply
         const constTerm: TTKTerm = { tag: 'Const', name: defName };
+        let directApplied = false;
         try {
           const applyTactic = new ApplyTactic(constTerm);
           const result = applyTactic.apply(engine, zonkedGoal, goalId);
-          if (result.success) {
+          if (result.success && isCleanApply(engine, result.newEngine, goalId, zonkedGoal.type)) {
+            directApplied = true;
             const numSubgoals = result.newEngine
               ? result.newEngine.goals.length - engine.goals.length + 1
               : 1;
@@ -941,6 +1040,47 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
             });
           }
         } catch { /* doesn't apply */ }
+
+        // If direct apply failed, try `simp ; apply` — canonicalizes literals
+        // (e.g. \`realOfRat R (MkRat 1 1 _)\` → \`rone R\`) so axiom args unify.
+        if (!directApplied) {
+          const simpResult = getSimpResult();
+          if (simpResult) {
+            try {
+              const newGoalId = simpResult.engine.getFocusedGoalId();
+              const newGoal = simpResult.engine.getFocusedGoal();
+              if (newGoalId && newGoal) {
+                const zonkedNewType = simpResult.engine.zonkTerm(newGoal.type, newGoal.ctx.length);
+                const zonkedNewGoal: MetaVar = { ...newGoal, type: zonkedNewType } as MetaVar;
+                const applyTactic2 = new ApplyTactic(constTerm);
+                const result2 = applyTactic2.apply(simpResult.engine, zonkedNewGoal, newGoalId);
+                if (result2.success && isCleanApply(simpResult.engine, result2.newEngine, newGoalId, zonkedNewGoal.type)) {
+                  const numSubgoals = result2.newEngine
+                    ? result2.newEngine.goals.length - simpResult.engine.goals.length + 1
+                    : 1;
+                  const subgoalPreviews = result2.newEngine
+                    ? renderSubgoalPreviews(simpResult.engine, result2.newEngine, kernelGoal.definitions, kernelGoal.rev)
+                    : undefined;
+                  const stepCount = simpResult.steps.length;
+                  const closesGoal = numSubgoals === 0 || (subgoalPreviews === undefined && (result2.newEngine?.goals.length ?? 1) < simpResult.engine.goals.length);
+                  const resultGoalLatex = closesGoal
+                    ? `\\checkmark\\; \\text{closes via } ${renderNameLatex(defName, 'textbf')}`
+                    : undefined;
+                  suggestions.push({
+                    id: `simp-then-apply-def-${defName}`,
+                    label: `simp; apply ${defName}`,
+                    labelLatex: `\\text{simp};\\, \\text{apply}\\; ${renderNameLatex(defName, 'textbf')}`,
+                    description: `Simplify (${stepCount} step${stepCount === 1 ? '' : 's'}), then apply ${defName}`,
+                    numSubgoals,
+                    subgoalPreviews,
+                    resultGoalLatex,
+                  } as any);
+                }
+              }
+            } catch { /* simp;apply doesn't work */ }
+          }
+        }
+
       }
     }
   }

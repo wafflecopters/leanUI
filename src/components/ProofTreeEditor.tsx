@@ -592,15 +592,29 @@ function GoalInteraction({
     } else if (suggestion.id.startsWith('apply-hyp-')) {
       const name = suggestion.id.slice('apply-hyp-'.length);
       const numSubgoals = suggestion.numSubgoals ?? 1;
-      result = numSubgoals === 0
-        ? applyExact(state, name)
-        : applyApplyTactic(state, name, numSubgoals);
+      // Always use applyApplyTactic — even for numSubgoals=0. The apply
+      // tactic does implicit-arg inference (creates fresh metas, unifies
+      // them); applyExact bypasses that and produces "missing required
+      // argument" errors at replay when the name has implicit args.
+      result = applyApplyTactic(state, name, numSubgoals);
     } else if (suggestion.id.startsWith('apply-def-')) {
       const defName = suggestion.id.slice('apply-def-'.length);
       const numSubgoals = suggestion.numSubgoals ?? 1;
-      result = numSubgoals === 0
-        ? applyExact(state, defName)
-        : applyApplyTactic(state, defName, numSubgoals);
+      result = applyApplyTactic(state, defName, numSubgoals);
+    } else if (suggestion.id.startsWith('simp-then-apply-def-')) {
+      const defName = suggestion.id.slice('simp-then-apply-def-'.length);
+      const numSubgoals = suggestion.numSubgoals ?? 1;
+      if (typedContext?.kernelGoal) {
+        const { engine, definitions: defs } = typedContext.kernelGoal;
+        const lemmas = [...(defs.simpLemmas ?? [])];
+        const simpResult = runSimp(engine, lemmas);
+        if (simpResult.success && simpResult.steps.length > 0) {
+          const afterSimp = applySimp(state, lemmas, simpResult.proofNodes);
+          if (afterSimp) {
+            result = applyApplyTactic(afterSimp, defName, numSubgoals);
+          }
+        }
+      }
     } else if (suggestion.id.startsWith('construct-')) {
       const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
       const numChildren = suggestion.numSubgoals ?? 1;
@@ -3760,16 +3774,10 @@ function HoleProseView({
           const lemmas = lemmaStr
             ? lemmaStr.split(/[\s,]+/).filter(Boolean)
             : [...(definitions.simpLemmas ?? [])];
-          // eslint-disable-next-line no-console
-          console.log('[simp-submit] lemmas:', lemmas.length, lemmas, 'cursor:', state.cursor.nodeId);
           if (lemmas.length > 0) {
             const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
-            // eslint-disable-next-line no-console
-            console.log('[simp-submit] engine?', !!engine);
             if (engine) {
               const simpResult = runSimp(engine, lemmas);
-              // eslint-disable-next-line no-console
-              console.log('[simp-submit] simpResult', { success: simpResult.success, steps: simpResult.steps.length, error: (simpResult as any).error });
               // Only commit the simp node when something actually fired —
               // a zero-step success means "ran but no lemma matched the
               // goal", which would otherwise insert a no-op simp node

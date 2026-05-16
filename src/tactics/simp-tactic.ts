@@ -12,11 +12,84 @@
  * 5. Return final engine + ordered list of steps
  */
 
-import { MetaVar } from '../compiler/term';
+import { MetaVar, DefinitionsMap } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { RewriteTactic } from './rewrite-tactic';
 import { UnfoldTactic } from './unfold-tactic';
 import { ProofNode, mkRewrite, mkUnfold } from '../proof-tree/proof-tree';
+import { whnf } from '../compiler/whnf';
+import { TTKTerm } from '../compiler/kernel';
+
+/** Walks a term, whnf-reducing any App whose head is registered as
+ *  @ratAdd/@ratMul/@ratSub or natAdd/natMul, then re-wrapping bare
+ *  literal results in MkRat form so simp lemmas keyed on MkRat match.
+ *  This is what makes mid-proof goals with un-reduced \`ratPlus 1 -1\`
+ *  become \`realOfRat R (MkRat 0 1 _)\` which then matches \`realOfRatZero\`. */
+function goalMightHaveRatOp(term: TTKTerm, ratOps: Map<string, 'add' | 'mul' | 'sub'>): boolean {
+  if (term.tag === 'App') {
+    let head: TTKTerm = term;
+    while (head.tag === 'App') head = head.fn;
+    if (head.tag === 'Const' && ratOps.has(head.name)) return true;
+    return goalMightHaveRatOp(term.fn, ratOps) || goalMightHaveRatOp(term.arg, ratOps);
+  }
+  if (term.tag === 'Binder') return goalMightHaveRatOp(term.domain, ratOps) || goalMightHaveRatOp(term.body, ratOps);
+  if (term.tag === 'Match') {
+    if (goalMightHaveRatOp(term.scrutinee, ratOps)) return true;
+    for (const c of term.clauses) if (goalMightHaveRatOp(c.rhs, ratOps)) return true;
+  }
+  return false;
+}
+
+function normalizeRatOps(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
+  const liftLitToMkRat = (t: TTKTerm): TTKTerm => {
+    if (t.tag !== 'NatLit' && t.tag !== 'RatLit') return t;
+    const impls = definitions.ratImplByCtor;
+    if (!impls) return t;
+    let mkRatName: string | undefined;
+    let intOfNat: string | undefined;
+    let intNegSucc: string | undefined;
+    for (const [name, impl] of impls) {
+      if (impl.intOfNatCtor && impl.intNegSuccCtor) {
+        mkRatName = name;
+        intOfNat = impl.intOfNatCtor;
+        intNegSucc = impl.intNegSuccCtor;
+        break;
+      }
+    }
+    if (!mkRatName || !intOfNat || !intNegSucc) return t;
+    const num = t.tag === 'NatLit' ? t.value : t.num;
+    const den = t.tag === 'NatLit' ? 1n : t.den;
+    if (den <= 0n) return t;
+    const intArg: TTKTerm = num >= 0n
+      ? { tag: 'App', fn: { tag: 'Const', name: intOfNat }, arg: { tag: 'NatLit', value: num } }
+      : { tag: 'App', fn: { tag: 'Const', name: intNegSucc }, arg: { tag: 'NatLit', value: -num - 1n } };
+    const denArg: TTKTerm = { tag: 'NatLit', value: den };
+    const proof: TTKTerm = { tag: 'App', fn: { tag: 'Const', name: 'IsSucc' }, arg: { tag: 'NatLit', value: den - 1n } };
+    return {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: mkRatName }, arg: intArg }, arg: denArg },
+      arg: proof,
+    };
+  };
+  function rec(t: TTKTerm): TTKTerm {
+    if (t.tag === 'App') {
+      const fn = rec(t.fn);
+      const arg = rec(t.arg);
+      const reb: TTKTerm = { tag: 'App', fn, arg };
+      if (reb.fn.tag === 'App' && reb.fn.fn.tag === 'Const'
+          && (definitions.ratOpByFn?.has(reb.fn.fn.name) || definitions.natOpByFn?.has(reb.fn.fn.name))) {
+        const reduced = whnf(reb, { definitions });
+        if (definitions.ratOpByFn?.has(reb.fn.fn.name)) return liftLitToMkRat(reduced);
+        return reduced;
+      }
+      return reb;
+    }
+    if (t.tag === 'Binder') return { ...t, domain: rec(t.domain), body: rec(t.body) };
+    if (t.tag === 'Match') return { ...t, scrutinee: rec(t.scrutinee), clauses: t.clauses.map(c => ({ ...c, rhs: rec(c.rhs) })) };
+    return t;
+  }
+  return rec(term);
+}
 
 export interface SimpStep {
   readonly type: 'rewrite' | 'unfold';
@@ -64,13 +137,28 @@ export function runSimp(
     return { success: false, engine, steps: [], proofNodes: [], error: 'simp: no lemmas provided' };
   }
 
+  // Pre-pass: normalize literal arithmetic in the goal (\`ratPlus 1 -1\` → 0
+  // → \`MkRat 0 1 _\`) so simp lemmas keyed on MkRat-form literals can fire
+  // on goals where the user just got to via rewrites that left unreduced
+  // operations. Only fires when the goal contains a @ratAdd-tagged head.
   let currentEngine = engine;
+  const initGoal0 = engine.getFocusedGoal();
+  const initGoalId0 = engine.getFocusedGoalId();
+  const ratOps = engine.definitions.ratOpByFn;
+  if (initGoal0 && initGoalId0 && ratOps && ratOps.size > 0 && goalMightHaveRatOp(initGoal0.type, ratOps)) {
+    const normalized = normalizeRatOps(initGoal0.type, engine.definitions);
+    if (normalized !== initGoal0.type) {
+      const newMetaVars = new Map(engine.metaVars);
+      newMetaVars.set(initGoalId0, { ...initGoal0, type: normalized });
+      currentEngine = engine.withUpdates({ metaVars: newMetaVars });
+    }
+  }
   const steps: SimpStep[] = [];
   // Track seen goal types to detect cycles (e.g. commutativity: mul a b → mul b a → ...)
   const seenGoals = new Set<string>();
 
   // Record initial goal
-  const initGoal = engine.getFocusedGoal();
+  const initGoal = currentEngine.getFocusedGoal();
   if (initGoal) seenGoals.add(JSON.stringify(initGoal.type, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v));
 
   for (let iteration = 0; iteration < MAX_SIMP_STEPS; iteration++) {

@@ -820,15 +820,17 @@ export function applyRewrite(
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
-/** Apply "apply" at the cursor (must be a hole). Replaces the hole with an apply node + child holes. */
+/** Apply "apply" at the cursor (must be a hole). Replaces the hole with an apply node + child holes.
+ *  When numChildren=0 (the apply closes the goal with no remaining subgoals),
+ *  no child holes are created and the cursor moves to the apply node itself. */
 export function applyApplyTactic(state: ProofTreeState, name: string, numChildren = 1): ProofTreeState | null {
   const node = findNode(state.root, state.cursor.nodeId);
   if (!node || node.tag !== 'hole') return null;
 
-  const children = Array.from({ length: Math.max(1, numChildren) }, () => mkHole());
+  const children = Array.from({ length: Math.max(0, numChildren) }, () => mkHole());
   const apply = mkApply(name, children);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, apply);
-  return { root: newRoot, cursor: { nodeId: children[0].id } };
+  return { root: newRoot, cursor: { nodeId: children.length > 0 ? children[0].id : apply.id } };
 }
 
 /** Apply simp at the cursor (must be a hole). Replaces the hole with a simp node containing steps + child hole. */

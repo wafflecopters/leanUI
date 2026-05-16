@@ -6,9 +6,29 @@
  */
 
 import { TTKTerm } from '../compiler/kernel';
-import { MetaVar, createNamedArgLookup } from '../compiler/term';
+import { MetaVar, createNamedArgLookup, extractAppSpine } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { whnf, areTypesDefEq } from '../compiler/whnf';
+import type { DefinitionsMap } from '../compiler/term';
+
+// Memoize the "definitions minus record projections" map per definitions
+// instance. Used by ApplyTactic's spine-shape fallback to whnf with
+// projection unfolding disabled. Recomputing per-candidate (called 100×
+// during suggestion iteration) was a major slowdown.
+const __reducedDefsCache = new WeakMap<DefinitionsMap, DefinitionsMap>();
+function getReducedDefs(definitions: DefinitionsMap): DefinitionsMap {
+  const cached = __reducedDefsCache.get(definitions);
+  if (cached) return cached;
+  const projections = new Set<string>();
+  for (const [, ind] of definitions.inductiveTypes) {
+    if (ind.recordInfo) for (const p of ind.recordInfo.projections) projections.add(p);
+  }
+  const reducedTerms = new Map(definitions.terms);
+  for (const p of projections) reducedTerms.delete(p);
+  const reduced = { ...definitions, terms: reducedTerms };
+  __reducedDefsCache.set(definitions, reduced);
+  return reduced;
+}
 import { subst } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
 
@@ -347,6 +367,12 @@ export class ApplyTactic implements Tactic {
       const numImplicit = namedArgMap?.size ?? 0;
       let argIndex = 0;
 
+      // Track the RAW (un-whnf'd) return type — same meta substitutions
+      // but without δ-reducing the head. Needed for post-hoc positional
+      // matching when the candidate's head is a record projection that
+      // whnf would otherwise unfold into a Match.
+      let rawReturnType = fnType;
+
       // Unwrap Pi types (Binder with BPi kind) and create metas for each argument
       while (currentType.tag === 'Binder' && currentType.binderKind.tag === 'BPi') {
         const isImplicit = argIndex < numImplicit;
@@ -365,6 +391,9 @@ export class ApplyTactic implements Tactic {
           definitions: engine.definitions,
           typingContext: goal.ctx
         });
+        if (rawReturnType.tag === 'Binder' && rawReturnType.binderKind.tag === 'BPi') {
+          rawReturnType = subst(0, { tag: 'Meta', id: argMetaId }, rawReturnType.body);
+        }
         argIndex++;
       }
 
@@ -397,6 +426,117 @@ export class ApplyTactic implements Tactic {
         if (areTypesDefEq(currentType, goal.type, engine.definitions, goal.ctx)) {
           unifyResult = { success: true, metaConstraints: [] } as any;
         }
+      }
+
+      // Additional fallback: when unify AND defEq both fail, try a positional
+      // spine match between the candidate's raw return type and the goal type
+      // (whnf'd with record projections stripped so aliases unfold but
+      // projections stay opaque). Only accept when:
+      //   (1) heads + arities align,
+      //   (2) the candidate has unsolved IMPLICIT metas at positions where the
+      //       goal has concrete terms (i.e. positional matching can actually
+      //       contribute solutions), AND
+      //   (3) at every position where BOTH candidate and goal are concrete
+      //       (i.e. neither is a meta), the heads match — so we don't accept
+      //       obviously-wrong applies like \`zeroLtOne\` on \`0 < ε/2\` where
+      //       the candidate's RHS \`rone R\` vs goal's \`ε/2\` (different
+      //       concrete heads) signals a real type mismatch.
+      // Without (3) the fallback would silently swallow type errors and surface
+      // bogus apply suggestions. The post-hoc positional matcher below fills
+      // in the remaining implicits.
+      // Only attempt this fallback for record-projection candidates — that's
+      // the case it was added to handle (e.g. \`CompleteOrderedField.zeroLeOne\`
+      // applied to a goal headed by the alias \`rle\`). For top-level aliases,
+      // structural unify already handles them — skip the expensive whnf to
+      // keep candidate iteration fast.
+      const isProjectionCandidate = (() => {
+        if (this.fn.tag !== 'Const') return false;
+        for (const [, ind] of engine.definitions.inductiveTypes) {
+          if (ind.recordInfo?.projections?.includes(this.fn.name)) return true;
+        }
+        return false;
+      })();
+      if (!unifyResult.success && isProjectionCandidate) {
+        try {
+          const reducedDefs = getReducedDefs(engine.definitions);
+          const candWhnf = whnf(rawReturnType, { definitions: reducedDefs, typingContext: goal.ctx });
+          const goalWhnf = whnf(goal.type, { definitions: reducedDefs, typingContext: goal.ctx });
+          const cs = extractAppSpine(candWhnf);
+          const gs = extractAppSpine(goalWhnf);
+          const allArgMetaIds = new Set(argMetas.map(m => m.id));
+          if (cs.fn.tag === 'Const' && gs.fn.tag === 'Const'
+              && cs.fn.name === gs.fn.name
+              && cs.args.length === gs.args.length) {
+            const stringify = (t: TTKTerm) => JSON.stringify(t, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v);
+            // (a) Group meta proposals by id (unique-proposal => solvable).
+            const proposals = new Map<string, Set<string>>();
+            for (let i = 0; i < cs.args.length; i++) {
+              const ca = cs.args[i];
+              const ga = gs.args[i];
+              if (ca.tag === 'Meta' && allArgMetaIds.has(ca.id) && ga.tag !== 'Meta' && ga.tag !== 'Hole') {
+                if (!proposals.has(ca.id)) proposals.set(ca.id, new Set());
+                proposals.get(ca.id)!.add(stringify(ga));
+              }
+            }
+            let contributes = false;
+            for (const [, s] of proposals) {
+              if (s.size === 1) { contributes = true; break; }
+            }
+            // (b) Non-meta positions on the candidate side MUST be def-equal
+            // to the corresponding goal position. Without this check the
+            // fallback would falsely accept e.g. \`zeroLeOne\` on \`rle 1 2\`:
+            // the head/arity align and \`?A\`/\`?inst\` get unique proposals,
+            // but positions 2/3 (\`zero ?A ?inst\` vs \`realOfRat R 1\`,
+            // \`one ?A ?inst\` vs \`realOfRat R 2\`) are NOT def-eq once
+            // \`?A\`/\`?inst\` are solved. We approximate the post-solve
+            // check by substituting the unique proposals into the candidate
+            // args inline, then calling \`areTypesDefEq\`.
+            const inlineSubst = (t: TTKTerm): TTKTerm => {
+              if (t.tag === 'Meta') {
+                const ps = proposals.get(t.id);
+                if (ps && ps.size === 1) return [...proposals.get(t.id)!.values() as any as IterableIterator<TTKTerm>][0] ?? t;
+                return t;
+              }
+              if (t.tag === 'App') return { tag: 'App', fn: inlineSubst(t.fn), arg: inlineSubst(t.arg) };
+              return t;
+            };
+            // Need to materialize the proposal terms (not just JSON keys).
+            const proposalTerms = new Map<string, TTKTerm>();
+            for (let i = 0; i < cs.args.length; i++) {
+              const ca = cs.args[i];
+              const ga = gs.args[i];
+              if (ca.tag === 'Meta' && allArgMetaIds.has(ca.id) && ga.tag !== 'Meta' && ga.tag !== 'Hole') {
+                if (proposals.get(ca.id)!.size === 1) {
+                  proposalTerms.set(ca.id, ga);
+                }
+              }
+            }
+            const subst = (t: TTKTerm): TTKTerm => {
+              if (t.tag === 'Meta') {
+                const sol = proposalTerms.get(t.id);
+                return sol !== undefined ? sol : t;
+              }
+              if (t.tag === 'App') return { tag: 'App', fn: subst(t.fn), arg: subst(t.arg) };
+              return t;
+            };
+            let allPositionsAlign = true;
+            for (let i = 0; i < cs.args.length; i++) {
+              const ca = cs.args[i];
+              const ga = gs.args[i];
+              if (ca.tag === 'Meta' || ga.tag === 'Meta' || ca.tag === 'Hole' || ga.tag === 'Hole') continue;
+              const caSubst = subst(ca);
+              if (!areTypesDefEq(caSubst, ga, engine.definitions, goal.ctx)) {
+                allPositionsAlign = false;
+                break;
+              }
+            }
+            if (contributes && allPositionsAlign) {
+              unifyResult = { success: true, metaConstraints: [] } as any;
+            }
+            // Silence unused-var lint (inlineSubst is kept for readability/contrast).
+            void inlineSubst;
+          }
+        } catch { /* fall through to failure */ }
       }
 
       if (!unifyResult.success) {
@@ -446,7 +586,137 @@ export class ApplyTactic implements Tactic {
         focusIndex: engine.focusIndex
       }).solveConstraints();
 
-      const zonkedEngine = solvedEngine;
+      let zonkedEngine = solvedEngine;
+
+      // POST-HOC POSITIONAL MATCH: when argMetas remain unsolved after
+      // constraint solving, the structural unifier missed them (typically
+      // because whnf descended into \`match\`/projection forms before
+      // reaching the meta position — e.g. for record-projection applies
+      // like \`CompleteOrderedField.zeroLeOne\` on a goal whose head is
+      // the alias \`rle\`). Walk the App spine of \`rawReturnType\`
+      // (un-whnf'd, projections preserved) against the goal type whnf'd
+      // with projections REMOVED from defs (so aliases unfold but
+      // projections stay opaque). For positions where the candidate has
+      // an unsolved meta and the goal has a concrete term, propose
+      // \`?meta := goal_arg\`. CONFLICT DETECTION: when a single meta has
+      // multiple proposals (e.g. \`leRefl: a ≤ a\` on \`0 ≤ 1\` would
+      // propose \`?a := 0\` AND \`?a := 1\` from positions 2 and 3),
+      // group by JSON key and reject the meta if it has multiple distinct
+      // proposals. This handles BOTH implicit type/instance args (which
+      // appear at multiple positions but always agree, like \`?A\` in
+      // \`zeroLeOne\`) AND explicit args (which we conservatively only
+      // solve when all positions agree).
+      const unsolvedArgMetas = argMetas.filter(({ id }) => {
+        const m = zonkedEngine.metaVars.get(id);
+        return m && m.solution === undefined;
+      });
+      if (unsolvedArgMetas.length > 0 && isProjectionCandidate) {
+        try {
+          const reducedDefs = getReducedDefs(engine.definitions);
+
+          let candSpine = extractAppSpine(rawReturnType);
+          let goalSpine = extractAppSpine(goal.type);
+          const headsMatch = (cs: ReturnType<typeof extractAppSpine>, gs: ReturnType<typeof extractAppSpine>) =>
+            cs.fn.tag === 'Const' && gs.fn.tag === 'Const' && cs.fn.name === gs.fn.name && cs.args.length === gs.args.length;
+          if (!headsMatch(candSpine, goalSpine)) {
+            const candWhnf = whnf(rawReturnType, { definitions: reducedDefs, typingContext: goal.ctx });
+            const goalWhnf = whnf(goal.type, { definitions: reducedDefs, typingContext: goal.ctx });
+            candSpine = extractAppSpine(candWhnf);
+            goalSpine = extractAppSpine(goalWhnf);
+          }
+          if (headsMatch(candSpine, goalSpine)) {
+            const unsolvedIds = new Set(unsolvedArgMetas.map(({ id }) => id));
+            // Group proposals by meta id, dedup'd by JSON serialization.
+            const proposalsByMeta = new Map<string, Map<string, TTKTerm>>();
+            const stringify = (t: TTKTerm) => JSON.stringify(t, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v);
+            for (let i = 0; i < candSpine.args.length; i++) {
+              const cArg = candSpine.args[i];
+              const gArg = goalSpine.args[i];
+              if (cArg.tag === 'Meta' && unsolvedIds.has(cArg.id)) {
+                if (!proposalsByMeta.has(cArg.id)) proposalsByMeta.set(cArg.id, new Map());
+                proposalsByMeta.get(cArg.id)!.set(stringify(gArg), gArg);
+              }
+            }
+            const extraConstraints: { ctx: any; meta: string; rhs: TTKTerm }[] = [];
+            for (const [metaId, proposals] of proposalsByMeta) {
+              // Only add a constraint when ALL positional proposals agree.
+              // Multiple distinct proposals = position conflict → reject
+              // (let the meta stay unsolved / become a subgoal).
+              if (proposals.size === 1) {
+                const rhs = [...proposals.values()][0];
+                extraConstraints.push({ ctx: goal.ctx, meta: metaId, rhs });
+              }
+            }
+            if (extraConstraints.length > 0) {
+              zonkedEngine = zonkedEngine.withUpdates({
+                constraints: [...zonkedEngine.constraints, ...extraConstraints],
+              }).solveConstraints();
+            }
+          }
+        } catch { /* fallthrough: leave unsolved */ }
+      }
+
+      // SOUNDNESS CHECK (closed-goal case only): after constraint solving,
+      // verify the substituted candidate return type is definitionally equal
+      // to the goal type. Catches the constraint-solver-first-wins behavior
+      // where conflicting solutions for the same meta (e.g. `leRefl: a ≤ a`
+      // on `0 ≤ 1` gets `?a := 0` from pos 2 then `?a := 1` from pos 3 — the
+      // second silently dropped, producing a ground proof of `0 ≤ 0` which
+      // doesn't match the goal). Only check when ALL argMetas are solved
+      // (zero new subgoals); otherwise the proof still has subgoal-holes
+      // that defEq can't relate.
+      const allArgsSolved = argMetas.every(({ id }) => {
+        const m = zonkedEngine.metaVars.get(id);
+        return m && m.solution !== undefined;
+      });
+      // Soundness check: when an EXPLICIT arg meta appears at ≥2 positions
+      // of the candidate's spine, the constraint solver's first-wins
+      // behavior may silently accept conflicting positional solutions
+      // (e.g. \`leRefl: a ≤ a\` on \`0 ≤ 1\`). First do a CHEAP structural
+      // scan of currentType (no whnf): does any explicit meta appear at
+      // ≥2 positions? If not, the conflict pattern can't arise — skip the
+      // expensive cross-spine check. Most apply candidates don't have
+      // repeated metas (\`leTrans\`, \`addLeRightCancel\` etc.), so this
+      // short-circuits quickly.
+      if (allArgsSolved && argMetas.length > 0) {
+        const explicitMetaIds = new Set(argMetas.filter(m => !m.implicit).map(m => m.id));
+        if (explicitMetaIds.size > 0) {
+          const explicitOccurrences = new Map<string, number>();
+          const candSpineCheap = extractAppSpine(currentType);
+          for (const arg of candSpineCheap.args) {
+            if (arg.tag === 'Meta' && explicitMetaIds.has(arg.id)) {
+              explicitOccurrences.set(arg.id, (explicitOccurrences.get(arg.id) ?? 0) + 1);
+            }
+          }
+          const hasRepeated = [...explicitOccurrences.values()].some(n => n >= 2);
+          if (hasRepeated) {
+            try {
+              const goalSpine = extractAppSpine(whnf(goal.type, {
+                definitions: engine.definitions, typingContext: goal.ctx,
+              }));
+              if (candSpineCheap.args.length === goalSpine.args.length) {
+                const stringify = (t: TTKTerm) => JSON.stringify(t, (_, v) => typeof v === 'bigint' ? `bi:${v}` : v);
+                const positions = new Map<string, Set<string>>();
+                for (let i = 0; i < candSpineCheap.args.length; i++) {
+                  const ca = candSpineCheap.args[i];
+                  if (ca.tag === 'Meta' && explicitMetaIds.has(ca.id)) {
+                    if (!positions.has(ca.id)) positions.set(ca.id, new Set());
+                    positions.get(ca.id)!.add(stringify(goalSpine.args[i]));
+                  }
+                }
+                for (const [, vals] of positions) {
+                  if (vals.size > 1) {
+                    return {
+                      success: false,
+                      error: `apply ${fnName ?? '?'}: explicit argument has conflicting positional constraints`,
+                    };
+                  }
+                }
+              }
+            } catch { /* fall through */ }
+          }
+        }
+      }
 
       // Replace current goal with arg metas that are STILL unsolved after constraint solving
       const newGoalIds = argMetas

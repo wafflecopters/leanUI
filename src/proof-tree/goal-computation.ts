@@ -31,6 +31,7 @@ import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
+import { runSimp } from '../tactics/simp-tactic';
 import { HaveTactic } from '../tactics/have-tactic';
 import { ConstructorTactic } from '../tactics/constructor-tactic';
 import { proposeVarName, freshenName } from './propose-var-name';
@@ -2702,32 +2703,20 @@ function replayProofTree(
     }
 
     case 'simp': {
-      // Replay each step sequentially, then recurse into child
+      // Re-run simp via runSimp rather than replaying recorded steps
+      // individually. Recorded steps were generated after \`runSimp\`'s
+      // normalize pre-pass; replaying them step-by-step (without the
+      // pre-pass) leaves the engine in a divergent state where the next
+      // \`apply\` sees an un-normalized goal and fails. \`runSimp\` is
+      // deterministic given the same engine + lemma set, so re-running
+      // it produces an equivalent canonical state.
+      const lemmaList = [...node.lemmas];
       let currentEngine = engine;
-      for (const step of node.steps) {
-        const stepGoalId = currentEngine.getFocusedGoalId();
-        const stepGoal = currentEngine.getFocusedGoal();
-        if (!stepGoalId || !stepGoal) break;
-
-        if (step.tag === 'rewrite') {
-          const tactic = new RewriteTactic(
-            resolveExprInGoal(step.name, stepGoal, currentEngine.definitions),
-            { reverse: step.reverse, enhanced: step.enhanced, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
-          );
-          const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
-          if (result.success) {
-            currentEngine = result.newEngine!;
-          }
-        } else if (step.tag === 'unfold') {
-          const tactic = new UnfoldTactic([step.name]);
-          const result = tactic.apply(currentEngine, stepGoal, stepGoalId);
-          if (result.success) {
-            const newId = result.newEngine.getFocusedGoalId();
-            currentEngine = newId
-              ? normalizeGoalInEngine(result.newEngine, newId)
-              : result.newEngine;
-          }
-        }
+      if (lemmaList.length > 0) {
+        try {
+          const simpRes = runSimp(engine, lemmaList);
+          if (simpRes.success) currentEngine = simpRes.engine;
+        } catch { /* keep original engine */ }
       }
 
       return replayProofTree(
@@ -4142,25 +4131,34 @@ function replayEntireTreeViaWalk(
 
       case 'simp': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
+        // Re-run runSimp instead of replaying recorded steps individually.
+        // The recorded steps were generated after \`runSimp\`'s normalize
+        // pre-pass; replaying them step-by-step (without the pre-pass)
+        // leaves the engine in a divergent state where the next \`apply\`
+        // sees an un-normalized goal and fails ("return type mismatch").
+        // \`runSimp\` is deterministic given the same engine + lemmas, so
+        // re-running produces an equivalent canonical state.
         let currentEngine = eng;
-        // Replay each step
+        // Still record per-step goal info for prose rendering.
         for (const step of node.steps) {
           const stepGoalId = currentEngine.getFocusedGoalId();
-          const stepGoal = currentEngine.getFocusedGoal();
-          if (!stepGoalId || !stepGoal) break;
-
+          if (!stepGoalId) break;
           recordGoal(step.id, currentEngine, stepGoalId, caseLabelLatex);
-
+          // We DON'T apply the step's tactic here — runSimp below does
+          // it as part of its loop. We only record the pre-step goal so
+          // the proof tree UI can show each intermediate state.
           if (step.tag === 'rewrite') {
+            const stepGoal = currentEngine.getFocusedGoal();
+            if (!stepGoal) break;
             const tactic = new RewriteTactic(
               resolveExprInGoal(step.name, stepGoal, currentEngine.definitions),
               { reverse: step.reverse, enhanced: step.enhanced, occurrences: step.occurrences && step.occurrences.length > 0 ? [...step.occurrences] : undefined, targetHead: step.targetHead },
             );
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
-            if (stepResult.success) {
-              currentEngine = stepResult.newEngine!;
-            }
+            if (stepResult.success) currentEngine = stepResult.newEngine!;
           } else if (step.tag === 'unfold') {
+            const stepGoal = currentEngine.getFocusedGoal();
+            if (!stepGoal) break;
             const tactic = new UnfoldTactic([step.name]);
             const stepResult = tactic.apply(currentEngine, stepGoal, stepGoalId);
             if (stepResult.success) {
@@ -4171,6 +4169,13 @@ function replayEntireTreeViaWalk(
             }
           }
         }
+        // Now run the full runSimp on the ORIGINAL engine to get the
+        // canonical final state — this includes the normalize pre-pass
+        // so subsequent tactics see the same engine as at suggestion time.
+        try {
+          const simpRes = runSimp(eng, [...node.lemmas]);
+          if (simpRes.success) currentEngine = simpRes.engine;
+        } catch { /* keep step-by-step result */ }
         walk(node.child, currentEngine, caseLabelLatex);
         break;
       }
