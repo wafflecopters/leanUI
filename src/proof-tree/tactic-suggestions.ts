@@ -1272,9 +1272,19 @@ function tryRewrite(
   try {
     const opts: any = occurrences.length > 0 ? { reverse, occurrences } : { reverse };
     if (targetHead) opts.targetHead = targetHead;
+    // Try standard mode first.
     const tactic = new RewriteTactic(proofTerm, opts);
-    const result = tactic.apply(engine, goal, goalId);
-    if (!result.success) return null;
+    let result = tactic.apply(engine, goal, goalId);
+    if (!result.success) {
+      // Retry with enhanced (erw) mode — WHNF-aware matching that sees
+      // through aliases like \`radd = CompleteOrderedField.add (field R)\`,
+      // so lemmas keyed on the projection head (\`add\`) can fire on goals
+      // with the alias head (\`radd\`).
+      const enhancedOpts = { ...opts, enhanced: true };
+      const enhanced = new RewriteTactic(proofTerm, enhancedOpts);
+      result = enhanced.apply(engine, goal, goalId);
+      if (!result.success) return null;
+    }
     const arrow = reverse ? '\\leftarrow' : '';
     // Normalize: empty occurrences means "all" — store as empty array (same as no restriction)
     const effectiveOcc = occurrences.length > 0 ? occurrences : [];
@@ -1287,16 +1297,18 @@ function tryRewrite(
         resultGoalLatex = renderSubtermLatex(
           result.unifiedEquation.rhs, goal.ctx, definitions, rev
         );
-        // Auto-suggest filter: drop rewrites that DON'T strictly simplify.
-        // Without this, reverse rewrites flood the suggestion strip with
-        // expansions like `x \u2192 0 + x` (rw\u2190 addZeroLeft), `0 \u2192 -0`
-        // (rw\u2190 negZero), `x \u2192 |x|` (rw\u2190 absOfNonneg) \u2014 valid equations but
-        // they make the goal worse. Compare rendered lengths; require strict
-        // shrinkage.
+        // Filter: drop rewrites that EXPAND the subterm (strictly longer)
+        // or produce IDENTICAL output (no-op). Keep same-length rewrites
+        // like \`addComm\` (\`a + b\` \u2192 \`b + a\`) \u2014 they're useful for
+        // exposing different heads to subsequent tactics, and users
+        // explicitly asked to see them when clicking a subterm.
+        // Without this filter we'd flood the strip with reverse rewrites
+        // like \`x \u2192 0 + x\`, \`x \u2192 |x|\`, etc.
         const lhsLatex = renderSubtermLatex(
           result.unifiedEquation.lhs, goal.ctx, definitions, rev,
         );
-        if (resultGoalLatex.length >= lhsLatex.length) return null;
+        if (resultGoalLatex.length > lhsLatex.length) return null;
+        if (resultGoalLatex === lhsLatex) return null;
       } catch { /* ignore */ }
     }
     return {
@@ -1341,6 +1353,30 @@ export function collectRewriteCandidates(
   const candidates: Array<{ proofTerm: TTKTerm; name: string; reverse: boolean; isSelfReference?: boolean }> = [];
   const headFilter = 'selectedHead' in filter ? filter.selectedHead : null;
 
+  // Also accept candidates whose head matches the δ-expansion of \`headFilter\`.
+  // Many top-level aliases (e.g. \`radd = CompleteOrderedField.add (field R)\`)
+  // wrap a record projection — without δ-expansion-aware filtering, lemmas like
+  // \`CompleteOrderedField.addComm\` (LHS head: \`CompleteOrderedField.add\`)
+  // never surface as candidates for clicks on the alias's head (\`radd\`).
+  const expandedHeads = new Set<string>();
+  if (headFilter) {
+    expandedHeads.add(headFilter);
+    const aliasDef = definitions.terms.get(headFilter);
+    let body: TTKTerm | undefined = aliasDef?.value;
+    for (let i = 0; i < 8 && body; i++) {
+      if (body.tag === 'Binder' && body.binderKind.tag === 'BLam') body = body.body;
+      else if (body.tag === 'Match' && body.clauses.length === 1) body = body.clauses[0].rhs;
+      else break;
+    }
+    if (body) {
+      let bodyHead: TTKTerm = body;
+      while (bodyHead.tag === 'App') bodyHead = bodyHead.fn;
+      if (bodyHead.tag === 'Const') expandedHeads.add(bodyHead.name);
+    }
+  }
+  const matchesHead = (h: string | null): boolean =>
+    h !== null && (h === headFilter || expandedHeads.has(h));
+
   // Scan hypotheses (goal context) for equality types
   const ctx = metaGoal.ctx;
   for (let i = 0; i < ctx.length; i++) {
@@ -1353,9 +1389,9 @@ export function collectRewriteCandidates(
 
     if (headFilter) {
       const lhsHead = getKernelHeadName(eqArgs.lhs);
-      if (lhsHead === headFilter) candidates.push({ proofTerm, name: entry.name, reverse: false });
+      if (matchesHead(lhsHead)) candidates.push({ proofTerm, name: entry.name, reverse: false });
       const rhsHead = getKernelHeadName(eqArgs.rhs);
-      if (rhsHead === headFilter) candidates.push({ proofTerm, name: entry.name, reverse: true });
+      if (matchesHead(rhsHead)) candidates.push({ proofTerm, name: entry.name, reverse: true });
     } else {
       // Broad search: try both directions
       candidates.push({ proofTerm, name: entry.name, reverse: false });
@@ -1376,9 +1412,9 @@ export function collectRewriteCandidates(
       const proofTerm: TTKTerm = { tag: 'Const', name };
       if (headFilter) {
         const lhsHead = getKernelHeadName(eqArgs.lhs);
-        if (lhsHead === headFilter) candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
+        if (matchesHead(lhsHead)) candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
         const rhsHead = getKernelHeadName(eqArgs.rhs);
-        if (rhsHead === headFilter) candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
+        if (matchesHead(rhsHead)) candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
       } else {
         candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
         candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
@@ -1390,9 +1426,9 @@ export function collectRewriteCandidates(
 
     if (headFilter) {
       const lhsHead = getKernelHeadName(eqArgs.lhs);
-      if (lhsHead === headFilter) candidates.push({ proofTerm, name, reverse: false });
+      if (matchesHead(lhsHead)) candidates.push({ proofTerm, name, reverse: false });
       const rhsHead = getKernelHeadName(eqArgs.rhs);
-      if (rhsHead === headFilter) candidates.push({ proofTerm, name, reverse: true });
+      if (matchesHead(rhsHead)) candidates.push({ proofTerm, name, reverse: true });
     } else {
       candidates.push({ proofTerm, name, reverse: false });
       candidates.push({ proofTerm, name, reverse: true });
