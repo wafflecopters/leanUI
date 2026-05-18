@@ -18,8 +18,8 @@ import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
-  computeContext, mkHole,
-  applySimp, editHaveExpr, editHaveName, insertHaveBefore,
+  computeContext,
+  applySimp,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode, editIntroName, editCaseParamName,
@@ -36,12 +36,15 @@ import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { renderNameLatex } from '../proof-tree/name-latex';
-import { computeTermSlots, buildExprFromSlots, kernelTermToSource, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
+import { computeTermSlots, buildExprFromSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
 import {
   applyManualProofTreeTactic,
   applyHypothesisSuggestionToProofTreeState,
   applySuggestionToProofTreeState,
+  hoistTermBuilderSlotToHave,
+  renameHaveBindingInProofTree,
   type ProofTreeManualTacticMode,
+  updateHaveExprInProofTree,
 } from '../proof-tree/tactic-editing';
 import { MathEditor, MathEditorHandle } from './MathEditor';
 import { convertToSource } from '../math-editor/syntax-registry';
@@ -1005,7 +1008,7 @@ function HaveProseItem({
     if (nameCommittedRef.current) return;
     nameCommittedRef.current = true;
     if (val && val !== kind.name) {
-      const updated = editHaveName(state, item.nodeId, val);
+      const updated = renameHaveBindingInProofTree(state, item.nodeId, val);
       if (updated) onPushChange(updated);
     }
     setEditingName(false);
@@ -1093,7 +1096,7 @@ function HaveProseItem({
               // Live-update the have expression
               const expr = buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx);
               if (expr) {
-                const updated = editHaveExpr(state, item.nodeId, expr);
+                const updated = updateHaveExprInProofTree(state, item.nodeId, expr);
                 if (updated) onPushChange(updated);
               }
             }
@@ -1119,7 +1122,7 @@ function HaveProseItem({
               // Live-update the have expression
               const expr = buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx);
               if (expr) {
-                const updated = editHaveExpr(state, item.nodeId, expr);
+                const updated = updateHaveExprInProofTree(state, item.nodeId, expr);
                 if (updated) onPushChange(updated);
               }
             }
@@ -1129,36 +1132,8 @@ function HaveProseItem({
           registry={_registry}
           onHoistToHave={(slotIndex) => {
             if (!builderState) return;
-            const slot = builderState.slots[slotIndex];
-            if (!slot) return;
-
-            // Generate a fresh name (no underscores — KaTeX renders them as subscripts)
-            const baseName = (slot.name && slot.name !== '_' && !slot.name.startsWith('_'))
-              ? slot.name
-              : `${slotIndex}`;
-            const hoistName = `h${baseName}`;
-
-            // 1. Insert have BEFORE the current have node
-            // The hoisted have gets an interactive proof subtree (proofTree hole)
-            // Store source expression with implicit args skipped (so parseExactExpr roundtrip works)
-            const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx, definitions);
-            const proofHole = mkHole();
-            let updated = insertHaveBefore(state, item.nodeId, hoistName, '?', typeSourceExpr, proofHole);
+            const updated = hoistTermBuilderSlotToHave(state, item.nodeId, builderState, slotIndex, definitions);
             if (!updated) return;
-
-            // 2. Fill the current slot with the hoisted name
-            const newSlots = [...builderState.slots];
-            (newSlots[slotIndex] as any) = {
-              ...slot,
-              value: { tag: 'Const', name: hoistName },
-              sourceExpr: hoistName,
-              valueLatex: texNameForProse(hoistName),
-            };
-            const expr = buildExprFromSlots(builderState.fnName, newSlots, builderState.goalCtx);
-            if (expr) {
-              updated = editHaveExpr(updated, item.nodeId, expr) ?? updated;
-            }
-
             onPushChange(updated);
             setBuilderState(null);
           }}
@@ -1224,7 +1199,7 @@ function HaveProseItem({
           e.preventDefault();
           const val = (e.target as HTMLInputElement).value.trim();
           if (val) {
-            const updated = editHaveExpr(state, item.nodeId, latexSourceToUnicode(val));
+            const updated = updateHaveExprInProofTree(state, item.nodeId, latexSourceToUnicode(val));
             if (updated) onPushChange(updated);
           }
           setEditingExpr(false);
@@ -1235,7 +1210,7 @@ function HaveProseItem({
       onBlur={(e) => {
         const val = e.target.value.trim();
         if (val && val !== kind.expr) {
-          const updated = editHaveExpr(state, item.nodeId, latexSourceToUnicode(val));
+          const updated = updateHaveExprInProofTree(state, item.nodeId, latexSourceToUnicode(val));
           if (updated) onPushChange(updated);
         }
         setEditingExpr(false);

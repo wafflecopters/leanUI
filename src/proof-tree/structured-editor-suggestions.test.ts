@@ -23,15 +23,16 @@
  * whnf with projections stripped, accept the apply and let the post-hoc
  * positional matcher fill in implicit metas.
  */
-import { describe, test, expect } from 'vitest';
+import { beforeEach, describe, test, expect } from 'vitest';
 import { compileTTFromText } from '../compiler/compile';
 import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { applyTacticCommandsAtCursor, buildApplyTacticCommands } from './tactic-command-bridge';
-import { mkIntros, mkApply, mkRewrite, mkHole, mkExact, type ProofNode } from './proof-tree';
-import { replayToEngine } from './goal-computation';
+import { applySimp, mkIntros, mkApply, mkRewrite, mkHole, mkExact, resetProofIds, type ProofNode } from './proof-tree';
+import { replayEntireTree, replayToEngine } from './goal-computation';
 import { computeTacticSuggestions } from './tactic-suggestions';
 import { renderInteractiveGoal } from './interactive-goal';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
+import { runSimp } from '../tactics/simp-tactic';
 
 function compileTop(declName: string, source: string) {
   const r = compileTTFromText(REAL_ANALYSIS_CODE + '\n\n' + source);
@@ -40,6 +41,10 @@ function compileTop(declName: string, source: string) {
   expect(decl).toBeDefined();
   return { r, decl };
 }
+
+beforeEach(() => {
+  resetProofIds();
+});
 
 describe('structured editor → engine state → suggestions at hole', () => {
   test('image-#24 scenario closes via apply zeroLeOne', { timeout: 30000 }, () => {
@@ -241,16 +246,13 @@ testFieldBox R = ?h`);
     }
   });
 
-  test('REGRESSION (image #32): full simp+apply chain replays without "return type mismatch (conflict)"', { timeout: 30000 }, async () => {
+  test('REGRESSION (image #32): full simp+apply chain replays without "return type mismatch (conflict)"', { timeout: 30000 }, () => {
     // Image #32: user reached `0 ≤ 1` via intros + apply addLeRightCancel
     // + exact -1 + 2 rewrites with addRealOfRat + simp. They clicked
     // \`apply CompleteOrderedField.zeroLeOne\` and got "return type mismatch
     // (conflict)" at REPLAY time. Reproduce the exact tree structure.
     const { r, decl } = compileTop('testImg32', `testImg32 : (R : Real) -> rle 1 2
 testImg32 R = ?h`);
-    const { runSimp } = await import('../tactics/simp-tactic');
-    const { applySimp } = await import('./proof-tree');
-
     // Build tree up to the post-rewrite leaf hole.
     const preSimpLeaf = mkHole();
     const partialTree: ProofNode = mkIntros(
@@ -291,7 +293,6 @@ testImg32 R = ?h`);
     // FULL TREE REPLAY from root: this is what the live editor does on
     // every keystroke. Must reach the cursor without errors.
     // FULL TREE WALK: replayEntireTree walks every node and validates.
-    const { replayEntireTree } = await import('./goal-computation');
     const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
     const goalMap = replayEntireTree(stateAfterApply.root, decl.kernelType, r.definitions, rev);
 
@@ -314,6 +315,11 @@ testImg32 R = ?h`);
     if (applyInfo?.validation?.status === 'error') {
       throw new Error(`apply node validation failed: ${applyInfo.validation.message}`);
     }
+    // REGRESSION (image #39): a 0-subgoal apply (e.g. `apply zeroLeOne` on
+    // `0 ≤ 1`) closes the goal. The walker must mark the apply node's
+    // validation as 'solved' so the editor shows the green "Goal solved"
+    // indicator in the side panel when the cursor lands on the apply line.
+    expect(applyInfo?.validation?.status).toBe('solved');
   });
 
   // REGRESSION (image #36): user typed `exact -1` in a `Carrier R` position.

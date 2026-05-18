@@ -11,8 +11,9 @@ import {
   extractTypeHead,
   generateCaseInfos,
 } from './goal-computation';
-import type { ProofTreeState } from './proof-tree';
-import { applyInduction, applyInductionWithCtors, applySimp } from './proof-tree';
+import type { ProofNodeId, ProofTreeState } from './proof-tree';
+import { applyInduction, applyInductionWithCtors, applySimp, findNode, mkHave, mkHole, replaceNode } from './proof-tree';
+import { buildExprFromSlots, kernelTermToSource, type TermBuilderState } from './term-builder';
 import type { RewriteSuggestion, TacticSuggestion } from './tactic-suggestions';
 import {
   applyTacticCommandsAtCursor,
@@ -102,6 +103,196 @@ export function buildProjectionApplicationSource(
 
   const holes = Array(Math.max(0, numExplicit - 1)).fill('?').join(' ');
   return holes ? `${projName} ${hypName} ${holes}` : `${projName} ${hypName}`;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceHaveNodeAtId(
+  root: ProofTreeState['root'],
+  haveNodeId: ProofNodeId,
+  updater: (node: Extract<ProofTreeState['root'], { tag: 'have' }>) => ProofTreeState['root'],
+): ProofTreeState['root'] | null {
+  if (root.id === haveNodeId && root.tag === 'have') {
+    return updater(root);
+  }
+
+  switch (root.tag) {
+    case 'intros':
+    case 'unfold':
+    case 'fold':
+    case 'rewrite': {
+      const newChild = replaceHaveNodeAtId(root.child, haveNodeId, updater);
+      return newChild ? { ...root, child: newChild } : null;
+    }
+    case 'apply': {
+      for (let i = 0; i < root.children.length; i++) {
+        const newChild = replaceHaveNodeAtId(root.children[i], haveNodeId, updater);
+        if (newChild) {
+          const newChildren = [...root.children];
+          newChildren[i] = newChild;
+          return { ...root, children: newChildren };
+        }
+      }
+      return null;
+    }
+    case 'induction': {
+      for (let i = 0; i < root.cases.length; i++) {
+        const c = root.cases[i];
+        const newBody = replaceHaveNodeAtId(c.body, haveNodeId, updater);
+        if (newBody) {
+          const newCases = [...root.cases];
+          newCases[i] = { ...c, body: newBody };
+          return { ...root, cases: newCases };
+        }
+      }
+      return null;
+    }
+    case 'simp': {
+      for (let i = 0; i < root.steps.length; i++) {
+        const newStep = replaceHaveNodeAtId(root.steps[i], haveNodeId, updater);
+        if (newStep) {
+          const newSteps = [...root.steps];
+          newSteps[i] = newStep;
+          return { ...root, steps: newSteps };
+        }
+      }
+      const newChild = replaceHaveNodeAtId(root.child, haveNodeId, updater);
+      return newChild ? { ...root, child: newChild } : null;
+    }
+    case 'suffices': {
+      if (root.byProof) {
+        const newBy = replaceHaveNodeAtId(root.byProof, haveNodeId, updater);
+        if (newBy) return { ...root, byProof: newBy };
+      }
+      const newChild = replaceHaveNodeAtId(root.child, haveNodeId, updater);
+      return newChild ? { ...root, child: newChild } : null;
+    }
+    case 'have': {
+      if (root.proofTree) {
+        const newProof = replaceHaveNodeAtId(root.proofTree, haveNodeId, updater);
+        if (newProof) return { ...root, proofTree: newProof };
+      }
+      const newChild = replaceHaveNodeAtId(root.child, haveNodeId, updater);
+      return newChild ? { ...root, child: newChild } : null;
+    }
+    case 'exact':
+    case 'hole':
+      return null;
+  }
+}
+
+function rewriteHaveReferenceSubtree(
+  node: ProofTreeState['root'],
+  oldName: string,
+  newName: string,
+): ProofTreeState['root'] {
+  const replaceNameInExpr = (expr: string): string =>
+    expr.replace(new RegExp(`(?<=^|[\\s()])${escapeRegExp(oldName)}(?=$|[\\s()])`, 'g'), newName);
+
+  switch (node.tag) {
+    case 'exact':
+      return { ...node, expr: replaceNameInExpr(node.expr) };
+    case 'have':
+      return {
+        ...node,
+        expr: replaceNameInExpr(node.expr),
+        child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
+        proofTree: node.proofTree ? rewriteHaveReferenceSubtree(node.proofTree, oldName, newName) : undefined,
+      };
+    case 'intros':
+    case 'unfold':
+    case 'fold':
+    case 'rewrite':
+      return { ...node, child: rewriteHaveReferenceSubtree(node.child, oldName, newName) };
+    case 'simp':
+      return {
+        ...node,
+        steps: node.steps.map(step => rewriteHaveReferenceSubtree(step, oldName, newName)),
+        child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
+      };
+    case 'apply':
+      return { ...node, children: node.children.map(child => rewriteHaveReferenceSubtree(child, oldName, newName)) };
+    case 'induction':
+      return { ...node, cases: node.cases.map(c => ({ ...c, body: rewriteHaveReferenceSubtree(c.body, oldName, newName) })) };
+    case 'suffices':
+      return {
+        ...node,
+        child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
+        byProof: node.byProof ? rewriteHaveReferenceSubtree(node.byProof, oldName, newName) : undefined,
+      };
+    case 'hole':
+      return node;
+  }
+}
+
+export function updateHaveExprInProofTree(
+  state: ProofTreeState,
+  haveNodeId: ProofNodeId,
+  newExpr: string,
+): ProofTreeState | null {
+  const newRoot = replaceHaveNodeAtId(state.root, haveNodeId, node => ({ ...node, expr: newExpr }));
+  return newRoot ? { ...state, root: newRoot } : null;
+}
+
+export function renameHaveBindingInProofTree(
+  state: ProofTreeState,
+  haveNodeId: ProofNodeId,
+  newName: string,
+): ProofTreeState | null {
+  const haveNode = findNode(state.root, haveNodeId);
+  if (!haveNode || haveNode.tag !== 'have') return null;
+  const oldName = haveNode.name;
+
+  const newRoot = replaceHaveNodeAtId(state.root, haveNodeId, node => ({
+    ...node,
+    name: newName,
+    child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
+  }));
+  return newRoot ? { ...state, root: newRoot } : null;
+}
+
+function buildHoistedHaveName(builderState: TermBuilderState, slotIndex: number): string {
+  const slot = builderState.slots[slotIndex];
+  const baseName = (slot?.name && slot.name !== '_' && !slot.name.startsWith('_'))
+    ? slot.name
+    : `${slotIndex}`;
+  return `h${baseName}`;
+}
+
+export function hoistTermBuilderSlotToHave(
+  state: ProofTreeState,
+  haveNodeId: ProofNodeId,
+  builderState: TermBuilderState,
+  slotIndex: number,
+  definitions?: DefinitionsMap,
+): ProofTreeState | null {
+  const slot = builderState.slots[slotIndex];
+  if (!slot) return null;
+
+  const target = findNode(state.root, haveNodeId);
+  if (!target) return null;
+
+  const hoistName = buildHoistedHaveName(builderState, slotIndex);
+  const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx, definitions);
+  const proofHole = mkHole();
+  const inserted = mkHave(hoistName, '?', target, typeSourceExpr, proofHole);
+  let updated: ProofTreeState = {
+    root: replaceNode(state.root, haveNodeId, inserted),
+    cursor: state.cursor,
+  };
+
+  const newSlots = [...builderState.slots];
+  newSlots[slotIndex] = {
+    ...slot,
+    value: { tag: 'Const', name: hoistName },
+    sourceExpr: hoistName,
+  };
+  const expr = buildExprFromSlots(builderState.fnName, newSlots, builderState.goalCtx);
+  if (!expr) return updated;
+
+  return updateHaveExprInProofTree(updated, haveNodeId, expr) ?? updated;
 }
 
 export function applySuggestionToProofTreeState(

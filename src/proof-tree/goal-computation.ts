@@ -3239,6 +3239,13 @@ function computeWithTacticEngine(
     }
   } else {
     goalLatex = renderGoalLatex(replay.engine, goal, definitions, rev);
+    // A 0-subgoal apply (e.g., `apply zeroLeOne` on `0 ≤ 1`) closes the goal.
+    // When the cursor is on such a node, surface the green "Goal solved" box
+    // in the side panel so the UI matches the "which is true, by ..." prose
+    // the editor already renders for it.
+    if (cursorNode?.tag === 'apply' && cursorNode.children.length === 0 && !replay.tacticError) {
+      validation = { status: 'solved' };
+    }
   }
 
   // Surface tactic errors (failed rewrite/unfold) as validation errors
@@ -3639,9 +3646,17 @@ function replayEntireTreeFromTrace(
       }
 
       case 'apply': {
-        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
-        // Advance trace cursor
+        // A 0-subgoal apply CLOSES the goal — mark validation as 'solved' so
+        // the side panel shows the green "Goal solved" indicator (matching
+        // the "which is true, by ..." prose the editor renders for it).
+        // For applies with subgoals, validation stays undefined; the panel
+        // shows the pre-apply goal that the user must still discharge.
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const closingValidation: ValidationResult | undefined =
+          (node.children.length === 0 && !step?.error)
+            ? { status: 'solved' }
+            : undefined;
+        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex, closingValidation);
         const nextEngine = step?.engineAfter ?? currentEngine;
         if (step?.error) {
           const existing = result.get(node.id);
@@ -3750,7 +3765,7 @@ function replayEntireTreeViaWalk(
   const projMap = buildProjectionFoldMap(definitions);
   const aliasMap = buildAliasFoldMap(definitions, projMap);
 
-  function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string): void {
+  function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string, validation?: ValidationResult): void {
     const goal = eng.metaVars.get(gId);
     if (!goal) return;
     const zonkedGoalType = eng.zonkTerm(goal.type, goal.ctx.length);
@@ -3759,6 +3774,7 @@ function replayEntireTreeViaWalk(
       hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
       caseLabelLatex,
       isValueType: isValueTypeGoal(zonkedGoalType),
+      validation,
     });
   }
 
@@ -3955,9 +3971,9 @@ function replayEntireTreeViaWalk(
       }
 
       case 'apply': {
-        recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
         if (!goal) {
+          recordGoal(node.id, eng, gId, caseLabelLatex);
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
@@ -3966,11 +3982,20 @@ function replayEntireTreeViaWalk(
           : new ApplyTactic(resolveExprInGoal(node.name, goal, eng.definitions));
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
+          recordGoal(node.id, eng, gId, caseLabelLatex);
           const existing = result.get(node.id);
           if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
+        // A 0-subgoal apply CLOSES the goal — record validation 'solved' so
+        // the editor surfaces the green "Goal solved" indicator (matching the
+        // "which is true, by ..." prose it already renders for the node).
+        const closingValidation: ValidationResult | undefined =
+          node.children.length === 0
+            ? { status: 'solved' }
+            : undefined;
+        recordGoal(node.id, eng, gId, caseLabelLatex, closingValidation);
 
         // Extract solved value-level args for prose rendering (e.g., "f" in "cong f")
         // Skip type-level args (whose type is Sort) and unsolved args (subgoals).

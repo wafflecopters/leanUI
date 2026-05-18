@@ -1,13 +1,16 @@
 import { mkConstTT } from '../compiler/surface';
 import { createDefinitionsMap } from '../compiler/term';
 import { beforeEach, describe, expect, test } from 'vitest';
-import { createInitialState, resetProofIds } from './proof-tree';
+import { createInitialState, mkExact, mkHave, mkHole, resetProofIds } from './proof-tree';
 import {
   applyManualProofTreeTactic,
   applyHypothesisSuggestionToProofTreeState,
   applySuggestionToProofTreeState,
   buildProjectionApplicationSource,
+  hoistTermBuilderSlotToHave,
+  renameHaveBindingInProofTree,
   type ProofTreeManualTacticMode,
+  updateHaveExprInProofTree,
 } from './tactic-editing';
 
 beforeEach(() => resetProofIds());
@@ -111,6 +114,76 @@ describe('applyManualProofTreeTactic', () => {
     expect(next?.root.tag).toBe('exact');
     if (!next || next.root.tag !== 'exact') return;
     expect(next.root.expr).toBe('-1');
+  });
+});
+
+describe('have editing helpers', () => {
+  test('updateHaveExprInProofTree rewrites the targeted have expression', () => {
+    const child = mkHole();
+    const state = {
+      root: mkHave('h', 'oldProof', child),
+      cursor: { nodeId: child.id },
+    };
+
+    const next = updateHaveExprInProofTree(state, state.root.id, 'newProof');
+    expect(next).not.toBeNull();
+    expect(next?.root.tag).toBe('have');
+    if (!next || next.root.tag !== 'have') return;
+    expect(next.root.expr).toBe('newProof');
+  });
+
+  test('renameHaveBindingInProofTree updates downstream exact references', () => {
+    const state = {
+      root: mkHave('h', 'refl', mkExact('h')),
+      cursor: { nodeId: 0 },
+    };
+
+    const next = renameHaveBindingInProofTree(state, state.root.id, 'k');
+    expect(next).not.toBeNull();
+    expect(next?.root.tag).toBe('have');
+    if (!next || next.root.tag !== 'have') return;
+    expect(next.root.name).toBe('k');
+    expect(next.root.child.tag).toBe('exact');
+    if (next.root.child.tag === 'exact') {
+      expect(next.root.child.expr).toBe('k');
+    }
+  });
+
+  test('hoistTermBuilderSlotToHave inserts a new interactive have and rewrites the parent expr', () => {
+    const currentHave = mkHave('main', 'foo (old)', mkHole());
+    const state = {
+      root: currentHave,
+      cursor: { nodeId: currentHave.id },
+    };
+
+    const next = hoistTermBuilderSlotToHave(state, currentHave.id, {
+      fnName: 'foo',
+      fnDisplayName: 'foo',
+      slots: [{
+        index: 0,
+        name: 'x',
+        type: { tag: 'Const', name: 'Nat' } as any,
+        typeLatex: 'Nat',
+        implicit: false,
+        metaId: '?m',
+        value: { tag: 'Const', name: 'old' } as any,
+        sourceExpr: 'old',
+      }],
+      slotSuggestions: new Map(),
+      engine: {} as any,
+      goalCtx: [],
+    }, 0);
+
+    expect(next).not.toBeNull();
+    expect(next?.root.tag).toBe('have');
+    if (!next || next.root.tag !== 'have') return;
+    expect(next.root.name).toBe('hx');
+    expect(next.root.expr).toBe('?');
+    expect(next.root.proofTree?.tag).toBe('hole');
+    expect(next.root.child.tag).toBe('have');
+    if (next.root.child.tag === 'have') {
+      expect(next.root.child.expr).toBe('foo (hx)');
+    }
   });
 });
 
