@@ -20,7 +20,7 @@ import { MetaVar } from '../compiler/term';
 import { TacticEngine } from './tacticsEngine';
 import { Tactic, TacticResult, UnifiedEquation, freshMetaName } from './tactic';
 import { whnf, fullNormalize } from '../compiler/whnf';
-import { shiftTerm, subst } from '../compiler/subst';
+import { shiftTerm, subst, substPatternBindings } from '../compiler/subst';
 
 /**
  * RewriteTactic: Use an equality proof to substitute in the goal
@@ -536,6 +536,46 @@ export class RewriteTactic implements Tactic {
       return true;
     }
 
+    // δ-bridge: alias-headed term vs projection/canonical-headed pattern.
+    // When both sides are App spines headed by different Consts, try unfolding
+    // ONE step of the term-side head's alias definition. This bridges patterns
+    // like `CompleteOrderedField.add ?inst ?a ?b` (LHS of addComm) against goal
+    // subterms like `radd ?R 2 (-1)` (where radd = field.add (field R), an alias).
+    //
+    // We use `unfoldAliasOneStep`, not full whnf, because whnf would keep going
+    // and unfold `plus` (or `CompleteOrderedField.add`) into its own Match body,
+    // changing the head from Const → Match and breaking structural matching.
+    if (definitions && pattern.tag === 'App' && term.tag === 'App') {
+      const patHead = this.getTermHeadName(pattern);
+      const termHead = this.getTermHeadName(term);
+      if (patHead && termHead && patHead !== termHead) {
+        // Try alias-unfolding term-side
+        const termN = this.unfoldAliasOneStep(term, definitions);
+        if (termN) {
+          const newHead = this.getTermHeadName(termN);
+          if (newHead === patHead) {
+            const snapshot = new Map(bindings);
+            if (this.tryMatchPattern(pattern, termN, snapshot, definitions)) {
+              for (const [k, v] of snapshot) bindings.set(k, v);
+              return true;
+            }
+          }
+        }
+        // Try alias-unfolding pattern-side (less common but symmetric)
+        const patN = this.unfoldAliasOneStep(pattern, definitions);
+        if (patN) {
+          const newHead = this.getTermHeadName(patN);
+          if (newHead === termHead) {
+            const snapshot = new Map(bindings);
+            if (this.tryMatchPattern(patN, term, snapshot, definitions)) {
+              for (const [k, v] of snapshot) bindings.set(k, v);
+              return true;
+            }
+          }
+        }
+      }
+    }
+
     // Try structural match first
     if (pattern.tag !== term.tag) {
       // If definitions available, try WHNF on both sides
@@ -689,6 +729,44 @@ export class RewriteTactic implements Tactic {
     return { head, args };
   }
 
+  /**
+   * Unfold a Const-headed term by ONE δ-step IF its definition is a trivial
+   * alias (single Match clause with only PVar/PWild patterns, like `f a b = g a b`).
+   * Returns the substituted RHS, or null if not unfoldable as a trivial alias.
+   *
+   * Unlike whnf, this stops as soon as it has unfolded the head once — it does
+   * NOT recursively reduce the result. This is critical for pattern matching:
+   * after unfolding `radd a b` to `CompleteOrderedField.add (field R) a b`, we
+   * want to keep the Const head visible, not let whnf reduce it further into a
+   * Match body that no longer structurally matches the pattern's Const head.
+   */
+  private unfoldAliasOneStep(term: TTKTerm, definitions: DefinitionsMap): TTKTerm | null {
+    const { head, args } = this.collectAppSpine(term);
+    if (head.tag !== 'Const') return null;
+    const def = definitions.terms.get(head.name);
+    if (!def?.value) return null;
+    const matchVal = def.value;
+    if (matchVal.tag !== 'Match') return null;
+    if (matchVal.clauses.length !== 1) return null;
+    const clause = matchVal.clauses[0];
+    if (!clause.patterns.every(p => p.tag === 'PVar' || p.tag === 'PWild')) return null;
+    if (clause.patterns.length > args.length) return null;
+    // Bindings come from the first patterns.length args; remaining args are appended.
+    const consumedArgs = args.slice(0, clause.patterns.length);
+    const remainingArgs = args.slice(clause.patterns.length);
+    // matchPatterns logic: PVar -> [term], PWild -> []
+    const bindings: TTKTerm[] = [];
+    for (let i = 0; i < clause.patterns.length; i++) {
+      const p = clause.patterns[i];
+      if (p.tag === 'PVar') bindings.push(consumedArgs[i]);
+    }
+    let result = substPatternBindings(bindings, clause.rhs);
+    for (const arg of remainingArgs) {
+      result = { tag: 'App', fn: result, arg };
+    }
+    return result;
+  }
+
   /** Look up implicit arg positions for a constant (from namedArgMap). */
   private getImplicitPositions(headName: string, definitions?: DefinitionsMap): Set<number> | null {
     if (!definitions) return null;
@@ -806,6 +884,27 @@ export class RewriteTactic implements Tactic {
           return to;
         }
         return term;  // Skip this occurrence
+      }
+      // δ-bridge: alias-headed term vs projection/canonical-headed `from`.
+      // E.g., `from = plus Var(1) Var(0)`, `term = addAlias Var(1) Var(0)`.
+      // One-step alias-unfold of `term` produces `plus Var(1) Var(0)` which
+      // structurally matches `from`. Use the helper that stops after a single
+      // δ step (unlike whnf, which would keep going into plus's Match body).
+      if (definitions && term.tag === 'App' && from.tag === 'App') {
+        const fromHead = this.getTermHeadName(from);
+        const termHead = this.getTermHeadName(term);
+        if (fromHead && termHead && fromHead !== termHead) {
+          const unfolded = this.unfoldAliasOneStep(term, definitions);
+          if (unfolded && this.getTermHeadName(unfolded) === fromHead) {
+            if (this.termEqual(unfolded, from)) {
+              counter.value++;
+              if (!occurrences || occurrences.includes(counter.value)) {
+                return to;
+              }
+              return term;
+            }
+          }
+        }
       }
     }
 

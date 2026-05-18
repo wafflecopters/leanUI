@@ -95,6 +95,11 @@ two = Succ (Succ Zero)
 mulOneRight : (n : Nat) -> Equal (mul n one) n
 mulOneRight Zero = refl
 mulOneRight (Succ n) = congSucc (mulOneRight n)
+addAlias : Nat -> Nat -> Nat
+addAlias a b = plus a b
+addAliasPartial : Nat -> Nat -> Nat
+addAliasPartial c = plus c
+postulate plusComm : (n m : Nat) -> Equal (plus n m) (plus m n)
 `;
 
 // Compile once and reuse
@@ -180,6 +185,102 @@ describe('RewriteTactic: basic rewrite (no premises)', () => {
     expect(newGoal).not.toBeNull();
     const goalStr = termToString(newGoal.type);
     expect(goalStr).not.toContain('plus');
+  });
+});
+
+describe('RewriteTactic: alias↔definition δ-bridge', () => {
+  // When the goal contains a top-level alias `addAlias a b = plus a b` and
+  // the rewrite lemma's LHS pattern is `plus ?n ?m`, the pattern matcher
+  // should bridge the gap by δ-unfolding the alias on the goal side.
+  // This is the kernel-level fix for the "click 2 + (-1), see addComm" case
+  // in the real-analysis preset (radd is an alias for CompleteOrderedField.add).
+  test('plusComm matches addAlias-headed subterm in goal', () => {
+    const defs = getDefinitions();
+
+    // Goal: (a b : Nat) -> Equal (addAlias a b) (addAlias a b)
+    // After intros, we have a, b in context and goal is Equal (addAlias a b) (addAlias a b)
+    // Rewrite with plusComm should match (plus ?n ?m) against (addAlias a b)
+    // by δ-unfolding addAlias → plus.
+    const aVar: TTKTerm = { tag: 'Var', index: 1 };
+    const bVar: TTKTerm = { tag: 'Var', index: 0 };
+    const addAliasAB: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'Const', name: 'addAlias' }, arg: aVar },
+      arg: bVar,
+    };
+    const equalAddAliasAB: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: { tag: 'Const', name: 'Nat' } }, arg: addAliasAB },
+      arg: addAliasAB,
+    };
+    // Pi(a : Nat) -> Pi(b : Nat) -> Equal (addAlias a b) (addAlias a b)
+    const goalType: TTKTerm = {
+      tag: 'Binder',
+      binderKind: { tag: 'BPi' },
+      name: 'a',
+      domain: { tag: 'Const', name: 'Nat' },
+      body: {
+        tag: 'Binder',
+        binderKind: { tag: 'BPi' },
+        name: 'b',
+        domain: { tag: 'Const', name: 'Nat' },
+        body: equalAddAliasAB,
+      },
+    };
+    const engine = setupEngineWithIntros(goalType, defs, ['a', 'b']);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'plusComm' });
+    const result = tactic.apply(engine, goal, goalId);
+
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // The new goal should still contain Equal and either side swapped
+    const newGoal = result.newEngine.getFocusedGoal()!;
+    expect(newGoal).not.toBeNull();
+    // After rewriting one side, the goal should no longer be a literal `Equal X X`
+    // (the rewrite should make a real change)
+    const goalStr = termToString(newGoal.type);
+    // Just verify success — the substitution happened (one side got swapped)
+    expect(goalStr).toContain('Equal');
+  });
+
+  // Same as above but with a partial-application alias (`f c = plus c`),
+  // which mirrors the real-analysis shape `radd R = CompleteOrderedField.add (field R)`.
+  // The alias has 1 PVar pattern; the remaining args are appended after δ-unfolding.
+  test('plusComm matches partial-application-alias-headed subterm', () => {
+    const defs = getDefinitions();
+
+    // Goal: (a b : Nat) -> Equal (addAliasPartial a b) (addAliasPartial a b)
+    // addAliasPartial c = plus c — 1 PVar pattern, remaining arg b applied after δ-unfold.
+    const aVar: TTKTerm = { tag: 'Var', index: 1 };
+    const bVar: TTKTerm = { tag: 'Var', index: 0 };
+    const lhs: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'Const', name: 'addAliasPartial' }, arg: aVar },
+      arg: bVar,
+    };
+    const equalLhsLhs: TTKTerm = {
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App', fn: { tag: 'Const', name: 'Equal' }, arg: { tag: 'Const', name: 'Nat' } }, arg: lhs },
+      arg: lhs,
+    };
+    const mkPi = (name: string, body: TTKTerm): TTKTerm => ({
+      tag: 'Binder',
+      binderKind: { tag: 'BPi' },
+      name,
+      domain: { tag: 'Const', name: 'Nat' },
+      body,
+    });
+    const goalType = mkPi('a', mkPi('b', equalLhsLhs));
+    const engine = setupEngineWithIntros(goalType, defs, ['a', 'b']);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+
+    const tactic = new RewriteTactic({ tag: 'Const', name: 'plusComm' });
+    const result = tactic.apply(engine, goal, goalId);
+    expect(result.success).toBe(true);
   });
 });
 
