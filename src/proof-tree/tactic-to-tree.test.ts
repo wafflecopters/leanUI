@@ -38,6 +38,30 @@ describe('surfaceTermToString', () => {
     const hole: TTerm = { tag: 'Hole', id: '_', type: cst('Nat'), context: [] };
     expect(surfaceTermToString(hole)).toBe('_');
   });
+
+  // REGRESSION (image #37): the structured editor's `case 'exact'` flow calls
+  // `parseExpr(input)` then `surfaceTermToString(parsed)` to store the proof
+  // node's expr string. If a literal tag falls through to the default '?' arm,
+  // the stored expr becomes "?" and validation surfaces "Type definition not
+  // found: ?". `NatLit`/`RatLit` must round-trip.
+  test('NatLit round-trips', () => {
+    expect(surfaceTermToString({ tag: 'NatLit', value: 5n })).toBe('5');
+  });
+
+  test('RatLit (integer-shaped, negative) round-trips as signed integer', () => {
+    expect(surfaceTermToString({ tag: 'RatLit', num: -1n, den: 1n })).toBe('-1');
+  });
+
+  test('RatLit (terminating decimal, negative) round-trips as decimal', () => {
+    // 3/2 (canonical of 1.5) → "1.5"; -3/2 → "-1.5"
+    expect(surfaceTermToString({ tag: 'RatLit', num: -3n, den: 2n })).toBe('-1.5');
+    expect(surfaceTermToString({ tag: 'RatLit', num: 3n, den: 2n })).toBe('1.5');
+  });
+
+  test('RatLit (non-terminating) falls back to fraction syntax', () => {
+    // 1/3 has no finite decimal expansion.
+    expect(surfaceTermToString({ tag: 'RatLit', num: 1n, den: 3n })).toBe('(1 / 3)');
+  });
 });
 
 describe('tacticCommandsToProofTree', () => {
@@ -129,6 +153,18 @@ describe('tacticCommandsToProofTree', () => {
     if (tree.child.tag !== 'unfold') return;
     expect(tree.child.name).toBe('g');
     expect(tree.child.child.tag).toBe('exact');
+  });
+
+  test('simp foo bar; exact refl → simp node with continuation', () => {
+    const tree = tacticCommandsToProofTree([
+      tc('simp', [cst('foo'), cst('bar')]),
+      tc('exact', [cst('refl')]),
+    ]);
+    expect(tree.tag).toBe('simp');
+    if (tree.tag !== 'simp') return;
+    expect(tree.lemmas).toEqual(['foo', 'bar']);
+    expect(tree.steps).toEqual([]);
+    expect(tree.child.tag).toBe('exact');
   });
 
   test('unknown tactics are skipped', () => {

@@ -19,6 +19,7 @@ import {
   mkApply,
   mkCase,
   mkHave,
+  mkSimp,
   mkSuffices,
 } from './proof-tree';
 import { renderNameLatex } from './name-latex';
@@ -55,6 +56,33 @@ export function surfaceTermToString(term: TTerm, ctx: string[] = []): string {
       return ctx[term.index] ?? `v${term.index}`;
     case 'Hole':
       return '_';
+    case 'NatLit':
+      return term.value.toString();
+    case 'RatLit': {
+      // Integer-shaped: emit a bare signed integer literal (the re-parser
+      // recognises `-N` as a signed literal and `N` as a NatLit).
+      if (term.den === 1n) return term.num.toString();
+      // Rational with a terminating decimal expansion: multiply num and den
+      // until den becomes a power of 10 (possible iff den's only prime
+      // factors are 2 and 5). For canonical RatLits (gcd-reduced by the
+      // parser), this lets `1.5` → RatLit(3, 2) round-trip back to `1.5`.
+      let num = term.num;
+      let den = term.den;
+      let pow10 = 0;
+      // Strip 2s and 5s from den; multiply num accordingly.
+      while (den % 2n === 0n) { den /= 2n; num *= 5n; pow10++; }
+      while (den % 5n === 0n) { den /= 5n; num *= 2n; pow10++; }
+      if (den === 1n) {
+        const absNum = num < 0n ? -num : num;
+        const numDigits = absNum.toString().padStart(pow10 + 1, '0');
+        const intPart = numDigits.slice(0, -pow10) || '0';
+        const fracPart = numDigits.slice(-pow10);
+        const sign = num < 0n ? '-' : '';
+        return `${sign}${intPart}.${fracPart}`;
+      }
+      // Non-terminating: fall back to explicit fraction syntax.
+      return `(${term.num.toString()} / ${term.den.toString()})`;
+    }
     default:
       return '?';
   }
@@ -190,6 +218,11 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
       }
       const haveExpr = cmd.args.length > 2 ? surfaceTermToString(cmd.args[2]) : '?';
       return mkHave(haveName, haveExpr, tacticCommandsToProofTree(rest));
+    }
+
+    case 'simp': {
+      const lemmas = cmd.args.map(arg => extractName(arg) ?? surfaceTermToString(arg));
+      return mkSimp(lemmas, [], tacticCommandsToProofTree(rest));
     }
 
     default:

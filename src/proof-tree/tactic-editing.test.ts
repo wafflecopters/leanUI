@@ -96,6 +96,22 @@ describe('applyManualProofTreeTactic', () => {
     expect(next.root.expr).toBe('refl');
     expect(next.root.child.tag).toBe('hole');
   });
+
+  // REGRESSION (image #37): typing `-1` into the structured editor's exact
+  // input must produce a proof node whose stored expr is "-1", not "?".
+  // The flow: parseExpr("-1") → RatLit(-1, 1) → surfaceTermToString → string
+  // stored on the ExactNode. Previously surfaceTermToString didn't handle
+  // RatLit and returned '?', producing "Type definition not found: ?" on
+  // validation.
+  test('manual exact "-1" stores expr as "-1" (not "?")', () => {
+    const state = createInitialState();
+    const tacticMode: ProofTreeManualTacticMode = { tactic: 'exact' };
+    const next = applyManualProofTreeTactic(state, tacticMode, '-1', {});
+    expect(next).not.toBeNull();
+    expect(next?.root.tag).toBe('exact');
+    if (!next || next.root.tag !== 'exact') return;
+    expect(next.root.expr).toBe('-1');
+  });
 });
 
 describe('hypothesis suggestion helpers', () => {
