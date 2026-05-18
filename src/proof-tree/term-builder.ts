@@ -61,6 +61,11 @@ export interface TermBuilderState {
   readonly goalCtx: TTKContext;
 }
 
+export interface RebuiltTermBuilderResult {
+  readonly builderState: TermBuilderState;
+  readonly expr: string | null;
+}
+
 // ============================================================================
 // Slot computation
 // ============================================================================
@@ -290,6 +295,99 @@ export function computeTermSlots(
   return {
     fnName, fnDisplayName, slots, slotSuggestions, returnTypeLatex,
     engine: currentEngine, goalCtx: goal.ctx,
+  };
+}
+
+function collectPrefilledSlots(
+  builderState: TermBuilderState,
+  excludeSlotIndex?: number,
+): { prefilled: Map<number, TTKTerm>; sourceExprs: Map<number, string> } {
+  const prefilled = new Map<number, TTKTerm>();
+  const sourceExprs = new Map<number, string>();
+  for (const s of builderState.slots) {
+    if (s.value === null || s.index === excludeSlotIndex) continue;
+    prefilled.set(s.index, s.value);
+    if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
+  }
+  return { prefilled, sourceExprs };
+}
+
+function restoreSourceExprs(
+  rebuilt: TermBuilderState,
+  sourceExprs: Map<number, string>,
+): void {
+  for (const slot of rebuilt.slots) {
+    const src = sourceExprs.get(slot.index);
+    if (src) (slot as any).sourceExpr = src;
+  }
+}
+
+export function rebuildTermBuilderWithFilledSlot(
+  builderState: TermBuilderState,
+  slotIndex: number,
+  sourceExpr: string,
+  engine: TacticEngine,
+  goal: MetaVar,
+  definitions: DefinitionsMap,
+  rev?: ReverseRegistry,
+): RebuiltTermBuilderResult | null {
+  let term: TTKTerm = { tag: 'Const', name: sourceExpr };
+  try {
+    const parsed = parseExactExpr(sourceExpr, goal.ctx, definitions);
+    if (parsed) term = parsed;
+  } catch {
+    /* fall back to raw Const */
+  }
+
+  const { prefilled, sourceExprs } = collectPrefilledSlots(builderState);
+  prefilled.set(slotIndex, term);
+  sourceExprs.set(slotIndex, sourceExpr);
+
+  const userFilled = new Set<number>();
+  for (const s of builderState.slots) {
+    if (s.value !== null && s.sourceExpr) userFilled.add(s.index);
+  }
+  userFilled.add(slotIndex);
+
+  const rebuilt = computeTermSlots(
+    builderState.fnName,
+    prefilled,
+    engine,
+    goal,
+    definitions,
+    rev,
+    userFilled,
+  );
+  if (!rebuilt) return null;
+  restoreSourceExprs(rebuilt, sourceExprs);
+  return {
+    builderState: rebuilt,
+    expr: buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx),
+  };
+}
+
+export function rebuildTermBuilderWithoutSlot(
+  builderState: TermBuilderState,
+  slotIndex: number,
+  engine: TacticEngine,
+  goal: MetaVar,
+  definitions: DefinitionsMap,
+  rev?: ReverseRegistry,
+): RebuiltTermBuilderResult | null {
+  const { prefilled, sourceExprs } = collectPrefilledSlots(builderState, slotIndex);
+  const rebuilt = computeTermSlots(
+    builderState.fnName,
+    prefilled,
+    engine,
+    goal,
+    definitions,
+    rev,
+  );
+  if (!rebuilt) return null;
+  restoreSourceExprs(rebuilt, sourceExprs);
+  return {
+    builderState: rebuilt,
+    expr: buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx),
   };
 }
 

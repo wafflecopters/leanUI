@@ -386,6 +386,12 @@ export function generateProofProse(
         }
 
         emit(node.id, depth, { tag: 'apply', name: node.name, preGoalLatex: info?.goalLatex, subgoalLatex, appliedArgsLatex: info?.appliedArgsLatex, error: info?.tacticError });
+        // A 0-subgoal apply (e.g., `apply zeroLeOne` on `0 ≤ 1`) closes the
+        // goal outright. Emit a qed marker so the prose shows the ∎ box,
+        // matching what an exact-closing goal does (lines 262-264).
+        if (node.children.length === 0 && info?.validation?.status === 'solved') {
+          emit(node.id, depth, { tag: 'qed' });
+        }
         if (node.children.length > 1) {
           // Multiple subgoals: use labeled branches with indentation
           for (let i = 0; i < node.children.length; i++) {

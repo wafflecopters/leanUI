@@ -36,7 +36,7 @@ import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { renderNameLatex } from '../proof-tree/name-latex';
-import { computeTermSlots, buildExprFromSlots, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
+import { computeTermSlots, buildExprFromSlots, rebuildTermBuilderWithFilledSlot, rebuildTermBuilderWithoutSlot, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
 import {
   applyManualProofTreeTactic,
   applyHypothesisSuggestionToProofTreeState,
@@ -1065,66 +1065,38 @@ function HaveProseItem({
           onFillSlot={(slotIndex, sourceExpr) => {
             if (!typedContext?.kernelGoal || !definitions) return;
             const kg = typedContext.kernelGoal;
-            let term: TTKTerm = { tag: 'Const', name: sourceExpr };
-            try {
-              const parsed = parseExactExpr(latexSourceToUnicode(sourceExpr), kg.goal.ctx, definitions);
-              if (parsed) term = parsed;
-            } catch { /* fall back */ }
-            const prefilled = new Map<number, TTKTerm>();
-            const sourceExprs = new Map<number, string>();
-            for (const s of builderState.slots) {
-              if (s.value !== null) {
-                prefilled.set(s.index, s.value);
-                if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
-              }
-            }
-            prefilled.set(slotIndex, term);
-            sourceExprs.set(slotIndex, sourceExpr);
-            // Track which slots the user filled (for type-checking)
-            const userFilled = new Set<number>();
-            for (const s of builderState.slots) {
-              if (s.value !== null && s.sourceExpr) userFilled.add(s.index);
-            }
-            userFilled.add(slotIndex);
-            const rebuilt = computeTermSlots(builderState.fnName, prefilled, kg.engine, kg.goal, definitions, kg.rev, userFilled);
-            if (rebuilt) {
-              for (const slot of rebuilt.slots) {
-                const src = sourceExprs.get(slot.index);
-                if (src) (slot as any).sourceExpr = src;
-              }
-              setBuilderState(rebuilt);
-              // Live-update the have expression
-              const expr = buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx);
-              if (expr) {
-                const updated = updateHaveExprInProofTree(state, item.nodeId, expr);
-                if (updated) onPushChange(updated);
-              }
+            const rebuilt = rebuildTermBuilderWithFilledSlot(
+              builderState,
+              slotIndex,
+              latexSourceToUnicode(sourceExpr),
+              kg.engine,
+              kg.goal,
+              definitions,
+              kg.rev,
+            );
+            if (!rebuilt) return;
+            setBuilderState(rebuilt.builderState);
+            if (rebuilt.expr) {
+              const updated = updateHaveExprInProofTree(state, item.nodeId, rebuilt.expr);
+              if (updated) onPushChange(updated);
             }
           }}
           onClearSlot={(slotIndex) => {
             if (!typedContext?.kernelGoal || !definitions) return;
             const kg = typedContext.kernelGoal;
-            const prefilled = new Map<number, TTKTerm>();
-            const sourceExprs = new Map<number, string>();
-            for (const s of builderState.slots) {
-              if (s.value !== null && s.index !== slotIndex) {
-                prefilled.set(s.index, s.value);
-                if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
-              }
-            }
-            const rebuilt = computeTermSlots(builderState.fnName, prefilled, kg.engine, kg.goal, definitions, kg.rev);
-            if (rebuilt) {
-              for (const slot of rebuilt.slots) {
-                const src = sourceExprs.get(slot.index);
-                if (src) (slot as any).sourceExpr = src;
-              }
-              setBuilderState(rebuilt);
-              // Live-update the have expression
-              const expr = buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx);
-              if (expr) {
-                const updated = updateHaveExprInProofTree(state, item.nodeId, expr);
-                if (updated) onPushChange(updated);
-              }
+            const rebuilt = rebuildTermBuilderWithoutSlot(
+              builderState,
+              slotIndex,
+              kg.engine,
+              kg.goal,
+              definitions,
+              kg.rev,
+            );
+            if (!rebuilt) return;
+            setBuilderState(rebuilt.builderState);
+            if (rebuilt.expr) {
+              const updated = updateHaveExprInProofTree(state, item.nodeId, rebuilt.expr);
+              if (updated) onPushChange(updated);
             }
           }}
           onConfirm={() => setBuilderState(null)}
@@ -3512,67 +3484,29 @@ function HoleProseView({
             onFillSlot={(slotIndex, sourceExpr) => {
               if (!typedContext?.kernelGoal || !definitions) return;
               const kg = typedContext.kernelGoal;
-
-              // Parse the source expression to a kernel term
-              let term: TTKTerm = { tag: 'Const', name: sourceExpr };
-              try {
-                const parsed = parseExactExpr(latexSourceToUnicode(sourceExpr), kg.goal.ctx, definitions);
-                if (parsed) term = parsed;
-              } catch { /* fall back to raw Const */ }
-
-              // Rebuild the prefilled map with ALL currently filled slots + the new one
-              const prefilled = new Map<number, TTKTerm>();
-              const sourceExprs = new Map<number, string>();
-              for (const s of inlineTermBuilder.slots) {
-                if (s.value !== null) {
-                  prefilled.set(s.index, s.value);
-                  if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
-                }
-              }
-              prefilled.set(slotIndex, term);
-              sourceExprs.set(slotIndex, sourceExpr);
-
-              const userFilled = new Set<number>();
-              for (const s of inlineTermBuilder.slots) {
-                if (s.value !== null && s.sourceExpr) userFilled.add(s.index);
-              }
-              userFilled.add(slotIndex);
-
-              const rebuilt = computeTermSlots(
-                inlineTermBuilder.fnName, prefilled,
-                kg.engine, kg.goal, definitions, kg.rev, userFilled,
+              const rebuilt = rebuildTermBuilderWithFilledSlot(
+                inlineTermBuilder,
+                slotIndex,
+                latexSourceToUnicode(sourceExpr),
+                kg.engine,
+                kg.goal,
+                definitions,
+                kg.rev,
               );
-              if (rebuilt) {
-                // Restore source expressions on the rebuilt slots
-                for (const slot of rebuilt.slots) {
-                  const src = sourceExprs.get(slot.index);
-                  if (src) (slot as any).sourceExpr = src;
-                }
-                onSetTermBuilder(rebuilt);
-              }
+              if (rebuilt) onSetTermBuilder(rebuilt.builderState);
             }}
             onClearSlot={(slotIndex) => {
               if (!typedContext?.kernelGoal || !definitions) return;
               const kg = typedContext.kernelGoal;
-              const prefilled = new Map<number, TTKTerm>();
-              const sourceExprs = new Map<number, string>();
-              for (const s of inlineTermBuilder.slots) {
-                if (s.value !== null && s.index !== slotIndex) {
-                  prefilled.set(s.index, s.value);
-                  if (s.sourceExpr) sourceExprs.set(s.index, s.sourceExpr);
-                }
-              }
-              const rebuilt = computeTermSlots(
-                inlineTermBuilder.fnName, prefilled,
-                kg.engine, kg.goal, definitions, kg.rev,
+              const rebuilt = rebuildTermBuilderWithoutSlot(
+                inlineTermBuilder,
+                slotIndex,
+                kg.engine,
+                kg.goal,
+                definitions,
+                kg.rev,
               );
-              if (rebuilt) {
-                for (const slot of rebuilt.slots) {
-                  const src = sourceExprs.get(slot.index);
-                  if (src) (slot as any).sourceExpr = src;
-                }
-                onSetTermBuilder(rebuilt);
-              }
+              if (rebuilt) onSetTermBuilder(rebuilt.builderState);
             }}
             onConfirm={() => {
               const expr = buildExprFromSlots(

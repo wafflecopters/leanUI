@@ -209,9 +209,16 @@ export class RewriteTactic implements Tactic {
           //     only accept matches whose resolved LHS has the matching head constant.
           //     This prevents bare-Meta LHS (from reverse rewrites) from resolving to
           //     wrong subterms like Const("Nat") instead of the clicked Const("two").
+          //
+          //     The match is via the "expanded head set" of targetHead — i.e.,
+          //     targetHead OR the head of its one-step δ-unfolded alias body.
+          //     Without this, a click on `radd`-headed `2 + (-1)` couldn't fire
+          //     `CompleteOrderedField.addComm` (its LHS head is the projection
+          //     `CompleteOrderedField.add`), even though radd is a trivial alias.
           if (this.options.targetHead && occurrences && occurrences.length > 0) {
             const resolvedHead = this.getTermHeadName(candidateLhs);
-            if (resolvedHead !== this.options.targetHead) continue;
+            const expanded = this.expandedHeadSet(this.options.targetHead, engine.definitions);
+            if (resolvedHead === null || !expanded.has(resolvedHead)) continue;
           }
 
           // 5. Replace LHS with RHS in the goal type
@@ -730,6 +737,31 @@ export class RewriteTactic implements Tactic {
   }
 
   /**
+   * Compute the "expanded head set" for a head name: the head itself, plus
+   * the head of its one-step δ-unfolded body (when it's a trivial alias —
+   * single-clause Match with only PVar/PWild patterns). This mirrors the
+   * head-bridge that `unfoldAliasOneStep` performs on terms, but at the
+   * level of head names alone. Used to widen targetHead matching so that
+   * a click on the alias's head (`radd`) accepts lemmas keyed under the
+   * projection head (`CompleteOrderedField.add`).
+   */
+  private expandedHeadSet(headName: string, definitions: DefinitionsMap): Set<string> {
+    const result = new Set<string>([headName]);
+    const def = definitions.terms.get(headName);
+    if (!def?.value) return result;
+    const matchVal = def.value;
+    if (matchVal.tag !== 'Match') return result;
+    if (matchVal.clauses.length !== 1) return result;
+    const clause = matchVal.clauses[0];
+    if (!clause.patterns.every(p => p.tag === 'PVar' || p.tag === 'PWild')) return result;
+    // Find the head of the clause RHS.
+    let head: TTKTerm = clause.rhs;
+    while (head.tag === 'App') head = head.fn;
+    if (head.tag === 'Const') result.add(head.name);
+    return result;
+  }
+
+  /**
    * Unfold a Const-headed term by ONE δ-step IF its definition is a trivial
    * alias (single Match clause with only PVar/PWild patterns, like `f a b = g a b`).
    * Returns the substituted RHS, or null if not unfoldable as a trivial alias.
@@ -826,9 +858,18 @@ export class RewriteTactic implements Tactic {
   ): TTKTerm {
     const counter = { value: 0 };
     // Only use head-based counting when `from` is an App — bare Consts/Vars
-    // don't form App spines, so head-based counting would skip them entirely
-    const lhsHead = (occurrences && occurrences.length > 0 && from.tag === 'App')
+    // don't form App spines, so head-based counting would skip them entirely.
+    //
+    // When `targetHead` is set (UI click on a specific subterm), prefer it
+    // over `from`'s head: the UI annotator counted occurrences by the
+    // surface-displayed head, which may be an alias (e.g. `radd`) of the
+    // lemma's LHS head (e.g. `CompleteOrderedField.add`). Counting by
+    // `from`'s head would find zero occurrences when the goal is alias-headed.
+    const fromHead = (occurrences && occurrences.length > 0 && from.tag === 'App')
       ? this.getTermHeadName(from)
+      : null;
+    const lhsHead = (occurrences && occurrences.length > 0)
+      ? (this.options.targetHead ?? fromHead)
       : null;
     return this.substituteImpl(term, from, to, definitions, occurrences, counter, lhsHead);
   }
@@ -846,26 +887,51 @@ export class RewriteTactic implements Tactic {
     // IMPORTANT: Uses POST-ORDER counting (children before parent) to match the
     // surface annotator, which assigns occurrence indices bottom-up during rendering
     // (children are rendered/annotated before parents in ttermToMathNodes).
-    if (lhsHead && occurrences && term.tag === 'App') {
-      const termHead = this.getTermHeadName(term);
-      if (termHead === lhsHead) {
-        // Post-order: first recurse into children
-        const recursedTerm = this.substituteIntoAppArgs(term, from, to, definitions, occurrences, counter, lhsHead);
-        // Then count this node
+    if (lhsHead && occurrences) {
+      if (term.tag === 'App') {
+        const termHead = this.getTermHeadName(term);
+        if (termHead === lhsHead) {
+          // Post-order: first recurse into children
+          const recursedTerm = this.substituteIntoAppArgs(term, from, to, definitions, occurrences, counter, lhsHead);
+          // Then count this node
+          counter.value++;
+          if (occurrences.includes(counter.value)) {
+            // This is the targeted occurrence — try the full match on ORIGINAL term
+            let isMatch = this.options.enhanced && definitions
+              ? this.termEqualDeep(term, from, definitions)
+              : this.termEqual(term, from);
+            if (!isMatch && definitions) {
+              // δ-bridge: lhsHead may equal `radd` (the surface alias the UI
+              // counted) while `from` has the projection head
+              // (`CompleteOrderedField.add`). One-step alias-unfold of the
+              // goal subterm exposes the projection head so the structural
+              // termEqual can succeed.
+              const unfolded = this.unfoldAliasOneStep(term, definitions);
+              if (unfolded) isMatch = this.termEqual(unfolded, from);
+            }
+            if (isMatch) {
+              return to;
+            }
+            // Head matches but LHS doesn't fully match — return recursed version
+            return recursedTerm;
+          }
+          // Not a targeted occurrence — return recursed version
+          return recursedTerm;
+        }
+      }
+
+      // Bare constants can also be targeted from the surface editor. This
+      // matters for reverse rewrites like `rewrite← mulOneRight` on a clicked
+      // literal `two`, where the resolved rewrite LHS is the bare constant.
+      if (term.tag === 'Const' && term.name === lhsHead) {
         counter.value++;
         if (occurrences.includes(counter.value)) {
-          // This is the targeted occurrence — try the full match on ORIGINAL term
           const isMatch = this.options.enhanced && definitions
             ? this.termEqualDeep(term, from, definitions)
             : this.termEqual(term, from);
-          if (isMatch) {
-            return to;
-          }
-          // Head matches but LHS doesn't fully match — return recursed version
-          return recursedTerm;
+          if (isMatch) return to;
         }
-        // Not a targeted occurrence — return recursed version
-        return recursedTerm;
+        return term;
       }
     }
 

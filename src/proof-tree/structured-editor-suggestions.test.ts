@@ -359,4 +359,56 @@ testImg36 R = ?h`);
       void leafHole;
     })();
   });
+
+  // REGRESSION (image #40): clicking the alias-headed `2 + (-1)` subterm in
+  // `1 + (-1) ≤ 2 + (-1)` must surface lemmas keyed under the projection head
+  // (e.g. `CompleteOrderedField.addComm`), not just `addRealOfRat`. The
+  // candidate gets collected via the head-expansion logic in
+  // collectRewriteCandidates; the rewrite tactic now also bridges
+  // alias↔projection in the occurrence-targeted substituteImpl path. Before
+  // the fix, targetHead='radd' and lhsHead='CompleteOrderedField.add' didn't
+  // match in the gate at rewrite-tactic.ts step 4e, dropping addComm before
+  // tryRewrite ever ran.
+  test('REGRESSION (image #40): clicking radd-headed subterm surfaces CompleteOrderedField.addComm', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg40', `testImg40 : (R : Real) -> rle 1 2
+testImg40 R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(
+      ['R'],
+      mkApply('addLeRightCancel', [
+        mkExact('-1'),
+        mkRewrite('addRealOfRat', leafHole),
+      ])
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    expect(focusedGoal).toBeDefined();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    // Find first radd-headed subterm path (occurrence 1).
+    let raddPath: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 1) { raddPath = p; break; }
+    }
+    expect(raddPath).not.toBeNull();
+    if (!raddPath) return;
+    const { computeRewriteSuggestionsIncremental } = await import('./tactic-suggestions');
+    const collected: any[] = [];
+    let done = false;
+    computeRewriteSuggestionsIncremental(raddPath, ig, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    } as any, (progress) => {
+      for (const s of progress.suggestions) {
+        if (!collected.find(x => x.id === s.id)) collected.push(s);
+      }
+      done = progress.done;
+    });
+    // Drain the setTimeout-batched pipeline.
+    for (let i = 0; i < 30 && !done; i++) await new Promise(r => setTimeout(r, 50));
+    const names = collected.map(s => s.rewriteName);
+    expect(names).toContain('CompleteOrderedField.addComm');
+  });
 });
