@@ -9,6 +9,7 @@ import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
 import { renderGoalLatex, renderSubtermLatex } from './goal-computation';
 import { TTKTerm, prettyPrint as kernelPrettyPrint } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
+import type { TacticCommand } from '../compiler/surface';
 import { fullNormalize, whnf, areTypesDefEq } from '../compiler/whnf';
 import { shiftTerm } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
@@ -22,6 +23,10 @@ import { runSimp } from '../tactics/simp-tactic';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
 import { proposeVarName, freshenName } from './propose-var-name';
 import { renderNameLatex } from './name-latex';
+import {
+  buildHaveTacticCommands,
+  buildProjectionApplicationSource,
+} from './tactic-command-bridge';
 
 // ============================================================================
 // Types
@@ -47,6 +52,8 @@ export interface TacticSuggestion {
   readonly numSubgoals?: number;
   /** For construct suggestions: the constructor name to apply. */
   readonly applyCtorName?: string;
+  /** Optional source-aligned tactic commands that directly implement this suggestion. */
+  readonly tacticCommands?: readonly TacticCommand[];
   /** For apply suggestions: LaTeX preview of each subgoal created. */
   readonly subgoalPreviews?: readonly string[];
 }
@@ -1297,17 +1304,16 @@ function tryRewrite(
         resultGoalLatex = renderSubtermLatex(
           result.unifiedEquation.rhs, goal.ctx, definitions, rev
         );
-        // Filter: drop rewrites that EXPAND the subterm (strictly longer)
-        // or produce IDENTICAL output (no-op). Keep same-length rewrites
-        // like \`addComm\` (\`a + b\` \u2192 \`b + a\`) \u2014 they're useful for
-        // exposing different heads to subsequent tactics, and users
-        // explicitly asked to see them when clicking a subterm.
-        // Without this filter we'd flood the strip with reverse rewrites
-        // like \`x \u2192 0 + x\`, \`x \u2192 |x|\`, etc.
+        // Drop only no-op rewrites (RHS renders identically to LHS). We used
+        // to ALSO drop strictly-longer results to keep the strip uncluttered,
+        // but users explicitly wanted to see all valid rewrites \u2014 including
+        // "introduce shape" ones like \`x \u2192 0 + x\` and \`x \u2192 (x) + 0\`. The
+        // candidate set's head-expansion logic already restricts what gets
+        // tried to lemmas operating on the clicked head's domain, so the
+        // resulting list is bounded by the domain's lemma count.
         const lhsLatex = renderSubtermLatex(
           result.unifiedEquation.lhs, goal.ctx, definitions, rev,
         );
-        if (resultGoalLatex.length > lhsLatex.length) return null;
         if (resultGoalLatex === lhsLatex) return null;
       } catch { /* ignore */ }
     }
@@ -1389,9 +1395,16 @@ export function collectRewriteCandidates(
 
     if (headFilter) {
       const lhsHead = getKernelHeadName(eqArgs.lhs);
-      if (matchesHead(lhsHead)) candidates.push({ proofTerm, name: entry.name, reverse: false });
       const rhsHead = getKernelHeadName(eqArgs.rhs);
-      if (matchesHead(rhsHead)) candidates.push({ proofTerm, name: entry.name, reverse: true });
+      if (matchesHead(lhsHead)) candidates.push({ proofTerm, name: entry.name, reverse: false });
+      // Reverse direction matches when EITHER the RHS head matches the clicked
+      // head, OR the LHS head matches AND the RHS is a bare Meta/Hole (no head).
+      // The bare-RHS case captures "introduce shape" rewrites like
+      // `addZeroLeft← : x → 0 + x` — the RHS pattern `?x` matches anything,
+      // and the reverse rewrite produces the LHS shape (head=add).
+      if (matchesHead(rhsHead) || (rhsHead === null && matchesHead(lhsHead))) {
+        candidates.push({ proofTerm, name: entry.name, reverse: true });
+      }
     } else {
       // Broad search: try both directions
       candidates.push({ proofTerm, name: entry.name, reverse: false });
@@ -1412,9 +1425,11 @@ export function collectRewriteCandidates(
       const proofTerm: TTKTerm = { tag: 'Const', name };
       if (headFilter) {
         const lhsHead = getKernelHeadName(eqArgs.lhs);
-        if (matchesHead(lhsHead)) candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
         const rhsHead = getKernelHeadName(eqArgs.rhs);
-        if (matchesHead(rhsHead)) candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
+        if (matchesHead(lhsHead)) candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
+        if (matchesHead(rhsHead) || (rhsHead === null && matchesHead(lhsHead))) {
+          candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
+        }
       } else {
         candidates.push({ proofTerm, name, reverse: false, isSelfReference: true });
         candidates.push({ proofTerm, name, reverse: true, isSelfReference: true });
@@ -1426,9 +1441,13 @@ export function collectRewriteCandidates(
 
     if (headFilter) {
       const lhsHead = getKernelHeadName(eqArgs.lhs);
-      if (matchesHead(lhsHead)) candidates.push({ proofTerm, name, reverse: false });
       const rhsHead = getKernelHeadName(eqArgs.rhs);
-      if (matchesHead(rhsHead)) candidates.push({ proofTerm, name, reverse: true });
+      if (matchesHead(lhsHead)) candidates.push({ proofTerm, name, reverse: false });
+      // See entry-context match logic above: include "introduce shape"
+      // reverse rewrites whose RHS is a bare Meta/Hole.
+      if (matchesHead(rhsHead) || (rhsHead === null && matchesHead(lhsHead))) {
+        candidates.push({ proofTerm, name, reverse: true });
+      }
     } else {
       candidates.push({ proofTerm, name, reverse: false });
       candidates.push({ proofTerm, name, reverse: true });
@@ -1622,7 +1641,7 @@ export function computeSelectedHypSuggestions(
         });
         if (hasFields) {
           suggestions.push({
-            id: `hyp-destruct-${hypName}`,
+            id: `induction-${hypName}`,
             label: `Destructure ${hypName}`,
             labelLatex: `\\text{cases } ${renderNameLatex(hypName, 'textbf')}`,
             description: `Pattern-match on ${hypName}`,
@@ -1634,13 +1653,15 @@ export function computeSelectedHypSuggestions(
         for (const [projName] of definitions.terms) {
           if (projName.startsWith(typeName + '.')) {
             const fieldName = projName.slice(typeName.length + 1);
+            const expr = buildProjectionApplicationSource(projName, hypName, definitions);
+            if (!expr) continue;
             suggestions.push({
               id: `hyp-proj-${hypName}-${fieldName}`,
               label: `Use ${fieldName}`,
               labelLatex: `\\text{Use } ${renderNameLatex(fieldName, 'textbf')}`,
               description: `have h := ${projName} ${hypName} ...`,
-              // Store the projection info for the click handler
               applyCtorName: projName,
+              tacticCommands: buildHaveTacticCommands('h', expr),
             });
           }
         }

@@ -38,6 +38,17 @@ export function buildApplyTacticCommands(
   ];
 }
 
+export function buildHaveTacticCommands(
+  name: string,
+  expr: string,
+): TacticCommand[] {
+  const inferredTypeHole = mkHoleTT('_have_type', mkHoleTT('_have_type_type', mkPropTT()));
+  return [{
+    name: 'have',
+    args: [mkConstTT(name), inferredTypeHole, parseSourceExpr(expr)],
+  }];
+}
+
 export function applyTacticCommandsAtCursor(
   state: ProofTreeState,
   commands: readonly TacticCommand[],
@@ -141,12 +152,8 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
           ...proofTreeToTacticCommands(node.child),
         ];
       }
-      const inferredTypeHole = mkHoleTT('_have_type', mkHoleTT('_have_type_type', mkPropTT()));
       return [
-        {
-          name: 'have',
-          args: [mkConstTT(node.name), inferredTypeHole, parseSourceExpr(node.expr)],
-        },
+        ...buildHaveTacticCommands(node.name, node.expr),
         ...proofTreeToTacticCommands(node.child),
       ];
     }

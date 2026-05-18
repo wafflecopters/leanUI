@@ -411,4 +411,57 @@ testImg40 R = ?h`);
     const names = collected.map(s => s.rewriteName);
     expect(names).toContain('CompleteOrderedField.addComm');
   });
+
+  // The "intro-shape" reverse rewrites — lemmas whose RHS is a bare Meta —
+  // were previously dropped twice: (a) collectRewriteCandidates required a
+  // matching RHS head, but bare-Meta RHS has no head, so the candidate
+  // never made it past head filtering; (b) tryRewrite dropped any rewrite
+  // whose result LaTeX was strictly longer than the input, which is exactly
+  // the shape "introduce shape" rewrites produce. Now both gates are relaxed.
+  test('REGRESSION (image #42): clicking radd-headed subterm surfaces intro-shape reverse rewrites (e.g. addZeroLeft←)', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg42', `testImg42 : (R : Real) -> rle 1 2
+testImg42 R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(
+      ['R'],
+      mkApply('addLeRightCancel', [
+        mkExact('-1'),
+        mkRewrite('addRealOfRat', leafHole),
+      ])
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    let raddPath: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 1) { raddPath = p; break; }
+    }
+    if (!raddPath) return;
+    const { computeRewriteSuggestionsIncremental } = await import('./tactic-suggestions');
+    const collected: any[] = [];
+    let done = false;
+    computeRewriteSuggestionsIncremental(raddPath, ig, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    } as any, (progress) => {
+      for (const s of progress.suggestions) {
+        if (!collected.find(x => x.id === s.id)) collected.push(s);
+      }
+      done = progress.done;
+    });
+    for (let i = 0; i < 60 && !done; i++) await new Promise(r => setTimeout(r, 50));
+    const reverseNames = collected.filter(s => s.reverse).map(s => s.rewriteName);
+    // Spot-check one canonical intro-shape reverse: addZeroLeft (RHS=Meta, LHS head=radd via δ-bridge).
+    // The actual surface lemma may be named `addZeroLeft` (preset top-level)
+    // or `CompleteOrderedField.addZeroRight` etc.; both have the right shape.
+    const hasIntroShape = reverseNames.some(n =>
+      n.toLowerCase().includes('zerole') ||
+      n.toLowerCase().includes('zeroright') ||
+      n.toLowerCase().includes('addzero')
+    );
+    expect(hasIntroShape).toBe(true);
+  });
 });
