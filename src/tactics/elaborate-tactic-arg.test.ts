@@ -174,6 +174,16 @@ describe('tacticCommandToTactic', () => {
     expect((t as any).proofTactics).toHaveLength(1);
   });
 
+  test('simp creates shared simp tactic', () => {
+    const t = tacticCommandToTactic({
+      name: 'simp',
+      args: [{ tag: 'Const', name: 'foo' }, { tag: 'Const', name: 'bar' }],
+    });
+    expect(t).not.toBe('sorry');
+    expect((t as any).name).toBe('simp');
+    expect((t as any).lemmaNames).toEqual(['foo', 'bar']);
+  });
+
   test('unknown tactic throws', () => {
     expect(() => tacticCommandToTactic({ name: 'bogus', args: [] })).toThrow('Unknown tactic');
   });

@@ -162,6 +162,24 @@ describe('proofTreeToTacticCommands', () => {
     expect(stripIds(reparsed)).toEqual(stripIds(tree));
   });
 
+  test('serializes source-shaped simp node without flattening it away', () => {
+    const tree: ProofNode = {
+      tag: 'simp',
+      id: 1001,
+      lemmas: ['foo', 'bar'],
+      steps: [],
+      collapsed: true,
+      child: mkExact('refl'),
+    };
+    const commands = proofTreeToTacticCommands(tree);
+
+    expect(commands[0].name).toBe('simp');
+    expect(commands[0].args).toEqual([cst('foo'), cst('bar')]);
+
+    const reparsed = tacticCommandsToProofTree(commands);
+    expect(stripIds(reparsed)).toEqual(stripIds(tree));
+  });
+
   test('preserves parser-shaped focus children emitted after apply', () => {
     const commands: TacticCommand[] = [
       tc('apply', [cst('sym')]),

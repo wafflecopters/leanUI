@@ -1,0 +1,11 @@
+@test success
+@name "simp tactic: explicit unfold lemma"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+myZero : Nat
+myZero = Zero
+
+testSimpExplicit : Equal myZero Zero := by
+  simp myZero
+  exact refl

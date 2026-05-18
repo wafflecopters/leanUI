@@ -601,17 +601,6 @@ export function updateCase(
 // Tactic Operations
 // ============================================================================
 
-/** Apply intros at the cursor (must be a hole). */
-export function applyIntros(state: ProofTreeState, names: readonly string[]): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const childHole = mkHole();
-  const intros = mkIntros(names, childHole);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, intros);
-  return { root: newRoot, cursor: { nodeId: childHole.id } };
-}
-
 /** Apply induction at the cursor (must be a hole). */
 export function applyInduction(
   state: ProofTreeState,
@@ -649,17 +638,6 @@ export function applyInductionWithCtors(
   const firstBody = cases.length > 0 ? cases[0].body : null;
   const cursorId = firstBody ? firstBody.id : induction.id;
   return { root: newRoot, cursor: { nodeId: cursorId } };
-}
-
-/** Apply have at the cursor (must be a hole). Replaces the hole with a have node + child hole. */
-export function applyHave(state: ProofTreeState, name: string, expr: string): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const childHole = mkHole();
-  const have = mkHave(name, expr, childHole);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, have);
-  return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
 /** Insert a have node BEFORE a target node. The new have wraps the target:
@@ -785,54 +763,6 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Apply unfold at the cursor (must be a hole). Replaces the hole with an unfold node + child hole. */
-export function applyUnfold(state: ProofTreeState, name: string, occurrence?: number): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const childHole = mkHole();
-  const unfold = mkUnfold(name, childHole, occurrence);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, unfold);
-  return { root: newRoot, cursor: { nodeId: childHole.id } };
-}
-
-/** Apply fold at the cursor (must be a hole). Replaces the hole with a fold node + child hole. */
-export function applyFold(state: ProofTreeState, name: string, occurrence?: number): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const childHole = mkHole();
-  const fold = mkFold(name, childHole, occurrence);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, fold);
-  return { root: newRoot, cursor: { nodeId: childHole.id } };
-}
-
-/** Apply rewrite at the cursor (must be a hole). Replaces the hole with a rewrite node + child hole. */
-export function applyRewrite(
-  state: ProofTreeState, name: string, reverse = false, occurrences?: readonly number[], targetHead?: string,
-): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const childHole = mkHole();
-  const rewrite = mkRewrite(name, childHole, reverse, occurrences, targetHead);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, rewrite);
-  return { root: newRoot, cursor: { nodeId: childHole.id } };
-}
-
-/** Apply "apply" at the cursor (must be a hole). Replaces the hole with an apply node + child holes.
- *  When numChildren=0 (the apply closes the goal with no remaining subgoals),
- *  no child holes are created and the cursor moves to the apply node itself. */
-export function applyApplyTactic(state: ProofTreeState, name: string, numChildren = 1): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const children = Array.from({ length: Math.max(0, numChildren) }, () => mkHole());
-  const apply = mkApply(name, children);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, apply);
-  return { root: newRoot, cursor: { nodeId: children.length > 0 ? children[0].id : apply.id } };
-}
-
 /** Apply simp at the cursor (must be a hole). Replaces the hole with a simp node containing steps + child hole. */
 export function applySimp(
   state: ProofTreeState,
@@ -846,16 +776,6 @@ export function applySimp(
   const simp = mkSimp(lemmas, steps, childHole);
   const newRoot = replaceNode(state.root, state.cursor.nodeId, simp);
   return { root: newRoot, cursor: { nodeId: childHole.id } };
-}
-
-/** Apply exact at the cursor (must be a hole). */
-export function applyExact(state: ProofTreeState, expr: string): ProofTreeState | null {
-  const node = findNode(state.root, state.cursor.nodeId);
-  if (!node || node.tag !== 'hole') return null;
-
-  const exact = mkExact(expr);
-  const newRoot = replaceNode(state.root, state.cursor.nodeId, exact);
-  return { root: newRoot, cursor: { nodeId: exact.id } };
 }
 
 // ============================================================================

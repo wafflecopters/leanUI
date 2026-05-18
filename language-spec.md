@@ -163,6 +163,14 @@ suffices h : T by
 `have h : T := proof` remains the expression-proof form, while `have h : T by ...`
 uses a tactic subproof that is shared with the structured proof tree representation.
 
+`simp` is also available in tactic blocks, either with explicit lemma/definition names
+or with no arguments to use the registered `@simp` set:
+
+```
+simp
+simp addNegRight, realOfRatOne
+```
+
 ## Definitions
 
 ### Function Definitions

@@ -26,6 +26,7 @@
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from '../compiler/compile';
 import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
+import { applyTacticCommandsAtCursor, buildApplyTacticCommands } from './tactic-command-bridge';
 import { mkIntros, mkApply, mkRewrite, mkHole, mkExact, type ProofNode } from './proof-tree';
 import { replayToEngine } from './goal-computation';
 import { computeTacticSuggestions } from './tactic-suggestions';
@@ -248,7 +249,7 @@ testFieldBox R = ?h`);
     const { r, decl } = compileTop('testImg32', `testImg32 : (R : Real) -> rle 1 2
 testImg32 R = ?h`);
     const { runSimp } = await import('../tactics/simp-tactic');
-    const { applySimp, applyApplyTactic } = await import('./proof-tree');
+    const { applySimp } = await import('./proof-tree');
 
     // Build tree up to the post-rewrite leaf hole.
     const preSimpLeaf = mkHole();
@@ -280,7 +281,10 @@ testImg32 R = ?h`);
     if (!stateAfterSimp) return;
 
     // Click apply zeroLeOne on the post-simp leaf (0 subgoals).
-    const stateAfterApply = applyApplyTactic(stateAfterSimp, 'CompleteOrderedField.zeroLeOne', 0);
+    const stateAfterApply = applyTacticCommandsAtCursor(
+      stateAfterSimp,
+      buildApplyTacticCommands('CompleteOrderedField.zeroLeOne', 0),
+    );
     expect(stateAfterApply).not.toBeNull();
     if (!stateAfterApply) return;
 

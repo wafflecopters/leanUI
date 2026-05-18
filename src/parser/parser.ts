@@ -4604,6 +4604,28 @@ export class Parser {
         };
       }
 
+      case 'simp': {
+        const args: TTerm[] = [];
+        while (this.current().type === 'IDENT') {
+          const argToken = this.current();
+          args.push(mkConstTT(argToken.value));
+          this.recordRange(
+            [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: args.length - 1 }],
+            argToken,
+            argToken,
+          );
+          this.advance();
+          if (this.current().type === 'COMMA') {
+            this.advance();
+          }
+        }
+        return {
+          name: tacticName,
+          args,
+          indexPath: path,
+        };
+      }
+
       default:
         throw new ParseError(
           `Unknown tactic: ${tacticName}`,

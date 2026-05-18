@@ -164,6 +164,15 @@ export function proofTreeToTacticCommands(node: ProofNode): TacticCommand[] {
     }
 
     case 'simp':
+      if (node.steps.length === 0) {
+        return [
+          {
+            name: 'simp',
+            args: node.lemmas.map(name => mkConstTT(name)),
+          },
+          ...proofTreeToTacticCommands(node.child),
+        ];
+      }
       return [
         ...node.steps.flatMap(step => proofTreeToTacticCommands(step)),
         ...proofTreeToTacticCommands(node.child),

@@ -27,6 +27,7 @@ import { SufficesTactic } from './suffices-tactic';
 import { UnfoldTactic } from './unfold-tactic';
 import { ConstructorTactic } from './constructor-tactic';
 import { FocusTactic } from './focus-tactic';
+import { SimpTactic } from './simp-as-tactic';
 
 // ============================================================================
 // Argument elaboration
@@ -197,7 +198,7 @@ function insertImplicitHolesForApp(
  * kernel terms (e.g., intro names, unfold targets, have hypothesis names).
  */
 export function shouldKeepArgAsName(tacticName: string, argIndex: number, totalArgs: number): boolean {
-  if (['sorry', 'intro', 'intros', 'unfold', 'fold'].includes(tacticName)) return true;
+  if (['sorry', 'intro', 'intros', 'unfold', 'fold', 'simp'].includes(tacticName)) return true;
   if (tacticName === 'have' && argIndex === 0) return true;
   if (tacticName === 'obtain' && argIndex < totalArgs - 1) return true;
   if (tacticName === 'suffices' && argIndex === 0) return true;
@@ -344,6 +345,16 @@ export function tacticCommandToTactic(
         return (arg as any).name;
       });
       return new UnfoldTactic(unfoldNames);
+    }
+
+    case 'simp': {
+      const simpNames = cmd.args.map(arg => {
+        if (arg.tag !== 'Const') {
+          throw new Error(`'simp' tactic arguments must be identifiers, got ${arg.tag}`);
+        }
+        return (arg as any).name;
+      });
+      return new SimpTactic(simpNames);
     }
 
     case 'have': {

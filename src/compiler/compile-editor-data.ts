@@ -546,6 +546,12 @@ function collectSemanticTokensFromTactic(
       }
       break;
 
+    case 'simp':
+      for (let i = 0; i < tactic.args.length; i++) {
+        collectSemanticTokensFromSurfaceTerm(tactic.args[i], sourceMap, [...path, 'args', i], tokens);
+      }
+      break;
+
     default:
       break;
   }

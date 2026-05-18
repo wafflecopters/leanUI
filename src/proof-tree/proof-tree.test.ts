@@ -1,11 +1,14 @@
 import { describe, test, expect, beforeEach } from 'vitest';
+import { mkConstTT } from '../compiler/surface';
+import { parseExpr } from '../parser/parser';
+import { applyTacticCommandsAtCursor, buildApplyTacticCommands } from './tactic-command-bridge';
 import {
   resetProofIds, freshProofId,
   mkHole, mkIntros, mkInduction, mkCase, mkExact, mkApply,
   createInitialState,
   findNode, findCase, isCursorInSubtree, linearize,
   replaceNode, updateCase,
-  applyIntros, applyInduction, applyExact, applyApplyTactic,
+  applyInduction,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse,
   moveCursorUp, moveCursorDown,
   editIntroName, addIntroName, removeIntroName,
@@ -15,6 +18,19 @@ import {
   createHistory, pushState, updateCurrent, undo, redo,
   ProofTreeState,
 } from './proof-tree';
+
+function applyIntros(state: ProofTreeState, names: readonly string[]): ProofTreeState | null {
+  const introName = names.length === 1 ? 'intro' : 'intros';
+  return applyTacticCommandsAtCursor(state, [{ name: introName, args: names.map(name => mkConstTT(name)) }]);
+}
+
+function applyExact(state: ProofTreeState, expr: string): ProofTreeState | null {
+  return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [parseExpr(expr)] }]);
+}
+
+function applyApplyTactic(state: ProofTreeState, name: string, numChildren = 1): ProofTreeState | null {
+  return applyTacticCommandsAtCursor(state, buildApplyTacticCommands(name, numChildren));
+}
 
 beforeEach(() => resetProofIds());
 

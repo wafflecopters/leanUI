@@ -3593,6 +3593,43 @@ test : Equal (Succ Zero) (Succ Zero) := by
       }
     });
 
+    test('Parse simp with explicit lemmas', () => {
+      const decls = parseDeclarations(`
+test : Equal Zero Zero := by
+  simp foo, bar
+  exact refl
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(2);
+        const simp = decls[0].value.tactics[0];
+        expect(simp.name).toBe('simp');
+        expect(simp.args).toEqual([
+          { tag: 'Const', name: 'foo' },
+          { tag: 'Const', name: 'bar' },
+        ]);
+      }
+    });
+
+    test('Parse simp with no arguments', () => {
+      const decls = parseDeclarations(`
+test : Equal Zero Zero := by
+  simp
+  exact refl
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(2);
+        const simp = decls[0].value.tactics[0];
+        expect(simp.name).toBe('simp');
+        expect(simp.args).toEqual([]);
+      }
+    });
+
     test('Empty by block parses successfully', () => {
       // Empty tactic blocks should parse - they'll fail during elaboration/type-checking
       const decls = parseDeclarations(`foo : Nat := by\n`);

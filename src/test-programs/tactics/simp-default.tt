@@ -1,0 +1,15 @@
+@test success
+@name "simp tactic: default @simp lemma set"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+myZero : Nat
+myZero = Zero
+
+@syntax @simp
+myZeroEq : Equal myZero Zero
+myZeroEq = refl
+
+testSimpDefault : Equal myZero Zero := by
+  simp
+  exact refl

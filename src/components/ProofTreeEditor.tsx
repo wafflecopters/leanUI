@@ -19,7 +19,7 @@ import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext, mkHole,
-  applyIntros, applyInduction, applyInductionWithCtors, applyExact, applyUnfold, applyFold, applyRewrite, applyApplyTactic, applySimp, applyHave, editHaveExpr, editHaveName, insertHaveBefore,
+  applySimp, editHaveExpr, editHaveName, insertHaveBefore,
   addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
   clearNode, editIntroName, editCaseParamName,
@@ -3606,7 +3606,9 @@ function HoleProseView({
                 inlineTermBuilder.goalCtx,
               );
               if (expr) {
-                const result = applyHave(state, 'h', expr);
+                const result = applyManualProofTreeTactic(state, { tactic: 'have' }, `h := ${expr}`, {
+                  definitions,
+                });
                 if (result) onPushChange(result);
               }
               onSetTermBuilder(null);

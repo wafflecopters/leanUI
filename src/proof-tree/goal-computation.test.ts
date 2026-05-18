@@ -8,11 +8,11 @@ import { NAT_MATH_CODE } from '../presets/nat-math';
 import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { resetIds } from '../math-editor/types';
+import { applyTacticCommandsAtCursor } from './tactic-command-bridge';
 import { tacticCommandsToProofTree } from './tactic-to-tree';
 import {
   resetProofIds,
   mkHole as mkTreeHole, mkIntros, mkInduction, mkCase, mkExact, mkUnfold, mkRewrite,
-  applyUnfold,
 } from './proof-tree';
 import {
   computeTypedContext,
@@ -43,6 +43,10 @@ const emptyRegistry: SyntaxRegistry = { symbolMap: new Map(), entries: [] };
 // Helper: build surface types
 const Nat = mkConstTT('Nat');
 const NatToNat = mkPiTT(Nat, Nat, '_');
+
+function applyUnfold(state: import('./proof-tree').ProofTreeState, name: string) {
+  return applyTacticCommandsAtCursor(state, [{ name: 'unfold', args: [mkConstTT(name)] }]);
+}
 
 function mkTestType() {
   // (i : Nat) -> (f : Nat -> Nat) -> (n : Nat) -> Nat
@@ -2741,6 +2745,32 @@ testHaveBy : Equal (Succ Zero) (Succ Zero) := by
     if (decl!.proofTree!.tag !== 'have') return;
     expect(decl!.proofTree!.typeExpr?.replace(/^\((.*)\)$/s, '$1')).toBe('Equal Zero Zero');
     expect(decl!.proofTree!.proofTree?.tag).toBe('exact');
+    expect(decl!.proofTree!.child.tag).toBe('exact');
+  });
+
+  test('source simp tactics become simp proof-tree nodes', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+myZero : Nat
+myZero = Zero
+
+testSimp : Equal myZero Zero := by
+  simp myZero
+  exact refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testSimp');
+    expect(decl).toBeDefined();
+    expect(decl!.proofTree).toBeDefined();
+    expect(decl!.proofTree!.tag).toBe('simp');
+    if (decl!.proofTree!.tag !== 'simp') return;
+    expect(decl!.proofTree!.lemmas).toEqual(['myZero']);
     expect(decl!.proofTree!.child.tag).toBe('exact');
   });
 

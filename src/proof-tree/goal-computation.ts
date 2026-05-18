@@ -2710,7 +2710,9 @@ function replayProofTree(
       // \`apply\` sees an un-normalized goal and fails. \`runSimp\` is
       // deterministic given the same engine + lemma set, so re-running
       // it produces an equivalent canonical state.
-      const lemmaList = [...node.lemmas];
+      const lemmaList = node.lemmas.length > 0
+        ? [...node.lemmas]
+        : [...(engine.definitions.simpLemmas ?? [])];
       let currentEngine = engine;
       if (lemmaList.length > 0) {
         try {
@@ -4172,8 +4174,11 @@ function replayEntireTreeViaWalk(
         // Now run the full runSimp on the ORIGINAL engine to get the
         // canonical final state — this includes the normalize pre-pass
         // so subsequent tactics see the same engine as at suggestion time.
+        const lemmaList = node.lemmas.length > 0
+          ? [...node.lemmas]
+          : [...(eng.definitions.simpLemmas ?? [])];
         try {
-          const simpRes = runSimp(eng, [...node.lemmas]);
+          const simpRes = runSimp(eng, lemmaList);
           if (simpRes.success) currentEngine = simpRes.engine;
         } catch { /* keep step-by-step result */ }
         walk(node.child, currentEngine, caseLabelLatex);
