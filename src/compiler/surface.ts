@@ -328,6 +328,17 @@ export interface TacticCommand {
   args: TTerm[];      // Arguments (can be identifiers as Const, or full terms)
   caseBranches?: CaseBranch[]; // Optional: for structured cases syntax
   focusedTactics?: TacticCommand[]; // Optional: for bullet syntax (subgoal focusing)
+  /**
+   * Optional rewrite metadata used by the structured editor / proof tree bridge.
+   * Text-source tactics do not need to populate this; parser-produced commands
+   * for plain `rewrite`/`rw`/`erw` keep using the tactic name and args alone.
+   */
+  rewriteOptions?: {
+    reverse?: boolean;
+    occurrences?: readonly number[];
+    targetHead?: string;
+    enhanced?: boolean;
+  };
   indexPath?: IndexPath; // Optional: source position for error reporting
 }
 

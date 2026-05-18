@@ -37,6 +37,12 @@ import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/
 import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
 import { renderNameLatex } from '../proof-tree/name-latex';
 import { computeTermSlots, buildExprFromSlots, kernelTermToSource, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
+import {
+  applyManualProofTreeTactic,
+  applyHypothesisSuggestionToProofTreeState,
+  applySuggestionToProofTreeState,
+  type ProofTreeManualTacticMode,
+} from '../proof-tree/tactic-editing';
 import { MathEditor, MathEditorHandle } from './MathEditor';
 import { convertToSource } from '../math-editor/syntax-registry';
 import { InteractiveGoalView } from './InteractiveGoalView';
@@ -154,18 +160,7 @@ function textToLatex(text: string): string {
 // Tactic input state (ephemeral, per-hole)
 // ============================================================================
 
-type TacticMode =
-  | null
-  | { tactic: 'intros' }
-  | { tactic: 'induction' }
-  | { tactic: 'exact' }
-  | { tactic: 'unfold' }
-  | { tactic: 'fold' }
-  | { tactic: 'rewrite' }
-  | { tactic: 'rewrite_rev' }
-  | { tactic: 'apply' }
-  | { tactic: 'simp' }
-  | { tactic: 'have' };
+type TacticMode = null | ProofTreeManualTacticMode;
 
 // ============================================================================
 // Main Component
@@ -565,82 +560,14 @@ function GoalInteraction({
   rewriteProgress, goalFontSize,
 }: GoalInteractionProps) {
   const handleApplySuggestion = (suggestion: TacticSuggestion) => {
-    let result: ProofTreeState | null = null;
-
-    if (suggestion.id === 'exact-refl') {
-      result = applyExact(state, 'refl');
-    } else if (suggestion.id.startsWith('unfold-')) {
-      const name = suggestion.id.slice('unfold-'.length);
-      result = applyUnfold(state, name, suggestion.unfoldOccurrence);
-    } else if (suggestion.id.startsWith('induction-')) {
-      const scrutinee = suggestion.id.slice('induction-'.length);
-      // Look up the inductive type info for the variable's type
-      const typeHead = interactiveGoal?.contextVarTypes.get(scrutinee);
-      const indInfo = typeHead && inductiveMap ? inductiveMap.get(typeHead) : undefined;
-      if (indInfo) {
-        const rev = registry ? buildReverseRegistry(registry) : undefined;
-        const ctxNames = typedContext?.hypotheses.map(h => h.name);
-        const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
-        result = applyInductionWithCtors(state, scrutinee, ctorInfos);
-      }
-    } else if (suggestion.id.startsWith('fold-')) {
-      const name = suggestion.foldName ?? suggestion.id.slice('fold-'.length);
-      result = applyFold(state, name, suggestion.foldOccurrence);
-    } else if (suggestion.id.startsWith('exact-hyp-')) {
-      const name = suggestion.id.slice('exact-hyp-'.length);
-      result = applyExact(state, name);
-    } else if (suggestion.id.startsWith('apply-hyp-')) {
-      const name = suggestion.id.slice('apply-hyp-'.length);
-      const numSubgoals = suggestion.numSubgoals ?? 1;
-      // Always use applyApplyTactic — even for numSubgoals=0. The apply
-      // tactic does implicit-arg inference (creates fresh metas, unifies
-      // them); applyExact bypasses that and produces "missing required
-      // argument" errors at replay when the name has implicit args.
-      result = applyApplyTactic(state, name, numSubgoals);
-    } else if (suggestion.id.startsWith('apply-def-')) {
-      const defName = suggestion.id.slice('apply-def-'.length);
-      const numSubgoals = suggestion.numSubgoals ?? 1;
-      result = applyApplyTactic(state, defName, numSubgoals);
-    } else if (suggestion.id.startsWith('simp-then-apply-def-')) {
-      const defName = suggestion.id.slice('simp-then-apply-def-'.length);
-      const numSubgoals = suggestion.numSubgoals ?? 1;
-      if (typedContext?.kernelGoal) {
-        const { engine, definitions: defs } = typedContext.kernelGoal;
-        const lemmas = [...(defs.simpLemmas ?? [])];
-        const simpResult = runSimp(engine, lemmas);
-        if (simpResult.success && simpResult.steps.length > 0) {
-          const afterSimp = applySimp(state, lemmas, simpResult.proofNodes);
-          if (afterSimp) {
-            result = applyApplyTactic(afterSimp, defName, numSubgoals);
-          }
-        }
-      }
-    } else if (suggestion.id.startsWith('construct-')) {
-      const ctorName = suggestion.applyCtorName ?? suggestion.id.slice('construct-'.length);
-      const numChildren = suggestion.numSubgoals ?? 1;
-      result = applyApplyTactic(state, ctorName, numChildren);
-    } else if (suggestion.id === 'simp-auto') {
-      // Compound simp: run the full @simp set via runSimp.
-      if (typedContext?.kernelGoal) {
-        const { engine, definitions: defs } = typedContext.kernelGoal;
-        const lemmas = [...(defs.simpLemmas ?? [])];
-        const simpResult = runSimp(engine, lemmas);
-        if (simpResult.success) {
-          result = applySimp(state, lemmas, simpResult.proofNodes);
-        }
-      }
-    } else if (suggestion.id.startsWith('rewrite-') || suggestion.id.startsWith('simp-')) {
-      // @simp suggestions are just curated rewrites; they reuse the same
-      // dispatch and the RewriteSuggestion shape, just with a distinct id
-      // prefix and label so the UI can render them differently.
-      const rw = suggestion as RewriteSuggestion;
-      result = applyRewrite(state, rw.rewriteName, rw.reverse, rw.occurrences, rw.targetHead);
-    } else {
-      const names = editingSuggestionId === suggestion.id && editingNames
-        ? editingNames
-        : [...(suggestion.proposedNames ?? [])];
-      result = applyIntros(state, names);
-    }
+    const result = applySuggestionToProofTreeState(state, suggestion, {
+      interactiveGoal,
+      inductiveMap,
+      registry,
+      typedContext,
+      editingNames,
+      editingSuggestionId,
+    });
 
     if (result) {
       onPushChange(result);
@@ -901,57 +828,14 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   // Handle hypothesis suggestion clicks
   const handleHypSuggestion = useCallback((suggestion: TacticSuggestion) => {
     if (!state || !onPushChange) return;
-    let result: ProofTreeState | null = null;
     const hypName = context?.hypotheses[selectedHyp!]?.name;
     if (!hypName) return;
-
-    if (suggestion.id.startsWith('hyp-exact-')) {
-      result = applyExact(state, hypName);
-    } else if (suggestion.id.startsWith('hyp-apply-')) {
-      const numSubgoals = suggestion.numSubgoals ?? 1;
-      result = applyApplyTactic(state, hypName, numSubgoals);
-    } else if (suggestion.id.startsWith('hyp-proj-')) {
-      // Use projection — directly create a have with ? for unfilled args.
-      // The tactic engine handles type-checking; errors show inline.
-      const projName = suggestion.applyCtorName; // e.g., "Limit.eps_delta"
-      if (projName && hypName && definitions) {
-        // Count how many explicit args the projection needs AFTER the hypothesis
-        const namedArgLookup = createNamedArgLookup(definitions);
-        const namedArgMap = namedArgLookup(projName);
-        const numImplicit = namedArgMap?.size ?? 0;
-        const termDef = definitions.terms.get(projName);
-        let numExplicit = 0;
-        if (termDef?.type) {
-          let t = termDef.type;
-          let idx = 0;
-          while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
-            if (idx >= numImplicit) numExplicit++;
-            t = t.body; idx++;
-          }
-        }
-        // Build: "projName hypName ? ? ..." with ? for remaining explicit args
-        const holes = Array(Math.max(0, numExplicit - 1)).fill('?').join(' ');
-        const expr = holes ? `${projName} ${hypName} ${holes}` : `${projName} ${hypName}`;
-        result = applyHave(state, 'h', expr);
-      }
-    } else if (suggestion.id.startsWith('hyp-destruct-')) {
-      // Cases on the hypothesis — generate structured case branches
-      if (context?.kernelGoal && definitions) {
-        const hyp = context.hypotheses[selectedHyp!];
-        const rawType = hyp?.rawType;
-        const headName = rawType ? extractTypeHead(rawType) : null;
-        const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
-        if (indInfo) {
-          const r = registry ? buildReverseRegistry(registry) : undefined;
-          const ctxNames = context.hypotheses.map(h => h.name);
-          const ctorInfos = generateCaseInfos(hypName, indInfo, r, ctxNames);
-          result = applyInductionWithCtors(state, hypName, ctorInfos);
-        } else {
-          // Fallback: simple cases without constructor info
-          result = applyInduction(state, hypName, [hypName]);
-        }
-      }
-    }
+    const result = applyHypothesisSuggestionToProofTreeState(state, suggestion, hypName, {
+      typedContext: context,
+      inductiveMap,
+      registry,
+      definitions,
+    });
 
     if (result) {
       onPushChange(result);
@@ -1839,102 +1723,18 @@ function HoleView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = useCallback((value: string) => {
-    if (!tacticMode) return;
-    let result: ProofTreeState | null = null;
-    switch (tacticMode.tactic) {
-      case 'intros': {
-        const names = value.split(/[\s,]+/).filter(Boolean);
-        if (names.length > 0) result = applyIntros(state, names);
-        break;
-      }
-      case 'induction': {
-        const scrutinee = value.trim();
-        if (scrutinee) {
-          // Try to auto-generate cases from inductive type info
-          const hyp = typedContext?.hypotheses.find(h => h.name === scrutinee);
-          const rawType = hyp?.rawType;
-          const headName = rawType ? extractTypeHead(rawType) : null;
-          const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
-
-          if (indInfo) {
-            const rev = registry ? buildReverseRegistry(registry) : undefined;
-            const ctxNames = typedContext?.hypotheses.map(h => h.name);
-            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
-            result = applyInductionWithCtors(state, scrutinee, ctorInfos);
-          } else {
-            // Fallback: hardcoded case labels
-            result = applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
-          }
-        }
-        break;
-      }
-      case 'exact': {
-        const expr = value.trim();
-        if (expr) result = applyExact(state, expr);
-        break;
-      }
-      case 'unfold': {
-        const name = value.trim();
-        if (name) result = applyUnfold(state, name);
-        break;
-      }
-      case 'fold': {
-        const name = value.trim();
-        if (name) result = applyFold(state, name);
-        break;
-      }
-      case 'rewrite': {
-        const name = value.trim();
-        if (name) result = applyRewrite(state, name);
-        break;
-      }
-      case 'rewrite_rev': {
-        const name = value.trim();
-        if (name) result = applyRewrite(state, name, true);
-        break;
-      }
-      case 'apply': {
-        const name = value.trim();
-        if (name) {
-          let numChildren = 1;
-          if (kernelType && definitions) {
-            numChildren = computeApplySubgoalCount(
-              state.root, state.cursor.nodeId, kernelType, definitions, name,
-            );
-          }
-          result = applyApplyTactic(state, name, numChildren);
-        }
-        break;
-      }
-      case 'simp': {
-        if (kernelType && definitions) {
-          const lemmaStr = value.trim();
-          // Empty input → use every @simp-tagged lemma in scope. Lets
-          // the user click "Simp" with no input and have the curated
-          // set run automatically.
-          const lemmas = lemmaStr
-            ? lemmaStr.split(/[\s,]+/).filter(Boolean)
-            : [...(definitions.simpLemmas ?? [])];
-          if (lemmas.length > 0) {
-            const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
-            if (engine) {
-              const simpResult = runSimp(engine, lemmas);
-              // Only commit the simp node when something actually fired —
-              // a zero-step success means "ran but no lemma matched the
-              // goal", which would otherwise insert a no-op simp node
-              // and silently confuse the user.
-              if (simpResult.success && simpResult.steps.length > 0) {
-                result = applySimp(state, lemmas, simpResult.proofNodes);
-              }
-            }
-          }
-        }
-        break;
-      }
-    }
+    const result = applyManualProofTreeTactic(state, tacticMode, value, {
+      typedContext,
+      inductiveMap,
+      registry,
+      kernelType,
+      definitions,
+      computeApplySubgoalCount: (root, cursorNodeId, rootKernelType, defs, name) =>
+        computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name),
+    });
     if (result) onPushChange(result);
     onTacticMode(null);
-  }, [tacticMode, state, onPushChange, onTacticMode, kernelType, definitions]);
+  }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -3691,106 +3491,15 @@ function HoleProseView({
   // (Constructor suggestions are computed in computeTacticSuggestions)
 
   const handleSubmit = useCallback((value: string) => {
-    if (!tacticMode) return;
-    let result: ProofTreeState | null = null;
-    switch (tacticMode.tactic) {
-      case 'intros': {
-        const names = value.split(/[\s,]+/).filter(Boolean);
-        if (names.length > 0) result = applyIntros(state, names);
-        break;
-      }
-      case 'induction': {
-        const scrutinee = value.trim();
-        if (scrutinee) {
-          const hyp = typedContext?.hypotheses.find(h => h.name === scrutinee);
-          const rawType = hyp?.rawType;
-          const headName = rawType ? extractTypeHead(rawType) : null;
-          const indInfo = headName && inductiveMap ? inductiveMap.get(headName) : undefined;
-          if (indInfo) {
-            const rev = registry ? buildReverseRegistry(registry) : undefined;
-            const ctxNames = typedContext?.hypotheses.map(h => h.name);
-            const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
-            result = applyInductionWithCtors(state, scrutinee, ctorInfos);
-          } else {
-            result = applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
-          }
-        }
-        break;
-      }
-      case 'exact': {
-        const expr = value.trim();
-        if (expr) result = applyExact(state, expr);
-        break;
-      }
-      case 'unfold': {
-        const name = value.trim();
-        if (name) result = applyUnfold(state, name);
-        break;
-      }
-      case 'fold': {
-        const name = value.trim();
-        if (name) result = applyFold(state, name);
-        break;
-      }
-      case 'rewrite': {
-        const name = value.trim();
-        if (name) result = applyRewrite(state, name);
-        break;
-      }
-      case 'rewrite_rev': {
-        const name = value.trim();
-        if (name) result = applyRewrite(state, name, true);
-        break;
-      }
-      case 'apply': {
-        const name = value.trim();
-        if (name) {
-          let numChildren = 1;
-          if (kernelType && definitions) {
-            numChildren = computeApplySubgoalCount(
-              state.root, state.cursor.nodeId, kernelType, definitions, name,
-            );
-          }
-          result = applyApplyTactic(state, name, numChildren);
-        }
-        break;
-      }
-      case 'have': {
-        // Format: "name := expression"
-        const trimmed = value.trim();
-        const eqIdx = trimmed.indexOf(':=');
-        if (eqIdx > 0) {
-          const haveName = trimmed.slice(0, eqIdx).trim().split(':')[0].trim();
-          const haveExpr = trimmed.slice(eqIdx + 2).trim();
-          if (haveName && haveExpr) {
-            result = applyHave(state, haveName, haveExpr);
-          }
-        }
-        break;
-      }
-      case 'simp': {
-        if (kernelType && definitions) {
-          const lemmaStr = value.trim();
-          const lemmas = lemmaStr
-            ? lemmaStr.split(/[\s,]+/).filter(Boolean)
-            : [...(definitions.simpLemmas ?? [])];
-          if (lemmas.length > 0) {
-            const engine = replayToEngine(state.root, state.cursor.nodeId, kernelType, definitions);
-            if (engine) {
-              const simpResult = runSimp(engine, lemmas);
-              // Only commit the simp node when something actually fired —
-              // a zero-step success means "ran but no lemma matched the
-              // goal", which would otherwise insert a no-op simp node
-              // and silently confuse the user.
-              if (simpResult.success && simpResult.steps.length > 0) {
-                result = applySimp(state, lemmas, simpResult.proofNodes);
-              }
-            }
-          }
-        }
-        break;
-      }
-    }
+    const result = applyManualProofTreeTactic(state, tacticMode, value, {
+      typedContext,
+      inductiveMap,
+      registry,
+      kernelType,
+      definitions,
+      computeApplySubgoalCount: (root, cursorNodeId, rootKernelType, defs, name) =>
+        computeApplySubgoalCount(root, cursorNodeId, rootKernelType, defs, name),
+    });
     if (result) onPushChange(result);
     onTacticMode(null);
   }, [tacticMode, state, onPushChange, onTacticMode, typedContext, inductiveMap, registry, kernelType, definitions]);

@@ -1,0 +1,12 @@
+@test success
+@name "have by: multi-line tactic block"
+@import preambles/nat.tt
+@import preambles/equal-simple.tt
+
+cong : {A B : Type} -> {a b : A} -> (f : A -> B) -> Equal a b -> Equal (f a) (f b)
+cong f refl = refl
+
+testHaveByMultiline : Equal (Succ Zero) (Succ Zero) := by
+  have h : Equal Zero Zero by
+    exact refl
+  exact (cong Succ h)

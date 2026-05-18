@@ -103,12 +103,18 @@ export type Associativity = 'left' | 'right' | 'none';
 
 export interface OperatorInfo {
   symbol: string;
+  // INFIX profile
   precedence: number;
   associativity: Associativity;
-  // If provided, this is the name of the constant to use
+  // If provided, this is the name of the constant to use when applied infix.
   constName?: string;
   // If true, this is a binding operator (e.g., DPair's **)
   binding?: boolean;
+  // PREFIX profile (independent from infix). When set, the symbol can be used
+  // as a prefix operator with these settings. If unset, the prefix parselet
+  // falls back to `precedence`/`constName` (legacy: a single-profile entry).
+  prefixPrecedence?: number;
+  prefixConstName?: string;
 }
 
 /**
@@ -117,7 +123,14 @@ export interface OperatorInfo {
 export const DEFAULT_OPERATORS: Record<string, OperatorInfo> = {
   // Arithmetic (higher precedence binds tighter)
   '+': { symbol: '+', precedence: 65, associativity: 'left', constName: 'add' },
-  '-': { symbol: '-', precedence: 65, associativity: 'left', constName: 'sub' },
+  // `-` is both INFIX (binary subtraction → 'sub') and PREFIX (unary negation
+  // → 'neg'). The prefix parselet also special-cases `-<digit>` (no whitespace)
+  // to emit a signed numeric literal so the elaborator can route it via @ofInt.
+  '-': {
+    symbol: '-',
+    precedence: 65, associativity: 'left', constName: 'sub',
+    prefixPrecedence: 90, prefixConstName: 'neg',
+  },
   '*': { symbol: '*', precedence: 70, associativity: 'left', constName: 'mul' },
   '/': { symbol: '/', precedence: 70, associativity: 'left', constName: 'div' },
   '^': { symbol: '^', precedence: 80, associativity: 'right', constName: 'pow' },
@@ -247,12 +260,32 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
         t.col
       );
     }
+    // Special case: `-<digit>` (no whitespace) emits a SIGNED numeric literal,
+    // not a unary-minus-of-literal application. This is so `exact -1` in a
+    // `Carrier R` position can route through @ofInt (which the real-analysis
+    // preset registers for `realOfInt`), producing the same kernel form as any
+    // other signed integer literal. The alternative `App(Const("neg"), NatLit(1))`
+    // would only work when `neg` resolves and produces a less uniform encoding.
+    if (t.value === '-') {
+      const nextTok = p['tokens'][p['pos'] + 1];
+      if (nextTok && nextTok.type === 'NUMBER' && nextTok.pos === t.pos + t.value.length) {
+        p['advance'](); // consume '-'
+        p['advance'](); // consume number
+        p['recordTokenSourcePosition'](t, path);
+        return p['parseSignedNumberLiteral'](nextTok.value);
+      }
+    }
     p['advance']();
+    // Use prefix-specific profile when available; fall back to infix profile
+    // for legacy single-profile entries (e.g., user-registered `prefix 90 ~ := neg`
+    // before the prefix/infix split — old entries only have `constName`).
+    const prefixPrec = opInfo.prefixPrecedence ?? opInfo.precedence;
+    const prefixConst = opInfo.prefixConstName ?? opInfo.constName ?? t.value;
     // Parse the operand at the prefix operator's precedence so that
     // `~ Succ Zero` parses as `neg (Succ Zero)` rather than `neg Succ`.
     const argPath = [...path, { kind: 'field' as const, name: 'arg' }];
-    const operand = p['expr'](opInfo.precedence, ctx, argPath);
-    const opConst = mkConstTT(opInfo.constName || t.value);
+    const operand = p['expr'](prefixPrec, ctx, argPath);
+    const opConst = mkConstTT(prefixConst);
     return mkAppTT(opConst, operand);
   },
 };
@@ -834,6 +867,38 @@ export class Parser {
    */
   registerOperator(op: OperatorInfo): void {
     this.operators[op.symbol] = op;
+  }
+
+  /**
+   * Register a PREFIX profile on a symbol, preserving any existing infix
+   * profile. Used for `prefix N op := target` declarations so that they
+   * don't clobber infix configurations on shared symbols like `-`.
+   *
+   * For purely prefix-only symbols (e.g., `~`) with no prior entry, this
+   * creates a stub entry whose infix `precedence` is set to 0 (a value low
+   * enough that the symbol won't accidentally function as an infix
+   * operator). The prefix parselet only uses `prefixPrecedence`/
+   * `prefixConstName` (set here), so the stub fields don't matter at use time.
+   */
+  registerPrefixOperator(symbol: string, precedence: number, constName: string): void {
+    const existing = this.operators[symbol];
+    if (existing) {
+      this.operators[symbol] = {
+        ...existing,
+        prefixPrecedence: precedence,
+        prefixConstName: constName,
+      };
+    } else {
+      this.operators[symbol] = {
+        symbol,
+        // Stub infix profile — `precedence: 0` keeps the symbol out of infix
+        // parsing (its precedence is below every meaningful minPrec).
+        precedence: 0,
+        associativity: 'none',
+        prefixPrecedence: precedence,
+        prefixConstName: constName,
+      };
+    }
   }
 
   /**
@@ -1862,14 +1927,20 @@ export class Parser {
       case 'prefix': associativity = 'none'; break;
     }
 
-    // Register the operator immediately so it affects subsequent parsing
-    this.registerOperator({
-      symbol,
-      precedence,
-      associativity,
-      constName: target,
-      binding: isBinding || undefined,
-    });
+    // Register the operator immediately so it affects subsequent parsing.
+    // For `prefix` declarations, only update the prefix profile of an existing
+    // entry — so `prefix 90 - := rneg` doesn't clobber the infix `-` profile.
+    if (notationKind === 'prefix') {
+      this.registerPrefixOperator(symbol, precedence, target);
+    } else {
+      this.registerOperator({
+        symbol,
+        precedence,
+        associativity,
+        constName: target,
+        binding: isBinding || undefined,
+      });
+    }
 
     return {
       kind: 'notation',
@@ -4326,6 +4397,7 @@ export class Parser {
 
       case 'have': {
         // have <identifier> ':' <term> ':=' <term>   (with type annotation)
+        // have <identifier> ':' <term> by <tactic(s)> (interactive proof)
         // have <identifier> ':=' <term>               (type inferred)
         if (this.current().type !== 'IDENT') {
           throw new ParseError(
@@ -4358,6 +4430,50 @@ export class Parser {
 
         const hypTypePath = [...path, { kind: 'field' as const, name: 'args' }, { kind: 'array' as const, index: 1 }];
         const hypType = this.expr(0, ctx, hypTypePath);
+
+        if (this.current().type === 'BY') {
+          this.advance(); // consume 'by'
+
+          const proofTactics: TacticCommand[] = [];
+          if (this.current().type === 'NEWLINE') {
+            this.advance();
+            this.skipNewlines();
+            const proofBaseIndent = this.current().col;
+            if (proofBaseIndent <= tacticToken.col) {
+              throw new ParseError(
+                'have: proof tactics must be indented',
+                this.current().line,
+                this.current().col,
+              );
+            }
+            while (this.current().type !== 'EOF' && this.current().col >= proofBaseIndent) {
+              const proofPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: proofTactics.length }];
+              proofTactics.push(this.parseTactic(ctx, proofPath));
+              if (this.current().type === 'NEWLINE') {
+                this.advance();
+                this.skipNewlines();
+              } else if (this.current().type === 'SEMICOLON') {
+                this.advance();
+                if (this.current().type === 'NEWLINE') {
+                  this.advance();
+                  this.skipNewlines();
+                }
+              } else {
+                break;
+              }
+            }
+          } else {
+            const proofPath = [...path, { kind: 'field' as const, name: 'focusedTactics' }, { kind: 'array' as const, index: 0 }];
+            proofTactics.push(this.parseTactic(ctx, proofPath));
+          }
+
+          return {
+            name: tacticName,
+            args: [mkConstTT(hypName), hypType],
+            focusedTactics: proofTactics,
+            indexPath: path,
+          };
+        }
 
         this.expect('ASSIGN');
 
@@ -4803,6 +4919,25 @@ export class Parser {
    * NatLit since RatLit is reserved for non-integer rationals (mkRatLit
    * downgrades den=1 to NatLit).
    */
+  /**
+   * Parse a signed numeric literal — used when prefix `-` is immediately
+   * followed by a digit (no whitespace). Always returns a RatLit (negative
+   * num), even for integer values, since NatLit is unsigned. The elaborator
+   * routes negative RatLits via @ofInt for groups/rings that have registered
+   * a signed-int coercion (e.g., real-analysis `realOfInt`).
+   */
+  private parseSignedNumberLiteral(value: string): TTerm {
+    const positive = this.parseNumberLiteral(value);
+    if (positive.tag === 'NatLit') {
+      // Negate via RatLit since NatLit is unsigned.
+      return { tag: 'RatLit', num: -positive.value, den: 1n };
+    }
+    if (positive.tag === 'RatLit') {
+      return { tag: 'RatLit', num: -positive.num, den: positive.den };
+    }
+    throw new Error(`Unexpected literal shape for signed value: ${value}`);
+  }
+
   private parseNumberLiteral(value: string): TTerm {
     // Pure integer: NatLit fast path
     if (!/[.eE]/.test(value)) {
@@ -4995,4 +5130,3 @@ export function tokenize(source: string, operators?: Record<string, OperatorInfo
   const lexer = new Lexer(source, operators);
   return lexer.tokenize();
 }
-

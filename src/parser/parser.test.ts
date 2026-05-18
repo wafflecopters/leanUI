@@ -1780,6 +1780,76 @@ describe('Parser: Notation Declarations', () => {
     expect(decls[1].kind).toBe('notation');
     expect(decls[1].symbol).toBe('*');
   });
+
+  // Regression: `exact -1` (and any other `-<digit>` with no whitespace) must
+  // parse as a SIGNED numeric literal — RatLit(-1, 1) — not as `App(Const("sub"), 1)`.
+  // The signed literal routes through the elaborator's @ofInt path; the broken
+  // sub-of-NatLit form was what the user reported in image #36.
+  test('-<digit> parses as a signed RatLit, not sub-of-NatLit', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('foo : Nat\nfoo = -1');
+    const defDecl = decls.find(d => d.kind === 'def') as any;
+    const body = defDecl?.value;
+    expect(body?.tag).toBe('RatLit');
+    expect(body.num).toBe(-1n);
+    expect(body.den).toBe(1n);
+  });
+
+  test('- with a space before identifier parses as prefix op application', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('foo : Nat\nfoo = - x');
+    const defDecl = decls.find(d => d.kind === 'def') as any;
+    const body = defDecl?.value;
+    // Default `-` has prefixConstName 'neg' (set in DEFAULT_OPERATORS).
+    expect(body?.tag).toBe('App');
+    expect(body.fn?.tag).toBe('Const');
+    expect(body.fn.name).toBe('neg');
+  });
+
+  test('a - 1 (infix with LHS) still parses as sub', () => {
+    const parser = new Parser();
+    const decls = parser.parseDeclarations('foo : Nat\nfoo = a - 1');
+    const defDecl = decls.find(d => d.kind === 'def') as any;
+    const body = defDecl?.value;
+    expect(body?.tag).toBe('App');
+    expect(body.fn?.tag).toBe('App');
+    expect(body.fn.fn?.tag).toBe('Const');
+    expect(body.fn.fn.name).toBe('sub');
+  });
+
+  // Regression: a `prefix N op := target` declaration must NOT clobber the
+  // infix profile of the same symbol. Specifically, `-` has a default infix
+  // profile (sub at prec 65) and a default prefix profile (neg at prec 90).
+  // Declaring `prefix 90 - := rneg` should override only the prefix profile.
+  test('prefix notation on shared symbol preserves infix profile', () => {
+    const parser = new Parser();
+    // Parse a prefix declaration for `-`, then a term that uses `-` infix.
+    const decls = parser.parseDeclarations(
+      'prefix 90 - := rneg\nfoo : Nat\nfoo = bar - baz'
+    );
+    const defDecl = decls.find(d => d.kind === 'def') as any;
+    // The body should be `App(App(Const("sub"), bar), baz)` — infix `-` still
+    // works after the prefix declaration. Walk the structure:
+    const body = defDecl?.value;
+    expect(body?.tag).toBe('App');
+    expect(body.fn?.tag).toBe('App');
+    expect(body.fn.fn?.tag).toBe('Const');
+    expect(body.fn.fn.name).toBe('sub');
+  });
+
+  test('prefix notation overrides prefix-position behavior of shared symbol', () => {
+    const parser = new Parser();
+    // Without the prefix declaration, default for `-` is prefixConstName: 'neg'.
+    // After `prefix 90 - := rneg`, prefix-position `- x` should use `rneg`.
+    const decls = parser.parseDeclarations(
+      'prefix 90 - := rneg\nfoo : Nat\nfoo = - x'
+    );
+    const defDecl = decls.find(d => d.kind === 'def') as any;
+    const body = defDecl?.value;
+    expect(body?.tag).toBe('App');
+    expect(body.fn?.tag).toBe('Const');
+    expect(body.fn.name).toBe('rneg');
+  });
 });
 
 // ============================================================================
@@ -3481,6 +3551,45 @@ test : Nat -> Nat := by
         expect(decls[0].value.tactics.length).toBe(2);
         expect(decls[0].value.tactics[0].name).toBe('intro');
         expect(decls[0].value.tactics[0].args.length).toBe(1);
+      }
+    });
+
+    test('Parse have with inline by-proof tactics', () => {
+      const decls = parseDeclarations(`
+test : Equal Zero Zero := by
+  have h : Equal Zero Zero by exact refl
+  exact h
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(2);
+        const have = decls[0].value.tactics[0];
+        expect(have.name).toBe('have');
+        expect(have.args.length).toBe(2);
+        expect(have.focusedTactics?.length).toBe(1);
+        expect(have.focusedTactics?.[0]?.name).toBe('exact');
+      }
+    });
+
+    test('Parse have with multi-line by-proof tactics', () => {
+      const decls = parseDeclarations(`
+test : Equal (Succ Zero) (Succ Zero) := by
+  have h : Equal Zero Zero by
+    exact refl
+  exact (cong Succ h)
+`);
+      expect(decls.length).toBe(1);
+      expect(decls[0].value?.tag).toBe('TacticBlock');
+
+      if (decls[0].value?.tag === 'TacticBlock') {
+        expect(decls[0].value.tactics.length).toBe(2);
+        const have = decls[0].value.tactics[0];
+        expect(have.name).toBe('have');
+        expect(have.args.length).toBe(2);
+        expect(have.focusedTactics?.length).toBe(1);
+        expect(have.focusedTactics?.[0]?.name).toBe('exact');
       }
     });
 

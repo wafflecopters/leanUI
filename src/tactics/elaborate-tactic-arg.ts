@@ -21,6 +21,7 @@ import { TransitivityTactic } from './transitivity-tactic';
 import { CongTactic } from './cong-tactic';
 import { SubstTactic } from './subst-tactic';
 import { HaveTactic } from './have-tactic';
+import { HaveByTactic } from './have-by-tactic';
 import { ObtainTactic } from './obtain-tactic';
 import { SufficesTactic } from './suffices-tactic';
 import { UnfoldTactic } from './unfold-tactic';
@@ -346,10 +347,17 @@ export function tacticCommandToTactic(
     }
 
     case 'have': {
-      if (cmd.args.length !== 3) {
-        throw new Error(`'have' tactic requires name, type, and proof (got ${cmd.args.length} args)`);
-      }
       const haveName = cmd.args[0].tag === 'Const' ? (cmd.args[0] as any).name : '_';
+      if (cmd.args.length === 2) {
+        const proofTactics = cmd.focusedTactics ?? [];
+        if (proofTactics.length === 0) {
+          throw new Error(`'have' tactic with explicit type requires proof tactics after 'by'`);
+        }
+        return new HaveByTactic(haveName, cmd.args[1] as TTKTerm, proofTactics);
+      }
+      if (cmd.args.length !== 3) {
+        throw new Error(`'have' tactic requires either name, type, and proof, or name and type with proof tactics after 'by' (got ${cmd.args.length} args)`);
+      }
       return new HaveTactic(haveName, cmd.args[1] as TTKTerm, cmd.args[2] as TTKTerm);
     }
 

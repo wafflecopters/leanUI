@@ -343,6 +343,13 @@ rdiv {R} a b = rmul a (rinv b)
 
 infixl 70 / := rdiv
 
+-- Unary minus: " - x" (with non-digit operand) parses as "rneg x". Note that
+-- "-<digit>" (no whitespace before a digit) is parsed by the surface parser as
+-- a SIGNED numeric literal (RatLit with negative num), not as an application
+-- of this prefix operator — that routes through the @ofInt coercion above
+-- so "exact -1 : Carrier R" elaborates uniformly with all other signed literals.
+prefix 90 - := rneg
+
 -- Strict ordering: a < b iff a <= b and a /= b
 rlt : {R : Real} -> Carrier R -> Carrier R -> Type
 rlt {R} a b = Pair (rle a b) (Equal a b -> Void)

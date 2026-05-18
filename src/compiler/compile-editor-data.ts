@@ -505,6 +505,16 @@ function collectSemanticTokensFromTactic(
       if (tactic.args.length > 2) {
         collectSemanticTokensFromSurfaceTerm(tactic.args[2], sourceMap, [...path, 'args', 2], tokens);
       }
+      if (tactic.focusedTactics) {
+        for (let i = 0; i < tactic.focusedTactics.length; i++) {
+          collectSemanticTokensFromTactic(
+            tactic.focusedTactics[i],
+            sourceMap,
+            [...path, 'focusedTactics', i],
+            tokens
+          );
+        }
+      }
       break;
 
     case 'obtain':

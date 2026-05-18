@@ -158,6 +158,22 @@ describe('tacticCommandToTactic', () => {
     expect((t as any).name).toBe('constructor');
   });
 
+  test('have with by-proof tactics creates shared have tactic', () => {
+    const t = tacticCommandToTactic({
+      name: 'have',
+      args: [
+        { tag: 'Const', name: 'h' },
+        { tag: 'Const', name: 'GoalTy' },
+      ],
+      focusedTactics: [
+        tacticCommandToTactic({ name: 'exact', args: [{ tag: 'Const', name: 'refl' }] }) as any,
+      ],
+    });
+    expect(t).not.toBe('sorry');
+    expect((t as any).name).toBe('have');
+    expect((t as any).proofTactics).toHaveLength(1);
+  });
+
   test('unknown tactic throws', () => {
     expect(() => tacticCommandToTactic({ name: 'bogus', args: [] })).toThrow('Unknown tactic');
   });

@@ -67,6 +67,31 @@ function extractName(term: TTerm | undefined): string | undefined {
   return undefined;
 }
 
+function buildFocusedChildren(
+  cmd: TacticCommand,
+  rest: readonly TacticCommand[],
+): ProofNode[] | null {
+  if (cmd.focusedTactics !== undefined) {
+    return cmd.focusedTactics.map(ft => tacticCommandsToProofTree([ft]));
+  }
+
+  // Collect consecutive `focus` commands from rest — these are the
+  // · bullet subgoals parsed as separate tactic commands.
+  const focusCommands: TacticCommand[] = [];
+  let i = 0;
+  while (i < rest.length && rest[i].name === 'focus') {
+    focusCommands.push(rest[i]);
+    i++;
+  }
+  if (focusCommands.length === 0) return null;
+
+  const afterFocus = rest.slice(focusCommands.length);
+  return focusCommands.map(fc => {
+    const inner = fc.focusedTactics ?? [];
+    return tacticCommandsToProofTree([...inner, ...afterFocus]);
+  });
+}
+
 /**
  * Convert a list of TacticCommands to a ProofNode tree.
  *
@@ -98,7 +123,8 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
 
     case 'apply': {
       const name = cmd.args.length > 0 ? surfaceTermToString(cmd.args[0]) : '?';
-      return mkApply(name, [tacticCommandsToProofTree(rest)]);
+      const children = buildFocusedChildren(cmd, rest) ?? [tacticCommandsToProofTree(rest)];
+      return mkApply(name, children);
     }
 
     case 'cases':
@@ -107,7 +133,14 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
 
     case 'rewrite': {
       const name = cmd.args.length > 0 ? surfaceTermToString(cmd.args[0]) : '?';
-      return mkRewrite(name, tacticCommandsToProofTree(rest));
+      return mkRewrite(
+        name,
+        tacticCommandsToProofTree(rest),
+        cmd.rewriteOptions?.reverse ?? false,
+        cmd.rewriteOptions?.occurrences,
+        cmd.rewriteOptions?.targetHead,
+        cmd.rewriteOptions?.enhanced,
+      );
     }
 
     case 'rw': {
@@ -133,28 +166,7 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
       // 1. Inline focusedTactics on the constructor command itself
       // 2. Separate `focus` commands that follow in `rest`
       // 3. Neither (single child from remaining commands)
-      let children: ProofNode[];
-      if (cmd.focusedTactics && cmd.focusedTactics.length > 0) {
-        children = cmd.focusedTactics.map(ft => tacticCommandsToProofTree([ft]));
-      } else {
-        // Collect consecutive `focus` commands from rest — these are the
-        // · bullet subgoals parsed as separate tactic commands.
-        const focusCommands: TacticCommand[] = [];
-        let i = 0;
-        while (i < rest.length && rest[i].name === 'focus') {
-          focusCommands.push(rest[i]);
-          i++;
-        }
-        if (focusCommands.length > 0) {
-          const afterFocus = rest.slice(focusCommands.length);
-          children = focusCommands.map(fc => {
-            const inner = fc.focusedTactics ?? [];
-            return tacticCommandsToProofTree([...inner, ...afterFocus]);
-          });
-        } else {
-          children = [tacticCommandsToProofTree(rest)];
-        }
-      }
+      const children = buildFocusedChildren(cmd, rest) ?? [tacticCommandsToProofTree(rest)];
       return mkApply('constructor', children);
     }
 
@@ -170,9 +182,12 @@ export function tacticCommandsToProofTree(commands: readonly TacticCommand[]): P
     }
 
     case 'have': {
-      // have name : type := proof → args[0]=name, args[1]=type, args[2]=proof
       const haveName = cmd.args.length > 0 ? extractName(cmd.args[0]) ?? '_' : '_';
-      // args[2] is the proof expression
+      if (cmd.focusedTactics && cmd.focusedTactics.length > 0) {
+        const haveType = cmd.args.length > 1 ? surfaceTermToString(cmd.args[1]) : '?';
+        const proofTree = tacticCommandsToProofTree(cmd.focusedTactics);
+        return mkHave(haveName, '?', tacticCommandsToProofTree(rest), haveType, proofTree);
+      }
       const haveExpr = cmd.args.length > 2 ? surfaceTermToString(cmd.args[2]) : '?';
       return mkHave(haveName, haveExpr, tacticCommandsToProofTree(rest));
     }

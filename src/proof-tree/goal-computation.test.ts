@@ -2719,6 +2719,31 @@ addZeroRight : (n : Nat) -> Equal (add n Zero) n := by
     expect(decl!.proofTree!.tag).toBe('intros');
   });
 
+  test('source have-by tactics become interactive have proof subtrees', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+testHaveBy : Equal (Succ Zero) (Succ Zero) := by
+  have h : Equal Zero Zero by
+    exact refl
+  exact refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testHaveBy');
+    expect(decl).toBeDefined();
+    expect(decl!.proofTree).toBeDefined();
+    expect(decl!.proofTree!.tag).toBe('have');
+    if (decl!.proofTree!.tag !== 'have') return;
+    expect(decl!.proofTree!.typeExpr?.replace(/^\((.*)\)$/s, '$1')).toBe('Equal Zero Zero');
+    expect(decl!.proofTree!.proofTree?.tag).toBe('exact');
+    expect(decl!.proofTree!.child.tag).toBe('exact');
+  });
+
   test('non-tactic declarations have no proofTree', () => {
     const source = `
 inductive Nat : Type where

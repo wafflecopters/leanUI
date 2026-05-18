@@ -311,4 +311,42 @@ testImg32 R = ?h`);
       throw new Error(`apply node validation failed: ${applyInfo.validation.message}`);
     }
   });
+
+  // REGRESSION (image #36): user typed `exact -1` in a `Carrier R` position.
+  // Previously parsed as `App(Const("sub"), NatLit(1))` because the prefix
+  // parselet used the same `constName` as infix `-`. Result: "Type definition
+  // not found: sub". Fix: parser now emits a signed RatLit for `-<digit>`
+  // (no whitespace), which routes through the elaborator's @ofInt path.
+  test('REGRESSION (image #36): exact -1 in Carrier R position elaborates without "sub not found"', { timeout: 30000 }, () => {
+    const { r, decl } = compileTop('testImg36', `testImg36 : (R : Real) -> Carrier R
+testImg36 R = ?h`);
+
+    const proof: ProofNode = mkIntros(['R'], mkExact('-1'));
+    const leafHole = mkHole();
+    // Use the goal-computation walk to surface any tactic errors at the exact node.
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    return (async () => {
+      const { replayEntireTree } = await import('./goal-computation');
+      const goalMap = replayEntireTree(proof, decl.kernelType, r.definitions, rev);
+      // Find the exact node and verify it produced no tactic error.
+      const findExact = (n: ProofNode): any => {
+        if (n.tag === 'exact') return n;
+        if ('child' in n && n.child) return findExact(n.child as ProofNode);
+        return null;
+      };
+      const exactNode = findExact(proof);
+      expect(exactNode).not.toBeNull();
+      const exactInfo = goalMap.get(exactNode.id);
+      // The old broken behavior surfaced an error mentioning "sub" — that should
+      // not happen anymore. The exact's elaboration should succeed; the kernel
+      // value should resolve to a real number via realOfInt / rneg-of-rone.
+      const err = (exactInfo as any)?.tacticError;
+      if (err) {
+        expect(err.toLowerCase()).not.toContain('sub');
+        expect(err.toLowerCase()).not.toContain('type definition not found');
+      }
+      // Re-suppress unused leafHole warning (kept for symmetry with other tests).
+      void leafHole;
+    })();
+  });
 });

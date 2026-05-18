@@ -137,6 +137,32 @@ match x with
 | Succ n => ...
 ```
 
+### Tactic Proof Blocks
+
+Definitions can use tactic mode with a trailing `by` block:
+
+```
+theoremName : T := by
+  intro x
+  exact x
+```
+
+Tactics may be written one-per-line in an indented block. Some tactics also accept
+an inline nested tactic block after `by`:
+
+```
+have h : Equal Zero Zero by exact refl
+
+have h : Equal Zero Zero by
+  exact refl
+
+suffices h : T by
+  exact h
+```
+
+`have h : T := proof` remains the expression-proof form, while `have h : T by ...`
+uses a tactic subproof that is shared with the structured proof tree representation.
+
 ## Definitions
 
 ### Function Definitions
