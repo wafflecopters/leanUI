@@ -890,7 +890,14 @@ export class RewriteTactic implements Tactic {
     if (lhsHead && occurrences) {
       if (term.tag === 'App') {
         const termHead = this.getTermHeadName(term);
-        if (termHead === lhsHead) {
+        // Count via the EXPANDED head set: `radd` clicks also count
+        // `CompleteOrderedField.add`-headed occurrences (and vice-versa).
+        // A goal that mixes alias and projection forms — e.g. after rewriting
+        // ONE of two `radd`-headed `+`s with `addComm` leaves the other in
+        // alias form and the rewritten one in projection form — needs both
+        // forms to count toward the surface annotator's occurrence index.
+        const headExpansion = definitions ? this.expandedHeadSet(lhsHead, definitions) : new Set([lhsHead]);
+        if (termHead !== null && headExpansion.has(termHead)) {
           // Post-order: first recurse into children
           const recursedTerm = this.substituteIntoAppArgs(term, from, to, definitions, occurrences, counter, lhsHead);
           // Then count this node
@@ -901,13 +908,21 @@ export class RewriteTactic implements Tactic {
               ? this.termEqualDeep(term, from, definitions)
               : this.termEqual(term, from);
             if (!isMatch && definitions) {
-              // δ-bridge: lhsHead may equal `radd` (the surface alias the UI
-              // counted) while `from` has the projection head
-              // (`CompleteOrderedField.add`). One-step alias-unfold of the
-              // goal subterm exposes the projection head so the structural
-              // termEqual can succeed.
+              // δ-bridge: try both directions of one-step alias-unfold.
+              //  (a) Unfold the goal subterm (term-side): lhsHead is the alias
+              //      (`radd`, UI count) while `from` is in projection form
+              //      (`CompleteOrderedField.add`). Used by e.g. addComm where
+              //      `from = CompleteOrderedField.add ?inst ?a ?b`.
+              //  (b) Unfold the lemma's `from` (lemma-side): the goal subterm
+              //      is in projection form (e.g. left over from a prior
+              //      `rewrite addComm`) while `from` is alias-headed (e.g.
+              //      `from = radd ?R ?a ?b` from `addRealOfRat`'s LHS).
               const unfolded = this.unfoldAliasOneStep(term, definitions);
               if (unfolded) isMatch = this.termEqual(unfolded, from);
+              if (!isMatch) {
+                const fromUnfolded = this.unfoldAliasOneStep(from, definitions);
+                if (fromUnfolded) isMatch = this.termEqual(term, fromUnfolded);
+              }
             }
             if (isMatch) {
               return to;

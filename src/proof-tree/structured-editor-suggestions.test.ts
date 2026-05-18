@@ -464,4 +464,68 @@ testImg42 R = ?h`);
     );
     expect(hasIntroShape).toBe(true);
   });
+
+  // REGRESSION (image #42 follow-up): after rewriting one of two `radd`-headed
+  // subterms with `addComm`, the rewritten subterm's kernel head changes to
+  // the projection form (`CompleteOrderedField.add`), while the un-rewritten
+  // sibling keeps the alias head (`radd`). The UI's fold pipeline shows both
+  // as `+` (radd in surface) and the surface annotator counts them together.
+  // But substituteImpl was counting by KERNEL head only — so a click on the
+  // projection-headed occurrence (occurrence 2 here) couldn't be reached: the
+  // counter never advanced to 2 for radd-targeted lemmas. Fix: substituteImpl
+  // now counts via the expanded head set, so both alias and projection forms
+  // of the same surface head count together. Also: isMatch tries unfolding
+  // BOTH sides (term and `from`), so `addRealOfRat` (LHS is alias) matches a
+  // projection-headed goal subterm.
+  test('REGRESSION (image #42b): after addComm on RHS, clicking the rewritten subterm surfaces both addComm AND addRealOfRat', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg42b', `testImg42b : (R : Real) -> rle 1 2
+testImg42b R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(
+      ['R'],
+      mkApply('addLeRightCancel', [
+        mkExact('-1'),
+        {
+          tag: 'rewrite',
+          id: -1 as any,  // resetProofIds via beforeEach reassigns
+          name: 'CompleteOrderedField.addComm',
+          reverse: false,
+          occurrences: [2],
+          targetHead: 'radd',
+          child: leafHole,
+        } as any,
+      ])
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    let occ2Path: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 2) { occ2Path = p; break; }
+    }
+    expect(occ2Path).not.toBeNull();
+    if (!occ2Path) return;
+    const { computeRewriteSuggestionsIncremental } = await import('./tactic-suggestions');
+    const collected: any[] = [];
+    let done = false;
+    computeRewriteSuggestionsIncremental(occ2Path, ig, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    } as any, (progress) => {
+      for (const s of progress.suggestions) {
+        if (!collected.find(x => x.id === s.id)) collected.push(s);
+      }
+      done = progress.done;
+    });
+    for (let i = 0; i < 60 && !done; i++) await new Promise(r => setTimeout(r, 50));
+    const names = collected.map(s => s.rewriteName);
+    expect(names).toContain('CompleteOrderedField.addComm');
+    // The key assertion: addRealOfRat must surface on the projection-headed
+    // occurrence, because the kernel goal still contains the same realOfRat
+    // structure — just wrapped under the projection head after the rewrite.
+    expect(names).toContain('addRealOfRat');
+  });
 });

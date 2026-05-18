@@ -40,6 +40,25 @@ function goalMightHaveRatOp(term: TTKTerm, ratOps: Map<string, 'add' | 'mul' | '
   return false;
 }
 
+function goalMightHaveBareOfRatLiteral(term: TTKTerm, definitions: DefinitionsMap): boolean {
+  const ofRatFns = new Set(definitions.ofRatByTargetHead ? [...definitions.ofRatByTargetHead.values()] : []);
+  function rec(t: TTKTerm): boolean {
+    if (t.tag === 'App') {
+      if (t.fn.tag === 'App' && t.fn.fn.tag === 'Const' && ofRatFns.has(t.fn.fn.name)) {
+        if (t.arg.tag === 'NatLit' || t.arg.tag === 'RatLit') return true;
+      }
+      return rec(t.fn) || rec(t.arg);
+    }
+    if (t.tag === 'Binder') return rec(t.domain) || rec(t.body);
+    if (t.tag === 'Match') {
+      if (rec(t.scrutinee)) return true;
+      for (const c of t.clauses) if (rec(c.rhs)) return true;
+    }
+    return false;
+  }
+  return rec(term);
+}
+
 function normalizeRatOps(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
   const liftLitToMkRat = (t: TTKTerm): TTKTerm => {
     if (t.tag !== 'NatLit' && t.tag !== 'RatLit') return t;
@@ -71,11 +90,18 @@ function normalizeRatOps(term: TTKTerm, definitions: DefinitionsMap): TTKTerm {
       arg: proof,
     };
   };
+  const ofRatFns = new Set(definitions.ofRatByTargetHead ? [...definitions.ofRatByTargetHead.values()] : []);
   function rec(t: TTKTerm): TTKTerm {
     if (t.tag === 'App') {
       const fn = rec(t.fn);
       const arg = rec(t.arg);
       const reb: TTKTerm = { tag: 'App', fn, arg };
+      if (reb.fn.tag === 'App' && reb.fn.fn.tag === 'Const' && ofRatFns.has(reb.fn.fn.name)) {
+        const liftedArg = liftLitToMkRat(reb.arg);
+        if (liftedArg !== reb.arg) {
+          return { tag: 'App', fn: reb.fn, arg: liftedArg };
+        }
+      }
       if (reb.fn.tag === 'App' && reb.fn.fn.tag === 'Const'
           && (definitions.ratOpByFn?.has(reb.fn.fn.name) || definitions.natOpByFn?.has(reb.fn.fn.name))) {
         const reduced = whnf(reb, { definitions });
@@ -145,7 +171,15 @@ export function runSimp(
   const initGoal0 = engine.getFocusedGoal();
   const initGoalId0 = engine.getFocusedGoalId();
   const ratOps = engine.definitions.ratOpByFn;
-  if (initGoal0 && initGoalId0 && ratOps && ratOps.size > 0 && goalMightHaveRatOp(initGoal0.type, ratOps)) {
+  const shouldNormalize = !!(
+    initGoal0
+    && initGoalId0
+    && (
+      (ratOps && ratOps.size > 0 && goalMightHaveRatOp(initGoal0.type, ratOps))
+      || goalMightHaveBareOfRatLiteral(initGoal0.type, engine.definitions)
+    )
+  );
+  if (initGoal0 && initGoalId0 && shouldNormalize) {
     const normalized = normalizeRatOps(initGoal0.type, engine.definitions);
     if (normalized !== initGoal0.type) {
       const newMetaVars = new Map(engine.metaVars);

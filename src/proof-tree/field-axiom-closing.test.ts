@@ -26,7 +26,6 @@ import { compileTTFromText } from '../compiler/compile';
 import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { createInitialEngine } from '../tactics/tacticsEngine';
 import { IntrosTactic, ApplyTactic } from '../tactics/tactic';
-import { RewriteTactic } from '../tactics/rewrite-tactic';
 import { runSimp } from '../tactics/simp-tactic';
 import { computeTacticSuggestions } from './tactic-suggestions';
 import { renderInteractiveGoal } from './interactive-goal';
@@ -58,33 +57,43 @@ function intros(engine: any) {
   return (new IntrosTactic(['R']).apply(engine, engine.metaVars.get(engine.goals[0])!, engine.goals[0]) as any).newEngine;
 }
 
+function simpThenApply(engine: any, defs: any, lemmaName: string) {
+  const lemmas = [...(defs.simpLemmas ?? [])];
+  const simpRes = runSimp(engine, lemmas);
+  expect(simpRes.success).toBe(true);
+  const simplifiedEngine = simpRes.success ? simpRes.engine : engine;
+  const goalId = simplifiedEngine.goals[0];
+  const goal = simplifiedEngine.metaVars.get(goalId)!;
+  return {
+    simpRes,
+    applyRes: new ApplyTactic({ tag: 'Const', name: lemmaName }).apply(simplifiedEngine, goal, goalId),
+  };
+}
+
 describe('field axiom application: 0 ≤ 1 / 0 < 1', () => {
   const r = setup();
 
   describe('Form A: MkRat-form literals (direct source elaboration)', () => {
-    // KERNEL LIMITATION: direct apply (without simp) doesn't bridge from
-    // \`realOfRat R MkRat0\` to \`CompleteOrderedField.zero (Carrier R) ...\`.
-    // The structural unifier needs simp lemmas to canonicalize first. The
-    // user-facing flow uses \`simp-then-apply-def-X\` (see
-    // apply-positional-fix.test.ts) — these test_skips document the gap.
-    test.skip('apply zeroLeOne on rle (realOfRat R MkRat0) (realOfRat R MkRat1) [BLOCKED: needs simp first]', () => {
+    test('simp then apply zeroLeOne on rle (realOfRat R MkRat0) (realOfRat R MkRat1)', () => {
       const R = VAR(0);
       const goal = buildGoal('rle', rofR(R, MKRAT(0n)), rofR(R, MKRAT(1n)));
       let engine = createInitialEngine(goal, [], r.definitions);
       engine = intros(engine);
-      const g = engine.metaVars.get(engine.goals[0])!;
-      const result = new ApplyTactic({ tag: 'Const', name: 'CompleteOrderedField.zeroLeOne' }).apply(engine, g, engine.goals[0]);
-      expect(result.success).toBe(true);
+      const { simpRes, applyRes } = simpThenApply(engine, r.definitions, 'CompleteOrderedField.zeroLeOne');
+      expect(simpRes.success).toBe(true);
+      expect(simpRes.steps.length).toBeGreaterThanOrEqual(2);
+      expect(applyRes.success).toBe(true);
     });
 
-    test.skip('apply zeroLtOne on rlt (realOfRat R MkRat0) (realOfRat R MkRat1) [BLOCKED: needs simp first]', () => {
+    test('simp then apply zeroLtOne on rlt (realOfRat R MkRat0) (realOfRat R MkRat1)', () => {
       const R = VAR(0);
       const goal = buildGoal('rlt', rofR(R, MKRAT(0n)), rofR(R, MKRAT(1n)));
       let engine = createInitialEngine(goal, [], r.definitions);
       engine = intros(engine);
-      const g = engine.metaVars.get(engine.goals[0])!;
-      const result = new ApplyTactic({ tag: 'Const', name: 'zeroLtOne' }).apply(engine, g, engine.goals[0]);
-      expect(result.success).toBe(true);
+      const { simpRes, applyRes } = simpThenApply(engine, r.definitions, 'zeroLtOne');
+      expect(simpRes.success).toBe(true);
+      expect(simpRes.steps.length).toBeGreaterThanOrEqual(2);
+      expect(applyRes.success).toBe(true);
     });
 
     test('simp canonicalizes MkRat-form 0 → rzero, 1 → rone', () => {
@@ -125,22 +134,18 @@ describe('field axiom application: 0 ≤ 1 / 0 < 1', () => {
   });
 
   describe('Form B: NatLit-form literals (after @ratAdd fast-path)', () => {
-    // NOTE: Form B (bare \`realOfRat R (NatLit n)\`) doesn't actually occur in
-    // production — the parser elaborates \`0 / 1 : Rat\` to MkRat form. NatLit
-    // form would only arise after @ratAdd fast-path normalizes arithmetic.
-    // These skipped tests document the gap for HYPOTHETICAL NatLit goals;
-    // the production user flow lives in Form A (handled by simp-then-apply).
-    test.skip('apply zeroLeOne on rle (realOfRat R NatLit0) (realOfRat R NatLit1) [Form B not in production]', () => {
+    test('simp then apply zeroLeOne on rle (realOfRat R NatLit0) (realOfRat R NatLit1)', () => {
       const R = VAR(0);
       const goal = buildGoal('rle', rofR(R, NLIT(0n)), rofR(R, NLIT(1n)));
       let engine = createInitialEngine(goal, [], r.definitions);
       engine = intros(engine);
-      const g = engine.metaVars.get(engine.goals[0])!;
-      const result = new ApplyTactic({ tag: 'Const', name: 'CompleteOrderedField.zeroLeOne' }).apply(engine, g, engine.goals[0]);
-      expect(result.success).toBe(true);
+      const { simpRes, applyRes } = simpThenApply(engine, r.definitions, 'CompleteOrderedField.zeroLeOne');
+      expect(simpRes.success).toBe(true);
+      expect(simpRes.steps.length).toBeGreaterThanOrEqual(2);
+      expect(applyRes.success).toBe(true);
     });
 
-    test.skip('simp closes/canonicalizes NatLit-form rle [Form B not in production]', () => {
+    test('simp canonicalizes NatLit-form rle enough for field-axiom apply', () => {
       const R = VAR(0);
       const goal = buildGoal('rle', rofR(R, NLIT(0n)), rofR(R, NLIT(1n)));
       let engine = createInitialEngine(goal, [], r.definitions);
@@ -148,9 +153,11 @@ describe('field axiom application: 0 ≤ 1 / 0 < 1', () => {
       const lemmas = [...(r.definitions.simpLemmas ?? [])];
       const simpRes = runSimp(engine, lemmas);
       expect(simpRes.success).toBe(true);
-      // We need at least the realOfRatZero / realOfRatOne bridges to fire
-      // even when their LHS is keyed on MkRat-form and the goal is NatLit-form.
       expect(simpRes.steps.length).toBeGreaterThanOrEqual(2);
+      const simplifiedGoal = simpRes.success ? simpRes.engine.getFocusedGoal() : null;
+      expect(simplifiedGoal).not.toBeNull();
+      const pretty = JSON.stringify(simplifiedGoal?.type);
+      expect(pretty).toContain('rle');
     });
   });
 

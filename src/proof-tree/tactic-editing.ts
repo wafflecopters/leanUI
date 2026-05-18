@@ -1,10 +1,9 @@
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { parseExpr } from '../parser/parser';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
-import { mkConstTT, mkHoleTT, mkPropTT } from '../compiler/surface';
-import { createNamedArgLookup, type DefinitionsMap } from '../compiler/term';
+import { mkConstTT } from '../compiler/surface';
+import { type DefinitionsMap } from '../compiler/term';
 import { runSimp } from '../tactics/simp-tactic';
-import type { InteractiveGoal } from './interactive-goal';
 import {
   TypedProofContext,
   type InductiveMap,
@@ -18,6 +17,7 @@ import type { RewriteSuggestion, TacticSuggestion } from './tactic-suggestions';
 import {
   applyTacticCommandsAtCursor,
   buildApplyTacticCommands,
+  buildHaveTacticCommands,
 } from './tactic-command-bridge';
 
 export type ProofTreeManualTacticMode =
@@ -33,7 +33,6 @@ export type ProofTreeManualTacticMode =
   | { tactic: 'have' };
 
 export interface ProofTreeSuggestionContext {
-  readonly interactiveGoal?: InteractiveGoal | null;
   readonly inductiveMap?: InductiveMap;
   readonly registry?: SyntaxRegistry;
   readonly typedContext?: TypedProofContext | null;
@@ -79,30 +78,6 @@ function buildInductionResult(
   }
 
   return applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
-}
-
-export function buildProjectionApplicationSource(
-  projName: string,
-  hypName: string,
-  definitions: DefinitionsMap,
-): string | null {
-  const namedArgLookup = createNamedArgLookup(definitions);
-  const namedArgMap = namedArgLookup(projName);
-  const numImplicit = namedArgMap?.size ?? 0;
-  const termDef = definitions.terms.get(projName);
-  if (!termDef?.type) return null;
-
-  let numExplicit = 0;
-  let t = termDef.type;
-  let idx = 0;
-  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
-    if (idx >= numImplicit) numExplicit++;
-    t = t.body;
-    idx++;
-  }
-
-  const holes = Array(Math.max(0, numExplicit - 1)).fill('?').join(' ');
-  return holes ? `${projName} ${hypName} ${holes}` : `${projName} ${hypName}`;
 }
 
 function escapeRegExp(s: string): string {
@@ -300,6 +275,10 @@ export function applySuggestionToProofTreeState(
   suggestion: TacticSuggestion,
   ctx: ProofTreeSuggestionContext,
 ): ProofTreeState | null {
+  if (suggestion.tacticCommands && suggestion.tacticCommands.length > 0) {
+    return applyTacticCommandsAtCursor(state, suggestion.tacticCommands);
+  }
+
   if (suggestion.id === 'exact-refl') {
     return applyTacticCommandsAtCursor(state, [{ name: 'exact', args: [mkConstTT('refl')] }]);
   }
@@ -311,13 +290,7 @@ export function applySuggestionToProofTreeState(
 
   if (suggestion.id.startsWith('induction-')) {
     const scrutinee = suggestion.id.slice('induction-'.length);
-    const typeHead = ctx.interactiveGoal?.contextVarTypes.get(scrutinee);
-    const indInfo = typeHead && ctx.inductiveMap ? ctx.inductiveMap.get(typeHead) : undefined;
-    if (!indInfo) return null;
-    const rev = ctx.registry ? buildReverseRegistry(ctx.registry) : undefined;
-    const ctxNames = ctx.typedContext?.hypotheses.map(h => h.name);
-    const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
-    return applyInductionWithCtors(state, scrutinee, ctorInfos);
+    return buildInductionResult(state, scrutinee, ctx);
   }
 
   if (suggestion.id.startsWith('fold-')) {
@@ -386,45 +359,6 @@ export function applySuggestionToProofTreeState(
   if (names.length === 0) return null;
   const introName = names.length === 1 ? 'intro' : 'intros';
   return applyTacticCommandsAtCursor(state, [{ name: introName, args: names.map(mkConstTT) }]);
-}
-
-export function applyHypothesisSuggestionToProofTreeState(
-  state: ProofTreeState,
-  suggestion: TacticSuggestion,
-  hypName: string,
-  ctx: Pick<ProofTreeSuggestionContext, 'typedContext' | 'inductiveMap' | 'registry' | 'definitions'>,
-): ProofTreeState | null {
-  if (suggestion.id.startsWith('hyp-exact-')) {
-    return applySuggestionToProofTreeState(state, {
-      ...suggestion,
-      id: `exact-hyp-${hypName}`,
-    }, {});
-  }
-
-  if (suggestion.id.startsWith('hyp-apply-')) {
-    return applySuggestionToProofTreeState(state, {
-      ...suggestion,
-      id: `apply-hyp-${hypName}`,
-    }, {});
-  }
-
-  if (suggestion.id.startsWith('hyp-proj-')) {
-    const projName = suggestion.applyCtorName;
-    if (!projName || !ctx.definitions) return null;
-    const expr = buildProjectionApplicationSource(projName, hypName, ctx.definitions);
-    if (!expr) return null;
-    return applyManualProofTreeTactic(state, { tactic: 'have' }, `h := ${expr}`, {});
-  }
-
-  if (suggestion.id.startsWith('hyp-destruct-')) {
-    return applyManualProofTreeTactic(state, { tactic: 'induction' }, hypName, {
-      typedContext: ctx.typedContext,
-      inductiveMap: ctx.inductiveMap,
-      registry: ctx.registry,
-    });
-  }
-
-  return null;
 }
 
 export function applyManualProofTreeTactic(
@@ -506,14 +440,7 @@ export function applyManualProofTreeTactic(
       const haveName = trimmed.slice(0, eqIdx).trim().split(':')[0].trim();
       const haveExpr = trimmed.slice(eqIdx + 2).trim();
       if (!haveName || !haveExpr) return null;
-      return applyTacticCommandsAtCursor(state, [{
-        name: 'have',
-        args: [
-          mkConstTT(haveName),
-          mkHoleTT('_have_type', mkHoleTT('_have_type_type', mkPropTT())),
-          parseExpr(haveExpr),
-        ],
-      }]);
+      return applyTacticCommandsAtCursor(state, buildHaveTacticCommands(haveName, haveExpr));
     }
 
     case 'simp': {

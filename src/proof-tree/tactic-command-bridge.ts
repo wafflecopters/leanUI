@@ -7,6 +7,7 @@ import {
   flatParamsToCasePatterns,
   type TTerm,
 } from '../compiler/surface';
+import { createNamedArgLookup, type DefinitionsMap } from '../compiler/term';
 import type { ProofNode, ProofTreeState } from './proof-tree';
 import { findNode, replaceNode } from './proof-tree';
 import { findFirstHole, tacticCommandsToProofTree } from './tactic-to-tree';
@@ -47,6 +48,30 @@ export function buildHaveTacticCommands(
     name: 'have',
     args: [mkConstTT(name), inferredTypeHole, parseSourceExpr(expr)],
   }];
+}
+
+export function buildProjectionApplicationSource(
+  projName: string,
+  hypName: string,
+  definitions: DefinitionsMap,
+): string | null {
+  const namedArgLookup = createNamedArgLookup(definitions);
+  const namedArgMap = namedArgLookup(projName);
+  const numImplicit = namedArgMap?.size ?? 0;
+  const termDef = definitions.terms.get(projName);
+  if (!termDef?.type) return null;
+
+  let numExplicit = 0;
+  let t = termDef.type;
+  let idx = 0;
+  while (t.tag === 'Binder' && t.binderKind.tag === 'BPi') {
+    if (idx >= numImplicit) numExplicit++;
+    t = t.body;
+    idx++;
+  }
+
+  const holes = Array(Math.max(0, numExplicit - 1)).fill('?').join(' ');
+  return holes ? `${projName} ${hypName} ${holes}` : `${projName} ${hypName}`;
 }
 
 export function applyTacticCommandsAtCursor(

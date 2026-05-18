@@ -2,11 +2,10 @@ import { mkConstTT } from '../compiler/surface';
 import { createDefinitionsMap } from '../compiler/term';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { createInitialState, mkExact, mkHave, mkHole, resetProofIds } from './proof-tree';
+import { buildProjectionApplicationSource, buildHaveTacticCommands } from './tactic-command-bridge';
 import {
   applyManualProofTreeTactic,
-  applyHypothesisSuggestionToProofTreeState,
   applySuggestionToProofTreeState,
-  buildProjectionApplicationSource,
   hoistTermBuilderSlotToHave,
   renameHaveBindingInProofTree,
   type ProofTreeManualTacticMode,
@@ -68,6 +67,39 @@ describe('applySuggestionToProofTreeState', () => {
     expect(next.root.reverse).toBe(true);
     expect(next.root.occurrences).toEqual([1]);
     expect(next.root.targetHead).toBe('two');
+  });
+
+  test('hypothesis projection suggestions use shared tactic commands directly', () => {
+    const state = createInitialState();
+    const next = applySuggestionToProofTreeState(state, {
+      id: 'hyp-proj-hLim-eps_delta',
+      label: 'Use eps_delta',
+      description: 'Introduce a helper hypothesis',
+      tacticCommands: buildHaveTacticCommands('h', 'Limit.eps_delta hLim _ _'),
+    }, {});
+
+    expect(next).not.toBeNull();
+    expect(next?.root.tag).toBe('have');
+    if (!next || next.root.tag !== 'have') return;
+    expect(next.root.name).toBe('h');
+    expect(next.root.expr).toBe('(Limit.eps_delta hLim _ _)');
+  });
+
+  test('hypothesis destructure suggestions share the generic induction path', () => {
+    const state = createInitialState();
+    const destructCtx = {
+      hypotheses: [{ name: 'n', rawType: mkConstTT('Nat'), type: 'Nat' }],
+      goal: '?',
+    } as any;
+    const next = applySuggestionToProofTreeState(state, {
+      id: 'induction-n',
+      label: 'cases n',
+      description: 'Destructure the hypothesis',
+    }, {
+      typedContext: destructCtx,
+    });
+
+    expect(next?.root.tag).toBe('induction');
   });
 });
 
@@ -224,82 +256,25 @@ describe('hypothesis suggestion helpers', () => {
       .toBe('Limit.eps_delta hLim ? ?');
   });
 
-  test('hypothesis projection suggestion now goes through shared pure helper', () => {
-    const state = createInitialState();
-    const definitions = createDefinitionsMap();
-    definitions.terms.set('Limit.eps_delta', {
-      name: 'Limit.eps_delta',
-      namedArgMap: new Map([['R', 0]]),
-      type: {
-        tag: 'Binder',
-        name: 'R',
-        binderKind: { tag: 'BPi' },
-        domain: { tag: 'Sort', level: { tag: 'ULit', n: 0 } },
-        body: {
-          tag: 'Binder',
-          name: 'limitProof',
-          binderKind: { tag: 'BPi' },
-          domain: { tag: 'Const', name: 'Limit' },
-          body: {
-            tag: 'Binder',
-            name: 'eps',
-            binderKind: { tag: 'BPi' },
-            domain: { tag: 'Const', name: 'Carrier' },
-            body: {
-              tag: 'Binder',
-              name: 'epsPos',
-              binderKind: { tag: 'BPi' },
-              domain: { tag: 'Const', name: 'Rlt' },
-              body: { tag: 'Const', name: 'Sigma' },
-            },
-          },
-        },
-      } as any,
-    });
-
-    const next = applyHypothesisSuggestionToProofTreeState(state, {
-      id: 'hyp-proj-0',
-      label: 'Use projection',
-      description: 'Introduce a helper hypothesis',
-      applyCtorName: 'Limit.eps_delta',
-    }, 'hLim', { definitions });
-
-    expect(next).not.toBeNull();
-    expect(next?.root.tag).toBe('have');
-    if (!next || next.root.tag !== 'have') return;
-    expect(next.root.expr).toBe('(Limit.eps_delta hLim _ _)');
-  });
-
-  test('hypothesis exact/apply/destruct suggestions reuse the shared bridge helpers', () => {
+  test('hypothesis exact/apply suggestions reuse the shared bridge helpers', () => {
     const state = createInitialState();
 
-    const exactNext = applyHypothesisSuggestionToProofTreeState(state, {
-      id: 'hyp-exact-0',
+    const exactNext = applySuggestionToProofTreeState(state, {
+      id: 'exact-hyp-h',
       label: 'exact h',
       description: 'Use the hypothesis directly',
-    }, 'h', {});
+    }, {});
     expect(exactNext?.root.tag).toBe('exact');
 
-    const applyNext = applyHypothesisSuggestionToProofTreeState(state, {
-      id: 'hyp-apply-0',
+    const applyNext = applySuggestionToProofTreeState(state, {
+      id: 'apply-hyp-h',
       label: 'apply h',
       description: 'Apply the hypothesis',
       numSubgoals: 2,
-    }, 'h', {});
+    }, {});
     expect(applyNext?.root.tag).toBe('apply');
     if (applyNext?.root.tag === 'apply') {
       expect(applyNext.root.children).toHaveLength(2);
     }
-
-    const destructCtx = {
-      hypotheses: [{ name: 'n', rawType: mkConstTT('Nat'), type: 'Nat' }],
-      goal: '?',
-    } as any;
-    const destructNext = applyHypothesisSuggestionToProofTreeState(state, {
-      id: 'hyp-destruct-0',
-      label: 'cases n',
-      description: 'Destructure the hypothesis',
-    }, 'n', { typedContext: destructCtx });
-    expect(destructNext?.root.tag).toBe('induction');
   });
 });

@@ -5,6 +5,7 @@
 import { describe, test, expect, beforeEach } from 'vitest';
 import { TTKTerm } from '../compiler/kernel';
 import { compileTTFromText } from '../compiler/compile';
+import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { createInitialEngine } from './tacticsEngine';
 import { IntrosTactic, resetMetaCounter } from './tactic';
 import { DefinitionsMap } from '../compiler/term';
@@ -213,4 +214,55 @@ describe('runSimp', () => {
     // Should NOT run 50 steps — cycle detection should stop it
     expect(result.steps.length).toBeLessThan(5);
   });
+
+  test('normalizes bare @ofRat NatLit arguments into MkRat-form before rewriting', () => {
+    const compiled = compileTTFromText(REAL_ANALYSIS_CODE);
+    expect(compiled.success).toBe(true);
+    const defs = compiled.definitions!;
+    const goalType: TTKTerm = {
+      tag: 'Binder',
+      binderKind: { tag: 'BPi' },
+      name: 'R',
+      domain: { tag: 'Const', name: 'Real' },
+      body: {
+        tag: 'App',
+        fn: {
+          tag: 'App',
+          fn: {
+            tag: 'App',
+            fn: { tag: 'Const', name: 'rle' },
+            arg: { tag: 'Var', index: 0 },
+          },
+          arg: {
+            tag: 'App',
+            fn: {
+              tag: 'App',
+              fn: { tag: 'Const', name: 'realOfRat' },
+              arg: { tag: 'Var', index: 0 },
+            },
+            arg: { tag: 'NatLit', value: 0n },
+          },
+        },
+        arg: {
+          tag: 'App',
+          fn: {
+            tag: 'App',
+            fn: { tag: 'Const', name: 'realOfRat' },
+            arg: { tag: 'Var', index: 0 },
+          },
+          arg: { tag: 'NatLit', value: 1n },
+        },
+      },
+    };
+    let engine = createInitialEngine(goalType, [], defs);
+    const goal = engine.getFocusedGoal()!;
+    const goalId = engine.getFocusedGoalId()!;
+    const introsResult = new IntrosTactic(['R']).apply(engine, goal, goalId);
+    if (!introsResult.success) { expect.unreachable('intros failed'); return; }
+    engine = introsResult.newEngine;
+
+    const result = runSimp(engine, [...(defs.simpLemmas ?? [])]);
+    expect(result.success).toBe(true);
+    expect(result.steps.length).toBeGreaterThanOrEqual(2);
+  }, 20000);
 });
