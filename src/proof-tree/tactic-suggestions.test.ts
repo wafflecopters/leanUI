@@ -2,7 +2,13 @@ import { describe, test, expect, beforeAll } from 'vitest';
 import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, MetaVar } from '../compiler/term';
 import { mkConstTT } from '../compiler/surface';
-import { collectRewriteCandidates, computeTacticSuggestions, KernelGoalInfo } from './tactic-suggestions';
+import {
+  collectRewriteCandidates,
+  computeSelectedBinderSuggestionsForToken,
+  computeTacticSuggestions,
+  KernelGoalInfo,
+  mergeGoalSuggestions,
+} from './tactic-suggestions';
 import { compileTTFromText } from '../compiler/compile';
 import { createInitialEngine } from '../tactics/tacticsEngine';
 import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
@@ -48,6 +54,40 @@ function mkConst(name: string): TTKTerm {
 function mkVar(index: number): TTKTerm {
   return { tag: 'Var', index };
 }
+
+describe('shared suggestion policy helpers', () => {
+  test('binder-token helper adds induction when raw type head is inductive', () => {
+    const sugs = computeSelectedBinderSuggestionsForToken(
+      'n',
+      { tag: 'Const', name: 'Nat' } as any,
+      undefined,
+      new Map([['Nat', {}]]),
+    );
+
+    expect(sugs.some(s => s.id === 'induction-n')).toBe(true);
+  });
+
+  test('mergeGoalSuggestions prefers simp suggestions when previews collide', () => {
+    const merged = mergeGoalSuggestions(
+      [],
+      [{
+        id: 'rewrite-addRealOfRat',
+        label: 'rewrite addRealOfRat',
+        description: 'rw',
+        resultGoalLatex: '1',
+      }],
+      [{
+        id: 'simp-addRealOfRat',
+        label: 'simp addRealOfRat',
+        description: 'simp',
+        resultGoalLatex: '1',
+      }],
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe('simp-addRealOfRat');
+  });
+});
 
 // ============================================================================
 // Tests for self-referential filtering

@@ -11,7 +11,23 @@ import {
   generateCaseInfos,
 } from './goal-computation';
 import type { ProofNodeId, ProofTreeState } from './proof-tree';
-import { applyInduction, applyInductionWithCtors, applySimp, findNode, mkHave, mkHole, replaceNode } from './proof-tree';
+import {
+  addCase,
+  applyInduction,
+  applyInductionWithCtors,
+  applySimp,
+  clearNode,
+  editCaseParamName,
+  editIntroName,
+  findNode,
+  mkHave,
+  mkHole,
+  removeCase,
+  replaceNode,
+  toggleCollapse,
+  toggleInductionCollapse,
+  toggleSimpCollapse,
+} from './proof-tree';
 import { buildExprFromSlots, kernelTermToSource, type TermBuilderState } from './term-builder';
 import type { RewriteSuggestion, TacticSuggestion } from './tactic-suggestions';
 import {
@@ -268,6 +284,82 @@ export function hoistTermBuilderSlotToHave(
   if (!expr) return updated;
 
   return updateHaveExprInProofTree(updated, haveNodeId, expr) ?? updated;
+}
+
+export function clearProofTreeNode(
+  state: ProofTreeState,
+  nodeId: ProofNodeId,
+): ProofTreeState | null {
+  return clearNode(state, nodeId);
+}
+
+export function insertHaveFromTermBuilder(
+  state: ProofTreeState,
+  builderState: TermBuilderState,
+  haveName = 'h',
+): ProofTreeState | null {
+  const expr = buildExprFromSlots(
+    builderState.fnName,
+    builderState.slots,
+    builderState.goalCtx,
+  );
+  if (!expr) return null;
+  return applyTacticCommandsAtCursor(state, buildHaveTacticCommands(haveName, expr));
+}
+
+export function renameIntroTokenInProofTree(
+  state: ProofTreeState,
+  nodeId: ProofNodeId,
+  nameIndex: number,
+  newName: string,
+): ProofTreeState | null {
+  return editIntroName(state, nodeId, nameIndex, newName);
+}
+
+export function renameCaseParamInProofTree(
+  state: ProofTreeState,
+  caseId: ProofNodeId,
+  paramIndex: number,
+  newName: string,
+): ProofTreeState | null {
+  return editCaseParamName(state, caseId, paramIndex, newName);
+}
+
+export function addInductionCaseInProofTree(
+  state: ProofTreeState,
+  inductionId: ProofNodeId,
+  label: string,
+): ProofTreeState | null {
+  return addCase(state, inductionId, label);
+}
+
+export function removeInductionCaseInProofTree(
+  state: ProofTreeState,
+  inductionId: ProofNodeId,
+  caseIndex: number,
+): ProofTreeState | null {
+  return removeCase(state, inductionId, caseIndex);
+}
+
+export function toggleCaseCollapseInProofTree(
+  state: ProofTreeState,
+  caseId: ProofNodeId,
+): ProofTreeState {
+  return toggleCollapse(state, caseId);
+}
+
+export function toggleSimpCollapseInProofTree(
+  state: ProofTreeState,
+  nodeId: ProofNodeId,
+): ProofTreeState | null {
+  return toggleSimpCollapse(state, nodeId);
+}
+
+export function toggleInductionCollapseInProofTree(
+  state: ProofTreeState,
+  nodeId: ProofNodeId,
+): ProofTreeState | null {
+  return toggleInductionCollapse(state, nodeId);
 }
 
 export function applySuggestionToProofTreeState(

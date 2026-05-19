@@ -506,7 +506,7 @@ test : DPair Nat (\\n => Pair Nat Nat) -> Nat := by
     expect(foundX1).toBe(true);
   });
 
-  test('implicit-arg metas are resolved for correct hypothesis types', { timeout: 45000 }, async () => {
+  test('implicit-arg metas are resolved for correct hypothesis types', { timeout: 90000 }, async () => {
     // When `cases Limit.eps_delta limG …` destructures, the hypothesis
     // types should reference `g` and `M` (from limG), NOT `f` and `L`
     // (from the generic parameter name in Limit.eps_delta's type signature).

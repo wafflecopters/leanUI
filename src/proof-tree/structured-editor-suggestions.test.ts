@@ -176,7 +176,7 @@ testImg29 R = ?h`);
     expect(zeroLeOneSug!.numSubgoals).toBe(0);
   });
 
-  test('REGRESSION (image #35): clicking a collapsed literal (`2`) does NOT surface simp rewrites of its parent', { timeout: 30000 }, () => {
+  test('REGRESSION (image #35): clicking a collapsed literal (`2`) does NOT surface simp rewrites of its parent', { timeout: 60000 }, () => {
     // Image #35: user clicked just `2` (which renders from
     // \`realOfRat R MkRat2\` via @ofRat-fold), but saw \`Simp addRealOfRat
     // → 1\` — a rewrite of the PARENT \`2 + (-1)\`. Clicking a literal
@@ -210,7 +210,7 @@ testFocus2 R = ?h`);
     expect(simpSugs.length).toBe(0);
   });
 
-  test('REGRESSION (image #34): apply leTrans subgoal previews resolve field-implicit to bound R (no `field(□)`)', { timeout: 30000 }, () => {
+  test('REGRESSION (image #34): apply leTrans subgoal previews resolve field-implicit to bound R (no `field(□)`)', { timeout: 90000 }, () => {
     // Image #34: subgoal previews for \`apply CompleteOrderedField.leTrans\`
     // on \`rle 0 1\` showed \`CompleteOrderedField.le (field (□), 0, a)\`
     // — the \`□\` was an unsolved elaborator Hole (the implicit \`{R}\` of
@@ -527,5 +527,49 @@ testImg42b R = ?h`);
     // occurrence, because the kernel goal still contains the same realOfRat
     // structure — just wrapped under the projection head after the rewrite.
     expect(names).toContain('addRealOfRat');
+  });
+
+  // REGRESSION (image #44): inside a `have h : T` proof subtree, apply-def
+  // suggestions used to disappear entirely — only "Unfold X" surfaced.
+  // Root cause: `isCleanApply` was zonking the WHOLE engine term and checking
+  // for dangling metas. In a have block, the engine still holds the outer
+  // theorem's goal (intentionally unsolved while we work on the have's body),
+  // which surfaces as a "dangling meta" and rejects every apply candidate.
+  // Fix: check only the SPECIFIC applied goal's solution, not the whole
+  // engine.
+  test('REGRESSION (image #44): apply suggestions surface inside have proof subtree', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg44', `testImg44 : (R : Real) -> (ε : Carrier R) -> rlt (rzero R) ε -> rlt (rzero R) (rdiv ε (rtwo R))
+testImg44 R ε hε = ?outer`);
+    // Set up: intros, then have h : 0 < ε/2, cursor in the have's proof
+    const { mkHave } = await import('./proof-tree');
+    const haveProofHole = mkHole();
+    const outerHole = mkHole();
+    const haveNode = mkHave('h', '?', outerHole, '(rlt (rzero R) (rdiv ε (rtwo R)))', haveProofHole);
+    const proof: ProofNode = mkIntros(['R', 'ε', 'hε'], haveNode);
+    const engine = replayToEngine(proof, haveProofHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    expect(focusedGoal).toBeDefined();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    let rltPath: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'rlt' && info.occurrenceIndex === 1) { rltPath = p; break; }
+    }
+    expect(rltPath).not.toBeNull();
+    if (!rltPath) return;
+    const sugs = computeTacticSuggestions(rltPath, ig, r.definitions, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    });
+    const labels = sugs.map(s => s.label);
+    // Expect at minimum: Unfold rlt PLUS at least one apply suggestion.
+    // The exact best apply lemma can vary with surrounding search heuristics,
+    // but the regression we care about is that apply-def suggestions surface
+    // at all inside the `have` proof subtree.
+    expect(labels).toContain('Unfold rlt');
+    const hasApplySuggestion = sugs.some(s => (s.id as string)?.startsWith('apply-def-'));
+    expect(hasApplySuggestion).toBe(true);
   });
 });

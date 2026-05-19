@@ -6,10 +6,11 @@
  */
 
 import { GoalPath, GoalBinderInfo, InteractiveGoal } from './interactive-goal';
-import { renderGoalLatex, renderSubtermLatex } from './goal-computation';
+import { extractTypeHead, renderGoalLatex, renderSubtermLatex } from './goal-computation';
 import { TTKTerm, prettyPrint as kernelPrettyPrint } from '../compiler/kernel';
 import { DefinitionsMap, MetaVar, createDefinitionsMap } from '../compiler/term';
 import type { TacticCommand } from '../compiler/surface';
+import type { TTerm } from '../compiler/surface';
 import { fullNormalize, whnf, areTypesDefEq } from '../compiler/whnf';
 import { shiftTerm } from '../compiler/subst';
 import { unifyTerms } from '../compiler/unify';
@@ -992,12 +993,22 @@ function computeHypothesisSuggestions(kernelGoal: KernelGoalInfo): TacticSuggest
       // 0\` from position 2 and \`?a := 1\` from position 3; first wins,
       // producing a proof of \`0 ≤ 0\` — ground but wrong-typed). The
       // type-check catches that.
-      const isCleanApply = (beforeEng: TacticEngine, afterEng: TacticEngine | undefined, _goalId: string, _goalType: TTKTerm): boolean => {
+      const isCleanApply = (beforeEng: TacticEngine, afterEng: TacticEngine | undefined, goalId: string, _goalType: TTKTerm): boolean => {
         if (!afterEng) return false;
         const oldGoalSet = new Set(beforeEng.goals);
         const newSubgoals = new Set(afterEng.goals.filter(g => !oldGoalSet.has(g)));
         try {
-          const zonked = afterEng.zonk();
+          // Check the SPECIFIC applied goal's solution, not the engine's
+          // overall term. In a `have` block, the engine still holds the outer
+          // theorem's goal (e.g. ?outer for the enclosing theorem) which is
+          // unsolved by design — zonking the whole engine would surface that
+          // outer hole as a "dangling meta" and reject every apply suggestion
+          // (image #44). The relevant question is whether THIS apply's
+          // solution is ground modulo the new subgoals it introduced.
+          const appliedMeta = afterEng.metaVars.get(goalId);
+          const solution = appliedMeta?.solution;
+          if (solution === undefined) return false;
+          const zonked = afterEng.zonkTerm(solution, appliedMeta!.ctx.length);
           if (hasMetaNotInSet(zonked, newSubgoals, afterEng, new Set())) return false;
           // For closed-goal applies (no new subgoals), verify the proof's
           // inferred type matches the goal type. Catches the constraint
@@ -1195,6 +1206,50 @@ export function computeSelectedBinderSuggestions(
   }
 
   return suggestions;
+}
+
+export function computeSelectedBinderSuggestionsForToken(
+  name: string,
+  rawType: TTerm | undefined,
+  kernelGoal: KernelGoalInfo | undefined,
+  inductiveMap?: ReadonlyMap<string, unknown>,
+): TacticSuggestion[] {
+  const head = rawType ? extractTypeHead(rawType) : null;
+  const isInductive = !!(head && inductiveMap?.has(head));
+  return computeSelectedBinderSuggestions(name, kernelGoal, isInductive);
+}
+
+export function mergeGoalSuggestions(
+  binderSuggestions: readonly TacticSuggestion[],
+  syncSuggestions: readonly TacticSuggestion[],
+  rewriteSuggestions: readonly TacticSuggestion[],
+): readonly TacticSuggestion[] {
+  if (binderSuggestions.length > 0) return binderSuggestions;
+  if (syncSuggestions.length === 0 && rewriteSuggestions.length === 0) return [];
+
+  const merged = [...syncSuggestions, ...rewriteSuggestions];
+  const seenByPreview = new Map<string, TacticSuggestion>();
+  const ordered: TacticSuggestion[] = [];
+  for (const s of merged) {
+    if (!s.resultGoalLatex) {
+      ordered.push(s);
+      continue;
+    }
+    const existing = seenByPreview.get(s.resultGoalLatex);
+    if (!existing) {
+      seenByPreview.set(s.resultGoalLatex, s);
+      ordered.push(s);
+      continue;
+    }
+    const curIsSimp = s.id.startsWith('simp-');
+    const exIsSimp = existing.id.startsWith('simp-');
+    if (curIsSimp && !exIsSimp) {
+      const idx = ordered.indexOf(existing);
+      if (idx >= 0) ordered[idx] = s;
+      seenByPreview.set(s.resultGoalLatex, s);
+    }
+  }
+  return ordered;
 }
 
 // ============================================================================

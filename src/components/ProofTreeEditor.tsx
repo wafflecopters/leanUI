@@ -14,34 +14,65 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import katex from 'katex';
 import { TTerm } from '../compiler/surface';
 import { TTKTerm } from '../compiler/kernel';
-import { DefinitionsMap, createNamedArgLookup } from '../compiler/term';
+import { DefinitionsMap } from '../compiler/term';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import {
   ProofTreeHistory, ProofTreeState, ProofNode, CaseNode, SimpNode, ProofNodeId,
   computeContext,
   applySimp,
-  addCase, removeCase, toggleCollapse, toggleInductionCollapse, toggleSimpCollapse,
   moveCursorUp, moveCursorDown,
-  clearNode, editIntroName, editCaseParamName,
   pushState, updateCurrent, undo, redo,
 } from '../proof-tree/proof-tree';
 import { runSimp } from '../tactics/simp-tactic';
 import {
   TypedProofContext, ValidationResult, computeTypedContext, computeApplySubgoalCount,
-  NodeGoalInfo, replayEntireTree, replayToEngine, parseExactExpr,
-  InductiveMap, extractTypeHead, generateCaseInfos,
+  NodeGoalInfo, replayEntireTree, replayToEngine,
+  InductiveMap, generateCaseInfos,
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
 import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
-import { computeTacticSuggestions, computeRewriteSuggestionsIncremental, computeSelectedBinderSuggestions, computeSelectedHypSuggestions, TacticSuggestion, RewriteSuggestion, RewriteProgress } from '../proof-tree/tactic-suggestions';
-import { renderNameLatex } from '../proof-tree/name-latex';
-import { computeTermSlots, buildExprFromSlots, rebuildTermBuilderWithFilledSlot, rebuildTermBuilderWithoutSlot, TermBuilderState, TermSlot } from '../proof-tree/term-builder';
 import {
+  computeRewriteSuggestionsIncremental,
+  TacticSuggestion,
+  RewriteProgress,
+} from '../proof-tree/tactic-suggestions';
+import {
+  EMPTY_GOAL_INTERACTION_STATE,
+  clearGoalInteractionAfterApply,
+  clearGoalInteractionForCursorChange,
+  computeGoalInteractionHypothesisSuggestions,
+  computeGoalInteractionSuggestions,
+  selectGoalInteractionBinder,
+  selectGoalInteractionPath,
+  startGoalInteractionEditing,
+  toggleGoalInteractionHypothesis,
+  updateGoalInteractionEditingNames,
+  type GoalInteractionState,
+  type SelectedBinder,
+} from '../proof-tree/goal-interaction-state';
+import { renderNameLatex } from '../proof-tree/name-latex';
+import {
+  clearTermBuilderSlot,
+  fillTermBuilderSlotFromSource,
+  openTermBuilderFromSourceExpr,
+  TermBuilderState,
+  TermSlot,
+} from '../proof-tree/term-builder';
+import {
+  addInductionCaseInProofTree,
   applyManualProofTreeTactic,
   applySuggestionToProofTreeState,
+  clearProofTreeNode,
   hoistTermBuilderSlotToHave,
+  insertHaveFromTermBuilder,
+  removeInductionCaseInProofTree,
+  renameCaseParamInProofTree,
+  renameIntroTokenInProofTree,
   renameHaveBindingInProofTree,
+  toggleCaseCollapseInProofTree,
+  toggleInductionCollapseInProofTree,
+  toggleSimpCollapseInProofTree,
   type ProofTreeManualTacticMode,
   updateHaveExprInProofTree,
 } from '../proof-tree/tactic-editing';
@@ -79,12 +110,6 @@ export interface ProofTreeEditorProps {
   currentDeclName?: string;
   /** Pre-computed tactic trace from compilation — avoids re-running tactics */
   tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[];
-}
-
-/** A binder selected by clicking a variable name in the proof prose view. */
-interface SelectedBinder {
-  readonly token: IntroToken;
-  readonly introNodeId: ProofNodeId;
 }
 
 // ============================================================================
@@ -184,28 +209,27 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const [activeTab, setActiveTab] = useState<'tactics' | 'proof'>('proof');
 
   // Goal interaction state (shared between GoalPanel and prose view)
-  const [goalSelectedPath, setGoalSelectedPath] = useState<GoalPath | null>(null);
-  const [goalEditingNames, setGoalEditingNames] = useState<string[] | null>(null);
-  const [goalEditingSuggestionId, setGoalEditingSuggestionId] = useState<string | null>(null);
+  const [goalInteractionState, setGoalInteractionState] = useState<GoalInteractionState>(
+    EMPTY_GOAL_INTERACTION_STATE,
+  );
+  const {
+    selectedPath: goalSelectedPath,
+    selectedBinder,
+    selectedHyp,
+    editingNames: goalEditingNames,
+    editingSuggestionId: goalEditingSuggestionId,
+  } = goalInteractionState;
 
-  // Selected binder from prose view (mutually exclusive with goalSelectedPath)
-  const [selectedBinder, setSelectedBinderRaw] = useState<SelectedBinder | null>(null);
-
-  // Mutual exclusion: selecting a binder clears goal path and vice versa
   const handleSelectBinder = useCallback((binder: SelectedBinder | null) => {
-    setSelectedBinderRaw(binder);
-    if (binder) {
-      setGoalSelectedPath(null);
-      setGoalEditingNames(null);
-      setGoalEditingSuggestionId(null);
-    }
+    setGoalInteractionState(prev => selectGoalInteractionBinder(prev, binder));
   }, []);
 
   const handleSelectGoalPath = useCallback((path: GoalPath | null) => {
-    setGoalSelectedPath(path);
-    if (path) {
-      setSelectedBinderRaw(null);
-    }
+    setGoalInteractionState(prev => selectGoalInteractionPath(prev, path));
+  }, []);
+
+  const handleToggleHypothesis = useCallback((hypIndex: number) => {
+    setGoalInteractionState(prev => toggleGoalInteractionHypothesis(prev, hypIndex));
   }, []);
 
   const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
@@ -249,14 +273,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   }, [typedContext?.kernelGoal, currentDeclName]);
 
   // Compute tactic suggestions from selection (synchronous: intro, unfold, induction)
-  const syncSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
-    if (!interactiveGoal || !goalSelectedPath) return [];
-    return computeTacticSuggestions(goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName);
-  }, [goalSelectedPath, interactiveGoal, definitions, kernelGoalWithDeclName]);
-
   // Incremental rewrite suggestions (scan hypotheses, try targeted rewrites)
   const [rewriteProgress, setRewriteProgress] = useState<RewriteProgress | null>(null);
-  const rewriteSuggestions = rewriteProgress?.suggestions ?? [];
   useEffect(() => {
     setRewriteProgress(null);
     if (!goalSelectedPath || !interactiveGoal || !kernelGoalWithDeclName) return;
@@ -268,56 +286,35 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   }, [goalSelectedPath, interactiveGoal, kernelGoalWithDeclName]);
 
   // Compute binder-specific suggestions when a binder is selected in the prose view
-  const binderSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
-    if (!selectedBinder) return [];
-    const isInductive = selectedBinder.token.rawType
-      ? (() => {
-          const head = extractTypeHead(selectedBinder.token.rawType!);
-          return !!(head && inductiveMap?.has(head));
-        })()
-      : false;
-    return computeSelectedBinderSuggestions(selectedBinder.token.name, kernelGoalWithDeclName, isInductive);
-  }, [selectedBinder, kernelGoalWithDeclName, inductiveMap]);
-
-  // Merge all suggestions — binder suggestions take priority when active.
-  // Dedupe by resultGoalLatex: when a simp lemma and the underlying rewrite
-  // produce the same visible result (e.g. \`Simp addRealOfRat → 1\` and
-  // \`rw addRealOfRat → 1\`), keep one. Prefer simp-* over rewrite-* since
-  // simp suggestions are curated. Suggestions without resultGoalLatex
-  // (apply / construct / unfold-as-fallback) aren't deduped.
   const goalSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
-    if (binderSuggestions.length > 0) return binderSuggestions;
-    if (syncSuggestions.length === 0 && rewriteSuggestions.length === 0) return [];
-    const merged = [...syncSuggestions, ...rewriteSuggestions];
-    const seenByPreview = new Map<string, TacticSuggestion>();
-    const ordered: TacticSuggestion[] = [];
-    for (const s of merged) {
-      if (!s.resultGoalLatex) { ordered.push(s); continue; }
-      const existing = seenByPreview.get(s.resultGoalLatex);
-      if (!existing) {
-        seenByPreview.set(s.resultGoalLatex, s);
-        ordered.push(s);
-        continue;
-      }
-      // Replace if current has higher priority (simp- beats rewrite-).
-      const curIsSimp = s.id.startsWith('simp-');
-      const exIsSimp = existing.id.startsWith('simp-');
-      if (curIsSimp && !exIsSimp) {
-        const idx = ordered.indexOf(existing);
-        if (idx >= 0) ordered[idx] = s;
-        seenByPreview.set(s.resultGoalLatex, s);
-      }
-      // else: drop the duplicate
-    }
-    return ordered;
-  }, [binderSuggestions, syncSuggestions, rewriteSuggestions]);
+    return computeGoalInteractionSuggestions(
+      goalInteractionState,
+      interactiveGoal,
+      definitions,
+      kernelGoalWithDeclName,
+      inductiveMap,
+      rewriteProgress,
+    );
+  }, [
+    goalInteractionState,
+    interactiveGoal,
+    definitions,
+    kernelGoalWithDeclName,
+    inductiveMap,
+    rewriteProgress,
+  ]);
+
+  const hypSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
+    return computeGoalInteractionHypothesisSuggestions(
+      goalInteractionState,
+      typedContext,
+      definitions,
+    );
+  }, [goalInteractionState, typedContext, definitions]);
 
   // Reset goal selection and binder selection when cursor changes
   useEffect(() => {
-    setGoalSelectedPath(null);
-    setGoalEditingNames(null);
-    setGoalEditingSuggestionId(null);
-    setSelectedBinderRaw(null);
+    setGoalInteractionState(clearGoalInteractionForCursorChange());
   }, [state.cursor.nodeId]);
 
   // Compute goal map for prose view (replays entire tree, not just to cursor)
@@ -344,13 +341,46 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   const pushChange = useCallback((newState: ProofTreeState) => {
     onHistoryChange(pushState(history, newState));
     setTacticMode(null);
-    setSelectedBinderRaw(null);
+    setGoalInteractionState(prev => ({ ...prev, selectedBinder: null, selectedHyp: null }));
   }, [history, onHistoryChange]);
 
   // Dispatch a cursor-only move (does NOT go on undo stack)
   const moveCursor = useCallback((newState: ProofTreeState) => {
     onHistoryChange(updateCurrent(history, newState));
   }, [history, onHistoryChange]);
+
+  const handleApplySuggestion = useCallback((suggestion: TacticSuggestion) => {
+    const result = applySuggestionToProofTreeState(state, suggestion, {
+      inductiveMap,
+      registry,
+      typedContext,
+      definitions,
+      editingNames: goalInteractionState.editingNames,
+      editingSuggestionId: goalInteractionState.editingSuggestionId,
+    });
+
+    if (result) {
+      pushChange(result);
+      setGoalInteractionState(clearGoalInteractionAfterApply());
+    }
+  }, [
+    state,
+    inductiveMap,
+    registry,
+    typedContext,
+    definitions,
+    goalInteractionState.editingNames,
+    goalInteractionState.editingSuggestionId,
+    pushChange,
+  ]);
+
+  const handleStartSuggestionEditing = useCallback((suggestion: TacticSuggestion) => {
+    setGoalInteractionState(prev => startGoalInteractionEditing(prev, suggestion));
+  }, []);
+
+  const handleEditingNamesChange = useCallback((names: string[] | null, suggestionId?: string) => {
+    setGoalInteractionState(prev => updateGoalInteractionEditingNames(prev, names, suggestionId));
+  }, []);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     // Don't intercept keys when typing in an input
@@ -381,7 +411,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
       }
       case 'Backspace':
       case 'Delete': {
-        const cleared = clearNode(state, state.cursor.nodeId);
+        const cleared = clearProofTreeNode(state, state.cursor.nodeId);
         if (cleared) {
           pushChange(cleared);
         }
@@ -474,9 +504,11 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 selectedPath={goalSelectedPath}
                 onSelectPath={handleSelectGoalPath}
                 editingNames={goalEditingNames}
-                onEditingNames={setGoalEditingNames}
+                onEditingNames={handleEditingNamesChange}
                 editingSuggestionId={goalEditingSuggestionId}
-                onEditingSuggestionId={setGoalEditingSuggestionId}
+                onEditingSuggestionId={(id) => handleEditingNamesChange(goalEditingNames, id ?? undefined)}
+                onApplySuggestion={handleApplySuggestion}
+                onStartEditingSuggestion={handleStartSuggestionEditing}
                 rewriteProgress={rewriteProgress}
                 selectedBinder={selectedBinder}
                 onSelectBinder={handleSelectBinder}
@@ -497,13 +529,15 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
           selectedPath={goalSelectedPath}
           onSelectPath={handleSelectGoalPath}
           editingNames={goalEditingNames}
-          onEditingNames={setGoalEditingNames}
+          onEditingNames={handleEditingNamesChange}
           editingSuggestionId={goalEditingSuggestionId}
-          onEditingSuggestionId={setGoalEditingSuggestionId}
-          inductiveMap={inductiveMap}
-          registry={registry}
+          onEditingSuggestionId={(id) => handleEditingNamesChange(goalEditingNames, id ?? undefined)}
+          onApplySuggestion={handleApplySuggestion}
+          onStartEditingSuggestion={handleStartSuggestionEditing}
+          selectedHyp={selectedHyp}
+          onToggleHypothesis={handleToggleHypothesis}
+          hypSuggestions={hypSuggestions}
           rewriteProgress={rewriteProgress}
-          definitions={definitions}
           onOpenTermBuilder={() => {}}
         />
       </SplitPane>
@@ -525,17 +559,14 @@ interface GoalInteractionProps {
   selectedPath: GoalPath | null;
   onSelectPath: (p: GoalPath | null) => void;
   editingNames: string[] | null;
-  onEditingNames: (n: string[] | null) => void;
+  onEditingNames: (n: string[] | null, suggestionId?: string) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
-  state: ProofTreeState;
-  onPushChange: (s: ProofTreeState) => void;
+  onApplySuggestion: (suggestion: TacticSuggestion) => void;
+  onStartEditingSuggestion: (suggestion: TacticSuggestion) => void;
   /** Fallback LaTeX when interactive goal is unavailable. */
   fallbackGoalLatex?: string;
   validation?: ValidationResult;
-  inductiveMap?: InductiveMap;
-  registry?: SyntaxRegistry;
-  typedContext?: TypedProofContext | null;
   /** Progress of incremental rewrite suggestion scanning. */
   rewriteProgress?: RewriteProgress | null;
   /** Font size for the interactive goal display (default '11px'). */
@@ -547,38 +578,10 @@ function GoalInteraction({
   selectedPath, onSelectPath,
   editingNames, onEditingNames,
   editingSuggestionId, onEditingSuggestionId,
-  state, onPushChange,
+  onApplySuggestion, onStartEditingSuggestion,
   fallbackGoalLatex, validation,
-  inductiveMap, registry, typedContext,
   rewriteProgress, goalFontSize,
 }: GoalInteractionProps) {
-  const handleApplySuggestion = (suggestion: TacticSuggestion) => {
-    const result = applySuggestionToProofTreeState(state, suggestion, {
-      inductiveMap,
-      registry,
-      typedContext,
-      editingNames,
-      editingSuggestionId,
-    });
-
-    if (result) {
-      onPushChange(result);
-      onSelectPath(null);
-      onEditingNames(null);
-      onEditingSuggestionId(null);
-    }
-  };
-
-  const handleStartEditing = (suggestion: TacticSuggestion) => {
-    if (editingSuggestionId === suggestion.id) {
-      onEditingSuggestionId(null);
-      onEditingNames(null);
-    } else {
-      onEditingSuggestionId(suggestion.id);
-      onEditingNames([...(suggestion.proposedNames ?? [])]);
-    }
-  };
-
   return (
     <>
       {/* Goal display */}
@@ -653,7 +656,7 @@ function GoalInteraction({
                     <button
                       key={s.id}
                       style={suggestionPreviewBtnStyle}
-                      onClick={() => handleApplySuggestion(s)}
+                      onClick={() => onApplySuggestion(s)}
                       title={s.description}
                     >
                       <InlineKaTeX latex={s.resultGoalLatex} style={{ fontSize: '12px' }} />
@@ -668,7 +671,7 @@ function GoalInteraction({
                     <button
                       key={s.id}
                       style={suggestionPreviewBtnStyle}
-                      onClick={() => handleApplySuggestion(s)}
+                      onClick={() => onApplySuggestion(s)}
                       title={s.description}
                     >
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
@@ -689,7 +692,7 @@ function GoalInteraction({
                   <button
                     key={s.id}
                     style={suggestionBtnStyle}
-                    onClick={() => handleApplySuggestion(s)}
+                    onClick={() => onApplySuggestion(s)}
                     title={s.description}
                   >
                     {btnLabel}
@@ -715,7 +718,7 @@ function GoalInteraction({
               }}>
                 <button
                   style={suggestionBtnStyle}
-                  onClick={() => handleStartEditing(s)}
+                  onClick={() => onStartEditingSuggestion(s)}
                   title={s.description}
                 >
                   {btnLabel}
@@ -727,13 +730,13 @@ function GoalInteraction({
                     onChange={e => {
                       const updated = [...names];
                       updated[i] = e.target.value;
-                      onEditingNames(updated);
+                      onEditingNames(updated, isEditing ? undefined : s.id);
                       if (!isEditing) onEditingSuggestionId(s.id);
                     }}
                     onKeyDown={e => {
                       if (e.key === 'Enter') {
                         e.preventDefault();
-                        handleApplySuggestion(s);
+                        onApplySuggestion(s);
                       }
                     }}
                     style={nameInputStyle}
@@ -741,7 +744,7 @@ function GoalInteraction({
                 ))}
                 <button
                   style={applyBtnStyle}
-                  onClick={() => handleApplySuggestion(s)}
+                  onClick={() => onApplySuggestion(s)}
                 >
                   Apply
                 </button>
@@ -783,7 +786,9 @@ function GoalInteraction({
 function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedPath, onSelectPath, editingNames, onEditingNames,
   editingSuggestionId, onEditingSuggestionId,
-  inductiveMap, registry, rewriteProgress, definitions,
+  onApplySuggestion, onStartEditingSuggestion,
+  selectedHyp, onToggleHypothesis, hypSuggestions,
+  rewriteProgress,
   onOpenTermBuilder: _onOpenTermBuilder,
 }: {
   context: TypedProofContext | null;
@@ -796,42 +801,16 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedPath: GoalPath | null;
   onSelectPath: (p: GoalPath | null) => void;
   editingNames: string[] | null;
-  onEditingNames: (n: string[] | null) => void;
-  definitions?: DefinitionsMap;
+  onEditingNames: (n: string[] | null, suggestionId?: string) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
-  inductiveMap?: InductiveMap;
-  registry?: SyntaxRegistry;
+  onApplySuggestion: (suggestion: TacticSuggestion) => void;
+  onStartEditingSuggestion: (suggestion: TacticSuggestion) => void;
+  selectedHyp: number | null;
+  onToggleHypothesis: (hypIndex: number) => void;
+  hypSuggestions: readonly TacticSuggestion[];
   rewriteProgress?: RewriteProgress | null;
 }) {
-  const [selectedHyp, setSelectedHyp] = useState<number | null>(null);
-
-  // Compute hypothesis-level suggestions when one is selected
-  const hypSuggestions = useMemo<readonly TacticSuggestion[]>(() => {
-    if (selectedHyp === null || !context?.kernelGoal || !definitions) return [];
-    const hyp = context.hypotheses[selectedHyp];
-    if (!hyp) return [];
-    return computeSelectedHypSuggestions(hyp.name, selectedHyp, context.kernelGoal, definitions);
-  }, [selectedHyp, context?.kernelGoal, definitions, context?.hypotheses]);
-
-  // Handle hypothesis suggestion clicks
-  const handleHypSuggestion = useCallback((suggestion: TacticSuggestion) => {
-    if (!state || !onPushChange) return;
-    const result = applySuggestionToProofTreeState(state, suggestion, {
-      typedContext: context,
-      inductiveMap,
-      registry,
-      definitions,
-      editingNames: null,
-      editingSuggestionId: null,
-    });
-
-    if (result) {
-      onPushChange(result);
-      setSelectedHyp(null);
-    }
-  }, [state, onPushChange, context, inductiveMap, registry, definitions]);
-
   if (!context) return null;
 
   const { hypotheses, caseLabel, caseLabelLatex, goal, validation } = context;
@@ -852,9 +831,7 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
             <div
               key={i}
               onClick={() => {
-                setSelectedHyp(prev => prev === i ? null : i);
-                // Deselect goal path when selecting hypothesis
-                onSelectPath(null);
+                onToggleHypothesis(i);
               }}
               style={{
                 padding: '2px 4px',
@@ -883,7 +860,7 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
                 <button
                   key={s.id}
                   style={{ ...suggestionBtnStyle, fontSize: '11px', padding: '2px 8px' }}
-                  onClick={(e) => { e.stopPropagation(); handleHypSuggestion(s); }}
+                  onClick={(e) => { e.stopPropagation(); onApplySuggestion(s); }}
                   title={s.description}
                 >
                   <InlineKaTeX latex={s.labelLatex ?? s.label} style={{ fontSize: '11px' }} />
@@ -920,13 +897,10 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
             onEditingNames={onEditingNames}
             editingSuggestionId={editingSuggestionId}
             onEditingSuggestionId={onEditingSuggestionId}
-            state={state}
-            onPushChange={onPushChange}
+            onApplySuggestion={onApplySuggestion}
+            onStartEditingSuggestion={onStartEditingSuggestion}
             fallbackGoalLatex={goal}
             validation={validation}
-            inductiveMap={inductiveMap}
-            registry={registry}
-            typedContext={context}
             rewriteProgress={rewriteProgress}
           />
         ) : (
@@ -1005,41 +979,14 @@ function HaveProseItem({
     if (!state || !onPushChange) return;
     if (!typedContext?.kernelGoal || !definitions) return;
     const kg = typedContext.kernelGoal;
-
-    // Parse the full expression to get a kernel term, then extract the App spine
-    const parsed = parseExactExpr(kind.expr, kg.goal.ctx, definitions);
-    if (!parsed) return;
-
-    // Walk the App spine to extract: head function + explicit args
-    const args: TTKTerm[] = [];
-    let head = parsed;
-    while (head.tag === 'App') {
-      args.unshift(head.arg);
-      head = head.fn;
-    }
-    if (head.tag !== 'Const') return;
-    const fnName = head.name;
-
-    // Determine how many are implicit vs explicit
-    const namedArgMap = createNamedArgLookup(definitions)(fnName);
-    const numImplicit = namedArgMap?.size ?? 0;
-
-    // Build prefilled map: args[0..numImplicit-1] are implicit, rest are explicit
-    const prefilled = new Map<number, TTKTerm>();
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      // Skip Hole args (unfilled slots)
-      if (arg.tag === 'Hole') continue;
-      prefilled.set(i, arg);
-    }
-
-    if (typedContext?.kernelGoal && definitions) {
-      const { engine, goal: metaGoal, rev } = typedContext.kernelGoal;
-      const builder = computeTermSlots(fnName, prefilled, engine, metaGoal, definitions, rev);
-      if (builder) {
-        setBuilderState(builder);
-        return;
-      }
+    const opened = openTermBuilderFromSourceExpr(kind.expr, {
+      engine: kg.engine,
+      goal: kg.goal,
+      definitions,
+      rev: kg.rev,
+    });
+    if (opened) {
+      setBuilderState(opened.builderState);
     }
   }, [kind.expr, state, onPushChange, definitions, typedContext]);
 
@@ -1051,14 +998,16 @@ function HaveProseItem({
           onFillSlot={(slotIndex, sourceExpr) => {
             if (!typedContext?.kernelGoal || !definitions) return;
             const kg = typedContext.kernelGoal;
-            const rebuilt = rebuildTermBuilderWithFilledSlot(
+            const rebuilt = fillTermBuilderSlotFromSource(
               builderState,
               slotIndex,
               latexSourceToUnicode(sourceExpr),
-              kg.engine,
-              kg.goal,
-              definitions,
-              kg.rev,
+              {
+                engine: kg.engine,
+                goal: kg.goal,
+                definitions,
+                rev: kg.rev,
+              },
             );
             if (!rebuilt) return;
             setBuilderState(rebuilt.builderState);
@@ -1070,13 +1019,15 @@ function HaveProseItem({
           onClearSlot={(slotIndex) => {
             if (!typedContext?.kernelGoal || !definitions) return;
             const kg = typedContext.kernelGoal;
-            const rebuilt = rebuildTermBuilderWithoutSlot(
+            const rebuilt = clearTermBuilderSlot(
               builderState,
               slotIndex,
-              kg.engine,
-              kg.goal,
-              definitions,
-              kg.rev,
+              {
+                engine: kg.engine,
+                goal: kg.goal,
+                definitions,
+                rev: kg.rev,
+              },
             );
             if (!rebuilt) return;
             setBuilderState(rebuilt.builderState);
@@ -1787,7 +1738,7 @@ function IntrosView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
   };
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -1828,18 +1779,18 @@ function InductionView({ node, depth, cursorId, state, tacticMode, onTacticMode,
 
   const handleToggleCollapse = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    const result = toggleInductionCollapse(state, node.id);
+    const result = toggleInductionCollapseInProofTree(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
   const handleAddCase = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    const result = addCase(state, node.id, 'new case');
+    const result = addInductionCaseInProofTree(state, node.id, 'new case');
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -1936,12 +1887,12 @@ function CaseView({
 
   const handleToggleCollapse = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    onPushChange(toggleCollapse(state, caseNode.id));
+    onPushChange(toggleCaseCollapseInProofTree(state, caseNode.id));
   }, [state, caseNode.id, onPushChange]);
 
   const handleDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    const result = removeCase(state, inductionId, caseIndex);
+    const result = removeInductionCaseInProofTree(state, inductionId, caseIndex);
     if (result) onPushChange(result);
   }, [state, inductionId, caseIndex, onPushChange]);
 
@@ -2003,7 +1954,7 @@ function UnfoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, on
   const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2045,7 +1996,7 @@ function FoldView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
   const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2087,7 +2038,7 @@ function RewriteView({ node, depth, cursorId, state, tacticMode, onTacticMode, o
   const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2129,7 +2080,7 @@ function ApplyView({ node, depth, cursorId, state, tacticMode, onTacticMode, onP
   const hasError = !!goalMap?.get(node.id)?.tacticError;
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2172,12 +2123,12 @@ function SimpView({ node, depth, cursorId, state, tacticMode, onTacticMode, onPu
   const isFocused = cursorId === node.id;
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
   const handleToggle = useCallback(() => {
-    const result = toggleSimpCollapse(state, node.id);
+    const result = toggleSimpCollapseInProofTree(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2242,7 +2193,7 @@ function ExactView({ node, depth, cursorId, state, onPushChange, onClickNode }: 
   const isFocused = cursorId === node.id;
 
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2265,7 +2216,7 @@ function HaveView({ node, depth, cursorId, state, onPushChange, onClickNode, ...
   if (node.tag !== 'have') return null;
   const isFocused = cursorId === node.id;
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2294,7 +2245,7 @@ function SufficesView({ node, depth, cursorId, state, onPushChange, onClickNode,
   if (node.tag !== 'suffices') return null;
   const isFocused = cursorId === node.id;
   const handleDelete = useCallback(() => {
-    const result = clearNode(state, node.id);
+    const result = clearProofTreeNode(state, node.id);
     if (result) onPushChange(result);
   }, [state, node.id, onPushChange]);
 
@@ -2337,9 +2288,11 @@ interface ProseViewProps {
   selectedPath: GoalPath | null;
   onSelectPath: (p: GoalPath | null) => void;
   editingNames: string[] | null;
-  onEditingNames: (n: string[] | null) => void;
+  onEditingNames: (n: string[] | null, suggestionId?: string) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  onApplySuggestion: (suggestion: TacticSuggestion) => void;
+  onStartEditingSuggestion: (suggestion: TacticSuggestion) => void;
   rewriteProgress?: RewriteProgress | null;
   // Binder selection from clickable tokens in prose
   selectedBinder: SelectedBinder | null;
@@ -2354,6 +2307,7 @@ function ProofProseView({
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
+  onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
   termBuilder, onSetTermBuilder,
 }: ProseViewProps) {
@@ -2389,7 +2343,7 @@ function ProofProseView({
           || item.kind.tag === 'exact' || item.kind.tag === 'inductionHeader'
           || item.kind.tag === 'have' || item.kind.tag === 'simp' || item.kind.tag === 'suffices';
         const handleDelete = isDeletable ? () => {
-          const result = clearNode(state, item.nodeId);
+          const result = clearProofTreeNode(state, item.nodeId);
           if (result) onPushChange(result);
         } : undefined;
 
@@ -2432,6 +2386,8 @@ function ProofProseView({
             onEditingNames={onEditingNames}
             editingSuggestionId={editingSuggestionId}
             onEditingSuggestionId={onEditingSuggestionId}
+            onApplySuggestion={onApplySuggestion}
+            onStartEditingSuggestion={onStartEditingSuggestion}
             rewriteProgress={rewriteProgress}
             selectedBinder={selectedBinder}
             onSelectBinder={onSelectBinder}
@@ -2475,9 +2431,11 @@ interface ProseItemViewProps {
   selectedPath: GoalPath | null;
   onSelectPath: (p: GoalPath | null) => void;
   editingNames: string[] | null;
-  onEditingNames: (n: string[] | null) => void;
+  onEditingNames: (n: string[] | null, suggestionId?: string) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  onApplySuggestion: (suggestion: TacticSuggestion) => void;
+  onStartEditingSuggestion: (suggestion: TacticSuggestion) => void;
   rewriteProgress?: RewriteProgress | null;
   // Binder selection from clickable tokens in prose
   selectedBinder: SelectedBinder | null;
@@ -2533,7 +2491,7 @@ function IntroProseItem({
     if (!selectedToken) return;
     const trimmed = newName.trim();
     if (!trimmed || trimmed === selectedToken.name) return;
-    const result = editIntroName(state, item.nodeId, selectedToken.nameIndex, trimmed);
+    const result = renameIntroTokenInProofTree(state, item.nodeId, selectedToken.nameIndex, trimmed);
     if (result) onPushChange(result);
   }, [selectedToken, state, item.nodeId, onPushChange]);
 
@@ -2640,7 +2598,7 @@ function CaseHeaderProseItem({
     if (selectedParamIndex === null) return;
     const trimmed = newName.trim();
     if (!trimmed || !paramNames || trimmed === paramNames[selectedParamIndex]) return;
-    const result = editCaseParamName(state, item.nodeId, selectedParamIndex, trimmed);
+    const result = renameCaseParamInProofTree(state, item.nodeId, selectedParamIndex, trimmed);
     if (result) onPushChange(result);
   }, [selectedParamIndex, paramNames, state, item.nodeId, onPushChange]);
 
@@ -2751,6 +2709,7 @@ function ProseItemView({
   typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
+  onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
   termBuilder, onSetTermBuilder,
 }: ProseItemViewProps) {
@@ -3151,7 +3110,7 @@ function ProseItemView({
               };
               const handleStepDelete = (e: React.MouseEvent) => {
                 e.stopPropagation();
-                const result = clearNode(state, step.nodeId);
+                const result = clearProofTreeNode(state, step.nodeId);
                 if (result) onPushChange(result);
               };
               return (
@@ -3290,6 +3249,8 @@ function ProseItemView({
           onEditingNames={onEditingNames}
           editingSuggestionId={editingSuggestionId}
           onEditingSuggestionId={onEditingSuggestionId}
+          onApplySuggestion={onApplySuggestion}
+          onStartEditingSuggestion={onStartEditingSuggestion}
           rewriteProgress={rewriteProgress}
           termBuilder={termBuilder}
           onSetTermBuilder={onSetTermBuilder}
@@ -3379,9 +3340,11 @@ interface HoleProseViewProps {
   selectedPath: GoalPath | null;
   onSelectPath: (p: GoalPath | null) => void;
   editingNames: string[] | null;
-  onEditingNames: (n: string[] | null) => void;
+  onEditingNames: (n: string[] | null, suggestionId?: string) => void;
   editingSuggestionId: string | null;
   onEditingSuggestionId: (id: string | null) => void;
+  onApplySuggestion: (suggestion: TacticSuggestion) => void;
+  onStartEditingSuggestion: (suggestion: TacticSuggestion) => void;
   rewriteProgress?: RewriteProgress | null;
   /** Active term builder (shown inline before the hole). */
   termBuilder?: TermBuilderState | null;
@@ -3393,6 +3356,7 @@ function HoleProseView({
   onClickNode, typedContext, inductiveMap, registry, kernelType, definitions,
   interactiveGoal, suggestions, selectedPath, onSelectPath,
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
+  onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress,
   termBuilder: inlineTermBuilder, onSetTermBuilder,
 }: HoleProseViewProps) {
@@ -3454,42 +3418,37 @@ function HoleProseView({
             onFillSlot={(slotIndex, sourceExpr) => {
               if (!typedContext?.kernelGoal || !definitions) return;
               const kg = typedContext.kernelGoal;
-              const rebuilt = rebuildTermBuilderWithFilledSlot(
+              const rebuilt = fillTermBuilderSlotFromSource(
                 inlineTermBuilder,
                 slotIndex,
                 latexSourceToUnicode(sourceExpr),
-                kg.engine,
-                kg.goal,
-                definitions,
-                kg.rev,
+                {
+                  engine: kg.engine,
+                  goal: kg.goal,
+                  definitions,
+                  rev: kg.rev,
+                },
               );
               if (rebuilt) onSetTermBuilder(rebuilt.builderState);
             }}
             onClearSlot={(slotIndex) => {
               if (!typedContext?.kernelGoal || !definitions) return;
               const kg = typedContext.kernelGoal;
-              const rebuilt = rebuildTermBuilderWithoutSlot(
+              const rebuilt = clearTermBuilderSlot(
                 inlineTermBuilder,
                 slotIndex,
-                kg.engine,
-                kg.goal,
-                definitions,
-                kg.rev,
+                {
+                  engine: kg.engine,
+                  goal: kg.goal,
+                  definitions,
+                  rev: kg.rev,
+                },
               );
               if (rebuilt) onSetTermBuilder(rebuilt.builderState);
             }}
             onConfirm={() => {
-              const expr = buildExprFromSlots(
-                inlineTermBuilder.fnName,
-                inlineTermBuilder.slots,
-                inlineTermBuilder.goalCtx,
-              );
-              if (expr) {
-                const result = applyManualProofTreeTactic(state, { tactic: 'have' }, `h := ${expr}`, {
-                  definitions,
-                });
-                if (result) onPushChange(result);
-              }
+              const result = insertHaveFromTermBuilder(state, inlineTermBuilder);
+              if (result) onPushChange(result);
               onSetTermBuilder(null);
             }}
             onCancel={() => onSetTermBuilder(null)}
@@ -3509,12 +3468,9 @@ function HoleProseView({
           onEditingNames={onEditingNames}
           editingSuggestionId={editingSuggestionId}
           onEditingSuggestionId={onEditingSuggestionId}
-          state={state}
-          onPushChange={onPushChange}
+          onApplySuggestion={onApplySuggestion}
+          onStartEditingSuggestion={onStartEditingSuggestion}
           fallbackGoalLatex={goalLatex}
-          inductiveMap={inductiveMap}
-          registry={registry}
-          typedContext={typedContext}
           rewriteProgress={rewriteProgress}
           goalFontSize="16px"
         />

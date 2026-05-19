@@ -66,6 +66,18 @@ export interface RebuiltTermBuilderResult {
   readonly expr: string | null;
 }
 
+export interface TermBuilderRuntime {
+  readonly engine: TacticEngine;
+  readonly goal: MetaVar;
+  readonly definitions: DefinitionsMap;
+  readonly rev?: ReverseRegistry;
+}
+
+export interface OpenedTermBuilderResult {
+  readonly builderState: TermBuilderState;
+  readonly expr: string;
+}
+
 // ============================================================================
 // Slot computation
 // ============================================================================
@@ -322,6 +334,50 @@ function restoreSourceExprs(
   }
 }
 
+function decomposeApplication(term: TTKTerm): { fnName: string; args: TTKTerm[] } | null {
+  const args: TTKTerm[] = [];
+  let head = term;
+  while (head.tag === 'App') {
+    args.unshift(head.arg);
+    head = head.fn;
+  }
+  if (head.tag !== 'Const') return null;
+  return { fnName: head.name, args };
+}
+
+export function openTermBuilderFromSourceExpr(
+  sourceExpr: string,
+  runtime: TermBuilderRuntime,
+): OpenedTermBuilderResult | null {
+  const parsed = parseExactExpr(sourceExpr, runtime.goal.ctx, runtime.definitions);
+  if (!parsed) return null;
+
+  const app = decomposeApplication(parsed);
+  if (!app) return null;
+
+  const prefilled = new Map<number, TTKTerm>();
+  const sourceExprs = new Map<number, string>();
+  for (let i = 0; i < app.args.length; i++) {
+    const arg = app.args[i];
+    if (arg.tag === 'Hole') continue;
+    if (arg.tag === 'Const' && arg.name === '?') continue;
+    prefilled.set(i, arg);
+    sourceExprs.set(i, kernelTermToSource(arg, runtime.goal.ctx, runtime.definitions));
+  }
+
+  const builder = computeTermSlots(
+    app.fnName,
+    prefilled,
+    runtime.engine,
+    runtime.goal,
+    runtime.definitions,
+    runtime.rev,
+  );
+  if (!builder) return null;
+  restoreSourceExprs(builder, sourceExprs);
+  return { builderState: builder, expr: sourceExpr };
+}
+
 export function rebuildTermBuilderWithFilledSlot(
   builderState: TermBuilderState,
   slotIndex: number,
@@ -389,6 +445,38 @@ export function rebuildTermBuilderWithoutSlot(
     builderState: rebuilt,
     expr: buildExprFromSlots(rebuilt.fnName, rebuilt.slots, rebuilt.goalCtx),
   };
+}
+
+export function fillTermBuilderSlotFromSource(
+  builderState: TermBuilderState,
+  slotIndex: number,
+  sourceExpr: string,
+  runtime: TermBuilderRuntime,
+): RebuiltTermBuilderResult | null {
+  return rebuildTermBuilderWithFilledSlot(
+    builderState,
+    slotIndex,
+    sourceExpr,
+    runtime.engine,
+    runtime.goal,
+    runtime.definitions,
+    runtime.rev,
+  );
+}
+
+export function clearTermBuilderSlot(
+  builderState: TermBuilderState,
+  slotIndex: number,
+  runtime: TermBuilderRuntime,
+): RebuiltTermBuilderResult | null {
+  return rebuildTermBuilderWithoutSlot(
+    builderState,
+    slotIndex,
+    runtime.engine,
+    runtime.goal,
+    runtime.definitions,
+    runtime.rev,
+  );
 }
 
 /**
