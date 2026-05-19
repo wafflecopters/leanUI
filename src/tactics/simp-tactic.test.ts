@@ -10,6 +10,8 @@ import { createInitialEngine } from './tacticsEngine';
 import { IntrosTactic, resetMetaCounter } from './tactic';
 import { DefinitionsMap } from '../compiler/term';
 import { runSimp } from './simp-tactic';
+import { mkApply, mkExact, mkHave, mkHole, mkIntros, type ProofNode } from '../proof-tree/proof-tree';
+import { replayToEngine } from '../proof-tree/goal-computation';
 
 beforeEach(() => {
   resetMetaCounter();
@@ -265,4 +267,44 @@ describe('runSimp', () => {
     expect(result.success).toBe(true);
     expect(result.steps.length).toBeGreaterThanOrEqual(2);
   }, 20000);
+
+  test('simplifies the deeply nested real-analysis replay goal that used to live in the debug trace probe', () => {
+    const compiled = compileTTFromText(REAL_ANALYSIS_CODE + `
+testSimpTrace : (R : Real) -> (ε : Carrier R) -> rlt (rzero R) ε -> rle 1 2
+testSimpTrace R ε hε = ?outer`);
+    expect(compiled.success).toBe(true);
+    let decl: any;
+    for (const block of compiled.blocks) {
+      for (const d of block.declarations) {
+        if (d.name === 'testSimpTrace') decl = d;
+      }
+    }
+    expect(decl?.kernelType).toBeTruthy();
+
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(['R', 'ε', 'hε'],
+      mkHave('h6', '?', mkHole(), '(rlt (rzero R) (rdiv ε (rtwo R)))',
+        mkApply('epsOverMPos', [
+          mkHole(),
+          mkApply('ltLeTrans', [
+            mkExact('1'),
+            mkHole(),
+            mkApply('addLeRightCancel', [
+              mkExact('-1'),
+              leafHole,
+            ]),
+          ]),
+        ]),
+      ),
+    );
+
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, compiled.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+
+    const result = runSimp(engine, [...(compiled.definitions.simpLemmas ?? [])]);
+    expect(result.success).toBe(true);
+    expect(result.steps.some(step => step.name === 'realOfRatOne')).toBe(true);
+    expect(result.engine.getFocusedGoal()).toBeTruthy();
+  }, 15000);
 });

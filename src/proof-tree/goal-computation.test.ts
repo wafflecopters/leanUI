@@ -19,6 +19,8 @@ import {
   replayEntireTree,
   InductiveMap, InductiveInfo,
   extractTypeHead, peelConstructorParams, generateCaseInfos,
+  buildInductionCaseReplayTargets,
+  buildTraceInductionCaseReplayTargets,
   kernelTypeToSurface,
   replaceVar,
   computeCaseGoalDirect,
@@ -32,6 +34,7 @@ import {
 } from './goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import { TTerm } from '../compiler/surface';
+import { createInitialEngine } from '../tactics/tacticsEngine';
 
 beforeEach(() => {
   resetProofIds();
@@ -1470,6 +1473,79 @@ describe('computeCaseGoalDirect', () => {
     // After peelCtorParams: under the fst binder, B was Var(1). From position 3:
     //   Var(0) = fst (ctx[2]), Var(1) = B (ctx[1]). ✓
     expect(result.ctx[3].type).toEqual(mkVar(1));
+  });
+});
+
+describe('buildInductionCaseReplayTargets', () => {
+  function makeNatDefs(): DefinitionsMap {
+    let defs = createDefinitionsMap();
+    defs = addInductiveDefinition(defs, 'Nat', mkSort(mkULit(0)), [
+      { name: 'Zero', type: mkConst('Nat') },
+      { name: 'Succ', type: mkPi(mkConst('Nat'), mkConst('Nat'), 'n') },
+    ], []);
+    return defs;
+  }
+
+  test('builds case-specific replay engines for matching constructors and preserves fallback branches', () => {
+    const defs = makeNatDefs();
+    const goalType = mkApp(mkApp(mkApp(mkConst('Equal'), mkConst('Nat')), mkVar(0)), mkVar(0));
+    const engine = createInitialEngine(goalType, [{ name: 'n', type: mkConst('Nat') }], defs, '?goal');
+    const node = mkInduction('n', [
+      mkCase('n = Zero', mkTreeHole(), 'Zero', []),
+      mkCase('n = Succ k', mkTreeHole(), 'Succ', ['k']),
+      mkCase('fallback', mkTreeHole(), 'Bogus', []),
+    ], true);
+
+    const targets = buildInductionCaseReplayTargets(node, engine, '?goal', c => c.labelLatex ?? c.label);
+    expect(targets).not.toBeNull();
+    if (!targets) return;
+
+    expect(targets).toHaveLength(3);
+    expect(targets[0].caseGoalId).toBe('?goal_case_Zero');
+    expect(targets[0].caseEngine.getFocusedGoalId()).toBe('?goal_case_Zero');
+    expect(targets[1].caseGoalId).toBe('?goal_case_Succ');
+    expect(targets[1].caseEngine.getFocusedGoalId()).toBe('?goal_case_Succ');
+    expect(targets[2].caseGoalId).toBe('?goal');
+    expect(targets[2].caseEngine).toBe(engine);
+  });
+});
+
+describe('buildTraceInductionCaseReplayTargets', () => {
+  function makeNatDefs(): DefinitionsMap {
+    let defs = createDefinitionsMap();
+    defs = addInductiveDefinition(defs, 'Nat', mkSort(mkULit(0)), [
+      { name: 'Zero', type: mkConst('Nat') },
+      { name: 'Succ', type: mkPi(mkConst('Nat'), mkConst('Nat'), 'n') },
+    ], []);
+    return defs;
+  }
+
+  test('focuses matching case-tagged goals and falls back cleanly for unmatched cases', () => {
+    const defs = makeNatDefs();
+    const base = createInitialEngine(mkConst('Nat'), [], defs, '?goal');
+    const metaVars = new Map(base.metaVars);
+    metaVars.set('?caseZero', { ctx: [], type: mkConst('Nat'), caseTag: 'Zero' });
+    metaVars.set('?caseSucc', { ctx: [], type: mkConst('Nat'), caseTag: 'Succ' });
+    const afterCasesEngine = base.withUpdates({
+      metaVars,
+      goals: ['?caseZero', '?caseSucc'],
+      focusIndex: 0,
+    });
+    const node = mkInduction('n', [
+      mkCase('n = Zero', mkTreeHole(), 'Zero', []),
+      mkCase('n = Succ k', mkTreeHole(), 'Succ', ['k']),
+      mkCase('fallback', mkTreeHole(), 'Bogus', []),
+    ], true);
+
+    const targets = buildTraceInductionCaseReplayTargets(node, afterCasesEngine, '?goal', c => c.labelLatex ?? c.label);
+
+    expect(targets).toHaveLength(3);
+    expect(targets[0].caseGoalId).toBe('?caseZero');
+    expect(targets[0].caseEngine.getFocusedGoalId()).toBe('?caseZero');
+    expect(targets[1].caseGoalId).toBe('?caseSucc');
+    expect(targets[1].caseEngine.getFocusedGoalId()).toBe('?caseSucc');
+    expect(targets[2].caseGoalId).toBe('?goal');
+    expect(targets[2].caseEngine).toBe(afterCasesEngine);
   });
 });
 

@@ -1254,6 +1254,52 @@ interface ReplayResult {
   tacticError?: string;
 }
 
+export interface InductionCaseReplayTarget {
+  readonly caseNode: CaseNode;
+  readonly caseEngine: TacticEngine;
+  readonly caseGoalId: string;
+  readonly caseLabelLatex?: string;
+}
+
+export interface TraceInductionCaseReplayTarget {
+  readonly caseNode: CaseNode;
+  readonly caseEngine: TacticEngine;
+  readonly caseGoalId: string;
+  readonly caseLabelLatex?: string;
+}
+
+interface ConsumedTraceStep {
+  readonly step?: import('../tactics/tactic-session').TacticStepTrace;
+  readonly nextEngine: TacticEngine;
+  readonly nextTraceIdx: number;
+}
+
+function consumeTraceStep(
+  trace: readonly import('../tactics/tactic-session').TacticStepTrace[],
+  traceIdx: number,
+  currentEngine: TacticEngine,
+): ConsumedTraceStep {
+  const step = traceIdx < trace.length ? trace[traceIdx] : undefined;
+  return {
+    step,
+    nextEngine: step?.engineAfter ?? currentEngine,
+    nextTraceIdx: traceIdx + (step ? 1 : 0),
+  };
+}
+
+function consumeSimpTraceStep(
+  trace: readonly import('../tactics/tactic-session').TacticStepTrace[],
+  traceIdx: number,
+  currentEngine: TacticEngine,
+  simpRewriteStepCount: number,
+): ConsumedTraceStep {
+  let nextTraceIdx = traceIdx;
+  for (let i = 0; i < simpRewriteStepCount && nextTraceIdx < trace.length; i++) {
+    nextTraceIdx++;
+  }
+  return consumeTraceStep(trace, nextTraceIdx, currentEngine);
+}
+
 /**
  * Find the de Bruijn index of a variable name in a TTKContext.
  * Returns null if not found.
@@ -2145,6 +2191,116 @@ function searchCasesForCursor(
   return null;
 }
 
+export function buildInductionCaseReplayTargets(
+  node: Extract<ProofNode, { tag: 'induction' }>,
+  engine: TacticEngine,
+  goalId: string,
+  resolveCaseLabelLatex?: (c: CaseNode) => string | undefined,
+): InductionCaseReplayTarget[] | null {
+  const goal = engine.getFocusedGoal();
+  if (!goal) return null;
+
+  const fallbackTargets = node.cases.map(c => ({
+    caseNode: c,
+    caseEngine: engine,
+    caseGoalId: goalId,
+    caseLabelLatex: resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex,
+  }));
+
+  let scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
+  let effectiveGoal = goal;
+  let effectiveEngine = engine;
+  let effectiveGoalId = goalId;
+
+  if (scrutineeIdx === null) {
+    const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, engine.definitions);
+    if (parsedScrutinee) {
+      const extended = extendGoalForComplexScrutinee(engine, goal, goalId, parsedScrutinee);
+      if (extended) {
+        effectiveEngine = extended.engine;
+        effectiveGoal = extended.goal;
+        effectiveGoalId = extended.goalId;
+        scrutineeIdx = extended.scrutineeIdx;
+      }
+    }
+  }
+
+  if (scrutineeIdx === null) return fallbackTargets;
+
+  const scrutineeType = effectiveGoal.ctx[effectiveGoal.ctx.length - 1 - scrutineeIdx].type;
+  const scrutineeTypeWhnf = whnf(scrutineeType, { definitions: engine.definitions });
+  const inductiveName = getInductiveHead(scrutineeTypeWhnf);
+  if (!inductiveName) return fallbackTargets;
+  const inductiveDef = engine.definitions.inductiveTypes.get(inductiveName);
+  if (!inductiveDef) return fallbackTargets;
+
+  return node.cases.map(c => {
+    const ctor = inductiveDef.constructors.find(ct => ct.name === c.constructorName);
+    if (!ctor) {
+      return {
+        caseNode: c,
+        caseEngine: engine,
+        caseGoalId: goalId,
+        caseLabelLatex: resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex,
+      };
+    }
+
+    const caseGoalId = `${effectiveGoalId}_case_${c.constructorName}`;
+    const caseMeta = computeCaseGoalDirect(
+      effectiveGoal, scrutineeIdx!, ctor, inductiveName, effectiveEngine.definitions, c.constructorParamNames,
+    );
+    const caseMetaVars = new Map(effectiveEngine.metaVars);
+    caseMetaVars.set(caseGoalId, caseMeta);
+    const caseGoals = [...effectiveEngine.goals];
+    const focusIdx = caseGoals.indexOf(effectiveGoalId);
+    if (focusIdx >= 0) {
+      caseGoals[focusIdx] = caseGoalId;
+    } else {
+      caseGoals.push(caseGoalId);
+    }
+    return {
+      caseNode: c,
+      caseEngine: effectiveEngine.withUpdates({
+        metaVars: caseMetaVars,
+        goals: caseGoals,
+        focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
+      }),
+      caseGoalId,
+      caseLabelLatex: resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex,
+    };
+  });
+}
+
+export function buildTraceInductionCaseReplayTargets(
+  node: Extract<ProofNode, { tag: 'induction' }>,
+  afterCasesEngine: TacticEngine,
+  fallbackGoalId: string,
+  resolveCaseLabelLatex?: (c: CaseNode) => string | undefined,
+): TraceInductionCaseReplayTarget[] {
+  return node.cases.map(c => {
+    const matchIdx = afterCasesEngine.goals.findIndex(g => {
+      const meta = afterCasesEngine.metaVars.get(g);
+      return meta?.caseTag === c.constructorName;
+    });
+    const caseLabelLatex = resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex;
+    if (matchIdx >= 0) {
+      const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
+      return {
+        caseNode: c,
+        caseEngine,
+        caseGoalId: caseEngine.getFocusedGoalId() ?? fallbackGoalId,
+        caseLabelLatex,
+      };
+    }
+    return {
+      caseNode: c,
+      caseEngine: afterCasesEngine,
+      caseGoalId: fallbackGoalId,
+      caseLabelLatex,
+    };
+  });
+}
+
 /**
  * Resolve a name against the goal context. If the name matches a hypothesis,
  * return a Var term with the correct de Bruijn index. Otherwise return Const.
@@ -2313,12 +2469,19 @@ function replayProofTreeFromTrace(
       case 'rewrite':
       case 'have':
       case 'suffices': {
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const nextEngine = step?.engineAfter ?? currentEngine;
+        const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
+        traceIdx = consumed.nextTraceIdx;
         if (node.child.id === cursorId) {
-          return { engine: nextEngine, goalId: nextEngine.getFocusedGoalId() ?? goalId, caseLabel, caseLabelLatex, inductionVar, tacticError: step?.error };
+          return {
+            engine: consumed.nextEngine,
+            goalId: consumed.nextEngine.getFocusedGoalId() ?? goalId,
+            caseLabel,
+            caseLabelLatex,
+            inductionVar,
+            tacticError: consumed.step?.error,
+          };
         }
-        return walk(node.child, nextEngine, caseLabel, caseLabelLatex, inductionVar);
+        return walk(node.child, consumed.nextEngine, caseLabel, caseLabelLatex, inductionVar);
       }
 
       case 'apply': {
@@ -2340,42 +2503,40 @@ function replayProofTreeFromTrace(
       }
 
       case 'induction': {
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const afterCasesEngine = step?.engineAfter ?? currentEngine;
+        const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
+        traceIdx = consumed.nextTraceIdx;
+        const afterCasesEngine = consumed.nextEngine;
 
-        for (const c of node.cases) {
-          const matchIdx = afterCasesEngine.goals.findIndex(g => {
-            const meta = afterCasesEngine.metaVars.get(g);
-            return meta?.caseTag === c.constructorName;
-          });
-          if (matchIdx >= 0) {
-            const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
-            if (c.id === cursorId) {
-              return { engine: caseEngine, goalId: caseEngine.getFocusedGoalId() ?? goalId, caseLabel: c.label, caseLabelLatex: c.labelLatex, inductionVar: node.scrutinee };
-            }
-            const result = walk(c.body, caseEngine, c.label, c.labelLatex, node.scrutinee);
-            if (result) return result;
-          } else {
-            if (c.id === cursorId) {
-              return { engine: afterCasesEngine, goalId, caseLabel: c.label, caseLabelLatex: c.labelLatex, inductionVar: node.scrutinee };
-            }
-            const result = walk(c.body, afterCasesEngine, c.label, c.labelLatex, node.scrutinee);
-            if (result) return result;
+        for (const target of buildTraceInductionCaseReplayTargets(node, afterCasesEngine, goalId, c => c.labelLatex)) {
+          const c = target.caseNode;
+          if (c.id === cursorId) {
+            return {
+              engine: target.caseEngine,
+              goalId: target.caseGoalId,
+              caseLabel: c.label,
+              caseLabelLatex: target.caseLabelLatex,
+              inductionVar: node.scrutinee,
+            };
           }
+          const result = walk(c.body, target.caseEngine, c.label, target.caseLabelLatex, node.scrutinee);
+          if (result) return result;
         }
         return null;
       }
 
       case 'simp': {
-        for (const _step of node.steps) {
-          if (traceIdx < trace.length) traceIdx++;
-        }
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const nextEngine = step?.engineAfter ?? currentEngine;
+        const consumed = consumeSimpTraceStep(trace, traceIdx, currentEngine, node.steps.length);
+        traceIdx = consumed.nextTraceIdx;
         if (node.child.id === cursorId) {
-          return { engine: nextEngine, goalId: nextEngine.getFocusedGoalId() ?? goalId, caseLabel, caseLabelLatex, inductionVar };
+          return {
+            engine: consumed.nextEngine,
+            goalId: consumed.nextEngine.getFocusedGoalId() ?? goalId,
+            caseLabel,
+            caseLabelLatex,
+            inductionVar,
+          };
         }
-        return walk(node.child, nextEngine, caseLabel, caseLabelLatex, inductionVar);
+        return walk(node.child, consumed.nextEngine, caseLabel, caseLabelLatex, inductionVar);
       }
     }
   }
@@ -2601,101 +2762,24 @@ function replayProofTree(
     }
 
     case 'induction': {
-      // Direct induction goal computation — bypasses InductionTactic
-      // which has a buildMotive bug assuming scrutinee at index 0.
-      // Instead, we directly compute case goals by substituting the
-      // scrutinee variable with the constructor pattern in the goal type.
-      const goal = engine.getFocusedGoal();
-      if (!goal) return null;
+      const targets = buildInductionCaseReplayTargets(node, engine, goalId, c => c.labelLatex);
+      if (!targets) return null;
 
-      // Find scrutinee in context or infer from expression
-      let scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
-      let effectiveGoal = goal;
-      let effectiveEngine = engine;
-      let effectiveGoalId = goalId;
-
-      // If scrutinee is a complex expression (not in context), try to parse and infer its type
-      if (scrutineeIdx === null) {
-        const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, engine.definitions);
-        if (parsedScrutinee) {
-          const extended = extendGoalForComplexScrutinee(engine, goal, goalId, parsedScrutinee);
-          if (extended) {
-            effectiveEngine = extended.engine;
-            effectiveGoal = extended.goal;
-            effectiveGoalId = extended.goalId;
-            scrutineeIdx = extended.scrutineeIdx;
-          }
-        }
-      }
-
-      if (scrutineeIdx === null) {
-        return searchCasesForCursor(node.cases, cursorId, engine, goalId, node.scrutinee);
-      }
-
-      // Look up inductive type for constructor info
-      const scrutineeType = effectiveGoal.ctx[effectiveGoal.ctx.length - 1 - scrutineeIdx].type;
-      const scrutineeTypeWhnf = whnf(scrutineeType, { definitions: engine.definitions });
-      const inductiveName = getInductiveHead(scrutineeTypeWhnf);
-      if (!inductiveName) {
-        return searchCasesForCursor(node.cases, cursorId, engine, goalId, node.scrutinee);
-      }
-      const inductiveDef = engine.definitions.inductiveTypes.get(inductiveName);
-      if (!inductiveDef) {
-        return searchCasesForCursor(node.cases, cursorId, engine, goalId, node.scrutinee);
-      }
-
-      // For each case node, compute case-specific goal
-      for (const c of node.cases) {
-        // Find matching constructor
-        const ctor = inductiveDef.constructors.find(ct => ct.name === c.constructorName);
-        if (!ctor) {
-          // No matching constructor — use unchanged engine
-          if (c.id === cursorId) {
-            return { engine, goalId, caseLabel: c.label, caseLabelLatex: c.labelLatex, inductionVar: node.scrutinee };
-          }
-          const bodyResult = replayProofTree(c.body, cursorId, engine, c.label, c.labelLatex, node.scrutinee);
-          if (bodyResult) return bodyResult;
-          continue;
-        }
-
-        // Compute case-specific goal with proper variable substitution
-        const caseGoalId = `${effectiveGoalId}_case_${c.constructorName}`;
-        const caseMeta = computeCaseGoalDirect(
-          effectiveGoal, scrutineeIdx, ctor, inductiveName, effectiveEngine.definitions,
-          c.constructorParamNames
-        );
-
-        // Create engine with this case goal
-        const caseMetaVars = new Map(effectiveEngine.metaVars);
-        caseMetaVars.set(caseGoalId, caseMeta);
-        const caseGoals = [...effectiveEngine.goals];
-        const focusIdx = caseGoals.indexOf(effectiveGoalId);
-        if (focusIdx >= 0) {
-          caseGoals[focusIdx] = caseGoalId;
-        } else {
-          caseGoals.push(caseGoalId);
-        }
-        const caseEngine = effectiveEngine.withUpdates({
-          metaVars: caseMetaVars,
-          goals: caseGoals,
-          focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
-        });
-
-        // Check cursor on case header
+      for (const target of targets) {
+        const c = target.caseNode;
         if (c.id === cursorId) {
           return {
-            engine: caseEngine,
-            goalId: caseGoalId,
+            engine: target.caseEngine,
+            goalId: target.caseGoalId,
             caseLabel: c.label,
-            caseLabelLatex: c.labelLatex,
+            caseLabelLatex: target.caseLabelLatex,
             inductionVar: node.scrutinee,
           };
         }
 
-        // Recurse into case body
         const bodyResult = replayProofTree(
-          c.body, cursorId, caseEngine,
-          c.label, c.labelLatex, node.scrutinee,
+          c.body, cursorId, target.caseEngine,
+          c.label, target.caseLabelLatex, node.scrutinee,
         );
         if (bodyResult) return bodyResult;
       }
@@ -3625,22 +3709,22 @@ function replayEntireTreeFromTrace(
             }
           }
         }
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const nextEngine = step?.engineAfter ?? currentEngine;
-        if (step?.error) {
+        const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
+        traceIdx = consumed.nextTraceIdx;
+        if (consumed.step?.error) {
           const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+          if (existing) result.set(node.id, { ...existing, tacticError: consumed.step.error });
         }
-        walkTrace(node.child, nextEngine, caseLabelLatex);
+        walkTrace(node.child, consumed.nextEngine, caseLabelLatex);
         break;
       }
       case 'suffices': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const nextEngine = step?.engineAfter ?? currentEngine;
-        if (step?.error) {
+        const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
+        traceIdx = consumed.nextTraceIdx;
+        if (consumed.step?.error) {
           const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+          if (existing) result.set(node.id, { ...existing, tacticError: consumed.step.error });
         }
         // Render the byProof expression through the math pipeline
         if (node.byProof) {
@@ -3650,7 +3734,7 @@ function replayEntireTreeFromTrace(
             if (existing) result.set(node.id, { ...existing, sufficesByLatex: byLatex });
           }
         }
-        walkTrace(node.child, nextEngine, caseLabelLatex);
+        walkTrace(node.child, consumed.nextEngine, caseLabelLatex);
         break;
       }
 
@@ -3660,20 +3744,20 @@ function replayEntireTreeFromTrace(
         // the "which is true, by ..." prose the editor renders for it).
         // For applies with subgoals, validation stays undefined; the panel
         // shows the pre-apply goal that the user must still discharge.
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
+        const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
+        traceIdx = consumed.nextTraceIdx;
         const closingValidation: ValidationResult | undefined =
-          (node.children.length === 0 && !step?.error)
+          (node.children.length === 0 && !consumed.step?.error)
             ? { status: 'solved' }
             : undefined;
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex, closingValidation);
-        const nextEngine = step?.engineAfter ?? currentEngine;
-        if (step?.error) {
+        if (consumed.step?.error) {
           const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
+          if (existing) result.set(node.id, { ...existing, tacticError: consumed.step.error });
         }
         // Walk children (subgoals from apply), propagating sibling solutions
-        let traceEng = nextEngine;
-        const baseFocus = nextEngine.focusIndex;
+        let traceEng = consumed.nextEngine;
+        const baseFocus = consumed.nextEngine.focusIndex;
         for (let i = 0; i < node.children.length; i++) {
           const childFocusIdx = baseFocus + i;
           if (childFocusIdx >= traceEng.goals.length) break;
@@ -3718,28 +3802,13 @@ function replayEntireTreeFromTrace(
         }
         // Cases/induction: trace has steps for the base tactic + each branch's tactics
         // Advance past the base cases/induction tactic
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const afterCasesEngine = step?.engineAfter ?? currentEngine;
+        const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
+        traceIdx = consumed.nextTraceIdx;
+        const afterCasesEngine = consumed.nextEngine;
 
-        for (const c of node.cases) {
-          // Find the goal with matching caseTag in the engine after cases
-          const matchIdx = afterCasesEngine.goals.findIndex(g => {
-            const meta = afterCasesEngine.metaVars.get(g);
-            return meta?.caseTag === c.constructorName;
-          });
-          const resolvedLabel = caseLabelLatexOf(c, rev);
-          if (matchIdx >= 0) {
-            const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
-            const caseGoalId = caseEngine.getFocusedGoalId();
-            if (caseGoalId) {
-              recordFromEngine(c.id, caseEngine, caseGoalId, resolvedLabel);
-            }
-            walkTrace(c.body, caseEngine, resolvedLabel);
-          } else {
-            // Fallback: use current engine
-            recordFromEngine(c.id, afterCasesEngine, gId, resolvedLabel);
-            walkTrace(c.body, afterCasesEngine, resolvedLabel);
-          }
+        for (const target of buildTraceInductionCaseReplayTargets(node, afterCasesEngine, gId, c => caseLabelLatexOf(c, rev))) {
+          recordFromEngine(target.caseNode.id, target.caseEngine, target.caseGoalId, target.caseLabelLatex);
+          walkTrace(target.caseNode.body, target.caseEngine, target.caseLabelLatex);
         }
         break;
       }
@@ -3747,13 +3816,9 @@ function replayEntireTreeFromTrace(
       case 'simp': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
         // Simp has multiple rewrite steps — each is a trace entry
-        for (const _step of node.steps) {
-          if (traceIdx < trace.length) traceIdx++; // advance past each simp sub-step
-        }
-        // After simp, advance past the simp tactic itself
-        const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
-        const nextEngine = step?.engineAfter ?? currentEngine;
-        walkTrace(node.child, nextEngine, caseLabelLatex);
+        const consumed = consumeSimpTraceStep(trace, traceIdx, currentEngine, node.steps.length);
+        traceIdx = consumed.nextTraceIdx;
+        walkTrace(node.child, consumed.nextEngine, caseLabelLatex);
         break;
       }
     }
@@ -4089,78 +4154,13 @@ function replayEntireTreeViaWalk(
           }
         }
 
-        let scrutineeIdx: number | null = findVarIndex(node.scrutinee, goal.ctx);
-        let effGoal = goal;
-        let effEng = eng;
-        let effGId = gId;
+        const targets = buildInductionCaseReplayTargets(node, eng, gId, c => caseLabelLatexOf(c, rev));
+        if (!targets) break;
 
-        // If scrutinee is a complex expression (not in context), try to parse and infer its type
-        if (scrutineeIdx === null) {
-          const parsedScrutinee = parseExactExpr(node.scrutinee, goal.ctx, eng.definitions);
-          if (parsedScrutinee) {
-            const extended = extendGoalForComplexScrutinee(eng, goal, gId, parsedScrutinee);
-            if (extended) {
-              effEng = extended.engine;
-              effGoal = extended.goal;
-              effGId = extended.goalId;
-              scrutineeIdx = extended.scrutineeIdx;
-            }
-          }
-        }
-
-        if (scrutineeIdx === null) {
-          for (const c of node.cases) {
-            const resolved = caseLabelLatexOf(c, rev);
-            recordGoal(c.id, eng, gId, resolved);
-            walk(c.body, eng, resolved);
-          }
-          break;
-        }
-
-        const scrutineeType = effGoal.ctx[effGoal.ctx.length - 1 - scrutineeIdx].type;
-        const scrutineeTypeWhnf = whnf(scrutineeType, { definitions: eng.definitions });
-        const inductiveName = getInductiveHead(scrutineeTypeWhnf);
-        if (!inductiveName) {
-          for (const c of node.cases) {
-            const resolved = caseLabelLatexOf(c, rev);
-            recordGoal(c.id, eng, gId, resolved);
-            walk(c.body, eng, resolved);
-          }
-          break;
-        }
-        const inductiveDef = eng.definitions.inductiveTypes.get(inductiveName);
-        if (!inductiveDef) {
-          for (const c of node.cases) {
-            const resolved = caseLabelLatexOf(c, rev);
-            recordGoal(c.id, eng, gId, resolved);
-            walk(c.body, eng, resolved);
-          }
-          break;
-        }
-
-        for (const c of node.cases) {
-          const resolved = caseLabelLatexOf(c, rev);
-          const ctor = inductiveDef.constructors.find(ct => ct.name === c.constructorName);
-          if (!ctor) {
-            recordGoal(c.id, eng, gId, resolved);
-            walk(c.body, eng, resolved);
-            continue;
-          }
-          const caseGoalId = `${effGId}_case_${c.constructorName}`;
-          const caseMeta = computeCaseGoalDirect(effGoal, scrutineeIdx!, ctor, inductiveName, effEng.definitions, c.constructorParamNames);
-          const caseMetaVars = new Map(effEng.metaVars);
-          caseMetaVars.set(caseGoalId, caseMeta);
-          const caseGoals = [...effEng.goals];
-          const focusIdx = caseGoals.indexOf(effGId);
-          if (focusIdx >= 0) caseGoals[focusIdx] = caseGoalId;
-          else caseGoals.push(caseGoalId);
-          const caseEngine = effEng.withUpdates({
-            metaVars: caseMetaVars,
-            goals: caseGoals,
-            focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
-          });
-          recordGoal(c.id, caseEngine, caseGoalId, resolved);
-          walk(c.body, caseEngine, resolved);
+        for (const target of targets) {
+          const c = target.caseNode;
+          recordGoal(c.id, target.caseEngine, target.caseGoalId, target.caseLabelLatex);
+          walk(c.body, target.caseEngine, target.caseLabelLatex);
         }
         break;
       }

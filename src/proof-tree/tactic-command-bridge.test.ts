@@ -23,11 +23,13 @@ import {
 import { tacticCommandsToProofTree } from './tactic-to-tree';
 import {
   applyTacticCommandsAtCursor,
+  buildCaseBranchFromCaseNode,
   buildApplyTacticCommands,
   buildHaveTacticCommands,
   buildInductionTacticCommands,
   buildProjectionApplicationSource,
   proofTreeToTacticCommands,
+  rebuildInductionNodeFromCaseBranches,
 } from './tactic-command-bridge';
 
 const cst = (name: string): TTerm => ({ tag: 'Const', name });
@@ -173,6 +175,29 @@ describe('proofTreeToTacticCommands', () => {
     if (reparsed.tag !== 'induction') return;
     expect(reparsed.isCases).toBe(true);
     expect(reparsed.cases[1].constructorParamNames).toEqual(['k']);
+  });
+
+  test('rebuilding induction branches preserves existing branch bodies and collapse state', () => {
+    const firstBody = mkExact('refl');
+    const secondBody = mkHole();
+    const firstCase = { ...mkCase('n = Zero', firstBody, 'Zero', []), collapsed: true };
+    const secondCase = mkCase('n = Succ k', secondBody, 'Succ', ['k']);
+    const node = mkInduction('n', [firstCase, secondCase], true);
+
+    const rebuilt = rebuildInductionNodeFromCaseBranches(node, [
+      buildCaseBranchFromCaseNode(firstCase),
+      {
+        constructor: 'Succ',
+        params: [{ tag: 'var', name: 'j' }],
+        tactics: [],
+      },
+    ]);
+
+    expect(rebuilt.isCases).toBe(true);
+    expect(rebuilt.cases[0].body.id).toBe(firstBody.id);
+    expect(rebuilt.cases[0].collapsed).toBe(true);
+    expect(rebuilt.cases[1].body.id).toBe(secondBody.id);
+    expect(rebuilt.cases[1].constructorParamNames).toEqual(['j']);
   });
 
   test('roundtrips intros + apply + focused children through shared command bridge', () => {

@@ -674,4 +674,52 @@ testImg46 R = ?h`);
     expect(names).toContain('addRealOfRat');
     expect(names).toContain('CompleteOrderedField.addComm');
   });
+
+  // REGRESSION (image #47): user's actual limitAdd-style flow — deeply
+  // nested apply chain inside a have block — surfaces `Simp` reduction for
+  // `2 + (-1) → 1` on the RHS subterm. Root cause analysis: the user's
+  // `rtwo R` (from source) and elaborator's `realOfRat -1` are DIFFERENT
+  // kernel forms but render identically. addRealOfRat's LHS pattern
+  // requires both args to be realOfRat-shaped, so it doesn't fire on
+  // `radd (rtwo R) (realOfRat -1)`.
+  // Fix: tag `rtwoAsRealOfRat : rtwo R = realOfRat R 2` as @simp. The
+  // simp chain becomes: rtwo → realOfRat 2, addRealOfRat: 2+(-1) →
+  // realOfRat 1, realOfRatOne: → rone R. No simp loop because there's
+  // no `realOfRat 2 → rtwo` direction registered.
+  test('REGRESSION (image #47): deep nested apply, simp reduces rtwo+(-1) to rone via rtwoAsRealOfRat chain', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg47', `testImg47 : (R : Real) -> (ε : Carrier R) -> rlt (rzero R) ε -> rle 1 2
+testImg47 R ε hε = ?outer`);
+    const { mkHave } = await import('./proof-tree');
+    const { runSimp } = await import('../tactics/simp-tactic');
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(['R', 'ε', 'hε'],
+      mkHave('h6', '?', mkHole(), '(rlt (rzero R) (rdiv ε (rtwo R)))',
+        mkApply('epsOverMPos', [
+          mkHole(),
+          mkApply('ltLeTrans', [
+            mkExact('1'),
+            mkHole(),
+            mkApply('addLeRightCancel', [
+              mkExact('-1'),
+              leafHole,
+            ]),
+          ]),
+        ]),
+      ),
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    // Run simp with the full @simp set and assert it produces a chain that
+    // includes rtwoAsRealOfRat AND at least one addRealOfRat step. Without
+    // rtwoAsRealOfRat in the @simp set, the chain stops after a single
+    // realOfRatOne step and the rtwo-side stays stuck.
+    const lemmas = [...(r.definitions.simpLemmas ?? [])];
+    const simpRes = runSimp(engine, lemmas);
+    expect(simpRes.success).toBe(true);
+    if (!simpRes.success) return;
+    const stepNames = simpRes.steps.map((s: any) => s.name);
+    expect(stepNames).toContain('rtwoAsRealOfRat');
+    expect(stepNames).toContain('addRealOfRat');
+  });
 });

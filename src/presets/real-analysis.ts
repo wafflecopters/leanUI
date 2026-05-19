@@ -706,6 +706,26 @@ realOfIntZero R = refl
 realOfRatZero : (R : Real) -> Equal (realOfRat R (MkRat (IntOfNat 0) 1 (IsSucc 0))) (rzero R)
 realOfRatZero R = refl
 
+-- Reverse-direction bridge (alias → realOfRat) for rtwo specifically.
+-- Tagged @simp because it does NOT loop with the realOfRat → rone / rzero
+-- bridges above — there's no \`realOfRat 2 → rtwo\` direction registered.
+--
+-- The motivating bug (image #46): \`rtwo R + (-1)\` doesn't auto-simplify
+-- because addRealOfRat's pattern requires BOTH args to be realOfRat-shaped,
+-- but rtwo is projection-shaped while -1 (from the elaborator's @ofRat path
+-- on signed-literal -1) is realOfRat-shaped. With rtwoAsRealOfRat in the
+-- @simp set, the chain becomes: rtwo → realOfRat 2, then addRealOfRat:
+-- 2 + (-1) → realOfRat 1, then realOfRatOne: → rone R. Closes cleanly.
+@syntax @simp
+rtwoAsRealOfRat : (R : Real) -> Equal (rtwo R) (realOfRat R (MkRat (IntOfNat 2) 1 (IsSucc 0)))
+rtwoAsRealOfRat R = cong (\\z => radd (rone R) z) (sym (CompleteOrderedField.addZeroRight (field R) (rone R)))
+
+-- Non-simp rewrite available when the user wants to go projection → realOfRat
+-- for rone. NOT tagged @simp because that would loop with realOfRatOne
+-- (which goes the other direction).
+roneAsRealOfRat : (R : Real) -> Equal (rone R) (realOfRat R (MkRat (IntOfNat 1) 1 (IsSucc 0)))
+roneAsRealOfRat R = sym (realOfRatOne R)
+
 -- 0 < 1: the field's foundational positivity. Used by realOfNatSuccPos
 -- (below) and the limit/derivative proofs (further down).
 zeroLtOne : (R : Real) -> rlt (rzero R) (rone R) := by
