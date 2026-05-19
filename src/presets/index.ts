@@ -11,5 +11,5 @@ export const PRESETS: { name: string; code: string }[] = [
   { name: 'Nat Math (Tactics)', code: NAT_MATH_TACTICS_CODE },
   { name: 'Real Analysis', code: REAL_ANALYSIS_CODE },
   { name: 'Peano Arithmetic', code: TRIANGLE_NUMBERS_CODE },
-  { name: 'Generic Literals (3 algebras)', code: LITERALS_DEMO_CODE },
+  { name: 'Generic Literals (Nat / Int / Real / Complex)', code: LITERALS_DEMO_CODE },
 ];
