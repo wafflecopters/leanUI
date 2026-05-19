@@ -1335,6 +1335,34 @@ function consumeSimpTraceStep(
   return consumeTraceStep(trace, nextTraceIdx, currentEngine);
 }
 
+function findCursorInInductionCaseTargets<T extends {
+  readonly caseNode: CaseNode;
+  readonly caseEngine: TacticEngine;
+  readonly caseGoalId: string;
+  readonly caseLabelLatex?: string;
+}>(
+  targets: readonly T[],
+  cursorId: ProofNodeId,
+  scrutinee: string,
+  descend: (target: T) => ReplayResult | null,
+): ReplayResult | null {
+  for (const target of targets) {
+    const c = target.caseNode;
+    if (c.id === cursorId) {
+      return {
+        engine: target.caseEngine,
+        goalId: target.caseGoalId,
+        caseLabel: c.label,
+        caseLabelLatex: target.caseLabelLatex,
+        inductionVar: scrutinee,
+      };
+    }
+    const result = descend(target);
+    if (result) return result;
+  }
+  return null;
+}
+
 /**
  * Find the de Bruijn index of a variable name in a TTKContext.
  * Returns null if not found.
@@ -2202,30 +2230,6 @@ function peelCtorParams(
   return { params, hasRecursiveParam, recursiveParamLocalIdx };
 }
 
-/**
- * Search case nodes for cursor when induction can't be applied.
- * Returns the first matching result from case bodies.
- */
-function searchCasesForCursor(
-  cases: readonly CaseNode[],
-  cursorId: ProofNodeId,
-  engine: TacticEngine,
-  goalId: string,
-  scrutinee: string,
-): ReplayResult | null {
-  for (const c of cases) {
-    if (c.id === cursorId) {
-      return { engine, goalId, caseLabel: c.label, caseLabelLatex: c.labelLatex, inductionVar: scrutinee };
-    }
-    const bodyResult = replayProofTree(
-      c.body, cursorId, engine,
-      c.label, c.labelLatex, scrutinee,
-    );
-    if (bodyResult) return bodyResult;
-  }
-  return null;
-}
-
 export function buildInductionCaseReplayTargets(
   node: Extract<ProofNode, { tag: 'induction' }>,
   engine: TacticEngine,
@@ -2527,22 +2531,16 @@ function replayProofTreeFromTrace(
         const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
         traceIdx = consumed.nextTraceIdx;
         const afterCasesEngine = consumed.nextEngine;
-
-        for (const target of buildTraceInductionCaseReplayTargets(node, afterCasesEngine, goalId, c => c.labelLatex)) {
-          const c = target.caseNode;
-          if (c.id === cursorId) {
-            return {
-              engine: target.caseEngine,
-              goalId: target.caseGoalId,
-              caseLabel: c.label,
-              caseLabelLatex: target.caseLabelLatex,
-              inductionVar: node.scrutinee,
-            };
-          }
-          const result = walk(c.body, target.caseEngine, c.label, target.caseLabelLatex, node.scrutinee);
-          if (result) return result;
-        }
-        return null;
+        const targets = buildTraceInductionCaseReplayTargets(node, afterCasesEngine, goalId, c => c.labelLatex);
+        return findCursorInInductionCaseTargets(targets, cursorId, node.scrutinee, target =>
+          walk(
+            target.caseNode.body,
+            target.caseEngine,
+            target.caseNode.label,
+            target.caseLabelLatex,
+            node.scrutinee,
+          ),
+        );
       }
 
       case 'simp': {
@@ -2785,26 +2783,16 @@ function replayProofTree(
     case 'induction': {
       const targets = buildInductionCaseReplayTargets(node, engine, goalId, c => c.labelLatex);
       if (!targets) return null;
-
-      for (const target of targets) {
-        const c = target.caseNode;
-        if (c.id === cursorId) {
-          return {
-            engine: target.caseEngine,
-            goalId: target.caseGoalId,
-            caseLabel: c.label,
-            caseLabelLatex: target.caseLabelLatex,
-            inductionVar: node.scrutinee,
-          };
-        }
-
-        const bodyResult = replayProofTree(
-          c.body, cursorId, target.caseEngine,
-          c.label, target.caseLabelLatex, node.scrutinee,
-        );
-        if (bodyResult) return bodyResult;
-      }
-      return null;
+      return findCursorInInductionCaseTargets(targets, cursorId, node.scrutinee, target =>
+        replayProofTree(
+          target.caseNode.body,
+          cursorId,
+          target.caseEngine,
+          target.caseNode.label,
+          target.caseLabelLatex,
+          node.scrutinee,
+        ),
+      );
     }
 
     case 'simp': {
