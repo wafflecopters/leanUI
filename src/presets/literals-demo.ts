@@ -1,31 +1,23 @@
 /**
  * Generic Literals Demo preset.
  *
- * Proves the @carrier* annotation system is genuinely generic by defining
- * FOUR canonical numeric algebras in ONE preset — Nat, Int, Real, Complex —
- * each tagged with the same `@carrierAdd` / `@carrierMul` / `@carrierValue`
- * annotations, and each closing the same theorem `1 + 4 = 5` via refl.
- *
- * The same kernel / suggestion-pipeline / renderer infra (inferIsRat,
- * isCarrierArithHead, carrierValueDisplay) recognizes all four algebras
- * uniformly because everything is data-driven from the @carrier* registry.
- * There is no preset-specific code anywhere downstream of the annotation
- * parser — proven both by these refl proofs typechecking and by the
- * Compute UI suggestion firing in each algebra.
+ * Demonstrates the @carrier* / @ofNat literal system across FOUR canonical
+ * numeric algebras — Nat, Int, Real, Complex — in ONE preset, each closing
+ * the same theorem `1 + 4 = 5` written with BARE NUMERALS. The kernel
+ * auto-coerces each `1`, `4`, `5` through the matching algebra's
+ * @impl=int / @ofNat path. Same source-level appearance, four very
+ * different elaborated kernel terms — and each one reduces to refl.
  */
 export const LITERALS_DEMO_CODE = `-- =====================================================================
--- Generic Literals Demo — four canonical numeric algebras, one tag system
+-- Generic Literals Demo — four numeric algebras, ONE syntax
 -- =====================================================================
 --
--- Each algebra below tags its own arithmetic operations with @carrierAdd /
--- @carrierMul and its named literals with @carrierValue N. The kernel
--- norm_num infra (inferIsRat), the suggestion pipeline (Compute suggestion),
--- and the renderer (carrierValueDisplay) all pick them up automatically —
--- no preset-specific code anywhere downstream.
+-- Numeric literals (\`1\`, \`4\`, \`5\`) work in any algebra that registers
+-- either a Nat / Int / Rat kernel impl OR a function tagged \`@ofNat\` /
+-- \`@ofInt\` / \`@ofRat\` whose return type is the target algebra. The
+-- elaborator finds the right coercion automatically from context.
 --
--- Each section closes "1 + 4 = 5" by refl, which only typechecks if the
--- kernel-level reduction actually goes through. Together they prove the
--- @carrier* abstraction is honestly generic: the same theorem, four ways.
+-- Each section closes "1 + 4 = 5" by refl, written exactly that way.
 
 inductive Void : Type where
 
@@ -33,7 +25,7 @@ inductive Equal : {A : Type} -> A -> A -> Type where
   refl : {A : Type} -> {a : A} -> Equal a a
 
 -- =====================================================================
--- ℕ — Natural numbers
+-- ℕ — Natural numbers (@impl=nat → literals are kernel-native NatLit)
 -- =====================================================================
 
 @syntax @impl=nat
@@ -53,41 +45,25 @@ mult : Nat -> Nat -> Nat
 mult Zero m = Zero
 mult (Succ n) m = plus m (mult n m)
 
-@syntax @carrierValue 0
-nat_0 : Nat
-nat_0 = Zero
-
-@syntax @carrierValue 1
-nat_1 : Nat
-nat_1 = Succ Zero
-
-@syntax @carrierValue 4
-nat_4 : Nat
-nat_4 = Succ (Succ (Succ (Succ Zero)))
-
-@syntax @carrierValue 5
-nat_5 : Nat
-nat_5 = Succ (Succ (Succ (Succ (Succ Zero))))
-
--- 1 + 4 = 5 in ℕ. Closes by refl because plus reduces via its ι rules.
-natOnePlusFour : Equal (plus nat_1 nat_4) nat_5
+-- 1 + 4 = 5 in ℕ. \`1\`, \`4\`, \`5\` are NatLits at the kernel level;
+-- the @natAdd fast-path collapses \`plus NatLit(1) NatLit(4)\` to NatLit(5).
+natOnePlusFour : Equal (plus 1 4) 5
 natOnePlusFour = refl
 
 -- =====================================================================
--- ℤ — Integers
+-- ℤ — Integers (@impl=int → literals expand to IntOfNat n directly)
 -- =====================================================================
 
 @syntax @impl=int
 inductive Int : Type where
-  IntOfNat   : Nat -> Int      -- non-negative case
-  IntNegSucc : Nat -> Int      -- -(n+1), never represents 0
+  IntOfNat   : Nat -> Int
+  IntNegSucc : Nat -> Int
 
 intNeg : Int -> Int
 intNeg (IntOfNat Zero)     = IntOfNat Zero
 intNeg (IntOfNat (Succ n)) = IntNegSucc n
 intNeg (IntNegSucc n)      = IntOfNat (Succ n)
 
--- subNatNat n m = n - m as Int. Structural recursion on both args.
 subNatNat : Nat -> Nat -> Int
 subNatNat Zero     Zero     = IntOfNat Zero
 subNatNat (Succ n) Zero     = IntOfNat (Succ n)
@@ -105,37 +81,24 @@ intAdd (IntNegSucc n) (IntNegSucc m) = IntNegSucc (Succ (plus n m))
 intNegFn : Int -> Int
 intNegFn = intNeg
 
-@syntax @carrierValue 0
-int_0 : Int
-int_0 = IntOfNat Zero
-
-@syntax @carrierValue 1
-int_1 : Int
-int_1 = IntOfNat (Succ Zero)
-
-@syntax @carrierValue 4
-int_4 : Int
-int_4 = IntOfNat (Succ (Succ (Succ (Succ Zero))))
-
-@syntax @carrierValue 5
-int_5 : Int
-int_5 = IntOfNat (Succ (Succ (Succ (Succ (Succ Zero)))))
-
-@syntax @carrierValue -1
-int_neg1 : Int
-int_neg1 = IntNegSucc Zero
-
--- 1 + 4 = 5 in ℤ. Reduces via intAdd's IntOfNat+IntOfNat case to plus on Nats.
-intOnePlusFour : Equal (intAdd int_1 int_4) int_5
+-- 1 + 4 = 5 in ℤ. Each literal expands to \`IntOfNat NatLit(_)\` via
+-- @impl=int; intAdd's first clause reduces \`IntOfNat n + IntOfNat m\`
+-- to \`IntOfNat (plus n m)\`, and @natAdd closes the rest. The explicit
+-- \`{A := Int}\` pins Equal's implicit type parameter — without it, \`5\`
+-- on the RHS defaults to Nat before the LHS resolves it to Int.
+intOnePlusFour : Equal {A := Int} (intAdd 1 4) 5
 intOnePlusFour = refl
 
 -- =====================================================================
--- ℝ — Reals (modeled as a wrap of Int for this demo — a "structural" Real
--- in the same spirit as real-analysis's abstract Real but concrete here)
+-- ℝ — Reals (no kernel impl — pure user algebra, literal-coerced via @ofNat)
 -- =====================================================================
 
 inductive Real : Type where
   MkReal : Int -> Real
+
+@syntax @ofNat
+realOfNat : Nat -> Real
+realOfNat n = MkReal (IntOfNat n)
 
 @syntax @carrierAdd
 realAdd : Real -> Real -> Real
@@ -145,56 +108,32 @@ realAdd (MkReal a) (MkReal b) = MkReal (intAdd a b)
 realNeg : Real -> Real
 realNeg (MkReal a) = MkReal (intNeg a)
 
-@syntax @carrierValue 0
-real_0 : Real
-real_0 = MkReal int_0
-
-@syntax @carrierValue 1
-real_1 : Real
-real_1 = MkReal int_1
-
-@syntax @carrierValue 4
-real_4 : Real
-real_4 = MkReal int_4
-
-@syntax @carrierValue 5
-real_5 : Real
-real_5 = MkReal int_5
-
--- 1 + 4 = 5 in ℝ. Reduces via realAdd's pattern → intAdd → plus.
-realOnePlusFour : Equal (realAdd real_1 real_4) real_5
+-- 1 + 4 = 5 in ℝ. The elaborator finds @ofNat at target head \`Real\`
+-- and inserts \`realOfNat _\` around each literal. Reduction unfolds
+-- realOfNat → MkReal (IntOfNat _), then realAdd / intAdd / @natAdd
+-- bring the whole chain home.
+realOnePlusFour : Equal {A := Real} (realAdd 1 4) 5
 realOnePlusFour = refl
 
 -- =====================================================================
--- ℂ — Complex numbers (pair of Reals: re + im·i)
+-- ℂ — Complex numbers (pair of Reals, literal-coerced via @ofNat)
 -- =====================================================================
 
 inductive Complex : Type where
-  MkComplex : Real -> Real -> Complex      -- (re, im)
+  MkComplex : Real -> Real -> Complex     -- (re, im)
+
+@syntax @ofNat
+complexOfNat : Nat -> Complex
+complexOfNat n = MkComplex (realOfNat n) (realOfNat 0)
 
 @syntax @carrierAdd
 complexAdd : Complex -> Complex -> Complex
 complexAdd (MkComplex a1 b1) (MkComplex a2 b2) = MkComplex (realAdd a1 a2) (realAdd b1 b2)
 
-@syntax @carrierValue 0
-complex_0 : Complex
-complex_0 = MkComplex real_0 real_0
-
-@syntax @carrierValue 1
-complex_1 : Complex
-complex_1 = MkComplex real_1 real_0
-
-@syntax @carrierValue 4
-complex_4 : Complex
-complex_4 = MkComplex real_4 real_0
-
-@syntax @carrierValue 5
-complex_5 : Complex
-complex_5 = MkComplex real_5 real_0
-
--- 1 + 4 = 5 in ℂ. Reduces componentwise: real-part via realAdd, imag-part
--- (0 + 0 = 0) also via realAdd. The whole proof closes by refl because
--- every nested reduction is definitional.
-complexOnePlusFour : Equal (complexAdd complex_1 complex_4) complex_5
+-- 1 + 4 = 5 in ℂ. Same surface form, deepest reduction chain: the
+-- real-part component reduces via realAdd → intAdd → @natAdd, and the
+-- imaginary-part components (both 0) collapse the same way. Every step
+-- is definitional, so refl closes it.
+complexOnePlusFour : Equal {A := Complex} (complexAdd 1 4) 5
 complexOnePlusFour = refl
 `;

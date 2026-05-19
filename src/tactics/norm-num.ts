@@ -144,6 +144,13 @@ function buildCoercionFnSet(definitions: DefinitionsMap): {
  * registered algebra.
  */
 export function inferIsRat(term: TTKTerm, definitions: DefinitionsMap): RatValue | null {
+  // Bare numeric literals — the kernel's native literal forms reduce to
+  // these whenever a closed arithmetic expression normalizes (e.g. via the
+  // @natAdd / @ratAdd fast paths). Recognize them directly so a carrier-op
+  // with NatLit/RatLit args evaluates instead of stranding at the leaves.
+  if (term.tag === 'NatLit') return canonRat(term.value, 1n);
+  if (term.tag === 'RatLit') return canonRat(term.num, term.den);
+
   const { head, args } = collectSpine(term);
   if (head.tag !== 'Const') return null;
   const name = head.name;

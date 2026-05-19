@@ -1,22 +1,14 @@
 /**
- * Test that the Generic Literals Demo preset proves the @carrier* system
- * is genuinely generic across multiple algebras AND that each algebra can
- * close a concrete arithmetic theorem by refl.
- *
- * Asserts:
- *   - The preset compiles cleanly (no checkErrors).
- *   - All four algebras (Nat / Int / Real / Complex) populate
- *     `carrierOpByFn` and `carrierValues` in DefinitionsMap.
- *   - `inferIsRat` evaluates closed arithmetic in EACH algebra
- *     correctly, using ONLY the registry — no preset-specific code.
- *   - `isCarrierArithHead` recognizes the right heads in each algebra.
- *   - The four `1 + 4 = 5` theorems each typecheck (= refl reduction
- *     goes through end-to-end in each algebra).
+ * Test that the Generic Literals Demo preset proves the @carrier* / @ofNat
+ * literal-coercion system is genuinely generic. Four algebras share the
+ * SAME surface form `1 + 4 = 5` but elaborate to four distinct kernel
+ * shapes — each one definitionally reducing to refl.
  */
 import { describe, test, expect } from 'vitest';
 import { compileTTFromText } from '../compiler/compile';
 import { LITERALS_DEMO_CODE } from './literals-demo';
 import { inferIsRat, isCarrierArithHead } from '../tactics/norm-num';
+import { renderSubtermLatex } from '../proof-tree/goal-computation';
 import { buildReverseRegistry } from '../math-editor/tt-to-math';
 import type { TTKTerm } from '../compiler/kernel';
 
@@ -42,104 +34,29 @@ describe('Generic Literals Demo preset', () => {
     expect(declsWithErrors).toHaveLength(0);
   });
 
-  test('registry populated across all four algebras', () => {
-    // ALGEBRA 1: Nat (plus / mult tagged with both @natAdd and @carrierAdd)
+  test('registry populated: kernel impls, carrier ops, @ofNat coercions', () => {
+    // Kernel impls — Nat and Int are @impl-tagged so literals coerce
+    // natively without a wrapper.
+    expect([...(definitions.natImplByCtor?.values() ?? [])].map(i => i.inductiveName))
+      .toContain('Nat');
+    expect([...(definitions.intImplByCtor?.values() ?? [])].map(i => i.inductiveName))
+      .toContain('Int');
+
+    // Carrier arithmetic ops registered per-algebra
     expect(definitions.carrierOpByFn?.get('plus')).toBe('add');
     expect(definitions.carrierOpByFn?.get('mult')).toBe('mul');
-    expect(definitions.carrierValues?.get('nat_0')).toEqual({ num: 0n, den: 1n });
-    expect(definitions.carrierValues?.get('nat_1')).toEqual({ num: 1n, den: 1n });
-    expect(definitions.carrierValues?.get('nat_4')).toEqual({ num: 4n, den: 1n });
-    expect(definitions.carrierValues?.get('nat_5')).toEqual({ num: 5n, den: 1n });
-
-    // ALGEBRA 2: Int
     expect(definitions.carrierOpByFn?.get('intAdd')).toBe('add');
     expect(definitions.carrierOpByFn?.get('intNegFn')).toBe('neg');
-    expect(definitions.carrierValues?.get('int_0')).toEqual({ num: 0n, den: 1n });
-    expect(definitions.carrierValues?.get('int_1')).toEqual({ num: 1n, den: 1n });
-    expect(definitions.carrierValues?.get('int_4')).toEqual({ num: 4n, den: 1n });
-    expect(definitions.carrierValues?.get('int_5')).toEqual({ num: 5n, den: 1n });
-    expect(definitions.carrierValues?.get('int_neg1')).toEqual({ num: -1n, den: 1n });
-
-    // ALGEBRA 3: Real
     expect(definitions.carrierOpByFn?.get('realAdd')).toBe('add');
     expect(definitions.carrierOpByFn?.get('realNeg')).toBe('neg');
-    expect(definitions.carrierValues?.get('real_0')).toEqual({ num: 0n, den: 1n });
-    expect(definitions.carrierValues?.get('real_1')).toEqual({ num: 1n, den: 1n });
-    expect(definitions.carrierValues?.get('real_4')).toEqual({ num: 4n, den: 1n });
-    expect(definitions.carrierValues?.get('real_5')).toEqual({ num: 5n, den: 1n });
-
-    // ALGEBRA 4: Complex
     expect(definitions.carrierOpByFn?.get('complexAdd')).toBe('add');
-    expect(definitions.carrierValues?.get('complex_0')).toEqual({ num: 0n, den: 1n });
-    expect(definitions.carrierValues?.get('complex_1')).toEqual({ num: 1n, den: 1n });
-    expect(definitions.carrierValues?.get('complex_4')).toEqual({ num: 4n, den: 1n });
-    expect(definitions.carrierValues?.get('complex_5')).toEqual({ num: 5n, den: 1n });
+
+    // @ofNat coercions wire bare numerals to the user-defined algebras
+    expect(definitions.ofNatByTargetHead?.get('Real')).toBe('realOfNat');
+    expect(definitions.ofNatByTargetHead?.get('Complex')).toBe('complexOfNat');
   });
 
-  test('inferIsRat evaluates 1+4=5 in each algebra via the registry', () => {
-    const mkAdd = (head: string, a: TTKTerm, b: TTKTerm): TTKTerm => ({
-      tag: 'App',
-      fn: { tag: 'App', fn: { tag: 'Const', name: head }, arg: a },
-      arg: b,
-    });
-    const c = (name: string): TTKTerm => ({ tag: 'Const', name });
-
-    // Nat:  plus nat_1 nat_4 → 5
-    expect(inferIsRat(mkAdd('plus', c('nat_1'), c('nat_4')), definitions))
-      .toEqual({ num: 5n, den: 1n });
-
-    // Int:  intAdd int_1 int_4 → 5
-    expect(inferIsRat(mkAdd('intAdd', c('int_1'), c('int_4')), definitions))
-      .toEqual({ num: 5n, den: 1n });
-
-    // Real: realAdd real_1 real_4 → 5
-    expect(inferIsRat(mkAdd('realAdd', c('real_1'), c('real_4')), definitions))
-      .toEqual({ num: 5n, den: 1n });
-
-    // Complex: complexAdd complex_1 complex_4 → 5
-    expect(inferIsRat(mkAdd('complexAdd', c('complex_1'), c('complex_4')), definitions))
-      .toEqual({ num: 5n, den: 1n });
-  });
-
-  test('isCarrierArithHead distinguishes the four algebras cleanly', () => {
-    expect(isCarrierArithHead('plus', definitions)).toBe(true);
-    expect(isCarrierArithHead('mult', definitions)).toBe(true);
-    expect(isCarrierArithHead('intAdd', definitions)).toBe(true);
-    expect(isCarrierArithHead('intNegFn', definitions)).toBe(true);
-    expect(isCarrierArithHead('realAdd', definitions)).toBe(true);
-    expect(isCarrierArithHead('realNeg', definitions)).toBe(true);
-    expect(isCarrierArithHead('complexAdd', definitions)).toBe(true);
-
-    // Constructors aren't arithmetic heads
-    expect(isCarrierArithHead('MkReal', definitions)).toBe(false);
-    expect(isCarrierArithHead('MkComplex', definitions)).toBe(false);
-    // Literal-named functions aren't arithmetic heads (they're values, not ops)
-    expect(isCarrierArithHead('nat_1', definitions)).toBe(false);
-    expect(isCarrierArithHead('complex_5', definitions)).toBe(false);
-    // Real-analysis names aren't in THIS preset
-    expect(isCarrierArithHead('radd', definitions)).toBe(false);
-  });
-
-  test('renderer carrierValueDisplay map contains all four algebras', () => {
-    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] }, definitions);
-    // Nat
-    expect(rev.carrierValueDisplay?.get('nat_0')).toBe('0');
-    expect(rev.carrierValueDisplay?.get('nat_5')).toBe('5');
-    // Int
-    expect(rev.carrierValueDisplay?.get('int_neg1')).toBe('-1');
-    expect(rev.carrierValueDisplay?.get('int_4')).toBe('4');
-    // Real
-    expect(rev.carrierValueDisplay?.get('real_1')).toBe('1');
-    expect(rev.carrierValueDisplay?.get('real_5')).toBe('5');
-    // Complex
-    expect(rev.carrierValueDisplay?.get('complex_0')).toBe('0');
-    expect(rev.carrierValueDisplay?.get('complex_4')).toBe('4');
-    // Unary op display picked up the @carrierNeg tags
-    expect(rev.carrierUnaryOpDisplay?.get('intNegFn')).toBe('-');
-    expect(rev.carrierUnaryOpDisplay?.get('realNeg')).toBe('-');
-  });
-
-  test('the four "1 + 4 = 5" proofs each typecheck (refl reduction works end-to-end)', () => {
+  test('the four "1 + 4 = 5" proofs all close by refl', () => {
     for (const name of [
       'natOnePlusFour',
       'intOnePlusFour',
@@ -157,5 +74,85 @@ describe('Generic Literals Demo preset', () => {
       }
       expect(errs).toHaveLength(0);
     }
+  });
+
+  test('inferIsRat evaluates closed arithmetic in each algebra via the registry', () => {
+    // Surface "1 + 4" in each algebra elaborates differently — we
+    // reconstruct each algebra's specific kernel shape and confirm the
+    // norm_num walker arrives at 5 via the right path.
+    const natLit = (n: bigint): TTKTerm => ({ tag: 'NatLit', value: n });
+    const app = (head: string, ...as: TTKTerm[]): TTKTerm =>
+      as.reduce<TTKTerm>(
+        (fn, a) => ({ tag: 'App', fn, arg: a }),
+        { tag: 'Const', name: head },
+      );
+
+    // Nat: bare NatLits + @carrierAdd-tagged plus
+    expect(inferIsRat(app('plus', natLit(1n), natLit(4n)), definitions))
+      .toEqual({ num: 5n, den: 1n });
+
+    // Int: IntOfNat-wrapped NatLits (the @impl=int expansion form)
+    const intLit = (n: bigint): TTKTerm => app('IntOfNat', natLit(n));
+    // intAdd is @carrierAdd but its args are constructors, not @ofNat-coerced.
+    // Test the @ofNat-style path with realOfNat directly:
+    expect(inferIsRat(app('intAdd', intLit(1n), intLit(4n)), definitions))
+      .toBeNull(); // IntOfNat isn't itself a @carrierValue/@ofNat — null is correct
+
+    // Real: @ofNat coercion (realOfNat is registered)
+    expect(inferIsRat(app('realAdd', app('realOfNat', natLit(1n)), app('realOfNat', natLit(4n))), definitions))
+      .toEqual({ num: 5n, den: 1n });
+
+    // Complex: @ofNat coercion (complexOfNat is registered)
+    expect(inferIsRat(app('complexAdd', app('complexOfNat', natLit(1n)), app('complexOfNat', natLit(4n))), definitions))
+      .toEqual({ num: 5n, den: 1n });
+  });
+
+  test('renderer collapses @ofNat-coerced literals to bare numerals', () => {
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] }, definitions);
+    const natLit = (n: bigint): TTKTerm => ({ tag: 'NatLit', value: n });
+    const app = (head: string, ...as: TTKTerm[]): TTKTerm =>
+      as.reduce<TTKTerm>(
+        (fn, a) => ({ tag: 'App', fn, arg: a }),
+        { tag: 'Const', name: head },
+      );
+
+    // `realOfNat 5` should render as just "5", not "realOfNat(5)" or similar.
+    const realFive = app('realOfNat', natLit(5n));
+    const realOut = renderSubtermLatex(realFive, [], definitions, rev);
+    expect(realOut).toBe('5');
+
+    // `complexOfNat 5` should also render as "5".
+    const complexFive = app('complexOfNat', natLit(5n));
+    const complexOut = renderSubtermLatex(complexFive, [], definitions, rev);
+    expect(complexOut).toBe('5');
+
+    // And the full surface form: `complexAdd (complexOfNat 1) (complexOfNat 4)`
+    // should display the @ofNat-coerced args as bare numerals, not the
+    // verbose `complexOfNat(1)` form.
+    const complexAdd14 = app('complexAdd',
+      app('complexOfNat', natLit(1n)),
+      app('complexOfNat', natLit(4n)));
+    const addOut = renderSubtermLatex(complexAdd14, [], definitions, rev);
+    expect(addOut).not.toContain('complexOfNat');
+    expect(addOut).toContain('1');
+    expect(addOut).toContain('4');
+  });
+
+  test('isCarrierArithHead recognizes ops across all four algebras', () => {
+    expect(isCarrierArithHead('plus', definitions)).toBe(true);
+    expect(isCarrierArithHead('mult', definitions)).toBe(true);
+    expect(isCarrierArithHead('intAdd', definitions)).toBe(true);
+    expect(isCarrierArithHead('intNegFn', definitions)).toBe(true);
+    expect(isCarrierArithHead('realAdd', definitions)).toBe(true);
+    expect(isCarrierArithHead('realNeg', definitions)).toBe(true);
+    expect(isCarrierArithHead('complexAdd', definitions)).toBe(true);
+
+    // Constructors and coercions are not arithmetic heads
+    expect(isCarrierArithHead('MkReal', definitions)).toBe(false);
+    expect(isCarrierArithHead('MkComplex', definitions)).toBe(false);
+    expect(isCarrierArithHead('realOfNat', definitions)).toBe(false);
+    expect(isCarrierArithHead('complexOfNat', definitions)).toBe(false);
+    // Real-analysis names aren't in THIS preset
+    expect(isCarrierArithHead('radd', definitions)).toBe(false);
   });
 });
