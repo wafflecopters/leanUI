@@ -21,7 +21,7 @@ import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { ttkTermsEqual } from '../tactics/fold-tactic';
 import { runSimp } from '../tactics/simp-tactic';
-import { inferIsRat, isCarrierArithHead } from '../tactics/norm-num';
+import { inferIsRat, isCarrierArithHead, ratValueLabel } from '../tactics/norm-num';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
 import { proposeVarName, freshenName } from './propose-var-name';
 import { renderNameLatex } from './name-latex';
@@ -758,15 +758,46 @@ export function computeTacticSuggestions(
                 || (fullGoalLatex !== undefined && origGoalLatex !== undefined && fullGoalLatex !== origGoalLatex);
               if (visiblyChanged) {
                 const resultGoalLatex = changedSubterm ?? fullGoalLatex;
-                suggestions.push({
-                  id: `simp-auto`,
-                  label: simpRes.steps.length === 1 ? `Simp ${simpRes.steps[0].name}` : `Simp (${simpRes.steps.length} steps)`,
-                  labelLatex: simpRes.steps.length === 1
-                    ? `\\text{Simp } ${renderNameLatex(simpRes.steps[0].name, 'textbf')}`
-                    : `\\text{Simp (${simpRes.steps.length} steps)}`,
-                  description: `Apply @simp lemmas: ${simpRes.steps.map(s => s.name).join(' → ')}`,
-                  resultGoalLatex,
-                } as any);
+                // norm_num path: when the clicked subterm is a registered
+                // carrier-arithmetic op AND `inferIsRat` evaluates it to a
+                // closed rational, label as \`Compute → X\` instead of
+                // \`Simp (N steps)\`. Same underlying simp proof, but the
+                // user-visible label reflects the user's mental model
+                // ("evaluate closed arithmetic" rather than "apply some
+                // simp lemmas").
+                let useComputeLabel = false;
+                let computedValueLabel: string | undefined;
+                if (isCarrierArithHead(subtermInfo.headName, definitions)) {
+                  const located = locateKernelSubterm(
+                    zonkedGoal.type, subtermInfo.headName!, subtermInfo.occurrenceIndex ?? 1
+                  );
+                  if (located) {
+                    const rat = inferIsRat(located, definitions);
+                    if (rat) {
+                      useComputeLabel = true;
+                      computedValueLabel = ratValueLabel(rat);
+                    }
+                  }
+                }
+                if (useComputeLabel) {
+                  suggestions.push({
+                    id: `compute`,
+                    label: `Compute = ${computedValueLabel}`,
+                    labelLatex: `\\text{Compute} = ${computedValueLabel}`,
+                    description: `Evaluate closed arithmetic via @simp chain: ${simpRes.steps.map(s => s.name).join(' → ')}`,
+                    resultGoalLatex,
+                  } as any);
+                } else {
+                  suggestions.push({
+                    id: `simp-auto`,
+                    label: simpRes.steps.length === 1 ? `Simp ${simpRes.steps[0].name}` : `Simp (${simpRes.steps.length} steps)`,
+                    labelLatex: simpRes.steps.length === 1
+                      ? `\\text{Simp } ${renderNameLatex(simpRes.steps[0].name, 'textbf')}`
+                      : `\\text{Simp (${simpRes.steps.length} steps)}`,
+                    description: `Apply @simp lemmas: ${simpRes.steps.map(s => s.name).join(' → ')}`,
+                    resultGoalLatex,
+                  } as any);
+                }
               }
             }
           } catch { /* ignore */ }

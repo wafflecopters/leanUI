@@ -675,6 +675,45 @@ testImg46 R = ?h`);
     expect(names).toContain('CompleteOrderedField.addComm');
   });
 
+  // PHASE 2 (norm_num): clicking a carrier-arithmetic-headed subterm whose
+  // value is a closed rational surfaces a `Compute = X` suggestion via the
+  // generic @carrierAdd / @carrierValue registry — NOT via hardcoded names.
+  // End-to-end of the full norm_num pipeline: preset annotations →
+  // DefinitionsMap registry → inferIsRat walker → suggestion pipeline →
+  // Compute label.
+  test('PHASE 2 (norm_num): click on 2+(-1) surfaces "Compute = 1" suggestion', { timeout: 30000 }, () => {
+    const { r, decl } = compileTop('testNormNum', `testNormNum : (R : Real) -> rle 1 2
+testNormNum R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(
+      ['R'],
+      mkApply('addLeRightCancel', [
+        mkExact('-1'),
+        leafHole,
+      ])
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    // RHS radd-headed subterm (occurrence 2).
+    let radd2Path: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 2) { radd2Path = p; break; }
+    }
+    expect(radd2Path).not.toBeNull();
+    if (!radd2Path) return;
+    const sugs = computeTacticSuggestions(radd2Path, ig, r.definitions, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    });
+    const computeSug = sugs.find(s => (s.id as string) === 'compute');
+    expect(computeSug).toBeDefined();
+    expect(computeSug?.label).toBe('Compute = 1');
+  });
+
   // REGRESSION (image #47): user's actual limitAdd-style flow — deeply
   // nested apply chain inside a have block — surfaces `Simp` reduction for
   // `2 + (-1) → 1` on the RHS subterm. Root cause analysis: the user's

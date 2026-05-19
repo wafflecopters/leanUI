@@ -3392,8 +3392,10 @@ function computeWithTacticEngine(
 /**
  * Find a node by ID in the proof tree.
  */
-function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
-  if (node.id === id) return node;
+function findInSharedProofChildren<T>(
+  node: ProofNode,
+  finder: (child: ProofNode) => T | null,
+): T | null {
   switch (node.tag) {
     case 'hole':
     case 'exact':
@@ -3404,28 +3406,34 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
     case 'rewrite':
     case 'have':
     case 'suffices':
-      return findNodeById(node.child, id);
+      return finder(node.child);
     case 'apply':
       for (const child of node.children) {
-        const found = findNodeById(child, id);
+        const found = finder(child);
         if (found) return found;
       }
       return null;
-    case 'induction':
-      for (const c of node.cases) {
-        if (c.id === id) return node; // Case header — return induction node
-        const found = findNodeById(c.body, id);
-        if (found) return found;
-      }
-      return null;
-    case 'simp': {
+    case 'simp':
       for (const step of node.steps) {
-        const found = findNodeById(step, id);
+        const found = finder(step);
         if (found) return found;
       }
-      return findNodeById(node.child, id);
+      return finder(node.child);
+    case 'induction':
+      return null;
+  }
+}
+
+function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
+  if (node.id === id) return node;
+  if (node.tag === 'induction') {
+    for (const c of node.cases) {
+      if (c.id === id) return node; // Case header — return induction node
+      const found = findNodeById(c.body, id);
+      if (found) return found;
     }
   }
+  return findInSharedProofChildren(node, child => findNodeById(child, id));
 }
 
 /**
@@ -3435,41 +3443,15 @@ function findNodeById(node: ProofNode, id: ProofNodeId): ProofNode | null {
 function findCaseAncestor(
   node: ProofNode, targetId: ProofNodeId,
 ): { caseNode: CaseNode; scrutinee: string } | null {
-  switch (node.tag) {
-    case 'hole':
-    case 'exact':
-      return null;
-    case 'intros':
-    case 'unfold':
-    case 'fold':
-    case 'rewrite':
-    case 'have':
-    case 'suffices':
-      return findCaseAncestor(node.child, targetId);
-    case 'apply':
-      for (const child of node.children) {
-        const found = findCaseAncestor(child, targetId);
-        if (found) return found;
+  if (node.tag === 'induction') {
+    for (const c of node.cases) {
+      if (c.id === targetId || findNodeById(c.body, targetId) !== null) {
+        return c.constructorName ? { caseNode: c, scrutinee: node.scrutinee } : null;
       }
-      return null;
-    case 'induction':
-      for (const c of node.cases) {
-        if (c.id === targetId || containsNodeId(c.body, targetId)) {
-          return c.constructorName ? { caseNode: c, scrutinee: node.scrutinee } : null;
-        }
-      }
-      return null;
-    case 'simp':
-      for (const step of node.steps) {
-        const found = findCaseAncestor(step, targetId);
-        if (found) return found;
-      }
-      return findCaseAncestor(node.child, targetId);
+    }
+    return null;
   }
-}
-
-function containsNodeId(node: ProofNode, id: ProofNodeId): boolean {
-  return findNodeById(node, id) !== null;
+  return findInSharedProofChildren(node, child => findCaseAncestor(child, targetId));
 }
 
 // ============================================================================
