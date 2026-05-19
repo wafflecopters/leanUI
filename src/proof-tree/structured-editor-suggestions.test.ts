@@ -626,4 +626,52 @@ testImg45 R = ?outer`);
     expect(names).toContain('addRealOfRat');
     expect(names).toContain('CompleteOrderedField.addComm');
   });
+
+  // REGRESSION (image #46): the user's actual flow — intros R, apply
+  // addLeRightCancel(exact -1, rewrite addRealOfRat → leaf) — and clicking the
+  // `radd` subterm on the leaf (goal: `0 ≤ 2 + (-1)` in surface; kernel form
+  // has the LHS still as `realOfRat (ratPlus 1 -1)` un-reduced). This is NOT
+  // a have-block; the cursor is on the post-rewrite leaf inside an apply's
+  // sibling subgoal. Must surface `rw addRealOfRat` to reduce `2 + (-1)` to
+  // `1` AND `rw CompleteOrderedField.addComm` to swap to `(-1) + 2`.
+  test('REGRESSION (image #46): post-rewrite-in-apply-sibling subgoal surfaces rw addRealOfRat', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg46', `testImg46 : (R : Real) -> rle 1 2
+testImg46 R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(
+      ['R'],
+      mkApply('addLeRightCancel', [
+        mkExact('-1'),
+        mkRewrite('addRealOfRat', leafHole),
+      ])
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    let raddPath: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 1) { raddPath = p; break; }
+    }
+    expect(raddPath).not.toBeNull();
+    if (!raddPath) return;
+    const { computeRewriteSuggestionsIncremental } = await import('./tactic-suggestions');
+    const collected: any[] = [];
+    let done = false;
+    computeRewriteSuggestionsIncremental(raddPath, ig, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    } as any, (progress) => {
+      for (const s of progress.suggestions) {
+        if (!collected.find(x => x.id === s.id)) collected.push(s);
+      }
+      done = progress.done;
+    });
+    for (let i = 0; i < 120 && !done; i++) await new Promise(r => setTimeout(r, 50));
+    const names = collected.map(s => s.rewriteName);
+    expect(names).toContain('addRealOfRat');
+    expect(names).toContain('CompleteOrderedField.addComm');
+  });
 });

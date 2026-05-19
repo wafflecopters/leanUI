@@ -257,7 +257,7 @@ export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], c
 }
 
 /** Format a case label as LaTeX: scrutinee = \text{Ctor}\;p1\;p2 */
-function formatCaseLabelLatex(scrutinee: string, ctorName: string, paramNames: readonly string[]): string {
+export function formatCaseLabelLatex(scrutinee: string, ctorName: string, paramNames: readonly string[]): string {
   const escName = (n: string) => n.length === 1 ? n : `\\text{${n}}`;
   const ctorLatex = `\\text{${ctorName}}`;
   if (paramNames.length === 0) return `${escName(scrutinee)} = ${ctorLatex}`;

@@ -345,6 +345,7 @@ describe('shared structural editing helpers', () => {
     if (!next || next.root.tag !== 'induction') return;
     expect(next.root.cases[0].constructorParamNames).toEqual(['j']);
     expect(next.root.cases[0].label).toBe('n = Succ j');
+    expect(next.root.cases[0].body.id).toBe(caseNode.body.id);
   });
 
   test('induction case helpers share add/remove behavior', () => {
@@ -359,11 +360,13 @@ describe('shared structural editing helpers', () => {
     expect(added?.root.tag).toBe('induction');
     if (!added || added.root.tag !== 'induction') return;
     expect(added.root.cases).toHaveLength(2);
+    expect(added.root.cases[0].body.id).toBe(firstCase.body.id);
 
     const removed = removeInductionCaseInProofTree(added, added.root.id, 1);
     expect(removed?.root.tag).toBe('induction');
     if (!removed || removed.root.tag !== 'induction') return;
     expect(removed.root.cases).toHaveLength(1);
+    expect(removed.root.cases[0].body.id).toBe(firstCase.body.id);
   });
 
   test('collapse helpers preserve cursor behavior through the shared wrapper layer', () => {

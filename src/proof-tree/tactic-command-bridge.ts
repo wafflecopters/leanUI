@@ -1,15 +1,17 @@
 import { parseExpr } from '../parser/parser';
 import {
   TacticCommand,
+  type CaseBranch,
   mkConstTT,
   mkHoleTT,
   mkPropTT,
+  allPatternVarNames,
   flatParamsToCasePatterns,
   type TTerm,
 } from '../compiler/surface';
 import { createNamedArgLookup, type DefinitionsMap } from '../compiler/term';
-import type { ProofNode, ProofTreeState } from './proof-tree';
-import { findNode, replaceNode } from './proof-tree';
+import type { CaseNode, InductionNode, ProofNode, ProofTreeState } from './proof-tree';
+import { findNode, formatCaseLabelLatex, mkCase, replaceNode } from './proof-tree';
 import { findFirstHole, tacticCommandsToProofTree } from './tactic-to-tree';
 
 function parseSourceExpr(expr: string): TTerm {
@@ -55,6 +57,14 @@ export interface StructuredInductionCaseInfo {
   readonly paramNames: readonly string[];
 }
 
+export function buildCaseBranchFromCaseNode(node: CaseNode): CaseBranch {
+  return {
+    constructor: node.constructorName ?? node.label,
+    params: node.casePatterns ? [...node.casePatterns] : flatParamsToCasePatterns(node.constructorParamNames ?? []),
+    tactics: proofTreeToTacticCommands(node.body),
+  };
+}
+
 export function buildInductionTacticCommands(
   scrutinee: string,
   caseInfos: readonly StructuredInductionCaseInfo[],
@@ -69,6 +79,32 @@ export function buildInductionTacticCommands(
       tactics: [],
     })),
   }];
+}
+
+export function rebuildInductionNodeFromCaseBranches(
+  node: InductionNode,
+  caseBranches: readonly CaseBranch[],
+): InductionNode {
+  const cases = caseBranches.map((branch, index) => {
+    const prev = node.cases[index];
+    const hasNestedPatterns = branch.params.some(param => param.tag === 'ctor');
+    const constructorParamNames = hasNestedPatterns ? undefined : allPatternVarNames(branch.params);
+    const label = constructorParamNames && constructorParamNames.length > 0
+      ? `${node.scrutinee} = ${branch.constructor} ${constructorParamNames.join(' ')}`
+      : `${node.scrutinee} = ${branch.constructor}`;
+    const caseNode = mkCase(
+      label,
+      prev ? prev.body : tacticCommandsToProofTree(branch.tactics),
+      branch.constructor,
+      constructorParamNames,
+      formatCaseLabelLatex(node.scrutinee, branch.constructor, constructorParamNames ?? []),
+      hasNestedPatterns ? branch.params : undefined,
+    );
+    return prev
+      ? { ...caseNode, id: prev.id, body: prev.body, collapsed: prev.collapsed }
+      : caseNode;
+  });
+  return { ...node, cases };
 }
 
 export function buildProjectionApplicationSource(

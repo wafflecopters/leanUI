@@ -12,28 +12,29 @@ import {
 } from './goal-computation';
 import type { ProofNodeId, ProofTreeState } from './proof-tree';
 import {
-  addCase,
   applyInduction,
   applySimp,
   clearNode,
-  editCaseParamName,
   editIntroName,
+  findCase,
   findNode,
+  isCursorInSubtree,
   mkHave,
   mkHole,
-  removeCase,
   replaceNode,
-  toggleCollapse,
   toggleInductionCollapse,
   toggleSimpCollapse,
+  updateCase,
 } from './proof-tree';
 import { buildExprFromSlots, kernelTermToSource, type TermBuilderState } from './term-builder';
 import type { RewriteSuggestion, TacticSuggestion } from './tactic-suggestions';
 import {
   applyTacticCommandsAtCursor,
+  buildCaseBranchFromCaseNode,
   buildApplyTacticCommands,
   buildHaveTacticCommands,
   buildInductionTacticCommands,
+  rebuildInductionNodeFromCaseBranches,
 } from './tactic-command-bridge';
 
 export type ProofTreeManualTacticMode =
@@ -121,6 +122,55 @@ function inferInductionSuggestionTacticName(
     return 'cases';
   }
   return 'induction';
+}
+
+function findInductionAndCase(
+  root: ProofTreeState['root'],
+  caseId: ProofNodeId,
+): { node: Extract<ProofTreeState['root'], { tag: 'induction' }>; caseIndex: number } | null {
+  switch (root.tag) {
+    case 'induction': {
+      const caseIndex = root.cases.findIndex(c => c.id === caseId);
+      if (caseIndex >= 0) return { node: root, caseIndex };
+      for (const c of root.cases) {
+        const nested = findInductionAndCase(c.body, caseId);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    case 'intros':
+    case 'unfold':
+    case 'fold':
+    case 'rewrite':
+      return findInductionAndCase(root.child, caseId);
+    case 'apply':
+      for (const child of root.children) {
+        const nested = findInductionAndCase(child, caseId);
+        if (nested) return nested;
+      }
+      return null;
+    case 'simp':
+      for (const step of root.steps) {
+        const nested = findInductionAndCase(step, caseId);
+        if (nested) return nested;
+      }
+      return findInductionAndCase(root.child, caseId);
+    case 'have':
+      if (root.proofTree) {
+        const nested = findInductionAndCase(root.proofTree, caseId);
+        if (nested) return nested;
+      }
+      return findInductionAndCase(root.child, caseId);
+    case 'suffices':
+      if (root.byProof) {
+        const nested = findInductionAndCase(root.byProof, caseId);
+        if (nested) return nested;
+      }
+      return findInductionAndCase(root.child, caseId);
+    case 'exact':
+    case 'hole':
+      return null;
+  }
 }
 
 function escapeRegExp(s: string): string {
@@ -349,7 +399,21 @@ export function renameCaseParamInProofTree(
   paramIndex: number,
   newName: string,
 ): ProofTreeState | null {
-  return editCaseParamName(state, caseId, paramIndex, newName);
+  const induction = findInductionAndCase(state.root, caseId);
+  if (!induction) return null;
+  const { node, caseIndex } = induction;
+  const branches = node.cases.map(buildCaseBranchFromCaseNode);
+  const target = branches[caseIndex];
+  if (!target || paramIndex < 0 || paramIndex >= target.params.length) return null;
+  const param = target.params[paramIndex];
+  if (param.tag !== 'var') return null;
+  const nextBranches = [...branches];
+  nextBranches[caseIndex] = {
+    ...target,
+    params: target.params.map((p, index) => index === paramIndex ? { tag: 'var', name: newName } : p),
+  };
+  const rebuilt = rebuildInductionNodeFromCaseBranches(node, nextBranches);
+  return { root: replaceNode(state.root, node.id, rebuilt), cursor: state.cursor };
 }
 
 export function addInductionCaseInProofTree(
@@ -357,7 +421,15 @@ export function addInductionCaseInProofTree(
   inductionId: ProofNodeId,
   label: string,
 ): ProofTreeState | null {
-  return addCase(state, inductionId, label);
+  const node = findNode(state.root, inductionId);
+  if (!node || node.tag !== 'induction') return null;
+  const rebuilt = rebuildInductionNodeFromCaseBranches(node, [
+    ...node.cases.map(buildCaseBranchFromCaseNode),
+    { constructor: label, params: [], tactics: [] },
+  ]);
+  const newRoot = replaceNode(state.root, inductionId, rebuilt);
+  const newCase = rebuilt.cases[rebuilt.cases.length - 1];
+  return { root: newRoot, cursor: { nodeId: newCase.body.id } };
 }
 
 export function removeInductionCaseInProofTree(
@@ -365,14 +437,35 @@ export function removeInductionCaseInProofTree(
   inductionId: ProofNodeId,
   caseIndex: number,
 ): ProofTreeState | null {
-  return removeCase(state, inductionId, caseIndex);
+  const node = findNode(state.root, inductionId);
+  if (!node || node.tag !== 'induction') return null;
+  if (node.cases.length <= 1 || caseIndex < 0 || caseIndex >= node.cases.length) return null;
+  const removedCase = node.cases[caseIndex];
+  const rebuilt = rebuildInductionNodeFromCaseBranches(
+    node,
+    node.cases.map(buildCaseBranchFromCaseNode).filter((_, index) => index !== caseIndex),
+  );
+  const newRoot = replaceNode(state.root, inductionId, rebuilt);
+  if (removedCase.id === state.cursor.nodeId || isCursorInSubtree(removedCase.body, state.cursor.nodeId)) {
+    const fallbackIdx = Math.min(caseIndex, rebuilt.cases.length - 1);
+    return { root: newRoot, cursor: { nodeId: rebuilt.cases[fallbackIdx].body.id } };
+  }
+  return { root: newRoot, cursor: state.cursor };
 }
 
 export function toggleCaseCollapseInProofTree(
   state: ProofTreeState,
   caseId: ProofNodeId,
 ): ProofTreeState {
-  return toggleCollapse(state, caseId);
+  const caseNode = findCase(state.root, caseId);
+  if (!caseNode) return state;
+  const newCollapsed = !caseNode.collapsed;
+  const newRoot = updateCase(state.root, caseId, c => ({ ...c, collapsed: newCollapsed }));
+  let cursor = state.cursor;
+  if (newCollapsed && isCursorInSubtree(caseNode.body, state.cursor.nodeId)) {
+    cursor = { nodeId: caseId };
+  }
+  return { root: newRoot, cursor };
 }
 
 export function toggleSimpCollapseInProofTree(
