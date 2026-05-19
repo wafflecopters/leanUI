@@ -727,14 +727,26 @@ realOfRatZero R = refl
 -- @simp set, the chain becomes: rtwo → realOfRat 2, then addRealOfRat:
 -- 2 + (-1) → realOfRat 1, then realOfRatOne: → rone R. Closes cleanly.
 @syntax @simp
+@syntax @carrierBridge
 rtwoAsRealOfRat : (R : Real) -> Equal (rtwo R) (realOfRat R (MkRat (IntOfNat 2) 1 (IsSucc 0)))
 rtwoAsRealOfRat R = cong (\\z => radd (rone R) z) (sym (CompleteOrderedField.addZeroRight (field R) (rone R)))
 
--- Non-simp rewrite available when the user wants to go projection → realOfRat
--- for rone. NOT tagged @simp because that would loop with realOfRatOne
--- (which goes the other direction).
+-- @carrierBridge (NOT @simp): registered in the norm_num bridge set so the
+-- Compute path can normalize \`rone R → realOfRat 1\` when needed. Not @simp
+-- because that would loop with realOfRatOne (which goes the other direction)
+-- in general simp. norm_num's seenGoals cycle detection plus the orientation
+-- preference (normalize TO realOfRat for arithmetic) lets both directions
+-- coexist in the Compute path without instability.
+@syntax @carrierBridge
 roneAsRealOfRat : (R : Real) -> Equal (rone R) (realOfRat R (MkRat (IntOfNat 1) 1 (IsSucc 0)))
 roneAsRealOfRat R = sym (realOfRatOne R)
+
+-- rzero ↔ realOfRat 0 is definitionally equal (refl) — realOfRat R (MkRat 0 1 _)
+-- δ/ι-reduces through realOfInt → realOfNat → rzero. Still register as a
+-- carrierBridge so norm_num can use it when walking proof structure.
+@syntax @carrierBridge
+rzeroAsRealOfRat : (R : Real) -> Equal (rzero R) (realOfRat R (MkRat (IntOfNat 0) 1 (IsSucc 0)))
+rzeroAsRealOfRat R = refl
 
 -- 0 < 1: the field's foundational positivity. Used by realOfNatSuccPos
 -- (below) and the limit/derivative proofs (further down).

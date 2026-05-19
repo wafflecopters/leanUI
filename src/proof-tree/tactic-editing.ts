@@ -543,10 +543,22 @@ export function applySuggestionToProofTreeState(
     return applyTacticCommandsAtCursor(state, buildApplyTacticCommands(ctorName, suggestion.numSubgoals ?? 1, true));
   }
 
-  if (suggestion.id === 'simp-auto') {
+  if (suggestion.id === 'simp-auto' || suggestion.id === 'compute') {
+    // 'compute' is the norm_num variant of simp-auto: the suggestion was
+    // surfaced because the clicked subterm was registered carrier-arithmetic
+    // and evaluated to a closed Rat. Dispatch both to runSimp, but for
+    // 'compute' augment the @simp set with @carrierBridge lemmas (the
+    // alias-→-realOfRat bridges needed to normalize literals before
+    // applying arithmetic homomorphism lemmas like addRealOfRat). This
+    // keeps the tactic tree shape consistent — replay walks see a simp
+    // node in either case — while letting Compute reach cases that
+    // ordinary simp can't.
     const kernelGoal = ctx.typedContext?.kernelGoal;
     if (!kernelGoal) return null;
-    const lemmas = [...(kernelGoal.definitions.simpLemmas ?? [])];
+    const baseSimp = [...(kernelGoal.definitions.simpLemmas ?? [])];
+    const lemmas = suggestion.id === 'compute' && kernelGoal.definitions.carrierBridges
+      ? [...baseSimp, ...kernelGoal.definitions.carrierBridges]
+      : baseSimp;
     const simpResult = runSimp(kernelGoal.engine, lemmas);
     if (!simpResult.success) return null;
     return applySimp(state, lemmas, simpResult.proofNodes);

@@ -721,7 +721,15 @@ export function computeTacticSuggestions(
         }
         if (simpAutoAllowed && gId) {
           try {
-            const all = [...definitions.simpLemmas];
+            // For Compute-style clicks (carrier-arithmetic head, closed value),
+            // augment the @simp set with @carrierBridge lemmas so norm_num can
+            // normalize alias-form literals toward realOfRat before arithmetic.
+            // Regular simp keeps the original (smaller) set.
+            const isComputePath = isCarrierArithHead(subtermInfo.headName, definitions);
+            const baseSimp = [...definitions.simpLemmas];
+            const all = isComputePath && definitions.carrierBridges
+              ? [...baseSimp, ...definitions.carrierBridges]
+              : baseSimp;
             // Patch the engine's focused-goal meta with the zonked type so
             // runSimp's per-iteration RewriteTactic sees the substituted
             // form (same fix as the per-lemma trySimp above).

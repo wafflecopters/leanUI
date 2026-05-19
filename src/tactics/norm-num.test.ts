@@ -71,6 +71,12 @@ describe('inferIsRat — generic registry-driven', () => {
     expect(definitions.carrierValues!.get('rone')).toEqual({ num: 1n, den: 1n });
     expect(definitions.carrierValues!.get('rtwo')).toEqual({ num: 2n, den: 1n });
     expect(definitions.carrierValues!.get('rhalf')).toEqual({ num: 1n, den: 2n });
+    // Bridges: the alias-→-realOfRat bridges norm_num uses to normalize
+    // alias-form literals before applying arithmetic homomorphism lemmas.
+    expect(definitions.carrierBridges).toBeDefined();
+    expect(definitions.carrierBridges!.has('rzeroAsRealOfRat')).toBe(true);
+    expect(definitions.carrierBridges!.has('roneAsRealOfRat')).toBe(true);
+    expect(definitions.carrierBridges!.has('rtwoAsRealOfRat')).toBe(true);
   });
 
   test('rzero R → 0  (via @carrierValue 0)', () => {

@@ -298,6 +298,19 @@ export type DefinitionsMap = {
    *  `@carrierValue <num>/<den>`. Generic — any preset can register its
    *  named literals through this. */
   carrierValues?: Map<string, { num: bigint; den: bigint }>,
+  /** Optional. Set of lemma names that bridge alias-form literals to their
+   *  `realOfRat`-form equivalents (e.g. `roneAsRealOfRat : rone R = realOfRat R 1`).
+   *  Populated by registerCarrierBridge when a definition is tagged
+   *  `@carrierBridge`. The norm_num decision procedure uses these lemmas
+   *  IN ADDITION TO the regular @simp set, so it can normalize toward
+   *  realOfRat form for arithmetic homomorphism lemmas (addRealOfRat etc.)
+   *  to fire. NOT included in the regular @simp set because doing so would
+   *  loop with the existing forward bridges (e.g. realOfRatOne goes the
+   *  opposite direction). runSimp's seenGoals cycle detection prevents
+   *  infinite loops when both directions coexist, but the simp result
+   *  could vary depending on iteration order — keeping the bridges
+   *  separate keeps regular simp's behavior deterministic. */
+  carrierBridges?: Set<string>,
 }
 
 /** Carrier-level arithmetic op kind. Generic across presets. */
@@ -354,6 +367,7 @@ export function createDefinitionsMap(): DefinitionsMap {
     ratOpByFn: new Map<string, 'add' | 'mul' | 'sub'>(),
     carrierOpByFn: new Map<string, CarrierOp>(),
     carrierValues: new Map<string, { num: bigint; den: bigint }>(),
+    carrierBridges: new Set<string>(),
   };
 }
 
@@ -377,6 +391,17 @@ export function registerCarrierValue(definitions: DefinitionsMap, fnName: string
   if (den === 0n) return `@carrierValue: denominator must be non-zero (${fnName})`;
   if (!definitions.carrierValues) definitions.carrierValues = new Map();
   definitions.carrierValues.set(fnName, { num, den });
+  return null;
+}
+
+/**
+ * Register a lemma as an alias-→-realOfRat bridge. Used by norm_num to
+ * normalize alias-form literals toward realOfRat form. Idempotent.
+ */
+export function registerCarrierBridge(definitions: DefinitionsMap, lemmaName: string): string | null {
+  if (!definitions.terms.has(lemmaName)) return `definition '${lemmaName}' not found`;
+  if (!definitions.carrierBridges) definitions.carrierBridges = new Set();
+  definitions.carrierBridges.add(lemmaName);
   return null;
 }
 

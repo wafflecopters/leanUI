@@ -1,4 +1,4 @@
-import { registerCarrierOp, registerCarrierValue, registerIntImpl, registerNatImpl, registerNatOp, registerOfInt, registerOfNat, registerOfRat, registerRatImpl, registerRatOp, registerSimp, type CarrierOp, type DefinitionsMap } from './term';
+import { registerCarrierBridge, registerCarrierOp, registerCarrierValue, registerIntImpl, registerNatImpl, registerNatOp, registerOfInt, registerOfNat, registerOfRat, registerRatImpl, registerRatOp, registerSimp, type CarrierOp, type DefinitionsMap } from './term';
 import type { CompiledBlock } from './compile-types';
 
 /**
@@ -114,6 +114,15 @@ function applyImplAnnotationLine(trimmed: string, declName: string, definitions:
     const den = cvMatch[2] ? BigInt(cvMatch[2]) : 1n;
     const err = registerCarrierValue(definitions, declName, num, den);
     if (err) console.warn(`@carrierValue verification failed for '${declName}': ${err}`);
+    return;
+  }
+
+  // @carrierBridge: registers a lemma as an alias-→-realOfRat bridge for
+  // norm_num. Lemma type should be `Equal (<fn> R) (realOfRat R q)` for
+  // some @carrierValue-registered <fn>.
+  if (trimmed === '@carrierBridge') {
+    const err = registerCarrierBridge(definitions, declName);
+    if (err) console.warn(`@carrierBridge verification failed for '${declName}': ${err}`);
     return;
   }
 }
