@@ -22,7 +22,7 @@ import type { DefinitionsMap } from '../compiler/term';
  * \`App(fn, hole)\` positions to determine expected types from \`fn\`'s
  * Pi signature. Then a substitution pass rewrites holes accordingly.
  */
-function pinHolesToCtxVars(
+export function pinHolesToCtxVars(
   type: TTKTerm,
   ctx: import('../compiler/term').TTKContext,
   definitions: DefinitionsMap,

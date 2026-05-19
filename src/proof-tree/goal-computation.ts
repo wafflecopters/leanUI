@@ -27,7 +27,7 @@ import { mkRow } from '../math-editor/types';
 import { renderStaticLatex } from '../math-editor/render';
 import { ProofNode, ProofNodeId, CaseNode, isCursorInSubtree } from './proof-tree';
 import { TacticEngine, createInitialEngine } from '../tactics/tacticsEngine';
-import { IntrosTactic, ApplyTactic, ExactTactic } from '../tactics/tactic';
+import { IntrosTactic, ApplyTactic, ExactTactic, pinHolesToCtxVars } from '../tactics/tactic';
 import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { RewriteTactic } from '../tactics/rewrite-tactic';
@@ -2736,10 +2736,19 @@ function replayProofTree(
         // Parse typeExpr in the current goal context (implicit args are re-inserted as Holes
         // by parseExactExpr, then resolved by elaborateType via checkType)
         const raw = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
-        const typeTerm = raw ? elaborateType(raw, goal.ctx, engine.definitions) : null;
-        if (!typeTerm) {
+        const elaborated = raw ? elaborateType(raw, goal.ctx, engine.definitions) : null;
+        if (!elaborated) {
           return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
         }
+        // Pin elaborator-leftover Holes (for implicit args like `rle`'s `{R}`)
+        // to compatible context vars — same fix the IntrosTactic does after
+        // intros. Without this, the proof subgoal type carries unresolved
+        // `Hole(_implicit_R)` placeholders, which the pattern matchers in
+        // RewriteTactic / ApplyTactic treat as deeper structure than
+        // expected and fail to match against alias-headed lemma patterns
+        // (image #45: `rw addRealOfRat`, `rw addComm` missing for radd-headed
+        // subterm clicks inside a have block).
+        const typeTerm = pinHolesToCtxVars(elaborated, goal.ctx, engine.definitions);
 
         // Create a subgoal for the proofTree with goal type = typeExpr
         const proofGoalId = goalId + '_have_proof';

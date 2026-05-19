@@ -25,6 +25,7 @@ import {
   applyTacticCommandsAtCursor,
   buildApplyTacticCommands,
   buildHaveTacticCommands,
+  buildInductionTacticCommands,
   buildProjectionApplicationSource,
   proofTreeToTacticCommands,
 } from './tactic-command-bridge';
@@ -150,6 +151,30 @@ describe('buildProjectionApplicationSource', () => {
 });
 
 describe('proofTreeToTacticCommands', () => {
+  test('shared induction command builder preserves cases mode and branch params', () => {
+    const commands = buildInductionTacticCommands('n', [
+      { constructorName: 'Zero', paramNames: [] },
+      { constructorName: 'Succ', paramNames: ['k'] },
+    ], 'cases');
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0].name).toBe('cases');
+    expect(commands[0].caseBranches).toEqual([
+      { constructor: 'Zero', params: [], tactics: [] },
+      {
+        constructor: 'Succ',
+        params: [{ tag: 'var', name: 'k' }],
+        tactics: [],
+      },
+    ]);
+
+    const reparsed = tacticCommandsToProofTree(commands);
+    expect(reparsed.tag).toBe('induction');
+    if (reparsed.tag !== 'induction') return;
+    expect(reparsed.isCases).toBe(true);
+    expect(reparsed.cases[1].constructorParamNames).toEqual(['k']);
+  });
+
   test('roundtrips intros + apply + focused children through shared command bridge', () => {
     const tree: ProofNode = mkIntros(['n'], mkApply('sym', [
       mkExact('refl'),

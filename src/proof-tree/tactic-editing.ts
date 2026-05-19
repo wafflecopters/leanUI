@@ -14,7 +14,6 @@ import type { ProofNodeId, ProofTreeState } from './proof-tree';
 import {
   addCase,
   applyInduction,
-  applyInductionWithCtors,
   applySimp,
   clearNode,
   editCaseParamName,
@@ -34,6 +33,7 @@ import {
   applyTacticCommandsAtCursor,
   buildApplyTacticCommands,
   buildHaveTacticCommands,
+  buildInductionTacticCommands,
 } from './tactic-command-bridge';
 
 export type ProofTreeManualTacticMode =
@@ -76,11 +76,11 @@ function splitNames(value: string): string[] {
   return value.split(/[\s,]+/).filter(Boolean);
 }
 
-function buildInductionResult(
-  state: ProofTreeState,
+function buildInductionTacticCommandsFromContext(
   scrutinee: string,
   ctx: Pick<ProofTreeManualTacticContext, 'typedContext' | 'inductiveMap' | 'registry'>,
-): ProofTreeState | null {
+  tacticName: 'induction' | 'cases',
+) {
   const hyp = ctx.typedContext?.hypotheses.find(h => h.name === scrutinee);
   const rawType = hyp?.rawType;
   const headName = rawType ? extractTypeHead(rawType) : null;
@@ -90,10 +90,37 @@ function buildInductionResult(
     const rev = ctx.registry ? buildReverseRegistry(ctx.registry) : undefined;
     const ctxNames = ctx.typedContext?.hypotheses.map(h => h.name);
     const ctorInfos = generateCaseInfos(scrutinee, indInfo, rev, ctxNames);
-    return applyInductionWithCtors(state, scrutinee, ctorInfos);
+    return buildInductionTacticCommands(scrutinee, ctorInfos, tacticName);
+  }
+
+  return null;
+}
+
+function applyInductionFromContext(
+  state: ProofTreeState,
+  scrutinee: string,
+  ctx: Pick<ProofTreeManualTacticContext, 'typedContext' | 'inductiveMap' | 'registry'>,
+  tacticName: 'induction' | 'cases',
+): ProofTreeState | null {
+  const commands = buildInductionTacticCommandsFromContext(scrutinee, ctx, tacticName);
+  if (commands) {
+    return applyTacticCommandsAtCursor(state, commands);
   }
 
   return applyInduction(state, scrutinee, [`${scrutinee} = 0`, `${scrutinee} = k'`]);
+}
+
+function inferInductionSuggestionTacticName(
+  suggestion: Pick<TacticSuggestion, 'label' | 'labelLatex'>,
+): 'induction' | 'cases' {
+  const label = suggestion.label.toLowerCase();
+  if (label.startsWith('destructure ') || label.startsWith('cases ')) {
+    return 'cases';
+  }
+  if (suggestion.labelLatex?.includes('\\text{cases }')) {
+    return 'cases';
+  }
+  return 'induction';
 }
 
 function escapeRegExp(s: string): string {
@@ -382,7 +409,7 @@ export function applySuggestionToProofTreeState(
 
   if (suggestion.id.startsWith('induction-')) {
     const scrutinee = suggestion.id.slice('induction-'.length);
-    return buildInductionResult(state, scrutinee, ctx);
+    return applyInductionFromContext(state, scrutinee, ctx, inferInductionSuggestionTacticName(suggestion));
   }
 
   if (suggestion.id.startsWith('fold-')) {
@@ -472,7 +499,7 @@ export function applyManualProofTreeTactic(
     case 'induction': {
       const scrutinee = value.trim();
       if (!scrutinee) return null;
-      return buildInductionResult(state, scrutinee, ctx);
+      return applyInductionFromContext(state, scrutinee, ctx, 'induction');
     }
 
     case 'exact': {

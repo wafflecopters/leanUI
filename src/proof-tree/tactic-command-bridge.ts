@@ -50,6 +50,27 @@ export function buildHaveTacticCommands(
   }];
 }
 
+export interface StructuredInductionCaseInfo {
+  readonly constructorName: string;
+  readonly paramNames: readonly string[];
+}
+
+export function buildInductionTacticCommands(
+  scrutinee: string,
+  caseInfos: readonly StructuredInductionCaseInfo[],
+  tacticName: 'induction' | 'cases' = 'induction',
+): TacticCommand[] {
+  return [{
+    name: tacticName,
+    args: [parseSourceExpr(scrutinee)],
+    caseBranches: caseInfos.map(info => ({
+      constructor: info.constructorName,
+      params: flatParamsToCasePatterns(info.paramNames),
+      tactics: [],
+    })),
+  }];
+}
+
 export function buildProjectionApplicationSource(
   projName: string,
   hypName: string,

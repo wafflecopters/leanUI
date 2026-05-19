@@ -1,6 +1,7 @@
-import { mkConstTT } from '../compiler/surface';
+import { mkConstTT, mkPiTT } from '../compiler/surface';
 import { createDefinitionsMap } from '../compiler/term';
 import { beforeEach, describe, expect, test } from 'vitest';
+import type { InductiveInfo } from './goal-computation';
 import { createInitialState, mkCase, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkSimp, resetProofIds } from './proof-tree';
 import { buildProjectionApplicationSource, buildHaveTacticCommands } from './tactic-command-bridge';
 import {
@@ -22,6 +23,14 @@ import {
 } from './tactic-editing';
 
 beforeEach(() => resetProofIds());
+
+const natInfo: InductiveInfo = {
+  name: 'Nat',
+  constructors: [
+    { name: 'Zero', type: mkConstTT('Nat') },
+    { name: 'Succ', type: mkPiTT(mkConstTT('Nat'), mkConstTT('Nat'), 'n') },
+  ],
+};
 
 describe('applySuggestionToProofTreeState', () => {
   test('uses edited intro names through the shared action helper', () => {
@@ -94,7 +103,7 @@ describe('applySuggestionToProofTreeState', () => {
     expect(next.root.expr).toBe('(Limit.eps_delta hLim _ _)');
   });
 
-  test('hypothesis destructure suggestions share the generic induction path', () => {
+  test('hypothesis destructure suggestions share the command bridge and preserve cases metadata', () => {
     const state = createInitialState();
     const destructCtx = {
       hypotheses: [{ name: 'n', rawType: mkConstTT('Nat'), type: 'Nat' }],
@@ -102,13 +111,19 @@ describe('applySuggestionToProofTreeState', () => {
     } as any;
     const next = applySuggestionToProofTreeState(state, {
       id: 'induction-n',
-      label: 'cases n',
+      label: 'Destructure n',
+      labelLatex: '\\text{cases } n',
       description: 'Destructure the hypothesis',
     }, {
       typedContext: destructCtx,
+      inductiveMap: new Map([['Nat', natInfo]]),
     });
 
     expect(next?.root.tag).toBe('induction');
+    if (!next || next.root.tag !== 'induction') return;
+    expect(next.root.isCases).toBe(true);
+    expect(next.root.cases.map(c => c.constructorName)).toEqual(['Zero', 'Succ']);
+    expect(next.root.cases[1].constructorParamNames).toEqual(['n1']);
   });
 });
 

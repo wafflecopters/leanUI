@@ -572,4 +572,58 @@ testImg44 R ε hε = ?outer`);
     const hasApplySuggestion = sugs.some(s => (s.id as string)?.startsWith('apply-def-'));
     expect(hasApplySuggestion).toBe(true);
   });
+
+  // REGRESSION (image #45): clicking a `radd`-headed subterm inside a `have`
+  // proof subtree must surface `rw addRealOfRat` (and other rewrites whose
+  // LHS pattern matches via the alias). Root cause: the have-block path in
+  // `replayProofTree` set up the proof's goal type via
+  // `parseExactExpr → elaborateType` but did NOT pin elaborator-leftover
+  // Holes for implicit args (e.g. `rle`'s `{R}`, `radd`'s `{R}`) to bound
+  // context vars. IntrosTactic does this pinning (since image #34), but the
+  // have-block setup skipped it — so the goal carried unresolved
+  // `Hole(_implicit_R)` placeholders that broke pattern matching in the
+  // rewrite tactic. Fix: also run `pinHolesToCtxVars` on the have block's
+  // elaborated type.
+  test('REGRESSION (image #45): rw addRealOfRat surfaces for radd inside have proof', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg45', `testImg45 : (R : Real) -> rle 1 2
+testImg45 R = ?outer`);
+    const { mkHave } = await import('./proof-tree');
+    const haveProof = mkHole();
+    const outer = mkHole();
+    // Have type: `0 ≤ 2 + (-1)` — uses natural surface syntax so implicit
+    // `{R}` args show up as Holes from parseExactExpr; pinHolesToCtxVars
+    // must resolve them before pattern matching.
+    const haveNode = mkHave('h', '?', outer,
+      '(rle (rzero R) (radd (realOfRat R 2) (realOfRat R -1)))',
+      haveProof);
+    const proof: ProofNode = mkIntros(['R'], haveNode);
+    const engine = replayToEngine(proof, haveProof.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    let raddPath: string | null = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 1) { raddPath = p; break; }
+    }
+    expect(raddPath).not.toBeNull();
+    if (!raddPath) return;
+    const { computeRewriteSuggestionsIncremental } = await import('./tactic-suggestions');
+    const collected: any[] = [];
+    let done = false;
+    computeRewriteSuggestionsIncremental(raddPath, ig, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    } as any, (progress) => {
+      for (const s of progress.suggestions) {
+        if (!collected.find(x => x.id === s.id)) collected.push(s);
+      }
+      done = progress.done;
+    });
+    for (let i = 0; i < 120 && !done; i++) await new Promise(r => setTimeout(r, 50));
+    const names = collected.map(s => s.rewriteName);
+    expect(names).toContain('addRealOfRat');
+    expect(names).toContain('CompleteOrderedField.addComm');
+  });
 });
