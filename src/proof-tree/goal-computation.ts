@@ -1280,6 +1280,29 @@ export interface TraceInductionCaseReplayTarget {
   readonly caseLabelLatex?: string;
 }
 
+type CaseLabelLatexResolver = (c: CaseNode) => string | undefined;
+
+function resolveCaseReplayLabelLatex(
+  caseNode: CaseNode,
+  resolveCaseLabelLatex?: CaseLabelLatexResolver,
+): string | undefined {
+  return resolveCaseLabelLatex ? resolveCaseLabelLatex(caseNode) : caseNode.labelLatex;
+}
+
+function makeCaseReplayTarget(
+  caseNode: CaseNode,
+  caseEngine: TacticEngine,
+  caseGoalId: string,
+  resolveCaseLabelLatex?: CaseLabelLatexResolver,
+): InductionCaseReplayTarget {
+  return {
+    caseNode,
+    caseEngine,
+    caseGoalId,
+    caseLabelLatex: resolveCaseReplayLabelLatex(caseNode, resolveCaseLabelLatex),
+  };
+}
+
 interface ConsumedTraceStep {
   readonly step?: import('../tactics/tactic-session').TacticStepTrace;
   readonly nextEngine: TacticEngine;
@@ -2207,17 +2230,14 @@ export function buildInductionCaseReplayTargets(
   node: Extract<ProofNode, { tag: 'induction' }>,
   engine: TacticEngine,
   goalId: string,
-  resolveCaseLabelLatex?: (c: CaseNode) => string | undefined,
+  resolveCaseLabelLatex?: CaseLabelLatexResolver,
 ): InductionCaseReplayTarget[] | null {
   const goal = engine.getFocusedGoal();
   if (!goal) return null;
 
-  const fallbackTargets = node.cases.map(c => ({
-    caseNode: c,
-    caseEngine: engine,
-    caseGoalId: goalId,
-    caseLabelLatex: resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex,
-  }));
+  const fallbackTargets = node.cases.map(c =>
+    makeCaseReplayTarget(c, engine, goalId, resolveCaseLabelLatex),
+  );
 
   let scrutineeIdx = findVarIndex(node.scrutinee, goal.ctx);
   let effectiveGoal = goal;
@@ -2249,12 +2269,7 @@ export function buildInductionCaseReplayTargets(
   return node.cases.map(c => {
     const ctor = inductiveDef.constructors.find(ct => ct.name === c.constructorName);
     if (!ctor) {
-      return {
-        caseNode: c,
-        caseEngine: engine,
-        caseGoalId: goalId,
-        caseLabelLatex: resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex,
-      };
+      return makeCaseReplayTarget(c, engine, goalId, resolveCaseLabelLatex);
     }
 
     const caseGoalId = `${effectiveGoalId}_case_${c.constructorName}`;
@@ -2270,16 +2285,16 @@ export function buildInductionCaseReplayTargets(
     } else {
       caseGoals.push(caseGoalId);
     }
-    return {
-      caseNode: c,
-      caseEngine: effectiveEngine.withUpdates({
+    return makeCaseReplayTarget(
+      c,
+      effectiveEngine.withUpdates({
         metaVars: caseMetaVars,
         goals: caseGoals,
         focusIndex: focusIdx >= 0 ? focusIdx : caseGoals.length - 1,
       }),
       caseGoalId,
-      caseLabelLatex: resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex,
-    };
+      resolveCaseLabelLatex,
+    );
   });
 }
 
@@ -2287,29 +2302,23 @@ export function buildTraceInductionCaseReplayTargets(
   node: Extract<ProofNode, { tag: 'induction' }>,
   afterCasesEngine: TacticEngine,
   fallbackGoalId: string,
-  resolveCaseLabelLatex?: (c: CaseNode) => string | undefined,
+  resolveCaseLabelLatex?: CaseLabelLatexResolver,
 ): TraceInductionCaseReplayTarget[] {
   return node.cases.map(c => {
     const matchIdx = afterCasesEngine.goals.findIndex(g => {
       const meta = afterCasesEngine.metaVars.get(g);
       return meta?.caseTag === c.constructorName;
     });
-    const caseLabelLatex = resolveCaseLabelLatex ? resolveCaseLabelLatex(c) : c.labelLatex;
     if (matchIdx >= 0) {
       const caseEngine = afterCasesEngine.withUpdates({ focusIndex: matchIdx });
-      return {
-        caseNode: c,
+      return makeCaseReplayTarget(
+        c,
         caseEngine,
-        caseGoalId: caseEngine.getFocusedGoalId() ?? fallbackGoalId,
-        caseLabelLatex,
-      };
+        caseEngine.getFocusedGoalId() ?? fallbackGoalId,
+        resolveCaseLabelLatex,
+      );
     }
-    return {
-      caseNode: c,
-      caseEngine: afterCasesEngine,
-      caseGoalId: fallbackGoalId,
-      caseLabelLatex,
-    };
+    return makeCaseReplayTarget(c, afterCasesEngine, fallbackGoalId, resolveCaseLabelLatex);
   });
 }
 
@@ -3014,7 +3023,7 @@ export function computeTypedContext(
   definitions?: DefinitionsMap,
   tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[],
 ): TypedProofContext | null {
-  const rev = buildReverseRegistry(registry);
+  const rev = buildReverseRegistry(registry, definitions);
 
   // If we have kernel type + definitions, use the real TacticEngine
   if (kernelType && definitions) {

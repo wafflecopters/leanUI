@@ -320,8 +320,8 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   // Compute goal map for prose view (replays entire tree, not just to cursor)
   const rev = useMemo<ReverseRegistry | null>(() => {
     if (!registry) return null;
-    return buildReverseRegistry(registry);
-  }, [registry]);
+    return buildReverseRegistry(registry, definitions ?? undefined);
+  }, [registry, definitions]);
 
   const goalMap = useMemo<Map<ProofNodeId, NodeGoalInfo>>(() => {
     if (!kernelType || !definitions || !rev) return new Map();

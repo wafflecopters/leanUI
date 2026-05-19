@@ -460,7 +460,7 @@ describe('definition search suggestions', () => {
 
     // Build KernelGoalInfo
     const registry = createDefaultRegistry();
-    const rev = buildReverseRegistry(registry);
+    const rev = buildReverseRegistry(registry, defs);
     const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
 
     const ig = renderInteractiveGoal(engine, goal, defs, rev);
@@ -490,7 +490,7 @@ describe('definition search suggestions', () => {
     const engine = createInitialEngine(elaborated, ctx, defs);
     const goal = engine.getFocusedGoal()!;
     const registry = createDefaultRegistry();
-    const rev = buildReverseRegistry(registry);
+    const rev = buildReverseRegistry(registry, defs);
     const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
     const ig = renderInteractiveGoal(engine, goal, defs, rev);
 
@@ -516,7 +516,7 @@ describe('definition search suggestions', () => {
     const engine = createInitialEngine(elaborated, ctx, defs);
     const goal = engine.getFocusedGoal()!;
     const registry = createDefaultRegistry();
-    const rev = buildReverseRegistry(registry);
+    const rev = buildReverseRegistry(registry, defs);
     const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
     const ig = renderInteractiveGoal(engine, goal, defs, rev);
 
@@ -746,7 +746,7 @@ describe('definition search suggestions', () => {
     const gId = engine.getFocusedGoalId()!;
 
     const registry = createDefaultRegistry();
-    const rev = buildReverseRegistry(registry);
+    const rev = buildReverseRegistry(registry, defs);
     const kernelGoal: KernelGoalInfo = { engine, goal, definitions: defs, rev };
     const ig = renderInteractiveGoal(engine, goal, defs, rev);
 

@@ -51,6 +51,18 @@ export interface ReverseRegistry {
   nameToEntry: Map<string, SyntaxEntry>; // "plus" → entry with pattern [$0, +, $1]
   /** Names that should be delta-reduced (unfolded) before rendering */
   unfoldNames: Set<string>;
+  /** Function name → display symbol for Carrier-style nullary constants.
+   *  Populated from `definitions.carrierValues` when buildReverseRegistry
+   *  is called with a DefinitionsMap. The renderer suppresses the
+   *  carrier-arg (first arg, typically `R`) and emits the display symbol.
+   *  E.g., {"rzero": "0", "rone": "1", "rtwo": "2"}. Generic across
+   *  presets — driven by `@carrierValue N` annotations. */
+  carrierValueDisplay?: Map<string, string>;
+  /** Function name → prefix operator symbol for Carrier-style unary ops.
+   *  Populated from `definitions.carrierOpByFn` (kinds 'neg' and 'inv').
+   *  The renderer suppresses the carrier-arg and emits the prefix.
+   *  E.g., {"rneg": "-"}. Generic — driven by `@carrierNeg` / `@carrierInv`. */
+  carrierUnaryOpDisplay?: Map<string, string>;
 }
 
 /** Extract function name from a template string (first space-delimited token). */
@@ -59,7 +71,10 @@ function templateFunctionName(template: string): string {
   return firstSpace >= 0 ? template.slice(0, firstSpace) : template;
 }
 
-export function buildReverseRegistry(registry: SyntaxRegistry): ReverseRegistry {
+export function buildReverseRegistry(
+  registry: SyntaxRegistry,
+  definitions?: import('../compiler/term').DefinitionsMap,
+): ReverseRegistry {
   const sourceToVisual = new Map<string, string>();
   const nameToEntry = new Map<string, SyntaxEntry>();
   const unfoldNames = new Set<string>();
@@ -87,7 +102,29 @@ export function buildReverseRegistry(registry: SyntaxRegistry): ReverseRegistry 
     r = r.parent;
   }
 
-  return { sourceToVisual, nameToEntry, unfoldNames };
+  // Build the carrier display maps from the DefinitionsMap if provided.
+  // These let the renderer emit `0` / `1` / `2` / `-` / etc. for
+  // Carrier-style constants without hardcoding preset-specific names.
+  let carrierValueDisplay: Map<string, string> | undefined;
+  let carrierUnaryOpDisplay: Map<string, string> | undefined;
+  if (definitions) {
+    if (definitions.carrierValues && definitions.carrierValues.size > 0) {
+      carrierValueDisplay = new Map<string, string>();
+      for (const [fnName, { num, den }] of definitions.carrierValues) {
+        const display = den === 1n ? num.toString() : `${num.toString()}/${den.toString()}`;
+        carrierValueDisplay.set(fnName, display);
+      }
+    }
+    if (definitions.carrierOpByFn && definitions.carrierOpByFn.size > 0) {
+      carrierUnaryOpDisplay = new Map<string, string>();
+      for (const [fnName, op] of definitions.carrierOpByFn) {
+        if (op === 'neg') carrierUnaryOpDisplay.set(fnName, '-');
+        // (inv has no widely-agreed unary prefix; skip for now)
+      }
+    }
+  }
+
+  return { sourceToVisual, nameToEntry, unfoldNames, carrierValueDisplay, carrierUnaryOpDisplay };
 }
 
 // ============================================================================
@@ -270,19 +307,21 @@ export function decomposePiSpine(type: TTerm): { binders: BinderInfo[]; body: TT
 // ============================================================================
 // Carrier-parameterized constant symbols (render-only, not bidirectional)
 // ============================================================================
-
-/** Constants whose first arg is a carrier/Real parameter that should be suppressed. */
-/** Nullary constants: first arg is carrier (suppressed), no other args. */
-const CARRIER_CONST_SYMBOLS = new Map<string, string>([
-  ['rzero', '0'],
-  ['rone', '1'],
-  ['rtwo', '2'],
+//
+// The rendering of `rzero R → 0`, `rone R → 1`, `rneg R x → -x`, etc.
+// is driven by the DefinitionsMap registry — see buildReverseRegistry()
+// above, which reads `definitions.carrierValues` and `definitions.carrierOpByFn`
+// to populate `rev.carrierValueDisplay` and `rev.carrierUnaryOpDisplay`.
+// No preset-specific names are hardcoded here.
+//
+// One residual non-generic mapping is `Carrier R → ℝ`, which is fundamentally
+// preset-specific notation (the abstract Real type is named "Carrier" of a
+// Real instance — a different preset would have its own analogue). It's
+// special-cased below via the `Carrier` head name. If a future preset
+// wants its own type-display sugar, a `@displayAs <symbol>` annotation
+// would be the natural extension.
+const TYPE_DISPLAY_FALLBACK = new Map<string, string>([
   ['Carrier', '\\mathbb{R}'],
-]);
-
-/** Prefix operators: first arg may be carrier (suppressed), last arg is the operand. */
-const CARRIER_PREFIX_OPS = new Map<string, string>([
-  ['rneg', '-'],
 ]);
 
 // ============================================================================
@@ -332,9 +371,12 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
       const { fn, args } = flattenApp(term);
 
       if (fn.tag === 'Const') {
-        // Carrier-parameterized constants: suppress the carrier arg and render as a symbol.
-        // E.g., rzero(R) → 0,  rone(R) → 1,  Carrier(R) → ℝ
-        const carrierSymbol = CARRIER_CONST_SYMBOLS.get(fn.name);
+        // Carrier-parameterized constants: suppress the carrier arg and render
+        // as a symbol. The map is built from the preset's @carrierValue
+        // annotations (rzero → "0", rone → "1", rtwo → "2", custom presets
+        // can register their own literals). The type-display fallback
+        // covers `Carrier R → ℝ` which is preset-naming-specific.
+        const carrierSymbol = rev.carrierValueDisplay?.get(fn.name) ?? TYPE_DISPLAY_FALLBACK.get(fn.name);
         if (carrierSymbol !== undefined && args.length >= 1) {
           if (args.length === 1) return [mkSymbol(carrierSymbol)];
           const overflowNodes: MathNode[] = [];
@@ -345,9 +387,9 @@ function ttermToMathNodesRaw(term: TTerm, rev: ReverseRegistry, ctx: string[], a
           return [mkSymbol(carrierSymbol), mkDelimiter('(', ')', mkRow(overflowNodes))];
         }
 
-        // Carrier-parameterized prefix operators: suppress carrier, render as prefix + last arg.
-        // E.g., rneg(R, c) → -(c),  rneg(c) → -(c)  (R may be implicit)
-        const prefixOp = CARRIER_PREFIX_OPS.get(fn.name);
+        // Carrier-parameterized prefix operators: suppress carrier, render as
+        // prefix + last arg. Built from @carrierNeg annotations.
+        const prefixOp = rev.carrierUnaryOpDisplay?.get(fn.name);
         if (prefixOp !== undefined && args.length >= 1) {
           const operand = args[args.length - 1];
           const operandNodes = ttermToMathNodes(operand, rev, ctx, annotate);

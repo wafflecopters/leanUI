@@ -1510,17 +1510,20 @@ describe('buildInductionCaseReplayTargets', () => {
       mkCase('fallback', mkTreeHole(), 'Bogus', []),
     ], true);
 
-    const targets = buildInductionCaseReplayTargets(node, engine, '?goal', c => c.labelLatex ?? c.label);
+    const targets = buildInductionCaseReplayTargets(node, engine, '?goal', c => `latex:${c.constructorName ?? c.label}`);
     expect(targets).not.toBeNull();
     if (!targets) return;
 
     expect(targets).toHaveLength(3);
     expect(targets[0].caseGoalId).toBe('?goal_case_Zero');
     expect(targets[0].caseEngine.getFocusedGoalId()).toBe('?goal_case_Zero');
+    expect(targets[0].caseLabelLatex).toBe('latex:Zero');
     expect(targets[1].caseGoalId).toBe('?goal_case_Succ');
     expect(targets[1].caseEngine.getFocusedGoalId()).toBe('?goal_case_Succ');
+    expect(targets[1].caseLabelLatex).toBe('latex:Succ');
     expect(targets[2].caseGoalId).toBe('?goal');
     expect(targets[2].caseEngine).toBe(engine);
+    expect(targets[2].caseLabelLatex).toBe('latex:Bogus');
   });
 });
 
@@ -1551,15 +1554,18 @@ describe('buildTraceInductionCaseReplayTargets', () => {
       mkCase('fallback', mkTreeHole(), 'Bogus', []),
     ], true);
 
-    const targets = buildTraceInductionCaseReplayTargets(node, afterCasesEngine, '?goal', c => c.labelLatex ?? c.label);
+    const targets = buildTraceInductionCaseReplayTargets(node, afterCasesEngine, '?goal', c => `latex:${c.constructorName ?? c.label}`);
 
     expect(targets).toHaveLength(3);
     expect(targets[0].caseGoalId).toBe('?caseZero');
     expect(targets[0].caseEngine.getFocusedGoalId()).toBe('?caseZero');
+    expect(targets[0].caseLabelLatex).toBe('latex:Zero');
     expect(targets[1].caseGoalId).toBe('?caseSucc');
     expect(targets[1].caseEngine.getFocusedGoalId()).toBe('?caseSucc');
+    expect(targets[1].caseLabelLatex).toBe('latex:Succ');
     expect(targets[2].caseGoalId).toBe('?goal');
     expect(targets[2].caseEngine).toBe(afterCasesEngine);
+    expect(targets[2].caseLabelLatex).toBe('latex:Bogus');
   });
 });
 
