@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { compileTTFromText, extractHoleLocations } from './compile';
 import { resetWithCounter } from './with-desugar';
+import { setConstructorParamNames, setCurrentTermParamNames } from './elab';
 
 // Common preambles to reduce repetition
 const natPreamble = `
@@ -42,6 +43,26 @@ function expectSuccess(allDecls: any[], name: string) {
 describe('With clauses', () => {
   beforeEach(() => {
     resetWithCounter();
+    setConstructorParamNames(new Map());
+    setCurrentTermParamNames(null);
+  });
+
+  test('fresh compilation resets elaboration globals before processing with clauses', () => {
+    setConstructorParamNames(new Map([['BogusCtor', [{ name: 'ghost', typePrefix: 'g' } as any]]]));
+    setCurrentTermParamNames([{ name: 'stale', typePrefix: 's' } as any]);
+
+    const result = compileTTFromText(`
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+foo : Nat -> Nat
+foo n with n
+| Zero => Zero
+| Succ _ => Zero
+`);
+
+    expect(result.success).toBe(true);
   });
 
   // ===========================================================================

@@ -369,6 +369,19 @@ describe('shared structural editing helpers', () => {
     expect(removed.root.cases[0].body.id).toBe(firstCase.body.id);
   });
 
+  test('induction case helpers reject invalid targets through the shared layer', () => {
+    const state = createInitialState();
+    expect(addInductionCaseInProofTree(state, state.root.id, 'new case')).toBeNull();
+
+    const onlyCase = mkCase('n = Zero', mkHole(), 'Zero', []);
+    const inductionState = {
+      root: mkInduction('n', [onlyCase]),
+      cursor: { nodeId: onlyCase.body.id },
+    };
+    expect(removeInductionCaseInProofTree(inductionState, inductionState.root.id, 0)).toBeNull();
+    expect(removeInductionCaseInProofTree(inductionState, inductionState.root.id, 4)).toBeNull();
+  });
+
   test('collapse helpers preserve cursor behavior through the shared wrapper layer', () => {
     const firstCase = mkCase('n = Zero', mkHole(), 'Zero', []);
     const secondCase = mkCase('n = Succ k', mkHole(), 'Succ', ['k']);

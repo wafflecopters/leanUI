@@ -600,6 +600,8 @@ export function compileTTFromText(source: string, options?: CompileOptions): Com
   // Reset counters for fresh compilation
   resetWildcardCounter();
   resetWithCounter();
+  setConstructorParamNames(new Map());
+  setCurrentTermParamNames(null);
 
   // Parse @assumeK directive from source (overrides options)
   const sourceAssumeK = parseAssumeKDirective(source);
@@ -697,6 +699,8 @@ export function compileIncrementalTT(
   // Reset counters for fresh compilation
   resetWildcardCounter();
   resetWithCounter();
+  setConstructorParamNames(new Map());
+  setCurrentTermParamNames(null);
 
   const sourceAssumeK = parseAssumeKDirective(source);
   const assumeK = sourceAssumeK ?? options?.assumeK ?? true;

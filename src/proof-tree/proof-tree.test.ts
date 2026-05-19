@@ -9,7 +9,7 @@ import {
   findNode, findCase, isCursorInSubtree, linearize,
   replaceNode, updateCase,
   applyInduction,
-  addCase, removeCase, toggleCollapse, toggleInductionCollapse,
+  toggleInductionCollapse,
   moveCursorUp, moveCursorDown,
   editIntroName, addIntroName, removeIntroName,
   editScrutinee, editExact, editCaseLabel,
@@ -447,84 +447,6 @@ describe('case operations', () => {
     const ind = mkInduction('n', [c1, c2]);
     return { root: ind, cursor: { nodeId: body1.id } };
   }
-
-  test('addCase appends new case to induction', () => {
-    const state = makeInductionState();
-    const result = addCase(state, state.root.id, 'NewCase');
-    expect(result).not.toBeNull();
-    const ind = result!.root as any;
-    expect(ind.cases).toHaveLength(3);
-    expect(ind.cases[2].label).toBe('NewCase');
-  });
-
-  test('addCase cursor moves to new case body', () => {
-    const state = makeInductionState();
-    const result = addCase(state, state.root.id, 'NewCase')!;
-    const ind = result.root as any;
-    expect(result.cursor.nodeId).toBe(ind.cases[2].body.id);
-  });
-
-  test('addCase returns null for non-induction node', () => {
-    const state = createInitialState();
-    expect(addCase(state, state.root.id, 'X')).toBeNull();
-  });
-
-  test('removeCase removes case at index', () => {
-    const state = makeInductionState();
-    const result = removeCase(state, state.root.id, 0);
-    expect(result).not.toBeNull();
-    const ind = result!.root as any;
-    expect(ind.cases).toHaveLength(1);
-    expect(ind.cases[0].label).toBe('Succ k');
-  });
-
-  test('removeCase blocks removal of last case', () => {
-    const body = mkHole();
-    const c = mkCase('Only', body);
-    const ind = mkInduction('n', [c]);
-    const state: ProofTreeState = { root: ind, cursor: { nodeId: body.id } };
-    expect(removeCase(state, ind.id, 0)).toBeNull();
-  });
-
-  test('removeCase fixes cursor when cursor was in removed case', () => {
-    const state = makeInductionState();
-    // Cursor is on first case body. Remove first case.
-    const result = removeCase(state, state.root.id, 0)!;
-    const ind = result.root as any;
-    // Cursor should move to remaining case's body
-    expect(result.cursor.nodeId).toBe(ind.cases[0].body.id);
-  });
-
-  test('removeCase returns null for invalid index', () => {
-    const state = makeInductionState();
-    expect(removeCase(state, state.root.id, -1)).toBeNull();
-    expect(removeCase(state, state.root.id, 5)).toBeNull();
-  });
-
-  test('toggleCollapse toggles case collapsed state', () => {
-    const body = mkHole();
-    const c = mkCase('Zero', body);
-    const ind = mkInduction('n', [c]);
-    const state: ProofTreeState = { root: ind, cursor: { nodeId: ind.id } };
-
-    const toggled = toggleCollapse(state, c.id);
-    const toggledCase = findCase(toggled.root, c.id)!;
-    expect(toggledCase.collapsed).toBe(true);
-
-    const unToggled = toggleCollapse(toggled, c.id);
-    const unToggledCase = findCase(unToggled.root, c.id)!;
-    expect(unToggledCase.collapsed).toBe(false);
-  });
-
-  test('toggleCollapse moves cursor to case header when collapsing hides cursor', () => {
-    const body = mkHole();
-    const c = mkCase('Zero', body);
-    const ind = mkInduction('n', [c]);
-    const state: ProofTreeState = { root: ind, cursor: { nodeId: body.id } };
-
-    const toggled = toggleCollapse(state, c.id);
-    expect(toggled.cursor.nodeId).toBe(c.id);
-  });
 
   test('toggleInductionCollapse toggles induction collapsed state', () => {
     const state = makeInductionState();

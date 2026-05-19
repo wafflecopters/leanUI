@@ -655,68 +655,6 @@ export function applySimp(
   return { root: newRoot, cursor: { nodeId: childHole.id } };
 }
 
-// ============================================================================
-// Case Operations
-// ============================================================================
-
-/** Add a case to an induction node. */
-export function addCase(
-  state: ProofTreeState,
-  inductionId: ProofNodeId,
-  label: string,
-): ProofTreeState | null {
-  const node = findNode(state.root, inductionId);
-  if (!node || node.tag !== 'induction') return null;
-
-  const newBody = mkHole();
-  const newCase = mkCase(label, newBody);
-  const updatedNode: InductionNode = { ...node, cases: [...node.cases, newCase] };
-  const newRoot = replaceNode(state.root, inductionId, updatedNode);
-  return { root: newRoot, cursor: { nodeId: newBody.id } };
-}
-
-/** Remove a case from an induction node (blocks removal of last case). */
-export function removeCase(
-  state: ProofTreeState,
-  inductionId: ProofNodeId,
-  caseIndex: number,
-): ProofTreeState | null {
-  const node = findNode(state.root, inductionId);
-  if (!node || node.tag !== 'induction') return null;
-  if (node.cases.length <= 1) return null;
-  if (caseIndex < 0 || caseIndex >= node.cases.length) return null;
-
-  const removedCase = node.cases[caseIndex];
-  const newCases = node.cases.filter((_, i) => i !== caseIndex);
-  const updatedNode: InductionNode = { ...node, cases: newCases };
-  const newRoot = replaceNode(state.root, inductionId, updatedNode);
-
-  // Fix cursor if it was inside the removed case
-  if (removedCase.id === state.cursor.nodeId || isCursorInSubtree(removedCase.body, state.cursor.nodeId)) {
-    const fallbackIdx = Math.min(caseIndex, newCases.length - 1);
-    return { root: newRoot, cursor: { nodeId: newCases[fallbackIdx].body.id } };
-  }
-
-  return { root: newRoot, cursor: state.cursor };
-}
-
-/** Toggle collapse on a case node. Fixes cursor if it gets hidden. */
-export function toggleCollapse(state: ProofTreeState, caseId: ProofNodeId): ProofTreeState {
-  const caseNode = findCase(state.root, caseId);
-  if (!caseNode) return state;
-
-  const newCollapsed = !caseNode.collapsed;
-  const newRoot = updateCase(state.root, caseId, c => ({ ...c, collapsed: newCollapsed }));
-
-  // If collapsing and cursor is inside the case body, move cursor to case header
-  let cursor = state.cursor;
-  if (newCollapsed && isCursorInSubtree(caseNode.body, state.cursor.nodeId)) {
-    cursor = { nodeId: caseId };
-  }
-
-  return { root: newRoot, cursor };
-}
-
 /** Toggle collapse on a simp node's step list. Fixes cursor if it gets hidden. */
 export function toggleSimpCollapse(state: ProofTreeState, nodeId: ProofNodeId): ProofTreeState | null {
   const node = findNode(state.root, nodeId);
