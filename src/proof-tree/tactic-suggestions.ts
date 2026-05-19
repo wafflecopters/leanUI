@@ -21,6 +21,7 @@ import { UnfoldTactic } from '../tactics/unfold-tactic';
 import { FoldTactic } from '../tactics/fold-tactic';
 import { ttkTermsEqual } from '../tactics/fold-tactic';
 import { runSimp } from '../tactics/simp-tactic';
+import { inferIsRat, isCarrierArithHead } from '../tactics/norm-num';
 import { ReverseRegistry } from '../math-editor/tt-to-math';
 import { proposeVarName, freshenName } from './propose-var-name';
 import { renderNameLatex } from './name-latex';
@@ -62,6 +63,48 @@ export interface TacticSuggestion {
 /** Render subgoal previews after an apply tactic. Returns LaTeX for each NEW goal.
  *  Only shows goals created by the tactic, not pre-existing ones.
  *  Replaces unsolved meta placeholders (□) with fresh variable names. */
+/**
+ * Locate the Nth post-order occurrence of an App-headed subterm with the
+ * given head Const name. Mirrors the surface annotator's counting order
+ * (children before parent), so when the renderer assigns an occurrence
+ * index of N to a clicked subterm, this returns the matching kernel
+ * subterm. Returns null if no Nth occurrence exists.
+ */
+function locateKernelSubterm(term: TTKTerm, headName: string, occurrence: number): TTKTerm | null {
+  let count = 0;
+  let found: TTKTerm | null = null;
+  function visit(t: TTKTerm): void {
+    if (found !== null) return;
+    if (t.tag === 'App') {
+      // Walk into children first (post-order). Collect spine to also walk
+      // each arg, then count this node if it matches.
+      const args: TTKTerm[] = [];
+      let cur: TTKTerm = t;
+      while (cur.tag === 'App') {
+        args.unshift(cur.arg);
+        cur = cur.fn;
+      }
+      for (const arg of args) visit(arg);
+      if (found !== null) return;
+      if (cur.tag === 'Const' && cur.name === headName) {
+        count++;
+        if (count === occurrence) {
+          found = t;
+          return;
+        }
+      }
+    } else if (t.tag === 'Binder') {
+      visit(t.domain);
+      visit(t.body);
+    } else if (t.tag === 'Match') {
+      visit(t.scrutinee);
+      for (const c of t.clauses) visit(c.rhs);
+    }
+  }
+  visit(term);
+  return found;
+}
+
 function renderSubgoalPreviews(
   oldEngine: TacticEngine,
   newEngine: TacticEngine,
@@ -653,6 +696,26 @@ export function computeTacticSuggestions(
           let bodyHead = bodyType;
           while (bodyHead.tag === 'App') bodyHead = bodyHead.fn;
           if (bodyHead.tag === 'Const' && bodyHead.name === subtermInfo.headName) {
+            simpAutoAllowed = true;
+          }
+        }
+        // Phase 2 (norm_num) — generic registry-driven: also allow compound
+        // Simp on subterm clicks where the head is a Carrier-arithmetic op
+        // (radd / rsub / rmul / etc., REGISTERED via @carrierAdd / @carrierSub
+        // / ... tags in the preset, not hardcoded). The compound simp chain
+        // handles the alias↔realOfRat representation gap that single-step
+        // simp can't cross. Works for ANY preset that registers Carrier-style
+        // arithmetic — Real, complex, custom rings, etc. — no hardcoding.
+        // Gate further: the subterm must locate to a closed arithmetic
+        // expression (inferIsRat returns a Rat value), so we don't surface
+        // Compute for goals like \`radd a (rmul x 2)\` where x is free.
+        if (!simpAutoAllowed && isCarrierArithHead(subtermInfo.headName, definitions)) {
+          // Locate the kernel subterm at the clicked occurrence by walking the
+          // goal's kernel type matching the renderer's head/occurrence count.
+          const located = locateKernelSubterm(
+            zonkedGoal.type, subtermInfo.headName!, subtermInfo.occurrenceIndex ?? 1
+          );
+          if (located && inferIsRat(located, definitions) !== null) {
             simpAutoAllowed = true;
           }
         }

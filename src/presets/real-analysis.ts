@@ -154,15 +154,19 @@ field R = DPair.snd R
 -- Field operations, parametric over any Real
 ------------------------------------------------------------
 
+@syntax @carrierAdd
 radd : {R : Real} -> Carrier R -> Carrier R -> Carrier R
 radd {R} = CompleteOrderedField.add (field R)
 
+@syntax @carrierMul
 rmul : {R : Real} -> Carrier R -> Carrier R -> Carrier R
 rmul {R} = CompleteOrderedField.mul (field R)
 
+@syntax @carrierValue 0
 rzero : (R : Real) -> Carrier R
 rzero R = CompleteOrderedField.zero (field R)
 
+@syntax @carrierValue 1
 rone : (R : Real) -> Carrier R
 rone R = CompleteOrderedField.one (field R)
 
@@ -312,6 +316,7 @@ minus (Succ n) (Succ m) = minus n m
 ratSub : Rat -> Rat -> Rat
 ratSub (MkRat a b pb) (MkRat c d pd) = MkRat (intSub (intMul a (IntOfNat d)) (intMul c (IntOfNat b))) (mult b d) (mulNotZero b d pb pd)
 
+@syntax @carrierNeg
 rneg : {R : Real} -> Carrier R -> Carrier R
 rneg {R} = CompleteOrderedField.neg (field R)
 
@@ -327,6 +332,7 @@ realOfInt R (IntNegSucc n) = rneg (radd (rone R) (realOfNat R n))
 
 -- negRealOfInt is defined further down, once negZero and negNeg are in scope.
 
+@syntax @carrierInv
 rinv : {R : Real} -> Carrier R -> Carrier R
 rinv {R} = CompleteOrderedField.inv (field R)
 
@@ -334,10 +340,12 @@ rle : {R : Real} -> Carrier R -> Carrier R -> Type
 rle {R} = CompleteOrderedField.le (field R)
 
 -- Subtraction: a - b = a + (-b)
+@syntax @carrierSub
 rsub : {R : Real} -> Carrier R -> Carrier R -> Carrier R
 rsub {R} a b = radd a (rneg b)
 
 -- Division: a / b = a * inv(b)
+@syntax @carrierDiv
 rdiv : {R : Real} -> Carrier R -> Carrier R -> Carrier R
 rdiv {R} a b = rmul a (rinv b)
 
@@ -508,9 +516,11 @@ addLtBoth {R} a b c d hab hcd = MkPair (addLeBoth a b c d (Pair.fst hab) (Pair.f
 ------------------------------------------------------------
 
 @syntax 2
+@syntax @carrierValue 2
 rtwo : (R : Real) -> Carrier R
 rtwo R = radd (rone R) (rone R)
 
+@syntax @carrierValue 1/2
 rhalf : (R : Real) -> Carrier R
 rhalf R = rinv (rtwo R)
 

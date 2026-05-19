@@ -160,6 +160,20 @@ describe('computeTypedContext (surface-only fallback)', () => {
     expect(ctx!.goal).toBe('\\operatorname{Nat}');
   });
 
+  test('case body fallback reconstructs caseLabelLatex when stored labelLatex is missing', () => {
+    const body = mkTreeHole();
+    const caseNode = mkCase('n = Succ k', body, 'Succ', ['k']);
+    const intros = mkIntros(['n'], mkInduction('n', [{ ...caseNode, labelLatex: undefined }]));
+    const type = mkPiTT(Nat, Nat, 'n');
+
+    const ctx = computeTypedContext(intros, body.id, type, emptyRegistry);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.caseLabel).toBe('n = Succ k');
+    expect(ctx!.caseLabelLatex).toContain('n');
+    expect(ctx!.caseLabelLatex).toContain('Succ');
+    expect(ctx!.caseLabelLatex).toContain('k');
+  });
+
   test('exact node shows expression as goal', () => {
     const exact = mkExact('refl');
     const type = Nat;

@@ -280,7 +280,28 @@ export type DefinitionsMap = {
    *  strictly-simpler subterm becomes a one-click suggestion. The set is
    *  insertion-ordered so the preset's preferred priority is preserved. */
   simpLemmas?: Set<string>,
+  /** Optional. Map from function name → carrier-level arithmetic op kind.
+   *  Generic registry for ANY preset that has homomorphism-image arithmetic
+   *  on a "Carrier"-style abstract type (Real, complex, custom rings).
+   *  Populated by registerCarrierOp when a definition is tagged with
+   *  `@carrierAdd / @carrierSub / @carrierMul / @carrierNeg / @carrierInv /
+   *  @carrierDiv`. Read by the norm_num-style suggestion pipeline to walk
+   *  arithmetic expressions without hardcoding preset-specific names like
+   *  "radd". Different presets can register their own operation names
+   *  (e.g. a complex-numbers preset would tag its `cadd` function the same
+   *  way). */
+  carrierOpByFn?: Map<string, CarrierOp>,
+  /** Optional. Map from function name → literal rational value the function
+   *  represents on the Carrier type (e.g. rzero R → 0/1, rone R → 1/1,
+   *  rtwo R → 2/1, rhalf R → 1/2). Populated by registerCarrierValue when
+   *  a definition is tagged with `@carrierValue <num>` or
+   *  `@carrierValue <num>/<den>`. Generic — any preset can register its
+   *  named literals through this. */
+  carrierValues?: Map<string, { num: bigint; den: bigint }>,
 }
+
+/** Carrier-level arithmetic op kind. Generic across presets. */
+export type CarrierOp = 'add' | 'sub' | 'mul' | 'neg' | 'inv' | 'div';
 
 /**
  * Rat-impl shape detected from `@syntax @impl=rat`. The kernel doesn't enforce
@@ -331,7 +352,32 @@ export function createDefinitionsMap(): DefinitionsMap {
     ofIntByTargetHead: new Map<string, string>(),
     simpLemmas: new Set<string>(),
     ratOpByFn: new Map<string, 'add' | 'mul' | 'sub'>(),
+    carrierOpByFn: new Map<string, CarrierOp>(),
+    carrierValues: new Map<string, { num: bigint; den: bigint }>(),
   };
+}
+
+/**
+ * Register a definition as a carrier-level arithmetic op. Idempotent.
+ * Returns an error string if the definition doesn't exist; otherwise null.
+ */
+export function registerCarrierOp(definitions: DefinitionsMap, fnName: string, kind: CarrierOp): string | null {
+  if (!definitions.terms.has(fnName)) return `definition '${fnName}' not found`;
+  if (!definitions.carrierOpByFn) definitions.carrierOpByFn = new Map();
+  definitions.carrierOpByFn.set(fnName, kind);
+  return null;
+}
+
+/**
+ * Register a definition as a literal value on the Carrier type. The value
+ * is given as a Rat (num/den). Idempotent.
+ */
+export function registerCarrierValue(definitions: DefinitionsMap, fnName: string, num: bigint, den: bigint): string | null {
+  if (!definitions.terms.has(fnName)) return `definition '${fnName}' not found`;
+  if (den === 0n) return `@carrierValue: denominator must be non-zero (${fnName})`;
+  if (!definitions.carrierValues) definitions.carrierValues = new Map();
+  definitions.carrierValues.set(fnName, { num, den });
+  return null;
 }
 
 /**

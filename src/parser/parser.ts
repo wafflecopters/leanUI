@@ -1105,14 +1105,22 @@ export class Parser {
       this.skipNewlines();
       if (this.current().type === 'EOF') break;
 
-      // Check for @syntax annotation before the declaration
+      // Check for @syntax annotation(s) before the declaration. Multiple
+      // @syntax lines on one declaration are allowed and stack: the parser
+      // joins them with newlines into a single `syntax` string so downstream
+      // consumers (notation rendering, @impl annotations, @carrierAdd / etc.)
+      // can each pick out their own sub-annotation by pattern-matching.
+      // This lets a definition carry both a notation hint (`@syntax 2`)
+      // AND a semantic tag (`@syntax @carrierValue 2`) simultaneously.
       let pendingSyntax: string | undefined;
-      if (this.current().type === 'SYNTAX') {
-        pendingSyntax = this.current().value;
+      while (this.current().type === 'SYNTAX') {
+        const piece = this.current().value;
+        pendingSyntax = pendingSyntax === undefined ? piece : `${pendingSyntax}\n${piece}`;
         this.advance();
         this.skipNewlines();
         if (this.current().type === 'EOF') break;
       }
+      if (this.current().type === 'EOF') break;
 
       // Reset source map for each declaration
       this.currentSourceMap = new Map();

@@ -1026,15 +1026,30 @@ function renderNestedCaseLabelLatex(
   return renderStaticLatex(mkRow(nodes));
 }
 
+function renderFlatCaseLabelLatex(
+  scrutinee: string,
+  ctorName: string,
+  paramNames: readonly string[],
+  rev: ReverseRegistry,
+): string {
+  const ctorApp = buildConstructorApp(ctorName, paramNames);
+  const ctx = [...paramNames].reverse();
+  const rhsLatex = renderTerm(ctorApp, ctx, rev);
+  return `${renderTerm(mkVarTT(0), [scrutinee], rev)} = ${rhsLatex}`;
+}
+
 /** Resolve a case node's display label. When the case has `casePatterns`
  *  (set for nested-pattern branches) AND a registry is available, render
  *  through the @syntax registry. Otherwise fall back to the static
  *  `labelLatex` set at tree-build time. `rev` is optional so cursor-replay
  *  functions (which don't need registry-aware labels) can reuse this
  *  helper without threading `rev` through every call site. */
-function caseLabelLatexOf(c: CaseNode, rev?: ReverseRegistry): string | undefined {
+function caseLabelLatexOf(c: CaseNode, rev?: ReverseRegistry, scrutinee?: string): string | undefined {
   if (rev && c.casePatterns && c.casePatterns.length > 0 && c.constructorName) {
     return renderNestedCaseLabelLatex(c.constructorName, c.casePatterns, rev);
+  }
+  if (rev && scrutinee && c.constructorName) {
+    return renderFlatCaseLabelLatex(scrutinee, c.constructorName, c.constructorParamNames ?? [], rev);
   }
   return c.labelLatex;
 }
@@ -1225,10 +1240,7 @@ export function generateCaseInfos(
 
     let labelLatex: string | undefined;
     if (rev) {
-      const ctorApp = buildConstructorApp(ctor.name, paramNames);
-      const ctx = [...paramNames].reverse();
-      const rhsLatex = renderTerm(ctorApp, ctx, rev);
-      labelLatex = `${scrutinee} = ${rhsLatex}`;
+      labelLatex = renderFlatCaseLabelLatex(scrutinee, ctor.name, paramNames, rev);
     }
 
     return {
@@ -3352,11 +3364,12 @@ function computeWithTacticEngine(
     const caseInfo = findCaseAncestor(root, cursorId);
     if (caseInfo) {
       const paramNames = caseInfo.caseNode.constructorParamNames ?? [];
-      const ctorApp = buildConstructorApp(caseInfo.caseNode.constructorName!, [...paramNames]);
-      const ctx = [...paramNames].reverse();
-      const rhsLatex = renderTerm(ctorApp, ctx, rev);
-      const scrutineeName = caseInfo.scrutinee;
-      caseLabelLatex = `${renderTerm(mkVarTT(0), [scrutineeName], rev)} = ${rhsLatex}`;
+      caseLabelLatex = renderFlatCaseLabelLatex(
+        caseInfo.scrutinee,
+        caseInfo.caseNode.constructorName!,
+        paramNames,
+        rev,
+      );
     }
   }
 
@@ -3806,7 +3819,7 @@ function replayEntireTreeFromTrace(
         traceIdx = consumed.nextTraceIdx;
         const afterCasesEngine = consumed.nextEngine;
 
-        for (const target of buildTraceInductionCaseReplayTargets(node, afterCasesEngine, gId, c => caseLabelLatexOf(c, rev))) {
+        for (const target of buildTraceInductionCaseReplayTargets(node, afterCasesEngine, gId, c => caseLabelLatexOf(c, rev, node.scrutinee))) {
           recordFromEngine(target.caseNode.id, target.caseEngine, target.caseGoalId, target.caseLabelLatex);
           walkTrace(target.caseNode.body, target.caseEngine, target.caseLabelLatex);
         }
@@ -4154,7 +4167,7 @@ function replayEntireTreeViaWalk(
           }
         }
 
-        const targets = buildInductionCaseReplayTargets(node, eng, gId, c => caseLabelLatexOf(c, rev));
+        const targets = buildInductionCaseReplayTargets(node, eng, gId, c => caseLabelLatexOf(c, rev, node.scrutinee));
         if (!targets) break;
 
         for (const target of targets) {
@@ -4313,7 +4326,7 @@ function walkTreeSurface(
           return {
             hypotheses,
             caseLabel: c.label,
-            caseLabelLatex: caseLabelLatexOf(c, rev),
+            caseLabelLatex: caseLabelLatexOf(c, rev, node.scrutinee),
             inductionVar: node.scrutinee,
             goal: renderTerm(currentType, [...nameCtx], rev),
           };
@@ -4323,7 +4336,7 @@ function walkTreeSurface(
           return {
             ...result,
             caseLabel: result.caseLabel ?? c.label,
-            caseLabelLatex: result.caseLabelLatex ?? caseLabelLatexOf(c, rev),
+            caseLabelLatex: result.caseLabelLatex ?? caseLabelLatexOf(c, rev, node.scrutinee),
             inductionVar: result.inductionVar ?? node.scrutinee,
           };
         }
