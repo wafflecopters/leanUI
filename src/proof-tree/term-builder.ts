@@ -516,6 +516,15 @@ export function kernelTermToSource(term: TTKTerm, ctx: TTKContext, definitions?:
       case 'Sort': return 'Type';
       case 'Hole': return '?';
       case 'Meta': return '?';
+      case 'NatLit': return t.value.toString();
+      case 'RatLit': {
+        // Source form parses `n` as NatLit and `-n` as a signed integer
+        // literal; for true fractions (den >= 2) there is no parseable
+        // surface form yet, so fall back to a hole rather than emit
+        // invalid source.
+        if (t.den === 1n) return t.num.toString();
+        return '?';
+      }
       default: return '?';
     }
   }

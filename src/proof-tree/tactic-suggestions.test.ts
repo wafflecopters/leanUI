@@ -718,6 +718,35 @@ describe('definition search suggestions', () => {
     expect(source).not.toMatch(/\bf\b/);
   });
 
+  // REGRESSION (image #52): hoisting a slot whose type was substituted with
+  // the previous slot's value used to lose any NatLit/RatLit inside the
+  // value, replacing them with `?` placeholders. The user typed `ε/2`, the
+  // term builder parsed the `2` as a NatLit, and kernelTermToSource fell
+  // through its default branch for NatLit, emitting `rdiv ε ?` as the
+  // hoisted have type — surfacing as "0 < ε/?" in the rendered have.
+  test('REGRESSION (image #52): kernelTermToSource preserves NatLit in nested arg positions', async () => {
+    const { kernelTermToSource } = await import('./term-builder');
+    // Construct `rdiv ε 2` directly as a kernel term (matches the parser's
+    // output for `rdiv ε 2`: implicit R is a Hole, the `2` is a NatLit).
+    const term: import('../compiler/kernel').TTKTerm = {
+      tag: 'App',
+      fn: {
+        tag: 'App',
+        fn: {
+          tag: 'App',
+          fn: { tag: 'Const', name: 'rdiv' },
+          arg: { tag: 'Hole', id: '_implicit_R' },
+        },
+        arg: { tag: 'Var', index: 0 },
+      },
+      arg: { tag: 'NatLit', value: 2n },
+    };
+    const ctx = [{ name: 'ε', type: { tag: 'Const' as const, name: 'Carrier' } }];
+    const source = kernelTermToSource(term, ctx, defs);
+    expect(source).toBe('rdiv ε 2');
+    expect(source).not.toContain('?');
+  });
+
   test('unfold rlt preview renders rtwo as 2, not 1+1', () => {
     const ctx = [
       { name: 'R', type: { tag: 'Const' as const, name: 'Real' } },

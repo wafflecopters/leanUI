@@ -343,7 +343,15 @@ export function hoistTermBuilderSlotToHave(
   if (!target) return null;
 
   const hoistName = buildHoistedHaveName(builderState, slotIndex);
-  const typeSourceExpr = kernelTermToSource(slot.type, builderState.goalCtx, definitions);
+  // Zonk the slot type before serializing so meta solutions (e.g. the
+  // implicit `R` of `rdiv` / `rtwo` in `ε/2`) get folded in. Without this
+  // step the source string ends up with literal `?` placeholders for any
+  // meta that the term-builder created but didn't get to solve at slot
+  // construction time — surfacing as `ε/?` in the hoisted have type.
+  const zonkedSlotType = typeof builderState.engine.zonkTerm === 'function'
+    ? builderState.engine.zonkTerm(slot.type, builderState.goalCtx.length)
+    : slot.type;
+  const typeSourceExpr = kernelTermToSource(zonkedSlotType, builderState.goalCtx, definitions);
   const proofHole = mkHole();
   const inserted = mkHave(hoistName, '?', target, typeSourceExpr, proofHole);
   let updated: ProofTreeState = {
