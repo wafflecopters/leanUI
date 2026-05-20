@@ -127,6 +127,49 @@ describe('inferIsRat — generic registry-driven', () => {
     expect(inferIsRat(radd(rmul(rtwo, rtwo), rneg(rone)), definitions)).toEqual({ num: 3n, den: 1n });
   });
 
+  // REGRESSION (image #50): in deeply-nested proof contexts (limits via
+  // ltLeTrans / addLeRightCancel chains), δ-reduction sometimes unfolds the
+  // `radd` / `rzero` / `rone` aliases to their underlying record-projection
+  // forms (`CompleteOrderedField.add (field R) a b`, etc.). The Compute
+  // suggestion was missing because the registry was keyed only under the
+  // alias names. Now the @carrier* registration propagates leaf aliases to
+  // their underlying head, so projection-form goals classify identically.
+  test('projection-form aliasing: CompleteOrderedField.add classifies as carrier add', () => {
+    expect(isCarrierArithHead('CompleteOrderedField.add', definitions)).toBe(true);
+    expect(isCarrierArithHead('CompleteOrderedField.mul', definitions)).toBe(true);
+    expect(isCarrierArithHead('CompleteOrderedField.neg', definitions)).toBe(true);
+  });
+
+  test('projection-form aliasing: CompleteOrderedField.zero/one classify as carrier values', () => {
+    expect(definitions.carrierValues!.get('CompleteOrderedField.zero')).toEqual({ num: 0n, den: 1n });
+    expect(definitions.carrierValues!.get('CompleteOrderedField.one')).toEqual({ num: 1n, den: 1n });
+  });
+
+  test('projection-form aliasing: rtwo / rhalf NOT propagated (derived, not leaf aliases)', () => {
+    // rtwo R = radd (rone R) (rone R)   — 2 top-level apps → not a leaf alias
+    // rhalf R = rinv (rtwo R)            — rinv has implicit R → 2 apps → not a leaf
+    // Propagating these as carrierValues would mis-tag radd / rinv as
+    // literals, since unfoldLeafAliasHead correctly walks past the first
+    // App to find the underlying head.
+    expect(definitions.carrierValues!.get('radd')).toBeUndefined();
+    expect(definitions.carrierValues!.get('rinv')).toBeUndefined();
+  });
+
+  test('projection-form arithmetic: inferIsRat on unfolded radd (= 2 + (-1)) → 1', () => {
+    // Construct the kernel form the user actually sees in image #50 after
+    // δ-reduction has unfolded `radd`: CompleteOrderedField.add applied to
+    // (field R) plus two operands. Both operands left as their alias forms
+    // for simplicity (the test for the unfolded literal forms is below).
+    const cofAdd = (a: TTKTerm, b: TTKTerm): TTKTerm => ({
+      tag: 'App',
+      fn: { tag: 'App', fn: { tag: 'App',
+        fn: { tag: 'Const', name: 'CompleteOrderedField.add' },
+        arg: { tag: 'App', fn: { tag: 'Const', name: 'field' }, arg: R } },
+        arg: a }, arg: b });
+    expect(inferIsRat(cofAdd(rtwo, rneg(rone)), definitions))
+      .toEqual({ num: 1n, den: 1n });
+  });
+
   test('returns null for free variable', () => {
     expect(inferIsRat({ tag: 'Var', index: 5 }, definitions)).toBeNull();
   });

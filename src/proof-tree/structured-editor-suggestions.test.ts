@@ -675,6 +675,118 @@ testImg46 R = ?h`);
     expect(names).toContain('CompleteOrderedField.addComm');
   });
 
+  // REGRESSION (image #50): user's actual limitAdd flow — apply
+  // addLeRightCancel → exact -1 → rewrite addRealOfRat → leaf goal is
+  // `0 ≤ 2 + (-1)`. Clicking the `2 + (-1)` radd subterm must surface
+  // BOTH the simp/addComm/etc. rewrite suggestions AND the "Compute = 1"
+  // suggestion. The image shows only the rewrites — Compute is missing.
+  // (Mirrors image #46 test exactly, but asserts Compute too.)
+  test('REGRESSION (image #50): post-addRealOfRat-rewrite goal surfaces Compute = 1 on the 2+(-1) subterm', { timeout: 30000 }, () => {
+    const { r, decl } = compileTop('testImg50', `testImg50 : (R : Real) -> rle 1 2
+testImg50 R = ?h`);
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(
+      ['R'],
+      mkApply('addLeRightCancel', [
+        mkExact('-1'),
+        mkRewrite('addRealOfRat', leafHole),
+      ])
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    // Click the single radd-headed subterm (the `2 + (-1)` on the RHS).
+    let raddPath: string | null = null;
+    let raddInfo: any = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 1) {
+        raddPath = p; raddInfo = info; break;
+      }
+    }
+    expect(raddPath, 'radd subterm should be located in subtermMap').not.toBeNull();
+    if (!raddPath) return;
+    // Diagnostic: show what head the renderer actually exposed at this click
+    // point — if Compute is missing, it might be because the head is
+    // `CompleteOrderedField.add` (the projection) rather than `radd` (the
+    // alias), in which case `isCarrierArithHead` doesn't recognize it.
+    const allHeads = new Set<string>();
+    for (const [, info] of ig.subtermMap) {
+      if (info.headName) allHeads.add(info.headName);
+    }
+    const sugs = computeTacticSuggestions(raddPath, ig, r.definitions, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    });
+    const computeSug = sugs.find(s => (s.id as string) === 'compute');
+    if (!computeSug) {
+      const labels = sugs.map(s => s.label).join(', ');
+      throw new Error(`Compute suggestion missing. Subterm head: ${raddInfo?.headName}. Heads in goal: ${[...allHeads].join(', ')}. Got suggestions: ${labels}`);
+    }
+    expect(computeSug.label).toBe('Compute = 1');
+  });
+
+  // REGRESSION (image #50 deep): the user's ACTUAL limitAdd flow — proves
+  // `rle 1 2` via the same deep nesting as image #47 (have block →
+  // epsOverMPos → ltLeTrans → addLeRightCancel → ...) BUT with the
+  // addRealOfRat rewrite at the bottom, then click on the `2 + (-1)`
+  // radd. Image #50 shows simp suggestions for this click but no
+  // Compute. This test mirrors the full nesting to see if Compute
+  // surfaces under all that context.
+  test('REGRESSION (image #50 deep): Compute fires through have→epsOverMPos→ltLeTrans→addLeRightCancel→rewrite', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg50deep', `testImg50deep : (R : Real) -> (ε : Carrier R) -> rlt (rzero R) ε -> rle 1 2
+testImg50deep R ε hε = ?outer`);
+    const { mkHave } = await import('./proof-tree');
+    const leafHole = mkHole();
+    const proof: ProofNode = mkIntros(['R', 'ε', 'hε'],
+      mkHave('h6', '?', mkHole(), '(rlt (rzero R) (rdiv ε (rtwo R)))',
+        mkApply('epsOverMPos', [
+          mkHole(),
+          mkApply('ltLeTrans', [
+            mkExact('1'),
+            mkHole(),
+            mkApply('addLeRightCancel', [
+              mkExact('-1'),
+              mkRewrite('addRealOfRat', leafHole),
+            ]),
+          ]),
+        ]),
+      ),
+    );
+    const engine = replayToEngine(proof, leafHole.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const ig = renderInteractiveGoal(engine, focusedGoal, r.definitions, rev);
+    let raddPath: string | null = null;
+    let raddInfo: any = null;
+    for (const [p, info] of ig.subtermMap) {
+      if (info.headName === 'radd' && info.occurrenceIndex === 1) {
+        raddPath = p; raddInfo = info; break;
+      }
+    }
+    if (!raddPath) {
+      const allHeads = new Set<string>();
+      for (const [, info] of ig.subtermMap) {
+        if (info.headName) allHeads.add(info.headName);
+      }
+      throw new Error(`radd subterm not in subtermMap. Heads in goal: ${[...allHeads].join(', ')}`);
+    }
+    const sugs = computeTacticSuggestions(raddPath, ig, r.definitions, {
+      engine, goal: focusedGoal, definitions: r.definitions, rev,
+    });
+    const computeSug = sugs.find(s => (s.id as string) === 'compute');
+    if (!computeSug) {
+      const labels = sugs.map(s => s.label).join(', ');
+      throw new Error(`Compute suggestion missing. Subterm head: ${raddInfo?.headName}. Got suggestions: ${labels}`);
+    }
+    expect(computeSug.label).toBe('Compute = 1');
+  });
+
   // PHASE 2 (norm_num): clicking a carrier-arithmetic-headed subterm whose
   // value is a closed rational surfaces a `Compute = X` suggestion via the
   // generic @carrierAdd / @carrierValue registry — NOT via hardcoded names.

@@ -379,7 +379,57 @@ export function registerCarrierOp(definitions: DefinitionsMap, fnName: string, k
   if (!definitions.terms.has(fnName)) return `definition '${fnName}' not found`;
   if (!definitions.carrierOpByFn) definitions.carrierOpByFn = new Map();
   definitions.carrierOpByFn.set(fnName, kind);
+  // Also register the underlying head reachable by η/δ. E.g.,
+  //   radd {R} = CompleteOrderedField.add (field R)
+  // After δ-reducing `radd` inside a goal, the kernel form is headed by
+  // `CompleteOrderedField.add` — but downstream uses (isCarrierArithHead,
+  // inferIsRat) look up by head Const. Without the same registration on
+  // the underlying head, the Compute suggestion path silently bails out
+  // whenever any earlier step happens to unfold the alias. Tag both.
+  const def = definitions.terms.get(fnName);
+  if (def?.value) {
+    const underlying = aliasUnderlyingHead(def.value);
+    if (underlying && underlying !== fnName
+        && !definitions.carrierOpByFn.has(underlying)
+        && !(definitions.carrierValues?.has(underlying))) {
+      definitions.carrierOpByFn.set(underlying, kind);
+    }
+  }
   return null;
+}
+
+/** Strip leading lambdas / let-binders and Match clauses (the surface
+ *  `f x = body` form elaborates to `Match (scrutinee) [PVar(x) => body]`),
+ *  then strip applications, returning the innermost Const head. Used to
+ *  recover the underlying function an alias points at so registry entries
+ *  cover both the alias name and its projection target.
+ *
+ *  Safety is enforced at the CALLER: we only propagate when the underlying
+ *  head isn't already registered under a different role. E.g. for
+ *      rsub {R} a b = radd a (rneg b)
+ *  the underlying head is `radd` (registered as 'add'); attempting to
+ *  re-register it as 'sub' is rejected by the caller's `!has(underlying)`
+ *  guard. For genuine aliases (`radd = CompleteOrderedField.add …`,
+ *  `rone R = CompleteOrderedField.one …`), the underlying head is fresh
+ *  and the propagation goes through. */
+function aliasUnderlyingHead(term: TTKTerm): string | null {
+  let t = term;
+  // Descend through lambdas / let-bindings.
+  while (t.tag === 'Binder' && (t.binderKind.tag === 'BLam' || t.binderKind.tag === 'BLet')) {
+    t = t.body;
+  }
+  // A definition `f x = body` elaborates to a single-clause Match whose
+  // patterns are all PVar (a "trivial intro" match — no constructor split).
+  // Unwrap THOSE only. A definition like
+  //     realAdd (MkReal a) (MkReal b) = MkReal (intAdd a b)
+  // is a genuine pattern match — its body head is `MkReal`, the constructor,
+  // which must NOT be propagated as a carrier op.
+  while (t.tag === 'Match' && t.clauses.length === 1
+      && t.clauses[0].patterns.every(p => p.tag === 'PVar')) {
+    t = t.clauses[0].rhs;
+  }
+  while (t.tag === 'App') t = t.fn;
+  return t.tag === 'Const' ? t.name : null;
 }
 
 /**
@@ -391,6 +441,20 @@ export function registerCarrierValue(definitions: DefinitionsMap, fnName: string
   if (den === 0n) return `@carrierValue: denominator must be non-zero (${fnName})`;
   if (!definitions.carrierValues) definitions.carrierValues = new Map();
   definitions.carrierValues.set(fnName, { num, den });
+  // Same η-alias propagation as registerCarrierOp: when `rone` aliases
+  // `CompleteOrderedField.one (field R)`, register both forms so that
+  // δ-reduced kernel goals still classify as literals during norm_num /
+  // Compute. Only meaningful for alias-shaped bodies (\\args => HEAD ...);
+  // a non-aliasing body (e.g. a Match) yields no useful underlying head.
+  const def = definitions.terms.get(fnName);
+  if (def?.value) {
+    const underlying = aliasUnderlyingHead(def.value);
+    if (underlying && underlying !== fnName
+        && !definitions.carrierValues.has(underlying)
+        && !(definitions.carrierOpByFn?.has(underlying))) {
+      definitions.carrierValues.set(underlying, { num, den });
+    }
+  }
   return null;
 }
 
