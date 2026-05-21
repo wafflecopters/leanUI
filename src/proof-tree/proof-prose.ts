@@ -485,9 +485,24 @@ export function generateProofProse(
 
       case 'simp': {
         const childGoalLatex = goalMap.get(node.child.id)?.goalLatex;
+        // Show only the lemmas that ACTUALLY fired during this simp run, not
+        // every lemma in the @simp set that was offered to the engine. The
+        // engine receives the full set (often dozens of lemmas) but only a
+        // handful do useful work on any one goal — listing all of them is
+        // noisy and misleading ("Simplifying using [12 lemmas] (2 steps)"
+        // when only 2 lemmas actually fired). Dedupe in encounter order so
+        // a lemma that fires twice shows up once.
+        const firedLemmas: string[] = [];
+        const seen = new Set<string>();
+        for (const step of node.steps) {
+          const name = (step.tag === 'rewrite' || step.tag === 'unfold') ? step.name : null;
+          if (name && !seen.has(name)) { seen.add(name); firedLemmas.push(name); }
+        }
         emit(node.id, depth, {
           tag: 'simp',
-          lemmas: node.lemmas,
+          // Fall back to the passed-in `lemmas` if no step recorded a name —
+          // shouldn't happen in practice, but keeps the prose readable.
+          lemmas: firedLemmas.length > 0 ? firedLemmas : node.lemmas,
           stepCount: node.steps.length,
           preGoalLatex: info?.goalLatex,
           goalLatex: childGoalLatex,

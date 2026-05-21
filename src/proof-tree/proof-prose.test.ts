@@ -348,6 +348,61 @@ describe('generateProofProse', () => {
     expect((items[0].kind as any).isValueType).toBe(true);
   });
 
+  // REGRESSION (image #57): the simp prose used to list `node.lemmas` —
+  // the FULL @simp set passed to the engine — rather than the lemmas that
+  // actually fired during the simp run. The user-visible effect was a
+  // line like "Simplifying using [12 lemma names] (2 steps)" when only 2
+  // of those lemmas did anything. Now show just the lemmas that fired,
+  // deduped in encounter order.
+  test('simp prose lists only lemmas that actually fired, not the full @simp set', () => {
+    const child: ProofNode = { tag: 'hole', id: 1 };
+    // 12 lemmas were passed to simp; only 2 actually fired (addRealOfRat
+    // twice, then realOfRatOne once — addRealOfRat dedupes to one entry).
+    const simp: ProofNode = {
+      tag: 'simp',
+      id: 2,
+      collapsed: false,
+      lemmas: [
+        'negLeft', 'addNegRight', 'realOfNatOne', 'realOfIntOne', 'realOfRatOne',
+        'realOfNatZero', 'realOfIntZero', 'realOfRatZero', 'rtwoAsRealOfRat',
+        'mulRealOfRat', 'addRealOfRat', 'subRealOfRat',
+      ],
+      steps: [
+        { tag: 'rewrite', id: 3, name: 'addRealOfRat', reverse: false, child: { tag: 'hole', id: 99 } },
+        { tag: 'rewrite', id: 4, name: 'addRealOfRat', reverse: false, child: { tag: 'hole', id: 99 } },
+        { tag: 'rewrite', id: 5, name: 'realOfRatOne', reverse: false, child: { tag: 'hole', id: 99 } },
+      ],
+      child,
+    };
+    const goalMap = mkGoalMap([[2, { goalLatex: '0 \\le 1' }]]);
+    const items = generateProofProse(simp, 1, goalMap);
+    const simpItem = items.find(i => i.kind.tag === 'simp');
+    expect(simpItem, 'simp item should exist').toBeDefined();
+    const kind = simpItem!.kind as any;
+    // The displayed lemma list should be only the firing lemmas, deduped.
+    expect(kind.lemmas).toEqual(['addRealOfRat', 'realOfRatOne']);
+    // Step count still reports total fires (including the duplicate).
+    expect(kind.stepCount).toBe(3);
+  });
+
+  test('simp prose falls back to passed-in lemmas if no step has a name', () => {
+    // Defensive fallback: if simp.steps somehow contains nodes without a
+    // recordable name, we shouldn't render an empty list.
+    const child: ProofNode = { tag: 'hole', id: 1 };
+    const simp: ProofNode = {
+      tag: 'simp',
+      id: 2,
+      collapsed: false,
+      lemmas: ['someLemma'],
+      steps: [{ tag: 'hole', id: 3 } as any],
+      child,
+    };
+    const goalMap = mkGoalMap([[2, { goalLatex: 'X' }]]);
+    const items = generateProofProse(simp, 1, goalMap);
+    const simpItem = items.find(i => i.kind.tag === 'simp');
+    expect((simpItem!.kind as any).lemmas).toEqual(['someLemma']);
+  });
+
   test('subgoalHeader (Goal N) carries child isValueType for prose switch', () => {
     // apply constructor with 2 exact children where subgoal 1 is a value type.
     const ex1: ProofNode = { tag: 'exact', id: 11, expr: 'δF' };
