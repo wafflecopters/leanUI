@@ -5,6 +5,7 @@ import { TTKTerm } from '../compiler/kernel';
 import { createDefinitionsMap, addDefinition, addInductiveDefinition, DefinitionsMap } from '../compiler/term';
 import { compileTTFromText } from '../compiler/compile';
 import { NAT_MATH_CODE } from '../presets/nat-math';
+import { NAT_MATH_TACTICS_CODE } from '../presets/nat-math-tactics';
 import { REAL_ANALYSIS_CODE } from '../presets/real-analysis';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { resetIds } from '../math-editor/types';
@@ -2819,6 +2820,67 @@ addZeroRight : (n : Nat) -> Equal (add n Zero) n := by
     expect(decl!.proofTree!.tag).toBe('intros');
   });
 
+  test('computeTypedContext agrees with and without tacticTrace on induction case metadata', () => {
+    const result = compileTTFromText(NAT_MATH_TACTICS_CODE);
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'plusZeroRight');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+    expect(decl!.proofTree).toBeDefined();
+    expect(decl!.tacticTrace).toBeDefined();
+
+    function findInductionNode(node: any): any | null {
+      if (node.tag === 'induction') return node;
+      if (node.child) return findInductionNode(node.child);
+      if (node.children) {
+        for (const child of node.children) {
+          const found = findInductionNode(child);
+          if (found) return found;
+        }
+      }
+      if (node.cases) {
+        for (const c of node.cases) {
+          const found = findInductionNode(c.body);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    const inductionNode = findInductionNode(decl!.proofTree!);
+    expect(inductionNode).not.toBeNull();
+    const zeroCase = inductionNode.cases[0];
+    const succCase = inductionNode.cases[1];
+
+    const traceHeader = computeTypedContext(
+      decl!.proofTree!, zeroCase.id, decl!.surfaceType!, emptyRegistry,
+      undefined, decl!.kernelType!, result.definitions, decl!.tacticTrace,
+    );
+    const walkHeader = computeTypedContext(
+      decl!.proofTree!, zeroCase.id, decl!.surfaceType!, emptyRegistry,
+      undefined, decl!.kernelType!, result.definitions,
+    );
+    expect(traceHeader).not.toBeNull();
+    expect(walkHeader).not.toBeNull();
+    expect(traceHeader!.caseLabel).toBe(walkHeader!.caseLabel);
+    expect(traceHeader!.caseLabelLatex).toBe(walkHeader!.caseLabelLatex);
+    expect(traceHeader!.inductionVar).toBe(walkHeader!.inductionVar);
+
+    const traceBody = computeTypedContext(
+      decl!.proofTree!, succCase.body.id, decl!.surfaceType!, emptyRegistry,
+      undefined, decl!.kernelType!, result.definitions, decl!.tacticTrace,
+    );
+    const walkBody = computeTypedContext(
+      decl!.proofTree!, succCase.body.id, decl!.surfaceType!, emptyRegistry,
+      undefined, decl!.kernelType!, result.definitions,
+    );
+    expect(traceBody).not.toBeNull();
+    expect(walkBody).not.toBeNull();
+    expect(traceBody!.caseLabel).toBe(walkBody!.caseLabel);
+    expect(traceBody!.caseLabelLatex).toBe(walkBody!.caseLabelLatex);
+    expect(traceBody!.inductionVar).toBe(walkBody!.inductionVar);
+  });
+
   test('source have-by tactics become interactive have proof subtrees', () => {
     const source = `
 inductive Nat : Type where
@@ -2842,6 +2904,82 @@ testHaveBy : Equal (Succ Zero) (Succ Zero) := by
     expect(decl!.proofTree!.typeExpr?.replace(/^\((.*)\)$/s, '$1')).toBe('Equal Zero Zero');
     expect(decl!.proofTree!.proofTree?.tag).toBe('exact');
     expect(decl!.proofTree!.child.tag).toBe('exact');
+  });
+
+  test('computeTypedContext agrees with and without tacticTrace across interactive have subgoals', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+testHaveBy : Equal (Succ Zero) (Succ Zero) := by
+  have h : Equal Zero Zero by
+    exact refl
+  exact refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testHaveBy');
+    expect(decl).toBeDefined();
+    expect(decl!.proofTree?.tag).toBe('have');
+    if (decl?.proofTree?.tag !== 'have') return;
+    expect(decl.tacticTrace).toBeDefined();
+    expect(decl.kernelType).toBeDefined();
+
+    const proofNodeId = decl.proofTree.proofTree?.id;
+    expect(proofNodeId).toBeDefined();
+    if (proofNodeId === undefined) return;
+
+    const traceProof = computeTypedContext(
+      decl.proofTree,
+      proofNodeId,
+      decl.surfaceType!,
+      emptyRegistry,
+      undefined,
+      decl.kernelType!,
+      result.definitions,
+      decl.tacticTrace,
+    );
+    const walkProof = computeTypedContext(
+      decl.proofTree,
+      proofNodeId,
+      decl.surfaceType!,
+      emptyRegistry,
+      undefined,
+      decl.kernelType!,
+      result.definitions,
+    );
+    expect(traceProof).not.toBeNull();
+    expect(walkProof).not.toBeNull();
+    expect(traceProof!.goal).toBe(walkProof!.goal);
+    expect(traceProof!.hypotheses).toEqual(walkProof!.hypotheses);
+
+    const traceChild = computeTypedContext(
+      decl.proofTree,
+      decl.proofTree.child.id,
+      decl.surfaceType!,
+      emptyRegistry,
+      undefined,
+      decl.kernelType!,
+      result.definitions,
+      decl.tacticTrace,
+    );
+    const walkChild = computeTypedContext(
+      decl.proofTree,
+      decl.proofTree.child.id,
+      decl.surfaceType!,
+      emptyRegistry,
+      undefined,
+      decl.kernelType!,
+      result.definitions,
+    );
+    expect(traceChild).not.toBeNull();
+    expect(walkChild).not.toBeNull();
+    expect(traceChild!.goal).toBe(walkChild!.goal);
+    expect(traceChild!.hypotheses).toEqual(walkChild!.hypotheses);
+    expect(traceChild!.hypotheses.some(h => h.name === 'h')).toBe(true);
   });
 
   test('source simp tactics become simp proof-tree nodes', () => {
@@ -2868,6 +3006,53 @@ testSimp : Equal myZero Zero := by
     if (decl!.proofTree!.tag !== 'simp') return;
     expect(decl!.proofTree!.lemmas).toEqual(['myZero']);
     expect(decl!.proofTree!.child.tag).toBe('exact');
+  });
+
+  test('computeTypedContext agrees with and without tacticTrace across suffices subgoals', () => {
+    const source = `
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+testSuffices : Equal (Succ Zero) (Succ Zero) := by
+  suffices h : Equal Zero Zero by
+    exact refl
+  exact refl
+`;
+    const result = compileTTFromText(source);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'testSuffices');
+    expect(decl).toBeDefined();
+    expect(decl!.proofTree?.tag).toBe('suffices');
+    if (decl?.proofTree?.tag !== 'suffices') return;
+    expect(decl.tacticTrace).toBeDefined();
+    expect(decl.kernelType).toBeDefined();
+
+    const traceChild = computeTypedContext(
+      decl.proofTree,
+      decl.proofTree.child.id,
+      decl.surfaceType!,
+      emptyRegistry,
+      undefined,
+      decl.kernelType!,
+      result.definitions,
+      decl.tacticTrace,
+    );
+    const walkChild = computeTypedContext(
+      decl.proofTree,
+      decl.proofTree.child.id,
+      decl.surfaceType!,
+      emptyRegistry,
+      undefined,
+      decl.kernelType!,
+      result.definitions,
+    );
+    expect(traceChild).not.toBeNull();
+    expect(walkChild).not.toBeNull();
+    expect(traceChild!.goal).toBe(walkChild!.goal);
+    expect(traceChild!.hypotheses).toEqual(walkChild!.hypotheses);
   });
 
   test('non-tactic declarations have no proofTree', () => {
@@ -2995,6 +3180,83 @@ addZeroLeft : {A : Type} -> (m : Monoid A) -> (a : A) -> Equal (myOp m (Monoid.e
       expect(walkInfo!.unifiedEquationLatex).toBeDefined();
       // Both paths should agree
       expect(traceInfo!.unifiedEquationLatex).toBe(walkInfo!.unifiedEquationLatex);
+    }
+  });
+
+  test('trace and walk paths agree on induction scrutinee and case metadata', () => {
+    const result = compileTTFromText(`
+inductive Nat : Type where
+  Zero : Nat
+  Succ : Nat -> Nat
+
+inductive Equal : {A : Type} -> A -> A -> Type where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+inductionReplayProbe : (n : Nat) -> Equal n n := by
+  intro n
+  induction n with
+  | Zero => exact refl
+  | Succ k ih => exact refl
+`);
+    expect(result.success).toBe(true);
+    const decl = result.blocks.flatMap(b => b.declarations).find(d => d.name === 'inductionReplayProbe');
+    expect(decl).toBeDefined();
+    expect(decl!.checkSuccess).toBe(true);
+    expect(decl!.proofTree).toBeDefined();
+    expect(decl!.tacticTrace).toBeDefined();
+
+    const definitions = result.definitions;
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] });
+    const traceMap = replayEntireTree(
+      decl!.proofTree!, decl!.kernelType!, definitions, rev, decl!.tacticTrace
+    );
+    const walkMap = replayEntireTree(
+      decl!.proofTree!, decl!.kernelType!, definitions, rev
+    );
+
+    function findInductionNode(node: any): any | null {
+      if (node.tag === 'induction') return node;
+      if (node.child) return findInductionNode(node.child);
+      if (node.children) {
+        for (const child of node.children) {
+          const found = findInductionNode(child);
+          if (found) return found;
+        }
+      }
+      if (node.cases) {
+        for (const c of node.cases) {
+          const found = findInductionNode(c.body);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
+    const inductionNode = findInductionNode(decl!.proofTree!);
+    expect(inductionNode).not.toBeNull();
+
+    const traceInduction = traceMap.get(inductionNode.id);
+    const walkInduction = walkMap.get(inductionNode.id);
+    expect(traceInduction).toBeDefined();
+    expect(walkInduction).toBeDefined();
+    expect(traceInduction!.scrutineeLatex).toBeDefined();
+    expect(traceInduction!.scrutineeLatex).toBe(walkInduction!.scrutineeLatex);
+
+    for (const caseNode of inductionNode.cases) {
+      const traceCase = traceMap.get(caseNode.id);
+      const walkCase = walkMap.get(caseNode.id);
+      expect(traceCase).toBeDefined();
+      expect(walkCase).toBeDefined();
+      expect(traceCase!.caseLabelLatex).toBeDefined();
+      expect(traceCase!.caseLabelLatex).toBe(walkCase!.caseLabelLatex);
+
+      const traceBody = traceMap.get(caseNode.body.id);
+      const walkBody = walkMap.get(caseNode.body.id);
+      expect(traceBody).toBeDefined();
+      expect(walkBody).toBeDefined();
+      expect(traceBody!.caseLabelLatex).toBe(walkBody!.caseLabelLatex);
+      expect(traceBody!.validation).toEqual(walkBody!.validation);
+      expect(traceBody!.proofExprLatex).toBe(walkBody!.proofExprLatex);
     }
   });
 });

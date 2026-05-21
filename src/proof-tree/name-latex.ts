@@ -12,9 +12,44 @@
 const GREEK_LATEX: Record<string, string> = {
   'α': '\\alpha', 'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta',
   'ε': '\\varepsilon', 'ζ': '\\zeta', 'η': '\\eta', 'θ': '\\theta',
-  'λ': '\\lambda', 'μ': '\\mu', 'π': '\\pi', 'σ': '\\sigma',
-  'φ': '\\varphi', 'ψ': '\\psi', 'ω': '\\omega',
+  'ι': '\\iota', 'κ': '\\kappa', 'λ': '\\lambda', 'μ': '\\mu',
+  'ν': '\\nu', 'ξ': '\\xi', 'π': '\\pi', 'ρ': '\\rho',
+  'σ': '\\sigma', 'τ': '\\tau', 'υ': '\\upsilon', 'φ': '\\varphi',
+  'χ': '\\chi', 'ψ': '\\psi', 'ω': '\\omega',
+  'Γ': '\\Gamma', 'Δ': '\\Delta', 'Θ': '\\Theta', 'Λ': '\\Lambda',
+  'Ξ': '\\Xi', 'Π': '\\Pi', 'Σ': '\\Sigma', 'Φ': '\\Phi',
+  'Ψ': '\\Psi', 'Ω': '\\Omega',
 };
+
+/** Inverse of GREEK_LATEX, plus a few common aliases the user is likely to
+ *  type that aren't in our canonical Unicode set (e.g. `\epsilon` → ε is
+ *  conventionally `\varepsilon` in KaTeX, but the user shouldn't have to
+ *  know that). */
+const LATEX_TO_GREEK: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  for (const [ch, cmd] of Object.entries(GREEK_LATEX)) m[cmd] = ch;
+  // Common aliases — what the user types vs the canonical command.
+  m['\\epsilon'] = 'ε';     // we display Unicode ε as \varepsilon
+  m['\\phi'] = 'φ';         // we display Unicode φ as \varphi
+  return m;
+})();
+
+/** Convert user-typed LaTeX-style commands in a binder name to Unicode
+ *  characters our renderer already handles. This lets the user type
+ *  `\delta_f` in a rename field and have it become the kernel name `δ_f`,
+ *  which `renderNameLatex` then renders as `\delta_{f}` via the
+ *  Greek+subscript path.
+ *
+ *  Conservative: only transforms `\command` tokens where `command` is a
+ *  letter run that maps to a known Greek/Unicode char. Anything else is
+ *  passed through unchanged — the user can still type plain identifiers
+ *  like `x`, `foo`, `n12` and they work exactly as before. */
+export function normalizeBinderNameInput(input: string): string {
+  return input.replace(/\\([a-zA-Z]+)/g, (whole, cmd) => {
+    const ch = LATEX_TO_GREEK['\\' + cmd];
+    return ch ?? whole;
+  });
+}
 
 export type NameWrapper = 'text' | 'textsf' | 'mathit' | 'textbf';
 
@@ -77,6 +112,22 @@ export function renderNameLatex(name: string, wrapper: NameWrapper = 'text'): st
     const greek = GREEK_LATEX[name[0]];
     const head = greek ? renderGreek(greek, wrapper) : (wrapper === 'textbf' ? `\\textbf{${name[0]}}` : name[0]);
     return `${head}'`;
+  }
+
+  // Explicit subscript: `δ_f` → δ subscript f, `x_foo` → x subscript foo.
+  // The user types this directly (e.g. via `\delta_f` → `δ_f` after
+  // `normalizeBinderNameInput`) and expects it to render as a real
+  // subscript, not as an underscore-in-text.
+  const subscriptMatch = name.match(/^(.)_([a-zA-Z0-9]+)$/);
+  if (subscriptMatch) {
+    const headCh = subscriptMatch[1];
+    const tail = subscriptMatch[2];
+    const greekHead = GREEK_LATEX[headCh];
+    const headRendered = greekHead
+      ? renderGreek(greekHead, wrapper)
+      : (wrapper === 'textbf' ? `\\textbf{${headCh}}` : headCh);
+    const tailRendered = wrapper === 'textbf' ? `\\textbf{${tail}}` : tail;
+    return `${headRendered}_{${tailRendered}}`;
   }
 
   // Greek prefix + alphanumeric tail: δF → \delta_{F}, ε1 → \varepsilon_{1}

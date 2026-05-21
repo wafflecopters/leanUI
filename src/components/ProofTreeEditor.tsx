@@ -51,7 +51,7 @@ import {
   type GoalInteractionState,
   type SelectedBinder,
 } from '../proof-tree/goal-interaction-state';
-import { renderNameLatex } from '../proof-tree/name-latex';
+import { renderNameLatex, normalizeBinderNameInput } from '../proof-tree/name-latex';
 import {
   clearTermBuilderSlot,
   fillTermBuilderSlotFromSource,
@@ -2454,6 +2454,59 @@ const proseStyle: React.CSSProperties = {
 };
 
 // ============================================================================
+// BinderNameRenameInput — text input + live KaTeX preview for binder rename
+// ============================================================================
+//
+// The input accepts LaTeX-style commands (\delta_f, \alpha, etc.) thanks to
+// `normalizeBinderNameInput`. As the user types, a small preview to the
+// right shows how the name will render once committed — so they can tell
+// at a glance whether their `\delta_f` is going to become δ_f (subscript)
+// or stay as the literal "\delta_f" string.
+function BinderNameRenameInput({
+  defaultValue, onConfirm, onCancel, autoFocus,
+}: {
+  defaultValue: string;
+  onConfirm: (value: string) => void;
+  onCancel: () => void;
+  autoFocus?: boolean;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  // Show preview only when the input has a value that DIFFERS visually from
+  // the raw text — i.e. when there's something the renderer will transform.
+  const previewName = normalizeBinderNameInput(value.trim());
+  const previewLatex = previewName ? renderNameLatex(previewName, 'text') : '';
+  // Skip the preview when nothing interesting is happening (plain ASCII
+  // identifier that renders identically to its raw form).
+  const showPreview = previewName.length > 0
+    && (previewName !== value.trim() || /[α-ωΑ-Ω_]/.test(previewName));
+  return (
+    <>
+      <input
+        defaultValue={defaultValue}
+        onChange={e => setValue(e.target.value)}
+        onBlur={e => onConfirm(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); onConfirm((e.target as HTMLInputElement).value); }
+          if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }}
+        onClick={e => e.stopPropagation()}
+        placeholder="rename"
+        style={nameInputStyle}
+        autoFocus={autoFocus}
+      />
+      {showPreview && (
+        <>
+          <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>→</span>
+          <span style={{ minWidth: '20px' }}>
+            <InlineKaTeX latex={previewLatex} style={{ fontSize: '13px' }} />
+          </span>
+        </>
+      )}
+    </>
+  );
+}
+
+// ============================================================================
 // IntroProseItem — intro line with clickable variable tokens
 // ============================================================================
 
@@ -2489,7 +2542,10 @@ function IntroProseItem({
 
   const handleRename = useCallback((newName: string) => {
     if (!selectedToken) return;
-    const trimmed = newName.trim();
+    // Allow the user to type LaTeX-style commands (`\delta_f`) and store
+    // the corresponding Unicode-shaped kernel name (`δ_f`) — renderNameLatex
+    // turns that back into a proper subscript at display time.
+    const trimmed = normalizeBinderNameInput(newName.trim());
     if (!trimmed || trimmed === selectedToken.name) return;
     const result = renameIntroTokenInProofTree(state, item.nodeId, selectedToken.nameIndex, trimmed);
     if (result) onPushChange(result);
@@ -2549,17 +2605,11 @@ function IntroProseItem({
           <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
             {selectedToken.name}:
           </span>
-          <input
+          <BinderNameRenameInput
             key={selectedToken.nameIndex}
             defaultValue={selectedToken.name}
-            onBlur={e => handleRename(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); handleRename((e.target as HTMLInputElement).value); }
-              if (e.key === 'Escape') { e.preventDefault(); onSelectBinder(null); }
-            }}
-            onClick={e => e.stopPropagation()}
-            placeholder="rename"
-            style={nameInputStyle}
+            onConfirm={handleRename}
+            onCancel={() => onSelectBinder(null)}
           />
         </div>
       )}
@@ -2596,7 +2646,9 @@ function CaseHeaderProseItem({
 
   const handleRename = useCallback((newName: string) => {
     if (selectedParamIndex === null) return;
-    const trimmed = newName.trim();
+    // Match the intro-token rename: accept LaTeX-style input and store the
+    // Unicode-shaped kernel name so renderNameLatex can format it properly.
+    const trimmed = normalizeBinderNameInput(newName.trim());
     if (!trimmed || !paramNames || trimmed === paramNames[selectedParamIndex]) return;
     const result = renameCaseParamInProofTree(state, item.nodeId, selectedParamIndex, trimmed);
     if (result) onPushChange(result);
@@ -2678,17 +2730,11 @@ function CaseHeaderProseItem({
           <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
             {paramNames[selectedParamIndex]}:
           </span>
-          <input
+          <BinderNameRenameInput
             key={`${item.nodeId}-${selectedParamIndex}`}
             defaultValue={paramNames[selectedParamIndex]}
-            onBlur={e => handleRename(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter') { e.preventDefault(); handleRename((e.target as HTMLInputElement).value); }
-              if (e.key === 'Escape') { e.preventDefault(); setSelectedParamIndex(null); }
-            }}
-            onClick={e => e.stopPropagation()}
-            placeholder="rename"
-            style={nameInputStyle}
+            onConfirm={handleRename}
+            onCancel={() => setSelectedParamIndex(null)}
             autoFocus
           />
         </div>
