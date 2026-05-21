@@ -675,6 +675,46 @@ testImg46 R = ?h`);
     expect(names).toContain('CompleteOrderedField.addComm');
   });
 
+  // REGRESSION (image #53): a hoisted `have` whose type uses a bare numeric
+  // literal (`rdiv ε 2`) must render with `2` collapsed back from its
+  // elaborated @ofRat/MkRat form. Previously the hypothesis-rendering path
+  // used betaNormalize only, so the kernel's MkRat ctor never folded back
+  // to a RatLit and the @ofRat-fold couldn't fire — the user saw "0 <
+  // ε/@ofRat(R, MkRat(IntOfNat(2), 1, IsSucc(0)))" instead of "0 < ε/2".
+  test('REGRESSION (image #53): have block with literal `2` in type renders as `2`, not the @ofRat/MkRat encoding', { timeout: 30000 }, async () => {
+    const { r, decl } = compileTop('testImg53', `testImg53 : (R : Real) -> (ε : Carrier R) -> rlt (rzero R) ε -> Type
+testImg53 R ε hε = ?outer`);
+    const { mkHave } = await import('./proof-tree');
+    const { computeTypedContext } = await import('./goal-computation');
+    const haveProof = mkHole();
+    const outer = mkHole();
+    // Have type uses the bare numeric literal `2` (NOT `rtwo R`). The
+    // elaborator coerces it via @ofRat → realOfRat R (MkRat (IntOfNat 2) 1
+    // (IsSucc 0)). The hypothesis rendering must collapse this back to "2".
+    const haveNode = mkHave('h6', '?', outer,
+      '(rlt (rzero R) (rdiv ε 2))', haveProof);
+    const proof: ProofNode = mkIntros(['R', 'ε', 'hε'], haveNode);
+    const engine = replayToEngine(proof, outer.id, decl.kernelType, r.definitions);
+    expect(engine).not.toBeNull();
+    if (!engine) return;
+    const focusedGoal = engine.getFocusedGoal();
+    if (!focusedGoal) return;
+    // Render the focused goal's hypothesis list through the exact UI path
+    // (renderHypotheses), so we catch the betaNormalize-only bug from
+    // image #53.
+    const { renderHypotheses } = await import('./goal-computation');
+    const rev = buildReverseRegistry({ symbolMap: new Map(), entries: [] }, r.definitions);
+    const hyps = renderHypotheses(focusedGoal.ctx, r.definitions, rev, undefined, undefined, engine);
+    const h6 = hyps.find(h => h.name === 'h6');
+    expect(h6, `h6 should be in hypotheses; got: ${hyps.map(h => h.name).join(', ')}`).toBeDefined();
+    if (!h6) return;
+    expect(h6.type, `h6.type was: ${h6.type}`).not.toContain('@ofRat');
+    expect(h6.type).not.toContain('MkRat');
+    expect(h6.type).not.toContain('IntOfNat');
+    expect(h6.type).not.toContain('IsSucc');
+    expect(h6.type).toMatch(/2/);
+  });
+
   // REGRESSION (image #50): user's actual limitAdd flow — apply
   // addLeRightCancel → exact -1 → rewrite addRealOfRat → leaf goal is
   // `0 ≤ 2 + (-1)`. Clicking the `2 + (-1)` radd subterm must surface

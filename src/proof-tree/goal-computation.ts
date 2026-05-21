@@ -1266,6 +1266,29 @@ interface ReplayResult {
   tacticError?: string;
 }
 
+type ReplayCaseMetadata = Pick<ReplayResult, 'caseLabel' | 'caseLabelLatex' | 'inductionVar'>;
+
+type InteractiveHaveReplayTargets = {
+  readonly proofEngine: TacticEngine;
+  readonly childEngine: TacticEngine;
+};
+
+function makeReplayResult(
+  engine: TacticEngine,
+  goalId: string,
+  metadata: ReplayCaseMetadata,
+  tacticError?: string,
+): ReplayResult {
+  return {
+    engine,
+    goalId,
+    caseLabel: metadata.caseLabel,
+    caseLabelLatex: metadata.caseLabelLatex,
+    inductionVar: metadata.inductionVar,
+    tacticError,
+  };
+}
+
 export interface InductionCaseReplayTarget {
   readonly caseNode: CaseNode;
   readonly caseEngine: TacticEngine;
@@ -1335,6 +1358,45 @@ function consumeSimpTraceStep(
   return consumeTraceStep(trace, nextTraceIdx, currentEngine);
 }
 
+interface InductionCaseMetadata {
+  readonly caseLabel: string;
+  readonly caseLabelLatex?: string;
+  readonly inductionVar: string;
+}
+
+function buildInductionCaseMetadata(
+  caseNode: CaseNode,
+  scrutinee: string,
+  rev?: ReverseRegistry,
+  caseLabelLatex?: string,
+): InductionCaseMetadata {
+  return {
+    caseLabel: caseNode.label,
+    caseLabelLatex: caseLabelLatex ?? caseLabelLatexOf(caseNode, rev, scrutinee),
+    inductionVar: scrutinee,
+  };
+}
+
+function mergeInductionCaseMetadata<T extends {
+  readonly caseLabel?: string;
+  readonly caseLabelLatex?: string;
+  readonly inductionVar?: string;
+}>(
+  value: T,
+  caseNode: CaseNode,
+  scrutinee: string,
+  rev?: ReverseRegistry,
+  caseLabelLatex?: string,
+): T & InductionCaseMetadata {
+  const meta = buildInductionCaseMetadata(caseNode, scrutinee, rev, caseLabelLatex);
+  return {
+    ...value,
+    caseLabel: value.caseLabel ?? meta.caseLabel,
+    caseLabelLatex: value.caseLabelLatex ?? meta.caseLabelLatex,
+    inductionVar: value.inductionVar ?? meta.inductionVar,
+  };
+}
+
 function findCursorInInductionCaseTargets<T extends {
   readonly caseNode: CaseNode;
   readonly caseEngine: TacticEngine;
@@ -1352,15 +1414,89 @@ function findCursorInInductionCaseTargets<T extends {
       return {
         engine: target.caseEngine,
         goalId: target.caseGoalId,
-        caseLabel: c.label,
-        caseLabelLatex: target.caseLabelLatex,
-        inductionVar: scrutinee,
+        ...buildInductionCaseMetadata(c, scrutinee, undefined, target.caseLabelLatex),
       };
     }
     const result = descend(target);
     if (result) return result;
   }
   return null;
+}
+
+function replayCursorInInductionCaseTargets<T extends {
+  readonly caseNode: CaseNode;
+  readonly caseEngine: TacticEngine;
+  readonly caseGoalId: string;
+  readonly caseLabelLatex?: string;
+}>(
+  targets: readonly T[],
+  cursorId: ProofNodeId,
+  scrutinee: string,
+  descend: (
+    body: ProofNode,
+    engine: TacticEngine,
+    meta: InductionCaseMetadata,
+  ) => ReplayResult | null,
+): ReplayResult | null {
+  return findCursorInInductionCaseTargets(targets, cursorId, scrutinee, target =>
+    descend(
+      target.caseNode.body,
+      target.caseEngine,
+      buildInductionCaseMetadata(target.caseNode, scrutinee, undefined, target.caseLabelLatex),
+    ),
+  );
+}
+
+function replaceFocusedGoalInEngine(
+  engine: TacticEngine,
+  currentGoalId: string,
+  nextGoalId: string,
+  nextGoal: MetaVar,
+): TacticEngine {
+  const nextMetaVars = new Map(engine.metaVars);
+  nextMetaVars.set(nextGoalId, nextGoal);
+  const nextGoals = engine.goals.map(g => g === currentGoalId ? nextGoalId : g);
+  return engine.withUpdates({ metaVars: nextMetaVars, goals: nextGoals });
+}
+
+function resolveInteractiveHaveTypeTerm(
+  node: Extract<ProofNode, { tag: 'have' }>,
+  engine: TacticEngine,
+  goal: MetaVar,
+): TTKTerm | null {
+  if (node.typeKernel) return node.typeKernel;
+  if (!node.typeExpr) return null;
+  const raw = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+  const elaborated = raw ? elaborateType(raw, goal.ctx, engine.definitions, engine.metaVars) : null;
+  if (!elaborated) return null;
+  // Pin elaborator-leftover Holes (for implicit args like `rle`'s `{R}`)
+  // to compatible context vars so inner rewrite/apply matching sees the
+  // same fully-contextualized shape in every replay path.
+  return pinHolesToCtxVars(elaborated, goal.ctx, engine.definitions);
+}
+
+function buildInteractiveHaveReplayTargets(
+  node: Extract<ProofNode, { tag: 'have' }>,
+  engine: TacticEngine,
+  goalId: string,
+  goal: MetaVar,
+): InteractiveHaveReplayTargets | null {
+  if (!node.proofTree || (!node.typeKernel && !node.typeExpr)) return null;
+
+  const typeTerm = resolveInteractiveHaveTypeTerm(node, engine, goal);
+  if (!typeTerm) return null;
+
+  const proofGoalId = `${goalId}_have_proof`;
+  const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
+  const proofEngine = replaceFocusedGoalInEngine(engine, goalId, proofGoalId, proofMeta);
+
+  const newCtx = [...goal.ctx, { name: node.name, type: typeTerm }];
+  const newGoalType = shiftTerm(goal.type, 1, 0);
+  const childGoalId = `${goalId}_have_cont`;
+  const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
+  const childEngine = replaceFocusedGoalInEngine(engine, goalId, childGoalId, childMeta);
+
+  return { proofEngine, childEngine };
 }
 
 /**
@@ -1564,11 +1700,8 @@ function extendGoalForComplexScrutinee(
     const extGoalType = shiftTerm(goal.type, 1, 0);
     const tempGoalId = goalId + '_cases_temp';
     const tempMeta: MetaVar = { ctx: extCtx, type: extGoalType, solution: undefined };
-    const tempMetaVars = new Map(engine.metaVars);
-    tempMetaVars.set(tempGoalId, tempMeta);
-    const tempGoals = engine.goals.map(g => g === goalId ? tempGoalId : g);
     return {
-      engine: engine.withUpdates({ metaVars: tempMetaVars, goals: tempGoals }),
+      engine: replaceFocusedGoalInEngine(engine, goalId, tempGoalId, tempMeta),
       goal: tempMeta,
       goalId: tempGoalId,
       scrutineeIdx: 0,
@@ -2477,10 +2610,11 @@ function replayProofTreeFromTrace(
     if (!node) return null;  // Defensive: handle undefined nodes gracefully
     const goalId = currentEngine.getFocusedGoalId();
     if (!goalId) return null;
+    const metadata: ReplayCaseMetadata = { caseLabel, caseLabelLatex, inductionVar };
 
     // Cursor found — return current engine state
     if (node.id === cursorId) {
-      return { engine: currentEngine, goalId, caseLabel, caseLabelLatex, inductionVar };
+      return makeReplayResult(currentEngine, goalId, metadata);
     }
 
     switch (node.tag) {
@@ -2497,14 +2631,12 @@ function replayProofTreeFromTrace(
         const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
         traceIdx = consumed.nextTraceIdx;
         if (node.child.id === cursorId) {
-          return {
-            engine: consumed.nextEngine,
-            goalId: consumed.nextEngine.getFocusedGoalId() ?? goalId,
-            caseLabel,
-            caseLabelLatex,
-            inductionVar,
-            tacticError: consumed.step?.error,
-          };
+          return makeReplayResult(
+            consumed.nextEngine,
+            consumed.nextEngine.getFocusedGoalId() ?? goalId,
+            metadata,
+            consumed.step?.error,
+          );
         }
         return walk(node.child, consumed.nextEngine, caseLabel, caseLabelLatex, inductionVar);
       }
@@ -2519,7 +2651,7 @@ function replayProofTreeFromTrace(
           const childEngine = nextEngine.withUpdates({ focusIndex: childFocusIdx });
           const childGoalId = childEngine.getFocusedGoalId();
           if (node.children[i].id === cursorId) {
-            return { engine: childEngine, goalId: childGoalId ?? goalId, caseLabel, caseLabelLatex, inductionVar };
+            return makeReplayResult(childEngine, childGoalId ?? goalId, metadata);
           }
           const result = walk(node.children[i], childEngine, caseLabel, caseLabelLatex, inductionVar);
           if (result) return result;
@@ -2532,13 +2664,13 @@ function replayProofTreeFromTrace(
         traceIdx = consumed.nextTraceIdx;
         const afterCasesEngine = consumed.nextEngine;
         const targets = buildTraceInductionCaseReplayTargets(node, afterCasesEngine, goalId, c => c.labelLatex);
-        return findCursorInInductionCaseTargets(targets, cursorId, node.scrutinee, target =>
+        return replayCursorInInductionCaseTargets(targets, cursorId, node.scrutinee, (body, caseEngine, meta) =>
           walk(
-            target.caseNode.body,
-            target.caseEngine,
-            target.caseNode.label,
-            target.caseLabelLatex,
-            node.scrutinee,
+            body,
+            caseEngine,
+            meta.caseLabel,
+            meta.caseLabelLatex,
+            meta.inductionVar,
           ),
         );
       }
@@ -2547,13 +2679,11 @@ function replayProofTreeFromTrace(
         const consumed = consumeSimpTraceStep(trace, traceIdx, currentEngine, node.steps.length);
         traceIdx = consumed.nextTraceIdx;
         if (node.child.id === cursorId) {
-          return {
-            engine: consumed.nextEngine,
-            goalId: consumed.nextEngine.getFocusedGoalId() ?? goalId,
-            caseLabel,
-            caseLabelLatex,
-            inductionVar,
-          };
+          return makeReplayResult(
+            consumed.nextEngine,
+            consumed.nextEngine.getFocusedGoalId() ?? goalId,
+            metadata,
+          );
         }
         return walk(node.child, consumed.nextEngine, caseLabel, caseLabelLatex, inductionVar);
       }
@@ -2579,10 +2709,11 @@ function replayProofTree(
   if (!node) return null;  // Defensive: handle undefined nodes gracefully
   const goalId = engine.getFocusedGoalId();
   if (!goalId) return null;
+  const metadata: ReplayCaseMetadata = { caseLabel, caseLabelLatex, inductionVar };
 
   // Cursor is on this node — return current engine state
   if (node.id === cursorId) {
-    return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+    return makeReplayResult(engine, goalId, metadata);
   }
 
   switch (node.tag) {
@@ -2602,7 +2733,7 @@ function replayProofTree(
       if (!result.success) {
         // Tactic failed — return current state at cursor if child matches
         if (node.child.id === cursorId) {
-          return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+          return makeReplayResult(engine, goalId, metadata);
         }
         return null;
       }
@@ -2714,7 +2845,7 @@ function replayProofTree(
         // Apply failed — search children with unchanged engine
         for (const child of node.children) {
           if (child.id === cursorId) {
-            return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+            return makeReplayResult(engine, goalId, metadata);
           }
           const childResult = replayProofTree(
             child, cursorId, engine,
@@ -2741,11 +2872,7 @@ function replayProofTree(
         const childGoalId = childEngine.getFocusedGoalId();
 
         if (child.id === cursorId) {
-          return {
-            engine: childEngine,
-            goalId: childGoalId!,
-            caseLabel, caseLabelLatex, inductionVar,
-          };
+          return makeReplayResult(childEngine, childGoalId!, metadata);
         }
 
         // Check if cursor is inside this child's subtree
@@ -2783,14 +2910,14 @@ function replayProofTree(
     case 'induction': {
       const targets = buildInductionCaseReplayTargets(node, engine, goalId, c => c.labelLatex);
       if (!targets) return null;
-      return findCursorInInductionCaseTargets(targets, cursorId, node.scrutinee, target =>
+      return replayCursorInInductionCaseTargets(targets, cursorId, node.scrutinee, (body, caseEngine, meta) =>
         replayProofTree(
-          target.caseNode.body,
+          body,
           cursorId,
-          target.caseEngine,
-          target.caseNode.label,
-          target.caseLabelLatex,
-          node.scrutinee,
+          caseEngine,
+          meta.caseLabel,
+          meta.caseLabelLatex,
+          meta.inductionVar,
         ),
       );
     }
@@ -2825,51 +2952,18 @@ function replayProofTree(
       if (!goal) return null;
 
       // Interactive proof subtree: proofTree proves typeExpr, then child gets h : T in context
-      if (node.proofTree && node.typeExpr) {
-        // Parse typeExpr in the current goal context (implicit args are re-inserted as Holes
-        // by parseExactExpr, then resolved by elaborateType via checkType)
-        const raw = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
-        const elaborated = raw ? elaborateType(raw, goal.ctx, engine.definitions) : null;
-        if (!elaborated) {
-          return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
-        }
-        // Pin elaborator-leftover Holes (for implicit args like `rle`'s `{R}`)
-        // to compatible context vars — same fix the IntrosTactic does after
-        // intros. Without this, the proof subgoal type carries unresolved
-        // `Hole(_implicit_R)` placeholders, which the pattern matchers in
-        // RewriteTactic / ApplyTactic treat as deeper structure than
-        // expected and fail to match against alias-headed lemma patterns
-        // (image #45: `rw addRealOfRat`, `rw addComm` missing for radd-headed
-        // subterm clicks inside a have block).
-        const typeTerm = pinHolesToCtxVars(elaborated, goal.ctx, engine.definitions);
-
-        // Create a subgoal for the proofTree with goal type = typeExpr
-        const proofGoalId = goalId + '_have_proof';
-        const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
-        const proofMetaVars = new Map(engine.metaVars);
-        proofMetaVars.set(proofGoalId, proofMeta);
-        const proofGoals = engine.goals.map(g => g === goalId ? proofGoalId : g);
-        const proofEngine = engine.withUpdates({ metaVars: proofMetaVars, goals: proofGoals });
-
+      const interactiveTargets = buildInteractiveHaveReplayTargets(node, engine, goalId, goal);
+      if (interactiveTargets && node.proofTree) {
         // If cursor is in the proofTree subtree, replay there
         if (isCursorInSubtree(node.proofTree, cursorId)) {
-          return replayProofTree(node.proofTree, cursorId, proofEngine, caseLabel, caseLabelLatex, inductionVar);
+          return replayProofTree(node.proofTree, cursorId, interactiveTargets.proofEngine, caseLabel, caseLabelLatex, inductionVar);
         }
 
-        // Cursor is in child — extend context with h : T
-        const newCtx = [...goal.ctx, { name: node.name, type: typeTerm }];
-        const newGoalType = shiftTerm(goal.type, 1, 0);
-        const childGoalId = goalId + '_have_cont';
-        const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
-        const childMetaVars = new Map(engine.metaVars);
-        childMetaVars.set(childGoalId, childMeta);
-        const childGoals = engine.goals.map(g => g === goalId ? childGoalId : g);
-        const childEngine = engine.withUpdates({ metaVars: childMetaVars, goals: childGoals });
-
-        if (node.child.id === cursorId) {
-          return { engine: childEngine, goalId: childGoalId, caseLabel, caseLabelLatex, inductionVar };
+        const childGoalId = interactiveTargets.childEngine.getFocusedGoalId();
+        if (node.child.id === cursorId && childGoalId) {
+          return makeReplayResult(interactiveTargets.childEngine, childGoalId, metadata);
         }
-        return replayProofTree(node.child, cursorId, childEngine, caseLabel, caseLabelLatex, inductionVar);
+        return replayProofTree(node.child, cursorId, interactiveTargets.childEngine, caseLabel, caseLabelLatex, inductionVar);
       }
 
       // Flat expression mode: Apply HaveTactic — parse proof expression, infer type, extend context
@@ -2877,7 +2971,7 @@ function replayProofTree(
       if (!proofTerm) {
         // Parse failed — continue with unchanged engine
         if (node.child.id === cursorId) {
-          return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+          return makeReplayResult(engine, goalId, metadata);
         }
         return replayProofTree(
           node.child, cursorId, engine,
@@ -2916,7 +3010,7 @@ function replayProofTree(
       const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
       if (!typeTerm) {
         if (node.child.id === cursorId) {
-          return { engine, goalId, caseLabel, caseLabelLatex, inductionVar };
+          return makeReplayResult(engine, goalId, metadata);
         }
         return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
       }
@@ -2924,13 +3018,10 @@ function replayProofTree(
       // Create new goal with the suffices type
       const newGoalId = goalId + '_suffices';
       const newMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
-      const newMetaVars = new Map(engine.metaVars);
-      newMetaVars.set(newGoalId, newMeta);
-      const newGoals = engine.goals.map(g => g === goalId ? newGoalId : g);
-      const newEngine = engine.withUpdates({ metaVars: newMetaVars, goals: newGoals });
+      const newEngine = replaceFocusedGoalInEngine(engine, goalId, newGoalId, newMeta);
 
       if (node.child.id === cursorId) {
-        return { engine: newEngine, goalId: newGoalId, caseLabel, caseLabelLatex, inductionVar };
+        return makeReplayResult(newEngine, newGoalId, metadata);
       }
       return replayProofTree(node.child, cursorId, newEngine, caseLabel, caseLabelLatex, inductionVar);
     }
@@ -3133,7 +3224,7 @@ function cosmeticZonkImplicitMetas(
   }
 }
 
-function renderHypotheses(
+export function renderHypotheses(
   ctx: ReadonlyArray<{ name: string; type: TTKTerm }>,
   definitions: DefinitionsMap,
   rev: ReverseRegistry,
@@ -3162,9 +3253,18 @@ function renderHypotheses(
     const zonked = engine ? engine.zonkTerm(entry.type, i) : entry.type;
     // Resolve stale `_implicit_*` metas to the matching outer ctx var.
     const cosmeticZonked = cosmeticZonkImplicitMetas(zonked, ctx, i);
-    const normalizedType = betaNormalize(cosmeticZonked);
+    // Mirror the goal-rendering pipeline (renderGoalLatex): prepareMatchesForIota
+    // + fullNormalize so the kernel's inverse-iota collapses expanded ctor
+    // forms like `MkRat (IntOfNat 2) 1 (IsSucc 0)` back to `RatLit(2,1)`. Without
+    // this step, an elaborated `2 : Carrier R` keeps its raw kernel encoding
+    // and the @ofRat fold in `kernelTypeToSurface` can't recognize it as a
+    // literal — the hypothesis renders as `@ofRat(R, MkRat(IntOfNat(2), 1,
+    // IsSucc(0)))` instead of `2`.
+    const prepared = prepareMatchesForIota(cosmeticZonked, definitions);
+    const normalizedType = fullNormalize(prepared, definitionsForRendering(definitions));
     let folded = foldProjectionMatches(normalizedType, pm);
     folded = foldAliases(folded, am);
+    folded = foldSimpleWrappers(folded, definitions);
     // Unfold @syntax @unfold-marked constants
     if (rev.unfoldNames.size > 0) {
       folded = unfoldTransparent(folded, definitions, rev.unfoldNames);
@@ -3360,13 +3460,7 @@ function computeWithTacticEngine(
   if (!caseLabelLatex && replay.caseLabel) {
     const caseInfo = findCaseAncestor(root, cursorId);
     if (caseInfo) {
-      const paramNames = caseInfo.caseNode.constructorParamNames ?? [];
-      caseLabelLatex = renderFlatCaseLabelLatex(
-        caseInfo.scrutinee,
-        caseInfo.caseNode.constructorName!,
-        paramNames,
-        rev,
-      );
+      caseLabelLatex = buildInductionCaseMetadata(caseInfo.caseNode, caseInfo.scrutinee, rev).caseLabelLatex;
     }
   }
 
@@ -3479,6 +3573,171 @@ export interface NodeGoalInfo {
   readonly isValueType?: boolean;
 }
 
+function attachScrutineeLatexToNode(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  nodeId: ProofNodeId,
+  scrutinee: string,
+  goal: MetaVar | null | undefined,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+): void {
+  if (!goal) return;
+  const scrLatex = renderProofExpr(scrutinee, goal, definitions, rev, projMap, aliasMap);
+  if (!scrLatex) return;
+  const existing = result.get(nodeId);
+  if (existing) result.set(nodeId, { ...existing, scrutineeLatex: scrLatex });
+}
+
+function updateNodeGoalInfo(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  nodeId: ProofNodeId,
+  update: (existing: NodeGoalInfo) => NodeGoalInfo,
+): void {
+  const existing = result.get(nodeId);
+  if (!existing) return;
+  result.set(nodeId, update(existing));
+}
+
+function attachProofExprLatexToNode(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  nodeId: ProofNodeId,
+  expr: string,
+  goal: MetaVar,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+): void {
+  const latex = renderProofExpr(expr, goal, definitions, rev, projMap, aliasMap);
+  if (!latex) return;
+  const existing = result.get(nodeId);
+  if (existing) {
+    result.set(nodeId, { ...existing, proofExprLatex: latex });
+    return;
+  }
+  result.set(nodeId, {
+    goalLatex: '',
+    hypotheses: [],
+    proofExprLatex: latex,
+  });
+}
+
+function attachSufficesByLatexToNode(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  nodeId: ProofNodeId,
+  byProof: ProofNode,
+  engine: TacticEngine,
+  goalId: string,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+): void {
+  const latex = renderByProofExpr(byProof, engine, goalId, definitions, rev, projMap, aliasMap);
+  if (!latex) return;
+  updateNodeGoalInfo(result, nodeId, existing => ({ ...existing, sufficesByLatex: latex }));
+}
+
+function attachTacticErrorToNode(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  nodeId: ProofNodeId,
+  tacticError?: string,
+): void {
+  if (!tacticError) return;
+  updateNodeGoalInfo(result, nodeId, existing => ({ ...existing, tacticError }));
+}
+
+function attachUnifiedEquationLatexToNode(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  nodeId: ProofNodeId,
+  equation: Parameters<typeof renderUnifiedEquationLatex>[0] | undefined,
+  engine: TacticEngine,
+  goalCtx: TTKContext,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+): void {
+  if (!equation) return;
+  const eqLatex = renderUnifiedEquationLatex(
+    equation,
+    engine,
+    goalCtx,
+    definitions,
+    rev,
+    projMap,
+    aliasMap,
+  );
+  updateNodeGoalInfo(result, nodeId, existing => ({ ...existing, unifiedEquationLatex: eqLatex }));
+}
+
+function buildRecordedGoalInfo(
+  eng: TacticEngine,
+  goal: MetaVar,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+  caseLabelLatex?: string,
+  validation?: ValidationResult,
+): NodeGoalInfo {
+  const zonkedGoalType = eng.zonkTerm(goal.type, goal.ctx.length);
+  return {
+    goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
+    hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
+    caseLabelLatex,
+    validation,
+    isValueType: isValueTypeGoal(zonkedGoalType),
+  };
+}
+
+function visitInductionCaseTargets<T extends {
+  readonly caseNode: CaseNode;
+  readonly caseEngine: TacticEngine;
+  readonly caseGoalId: string;
+  readonly caseLabelLatex?: string;
+}>(
+  targets: readonly T[],
+  visit: (target: T) => void,
+): void {
+  for (const target of targets) visit(target);
+}
+
+function replayWholeTreeInductionTargets<T extends InductionCaseReplayTarget>(
+  result: Map<ProofNodeId, NodeGoalInfo>,
+  node: Extract<ProofNode, { tag: 'induction' }>,
+  currentEngine: TacticEngine,
+  goalId: string,
+  caseLabelLatex: string | undefined,
+  goal: MetaVar | null | undefined,
+  definitions: DefinitionsMap,
+  rev: ReverseRegistry,
+  projMap: Map<string, Map<number, string>>,
+  aliasMap: Map<string, AliasFoldInfo>,
+  targets: readonly T[] | null,
+  recordNode: (nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string) => void,
+  walkCaseBody: (node: ProofNode | undefined, eng: TacticEngine, caseLabelLatex?: string) => void,
+): void {
+  recordNode(node.id, currentEngine, goalId, caseLabelLatex);
+  attachScrutineeLatexToNode(
+    result,
+    node.id,
+    node.scrutinee,
+    goal,
+    definitions,
+    rev,
+    projMap,
+    aliasMap,
+  );
+  if (!targets) return;
+  visitInductionCaseTargets(targets, target => {
+    recordNode(target.caseNode.id, target.caseEngine, target.caseGoalId, target.caseLabelLatex);
+    walkCaseBody(target.caseNode.body, target.caseEngine, target.caseLabelLatex);
+  });
+}
+
 /**
  * Replay the entire proof tree, collecting goal info at every node.
  * Unlike replayProofTree (which stops at cursor), this visits all nodes
@@ -3536,14 +3795,19 @@ function replayEntireTreeFromTrace(
     // `engineAfter` of the enclosing cases tactic.
     const goal = zonkEng.metaVars.get(gId) ?? eng.metaVars.get(gId);
     if (!goal) return;
-    const zonkedGoalType = zonkEng.zonkTerm(goal.type, goal.ctx.length);
-    result.set(nodeId, {
-      goalLatex: renderGoalLatex(zonkEng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, zonkEng),
-      caseLabelLatex,
-      validation,
-      isValueType: isValueTypeGoal(zonkedGoalType),
-    });
+    result.set(
+      nodeId,
+      buildRecordedGoalInfo(
+        zonkEng,
+        goal,
+        definitions,
+        rev,
+        projMap,
+        aliasMap,
+        caseLabelLatex,
+        validation,
+      ),
+    );
   }
 
   /** Fill in proofExprLatex for exact descendants that the trace walk missed.
@@ -3558,19 +3822,7 @@ function replayEntireTreeFromTrace(
       if (n.tag === 'exact') {
         const existing = result.get(n.id);
         if (!existing || !existing.proofExprLatex) {
-          const latex = renderProofExpr(n.expr, parentGoal, definitions, rev, projMap, aliasMap);
-          if (latex) {
-            if (existing) {
-              result.set(n.id, { ...existing, proofExprLatex: latex });
-            } else {
-              // Create a minimal entry for nodes the trace walk never visited
-              result.set(n.id, {
-                goalLatex: '',
-                hypotheses: [],
-                proofExprLatex: latex,
-              });
-            }
-          }
+          attachProofExprLatexToNode(result, n.id, n.expr, parentGoal, definitions, rev, projMap, aliasMap);
         }
       }
       if ('child' in n && (n as any).child) visit((n as any).child);
@@ -3608,11 +3860,7 @@ function replayEntireTreeFromTrace(
         // Render the proof expression through the math pipeline
         const exactGoal = currentEngine.metaVars.get(gId);
         if (exactGoal) {
-          const exprLatex = renderProofExpr(node.expr, exactGoal, definitions, rev, projMap, aliasMap);
-          if (exprLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, proofExprLatex: exprLatex });
-          }
+          attachProofExprLatexToNode(result, node.id, node.expr, exactGoal, definitions, rev, projMap, aliasMap);
         }
         break;
       }
@@ -3623,10 +3871,7 @@ function replayEntireTreeFromTrace(
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
         const nextEngine = step?.engineAfter ?? currentEngine;
-        if (step?.error) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
-        }
+        attachTacticErrorToNode(result, node.id, step?.error);
         walkTrace(node.child, nextEngine, caseLabelLatex);
         break;
       }
@@ -3634,20 +3879,22 @@ function replayEntireTreeFromTrace(
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
         const step = traceIdx < trace.length ? trace[traceIdx++] : undefined;
         const nextEngine = step?.engineAfter ?? currentEngine;
-        if (step?.error) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: step.error });
-        }
+        attachTacticErrorToNode(result, node.id, step?.error);
         // Render the unified equation from the trace
-        if (step?.unifiedEquation && !step.error) {
+        if (!step?.error) {
           const goal = currentEngine.metaVars.get(gId);
           if (goal) {
-            const eqLatex = renderUnifiedEquationLatex(
-              step.unifiedEquation, nextEngine, goal.ctx,
-              definitions, rev, projMap, aliasMap,
+            attachUnifiedEquationLatexToNode(
+              result,
+              node.id,
+              step?.unifiedEquation,
+              nextEngine,
+              goal.ctx,
+              definitions,
+              rev,
+              projMap,
+              aliasMap,
             );
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, unifiedEquationLatex: eqLatex });
           }
         }
         walkTrace(node.child, nextEngine, caseLabelLatex);
@@ -3655,58 +3902,27 @@ function replayEntireTreeFromTrace(
       }
       case 'have': {
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
+        const haveGoal = currentEngine.metaVars.get(gId);
 
         // Interactive proof subtree mode — no trace step to consume
-        if (node.proofTree && (node.typeKernel || node.typeExpr)) {
-          const haveGoal = currentEngine.metaVars.get(gId);
-          if (haveGoal) {
-            let typeTerm = node.typeKernel ?? null;
-            if (!typeTerm && node.typeExpr) {
-              const raw = parseExactExpr(node.typeExpr, haveGoal.ctx, definitions);
-              if (raw) typeTerm = elaborateType(raw, haveGoal.ctx, definitions, currentEngine.metaVars);
-            }
-            if (typeTerm) {
-              // Walk proofTree with subgoal
-              const proofGoalId = gId + '_have_proof';
-              const proofMeta: MetaVar = { ctx: haveGoal.ctx, type: typeTerm, solution: undefined };
-              const proofMetaVars = new Map(currentEngine.metaVars);
-              proofMetaVars.set(proofGoalId, proofMeta);
-              const proofGoals = currentEngine.goals.map(g => g === gId ? proofGoalId : g);
-              const proofEngine = currentEngine.withUpdates({ metaVars: proofMetaVars, goals: proofGoals });
-              walkTrace(node.proofTree, proofEngine, caseLabelLatex);
-
-              // Walk child with h : T
-              const newCtx = [...haveGoal.ctx, { name: node.name, type: typeTerm }];
-              const newGoalType = shiftTerm(haveGoal.type, 1, 0);
-              const childGoalId = gId + '_have_cont';
-              const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
-              const childMetaVars = new Map(currentEngine.metaVars);
-              childMetaVars.set(childGoalId, childMeta);
-              const childGoals = currentEngine.goals.map(g => g === gId ? childGoalId : g);
-              const childEngine = currentEngine.withUpdates({ metaVars: childMetaVars, goals: childGoals });
-              walkTrace(node.child, childEngine, caseLabelLatex);
-              break;
-            }
-          }
+        const interactiveTargets = haveGoal
+          ? buildInteractiveHaveReplayTargets(node, currentEngine, gId, haveGoal)
+          : null;
+        if (interactiveTargets) {
+          walkTrace(node.proofTree, interactiveTargets.proofEngine, caseLabelLatex);
+          walkTrace(node.child, interactiveTargets.childEngine, caseLabelLatex);
+          break;
         }
 
         // Flat expression mode
         if (node.expr.trim() !== '?') {
-          const haveGoal = currentEngine.metaVars.get(gId);
           if (haveGoal) {
-            const haveLatex = renderProofExpr(node.expr, haveGoal, definitions, rev, projMap, aliasMap);
-            if (haveLatex) {
-              const existing = result.get(node.id);
-              if (existing) result.set(node.id, { ...existing, proofExprLatex: haveLatex });
-            }
+            attachProofExprLatexToNode(result, node.id, node.expr, haveGoal, definitions, rev, projMap, aliasMap);
           }
         }
         const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
         traceIdx = consumed.nextTraceIdx;
-        if (consumed.step?.error) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: consumed.step.error });
-        }
+        attachTacticErrorToNode(result, node.id, consumed.step?.error);
         walkTrace(node.child, consumed.nextEngine, caseLabelLatex);
         break;
       }
@@ -3714,17 +3930,10 @@ function replayEntireTreeFromTrace(
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
         const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
         traceIdx = consumed.nextTraceIdx;
-        if (consumed.step?.error) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: consumed.step.error });
-        }
+        attachTacticErrorToNode(result, node.id, consumed.step?.error);
         // Render the byProof expression through the math pipeline
         if (node.byProof) {
-          const byLatex = renderByProofExpr(node.byProof, currentEngine, gId, definitions, rev, projMap, aliasMap);
-          if (byLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, sufficesByLatex: byLatex });
-          }
+          attachSufficesByLatexToNode(result, node.id, node.byProof, currentEngine, gId, definitions, rev, projMap, aliasMap);
         }
         walkTrace(node.child, consumed.nextEngine, caseLabelLatex);
         break;
@@ -3743,10 +3952,7 @@ function replayEntireTreeFromTrace(
             ? { status: 'solved' }
             : undefined;
         recordFromEngine(node.id, currentEngine, gId, caseLabelLatex, closingValidation);
-        if (consumed.step?.error) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: consumed.step.error });
-        }
+        attachTacticErrorToNode(result, node.id, consumed.step?.error);
         // Walk children (subgoals from apply), propagating sibling solutions
         let traceEng = consumed.nextEngine;
         const baseFocus = consumed.nextEngine.focusIndex;
@@ -3782,26 +3988,26 @@ function replayEntireTreeFromTrace(
       }
 
       case 'induction': {
-        recordFromEngine(node.id, currentEngine, gId, caseLabelLatex);
-        // Render scrutinee through math pipeline
-        const indGoal = currentEngine.metaVars.get(gId);
-        if (indGoal) {
-          const scrLatex = renderProofExpr(node.scrutinee, indGoal, definitions, rev, projMap, aliasMap);
-          if (scrLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, scrutineeLatex: scrLatex });
-          }
-        }
         // Cases/induction: trace has steps for the base tactic + each branch's tactics
         // Advance past the base cases/induction tactic
         const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
         traceIdx = consumed.nextTraceIdx;
         const afterCasesEngine = consumed.nextEngine;
-
-        for (const target of buildTraceInductionCaseReplayTargets(node, afterCasesEngine, gId, c => caseLabelLatexOf(c, rev, node.scrutinee))) {
-          recordFromEngine(target.caseNode.id, target.caseEngine, target.caseGoalId, target.caseLabelLatex);
-          walkTrace(target.caseNode.body, target.caseEngine, target.caseLabelLatex);
-        }
+        replayWholeTreeInductionTargets(
+          result,
+          node,
+          currentEngine,
+          gId,
+          caseLabelLatex,
+          currentEngine.metaVars.get(gId),
+          definitions,
+          rev,
+          projMap,
+          aliasMap,
+          buildTraceInductionCaseReplayTargets(node, afterCasesEngine, gId, c => caseLabelLatexOf(c, rev, node.scrutinee)),
+          recordFromEngine,
+          walkTrace,
+        );
         break;
       }
 
@@ -3834,25 +4040,19 @@ function replayEntireTreeViaWalk(
   function recordGoal(nodeId: ProofNodeId, eng: TacticEngine, gId: string, caseLabelLatex?: string, validation?: ValidationResult): void {
     const goal = eng.metaVars.get(gId);
     if (!goal) return;
-    const zonkedGoalType = eng.zonkTerm(goal.type, goal.ctx.length);
-    result.set(nodeId, {
-      goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
-      caseLabelLatex,
-      isValueType: isValueTypeGoal(zonkedGoalType),
-      validation,
-    });
-  }
-
-  function recordExact(nodeId: ProofNodeId, eng: TacticEngine, gId: string, expr: string): void {
-    const goal = eng.metaVars.get(gId);
-    if (!goal) return;
-    const validation = validateExactNode(expr, eng, gId);
-    result.set(nodeId, {
-      goalLatex: renderGoalLatex(eng, goal, definitions, rev, projMap, aliasMap),
-      hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
-      validation,
-    });
+    result.set(
+      nodeId,
+      buildRecordedGoalInfo(
+        eng,
+        goal,
+        definitions,
+        rev,
+        projMap,
+        aliasMap,
+        caseLabelLatex,
+        validation,
+      ),
+    );
   }
 
   function walk(
@@ -3871,15 +4071,11 @@ function replayEntireTreeViaWalk(
       }
 
       case 'exact': {
-        recordExact(node.id, eng, gId, node.expr);
+        recordGoal(node.id, eng, gId, caseLabelLatex, validateExactNode(node.expr, eng, gId));
         // Render the exact proof expression through the math pipeline
         const exactGoal = eng.metaVars.get(gId);
         if (exactGoal) {
-          const exprLatex = renderProofExpr(node.expr, exactGoal, definitions, rev, projMap, aliasMap);
-          if (exprLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, proofExprLatex: exprLatex });
-          }
+          attachProofExprLatexToNode(result, node.id, node.expr, exactGoal, definitions, rev, projMap, aliasMap);
         }
         break;
       }
@@ -3907,9 +4103,7 @@ function replayEntireTreeViaWalk(
             : tacResult.newEngine!;
           walk(node.child, normalized, caseLabelLatex);
         } else {
-          // Tag the node with error info
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
+          attachTacticErrorToNode(result, node.id, tacResult.error);
           walk(node.child, eng, caseLabelLatex);
         }
         break;
@@ -3924,8 +4118,7 @@ function replayEntireTreeViaWalk(
         if (foldResult.success) {
           walk(node.child, foldResult.newEngine!, caseLabelLatex);
         } else {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: foldResult.error });
+          attachTacticErrorToNode(result, node.id, foldResult.error);
           walk(node.child, eng, caseLabelLatex);
         }
         break;
@@ -3941,20 +4134,20 @@ function replayEntireTreeViaWalk(
         );
         const tacResult = tactic.apply(eng, goal, gId);
         // Capture the unified equation and attach it to this node's info
-        if (tacResult.success && tacResult.unifiedEquation) {
-          const eqLatex = renderUnifiedEquationLatex(
-            tacResult.unifiedEquation, tacResult.newEngine!, goal.ctx,
-            definitions, rev, projMap, aliasMap,
+        if (tacResult.success) {
+          attachUnifiedEquationLatexToNode(
+            result,
+            node.id,
+            tacResult.unifiedEquation,
+            tacResult.newEngine!,
+            goal.ctx,
+            definitions,
+            rev,
+            projMap,
+            aliasMap,
           );
-          const existing = result.get(node.id);
-          if (existing) {
-            result.set(node.id, { ...existing, unifiedEquationLatex: eqLatex });
-          }
         }
-        if (!tacResult.success) {
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
-        }
+        attachTacticErrorToNode(result, node.id, tacResult.success ? undefined : tacResult.error);
         walk(node.child, tacResult.success ? tacResult.newEngine! : eng, caseLabelLatex);
         break;
       }
@@ -3965,43 +4158,16 @@ function replayEntireTreeViaWalk(
         if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
 
         // Interactive proof subtree mode
-        if (node.proofTree && (node.typeKernel || node.typeExpr)) {
-          let typeTerm = node.typeKernel ?? null;
-          if (!typeTerm && node.typeExpr) {
-            const raw = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
-            if (raw) typeTerm = elaborateType(raw, goal.ctx, eng.definitions, eng.metaVars);
-          }
-          if (typeTerm) {
-            // Walk proofTree with a subgoal of type typeExpr
-            const proofGoalId = gId + '_have_proof';
-            const proofMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
-            const proofMetaVars = new Map(eng.metaVars);
-            proofMetaVars.set(proofGoalId, proofMeta);
-            const proofGoals = eng.goals.map(g => g === gId ? proofGoalId : g);
-            const proofEngine = eng.withUpdates({ metaVars: proofMetaVars, goals: proofGoals });
-            walk(node.proofTree, proofEngine, caseLabelLatex);
-
-            // Walk child with h : T in context
-            const newCtx = [...goal.ctx, { name: node.name, type: typeTerm }];
-            const newGoalType = shiftTerm(goal.type, 1, 0);
-            const childGoalId = gId + '_have_cont';
-            const childMeta: MetaVar = { ctx: newCtx, type: newGoalType, solution: undefined };
-            const childMetaVars = new Map(eng.metaVars);
-            childMetaVars.set(childGoalId, childMeta);
-            const childGoals = eng.goals.map(g => g === gId ? childGoalId : g);
-            const childEngine = eng.withUpdates({ metaVars: childMetaVars, goals: childGoals });
-            walk(node.child, childEngine, caseLabelLatex);
-            break;
-          }
+        const interactiveTargets = buildInteractiveHaveReplayTargets(node, eng, gId, goal);
+        if (interactiveTargets) {
+          walk(node.proofTree, interactiveTargets.proofEngine, caseLabelLatex);
+          walk(node.child, interactiveTargets.childEngine, caseLabelLatex);
+          break;
         }
 
         // Flat expression mode
         if (node.expr.trim() !== '?') {
-          const haveExprLatex = renderProofExpr(node.expr, goal, definitions, rev, projMap, aliasMap);
-          if (haveExprLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, proofExprLatex: haveExprLatex });
-          }
+          attachProofExprLatexToNode(result, node.id, node.expr, goal, definitions, rev, projMap, aliasMap);
         }
         const proofTerm = parseExactExpr(node.expr, goal.ctx, eng.definitions);
         if (!proofTerm) { walk(node.child, eng, caseLabelLatex); break; }
@@ -4019,19 +4185,12 @@ function replayEntireTreeViaWalk(
         if (!typeTerm) { walk(node.child, eng, caseLabelLatex); break; }
         // Render the byProof expression through the math pipeline
         if (node.byProof) {
-          const byLatex = renderByProofExpr(node.byProof, eng, gId, definitions, rev, projMap, aliasMap);
-          if (byLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, sufficesByLatex: byLatex });
-          }
+          attachSufficesByLatexToNode(result, node.id, node.byProof, eng, gId, definitions, rev, projMap, aliasMap);
         }
         // Create new goal with the suffices type
         const suffGoalId = gId + '_suffices';
         const suffMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
-        const suffMetaVars = new Map(eng.metaVars);
-        suffMetaVars.set(suffGoalId, suffMeta);
-        const suffGoals = eng.goals.map(g => g === gId ? suffGoalId : g);
-        const suffEngine = eng.withUpdates({ metaVars: suffMetaVars, goals: suffGoals });
+        const suffEngine = replaceFocusedGoalInEngine(eng, gId, suffGoalId, suffMeta);
         walk(node.child, suffEngine, caseLabelLatex);
         break;
       }
@@ -4049,8 +4208,7 @@ function replayEntireTreeViaWalk(
         const tacResult = tactic.apply(eng, goal, gId);
         if (!tacResult.success) {
           recordGoal(node.id, eng, gId, caseLabelLatex);
-          const existing = result.get(node.id);
-          if (existing) result.set(node.id, { ...existing, tacticError: tacResult.error });
+          attachTacticErrorToNode(result, node.id, tacResult.error);
           for (const child of node.children) walk(child, eng, caseLabelLatex);
           break;
         }
@@ -4134,26 +4292,22 @@ function replayEntireTreeViaWalk(
       }
 
       case 'induction': {
-        recordGoal(node.id, eng, gId, caseLabelLatex);
         const goal = eng.getFocusedGoal();
-        if (!goal) break;
-        // Render scrutinee through math pipeline
-        {
-          const scrLatex = renderProofExpr(node.scrutinee, goal, definitions, rev, projMap, aliasMap);
-          if (scrLatex) {
-            const existing = result.get(node.id);
-            if (existing) result.set(node.id, { ...existing, scrutineeLatex: scrLatex });
-          }
-        }
-
-        const targets = buildInductionCaseReplayTargets(node, eng, gId, c => caseLabelLatexOf(c, rev, node.scrutinee));
-        if (!targets) break;
-
-        for (const target of targets) {
-          const c = target.caseNode;
-          recordGoal(c.id, target.caseEngine, target.caseGoalId, target.caseLabelLatex);
-          walk(c.body, target.caseEngine, target.caseLabelLatex);
-        }
+        replayWholeTreeInductionTargets(
+          result,
+          node,
+          eng,
+          gId,
+          caseLabelLatex,
+          goal,
+          definitions,
+          rev,
+          projMap,
+          aliasMap,
+          goal ? buildInductionCaseReplayTargets(node, eng, gId, c => caseLabelLatexOf(c, rev, node.scrutinee)) : null,
+          recordGoal,
+          walk,
+        );
         break;
       }
 
@@ -4304,20 +4458,13 @@ function walkTreeSurface(
         if (c.id === cursorId) {
           return {
             hypotheses,
-            caseLabel: c.label,
-            caseLabelLatex: caseLabelLatexOf(c, rev, node.scrutinee),
-            inductionVar: node.scrutinee,
+            ...buildInductionCaseMetadata(c, node.scrutinee, rev),
             goal: renderTerm(currentType, [...nameCtx], rev),
           };
         }
         const result = walkTreeSurface(c.body, cursorId, currentType, hypotheses, nameCtx, rev);
         if (result) {
-          return {
-            ...result,
-            caseLabel: result.caseLabel ?? c.label,
-            caseLabelLatex: result.caseLabelLatex ?? caseLabelLatexOf(c, rev, node.scrutinee),
-            inductionVar: result.inductionVar ?? node.scrutinee,
-          };
+          return mergeInductionCaseMetadata(result, c, node.scrutinee, rev);
         }
       }
       return null;
