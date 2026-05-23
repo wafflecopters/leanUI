@@ -1,0 +1,8 @@
+@test success
+@name "inductive True : Prop with one zero-arg constructor"
+
+-- A singleton proposition: True/triv.
+-- No data-storing arguments → no universe constraints engaged.
+
+inductive True : Prop where
+  triv : True

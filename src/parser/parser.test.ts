@@ -311,6 +311,73 @@ describe('Parser: Basic Expressions', () => {
     }
   });
 
+  test('Parse Sort 0 — equivalent to Prop', () => {
+    const term = parseExpr('Sort 0');
+    assertTermShape(term, 'Sort');
+    if (term.tag === 'Sort') {
+      expect(levelTermToNumber(term.level)).toBe(0);
+    }
+  });
+
+  test('Parse Sort 1 — equivalent to Type 0', () => {
+    const term = parseExpr('Sort 1');
+    assertTermShape(term, 'Sort');
+    if (term.tag === 'Sort') {
+      // Sort 1 IS Type 0. Both have literal level 1.
+      expect(levelTermToNumber(term.level)).toBe(1);
+    }
+  });
+
+  test('Parse Sort 5 — large literal level', () => {
+    const term = parseExpr('Sort 5');
+    assertTermShape(term, 'Sort');
+    if (term.tag === 'Sort') {
+      expect(levelTermToNumber(term.level)).toBe(5);
+    }
+  });
+
+  test('Parse Sort u as free constant (no bound u)', () => {
+    const term = parseExpr('Sort u');
+    assertTermShape(term, 'Sort');
+    if (term.tag === 'Sort') {
+      // u is unbound in this fresh parse → treated as a Const referring to a global.
+      expect(term.level.tag).toBe('Const');
+      if (term.level.tag === 'Const') {
+        expect(term.level.name).toBe('u');
+      }
+    }
+  });
+
+  test('Parse Sort u where u is bound — produces Var', () => {
+    // Bound level variable: {u : ULevel} -> Sort u
+    const term = parseExpr('{u : ULevel} -> Sort u');
+    // Outer is a Pi; the body is Sort u where u is bound at de Bruijn 0.
+    assertTermShape(term, 'Binder');
+    if (term.tag === 'Binder') {
+      assertTermShape(term.body, 'Sort');
+      if (term.body.tag === 'Sort') {
+        expect(term.body.level.tag).toBe('Var');
+        if (term.body.level.tag === 'Var') {
+          expect(term.body.level.index).toBe(0);
+        }
+      }
+    }
+  });
+
+  test('Parse Sort (USucc u) — parenthesised level expression', () => {
+    const term = parseExpr('Sort (USucc 0)');
+    assertTermShape(term, 'Sort');
+    if (term.tag === 'Sort') {
+      // Sort (USucc 0) = Sort 1 = Type 0. Concrete level evaluates to 1.
+      expect(levelTermToNumber(term.level)).toBe(1);
+    }
+  });
+
+  test('Parse Sort without an argument is an error', () => {
+    // Bare `Sort` is ambiguous and must be rejected — the level is mandatory.
+    expect(() => parseExpr('Sort')).toThrow();
+  });
+
   test('Parse hole', () => {
     const term = parseExpr('?foo');
     assertTermShape(term, 'Hole');

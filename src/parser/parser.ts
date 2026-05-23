@@ -61,6 +61,7 @@ export type TokenType =
   | 'ASSIGN'       // :=
   | 'TYPE'         // Type
   | 'PROP'         // Prop
+  | 'SORT'         // Sort (universe-polymorphic sort: Sort 0 = Prop, Sort (n+1) = Type n)
   | 'ULEVEL'       // ULevel - the type of universe levels
   | 'UZERO'        // UZero - the zero universe level
   | 'USUCC'        // USucc - successor of universe level
@@ -211,6 +212,7 @@ const PREFIX_PARSELETS: Partial<Record<TokenType, PrefixParselet>> = {
   'CASE': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
   'MATCH': (p, _t, ctx, path) => p['parseMatch'](ctx, path),
   'TYPE': (p, _t, ctx, path) => p['parseType'](ctx, path),
+  'SORT': (p, _t, ctx, path) => p['parseSort'](ctx, path),
   'IDENT': (p, _t, ctx, path) => p['parseIdent'](ctx, path),
 
   // Simple tokens that don't need helper methods
@@ -630,6 +632,8 @@ export class Lexer {
             return { type: 'TYPE', value: 'Type', pos: startPos, line: startLine, col: startCol };
           case 'Prop':
             return { type: 'PROP', value: 'Prop', pos: startPos, line: startLine, col: startCol };
+          case 'Sort':
+            return { type: 'SORT', value: 'Sort', pos: startPos, line: startLine, col: startCol };
           case 'ULevel':
             return { type: 'ULEVEL', value: 'ULevel', pos: startPos, line: startLine, col: startCol };
           case 'UZero':
@@ -4697,6 +4701,66 @@ export class Parser {
         return [...positionalVars, ...namedVars];
       }
     }
+  }
+
+  /**
+   * Parse a `Sort` expression with explicit universe level.
+   *
+   * Unlike `Type n` (which is sugar for `Sort (n+1)`), `Sort u` names the
+   * level directly. So:
+   *   - `Sort 0`          → Prop
+   *   - `Sort 1`          → Type 0
+   *   - `Sort u`          → universe-polymorphic over a level variable
+   *   - `Sort (USucc u)`  → parenthesised level expressions
+   *
+   * Useful for universe-polymorphic definitions that need to range over Prop
+   * AND Type, e.g. `Equal : {u : ULevel} -> {A : Sort u} -> A -> A -> Prop`.
+   * Mirrors Lean's `Sort u` syntax.
+   *
+   * A bare `Sort` with no level argument is an error — the level must be
+   * explicit.
+   */
+  private parseSort(ctx: NameContext, path: IndexPath = []): TTerm {
+    const startToken = this.current();
+    this.expect('SORT');
+
+    let level: TTerm;
+    if (this.current().type === 'NUMBER') {
+      const n = parseInt(this.current().value, 10);
+      this.advance();
+      level = mkULitTT(n);
+    } else if (this.current().type === 'IDENT') {
+      const identToken = this.current();
+      const name = identToken.value;
+      this.advance();
+      if (name === 'ω') {
+        level = mkUOmegaTT();
+      } else {
+        const idx = ctx.indexOf(name);
+        level = idx >= 0 ? mkVarTT(idx) : mkConstTT(name);
+      }
+      const levelPath = [...path, { kind: 'field' as const, name: 'level' }];
+      this.recordRange(levelPath, identToken, identToken);
+    } else if (this.current().type === 'LPAREN') {
+      this.advance(); // consume '('
+      level = this.parseLevelExpr(ctx);
+      this.expect('RPAREN');
+    } else {
+      throw new ParseError(
+        `Expected a universe level after 'Sort' (a number, identifier, or '(level-expr)')`,
+        this.current().line,
+        this.current().col,
+      );
+    }
+
+    const result = mkSortTT(level);
+
+    if (path.length > 0) {
+      const endToken = this.tokens[this.pos - 1];
+      this.recordRange(path, startToken, endToken);
+    }
+
+    return result;
   }
 
   /**

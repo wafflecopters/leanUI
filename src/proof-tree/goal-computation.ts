@@ -14,13 +14,14 @@
  */
 
 import { TTerm, TPattern, CasePattern, mkConstTT, mkAppTT, mkAppSpineTT, mkVarTT, mkPiTT, mkPropTT, mkHoleTT, mkULitTT } from '../compiler/surface';
-import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp } from '../compiler/kernel';
+import { TTKTerm, TTKPattern, TTKContext, mkConst, mkApp, isProp } from '../compiler/kernel';
 import { countKernelClauseBindings } from '../compiler/pattern-binders';
 import { DefinitionsMap, NamedArgMap, MetaVar, createDefinitionsMap, createNamedArgLookup } from '../compiler/term';
 import { inferType, checkType } from '../compiler/checker';
 import { elaborateTermInContext, inferTermTypeInContext } from '../compiler/contextual-inference';
 import { whnf, fullNormalize } from '../compiler/whnf';
 import { shiftTerm, subst, betaNormalize } from '../compiler/subst';
+import { inferTypeForProofIrrelevance } from '../compiler/proof-irrelevance';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { ReverseRegistry, buildReverseRegistry, ttermToMathNodes, SubtermAnnotator } from '../math-editor/tt-to-math';
 import { mkRow } from '../math-editor/types';
@@ -977,15 +978,37 @@ const VALUE_TYPE_HEADS = new Set([
   'Unit', 'Empty',
 ]);
 
-export function isValueTypeGoal(term: TTKTerm): boolean {
+function classifyGoalByInferredSort(
+  term: TTKTerm,
+  definitions?: DefinitionsMap,
+  typingContext: TTKContext = [],
+): boolean | undefined {
+  if (!definitions) return undefined;
+  const reduce = (candidate: TTKTerm, ctx: TTKContext) =>
+    whnf(candidate, { definitions, typingContext: ctx });
+  const type = inferTypeForProofIrrelevance(term, typingContext, definitions, reduce);
+  if (!type) return undefined;
+  const normalizedType = whnf(type, { definitions, typingContext });
+  if (normalizedType.tag !== 'Sort') return undefined;
+  return !isProp(normalizedType);
+}
+
+export function isValueTypeGoal(
+  term: TTKTerm,
+  definitions?: DefinitionsMap,
+  typingContext: TTKContext = [],
+): boolean {
   if (!term) return false;
+  const inferred = classifyGoalByInferredSort(term, definitions, typingContext);
+  if (inferred !== undefined) return inferred;
+
   // Sort (Type, Prop itself as a value) — picking a type counts as value-like
   if (term.tag === 'Sort') return true;
   // Pi type: recurse into the return type
   if (term.tag === 'Binder' && term.binderKind.tag === 'BPi') {
     let body: TTKTerm = term.body;
     while (body.tag === 'Binder' && body.binderKind.tag === 'BPi') body = body.body;
-    return isValueTypeGoal(body);
+    return isValueTypeGoal(body, definitions, typingContext);
   }
   // Walk the App spine to the head
   let head: TTKTerm = term;
@@ -1289,6 +1312,55 @@ function makeReplayResult(
   };
 }
 
+function descendReplayCursor(
+  child: ProofNode,
+  cursorId: ProofNodeId,
+  nextEngine: TacticEngine,
+  fallbackGoalId: string,
+  metadata: ReplayCaseMetadata,
+): ReplayResult | null {
+  if (child.id === cursorId) {
+    return makeReplayResult(
+      nextEngine,
+      nextEngine.getFocusedGoalId() ?? fallbackGoalId,
+      metadata,
+    );
+  }
+  return replayProofTree(
+    child,
+    cursorId,
+    nextEngine,
+    metadata.caseLabel,
+    metadata.caseLabelLatex,
+    metadata.inductionVar,
+  );
+}
+
+function descendReplayCursorAfterFailure(
+  child: ProofNode,
+  cursorId: ProofNodeId,
+  currentEngine: TacticEngine,
+  goalId: string,
+  metadata: ReplayCaseMetadata,
+  tacticError?: string,
+): ReplayResult | null {
+  if (child.id === cursorId) {
+    return makeReplayResult(currentEngine, goalId, metadata);
+  }
+  const childResult = replayProofTree(
+    child,
+    cursorId,
+    currentEngine,
+    metadata.caseLabel,
+    metadata.caseLabelLatex,
+    metadata.inductionVar,
+  );
+  if (childResult && tacticError) {
+    childResult.tacticError = tacticError;
+  }
+  return childResult;
+}
+
 export interface InductionCaseReplayTarget {
   readonly caseNode: CaseNode;
   readonly caseEngine: TacticEngine;
@@ -1497,6 +1569,38 @@ function buildInteractiveHaveReplayTargets(
   const childEngine = replaceFocusedGoalInEngine(engine, goalId, childGoalId, childMeta);
 
   return { proofEngine, childEngine };
+}
+
+function advanceFlatHaveReplay(
+  node: Extract<ProofNode, { tag: 'have' }>,
+  engine: TacticEngine,
+  goalId: string,
+  goal: MetaVar,
+): { nextEngine: TacticEngine | null; error?: string } {
+  const proofTerm = parseExactExpr(node.expr, goal.ctx, engine.definitions);
+  if (!proofTerm) return { nextEngine: null };
+  const haveTactic = new HaveTactic(node.name, { tag: 'Hole', id: '_have_type' }, proofTerm);
+  const haveResult = haveTactic.apply(engine, goal, goalId);
+  if (!haveResult.success) {
+    return { nextEngine: null, error: haveResult.error };
+  }
+  return { nextEngine: haveResult.newEngine! };
+}
+
+function buildSufficesReplayTarget(
+  node: Extract<ProofNode, { tag: 'suffices' }>,
+  engine: TacticEngine,
+  goalId: string,
+  goal: MetaVar,
+): { nextEngine: TacticEngine; nextGoalId: string } | null {
+  const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
+  if (!typeTerm) return null;
+  const nextGoalId = `${goalId}_suffices`;
+  const nextMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
+  return {
+    nextGoalId,
+    nextEngine: replaceFocusedGoalInEngine(engine, goalId, nextGoalId, nextMeta),
+  };
 }
 
 /**
@@ -2600,6 +2704,31 @@ function replayProofTreeFromTrace(
 ): ReplayResult | null {
   let traceIdx = 0;
 
+  function descendTraceCursor(
+    child: ProofNode,
+    cursorId: ProofNodeId,
+    nextEngine: TacticEngine,
+    fallbackGoalId: string,
+    metadata: ReplayCaseMetadata,
+    tacticError?: string,
+  ): ReplayResult | null {
+    if (child.id === cursorId) {
+      return makeReplayResult(
+        nextEngine,
+        nextEngine.getFocusedGoalId() ?? fallbackGoalId,
+        metadata,
+        tacticError,
+      );
+    }
+    return walk(
+      child,
+      nextEngine,
+      metadata.caseLabel,
+      metadata.caseLabelLatex,
+      metadata.inductionVar,
+    );
+  }
+
   function walk(
     node: ProofNode | undefined,
     currentEngine: TacticEngine,
@@ -2630,15 +2759,14 @@ function replayProofTreeFromTrace(
       case 'suffices': {
         const consumed = consumeTraceStep(trace, traceIdx, currentEngine);
         traceIdx = consumed.nextTraceIdx;
-        if (node.child.id === cursorId) {
-          return makeReplayResult(
-            consumed.nextEngine,
-            consumed.nextEngine.getFocusedGoalId() ?? goalId,
-            metadata,
-            consumed.step?.error,
-          );
-        }
-        return walk(node.child, consumed.nextEngine, caseLabel, caseLabelLatex, inductionVar);
+        return descendTraceCursor(
+          node.child,
+          cursorId,
+          consumed.nextEngine,
+          goalId,
+          metadata,
+          consumed.step?.error,
+        );
       }
 
       case 'apply': {
@@ -2678,14 +2806,7 @@ function replayProofTreeFromTrace(
       case 'simp': {
         const consumed = consumeSimpTraceStep(trace, traceIdx, currentEngine, node.steps.length);
         traceIdx = consumed.nextTraceIdx;
-        if (node.child.id === cursorId) {
-          return makeReplayResult(
-            consumed.nextEngine,
-            consumed.nextEngine.getFocusedGoalId() ?? goalId,
-            metadata,
-          );
-        }
-        return walk(node.child, consumed.nextEngine, caseLabel, caseLabelLatex, inductionVar);
+        return descendTraceCursor(node.child, cursorId, consumed.nextEngine, goalId, metadata);
       }
     }
   }
@@ -2732,16 +2853,10 @@ function replayProofTree(
 
       if (!result.success) {
         // Tactic failed — return current state at cursor if child matches
-        if (node.child.id === cursorId) {
-          return makeReplayResult(engine, goalId, metadata);
-        }
-        return null;
+        return descendReplayCursorAfterFailure(node.child, cursorId, engine, goalId, metadata);
       }
 
-      return replayProofTree(
-        node.child, cursorId, result.newEngine,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      return descendReplayCursor(node.child, cursorId, result.newEngine, goalId, metadata);
     }
 
     case 'unfold': {
@@ -2754,15 +2869,14 @@ function replayProofTree(
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
-        // Unfold failed — continue with unchanged engine, propagate error
-        const childResult = replayProofTree(
-          node.child, cursorId, engine,
-          caseLabel, caseLabelLatex, inductionVar,
+        return descendReplayCursorAfterFailure(
+          node.child,
+          cursorId,
+          engine,
+          goalId,
+          metadata,
+          `unfold ${node.name}: ${result.error ?? 'failed'}`,
         );
-        if (childResult) {
-          childResult.tacticError = `unfold ${node.name}: ${result.error ?? 'failed'}`;
-        }
-        return childResult;
       }
 
       // Normalize the goal type to reduce beta-redexes from constant unfolding
@@ -2771,10 +2885,7 @@ function replayProofTree(
         ? normalizeGoalInEngine(result.newEngine, newGoalId)
         : result.newEngine;
 
-      return replayProofTree(
-        node.child, cursorId, normalizedEngine,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      return descendReplayCursor(node.child, cursorId, normalizedEngine, goalId, metadata);
     }
 
     case 'fold': {
@@ -2786,20 +2897,17 @@ function replayProofTree(
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
-        const childResult = replayProofTree(
-          node.child, cursorId, engine,
-          caseLabel, caseLabelLatex, inductionVar,
+        return descendReplayCursorAfterFailure(
+          node.child,
+          cursorId,
+          engine,
+          goalId,
+          metadata,
+          `fold ${node.name}: ${result.error ?? 'failed'}`,
         );
-        if (childResult) {
-          childResult.tacticError = `fold ${node.name}: ${result.error ?? 'failed'}`;
-        }
-        return childResult;
       }
 
-      return replayProofTree(
-        node.child, cursorId, result.newEngine,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      return descendReplayCursor(node.child, cursorId, result.newEngine, goalId, metadata);
     }
 
     case 'rewrite': {
@@ -2814,21 +2922,17 @@ function replayProofTree(
       const result = tactic.apply(engine, goal, goalId);
 
       if (!result.success) {
-        // Rewrite failed — continue with unchanged engine, propagate error
-        const childResult = replayProofTree(
-          node.child, cursorId, engine,
-          caseLabel, caseLabelLatex, inductionVar,
+        return descendReplayCursorAfterFailure(
+          node.child,
+          cursorId,
+          engine,
+          goalId,
+          metadata,
+          `rewrite ${node.reverse ? '← ' : ''}${node.name}: ${result.error ?? 'failed'}`,
         );
-        if (childResult) {
-          childResult.tacticError = `rewrite ${node.reverse ? '← ' : ''}${node.name}: ${result.error ?? 'failed'}`;
-        }
-        return childResult;
       }
 
-      return replayProofTree(
-        node.child, cursorId, result.newEngine!,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      return descendReplayCursor(node.child, cursorId, result.newEngine!, goalId, metadata);
     }
 
     case 'apply': {
@@ -2941,10 +3045,7 @@ function replayProofTree(
         } catch { /* keep original engine */ }
       }
 
-      return replayProofTree(
-        node.child, cursorId, currentEngine,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      return descendReplayCursor(node.child, cursorId, currentEngine, goalId, metadata);
     }
 
     case 'have': {
@@ -2959,47 +3060,23 @@ function replayProofTree(
           return replayProofTree(node.proofTree, cursorId, interactiveTargets.proofEngine, caseLabel, caseLabelLatex, inductionVar);
         }
 
-        const childGoalId = interactiveTargets.childEngine.getFocusedGoalId();
-        if (node.child.id === cursorId && childGoalId) {
-          return makeReplayResult(interactiveTargets.childEngine, childGoalId, metadata);
-        }
-        return replayProofTree(node.child, cursorId, interactiveTargets.childEngine, caseLabel, caseLabelLatex, inductionVar);
+        return descendReplayCursor(node.child, cursorId, interactiveTargets.childEngine, goalId, metadata);
       }
 
       // Flat expression mode: Apply HaveTactic — parse proof expression, infer type, extend context
-      const proofTerm = parseExactExpr(node.expr, goal.ctx, engine.definitions);
-      if (!proofTerm) {
-        // Parse failed — continue with unchanged engine
-        if (node.child.id === cursorId) {
-          return makeReplayResult(engine, goalId, metadata);
-        }
-        return replayProofTree(
-          node.child, cursorId, engine,
-          caseLabel, caseLabelLatex, inductionVar,
+      const advanced = advanceFlatHaveReplay(node, engine, goalId, goal);
+      if (!advanced.nextEngine) {
+        return descendReplayCursorAfterFailure(
+          node.child,
+          cursorId,
+          engine,
+          goalId,
+          metadata,
+          advanced.error ? `have ${node.name}: ${advanced.error}` : undefined,
         );
       }
 
-      // Use Hole as type — HaveTactic will infer it
-      const holeType: TTKTerm = { tag: 'Hole', id: '_have_type' };
-      const tactic = new HaveTactic(node.name, holeType, proofTerm);
-      const result = tactic.apply(engine, goal, goalId);
-
-      if (!result.success) {
-        // Tactic failed — continue with unchanged engine, propagate error
-        const childResult = replayProofTree(
-          node.child, cursorId, engine,
-          caseLabel, caseLabelLatex, inductionVar,
-        );
-        if (childResult) {
-          childResult.tacticError = `have ${node.name}: ${result.error ?? 'failed'}`;
-        }
-        return childResult;
-      }
-
-      return replayProofTree(
-        node.child, cursorId, result.newEngine,
-        caseLabel, caseLabelLatex, inductionVar,
-      );
+      return descendReplayCursor(node.child, cursorId, advanced.nextEngine, goalId, metadata);
     }
 
     case 'suffices': {
@@ -3007,23 +3084,12 @@ function replayProofTree(
       const goal = engine.getFocusedGoal();
       if (!goal) return null;
 
-      const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, engine.definitions);
-      if (!typeTerm) {
-        if (node.child.id === cursorId) {
-          return makeReplayResult(engine, goalId, metadata);
-        }
-        return replayProofTree(node.child, cursorId, engine, caseLabel, caseLabelLatex, inductionVar);
+      const target = buildSufficesReplayTarget(node, engine, goalId, goal);
+      if (!target) {
+        return descendReplayCursorAfterFailure(node.child, cursorId, engine, goalId, metadata);
       }
 
-      // Create new goal with the suffices type
-      const newGoalId = goalId + '_suffices';
-      const newMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
-      const newEngine = replaceFocusedGoalInEngine(engine, goalId, newGoalId, newMeta);
-
-      if (node.child.id === cursorId) {
-        return makeReplayResult(newEngine, newGoalId, metadata);
-      }
-      return replayProofTree(node.child, cursorId, newEngine, caseLabel, caseLabelLatex, inductionVar);
+      return descendReplayCursor(node.child, cursorId, target.nextEngine, target.nextGoalId, metadata);
     }
   }
 }
@@ -3689,7 +3755,7 @@ function buildRecordedGoalInfo(
     hypotheses: renderHypotheses(goal.ctx, definitions, rev, projMap, aliasMap, eng),
     caseLabelLatex,
     validation,
-    isValueType: isValueTypeGoal(zonkedGoalType),
+    isValueType: isValueTypeGoal(zonkedGoalType, definitions, goal.ctx),
   };
 }
 
@@ -4055,6 +4121,19 @@ function replayEntireTreeViaWalk(
     );
   }
 
+  function getFocusedGoalOrWalkChild(
+    node: { child: ProofNode },
+    eng: TacticEngine,
+    caseLabelLatex: string | undefined,
+  ): MetaVar | null {
+    const goal = eng.getFocusedGoal();
+    if (!goal) {
+      walk(node.child, eng, caseLabelLatex);
+      return null;
+    }
+    return goal;
+  }
+
   function walk(
     node: ProofNode | undefined,
     eng: TacticEngine,
@@ -4082,8 +4161,8 @@ function replayEntireTreeViaWalk(
 
       case 'intros': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
-        const goal = eng.getFocusedGoal();
-        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const goal = getFocusedGoalOrWalkChild(node, eng, caseLabelLatex);
+        if (!goal) break;
         const tactic = new IntrosTactic([...node.names]);
         const tacResult = tactic.apply(eng, goal, gId);
         walk(node.child, tacResult.success ? tacResult.newEngine! : eng, caseLabelLatex);
@@ -4092,8 +4171,8 @@ function replayEntireTreeViaWalk(
 
       case 'unfold': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
-        const goal = eng.getFocusedGoal();
-        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const goal = getFocusedGoalOrWalkChild(node, eng, caseLabelLatex);
+        if (!goal) break;
         const tactic = new UnfoldTactic([node.name], node.occurrence);
         const tacResult = tactic.apply(eng, goal, gId);
         if (tacResult.success) {
@@ -4111,8 +4190,8 @@ function replayEntireTreeViaWalk(
 
       case 'fold': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
-        const goal = eng.getFocusedGoal();
-        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const goal = getFocusedGoalOrWalkChild(node, eng, caseLabelLatex);
+        if (!goal) break;
         const foldTactic = new FoldTactic([node.name], node.occurrence);
         const foldResult = foldTactic.apply(eng, goal, gId);
         if (foldResult.success) {
@@ -4126,8 +4205,8 @@ function replayEntireTreeViaWalk(
 
       case 'rewrite': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
-        const goal = eng.getFocusedGoal();
-        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const goal = getFocusedGoalOrWalkChild(node, eng, caseLabelLatex);
+        if (!goal) break;
         const tactic = new RewriteTactic(
           resolveExprInGoal(node.name, goal, eng.definitions),
           { reverse: node.reverse, enhanced: node.enhanced, occurrences: node.occurrences && node.occurrences.length > 0 ? [...node.occurrences] : undefined, targetHead: node.targetHead },
@@ -4154,8 +4233,8 @@ function replayEntireTreeViaWalk(
 
       case 'have': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
-        const goal = eng.getFocusedGoal();
-        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
+        const goal = getFocusedGoalOrWalkChild(node, eng, caseLabelLatex);
+        if (!goal) break;
 
         // Interactive proof subtree mode
         const interactiveTargets = buildInteractiveHaveReplayTargets(node, eng, gId, goal);
@@ -4169,29 +4248,21 @@ function replayEntireTreeViaWalk(
         if (node.expr.trim() !== '?') {
           attachProofExprLatexToNode(result, node.id, node.expr, goal, definitions, rev, projMap, aliasMap);
         }
-        const proofTerm = parseExactExpr(node.expr, goal.ctx, eng.definitions);
-        if (!proofTerm) { walk(node.child, eng, caseLabelLatex); break; }
-        const haveTactic = new HaveTactic(node.name, { tag: 'Hole', id: '_have_type' }, proofTerm);
-        const haveResult = haveTactic.apply(eng, goal, gId);
-        walk(node.child, haveResult.success ? haveResult.newEngine! : eng, caseLabelLatex);
+        const advanced = advanceFlatHaveReplay(node, eng, gId, goal);
+        walk(node.child, advanced.nextEngine ?? eng, caseLabelLatex);
         break;
       }
 
       case 'suffices': {
         recordGoal(node.id, eng, gId, caseLabelLatex);
-        const goal = eng.getFocusedGoal();
-        if (!goal) { walk(node.child, eng, caseLabelLatex); break; }
-        const typeTerm = parseExactExpr(node.typeExpr, goal.ctx, eng.definitions);
-        if (!typeTerm) { walk(node.child, eng, caseLabelLatex); break; }
+        const goal = getFocusedGoalOrWalkChild(node, eng, caseLabelLatex);
+        if (!goal) break;
         // Render the byProof expression through the math pipeline
         if (node.byProof) {
           attachSufficesByLatexToNode(result, node.id, node.byProof, eng, gId, definitions, rev, projMap, aliasMap);
         }
-        // Create new goal with the suffices type
-        const suffGoalId = gId + '_suffices';
-        const suffMeta: MetaVar = { ctx: goal.ctx, type: typeTerm, solution: undefined };
-        const suffEngine = replaceFocusedGoalInEngine(eng, gId, suffGoalId, suffMeta);
-        walk(node.child, suffEngine, caseLabelLatex);
+        const target = buildSufficesReplayTarget(node, eng, gId, goal);
+        walk(node.child, target?.nextEngine ?? eng, caseLabelLatex);
         break;
       }
 

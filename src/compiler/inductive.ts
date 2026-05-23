@@ -1,5 +1,5 @@
 import { addDefinitionInTCEnv, addInductiveDefinitionInTCEnv, contextToNamesStack, createTCEnv, DefinitionsMap, extractPiSpine, InductiveDefinition, NamedArgMap, postOrderTraverseTerm, RecordInfo, setTypeInfoCollector, TCEnv, TCEnvError, validateInductiveNamingConventions } from "./term";
-import { TTKTerm, levelsEqual, mkULit, levelLeq, collectLevelVars, levelVarContainedIn, prettyPrintLevel } from "./kernel";
+import { TTKTerm, levelsEqual, mkULit, levelLeq, collectLevelVars, levelVarContainedIn, prettyPrintLevel, isPropLevel, isProp } from "./kernel";
 import { inferType } from "./checker";
 import { shiftTerm } from "./subst";
 import type { TypeInfoMap } from "./type-info";
@@ -184,7 +184,12 @@ export function checkInductiveDeclaration(
   // Use zonked constructors so that metas are substituted with their solutions
   const indexPositions = inferParameterIndicesK({ name, type, constructors: zonkedConstructors });
 
-  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, zonkedConstructors, indexPositions, namedArgMap, recordInfo);
+  // Decide whether this inductive permits large elimination. For Type-valued
+  // inductives, always; for Prop-valued inductives, only when the constructor
+  // shape qualifies as "singleton" in the Lean sense (see term.ts).
+  const allowsLargeElim = computeAllowsLargeElim(type, zonkedConstructors, ctorsEnv);
+
+  const newEnv = addInductiveDefinitionInTCEnv(ctorsEnv, name, type, zonkedConstructors, indexPositions, namedArgMap, recordInfo, allowsLargeElim);
 
   return {
     success: true,
@@ -394,6 +399,16 @@ function checkConstructorUniverseLevels(
   }
   const resultLevel = resultType.level;
 
+  // Prop is impredicative at the inductive level: a Prop-valued inductive may
+  // have constructor arguments of arbitrary universe. This is what makes
+  // `Exists {A : Type} (P : A -> Prop) : Prop` (whose witness lives in A : Type)
+  // typecheck even though the data sits in a higher universe than the result.
+  // Without this, only inductives whose data are themselves propositional
+  // would land in Prop. (Cf. Lean's `inductive` elaborator.)
+  if (isPropLevel(resultLevel)) {
+    return;
+  }
+
   // Check each constructor
   for (const ctor of constructors) {
     // First, extract the constructor's return type and count binders
@@ -485,6 +500,101 @@ function checkConstructorUniverseLevels(
       binderIndex++;
     }
   }
+}
+
+/**
+ * Decide whether case-analysis on `inductiveType` may produce a value at any
+ * universe (large elimination). Mirrors Lean's recursor restriction.
+ *
+ *   - Non-Prop result → always true (universes above Prop have no restriction).
+ *   - Zero constructors → true (vacuous; e.g. False elimination into any sort).
+ *   - One constructor where every stored datum is either itself in Prop or
+ *     uniquely recoverable from the indices → true (singleton, e.g. Eq.refl,
+ *     Acc, And in Prop with proof-only fields).
+ *   - Otherwise → false (e.g. Or, two-ctor Prop inductives, And whose fields
+ *     are not in Prop). The match elaborator forces the motive into Prop in
+ *     this case.
+ *
+ * "Uniquely recoverable from the indices" is the subtle part. Lean's rule is
+ * structural: the argument must appear AS A BARE VAR in one of the indices
+ * of the constructor's return type, not merely *somewhere* inside it. For
+ * `refl : Eq A a a` both indices are literally `a`, so the implicit `a` is
+ * recovered. For `mkBox : (n : Nat) -> Box (Succ n)` the only occurrence of
+ * `n` is wrapped in `Succ`; even though `Succ` is morally injective, we
+ * don't trust the kernel to invert it, so `Box` is NOT singleton.
+ *
+ * Without this conservativity proof irrelevance would let us prove `2 ≡ 1`:
+ * two structurally different proofs of a non-injectively-indexed Prop would
+ * be definitionally equal, and large-eliminating one to extract the stored
+ * value would yield different answers for the same proof.
+ */
+function computeAllowsLargeElim(
+  inductiveType: TTKTerm,
+  constructors: Array<{ name: string; type: TTKTerm }>,
+  env: TCEnv<unknown>
+): boolean {
+  const { body: resultType } = extractPiSpine(inductiveType);
+  if (resultType.tag !== 'Sort') return false;  // Unknown shape: do not grant large elimination.
+  if (!isPropLevel(resultType.level)) return true;  // Not Prop — no restriction.
+
+  if (constructors.length === 0) return true;
+  if (constructors.length > 1) return false;
+
+  const ctor = constructors[0];
+  const ctorSpine = extractPiSpine(ctor.type);
+  const ctorReturnType = ctorSpine.body;
+  const binderCount = ctorSpine.binders.length;
+
+  let current = ctor.type;
+  let currentEnv = env;
+  let binderIndex = 0;
+  while (current.tag === 'Binder' && current.binderKind.tag === 'BPi') {
+    const domain = current.domain;
+    if (!isTypeLevelDomain(domain)) {
+      const deBruijnInReturn = binderCount - 1 - binderIndex;
+      const isIndex = argAppearsAsBareIndex(deBruijnInReturn, ctorReturnType);
+      if (!isIndex) {
+        // Stored datum — must itself live in Prop for singleton-elim to apply.
+        try {
+          const typeResult = inferType(currentEnv.withValue(domain));
+          if (!isProp(typeResult.value)) return false;
+        } catch {
+          return false;  // Can't determine — conservative: not singleton.
+        }
+      }
+    }
+    currentEnv = currentEnv.extendTTKContext(current.name, domain);
+    current = current.body;
+    binderIndex++;
+  }
+  return true;
+}
+
+/**
+ * Does the variable at de Bruijn index `argDeBruijn` appear AS A BARE VAR
+ * in one of the App-spine positions of the constructor's return type?
+ *
+ * The constructor return type has shape `Const(I) p1 ... pk i1 ... in`
+ * (parameters then indices, all as App spine args). We walk the spine and
+ * check each arg structurally. Wrapping in another constructor or function
+ * application (`Succ n`, `plus n m`, `f n`) does NOT count — only literal
+ * `Var(argDeBruijn)` at a top-level spine position.
+ *
+ * This is intentionally conservative. A more permissive check (e.g. "n
+ * appears inside an injective constructor") would require trusting the
+ * kernel to invert that constructor at elimination time, which it currently
+ * does not. Better to under-approximate (reject more programs as
+ * non-singleton) than over-approximate (accept unsound large eliminations).
+ */
+function argAppearsAsBareIndex(argDeBruijn: number, ctorReturnType: TTKTerm): boolean {
+  let current = ctorReturnType;
+  while (current.tag === 'App') {
+    if (current.arg.tag === 'Var' && current.arg.index === argDeBruijn) {
+      return true;
+    }
+    current = current.fn;
+  }
+  return false;
 }
 
 /**

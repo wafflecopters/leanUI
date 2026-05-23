@@ -203,18 +203,15 @@ function printCaseTreeAsString(caseTree: CaseTree, depth: number = 0): string {
 }
 
 function logCaseTree(caseTree: CaseTree): void {
-  console.log(printCaseTreeAsString(caseTree, 0));
+  if (loggingEnabled) {
+    console.log(printCaseTreeAsString(caseTree, 0));
+  }
 }
 
 function caseTreeWithClauseAdded(caseTree: CaseTree, clauseIndex: number, clause: TotalityClause, definitions: DefinitionsMap): CaseTree | undefined {
   if (clause.patterns.length === 0) {
-    debugger
     throw new Error('Zero-pattern clauses are not supported');
   }
-
-  // if (debugging) {
-  //   debugger;
-  // }
 
   const _x = caseTreeWithPatternsAdded(caseTree, clauseIndex, clause.patterns, clause.elabArgs, clause.contextNames, definitions);
 
@@ -315,8 +312,11 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
       };
     } else if (caseTree.tag === 'Leaf') {
       return undefined;
+    } else if (caseTree.tag === 'Absurd') {
+      return caseTree;
     } else {
-      debugger
+      const _never: never = caseTree;
+      throw new Error(`Unexpected case tree state while adding wildcard pattern: ${_never}`);
     }
   } else /* PCtor */ {
     const typeName = definitions.inductiveNameOfConstructor.get(pattern.name);
@@ -416,13 +416,15 @@ function caseTreeWithPatternsAdded(caseTree: CaseTree, clauseIndex: number, patt
         ctorArities,
         missingCtors: new Set(),
       }
+    } else if (caseTree.tag === 'Leaf' || caseTree.tag === 'Absurd') {
+      return caseTree;
     } else {
-      debugger
+      const _never: never = caseTree;
+      throw new Error(`Unexpected case tree state while adding constructor pattern: ${_never}`);
     }
   }
 
-  debugger
-  return caseTree;
+  throw new Error('Unreachable case tree insertion state');
 }
 
 function* uncoveredPatternsInCaseTree(caseTree: CaseTree, definitions: DefinitionsMap): Generator<{ patterns: TTKPattern[] }> {
@@ -446,7 +448,6 @@ function* uncoveredPatternsInCaseTree(caseTree: CaseTree, definitions: Definitio
     // rather than being incorrectly treated as absurd.
     yield { patterns: [] }
   } else if (caseTree.tag === 'Absurd') {
-    debugger
     return
   } else if (caseTree.tag === 'NoSplit') {
     for (const tail of uncoveredPatternsInCaseTree(caseTree.branch, definitions)) {

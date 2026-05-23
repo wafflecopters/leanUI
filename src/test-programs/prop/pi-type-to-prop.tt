@@ -1,0 +1,10 @@
+@test success
+@name "(A : Type) -> P : Prop lives in Prop (imax(_, 0) = 0)"
+
+inductive P : Prop where
+  evP : P
+
+-- Without impredicativity this would have to live in Type 0.
+-- With Lean-style impredicativity, the codomain being Prop forces the Pi into Prop.
+PiTypeProp : Prop
+PiTypeProp = (A : Type) -> P

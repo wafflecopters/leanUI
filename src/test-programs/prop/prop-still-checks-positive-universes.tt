@@ -1,0 +1,11 @@
+@test failure
+@name "non-Prop inductive still rejects oversized constructor args"
+@error "Universe level violation"
+
+-- Regression: relaxing the universe check for Prop must NOT relax it for
+-- Type-valued inductives. Storing Type-1 data in a Type-0 inductive
+-- must still be rejected. Cf. SYSTEM_OVERVIEW.md — this is the canonical
+-- BadList example.
+
+inductive BadList : Type 1 -> Type where
+  bcons : {A : Type 1} -> A -> BadList A -> BadList A

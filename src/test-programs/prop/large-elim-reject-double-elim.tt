@@ -1,0 +1,21 @@
+@test failure
+@name "large-elim ban: nested PCtor on non-singleton Prop still rejected"
+@error "Large elimination from Prop"
+@import preambles/nat.tt
+
+inductive P : Prop where pp : P
+inductive Q : Prop where pq : Q
+
+inductive Or : Prop -> Prop -> Prop where
+  orLeft  : {A : Prop} -> {B : Prop} -> A -> Or A B
+  orRight : {A : Prop} -> {B : Prop} -> B -> Or A B
+
+inductive Outer : Prop where
+  wrap : Or P Q -> Outer
+
+-- The outer match destructs Outer (singleton, allowed) but the *inner*
+-- pattern destructs Or (non-singleton). The inner elim of Or with a Nat
+-- motive must be rejected — the ban walks into nested PCtors.
+extract : Outer -> Nat
+extract (wrap (orLeft _)) = Zero
+extract (wrap (orRight _)) = Zero

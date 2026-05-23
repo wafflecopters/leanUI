@@ -1,0 +1,12 @@
+@test success
+@name "Sort 0 is definitionally Prop"
+
+-- The kernel collapses `Sort 0` and `Prop` to the same term shape
+-- (both are Sort(ULit(0))). Declaring an inductive with `: Sort 0`
+-- yields a proposition usable wherever a Prop is expected.
+
+inductive P : Sort 0 where
+  pp : P
+
+usableAsProp : Prop
+usableAsProp = P

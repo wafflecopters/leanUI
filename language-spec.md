@@ -19,13 +19,25 @@ Currently used for record projections (e.g., `Point.x` to project field `x` from
 ### Universes (Sorts)
 
 ```
-Type            -- Type_0 (alias for Type 0)
-Type 0          -- Type at level 0
-Type 1          -- Type at level 1
+Type            -- Type 0 (alias)
+Type 0          -- Type at level 0  ≡ Sort 1
+Type 1          -- Type at level 1  ≡ Sort 2
 Type_3          -- Type at level 3 (underscore notation)
-Type u          -- Type at level u (where u is a level variable)
-Prop            -- Propositions (Type 0)
+Type u          -- Type at level u (where u is a level variable)  ≡ Sort (u+1)
+Prop            -- Propositions  ≡ Sort 0
+Sort 0          -- Equivalent to Prop
+Sort 1          -- Equivalent to Type 0
+Sort u          -- Universe-polymorphic sort at level u (Prop when u = 0, Type (u-1) otherwise)
+Sort (USucc u)  -- Parenthesised level expressions
 ```
+
+`Sort u` ranges over both `Prop` (when the level is 0) and `Type` levels.
+Use it for universe-polymorphic definitions that need to work on propositions
+as well as data — e.g. `Equal : {u : ULevel} -> {A : Sort u} -> A -> A -> Prop`.
+A bare `Sort` with no level argument is rejected; the level must be explicit.
+
+Note: `Prop : Type 0` (i.e. `Sort 0 : Sort 1`). The `Prop` sort is itself a
+member of `Type 0`, not of `Prop`.
 
 ### Universe Levels
 

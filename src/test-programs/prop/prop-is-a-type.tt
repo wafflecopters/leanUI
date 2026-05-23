@@ -1,0 +1,8 @@
+@test success
+@name "Prop : Type — Prop inhabits the Type universe"
+
+-- The Prop sort itself has type Type (= Type 0 = Sort 1).
+-- Lean convention: Sort 0 = Prop, Sort (u+1) = Type u, so Prop : Type.
+
+PropIsAType : Type
+PropIsAType = Prop

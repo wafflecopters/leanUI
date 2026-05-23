@@ -1,0 +1,15 @@
+@test success
+@name "Equal landing in Prop with parameters in Type"
+
+-- The canonical impredicative-Pi + impredicative-inductive use case:
+-- propositional equality. The signature `(A : Type) -> A -> A -> Prop`
+-- itself uses impredicative Pi (collapsing to Type-level), and the
+-- constructor `refl : Equal A a a` uses impredicative inductive (the
+-- parameter `a : A` would otherwise be at Type, not Prop).
+--
+-- Note: `a` is also an index, so the universe check is already skipped on
+-- that ground; this is more of a smoke test that Prop-result inductives
+-- with Type parameters elaborate cleanly.
+
+inductive Equal : {A : Type} -> A -> A -> Prop where
+  reflEqual : {A : Type} -> {a : A} -> Equal a a

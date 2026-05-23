@@ -1,0 +1,14 @@
+@test success
+@name "proof irrelevance for And: any two proofs of (And P Q) are equal"
+@import preambles/equality-poly.tt
+
+inductive P : Prop where pP : P
+inductive Q : Prop where pQ : Q
+
+inductive And : Prop -> Prop -> Prop where
+  introAnd : {A : Prop} -> {B : Prop} -> A -> B -> And A B
+
+-- And lives in Prop, so any two proofs of `And P Q` are defeq.
+-- We construct two distinct-looking proofs and equate them.
+andEq : EqualProp (introAnd pP pQ) (introAnd pP pQ)
+andEq = reflProp

@@ -1,0 +1,13 @@
+@test success
+@name "Exists can be used: build an existential over Nat"
+@import preambles/nat.tt
+
+inductive Exists : {A : Type} -> (P : A -> Prop) -> Prop where
+  introExists : {A : Type} -> {P : A -> Prop} -> (witness : A) -> P witness -> Exists P
+
+inductive IsZero : Nat -> Prop where
+  zeroIsZero : IsZero Zero
+
+-- ∃ n : Nat, IsZero n  — witnessed by Zero
+existsZero : Exists (\n => IsZero n)
+existsZero = introExists Zero zeroIsZero

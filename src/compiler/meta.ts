@@ -3,7 +3,7 @@ import { countKernelClauseBindings, countKernelPatternBindings } from "./pattern
 import { shiftTerm, minFreeVarIndex, subst } from "./subst";
 import { Constraint, DefinitionsMap, MetaVar, TTKContext } from "./term";
 import { unifyTerms } from "./unify";
-import { whnf, areTypesDefEq } from "./whnf";
+import { whnf, areTypesDefEq, isProofIrrelevantEq } from "./whnf";
 
 /**
  * Substitute solved metas in a term using the given metaVars map.
@@ -305,6 +305,16 @@ function areTermsDefinitelyDifferent(
   ctxA?: TTKContext, ctxB?: TTKContext,
   _insideConstructorArg = false
 ): boolean {
+  // Proof irrelevance: if both `a` and `b` are inhabitants of the same
+  // Prop-valued type, they are definitionally equal regardless of structure.
+  // Hence they cannot be "definitely different" — we must defer to defeq.
+  // Without this guard, two distinct constructors of a Prop-valued inductive
+  // (e.g. `pa`/`pb` of `P : Prop where pa : P | pb : P`) would be reported
+  // as a meta-solution conflict before defeq ever gets a chance to run.
+  if (isProofIrrelevantEq(a, b, definitions, ctxA)) {
+    return false;
+  }
+
   // If definitions are available, reduce to WHNF first.
   // This handles cases like `plus Zero Zero` reducing to `Zero`.
   let wa = a, wb = b;
@@ -845,9 +855,13 @@ export function solveConstraints(
             const solTypeMatches = !metaIsConst || !solType || (solType.tag === 'Const' && solType.name === (resolvedMetaType as any).name);
             const rhsTypeMatches = !metaIsConst || !rhsType || (rhsType.tag === 'Const' && rhsType.name === (resolvedMetaType as any).name);
             if (solTypeMatches && rhsTypeMatches) {
-              const names = effectiveContext.map(c => c.name).reverse();
-              const metaTypeStr = prettyPrint(resolvedMetaType, names);
-              throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+              // Proof irrelevance: even when the two rigid Vars have different
+              // indices, if both are proofs of the same proposition they're defeq.
+              if (!isProofIrrelevantEq(meta.solution, resolvedRhs, definitions, effectiveContext)) {
+                const names = effectiveContext.map(c => c.name).reverse();
+                const metaTypeStr = prettyPrint(resolvedMetaType, names);
+                throw new Error(`Implicit argument conflict for ${normConstraint.meta} : ${metaTypeStr}: inferred ${prettyPrint(meta.solution, names)} but required to be ${prettyPrint(resolvedRhs, names)}`);
+              }
             }
           }
         }

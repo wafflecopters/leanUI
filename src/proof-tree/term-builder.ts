@@ -73,9 +73,28 @@ export interface TermBuilderRuntime {
   readonly rev?: ReverseRegistry;
 }
 
+export interface TermBuilderKernelGoalRuntime {
+  readonly engine: TacticEngine;
+  readonly goal: MetaVar;
+  readonly rev?: ReverseRegistry;
+}
+
 export interface OpenedTermBuilderResult {
   readonly builderState: TermBuilderState;
   readonly expr: string;
+}
+
+export function buildTermBuilderRuntime(
+  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
+  definitions?: DefinitionsMap,
+): TermBuilderRuntime | null {
+  if (!kernelGoal || !definitions) return null;
+  return {
+    engine: kernelGoal.engine,
+    goal: kernelGoal.goal,
+    definitions,
+    rev: kernelGoal.rev,
+  };
 }
 
 // ============================================================================
@@ -464,6 +483,18 @@ export function fillTermBuilderSlotFromSource(
   );
 }
 
+export function fillTermBuilderSlotFromGoal(
+  builderState: TermBuilderState,
+  slotIndex: number,
+  sourceExpr: string,
+  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
+  definitions?: DefinitionsMap,
+): RebuiltTermBuilderResult | null {
+  const runtime = buildTermBuilderRuntime(kernelGoal, definitions);
+  if (!runtime) return null;
+  return fillTermBuilderSlotFromSource(builderState, slotIndex, sourceExpr, runtime);
+}
+
 export function clearTermBuilderSlot(
   builderState: TermBuilderState,
   slotIndex: number,
@@ -477,6 +508,17 @@ export function clearTermBuilderSlot(
     runtime.definitions,
     runtime.rev,
   );
+}
+
+export function clearTermBuilderSlotFromGoal(
+  builderState: TermBuilderState,
+  slotIndex: number,
+  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
+  definitions?: DefinitionsMap,
+): RebuiltTermBuilderResult | null {
+  const runtime = buildTermBuilderRuntime(kernelGoal, definitions);
+  if (!runtime) return null;
+  return clearTermBuilderSlot(builderState, slotIndex, runtime);
 }
 
 /**

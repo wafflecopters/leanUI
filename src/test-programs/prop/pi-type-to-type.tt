@@ -1,0 +1,7 @@
+@test success
+@name "(A : Type) -> Type lives in Type 1 (imax(1, 1) = 1)"
+
+-- Sanity check: impredicativity must not break the regular Type rule.
+-- max and imax agree when the codomain is not Prop.
+PiTypeType : Type 1
+PiTypeType = (A : Type) -> Type

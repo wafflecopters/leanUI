@@ -1,6 +1,7 @@
-import { TTKTerm, TTKPattern, TTKContext, isDefinitionallyEqual, levelsEqual, prettyPrint } from "./kernel";
-import { subst, substPatternBindings, shiftTerm, minFreeVarIndex } from "./subst";
-import { DefinitionsMap, getTermDefinition, RecordInfo, extractAppSpine } from "./term";
+import { TTKTerm, TTKPattern, TTKContext, isDefinitionallyEqual, levelsEqual, prettyPrint, isProp } from "./kernel";
+import { subst, substPatternBindings, shiftTerm } from "./subst";
+import { DefinitionsMap, getTermDefinition, getTypeDefinition, RecordInfo, extractAppSpine } from "./term";
+import { inferTypeForProofIrrelevance } from "./proof-irrelevance";
 
 /**
  * Context for weak head normal form reduction.
@@ -337,6 +338,46 @@ function extractProjectionTarget(
 // ============================================================================
 
 /**
+ * Definitional proof irrelevance (Lean 4 style).
+ *
+ * If `t1, t2 : P` and `P : Prop`, then `t1 ≡ t2`. We verify the precondition
+ * by inferring `T1 = typeof(t1)`, checking that `T1 : Prop`, and confirming
+ * that `t2` also has type `T1` (definitionally). When all three hold, the
+ * two terms are equal regardless of their structure.
+ *
+ * Returns false (no judgment) on anything we cannot cheaply check. The
+ * caller continues with structural defeq in that case.
+ *
+ * Termination: if `T1 : Prop`, then T1's *type* is Prop, not a Prop, so the
+ * recursive `areTypesDefEq(T1, T2)` call cannot re-trigger this check
+ * (proof irrelevance only fires when the term's type's type is Prop).
+ */
+export function isProofIrrelevantEq(
+  t1: TTKTerm,
+  t2: TTKTerm,
+  definitions?: DefinitionsMap,
+  typingContext?: TTKContext
+): boolean {
+  if (!typingContext) return false;
+  // Metas/Holes don't have inferrable types here — defer to the meta solver.
+  if (t1.tag === 'Meta' || t1.tag === 'Hole') return false;
+  if (t2.tag === 'Meta' || t2.tag === 'Hole') return false;
+
+  const reduce = (term: TTKTerm, ctx: TTKContext) => whnf(term, { definitions, typingContext: ctx });
+  const T1 = inferTypeForProofIrrelevance(t1, typingContext, definitions, reduce);
+  if (!T1) return false;
+  const T1Type = inferTypeForProofIrrelevance(T1, typingContext, definitions, reduce);
+  if (!T1Type) return false;
+  const T1TypeW = whnf(T1Type, { definitions, typingContext });
+  if (!isProp(T1TypeW)) return false;
+
+  const T2 = inferTypeForProofIrrelevance(t2, typingContext, definitions, reduce);
+  if (!T2) return false;
+
+  return areTypesDefEq(T1, T2, definitions, typingContext);
+}
+
+/**
  * Check if two types are definitionally equal.
  *
  * Implements:
@@ -346,6 +387,7 @@ function extractProjectionTarget(
  * - record η: MkR (R.f1 r) ... (R.fN r) ≃ r
  * - δ-reduction: unfold definitions
  * - ι-reduction: pattern matching on constructors
+ * - proof irrelevance: any two proofs of the same Prop are equal
  */
 export function areTypesDefEq(t1: TTKTerm, t2: TTKTerm, definitions?: DefinitionsMap, typingContext?: TTKContext): boolean {
   // Check record eta BEFORE normalization (projections get unfolded by whnf)
@@ -391,6 +433,14 @@ export function areWhnfTypesDefEq(n1: TTKTerm, n2: TTKTerm, definitions?: Defini
 
   // Quick structural check first
   if (isDefinitionallyEqual(n1, n2)) {
+    return true;
+  }
+
+  // Proof irrelevance (Lean 4 style): if both sides have the same Prop-valued
+  // type, they are definitionally equal regardless of structure. Cheaper to
+  // attempt before lambda eta / structural recursion: if it succeeds we skip
+  // all the deep work; if it fails we lose only a couple of type lookups.
+  if (isProofIrrelevantEq(n1, n2, definitions, typingContext)) {
     return true;
   }
 

@@ -1,0 +1,14 @@
+@test success
+@name "singleton: a single bare-Var index occurrence is enough (even with wrapped peers)"
+@import preambles/nat.tt
+
+-- `n` appears twice in the return type: once bare (first index) and once
+-- wrapped (Succ n). The first bare occurrence alone is enough to recover
+-- `n` from the first index, so the inductive IS singleton-eliminable.
+inductive DoubleR : Nat -> Nat -> Prop where
+  doubleR : (n : Nat) -> DoubleR n (Succ n)
+
+-- Large-elim into Nat is OK because n is uniquely recoverable from the
+-- first index.
+extractFst : (a : Nat) -> (b : Nat) -> DoubleR a b -> Nat
+extractFst a b (doubleR n) = n

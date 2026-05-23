@@ -3,6 +3,7 @@ import { parseExpr } from '../parser/parser';
 import { SyntaxRegistry } from '../math-editor/syntax-registry';
 import { mkConstTT } from '../compiler/surface';
 import { type DefinitionsMap } from '../compiler/term';
+import { normalizeBinderNameInput } from './name-latex';
 import { runSimp } from '../tactics/simp-tactic';
 import {
   TypedProofContext,
@@ -26,7 +27,16 @@ import {
   toggleSimpCollapse,
   updateCase,
 } from './proof-tree';
-import { buildExprFromSlots, kernelTermToSource, type TermBuilderState } from './term-builder';
+import {
+  buildExprFromSlots,
+  buildTermBuilderRuntime,
+  clearTermBuilderSlotFromGoal,
+  fillTermBuilderSlotFromGoal,
+  kernelTermToSource,
+  openTermBuilderFromSourceExpr,
+  type TermBuilderKernelGoalRuntime,
+  type TermBuilderState,
+} from './term-builder';
 import type { RewriteSuggestion, TacticSuggestion } from './tactic-suggestions';
 import {
   applyTacticCommandsAtCursor,
@@ -73,8 +83,29 @@ export interface ProofTreeManualTacticContext {
   ) => number;
 }
 
+export type ProofTreeBinderRenameTarget =
+  | { tag: 'have'; nodeId: ProofNodeId }
+  | { tag: 'introToken'; nodeId: ProofNodeId; nameIndex: number }
+  | { tag: 'caseParam'; nodeId: ProofNodeId; paramIndex: number };
+
+export interface ProofTreeHaveTermBuilderEditResult {
+  readonly state: ProofTreeState;
+  readonly builderState: TermBuilderState;
+}
+
 function splitNames(value: string): string[] {
   return value.split(/[\s,]+/).filter(Boolean);
+}
+
+const LATEX_TO_UNICODE: Record<string, string> = {
+  '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ',
+  '\\epsilon': 'ε', '\\varepsilon': 'ε', '\\zeta': 'ζ', '\\eta': 'η',
+  '\\theta': 'θ', '\\lambda': 'λ', '\\mu': 'μ', '\\pi': 'π',
+  '\\sigma': 'σ', '\\varphi': 'φ', '\\psi': 'ψ', '\\omega': 'ω',
+};
+
+export function convertMathEditorSourceToUnicode(source: string): string {
+  return source.replace(/\\[a-zA-Z]+/g, match => LATEX_TO_UNICODE[match] ?? match);
 }
 
 function buildInductionTacticCommandsFromContext(
@@ -304,6 +335,72 @@ export function updateHaveExprInProofTree(
   return newRoot ? { ...state, root: newRoot } : null;
 }
 
+export function commitHaveExprSourceInProofTree(
+  state: ProofTreeState,
+  haveNodeId: ProofNodeId,
+  rawExpr: string,
+): ProofTreeState | null {
+  const newExpr = convertMathEditorSourceToUnicode(rawExpr.trim());
+  if (!newExpr) return null;
+  const node = findNode(state.root, haveNodeId);
+  if (!node || node.tag !== 'have' || node.expr === newExpr) return null;
+  return updateHaveExprInProofTree(state, haveNodeId, newExpr);
+}
+
+export function openHaveExprTermBuilder(
+  sourceExpr: string,
+  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
+  definitions?: DefinitionsMap,
+) {
+  const runtime = buildTermBuilderRuntime(kernelGoal, definitions);
+  if (!runtime) return null;
+  return openTermBuilderFromSourceExpr(sourceExpr, runtime);
+}
+
+export function fillHaveTermBuilderSlotInProofTree(
+  state: ProofTreeState,
+  haveNodeId: ProofNodeId,
+  builderState: TermBuilderState,
+  slotIndex: number,
+  sourceExpr: string,
+  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
+  definitions?: DefinitionsMap,
+): ProofTreeHaveTermBuilderEditResult | null {
+  const rebuilt = fillTermBuilderSlotFromGoal(
+    builderState,
+    slotIndex,
+    convertMathEditorSourceToUnicode(sourceExpr),
+    kernelGoal,
+    definitions,
+  );
+  if (!rebuilt) return null;
+  const nextState = rebuilt.expr
+    ? (updateHaveExprInProofTree(state, haveNodeId, rebuilt.expr) ?? state)
+    : state;
+  return { state: nextState, builderState: rebuilt.builderState };
+}
+
+export function clearHaveTermBuilderSlotInProofTree(
+  state: ProofTreeState,
+  haveNodeId: ProofNodeId,
+  builderState: TermBuilderState,
+  slotIndex: number,
+  kernelGoal: TermBuilderKernelGoalRuntime | null | undefined,
+  definitions?: DefinitionsMap,
+): ProofTreeHaveTermBuilderEditResult | null {
+  const rebuilt = clearTermBuilderSlotFromGoal(
+    builderState,
+    slotIndex,
+    kernelGoal,
+    definitions,
+  );
+  if (!rebuilt) return null;
+  const nextState = rebuilt.expr
+    ? (updateHaveExprInProofTree(state, haveNodeId, rebuilt.expr) ?? state)
+    : state;
+  return { state: nextState, builderState: rebuilt.builderState };
+}
+
 export function renameHaveBindingInProofTree(
   state: ProofTreeState,
   haveNodeId: ProofNodeId,
@@ -319,6 +416,38 @@ export function renameHaveBindingInProofTree(
     child: rewriteHaveReferenceSubtree(node.child, oldName, newName),
   }));
   return newRoot ? { ...state, root: newRoot } : null;
+}
+
+export function commitProofTreeBinderRename(
+  state: ProofTreeState,
+  target: ProofTreeBinderRenameTarget,
+  rawName: string,
+): ProofTreeState | null {
+  const newName = normalizeBinderNameInput(rawName.trim());
+  if (!newName) return null;
+
+  switch (target.tag) {
+    case 'have': {
+      const node = findNode(state.root, target.nodeId);
+      if (!node || node.tag !== 'have' || node.name === newName) return null;
+      return renameHaveBindingInProofTree(state, target.nodeId, newName);
+    }
+    case 'introToken': {
+      const node = findNode(state.root, target.nodeId);
+      if (!node || node.tag !== 'intros') return null;
+      if (target.nameIndex < 0 || target.nameIndex >= node.names.length) return null;
+      if (node.names[target.nameIndex] === newName) return null;
+      return renameIntroTokenInProofTree(state, target.nodeId, target.nameIndex, newName);
+    }
+    case 'caseParam': {
+      const induction = findInductionAndCase(state.root, target.nodeId);
+      if (!induction) return null;
+      const params = induction.node.cases[induction.caseIndex]?.constructorParamNames;
+      if (!params || target.paramIndex < 0 || target.paramIndex >= params.length) return null;
+      if (params[target.paramIndex] === newName) return null;
+      return renameCaseParamInProofTree(state, target.nodeId, target.paramIndex, newName);
+    }
+  }
 }
 
 function buildHoistedHaveName(builderState: TermBuilderState, slotIndex: number): string {

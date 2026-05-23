@@ -1,6 +1,6 @@
 // INFERENCE
 
-import { TTKTerm, mkLMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual, mkULevel } from "./kernel";
+import { TTKTerm, mkLIMax, simplifyLevel, mkPi, prettyPrint, mkLevelNum, levelContainsParam, mkLSucc, mkLOmega, isDefinitionallyEqual, mkULevel } from "./kernel";
 import { subst, shiftTerm, minFreeVarIndex, containsVarIndex } from "./subst";
 import { assertIsPi, TCEnv, TCEnvError, getTermDefinition, DefinitionsMap, NamedArgMap, BinderPartSegment } from "./term";
 import { IndexPath, serializeIndexPath } from "../types/source-position";
@@ -103,12 +103,17 @@ function getTermDescription(term: TTKTerm, env: TCEnv<unknown>): string {
 function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm> {
   if (env.isBinderPiTerm()) {
     // ────────────────────────────────────────────────────────────────
-    // (PI) - Pi type
+    // (PI) - Pi type — Lean-style impredicative Prop
     //
-    //   Γ ⊢ A ⇐ Type_i
-    //   Γ, x : A ⊢ B ⇐ Type_j
-    //   ─────────────────────────────
-    //   Γ ⊢ Π x : A, B ⇒ Type_max(i,j)
+    //   Γ ⊢ A ⇐ Sort i
+    //   Γ, x : A ⊢ B ⇐ Sort j
+    //   ─────────────────────────────────────
+    //   Γ ⊢ Π x : A, B ⇒ Sort (imax(i, j))
+    //
+    // imax(i, 0) = 0, otherwise imax(i, j) = max(i, j).
+    // Hence a Pi whose codomain lands in Prop (Sort 0) is itself in Prop,
+    // independent of the domain's universe — this is the impredicativity
+    // of Prop (`(A : Type) → P` lives in Prop when P : Prop).
     // ────────────────────────────────────────────────────────────────
     // Create fresh level metas for domain and body
     // Check for duplicate parameter name (shadowing)
@@ -140,7 +145,7 @@ function inferBinderType(env: TCEnv<TTKTerm & { tag: 'Binder' }>): TCEnv<TTKTerm
     // the codomain level depends on a bound variable of type ULevel.
     // In that case, the Pi type must live in Type ω.
     // Example: (U : ULevel) -> Type U has type Type ω
-    const rawLevel = simplifyLevel(mkLMax(domainSort.level, bodySort.level));
+    const rawLevel = simplifyLevel(mkLIMax(domainSort.level, bodySort.level));
     // Substitute any solved level metas before checking for LParam
     const substitutedLevel = bodyEnv.substituteLevelMetasInLevel(rawLevel);
     const simplifiedLevel = simplifyLevel(substitutedLevel);
@@ -850,7 +855,6 @@ export function checkType(env: TCEnv<TTKTerm>, expectedType: TTKTerm): TCEnv<TTK
       lambdaEnv = env.unifyTerms(env.value.domain, expectedType.domain)
     } catch (e) {
       if (e instanceof TCEnvError) {
-        debugger
         throw e.wrappedBy(`Lambda parameter '${env.value.name}' has type ${e.env.prettyPrint(env.value.domain)} but expected ${e.env.prettyPrint(expectedType.domain)}`);
       }
       throw e;

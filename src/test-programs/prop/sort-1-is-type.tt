@@ -1,0 +1,9 @@
+@test success
+@name "Sort 1 is definitionally Type 0"
+
+-- Sort 1 = Type 0. Anywhere Type is expected, Sort 1 works.
+inductive Wrapper : Sort 1 where
+  wrap : Wrapper
+
+usableAsType : Type
+usableAsType = Wrapper

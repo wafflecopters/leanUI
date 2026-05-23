@@ -1,0 +1,19 @@
+@test success
+@name "nested PCtor on non-singleton Prop allowed when motive is Prop"
+@import preambles/equality-poly.tt
+
+inductive P : Prop where pp : P
+
+inductive Or : Prop -> Prop -> Prop where
+  orLeft  : {A : Prop} -> {B : Prop} -> A -> Or A B
+  orRight : {A : Prop} -> {B : Prop} -> B -> Or A B
+
+inductive Outer : Prop where
+  wrap : Or P P -> Outer
+
+-- Both outer and inner matches are on Prop inductives. The motive lands in
+-- Prop (we return a proof of EqualProp), so even the non-singleton inner Or
+-- destruct is allowed.
+collapse : (o : Outer) -> EqualProp o o
+collapse (wrap (orLeft _))  = reflProp
+collapse (wrap (orRight _)) = reflProp

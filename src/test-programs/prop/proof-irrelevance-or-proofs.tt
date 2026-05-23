@@ -1,0 +1,17 @@
+@test success
+@name "proof irrelevance for Or: distinct injections are still defeq as proofs"
+@import preambles/equality-poly.tt
+
+inductive P : Prop where pp : P
+inductive Q : Prop where pq : Q
+
+inductive Or : Prop -> Prop -> Prop where
+  orLeft  : {A : Prop} -> {B : Prop} -> A -> Or A B
+  orRight : {A : Prop} -> {B : Prop} -> B -> Or A B
+
+-- Proof irrelevance says: two proofs of Or P Q are equal, even if one is
+-- orLeft and the other orRight. This is *consistent* (you can't actually
+-- case-analyse to expose the difference unless your motive is in Prop, by
+-- the large-elim ban) and reflects how Lean handles non-singleton Props.
+twoInjectionsEq : EqualProp (orLeft pp) (orRight pq)
+twoInjectionsEq = reflProp

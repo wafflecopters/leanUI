@@ -31,6 +31,18 @@ import {
 } from '../proof-tree/goal-computation';
 import { buildReverseRegistry, ReverseRegistry } from '../math-editor/tt-to-math';
 import { ProseItem, ProseItemKind, IntroToken, CalcChainStep, generateProofProse } from '../proof-tree/proof-prose';
+import {
+  buildProseGoalLead,
+  findLastInteractiveGoalStepIndex,
+  findNextHoleNodeId,
+  proseItemShowsVisibleGoal,
+} from '../proof-tree/prose-view-helpers';
+import {
+  describeApplyProse,
+  describeExactProse,
+  describeInductionHeader,
+  describeRewriteReference,
+} from '../proof-tree/prose-row-helpers';
 import { renderInteractiveGoal, InteractiveGoal, GoalPath } from '../proof-tree/interactive-goal';
 import {
   computeRewriteSuggestionsIncremental,
@@ -53,9 +65,8 @@ import {
 } from '../proof-tree/goal-interaction-state';
 import { renderNameLatex, normalizeBinderNameInput } from '../proof-tree/name-latex';
 import {
-  clearTermBuilderSlot,
-  fillTermBuilderSlotFromSource,
-  openTermBuilderFromSourceExpr,
+  clearTermBuilderSlotFromGoal,
+  fillTermBuilderSlotFromGoal,
   TermBuilderState,
   TermSlot,
 } from '../proof-tree/term-builder';
@@ -63,13 +74,16 @@ import {
   addInductionCaseInProofTree,
   applyManualProofTreeTactic,
   applySuggestionToProofTreeState,
+  clearHaveTermBuilderSlotInProofTree,
   clearProofTreeNode,
+  commitHaveExprSourceInProofTree,
+  commitProofTreeBinderRename,
+  convertMathEditorSourceToUnicode,
+  fillHaveTermBuilderSlotInProofTree,
   hoistTermBuilderSlotToHave,
   insertHaveFromTermBuilder,
+  openHaveExprTermBuilder,
   removeInductionCaseInProofTree,
-  renameCaseParamInProofTree,
-  renameIntroTokenInProofTree,
-  renameHaveBindingInProofTree,
   toggleCaseCollapseInProofTree,
   toggleInductionCollapseInProofTree,
   toggleSimpCollapseInProofTree,
@@ -157,19 +171,6 @@ function InlineKaTeX({ latex, style, displayMode }: { latex: string; style?: Rea
   }, [latex]);
 
   return <span ref={ref} style={style} />;
-}
-
-/** Map LaTeX Greek commands back to Unicode source characters. */
-const LATEX_TO_UNICODE: Record<string, string> = {
-  '\\alpha': 'α', '\\beta': 'β', '\\gamma': 'γ', '\\delta': 'δ',
-  '\\epsilon': 'ε', '\\varepsilon': 'ε', '\\zeta': 'ζ', '\\eta': 'η',
-  '\\theta': 'θ', '\\lambda': 'λ', '\\mu': 'μ', '\\pi': 'π',
-  '\\sigma': 'σ', '\\varphi': 'φ', '\\psi': 'ψ', '\\omega': 'ω',
-};
-
-/** Convert source from convertToSource (may have LaTeX commands) to Unicode source code. */
-function latexSourceToUnicode(source: string): string {
-  return source.replace(/\\[a-zA-Z]+/g, match => LATEX_TO_UNICODE[match] ?? match);
 }
 
 /** Convert a plain-text math expression to LaTeX. Simple heuristic. */
@@ -967,78 +968,54 @@ function HaveProseItem({
   const commitName = useCallback((val: string) => {
     if (nameCommittedRef.current) return;
     nameCommittedRef.current = true;
-    if (val && val !== kind.name) {
-      const updated = renameHaveBindingInProofTree(state, item.nodeId, val);
-      if (updated) onPushChange(updated);
-    }
+    const updated = commitProofTreeBinderRename(state, { tag: 'have', nodeId: item.nodeId }, val);
+    if (updated) onPushChange(updated);
     setEditingName(false);
-  }, [kind.name, state, item.nodeId, onPushChange]);
+  }, [state, item.nodeId, onPushChange]);
 
   // Open the term builder by parsing the have expression into slots
   const openBuilder = useCallback(() => {
-    if (!state || !onPushChange) return;
-    if (!typedContext?.kernelGoal || !definitions) return;
-    const kg = typedContext.kernelGoal;
-    const opened = openTermBuilderFromSourceExpr(kind.expr, {
-      engine: kg.engine,
-      goal: kg.goal,
-      definitions,
-      rev: kg.rev,
-    });
+    const opened = openHaveExprTermBuilder(kind.expr, typedContext?.kernelGoal, definitions);
     if (opened) {
       setBuilderState(opened.builderState);
     }
-  }, [kind.expr, state, onPushChange, definitions, typedContext]);
+  }, [kind.expr, definitions, typedContext]);
 
   if (builderState) {
     return (
       <div style={rowStyle}>
-        <TermBuilderView
+        <ProofTreeTermBuilderPanel
           builderState={builderState}
+          registry={_registry}
           onFillSlot={(slotIndex, sourceExpr) => {
-            if (!typedContext?.kernelGoal || !definitions) return;
-            const kg = typedContext.kernelGoal;
-            const rebuilt = fillTermBuilderSlotFromSource(
+            const rebuilt = fillHaveTermBuilderSlotInProofTree(
+              state,
+              item.nodeId,
               builderState,
               slotIndex,
-              latexSourceToUnicode(sourceExpr),
-              {
-                engine: kg.engine,
-                goal: kg.goal,
-                definitions,
-                rev: kg.rev,
-              },
+              sourceExpr,
+              typedContext?.kernelGoal,
+              definitions,
             );
             if (!rebuilt) return;
             setBuilderState(rebuilt.builderState);
-            if (rebuilt.expr) {
-              const updated = updateHaveExprInProofTree(state, item.nodeId, rebuilt.expr);
-              if (updated) onPushChange(updated);
-            }
+            onPushChange(rebuilt.state);
           }}
           onClearSlot={(slotIndex) => {
-            if (!typedContext?.kernelGoal || !definitions) return;
-            const kg = typedContext.kernelGoal;
-            const rebuilt = clearTermBuilderSlot(
+            const rebuilt = clearHaveTermBuilderSlotInProofTree(
+              state,
+              item.nodeId,
               builderState,
               slotIndex,
-              {
-                engine: kg.engine,
-                goal: kg.goal,
-                definitions,
-                rev: kg.rev,
-              },
+              typedContext?.kernelGoal,
+              definitions,
             );
             if (!rebuilt) return;
             setBuilderState(rebuilt.builderState);
-            if (rebuilt.expr) {
-              const updated = updateHaveExprInProofTree(state, item.nodeId, rebuilt.expr);
-              if (updated) onPushChange(updated);
-            }
+            onPushChange(rebuilt.state);
           }}
           onConfirm={() => setBuilderState(null)}
           onCancel={() => setBuilderState(null)}
-          registry={_registry}
           onHoistToHave={(slotIndex) => {
             if (!builderState) return;
             const updated = hoistTermBuilderSlotToHave(state, item.nodeId, builderState, slotIndex, definitions);
@@ -1058,25 +1035,16 @@ function HaveProseItem({
   const displayType = kind.typeLatex;
 
   const nameEditor = editingName ? (
-    <input
+    <InlineTextEditInput
       autoFocus
       defaultValue={kind.name}
-      style={{
-        background: 'rgba(88, 166, 255, 0.1)', border: '1px solid rgba(88, 166, 255, 0.3)',
-        borderRadius: '3px', color: '#c9d1d9', fontSize: '13px', padding: '0 4px',
-        fontFamily: '"JetBrains Mono", monospace', width: `${Math.max(kind.name.length, 3) + 2}ch`,
+      width={`${Math.max(kind.name.length, 3) + 2}ch`}
+      commitOnTab
+      onCommit={(value) => commitName(value.trim())}
+      onCancel={() => {
+        nameCommittedRef.current = true;
+        setEditingName(false);
       }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === 'Tab') {
-          e.preventDefault();
-          commitName((e.target as HTMLInputElement).value.trim());
-        } else if (e.key === 'Escape') {
-          nameCommittedRef.current = true;
-          setEditingName(false);
-        }
-      }}
-      onBlur={(e) => commitName(e.target.value.trim())}
-      onClick={(e) => e.stopPropagation()}
     />
   ) : (
     <span
@@ -1094,37 +1062,17 @@ function HaveProseItem({
 
   // Inline expression editor for have proof
   const exprEditor = editingExpr ? (
-    <input
+    <InlineTextEditInput
       autoFocus
       defaultValue={kind.expr}
-      style={{
-        background: 'rgba(88, 166, 255, 0.1)', border: '1px solid rgba(88, 166, 255, 0.3)',
-        borderRadius: '3px', color: '#c9d1d9', fontSize: '13px', padding: '1px 6px',
-        fontFamily: '"JetBrains Mono", monospace', minWidth: '120px',
-        width: `${Math.max(kind.expr.length, 10) + 4}ch`,
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          const val = (e.target as HTMLInputElement).value.trim();
-          if (val) {
-            const updated = updateHaveExprInProofTree(state, item.nodeId, latexSourceToUnicode(val));
-            if (updated) onPushChange(updated);
-          }
-          setEditingExpr(false);
-        } else if (e.key === 'Escape') {
-          setEditingExpr(false);
-        }
-      }}
-      onBlur={(e) => {
-        const val = e.target.value.trim();
-        if (val && val !== kind.expr) {
-          const updated = updateHaveExprInProofTree(state, item.nodeId, latexSourceToUnicode(val));
-          if (updated) onPushChange(updated);
-        }
+      width={`${Math.max(kind.expr.length, 10) + 4}ch`}
+      minWidth="120px"
+      onCommit={(value) => {
+        const updated = commitHaveExprSourceInProofTree(state, item.nodeId, value);
+        if (updated) onPushChange(updated);
         setEditingExpr(false);
       }}
-      onClick={(e) => e.stopPropagation()}
+      onCancel={() => setEditingExpr(false)}
     />
   ) : null;
 
@@ -1142,45 +1090,23 @@ function HaveProseItem({
       {kind.hasProofTree ? (
         /* Interactive proof subtree — the subgoal is rendered as a child prose item */
         null
-      ) : isHole ? (
-        /* Unfilled have — show "proof needed" or inline expr editor */
-        editingExpr ? (
-          <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
-        ) : (
-          <span
-            onClick={(e) => { e.stopPropagation(); setEditingExpr(true); }}
-            style={{ cursor: 'pointer', color: '#8b949e', fontStyle: 'italic', marginLeft: '6px',
-              borderBottom: '1px dashed rgba(248, 81, 73, 0.4)' }}
-            title="Click to provide proof"
-          >
-            proof needed
-          </span>
-        )
-      ) : proofLatex ? (
-        <div style={{ paddingLeft: '20px' }}>
-          <span style={prose}>since{' '}</span>
-          <span
-            onClick={(e) => { e.stopPropagation(); openBuilder(); }}
-            style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
-            title="Click to edit expression"
-          >
-            <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
-          </span>
-          <span style={prose}>.</span>
-        </div>
       ) : (
-        /* Non-hole expr but no rendered LaTeX — show raw expr, click to edit */
-        editingExpr ? (
-          <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
-        ) : (
-          <span
-            onClick={(e) => { e.stopPropagation(); setEditingExpr(true); }}
-            style={{ cursor: 'pointer', color: '#8b949e', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)', marginLeft: '4px' }}
-            title="Click to edit expression"
-          >
-            {kind.expr}
-          </span>
-        )
+        <HaveExprBlock
+          editingExpr={editingExpr}
+          exprEditor={exprEditor}
+          isHole={isHole}
+          proofLatex={proofLatex}
+          expr={kind.expr}
+          prose={prose}
+          onStartEditing={(e) => {
+            e.stopPropagation();
+            setEditingExpr(true);
+          }}
+          onOpenBuilder={(e) => {
+            e.stopPropagation();
+            openBuilder();
+          }}
+        />
       )}
       {kind.error && (
         <div style={{ fontSize: '11px', color: '#f85149', paddingLeft: '20px', paddingTop: '2px' }}>
@@ -2317,22 +2243,7 @@ function ProofProseView({
 
   // Find the last goal-showing step before the active cursor hole.
   // This step will render its goal interactively instead of as plain LaTeX.
-  const lastGoalStepIdx = (() => {
-    // Find cursor hole
-    const holeIdx = items.findIndex(it => it.isCursor && it.kind.tag === 'hole');
-    if (holeIdx < 0) return -1;
-    // Walk backwards to find the last goal-showing step
-    for (let i = holeIdx - 1; i >= 0; i--) {
-      const k = items[i].kind;
-      if (k.tag === 'unfold' || k.tag === 'rewrite' || k.tag === 'simp') return i;
-      if (k.tag === 'intro' && k.goalLatex) return i;
-      if (k.tag === 'apply') return i;
-      // Stop at structural boundaries
-      if (k.tag === 'caseHeader' || k.tag === 'inductionHeader') break;
-      if (k.tag === 'hole' || k.tag === 'qed' || k.tag === 'exact') break;
-    }
-    return -1;
-  })();
+  const lastGoalStepIdx = findLastInteractiveGoalStepIndex(items);
 
   return (
     <div>
@@ -2348,14 +2259,7 @@ function ProofProseView({
         } : undefined;
 
         // Find the next hole's nodeId so clicking the goal can focus it
-        const nextHoleNodeId = (() => {
-          for (let j = idx + 1; j < items.length; j++) {
-            if (items[j].kind.tag === 'hole') return items[j].nodeId;
-            // Stop at structural boundaries
-            if (items[j].kind.tag === 'caseHeader' || items[j].kind.tag === 'inductionHeader') break;
-          }
-          return undefined;
-        })();
+        const nextHoleNodeId = findNextHoleNodeId(items, idx);
 
         return (
           <ProseItemView
@@ -2506,6 +2410,742 @@ function BinderNameRenameInput({
   );
 }
 
+function InlineTextEditInput({
+  defaultValue,
+  onCommit,
+  onCancel,
+  autoFocus,
+  commitOnTab = false,
+  width,
+  minWidth,
+}: {
+  defaultValue: string;
+  onCommit: (value: string) => void;
+  onCancel: () => void;
+  autoFocus?: boolean;
+  commitOnTab?: boolean;
+  width?: string;
+  minWidth?: string;
+}) {
+  return (
+    <input
+      autoFocus={autoFocus}
+      defaultValue={defaultValue}
+      style={{
+        background: 'rgba(88, 166, 255, 0.1)',
+        border: '1px solid rgba(88, 166, 255, 0.3)',
+        borderRadius: '3px',
+        color: '#c9d1d9',
+        fontSize: '13px',
+        padding: '1px 6px',
+        fontFamily: '"JetBrains Mono", monospace',
+        width,
+        minWidth,
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || (commitOnTab && e.key === 'Tab')) {
+          e.preventDefault();
+          onCommit((e.target as HTMLInputElement).value);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={(e) => onCommit(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+function ProofTreeTermBuilderPanel({
+  builderState,
+  registry,
+  onFillSlot,
+  onClearSlot,
+  onConfirm,
+  onCancel,
+  onHoistToHave,
+  marginBottom = '8px',
+}: {
+  builderState: TermBuilderState;
+  registry?: SyntaxRegistry;
+  onFillSlot: (slotIndex: number, sourceExpr: string) => void;
+  onClearSlot: (slotIndex: number) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onHoistToHave?: (slotIndex: number) => void;
+  marginBottom?: string;
+}) {
+  return (
+    <div style={{ marginBottom }}>
+      <TermBuilderView
+        builderState={builderState}
+        onFillSlot={onFillSlot}
+        onClearSlot={onClearSlot}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        registry={registry}
+        onHoistToHave={onHoistToHave}
+      />
+    </div>
+  );
+}
+
+function InlineBinderRenameRow({
+  depth,
+  label,
+  renameKey,
+  defaultValue,
+  onConfirm,
+  onCancel,
+  autoFocus,
+}: {
+  depth: number;
+  label: string;
+  renameKey: string | number;
+  defaultValue: string;
+  onConfirm: (value: string) => void;
+  onCancel: () => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <div style={{
+      paddingLeft: `${depth * 20 + 24}px`,
+      paddingTop: '2px',
+      paddingBottom: '4px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '6px',
+      flexWrap: 'wrap',
+    }}>
+      <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
+        {label}:
+      </span>
+      <BinderNameRenameInput
+        key={renameKey}
+        defaultValue={defaultValue}
+        onConfirm={onConfirm}
+        onCancel={onCancel}
+        autoFocus={autoFocus}
+      />
+    </div>
+  );
+}
+
+function HaveExprBlock({
+  editingExpr,
+  exprEditor,
+  isHole,
+  proofLatex,
+  expr,
+  prose,
+  onStartEditing,
+  onOpenBuilder,
+}: {
+  editingExpr: boolean;
+  exprEditor: React.ReactNode;
+  isHole: boolean;
+  proofLatex?: string;
+  expr: string;
+  prose: React.CSSProperties;
+  onStartEditing: (e: React.MouseEvent) => void;
+  onOpenBuilder: (e: React.MouseEvent) => void;
+}) {
+  if (isHole) {
+    return editingExpr ? (
+      <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
+    ) : (
+      <span
+        onClick={onStartEditing}
+        style={{
+          cursor: 'pointer',
+          color: '#8b949e',
+          fontStyle: 'italic',
+          marginLeft: '6px',
+          borderBottom: '1px dashed rgba(248, 81, 73, 0.4)',
+        }}
+        title="Click to provide proof"
+      >
+        proof needed
+      </span>
+    );
+  }
+
+  if (proofLatex) {
+    return (
+      <div style={{ paddingLeft: '20px' }}>
+        <span style={prose}>since{' '}</span>
+        <span
+          onClick={onOpenBuilder}
+          style={{ cursor: 'pointer', borderBottom: '1px dashed rgba(88, 166, 255, 0.4)' }}
+          title="Click to edit expression"
+        >
+          <InlineKaTeX latex={proofLatex} style={{ fontSize: '13px' }} />
+        </span>
+        <span style={prose}>.</span>
+      </div>
+    );
+  }
+
+  return editingExpr ? (
+    <div style={{ paddingLeft: '20px' }}>{exprEditor}</div>
+  ) : (
+    <span
+      onClick={onStartEditing}
+      style={{
+        cursor: 'pointer',
+        color: '#8b949e',
+        borderBottom: '1px dashed rgba(88, 166, 255, 0.4)',
+        marginLeft: '4px',
+      }}
+      title="Click to edit expression"
+    >
+      {expr}
+    </span>
+  );
+}
+
+function InlineProseName({ name, fontSize = '13px', fontWeight }: {
+  name: string;
+  fontSize?: string;
+  fontWeight?: React.CSSProperties['fontWeight'];
+}) {
+  return (
+    <InlineKaTeX
+      latex={texNameForProse(name)}
+      style={{ fontSize, ...(fontWeight ? { fontWeight } : {}) }}
+    />
+  );
+}
+
+function InlineLatexSequence({
+  values,
+  prose,
+  fontSize = '13px',
+}: {
+  values: readonly string[];
+  prose: React.CSSProperties;
+  fontSize?: string;
+}) {
+  return (
+    <>
+      {values.map((value, index) => (
+        <React.Fragment key={`${value}-${index}`}>
+          {index > 0 && <span style={prose}>,{' '}</span>}
+          <InlineKaTeX latex={value} style={{ fontSize }} />
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
+
+type ProseRowHandlers = {
+  onClick: () => void;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+};
+
+type GoalPrefixRenderer = (preGoalLatex?: string, isValueType?: boolean) => React.ReactNode;
+type GoalSectionRenderer = (goalLatex: string | undefined, prefix: string) => React.ReactNode;
+
+function ProseRow({
+  rowStyle,
+  rowHandlers,
+  deleteBtn,
+  children,
+}: {
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  deleteBtn?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={rowStyle} {...rowHandlers}>
+      {children}
+      {deleteBtn}
+    </div>
+  );
+}
+
+function ApplyLeadFragment({
+  phrase,
+  theoremName,
+  constructorPhrase,
+  prose,
+}: {
+  phrase: 'constructor' | 'theorem';
+  theoremName?: string;
+  constructorPhrase?: string;
+  prose: React.CSSProperties;
+}) {
+  if (phrase === 'constructor') {
+    return <span style={prose}>which is true, {constructorPhrase}</span>;
+  }
+
+  return (
+    <>
+      <span style={prose}>which is true, by{' '}</span>
+      <InlineProseName name={theoremName ?? ''} />
+    </>
+  );
+}
+
+function UnfoldProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+  mustShowPrefix,
+  errorSuffix,
+  renderGoalSection,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'unfold' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  mustShowPrefix: GoalPrefixRenderer;
+  errorSuffix: React.ReactNode;
+  renderGoalSection: GoalSectionRenderer;
+}) {
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      {mustShowPrefix(kind.preGoalLatex)}
+      <span style={prose}>which is true, by definition of{' '}</span>
+      <InlineProseName name={kind.name} />
+      {errorSuffix}
+      {renderGoalSection(kind.goalLatex, ', if')}
+    </ProseRow>
+  );
+}
+
+function FoldProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+  mustShowPrefix,
+  errorSuffix,
+  renderGoalSection,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'fold' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  mustShowPrefix: GoalPrefixRenderer;
+  errorSuffix: React.ReactNode;
+  renderGoalSection: GoalSectionRenderer;
+}) {
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      {mustShowPrefix(kind.preGoalLatex)}
+      <span style={prose}>which matches the definition of{' '}</span>
+      <InlineProseName name={kind.name} />
+      {errorSuffix}
+      {renderGoalSection(kind.goalLatex, ', if')}
+    </ProseRow>
+  );
+}
+
+function RewriteProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+  mustShowPrefix,
+  errorSuffix,
+  renderGoalSection,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'rewrite' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  mustShowPrefix: GoalPrefixRenderer;
+  errorSuffix: React.ReactNode;
+  renderGoalSection: GoalSectionRenderer;
+}) {
+  const rewriteReference = describeRewriteReference(kind);
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      {mustShowPrefix(kind.preGoalLatex)}
+      <span style={prose}>which is true, because{' '}</span>
+      {rewriteReference.mode === 'equation' ? (
+        <>
+          <InlineKaTeX latex={rewriteReference.equationLatex ?? ''} style={{ fontSize: '12px' }} />
+          <span style={prose}>{rewriteReference.arrowSuffix} (</span>
+          <InlineProseName name={rewriteReference.theoremName} />
+          <span style={prose}>)</span>
+        </>
+      ) : (
+        <>
+          <span style={prose}>of{' '}</span>
+          <InlineProseName name={rewriteReference.theoremName} />
+          {rewriteReference.arrowSuffix && <span style={prose}>{rewriteReference.arrowSuffix}</span>}
+        </>
+      )}
+      {errorSuffix}
+      {renderGoalSection(kind.goalLatex, ', if')}
+    </ProseRow>
+  );
+}
+
+function ApplyProseItem({
+  item,
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+  mustShowPrefix,
+  errorSuffix,
+  renderGoalSection,
+}: {
+  item: ProseItem;
+  kind: Extract<ProseItemKind, { tag: 'apply' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  mustShowPrefix: GoalPrefixRenderer;
+  errorSuffix: React.ReactNode;
+  renderGoalSection: GoalSectionRenderer;
+}) {
+  const applyDescription = describeApplyProse(kind);
+
+  if (applyDescription.mode === 'proofExprs') {
+    const ROMAN = ['(i)', '(ii)', '(iii)', '(iv)', '(v)', '(vi)'];
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        {mustShowPrefix(kind.preGoalLatex)}
+        <span style={prose}>The result follows from</span>
+        {applyDescription.proofExprs.map((expr, i) => (
+          <div key={i} style={{ paddingLeft: `${item.depth * 20 + 24}px`, paddingTop: '1px' }}>
+            <span style={{ color: '#8b949e', fontSize: '12px', marginRight: '4px' }}>{ROMAN[i] ?? `(${i + 1})`}</span>
+            <InlineKaTeX latex={expr} style={{ fontSize: '13px' }} />
+          </div>
+        ))}
+        {errorSuffix}
+      </ProseRow>
+    );
+  }
+
+  if (applyDescription.mode === 'singleSubgoal') {
+    return (
+      <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+        {mustShowPrefix(kind.preGoalLatex)}
+        <ApplyLeadFragment
+          phrase={applyDescription.phrase}
+          theoremName={applyDescription.theoremName}
+          constructorPhrase={applyDescription.constructorPhrase}
+          prose={prose}
+        />
+        {applyDescription.appliedArgs.length > 0 && (
+          <>
+            <span style={prose}>{' '}applied to{' '}</span>
+            <InlineLatexSequence values={applyDescription.appliedArgs} prose={prose} />
+          </>
+        )}
+        {errorSuffix}
+        {renderGoalSection(applyDescription.subgoals[0], ', if')}
+      </ProseRow>
+    );
+  }
+
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      {mustShowPrefix(kind.preGoalLatex)}
+      <ApplyLeadFragment
+        phrase={applyDescription.phrase}
+        theoremName={applyDescription.theoremName}
+        constructorPhrase={applyDescription.constructorPhrase}
+        prose={prose}
+      />
+      {applyDescription.appliedArgs.length > 0 && (
+        <>
+          <span style={prose}>{' '}applied to{' '}</span>
+          <InlineLatexSequence values={applyDescription.appliedArgs} prose={prose} />
+        </>
+      )}
+      {errorSuffix}
+      <span style={prose}>, after showing {applyDescription.subgoals.length} subgoals:</span>
+    </ProseRow>
+  );
+}
+
+function SimpProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+  mustShowPrefix,
+  renderGoalSection,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'simp' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  mustShowPrefix: GoalPrefixRenderer;
+  renderGoalSection: GoalSectionRenderer;
+}) {
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      {mustShowPrefix(kind.preGoalLatex)}
+      <span style={prose}>Simplifying using{' '}</span>
+      <InlineLatexSequence values={kind.lemmas.map((lemma) => texNameForProse(lemma))} prose={prose} />
+      <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
+      {renderGoalSection(kind.goalLatex, ', we get')}
+    </ProseRow>
+  );
+}
+
+function InductionHeaderProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'inductionHeader' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+}) {
+  const header = describeInductionHeader(kind);
+  const scrutineeDisplay = kind.scrutineeLatex
+    ? <InlineKaTeX latex={kind.scrutineeLatex} style={{ fontSize: '13px' }} />
+    : <InlineProseName name={kind.scrutinee} />;
+
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      <span style={prose}>{header.lead}{' '}</span>
+      {scrutineeDisplay}
+      <span style={prose}>{header.punctuation}</span>
+    </ProseRow>
+  );
+}
+
+function ExactProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+  mustShowPrefix,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'exact' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+  mustShowPrefix: GoalPrefixRenderer;
+}) {
+  const description = describeExactProse(kind);
+
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      {mustShowPrefix(kind.goalLatex, kind.isValueType)}
+      {description.mode === 'solved' ? (
+        <>
+          <span style={prose}>{description.lead}{' '}</span>
+          <InlineKaTeX latex={description.displayLatex} style={{ fontSize: '13px' }} />
+          <span style={prose}>.</span>
+        </>
+      ) : description.mode === 'error' ? (
+        <>
+          <span style={{ color: '#f85149' }}>By{' '}</span>
+          <InlineKaTeX latex={description.displayLatex} style={{ fontSize: '13px' }} />
+          <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>({description.error})</span>
+        </>
+      ) : (
+        <>
+          <span style={prose}>{description.lead}{' '}</span>
+          <InlineKaTeX latex={description.displayLatex} style={{ fontSize: '13px' }} />
+          <span style={prose}>.</span>
+        </>
+      )}
+    </ProseRow>
+  );
+}
+
+function CalcChainStepRow({
+  step,
+  isStepCursor,
+  onClickNode,
+  onDelete,
+}: {
+  step: CalcChainStep;
+  isStepCursor: boolean;
+  onClickNode: (id: ProofNodeId) => void;
+  onDelete: () => void;
+}) {
+  const stepStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: '8px',
+    paddingTop: '2px',
+    paddingBottom: '2px',
+    paddingLeft: '4px',
+    borderLeft: isStepCursor ? '2px solid #58a6ff' : '2px solid transparent',
+    cursor: 'pointer',
+  };
+
+  return (
+    <div key={step.nodeId} style={stepStyle} onClick={(e) => { e.stopPropagation(); onClickNode(step.nodeId); }}>
+      <span style={{ flex: 1 }}>
+        {step.goalLatex ? (
+          <InlineKaTeX latex={step.goalLatex} style={{ fontSize: '13px' }} />
+        ) : (
+          <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
+        )}
+      </span>
+      <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap', marginLeft: '12px' }}>
+        (<InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />)
+      </span>
+      <button
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        style={{
+          background: 'none', border: 'none', color: '#f85149',
+          cursor: 'pointer', fontSize: '13px', padding: '0 2px',
+          opacity: 0.5, lineHeight: 1,
+        }}
+        title="Delete this step"
+      >&times;</button>
+    </div>
+  );
+}
+
+function CalcChainProseItem({
+  item,
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  state,
+  onPushChange,
+  onClickNode,
+  mustShowPrefix,
+}: {
+  item: ProseItem;
+  kind: Extract<ProseItemKind, { tag: 'calcChain' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: { onClick: () => void; onMouseEnter: () => void; onMouseLeave: () => void };
+  prose: React.CSSProperties;
+  state: ProofTreeState;
+  onPushChange: (s: ProofTreeState) => void;
+  onClickNode: (id: ProofNodeId) => void;
+  mustShowPrefix: (preGoalLatex?: string, isValueType?: boolean) => React.ReactNode;
+}) {
+  return (
+    <div style={rowStyle} {...rowHandlers}>
+      {mustShowPrefix(kind.preGoalLatex)}
+      <span style={prose}>By rewriting:</span>
+      <div style={{ paddingLeft: '12px', paddingTop: '4px', paddingBottom: '4px' }}>
+        {kind.steps.map((step) => (
+          <CalcChainStepRow
+            key={step.nodeId}
+            step={step}
+            isStepCursor={step.nodeId === item.nodeId}
+            onClickNode={onClickNode}
+            onDelete={() => {
+              const result = clearProofTreeNode(state, step.nodeId);
+              if (result) onPushChange(result);
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SufficesProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+  deleteBtn,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'suffices' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+  deleteBtn: React.ReactNode;
+}) {
+  return (
+    <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
+      <span style={prose}>It suffices to show</span>
+      {kind.goalLatex && (
+        <span style={eqBlockStyle}>
+          <InlineKaTeX latex={kind.goalLatex} displayMode />
+        </span>
+      )}
+      {kind.byExprLatex ? (
+        <div style={{ paddingLeft: '20px' }}>
+          <span style={prose}>since the result then follows from{' '}</span>
+          <InlineKaTeX latex={kind.byExprLatex} style={{ fontSize: '13px' }} />
+          <span style={prose}>.</span>
+        </div>
+      ) : null}
+    </ProseRow>
+  );
+}
+
+function SubgoalHeaderProseItem({
+  kind,
+  rowStyle,
+  rowHandlers,
+  prose,
+}: {
+  kind: Extract<ProseItemKind, { tag: 'subgoalHeader' }>;
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+  prose: React.CSSProperties;
+}) {
+  const goalLead = buildProseGoalLead(kind.goalLatex, kind.isValueType);
+  return (
+    <div style={{ ...rowStyle, fontWeight: 600, paddingTop: '6px' }} {...rowHandlers}>
+      <span style={{ color: '#79c0ff' }}>{kind.label}</span>
+      <span style={prose}>:</span>
+      {goalLead?.inline && (
+        <>
+          <span style={{ ...prose, fontWeight: 400 }}>{' '}{goalLead.lead}{' '}</span>
+          <InlineKaTeX latex={goalLead.goalLatex} style={{ fontSize: '13px' }} />
+          <span style={{ ...prose, fontWeight: 400 }}>.</span>
+        </>
+      )}
+      {goalLead && !goalLead.inline && (
+        <>
+          <span style={{ ...prose, fontWeight: 400 }}>{' '}{goalLead.lead}</span>
+          <span style={eqBlockStyle}>
+            <InlineKaTeX latex={goalLead.goalLatex} displayMode />
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function QedProseItem({
+  rowStyle,
+  rowHandlers,
+}: {
+  rowStyle: React.CSSProperties;
+  rowHandlers: ProseRowHandlers;
+}) {
+  return (
+    <ProseRow rowStyle={{ ...rowStyle, paddingTop: '2px' }} rowHandlers={rowHandlers}>
+      <span style={{ color: '#3fb950', fontSize: '14px' }}>&#8718;</span>
+    </ProseRow>
+  );
+}
+
 // ============================================================================
 // IntroProseItem — intro line with clickable variable tokens
 // ============================================================================
@@ -2517,10 +3157,10 @@ function IntroProseItem({
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'intro' }>;
   rowStyle: React.CSSProperties;
-  rowHandlers: { onClick: () => void; onMouseEnter: () => void; onMouseLeave: () => void };
+  rowHandlers: ProseRowHandlers;
   prose: React.CSSProperties;
   deleteBtn: React.ReactNode;
-  renderGoalSection: (goalLatex: string | undefined, prefix: string) => React.ReactNode;
+  renderGoalSection: GoalSectionRenderer;
   state: ProofTreeState;
   onPushChange: (s: ProofTreeState) => void;
   selectedBinder: SelectedBinder | null;
@@ -2542,12 +3182,11 @@ function IntroProseItem({
 
   const handleRename = useCallback((newName: string) => {
     if (!selectedToken) return;
-    // Allow the user to type LaTeX-style commands (`\delta_f`) and store
-    // the corresponding Unicode-shaped kernel name (`δ_f`) — renderNameLatex
-    // turns that back into a proper subscript at display time.
-    const trimmed = normalizeBinderNameInput(newName.trim());
-    if (!trimmed || trimmed === selectedToken.name) return;
-    const result = renameIntroTokenInProofTree(state, item.nodeId, selectedToken.nameIndex, trimmed);
+    const result = commitProofTreeBinderRename(state, {
+      tag: 'introToken',
+      nodeId: item.nodeId,
+      nameIndex: selectedToken.nameIndex,
+    }, newName);
     if (result) onPushChange(result);
   }, [selectedToken, state, item.nodeId, onPushChange]);
 
@@ -2594,19 +3233,11 @@ function IntroProseItem({
       </div>
       {/* Inline rename for selected token */}
       {selectedToken && (
-        <div data-token-rename style={{
-          paddingLeft: `${item.depth * 20 + 24}px`,
-          paddingTop: '2px',
-          paddingBottom: '4px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-        }}>
-          <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
-            {selectedToken.name}:
-          </span>
-          <BinderNameRenameInput
-            key={selectedToken.nameIndex}
+        <div data-token-rename>
+          <InlineBinderRenameRow
+            depth={item.depth}
+            label={selectedToken.name}
+            renameKey={selectedToken.nameIndex}
             defaultValue={selectedToken.name}
             onConfirm={handleRename}
             onCancel={() => onSelectBinder(null)}
@@ -2628,7 +3259,7 @@ function CaseHeaderProseItem({
   item: ProseItem;
   kind: Extract<ProseItemKind, { tag: 'caseHeader' }>;
   rowStyle: React.CSSProperties;
-  rowHandlers: { onClick: () => void; onMouseEnter: () => void; onMouseLeave: () => void };
+  rowHandlers: ProseRowHandlers;
   prose: React.CSSProperties;
   state: ProofTreeState;
   onPushChange: (s: ProofTreeState) => void;
@@ -2646,13 +3277,13 @@ function CaseHeaderProseItem({
 
   const handleRename = useCallback((newName: string) => {
     if (selectedParamIndex === null) return;
-    // Match the intro-token rename: accept LaTeX-style input and store the
-    // Unicode-shaped kernel name so renderNameLatex can format it properly.
-    const trimmed = normalizeBinderNameInput(newName.trim());
-    if (!trimmed || !paramNames || trimmed === paramNames[selectedParamIndex]) return;
-    const result = renameCaseParamInProofTree(state, item.nodeId, selectedParamIndex, trimmed);
+    const result = commitProofTreeBinderRename(state, {
+      tag: 'caseParam',
+      nodeId: item.nodeId,
+      paramIndex: selectedParamIndex,
+    }, newName);
     if (result) onPushChange(result);
-  }, [selectedParamIndex, paramNames, state, item.nodeId, onPushChange]);
+  }, [selectedParamIndex, state, item.nodeId, onPushChange]);
 
   // Dismiss selection when focus leaves the container
   const handleCaseContainerBlur = useCallback((e: React.FocusEvent) => {
@@ -2718,26 +3349,15 @@ function CaseHeaderProseItem({
       </div>
       {/* Inline rename for selected param — same style as tactic suggestions */}
       {selectedParamIndex !== null && paramNames && (
-        <div style={{
-          paddingLeft: `${item.depth * 20 + 24}px`,
-          paddingTop: '2px',
-          paddingBottom: '4px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          flexWrap: 'wrap',
-        }}>
-          <span style={{ fontSize: '10px', color: '#484f58', fontFamily: FONT_UI }}>
-            {paramNames[selectedParamIndex]}:
-          </span>
-          <BinderNameRenameInput
-            key={`${item.nodeId}-${selectedParamIndex}`}
-            defaultValue={paramNames[selectedParamIndex]}
-            onConfirm={handleRename}
-            onCancel={() => setSelectedParamIndex(null)}
-            autoFocus
-          />
-        </div>
+        <InlineBinderRenameRow
+          depth={item.depth}
+          label={paramNames[selectedParamIndex]}
+          renameKey={`${item.nodeId}-${selectedParamIndex}`}
+          defaultValue={paramNames[selectedParamIndex]}
+          onConfirm={handleRename}
+          onCancel={() => setSelectedParamIndex(null)}
+          autoFocus
+        />
       )}
     </div>
   );
@@ -2783,17 +3403,7 @@ function ProseItemView({
   const prose: React.CSSProperties = { color: hasError ? '#f85149' : '#c9d1d9' };
 
   // Does the previous item already show a goal equation (making the pre-goal redundant)?
-  const prevShowedGoal = prevItem && (
-    (prevItem.kind.tag === 'unfold' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'rewrite' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'apply' && (prevItem.kind.subgoalLatex?.length ?? 0) <= 1 && prevItem.kind.subgoalLatex?.[0]) ||
-    (prevItem.kind.tag === 'simp' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'intro' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'have' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'suffices' && prevItem.kind.goalLatex) ||
-    (prevItem.kind.tag === 'calcChain') ||
-    (prevItem.kind.tag === 'subgoalHeader' && prevItem.kind.goalLatex)
-  );
+  const prevShowedGoal = prevItem ? proseItemShowsVisibleGoal(prevItem.kind) : false;
 
   // "We must show [goal]" / "We need a value of type [goal]" prefix for steps
   // where no prior goal is visible. The isValueType flag switches to
@@ -2803,23 +3413,23 @@ function ProseItemView({
   // Short goals render inline (`We need a value of type ℝ.`); longer ones
   // break to a centered display block for readability.
   function mustShowPrefix(preGoalLatex?: string, isValueType?: boolean): React.ReactNode {
-    if (prevShowedGoal || !preGoalLatex) return null;
-    const lead = isValueType ? 'We need a value of type' : 'We must show';
-    const inline = preGoalLatex.length <= 30;
-    if (inline) {
+    if (prevShowedGoal) return null;
+    const goalLead = buildProseGoalLead(preGoalLatex, isValueType);
+    if (!goalLead) return null;
+    if (goalLead.inline) {
       return (
         <>
-          <span style={prose}>{lead}{' '}</span>
-          <InlineKaTeX latex={preGoalLatex} style={{ fontSize: '13px' }} />
+          <span style={prose}>{goalLead.lead}{' '}</span>
+          <InlineKaTeX latex={goalLead.goalLatex} style={{ fontSize: '13px' }} />
           <span style={prose}>.{' '}</span>
         </>
       );
     }
     return (
       <>
-        <span style={prose}>{lead}</span>
+        <span style={prose}>{goalLead.lead}</span>
         <span style={eqBlockStyle}>
-          <InlineKaTeX latex={preGoalLatex} displayMode />
+          <InlineKaTeX latex={goalLead.goalLatex} displayMode />
         </span>
       </>
     );
@@ -2906,167 +3516,71 @@ function ProseItemView({
 
     case 'unfold':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.preGoalLatex)}
-          <span style={prose}>which is true, by definition of{' '}</span>
-          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-          {errorSuffix}
-          {renderGoalSection(kind.goalLatex, ', if')}
-          {deleteBtn}
-        </div>
+        <UnfoldProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          mustShowPrefix={mustShowPrefix}
+          errorSuffix={errorSuffix}
+          renderGoalSection={renderGoalSection}
+        />
       );
 
     case 'fold':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.preGoalLatex)}
-          <span style={prose}>which matches the definition of{' '}</span>
-          <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-          {errorSuffix}
-          {renderGoalSection(kind.goalLatex, ', if')}
-          {deleteBtn}
-        </div>
+        <FoldProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          mustShowPrefix={mustShowPrefix}
+          errorSuffix={errorSuffix}
+          renderGoalSection={renderGoalSection}
+        />
       );
 
-    case 'rewrite': {
-      const arrow = kind.reverse ? ' (\u2190)' : '';
+    case 'rewrite':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.preGoalLatex)}
-          <span style={prose}>which is true, because{' '}</span>
-          {kind.equationLatex ? (
-            <>
-              <InlineKaTeX latex={kind.equationLatex} style={{ fontSize: '12px' }} />
-              <span style={prose}>{arrow} (</span>
-              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-              <span style={prose}>)</span>
-            </>
-          ) : (
-            <>
-              <span style={prose}>of{' '}</span>
-              <InlineKaTeX latex={texNameForProse(extractLemmaAndArgs(kind.name).lemma)} style={{ fontSize: '13px' }} />
-              {arrow && <span style={prose}>{arrow}</span>}
-            </>
-          )}
-          {errorSuffix}
-          {renderGoalSection(kind.goalLatex, ', if')}
-          {deleteBtn}
-        </div>
+        <RewriteProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          mustShowPrefix={mustShowPrefix}
+          errorSuffix={errorSuffix}
+          renderGoalSection={renderGoalSection}
+        />
       );
-    }
 
-    case 'apply': {
-      const subgoals = kind.subgoalLatex ?? [];
-      const appliedArgs = kind.appliedArgsLatex ?? [];
-      // "constructor" tactic: "by definition" for single-ctor types, "by construction" otherwise
-      const isConstructor = kind.name === 'constructor';
-      const constructorPhrase = isConstructor
-        ? (subgoals.length <= 1 ? 'by definition' : 'by construction')
-        : null;
-
-      // Compact form: all subgoals solved by `exact` — show a tight list
-      // of proof expressions instead of separate "Goal N" sections.
-      // e.g., "The result follows from (i) δF  (ii) MkPair(posF, ...)"
-      if (kind.proofExprs && kind.proofExprs.length > 0) {
-        const ROMAN = ['(i)', '(ii)', '(iii)', '(iv)', '(v)', '(vi)'];
-        return (
-          <div style={rowStyle} {...rowHandlers}>
-            {mustShowPrefix(kind.preGoalLatex)}
-            <span style={prose}>The result follows from</span>
-            {kind.proofExprs.map((expr, i) => (
-              <div key={i} style={{ paddingLeft: `${item.depth * 20 + 24}px`, paddingTop: '1px' }}>
-                <span style={{ color: '#8b949e', fontSize: '12px', marginRight: '4px' }}>{ROMAN[i] ?? `(${i + 1})`}</span>
-                <InlineKaTeX latex={expr} style={{ fontSize: '13px' }} />
-              </div>
-            ))}
-            {errorSuffix}
-            {deleteBtn}
-          </div>
-        );
-      }
-
-      if (subgoals.length <= 1) {
-        return (
-          <div style={rowStyle} {...rowHandlers}>
-            {mustShowPrefix(kind.preGoalLatex)}
-            {constructorPhrase ? (
-              <span style={prose}>which is true, {constructorPhrase}</span>
-            ) : (
-              <>
-                <span style={prose}>which is true, by{' '}</span>
-                <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-              </>
-            )}
-            {appliedArgs.length > 0 && (
-              <>
-                <span style={prose}>{' '}applied to{' '}</span>
-                {appliedArgs.map((arg, i) => (
-                  <React.Fragment key={i}>
-                    {i > 0 && <span style={prose}>,{' '}</span>}
-                    <InlineKaTeX latex={arg} style={{ fontSize: '13px' }} />
-                  </React.Fragment>
-                ))}
-              </>
-            )}
-            {errorSuffix}
-            {renderGoalSection(subgoals[0], ', if')}
-            {deleteBtn}
-          </div>
-        );
-      }
-      // Multiple subgoals (with non-exact children — needs full Goal sections)
+    case 'apply':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.preGoalLatex)}
-          {constructorPhrase ? (
-            <span style={prose}>which is true, {constructorPhrase}</span>
-          ) : (
-            <>
-              <span style={prose}>which is true, by{' '}</span>
-              <InlineKaTeX latex={texNameForProse(kind.name)} style={{ fontSize: '13px' }} />
-            </>
-          )}
-          {appliedArgs.length > 0 && (
-            <>
-              <span style={prose}>{' '}applied to{' '}</span>
-              {appliedArgs.map((arg, i) => (
-                <React.Fragment key={i}>
-                  {i > 0 && <span style={prose}>,{' '}</span>}
-                  <InlineKaTeX latex={arg} style={{ fontSize: '13px' }} />
-                </React.Fragment>
-              ))}
-            </>
-          )}
-          {errorSuffix}
-          <span style={prose}>, after showing {subgoals.length} subgoals:</span>
-          {deleteBtn}
-        </div>
+        <ApplyProseItem
+          item={item}
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          mustShowPrefix={mustShowPrefix}
+          errorSuffix={errorSuffix}
+          renderGoalSection={renderGoalSection}
+        />
       );
-    }
 
-    case 'inductionHeader': {
-      const scrutineeDisplay = kind.scrutineeLatex
-        ? <InlineKaTeX latex={kind.scrutineeLatex} style={{ fontSize: '13px' }} />
-        : <InlineKaTeX latex={texNameForProse(kind.scrutinee)} style={{ fontSize: '13px' }} />;
-      if (kind.isCases) {
-        return (
-          <div style={rowStyle} {...rowHandlers}>
-            <span style={prose}>By cases on{' '}</span>
-            {scrutineeDisplay}
-            <span style={prose}>:</span>
-            {deleteBtn}
-          </div>
-        );
-      }
+    case 'inductionHeader':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          <span style={prose}>We proceed by induction on{' '}</span>
-          {scrutineeDisplay}
-          <span style={prose}>.</span>
-          {deleteBtn}
-        </div>
+        <InductionHeaderProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+        />
       );
-    }
 
     case 'caseHeader':
       return (
@@ -3081,112 +3595,45 @@ function ProseItemView({
         />
       );
 
-    case 'exact': {
-      const proofLatex = kind.proofExprLatex;
-      const fallbackLatex = texNameForProse(kind.exprLatex.trim().split(/[\s(]/)[0].replace(/^\(+/, ''));
-      // Value-type goals (need data, not a proof): "Use δF." reads naturally.
-      // Propositional goals: "The result follows from posF." reads naturally.
-      const solvedLead = kind.isValueType ? 'Use' : 'The result follows from';
+    case 'exact':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.goalLatex, kind.isValueType)}
-          {kind.solved ? (
-            <>
-              <span style={prose}>{solvedLead}{' '}</span>
-              <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
-              <span style={prose}>.</span>
-            </>
-          ) : kind.error ? (
-            <>
-              <span style={{ color: '#f85149' }}>By{' '}</span>
-              <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
-              <span style={{ color: '#f85149', fontSize: '11px', marginLeft: '6px' }}>({kind.error})</span>
-            </>
-          ) : (
-            <>
-              <span style={prose}>By{' '}</span>
-              <InlineKaTeX latex={proofLatex ?? fallbackLatex} style={{ fontSize: '13px' }} />
-              <span style={prose}>.</span>
-            </>
-          )}
-          {deleteBtn}
-        </div>
+        <ExactProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          mustShowPrefix={mustShowPrefix}
+        />
       );
-    }
 
     case 'simp':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.preGoalLatex)}
-          <span style={prose}>Simplifying using{' '}</span>
-          {kind.lemmas.map((lemma, i) => (
-            <React.Fragment key={i}>
-              {i > 0 && <span style={prose}>,{' '}</span>}
-              <InlineKaTeX latex={texNameForProse(lemma)} style={{ fontSize: '13px' }} />
-            </React.Fragment>
-          ))}
-          <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
-          {renderGoalSection(kind.goalLatex, ', we get')}
-          {deleteBtn}
-        </div>
+        <SimpProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+          mustShowPrefix={mustShowPrefix}
+          renderGoalSection={renderGoalSection}
+        />
       );
 
-    case 'calcChain': {
-      const steps = kind.steps;
+    case 'calcChain':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          {mustShowPrefix(kind.preGoalLatex)}
-          <span style={prose}>By rewriting:</span>
-          <div style={{ paddingLeft: '12px', paddingTop: '4px', paddingBottom: '4px' }}>
-            {steps.map((step, si) => {
-              const isStepCursor = step.nodeId === item.nodeId;
-              const stepStyle: React.CSSProperties = {
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: '8px',
-                paddingTop: si === 0 ? 0 : '2px',
-                paddingBottom: '2px',
-                paddingLeft: '4px',
-                borderLeft: isStepCursor ? '2px solid #58a6ff' : '2px solid transparent',
-                cursor: 'pointer',
-              };
-              const handleStepClick = (e: React.MouseEvent) => {
-                e.stopPropagation();
-                onClickNode(step.nodeId);
-              };
-              const handleStepDelete = (e: React.MouseEvent) => {
-                e.stopPropagation();
-                const result = clearProofTreeNode(state, step.nodeId);
-                if (result) onPushChange(result);
-              };
-              return (
-                <div key={step.nodeId} style={stepStyle} onClick={handleStepClick}>
-                  <span style={{ flex: 1 }}>
-                    {step.goalLatex ? (
-                      <InlineKaTeX latex={step.goalLatex} style={{ fontSize: '13px' }} />
-                    ) : (
-                      <span style={{ color: '#8b949e', fontStyle: 'italic' }}>?</span>
-                    )}
-                  </span>
-                  <span style={{ color: '#484f58', fontSize: '11px', whiteSpace: 'nowrap', marginLeft: '12px' }}>
-                    (<InlineKaTeX latex={texNameForProse(step.lemmaName)} style={{ fontSize: '11px' }} />)
-                  </span>
-                  <button
-                    onClick={handleStepDelete}
-                    style={{
-                      background: 'none', border: 'none', color: '#f85149',
-                      cursor: 'pointer', fontSize: '13px', padding: '0 2px',
-                      opacity: 0.5, lineHeight: 1,
-                    }}
-                    title="Delete this step"
-                  >&times;</button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <CalcChainProseItem
+          item={item}
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          state={state}
+          onPushChange={onPushChange}
+          onClickNode={onClickNode}
+          mustShowPrefix={mustShowPrefix}
+        />
       );
-    }
 
     case 'have':
       return (
@@ -3209,57 +3656,27 @@ function ProseItemView({
 
     case 'suffices':
       return (
-        <div style={rowStyle} {...rowHandlers}>
-          <span style={prose}>It suffices to show</span>
-          {kind.goalLatex && (
-            <span style={eqBlockStyle}>
-              <InlineKaTeX latex={kind.goalLatex} displayMode />
-            </span>
-          )}
-          {kind.byExprLatex ? (
-            <div style={{ paddingLeft: '20px' }}>
-              <span style={prose}>since the result then follows from{' '}</span>
-              <InlineKaTeX latex={kind.byExprLatex} style={{ fontSize: '13px' }} />
-              <span style={prose}>.</span>
-            </div>
-          ) : null}
-          {deleteBtn}
-        </div>
+        <SufficesProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+          deleteBtn={deleteBtn}
+        />
       );
 
-    case 'subgoalHeader': {
-      // Inline short goals right after the label: "Goal 1: We need ℝ. Use δF."
-      const lead = kind.isValueType ? 'We need a value of type' : 'We must show';
-      const short = kind.goalLatex && kind.goalLatex.length <= 30;
+    case 'subgoalHeader':
       return (
-        <div style={{ ...rowStyle, fontWeight: 600, paddingTop: '6px' }} {...rowHandlers}>
-          <span style={{ color: '#79c0ff' }}>{kind.label}</span>
-          <span style={prose}>:</span>
-          {kind.goalLatex && short && (
-            <>
-              <span style={{ ...prose, fontWeight: 400 }}>{' '}{lead}{' '}</span>
-              <InlineKaTeX latex={kind.goalLatex} style={{ fontSize: '13px' }} />
-              <span style={{ ...prose, fontWeight: 400 }}>.</span>
-            </>
-          )}
-          {kind.goalLatex && !short && (
-            <>
-              <span style={{ ...prose, fontWeight: 400 }}>{' '}{lead}</span>
-              <span style={eqBlockStyle}>
-                <InlineKaTeX latex={kind.goalLatex} displayMode />
-              </span>
-            </>
-          )}
-        </div>
+        <SubgoalHeaderProseItem
+          kind={kind}
+          rowStyle={rowStyle}
+          rowHandlers={rowHandlers}
+          prose={prose}
+        />
       );
-    }
 
     case 'qed':
-      return (
-        <div style={{ ...rowStyle, paddingTop: '2px' }} {...rowHandlers}>
-          <span style={{ color: '#3fb950', fontSize: '14px' }}>&#8718;</span>
-        </div>
-      );
+      return <QedProseItem rowStyle={rowStyle} rowHandlers={rowHandlers} />;
 
     case 'hole': {
       if (!item.isCursor) {
@@ -3307,50 +3724,6 @@ function ProseItemView({
     default:
       return null;
   }
-}
-
-/**
- * Extract lemma name + meaningful simple args from a proof expression.
- * "limitExt (\x => ...) (diffQuot ...) x0 (rmul Lg Lf) (chainAlgId g f x0 Lg) h"
- *  → { lemma: "limitExt", simpleArgs: ["chainAlgId", "h"] }
- * Filters out: lambdas, parenthesized sub-expressions, single-char structural vars.
- */
-function extractLemmaAndArgs(expr: string): { lemma: string; simpleArgs: string[] } {
-  const trimmed = expr.trim();
-  // Tokenize respecting parentheses: split into top-level space-separated chunks
-  const tokens: string[] = [];
-  let depth = 0;
-  let current = '';
-  for (const ch of trimmed) {
-    if (ch === '(' || ch === ')') {
-      depth += ch === '(' ? 1 : -1;
-      current += ch;
-    } else if (ch === ' ' && depth === 0) {
-      if (current) tokens.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  if (current) tokens.push(current);
-
-  // Extract the function name: split first token on '(' in case there's no space
-  // e.g., "limitExt(\x=>...)" → "limitExt"
-  const raw0 = (tokens[0] ?? '').replace(/^\(+/, '');
-  const parenIdx = raw0.indexOf('(');
-  const lemma = parenIdx >= 0 ? raw0.slice(0, parenIdx) : raw0.replace(/\)+$/, '');
-  const simpleArgs: string[] = [];
-  for (let i = 1; i < tokens.length; i++) {
-    const t = tokens[i];
-    // Skip parenthesized expressions, lambdas
-    if (t.startsWith('(') || t.startsWith('\\') || t.includes('=>')) continue;
-    // Keep identifiers that look like lemma/hypothesis names:
-    // 3+ chars (chainAlgId, addZeroLeft, hSum) or h-prefixed (hA, hf)
-    if (/^[a-zA-Z][a-zA-Z0-9_]*$/.test(t) && (t.length >= 3 || t.startsWith('h'))) {
-      simpleArgs.push(t);
-    }
-  }
-  return { lemma, simpleArgs };
 }
 
 /** Render a variable name for prose inline KaTeX.
@@ -3458,49 +3831,35 @@ function HoleProseView({
     <div style={rowStyle} onClick={() => onClickNode(nodeId)}>
       {/* Inline term builder (appears above the goal when active) */}
       {inlineTermBuilder && onSetTermBuilder && (
-        <div style={{ marginBottom: '8px' }}>
-          <TermBuilderView
-            builderState={inlineTermBuilder}
-            onFillSlot={(slotIndex, sourceExpr) => {
-              if (!typedContext?.kernelGoal || !definitions) return;
-              const kg = typedContext.kernelGoal;
-              const rebuilt = fillTermBuilderSlotFromSource(
-                inlineTermBuilder,
-                slotIndex,
-                latexSourceToUnicode(sourceExpr),
-                {
-                  engine: kg.engine,
-                  goal: kg.goal,
-                  definitions,
-                  rev: kg.rev,
-                },
-              );
-              if (rebuilt) onSetTermBuilder(rebuilt.builderState);
-            }}
-            onClearSlot={(slotIndex) => {
-              if (!typedContext?.kernelGoal || !definitions) return;
-              const kg = typedContext.kernelGoal;
-              const rebuilt = clearTermBuilderSlot(
-                inlineTermBuilder,
-                slotIndex,
-                {
-                  engine: kg.engine,
-                  goal: kg.goal,
-                  definitions,
-                  rev: kg.rev,
-                },
-              );
-              if (rebuilt) onSetTermBuilder(rebuilt.builderState);
-            }}
-            onConfirm={() => {
-              const result = insertHaveFromTermBuilder(state, inlineTermBuilder);
-              if (result) onPushChange(result);
-              onSetTermBuilder(null);
-            }}
-            onCancel={() => onSetTermBuilder(null)}
-            registry={registry}
-          />
-        </div>
+        <ProofTreeTermBuilderPanel
+          builderState={inlineTermBuilder}
+          registry={registry}
+          onFillSlot={(slotIndex, sourceExpr) => {
+            const rebuilt = fillTermBuilderSlotFromGoal(
+              inlineTermBuilder,
+              slotIndex,
+              convertMathEditorSourceToUnicode(sourceExpr),
+              typedContext?.kernelGoal,
+              definitions,
+            );
+            if (rebuilt) onSetTermBuilder(rebuilt.builderState);
+          }}
+          onClearSlot={(slotIndex) => {
+            const rebuilt = clearTermBuilderSlotFromGoal(
+              inlineTermBuilder,
+              slotIndex,
+              typedContext?.kernelGoal,
+              definitions,
+            );
+            if (rebuilt) onSetTermBuilder(rebuilt.builderState);
+          }}
+          onConfirm={() => {
+            const result = insertHaveFromTermBuilder(state, inlineTermBuilder);
+            if (result) onPushChange(result);
+            onSetTermBuilder(null);
+          }}
+          onCancel={() => onSetTermBuilder(null)}
+        />
       )}
 
       {/* Interactive goal display — centered and large */}

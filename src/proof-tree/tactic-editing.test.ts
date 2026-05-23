@@ -1,6 +1,8 @@
 import { mkConstTT, mkPiTT } from '../compiler/surface';
-import { createDefinitionsMap } from '../compiler/term';
+import { addDefinition, createDefinitionsMap, type MetaVar } from '../compiler/term';
 import { beforeEach, describe, expect, test } from 'vitest';
+import type { TTKContext, TTKTerm } from '../compiler/kernel';
+import { createInitialEngine } from '../tactics/tacticsEngine';
 import type { InductiveInfo } from './goal-computation';
 import { createInitialState, mkCase, mkExact, mkHave, mkHole, mkInduction, mkIntros, mkSimp, resetProofIds } from './proof-tree';
 import { buildProjectionApplicationSource, buildHaveTacticCommands } from './tactic-command-bridge';
@@ -9,8 +11,14 @@ import {
   applyManualProofTreeTactic,
   applySuggestionToProofTreeState,
   clearProofTreeNode,
+  clearHaveTermBuilderSlotInProofTree,
+  commitHaveExprSourceInProofTree,
+  commitProofTreeBinderRename,
+  convertMathEditorSourceToUnicode,
+  fillHaveTermBuilderSlotInProofTree,
   hoistTermBuilderSlotToHave,
   insertHaveFromTermBuilder,
+  openHaveExprTermBuilder,
   renameHaveBindingInProofTree,
   renameCaseParamInProofTree,
   renameIntroTokenInProofTree,
@@ -23,6 +31,12 @@ import {
 } from './tactic-editing';
 
 beforeEach(() => resetProofIds());
+
+const nat: TTKTerm = { tag: 'Const', name: 'Nat' };
+
+function mkPi(name: string, domain: TTKTerm, body: TTKTerm): TTKTerm {
+  return { tag: 'Binder', binderKind: { tag: 'BPi' }, name, domain, body };
+}
 
 const natInfo: InductiveInfo = {
   name: 'Nat',
@@ -205,6 +219,78 @@ describe('have editing helpers', () => {
     }
   });
 
+  test('commitHaveExprSourceInProofTree normalizes math-editor source and rejects no-op edits', () => {
+    const child = mkHole();
+    const state = {
+      root: mkHave('h', 'α', child),
+      cursor: { nodeId: child.id },
+    };
+
+    const noChange = commitHaveExprSourceInProofTree(state, state.root.id, '\\alpha');
+    expect(noChange).toBeNull();
+
+    const next = commitHaveExprSourceInProofTree(state, state.root.id, '\\beta');
+    expect(next?.root.tag).toBe('have');
+    if (!next || next.root.tag !== 'have') return;
+    expect(next.root.expr).toBe('β');
+    expect(convertMathEditorSourceToUnicode('\\delta')).toBe('δ');
+  });
+
+  test('shared have term-builder helpers reopen and sync the have expression', () => {
+    let defs = createDefinitionsMap();
+    defs = addDefinition(
+      defs,
+      'pairNat',
+      mkPi('x', nat, mkPi('y', nat, nat)),
+    );
+
+    const ctx: TTKContext = [{ name: 'n', type: nat }];
+    const goalMeta: MetaVar = { ctx, type: nat, solution: undefined };
+    const kernelGoal = { engine: createInitialEngine(nat, ctx, defs), goal: goalMeta };
+
+    const child = mkHole();
+    const state = {
+      root: mkHave('h', 'pairNat n ?', child),
+      cursor: { nodeId: child.id },
+    };
+
+    const opened = openHaveExprTermBuilder(state.root.expr, kernelGoal, defs);
+    expect(opened).not.toBeNull();
+    if (!opened) return;
+    expect(opened.builderState.slots[0].sourceExpr).toBe('n');
+
+    const filled = fillHaveTermBuilderSlotInProofTree(
+      state,
+      state.root.id,
+      opened.builderState,
+      1,
+      '\\alpha',
+      kernelGoal,
+      defs,
+    );
+    expect(filled).not.toBeNull();
+    if (!filled) return;
+    expect(filled.builderState.slots[1].sourceExpr).toBe('α');
+    expect(filled.state.root.tag).toBe('have');
+    if (filled.state.root.tag !== 'have') return;
+    expect(filled.state.root.expr).toBe('pairNat (n) (α)');
+
+    const cleared = clearHaveTermBuilderSlotInProofTree(
+      filled.state,
+      state.root.id,
+      filled.builderState,
+      1,
+      kernelGoal,
+      defs,
+    );
+    expect(cleared).not.toBeNull();
+    if (!cleared) return;
+    expect(cleared.builderState.slots[1].value).toBeNull();
+    expect(cleared.state.root.tag).toBe('have');
+    if (cleared.state.root.tag !== 'have') return;
+    expect(cleared.state.root.expr).toBe('pairNat (n) ?');
+  });
+
   test('hoistTermBuilderSlotToHave inserts a new interactive have and rewrites the parent expr', () => {
     const currentHave = mkHave('main', 'foo (old)', mkHole());
     const state = {
@@ -346,6 +432,73 @@ describe('shared structural editing helpers', () => {
     expect(next.root.cases[0].constructorParamNames).toEqual(['j']);
     expect(next.root.cases[0].label).toBe('n = Succ j');
     expect(next.root.cases[0].body.id).toBe(caseNode.body.id);
+  });
+
+  test('commitProofTreeBinderRename normalizes latex-style binder names across rename targets', () => {
+    const haveState = {
+      root: mkHave('h', 'proof', mkExact('h')),
+      cursor: { nodeId: 0 },
+    };
+    const renamedHave = commitProofTreeBinderRename(haveState, {
+      tag: 'have',
+      nodeId: haveState.root.id,
+    }, '\\delta_f');
+    expect(renamedHave?.root.tag).toBe('have');
+    if (!renamedHave || renamedHave.root.tag !== 'have') return;
+    expect(renamedHave.root.name).toBe('δ_f');
+    expect(renamedHave.root.child.tag).toBe('exact');
+    if (renamedHave.root.child.tag !== 'exact') return;
+    expect(renamedHave.root.child.expr).toBe('δ_f');
+
+    const introChild = mkHole();
+    const introRoot = mkIntros(['x'], introChild);
+    const renamedIntro = commitProofTreeBinderRename({
+      root: introRoot,
+      cursor: { nodeId: introChild.id },
+    }, {
+      tag: 'introToken',
+      nodeId: introRoot.id,
+      nameIndex: 0,
+    }, '\\alpha');
+    expect(renamedIntro?.root.tag).toBe('intros');
+    if (!renamedIntro || renamedIntro.root.tag !== 'intros') return;
+    expect(renamedIntro.root.names).toEqual(['α']);
+
+    const caseNode = mkCase('n = Succ k', mkHole(), 'Succ', ['k']);
+    const inductionRoot = mkInduction('n', [caseNode]);
+    const renamedCase = commitProofTreeBinderRename({
+      root: inductionRoot,
+      cursor: { nodeId: caseNode.body.id },
+    }, {
+      tag: 'caseParam',
+      nodeId: caseNode.id,
+      paramIndex: 0,
+    }, '\\beta');
+    expect(renamedCase?.root.tag).toBe('induction');
+    if (!renamedCase || renamedCase.root.tag !== 'induction') return;
+    expect(renamedCase.root.cases[0].constructorParamNames).toEqual(['β']);
+    expect(renamedCase.root.cases[0].label).toBe('n = Succ β');
+  });
+
+  test('commitProofTreeBinderRename rejects empty or unchanged binder names', () => {
+    const child = mkHole();
+    const root = mkIntros(['x'], child);
+    const state = {
+      root,
+      cursor: { nodeId: child.id },
+    };
+
+    expect(commitProofTreeBinderRename(state, {
+      tag: 'introToken',
+      nodeId: root.id,
+      nameIndex: 0,
+    }, '   ')).toBeNull();
+
+    expect(commitProofTreeBinderRename(state, {
+      tag: 'introToken',
+      nodeId: root.id,
+      nameIndex: 0,
+    }, 'x')).toBeNull();
   });
 
   test('induction case helpers share add/remove behavior', () => {

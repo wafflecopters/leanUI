@@ -312,6 +312,30 @@ export function mkProp(): TTKTerm {
 }
 
 /**
+ * Check whether a level term reduces to 0 (would make Sort(level) = Prop).
+ *
+ * Lean convention: Sort 0 is Prop; Sort (n+1) is Type n. Hence a sort sits in
+ * the propositional universe iff its level normalises to the literal 0.
+ *
+ * For levels containing metas/vars that haven't been resolved, returns false
+ * (we can't *know* it's Prop). Callers that have access to metaVars should
+ * zonk first if they want metas substituted.
+ */
+export function isPropLevel(level: TTKTerm): boolean {
+  return levelToNumber(simplifyLevel(level)) === 0;
+}
+
+/**
+ * Check whether a term is the Prop sort (Sort 0).
+ *
+ * Sugar around `isPropLevel`. Use this on any term that might be a sort —
+ * type-of-a-type checks, motive return-type checks, codomain checks.
+ */
+export function isProp(term: TTKTerm): boolean {
+  return term.tag === 'Sort' && isPropLevel(term.level);
+}
+
+/**
  * Create Type_i (Sort (i+1) in our convention)
  * Type = Type_0 = Sort 1
  * Type 1 = Sort 2

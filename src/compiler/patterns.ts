@@ -7,14 +7,14 @@
  * - LHS unification for match clauses
  */
 
-import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole } from './kernel';
+import { TTKTerm, TTKClause, TTKPattern, prettyPrint as prettyPrintTTK, prettyPrintPattern, mkVar, mkConst, mkAppSpine, fillHole, isProp } from './kernel';
 import { arraySeg, fieldSeg, IndexPath, serializeIndexPath } from '../types/source-position';
 import { countKernelPatternBindings, countKernelPatternsBindings } from './pattern-binders';
 import { countPiBinders, DefinitionsMap, extractAppSpine, extractPiSpine, printCollectionFancy, TTKContext, TCEnv, TCEnvError, assertDefined, assertIsNotPi, assertIsPi, transformVarsInTerm, validatePatternVarName, addMetaVarInTCEnv, NamedArgMap, ClausePartIndex, InductiveDefinition, registerHolesInTermAsMetas, getTypeDefinition } from './term';
 import { unifyTerms } from './unify';
 import { shiftTerm, subst, enumerateAppliedSubstitutions } from './subst';
 import { areWhnfTypesDefEq, whnf, whnfToPi } from './whnf';
-import { checkType } from './checker';
+import { checkType, inferType } from './checker';
 
 // ============================================================================
 // Logging
@@ -1301,7 +1301,6 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
     const checkTypeEntry = checkStack.pop() as CheckStackEntry
 
     if (!checkTypeEntry) {
-      debugger
       throw new Error('No next check type')
     }
 
@@ -1315,7 +1314,6 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
   }
 
   if (checkStack.length !== 1) {
-    debugger
     throw new Error('Check stack not empty')
   }
 
@@ -1341,6 +1339,116 @@ function unifyMatchClauseLhs(termName: string, env: TCEnv<TTKPattern[]>, type: T
  * @param namedArgMap Map of named parameter names to positions (from function signature)
  * @param totalArity Total number of parameters in the function signature
  */
+/**
+ * Walk a pattern, collecting the names of all constructor heads (including
+ * nested ones). Used by the large-elim ban to find every Prop-elimination
+ * site in a clause.
+ */
+function collectCtorHeadsInPattern(pattern: TTKPattern, out: string[]): void {
+  if (pattern.tag !== 'PCtor') return;
+  out.push(pattern.name);
+  for (const arg of pattern.args) collectCtorHeadsInPattern(arg, out);
+  if (pattern.namedArgs) {
+    for (const na of pattern.namedArgs) collectCtorHeadsInPattern(na.pattern, out);
+  }
+}
+
+/**
+ * Conservative fallback for large-elim motive classification.
+ *
+ * Full inference can get stuck before RHS checking has solved every implicit
+ * argument in a proposition like `EqualProp o o`. In that case it is still safe
+ * to allow the elimination when the return type's head constant has a declared
+ * codomain that is definitionally Prop, independent of its arguments.
+ */
+function hasDefinitelyPropHeadCodomain(returnType: TTKTerm, env: TCEnv<unknown>): boolean {
+  const normalized = whnf(returnType, { definitions: env.definitions, typingContext: env.context });
+  const { fn: head } = extractAppSpine(normalized);
+  if (head.tag !== 'Const') return false;
+  const headType = getTypeDefinition(env.definitions, head.name);
+  if (!headType) return false;
+
+  let codomain = whnf(headType, { definitions: env.definitions, typingContext: env.context });
+  while (codomain.tag === 'Binder' && codomain.binderKind.tag === 'BPi') {
+    codomain = whnf(codomain.body, { definitions: env.definitions, typingContext: env.context });
+  }
+  return codomain.tag === 'Sort' && isProp(codomain);
+}
+
+/**
+ * Enforce the large-elimination restriction.
+ *
+ * For every constructor pattern in the clause, look up its parent inductive.
+ * If that inductive is Prop-valued and not singleton-eliminable, the clause's
+ * RHS type (`returnType`) must itself be in Prop.
+ *
+ * This mirrors Lean: pattern matching on a non-singleton Prop forbids the
+ * motive from landing in Type. Combined with proof irrelevance this is what
+ * makes Prop runtime-erasable in principle.
+ */
+function enforceLargeElimRestriction(
+  patterns: TTKPattern[],
+  returnType: TTKTerm,
+  env: TCEnv<unknown>,
+): void {
+  const ctorHeads: string[] = [];
+  for (const p of patterns) collectCtorHeadsInPattern(p, ctorHeads);
+  if (ctorHeads.length === 0) return;
+
+  // Find any constructor whose inductive is Prop-valued and not singleton.
+  // We only need one such case to demand a Prop motive.
+  let restrictingInductive: string | null = null;
+  let restrictingCtor: string | null = null;
+  for (const ctorName of ctorHeads) {
+    const indName = env.definitions.inductiveNameOfConstructor.get(ctorName);
+    if (!indName) continue;
+    const ind = env.definitions.inductiveTypes.get(indName);
+    if (!ind) continue;
+    if (ind.allowsLargeElim !== false) continue;
+    restrictingInductive = indName;
+    restrictingCtor = ctorName;
+    break;
+  }
+  if (!restrictingInductive) return;
+
+  // Infer the sort of returnType. Once a non-singleton Prop pattern has been
+  // found, uncertainty must be conservative in the soundness direction: if we
+  // cannot prove the motive lands in Prop, reject rather than silently allowing
+  // large elimination into an unknown sort.
+  let returnSort: TTKTerm;
+  try {
+    returnSort = inferType(env.withValue(returnType)).value;
+  } catch (e) {
+    if (hasDefinitelyPropHeadCodomain(returnType, env)) return;
+    const detail = e instanceof Error && e.message ? ` (${e.message})` : '';
+    throw TCEnvError.create(
+      `Large elimination from Prop could not verify that the motive lands in Prop: ` +
+      `pattern '${restrictingCtor}' destructs '${restrictingInductive}' ` +
+      `(a non-singleton Prop), but the clause return type's sort could not be inferred${detail}.`,
+      env,
+    );
+  }
+  if (returnSort.tag !== 'Sort') {
+    if (hasDefinitelyPropHeadCodomain(returnType, env)) return;
+    throw TCEnvError.create(
+      `Large elimination from Prop could not verify that the motive lands in Prop: ` +
+      `pattern '${restrictingCtor}' destructs '${restrictingInductive}' ` +
+      `(a non-singleton Prop), but the clause return type has non-sort type ` +
+      `${prettyPrintTTK(returnSort)}.`,
+      env,
+    );
+  }
+  if (isProp(returnSort)) return;  // Motive lands in Prop — allowed.
+
+  throw TCEnvError.create(
+    `Large elimination from Prop is not allowed: pattern '${restrictingCtor}' ` +
+    `destructs '${restrictingInductive}' (a non-singleton Prop) but the clause ` +
+    `produces a value at ${prettyPrintTTK(returnSort)}, not Prop. ` +
+    `Either change the result type to Prop, or restructure to avoid case-analysing the proposition.`,
+    env,
+  );
+}
+
 export function checkMatchClause(
   termName: string,
   env: TCEnv<TTKClause>,
@@ -1537,6 +1645,13 @@ export function checkMatchClause(
     });
     console.log('[RHS CHECK] Expected type:', checkEnv.prettyPrint(returnType));
   }
+
+  // Large-elimination ban: matching on a Prop-valued non-singleton inductive
+  // restricts the motive to Prop. We forbid any clause whose RHS is to be
+  // checked against a non-Prop type when any pattern destructs such an
+  // inductive. Singleton inductives (Eq, And-of-props, False, Acc) are
+  // exempt via `allowsLargeElim` set at inductive elaboration time.
+  enforceLargeElimRestriction(paddedPatterns, returnType, checkEnv);
 
   // Type check the transformed RHS
   const checkedEnv = checkType(checkEnv, returnType);

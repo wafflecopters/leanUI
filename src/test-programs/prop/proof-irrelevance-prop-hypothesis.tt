@@ -1,0 +1,15 @@
+@test success
+@name "proof-irrelevant hypotheses interchangeable in proof terms"
+@import preambles/equality-poly.tt
+
+inductive P : Prop where
+  triv : P
+
+-- A function taking two distinct hypothetical P proofs can use either
+-- where the other is expected, because they are defeq.
+swap : (h1 : P) -> (h2 : P) -> EqualProp h1 h2
+swap h1 h2 = reflProp
+
+-- Symmetric: returning either hypothesis as if it were a specific proof.
+returnAsTriv : (h : P) -> EqualProp h triv
+returnAsTriv h = reflProp

@@ -1,0 +1,13 @@
+-- PLift / ULift: a universe-polymorphic embedding from `Sort u` into `Type u`.
+--
+-- For u = 0 this is Lean's PLift: it packages a Prop as a Type value, so
+-- propositional content can flow through positions that demand a Type. For
+-- u ≥ 1 it acts as ULift, lifting a Type one universe level higher.
+--
+-- A single constructor with one Sort-u-typed argument keeps PLift in the
+-- singleton-eliminable family: matching on `mkPLift` recovers the wrapped
+-- value. When u = 0 the wrapped value lives in Prop, so two PLift wrappers
+-- of any two proofs of the same Prop are themselves definitionally equal
+-- (proof irrelevance lifts to the wrapper by congruence).
+inductive PLift : {u : ULevel} -> Sort u -> Type u where
+  mkPLift : {u : ULevel} -> {A : Sort u} -> A -> PLift A

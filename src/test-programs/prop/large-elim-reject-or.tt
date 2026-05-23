@@ -1,0 +1,18 @@
+@test failure
+@name "large-elim ban: case-analysing Or to produce a Nat is rejected"
+@error "Large elimination from Prop"
+@import preambles/nat.tt
+
+inductive P : Prop where pp : P
+inductive Q : Prop where pq : Q
+
+-- Or has TWO constructors → not singleton-eliminable.
+inductive Or : Prop -> Prop -> Prop where
+  orLeft  : {A : Prop} -> {B : Prop} -> A -> Or A B
+  orRight : {A : Prop} -> {B : Prop} -> B -> Or A B
+
+-- Trying to extract a Nat from an Or proof: the motive Nat lives in Type,
+-- but Or is in Prop and not singleton. The check must reject this.
+badProj : Or P Q -> Nat
+badProj (orLeft _) = Zero
+badProj (orRight _) = Zero

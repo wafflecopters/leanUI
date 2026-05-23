@@ -1,0 +1,13 @@
+@test success
+@name "And and Or in Prop"
+
+-- Classic propositional connectives.
+-- These work even without impredicative inductive (data is itself in Prop),
+-- but they should still typecheck under the relaxed regime.
+
+inductive And : Prop -> Prop -> Prop where
+  introAnd : {P : Prop} -> {Q : Prop} -> P -> Q -> And P Q
+
+inductive Or : Prop -> Prop -> Prop where
+  introLeft : {P : Prop} -> {Q : Prop} -> P -> Or P Q
+  introRight : {P : Prop} -> {Q : Prop} -> Q -> Or P Q

@@ -330,6 +330,28 @@ describe('isValueTypeGoal', () => {
   test('Void → proposition', () => {
     expect(isValueTypeGoal(mkConst('Void'))).toBe(false);
   });
+
+  test('definition-backed custom Prop head → proposition without hardcoded name', () => {
+    let defs = createDefinitionsMap();
+    defs = addDefinition(
+      defs,
+      'CustomRel',
+      mkPi(mkConst('Nat'), mkPi(mkConst('Nat'), mkSort(mkULit(0)), '_'), '_'),
+    );
+    const term = mkApp(mkApp(mkConst('CustomRel'), mkVar(0)), mkVar(1));
+    expect(isValueTypeGoal(term, defs)).toBe(false);
+  });
+
+  test('definition-backed custom Type family → value type without hardcoded name', () => {
+    let defs = createDefinitionsMap();
+    defs = addDefinition(
+      defs,
+      'CustomCarrier',
+      mkPi(mkConst('Struct'), mkSort(mkULit(1)), '_'),
+    );
+    const term = mkApp(mkConst('CustomCarrier'), mkVar(0));
+    expect(isValueTypeGoal(term, defs)).toBe(true);
+  });
 });
 
 describe('peelConstructorParams', () => {

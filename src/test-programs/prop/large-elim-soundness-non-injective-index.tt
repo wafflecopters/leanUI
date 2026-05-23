@@ -1,0 +1,16 @@
+@test failure
+@name "soundness: Prop arg that appears only inside a ctor (Succ n) is NOT bare-index, not singleton"
+@error "Large elimination from Prop"
+@import preambles/nat.tt
+
+inductive Box : Nat -> Prop where
+  mkBox : (n : Nat) -> Box (Succ n)
+
+-- `n` appears in the constructor's return type ONLY as the argument of Succ,
+-- not as a bare Var. Even though Succ is morally injective, the kernel must
+-- conservatively treat `n` as not-uniquely-determined-by-indices — Lean's
+-- rule requires the arg to appear directly as an index (bare Var), not
+-- wrapped in another constructor or function call. So Box must be classified
+-- as non-singleton, and large elimination into Nat must be rejected.
+extractN : (k : Nat) -> Box k -> Nat
+extractN k (mkBox n) = n

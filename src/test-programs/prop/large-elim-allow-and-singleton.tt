@@ -1,0 +1,16 @@
+@test success
+@name "singleton elim: And whose fields are both Prop is singleton-eliminable into Type"
+@import preambles/nat.tt
+
+inductive P : Prop where pp : P
+inductive Q : Prop where pq : Q
+
+inductive And : Prop -> Prop -> Prop where
+  intro : {A : Prop} -> {B : Prop} -> A -> B -> And A B
+
+-- And : Prop -> Prop -> Prop. Single ctor, both fields in Prop → singleton.
+-- Hence we *can* eliminate into Nat (Type-valued motive). The destructured
+-- proofs are erased; only the structural traversal contributes to the Nat.
+-- Vacuous in practice (we return a constant), but the kernel rule must allow it.
+fromAnd : And P Q -> Nat
+fromAnd (intro _ _) = Zero

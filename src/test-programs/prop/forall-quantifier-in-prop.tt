@@ -1,0 +1,10 @@
+@test success
+@name "universal quantification over Type stays in Prop"
+
+inductive P : (A : Type) -> Prop where
+  mkP : (A : Type) -> P A
+
+-- forall A : Type, P A — the result is a proposition by impredicativity.
+-- This is the bread and butter of Prop: statements about all types.
+ForallProp : Prop
+ForallProp = (A : Type) -> P A

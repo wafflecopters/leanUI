@@ -1,0 +1,14 @@
+@test success
+@name "Eq.rec analogue: matching on a Prop-valued Equal whose arg is indexed → singleton"
+@import preambles/nat.tt
+
+-- Equal lives in Prop; its single constructor `refl` has its `a` parameter
+-- determined by the indices (the implicit `{a : A}` is both binding and index).
+-- This is the canonical Lean singleton-elim case.
+inductive Equal : {A : Type} -> A -> A -> Prop where
+  refl : {A : Type} -> {a : A} -> Equal a a
+
+-- Transport: given Equal x y and (P x) at Type level, produce (P y).
+-- The motive lives in Type — only legal because Equal is singleton.
+transport : {A : Type} -> {x : A} -> {y : A} -> (P : A -> Type) -> Equal x y -> P x -> P y
+transport P refl px = px

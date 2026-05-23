@@ -1,0 +1,10 @@
+@test success
+@name "(A : Type 5) -> P : Prop lives in Prop (imax(6, 0) = 0)"
+
+inductive P : Prop where
+  evP : P
+
+-- The impredicativity rule is universe-uniform: any domain universe collapses
+-- when the codomain is Prop. Useful for, e.g., universe-polymorphic propositions.
+PiBigTypeProp : Prop
+PiBigTypeProp = (A : Type 5) -> P

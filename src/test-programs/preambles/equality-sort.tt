@@ -1,0 +1,5 @@
+-- Truly universe-polymorphic equality using `Sort u`.
+-- Ranges over Prop (u = 0) and Type (u ≥ 1) uniformly. Result is in Prop
+-- by impredicative Pi.
+inductive Equal : {u : ULevel} -> {A : Sort u} -> A -> A -> Prop where
+  refl : {u : ULevel} -> {A : Sort u} -> {a : A} -> Equal a a

@@ -1,0 +1,13 @@
+@test failure
+@name "soundness: arg absent from indices is not singleton (existential-style)"
+@error "Large elimination from Prop"
+@import preambles/nat.tt
+
+-- Classic existential shape: a witness `n` and no constraint placing it
+-- anywhere in the indices. Cannot recover `n` from `Witness Zero`
+-- (every constructor lands at the same index). Must NOT be singleton.
+inductive Witness : Nat -> Prop where
+  hide : (n : Nat) -> Witness Zero
+
+extractHidden : (k : Nat) -> Witness k -> Nat
+extractHidden k (hide n) = n

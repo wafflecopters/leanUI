@@ -1,0 +1,10 @@
+@test success
+@name "nested impredicativity: (A:Type) -> (B:Type 3) -> P : Prop"
+
+inductive P : Prop where
+  evP : P
+
+-- Multiple type-level domains collapse uniformly when the eventual codomain is Prop.
+-- imax(1, imax(4, 0)) = imax(1, 0) = 0.
+NestedPi : Prop
+NestedPi = (A : Type) -> (B : Type 3) -> P

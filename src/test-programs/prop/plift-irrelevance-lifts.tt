@@ -1,0 +1,15 @@
+@test success
+@name "proof irrelevance lifts through PLift by congruence"
+@import preambles/plift.tt
+@import preambles/equality-sort.tt
+
+inductive P : Prop where
+  pa : P
+  pb : P
+
+-- pa and pb are defeq inside Prop (proof irrelevance). Wrapping both with
+-- mkPLift, the resulting PLift P values are also defeq — congruence on the
+-- single-arg constructor, since proof irrelevance fires when comparing the
+-- arguments. EqualProp / refl witness this.
+liftedEq : Equal (mkPLift pa) (mkPLift pb)
+liftedEq = refl

@@ -1,0 +1,12 @@
+@test success
+@name "proof irrelevance: any two hypothetical proofs of P are equal"
+@import preambles/equality-poly.tt
+
+inductive P : Prop where
+  triv : P
+
+-- p1 and p2 are abstract hypotheses. By proof irrelevance they collapse,
+-- so `EqualProp p1 p2` is provable by `refl` (which demands the two sides be
+-- definitionally equal).
+hypoEq : (p1 : P) -> (p2 : P) -> EqualProp p1 p2
+hypoEq p1 p2 = reflProp
