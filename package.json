@@ -3,11 +3,13 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "dev": "rsbuild dev",
+    "dev": "tsx server/index.ts & rsbuild dev",
+    "dev:web": "rsbuild dev",
+    "dev:server": "tsx server/index.ts",
     "build": "rsbuild build",
     "preview": "rsbuild preview",
     "server": "tsx server/index.ts",
-    "start": "npm run server & npm run dev",
+    "start": "tsx server/index.ts & rsbuild dev",
     "test": "vitest run",
     "test:watch": "vitest"
   },

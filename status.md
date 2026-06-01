@@ -3,6 +3,13 @@
 ## Vision
 Bridge between Overleaf and Lean: write LaTeX-like code with proof-correctness, or write Lean code with LaTeX presentation and WYSIWYG ergonomics. We are exploring both a custom dependently typed language (TT) and the possibility of building atop Lean itself.
 
+## Active Branch: `lean-backend` (Lean 4 pivot)
+Experiment to replace the entire custom TT/TTK engine with **Lean 4** as the sole backend (typechecking, inference, tactics), served by a Lean process that `bun run dev` launches alongside the web server. Keep only the text-editor page (source box + compiled results + WYSIWYG) and port all WYSIWYG features onto Lean. Mathlib is a toggle (off by default for now).
+- **M1 — DONE (proof of life):** `server/lean-bridge.ts` runs `lean --json`; `POST /api/check` returns diagnostics; `/lean` route renders them with Monaco markers.
+- **M1.5 — DONE (real proof editor on Lean, testable end-to-end):** `lean/Extract.lean` builds the env via `headerToImports` + `importModules (loadExts := true)` (with `enableInitializersExecution`, `unsafe main`), runs the frontend, and walks the InfoTree → `{messages, goals}` JSON: diagnostics + per-tactic goal states (with hypotheses + case names) keyed by source range, deduped per range. Verified messages match `lean --json` ground truth exactly. `POST /api/analyze` serves it; the `/lean` page shows live **goal-at-cursor** (InfoView-style) + diagnostics + Monaco squiggles. Confirmed through the full stack via `bun run dev` → http://localhost:3000/lean (web :3000 → proxy → bridge :3457 → lean). ~3s/analyze core mode. Bridge port 3457 (env `LEAN_BRIDGE_PORT`; 3001 squatted by another local project). Tests: `src/lean/goalAtCursor.test.ts` + `server/lean-bridge.test.ts` (11 pass); tsc clean.
+- **Next:** M2 map Lean output into the existing `CompileResult` contract (legacy `TextEditorPage` on Lean) → M3 `CodeWithInfos`→`MathRow` for WYSIWYG math → M4 async tactic engine → M5 delete TT/TTK.
+- Toolchain: Lean 4.30.0 + Lake 5.0.0 via elan (`~/.elan/bin`).
+
 ## Near-Term Goal
 Live demo proving `sum(0..n, i) = n*(n+1)/2` (triangle numbers) in a WYSIWYG editor that:
 - Produces real-looking math, not code-shaped proof terms
