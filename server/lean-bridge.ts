@@ -163,10 +163,23 @@ export interface LeanGoal {
   goals: string[];
 }
 
+/** A top-level declaration the user wrote (def/theorem/inductive/...). */
+export interface LeanDeclaration {
+  name: string;
+  kind: 'def' | 'theorem' | 'inductive' | 'axiom' | 'opaque';
+  prettyType: string;
+  /** Present for plain `def`s only. */
+  prettyValue?: string;
+  /** 1-based line, 0-based column of the declaration's start. */
+  line: number;
+  col: number;
+}
+
 export interface AnalyzeResult {
   success: boolean;
   messages: LeanMessage[];
   goals: LeanGoal[];
+  declarations: LeanDeclaration[];
   bridgeError?: string;
   durationMs: number;
 }
@@ -175,8 +188,12 @@ function clampInt(n: unknown, fallback = 0): number {
   return typeof n === 'number' && Number.isFinite(n) ? n : fallback;
 }
 
+const DECL_KINDS: ReadonlySet<string> = new Set(['def', 'theorem', 'inductive', 'axiom', 'opaque']);
+
 /** Parse the extractor's single-object JSON output. */
-export function parseAnalyzeJson(stdout: string): { messages: LeanMessage[]; goals: LeanGoal[] } | null {
+export function parseAnalyzeJson(
+  stdout: string,
+): { messages: LeanMessage[]; goals: LeanGoal[]; declarations: LeanDeclaration[] } | null {
   const trimmed = stdout.trim();
   if (!trimmed) return null;
   // The extractor prints exactly one JSON object (take the last non-empty line).
@@ -205,7 +222,17 @@ export function parseAnalyzeJson(stdout: string): { messages: LeanMessage[]; goa
     endCol: clampInt(g.endCol, clampInt(g.startCol)),
     goals: Array.isArray(g.goals) ? g.goals.map((s: any) => String(s)) : [],
   }));
-  return { messages, goals };
+  const declarations: LeanDeclaration[] = Array.isArray(obj.declarations)
+    ? obj.declarations.map((d: any) => ({
+        name: String(d.name ?? ''),
+        kind: DECL_KINDS.has(d.kind) ? d.kind : 'def',
+        prettyType: String(d.prettyType ?? ''),
+        ...(typeof d.prettyValue === 'string' ? { prettyValue: d.prettyValue } : {}),
+        line: clampInt(d.line, 1),
+        col: clampInt(d.col),
+      }))
+    : [];
+  return { messages, goals, declarations };
 }
 
 export async function analyzeLeanSource(source: string, opts: CheckOptions = {}): Promise<AnalyzeResult> {
@@ -228,7 +255,14 @@ export async function analyzeLeanSource(source: string, opts: CheckOptions = {})
         out.error.code === 'ENOENT'
           ? `Could not find \`${opts.mathlib ? 'lake' : 'lean'}\`. Is elan installed and on PATH (${ELAN_BIN})?`
           : `Lean timed out after ${timeoutMs}ms.`;
-      return { success: false, messages: [], goals: [], bridgeError: reason, durationMs: Date.now() - started };
+      return {
+        success: false,
+        messages: [],
+        goals: [],
+        declarations: [],
+        bridgeError: reason,
+        durationMs: Date.now() - started,
+      };
     }
 
     const parsed = parseAnalyzeJson(out.stdout);
@@ -238,18 +272,26 @@ export async function analyzeLeanSource(source: string, opts: CheckOptions = {})
         success: false,
         messages: [],
         goals: [],
+        declarations: [],
         bridgeError: `Lean extractor produced no output.${detail ? `\n${detail}` : ''}`,
         durationMs: Date.now() - started,
       };
     }
 
     const success = !parsed.messages.some((m) => m.severity === 'error');
-    return { success, messages: parsed.messages, goals: parsed.goals, durationMs: Date.now() - started };
+    return {
+      success,
+      messages: parsed.messages,
+      goals: parsed.goals,
+      declarations: parsed.declarations,
+      durationMs: Date.now() - started,
+    };
   } catch (e) {
     return {
       success: false,
       messages: [],
       goals: [],
+      declarations: [],
       bridgeError: e instanceof Error ? e.message : String(e),
       durationMs: Date.now() - started,
     };

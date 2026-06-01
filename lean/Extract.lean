@@ -3,12 +3,17 @@ LeanUI extractor.
 
 Runs the user's source through the Lean frontend and emits a single JSON object:
 
-  { "messages": [ {severity,startLine,startCol,endLine,endCol,text}, ... ],
-    "goals":    [ {startLine,startCol,endLine,endCol,goals:[string]}, ... ] }
+  { "messages":     [ {severity,startLine,startCol,endLine,endCol,text}, ... ],
+    "goals":        [ {startLine,startCol,endLine,endCol,goals:[string]}, ... ],
+    "declarations": [ {name,kind,prettyType,prettyValue?,line,col}, ... ] }
 
 `messages` are the diagnostics (errors / warnings / `#check` info).
 `goals` are tactic goal-states keyed by the source range of the tactic, so the
 editor can show the goal at the cursor (pick the smallest range containing it).
+`declarations` are the user's top-level defs/theorems/inductives in source order
+(name + pretty-printed type, and value for plain `def`s) — what the results
+panel renders. Auto-generated constants (recursors, constructors, internal
+detail names) are filtered out.
 
 Usage:
   lean --run lean/Extract.lean <file.lean> [mathlib]
@@ -106,5 +111,62 @@ unsafe def main (args : List String) : IO Unit := do
           ("goals", Json.arr (rendered.toArray.map Json.str)) ::
           mkRangeFields sp.line sp.column ep.line ep.column
 
-  let out := Json.mkObj [("messages", Json.arr messages), ("goals", Json.arr goals)]
+  -- Declarations ------------------------------------------------------------
+  -- The user's own top-level constants, in source order. `map₂` holds the
+  -- constants added in THIS file (not imported ones). We use the env's
+  -- declaration-range metadata (the same source `lean --server` uses for
+  -- go-to-def) both to locate each decl and to filter out auto-generated names
+  -- (recursors, `.rec`/`.casesOn`, match auxiliaries) which have no user range.
+  let coreCtx : Core.Context := { fileName := path, fileMap := fm }
+  let coreState : Core.State := { env := cmdState.env }
+  let declAction : MetaM (Array (Nat × Nat × Json)) := do
+    let mut rows : Array (Nat × Nat × Json) := #[]
+    let env := cmdState.env
+    for (declName, ci) in env.constants.map₂.toList do
+      -- Keep only what the user wrote: drop internal names and the machinery
+      -- the elaborator generates around an `inductive` (recursors, `.casesOn`/
+      -- `.recOn`, `.noConfusion`, constructors, and the `.ctorIdx`/`.ctorElim`/
+      -- `.elim` helpers). These are standard Lean-generated names, not domain
+      -- knowledge.
+      if declName.isInternal then continue
+      if isAuxRecursor env declName || isNoConfusion env declName then continue
+      match ci with
+      | .recInfo _ => continue   -- `.rec`
+      | .ctorInfo _ => continue  -- constructors (surfaced under their inductive in M3)
+      | _ => pure ()
+      let nameStr := declName.toString
+      if nameStr.endsWith ".ctorIdx" || nameStr.endsWith ".ctorElim"
+          || nameStr.endsWith ".elim" || nameStr.endsWith ".ctorElimType" then continue
+      let some ranges ← findDeclarationRanges? declName | continue
+      let pos := ranges.range.pos
+      let kindStr :=
+        match ci with
+        | .inductInfo _ => "inductive"
+        | .thmInfo _ => "theorem"
+        | .defnInfo _ => "def"
+        | .axiomInfo _ => "axiom"
+        | .opaqueInfo _ => "opaque"
+        | _ => "def"
+      let prettyType := toString (← Meta.ppExpr ci.type)
+      let mut fields : List (String × Json) :=
+        [("name", Json.str declName.toString),
+         ("kind", Json.str kindStr),
+         ("prettyType", Json.str prettyType),
+         ("line", natJ pos.line), ("col", natJ pos.column)]
+      -- Value, for plain defs only (theorems' proofs are noise here).
+      match ci with
+      | .defnInfo di =>
+        fields := fields ++ [("prettyValue", Json.str (toString (← Meta.ppExpr di.value)))]
+      | _ => pure ()
+      rows := rows.push (pos.line, pos.column, Json.mkObj fields)
+    pure rows
+  let (declRows, _) ← (declAction.run' (s := {})).toIO coreCtx coreState
+  -- Source order.
+  let sortedRows := declRows.qsort (fun a b => a.1 < b.1 || (a.1 == b.1 && a.2.1 < b.2.1))
+  let declarations := sortedRows.map (·.2.2)
+
+  let out := Json.mkObj
+    [("messages", Json.arr messages),
+     ("goals", Json.arr goals),
+     ("declarations", Json.arr declarations)]
   IO.println out.compress

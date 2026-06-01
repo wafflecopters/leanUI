@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
-import type { AnalyzeResult, LeanGoal, LeanMessage, LeanSeverity } from '../lean/types';
+import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanMessage, LeanSeverity } from '../lean/types';
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 
 /**
@@ -91,6 +91,7 @@ export function LeanEditorPage() {
             success: false,
             messages: [],
             goals: [],
+            declarations: [],
             bridgeError: `Request failed: ${e instanceof Error ? e.message : String(e)}`,
             durationMs: 0,
           });
@@ -125,6 +126,7 @@ export function LeanEditorPage() {
 
   const messages = result?.messages ?? [];
   const goals = result?.goals ?? [];
+  const declarations = result?.declarations ?? [];
   const errorCount = messages.filter((m) => m.severity === 'error').length;
 
   const activeGoal: LeanGoal | null = useMemo(
@@ -178,9 +180,10 @@ export function LeanEditorPage() {
           />
         </div>
 
-        {/* Right column: goal-at-cursor (top) + diagnostics (bottom) */}
+        {/* Right column: goal-at-cursor + declarations + diagnostics */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <GoalPanel goal={activeGoal} />
+          <DeclarationsPanel declarations={declarations} />
           <MessagesPanel messages={messages} bridgeError={result?.bridgeError} loading={loading} />
         </div>
       </div>
@@ -214,6 +217,58 @@ function GoalPanel({ goal }: { goal: LeanGoal | null }) {
         >
           {g}
         </pre>
+      ))}
+    </div>
+  );
+}
+
+const KIND_COLOR: Record<LeanDeclaration['kind'], string> = {
+  def: '#3b82f6',
+  theorem: '#8b5cf6',
+  inductive: '#0d9488',
+  axiom: '#b45309',
+  opaque: '#6b7280',
+};
+
+function DeclarationsPanel({ declarations }: { declarations: LeanDeclaration[] }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, borderBottom: '1px solid #ddd' }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#666', marginBottom: 8, letterSpacing: 0.5 }}>
+        DECLARATIONS {declarations.length ? `(${declarations.length})` : ''}
+      </div>
+      {declarations.length === 0 && <div style={{ color: '#999', fontSize: 13 }}>No declarations.</div>}
+      {declarations.map((d, i) => (
+        <div key={i} style={{ marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                color: '#fff',
+                background: KIND_COLOR[d.kind],
+                borderRadius: 4,
+                padding: '1px 5px',
+              }}
+            >
+              {d.kind}
+            </span>
+            <span style={{ fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>{d.name}</span>
+          </div>
+          <pre
+            style={{
+              margin: '3px 0 0',
+              whiteSpace: 'pre-wrap',
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: 12.5,
+              color: '#333',
+            }}
+          >
+            {': '}
+            {d.prettyType}
+            {d.prettyValue !== undefined ? `\n:= ${d.prettyValue}` : ''}
+          </pre>
+        </div>
       ))}
     </div>
   );
