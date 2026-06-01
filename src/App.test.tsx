@@ -5,8 +5,19 @@ import { MemoryRouter } from 'react-router-dom';
 vi.mock('./components/TextEditorPage', () => ({
   TextEditorPage: () => <div>Mock Text Editor Page</div>,
 }));
+vi.mock('./components/LeanEditorPage', () => ({
+  LeanEditorPage: () => <div>Mock Lean Editor Page</div>,
+}));
 
 import { AppRoutes } from './App';
+
+function render(path: string): string {
+  return renderToStaticMarkup(
+    <MemoryRouter initialEntries={[path]}>
+      <AppRoutes />
+    </MemoryRouter>,
+  );
+}
 
 describe('App routes', () => {
   beforeEach(() => {
@@ -17,23 +28,23 @@ describe('App routes', () => {
     vi.restoreAllMocks();
   });
 
-  test('renders the text editor on /text-editor', () => {
-    const markup = renderToStaticMarkup(
-      <MemoryRouter initialEntries={['/text-editor']}>
-        <AppRoutes />
-      </MemoryRouter>
-    );
-
-    expect(markup).toContain('Mock Text Editor Page');
+  test('the Lean editor is the default route', () => {
+    expect(render('/')).toContain('Mock Lean Editor Page');
   });
 
-  test('legacy routes fall through to the same text editor page', () => {
-    const markup = renderToStaticMarkup(
-      <MemoryRouter initialEntries={['/inductive']}>
-        <AppRoutes />
-      </MemoryRouter>
-    );
+  test('/lean renders the Lean editor', () => {
+    expect(render('/lean')).toContain('Mock Lean Editor Page');
+  });
 
-    expect(markup).toContain('Mock Text Editor Page');
+  test('unknown routes fall through to the Lean editor', () => {
+    expect(render('/inductive')).toContain('Mock Lean Editor Page');
+  });
+
+  test('the legacy TT editor stays reachable at /tt-legacy', () => {
+    expect(render('/tt-legacy')).toContain('Mock Text Editor Page');
+  });
+
+  test('the legacy TT editor stays reachable at /text-editor', () => {
+    expect(render('/text-editor')).toContain('Mock Text Editor Page');
   });
 });

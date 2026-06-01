@@ -3,40 +3,47 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanMessage, LeanSeverity } from '../lean/types';
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
+import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
 
 /**
- * Lean-backed editor page (route `/lean`).
+ * The leanUI editor — running entirely on Lean 4.
  *
- * A real proof editor running entirely on Lean 4: Monaco source box, a live
- * goal-at-cursor panel (the InfoView equivalent, fed by the InfoTree extractor),
- * and a diagnostics list — all from `POST /api/analyze`. Deliberately separate
- * from the legacy TT/TTK `TextEditorPage` while the backend swap is in progress.
+ * Monaco source box, a live goal-at-cursor panel (the InfoView equivalent, fed
+ * by the InfoTree extractor), a declarations list, and diagnostics — all from
+ * `POST /api/analyze`. This is the default editor; the legacy TT/TTK page lives
+ * at /tt-legacy during the migration (removed in M5). The WYSIWYG panel returns
+ * here in M3 once Lean expressions render to the math editor.
  */
 
-const SAMPLE = `-- leanUI · running on real Lean 4
--- Put your cursor inside a proof to see the goal state on the right.
-
-def double (n : Nat) : Nat := n + n
-
-#check double
-
-theorem add_zero_ex (n : Nat) : n + 0 = n := by
-  rfl
-
-theorem add_comm_ex (a b : Nat) : a + b = b + a := by
-  induction a with
-  | zero => simp
-  | succ k ih => simp [Nat.succ_add, ih]
-
--- An error, to show diagnostics:
-def bad : Nat := "not a nat"
-`;
+// ── theme (matches the app's dark chrome) ──────────────────────────────────
+const C = {
+  bg: '#0d1117',
+  panel: '#161b22',
+  border: '#30363d',
+  label: '#8b949e',
+  text: '#c9d1d9',
+  blue: '#79c0ff',
+  purple: '#d2a8ff',
+  teal: '#39c5bb',
+  amber: '#d29922',
+  red: '#f85149',
+  green: '#3fb950',
+  faint: '#484f58',
+};
 
 const SEVERITY_COLOR: Record<LeanSeverity, string> = {
-  error: '#e5484d',
-  warning: '#f5a623',
-  information: '#3b82f6',
-  hint: '#8b8b8b',
+  error: C.red,
+  warning: C.amber,
+  information: C.blue,
+  hint: C.faint,
+};
+
+const KIND_COLOR: Record<LeanDeclaration['kind'], string> = {
+  def: C.blue,
+  theorem: C.purple,
+  inductive: C.teal,
+  axiom: C.amber,
+  opaque: C.faint,
 };
 
 function severityToMarker(sev: LeanSeverity): number {
@@ -53,8 +60,22 @@ function severityToMarker(sev: LeanSeverity): number {
   }
 }
 
+const mono = "'JetBrains Mono', 'Fira Code', 'Consolas', monospace";
+
+const sectionHeader: React.CSSProperties = {
+  padding: '6px 12px',
+  fontSize: 11,
+  fontWeight: 600,
+  color: C.label,
+  textTransform: 'uppercase',
+  letterSpacing: '0.5px',
+  backgroundColor: C.panel,
+  borderBottom: `1px solid ${C.border}`,
+  flexShrink: 0,
+};
+
 export function LeanEditorPage() {
-  const [source, setSource] = useState(SAMPLE);
+  const [source, setSource] = useState(DEFAULT_LEAN_SOURCE);
   const [mathlib, setMathlib] = useState(false);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -71,6 +92,24 @@ export function LeanEditorPage() {
       setCursor({ line: e.position.lineNumber, col: e.position.column - 1 });
     });
   }, []);
+
+  // Imperatively set editor text (preset load) so cursor handling stays sane.
+  const loadSource = useCallback((code: string) => {
+    setSource(code);
+    const ed = editorRef.current;
+    const model = ed?.getModel();
+    if (model && model.getValue() !== code) model.setValue(code);
+  }, []);
+
+  const loadPreset = useCallback(
+    (name: string) => {
+      const p = LEAN_PRESETS.find((x) => x.name === name);
+      if (!p) return;
+      if (p.mathlib) setMathlib(true);
+      loadSource(p.code);
+    },
+    [loadSource],
+  );
 
   // Debounced analyze on source / mathlib change.
   useEffect(() => {
@@ -145,39 +184,65 @@ export function LeanEditorPage() {
       : '—';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', fontFamily: 'system-ui, sans-serif' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, color: C.text, fontFamily: 'system-ui, sans-serif' }}>
       <header
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 16,
-          padding: '8px 16px',
-          borderBottom: '1px solid #ddd',
-          background: '#fafafa',
+          padding: '8px 14px',
+          borderBottom: `1px solid ${C.border}`,
+          background: C.panel,
         }}
       >
-        <strong>leanUI · Lean 4 backend</strong>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <strong style={{ color: C.text }}>leanUI</strong>
+        <span style={{ fontSize: 11, color: C.label, textTransform: 'uppercase', letterSpacing: 0.5 }}>Lean 4</span>
+
+        <label style={{ fontSize: 12, color: C.label }}>
+          Example:{' '}
+          <select
+            onChange={(e) => {
+              if (e.target.value) loadPreset(e.target.value);
+              e.target.selectedIndex = 0;
+            }}
+            style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '2px 6px' }}
+          >
+            <option value="">choose…</option>
+            {LEAN_PRESETS.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name}
+                {p.mathlib ? ' (Mathlib)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.label }}>
           <input type="checkbox" checked={mathlib} onChange={(e) => setMathlib(e.target.checked)} />
           Mathlib
         </label>
-        <span style={{ fontSize: 13, color: '#666' }}>{statusText}</span>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#999' }}>
+
+        <span style={{ fontSize: 12, color: result?.success ? C.green : C.label }}>{statusText}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: C.faint }}>
           cursor {cursor.line}:{cursor.col}
         </span>
       </header>
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         {/* Source */}
-        <div style={{ flex: 1.3, minWidth: 0, borderRight: '1px solid #ddd' }}>
-          <Editor
-            height="100%"
-            defaultLanguage="plaintext"
-            value={source}
-            onChange={(v) => setSource(v ?? '')}
-            onMount={handleMount}
-            options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false }}
-          />
+        <div style={{ flex: 1.3, minWidth: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column' }}>
+          <div style={sectionHeader}>Source</div>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <Editor
+              height="100%"
+              theme="vs-dark"
+              defaultLanguage="plaintext"
+              value={source}
+              onChange={(v) => setSource(v ?? '')}
+              onMount={handleMount}
+              options={{ minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, automaticLayout: true }}
+            />
+          </div>
         </div>
 
         {/* Right column: goal-at-cursor + declarations + diagnostics */}
@@ -193,83 +258,67 @@ export function LeanEditorPage() {
 
 function GoalPanel({ goal }: { goal: LeanGoal | null }) {
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, borderBottom: '1px solid #ddd' }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#666', marginBottom: 8, letterSpacing: 0.5 }}>
-        GOAL {goal ? `(${goal.goals.length})` : ''}
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: `1px solid ${C.border}` }}>
+      <div style={sectionHeader}>Goal {goal ? `(${goal.goals.length})` : ''}</div>
+      <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+        {!goal && <div style={{ color: C.faint, fontSize: 13 }}>Move the cursor into a proof to see the goal.</div>}
+        {goal?.goals.length === 0 && <div style={{ color: C.green, fontSize: 13 }}>No goals — proof complete here. 🎉</div>}
+        {goal?.goals.map((g, i) => (
+          <pre
+            key={i}
+            style={{
+              margin: '0 0 12px',
+              padding: 10,
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 6,
+              whiteSpace: 'pre-wrap',
+              fontFamily: mono,
+              fontSize: 13,
+              lineHeight: 1.5,
+              color: C.text,
+            }}
+          >
+            {g}
+          </pre>
+        ))}
       </div>
-      {!goal && <div style={{ color: '#999', fontSize: 13 }}>No goal at cursor.</div>}
-      {goal?.goals.length === 0 && (
-        <div style={{ color: '#2e9e5b', fontSize: 13 }}>No goals — proof complete here. 🎉</div>
-      )}
-      {goal?.goals.map((g, i) => (
-        <pre
-          key={i}
-          style={{
-            margin: '0 0 12px',
-            padding: 10,
-            background: '#f6f8fa',
-            borderRadius: 6,
-            whiteSpace: 'pre-wrap',
-            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
-          {g}
-        </pre>
-      ))}
     </div>
   );
 }
 
-const KIND_COLOR: Record<LeanDeclaration['kind'], string> = {
-  def: '#3b82f6',
-  theorem: '#8b5cf6',
-  inductive: '#0d9488',
-  axiom: '#b45309',
-  opaque: '#6b7280',
-};
-
 function DeclarationsPanel({ declarations }: { declarations: LeanDeclaration[] }) {
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, borderBottom: '1px solid #ddd' }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#666', marginBottom: 8, letterSpacing: 0.5 }}>
-        DECLARATIONS {declarations.length ? `(${declarations.length})` : ''}
-      </div>
-      {declarations.length === 0 && <div style={{ color: '#999', fontSize: 13 }}>No declarations.</div>}
-      {declarations.map((d, i) => (
-        <div key={i} style={{ marginBottom: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                textTransform: 'uppercase',
-                color: '#fff',
-                background: KIND_COLOR[d.kind],
-                borderRadius: 4,
-                padding: '1px 5px',
-              }}
-            >
-              {d.kind}
-            </span>
-            <span style={{ fontWeight: 600, fontFamily: 'ui-monospace, monospace' }}>{d.name}</span>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: `1px solid ${C.border}` }}>
+      <div style={sectionHeader}>Declarations {declarations.length ? `(${declarations.length})` : ''}</div>
+      <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
+        {declarations.length === 0 && <div style={{ color: C.faint, fontSize: 13 }}>No declarations.</div>}
+        {declarations.map((d, i) => (
+          <div key={i} style={{ marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  color: C.bg,
+                  background: KIND_COLOR[d.kind],
+                  borderRadius: 4,
+                  padding: '1px 5px',
+                }}
+              >
+                {d.kind}
+              </span>
+              <span style={{ fontWeight: 600, fontFamily: mono, color: C.text }}>{d.name}</span>
+            </div>
+            <pre style={{ margin: '3px 0 0', whiteSpace: 'pre-wrap', fontFamily: mono, fontSize: 12.5, color: C.blue }}>
+              {': '}
+              {d.prettyType}
+              {d.prettyValue !== undefined ? `\n:= ${d.prettyValue}` : ''}
+            </pre>
           </div>
-          <pre
-            style={{
-              margin: '3px 0 0',
-              whiteSpace: 'pre-wrap',
-              fontFamily: 'ui-monospace, monospace',
-              fontSize: 12.5,
-              color: '#333',
-            }}
-          >
-            {': '}
-            {d.prettyType}
-            {d.prettyValue !== undefined ? `\n:= ${d.prettyValue}` : ''}
-          </pre>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
@@ -284,26 +333,26 @@ function MessagesPanel({
   loading: boolean;
 }) {
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 12, fontSize: 13 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#666', marginBottom: 8, letterSpacing: 0.5 }}>
-        MESSAGES {messages.length ? `(${messages.length})` : ''}
-      </div>
-      {bridgeError && (
-        <div style={{ color: SEVERITY_COLOR.error, marginBottom: 12, whiteSpace: 'pre-wrap' }}>
-          <strong>Bridge error:</strong> {bridgeError}
-        </div>
-      )}
-      {messages.length === 0 && !bridgeError && (
-        <div style={{ color: '#999' }}>{loading ? 'Checking with Lean…' : 'No messages.'}</div>
-      )}
-      {messages.map((m, i) => (
-        <div key={i} style={{ marginBottom: 10, paddingLeft: 8, borderLeft: `3px solid ${SEVERITY_COLOR[m.severity]}` }}>
-          <div style={{ color: SEVERITY_COLOR[m.severity], fontWeight: 600 }}>
-            {m.severity} · {m.startLine}:{m.startCol + 1}
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={sectionHeader}>Messages {messages.length ? `(${messages.length})` : ''}</div>
+      <div style={{ flex: 1, overflow: 'auto', padding: 12, fontSize: 13 }}>
+        {bridgeError && (
+          <div style={{ color: C.red, marginBottom: 12, whiteSpace: 'pre-wrap' }}>
+            <strong>Bridge error:</strong> {bridgeError}
           </div>
-          <pre style={{ margin: '2px 0 0', whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, monospace' }}>{m.text}</pre>
-        </div>
-      ))}
+        )}
+        {messages.length === 0 && !bridgeError && (
+          <div style={{ color: C.faint }}>{loading ? 'Checking with Lean…' : 'No messages.'}</div>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} style={{ marginBottom: 10, paddingLeft: 8, borderLeft: `3px solid ${SEVERITY_COLOR[m.severity]}` }}>
+            <div style={{ color: SEVERITY_COLOR[m.severity], fontWeight: 600 }}>
+              {m.severity} · {m.startLine}:{m.startCol + 1}
+            </div>
+            <pre style={{ margin: '2px 0 0', whiteSpace: 'pre-wrap', fontFamily: mono, color: C.text }}>{m.text}</pre>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
