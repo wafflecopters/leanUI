@@ -1,0 +1,125 @@
+import { describe, expect, test } from 'vitest';
+import { proofTreeToLean } from './proofTreeToLean';
+import {
+  mkHole,
+  mkIntros,
+  mkExact,
+  mkUnfold,
+  mkRewrite,
+  mkSimp,
+  mkApply,
+  mkHave,
+  mkSuffices,
+  mkInduction,
+  mkCase,
+  resetProofIds,
+} from '../proof-tree/proof-tree';
+
+describe('proofTreeToLean', () => {
+  test('a bare hole becomes sorry and is tracked', () => {
+    resetProofIds();
+    const h = mkHole();
+    const out = proofTreeToLean(h);
+    expect(out.source).toBe('  sorry');
+    expect(out.holeNodeIds.has(h.id)).toBe(true);
+    expect(out.nodeRanges.get(h.id)).toMatchObject({ startLine: 1, startCol: 2 });
+  });
+
+  test('intros → intro with names, then child', () => {
+    resetProofIds();
+    const tree = mkIntros(['a', 'b'], mkExact('Nat.add_comm a b'));
+    const out = proofTreeToLean(tree);
+    expect(out.source).toBe('  intro a b\n  exact Nat.add_comm a b');
+  });
+
+  test('empty intro names degrade to _', () => {
+    resetProofIds();
+    expect(proofTreeToLean(mkIntros([], mkHole())).source).toBe('  intro _\n  sorry');
+  });
+
+  test('rewrite forward and reverse', () => {
+    resetProofIds();
+    expect(proofTreeToLean(mkRewrite('foo', mkHole())).source).toBe('  rw [foo]\n  sorry');
+    expect(proofTreeToLean(mkRewrite('foo', mkHole(), true)).source).toBe('  rw [← foo]\n  sorry');
+  });
+
+  test('unfold then continuation', () => {
+    resetProofIds();
+    expect(proofTreeToLean(mkUnfold('double', mkExact('rfl'))).source).toBe('  unfold double\n  exact rfl');
+  });
+
+  test('simp with and without lemmas', () => {
+    resetProofIds();
+    expect(proofTreeToLean(mkSimp([], [], mkHole())).source).toBe('  simp\n  sorry');
+    expect(proofTreeToLean(mkSimp(['a', 'b'], [], mkHole())).source).toBe('  simp [a, b]\n  sorry');
+  });
+
+  test('apply with two subgoal children', () => {
+    resetProofIds();
+    const tree = mkApply('foo', [mkExact('h1'), mkExact('h2')]);
+    const out = proofTreeToLean(tree);
+    expect(out.source).toBe('  apply foo\n  exact h1\n  exact h2');
+  });
+
+  test('have flat expression', () => {
+    resetProofIds();
+    const tree = mkHave('h', 'Nat.le_refl n', mkExact('h'));
+    expect(proofTreeToLean(tree).source).toBe('  have h := Nat.le_refl n\n  exact h');
+  });
+
+  test('have with interactive subtree → have : T := by <subtree>', () => {
+    resetProofIds();
+    const tree = mkHave('h', '', mkExact('h'), 'n = n', mkExact('rfl'));
+    const out = proofTreeToLean(tree);
+    expect(out.source).toBe('  have h : n = n := by\n    exact rfl\n  exact h');
+  });
+
+  test('suffices with by-proof and continuation', () => {
+    resetProofIds();
+    const tree = mkSuffices('h', 'P n', mkExact('done'), mkExact('from_h'));
+    expect(proofTreeToLean(tree).source).toBe('  suffices h : P n by\n    exact from_h\n  exact done');
+  });
+
+  test('induction with zero/succ cases produces a with-block', () => {
+    resetProofIds();
+    const zero = mkCase('zero', mkExact('rfl'), 'zero', []);
+    const succ = mkCase('succ', mkExact('by simp'), 'succ', ['k', 'ih']);
+    const tree = mkIntros(['n'], mkInduction('n', [zero, succ]));
+    const out = proofTreeToLean(tree);
+    expect(out.source).toBe(
+      [
+        '  intro n',
+        '  induction n with',
+        '  | zero =>',
+        '    exact rfl',
+        '  | succ k ih =>',
+        '    exact by simp',
+      ].join('\n'),
+    );
+  });
+
+  test('cases tactic uses `cases` keyword', () => {
+    resetProofIds();
+    const tree = mkInduction('x', [mkCase('a', mkHole(), 'a', [])], true);
+    expect(proofTreeToLean(tree).source.startsWith('  cases x with')).toBe(true);
+  });
+
+  test('node ranges are absolute when baseLine is given', () => {
+    resetProofIds();
+    const inner = mkExact('rfl');
+    const tree = mkIntros(['n'], inner);
+    const out = proofTreeToLean(tree, /* baseLine */ 10, /* baseDepth */ 1);
+    // first tactic sits on line 10, the exact on line 11
+    expect(out.nodeRanges.get(tree.id)!.startLine).toBe(10);
+    expect(out.nodeRanges.get(inner.id)!.startLine).toBe(11);
+  });
+
+  test('every emitted node has a recorded range', () => {
+    resetProofIds();
+    const zero = mkCase('zero', mkExact('rfl'), 'zero', []);
+    const tree = mkIntros(['n'], mkInduction('n', [zero]));
+    const out = proofTreeToLean(tree);
+    // intros, induction, case, exact → 4 ranges
+    expect(out.nodeRanges.size).toBe(4);
+  });
+});

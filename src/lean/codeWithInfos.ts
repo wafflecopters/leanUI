@@ -25,6 +25,7 @@ import {
   type MathNode,
   type MathRow,
 } from '../math-editor/types';
+import { renderStaticLatex } from '../math-editor/render';
 import type { TaggedText } from './types';
 
 // ── wire format ────────────────────────────────────────────────────────────
@@ -170,4 +171,19 @@ function nodesOf(tt: TaggedJson): MathNode[] {
  */
 export function codeWithInfosToMathRow(tagged: TaggedJson): MathRow {
   return mkRow(nodesOf(tagged));
+}
+
+/**
+ * Render a Lean tagged expression directly to a LaTeX string, via the math
+ * editor's own static renderer. Used where the existing UI contract expects a
+ * LaTeX string (e.g. `NodeGoalInfo.goalLatex`, `TypedHypothesis.type`) rather
+ * than a MathRow. Returns `fallback` if conversion/render fails.
+ */
+export function taggedToLatex(tagged: TaggedJson | undefined, fallback = ''): string {
+  if (!tagged) return fallback;
+  try {
+    return renderStaticLatex(codeWithInfosToMathRow(tagged));
+  } catch {
+    return fallback;
+  }
 }
