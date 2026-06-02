@@ -5,6 +5,7 @@ import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanMessage, LeanSeverit
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
 import { LeanMathView } from './LeanMathView';
+import { LeanMathEditor } from './LeanMathEditor';
 
 /**
  * The leanUI editor — running entirely on Lean 4.
@@ -289,42 +290,91 @@ function GoalPanel({ goal }: { goal: LeanGoal | null }) {
 }
 
 function DeclarationsPanel({ declarations }: { declarations: LeanDeclaration[] }) {
+  // Which declaration is being structurally edited (click to activate).
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: `1px solid ${C.border}` }}>
       <div style={sectionHeader}>Declarations {declarations.length ? `(${declarations.length})` : ''}</div>
       <div style={{ flex: 1, overflow: 'auto', padding: 12 }}>
         {declarations.length === 0 && <div style={{ color: C.faint, fontSize: 13 }}>No declarations.</div>}
-        {declarations.map((d, i) => (
-          <div key={i} style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  color: C.bg,
-                  background: KIND_COLOR[d.kind],
-                  borderRadius: 4,
-                  padding: '1px 5px',
-                }}
-              >
-                {d.kind}
-              </span>
-              <span style={{ fontWeight: 600, fontFamily: mono, color: C.text }}>{d.name}</span>
-            </div>
-            {/* WYSIWYG math (Lean expr → MathRow → KaTeX); falls back to text. */}
-            <div style={{ margin: '4px 0 0', fontSize: 15, color: C.text, lineHeight: 1.5 }}>
-              <span style={{ color: C.label }}>: </span>
-              <LeanMathView tagged={d.typeTagged} fallback={d.prettyType} />
-              {d.valueTagged !== undefined && (
-                <div style={{ marginTop: 2 }}>
-                  <span style={{ color: C.label }}>:= </span>
-                  <LeanMathView tagged={d.valueTagged} fallback={d.prettyValue ?? ''} />
-                </div>
-              )}
-            </div>
+        {declarations.map((d) => {
+          const key = `${d.name}@${d.line}:${d.col}`;
+          return (
+            <DeclarationCard
+              key={key}
+              decl={d}
+              active={activeKey === key}
+              onActivate={() => setActiveKey(key)}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One declaration as a structured-editor card. Shows read-only WYSIWYG math by
+ * default; clicking activates the interactive structured editor (the real
+ * MathEditor) over the same Lean-derived MathRow.
+ */
+function DeclarationCard({
+  decl,
+  active,
+  onActivate,
+}: {
+  decl: LeanDeclaration;
+  active: boolean;
+  onActivate: () => void;
+}) {
+  return (
+    <div
+      onClick={active ? undefined : onActivate}
+      style={{
+        marginBottom: 10,
+        padding: active ? 8 : 0,
+        borderRadius: 6,
+        border: active ? `1px solid ${C.border}` : '1px solid transparent',
+        background: active ? C.panel : 'transparent',
+        cursor: active ? 'default' : 'pointer',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            color: C.bg,
+            background: KIND_COLOR[decl.kind],
+            borderRadius: 4,
+            padding: '1px 5px',
+          }}
+        >
+          {decl.kind}
+        </span>
+        <span style={{ fontWeight: 600, fontFamily: mono, color: C.text }}>{decl.name}</span>
+        {active && <span style={{ marginLeft: 'auto', fontSize: 10, color: C.faint }}>editing</span>}
+      </div>
+
+      {/* Type — interactive structured editor when active, static math otherwise. */}
+      <div style={{ margin: '4px 0 0', fontSize: 15, color: C.text, lineHeight: 1.5 }}>
+        <span style={{ color: C.label }}>: </span>
+        {active ? (
+          <LeanMathEditor tagged={decl.typeTagged} active />
+        ) : (
+          <LeanMathView tagged={decl.typeTagged} fallback={decl.prettyType} />
+        )}
+        {decl.valueTagged !== undefined && (
+          <div style={{ marginTop: 2 }}>
+            <span style={{ color: C.label }}>:= </span>
+            {active ? (
+              <LeanMathEditor tagged={decl.valueTagged} />
+            ) : (
+              <LeanMathView tagged={decl.valueTagged} fallback={decl.prettyValue ?? ''} />
+            )}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
