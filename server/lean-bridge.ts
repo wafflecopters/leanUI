@@ -163,16 +163,46 @@ export interface LeanGoal {
   goals: string[];
 }
 
+/**
+ * Tagged pretty-printed expression (Lean `CodeWithInfos`), as serialized by
+ * lean/Extract.lean. Mirrors `TaggedText SubexprInfo`: text leaves, append
+ * nodes, and `tag` nodes carrying a subexpression position. Passed through
+ * verbatim; the client's codeWithInfosToMathRow turns it into a MathRow.
+ */
+export type TaggedText =
+  | { t: 'text'; s: string }
+  | { t: 'append'; kids: TaggedText[] }
+  | { t: 'tag'; pos: string; child: TaggedText };
+
 /** A top-level declaration the user wrote (def/theorem/inductive/...). */
 export interface LeanDeclaration {
   name: string;
   kind: 'def' | 'theorem' | 'inductive' | 'axiom' | 'opaque';
   prettyType: string;
+  /** Tagged pretty-print of the type, for the WYSIWYG math editor. */
+  typeTagged?: TaggedText;
   /** Present for plain `def`s only. */
   prettyValue?: string;
+  /** Tagged pretty-print of the value (defs only). */
+  valueTagged?: TaggedText;
   /** 1-based line, 0-based column of the declaration's start. */
   line: number;
   col: number;
+}
+
+/** Shallow structural validation of a tagged-text tree (defensive; bounded depth). */
+function sanitizeTagged(x: any, depth = 0): TaggedText | undefined {
+  if (!x || typeof x !== 'object' || depth > 200) return undefined;
+  if (x.t === 'text') return { t: 'text', s: String(x.s ?? '') };
+  if (x.t === 'append' && Array.isArray(x.kids)) {
+    return { t: 'append', kids: x.kids.map((k: any) => sanitizeTagged(k, depth + 1)).filter(Boolean) };
+  }
+  if (x.t === 'tag') {
+    const child = sanitizeTagged(x.child, depth + 1);
+    if (!child) return undefined;
+    return { t: 'tag', pos: String(x.pos ?? ''), child };
+  }
+  return undefined;
 }
 
 export interface AnalyzeResult {
@@ -223,14 +253,20 @@ export function parseAnalyzeJson(
     goals: Array.isArray(g.goals) ? g.goals.map((s: any) => String(s)) : [],
   }));
   const declarations: LeanDeclaration[] = Array.isArray(obj.declarations)
-    ? obj.declarations.map((d: any) => ({
-        name: String(d.name ?? ''),
-        kind: DECL_KINDS.has(d.kind) ? d.kind : 'def',
-        prettyType: String(d.prettyType ?? ''),
-        ...(typeof d.prettyValue === 'string' ? { prettyValue: d.prettyValue } : {}),
-        line: clampInt(d.line, 1),
-        col: clampInt(d.col),
-      }))
+    ? obj.declarations.map((d: any) => {
+        const typeTagged = sanitizeTagged(d.typeTagged);
+        const valueTagged = sanitizeTagged(d.valueTagged);
+        return {
+          name: String(d.name ?? ''),
+          kind: DECL_KINDS.has(d.kind) ? d.kind : 'def',
+          prettyType: String(d.prettyType ?? ''),
+          ...(typeTagged ? { typeTagged } : {}),
+          ...(typeof d.prettyValue === 'string' ? { prettyValue: d.prettyValue } : {}),
+          ...(valueTagged ? { valueTagged } : {}),
+          line: clampInt(d.line, 1),
+          col: clampInt(d.col),
+        };
+      })
     : [];
   return { messages, goals, declarations };
 }

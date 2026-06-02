@@ -4,6 +4,7 @@ import type { editor } from 'monaco-editor';
 import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanMessage, LeanSeverity } from '../lean/types';
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
+import { LeanMathView } from './LeanMathView';
 
 /**
  * The leanUI editor — running entirely on Lean 4.
@@ -311,11 +312,17 @@ function DeclarationsPanel({ declarations }: { declarations: LeanDeclaration[] }
               </span>
               <span style={{ fontWeight: 600, fontFamily: mono, color: C.text }}>{d.name}</span>
             </div>
-            <pre style={{ margin: '3px 0 0', whiteSpace: 'pre-wrap', fontFamily: mono, fontSize: 12.5, color: C.blue }}>
-              {': '}
-              {d.prettyType}
-              {d.prettyValue !== undefined ? `\n:= ${d.prettyValue}` : ''}
-            </pre>
+            {/* WYSIWYG math (Lean expr → MathRow → KaTeX); falls back to text. */}
+            <div style={{ margin: '4px 0 0', fontSize: 15, color: C.text, lineHeight: 1.5 }}>
+              <span style={{ color: C.label }}>: </span>
+              <LeanMathView tagged={d.typeTagged} fallback={d.prettyType} />
+              {d.valueTagged !== undefined && (
+                <div style={{ marginTop: 2 }}>
+                  <span style={{ color: C.label }}>:= </span>
+                  <LeanMathView tagged={d.valueTagged} fallback={d.prettyValue ?? ''} />
+                </div>
+              )}
+            </div>
           </div>
         ))}
       </div>

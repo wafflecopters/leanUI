@@ -26,9 +26,22 @@ set is fixed (Init [+ Mathlib]); this keeps each invocation deterministic.
 Lines are 1-based, columns 0-based (Lean's native convention).
 -/
 import Lean
-open Lean Elab
+open Lean Elab Meta Widget
 
 private def natJ (n : Nat) : Json := toJson n
+
+/-- Serialize a `CodeWithInfos` (`TaggedText SubexprInfo`) tree to JSON for the
+    WYSIWYG math editor. `pos` is the `SubExpr.Pos` of the subexpression — the
+    stable id used as the math editor's `Group` htmlId (click-to-select target).
+    The `info` RPC ref is intentionally dropped (it isn't serializable and the
+    position is enough). -/
+private partial def taggedToJson (tt : TaggedText SubexprInfo) : Json :=
+  match tt with
+  | .text s => Json.mkObj [("t", "text"), ("s", Json.str s)]
+  | .append as => Json.mkObj [("t", "append"), ("kids", Json.arr (as.map taggedToJson))]
+  | .tag info child =>
+      Json.mkObj [("t", "tag"), ("pos", Json.str (toString info.subexprPos)),
+                  ("child", taggedToJson child)]
 
 private def sevString : MessageSeverity → String
   | .error => "error"
@@ -148,15 +161,20 @@ unsafe def main (args : List String) : IO Unit := do
         | .opaqueInfo _ => "opaque"
         | _ => "def"
       let prettyType := toString (← Meta.ppExpr ci.type)
+      -- Tagged pretty-print for the WYSIWYG math editor (text + subexpr spans).
+      let typeTagged := taggedToJson (← ppExprTagged ci.type)
       let mut fields : List (String × Json) :=
         [("name", Json.str declName.toString),
          ("kind", Json.str kindStr),
          ("prettyType", Json.str prettyType),
+         ("typeTagged", typeTagged),
          ("line", natJ pos.line), ("col", natJ pos.column)]
       -- Value, for plain defs only (theorems' proofs are noise here).
       match ci with
       | .defnInfo di =>
-        fields := fields ++ [("prettyValue", Json.str (toString (← Meta.ppExpr di.value)))]
+        fields := fields ++
+          [("prettyValue", Json.str (toString (← Meta.ppExpr di.value))),
+           ("valueTagged", taggedToJson (← ppExprTagged di.value))]
       | _ => pure ()
       rows := rows.push (pos.line, pos.column, Json.mkObj fields)
     pure rows
