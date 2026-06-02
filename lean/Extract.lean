@@ -116,12 +116,27 @@ unsafe def main (args : List String) : IO Unit := do
         if seen.contains key then pure () else
         seen := seen.insert key
         let ci := { ci with mctx := ti.mctxBefore }
-        let rendered ← ci.runMetaM {} do
+        -- Structured + tagged goals: decompose each goal into hypotheses and a
+        -- target, each pretty-printed as CodeWithInfos so the goal panel renders
+        -- as WYSIWYG math (same machinery as the InfoView). We also keep the
+        -- plain string (ppGoal) for fallback/diagnostics.
+        let renderedGoals ← ci.runMetaM {} do
           ti.goalsBefore.mapM fun g => do
-            let fmt ← Meta.ppGoal g
-            pure (toString fmt)
+            let ig ← Widget.goalToInteractive g
+            let hypsJson := ig.hyps.map fun h =>
+              Json.mkObj
+                [("names", Json.arr (h.names.map Json.str)),
+                 ("type", taggedToJson h.type)]
+            let plain := toString (← Meta.ppGoal g)
+            pure <| Json.mkObj <|
+              (match ig.userName? with
+               | some n => [("case", Json.str n)]
+               | none => []) ++
+              [("hyps", Json.arr hypsJson),
+               ("targetTagged", taggedToJson ig.type),
+               ("plain", Json.str plain)]
         goals := goals.push <| Json.mkObj <|
-          ("goals", Json.arr (rendered.toArray.map Json.str)) ::
+          ("goals", Json.arr renderedGoals.toArray) ::
           mkRangeFields sp.line sp.column ep.line ep.column
 
   -- Declarations ------------------------------------------------------------

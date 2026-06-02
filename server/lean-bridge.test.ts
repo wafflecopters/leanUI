@@ -29,7 +29,22 @@ describe('parseAnalyzeJson', () => {
   test('parses extractor output with messages, goals, and declarations', () => {
     const stdout = JSON.stringify({
       messages: [{ severity: 'error', text: 'boom', startLine: 1, startCol: 0, endLine: 1, endCol: 3 }],
-      goals: [{ startLine: 6, startCol: 2, endLine: 6, endCol: 5, goals: ['n : Nat\n⊢ n + 0 = n'] }],
+      goals: [
+        {
+          startLine: 6,
+          startCol: 2,
+          endLine: 6,
+          endCol: 5,
+          goals: [
+            {
+              case: 'succ',
+              hyps: [{ names: ['n'], type: { t: 'text', s: 'Nat' } }],
+              targetTagged: { t: 'append', kids: [{ t: 'tag', pos: '/', child: { t: 'text', s: 'n + 0 = n' } }] },
+              plain: 'n : Nat\n⊢ n + 0 = n',
+            },
+          ],
+        },
+      ],
       declarations: [
         { name: 'good', kind: 'def', prettyType: 'Nat', prettyValue: '42', line: 1, col: 0 },
         { name: 'add_zero_ex', kind: 'theorem', prettyType: '∀ (n : Nat), n + 0 = n', line: 5, col: 0 },
@@ -39,11 +54,26 @@ describe('parseAnalyzeJson', () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.messages).toHaveLength(1);
     expect(parsed!.goals).toHaveLength(1);
-    expect(parsed!.goals[0].goals[0]).toContain('⊢ n + 0 = n');
+    const gstate = parsed!.goals[0].goals[0];
+    expect(gstate.case).toBe('succ');
+    expect(gstate.hyps).toEqual([{ names: ['n'], type: { t: 'text', s: 'Nat' } }]);
+    expect(gstate.targetTagged.t).toBe('append');
+    expect(gstate.plain).toContain('⊢ n + 0 = n');
     expect(parsed!.declarations).toHaveLength(2);
     expect(parsed!.declarations[0]).toMatchObject({ name: 'good', kind: 'def', prettyValue: '42' });
     expect(parsed!.declarations[1]).toMatchObject({ name: 'add_zero_ex', kind: 'theorem' });
     expect(parsed!.declarations[1].prettyValue).toBeUndefined();
+  });
+
+  test('a goal state without targetTagged falls back to a text node from plain', () => {
+    const stdout = JSON.stringify({
+      messages: [],
+      goals: [{ startLine: 1, startCol: 0, endLine: 1, endCol: 1, goals: [{ hyps: [], plain: '⊢ True' }] }],
+    });
+    const g = parseAnalyzeJson(stdout)!.goals[0].goals[0];
+    expect(g.targetTagged).toEqual({ t: 'text', s: '⊢ True' });
+    expect(g.hyps).toEqual([]);
+    expect(g.case).toBeUndefined();
   });
 
   test('coerces unknown declaration kind to def and defaults missing declarations to []', () => {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
-import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanMessage, LeanSeverity } from '../lean/types';
+import type { AnalyzeResult, LeanDeclaration, LeanGoal, LeanGoalState, LeanMessage, LeanSeverity } from '../lean/types';
 import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
 import { LeanMathView } from './LeanMathView';
@@ -266,24 +266,45 @@ function GoalPanel({ goal }: { goal: LeanGoal | null }) {
         {!goal && <div style={{ color: C.faint, fontSize: 13 }}>Move the cursor into a proof to see the goal.</div>}
         {goal?.goals.length === 0 && <div style={{ color: C.green, fontSize: 13 }}>No goals — proof complete here. 🎉</div>}
         {goal?.goals.map((g, i) => (
-          <pre
-            key={i}
-            style={{
-              margin: '0 0 12px',
-              padding: 10,
-              background: C.panel,
-              border: `1px solid ${C.border}`,
-              borderRadius: 6,
-              whiteSpace: 'pre-wrap',
-              fontFamily: mono,
-              fontSize: 13,
-              lineHeight: 1.5,
-              color: C.text,
-            }}
-          >
-            {g}
-          </pre>
+          <GoalStateView key={i} state={g} index={i} count={goal.goals.length} />
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** One open goal rendered as WYSIWYG math: hypotheses then ⊢ target. */
+function GoalStateView({ state, index, count }: { state: LeanGoalState; index: number; count: number }) {
+  return (
+    <div
+      style={{
+        margin: '0 0 12px',
+        padding: 10,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: 6,
+        fontSize: 14,
+        lineHeight: 1.6,
+        color: C.text,
+      }}
+    >
+      {(count > 1 || state.case) && (
+        <div style={{ fontSize: 11, color: C.faint, marginBottom: 6 }}>
+          {count > 1 ? `goal ${index + 1}/${count}` : ''}
+          {count > 1 && state.case ? ' · ' : ''}
+          {state.case ? `case ${state.case}` : ''}
+        </div>
+      )}
+      {state.hyps.map((h, hi) => (
+        <div key={hi} style={{ marginBottom: 2 }}>
+          <span style={{ fontFamily: mono, color: C.purple }}>{h.names.join(' ')}</span>
+          <span style={{ color: C.label }}> : </span>
+          <LeanMathView tagged={h.type} />
+        </div>
+      ))}
+      <div style={{ marginTop: state.hyps.length ? 6 : 0, display: 'flex', gap: 6 }}>
+        <span style={{ color: C.green }}>⊢</span>
+        <LeanMathView tagged={state.targetTagged} fallback={state.plain} />
       </div>
     </div>
   );

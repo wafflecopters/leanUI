@@ -153,16 +153,6 @@ export async function checkLeanSource(source: string, opts: CheckOptions = {}): 
 // Analyze: messages + tactic goal states (via lean/Extract.lean InfoTree walk)
 // ---------------------------------------------------------------------------
 
-export interface LeanGoal {
-  /** 1-based line, 0-based col — source range of the tactic this goal precedes. */
-  startLine: number;
-  startCol: number;
-  endLine: number;
-  endCol: number;
-  /** Pretty-printed goal states (one per open goal), e.g. "n : Nat\n⊢ n + 0 = n". */
-  goals: string[];
-}
-
 /**
  * Tagged pretty-printed expression (Lean `CodeWithInfos`), as serialized by
  * lean/Extract.lean. Mirrors `TaggedText SubexprInfo`: text leaves, append
@@ -173,6 +163,34 @@ export type TaggedText =
   | { t: 'text'; s: string }
   | { t: 'append'; kids: TaggedText[] }
   | { t: 'tag'; pos: string; child: TaggedText };
+
+/** One hypothesis in a goal state (names share a type, e.g. `a b : Nat`). */
+export interface LeanHyp {
+  names: string[];
+  /** Tagged pretty-print of the hypothesis type, for WYSIWYG rendering. */
+  type: TaggedText;
+}
+
+/** A single open goal: optional case name, hypotheses, and a target. */
+export interface LeanGoalState {
+  /** `case foo` name, if any. */
+  case?: string;
+  hyps: LeanHyp[];
+  /** Tagged pretty-print of the target type (the thing after ⊢). */
+  targetTagged: TaggedText;
+  /** Plain-text rendering (fallback / copy), e.g. "n : Nat\n⊢ n + 0 = n". */
+  plain: string;
+}
+
+export interface LeanGoal {
+  /** 1-based line, 0-based col — source range of the tactic this goal precedes. */
+  startLine: number;
+  startCol: number;
+  endLine: number;
+  endCol: number;
+  /** The open goal states at this tactic position. */
+  goals: LeanGoalState[];
+}
 
 /** A top-level declaration the user wrote (def/theorem/inductive/...). */
 export interface LeanDeclaration {
@@ -245,12 +263,30 @@ export function parseAnalyzeJson(
     endCol: clampInt(m.endCol, clampInt(m.startCol)),
     text: typeof m.text === 'string' ? m.text : String(m.text ?? ''),
   }));
+  const parseGoalState = (gs: any): LeanGoalState => {
+    const target = sanitizeTagged(gs?.targetTagged) ?? { t: 'text', s: String(gs?.plain ?? '') };
+    const hyps: LeanHyp[] = Array.isArray(gs?.hyps)
+      ? gs.hyps
+          .map((h: any) => {
+            const type = sanitizeTagged(h?.type);
+            if (!type) return undefined;
+            return { names: Array.isArray(h?.names) ? h.names.map((n: any) => String(n)) : [], type };
+          })
+          .filter(Boolean)
+      : [];
+    return {
+      ...(typeof gs?.case === 'string' ? { case: gs.case } : {}),
+      hyps,
+      targetTagged: target,
+      plain: String(gs?.plain ?? ''),
+    };
+  };
   const goals: LeanGoal[] = obj.goals.map((g: any) => ({
     startLine: clampInt(g.startLine, 1),
     startCol: clampInt(g.startCol),
     endLine: clampInt(g.endLine, clampInt(g.startLine, 1)),
     endCol: clampInt(g.endCol, clampInt(g.startCol)),
-    goals: Array.isArray(g.goals) ? g.goals.map((s: any) => String(s)) : [],
+    goals: Array.isArray(g.goals) ? g.goals.map(parseGoalState) : [],
   }));
   const declarations: LeanDeclaration[] = Array.isArray(obj.declarations)
     ? obj.declarations.map((d: any) => {

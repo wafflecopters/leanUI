@@ -13,13 +13,31 @@ export interface LeanMessage {
   text: string;
 }
 
+/** One hypothesis in a goal state (names share a type, e.g. `a b : Nat`). */
+export interface LeanHyp {
+  names: string[];
+  /** Tagged pretty-print of the hypothesis type, for WYSIWYG rendering. */
+  type: TaggedText;
+}
+
+/** A single open goal: optional case name, hypotheses, and a target. */
+export interface LeanGoalState {
+  /** `case foo` name, if any. */
+  case?: string;
+  hyps: LeanHyp[];
+  /** Tagged pretty-print of the target type (after ⊢). */
+  targetTagged: TaggedText;
+  /** Plain-text rendering (fallback / copy). */
+  plain: string;
+}
+
 export interface LeanGoal {
   startLine: number;
   startCol: number;
   endLine: number;
   endCol: number;
-  /** One pretty-printed goal state per open goal. */
-  goals: string[];
+  /** The open goal states at this tactic position. */
+  goals: LeanGoalState[];
 }
 
 /**
