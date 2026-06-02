@@ -6,6 +6,7 @@ import { pickGoalAtCursor } from '../lean/goalAtCursor';
 import { LEAN_PRESETS, DEFAULT_LEAN_SOURCE } from '../lean/presets';
 import { LeanMathView } from './LeanMathView';
 import { LeanMathEditor } from './LeanMathEditor';
+import { LeanWysiwygPanel } from './LeanWysiwygPanel';
 
 /**
  * The leanUI editor — running entirely on Lean 4.
@@ -79,6 +80,7 @@ const sectionHeader: React.CSSProperties = {
 export function LeanEditorPage() {
   const [source, setSource] = useState(DEFAULT_LEAN_SOURCE);
   const [mathlib, setMathlib] = useState(false);
+  const [wysiwyg, setWysiwyg] = useState(true);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
   // Cursor in Lean convention: 1-based line, 0-based column.
@@ -223,6 +225,10 @@ export function LeanEditorPage() {
           <input type="checkbox" checked={mathlib} onChange={(e) => setMathlib(e.target.checked)} />
           Mathlib
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.label }}>
+          <input type="checkbox" checked={wysiwyg} onChange={(e) => setWysiwyg(e.target.checked)} />
+          WYSIWYG
+        </label>
 
         <span style={{ fontSize: 12, color: result?.success ? C.green : C.label }}>{statusText}</span>
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.faint }}>
@@ -247,11 +253,22 @@ export function LeanEditorPage() {
           </div>
         </div>
 
-        {/* Right column: goal-at-cursor + declarations + diagnostics */}
+        {/* Right column: WYSIWYG structured editor, or goal/declarations/messages. */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <GoalPanel goal={activeGoal} />
-          <DeclarationsPanel declarations={declarations} />
-          <MessagesPanel messages={messages} bridgeError={result?.bridgeError} loading={loading} />
+          {wysiwyg ? (
+            <>
+              <div style={{ flex: 1, minHeight: 0, borderBottom: `1px solid ${C.border}`, overflow: 'hidden' }}>
+                <LeanWysiwygPanel declarations={declarations} goals={goals} />
+              </div>
+              <MessagesPanel messages={messages} bridgeError={result?.bridgeError} loading={loading} />
+            </>
+          ) : (
+            <>
+              <GoalPanel goal={activeGoal} />
+              <DeclarationsPanel declarations={declarations} />
+              <MessagesPanel messages={messages} bridgeError={result?.bridgeError} loading={loading} />
+            </>
+          )}
         </div>
       </div>
     </div>
