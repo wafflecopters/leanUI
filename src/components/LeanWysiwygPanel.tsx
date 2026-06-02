@@ -1,19 +1,24 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LeanDeclaration, LeanGoal } from '../lean/types';
-import { groupGoalsByDeclaration, declKey, type ProofStep } from '../lean/declProofSteps';
+import { declKey } from '../lean/declProofSteps';
 import { LeanMathView } from './LeanMathView';
 import { LeanMathEditor } from './LeanMathEditor';
+import { ProofTreeEditor } from './ProofTreeEditor';
+import {
+  createHistory,
+  type ProofTreeHistory,
+} from '../proof-tree/proof-tree';
+import { findFirstHole } from '../proof-tree/tactic-to-tree';
+import { leanTacticsToTree } from '../lean/leanTacticsToTree';
+import { extractTacticBlock } from '../lean/extractTacticBlock';
+import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 
 /**
- * The structured WYSIWYG editor panel — restores the original two-column layout
- * on Lean data: one card per declaration, each with an interactive math editor
- * for the type (and value, for defs) and a Proof section that shows the proof's
- * goal states as WYSIWYG math, step by step.
- *
- * Interactive proof *construction* (the old ProofTreeEditor's click-to-build
- * tactics) is M4 — it was bound to the TT tactic engine and needs an async
- * Lean-backed rebuild. This panel restores the structure and the WYSIWYG
- * display; the proof steps are read from Lean's tactic goal states.
+ * The structured WYSIWYG editor on Lean — uses the REAL ProofTreeEditor (and the
+ * real math editors), with goals supplied by the Lean round-trip provider
+ * (proof tree → Lean tactic source → InfoTree goals → NodeGoalInfo). One card
+ * per declaration: interactive type/value math, plus the full structured proof
+ * editor for theorems, seeded from the user's actual proof.
  */
 const C = {
   bg: '#0d1117',
@@ -39,18 +44,26 @@ const KIND_COLOR: Record<LeanDeclaration['kind'], string> = {
 
 export function LeanWysiwygPanel({
   declarations,
-  goals,
+  goals: _goals,
+  source,
+  mathlib,
 }: {
   declarations: LeanDeclaration[];
   goals: LeanGoal[];
+  source: string;
+  mathlib?: boolean;
 }) {
-  const stepsByDecl = useMemo(() => groupGoalsByDeclaration(declarations, goals), [declarations, goals]);
+  // Declaration start lines (sorted) to bound each declaration's source slice.
+  const sortedLines = useMemo(
+    () => [...declarations].map((d) => d.line).sort((a, b) => a - b),
+    [declarations],
+  );
+  const nextLineOf = (line: number): number | undefined => sortedLines.find((l) => l > line);
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', color: C.text }}>
       <div
         style={{
-          margin: 0,
           padding: '12px 16px 8px',
           color: '#e6edf3',
           fontSize: 13,
@@ -64,16 +77,29 @@ export function LeanWysiwygPanel({
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px 16px' }}>
         {declarations.length === 0 && <div style={{ color: C.faint, fontSize: 13 }}>No declarations.</div>}
         {declarations.map((d) => (
-          <DeclCard key={declKey(d)} decl={d} steps={stepsByDecl.get(declKey(d)) ?? []} />
+          <DeclCard
+            key={declKey(d)}
+            decl={d}
+            tacticBlock={extractTacticBlock(source, d, nextLineOf(d.line))}
+            mathlib={mathlib}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function DeclCard({ decl, steps }: { decl: LeanDeclaration; steps: ProofStep[] }) {
+function DeclCard({
+  decl,
+  tacticBlock,
+  mathlib,
+}: {
+  decl: LeanDeclaration;
+  tacticBlock: string | null;
+  mathlib?: boolean;
+}) {
   const [editing, setEditing] = useState(false);
-  const isProof = decl.kind === 'theorem';
+  const isProof = decl.kind === 'theorem' && tacticBlock !== null;
 
   return (
     <div
@@ -85,7 +111,6 @@ function DeclCard({ decl, steps }: { decl: LeanDeclaration; steps: ProofStep[] }
         backgroundColor: C.panel,
       }}
     >
-      {/* Header */}
       <div
         style={{
           display: 'flex',
@@ -110,7 +135,6 @@ function DeclCard({ decl, steps }: { decl: LeanDeclaration; steps: ProofStep[] }
         <span style={{ flex: 1, fontFamily: mono, fontSize: 13, fontWeight: 500, color: '#e6edf3' }}>{decl.name}</span>
         <button
           onClick={() => setEditing((e) => !e)}
-          title={editing ? 'Done editing' : 'Edit structurally'}
           style={{
             background: 'none',
             border: `1px solid ${C.border}`,
@@ -126,7 +150,7 @@ function DeclCard({ decl, steps }: { decl: LeanDeclaration; steps: ProofStep[] }
       </div>
 
       {/* Type (+ value for defs) */}
-      <div style={{ padding: '8px 10px', borderBottom: steps.length ? `1px solid ${C.border}` : 'none' }}>
+      <div style={{ padding: '8px 10px', borderBottom: isProof ? `1px solid ${C.border}` : 'none' }}>
         <div style={{ fontSize: 15, lineHeight: 1.6 }}>
           <span style={{ color: C.label }}>: </span>
           {editing ? (
@@ -147,43 +171,58 @@ function DeclCard({ decl, steps }: { decl: LeanDeclaration; steps: ProofStep[] }
         )}
       </div>
 
-      {/* Proof steps (theorems) */}
-      {isProof && steps.length > 0 && <ProofSteps steps={steps} />}
+      {/* Structured proof editor (the REAL ProofTreeEditor, goals from Lean) */}
+      {isProof && (
+        <LeanProofEditor decl={decl} tacticBlock={tacticBlock} mathlib={mathlib} />
+      )}
     </div>
   );
 }
 
-function ProofSteps({ steps }: { steps: ProofStep[] }) {
+function LeanProofEditor({
+  decl,
+  tacticBlock,
+  mathlib,
+}: {
+  decl: LeanDeclaration;
+  tacticBlock: string;
+  mathlib?: boolean;
+}) {
+  // Seed the proof tree from the user's actual Lean proof. Re-seed if the source
+  // proof changes (keyed by name + block).
+  const [history, setHistory] = useState<ProofTreeHistory>(() => seedHistory(tacticBlock));
+  useEffect(() => {
+    setHistory(seedHistory(tacticBlock));
+  }, [tacticBlock]);
+
+  const state = history.current;
+  const lean = useLeanProofGoals({
+    name: decl.name,
+    typeSource: decl.prettyType,
+    proof: state.root,
+    cursorId: state.cursor.nodeId,
+    mathlib,
+  });
+
   return (
-    <div style={{ padding: '8px 10px' }}>
-      <div style={{ fontSize: 10, color: C.faint, marginBottom: 6, letterSpacing: '0.03em' }}>PROOF</div>
-      {steps.map((step, i) => {
-        const state = step.goal.goals[0];
-        return (
-          <div key={i} style={{ marginBottom: 8, paddingLeft: 8, borderLeft: `2px solid ${C.border}` }}>
-            <div style={{ fontSize: 10, color: C.faint, marginBottom: 2 }}>
-              step {i + 1} · line {step.startLine}
-              {state?.case ? ` · case ${state.case}` : ''}
-            </div>
-            {!state && <span style={{ color: C.green, fontSize: 12 }}>goals solved</span>}
-            {state && (
-              <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>
-                {state.hyps.map((h, hi) => (
-                  <div key={hi}>
-                    <span style={{ fontFamily: mono, color: C.purple }}>{h.names.join(' ')}</span>
-                    <span style={{ color: C.label }}> : </span>
-                    <LeanMathView tagged={h.type} />
-                  </div>
-                ))}
-                <div style={{ display: 'flex', gap: 6, marginTop: state.hyps.length ? 2 : 0 }}>
-                  <span style={{ color: C.green }}>⊢</span>
-                  <LeanMathView tagged={state.targetTagged} fallback={state.plain} />
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div style={{ padding: '6px 10px' }}>
+      <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, letterSpacing: '0.03em', display: 'flex', gap: 8 }}>
+        <span>PROOF</span>
+        {lean.loading && <span style={{ color: C.label }}>checking…</span>}
+        {lean.error && <span style={{ color: '#f85149' }}>⚠ {lean.error.slice(0, 60)}</span>}
+      </div>
+      <ProofTreeEditor
+        history={history}
+        onHistoryChange={setHistory}
+        goalMapOverride={lean.goalMap}
+        typedContextOverride={lean.typedContext}
+      />
     </div>
   );
+}
+
+function seedHistory(tacticBlock: string): ProofTreeHistory {
+  const root = leanTacticsToTree(tacticBlock);
+  const firstHole = findFirstHole(root);
+  return createHistory({ root, cursor: { nodeId: firstHole?.id ?? root.id } });
 }

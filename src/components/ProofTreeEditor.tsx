@@ -124,6 +124,14 @@ export interface ProofTreeEditorProps {
   currentDeclName?: string;
   /** Pre-computed tactic trace from compilation — avoids re-running tactics */
   tacticTrace?: import('../tactics/tactic-session').TacticStepTrace[];
+  /**
+   * Lean backend overrides. When provided (by the Lean-backed WYSIWYG parent),
+   * the editor renders goals from these instead of running the in-process TT
+   * engine — the dependency-injection seam for the Lean port. When absent, the
+   * legacy TT goal computation runs unchanged.
+   */
+  goalMapOverride?: Map<ProofNodeId, NodeGoalInfo>;
+  typedContextOverride?: TypedProofContext | null;
 }
 
 // ============================================================================
@@ -194,7 +202,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -235,8 +243,10 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 
   const emptyRegistry = useMemo<SyntaxRegistry>(() => ({ symbolMap: new Map(), entries: [] }), []);
 
-  // Compute typed context at cursor position (uses surface type when available)
+  // Compute typed context at cursor position (uses surface type when available).
+  // Lean backend: when a typedContextOverride is supplied, use it directly.
   const typedContext = useMemo<TypedProofContext | null>(() => {
+    if (typedContextOverride !== undefined) return typedContextOverride;
     if (surfaceType) {
       return computeTypedContext(
         state.root, state.cursor.nodeId, surfaceType, registry ?? emptyRegistry,
@@ -252,7 +262,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
       inductionVar: ctx.inductionVar,
       goal: ctx.goalDescription,
     };
-  }, [state.root, state.cursor.nodeId, surfaceType, kernelType, definitions, registry, emptyRegistry, inductiveMap]);
+  }, [typedContextOverride, state.root, state.cursor.nodeId, surfaceType, kernelType, definitions, registry, emptyRegistry, inductiveMap]);
 
   // Compute interactive goal from kernel info (shared between GoalPanel and prose view)
   const interactiveGoal = useMemo<InteractiveGoal | null>(() => {
@@ -325,13 +335,15 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
   }, [registry, definitions]);
 
   const goalMap = useMemo<Map<ProofNodeId, NodeGoalInfo>>(() => {
+    // Lean backend: a supplied goal map (from the Lean round-trip) takes over.
+    if (goalMapOverride) return goalMapOverride;
     if (!kernelType || !definitions || !rev) return new Map();
     try {
       return replayEntireTree(state.root, kernelType, definitions, rev, effectiveTrace);
     } catch {
       return new Map();
     }
-  }, [state.root, kernelType, definitions, rev, effectiveTrace]);
+  }, [goalMapOverride, state.root, kernelType, definitions, rev, effectiveTrace]);
 
   // Generate prose items from proof tree + goal map
   const proseItems = useMemo<ProseItem[]>(() => {
