@@ -11,6 +11,8 @@ import {
 import { findFirstHole } from '../proof-tree/tactic-to-tree';
 import { leanTacticsToTree } from '../lean/leanTacticsToTree';
 import { extractTacticBlock } from '../lean/extractTacticBlock';
+import { spliceTacticBlock } from '../lean/spliceTacticBlock';
+import { proofTreeToLean } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 
 /**
@@ -47,11 +49,14 @@ export function LeanWysiwygPanel({
   goals: _goals,
   source,
   mathlib,
+  onSourceChange,
 }: {
   declarations: LeanDeclaration[];
   goals: LeanGoal[];
   source: string;
   mathlib?: boolean;
+  /** Write-back: structural proof edits reprint + splice into the source. */
+  onSourceChange?: (next: string) => void;
 }) {
   // Declaration start lines (sorted) to bound each declaration's source slice.
   const sortedLines = useMemo(
@@ -82,6 +87,11 @@ export function LeanWysiwygPanel({
             decl={d}
             tacticBlock={extractTacticBlock(source, d, nextLineOf(d.line))}
             mathlib={mathlib}
+            onProofChange={
+              onSourceChange
+                ? (newBlock) => onSourceChange(spliceTacticBlock(source, d, nextLineOf(d.line), newBlock))
+                : undefined
+            }
           />
         ))}
       </div>
@@ -93,10 +103,12 @@ function DeclCard({
   decl,
   tacticBlock,
   mathlib,
+  onProofChange,
 }: {
   decl: LeanDeclaration;
   tacticBlock: string | null;
   mathlib?: boolean;
+  onProofChange?: (newBlock: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const isProof = decl.kind === 'theorem' && tacticBlock !== null;
@@ -173,7 +185,7 @@ function DeclCard({
 
       {/* Structured proof editor (the REAL ProofTreeEditor, goals from Lean) */}
       {isProof && (
-        <LeanProofEditor decl={decl} tacticBlock={tacticBlock} mathlib={mathlib} />
+        <LeanProofEditor decl={decl} tacticBlock={tacticBlock} mathlib={mathlib} onProofChange={onProofChange} />
       )}
     </div>
   );
@@ -183,17 +195,30 @@ function LeanProofEditor({
   decl,
   tacticBlock,
   mathlib,
+  onProofChange,
 }: {
   decl: LeanDeclaration;
   tacticBlock: string;
   mathlib?: boolean;
+  onProofChange?: (newBlock: string) => void;
 }) {
   // Seed the proof tree from the user's actual Lean proof. Re-seed if the source
-  // proof changes (keyed by name + block).
+  // proof changes (keyed by the block text).
   const [history, setHistory] = useState<ProofTreeHistory>(() => seedHistory(tacticBlock));
   useEffect(() => {
     setHistory(seedHistory(tacticBlock));
   }, [tacticBlock]);
+
+  // Write-back: when a structural edit changes the printed proof, splice it into
+  // the source. We compare against the printed form of the seed so cursor-only
+  // moves and no-op edits don't trigger a source rewrite (which would re-seed).
+  const handleHistoryChange = (h: ProofTreeHistory) => {
+    setHistory(h);
+    if (!onProofChange) return;
+    const printed = proofTreeToLean(h.current.root, 1, 1).source;
+    const seedPrinted = proofTreeToLean(leanTacticsToTree(tacticBlock), 1, 1).source;
+    if (printed !== seedPrinted) onProofChange(printed);
+  };
 
   const state = history.current;
   const lean = useLeanProofGoals({
@@ -213,7 +238,7 @@ function LeanProofEditor({
       </div>
       <ProofTreeEditor
         history={history}
-        onHistoryChange={setHistory}
+        onHistoryChange={handleHistoryChange}
         goalMapOverride={lean.goalMap}
         typedContextOverride={lean.typedContext}
       />

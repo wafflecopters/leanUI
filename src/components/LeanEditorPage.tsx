@@ -258,7 +258,13 @@ export function LeanEditorPage() {
           {wysiwyg ? (
             <>
               <div style={{ flex: 1, minHeight: 0, borderBottom: `1px solid ${C.border}`, overflow: 'hidden' }}>
-                <LeanWysiwygPanel declarations={declarations} goals={goals} source={source} mathlib={mathlib} />
+                <LeanWysiwygPanel
+                  declarations={declarations}
+                  goals={goals}
+                  source={source}
+                  mathlib={mathlib}
+                  onSourceChange={loadSource}
+                />
               </div>
               <MessagesPanel messages={messages} bridgeError={result?.bridgeError} loading={loading} />
             </>
