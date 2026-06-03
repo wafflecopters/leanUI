@@ -43,6 +43,8 @@ class Emitter {
   lines: string[] = [];
   ranges = new Map<ProofNodeId, NodeRange>();
   holes = new Set<ProofNodeId>();
+  /** Write-back mode: drop a chaining tactic's lone-hole continuation. */
+  omitTrailingHoles = false;
 
   /** Emit one tactic line at the given indent depth, recording its node range. */
   emit(depth: number, text: string, nodeId?: ProofNodeId): void {
@@ -85,6 +87,12 @@ function rewriteTerm(node: { name: string; reverse: boolean }): string {
   return node.reverse ? `← ${node.name}` : node.name;
 }
 
+/** Emit a chaining tactic's continuation child, honoring omitTrailingHoles. */
+function emitChild(em: Emitter, child: ProofNode, depth: number): void {
+  if (em.omitTrailingHoles && child.tag === 'hole') return;
+  emitNode(em, child, depth);
+}
+
 function emitNode(em: Emitter, node: ProofNode, depth: number): void {
   switch (node.tag) {
     case 'hole': {
@@ -94,7 +102,7 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     }
     case 'intros': {
       em.emit(depth, `intro ${introNames(node.names)}`, node.id);
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'exact': {
@@ -104,25 +112,25 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     }
     case 'unfold': {
       em.emit(depth, `unfold ${node.name}`, node.id);
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'fold': {
       // `fold` is not a core tactic; emit as a no-op comment so the block still
       // elaborates and the node keeps a range. (Lean-native fold handled later.)
       em.emit(depth, `-- fold ${node.name}`, node.id);
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'rewrite': {
       em.emit(depth, `rw [${rewriteTerm(node)}]`, node.id);
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'simp': {
       const lemmas = node.lemmas.filter((l) => l.trim().length > 0);
       em.emit(depth, lemmas.length ? `simp [${lemmas.join(', ')}]` : 'simp', node.id);
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'apply': {
@@ -144,7 +152,7 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
         const expr = node.expr.trim() || 'sorry';
         em.emit(depth, `have ${node.name} := ${expr}`, node.id);
       }
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'suffices': {
@@ -152,7 +160,7 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
       em.emit(depth, `suffices ${node.name} : ${type} by`, node.id);
       if (node.byProof) emitNode(em, node.byProof, depth + 1);
       else em.emit(depth + 1, 'sorry');
-      emitNode(em, node.child, depth);
+      emitChild(em, node.child, depth);
       return;
     }
     case 'induction': {
@@ -201,4 +209,21 @@ export function proofTreeToLean(root: ProofNode, baseLine = 1, baseDepth = 1): P
     }
   }
   return { source: em.lines.join('\n'), nodeRanges: em.ranges, holeNodeIds: em.holes };
+}
+
+/**
+ * Print a proof tree as Lean source for WRITE-BACK into the user's file.
+ *
+ * Unlike `proofTreeToLean` (which renders every hole as `sorry` so Lean reports
+ * a goal there), this omits trailing-hole continuations of chaining tactics: a
+ * goal-closing tactic like `simp` that the parser gave a fabricated `sorry`
+ * child would otherwise write `simp\n  sorry` — which Lean rejects as "no goals
+ * to be solved". A standalone unfinished hole still becomes `sorry` so the user
+ * keeps a visible obligation.
+ */
+export function proofTreeToSource(root: ProofNode, baseDepth = 1): string {
+  const em = new Emitter();
+  em.omitTrailingHoles = true;
+  emitNode(em, root, baseDepth);
+  return em.lines.join('\n');
 }

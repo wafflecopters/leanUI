@@ -84,6 +84,16 @@ export function mapLeanGoalsToNodes(input: LeanGoalMappingInput): Map<ProofNodeI
   for (const [nodeId, range] of nodeRanges) {
     const g = goalForRange(goals, range);
     const err = errorByLine.get(range.startLine);
+    const isHole = holeNodeIds.has(nodeId);
+
+    // A `sorry` that lands where the previous tactic already closed the goal
+    // produces "no goals to be solved" — that's SOLVED, not a real error. Treat
+    // such a hole as solved rather than surfacing the error.
+    const isNoGoalsError = err !== undefined && /no goals/i.test(err.text);
+    if (isHole && isNoGoalsError) {
+      result.set(nodeId, { goalLatex: '', hypotheses: [], validation: { status: 'solved' } });
+      continue;
+    }
 
     if (g && g.goals.length > 0) {
       const info = nodeGoalInfoFromState(g.goals[0]);
@@ -93,12 +103,8 @@ export function mapLeanGoalsToNodes(input: LeanGoalMappingInput): Map<ProofNodeI
 
     // No goal at this range. For a hole that means the proof is complete here
     // (Lean reports a `sorry` warning, not an open goal we must show).
-    if (holeNodeIds.has(nodeId)) {
-      result.set(nodeId, {
-        goalLatex: '',
-        hypotheses: [],
-        validation: { status: 'solved' },
-      });
+    if (isHole) {
+      result.set(nodeId, { goalLatex: '', hypotheses: [], validation: { status: 'solved' } });
       continue;
     }
 

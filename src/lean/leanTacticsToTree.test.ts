@@ -32,6 +32,19 @@ describe('leanTacticsToTree', () => {
     expect((leanTacticsToTree('  rw [← foo]') as any).reverse).toBe(true);
   });
 
+  test('rw with multiple lemmas becomes a chain of rewrites (none dropped)', () => {
+    resetProofIds();
+    const tree = leanTacticsToTree('  rw [a, ← b, c]') as any;
+    expect(tree.tag).toBe('rewrite');
+    expect(tree.name).toBe('a');
+    expect(tree.reverse).toBe(false);
+    expect(tree.child.tag).toBe('rewrite');
+    expect(tree.child.name).toBe('b');
+    expect(tree.child.reverse).toBe(true);
+    expect(tree.child.child.tag).toBe('rewrite');
+    expect(tree.child.child.name).toBe('c');
+  });
+
   test('simp with and without lemmas', () => {
     resetProofIds();
     expect((leanTacticsToTree('  simp') as any).lemmas).toEqual([]);

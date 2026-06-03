@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { proofTreeToLean } from './proofTreeToLean';
+import { proofTreeToLean, proofTreeToSource } from './proofTreeToLean';
 import {
   mkHole,
   mkIntros,
@@ -112,6 +112,29 @@ describe('proofTreeToLean', () => {
     // first tactic sits on line 10, the exact on line 11
     expect(out.nodeRanges.get(tree.id)!.startLine).toBe(10);
     expect(out.nodeRanges.get(inner.id)!.startLine).toBe(11);
+  });
+
+  describe('proofTreeToSource (write-back)', () => {
+    test('omits a chaining tactic’s fabricated trailing hole', () => {
+      resetProofIds();
+      // `simp` then a hole continuation → for analysis prints `simp\n  sorry`,
+      // but for source it should be just `simp`.
+      const tree = mkSimp(['x'], [], mkHole());
+      expect(proofTreeToLean(tree).source).toBe('  simp [x]\n  sorry');
+      expect(proofTreeToSource(tree, 1)).toBe('  simp [x]');
+    });
+
+    test('keeps a standalone hole as sorry', () => {
+      resetProofIds();
+      expect(proofTreeToSource(mkHole(), 1)).toBe('  sorry');
+    });
+
+    test('omits trailing hole inside an induction case body', () => {
+      resetProofIds();
+      const zero = mkCase('zero', mkSimp([], [], mkHole()), 'zero', []);
+      const tree = mkInduction('n', [zero]);
+      expect(proofTreeToSource(tree, 1)).toBe('  induction n with\n  | zero =>\n    simp');
+    });
   });
 
   test('every emitted node has a recorded range', () => {

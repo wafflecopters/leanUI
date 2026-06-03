@@ -72,6 +72,14 @@ function continuation(lines: Line[], pos: { i: number }, level: number): ProofNo
   return mkHole();
 }
 
+/** Split a `rw [...]` rule list on commas, respecting `←` prefixes. */
+function splitRwRules(inner: string): string[] {
+  return inner
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 function parseTactic(lines: Line[], pos: { i: number }, level: number, text: string): ProofNode {
   // sorry / hole
   if (text === 'sorry' || text === 'admit') return mkHole();
@@ -93,10 +101,17 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   // rw [..]  /  rw [← ..]
   m = text.match(/^rw\s*\[\s*(.*?)\s*\]\s*$/);
   if (m) {
-    const inner = m[1].trim();
-    const reverse = inner.startsWith('←') || inner.startsWith('<-');
-    const name = inner.replace(/^(←|<-)\s*/, '').split(',')[0].trim();
-    return mkRewrite(name, continuation(lines, pos, level), reverse);
+    // `rw [a, ← b, c]` is multiple rewrites; model as a chain of RewriteNodes so
+    // each lemma is an editable step and the whole list round-trips.
+    const rules = splitRwRules(m[1]);
+    const cont = continuation(lines, pos, level);
+    let chain = cont;
+    for (let r = rules.length - 1; r >= 0; r--) {
+      const reverse = rules[r].startsWith('←') || rules[r].startsWith('<-');
+      const name = rules[r].replace(/^(←|<-)\s*/, '').trim();
+      chain = mkRewrite(name, chain, reverse);
+    }
+    return rules.length > 0 ? chain : mkRewrite('', cont, false);
   }
 
   // simp [..]  /  simp
