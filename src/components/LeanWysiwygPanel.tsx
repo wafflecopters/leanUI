@@ -12,7 +12,7 @@ import { findFirstHole } from '../proof-tree/tactic-to-tree';
 import { leanTacticsToTree } from '../lean/leanTacticsToTree';
 import { extractTacticBlock } from '../lean/extractTacticBlock';
 import { spliceTacticBlock } from '../lean/spliceTacticBlock';
-import { proofTreeToLean } from '../lean/proofTreeToLean';
+import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 
 /**
@@ -215,9 +215,12 @@ function LeanProofEditor({
   const handleHistoryChange = (h: ProofTreeHistory) => {
     setHistory(h);
     if (!onProofChange) return;
+    // Compare via the analysis printer (stable canonical form) to detect real
+    // structural change, but write back the SOURCE printer (no fabricated
+    // trailing `sorry`s) so the user's file stays valid.
     const printed = proofTreeToLean(h.current.root, 1, 1).source;
     const seedPrinted = proofTreeToLean(leanTacticsToTree(tacticBlock), 1, 1).source;
-    if (printed !== seedPrinted) onProofChange(printed);
+    if (printed !== seedPrinted) onProofChange(proofTreeToSource(h.current.root, 1));
   };
 
   const state = history.current;
