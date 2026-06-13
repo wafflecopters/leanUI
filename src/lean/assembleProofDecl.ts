@@ -13,7 +13,7 @@
  * binders"; see LEAN_WYSIWYG_PORT.md). We compute the absolute base line of the
  * first tactic so `proofTreeToLean`'s node ranges line up with what Lean reports.
  */
-import type { ProofNode } from '../proof-tree/proof-tree';
+import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import { proofTreeToLean, type ProofTreeLean } from './proofTreeToLean';
 
 export interface AssembleInput {
@@ -29,6 +29,12 @@ export interface AssembleInput {
    * numbers are offset past these.
    */
   preamble?: string[];
+  /**
+   * For suggestion discovery: emit this tactic in place of the given hole's
+   * `sorry` (e.g. `exact?`), so Lean reports its `Try this:` at that range.
+   */
+  holeOverrideId?: ProofNodeId;
+  holeOverrideTactic?: string;
 }
 
 export interface AssembledProof {
@@ -50,7 +56,10 @@ export function assembleProofDecl(input: AssembleInput): AssembledProof {
   // Lines are 1-based: preamble occupies lines 1..N, header is N+1,
   // so the first tactic is at N+2.
   const baseLine = preamble.length + 2;
-  const lean = proofTreeToLean(input.proof, baseLine, /* baseDepth */ 1);
+  const lean = proofTreeToLean(input.proof, baseLine, /* baseDepth */ 1, {
+    holeOverrideId: input.holeOverrideId,
+    holeOverrideTactic: input.holeOverrideTactic,
+  });
 
   const source = [...preamble, header, lean.source, ''].join('\n');
   return { source, lean };

@@ -45,6 +45,9 @@ class Emitter {
   holes = new Set<ProofNodeId>();
   /** Write-back mode: drop a chaining tactic's lone-hole continuation. */
   omitTrailingHoles = false;
+  /** When set, a hole with this id emits `holeOverrideTactic` instead of `sorry`. */
+  holeOverrideId?: ProofNodeId;
+  holeOverrideTactic = '';
 
   /** Emit one tactic line at the given indent depth, recording its node range. */
   emit(depth: number, text: string, nodeId?: ProofNodeId): void {
@@ -96,6 +99,12 @@ function emitChild(em: Emitter, child: ProofNode, depth: number): void {
 function emitNode(em: Emitter, node: ProofNode, depth: number): void {
   switch (node.tag) {
     case 'hole': {
+      if (em.holeOverrideId === node.id) {
+        // Suggestion discovery: emit a discovery tactic (exact?/apply?/…) here
+        // instead of `sorry`, so Lean reports its `Try this:` at this range.
+        em.emit(depth, em.holeOverrideTactic, node.id);
+        return;
+      }
       em.emit(depth, 'sorry', node.id);
       em.holes.add(node.id);
       return;
@@ -193,8 +202,17 @@ function emitCase(em: Emitter, c: CaseNode, depth: number): void {
  * final file (so recorded ranges are absolute and match what Lean reports).
  * `baseDepth` is the indent depth of that first tactic.
  */
-export function proofTreeToLean(root: ProofNode, baseLine = 1, baseDepth = 1): ProofTreeLean {
+export function proofTreeToLean(
+  root: ProofNode,
+  baseLine = 1,
+  baseDepth = 1,
+  opts?: { holeOverrideId?: ProofNodeId; holeOverrideTactic?: string },
+): ProofTreeLean {
   const em = new Emitter();
+  if (opts?.holeOverrideId !== undefined) {
+    em.holeOverrideId = opts.holeOverrideId;
+    em.holeOverrideTactic = opts.holeOverrideTactic ?? 'sorry';
+  }
   emitNode(em, root, baseDepth);
   // Shift recorded line numbers so the first emitted line is `baseLine`.
   const lineShift = baseLine - 1;

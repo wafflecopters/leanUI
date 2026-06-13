@@ -6,6 +6,9 @@ import { LeanMathEditor } from './LeanMathEditor';
 import { ProofTreeEditor } from './ProofTreeEditor';
 import {
   createHistory,
+  pushState,
+  findNode,
+  replaceNode,
   type ProofTreeHistory,
 } from '../proof-tree/proof-tree';
 import { findFirstHole } from '../proof-tree/tactic-to-tree';
@@ -14,6 +17,7 @@ import { extractTacticBlock } from '../lean/extractTacticBlock';
 import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
+import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 
 /**
  * The structured WYSIWYG editor on Lean — uses the REAL ProofTreeEditor (and the
@@ -232,6 +236,27 @@ function LeanProofEditor({
     mathlib,
   });
 
+  // Lean-backed suggestions for the cursor hole (exact?/simp?/apply?/rw?).
+  const cursorNode = findNode(state.root, state.cursor.nodeId);
+  const cursorIsHole = cursorNode?.tag === 'hole';
+  const suggest = useLeanSuggestions({
+    name: decl.name,
+    typeSource: decl.prettyType,
+    proof: state.root,
+    cursorId: state.cursor.nodeId,
+    cursorIsHole,
+    mathlib,
+  });
+
+  const applySuggestion = (tactic: string) => {
+    const replacement = leanTacticsToTree(tactic);
+    const newRoot = replaceNode(state.root, state.cursor.nodeId, replacement);
+    const firstHole = findFirstHole(newRoot);
+    handleHistoryChange(
+      pushState(history, { root: newRoot, cursor: { nodeId: firstHole?.id ?? newRoot.id } }),
+    );
+  };
+
   return (
     <div style={{ padding: '6px 10px' }}>
       <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, letterSpacing: '0.03em', display: 'flex', gap: 8 }}>
@@ -245,6 +270,39 @@ function LeanProofEditor({
         goalMapOverride={lean.goalMap}
         typedContextOverride={lean.typedContext}
       />
+      {cursorIsHole && (suggest.suggestions.length > 0 || suggest.loading) && (
+        <div style={{ marginTop: 6 }}>
+          <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
+            <span>SUGGESTIONS</span>
+            {suggest.loading && <span style={{ color: C.label }}>searching…</span>}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {suggest.suggestions.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => applySuggestion(s.tactic)}
+                title={`${s.kind}?  →  ${s.tactic}`}
+                style={{
+                  fontFamily: mono,
+                  fontSize: 11,
+                  color: C.text,
+                  background: C.bg,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 4,
+                  padding: '2px 8px',
+                  cursor: 'pointer',
+                  maxWidth: '100%',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
