@@ -16,6 +16,7 @@
  * requires the package to have been built with `-K mathlib=on` first.
  */
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -53,6 +54,22 @@ export interface CheckResult {
 const ELAN_BIN = join(homedir(), '.elan', 'bin');
 const LEAN_PKG_DIR = resolve(process.cwd(), 'lean');
 const EXTRACT_LEAN = join(LEAN_PKG_DIR, 'Extract.lean');
+// Precompiled extractor (built via `cd lean && lake build extract`, which the
+// dev script runs). With `supportInterpreter := true` it elaborates user files
+// correctly AND skips recompiling Extract.lean each call — ~1.7s vs ~32s. The
+// bridge prefers it when present (core mode), else falls back to `lean --run`.
+const EXTRACT_BIN = join(LEAN_PKG_DIR, '.lake', 'build', 'bin', 'extract');
+let extractBinExists: boolean | undefined;
+function hasExtractBin(): boolean {
+  if (extractBinExists === undefined) {
+    try {
+      extractBinExists = existsSync(EXTRACT_BIN);
+    } catch {
+      extractBinExists = false;
+    }
+  }
+  return extractBinExists;
+}
 
 /** PATH with elan's shim dir prepended so `lean`/`lake` resolve. */
 function leanEnv(): NodeJS.ProcessEnv {
@@ -307,7 +324,34 @@ export function parseAnalyzeJson(
   return { messages, goals, declarations };
 }
 
+// Same-source cache. The editor's debounce re-sends identical source often (and
+// suggestion discovery re-analyzes near-identical sources), so memoizing by
+// source+mathlib turns repeat analyses into instant hits. Bounded FIFO.
+const ANALYZE_CACHE = new Map<string, AnalyzeResult>();
+const ANALYZE_CACHE_MAX = 200;
+
+function cacheKey(source: string, mathlib: boolean): string {
+  return `${mathlib ? 'M' : 'C'}:${source}`;
+}
+
 export async function analyzeLeanSource(source: string, opts: CheckOptions = {}): Promise<AnalyzeResult> {
+  const key = cacheKey(source, opts.mathlib === true);
+  const hit = ANALYZE_CACHE.get(key);
+  if (hit && !hit.bridgeError) {
+    return { ...hit, durationMs: 0 };
+  }
+  const result = await runAnalyze(source, opts);
+  if (!result.bridgeError) {
+    ANALYZE_CACHE.set(key, result);
+    if (ANALYZE_CACHE.size > ANALYZE_CACHE_MAX) {
+      const oldest = ANALYZE_CACHE.keys().next().value;
+      if (oldest !== undefined) ANALYZE_CACHE.delete(oldest);
+    }
+  }
+  return result;
+}
+
+async function runAnalyze(source: string, opts: CheckOptions = {}): Promise<AnalyzeResult> {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const started = Date.now();
   let dir: string | undefined;
@@ -316,16 +360,26 @@ export async function analyzeLeanSource(source: string, opts: CheckOptions = {})
     const file = join(dir, 'Main.lean');
     await writeFile(file, source, 'utf8');
 
-    const args = ['--run', EXTRACT_LEAN, file];
-    if (opts.mathlib) args.push('mathlib');
-    const out = opts.mathlib
-      ? await run('lake', ['env', 'lean', ...args], { cwd: LEAN_PKG_DIR, timeoutMs })
-      : await run('lean', args, { timeoutMs });
+    // Mathlib mode runs under `lake env` (interpreted) for the import path.
+    // Core mode prefers the precompiled binary (supportInterpreter=true, so it
+    // elaborates correctly), falling back to `lean --run` if not yet built.
+    let out: ExecOut;
+    let cmdName: string;
+    if (opts.mathlib) {
+      cmdName = 'lake';
+      out = await run('lake', ['env', 'lean', '--run', EXTRACT_LEAN, file, 'mathlib'], { cwd: LEAN_PKG_DIR, timeoutMs });
+    } else if (hasExtractBin()) {
+      cmdName = 'extract';
+      out = await run(EXTRACT_BIN, [file], { timeoutMs });
+    } else {
+      cmdName = 'lean';
+      out = await run('lean', ['--run', EXTRACT_LEAN, file], { timeoutMs });
+    }
 
     if (out.error && (out.error.code === 'ENOENT' || (out.error as any).killed)) {
       const reason =
         out.error.code === 'ENOENT'
-          ? `Could not find \`${opts.mathlib ? 'lake' : 'lean'}\`. Is elan installed and on PATH (${ELAN_BIN})?`
+          ? `Could not find \`${cmdName}\`. Is elan installed and on PATH (${ELAN_BIN})?`
           : `Lean timed out after ${timeoutMs}ms.`;
       return {
         success: false,

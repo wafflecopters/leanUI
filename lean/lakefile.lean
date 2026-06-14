@@ -31,3 +31,13 @@ require mathlib from git
 
 @[default_target]
 lean_lib LeanUI where
+
+-- The extractor as a compiled executable. Building it once (`lake build extract`)
+-- avoids recompiling Extract.lean (which imports all of `Lean`) on every analyze
+-- call. `supportInterpreter := true` is REQUIRED: the extractor elaborates the
+-- user's file, so the binary must expose symbols to the Lean interpreter (else
+-- syntax-extension elaborators like `=` fail with "elaboration function not
+-- implemented"). The bridge runs this binary when present, else `lean --run`.
+lean_exe extract where
+  root := `Extract
+  supportInterpreter := true
