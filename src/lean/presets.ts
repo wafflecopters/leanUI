@@ -405,6 +405,9 @@ universe u v
 inductive Equal {A : Type u} : A → A → Type u where
   | refl : {a : A} → Equal a a
 
+-- Notation: render Equal a b as a = b in the structured editor.
+infix:50 " = " => Equal
+
 def eqSym {A : Type u} {x y : A} : Equal x y → Equal y x
   | .refl => .refl
 
@@ -494,6 +497,8 @@ def myAbsurd {A : Type} : MyVoid → A := fun v => nomatch v
 
 inductive Equal {A : Type} : A → A → Type where
   | refl : {a : A} → Equal a a
+
+infix:50 " = " => Equal
 
 def eqSym {A : Type} {x y : A} : Equal x y → Equal y x
   | .refl => .refl
@@ -738,6 +743,15 @@ def rdiv {R : Real} (a b : Carrier R) : Carrier R := rmul a (rinv b)
 
 -- Strict ordering: a < b iff a <= b and a /= b
 def rlt {R : Real} (a b : Carrier R) : Type := Pair (rle a b) (Equal a b → MyVoid)
+
+-- Notation so the editor renders real-number expressions as math.
+infixl:65 " + " => radd
+infixl:70 " * " => rmul
+infixl:65 " - " => rsub
+infixl:70 " / " => rdiv
+infix:50 " ≤ " => rle
+infix:50 " < " => rlt
+prefix:75 "-" => rneg
 
 -- Absolute value (defined from leTotal via eitherElim, not axiomatized)
 def rabs {R : Real} (a : Carrier R) : Carrier R :=
