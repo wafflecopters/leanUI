@@ -137,7 +137,10 @@ export function tokenizeText(s: string): MathNode[] {
     }
     if (PUNCT.has(ch)) {
       flush();
-      nodes.push(mkSymbol(ch));
+      // `*` displays as the math centered dot `·` (the TT editor's convention);
+      // other punctuation passes through. `/` and `^` stay literal here so the
+      // structural pass can still recognize them as Frac/Sup operators.
+      nodes.push(mkSymbol(ch === '*' ? '\\cdot' : ch));
       i++;
       continue;
     }
@@ -211,13 +214,57 @@ function restructure(nodes: MathNode[]): MathNode[] {
   return nodes;
 }
 
+/**
+ * Recognize our summation notation `∑[ i , lo , hi ] body` (emitted by the
+ * preset's `notation:max "∑[" i "," lo "," hi "] " f`) and build a real
+ * `BigOpNode` rendering as `\sum_{i = lo}^{hi} body`. Operates on the raw tagged
+ * kids (before tokenization) where the `∑[`/`,`/`]` text leaves and the four
+ * operand subtrees are still cleanly separated.
+ *
+ * Returns null if the kids don't match the sum shape (caller falls back).
+ */
+function recognizeSum(kids: TaggedJson[]): MathNode[] | null {
+  // Expect a leading text leaf beginning with "∑[".
+  if (kids.length === 0) return null;
+  const first = kids[0];
+  if (first.t !== 'text' || !first.s.includes('∑[')) return null;
+
+  // Collect the non-text operands (i, lo, hi, body) in order, and the separator
+  // text leaves to confirm shape (",", ",", "]").
+  const operands: TaggedJson[] = [];
+  let sawClose = false;
+  for (let k = 1; k < kids.length; k++) {
+    const kid = kids[k];
+    if (kid.t === 'text') {
+      if (kid.s.includes(']')) sawClose = true;
+      continue;
+    }
+    operands.push(kid);
+  }
+  if (operands.length < 4 || !sawClose) return null;
+
+  const [iVar, lo, hi, body] = operands;
+  // below = "i = lo"
+  const below = mkRow([
+    ...nodesOf(iVar),
+    mkSymbol('='),
+    ...nodesOf(lo),
+  ]);
+  const above = mkRow(nodesOf(hi));
+  const bodyRow = mkRow(restructure(nodesOf(body)));
+  return [mkBigOp('sum', below, above, bodyRow)];
+}
+
 /** Convert a tagged-text node into a list of MathNodes (structurally enriched). */
 function nodesOf(tt: TaggedJson): MathNode[] {
   switch (tt.t) {
     case 'text':
       return restructure(tokenizeText(tt.s));
-    case 'append':
+    case 'append': {
+      const sum = recognizeSum(tt.kids);
+      if (sum) return sum;
       return restructure(tt.kids.flatMap(nodesOf));
+    }
     case 'tag': {
       const inner = restructure(nodesOf(tt.child));
       // Wrap the subexpression in a Group so it's individually selectable.

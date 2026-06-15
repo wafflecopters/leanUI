@@ -96,6 +96,8 @@ def one : MyNat := .succ .zero
 infixl:65 " + " => plus
 infixl:70 " * " => mul
 infix:50 " = " => Equal
+instance : OfNat MyNat 0 := ⟨MyNat.zero⟩
+instance : OfNat MyNat 1 := ⟨one⟩
 
 -- Equality helpers (named to avoid clashing with Lean's Trans/_root_.trans)
 def congSucc {n m : MyNat} : Equal n m → Equal (MyNat.succ n) (MyNat.succ m)
@@ -288,12 +290,14 @@ def sum (start stop : MyNat) (f : MyNat → MyNat) : MyNat :=
   sumStartCount start (minus (.succ stop) start) f
 
 def two : MyNat := .succ (.succ .zero)
+instance : OfNat MyNat 2 := ⟨two⟩
+notation:max "∑[" i "," lo "," hi "] " f:67 => sum lo hi (fun i => f)
 
 -- Triangle sum: 2 * (0 + 1 + ... + n) = (n + 1) * n.
 -- Left as sorry, exactly as the original TT preset left it (?TODO).
 -- (def, not theorem: this custom Equal lives in Type, not Prop.)
 def triangleSum (n : MyNat) :
-    Equal (mul two (sum .zero n (fun i => i))) (mul (plus n one) n) := sorry
+    Equal (mul 2 (∑[i,0,n] i)) (mul (plus n 1) n) := sorry
 
 #check natSemiring
 #check leqAntisym
