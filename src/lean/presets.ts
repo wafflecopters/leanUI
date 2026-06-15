@@ -90,6 +90,13 @@ def mul : MyNat → MyNat → MyNat
 
 def one : MyNat := .succ .zero
 
+-- Notation so the structured editor renders real math (a + b, a * b, a = b,
+-- a ≤ b) instead of plus a b / Equal a b. Lean's delaborator applies these
+-- to the function-form proofs below automatically.
+infixl:65 " + " => plus
+infixl:70 " * " => mul
+infix:50 " = " => Equal
+
 -- Equality helpers (named to avoid clashing with Lean's Trans/_root_.trans)
 def congSucc {n m : MyNat} : Equal n m → Equal (MyNat.succ n) (MyNat.succ m)
   | .refl => .refl
@@ -219,6 +226,8 @@ def natSemiring : Semiring MyNat where
 inductive Leq : MyNat → MyNat → Type where
   | LeqZero : {n : MyNat} → Leq .zero n
   | LeqSucc : {n m : MyNat} → Leq n m → Leq (.succ n) (.succ m)
+
+infix:50 " ≤ " => Leq
 
 def leqRefl : (n : MyNat) → Leq n n
   | .zero   => .LeqZero
