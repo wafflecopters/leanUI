@@ -22,8 +22,13 @@ import {
   mkGroup,
   mkRow,
   mkSymbol,
+  mkFrac,
+  mkSup,
+  mkSub,
+  mkBigOp,
   type MathNode,
   type MathRow,
+  type SymbolNode,
 } from '../math-editor/types';
 import { renderStaticLatex } from '../math-editor/render';
 import type { TaggedText } from './types';
@@ -144,15 +149,77 @@ export function tokenizeText(s: string): MathNode[] {
   return nodes;
 }
 
-/** Convert a tagged-text node into a flat list of MathNodes. */
+/** Is this node the bare operator symbol `op`? */
+function isOpSymbol(n: MathNode, op: string): boolean {
+  return n.tag === 'Symbol' && (n as SymbolNode).value === op;
+}
+
+/**
+ * Restructure a flat sibling list into structural math nodes, mirroring how the
+ * old TT pipeline emitted real Frac/Sup/Sub/BigOp instead of flat text:
+ *
+ *   a / b      → FracNode(a, b)          (lowest precedence — split first)
+ *   base ^ exp → SupNode(base, exp)
+ *   base _ sub → SubNode(base, sub)
+ *   ∑/∏/∫ body → BigOpNode(operator, …, body)
+ *
+ * We split on the FIRST occurrence (left-to-right) of the lowest-precedence
+ * structural operator present, recursing into each side. Operators are the bare
+ * symbols Lean's delaborator emits between tagged operands (` / `, ` ^ `, …),
+ * which tokenizeText turns into single Symbol nodes.
+ */
+function restructure(nodes: MathNode[]): MathNode[] {
+  if (nodes.length <= 1) return nodes;
+
+  // Fraction: a / b  (split on the first top-level `/`).
+  const slash = nodes.findIndex((n) => isOpSymbol(n, '/'));
+  if (slash > 0 && slash < nodes.length - 1) {
+    const numer = restructure(nodes.slice(0, slash));
+    const denom = restructure(nodes.slice(slash + 1));
+    return [mkFrac(mkRow(numer), mkRow(denom))];
+  }
+
+  // Superscript: base ^ exp.
+  const caret = nodes.findIndex((n) => isOpSymbol(n, '^'));
+  if (caret > 0 && caret < nodes.length - 1) {
+    const base = restructure(nodes.slice(0, caret));
+    const exp = restructure(nodes.slice(caret + 1));
+    return [mkSup(mkRow(base), mkRow(exp))];
+  }
+
+  // Subscript: base _ sub (Lean emits `_` as a symbol from tokenizeText).
+  const under = nodes.findIndex((n) => isOpSymbol(n, '_'));
+  if (under > 0 && under < nodes.length - 1) {
+    const base = restructure(nodes.slice(0, under));
+    const sub = restructure(nodes.slice(under + 1));
+    return [mkSub(mkRow(base), mkRow(sub))];
+  }
+
+  // Big operator: ∑/∏/∫ … body — operator (already mapped to \sum etc.) is the
+  // first node; the rest is the body. (No below/above unless emitted separately.)
+  const bigOps: Record<string, 'sum' | 'prod' | 'int'> = {
+    '\\sum': 'sum',
+    '\\prod': 'prod',
+    '\\int': 'int',
+  };
+  if (nodes[0].tag === 'Symbol' && bigOps[(nodes[0] as SymbolNode).value]) {
+    const op = bigOps[(nodes[0] as SymbolNode).value];
+    const body = restructure(nodes.slice(1));
+    return [mkBigOp(op, null, null, mkRow(body))];
+  }
+
+  return nodes;
+}
+
+/** Convert a tagged-text node into a list of MathNodes (structurally enriched). */
 function nodesOf(tt: TaggedJson): MathNode[] {
   switch (tt.t) {
     case 'text':
-      return tokenizeText(tt.s);
+      return restructure(tokenizeText(tt.s));
     case 'append':
-      return tt.kids.flatMap(nodesOf);
+      return restructure(tt.kids.flatMap(nodesOf));
     case 'tag': {
-      const inner = nodesOf(tt.child);
+      const inner = restructure(nodesOf(tt.child));
       // Wrap the subexpression in a Group so it's individually selectable.
       // Skip empty wrappers (can happen for zero-width tags).
       if (inner.length === 0) return [];

@@ -120,3 +120,58 @@ describe('codeWithInfosToMathRow', () => {
     expect(ids.size).toBeGreaterThan(0);
   });
 });
+
+describe('structural restructuring', () => {
+  // a / b  → append[ tag(a), " / ", tag(b) ]
+  const div = (a: string, b: string): TaggedJson => ({
+    t: 'append',
+    kids: [
+      { t: 'tag', pos: '/0', child: { t: 'text', s: a } },
+      { t: 'text', s: ' / ' },
+      { t: 'tag', pos: '/1', child: { t: 'text', s: b } },
+    ],
+  });
+
+  test('a / b becomes a FracNode', () => {
+    const row = codeWithInfosToMathRow(div('a', 'b'));
+    expect(row.children).toHaveLength(1);
+    const f = row.children[0] as any;
+    expect(f.tag).toBe('Frac');
+    // numer/denom are MathRows wrapping the (group-wrapped) operands
+    expect(f.numer.children.length).toBeGreaterThan(0);
+    expect(f.denom.children.length).toBeGreaterThan(0);
+  });
+
+  test('x ^ 2 becomes a SupNode', () => {
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'x' } },
+        { t: 'text', s: ' ^ ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: '2' } },
+      ],
+    };
+    const f = codeWithInfosToMathRow(tagged).children[0] as any;
+    expect(f.tag).toBe('Sup');
+  });
+
+  test('∑ body becomes a BigOpNode (sum)', () => {
+    const tagged: TaggedJson = { t: 'text', s: '∑ x' };
+    const f = codeWithInfosToMathRow(tagged).children[0] as any;
+    expect(f.tag).toBe('BigOp');
+    expect(f.operator).toBe('sum');
+  });
+
+  test('plain a + b is NOT restructured (stays flat symbols)', () => {
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'a' } },
+        { t: 'text', s: ' + ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'b' } },
+      ],
+    };
+    const kids = codeWithInfosToMathRow(tagged).children;
+    expect(kids.map((n) => n.tag)).toEqual(['Group', 'Symbol', 'Group']);
+  });
+});
