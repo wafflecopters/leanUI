@@ -24,7 +24,9 @@ export function LeanMathEditor({
 }) {
   const initialState = useMemo<MathEditorState | undefined>(() => {
     if (!tagged) return undefined;
-    const root = codeWithInfosToMathRow(tagged);
+    // wrapSubterms:false → clean tree with the editor's own n-<id> click ids
+    // (Group htmlIds would shadow them and break cursor placement).
+    const root = codeWithInfosToMathRow(tagged, { wrapSubterms: false });
     if (root.children.length === 0) return undefined;
     return {
       root,

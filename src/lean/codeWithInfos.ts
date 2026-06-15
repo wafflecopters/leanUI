@@ -158,6 +158,42 @@ function isOpSymbol(n: MathNode, op: string): boolean {
 }
 
 /**
+ * Rewrite leading dependent-Pi binders `( x : T ) → …` into `∀ x, …`, the
+ * mathematical convention (Lean prints `(n : Nat) → P n`; mathematicians read
+ * `∀ n, P n`). Consumes consecutive binders. The flat node sequence for one
+ * binder is: `(`  <var…>  `:`  <type…>  `)`  `\to`  <rest>. We render
+ * `\forall <var> ,` and recurse on <rest>. Only fires on a leading `(` that is
+ * actually a binder (has a top-level `:` before the matching `)` then `\to`).
+ */
+function recognizeForall(nodes: MathNode[]): MathNode[] | null {
+  if (nodes.length === 0 || !isOpSymbol(nodes[0], '(')) return null;
+  // Find the matching close paren for the opening one.
+  let depth = 0;
+  let close = -1;
+  let colon = -1;
+  for (let i = 0; i < nodes.length; i++) {
+    if (isOpSymbol(nodes[i], '(')) depth++;
+    else if (isOpSymbol(nodes[i], ')')) {
+      depth--;
+      if (depth === 0) { close = i; break; }
+    } else if (depth === 1 && colon === -1 && isOpSymbol(nodes[i], ':')) {
+      colon = i;
+    }
+  }
+  // Must be `( var : type )` immediately followed by `\to`.
+  if (close === -1 || colon === -1) return null;
+  if (close + 1 >= nodes.length || !isOpSymbol(nodes[close + 1], '\\to')) return null;
+
+  const varNodes = nodes.slice(1, colon); // between `(` and `:`
+  const rest = nodes.slice(close + 2); // after `) \to`
+  if (varNodes.length === 0) return null;
+
+  // ∀ <var> , <rest>   (rest may itself begin with another binder → recurse)
+  const restConverted = recognizeForall(rest) ?? rest;
+  return [mkSymbol('\\forall'), ...varNodes, mkSymbol(','), ...restConverted];
+}
+
+/**
  * Restructure a flat sibling list into structural math nodes, mirroring how the
  * old TT pipeline emitted real Frac/Sup/Sub/BigOp instead of flat text:
  *
@@ -173,6 +209,10 @@ function isOpSymbol(n: MathNode, op: string): boolean {
  */
 function restructure(nodes: MathNode[]): MathNode[] {
   if (nodes.length <= 1) return nodes;
+
+  // Dependent Pi binders → ∀ (outermost; do before infix splits).
+  const forall = recognizeForall(nodes);
+  if (forall) return forall;
 
   // Fraction: a / b  (split on the first top-level `/`).
   const slash = nodes.findIndex((n) => isOpSymbol(n, '/'));
@@ -215,22 +255,16 @@ function restructure(nodes: MathNode[]): MathNode[] {
 }
 
 /**
- * Recognize our summation notation `∑[ i , lo , hi ] body` (emitted by the
- * preset's `notation:max "∑[" i "," lo "," hi "] " f`) and build a real
+ * Recognize our summation notation `∑[ i , lo , hi ] body` and build a real
  * `BigOpNode` rendering as `\sum_{i = lo}^{hi} body`. Operates on the raw tagged
  * kids (before tokenization) where the `∑[`/`,`/`]` text leaves and the four
- * operand subtrees are still cleanly separated.
- *
- * Returns null if the kids don't match the sum shape (caller falls back).
+ * operand subtrees are still cleanly separated. Null if the shape doesn't match.
  */
-function recognizeSum(kids: TaggedJson[]): MathNode[] | null {
-  // Expect a leading text leaf beginning with "∑[".
+function recognizeSum(kids: TaggedJson[], wrap: boolean): MathNode[] | null {
   if (kids.length === 0) return null;
   const first = kids[0];
   if (first.t !== 'text' || !first.s.includes('∑[')) return null;
 
-  // Collect the non-text operands (i, lo, hi, body) in order, and the separator
-  // text leaves to confirm shape (",", ",", "]").
   const operands: TaggedJson[] = [];
   let sawClose = false;
   for (let k = 1; k < kids.length; k++) {
@@ -244,47 +278,47 @@ function recognizeSum(kids: TaggedJson[]): MathNode[] | null {
   if (operands.length < 4 || !sawClose) return null;
 
   const [iVar, lo, hi, body] = operands;
-  // below = "i = lo"
-  const below = mkRow([
-    ...nodesOf(iVar),
-    mkSymbol('='),
-    ...nodesOf(lo),
-  ]);
-  const above = mkRow(nodesOf(hi));
-  const bodyRow = mkRow(restructure(nodesOf(body)));
+  const below = mkRow([...nodesOf(iVar, wrap), mkSymbol('='), ...nodesOf(lo, wrap)]);
+  const above = mkRow(nodesOf(hi, wrap));
+  const bodyRow = mkRow(restructure(nodesOf(body, wrap)));
   return [mkBigOp('sum', below, above, bodyRow)];
 }
 
-/** Convert a tagged-text node into a list of MathNodes (structurally enriched). */
-function nodesOf(tt: TaggedJson): MathNode[] {
+/**
+ * Convert a tagged-text node into MathNodes (structurally enriched).
+ *
+ * `wrap` controls subexpression Group wrappers: TRUE for read-only views (each
+ * subterm gets a `Group{htmlId}` for click-to-select), FALSE for the editable
+ * MathEditor (Group htmlIds collide with the editor's `n-<id>` click protocol,
+ * breaking cursor placement — so editors get a clean tree with no Group nodes).
+ */
+function nodesOf(tt: TaggedJson, wrap: boolean): MathNode[] {
   switch (tt.t) {
     case 'text':
       return restructure(tokenizeText(tt.s));
     case 'append': {
-      const sum = recognizeSum(tt.kids);
+      const sum = recognizeSum(tt.kids, wrap);
       if (sum) return sum;
-      return restructure(tt.kids.flatMap(nodesOf));
+      return restructure(tt.kids.flatMap((k) => nodesOf(k, wrap)));
     }
     case 'tag': {
-      const inner = restructure(nodesOf(tt.child));
-      // Wrap the subexpression in a Group so it's individually selectable.
-      // Skip empty wrappers (can happen for zero-width tags).
+      const inner = restructure(nodesOf(tt.child, wrap));
       if (inner.length === 0) return [];
+      if (!wrap) return inner; // editable: no Group wrappers
       return [mkGroup(`${SUBEXPR_HTML_PREFIX}${tt.pos}`, inner)];
     }
   }
 }
 
 /**
- * Convert Lean `CodeWithInfos` JSON into a MathRow ready for the math editor.
+ * Convert Lean `CodeWithInfos` JSON into a MathRow for the math editor.
  *
- * The result is flat (a linear sequence of symbols + group wrappers) — the
- * editor's structural nodes (Frac, Sub/Sup, BigOp…) are introduced by user
- * editing, not by this initial render. This matches how the TT path produced
- * type signatures: a readable linear form that's fully editable.
+ * Pass `wrapSubterms: false` when seeding the INTERACTIVE editor (clean tree,
+ * working cursor); default `true` wraps subterms in Group nodes for the
+ * read-only click-to-select views.
  */
-export function codeWithInfosToMathRow(tagged: TaggedJson): MathRow {
-  return mkRow(nodesOf(tagged));
+export function codeWithInfosToMathRow(tagged: TaggedJson, opts?: { wrapSubterms?: boolean }): MathRow {
+  return mkRow(nodesOf(tagged, opts?.wrapSubterms ?? true));
 }
 
 /**

@@ -179,7 +179,7 @@ function DeclCard({
           <div style={{ fontSize: 15, lineHeight: 1.6, marginTop: 4 }}>
             <span style={{ color: C.label }}>:= </span>
             {editing ? (
-              <LeanMathEditor tagged={decl.valueTagged} />
+              <LeanMathEditor tagged={decl.valueTagged} active />
             ) : (
               <LeanMathView tagged={decl.valueTagged} fallback={decl.prettyValue ?? ''} />
             )}

@@ -162,6 +162,42 @@ describe('structural restructuring', () => {
     expect(f.operator).toBe('sum');
   });
 
+  test('dependent Pi binder (x : T) → body renders as ∀ x, body', () => {
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'text', s: '(' },
+        { t: 'tag', pos: '/n', child: { t: 'text', s: 'n' } },
+        { t: 'text', s: ' : ' },
+        { t: 'tag', pos: '/T', child: { t: 'text', s: 'MyNat' } },
+        { t: 'text', s: ') → ' },
+        { t: 'tag', pos: '/b', child: { t: 'text', s: 'P' } },
+      ],
+    };
+    const syms = codeWithInfosToMathRow(tagged, { wrapSubterms: false }).children.map(
+      (n) => (n.tag === 'Symbol' ? (n as SymbolNode).value : n.tag),
+    );
+    expect(syms[0]).toBe('\\forall');
+    expect(syms).toContain(','); // ∀ n , …
+    expect(syms).not.toContain(':'); // type dropped
+  });
+
+  test('non-dependent A → B stays an arrow (not ∀)', () => {
+    const tagged: TaggedJson = {
+      t: 'append',
+      kids: [
+        { t: 'tag', pos: '/0', child: { t: 'text', s: 'A' } },
+        { t: 'text', s: ' → ' },
+        { t: 'tag', pos: '/1', child: { t: 'text', s: 'B' } },
+      ],
+    };
+    const syms = codeWithInfosToMathRow(tagged, { wrapSubterms: false }).children.map(
+      (n) => (n.tag === 'Symbol' ? (n as SymbolNode).value : n.tag),
+    );
+    expect(syms).toContain('\\to');
+    expect(syms).not.toContain('\\forall');
+  });
+
   test('plain a + b is NOT restructured (stays flat symbols)', () => {
     const tagged: TaggedJson = {
       t: 'append',
