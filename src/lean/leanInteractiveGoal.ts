@@ -35,22 +35,47 @@ export function posForGoalId(id: string): string | null {
 export function taggedToInteractiveGoal(target: TaggedText): InteractiveGoal {
   const subtermMap = new Map<string, SubtermInfo>();
 
-  // Walk the converted MathRow; for each Group whose htmlId is a subexpr id,
-  // relabel to a goal- id and register it in the map.
+  // Walk the converted MathRow, relabeling every Group's subexpr htmlId to a
+  // clickable goal- id — recursing through ALL compound-node slots (Frac, Sup,
+  // Sub, SubSup, BigOp below/above/body, Accent, Delimiter), not just Group
+  // children, so subterms inside ∑ bounds / fractions / sub-superscripts are
+  // clickable too.
+  const relabelRow = (row: MathRow): MathRow => mkRow(relabel(row.children));
   const relabel = (nodes: readonly MathNode[]): MathNode[] =>
-    nodes.map((n) => {
-      if (n.tag === 'Group') {
-        const pos = n.htmlId.startsWith('subexpr:') ? n.htmlId.slice('subexpr:'.length) : n.htmlId;
-        const goalId = goalIdForPos(pos);
-        subtermMap.set(goalId, {
-          htmlId: goalId,
-          // We have no TTerm; downstream Lean suggestions key off the path string.
-          term: { tag: 'Hole' } as unknown as SubtermInfo['term'],
-          isAppOfConst: false,
-        });
-        return mkGroup(goalId, relabel(n.children));
+    nodes.map((n): MathNode => {
+      switch (n.tag) {
+        case 'Group': {
+          const pos = n.htmlId.startsWith('subexpr:') ? n.htmlId.slice('subexpr:'.length) : n.htmlId;
+          const goalId = goalIdForPos(pos);
+          subtermMap.set(goalId, {
+            htmlId: goalId,
+            term: { tag: 'Hole' } as unknown as SubtermInfo['term'],
+            isAppOfConst: false,
+          });
+          return mkGroup(goalId, relabel(n.children));
+        }
+        case 'Frac':
+          return { ...n, numer: relabelRow(n.numer), denom: relabelRow(n.denom) };
+        case 'Sup':
+          return { ...n, base: relabelRow(n.base), sup: relabelRow(n.sup) };
+        case 'Sub':
+          return { ...n, base: relabelRow(n.base), sub: relabelRow(n.sub) };
+        case 'SubSup':
+          return { ...n, base: relabelRow(n.base), sub: relabelRow(n.sub), sup: relabelRow(n.sup) };
+        case 'BigOp':
+          return {
+            ...n,
+            below: n.below ? relabelRow(n.below) : null,
+            above: n.above ? relabelRow(n.above) : null,
+            body: relabelRow(n.body),
+          };
+        case 'Accent':
+          return { ...n, body: relabelRow(n.body) };
+        case 'Delimiter':
+          return { ...n, inner: relabelRow(n.inner) };
+        default:
+          return n;
       }
-      return n;
     });
 
   const row: MathRow = codeWithInfosToMathRow(target, { wrapSubterms: true });
