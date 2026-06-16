@@ -132,6 +132,19 @@ export interface ProofTreeEditorProps {
    */
   goalMapOverride?: Map<ProofNodeId, NodeGoalInfo>;
   typedContextOverride?: TypedProofContext | null;
+  /**
+   * Lean-built interactive goal (clickable subterms). When provided, it drives
+   * the goal panel's InteractiveGoalView instead of the TT kernel rendering.
+   */
+  interactiveGoalOverride?: InteractiveGoal | null;
+  /**
+   * Lean subterm-selection seam: when the user clicks a subterm in the goal, the
+   * editor reports its path here (instead of running TT suggestion computation),
+   * and the parent supplies path-targeted suggestion pills via a render slot.
+   */
+  onGoalPathSelect?: (path: GoalPath | null) => void;
+  /** Extra content rendered under the goal (Lean-backed suggestion pills). */
+  goalExtraSlot?: React.ReactNode;
 }
 
 // ============================================================================
@@ -202,7 +215,7 @@ type TacticMode = null | ProofTreeManualTacticMode;
 // Main Component
 // ============================================================================
 
-export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride }: ProofTreeEditorProps) {
+export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelType, definitions, registry, inductiveMap, currentDeclName, tacticTrace, goalMapOverride, typedContextOverride, interactiveGoalOverride, onGoalPathSelect, goalExtraSlot }: ProofTreeEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const state = history.current;
 
@@ -235,7 +248,10 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
 
   const handleSelectGoalPath = useCallback((path: GoalPath | null) => {
     setGoalInteractionState(prev => selectGoalInteractionPath(prev, path));
-  }, []);
+    // Lean backend: report the selected subterm path so the parent can compute
+    // path-targeted suggestions (rendered via goalExtraSlot).
+    onGoalPathSelect?.(path);
+  }, [onGoalPathSelect]);
 
   const handleToggleHypothesis = useCallback((hypIndex: number) => {
     setGoalInteractionState(prev => toggleGoalInteractionHypothesis(prev, hypIndex));
@@ -264,8 +280,10 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     };
   }, [typedContextOverride, state.root, state.cursor.nodeId, surfaceType, kernelType, definitions, registry, emptyRegistry, inductiveMap]);
 
-  // Compute interactive goal from kernel info (shared between GoalPanel and prose view)
+  // Compute interactive goal from kernel info (shared between GoalPanel and prose
+  // view). Lean backend: a supplied interactiveGoalOverride takes over.
   const interactiveGoal = useMemo<InteractiveGoal | null>(() => {
+    if (interactiveGoalOverride !== undefined) return interactiveGoalOverride;
     if (!typedContext?.kernelGoal) return null;
     if (typedContext.validation?.status === 'solved') return null;
     const { engine, goal, definitions: defs, rev: r } = typedContext.kernelGoal;
@@ -274,7 +292,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
     } catch {
       return null;
     }
-  }, [typedContext?.kernelGoal, typedContext?.validation]);
+  }, [interactiveGoalOverride, typedContext?.kernelGoal, typedContext?.validation]);
 
   // Augment kernelGoal with currentDeclName for self-reference filtering
   const kernelGoalWithDeclName = useMemo(() => {
@@ -552,6 +570,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
           hypSuggestions={hypSuggestions}
           rewriteProgress={rewriteProgress}
           onOpenTermBuilder={() => {}}
+          extraSlot={goalExtraSlot}
         />
       </SplitPane>
     </div>
@@ -803,8 +822,10 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
   selectedHyp, onToggleHypothesis, hypSuggestions,
   rewriteProgress,
   onOpenTermBuilder: _onOpenTermBuilder,
+  extraSlot,
 }: {
   context: TypedProofContext | null;
+  extraSlot?: React.ReactNode;
   state?: ProofTreeState;
   onPushChange?: (s: ProofTreeState) => void;
   /** Open the term builder inline in the prose view. */
@@ -932,6 +953,9 @@ function GoalPanel({ context, state, onPushChange, interactiveGoal, suggestions,
           </div>
         )}
       </div>
+
+      {/* Lean-backed extra content (path-targeted suggestion pills) */}
+      {extraSlot}
     </div>
   );
 }

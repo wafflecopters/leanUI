@@ -18,6 +18,7 @@ import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
+import { taggedToInteractiveGoal } from '../lean/leanInteractiveGoal';
 
 /**
  * The structured WYSIWYG editor on Lean — uses the REAL ProofTreeEditor (and the
@@ -280,6 +281,50 @@ function LeanProofEditor({
     );
   };
 
+  // Build the clickable interactive goal from the cursor's Lean goal state.
+  const interactiveGoal = useMemo(
+    () => (lean.cursorGoal ? taggedToInteractiveGoal(lean.cursorGoal.targetTagged) : null),
+    [lean.cursorGoal],
+  );
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  // The suggestion pills, shown under the goal (relocated into the goal panel so
+  // selecting a subterm and getting suggestions reads as one interaction).
+  const suggestionSlot =
+    cursorIsHole && (suggest.suggestions.length > 0 || suggest.loading) ? (
+      <div style={{ marginTop: 8 }}>
+        <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
+          <span>SUGGESTIONS</span>
+          {suggest.loading && <span style={{ color: C.label }}>searching…</span>}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {suggest.suggestions.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => applySuggestion(s.tactic)}
+              title={`${s.kind}?  →  ${s.tactic}`}
+              style={{
+                fontFamily: mono,
+                fontSize: 11,
+                color: C.text,
+                background: C.bg,
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                padding: '2px 8px',
+                cursor: 'pointer',
+                maxWidth: '100%',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
   return (
     <div style={{ padding: '6px 10px' }}>
       <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, letterSpacing: '0.03em', display: 'flex', gap: 8 }}>
@@ -292,40 +337,10 @@ function LeanProofEditor({
         onHistoryChange={handleHistoryChange}
         goalMapOverride={lean.goalMap}
         typedContextOverride={lean.typedContext}
+        interactiveGoalOverride={interactiveGoal}
+        onGoalPathSelect={setSelectedPath}
+        goalExtraSlot={suggestionSlot}
       />
-      {cursorIsHole && (suggest.suggestions.length > 0 || suggest.loading) && (
-        <div style={{ marginTop: 6 }}>
-          <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
-            <span>SUGGESTIONS</span>
-            {suggest.loading && <span style={{ color: C.label }}>searching…</span>}
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {suggest.suggestions.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => applySuggestion(s.tactic)}
-                title={`${s.kind}?  →  ${s.tactic}`}
-                style={{
-                  fontFamily: mono,
-                  fontSize: 11,
-                  color: C.text,
-                  background: C.bg,
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 4,
-                  padding: '2px 8px',
-                  cursor: 'pointer',
-                  maxWidth: '100%',
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

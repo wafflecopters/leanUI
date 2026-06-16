@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-computation';
-import type { AnalyzeResult } from './types';
+import type { AnalyzeResult, LeanGoal, LeanGoalState } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
 import { mapLeanGoalsToNodes } from './leanGoalMapping';
 
@@ -18,6 +18,9 @@ import { mapLeanGoalsToNodes } from './leanGoalMapping';
 export interface LeanProofGoals {
   goalMap: Map<ProofNodeId, NodeGoalInfo>;
   typedContext: TypedProofContext | null;
+  /** The cursor node's full Lean goal state (tagged target + hyps), for the
+   *  interactive clickable-subterm goal view. Null when no open goal there. */
+  cursorGoal: LeanGoalState | null;
   loading: boolean;
   error?: string;
 }
@@ -36,7 +39,7 @@ export interface UseLeanProofGoalsArgs {
   enabled?: boolean;
 }
 
-const EMPTY: LeanProofGoals = { goalMap: new Map(), typedContext: null, loading: false };
+const EMPTY: LeanProofGoals = { goalMap: new Map(), typedContext: null, cursorGoal: null, loading: false };
 
 export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
   const { source, declLine, nextDeclLine, proof, cursorId, mathlib, enabled = true } = args;
@@ -59,7 +62,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
         assembled = assembleProofInSource({ source, decl: { line: declLine }, nextDeclLine, proof });
       } catch (e) {
         if (!cancelled && reqId === reqRef.current) {
-          setState({ goalMap: new Map(), typedContext: null, loading: false, error: String(e) });
+          setState({ goalMap: new Map(), typedContext: null, cursorGoal: null, loading: false, error: String(e) });
         }
         return;
       }
@@ -88,9 +91,21 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
             }
           : null;
 
+        // The cursor node's full Lean goal state (tagged target) for the
+        // interactive clickable-subterm goal view.
+        const cursorRange = assembled.lean.nodeRanges.get(cursorId);
+        let cursorGoal: LeanGoalState | null = null;
+        if (cursorRange) {
+          const g: LeanGoal | undefined = data.goals.find(
+            (x) => x.startLine === cursorRange.startLine && x.startCol === cursorRange.startCol,
+          );
+          cursorGoal = g && g.goals.length > 0 ? g.goals[0] : null;
+        }
+
         setState({
           goalMap,
           typedContext,
+          cursorGoal,
           loading: false,
           ...(data.bridgeError ? { error: data.bridgeError } : {}),
         });
@@ -99,6 +114,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
           setState({
             goalMap: new Map(),
             typedContext: null,
+            cursorGoal: null,
             loading: false,
             error: `Request failed: ${e instanceof Error ? e.message : String(e)}`,
           });
