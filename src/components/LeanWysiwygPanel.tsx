@@ -13,7 +13,7 @@ import {
 } from '../proof-tree/proof-tree';
 import { findFirstHole } from '../proof-tree/tactic-to-tree';
 import { leanTacticsToTree } from '../lean/leanTacticsToTree';
-import { extractTacticBlock } from '../lean/extractTacticBlock';
+import { proofSeedBlock } from '../lean/extractTacticBlock';
 import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
@@ -89,7 +89,7 @@ export function LeanWysiwygPanel({
           <DeclCard
             key={declKey(d)}
             decl={d}
-            tacticBlock={extractTacticBlock(source, d, nextLineOf(d.line))}
+            tacticBlock={proofSeedBlock(source, d, nextLineOf(d.line))}
             mathlib={mathlib}
             onProofChange={
               onSourceChange
@@ -115,7 +115,9 @@ function DeclCard({
   onProofChange?: (newBlock: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
-  const isProof = decl.kind === 'theorem' && tacticBlock !== null;
+  // Any provable decl (theorem or def/example with a term/sorry body) gets the
+  // structured proof-tree editor — select the sorry and build a proof.
+  const isProof = tacticBlock !== null;
 
   return (
     <div
@@ -175,7 +177,9 @@ function DeclCard({
             <LeanMathView tagged={decl.typeTagged} fallback={decl.prettyType} />
           )}
         </div>
-        {decl.valueTagged !== undefined && (
+        {/* Value editor only for non-proof defs (e.g. computational `def x := …`).
+            For provable bodies the structured proof tree below IS the body. */}
+        {!isProof && decl.valueTagged !== undefined && (
           <div style={{ fontSize: 15, lineHeight: 1.6, marginTop: 4 }}>
             <span style={{ color: C.label }}>:= </span>
             {editing ? (

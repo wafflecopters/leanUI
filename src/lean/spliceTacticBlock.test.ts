@@ -24,8 +24,15 @@ describe('spliceTacticBlock', () => {
     expect(out).toBe('theorem t : n = n := by\n  exact rfl');
   });
 
-  test('no by block → source unchanged', () => {
-    const src = 'def x : Nat := 42';
+  test('term body := <term> is converted to := by <block>', () => {
+    // A def/theorem written `:= sorry` (or any term) gets a proof tree spliced
+    // back as a `by` block, so building a proof on a term body works.
+    const src = 'theorem t : a = b := sorry';
+    expect(spliceTacticBlock(src, decl(1), undefined, '  exact h')).toBe('theorem t : a = b := by\n  exact h');
+  });
+
+  test('no := at all → source unchanged', () => {
+    const src = 'inductive Foo where | bar';
     expect(spliceTacticBlock(src, decl(1), undefined, '  whatever')).toBe(src);
   });
 

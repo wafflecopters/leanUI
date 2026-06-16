@@ -29,17 +29,19 @@ export function spliceTacticBlock(
   const after = lines.slice(endIdx);
 
   const joined = region.join('\n');
-  const byMatch = joined.match(/:=\s*by\b/);
-  if (!byMatch || byMatch.index === undefined) return source;
 
-  // Keep everything up to and including `by`; drop a trailing inline tactic on
-  // that line and everything after, then append the new block on fresh lines.
-  const head = joined.slice(0, byMatch.index + byMatch[0].length);
-  // `head` ends at `by`; ensure the inline-proof remainder of that line is gone.
-  const headFirstLineEnd = head.length;
-  // (head already stops right after `by`, so the rest of that physical line is
-  // part of `joined` after byMatch — which we intentionally discard.)
-  void headFirstLineEnd;
+  // Prefer an existing `:= by` (keep through `by`). Otherwise, for a term body
+  // `:= <term>` (e.g. `:= sorry`), splice at `:=` and introduce a `by` block —
+  // so a def/example built into a proof writes back as `:= by <block>`.
+  const byMatch = joined.match(/:=\s*by\b/);
+  let head: string;
+  if (byMatch && byMatch.index !== undefined) {
+    head = joined.slice(0, byMatch.index + byMatch[0].length);
+  } else {
+    const assignMatch = joined.match(/:=/);
+    if (!assignMatch || assignMatch.index === undefined) return source;
+    head = joined.slice(0, assignMatch.index + assignMatch[0].length) + ' by';
+  }
 
   const rebuiltRegion = `${head}\n${newBlock}`;
   return [...before, rebuiltRegion, ...after].join('\n');

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { extractTacticBlock } from './extractTacticBlock';
+import { extractTacticBlock, proofSeedBlock } from './extractTacticBlock';
 import type { LeanDeclaration } from './types';
 
 const decl = (line: number, kind: LeanDeclaration['kind'] = 'theorem'): LeanDeclaration => ({
@@ -48,5 +48,32 @@ describe('extractTacticBlock', () => {
   test('returns null when block is empty', () => {
     const src = 'theorem t : True := by\n';
     expect(extractTacticBlock(src, decl(1), undefined)).toBeNull();
+  });
+});
+
+describe('proofSeedBlock', () => {
+  test('uses the by-block when present', () => {
+    const src = 'theorem t : a = b := by\n  rw [h]';
+    expect(proofSeedBlock(src, decl(1, 'theorem'), undefined)).toBe('  rw [h]');
+  });
+
+  test('theorem with a term body seeds sorry (build a proof)', () => {
+    const src = 'theorem t : a = b := myProof';
+    expect(proofSeedBlock(src, decl(1, 'theorem'), undefined)).toBe('sorry');
+  });
+
+  test('def := sorry seeds sorry (wants a proof)', () => {
+    const src = 'def t : a = b := sorry';
+    expect(proofSeedBlock(src, decl(1, 'def'), undefined)).toBe('sorry');
+  });
+
+  test('computational def := <term> (no sorry) → null (value editor)', () => {
+    const src = 'def double (n : Nat) : Nat := n + n';
+    expect(proofSeedBlock(src, decl(1, 'def'), undefined)).toBeNull();
+  });
+
+  test('inductive → null', () => {
+    const src = 'inductive Foo where | bar';
+    expect(proofSeedBlock(src, decl(1, 'inductive'), undefined)).toBeNull();
   });
 });

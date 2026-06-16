@@ -1,13 +1,15 @@
 import type { LeanDeclaration } from './types';
 
 /**
- * Slice a declaration's tactic block (the text after `:= by`) out of the source.
+ * Slice a declaration's PROOF/body for the structured editor — the text after
+ * `:= by` as a tactic block.
  *
- * Used to seed the structured editor from the user's actual proof. A declaration
- * spans from its start line up to the next declaration's start line; within that
- * window we find `:= by` and return the dedented remainder (the tactic block).
+ * A declaration spans from its start line to the next declaration's; within that
+ * window we find `:= by` and return the dedented tactic block.
  *
- * Returns null when the declaration has no `by` block (term-mode def, inductive).
+ * Returns null when there's no `by` block. (Callers that want to prove a
+ * `:= <term>` / `:= sorry` body interactively should fall back to a `sorry`
+ * seed — see `bodyIsProvable`.)
  * Lines are 1-based (matching LeanDeclaration.line).
  */
 export function extractTacticBlock(
@@ -45,4 +47,34 @@ export function extractTacticBlock(
   // (indentation matters for the parser).
   const block = afterBy.replace(/^\n+/, '').replace(/\s+$/, '');
   return block.trim().length === 0 ? null : block;
+}
+
+/** Does the declaration's body region literally contain `:= sorry`? */
+function bodyIsSorry(source: string, decl: LeanDeclaration, nextDeclLine: number | undefined): boolean {
+  const lines = source.split('\n');
+  const startIdx = Math.max(0, decl.line - 1);
+  const endIdx = nextDeclLine !== undefined ? Math.min(lines.length, nextDeclLine - 1) : lines.length;
+  const region = lines.slice(startIdx, endIdx).join('\n');
+  return /:=\s*sorry\b/.test(region);
+}
+
+/**
+ * The proof block to seed the structured editor with, or null if the decl has no
+ * interactive proof body. Rules:
+ *   - has a `:= by` block  → that block (theorem OR def written in tactic mode)
+ *   - `theorem … := <term>` → seed `sorry` (build the proof structurally)
+ *   - any `… := sorry`      → seed `sorry` (clearly wants a proof)
+ *   - computational `def := <term>` (no sorry) → null (use the value editor)
+ *   - inductive/axiom/opaque → null
+ */
+export function proofSeedBlock(
+  source: string,
+  decl: LeanDeclaration,
+  nextDeclLine: number | undefined,
+): string | null {
+  const block = extractTacticBlock(source, decl, nextDeclLine);
+  if (block !== null) return block;
+  if (decl.kind === 'theorem') return 'sorry';
+  if (decl.kind === 'def' && bodyIsSorry(source, decl, nextDeclLine)) return 'sorry';
+  return null;
 }
