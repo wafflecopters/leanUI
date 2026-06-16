@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseTryThis, suggestionsFromMessages } from './leanSuggestions';
+import { parseTryThis, suggestionsFromMessages, targetedSuggestions } from './leanSuggestions';
 import type { LeanMessage } from './types';
 
 const info = (text: string): LeanMessage => ({
@@ -56,5 +56,24 @@ describe('suggestionsFromMessages', () => {
     ];
     const s = suggestionsFromMessages(msgs, 'exact');
     expect(s.map((x) => x.tactic)).toEqual(['exact h1', 'exact h3']);
+  });
+});
+
+describe('targetedSuggestions', () => {
+  test('a bare variable offers induction and cases on it', () => {
+    const s = targetedSuggestions('n');
+    expect(s.map((x) => x.label)).toEqual(['induction n', 'cases n']);
+    expect(s[0].tactic).toContain('induction n');
+    expect(s[0].tactic).toContain('·');
+  });
+
+  test("primed/underscored identifiers count as variables", () => {
+    expect(targetedSuggestions("k'").map((x) => x.label)).toEqual(['induction k\'', 'cases k\'']);
+  });
+
+  test('a compound expression offers no targeted tactics', () => {
+    expect(targetedSuggestions('a + b')).toEqual([]);
+    expect(targetedSuggestions('f x')).toEqual([]);
+    expect(targetedSuggestions('0')).toEqual([]); // numeral, not a var
   });
 });

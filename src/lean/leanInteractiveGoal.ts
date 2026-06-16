@@ -32,6 +32,36 @@ export function posForGoalId(id: string): string | null {
  * re-walking the tagged tree to wrap tagged spans with goal- ids. Simpler: build
  * the MathRow with wrapSubterms but relabel the Group htmlIds.
  */
+/** Plain text of a tagged subtree (concatenated leaves), trimmed. */
+function taggedText(tt: TaggedText): string {
+  switch (tt.t) {
+    case 'text':
+      return tt.s;
+    case 'append':
+      return tt.kids.map(taggedText).join('');
+    case 'tag':
+      return taggedText(tt.child);
+  }
+}
+
+/**
+ * Map each subexpression's `goal-<pos>` id to its plain text, so the suggestion
+ * layer knows WHAT was clicked (e.g. a bare variable `n` → offer induction n).
+ */
+export function subtermTextMap(target: TaggedText): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (tt: TaggedText) => {
+    if (tt.t === 'tag') {
+      out.set(goalIdForPos(tt.pos), taggedText(tt).trim());
+      walk(tt.child);
+    } else if (tt.t === 'append') {
+      tt.kids.forEach(walk);
+    }
+  };
+  walk(target);
+  return out;
+}
+
 export function taggedToInteractiveGoal(target: TaggedText): InteractiveGoal {
   const subtermMap = new Map<string, SubtermInfo>();
 

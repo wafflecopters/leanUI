@@ -18,7 +18,8 @@ import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
-import { taggedToInteractiveGoal } from '../lean/leanInteractiveGoal';
+import { taggedToInteractiveGoal, subtermTextMap } from '../lean/leanInteractiveGoal';
+import { targetedSuggestions } from '../lean/leanSuggestions';
 
 /**
  * The structured WYSIWYG editor on Lean — uses the REAL ProofTreeEditor (and the
@@ -281,28 +282,39 @@ function LeanProofEditor({
     );
   };
 
-  // Build the clickable interactive goal from the cursor's Lean goal state.
+  // Build the clickable interactive goal + a map of subterm id → its text.
   const interactiveGoal = useMemo(
     () => (lean.cursorGoal ? taggedToInteractiveGoal(lean.cursorGoal.targetTagged) : null),
     [lean.cursorGoal],
   );
+  const subtermTexts = useMemo(
+    () => (lean.cursorGoal ? subtermTextMap(lean.cursorGoal.targetTagged) : new Map<string, string>()),
+    [lean.cursorGoal],
+  );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
-  // The suggestion pills, shown under the goal (relocated into the goal panel so
-  // selecting a subterm and getting suggestions reads as one interaction).
+  // Suggestions: when a subterm is selected, targeted tactics for it (e.g.
+  // induction/cases on a clicked variable) come first; then the whole-goal
+  // discovery pills (exact?/simp?/…).
+  const targeted = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
+  const allSuggestions = [...targeted, ...suggest.suggestions];
+
   const suggestionSlot =
-    cursorIsHole && (suggest.suggestions.length > 0 || suggest.loading) ? (
+    cursorIsHole && (allSuggestions.length > 0 || suggest.loading) ? (
       <div style={{ marginTop: 8 }}>
         <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
           <span>SUGGESTIONS</span>
+          {selectedPath && subtermTexts.get(selectedPath) && (
+            <span style={{ color: C.label }}>for {subtermTexts.get(selectedPath)}</span>
+          )}
           {suggest.loading && <span style={{ color: C.label }}>searching…</span>}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {suggest.suggestions.map((s) => (
+          {allSuggestions.map((s) => (
             <button
               key={s.id}
               onClick={() => applySuggestion(s.tactic)}
-              title={`${s.kind}?  →  ${s.tactic}`}
+              title={s.tactic}
               style={{
                 fontFamily: mono,
                 fontSize: 11,

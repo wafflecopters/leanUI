@@ -32,6 +32,28 @@ export const DISCOVERY_TACTICS: ReadonlyArray<{ kind: LeanSuggestion['kind']; ta
 ];
 
 /**
+ * Suggestions targeted at a clicked subterm, derived from its text — no Lean
+ * round-trip needed. A bare identifier (a variable) offers `induction`/`cases`
+ * on it; this mirrors the TT editor's "click n → induct on n" interaction.
+ */
+export function targetedSuggestions(subtermText: string): LeanSuggestion[] {
+  const t = subtermText.trim();
+  // Bare lowercase-ish identifier (a variable, not an application/operator).
+  if (/^[a-zA-Z_][a-zA-Z0-9_']*$/.test(t)) {
+    // Emit with two `·` case placeholders so the parser builds a real induction
+    // node (bare `induction n` alone is incomplete Lean). Two cases cover the
+    // common inductives (Nat/Bool/List/Either); extras/shortfall surface as a
+    // Lean error the user can fix, and the goal round-trip shows the real cases.
+    const withHoles = (kw: string) => `${kw} ${t}\n·\n  sorry\n·\n  sorry`;
+    return [
+      { id: `lean-induction:${t}`, label: `induction ${t}`, tactic: withHoles('induction'), kind: 'apply' },
+      { id: `lean-cases:${t}`, label: `cases ${t}`, tactic: withHoles('cases'), kind: 'apply' },
+    ];
+  }
+  return [];
+}
+
+/**
  * Parse `Try this:` suggestion text out of a Lean info message.
  *
  * Lean formats them as (note the leading tag in some versions):
