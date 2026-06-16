@@ -65,6 +65,62 @@ export function assembleProofDecl(input: AssembleInput): AssembledProof {
   return { source, lean };
 }
 
+/**
+ * Assemble the proof IN the real source file — the correct way to compute goals
+ * for a declaration whose type references earlier defs (so they're in scope).
+ *
+ * Splices the printed proof block into `decl`'s `:= by` (replacing its body) in
+ * the full `source`, keeping every other declaration intact as context. Returns
+ * the spliced full source plus per-node ranges with ABSOLUTE line numbers (so
+ * `mapLeanGoalsToNodes` matches Lean's reported goal ranges).
+ */
+export interface AssembleInSourceInput {
+  source: string;
+  decl: { line: number };
+  nextDeclLine: number | undefined;
+  proof: ProofNode;
+  holeOverrideId?: ProofNodeId;
+  holeOverrideTactic?: string;
+}
+
+export function assembleProofInSource(input: AssembleInSourceInput): AssembledProof {
+  const { source, decl, nextDeclLine } = input;
+  const lines = source.split('\n');
+  const startIdx = Math.max(0, decl.line - 1);
+  const endIdx = nextDeclLine !== undefined ? Math.min(lines.length, nextDeclLine - 1) : lines.length;
+
+  // Find `:=` within the declaration's region to locate where the body begins.
+  const region = lines.slice(startIdx, endIdx).join('\n');
+  const byMatch = region.match(/:=\s*by\b/);
+  const assignMatch = region.match(/:=/);
+  // Header text (everything up to and including `by`), and which physical line
+  // the `by` sits on so we can compute the first tactic's absolute line.
+  let headEnd: number;
+  if (byMatch && byMatch.index !== undefined) headEnd = byMatch.index + byMatch[0].length;
+  else if (assignMatch && assignMatch.index !== undefined) headEnd = assignMatch.index + assignMatch[0].length;
+  else {
+    // No `:=` — can't host a proof; fall back to standalone (shouldn't happen for provable decls).
+    return assembleProofDecl({ typeSource: 'True', proof: input.proof });
+  }
+  const head = byMatch ? region.slice(0, headEnd) : region.slice(0, headEnd) + ' by';
+
+  // Lines occupied by `head` within the region → first tactic is on the next line.
+  const headLineCount = head.split('\n').length; // 1-based count
+  const baseLine = startIdx + headLineCount + 1; // absolute 1-based line of first tactic
+
+  const lean = proofTreeToLean(input.proof, baseLine, /* baseDepth */ 1, {
+    holeOverrideId: input.holeOverrideId,
+    holeOverrideTactic: input.holeOverrideTactic,
+  });
+
+  const before = lines.slice(0, startIdx);
+  const after = lines.slice(endIdx);
+  const rebuiltRegion = `${head}\n${lean.source}`;
+  const fullSource = [...before, rebuiltRegion, ...after].join('\n');
+
+  return { source: fullSource, lean };
+}
+
 /** Keep only identifier-safe characters; fall back to the default name. */
 function sanitizeName(name: string | undefined): string {
   if (!name) return DEFAULT_NAME;

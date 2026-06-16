@@ -89,6 +89,8 @@ export function LeanWysiwygPanel({
           <DeclCard
             key={declKey(d)}
             decl={d}
+            source={source}
+            nextDeclLine={nextLineOf(d.line)}
             tacticBlock={proofSeedBlock(source, d, nextLineOf(d.line))}
             mathlib={mathlib}
             onProofChange={
@@ -105,11 +107,15 @@ export function LeanWysiwygPanel({
 
 function DeclCard({
   decl,
+  source,
+  nextDeclLine,
   tacticBlock,
   mathlib,
   onProofChange,
 }: {
   decl: LeanDeclaration;
+  source: string;
+  nextDeclLine?: number;
   tacticBlock: string | null;
   mathlib?: boolean;
   onProofChange?: (newBlock: string) => void;
@@ -192,8 +198,15 @@ function DeclCard({
       </div>
 
       {/* Structured proof editor (the REAL ProofTreeEditor, goals from Lean) */}
-      {isProof && (
-        <LeanProofEditor decl={decl} tacticBlock={tacticBlock} mathlib={mathlib} onProofChange={onProofChange} />
+      {isProof && tacticBlock !== null && (
+        <LeanProofEditor
+          decl={decl}
+          source={source}
+          nextDeclLine={nextDeclLine}
+          tacticBlock={tacticBlock}
+          mathlib={mathlib}
+          onProofChange={onProofChange}
+        />
       )}
     </div>
   );
@@ -201,11 +214,15 @@ function DeclCard({
 
 function LeanProofEditor({
   decl,
+  source,
+  nextDeclLine,
   tacticBlock,
   mathlib,
   onProofChange,
 }: {
   decl: LeanDeclaration;
+  source: string;
+  nextDeclLine?: number;
   tacticBlock: string;
   mathlib?: boolean;
   onProofChange?: (newBlock: string) => void;
@@ -233,8 +250,9 @@ function LeanProofEditor({
 
   const state = history.current;
   const lean = useLeanProofGoals({
-    name: decl.name,
-    typeSource: decl.prettyType,
+    source,
+    declLine: decl.line,
+    nextDeclLine,
     proof: state.root,
     cursorId: state.cursor.nodeId,
     mathlib,
@@ -244,8 +262,9 @@ function LeanProofEditor({
   const cursorNode = findNode(state.root, state.cursor.nodeId);
   const cursorIsHole = cursorNode?.tag === 'hole';
   const suggest = useLeanSuggestions({
-    name: decl.name,
-    typeSource: decl.prettyType,
+    source,
+    declLine: decl.line,
+    nextDeclLine,
     proof: state.root,
     cursorId: state.cursor.nodeId,
     cursorIsHole,

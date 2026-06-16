@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import type { AnalyzeResult } from './types';
-import { assembleProofDecl } from './assembleProofDecl';
+import { assembleProofInSource } from './assembleProofDecl';
 import { DISCOVERY_TACTICS, suggestionsFromMessages, type LeanSuggestion } from './leanSuggestions';
 
 /**
@@ -17,13 +17,14 @@ export interface LeanSuggestionsState {
 }
 
 export interface UseLeanSuggestionsArgs {
-  name?: string;
-  typeSource?: string;
+  /** Full source file (declaration context). */
+  source: string;
+  declLine: number;
+  nextDeclLine?: number;
   proof: ProofNode;
   /** The cursor node — suggestions are computed only when it's a hole. */
   cursorId: ProofNodeId;
   cursorIsHole: boolean;
-  preamble?: string[];
   mathlib?: boolean;
   enabled?: boolean;
 }
@@ -44,12 +45,12 @@ async function analyze(source: string, mathlib?: boolean): Promise<AnalyzeResult
 }
 
 export function useLeanSuggestions(args: UseLeanSuggestionsArgs): LeanSuggestionsState {
-  const { name, typeSource, proof, cursorId, cursorIsHole, preamble, mathlib, enabled = true } = args;
+  const { source, declLine, nextDeclLine, proof, cursorId, cursorIsHole, mathlib, enabled = true } = args;
   const [state, setState] = useState<LeanSuggestionsState>(EMPTY);
   const reqRef = useRef(0);
 
   useEffect(() => {
-    if (!enabled || !typeSource || !cursorIsHole) {
+    if (!enabled || !source || !cursorIsHole) {
       setState(EMPTY);
       return;
     }
@@ -64,11 +65,11 @@ export function useLeanSuggestions(args: UseLeanSuggestionsArgs): LeanSuggestion
       for (const { kind, tactic } of DISCOVERY_TACTICS) {
         let assembled;
         try {
-          assembled = assembleProofDecl({
-            name,
-            typeSource,
+          assembled = assembleProofInSource({
+            source,
+            decl: { line: declLine },
+            nextDeclLine,
             proof,
-            preamble,
             holeOverrideId: cursorId,
             holeOverrideTactic: tactic,
           });
@@ -95,7 +96,7 @@ export function useLeanSuggestions(args: UseLeanSuggestionsArgs): LeanSuggestion
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [name, typeSource, proof, cursorId, cursorIsHole, preamble, mathlib, enabled]);
+  }, [source, declLine, nextDeclLine, proof, cursorId, cursorIsHole, mathlib, enabled]);
 
   return state;
 }

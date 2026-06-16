@@ -2,18 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
 import type { NodeGoalInfo, TypedProofContext } from '../proof-tree/goal-computation';
 import type { AnalyzeResult } from './types';
-import { assembleProofDecl } from './assembleProofDecl';
+import { assembleProofInSource } from './assembleProofDecl';
 import { mapLeanGoalsToNodes } from './leanGoalMapping';
 
 /**
  * Compute a proof tree's goal state from Lean (the async provider for the
  * dependency-injection seam in ProofTreeEditor).
  *
- * Flow: proof tree → `assembleProofDecl` (theorem … := by <block>) → POST
- * /api/analyze → `mapLeanGoalsToNodes` → { goalMap, cursor context }. The result
- * is fed to ProofTreeEditor as `goalMapOverride` / `typedContextOverride`, so the
- * REAL editor renders entirely off Lean-computed goals. Debounced; stale
- * responses are discarded.
+ * Flow: splice the printed proof into the REAL declaration in the full source
+ * (so its type's dependencies — earlier defs — are in scope), POST /api/analyze
+ * on the whole file → `mapLeanGoalsToNodes` → { goalMap, cursor context }. Fed to
+ * ProofTreeEditor as `goalMapOverride` / `typedContextOverride`. Debounced; stale
+ * responses discarded.
  */
 export interface LeanProofGoals {
   goalMap: Map<ProofNodeId, NodeGoalInfo>;
@@ -23,27 +23,29 @@ export interface LeanProofGoals {
 }
 
 export interface UseLeanProofGoalsArgs {
-  name?: string;
-  /** The declaration type as Lean source (no signature binders). */
-  typeSource?: string;
+  /** The full Lean source file (provides the declaration's context). */
+  source: string;
+  /** The declaration being proved (its 1-based start line). */
+  declLine: number;
+  /** Start line of the next declaration, bounding this decl's region. */
+  nextDeclLine?: number;
   proof: ProofNode;
   cursorId: ProofNodeId;
-  preamble?: string[];
   mathlib?: boolean;
-  /** Disable the round-trip (e.g. when typeSource is unavailable). */
+  /** Disable the round-trip. */
   enabled?: boolean;
 }
 
 const EMPTY: LeanProofGoals = { goalMap: new Map(), typedContext: null, loading: false };
 
 export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
-  const { name, typeSource, proof, cursorId, preamble, mathlib, enabled = true } = args;
+  const { source, declLine, nextDeclLine, proof, cursorId, mathlib, enabled = true } = args;
   const [state, setState] = useState<LeanProofGoals>(EMPTY);
   // Monotonic request id so out-of-order responses are ignored.
   const reqRef = useRef(0);
 
   useEffect(() => {
-    if (!enabled || !typeSource) {
+    if (!enabled || !source) {
       setState(EMPTY);
       return;
     }
@@ -54,7 +56,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
     const handle = setTimeout(async () => {
       let assembled;
       try {
-        assembled = assembleProofDecl({ name, typeSource, proof, preamble });
+        assembled = assembleProofInSource({ source, decl: { line: declLine }, nextDeclLine, proof });
       } catch (e) {
         if (!cancelled && reqId === reqRef.current) {
           setState({ goalMap: new Map(), typedContext: null, loading: false, error: String(e) });
@@ -108,7 +110,7 @@ export function useLeanProofGoals(args: UseLeanProofGoalsArgs): LeanProofGoals {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [name, typeSource, proof, cursorId, preamble, mathlib, enabled]);
+  }, [source, declLine, nextDeclLine, proof, cursorId, mathlib, enabled]);
 
   return state;
 }
