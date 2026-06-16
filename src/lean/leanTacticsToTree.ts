@@ -169,6 +169,26 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     return mkInduction(scrutinee, cases, isCases);
   }
 
+  // Bare `induction x` / `cases x` (no `with`) followed by `·` bullet cases —
+  // the form our printer uses when constructor names aren't known. Each `·` (or
+  // `.`) bullet at this indent or deeper starts a case body.
+  m = text.match(/^(induction|cases)\s+(\S+)\s*$/);
+  if (m) {
+    const isCases = m[1] === 'cases';
+    const scrutinee = m[2];
+    const cases: CaseNode[] = [];
+    while (
+      pos.i < lines.length &&
+      lines[pos.i].indent >= level &&
+      (lines[pos.i].text === '·' || lines[pos.i].text === '.' || lines[pos.i].text.startsWith('· ') || lines[pos.i].text.startsWith('. '))
+    ) {
+      cases.push(parseBulletCase(lines, pos));
+    }
+    // No bullets parsed → treat as an opaque leaf so nothing breaks.
+    if (cases.length === 0) return mkExact(text);
+    return mkInduction(scrutinee, cases, isCases);
+  }
+
   // Fallback: keep the text as an exact node so nothing is dropped.
   return mkExact(text);
 }
@@ -194,6 +214,24 @@ function parseCase(lines: Line[], pos: { i: number }): CaseNode {
     body = parseSeq(lines, pos, caseLevel + 1);
   }
   return mkCase(ctor, body, ctor, params);
+}
+
+/** Parse a `·` bullet case body. Bullet may be `·` alone (body on next lines)
+ *  or `· <inline tactic>`. Label is a placeholder (no constructor name known). */
+function parseBulletCase(lines: Line[], pos: { i: number }): CaseNode {
+  const line = lines[pos.i];
+  pos.i++;
+  const caseLevel = line.indent;
+  const inline = line.text.replace(/^[·.]\s*/, '').trim();
+  let body: ProofNode;
+  if (inline.length > 0) {
+    const innerPos = { i: 0 };
+    body = parseChainAt([{ indent: caseLevel + 2, text: inline }], innerPos, caseLevel + 2);
+  } else {
+    body = parseSeq(lines, pos, caseLevel + 1);
+  }
+  // No constructor name (bullet form) — label is a display placeholder only.
+  return mkCase('case', body);
 }
 
 /**

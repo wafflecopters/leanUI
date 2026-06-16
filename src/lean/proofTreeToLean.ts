@@ -174,24 +174,40 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     }
     case 'induction': {
       const kw = node.isCases ? 'cases' : 'induction';
-      em.emit(depth, `${kw} ${node.scrutinee} with`, node.id);
-      for (const c of node.cases) {
-        emitCase(em, c, depth);
+      // Use a `with`/`| ctor =>` block only when EVERY case has a real Lean
+      // constructor name (a valid identifier). Otherwise the TT engine produced
+      // display-only labels like "n = 0" — invalid as Lean case tags — so emit a
+      // bare `induction n` + `·` bullets (Lean focuses cases in order), keeping
+      // the source valid.
+      const named = node.cases.length > 0 && node.cases.every((c) => isLeanCtorName(c.constructorName));
+      if (named) {
+        em.emit(depth, `${kw} ${node.scrutinee} with`, node.id);
+        for (const c of node.cases) emitNamedCase(em, c, depth);
+      } else {
+        em.emit(depth, `${kw} ${node.scrutinee}`, node.id);
+        for (const c of node.cases) emitBulletCase(em, c, depth);
       }
       return;
     }
   }
 }
 
-function emitCase(em: Emitter, c: CaseNode, depth: number): void {
-  // `| ctor params =>` then the case body indented one level deeper.
-  const ctor = c.constructorName ?? c.label;
+/** A valid Lean constructor identifier (letters/digits/_/., not a display label). */
+function isLeanCtorName(name: string | undefined): name is string {
+  return name !== undefined && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(name);
+}
+
+function emitNamedCase(em: Emitter, c: CaseNode, depth: number): void {
   const params = c.constructorParamNames && c.constructorParamNames.length > 0
     ? ' ' + c.constructorParamNames.join(' ')
     : '';
-  const header = `| ${ctor}${params} =>`;
-  // Record the case header range under the case node id.
-  em.emit(depth, header, c.id);
+  em.emit(depth, `| ${c.constructorName}${params} =>`, c.id);
+  emitNode(em, c.body, depth + 1);
+}
+
+function emitBulletCase(em: Emitter, c: CaseNode, depth: number): void {
+  // `·` focuses the next goal; the body goes on following indented lines.
+  em.emit(depth, '·', c.id);
   emitNode(em, c.body, depth + 1);
 }
 

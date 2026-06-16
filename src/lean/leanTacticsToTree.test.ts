@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { leanTacticsToTree } from './leanTacticsToTree';
-import { proofTreeToLean } from './proofTreeToLean';
+import { proofTreeToLean, proofTreeToSource } from './proofTreeToLean';
 import { resetProofIds } from '../proof-tree/proof-tree';
 
 /** Parse a block, re-print it, and return the normalized printed source. */
@@ -67,6 +67,20 @@ describe('leanTacticsToTree', () => {
     expect(ind.cases[0].constructorName).toBe('zero');
     expect(ind.cases[1].constructorName).toBe('succ');
     expect(ind.cases[1].constructorParamNames).toEqual(['k', 'ih']);
+  });
+
+  test('bare induction with · bullet cases (no constructor names known)', () => {
+    resetProofIds();
+    const block = ['induction n', '·', '  simp', '·', '  exact rfl'].join('\n');
+    const tree = leanTacticsToTree(block) as any;
+    expect(tree.tag).toBe('induction');
+    expect(tree.scrutinee).toBe('n');
+    expect(tree.cases).toHaveLength(2);
+    // No real constructor names → printer must emit valid bullet Lean, NOT `| label =>`
+    // (source printer omits chaining tactics' fabricated trailing sorry).
+    expect(proofTreeToSource(tree, 1)).toBe(
+      ['  induction n', '  ·', '    simp', '  ·', '    exact rfl'].join('\n'),
+    );
   });
 
   test('unrecognized tactic is preserved as exact (nothing dropped)', () => {
