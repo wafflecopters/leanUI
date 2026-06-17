@@ -50,6 +50,13 @@ export function targetedSuggestions(subtermText: string): LeanSuggestion[] {
       { id: `lean-cases:${t}`, label: `cases ${t}`, tactic: withHoles('cases'), kind: 'apply' },
     ];
   }
+  // An equality goal offers reflexivity. `.refl` (the anonymous constructor)
+  // closes any single-constructor equality that holds definitionally — both
+  // Lean's `Eq` and a custom `Equal` — WITHOUT needing an `@[refl]` lemma (which
+  // the bare `rfl` tactic requires, so `rfl` fails on a custom `Equal`).
+  if (/\s=\s/.test(t)) {
+    return [{ id: 'lean-refl', label: 'exact .refl', tactic: 'exact .refl', kind: 'exact' }];
+  }
   return [];
 }
 

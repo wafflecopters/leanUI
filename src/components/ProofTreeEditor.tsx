@@ -545,6 +545,7 @@ export function ProofTreeEditor({ history, onHistoryChange, surfaceType, kernelT
                 onSelectBinder={handleSelectBinder}
                 termBuilder={null}
                 onSetTermBuilder={() => {}}
+                holeExtraSlot={goalExtraSlot}
               />
             )}
           </div>
@@ -2262,6 +2263,9 @@ interface ProseViewProps {
   // Inline term builder
   termBuilder?: TermBuilderState | null;
   onSetTermBuilder?: (b: TermBuilderState | null) => void;
+  // Extra content rendered inline above the active hole's tactic buttons
+  // (Lean-backed suggestion pills); mirrors where the TT path showed them.
+  holeExtraSlot?: React.ReactNode;
 }
 
 function ProofProseView({
@@ -2271,7 +2275,7 @@ function ProofProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder,
+  termBuilder, onSetTermBuilder, holeExtraSlot,
 }: ProseViewProps) {
   if (items.length === 0) {
     return <div style={{ padding: '8px 12px', color: '#484f58', fontStyle: 'italic' }}>No proof steps yet.</div>;
@@ -2333,6 +2337,7 @@ function ProofProseView({
             onSelectBinder={onSelectBinder}
             termBuilder={termBuilder}
             onSetTermBuilder={onSetTermBuilder}
+            holeExtraSlot={holeExtraSlot}
           />
         );
       })}
@@ -2383,6 +2388,8 @@ interface ProseItemViewProps {
   // Inline term builder
   termBuilder?: TermBuilderState | null;
   onSetTermBuilder?: (b: TermBuilderState | null) => void;
+  // Extra content rendered inline above the active hole's tactic buttons.
+  holeExtraSlot?: React.ReactNode;
 }
 
 const proseStyle: React.CSSProperties = {
@@ -3413,7 +3420,7 @@ function ProseItemView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress, selectedBinder, onSelectBinder,
-  termBuilder, onSetTermBuilder,
+  termBuilder, onSetTermBuilder, holeExtraSlot,
 }: ProseItemViewProps) {
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
@@ -3753,6 +3760,7 @@ function ProseItemView({
           rewriteProgress={rewriteProgress}
           termBuilder={termBuilder}
           onSetTermBuilder={onSetTermBuilder}
+          holeExtraSlot={holeExtraSlot}
         />
       );
     }
@@ -3804,6 +3812,8 @@ interface HoleProseViewProps {
   /** Active term builder (shown inline before the hole). */
   termBuilder?: TermBuilderState | null;
   onSetTermBuilder?: (b: TermBuilderState | null) => void;
+  /** Extra content rendered above the tactic buttons (Lean suggestion pills). */
+  holeExtraSlot?: React.ReactNode;
 }
 
 function HoleProseView({
@@ -3813,7 +3823,7 @@ function HoleProseView({
   editingNames, onEditingNames, editingSuggestionId, onEditingSuggestionId,
   onApplySuggestion, onStartEditingSuggestion,
   rewriteProgress,
-  termBuilder: inlineTermBuilder, onSetTermBuilder,
+  termBuilder: inlineTermBuilder, onSetTermBuilder, holeExtraSlot,
 }: HoleProseViewProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const activeTactic = tacticMode?.tactic ?? null;
@@ -3916,6 +3926,10 @@ function HoleProseView({
           goalFontSize="16px"
         />
       </div>
+
+      {/* Lean-backed suggestion pills (rendered inline, above the tactic
+          buttons — where the TT path surfaced focus recommendations). */}
+      {holeExtraSlot}
 
       {/* Tactic buttons or input */}
       {!activeTactic ? (
