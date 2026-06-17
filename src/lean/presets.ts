@@ -77,7 +77,7 @@ inductive MyNat where
   | zero : MyNat
   | succ : MyNat → MyNat
 
-inductive Equal {A : Type} : A → A → Type where
+inductive Equal {A : Type} : A → A → Prop where
   | refl : {a : A} → Equal a a
 
 def plus : MyNat → MyNat → MyNat
@@ -98,6 +98,12 @@ infixl:70 " * " => mul
 infix:50 " = " => Equal
 instance : OfNat MyNat 0 := ⟨MyNat.zero⟩
 instance : OfNat MyNat 1 := ⟨one⟩
+
+-- Render the bare constructor MyNat.zero as the literal 0. After induction,
+-- goals substitute the raw constructor (not the OfNat literal), so without this
+-- the base case shows MyNat.zero instead of 0.
+@[app_unexpander MyNat.zero] def unexpMyNatZero : Lean.PrettyPrinter.Unexpander
+  | \`($_) => \`(0)
 
 -- Equality helpers (named to avoid clashing with Lean's Trans/_root_.trans)
 def congSucc {n m : MyNat} : Equal n m → Equal (MyNat.succ n) (MyNat.succ m)
@@ -225,7 +231,7 @@ def natSemiring : Semiring MyNat where
   distribR := mulDistribRight
 
 -- Leq: ordering on MyNat
-inductive Leq : MyNat → MyNat → Type where
+inductive Leq : MyNat → MyNat → Prop where
   | LeqZero : {n : MyNat} → Leq .zero n
   | LeqSucc : {n m : MyNat} → Leq n m → Leq (.succ n) (.succ m)
 

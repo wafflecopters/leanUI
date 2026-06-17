@@ -421,7 +421,18 @@ export function generateProofProse(
         emit(node.id, depth, { tag: 'inductionHeader', scrutinee: node.scrutinee, scrutineeLatex: info?.scrutineeLatex, isCases: node.isCases });
         for (let i = 0; i < node.cases.length; i++) {
           const c = node.cases[i];
-          const isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
+          let isBaseCase = !c.constructorParamNames || c.constructorParamNames.length === 0;
+          // The Lean path produces bullet-cases with no recorded constructor
+          // params, so the heuristic above would call every case a "base case".
+          // Recover the distinction generically (no hard-coded constructor names)
+          // from the goal state: a case that introduces hypotheses NOT present in
+          // the induction's incoming goal (the constructor's recursive args / the
+          // induction hypothesis) is the inductive step, not a base case.
+          if (isBaseCase) {
+            const parentHyps = new Set((info?.hypotheses ?? []).map((h) => h.name));
+            const caseHyps = goalMap.get(c.id)?.hypotheses ?? [];
+            if (caseHyps.some((h) => !parentHyps.has(h.name))) isBaseCase = false;
+          }
           // Prefer the registry-aware label computed by goal-computation
           // (so nested `@syntax` like `MkDPair → witness ...` applies).
           const registryLabel = goalMap.get(c.id)?.caseLabelLatex;

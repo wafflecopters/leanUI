@@ -256,6 +256,36 @@ describe('generateProofProse', () => {
     expect(items[4].depth).toBe(2);
   });
 
+  test('Lean bullet-cases: goal hyps distinguish base case from inductive step', () => {
+    // The Lean path emits `induction n` + `·` bullets with NO constructorParamNames,
+    // so isBaseCase must be recovered from the goal state: the inductive step
+    // introduces hypotheses (predecessor + IH) absent from the induction's goal.
+    const zeroHole: ProofNode = { tag: 'hole', id: 2 };
+    const succHole: ProofNode = { tag: 'hole', id: 4 };
+    const induction: ProofNode = {
+      tag: 'induction',
+      id: 1,
+      scrutinee: 'n',
+      collapsed: false,
+      cases: [
+        { tag: 'case', id: 3, label: 'case', body: zeroHole, collapsed: false },
+        { tag: 'case', id: 5, label: 'case', body: succHole, collapsed: false },
+      ],
+    };
+    const goalMap = mkGoalMap([
+      [1, { hypotheses: [{ name: 'n', type: 'MyNat' }] }], // induction's incoming goal
+      [3, { caseLabelLatex: 'zero', hypotheses: [] }], // base: no new hyps
+      [5, { caseLabelLatex: 'succ', hypotheses: [{ name: 'a', type: 'MyNat' }, { name: 'a_ih', type: 'P a' }] }],
+    ]);
+    const items = generateProofProse(induction, 999, goalMap);
+    const caseHeaders = items.filter((it) => it.kind.tag === 'caseHeader');
+    expect(caseHeaders).toHaveLength(2);
+    expect((caseHeaders[0].kind as any).labelLatex).toBe('zero');
+    expect((caseHeaders[0].kind as any).isBaseCase).toBe(true);
+    expect((caseHeaders[1].kind as any).labelLatex).toBe('succ');
+    expect((caseHeaders[1].kind as any).isBaseCase).toBe(false); // inductive step
+  });
+
   test('case without constructorParamNames is base case', () => {
     const hole: ProofNode = { tag: 'hole', id: 10 };
     const induction: ProofNode = {
