@@ -69,16 +69,14 @@ theorem length_append {α : Type} (xs ys : List α) :
 // MyNat with its own Equal, plus, mul, and the semiring laws by structural
 // recursion. Core Lean, no Mathlib. Verified to compile clean.
 const NAT_MATH = `-- Nat Math (from scratch): the full TT development ported to core Lean.
--- A hand-rolled MyNat with its own Equal, plus, mul, one; the 12 semiring laws
+-- A hand-rolled MyNat with plus, mul, one; the 12 semiring laws
 -- + a Semiring record/instance; Leq ordering; subtraction lemmas; summation;
 -- and the triangle-sum statement (left as sorry, as in the original).
+-- Equality is Lean's native = (Eq), so rw/simp/rfl and rewrite suggestions work.
 
 inductive MyNat where
   | zero : MyNat
   | succ : MyNat → MyNat
-
-inductive Equal {A : Type} : A → A → Prop where
-  | refl : {a : A} → Equal a a
 
 def plus : MyNat → MyNat → MyNat
   | .zero,   m => m
@@ -91,11 +89,10 @@ def mul : MyNat → MyNat → MyNat
 def one : MyNat := .succ .zero
 
 -- Notation so the structured editor renders real math (a + b, a * b, a = b,
--- a ≤ b) instead of plus a b / Equal a b. Lean's delaborator applies these
+-- a ≤ b) instead of plus a b / a = b. Lean's delaborator applies these
 -- to the function-form proofs below automatically.
 infixl:65 " + " => plus
 infixl:70 " * " => mul
-infix:50 " = " => Equal
 instance : OfNat MyNat 0 := ⟨MyNat.zero⟩
 instance : OfNat MyNat 1 := ⟨one⟩
 
@@ -106,87 +103,87 @@ instance : OfNat MyNat 1 := ⟨one⟩
   | \`($_) => \`(0)
 
 -- Equality helpers (named to avoid clashing with Lean's Trans/_root_.trans)
-def congSucc {n m : MyNat} : Equal n m → Equal (MyNat.succ n) (MyNat.succ m)
-  | .refl => .refl
+def congSucc {n m : MyNat} : n = m → (MyNat.succ n) = (MyNat.succ m)
+  | rfl => rfl
 
-def succInj {n m : MyNat} : Equal (MyNat.succ n) (.succ m) → Equal n m
-  | .refl => .refl
+def succInj {n m : MyNat} : (MyNat.succ n) = (.succ m) → n = m
+  | rfl => rfl
 
-def eqSym {A : Type} {x y : A} : Equal x y → Equal y x
-  | .refl => .refl
+def eqSym {A : Type} {x y : A} : x = y → y = x
+  | rfl => rfl
 
-def eqTrans {A : Type} {x y z : A} : Equal x y → Equal y z → Equal x z
-  | .refl, .refl => .refl
+def eqTrans {A : Type} {x y z : A} : x = y → y = z → x = z
+  | rfl, rfl => rfl
 
-def eqCong {A B : Type} {x y : A} (f : A → B) : Equal x y → Equal (f x) (f y)
-  | .refl => .refl
+def eqCong {A B : Type} {x y : A} (f : A → B) : x = y → (f x) = (f y)
+  | rfl => rfl
 
-def replace {A : Type} {x y : A} (P : A → Type) : Equal x y → P x → P y
-  | .refl, px => px
+def replace {A : Type} {x y : A} (P : A → Type) : x = y → P x → P y
+  | rfl, px => px
 
 -- Addition properties
-def plusZeroLeft (n : MyNat) : Equal (plus .zero n) n := .refl
+def plusZeroLeft (n : MyNat) : (plus .zero n) = n := rfl
 
-def plusZeroRight : (n : MyNat) → Equal (plus n .zero) n
-  | .zero   => .refl
+def plusZeroRight : (n : MyNat) → (plus n .zero) = n
+  | .zero   => rfl
   | .succ n => congSucc (plusZeroRight n)
 
-def plusSuccRight : (n m : MyNat) → Equal (plus n (.succ m)) (.succ (plus n m))
-  | .zero,   _ => .refl
+def plusSuccRight : (n m : MyNat) → (plus n (.succ m)) = (.succ (plus n m))
+  | .zero,   _ => rfl
   | .succ n, m => congSucc (plusSuccRight n m)
 
-def plusAssoc : (n m p : MyNat) → Equal (plus (plus n m) p) (plus n (plus m p))
-  | .zero,   _, _ => .refl
+def plusAssoc : (n m p : MyNat) → (plus (plus n m) p) = (plus n (plus m p))
+  | .zero,   _, _ => rfl
   | .succ n, m, p => congSucc (plusAssoc n m p)
 
-def plusComm : (n m : MyNat) → Equal (plus n m) (plus m n)
+def plusComm : (n m : MyNat) → (plus n m) = (plus m n)
   | .zero,   m => eqSym (plusZeroRight m)
   | .succ n, m => eqTrans (congSucc (plusComm n m)) (eqSym (plusSuccRight m n))
 
-def congPlusLeft {n m : MyNat} (p : MyNat) : Equal n m → Equal (plus n p) (plus m p)
-  | .refl => .refl
+def congPlusLeft {n m : MyNat} (p : MyNat) : n = m → (plus n p) = (plus m p)
+  | rfl => rfl
 
-def congPlusRight {n m : MyNat} : (p : MyNat) → Equal n m → Equal (plus p n) (plus p m)
+def congPlusRight {n m : MyNat} : (p : MyNat) → n = m → (plus p n) = (plus p m)
   | .zero,   eq => eq
   | .succ p, eq => congSucc (congPlusRight p eq)
 
-def plusLeftComm (m n p : MyNat) : Equal (plus m (plus n p)) (plus n (plus m p)) :=
+def plusLeftComm (m n p : MyNat) : (plus m (plus n p)) = (plus n (plus m p)) :=
   eqTrans (eqSym (plusAssoc m n p)) (eqTrans (congPlusLeft p (plusComm m n)) (plusAssoc n m p))
 
 -- Multiplication properties
-def mulZeroLeft (n : MyNat) : Equal (mul .zero n) .zero := .refl
+def mulZeroLeft (n : MyNat) : (mul .zero n) = .zero := rfl
 
-def mulZeroRight : (n : MyNat) → Equal (mul n .zero) .zero
-  | .zero   => .refl
+def mulZeroRight : (n : MyNat) → (mul n .zero) = .zero
+  | .zero   => rfl
   | .succ n => mulZeroRight n
 
-def mulOneLeft (n : MyNat) : Equal (mul one n) n := plusZeroRight n
+def mulOneLeft (n : MyNat) : (mul one n) = n := plusZeroRight n
 
-def mulOneRight : (n : MyNat) → Equal (mul n one) n
-  | .zero   => .refl
+def mulOneRight : (n : MyNat) → (mul n one) = n
+  | .zero   => rfl
   | .succ n => congSucc (mulOneRight n)
 
-def mulSuccRight : (n m : MyNat) → Equal (mul n (.succ m)) (plus n (mul n m))
-  | .zero,   _ => .refl
+def mulSuccRight : (n m : MyNat) → (mul n (.succ m)) = (plus n (mul n m))
+  | .zero,   _ => rfl
   | .succ n, m =>
       congSucc (eqTrans (congPlusRight m (mulSuccRight n m)) (plusLeftComm m n (mul n m)))
 
-def mulComm : (n m : MyNat) → Equal (mul n m) (mul m n)
+def mulComm : (n m : MyNat) → (mul n m) = (mul m n)
   | .zero,   m => eqSym (mulZeroRight m)
   | .succ n, m => eqTrans (congPlusRight m (mulComm n m)) (eqSym (mulSuccRight m n))
 
-def mulDistribRight : (n m p : MyNat) → Equal (mul (plus n m) p) (plus (mul n p) (mul m p))
-  | .zero,   _, _ => .refl
+def mulDistribRight : (n m p : MyNat) → (mul (plus n m) p) = (plus (mul n p) (mul m p))
+  | .zero,   _, _ => rfl
   | .succ n, m, p =>
       eqTrans (congPlusRight p (mulDistribRight n m p)) (eqSym (plusAssoc p (mul n p) (mul m p)))
 
-def mulAssoc : (n m p : MyNat) → Equal (mul (mul n m) p) (mul n (mul m p))
-  | .zero,   _, _ => .refl
+def mulAssoc : (n m p : MyNat) → (mul (mul n m) p) = (mul n (mul m p))
+  | .zero,   _, _ => rfl
   | .succ n, m, p =>
       eqTrans (mulDistribRight m (mul n m) p) (congPlusRight (mul m p) (mulAssoc n m p))
 
-def mulDistribLeft : (n m p : MyNat) → Equal (mul n (plus m p)) (plus (mul n m) (mul n p))
-  | .zero,   _, _ => .refl
+def mulDistribLeft : (n m p : MyNat) → (mul n (plus m p)) = (plus (mul n m) (mul n p))
+  | .zero,   _, _ => rfl
   | .succ n, m, p =>
       eqTrans (congPlusRight (plus m p) (mulDistribLeft n m p))
         (eqTrans (plusAssoc m p (plus (mul n m) (mul n p)))
@@ -199,18 +196,18 @@ structure Semiring (A : Type) where
   mulS : A → A → A
   zero : A
   oneS : A
-  addZeroLeft : (a : A) → Equal (add zero a) a
-  addZeroRight : (a : A) → Equal (add a zero) a
-  addComm : (a b : A) → Equal (add a b) (add b a)
-  addAssoc : (a b c : A) → Equal (add (add a b) c) (add a (add b c))
-  mulZeroL : (a : A) → Equal (mulS zero a) zero
-  mulZeroR : (a : A) → Equal (mulS a zero) zero
-  mulOneL : (a : A) → Equal (mulS oneS a) a
-  mulOneR : (a : A) → Equal (mulS a oneS) a
-  mulCommS : (a b : A) → Equal (mulS a b) (mulS b a)
-  mulAssocS : (a b c : A) → Equal (mulS (mulS a b) c) (mulS a (mulS b c))
-  distribL : (a b c : A) → Equal (mulS a (add b c)) (add (mulS a b) (mulS a c))
-  distribR : (a b c : A) → Equal (mulS (add a b) c) (add (mulS a c) (mulS b c))
+  addZeroLeft : (a : A) → (add zero a) = a
+  addZeroRight : (a : A) → (add a zero) = a
+  addComm : (a b : A) → (add a b) = (add b a)
+  addAssoc : (a b c : A) → (add (add a b) c) = (add a (add b c))
+  mulZeroL : (a : A) → (mulS zero a) = zero
+  mulZeroR : (a : A) → (mulS a zero) = zero
+  mulOneL : (a : A) → (mulS oneS a) = a
+  mulOneR : (a : A) → (mulS a oneS) = a
+  mulCommS : (a b : A) → (mulS a b) = (mulS b a)
+  mulAssocS : (a b c : A) → (mulS (mulS a b) c) = (mulS a (mulS b c))
+  distribL : (a b c : A) → (mulS a (add b c)) = (add (mulS a b) (mulS a c))
+  distribR : (a b c : A) → (mulS (add a b) c) = (add (mulS a c) (mulS b c))
 
 def natSemiring : Semiring MyNat where
   add := plus
@@ -245,8 +242,8 @@ def leqTrans : {a b c : MyNat} → Leq a b → Leq b c → Leq a c
   | _, _, _, .LeqZero,   _          => .LeqZero
   | _, _, _, .LeqSucc p, .LeqSucc q => .LeqSucc (leqTrans p q)
 
-def leqAntisym : {a b : MyNat} → Leq a b → Leq b a → Equal a b
-  | _, _, .LeqZero,   .LeqZero   => .refl
+def leqAntisym : {a b : MyNat} → Leq a b → Leq b a → a = b
+  | _, _, .LeqZero,   .LeqZero   => rfl
   | _, _, .LeqSucc p, .LeqSucc q => congSucc (leqAntisym p q)
 
 def leqSuccRight : {i n : MyNat} → Leq i n → Leq i (.succ n)
@@ -262,24 +259,24 @@ def minus : MyNat → MyNat → MyNat
 -- minus n zero = n doesn't hold definitionally for a variable n under Lean's
 -- compiled recursion, so prove it (and use it where the TT preset relied on the
 -- minus a Zero = a equation reducing).
-def minusZeroR : (n : MyNat) → Equal (minus n .zero) n
-  | .zero   => .refl
-  | .succ _ => .refl
+def minusZeroR : (n : MyNat) → (minus n .zero) = n
+  | .zero   => rfl
+  | .succ _ => rfl
 
-def minusSucc : {i n : MyNat} → Leq i n → Equal (minus (.succ n) i) (.succ (minus n i))
+def minusSucc : {i n : MyNat} → Leq i n → (minus (.succ n) i) = (.succ (minus n i))
   | _, _, @Leq.LeqZero n => eqCong MyNat.succ (eqSym (minusZeroR n))
   | _, _, @Leq.LeqSucc i' n' l => @minusSucc i' n' l
 
-def plusMinusCancel : {i n : MyNat} → Leq i n → Equal (plus i (minus n i)) n
+def plusMinusCancel : {i n : MyNat} → Leq i n → (plus i (minus n i)) = n
   | _, _, @Leq.LeqZero n => minusZeroR n
   | _, _, .LeqSucc l => congSucc (plusMinusCancel l)
 
-def minusSelf : (n : MyNat) → Equal (minus n n) .zero
-  | .zero   => .refl
+def minusSelf : (n : MyNat) → (minus n n) = .zero
+  | .zero   => rfl
   | .succ n => minusSelf n
 
-def plusMinusSucc : {i n : MyNat} → Leq i n → Equal (plus i (minus (.succ n) i)) (.succ n)
-  | .zero,   _, .LeqZero   => .refl
+def plusMinusSucc : {i n : MyNat} → Leq i n → (plus i (minus (.succ n) i)) = (.succ n)
+  | .zero,   _, .LeqZero   => rfl
   | .succ _, _, .LeqSucc l => congSucc (plusMinusSucc l)
 
 -- Summation
@@ -287,9 +284,9 @@ def sumStartCount : (start count : MyNat) → (MyNat → MyNat) → MyNat
   | _,     .zero,   _ => .zero
   | start, .succ k, f => plus (sumStartCount start k f) (f (plus start k))
 
-def sumStartCountZero (s : MyNat) (f : MyNat → MyNat) : Equal (sumStartCount s .zero f) .zero := .refl
+def sumStartCountZero (s : MyNat) (f : MyNat → MyNat) : (sumStartCount s .zero f) = .zero := rfl
 
-def sumStartCountOne (s : MyNat) (f : MyNat → MyNat) : Equal (sumStartCount s (.succ .zero) f) (f s) :=
+def sumStartCountOne (s : MyNat) (f : MyNat → MyNat) : (sumStartCount s (.succ .zero) f) = (f s) :=
   eqCong f (plusZeroRight s)
 
 def sum (start stop : MyNat) (f : MyNat → MyNat) : MyNat :=
@@ -301,20 +298,20 @@ notation:max "∑[" i "," lo "," hi "] " f:67 => sum lo hi (fun i => f)
 
 -- sumStartCount splits off its last term definitionally.
 def sumStartCountSplit (s k : MyNat) (f : MyNat → MyNat) :
-    Equal (sumStartCount s (.succ k) f) (plus (sumStartCount s k f) (f (plus s k))) := .refl
+    (sumStartCount s (.succ k) f) = (plus (sumStartCount s k f) (f (plus s k))) := rfl
 
 -- Summation splitting: sum from i to (n+1) = (sum from i to n) + f(n+1).
 def summationSplit (i n : MyNat) (l : Leq i n) (f : MyNat → MyNat) :
-    Equal (sum i (.succ n) f) (plus (sum i n f) (f (.succ n))) :=
+    (sum i (.succ n) f) = (plus (sum i n f) (f (.succ n))) :=
   eqTrans
     (eqCong (fun k => sumStartCount i k f) (minusSucc (leqSuccRight l)))
     (congPlusRight (sum i n f) (eqCong f (plusMinusSucc l)))
 
 -- Triangle sum: 2 * (0 + 1 + ... + n) = (n + 1) * n.
 -- Left as sorry, exactly as the original TT preset left it (?TODO).
--- (def, not theorem: this custom Equal lives in Type, not Prop.)
+-- (def, not theorem: this custom lives = in Type, not Prop.)
 def triangleSum (n : MyNat) :
-    Equal (mul 2 (∑[i,0,n] i)) (mul (plus n 1) n) := sorry
+    (mul 2 (∑[i,0,n] i)) = (mul (plus n 1) n) := sorry
 
 #check natSemiring
 #check leqAntisym
