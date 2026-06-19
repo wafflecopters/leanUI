@@ -293,10 +293,21 @@ function LeanProofEditor({
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
-  // Suggestions: when a subterm is selected, targeted tactics for it (e.g.
-  // induction/cases on a clicked variable) come first; then the whole-goal
-  // discovery pills (exact?/simp?/…).
-  const targeted = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
+  // Suggestions, in priority order:
+  // 1. Subterm-targeted: when a subterm is selected, tactics FOR it (e.g.
+  //    induction/cases on a clicked variable).
+  // 2. Whole-goal: tactics for the goal regardless of selection (e.g.
+  //    `exact .refl` when the GOAL is an equality) — so reflexivity is offered
+  //    even when the user has a sub-expression like `i` selected.
+  // 3. Lean discovery pills (exact?/simp?/…).
+  const subtermTargeted = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
+  const goalTargeted = lean.cursorGoal ? targetedSuggestions(lean.cursorGoal.plain) : [];
+  // Merge subterm + goal-level, deduping by id (a selected equality subterm and
+  // the goal can both yield `exact .refl`).
+  const seenIds = new Set<string>();
+  const targeted = [...subtermTargeted, ...goalTargeted].filter((s) =>
+    seenIds.has(s.id) ? false : (seenIds.add(s.id), true),
+  );
   const allSuggestions = [...targeted, ...suggest.suggestions];
 
   const suggestionSlot =
