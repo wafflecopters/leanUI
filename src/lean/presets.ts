@@ -299,6 +299,17 @@ def two : MyNat := .succ (.succ .zero)
 instance : OfNat MyNat 2 := ⟨two⟩
 notation:max "∑[" i "," lo "," hi "] " f:67 => sum lo hi (fun i => f)
 
+-- sumStartCount splits off its last term definitionally.
+def sumStartCountSplit (s k : MyNat) (f : MyNat → MyNat) :
+    Equal (sumStartCount s (.succ k) f) (plus (sumStartCount s k f) (f (plus s k))) := .refl
+
+-- Summation splitting: sum from i to (n+1) = (sum from i to n) + f(n+1).
+def summationSplit (i n : MyNat) (l : Leq i n) (f : MyNat → MyNat) :
+    Equal (sum i (.succ n) f) (plus (sum i n f) (f (.succ n))) :=
+  eqTrans
+    (eqCong (fun k => sumStartCount i k f) (minusSucc (leqSuccRight l)))
+    (congPlusRight (sum i n f) (eqCong f (plusMinusSucc l)))
+
 -- Triangle sum: 2 * (0 + 1 + ... + n) = (n + 1) * n.
 -- Left as sorry, exactly as the original TT preset left it (?TODO).
 -- (def, not theorem: this custom Equal lives in Type, not Prop.)
