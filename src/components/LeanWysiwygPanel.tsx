@@ -20,6 +20,7 @@ import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { taggedToInteractiveGoal, subtermTextMap } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions } from '../lean/leanSuggestions';
+import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
 /**
  * The structured WYSIWYG editor on Lean — uses the REAL ProofTreeEditor (and the
@@ -259,6 +260,21 @@ function LeanProofEditor({
     cursorId: state.cursor.nodeId,
     mathlib,
   });
+
+  // Once Lean reports each induction case's name + introduced hypotheses, bake
+  // them into bullet-case inductions so the proof reprints as
+  // `induction n with | zero => … | succ a a_ih => …`. This replaces Lean's
+  // auto-generated INACCESSIBLE names (the `a✝` daggers) with accessible ones,
+  // and the named hyps become clickable/usable. Idempotent: already-named cases
+  // are left alone, so it settles after one pass (no oscillation).
+  useEffect(() => {
+    if (lean.goalMap.size === 0) return;
+    const { root, changed } = enrichInductionCaseNames(state.root, lean.goalMap);
+    if (changed) {
+      handleHistoryChange(pushState(history, { root, cursor: state.cursor }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lean.goalMap]);
 
   // Lean-backed suggestions for the cursor hole (exact?/simp?/apply?/rw?).
   const cursorNode = findNode(state.root, state.cursor.nodeId);
