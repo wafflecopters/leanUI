@@ -417,75 +417,73 @@ theorem leqAntisym : {a b : Nat} → Leq a b → Leq b a → a = b := by
 // through the eliminator — universe-polymorphic Equal, no Mathlib. Verified.
 const PEANO = `-- Peano (record): a carrier with zero/succ and an induction eliminator,
 -- with addition + its laws derived entirely through the eliminator.
+-- Equality is Lean's native = (Eq). The eliminator comes in two forms:
+-- ind into Type (so plus computes a carrier value) and indProp into Prop
+-- (so the equational proofs can do induction).
 
 universe u v
 
-inductive Equal {A : Type u} : A → A → Type u where
-  | refl : {a : A} → Equal a a
+def eqSym {A : Type u} {x y : A} : x = y → y = x
+  | rfl => rfl
 
--- Notation: render Equal a b as a = b in the structured editor.
-infix:50 " = " => Equal
+def eqTrans {A : Type u} {x y z : A} : x = y → y = z → x = z
+  | rfl, rfl => rfl
 
-def eqSym {A : Type u} {x y : A} : Equal x y → Equal y x
-  | .refl => .refl
+def eqCong {A : Type u} {B : Type v} (f : A → B) {x y : A} : x = y → (f x) = (f y)
+  | rfl => rfl
 
-def eqTrans {A : Type u} {x y z : A} : Equal x y → Equal y z → Equal x z
-  | .refl, .refl => .refl
+inductive MyVoid : Prop where
 
-def eqCong {A : Type u} {B : Type v} (f : A → B) {x y : A} : Equal x y → Equal (f x) (f y)
-  | .refl => .refl
-
-inductive MyVoid : Type where
-
-def MyNot (A : Type u) : Type u := A → MyVoid
+def MyNot (A : Prop) : Prop := A → MyVoid
 
 structure PeanoNat where
   carrier : Type
   zero : carrier
   succ : carrier → carrier
-  zeroNeqSucc : {n : carrier} → MyNot (Equal zero (succ n))
-  succInj : {m n : carrier} → Equal (succ m) (succ n) → Equal m n
+  zeroNeqSucc : {n : carrier} → MyNot (zero = succ n)
+  succInj : {m n : carrier} → succ m = succ n → m = n
   ind : {P : carrier → Type} → P zero → ({n : carrier} → P n → P (succ n)) → (n : carrier) → P n
+  indProp : {P : carrier → Prop} → P zero → ({n : carrier} → P n → P (succ n)) → (n : carrier) → P n
   indZero : {P : carrier → Type} → (base : P zero) → (step : {n : carrier} → P n → P (succ n)) →
-    Equal (ind base step zero) base
+    (ind base step zero) = base
   indSucc : {P : carrier → Type} → (base : P zero) → (step : {n : carrier} → P n → P (succ n)) →
-    (n : carrier) → Equal (ind base step (succ n)) (step (ind base step n))
+    (n : carrier) → (ind base step (succ n)) = (step (ind base step n))
 
 @[reducible] def plus (N : PeanoNat) (n m : N.carrier) : N.carrier :=
   N.ind m (fun ih => N.succ ih) n
 
-def plusZeroEq (N : PeanoNat) (m : N.carrier) : Equal (plus N N.zero m) m :=
+def plusZeroEq (N : PeanoNat) (m : N.carrier) : (plus N N.zero m) = m :=
   N.indZero m (fun ih => N.succ ih)
 
 def plusSuccEq (N : PeanoNat) (k m : N.carrier) :
-    Equal (plus N (N.succ k) m) (N.succ (plus N k m)) :=
+    (plus N (N.succ k) m) = (N.succ (plus N k m)) :=
   N.indSucc m (fun ih => N.succ ih) k
 
-def plusZeroRight (N : PeanoNat) (n : N.carrier) : Equal (plus N n N.zero) n :=
-  N.ind (P := fun k => Equal (plus N k N.zero) k)
+def plusZeroRight (N : PeanoNat) (n : N.carrier) : (plus N n N.zero) = n :=
+  N.indProp (P := fun k => (plus N k N.zero) = k)
     (plusZeroEq N N.zero)
     (fun {k} ih => eqTrans (plusSuccEq N k N.zero) (eqCong N.succ ih))
     n
 
 def plusSuccRight (N : PeanoNat) (n m : N.carrier) :
-    Equal (plus N n (N.succ m)) (N.succ (plus N n m)) :=
-  N.ind (P := fun k => Equal (plus N k (N.succ m)) (N.succ (plus N k m)))
+    (plus N n (N.succ m)) = (N.succ (plus N n m)) :=
+  N.indProp (P := fun k => (plus N k (N.succ m)) = (N.succ (plus N k m)))
     (eqTrans (plusZeroEq N (N.succ m)) (eqSym (eqCong N.succ (plusZeroEq N m))))
     (fun {k} ih =>
       eqTrans (eqTrans (plusSuccEq N k (N.succ m)) (eqCong N.succ ih))
             (eqSym (eqCong N.succ (plusSuccEq N k m))))
     n
 
-def plusComm (N : PeanoNat) (n m : N.carrier) : Equal (plus N n m) (plus N m n) :=
-  N.ind (P := fun k => Equal (plus N k m) (plus N m k))
+def plusComm (N : PeanoNat) (n m : N.carrier) : (plus N n m) = (plus N m n) :=
+  N.indProp (P := fun k => (plus N k m) = (plus N m k))
     (eqTrans (plusZeroEq N m) (eqSym (plusZeroRight N m)))
     (fun {k} ih =>
       eqTrans (eqTrans (plusSuccEq N k m) (eqCong N.succ ih)) (eqSym (plusSuccRight N m k)))
     n
 
 def plusAssoc (N : PeanoNat) (a b c : N.carrier) :
-    Equal (plus N (plus N a b) c) (plus N a (plus N b c)) :=
-  N.ind (P := fun k => Equal (plus N (plus N k b) c) (plus N k (plus N b c)))
+    (plus N (plus N a b) c) = (plus N a (plus N b c)) :=
+  N.indProp (P := fun k => (plus N (plus N k b) c) = (plus N k (plus N b c)))
     (eqTrans (eqCong (fun x => plus N x c) (plusZeroEq N b)) (eqSym (plusZeroEq N (plus N b c))))
     (fun {k} ih =>
       eqTrans
