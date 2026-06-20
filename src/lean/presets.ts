@@ -507,37 +507,36 @@ const REAL_ANALYSIS = `-- Real Analysis: algebraic hierarchy, ordered fields, li
 -- Foundation: basic types and equality
 ------------------------------------------------------------
 
+universe u v w
+
 inductive MyVoid : Type where
 
 def myAbsurd {A : Type} : MyVoid → A := fun v => nomatch v
 
-inductive Equal {A : Type} : A → A → Type where
-  | refl : {a : A} → Equal a a
 
-infix:50 " = " => Equal
 
-def eqSym {A : Type} {x y : A} : Equal x y → Equal y x
-  | .refl => .refl
+def eqSym {A : Type} {x y : A} : x = y → y = x
+  | rfl => rfl
 
-def eqTrans {A : Type} {x y z : A} : Equal x y → Equal y z → Equal x z
-  | .refl, .refl => .refl
+def eqTrans {A : Type} {x y z : A} : x = y → y = z → x = z
+  | rfl, rfl => rfl
 
-def eqCong {A B : Type} {x y : A} (f : A → B) : Equal x y → Equal (f x) (f y)
-  | .refl => .refl
+def eqCong {A B : Type} {x y : A} (f : A → B) : x = y → (f x) = (f y)
+  | rfl => rfl
 
 -- Transport: rewrite along an equality proof
-def replace {A : Type} {x y : A} (P : A → Type) : Equal x y → P x → P y
-  | .refl, px => px
+def replace {A : Type} {x y : A} (P : A → Sort w) : x = y → P x → P y
+  | rfl, px => px
 
-inductive Either : Type → Type → Type where
-  | left : {A B : Type} → A → Either A B
-  | right : {A B : Type} → B → Either A B
+inductive Either (A : Sort u) (B : Sort v) where
+  | left : A → Either A B
+  | right : B → Either A B
 
-def eitherElim {A B C : Type} (f : A → C) (g : B → C) : Either A B → C
+def eitherElim {A : Sort u} {B : Sort v} {C : Sort w} (f : A → C) (g : B → C) : Either A B → C
   | .left a => f a
   | .right b => g b
 
-def eitherElimDep {A B : Type} (C : Either A B → Type)
+def eitherElimDep {A : Sort u} {B : Sort v} (C : Either A B → Sort w)
     (f : (a : A) → C (.left a)) (g : (b : B) → C (.right b)) : (e : Either A B) → C e
   | .left a => f a
   | .right b => g b
@@ -545,8 +544,6 @@ def eitherElimDep {A B : Type} (C : Either A B → Type)
 structure Pair (A B : Type) where
   fst : A
   snd : B
-
-universe u v
 
 structure DPair (A : Type u) (B : A → Type v) : Type (max u v) where
   fst : A
@@ -562,7 +559,7 @@ structure Preorder (A : Type) where
   leTrans : (a b c : A) → le a b → le b c → le a c
 
 structure PartialOrder (A : Type) extends Preorder A where
-  leAntisym : (a b : A) → le a b → le b a → Equal a b
+  leAntisym : (a b : A) → le a b → le b a → a = b
 
 structure TotalOrder (A : Type) extends PartialOrder A where
   leTotal : (a b : A) → Either (le a b) (le b a)
@@ -575,26 +572,26 @@ structure AbelianGroup (A : Type) where
   add : A → A → A
   zero : A
   neg : A → A
-  addAssoc : (a b c : A) → Equal (add (add a b) c) (add a (add b c))
-  addComm : (a b : A) → Equal (add a b) (add b a)
-  addZeroRight : (a : A) → Equal (add a zero) a
-  negRight : (a : A) → Equal (add a (neg a)) zero
+  addAssoc : (a b c : A) → (add (add a b) c) = (add a (add b c))
+  addComm : (a b : A) → (add a b) = (add b a)
+  addZeroRight : (a : A) → (add a zero) = a
+  negRight : (a : A) → (add a (neg a)) = zero
 
 structure Ring (A : Type) extends AbelianGroup A where
   mul : A → A → A
   one : A
-  mulAssoc : (a b c : A) → Equal (mul (mul a b) c) (mul a (mul b c))
-  mulOneLeft : (a : A) → Equal (mul one a) a
-  mulOneRight : (a : A) → Equal (mul a one) a
-  distribLeft : (a b c : A) → Equal (mul a (add b c)) (add (mul a b) (mul a c))
-  distribRight : (a b c : A) → Equal (mul (add a b) c) (add (mul a c) (mul b c))
+  mulAssoc : (a b c : A) → (mul (mul a b) c) = (mul a (mul b c))
+  mulOneLeft : (a : A) → (mul one a) = a
+  mulOneRight : (a : A) → (mul a one) = a
+  distribLeft : (a b c : A) → (mul a (add b c)) = (add (mul a b) (mul a c))
+  distribRight : (a b c : A) → (mul (add a b) c) = (add (mul a c) (mul b c))
 
 structure CommRing (A : Type) extends Ring A where
-  mulComm : (a b : A) → Equal (mul a b) (mul b a)
+  mulComm : (a b : A) → (mul a b) = (mul b a)
 
 structure Field (A : Type) extends CommRing A where
   inv : A → A
-  mulInvRight : (a : A) → (Equal a zero → MyVoid) → Equal (mul a (inv a)) one
+  mulInvRight : (a : A) → (a = zero → MyVoid) → (mul a (inv a)) = one
 
 ------------------------------------------------------------
 -- Ordered Field: Field + Total Order + Compatibility
@@ -603,15 +600,15 @@ structure Field (A : Type) extends CommRing A where
 structure OrderedField (A : Type) : Type 1 extends Field A where
   le : A → A → Type
   leRefl : (a : A) → le a a
-  leAntisym : (a b : A) → le a b → le b a → Equal a b
+  leAntisym : (a b : A) → le a b → le b a → a = b
   leTrans : (a b c : A) → le a b → le b c → le a c
   leTotal : (a b : A) → Either (le a b) (le b a)
   addLeLeft : (a b c : A) → le a b → le (add c a) (add c b)
   mulNonneg : (a b : A) → le zero a → le zero b → le zero (mul a b)
   zeroLeOne : le zero one
-  zeroNeOne : Equal zero one → MyVoid
-  invPos : (a : A) → le zero a → (Equal a zero → MyVoid) → le zero (inv a)
-  leToEqOrLt : (a b : A) → le a b → Either (Equal a b) (Pair (le a b) (Equal a b → MyVoid))
+  zeroNeOne : zero = one → MyVoid
+  invPos : (a : A) → le zero a → (a = zero → MyVoid) → le zero (inv a)
+  leToEqOrLt : (a b : A) → le a b → Either (a = b) (Pair (le a b) (a = b → MyVoid))
 
 ------------------------------------------------------------
 -- Complete Ordered Field: the Dedekind completeness axiom
@@ -758,7 +755,7 @@ def rsub {R : Real} (a b : Carrier R) : Carrier R := radd a (rneg b)
 def rdiv {R : Real} (a b : Carrier R) : Carrier R := rmul a (rinv b)
 
 -- Strict ordering: a < b iff a <= b and a /= b
-def rlt {R : Real} (a b : Carrier R) : Type := Pair (rle a b) (Equal a b → MyVoid)
+def rlt {R : Real} (a b : Carrier R) : Type := Pair (rle a b) (a = b → MyVoid)
 
 -- Notation so the editor renders real-number expressions as math.
 infixl:65 " + " => radd
@@ -773,7 +770,7 @@ prefix:75 "-" => rneg
 def rabs {R : Real} (a : Carrier R) : Carrier R :=
   eitherElim (fun _ => a) (fun _ => rneg a) ((fieldOf R).leTotal (rzero R) a)
 
-def absElim {R : Real} (a : Carrier R) (C : Carrier R → Type)
+def absElim {R : Real} (a : Carrier R) (C : Carrier R → Sort w)
     (pos : rle (rzero R) a → C a) (neg : rle a (rzero R) → C (rneg a)) : C (rabs a) :=
   eitherElimDep (fun e => C (eitherElim (fun _ => a) (fun _ => rneg a) e))
     (fun h => pos h) (fun h => neg h)
@@ -807,19 +804,19 @@ structure Limit {R : Real} (f : Carrier R → Carrier R) (x0 L : Carrier R) wher
 ------------------------------------------------------------
 
 -- TACTIC-MODE in source (erw); kept faithful as statement, body sorried.
-def addZeroLeft {R : Real} (a : Carrier R) : Equal (radd (rzero R) a) a := sorry
+def addZeroLeft {R : Real} (a : Carrier R) : (radd (rzero R) a) = a := sorry
 
 def addRealOfNat (R : Real) : (n m : MyNat) →
-    Equal (radd (realOfNat R n) (realOfNat R m)) (realOfNat R (plus n m))
+    (radd (realOfNat R n) (realOfNat R m)) = (realOfNat R (plus n m))
   | .zero, m => addZeroLeft (realOfNat R m)
   | .succ n, m =>
       eqTrans ((fieldOf R).addAssoc (rone R) (realOfNat R n) (realOfNat R m))
         (eqCong (fun z => radd (rone R) z) (addRealOfNat R n m))
 
 -- TACTIC-MODE in source (erw).
-def negLeft {R : Real} (a : Carrier R) : Equal (radd (rneg a) a) (rzero R) := sorry
+def negLeft {R : Real} (a : Carrier R) : (radd (rneg a) a) = (rzero R) := sorry
 
-def addNegRight {R : Real} (a : Carrier R) : Equal (radd a (rneg a)) (rzero R) :=
+def addNegRight {R : Real} (a : Carrier R) : (radd a (rneg a)) = (rzero R) :=
   (fieldOf R).negRight a
 
 def addLeRight {R : Real} (a b c : Carrier R) (h : rle a b) : rle (radd a c) (radd b c) :=
@@ -833,7 +830,7 @@ def addLeBoth {R : Real} (a b c d : Carrier R) (hab : rle a b) (hcd : rle c d) :
     (addLeRight a b c hab) ((fieldOf R).addLeLeft c d b hcd)
 
 -- TACTIC-MODE in source (erw).
-def negZero (R : Real) : Equal (rneg (rzero R)) (rzero R) := sorry
+def negZero (R : Real) : (rneg (rzero R)) = (rzero R) := sorry
 
 def leNegNonneg {R : Real} (a : Carrier R) (h : rle a (rzero R)) : rle (rzero R) (rneg a) :=
   replace (fun z => rle z (rneg a)) ((fieldOf R).negRight a)
@@ -849,7 +846,7 @@ def leLtTransLe {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c) :
   (fieldOf R).leTrans a b c hab hbc
 
 def leLtTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c)
-    (nebc : Equal b c → MyVoid) (eq : Equal a c) : MyVoid :=
+    (nebc : b = c → MyVoid) (eq : a = c) : MyVoid :=
   nebc ((fieldOf R).leAntisym b c hbc (replace (fun z => rle z b) eq hab))
 
 def leLtTrans {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rlt b c) : rlt a c :=
@@ -858,8 +855,8 @@ def leLtTrans {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rlt b c) : r
 def ltLeTransLe {R : Real} (a b c : Carrier R) (hab : rle a b) (hbc : rle b c) : rle a c :=
   (fieldOf R).leTrans a b c hab hbc
 
-def ltLeTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (neab : Equal a b → MyVoid)
-    (hbc : rle b c) (eq : Equal a c) : MyVoid :=
+def ltLeTransNe {R : Real} (a b c : Carrier R) (hab : rle a b) (neab : a = b → MyVoid)
+    (hbc : rle b c) (eq : a = c) : MyVoid :=
   neab ((fieldOf R).leAntisym a b hab
     ((fieldOf R).leTrans b c a hbc
       (replace (fun z => rle z a) eq ((fieldOf R).leRefl a))))
@@ -869,11 +866,11 @@ def ltLeTrans {R : Real} (a b c : Carrier R) (hab : rlt a b) (hbc : rle b c) : r
 
 -- TACTIC-MODE in source (erw).
 def addCancelRightHelper {R : Real} (x c : Carrier R) :
-    Equal (radd (radd x c) (rneg c)) x := sorry
+    (radd (radd x c) (rneg c)) = x := sorry
 
 -- TACTIC-MODE in source (erw).
-def addCancelRight {R : Real} (a b c : Carrier R) (h : Equal (radd a c) (radd b c)) :
-    Equal a b := sorry
+def addCancelRight {R : Real} (a b c : Carrier R) (h : (radd a c) = (radd b c)) :
+    a = b := sorry
 
 def addLeRightCancel {R : Real} (a b c : Carrier R) (h : rle (radd a c) (radd b c)) : rle a b :=
   replace (fun z => rle z b) (addCancelRightHelper a c)
@@ -885,8 +882,8 @@ def addLeLeftCancel {R : Real} (a b c : Carrier R) (h : rle (radd c a) (radd c b
     (replace (fun z => rle (radd a c) z) ((fieldOf R).addComm c b)
       (replace (fun z => rle z (radd c b)) ((fieldOf R).addComm c a) h))
 
-def addLtBothNe {R : Real} (a b c d : Carrier R) (leab : rle a b) (neab : Equal a b → MyVoid)
-    (lecd : rle c d) (eq : Equal (radd a c) (radd b d)) : MyVoid :=
+def addLtBothNe {R : Real} (a b c d : Carrier R) (leab : rle a b) (neab : a = b → MyVoid)
+    (lecd : rle c d) (eq : (radd a c) = (radd b d)) : MyVoid :=
   neab (addCancelRight a b c
     ((fieldOf R).leAntisym (radd a c) (radd b c)
       (addLeRight a b c leab)
@@ -912,18 +909,18 @@ def oneLeTwo (R : Real) : rle (rone R) (rtwo R) :=
   replace (fun z => rle z (rtwo R)) (addZeroLeft (rone R))
     (addLeRight (rzero R) (rone R) (rone R) ((fieldOf R).zeroLeOne))
 
-def twoNeZero (R : Real) (eq : Equal (rtwo R) (rzero R)) : MyVoid :=
+def twoNeZero (R : Real) (eq : (rtwo R) = (rzero R)) : MyVoid :=
   (fieldOf R).zeroNeOne
     ((fieldOf R).leAntisym (rzero R) (rone R)
       ((fieldOf R).zeroLeOne)
       (replace (fun z => rle (rone R) z) eq (oneLeTwo R)))
 
 -- TACTIC-MODE in source (erw).
-def halfPlusHalf (R : Real) : Equal (radd (rhalf R) (rhalf R)) (rone R) := sorry
+def halfPlusHalf (R : Real) : (radd (rhalf R) (rhalf R)) = (rone R) := sorry
 
 -- TACTIC-MODE in source (erw).
 def halfMulEps {R : Real} (e : Carrier R) :
-    Equal (radd (rmul (rhalf R) e) (rmul (rhalf R) e)) e := sorry
+    (radd (rmul (rhalf R) e) (rmul (rhalf R) e)) = e := sorry
 
 def zeroLeTwo (R : Real) : rle (rzero R) (rtwo R) :=
   (fieldOf R).leTrans (rzero R) (rone R) (rtwo R)
@@ -937,7 +934,7 @@ def halfMulEpsLe {R : Real} (e : Carrier R) (hle : rle (rzero R) e) :
   (fieldOf R).mulNonneg (rhalf R) e (halfPos R) hle
 
 def halfMulEpsNe {R : Real} (e : Carrier R) (hle : rle (rzero R) e)
-    (hne : Equal (rzero R) e → MyVoid) (heq : Equal (rzero R) (rmul (rhalf R) e)) : MyVoid :=
+    (hne : (rzero R) = e → MyVoid) (heq : (rzero R) = (rmul (rhalf R) e)) : MyVoid :=
   hne (eqTrans (eqSym (addZeroLeft (rzero R)))
     (eqTrans (eqCong (fun z => radd z z) heq) (halfMulEps e)))
 
@@ -950,37 +947,36 @@ def halfMulEpsPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
 ------------------------------------------------------------
 
 -- TACTIC-MODE in source (erw).
-def addSumNeg {R : Real} (a b : Carrier R) : Equal (radd (radd a b) (rneg a)) b := sorry
+def addSumNeg {R : Real} (a b : Carrier R) : (radd (radd a b) (rneg a)) = b := sorry
 
 -- TACTIC-MODE in source (erw).
 def negAddCancel {R : Real} (a b : Carrier R) :
-    Equal (radd (radd a b) (radd (rneg a) (rneg b))) (rzero R) := sorry
+    (radd (radd a b) (radd (rneg a) (rneg b))) = (rzero R) := sorry
 
 -- TACTIC-MODE in source (erw).
-def negUnique {R : Real} (a b : Carrier R) (h : Equal (radd a b) (rzero R)) :
-    Equal b (rneg a) := sorry
+def negUnique {R : Real} (a b : Carrier R) (h : (radd a b) = (rzero R)) :
+    b = (rneg a) := sorry
 
 -- TACTIC-MODE in source (erw).
 def negAdd {R : Real} (a b : Carrier R) :
-    Equal (rneg (radd a b)) (radd (rneg a) (rneg b)) := sorry
+    (rneg (radd a b)) = (radd (rneg a) (rneg b)) := sorry
 
-def negNeg {R : Real} (a : Carrier R) : Equal (rneg (rneg a)) a :=
+def negNeg {R : Real} (a : Carrier R) : (rneg (rneg a)) = a :=
   eqSym (negUnique (rneg a) a (negLeft a))
 
 def negRealOfInt (R : Real) : (a : MyInt) →
-    Equal (rneg (realOfInt R a)) (realOfInt R (intNeg a))
+    (rneg (realOfInt R a)) = (realOfInt R (intNeg a))
   | .intOfNat .zero => negZero R
-  | .intOfNat (.succ _) => .refl
+  | .intOfNat (.succ _) => rfl
   | .intNegSucc n => negNeg (radd (rone R) (realOfNat R n))
 
-def plusSuccRight : (m n : MyNat) → Equal (plus m (.succ n)) (.succ (plus m n))
-  | .zero, _ => .refl
+def plusSuccRight : (m n : MyNat) → (plus m (.succ n)) = (.succ (plus m n))
+  | .zero, _ => rfl
   | .succ m, n => eqCong MyNat.succ (plusSuccRight m n)
 
 -- TACTIC-MODE in source (erw).
 def addOnePlusOneShuffle (R : Real) (m n : MyNat) :
-    Equal (radd (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n)))
-      (radd (rone R) (radd (rone R) (realOfNat R (plus m n)))) := sorry
+    (radd (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n))) = (radd (rone R) (radd (rone R) (realOfNat R (plus m n)))) := sorry
 
 ------------------------------------------------------------
 -- (a+b)-(c+d) = (a-c)+(b-d)
@@ -988,27 +984,27 @@ def addOnePlusOneShuffle (R : Real) (m n : MyNat) :
 
 -- TACTIC-MODE in source (erw).
 def fourTermRearrange {R : Real} (a b c d : Carrier R) :
-    Equal (radd (radd a b) (radd c d)) (radd (radd a c) (radd b d)) := sorry
+    (radd (radd a b) (radd c d)) = (radd (radd a c) (radd b d)) := sorry
 
 -- TACTIC-MODE in source (erw).
 def subAddSub {R : Real} (a b c d : Carrier R) :
-    Equal (rsub (radd a b) (radd c d)) (radd (rsub a c) (rsub b d)) := sorry
+    (rsub (radd a b) (radd c d)) = (radd (rsub a c) (rsub b d)) := sorry
 
 ------------------------------------------------------------
 -- Multiplication-negation lemmas (needed for abs properties)
 ------------------------------------------------------------
 
-def mulZeroLeft {R : Real} (a : Carrier R) : Equal (rmul (rzero R) a) (rzero R) :=
+def mulZeroLeft {R : Real} (a : Carrier R) : (rmul (rzero R) a) = (rzero R) :=
   addCancelRight (rmul (rzero R) a) (rzero R) (rmul (rzero R) a)
     (eqTrans (eqSym ((fieldOf R).distribRight (rzero R) (rzero R) a))
       (eqTrans (eqCong (fun z => rmul z a) (addZeroLeft (rzero R)))
         (eqSym (addZeroLeft (rmul (rzero R) a)))))
 
 -- TACTIC-MODE in source (erw).
-def mulZeroRight {R : Real} (c : Carrier R) : Equal (rmul c (rzero R)) (rzero R) := sorry
+def mulZeroRight {R : Real} (c : Carrier R) : (rmul c (rzero R)) = (rzero R) := sorry
 
 def mulRealOfNat (R : Real) : (n m : MyNat) →
-    Equal (rmul (realOfNat R n) (realOfNat R m)) (realOfNat R (mult n m))
+    (rmul (realOfNat R n) (realOfNat R m)) = (realOfNat R (mult n m))
   | .zero, m => mulZeroLeft (realOfNat R m)
   | .succ n, m =>
       eqTrans ((fieldOf R).distribRight (rone R) (realOfNat R n) (realOfNat R m))
@@ -1017,53 +1013,53 @@ def mulRealOfNat (R : Real) : (n m : MyNat) →
           (eqTrans (eqCong (fun z => radd (realOfNat R m) z) (mulRealOfNat R n m))
             (addRealOfNat R m (mult n m))))
 
-def oneNeZero (R : Real) (eq : Equal (rone R) (rzero R)) : MyVoid :=
+def oneNeZero (R : Real) (eq : (rone R) = (rzero R)) : MyVoid :=
   (fieldOf R).zeroNeOne (eqSym eq)
 
-def invOne (R : Real) : Equal (rinv (rone R)) (rone R) :=
+def invOne (R : Real) : (rinv (rone R)) = (rone R) :=
   eqTrans (eqSym ((fieldOf R).mulOneLeft (rinv (rone R))))
     ((fieldOf R).mulInvRight (rone R) (oneNeZero R))
 
-def divOne {R : Real} (a : Carrier R) : Equal (rdiv a (rone R)) a :=
+def divOne {R : Real} (a : Carrier R) : (rdiv a (rone R)) = a :=
   eqTrans (eqCong (fun z => rmul a z) (invOne R)) ((fieldOf R).mulOneRight a)
 
 def mulDivAssoc {R : Real} (a b c : Carrier R) :
-    Equal (rmul a (rdiv b c)) (rdiv (rmul a b) c) :=
+    (rmul a (rdiv b c)) = (rdiv (rmul a b) c) :=
   eqSym ((fieldOf R).mulAssoc a b (rinv c))
 
 def divMulRight {R : Real} (a b c : Carrier R) :
-    Equal (rmul (rdiv a b) c) (rdiv (rmul a c) b) :=
+    (rmul (rdiv a b) c) = (rdiv (rmul a c) b) :=
   eqTrans ((fieldOf R).mulAssoc a (rinv b) c)
     (eqTrans (eqCong (fun z => rmul a z) ((fieldOf R).mulComm (rinv b) c))
       (eqSym ((fieldOf R).mulAssoc a c (rinv b))))
 
-def realOfNatOne (R : Real) : Equal (realOfNat R (.succ .zero)) (rone R) :=
+def realOfNatOne (R : Real) : (realOfNat R (.succ .zero)) = (rone R) :=
   (fieldOf R).addZeroRight (rone R)
 
-def realOfIntOne (R : Real) : Equal (realOfInt R (.intOfNat (.succ .zero))) (rone R) :=
+def realOfIntOne (R : Real) : (realOfInt R (.intOfNat (.succ .zero))) = (rone R) :=
   realOfNatOne R
 
 def realOfRatOne (R : Real) :
-    Equal (realOfRat R (.mkRat (.intOfNat (.succ .zero)) (.succ .zero) (.isSucc .zero))) (rone R) :=
+    (realOfRat R (.mkRat (.intOfNat (.succ .zero)) (.succ .zero) (.isSucc .zero))) = (rone R) :=
   realOfNatOne R
 
-def realOfNatZero (R : Real) : Equal (realOfNat R .zero) (rzero R) := .refl
+def realOfNatZero (R : Real) : (realOfNat R .zero) = (rzero R) := rfl
 
-def realOfIntZero (R : Real) : Equal (realOfInt R (.intOfNat .zero)) (rzero R) := .refl
+def realOfIntZero (R : Real) : (realOfInt R (.intOfNat .zero)) = (rzero R) := rfl
 
 def realOfRatZero (R : Real) :
-    Equal (realOfRat R (.mkRat (.intOfNat .zero) (.succ .zero) (.isSucc .zero))) (rzero R) := .refl
+    (realOfRat R (.mkRat (.intOfNat .zero) (.succ .zero) (.isSucc .zero))) = (rzero R) := rfl
 
 def rtwoAsRealOfRat (R : Real) :
-    Equal (rtwo R) (realOfRat R (.mkRat (.intOfNat (.succ (.succ .zero))) (.succ .zero) (.isSucc .zero))) :=
+    (rtwo R) = (realOfRat R (.mkRat (.intOfNat (.succ (.succ .zero))) (.succ .zero) (.isSucc .zero))) :=
   eqCong (fun z => radd (rone R) z) (eqSym ((fieldOf R).addZeroRight (rone R)))
 
 def roneAsRealOfRat (R : Real) :
-    Equal (rone R) (realOfRat R (.mkRat (.intOfNat (.succ .zero)) (.succ .zero) (.isSucc .zero))) :=
+    (rone R) = (realOfRat R (.mkRat (.intOfNat (.succ .zero)) (.succ .zero) (.isSucc .zero))) :=
   eqSym (realOfRatOne R)
 
 def rzeroAsRealOfRat (R : Real) :
-    Equal (rzero R) (realOfRat R (.mkRat (.intOfNat .zero) (.succ .zero) (.isSucc .zero))) := .refl
+    (rzero R) = (realOfRat R (.mkRat (.intOfNat .zero) (.succ .zero) (.isSucc .zero))) := rfl
 
 -- TACTIC-MODE in source (constructor).
 def zeroLtOne (R : Real) : rlt (rzero R) (rone R) := sorry
@@ -1085,94 +1081,94 @@ def oneLeRealOfNatSucc (R : Real) (n : MyNat) : rle (rone R) (realOfNat R (.succ
 def realOfNatSuccPos (R : Real) (n : MyNat) : rlt (rzero R) (realOfNat R (.succ n)) :=
   ltLeTrans (rzero R) (rone R) (realOfNat R (.succ n)) (zeroLtOne R) (oneLeRealOfNatSucc R n)
 
-def realOfNatSuccNeZero (R : Real) (n : MyNat) (eq : Equal (realOfNat R (.succ n)) (rzero R)) :
+def realOfNatSuccNeZero (R : Real) (n : MyNat) (eq : (realOfNat R (.succ n)) = (rzero R)) :
     MyVoid :=
   Pair.snd (realOfNatSuccPos R n) (eqSym eq)
 
 -- TACTIC-MODE in source (apply / erw).
-def mulNeZero {R : Real} (a b : Carrier R) (ane : Equal a (rzero R) → MyVoid)
-    (bne : Equal b (rzero R) → MyVoid) (eq : Equal (rmul a b) (rzero R)) : MyVoid := sorry
+def mulNeZero {R : Real} (a b : Carrier R) (ane : a = (rzero R) → MyVoid)
+    (bne : b = (rzero R) → MyVoid) (eq : (rmul a b) = (rzero R)) : MyVoid := sorry
 
 -- TACTIC-MODE in source (erw).
-def mulInvMulInv {R : Real} (a b : Carrier R) (ane : Equal a (rzero R) → MyVoid)
-    (bne : Equal b (rzero R) → MyVoid) :
-    Equal (rmul (rmul a b) (rmul (rinv a) (rinv b))) (rone R) := sorry
+def mulInvMulInv {R : Real} (a b : Carrier R) (ane : a = (rzero R) → MyVoid)
+    (bne : b = (rzero R) → MyVoid) :
+    (rmul (rmul a b) (rmul (rinv a) (rinv b))) = (rone R) := sorry
 
 -- TACTIC-MODE in source (erw).
-def invMul {R : Real} (a b : Carrier R) (ane : Equal a (rzero R) → MyVoid)
-    (bne : Equal b (rzero R) → MyVoid) :
-    Equal (rinv (rmul a b)) (rmul (rinv a) (rinv b)) := sorry
+def invMul {R : Real} (a b : Carrier R) (ane : a = (rzero R) → MyVoid)
+    (bne : b = (rzero R) → MyVoid) :
+    (rinv (rmul a b)) = (rmul (rinv a) (rinv b)) := sorry
 
 -- TACTIC-MODE in source (erw).
-def mulDivDiv {R : Real} (a b c d : Carrier R) (bne : Equal b (rzero R) → MyVoid)
-    (dne : Equal d (rzero R) → MyVoid) :
-    Equal (rmul (rdiv a b) (rdiv c d)) (rdiv (rmul a c) (rmul b d)) := sorry
+def mulDivDiv {R : Real} (a b c d : Carrier R) (bne : b = (rzero R) → MyVoid)
+    (dne : d = (rzero R) → MyVoid) :
+    (rmul (rdiv a b) (rdiv c d)) = (rdiv (rmul a c) (rmul b d)) := sorry
 
-def divCancel {R : Real} (a e : Carrier R) (ene : Equal e (rzero R) → MyVoid) :
-    Equal (rdiv (rmul a e) e) a :=
+def divCancel {R : Real} (a e : Carrier R) (ene : e = (rzero R) → MyVoid) :
+    (rdiv (rmul a e) e) = a :=
   eqTrans ((fieldOf R).mulAssoc a e (rinv e))
     (eqTrans (eqCong (fun z => rmul a z) ((fieldOf R).mulInvRight e ene))
       ((fieldOf R).mulOneRight a))
 
 def addDivSame {R : Real} (x y e : Carrier R) :
-    Equal (radd (rdiv x e) (rdiv y e)) (rdiv (radd x y) e) :=
+    (radd (rdiv x e) (rdiv y e)) = (rdiv (radd x y) e) :=
   eqSym ((fieldOf R).distribRight x y (rinv e))
 
-def divDenomExpand {R : Real} (x b d : Carrier R) (bne : Equal b (rzero R) → MyVoid)
-    (dne : Equal d (rzero R) → MyVoid) :
-    Equal (rdiv x b) (rdiv (rmul x d) (rmul b d)) :=
+def divDenomExpand {R : Real} (x b d : Carrier R) (bne : b = (rzero R) → MyVoid)
+    (dne : d = (rzero R) → MyVoid) :
+    (rdiv x b) = (rdiv (rmul x d) (rmul b d)) :=
   eqTrans (eqSym ((fieldOf R).mulOneRight (rdiv x b)))
     (eqTrans (eqCong (fun z => rmul (rdiv x b) z)
         (eqSym ((fieldOf R).mulInvRight d dne)))
       (mulDivDiv x b d d bne dne))
 
-def addDivDiv {R : Real} (x b y d : Carrier R) (bne : Equal b (rzero R) → MyVoid)
-    (dne : Equal d (rzero R) → MyVoid) :
-    Equal (radd (rdiv x b) (rdiv y d)) (rdiv (radd (rmul x d) (rmul y b)) (rmul b d)) :=
+def addDivDiv {R : Real} (x b y d : Carrier R) (bne : b = (rzero R) → MyVoid)
+    (dne : d = (rzero R) → MyVoid) :
+    (radd (rdiv x b) (rdiv y d)) = (rdiv (radd (rmul x d) (rmul y b)) (rmul b d)) :=
   eqTrans (eqCong (fun z => radd z (rdiv y d)) (divDenomExpand x b d bne dne))
     (eqTrans (eqCong (fun z => radd (rdiv (rmul x d) (rmul b d)) z)
         (eqTrans (divDenomExpand y d b dne bne)
           (eqCong (fun w => rdiv (rmul y b) w) ((fieldOf R).mulComm d b))))
       (addDivSame (rmul x d) (rmul y b) (rmul b d)))
 
-def addCommonDenom {R : Real} (a c e : Carrier R) (ene : Equal e (rzero R) → MyVoid) :
-    Equal (radd a (rdiv c e)) (rdiv (radd (rmul a e) c) e) :=
+def addCommonDenom {R : Real} (a c e : Carrier R) (ene : e = (rzero R) → MyVoid) :
+    (radd a (rdiv c e)) = (rdiv (radd (rmul a e) c) e) :=
   eqTrans (eqCong (fun z => radd z (rdiv c e)) (eqSym (divCancel a e ene)))
     (addDivSame (rmul a e) c e)
 
-def addCommonDenomLeft {R : Real} (a c e : Carrier R) (ene : Equal e (rzero R) → MyVoid) :
-    Equal (radd (rdiv a e) c) (rdiv (radd a (rmul c e)) e) :=
+def addCommonDenomLeft {R : Real} (a c e : Carrier R) (ene : e = (rzero R) → MyVoid) :
+    (radd (rdiv a e) c) = (rdiv (radd a (rmul c e)) e) :=
   eqTrans (eqCong (fun z => radd (rdiv a e) z) (eqSym (divCancel c e ene)))
     (addDivSame a (rmul c e) e)
 
-def mulNegRight {R : Real} (c b : Carrier R) : Equal (rmul c (rneg b)) (rneg (rmul c b)) :=
+def mulNegRight {R : Real} (c b : Carrier R) : (rmul c (rneg b)) = (rneg (rmul c b)) :=
   negUnique (rmul c b) (rmul c (rneg b))
     (eqTrans (eqSym ((fieldOf R).distribLeft c b (rneg b)))
       (eqTrans (eqCong (fun z => rmul c z) ((fieldOf R).negRight b))
         (mulZeroRight c)))
 
 -- TACTIC-MODE in source (erw).
-def mulNegLeft {R : Real} (a b : Carrier R) : Equal (rmul (rneg a) b) (rneg (rmul a b)) := sorry
+def mulNegLeft {R : Real} (a b : Carrier R) : (rmul (rneg a) b) = (rneg (rmul a b)) := sorry
 
-def negDivLeft {R : Real} (y e : Carrier R) : Equal (rneg (rdiv y e)) (rdiv (rneg y) e) :=
+def negDivLeft {R : Real} (y e : Carrier R) : (rneg (rdiv y e)) = (rdiv (rneg y) e) :=
   eqSym (mulNegLeft y (rinv e))
 
 def subDivSame {R : Real} (x y e : Carrier R) :
-    Equal (rsub (rdiv x e) (rdiv y e)) (rdiv (rsub x y) e) :=
+    (rsub (rdiv x e) (rdiv y e)) = (rdiv (rsub x y) e) :=
   eqTrans (eqCong (fun z => radd (rdiv x e) z) (negDivLeft y e)) (addDivSame x (rneg y) e)
 
-def subCommonDenom {R : Real} (a c e : Carrier R) (ene : Equal e (rzero R) → MyVoid) :
-    Equal (rsub a (rdiv c e)) (rdiv (rsub (rmul a e) c) e) :=
+def subCommonDenom {R : Real} (a c e : Carrier R) (ene : e = (rzero R) → MyVoid) :
+    (rsub a (rdiv c e)) = (rdiv (rsub (rmul a e) c) e) :=
   eqTrans (eqCong (fun z => radd a z) (negDivLeft c e)) (addCommonDenom a (rneg c) e ene)
 
-def subCommonDenomLeft {R : Real} (a c e : Carrier R) (ene : Equal e (rzero R) → MyVoid) :
-    Equal (rsub (rdiv a e) c) (rdiv (rsub a (rmul c e)) e) :=
+def subCommonDenomLeft {R : Real} (a c e : Carrier R) (ene : e = (rzero R) → MyVoid) :
+    (rsub (rdiv a e) c) = (rdiv (rsub a (rmul c e)) e) :=
   eqTrans (addCommonDenomLeft a (rneg c) e ene)
     (eqCong (fun z => rdiv (radd a z) e) (mulNegLeft c e))
 
-def subDivDiv {R : Real} (x b y d : Carrier R) (bne : Equal b (rzero R) → MyVoid)
-    (dne : Equal d (rzero R) → MyVoid) :
-    Equal (rsub (rdiv x b) (rdiv y d)) (rdiv (rsub (rmul x d) (rmul y b)) (rmul b d)) :=
+def subDivDiv {R : Real} (x b y d : Carrier R) (bne : b = (rzero R) → MyVoid)
+    (dne : d = (rzero R) → MyVoid) :
+    (rsub (rdiv x b) (rdiv y d)) = (rdiv (rsub (rmul x d) (rmul y b)) (rmul b d)) :=
   eqTrans (eqCong (fun z => radd (rdiv x b) z) (negDivLeft y d))
     (eqTrans (addDivDiv x b (rneg y) d bne dne)
       (eqCong (fun z => rdiv (radd (rmul x d) z) (rmul b d)) (mulNegLeft y b)))
@@ -1184,11 +1180,11 @@ def subDivDiv {R : Real} (x b y d : Carrier R) (bne : Equal b (rzero R) → MyVo
 def absNonneg {R : Real} (a : Carrier R) : rle (rzero R) (rabs a) :=
   absElim a (fun x => rle (rzero R) x) (fun h => h) (fun h => leNegNonneg a h)
 
-def absZero (R : Real) : Equal (rabs (rzero R)) (rzero R) :=
-  absElim (rzero R) (fun x => Equal x (rzero R)) (fun _ => .refl) (fun _ => negZero R)
+def absZero (R : Real) : (rabs (rzero R)) = (rzero R) :=
+  absElim (rzero R) (fun x => x = (rzero R)) (fun _ => rfl) (fun _ => negZero R)
 
-def absEqZero {R : Real} (a : Carrier R) (h : Equal (rabs a) (rzero R)) : Equal a (rzero R) :=
-  absElim a (fun x => Equal x (rzero R) → Equal a (rzero R))
+def absEqZero {R : Real} (a : Carrier R) (h : (rabs a) = (rzero R)) : a = (rzero R) :=
+  absElim a (fun x => x = (rzero R) → a = (rzero R))
     (fun _ eq => eq)
     (fun _ eq => eqTrans (eqSym (negNeg a))
       (eqTrans (eqCong (fun z => rneg z) eq) (negZero R))) h
@@ -1209,15 +1205,15 @@ def absTriangle {R : Real} (a b : Carrier R) :
     (fun _ => replace (fun z => rle z (radd (rabs a) (rabs b))) (eqSym (negAdd a b))
       (addLeBoth (rneg a) (rabs a) (rneg b) (rabs b) (leAbsNeg a) (leAbsNeg b)))
 
-def absOfNonneg {R : Real} (a : Carrier R) (h : rle (rzero R) a) : Equal (rabs a) a :=
-  absElim a (fun x => Equal x a) (fun _ => .refl)
+def absOfNonneg {R : Real} (a : Carrier R) (h : rle (rzero R) a) : (rabs a) = a :=
+  absElim a (fun x => x = a) (fun _ => rfl)
     (fun h2 => eqTrans (eqCong (fun z => rneg z)
         (eqSym ((fieldOf R).leAntisym (rzero R) a h h2)))
       (eqTrans (negZero R) ((fieldOf R).leAntisym (rzero R) a h h2)))
 
-def absOfNonpos {R : Real} (a : Carrier R) (h : rle a (rzero R)) : Equal (rabs a) (rneg a) := sorry
+def absOfNonpos {R : Real} (a : Carrier R) (h : rle a (rzero R)) : (rabs a) = (rneg a) := sorry
 
-def negMulNeg {R : Real} (a b : Carrier R) : Equal (rmul (rneg a) (rneg b)) (rmul a b) :=
+def negMulNeg {R : Real} (a b : Carrier R) : (rmul (rneg a) (rneg b)) = (rmul a b) :=
   eqTrans (mulNegLeft a (rneg b))
     (eqTrans (eqCong (fun z => rneg z) (mulNegRight a b)) (negNeg (rmul a b)))
 
@@ -1235,13 +1231,13 @@ def mulNegNeg {R : Real} (a b : Carrier R) (ha : rle a (rzero R)) (hb : rle b (r
       (leNegNonneg a ha) (leNegNonneg b hb))
 
 def absMul {R : Real} (a b : Carrier R) :
-    Equal (rabs (rmul a b)) (rmul (rabs a) (rabs b)) :=
-  absElim a (fun va => Equal (rabs (rmul a b)) (rmul va (rabs b)))
-    (fun ha => absElim b (fun vb => Equal (rabs (rmul a b)) (rmul a vb))
+    (rabs (rmul a b)) = (rmul (rabs a) (rabs b)) :=
+  absElim a (fun va => (rabs (rmul a b)) = (rmul va (rabs b)))
+    (fun ha => absElim b (fun vb => (rabs (rmul a b)) = (rmul a vb))
       (fun hb => absOfNonneg (rmul a b) ((fieldOf R).mulNonneg a b ha hb))
       (fun hb => eqTrans (absOfNonpos (rmul a b) (mulNonnegNonpos a b ha hb))
         (eqSym (mulNegRight a b))))
-    (fun ha => absElim b (fun vb => Equal (rabs (rmul a b)) (rmul (rneg a) vb))
+    (fun ha => absElim b (fun vb => (rabs (rmul a b)) = (rmul (rneg a) vb))
       (fun hb => eqTrans (absOfNonpos (rmul a b)
           (replace (fun z => rle z (rzero R)) ((fieldOf R).mulComm b a)
             (mulNonnegNonpos b a hb ha)))
@@ -1263,7 +1259,7 @@ def coreEstimate {R : Real} (f g : Carrier R → Carrier R) (x0 L M he x : Carri
       (absTriangle (rsub (f x) L) (rsub (g x) M)))
     (addLtBoth (rabs (rsub (f x) L)) he (rabs (rsub (g x) M)) he hfx hgx)
 
-def halfEqDiv {R : Real} (e : Carrier R) : Equal (rmul (rhalf R) e) (rdiv e (rtwo R)) :=
+def halfEqDiv {R : Real} (e : Carrier R) : (rmul (rhalf R) e) = (rdiv e (rtwo R)) :=
   (fieldOf R).mulComm (rhalf R) e
 
 def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
@@ -1271,8 +1267,8 @@ def divTwoPos {R : Real} (e : Carrier R) (hlt : rlt (rzero R) e) :
   replace (fun z => rlt (rzero R) z) (halfEqDiv e) (halfMulEpsPos e hlt)
 
 def divTwoAddEq {R : Real} (e : Carrier R) :
-    Equal (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) e :=
-  replace (fun z => Equal (radd z z) e) (halfEqDiv e) (halfMulEps e)
+    (radd (rdiv e (rtwo R)) (rdiv e (rtwo R))) = e :=
+  replace (fun z => (radd z z) = e) (halfEqDiv e) (halfMulEps e)
 
 def convertEps {R : Real} (epsilon v : Carrier R)
     (hlt : rlt v (radd (rdiv epsilon (rtwo R)) (rdiv epsilon (rtwo R)))) : rlt v epsilon :=
@@ -1292,7 +1288,7 @@ def limitAdd3 {R : Real} (f g h : Carrier R → Carrier R) (x0 L M N : Carrier R
 -- The lim operator: projecting the limit value
 ------------------------------------------------------------
 
-def subSelf {R : Real} (a : Carrier R) : Equal (rsub a a) (rzero R) :=
+def subSelf {R : Real} (a : Carrier R) : (rsub a a) = (rzero R) :=
   (fieldOf R).negRight a
 
 -- TACTIC-MODE in source (constructor). Statement kept faithful.
@@ -1303,23 +1299,20 @@ def limitConst {R : Real} (k x0 : Carrier R) : Limit (fun _ => k) x0 k := sorry
 
 def limit_pull_radd {R : Real} (f g : Carrier R → Carrier R) (x0 Lf Lg : Carrier R)
     (limF : Limit f x0 Lf) (limG : Limit g x0 Lg) :
-    Equal (radd (lim f x0 limF) (lim g x0 limG))
-      (lim (fun x => radd (f x) (g x)) x0 (limitAdd f g x0 Lf Lg limF limG)) := .refl
+    (radd (lim f x0 limF) (lim g x0 limG)) = (lim (fun x => radd (f x) (g x)) x0 (limitAdd f g x0 Lf Lg limF limG)) := rfl
 
 def limit_pull_radd3 {R : Real} (f g h : Carrier R → Carrier R) (x0 Lf Lg Lh : Carrier R)
     (limF : Limit f x0 Lf) (limG : Limit g x0 Lg) (limH : Limit h x0 Lh) :
-    Equal (radd (radd (lim f x0 limF) (lim g x0 limG)) (lim h x0 limH))
-      (lim (fun x => radd (radd (f x) (g x)) (h x)) x0
-        (limitAdd3 f g h x0 Lf Lg Lh limF limG limH)) := .refl
+    (radd (radd (lim f x0 limF) (lim g x0 limG)) (lim h x0 limH)) = (lim (fun x => radd (radd (f x) (g x)) (h x)) x0
+        (limitAdd3 f g h x0 Lf Lg Lh limF limG limH)) := rfl
 
 def lim_const {R : Real} (k x0 : Carrier R) :
-    Equal k (lim (fun _ => k) x0 (limitConst k x0)) := .refl
+    k = (lim (fun _ => k) x0 (limitConst k x0)) := rfl
 
 def limit_pull_const_add {R : Real} (k : Carrier R) (f : Carrier R → Carrier R)
     (x0 Lf : Carrier R) (limF : Limit f x0 Lf) :
-    Equal (radd k (lim f x0 limF))
-      (lim (fun x => radd k (f x)) x0 (limitAdd (fun _ => k) f x0 k Lf (limitConst k x0) limF)) :=
-  .refl
+    (radd k (lim f x0 limF)) = (lim (fun x => radd k (f x)) x0 (limitAdd (fun _ => k) f x0 k Lf (limitConst k x0) limF)) :=
+  rfl
 
 ------------------------------------------------------------
 -- DERIVATIVES
@@ -1336,12 +1329,11 @@ def diffQuot {R : Real} (f : Carrier R → Carrier R) (x0 x : Carrier R) : Carri
 
 -- TACTIC-MODE in source (constructor). Statement kept faithful.
 def limitExt {R : Real} (f g : Carrier R → Carrier R) (x0 L : Carrier R)
-    (ext : (x : Carrier R) → Equal (f x) (g x)) (limF : Limit f x0 L) : Limit g x0 L := sorry
+    (ext : (x : Carrier R) → (f x) = (g x)) (limF : Limit f x0 L) : Limit g x0 L := sorry
 
 -- TACTIC-MODE in source (erw). Statement kept faithful.
 def diffQuotAddEq {R : Real} (f g : Carrier R → Carrier R) (x0 x : Carrier R) :
-    Equal (radd (diffQuot f x0 x) (diffQuot g x0 x))
-      (diffQuot (fun y => radd (f y) (g y)) x0 x) := sorry
+    (radd (diffQuot f x0 x) (diffQuot g x0 x)) = (diffQuot (fun y => radd (f y) (g y)) x0 x) := sorry
 
 def derivAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
     (hf : HasDerivative f x0 L) (hg : HasDerivative g x0 M) :
@@ -1357,21 +1349,21 @@ def derivAdd {R : Real} (f g : Carrier R → Carrier R) (x0 L M : Carrier R)
 
 -- TACTIC-MODE in source (erw).
 def mulSubDistrib {R : Real} (c a b : Carrier R) :
-    Equal (rmul c (rsub a b)) (rsub (rmul c a) (rmul c b)) := sorry
+    (rmul c (rsub a b)) = (rsub (rmul c a) (rmul c b)) := sorry
 
 -- TACTIC-MODE in source (erw).
 def diffQuotScalarEq {R : Real} (c : Carrier R) (f : Carrier R → Carrier R) (x0 x : Carrier R) :
-    Equal (rmul c (diffQuot f x0 x)) (diffQuot (fun y => rmul c (f y)) x0 x) := sorry
+    (rmul c (diffQuot f x0 x)) = (diffQuot (fun y => rmul c (f y)) x0 x) := sorry
 
 ------------------------------------------------------------
 -- Infrastructure: abs, ordering, and multiplication lemmas
 ------------------------------------------------------------
 
 -- TACTIC-MODE in source (erw).
-def subCancel {R : Real} (a b : Carrier R) : Equal (radd (rsub a b) b) a := sorry
+def subCancel {R : Real} (a b : Carrier R) : (radd (rsub a b) b) = a := sorry
 
 -- TACTIC-MODE in source (constructor).
-def absPos {R : Real} (c : Carrier R) (hne : Equal c (rzero R) → MyVoid) :
+def absPos {R : Real} (c : Carrier R) (hne : c = (rzero R) → MyVoid) :
     rlt (rzero R) (rabs c) := sorry
 
 -- TACTIC-MODE in source (rewrite). Statement kept faithful.
@@ -1395,14 +1387,14 @@ def oneLeAbsPlusOne {R : Real} (c : Carrier R) :
 def absPlusOnePos {R : Real} (c : Carrier R) : rlt (rzero R) (radd (rabs c) (rone R)) :=
   ltLeTrans (rzero R) (rone R) (radd (rabs c) (rone R)) (zeroLtOne R) (oneLeAbsPlusOne c)
 
-def absPlusOneNe {R : Real} (c : Carrier R) (heq : Equal (radd (rabs c) (rone R)) (rzero R)) :
+def absPlusOneNe {R : Real} (c : Carrier R) (heq : (radd (rabs c) (rone R)) = (rzero R)) :
     MyVoid :=
   Pair.snd (absPlusOnePos c) (eqSym heq)
 
 -- TACTIC-MODE in source (erw).
 def mulLtLeftNe {R : Real} (c a b : Carrier R) (hc : rle (rzero R) c)
-    (hcne : Equal c (rzero R) → MyVoid) (hab : rle a b) (heq : Equal (rmul c a) (rmul c b)) :
-    Equal a b := sorry
+    (hcne : c = (rzero R) → MyVoid) (hab : rle a b) (heq : (rmul c a) = (rmul c b)) :
+    a = b := sorry
 
 -- TACTIC-MODE in source (constructor).
 def mulLtLeft {R : Real} (c a b : Carrier R) (hc : rlt (rzero R) c) (hab : rlt a b) :
@@ -1421,8 +1413,8 @@ def absLeAbsPlusOne {R : Real} (c : Carrier R) : rle (rabs c) (radd (rabs c) (ro
       ((fieldOf R).zeroLeOne))
 
 -- TACTIC-MODE in source (erw).
-def mulInvCancel {R : Real} (M a : Carrier R) (hne : Equal M (rzero R) → MyVoid) :
-    Equal (rmul M (rmul a (rinv M))) a := sorry
+def mulInvCancel {R : Real} (M a : Carrier R) (hne : M = (rzero R) → MyVoid) :
+    (rmul M (rmul a (rinv M))) = a := sorry
 
 -- TACTIC-MODE in source (constructor).
 def epsOverMPos {R : Real} (eps M : Carrier R) (heps : rlt (rzero R) eps)
@@ -1445,12 +1437,12 @@ def scalarAbsBound {R : Real} (c a b : Carrier R) :
 def limitScalarAll {R : Real} (c : Carrier R) (h : Carrier R → Carrier R) (x0 L : Carrier R)
     (limH : Limit h x0 L) : Limit (fun x => rmul c (h x)) x0 (rmul c L) := sorry
 
-def limitScalar {R : Real} (c : Carrier R) (_hcnz : Equal c (rzero R) → MyVoid)
+def limitScalar {R : Real} (c : Carrier R) (_hcnz : c = (rzero R) → MyVoid)
     (f : Carrier R → Carrier R) (x0 L : Carrier R) (limF : Limit f x0 L) :
     Limit (fun x => rmul c (f x)) x0 (rmul c L) :=
   limitScalarAll c f x0 L limF
 
-def derivScalar {R : Real} (c : Carrier R) (hcnz : Equal c (rzero R) → MyVoid)
+def derivScalar {R : Real} (c : Carrier R) (hcnz : c = (rzero R) → MyVoid)
     (f : Carrier R → Carrier R) (x0 L : Carrier R) (hf : HasDerivative f x0 L) :
     HasDerivative (fun x => rmul c (f x)) x0 (rmul c L) :=
   limitExt (fun x => rmul c (diffQuot f x0 x)) (diffQuot (fun y => rmul c (f y)) x0) x0 (rmul c L)
@@ -1461,7 +1453,7 @@ def derivScalar {R : Real} (c : Carrier R) (hcnz : Equal c (rzero R) → MyVoid)
 ------------------------------------------------------------
 
 -- TACTIC-MODE in source (erw).
-def subZeroRight {R : Real} (a : Carrier R) : Equal (rsub a (rzero R)) a := sorry
+def subZeroRight {R : Real} (a : Carrier R) : (rsub a (rzero R)) = a := sorry
 
 ------------------------------------------------------------
 -- Int -> Real arithmetic homomorphisms
@@ -1469,10 +1461,10 @@ def subZeroRight {R : Real} (a : Carrier R) : Equal (rsub a (rzero R)) a := sorr
 
 -- TACTIC-MODE in source (erw).
 def subSuccSucc {R : Real} (a b : Carrier R) :
-    Equal (rsub a b) (rsub (radd (rone R) a) (radd (rone R) b)) := sorry
+    (rsub a b) = (rsub (radd (rone R) a) (radd (rone R) b)) := sorry
 
 def subNatNatLemma (R : Real) : (m n : MyNat) →
-    Equal (realOfInt R (subNatNat m n)) (rsub (realOfNat R m) (realOfNat R n))
+    (realOfInt R (subNatNat m n)) = (rsub (realOfNat R m) (realOfNat R n))
   | .zero, .zero => eqSym (subZeroRight (rzero R))
   | .succ m, .zero => eqSym (subZeroRight (realOfNat R (.succ m)))
   | .zero, .succ n => eqSym (addZeroLeft (rneg (radd (rone R) (realOfNat R n))))
@@ -1480,7 +1472,7 @@ def subNatNatLemma (R : Real) : (m n : MyNat) →
       eqTrans (subNatNatLemma R m n) (subSuccSucc (realOfNat R m) (realOfNat R n))
 
 def addRealOfInt (R : Real) : (a b : MyInt) →
-    Equal (radd (realOfInt R a) (realOfInt R b)) (realOfInt R (intAdd a b))
+    (radd (realOfInt R a) (realOfInt R b)) = (realOfInt R (intAdd a b))
   | .intOfNat m, .intOfNat n => addRealOfNat R m n
   | .intOfNat m, .intNegSucc n => eqSym (subNatNatLemma R m (.succ n))
   | .intNegSucc m, .intOfNat n =>
@@ -1492,17 +1484,17 @@ def addRealOfInt (R : Real) : (a b : MyInt) →
         (eqCong rneg (addOnePlusOneShuffle R m n))
 
 def subRealOfInt (R : Real) (a c : MyInt) :
-    Equal (rsub (realOfInt R a) (realOfInt R c)) (realOfInt R (intSub a c)) :=
+    (rsub (realOfInt R a) (realOfInt R c)) = (realOfInt R (intSub a c)) :=
   eqTrans (eqCong (fun z => radd (realOfInt R a) z) (negRealOfInt R c))
     (addRealOfInt R a (intNeg c))
 
 def negOfNatLemma (R : Real) : (k : MyNat) →
-    Equal (rneg (realOfNat R k)) (realOfInt R (negOfNat k))
+    (rneg (realOfNat R k)) = (realOfInt R (negOfNat k))
   | .zero => negZero R
-  | .succ _ => .refl
+  | .succ _ => rfl
 
 def mulRealOfInt (R : Real) : (a b : MyInt) →
-    Equal (rmul (realOfInt R a) (realOfInt R b)) (realOfInt R (intMul a b))
+    (rmul (realOfInt R a) (realOfInt R b)) = (realOfInt R (intMul a b))
   | .intOfNat m, .intOfNat n => mulRealOfNat R m n
   | .intOfNat m, .intNegSucc n =>
       eqTrans (mulNegRight (realOfNat R m) (radd (rone R) (realOfNat R n)))
@@ -1516,20 +1508,20 @@ def mulRealOfInt (R : Real) : (a b : MyInt) →
       eqTrans (negMulNeg (radd (rone R) (realOfNat R m)) (radd (rone R) (realOfNat R n)))
         (mulRealOfNat R (.succ m) (.succ n))
 
-def plusZeroRight : (n : MyNat) → Equal (plus n .zero) n
-  | .zero => .refl
+def plusZeroRight : (n : MyNat) → (plus n .zero) = n
+  | .zero => rfl
   | .succ k => eqCong MyNat.succ (plusZeroRight k)
 
-def multOneRight : (n : MyNat) → Equal (mult n (.succ .zero)) n
-  | .zero => .refl
+def multOneRight : (n : MyNat) → (mult n (.succ .zero)) = n
+  | .zero => rfl
   | .succ k => eqCong MyNat.succ (multOneRight k)
 
-def intMulOneRight : (a : MyInt) → Equal (intMul a (.intOfNat (.succ .zero))) a
+def intMulOneRight : (a : MyInt) → (intMul a (.intOfNat (.succ .zero))) = a
   | .intOfNat m => eqCong MyInt.intOfNat (multOneRight m)
   | .intNegSucc m => eqCong MyInt.intNegSucc (multOneRight m)
 
 def mulRealOfRat (R : Real) : (a b : MyRat) →
-    Equal (rmul (realOfRat R a) (realOfRat R b)) (realOfRat R (ratMult a b))
+    (rmul (realOfRat R a) (realOfRat R b)) = (realOfRat R (ratMult a b))
   | .mkRat a (.succ .zero) _, .mkRat c (.succ .zero) _ => mulRealOfInt R a c
   | .mkRat a (.succ .zero) _, .mkRat c (.succ (.succ d1)) _ =>
       eqTrans (mulDivAssoc (realOfInt R a) (realOfInt R c) (realOfNat R (.succ (.succ d1))))
@@ -1551,7 +1543,7 @@ def mulRealOfRat (R : Real) : (a b : MyRat) →
             (mulRealOfNat R (.succ (.succ b1)) (.succ (.succ d1)))))
 
 def addRealOfRat (R : Real) : (a b : MyRat) →
-    Equal (radd (realOfRat R a) (realOfRat R b)) (realOfRat R (ratPlus a b))
+    (radd (realOfRat R a) (realOfRat R b)) = (realOfRat R (ratPlus a b))
   | .mkRat a (.succ .zero) _, .mkRat c (.succ .zero) _ =>
       eqTrans (addRealOfInt R a c)
         (eqCong (realOfInt R)
@@ -1599,7 +1591,7 @@ def addRealOfRat (R : Real) : (a b : MyRat) →
             (mulRealOfNat R (.succ (.succ b1)) (.succ (.succ d1)))))
 
 def subRealOfRat (R : Real) : (a b : MyRat) →
-    Equal (rsub (realOfRat R a) (realOfRat R b)) (realOfRat R (ratSub a b))
+    (rsub (realOfRat R a) (realOfRat R b)) = (realOfRat R (ratSub a b))
   | .mkRat a (.succ .zero) _, .mkRat c (.succ .zero) _ =>
       eqTrans (subRealOfInt R a c)
         (eqCong (realOfInt R)
@@ -1647,12 +1639,12 @@ def subRealOfRat (R : Real) : (a b : MyRat) →
             (mulRealOfNat R (.succ (.succ b1)) (.succ (.succ d1)))))
 
 def absOfMul {R : Real} (a b : Carrier R) :
-    Equal (rabs (rmul a b)) (rmul (rabs a) (rabs b)) := absMul a b
+    (rabs (rmul a b)) = (rmul (rabs a) (rabs b)) := absMul a b
 
-def absOfZero (R : Real) : Equal (rabs (rzero R)) (rzero R) := absZero R
+def absOfZero (R : Real) : (rabs (rzero R)) = (rzero R) := absZero R
 
 def mulZeroBoth {R : Real} (a b : Carrier R) :
-    Equal (rmul (rzero R) a) (rmul (rzero R) b) :=
+    (rmul (rzero R) a) = (rmul (rzero R) b) :=
   eqTrans (mulZeroLeft a) (eqSym (mulZeroLeft b))
 
 def ltToLe {R : Real} (a b : Carrier R) (h : rlt a b) : rle a b := Pair.fst h
@@ -1661,7 +1653,7 @@ def absLtToLe {R : Real} (a b : Carrier R) (h : rlt (rabs a) b) : rle (rabs a) b
 
 -- TACTIC-MODE in source (erw).
 def subSplit {R : Real} (a b c : Carrier R) :
-    Equal (radd (rsub a c) (rsub c b)) (rsub a b) := sorry
+    (radd (rsub a c) (rsub c b)) = (rsub a b) := sorry
 
 def subTriangle {R : Real} (a b c : Carrier R) :
     rle (rabs (rsub a b)) (radd (rabs (rsub a c)) (rabs (rsub c b))) :=
@@ -1670,26 +1662,26 @@ def subTriangle {R : Real} (a b c : Carrier R) :
 
 -- TACTIC-MODE in source (erw).
 def mulSubDistribRight {R : Real} (a b c : Carrier R) :
-    Equal (rmul (rsub a b) c) (rsub (rmul a c) (rmul b c)) := sorry
+    (rmul (rsub a b) c) = (rsub (rmul a c) (rmul b c)) := sorry
 
 -- TACTIC-MODE in source (erw).
-def mulInvLeftCancel {R : Real} (a b : Carrier R) (hne : Equal a (rzero R) → MyVoid) :
-    Equal (rmul a (rmul (rinv a) b)) b := sorry
+def mulInvLeftCancel {R : Real} (a b : Carrier R) (hne : a = (rzero R) → MyVoid) :
+    (rmul a (rmul (rinv a) b)) = b := sorry
 
 -- TACTIC-MODE in source (erw).
-def diffQuotSubMulEq {R : Real} (a b c : Carrier R) (hne : Equal b (rzero R) → MyVoid) :
-    Equal (rmul (rsub (rmul a (rinv b)) c) b) (rsub a (rmul c b)) := sorry
+def diffQuotSubMulEq {R : Real} (a b c : Carrier R) (hne : b = (rzero R) → MyVoid) :
+    (rmul (rsub (rmul a (rinv b)) c) b) = (rsub a (rmul c b)) := sorry
 
-def eqOrNeZeroLeft {R : Real} (a : Carrier R) (h : Equal (rzero R) (rabs a)) :
-    Equal a (rzero R) :=
+def eqOrNeZeroLeft {R : Real} (a : Carrier R) (h : (rzero R) = (rabs a)) :
+    a = (rzero R) :=
   absEqZero a (eqSym h)
 
-def eqOrNeZeroRight {R : Real} (a : Carrier R) (hne : Equal (rzero R) (rabs a) → MyVoid)
-    (heq : Equal a (rzero R)) : MyVoid :=
+def eqOrNeZeroRight {R : Real} (a : Carrier R) (hne : (rzero R) = (rabs a) → MyVoid)
+    (heq : a = (rzero R)) : MyVoid :=
   hne (eqSym (eqTrans (eqCong (fun z => rabs z) heq) (absOfZero R)))
 
 def eqOrNeZero {R : Real} (a : Carrier R) :
-    Either (Equal a (rzero R)) (Equal a (rzero R) → MyVoid) :=
+    Either (a = (rzero R)) (a = (rzero R) → MyVoid) :=
   eitherElim (fun h => Either.left (eqOrNeZeroLeft a h))
     (fun h => Either.right (eqOrNeZeroRight a (Pair.snd h)))
     ((fieldOf R).leToEqOrLt (rzero R) (rabs a) (absNonneg a))
@@ -1705,11 +1697,11 @@ def derivBoundZero (R : Real) (g : Carrier R → Carrier R) (y0 Lg eta : Carrier
       ((fieldOf R).leRefl (rzero R)))
 
 -- TACTIC-MODE in source (erw).
-def subEqZeroToEq {R : Real} (a b : Carrier R) (h : Equal (rsub a b) (rzero R)) :
-    Equal a b := sorry
+def subEqZeroToEq {R : Real} (a b : Carrier R) (h : (rsub a b) = (rzero R)) :
+    a = b := sorry
 
 def derivBoundNonzero (R : Real) (g : Carrier R → Carrier R) (y0 Lg eta y : Carrier R)
-    (hne : Equal (rsub y y0) (rzero R) → MyVoid)
+    (hne : (rsub y y0) = (rzero R) → MyVoid)
     (hle : rle (rabs (rsub (diffQuot g y0 y) Lg)) eta) :
     rle (rabs (rsub (rsub (g y) (g y0)) (rmul Lg (rsub y y0)))) (rmul eta (rabs (rsub y y0))) :=
   replace (fun z => rle (rabs z) (rmul eta (rabs (rsub y y0))))
@@ -1754,12 +1746,12 @@ def diffQuotBounded {R : Real} (f : Carrier R → Carrier R) (x0 Lf : Carrier R)
 
 -- TACTIC-MODE in source (erw).
 def diffQuotTimesH {R : Real} (f : Carrier R → Carrier R) (x0 x : Carrier R)
-    (hne : Equal (rsub x x0) (rzero R) → MyVoid) :
-    Equal (rmul (diffQuot f x0 x) (rsub x x0)) (rsub (f x) (f x0)) := sorry
+    (hne : (rsub x x0) = (rzero R) → MyVoid) :
+    (rmul (diffQuot f x0 x) (rsub x x0)) = (rsub (f x) (f x0)) := sorry
 
 def absDiffQuotTimesH {R : Real} (f : Carrier R → Carrier R) (x0 x : Carrier R)
-    (hne : Equal (rsub x x0) (rzero R) → MyVoid) :
-    Equal (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) (rabs (rsub (f x) (f x0))) :=
+    (hne : (rsub x x0) = (rzero R) → MyVoid) :
+    (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) = (rabs (rsub (f x) (f x0))) :=
   eqTrans (eqSym (absOfMul (diffQuot f x0 x) (rsub x x0)))
     (eqCong (fun z => rabs z) (diffQuotTimesH f x0 x hne))
 
@@ -1779,7 +1771,7 @@ def absMulBound {R : Real} (a b M eps : Carrier R) (hle : rle (rabs a) M)
 def continuityBound {R : Real} (f : Carrier R → Carrier R) (x0 x lf target : Carrier R)
     (hdq : rle (rabs (diffQuot f x0 x)) (radd (rabs lf) (rone R)))
     (hdelta : rlt (rabs (rsub x x0)) (rmul target (rinv (radd (rabs lf) (rone R)))))
-    (hne : Equal (rsub x x0) (rzero R) → MyVoid) :
+    (hne : (rsub x x0) = (rzero R) → MyVoid) :
     rlt (rabs (rsub (f x) (f x0))) target :=
   replace (fun z => rlt z target) (absDiffQuotTimesH f x0 x hne)
     (replace (fun z => rlt (rmul (rabs (diffQuot f x0 x)) (rabs (rsub x x0))) z)
@@ -1802,17 +1794,16 @@ def chainTermA {R : Real} (g f : Carrier R → Carrier R) (x0 Lg x : Carrier R) 
 
 -- TACTIC-MODE in source (erw). Statement kept faithful.
 def chainAlgId {R : Real} (g f : Carrier R → Carrier R) (x0 Lg : Carrier R) (x : Carrier R) :
-    Equal (radd (chainTermA g f x0 Lg x) (rmul Lg (diffQuot f x0 x)))
-      (diffQuot (fun y => g (f y)) x0 x) := sorry
+    (radd (chainTermA g f x0 Lg x) (rmul Lg (diffQuot f x0 x))) = (diffQuot (fun y => g (f y)) x0 x) := sorry
 
 -- TACTIC-MODE in source (erw). Statement kept faithful.
 def mulAssocAbs {R : Real} (eta a b : Carrier R) :
-    Equal (rmul (rmul eta (rabs a)) (rabs b)) (rmul eta (rabs (rmul a b))) := sorry
+    (rmul (rmul eta (rabs a)) (rabs b)) = (rmul eta (rabs (rmul a b))) := sorry
 
 def chainBound {R : Real} (num fxfx0 h eta M eps : Carrier R)
     (hdb : rle (rabs num) (rmul eta (rabs fxfx0)))
     (hdq : rlt (rabs (rmul fxfx0 (rinv h))) M)
-    (heta : rlt (rzero R) eta) (hmul : Equal (rmul eta M) eps) :
+    (heta : rlt (rzero R) eta) (hmul : (rmul eta M) = eps) :
     rlt (rabs (rmul num (rinv h))) eps :=
   replace (fun z => rlt (rabs (rmul num (rinv h))) z) hmul
     (leLtTrans (rabs (rmul num (rinv h))) (rmul eta (rabs (rmul fxfx0 (rinv h)))) (rmul eta M)
@@ -1835,8 +1826,7 @@ def derivChain {R : Real} (g f : Carrier R → Carrier R) (x0 Lf Lg : Carrier R)
 
 def derivChainEq {R : Real} (g f : Carrier R → Carrier R) (x0 Lf Lg : Carrier R)
     (hf : HasDerivative f x0 Lf) (hg : HasDerivative g (f x0) Lg) :
-    Equal (deriv (fun x => g (f x)) x0 (derivChain g f x0 Lf Lg hf hg))
-      (rmul (deriv g (f x0) hg) (deriv f x0 hf)) := .refl
+    (deriv (fun x => g (f x)) x0 (derivChain g f x0 Lf Lg hf hg)) = (rmul (deriv g (f x0) hg) (deriv f x0 hf)) := rfl
 
 ------------------------------------------------------------
 -- Demo / scratch goal
