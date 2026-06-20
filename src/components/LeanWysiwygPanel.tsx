@@ -18,6 +18,8 @@ import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
+import { useLeanRewriteSuggestions } from '../lean/useLeanRewriteSuggestions';
+import { equalityLemmas, rankByGoalOverlap } from '../lean/rewriteCandidates';
 import { taggedToInteractiveGoal, subtermTextMap } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
@@ -92,6 +94,7 @@ export function LeanWysiwygPanel({
           <DeclCard
             key={declKey(d)}
             decl={d}
+            allDeclarations={declarations}
             source={source}
             nextDeclLine={nextLineOf(d.line)}
             tacticBlock={proofSeedBlock(source, d, nextLineOf(d.line))}
@@ -110,6 +113,7 @@ export function LeanWysiwygPanel({
 
 function DeclCard({
   decl,
+  allDeclarations,
   source,
   nextDeclLine,
   tacticBlock,
@@ -117,6 +121,7 @@ function DeclCard({
   onProofChange,
 }: {
   decl: LeanDeclaration;
+  allDeclarations: LeanDeclaration[];
   source: string;
   nextDeclLine?: number;
   tacticBlock: string | null;
@@ -204,6 +209,7 @@ function DeclCard({
       {isProof && tacticBlock !== null && (
         <LeanProofEditor
           decl={decl}
+          allDeclarations={allDeclarations}
           source={source}
           nextDeclLine={nextDeclLine}
           tacticBlock={tacticBlock}
@@ -217,6 +223,7 @@ function DeclCard({
 
 function LeanProofEditor({
   decl,
+  allDeclarations,
   source,
   nextDeclLine,
   tacticBlock,
@@ -224,6 +231,7 @@ function LeanProofEditor({
   onProofChange,
 }: {
   decl: LeanDeclaration;
+  allDeclarations: LeanDeclaration[];
   source: string;
   nextDeclLine?: number;
   tacticBlock: string;
@@ -309,6 +317,25 @@ function LeanProofEditor({
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
+  // "Try the file's rewrite lemmas at this goal" (the core-Lean stand-in for
+  // rw?). Candidates = the file's equality lemmas, ranked by overlap with the
+  // current goal and capped, then each trialed via `rw [lemma]`.
+  const goalText = lean.cursorGoal?.plain ?? '';
+  const rewriteCandidates = useMemo(
+    () => rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), goalText, 10),
+    [allDeclarations, decl.name, goalText],
+  );
+  const rewriteSuggest = useLeanRewriteSuggestions({
+    source,
+    declLine: decl.line,
+    nextDeclLine,
+    proof: state.root,
+    cursorId: state.cursor.nodeId,
+    cursorIsHole,
+    candidates: rewriteCandidates,
+    mathlib,
+  });
+
   // Suggestions, in priority order:
   // 1. Subterm-targeted: when a subterm is selected, tactics FOR it (e.g.
   //    induction/cases on a clicked variable).
@@ -324,17 +351,18 @@ function LeanProofEditor({
   const targeted = [...subtermTargeted, ...goalTargeted].filter((s) =>
     seenIds.has(s.id) ? false : (seenIds.add(s.id), true),
   );
-  const allSuggestions = [...targeted, ...suggest.suggestions];
+  const allSuggestions = [...targeted, ...rewriteSuggest.suggestions, ...suggest.suggestions];
+  const anyLoading = suggest.loading || rewriteSuggest.loading;
 
   const suggestionSlot =
-    cursorIsHole && (allSuggestions.length > 0 || suggest.loading) ? (
+    cursorIsHole && (allSuggestions.length > 0 || anyLoading) ? (
       <div style={{ marginTop: 8 }}>
         <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
           <span>SUGGESTIONS</span>
           {selectedPath && subtermTexts.get(selectedPath) && (
             <span style={{ color: C.label }}>for {subtermTexts.get(selectedPath)}</span>
           )}
-          {suggest.loading && <span style={{ color: C.label }}>searching…</span>}
+          {anyLoading && <span style={{ color: C.label }}>searching…</span>}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {allSuggestions.map((s) => (
