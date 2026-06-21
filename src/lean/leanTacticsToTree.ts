@@ -98,6 +98,15 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   // rfl (a leaf)
   if (text === 'rfl') return mkExact('rfl');
 
+  // conv in (pat) => rw [lemma]  — a subterm-scoped rewrite.
+  m = text.match(/^conv\s+in\s+\((.*)\)\s*=>\s*rw\s*\[\s*(.*?)\s*\]\s*$/);
+  if (m) {
+    const pattern = m[1].trim();
+    const reverse = m[2].startsWith('←') || m[2].startsWith('<-');
+    const name = m[2].replace(/^(←|<-)\s*/, '').trim();
+    return mkRewrite(name, continuation(lines, pos, level), reverse, undefined, undefined, undefined, pattern);
+  }
+
   // rw [..]  /  rw [← ..]
   m = text.match(/^rw\s*\[\s*(.*?)\s*\]\s*$/);
   if (m) {

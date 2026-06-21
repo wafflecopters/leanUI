@@ -324,13 +324,25 @@ function LeanProofEditor({
   //    induction/cases on a clicked variable.
   // Each is trialed at the hole; only the ones that actually APPLY are surfaced.
   const goalText = lean.cursorGoal?.plain ?? '';
-  const rewriteCandidates = useMemo(
-    () =>
-      rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), goalText, 10).map(
-        (c): LeanSuggestion => ({ id: `lean-rw:${c.name}`, label: `rw [${c.name}]`, tactic: `rw [${c.name}]`, kind: 'rw' }),
-      ),
-    [allDeclarations, decl.name, goalText],
-  );
+  const selectedSubtermText = selectedPath ? (subtermTexts.get(selectedPath) ?? '').trim() : '';
+  // Rank against the SELECTED subterm when there is one (so lemmas about it
+  // surface first), else the whole goal.
+  const scopeText = selectedSubtermText || goalText;
+  const rewriteCandidates = useMemo(() => {
+    const ranked = rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), scopeText, 10);
+    const out: LeanSuggestion[] = [];
+    for (const c of ranked) {
+      // When a subterm is selected, prefer a subterm-SCOPED rewrite
+      // (`conv in (sub) => rw [..]`); list it first so it wins dedup. Always also
+      // offer the whole-goal form as a fallback (e.g. lemmas with side goals
+      // can't run inside conv).
+      if (selectedSubtermText) {
+        out.push({ id: `lean-convrw:${c.name}`, label: `rw [${c.name}]`, tactic: `conv in (${selectedSubtermText}) => rw [${c.name}]`, kind: 'rw' });
+      }
+      out.push({ id: `lean-rw:${c.name}`, label: `rw [${c.name}]`, tactic: `rw [${c.name}]`, kind: 'rw' });
+    }
+    return out;
+  }, [allDeclarations, decl.name, scopeText, selectedSubtermText]);
   const heuristicCandidates = useMemo(() => {
     const subterm = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
     const goalLevel = lean.cursorGoal ? targetedSuggestions(lean.cursorGoal.plain) : [];
@@ -354,10 +366,12 @@ function LeanProofEditor({
   });
 
   // Merge validated suggestions with Lean's own discovery (exact?/simp?/apply?,
-  // which Lean already vetted as applicable), deduped by id.
+  // which Lean already vetted as applicable), deduped by LABEL — so the scoped
+  // `conv in (..) => rw [L]` and the whole-goal `rw [L]` (same label) collapse to
+  // one, keeping whichever validated first (scoped is listed first).
   const mergeSeen = new Set<string>();
   const allSuggestions = [...validated.suggestions, ...suggest.suggestions].filter((s) =>
-    mergeSeen.has(s.id) ? false : (mergeSeen.add(s.id), true),
+    mergeSeen.has(s.label) ? false : (mergeSeen.add(s.label), true),
   );
   const anyLoading = suggest.loading || validated.loading;
 

@@ -97,6 +97,9 @@ export interface RewriteNode {
   readonly occurrences?: readonly number[];
   /** Head constant name of the target subterm (for occurrence-targeted rewrites). */
   readonly targetHead?: string;
+  /** When set, scope the rewrite to this subterm via `conv in (pat) => rw [...]`
+   *  (Lean-backend subterm-targeted rewrite). */
+  readonly convPattern?: string;
   readonly child: ProofNode;
 }
 
@@ -240,11 +243,12 @@ export function mkFold(name: string, child: ProofNode, occurrence?: number): Fol
   return { tag: 'fold', id: freshProofId(), name, child, occurrence };
 }
 
-export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean): RewriteNode {
+export function mkRewrite(name: string, child: ProofNode, reverse = false, occurrences?: readonly number[], targetHead?: string, enhanced?: boolean, convPattern?: string): RewriteNode {
   const node: RewriteNode = { tag: 'rewrite', id: freshProofId(), name, reverse, child };
   if (occurrences !== undefined) (node as any).occurrences = occurrences;
   if (targetHead !== undefined) (node as any).targetHead = targetHead;
   if (enhanced) (node as any).enhanced = true;
+  if (convPattern !== undefined) (node as any).convPattern = convPattern;
   return node;
 }
 

@@ -132,7 +132,9 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
       return;
     }
     case 'rewrite': {
-      em.emit(depth, `rw [${rewriteTerm(node)}]`, node.id);
+      // Subterm-scoped rewrite → `conv in (pat) => rw [...]`; else plain `rw`.
+      const rw = `rw [${rewriteTerm(node)}]`;
+      em.emit(depth, node.convPattern ? `conv in (${node.convPattern}) => ${rw}` : rw, node.id);
       emitChild(em, node.child, depth);
       return;
     }

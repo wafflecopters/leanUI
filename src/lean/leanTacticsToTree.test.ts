@@ -100,6 +100,8 @@ describe('leanTacticsToTree', () => {
         'induction',
         ['  induction n with', '  | zero =>', '    exact rfl', '  | succ k ih =>', '    simp'].join('\n'),
       ],
+      ['conv-scoped rewrite', '  conv in (a.succ + 1) => rw [plusComm]\n  sorry'],
+      ['conv-scoped reverse rewrite', '  conv in (sum i n f) => rw [← summationSplit]\n  sorry'],
     ];
     for (const [name, src] of cases) {
       test(name, () => {
