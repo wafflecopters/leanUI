@@ -3425,8 +3425,9 @@ function ProseItemView({
   const [hovered, setHovered] = useState(false);
   const { kind } = item;
 
-  // Check for error on unfold/rewrite/apply items
-  const hasError = (kind.tag === 'unfold' || kind.tag === 'rewrite' || kind.tag === 'apply') && !!kind.error;
+  // Check for error on unfold/rewrite/apply/exact/have items
+  const hasError = (kind.tag === 'unfold' || kind.tag === 'rewrite' || kind.tag === 'apply'
+    || kind.tag === 'exact' || kind.tag === 'have') && !!kind.error;
 
   const rowStyle: React.CSSProperties = {
     ...proseStyle,

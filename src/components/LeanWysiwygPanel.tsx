@@ -18,10 +18,10 @@ import { spliceTacticBlock } from '../lean/spliceTacticBlock';
 import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
-import { useLeanRewriteSuggestions } from '../lean/useLeanRewriteSuggestions';
+import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
 import { equalityLemmas, rankByGoalOverlap } from '../lean/rewriteCandidates';
 import { taggedToInteractiveGoal, subtermTextMap } from '../lean/leanInteractiveGoal';
-import { targetedSuggestions } from '../lean/leanSuggestions';
+import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
 /**
@@ -317,42 +317,49 @@ function LeanProofEditor({
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
-  // "Try the file's rewrite lemmas at this goal" (the core-Lean stand-in for
-  // rw?). Candidates = the file's equality lemmas, ranked by overlap with the
-  // current goal and capped, then each trialed via `rw [lemma]`.
+  // Candidate tactics to VALIDATE before showing ("try before suggest"):
+  // 1. the file's rewrite lemmas (core-Lean stand-in for rw?), ranked by overlap
+  //    with the goal and capped — each trialed via `rw [lemma]`;
+  // 2. subterm/goal heuristics — `exact .refl` on an equality goal, and
+  //    induction/cases on a clicked variable.
+  // Each is trialed at the hole; only the ones that actually APPLY are surfaced.
   const goalText = lean.cursorGoal?.plain ?? '';
   const rewriteCandidates = useMemo(
-    () => rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), goalText, 10),
+    () =>
+      rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), goalText, 10).map(
+        (c): LeanSuggestion => ({ id: `lean-rw:${c.name}`, label: `rw [${c.name}]`, tactic: `rw [${c.name}]`, kind: 'rw' }),
+      ),
     [allDeclarations, decl.name, goalText],
   );
-  const rewriteSuggest = useLeanRewriteSuggestions({
+  const heuristicCandidates = useMemo(() => {
+    const subterm = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
+    const goalLevel = lean.cursorGoal ? targetedSuggestions(lean.cursorGoal.plain) : [];
+    const seen = new Set<string>();
+    return [...subterm, ...goalLevel].filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)));
+  }, [selectedPath, subtermTexts, lean.cursorGoal]);
+  // Dedup the combined candidate list by id.
+  const candSeen = new Set<string>();
+  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates].filter((s) =>
+    candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
+  );
+  const validated = useLeanValidatedSuggestions({
     source,
     declLine: decl.line,
     nextDeclLine,
     proof: state.root,
     cursorId: state.cursor.nodeId,
     cursorIsHole,
-    candidates: rewriteCandidates,
+    candidates: validateCandidates,
     mathlib,
   });
 
-  // Suggestions, in priority order:
-  // 1. Subterm-targeted: when a subterm is selected, tactics FOR it (e.g.
-  //    induction/cases on a clicked variable).
-  // 2. Whole-goal: tactics for the goal regardless of selection (e.g.
-  //    `exact .refl` when the GOAL is an equality) — so reflexivity is offered
-  //    even when the user has a sub-expression like `i` selected.
-  // 3. Lean discovery pills (exact?/simp?/…).
-  const subtermTargeted = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
-  const goalTargeted = lean.cursorGoal ? targetedSuggestions(lean.cursorGoal.plain) : [];
-  // Merge subterm + goal-level, deduping by id (a selected equality subterm and
-  // the goal can both yield `exact .refl`).
-  const seenIds = new Set<string>();
-  const targeted = [...subtermTargeted, ...goalTargeted].filter((s) =>
-    seenIds.has(s.id) ? false : (seenIds.add(s.id), true),
+  // Merge validated suggestions with Lean's own discovery (exact?/simp?/apply?,
+  // which Lean already vetted as applicable), deduped by id.
+  const mergeSeen = new Set<string>();
+  const allSuggestions = [...validated.suggestions, ...suggest.suggestions].filter((s) =>
+    mergeSeen.has(s.id) ? false : (mergeSeen.add(s.id), true),
   );
-  const allSuggestions = [...targeted, ...rewriteSuggest.suggestions, ...suggest.suggestions];
-  const anyLoading = suggest.loading || rewriteSuggest.loading;
+  const anyLoading = suggest.loading || validated.loading;
 
   const suggestionSlot =
     cursorIsHole && (allSuggestions.length > 0 || anyLoading) ? (

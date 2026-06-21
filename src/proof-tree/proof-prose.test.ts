@@ -70,6 +70,14 @@ describe('generateProofProse', () => {
     expect((items[0].kind as any).error).toBeUndefined();
   });
 
+  test('exact surfaces a Lean round-trip tacticError (shows red in the editor)', () => {
+    const exact: ProofNode = { tag: 'exact', id: 1, expr: '.refl' };
+    // The Lean path reports failures via tacticError (not validation).
+    const goalMap = mkGoalMap([[1, { tacticError: 'Type mismatch: Eq.refl ...' }]]);
+    const items = generateProofProse(exact, 1, goalMap);
+    expect((items[0].kind as any).error).toBe('Type mismatch: Eq.refl ...');
+  });
+
   test('intros with typed hypotheses renders grouped LaTeX', () => {
     const hole: ProofNode = { tag: 'hole', id: 2 };
     const intros: ProofNode = { tag: 'intros', id: 1, names: ['n', 'm'], child: hole };

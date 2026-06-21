@@ -257,7 +257,9 @@ export function generateProofProse(
 
       case 'exact': {
         const solved = info?.validation?.status === 'solved';
-        const error = info?.validation?.status === 'error' ? info.validation.message : undefined;
+        // Error from the TT validator (validation) OR the Lean round-trip
+        // (tacticError) — so a failing `exact` shows red in the structured editor.
+        const error = (info?.validation?.status === 'error' ? info.validation.message : undefined) ?? info?.tacticError;
         emit(node.id, depth, { tag: 'exact', exprLatex: node.expr, solved, goalLatex: info?.goalLatex, error, proofExprLatex: info?.proofExprLatex, isValueType: info?.isValueType });
         if (solved) {
           emit(node.id, depth, { tag: 'qed' });

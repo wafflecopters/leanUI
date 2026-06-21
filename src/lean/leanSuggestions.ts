@@ -21,14 +21,19 @@ export interface LeanSuggestion {
   tactic: string;
   /** Which discovery tactic produced it. */
   kind: 'exact' | 'apply' | 'rw' | 'simp';
+  /** Single-line tactic to TRY when validating this suggestion (defaults to
+   *  `tactic`). Differs for multi-line tactics like induction, whose applied
+   *  form has `·` case bullets but whose validation form is the bare tactic. */
+  validateTactic?: string;
 }
 
-/** Discovery tactics we try at a hole, in priority order (cheapest/most-closing first). */
+/** Discovery tactics we try at a hole, in priority order (cheapest/most-closing
+ *  first). NOTE: `rw?` is Mathlib-only (absent in core Lean) — file rewrites are
+ *  surfaced via the dedicated rewrite-candidate trials instead. */
 export const DISCOVERY_TACTICS: ReadonlyArray<{ kind: LeanSuggestion['kind']; tactic: string }> = [
   { kind: 'exact', tactic: 'exact?' },
   { kind: 'simp', tactic: 'simp?' },
   { kind: 'apply', tactic: 'apply?' },
-  { kind: 'rw', tactic: 'rw?' },
 ];
 
 /**
@@ -45,9 +50,12 @@ export function targetedSuggestions(subtermText: string): LeanSuggestion[] {
     // common inductives (Nat/Bool/List/Either); extras/shortfall surface as a
     // Lean error the user can fix, and the goal round-trip shows the real cases.
     const withHoles = (kw: string) => `${kw} ${t}\n·\n  sorry\n·\n  sorry`;
+    // validateTactic is the BARE form: `induction t` alone leaves goals (valid)
+    // when t is a real local variable, but errors when t is a bound/unknown name
+    // (e.g. clicking the `i` inside ∑) — so validation correctly rejects it.
     return [
-      { id: `lean-induction:${t}`, label: `induction ${t}`, tactic: withHoles('induction'), kind: 'apply' },
-      { id: `lean-cases:${t}`, label: `cases ${t}`, tactic: withHoles('cases'), kind: 'apply' },
+      { id: `lean-induction:${t}`, label: `induction ${t}`, tactic: withHoles('induction'), validateTactic: `induction ${t}`, kind: 'apply' },
+      { id: `lean-cases:${t}`, label: `cases ${t}`, tactic: withHoles('cases'), validateTactic: `cases ${t}`, kind: 'apply' },
     ];
   }
   // An equality goal offers reflexivity. `.refl` (the anonymous constructor)
