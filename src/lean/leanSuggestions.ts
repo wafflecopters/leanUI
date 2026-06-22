@@ -29,6 +29,8 @@ export interface LeanSuggestion {
    *  transforms the goal into (empty if it closes the goal). Filled by the
    *  validation round-trip. */
   preview?: string;
+  /** True when applying this tactic CLOSES the goal (no goals remain). */
+  closes?: boolean;
 }
 
 /** Discovery tactics we try at a hole, in priority order (cheapest/most-closing
@@ -62,12 +64,11 @@ export function targetedSuggestions(subtermText: string): LeanSuggestion[] {
       { id: `lean-cases:${t}`, label: `cases ${t}`, tactic: withHoles('cases'), validateTactic: `cases ${t}`, kind: 'apply' },
     ];
   }
-  // An equality goal offers reflexivity. `.refl` (the anonymous constructor)
-  // closes any single-constructor equality that holds definitionally — both
-  // Lean's `Eq` and a custom `Equal` — WITHOUT needing an `@[refl]` lemma (which
-  // the bare `rfl` tactic requires, so `rfl` fails on a custom `Equal`).
+  // An equality goal offers `rfl` — the tactic reduces both sides (so it both
+  // computes, e.g. ∑[i,0,0] i ↦ 0, AND closes goals that hold definitionally).
+  // It's validated, so it only appears when it actually closes.
   if (/\s=\s/.test(t)) {
-    return [{ id: 'lean-refl', label: 'exact .refl', tactic: 'exact .refl', kind: 'exact' }];
+    return [{ id: 'lean-rfl', label: 'rfl', tactic: 'rfl', kind: 'exact' }];
   }
   return [];
 }
@@ -108,6 +109,8 @@ export function parseTryThis(text: string, kind: LeanSuggestion['kind']): LeanSu
       label: line,
       tactic: line,
       kind,
+      // `exact?` only returns terms that CLOSE the goal.
+      closes: kind === 'exact',
     });
   }
   return out;

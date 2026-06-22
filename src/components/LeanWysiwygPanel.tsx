@@ -438,9 +438,10 @@ function LeanProofEditor({
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {allSuggestions.map((s) => {
-            // When we have a focus-transform preview, the button shows the
-            // result PROMINENTLY with the tactic name subtle beneath it.
-            const hasPreview = !!s.preview;
+            // Closers show a green "Solve Goal"; otherwise, when there's a
+            // focus-transform preview, the result shows PROMINENTLY — both with
+            // the tactic name subtle beneath.
+            const topLine = s.closes || !!s.preview;
             return (
               <button
                 key={s.id}
@@ -457,19 +458,21 @@ function LeanProofEditor({
                   fontSize: 11,
                   color: C.text,
                   background: hoveredSuggestion === s.id ? C.header : C.bg,
-                  border: `1px solid ${hoveredSuggestion === s.id ? C.blue : C.border}`,
+                  border: `1px solid ${s.closes ? C.green : hoveredSuggestion === s.id ? C.blue : C.border}`,
                   borderRadius: 4,
-                  padding: hasPreview ? '3px 8px' : '2px 8px',
+                  padding: topLine ? '3px 8px' : '2px 8px',
                   cursor: 'pointer',
                   maxWidth: '100%',
                 }}
               >
-                {hasPreview && (
+                {s.closes ? (
+                  <span style={{ color: C.green, fontSize: 12, fontWeight: 600 }}>✓ Solve Goal</span>
+                ) : s.preview ? (
                   <span style={{ fontSize: 14, lineHeight: 1.2 }}>
-                    <PreviewMath latex={s.preview!} />
+                    <PreviewMath latex={s.preview} />
                   </span>
-                )}
-                <span style={{ color: hasPreview ? C.faint : C.text, fontSize: hasPreview ? 10 : 11 }}>{s.label}</span>
+                ) : null}
+                <span style={{ color: topLine ? C.faint : C.text, fontSize: topLine ? 10 : 11 }}>{s.label}</span>
               </button>
             );
           })}

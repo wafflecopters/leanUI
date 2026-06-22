@@ -105,18 +105,29 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         // `by`-line "unsolved goals", or unrelated failing tactics — don't count).
         const failsHere = data.messages.some((m) => m.severity === 'error' && m.startLine === tacticLine);
         if (failsHere) return;
-        // Preview: how the FOCUSED subterm looks after the tactic (e.g.
-        // `b + c` → `c + b`). Read the post-tactic goal at the tactic's first
-        // remaining hole and pull out the subterm at the focus position.
-        let preview = '';
         const firstHole = findFirstHole(sub);
-        if (firstHole && focusPos) {
+        // Does it close the goal? A terminal tactic (no remaining hole) that
+        // validated closed it; otherwise it closed iff no open goal remains at
+        // the tactic's first hole.
+        let closes = false;
+        let postTarget;
+        if (!firstHole) {
+          closes = true;
+        } else {
           const range = assembled.lean.nodeRanges.get(firstHole.id);
           const g = range ? data.goals.find((x) => x.startLine === range.startLine && x.startCol === range.startCol) : undefined;
-          const target = g?.goals?.[0]?.targetTagged;
-          if (target) preview = subtermLatexAtPos(target, focusPos) ?? '';
+          closes = !g || g.goals.length === 0;
+          postTarget = g?.goals?.[0]?.targetTagged;
         }
-        valid.push({ ...cand, preview });
+        // Preview: how the FOCUSED subterm looks after the tactic (e.g.
+        // `b + c` → `c + b`), pulled from the post-tactic goal at the focus pos.
+        let preview = '';
+        if (postTarget && focusPos) preview = subtermLatexAtPos(postTarget, focusPos) ?? '';
+        // Drop suggestions whose result is headed by a raw `match`/recursor — it
+        // didn't reduce to anything useful (e.g. `unfold mul` exposing the
+        // pattern-match body).
+        if (/\\operatorname\{match\}|\bmatch\b/.test(preview)) return;
+        valid.push({ ...cand, preview, closes });
         // Preserve the caller's candidate order as results stream in.
         valid.sort((a, b) => candidates.findIndex((c) => c.id === a.id) - candidates.findIndex((c) => c.id === b.id));
         setState({ suggestions: [...valid], loading: true });

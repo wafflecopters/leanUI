@@ -77,11 +77,11 @@ describe('targetedSuggestions', () => {
     expect(targetedSuggestions('0')).toEqual([]); // numeral, not a var
   });
 
-  test('an equality goal offers exact .refl (works for custom Equal, no @[refl] needed)', () => {
+  test('an equality goal offers rfl (the tactic — reduces both sides and closes)', () => {
     const s = targetedSuggestions('2 * ∑[i,0,0] i = (0 + 1) * 0');
     expect(s).toHaveLength(1);
-    expect(s[0].label).toBe('exact .refl');
-    expect(s[0].tactic).toBe('exact .refl');
+    expect(s[0].label).toBe('rfl');
+    expect(s[0].tactic).toBe('rfl');
   });
 
   test('a non-equality compound (e.g. ≤) offers no refl', () => {
