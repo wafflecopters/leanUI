@@ -22,6 +22,7 @@ import {
   isCursorInSubtree,
   mkHave,
   mkHole,
+  mkSimp,
   replaceNode,
   toggleInductionCollapse,
   toggleSimpCollapse,
@@ -805,15 +806,21 @@ export function applyManualProofTreeTactic(
     }
 
     case 'simp': {
-      if (!ctx.typedContext?.kernelGoal) return null;
-      const { engine, definitions } = ctx.typedContext.kernelGoal;
       const lemmaStr = value.trim();
-      const lemmas = lemmaStr
-        ? lemmaStr.split(/[\s,]+/).filter(Boolean)
-        : [...(definitions.simpLemmas ?? [])];
-      const simpResult = runSimp(engine, lemmas);
+      const lemmas = lemmaStr ? lemmaStr.split(/[\s,]+/).filter(Boolean) : [];
+      // Lean backend: no TT kernel engine — insert a structural `simp [...]` node
+      // and let the Lean round-trip check/replay it (the engine path below only
+      // runs for the in-process TT checker).
+      if (!ctx.typedContext?.kernelGoal) {
+        const child = mkHole();
+        const newRoot = replaceNode(state.root, state.cursor.nodeId, mkSimp(lemmas, [], child));
+        return { root: newRoot, cursor: { nodeId: child.id } };
+      }
+      const { engine, definitions } = ctx.typedContext.kernelGoal;
+      const allLemmas = lemmas.length ? lemmas : [...(definitions.simpLemmas ?? [])];
+      const simpResult = runSimp(engine, allLemmas);
       if (!simpResult.success) return null;
-      return applySimp(state, lemmas, simpResult.proofNodes);
+      return applySimp(state, allLemmas, simpResult.proofNodes);
     }
   }
 }
