@@ -394,9 +394,17 @@ function LeanProofEditor({
     const seen = new Set<string>();
     return [...subterm, ...goalLevel].filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)));
   }, [selectedPath, subtermTexts, lean.cursorGoal]);
+  // A poor-man's ring solver: `simp` with all the file's equality lemmas
+  // (distrib/comm/assoc/…). Validated → only shows when it closes the goal, as a
+  // one-click "Solve Goal". (The custom MyNat isn't a Mathlib ring, so `ring`
+  // itself is unavailable; this fills that gap from the preset's own lemmas.)
+  const ringCandidate = useMemo(() => {
+    const names = equalityLemmas(allDeclarations, decl.name).map((c) => c.name);
+    return names.length ? [{ id: 'lean-simp-ring', label: 'simp [ring lemmas]', tactic: `simp [${names.join(', ')}]`, kind: 'simp' as const }] : [];
+  }, [allDeclarations, decl.name]);
   // Dedup the combined candidate list by id.
   const candSeen = new Set<string>();
-  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates, ...unfoldCandidates].filter((s) =>
+  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates, ...unfoldCandidates, ...ringCandidate].filter((s) =>
     candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
   );
   const validated = useLeanValidatedSuggestions({
