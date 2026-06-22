@@ -19,7 +19,7 @@ import { proofTreeToLean, proofTreeToSource } from '../lean/proofTreeToLean';
 import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
-import { equalityLemmas, rankByGoalOverlap } from '../lean/rewriteCandidates';
+import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from '../lean/rewriteCandidates';
 import { taggedToInteractiveGoal, subtermTextMap } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
@@ -343,6 +343,19 @@ function LeanProofEditor({
     }
     return out;
   }, [allDeclarations, decl.name, scopeText, selectedSubtermText]);
+  // When a subterm is selected, also offer `unfold <def>` for the file's
+  // definitions (e.g. selecting ∑… → `unfold sum`, which unblocks the sum
+  // lemmas). Validated like everything else; only shown on selection to keep
+  // the default view uncluttered and bound the trial count.
+  const unfoldCandidates = useMemo(
+    () =>
+      selectedSubtermText
+        ? unfoldableDefs(allDeclarations, decl.name, 12).map(
+            (name): LeanSuggestion => ({ id: `lean-unfold:${name}`, label: `unfold ${name}`, tactic: `unfold ${name}`, kind: 'unfold' }),
+          )
+        : [],
+    [allDeclarations, decl.name, selectedSubtermText],
+  );
   const heuristicCandidates = useMemo(() => {
     const subterm = selectedPath ? targetedSuggestions(subtermTexts.get(selectedPath) ?? '') : [];
     const goalLevel = lean.cursorGoal ? targetedSuggestions(lean.cursorGoal.plain) : [];
@@ -351,7 +364,7 @@ function LeanProofEditor({
   }, [selectedPath, subtermTexts, lean.cursorGoal]);
   // Dedup the combined candidate list by id.
   const candSeen = new Set<string>();
-  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates].filter((s) =>
+  const validateCandidates = [...heuristicCandidates, ...rewriteCandidates, ...unfoldCandidates].filter((s) =>
     candSeen.has(s.id) ? false : (candSeen.add(s.id), true),
   );
   const validated = useLeanValidatedSuggestions({

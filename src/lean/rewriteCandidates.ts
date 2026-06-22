@@ -97,6 +97,32 @@ export function equalityLemmas(
 }
 
 /**
+ * The file's unfoldable definitions: `def`s whose conclusion is NOT an equality
+ * (i.e. functions/data like `sum`, `plus`, not the equality lemmas). Each is a
+ * candidate for `unfold <name>` — which targets the underlying constant, so it
+ * works regardless of how the term is displayed (e.g. `unfold sum` fires on a
+ * goal shown with ∑ notation). Validation drops the ones that don't appear.
+ */
+export function unfoldableDefs(
+  declarations: readonly LeanDeclaration[],
+  currentDeclName?: string,
+  cap = 20,
+): string[] {
+  const out: string[] = [];
+  for (const d of declarations) {
+    if (d.name === currentDeclName) continue;
+    if (d.kind !== 'def') continue;
+    // Skip noise: auto-generated instances (instOfNat…) and structure
+    // projections (Semiring.add) — not useful unfold targets.
+    if (d.name.startsWith('inst') || d.name.includes('.')) continue;
+    if (splitTopLevel(conclusionOf(d.prettyType), ' = ')) continue; // equality lemma, not an unfold target
+    out.push(d.name);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/**
  * Order candidates by descending token overlap between their LHS and the goal,
  * then cap. Candidates sharing more symbols with the goal are likelier to fire.
  */

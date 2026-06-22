@@ -20,7 +20,7 @@ export interface LeanSuggestion {
   /** The raw Lean tactic to insert, e.g. "exact Nat.add_comm a b". */
   tactic: string;
   /** Which discovery tactic produced it. */
-  kind: 'exact' | 'apply' | 'rw' | 'simp';
+  kind: 'exact' | 'apply' | 'rw' | 'simp' | 'unfold';
   /** Single-line tactic to TRY when validating this suggestion (defaults to
    *  `tactic`). Differs for multi-line tactics like induction, whose applied
    *  form has `·` case bullets but whose validation form is the bare tactic. */

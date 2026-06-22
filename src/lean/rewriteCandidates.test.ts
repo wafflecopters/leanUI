@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { equalityLemmas, rankByGoalOverlap } from './rewriteCandidates';
+import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from './rewriteCandidates';
 import type { LeanDeclaration } from './types';
 
 function decl(name: string, prettyType: string, kind: LeanDeclaration['kind'] = 'def'): LeanDeclaration {
@@ -30,6 +30,25 @@ describe('equalityLemmas', () => {
     ];
     const got = equalityLemmas(decls, 'triangleSum');
     expect(got.map((c) => c.name)).toEqual(['plusComm']);
+  });
+});
+
+describe('unfoldableDefs', () => {
+  test('returns function/data defs, skipping equality lemmas, instances, projections, self', () => {
+    const decls = [
+      decl('sum', 'MyNat → MyNat → (MyNat → MyNat) → MyNat'),
+      decl('plus', 'MyNat → MyNat → MyNat'),
+      decl('plusComm', '∀ (n m : MyNat), n + m = m + n'), // equality lemma — not an unfold target
+      decl('instOfNatMyNat', 'OfNat MyNat 0'), // auto instance
+      decl('Semiring.add', 'MyNat → MyNat → MyNat'), // projection
+      decl('triangleSum', 'MyNat → MyNat'),
+    ];
+    expect(unfoldableDefs(decls, 'triangleSum')).toEqual(['sum', 'plus']);
+  });
+
+  test('respects the cap', () => {
+    const decls = Array.from({ length: 30 }, (_, i) => decl(`f${i}`, 'MyNat → MyNat'));
+    expect(unfoldableDefs(decls, undefined, 5)).toHaveLength(5);
   });
 });
 
