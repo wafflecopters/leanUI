@@ -903,6 +903,18 @@ def addLtBoth {R : Real} (a b c d : Carrier R) (hab : rlt a b) (hcd : rlt c d) :
 
 def rtwo (R : Real) : Carrier R := radd (rone R) (rone R)
 
+-- Render the carrier constants rzero/rone/rtwo R as the literals 0/1/2 in the
+-- structured editor (display only — like MyNat.zero's unexpander).
+@[app_unexpander rzero] def unexpRZero : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_) => \`(0)
+  | _ => throw ()
+@[app_unexpander rone] def unexpROne : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_) => \`(1)
+  | _ => throw ()
+@[app_unexpander rtwo] def unexpRTwo : Lean.PrettyPrinter.Unexpander
+  | \`($_ $_) => \`(2)
+  | _ => throw ()
+
 def rhalf (R : Real) : Carrier R := rinv (rtwo R)
 
 def oneLeTwo (R : Real) : rle (rone R) (rtwo R) :=
