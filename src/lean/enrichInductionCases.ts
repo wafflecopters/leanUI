@@ -14,7 +14,7 @@
  * Only bullet-cases (no constructor name yet) are enriched; once a case is named
  * it is left alone, so this converges in a single pass and never oscillates.
  */
-import type { ProofNode, CaseNode, ProofNodeId } from '../proof-tree/proof-tree';
+import { type ProofNode, type CaseNode, type ProofNodeId, splitCaseParams } from '../proof-tree/proof-tree';
 import type { NodeGoalInfo } from '../proof-tree/goal-computation';
 
 /** Lean's inaccessible-name marker (LATIN CROSS, U+271D). */
@@ -63,18 +63,21 @@ export function enrichInductionCaseNames(
     if (!isLeanCtorName(ctorName)) {
       return body === c.body ? c : { ...c, body };
     }
-    // Params = hypotheses this case introduced that the induction's incoming
-    // goal didn't have (the constructor's args + the induction hypothesis).
+    // Hypotheses this case introduced that the induction's incoming goal didn't
+    // have = the constructor's args + the induction hypotheses. Split them so the
+    // label shows only the args (`succ a`), not the IH (`succ (a, a_ih)`).
     const caseHyps = info?.hypotheses ?? [];
-    const params = uniquify(
+    const introduced = uniquify(
       caseHyps.filter((h) => !parentHypNames.has(h.name)).map((h) => cleanHypName(h.name)),
     );
+    const { args, ihNames } = splitCaseParams(introduced);
     changed = true;
     return {
       ...c,
       body,
       constructorName: ctorName,
-      constructorParamNames: params,
+      constructorParamNames: args,
+      ...(ihNames.length ? { ihNames } : {}),
     };
   };
 

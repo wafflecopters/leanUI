@@ -165,8 +165,13 @@ export interface CaseNode {
   readonly collapsed: boolean;
   /** Constructor name (e.g., 'Zero', 'Succ') — set when induction knows the inductive type */
   readonly constructorName?: string;
-  /** Names for constructor parameters (e.g., ['k'] for Succ) */
+  /** Names for constructor parameters (e.g., ['k'] for Succ) — the data the
+   *  constructor carries, shown in the case label. Does NOT include induction
+   *  hypotheses. */
   readonly constructorParamNames?: readonly string[];
+  /** Induction-hypothesis names introduced for this case (e.g. ['k_ih']). Bound
+   *  in the printed `| ctor args ih… =>` but NOT shown in the case label. */
+  readonly ihNames?: readonly string[];
   /** Pre-rendered LaTeX for the case label (e.g., "n = 0" rendered through structured pipeline) */
   readonly labelLatex?: string;
   /** Original (pre-desugar) nested pattern structure, for branches written like
@@ -261,6 +266,19 @@ export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], c
 }
 
 /** Format a case label as LaTeX: scrutinee = \text{Ctor}\;p1\;p2 */
+/** Is `name` an induction hypothesis (Lean names them `<arg>_ih` / `ih`)? */
+export function isInductionHypothesisName(name: string): boolean {
+  return /(?:^|_)ih$/.test(name);
+}
+
+/** Split induction-case binder names into constructor args vs induction hyps. */
+export function splitCaseParams(names: readonly string[]): { args: string[]; ihNames: string[] } {
+  const args: string[] = [];
+  const ihNames: string[] = [];
+  for (const n of names) (isInductionHypothesisName(n) ? ihNames : args).push(n);
+  return { args, ihNames };
+}
+
 export function formatCaseLabelLatex(scrutinee: string, ctorName: string, paramNames: readonly string[]): string {
   const escName = (n: string) => n.length === 1 ? n : `\\text{${n}}`;
   const ctorLatex = `\\text{${ctorName}}`;

@@ -66,7 +66,9 @@ describe('leanTacticsToTree', () => {
     expect(ind.cases).toHaveLength(2);
     expect(ind.cases[0].constructorName).toBe('zero');
     expect(ind.cases[1].constructorName).toBe('succ');
-    expect(ind.cases[1].constructorParamNames).toEqual(['k', 'ih']);
+    // The ctor arg and the induction hypothesis are kept apart.
+    expect(ind.cases[1].constructorParamNames).toEqual(['k']);
+    expect(ind.cases[1].ihNames).toEqual(['ih']);
   });
 
   test('bare induction with · bullet cases (no constructor names known)', () => {

@@ -24,6 +24,7 @@ import {
   mkSuffices,
   mkInduction,
   mkCase,
+  splitCaseParams,
 } from '../proof-tree/proof-tree';
 
 interface Line {
@@ -222,7 +223,11 @@ function parseCase(lines: Line[], pos: { i: number }): CaseNode {
   } else {
     body = parseSeq(lines, pos, caseLevel + 1);
   }
-  return mkCase(ctor, body, ctor, params);
+  // `| succ a a_ih =>` binds both the ctor arg and the induction hypothesis;
+  // keep them apart so the label shows `succ a` (not `succ (a, a_ih)`).
+  const { args, ihNames } = splitCaseParams(params);
+  const node = mkCase(ctor, body, ctor, args);
+  return ihNames.length ? { ...node, ihNames } : node;
 }
 
 /** Parse a `·` bullet case body. Bullet may be `·` alone (body on next lines)

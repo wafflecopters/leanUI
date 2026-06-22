@@ -39,8 +39,9 @@ describe('enrichInductionCaseNames', () => {
     expect(ind.cases[0].constructorName).toBe('zero');
     expect(ind.cases[0].constructorParamNames).toEqual([]);
     expect(ind.cases[1].constructorName).toBe('succ');
-    // Daggers stripped so Lean binds accessible names.
-    expect(ind.cases[1].constructorParamNames).toEqual(['a', 'a_ih']);
+    // Daggers stripped; ctor arg in the label, IH kept separate (not in the label).
+    expect(ind.cases[1].constructorParamNames).toEqual(['a']);
+    expect(ind.cases[1].ihNames).toEqual(['a_ih']);
   });
 
   test('is idempotent — already-named cases are left alone (no oscillation)', () => {

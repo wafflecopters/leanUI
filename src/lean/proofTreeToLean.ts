@@ -200,9 +200,10 @@ function isLeanCtorName(name: string | undefined): name is string {
 }
 
 function emitNamedCase(em: Emitter, c: CaseNode, depth: number): void {
-  const params = c.constructorParamNames && c.constructorParamNames.length > 0
-    ? ' ' + c.constructorParamNames.join(' ')
-    : '';
+  // Bind constructor args AND induction hypotheses (`| succ a a_ih =>`), so Lean
+  // doesn't auto-generate inaccessible (✝) names for the IH.
+  const names = [...(c.constructorParamNames ?? []), ...(c.ihNames ?? [])];
+  const params = names.length > 0 ? ' ' + names.join(' ') : '';
   em.emit(depth, `| ${c.constructorName}${params} =>`, c.id);
   emitNode(em, c.body, depth + 1);
 }
