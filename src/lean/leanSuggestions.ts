@@ -25,6 +25,10 @@ export interface LeanSuggestion {
    *  `tactic`). Differs for multi-line tactics like induction, whose applied
    *  form has `·` case bullets but whose validation form is the bare tactic. */
   validateTactic?: string;
+  /** LaTeX of the goal AFTER applying this tactic — a preview of what it
+   *  transforms the goal into (empty if it closes the goal). Filled by the
+   *  validation round-trip. */
+  preview?: string;
 }
 
 /** Discovery tactics we try at a hole, in priority order (cheapest/most-closing

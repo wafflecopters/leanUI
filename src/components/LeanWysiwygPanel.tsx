@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import katex from 'katex';
 import type { LeanDeclaration, LeanGoal } from '../lean/types';
 import { declKey } from '../lean/declProofSteps';
 import { LeanMathView } from './LeanMathView';
@@ -44,6 +45,17 @@ const C = {
   purple: '#a371f7',
 };
 const mono = '"JetBrains Mono", "Fira Code", Menlo, Consolas, monospace';
+
+/** Render a LaTeX goal string (KaTeX) — used for suggestion previews. */
+function PreviewMath({ latex }: { latex: string }) {
+  let html: string;
+  try {
+    html = katex.renderToString(latex, { displayMode: false, throwOnError: false, trust: true, strict: false });
+  } catch {
+    return <span style={{ fontFamily: mono, fontSize: 11, color: C.text }}>{latex}</span>;
+  }
+  return <span style={{ fontSize: 13, color: C.text }} dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 const KIND_COLOR: Record<LeanDeclaration['kind'], string> = {
   def: C.blue,
@@ -324,6 +336,7 @@ function LeanProofEditor({
     [lean.cursorGoal],
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [hoveredSuggestion, setHoveredSuggestion] = useState<string | null>(null);
 
   // Candidate tactics to VALIDATE before showing ("try before suggest"):
   // 1. the file's rewrite lemmas (core-Lean stand-in for rw?), ranked by overlap
@@ -398,13 +411,18 @@ function LeanProofEditor({
   });
 
   // Merge validated suggestions with Lean's own discovery (exact?/simp?/apply?,
-  // which Lean already vetted as applicable), deduped by LABEL — so the scoped
-  // `conv in (..) => rw [L]` and the whole-goal `rw [L]` (same label) collapse to
-  // one, keeping whichever validated first (scoped is listed first).
-  const mergeSeen = new Set<string>();
-  const allSuggestions = [...validated.suggestions, ...suggest.suggestions].filter((s) =>
-    mergeSeen.has(s.label) ? false : (mergeSeen.add(s.label), true),
-  );
+  // which Lean already vetted as applicable), deduped by LABEL. The scoped
+  // `conv in (..) => rw [L]` and the whole-goal `rw [L]` share a label and
+  // collapse to one: keep the scoped form's apply tactic (listed first), but
+  // adopt the whole-goal form's preview (conv hides its exit goal from Lean's
+  // InfoTree, so only the whole-goal trial produces a usable preview).
+  const byLabel = new Map<string, LeanSuggestion>();
+  for (const s of [...validated.suggestions, ...suggest.suggestions]) {
+    const existing = byLabel.get(s.label);
+    if (!existing) byLabel.set(s.label, s);
+    else if (!existing.preview && s.preview) byLabel.set(s.label, { ...existing, preview: s.preview });
+  }
+  const allSuggestions = [...byLabel.values()];
   const anyLoading = suggest.loading || validated.loading;
 
   const suggestionSlot =
@@ -422,13 +440,15 @@ function LeanProofEditor({
             <button
               key={s.id}
               onClick={() => applySuggestion(s.tactic)}
+              onMouseEnter={() => setHoveredSuggestion(s.id)}
+              onMouseLeave={() => setHoveredSuggestion((h) => (h === s.id ? null : h))}
               title={s.tactic}
               style={{
                 fontFamily: mono,
                 fontSize: 11,
                 color: C.text,
-                background: C.bg,
-                border: `1px solid ${C.border}`,
+                background: hoveredSuggestion === s.id ? C.header : C.bg,
+                border: `1px solid ${hoveredSuggestion === s.id ? C.blue : C.border}`,
                 borderRadius: 4,
                 padding: '2px 8px',
                 cursor: 'pointer',
@@ -442,6 +462,17 @@ function LeanProofEditor({
             </button>
           ))}
         </div>
+        {/* Preview of what the hovered suggestion transforms the goal into. */}
+        {(() => {
+          const hov = allSuggestions.find((s) => s.id === hoveredSuggestion);
+          if (!hov || hov.preview === undefined) return null;
+          return (
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12 }}>
+              <span style={{ color: C.faint, fontFamily: mono, fontSize: 10 }}>⟶</span>
+              {hov.preview ? <PreviewMath latex={hov.preview} /> : <span style={{ color: C.green, fontSize: 11 }}>closes the goal ∎</span>}
+            </div>
+          );
+        })()}
       </div>
     ) : null;
 

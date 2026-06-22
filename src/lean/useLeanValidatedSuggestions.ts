@@ -1,23 +1,25 @@
 /**
  * Validate candidate tactic suggestions against Lean BEFORE showing them — the
- * "try before you suggest" behaviour: a pill only appears if its tactic actually
- * applies at the cursor goal.
+ * "try before you suggest" behaviour — AND capture a preview of the goal each
+ * one produces.
  *
- * For each candidate we splice its (single-line) validation tactic in place of
- * the cursor hole, analyze, and keep it iff Lean reports NO error AT the hole's
- * line. A genuine tactic failure (type mismatch, "did not find occurrence",
- * unknown identifier, …) is reported at that line; a tactic that applies but
- * leaves work reports "unsolved goals" elsewhere (the `by` line), which does NOT
- * count — so both closers (`exact .refl`) and progress tactics (`rw [lemma]`,
- * `induction n`) are judged correctly. Scoping to the hole line also means a
- * failing tactic elsewhere in the proof can't suppress valid suggestions.
+ * For each candidate we splice its parsed tactic in place of the cursor hole,
+ * analyze, and keep it iff Lean reports NO error at the spliced tactic's line (a
+ * genuine failure — type mismatch, "did not find occurrence", unknown
+ * identifier — lands there; a tactic that applies but leaves work does not).
+ * The resulting goal at the tactic's first remaining hole becomes the pill's
+ * `preview` (rendered LaTeX), so the UI can show what the tactic transforms the
+ * goal into — like the TT/TTK editor.
  *
  * Trials run with bounded concurrency and surface incrementally.
  */
 import { useEffect, useRef, useState } from 'react';
-import type { ProofNode, ProofNodeId } from '../proof-tree/proof-tree';
+import { type ProofNode, type ProofNodeId, replaceNode } from '../proof-tree/proof-tree';
+import { findFirstHole } from '../proof-tree/tactic-to-tree';
 import type { AnalyzeResult } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
+import { leanTacticsToTree } from './leanTacticsToTree';
+import { mapLeanGoalsToNodes } from './leanGoalMapping';
 import type { LeanSuggestion } from './leanSuggestions';
 
 export interface UseLeanValidatedSuggestionsArgs {
@@ -83,30 +85,40 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
       await mapPool(candidates, 4, async (cand) => {
         if (cancelled || reqId !== reqRef.current) return;
         let assembled;
+        let sub;
         try {
-          assembled = assembleProofInSource({
-            source,
-            decl: { line: declLine },
-            nextDeclLine,
-            proof,
-            holeOverrideId: cursorId,
-            holeOverrideTactic: cand.validateTactic ?? cand.tactic,
-          });
+          // Splice the PARSED tactic (so its remaining hole carries the
+          // post-tactic goal we preview), not a raw override.
+          sub = leanTacticsToTree(cand.tactic);
+          const applied = replaceNode(proof, cursorId, sub);
+          assembled = assembleProofInSource({ source, decl: { line: declLine }, nextDeclLine, proof: applied });
         } catch {
           return;
         }
-        const holeLine = assembled.lean.nodeRanges.get(cursorId)?.startLine;
+        const tacticLine = assembled.lean.nodeRanges.get(sub.id)?.startLine;
         const data = await analyze(assembled.source, mathlib);
-        if (cancelled || reqId !== reqRef.current || !data || holeLine === undefined) return;
+        if (cancelled || reqId !== reqRef.current || !data || tacticLine === undefined) return;
         // Valid iff no error AT the candidate's own line (errors elsewhere — the
         // `by`-line "unsolved goals", or unrelated failing tactics — don't count).
-        const failsHere = data.messages.some((m) => m.severity === 'error' && m.startLine === holeLine);
-        if (!failsHere) {
-          valid.push(cand);
-          // Preserve the caller's candidate order as results stream in.
-          valid.sort((a, b) => candidates.indexOf(a) - candidates.indexOf(b));
-          setState({ suggestions: [...valid], loading: true });
+        const failsHere = data.messages.some((m) => m.severity === 'error' && m.startLine === tacticLine);
+        if (failsHere) return;
+        // Preview: the goal at the tactic's first remaining hole (empty if it
+        // closes the goal). Rendered to LaTeX by mapLeanGoalsToNodes.
+        let preview = '';
+        const firstHole = findFirstHole(sub);
+        if (firstHole) {
+          const goalMap = mapLeanGoalsToNodes({
+            nodeRanges: assembled.lean.nodeRanges,
+            holeNodeIds: assembled.lean.holeNodeIds,
+            goals: data.goals,
+            messages: data.messages,
+          });
+          preview = goalMap.get(firstHole.id)?.goalLatex ?? '';
         }
+        valid.push({ ...cand, preview });
+        // Preserve the caller's candidate order as results stream in.
+        valid.sort((a, b) => candidates.findIndex((c) => c.id === a.id) - candidates.findIndex((c) => c.id === b.id));
+        setState({ suggestions: [...valid], loading: true });
       });
       if (!cancelled && reqId === reqRef.current) setState({ suggestions: valid, loading: false });
     }, 450);
