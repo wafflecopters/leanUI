@@ -33,7 +33,7 @@ export function posForGoalId(id: string): string | null {
  * the MathRow with wrapSubterms but relabel the Group htmlIds.
  */
 /** Plain text of a tagged subtree (concatenated leaves), trimmed. */
-function taggedText(tt: TaggedText): string {
+export function taggedText(tt: TaggedText): string {
   switch (tt.t) {
     case 'text':
       return tt.s;

@@ -20,7 +20,7 @@ import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
 import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from '../lean/rewriteCandidates';
-import { taggedToInteractiveGoal, subtermTextMap } from '../lean/leanInteractiveGoal';
+import { taggedToInteractiveGoal, subtermTextMap, taggedText } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
@@ -328,21 +328,32 @@ function LeanProofEditor({
   // Rank against the SELECTED subterm when there is one (so lemmas about it
   // surface first), else the whole goal.
   const scopeText = selectedSubtermText || goalText;
+  // Local equality HYPOTHESES are rewrite candidates too (esp. the induction
+  // hypothesis, e.g. `rw [a_ih]`) — and usually the most relevant, so list them
+  // before the file lemmas.
+  const hypEqNames = useMemo(() => {
+    const out: string[] = [];
+    for (const h of lean.cursorGoal?.hyps ?? []) {
+      if (/\s=\s/.test(taggedText(h.type))) out.push(...h.names);
+    }
+    return out;
+  }, [lean.cursorGoal]);
   const rewriteCandidates = useMemo(() => {
-    const ranked = rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), scopeText, 10);
+    const fileLemmas = rankByGoalOverlap(equalityLemmas(allDeclarations, decl.name), scopeText, 10).map((c) => c.name);
+    const names = [...hypEqNames, ...fileLemmas];
     const out: LeanSuggestion[] = [];
-    for (const c of ranked) {
+    for (const name of names) {
       // When a subterm is selected, prefer a subterm-SCOPED rewrite
       // (`conv in (sub) => rw [..]`); list it first so it wins dedup. Always also
       // offer the whole-goal form as a fallback (e.g. lemmas with side goals
       // can't run inside conv).
       if (selectedSubtermText) {
-        out.push({ id: `lean-convrw:${c.name}`, label: `rw [${c.name}]`, tactic: `conv in (${selectedSubtermText}) => rw [${c.name}]`, kind: 'rw' });
+        out.push({ id: `lean-convrw:${name}`, label: `rw [${name}]`, tactic: `conv in (${selectedSubtermText}) => rw [${name}]`, kind: 'rw' });
       }
-      out.push({ id: `lean-rw:${c.name}`, label: `rw [${c.name}]`, tactic: `rw [${c.name}]`, kind: 'rw' });
+      out.push({ id: `lean-rw:${name}`, label: `rw [${name}]`, tactic: `rw [${name}]`, kind: 'rw' });
     }
     return out;
-  }, [allDeclarations, decl.name, scopeText, selectedSubtermText]);
+  }, [allDeclarations, decl.name, scopeText, selectedSubtermText, hypEqNames]);
   // When a subterm is selected, also offer `unfold <def>` for the file's
   // definitions (e.g. selecting ∑… → `unfold sum`, which unblocks the sum
   // lemmas). Validated like everything else; only shown on selection to keep
