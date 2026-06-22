@@ -44,6 +44,22 @@ export function InteractiveGoalView({ goal, selectedPath, onSelectPath, style }:
       });
     } catch {
       containerRef.current.textContent = goal.latex;
+      return;
+    }
+    // KaTeX folds the inter-atom spacing BEFORE a following operator into the
+    // left operand's group (a trailing empty `.mspace` inside the `goal-…`
+    // span). That makes a subterm's selection-highlight bleed rightward toward
+    // the operator. Move any trailing mspace out to be a sibling — same visual
+    // gap, but the highlight box now hugs the subterm.
+    // Innermost-first, so a trailing space lifted out of a nested span cascades
+    // out of its ancestors too.
+    const goalSpans = [...containerRef.current.querySelectorAll<HTMLElement>('[id^="goal-"]')].reverse();
+    for (const el of goalSpans) {
+      let last = el.lastElementChild as HTMLElement | null;
+      while (last && last.classList.contains('mspace')) {
+        el.parentElement?.insertBefore(last, el.nextSibling);
+        last = el.lastElementChild as HTMLElement | null;
+      }
     }
   }, [goal.latex]);
 
