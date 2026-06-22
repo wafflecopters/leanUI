@@ -19,7 +19,7 @@ import { findFirstHole } from '../proof-tree/tactic-to-tree';
 import type { AnalyzeResult } from './types';
 import { assembleProofInSource } from './assembleProofDecl';
 import { leanTacticsToTree } from './leanTacticsToTree';
-import { mapLeanGoalsToNodes } from './leanGoalMapping';
+import { subtermLatexAtPos } from './leanInteractiveGoal';
 import type { LeanSuggestion } from './leanSuggestions';
 
 export interface UseLeanValidatedSuggestionsArgs {
@@ -31,6 +31,9 @@ export interface UseLeanValidatedSuggestionsArgs {
   cursorIsHole: boolean;
   /** Candidate suggestions to validate (already ordered by the caller). */
   candidates: readonly LeanSuggestion[];
+  /** Lean SubExpr.Pos of the FOCUSED subterm, if any — its post-tactic form is
+   *  the suggestion's preview (e.g. `b + c` → `c + b`). */
+  focusPos?: string | null;
   mathlib?: boolean;
   enabled?: boolean;
 }
@@ -64,7 +67,7 @@ async function mapPool<T>(items: readonly T[], limit: number, fn: (t: T) => Prom
 }
 
 export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArgs): { suggestions: LeanSuggestion[]; loading: boolean } {
-  const { source, declLine, nextDeclLine, proof, cursorId, cursorIsHole, candidates, mathlib, enabled = true } = args;
+  const { source, declLine, nextDeclLine, proof, cursorId, cursorIsHole, candidates, focusPos, mathlib, enabled = true } = args;
   const [state, setState] = useState(EMPTY);
   const reqRef = useRef(0);
 
@@ -102,18 +105,16 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
         // `by`-line "unsolved goals", or unrelated failing tactics — don't count).
         const failsHere = data.messages.some((m) => m.severity === 'error' && m.startLine === tacticLine);
         if (failsHere) return;
-        // Preview: the goal at the tactic's first remaining hole (empty if it
-        // closes the goal). Rendered to LaTeX by mapLeanGoalsToNodes.
+        // Preview: how the FOCUSED subterm looks after the tactic (e.g.
+        // `b + c` → `c + b`). Read the post-tactic goal at the tactic's first
+        // remaining hole and pull out the subterm at the focus position.
         let preview = '';
         const firstHole = findFirstHole(sub);
-        if (firstHole) {
-          const goalMap = mapLeanGoalsToNodes({
-            nodeRanges: assembled.lean.nodeRanges,
-            holeNodeIds: assembled.lean.holeNodeIds,
-            goals: data.goals,
-            messages: data.messages,
-          });
-          preview = goalMap.get(firstHole.id)?.goalLatex ?? '';
+        if (firstHole && focusPos) {
+          const range = assembled.lean.nodeRanges.get(firstHole.id);
+          const g = range ? data.goals.find((x) => x.startLine === range.startLine && x.startCol === range.startCol) : undefined;
+          const target = g?.goals?.[0]?.targetTagged;
+          if (target) preview = subtermLatexAtPos(target, focusPos) ?? '';
         }
         valid.push({ ...cand, preview });
         // Preserve the caller's candidate order as results stream in.

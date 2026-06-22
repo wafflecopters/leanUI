@@ -25,6 +25,32 @@ export function posForGoalId(id: string): string | null {
   return id.slice(GOAL_PREFIX.length).replace(/_/g, '/');
 }
 
+/** Find the tagged subexpression at a given Lean SubExpr.Pos. */
+function findTagAtPos(tt: TaggedText, pos: string): TaggedText | null {
+  if (tt.t === 'tag') {
+    if (tt.pos === pos) return tt;
+    return findTagAtPos(tt.child, pos);
+  }
+  if (tt.t === 'append') {
+    for (const k of tt.kids) {
+      const found = findTagAtPos(k, pos);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/**
+ * LaTeX of the subterm at `pos` within a tagged goal target — used to preview
+ * what a rewrite turns the FOCUSED subterm into (e.g. `b + c` → `c + b`).
+ * Returns null if there's no subexpression at that position.
+ */
+export function subtermLatexAtPos(target: TaggedText, pos: string): string | null {
+  const tag = findTagAtPos(target, pos);
+  if (!tag) return null;
+  return renderStaticLatex(codeWithInfosToMathRow(tag, { wrapSubterms: false }));
+}
+
 /**
  * Convert a tagged goal target into a MathRow whose subterm Groups carry
  * `goal-<pos>` htmlIds, plus the subterm map. We reuse codeWithInfosToMathRow's

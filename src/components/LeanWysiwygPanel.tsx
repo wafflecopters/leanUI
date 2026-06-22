@@ -21,7 +21,7 @@ import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
 import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from '../lean/rewriteCandidates';
-import { taggedToInteractiveGoal, subtermTextMap, taggedText } from '../lean/leanInteractiveGoal';
+import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
@@ -407,6 +407,7 @@ function LeanProofEditor({
     cursorId: state.cursor.nodeId,
     cursorIsHole,
     candidates: validateCandidates,
+    focusPos: selectedPath ? posForGoalId(selectedPath) : null,
     mathlib,
   });
 
@@ -436,65 +437,43 @@ function LeanProofEditor({
           {anyLoading && <span style={{ color: C.label }}>searching…</span>}
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {allSuggestions.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => applySuggestion(s.tactic)}
-              onMouseEnter={() => setHoveredSuggestion(s.id)}
-              onMouseLeave={() => setHoveredSuggestion((h) => (h === s.id ? null : h))}
-              title={s.tactic}
-              style={{
-                fontFamily: mono,
-                fontSize: 11,
-                color: C.text,
-                background: hoveredSuggestion === s.id ? C.header : C.bg,
-                border: `1px solid ${hoveredSuggestion === s.id ? C.blue : C.border}`,
-                borderRadius: 4,
-                padding: '2px 8px',
-                cursor: 'pointer',
-                maxWidth: '100%',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {s.label}
-            </button>
-          ))}
+          {allSuggestions.map((s) => {
+            // When we have a focus-transform preview, the button shows the
+            // result PROMINENTLY with the tactic name subtle beneath it.
+            const hasPreview = !!s.preview;
+            return (
+              <button
+                key={s.id}
+                onClick={() => applySuggestion(s.tactic)}
+                onMouseEnter={() => setHoveredSuggestion(s.id)}
+                onMouseLeave={() => setHoveredSuggestion((h) => (h === s.id ? null : h))}
+                title={s.tactic}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  gap: 1,
+                  fontFamily: mono,
+                  fontSize: 11,
+                  color: C.text,
+                  background: hoveredSuggestion === s.id ? C.header : C.bg,
+                  border: `1px solid ${hoveredSuggestion === s.id ? C.blue : C.border}`,
+                  borderRadius: 4,
+                  padding: hasPreview ? '3px 8px' : '2px 8px',
+                  cursor: 'pointer',
+                  maxWidth: '100%',
+                }}
+              >
+                {hasPreview && (
+                  <span style={{ fontSize: 14, lineHeight: 1.2 }}>
+                    <PreviewMath latex={s.preview!} />
+                  </span>
+                )}
+                <span style={{ color: hasPreview ? C.faint : C.text, fontSize: hasPreview ? 10 : 11 }}>{s.label}</span>
+              </button>
+            );
+          })}
         </div>
-        {/* Preview of what the hovered suggestion transforms the goal into. A
-            reserved, labeled box right under the pills so it's unmissable. */}
-        {(() => {
-          const hov = allSuggestions.find((s) => s.id === hoveredSuggestion);
-          const hasPreview = hov && hov.preview !== undefined;
-          return (
-            <div
-              style={{
-                marginTop: 8,
-                minHeight: 30,
-                padding: '5px 8px',
-                border: `1px solid ${C.border}`,
-                borderRadius: 4,
-                background: C.bg,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                overflowX: 'auto',
-              }}
-            >
-              <span style={{ color: C.faint, fontFamily: mono, fontSize: 10, flexShrink: 0 }}>
-                {hasPreview ? `${hov!.label} ⟶` : 'preview'}
-              </span>
-              {!hasPreview ? (
-                <span style={{ color: C.faint, fontSize: 11, fontStyle: 'italic' }}>hover a suggestion</span>
-              ) : hov!.preview ? (
-                <PreviewMath latex={hov!.preview} />
-              ) : (
-                <span style={{ color: C.green, fontSize: 12 }}>closes the goal ∎</span>
-              )}
-            </div>
-          );
-        })()}
       </div>
     ) : null;
 
