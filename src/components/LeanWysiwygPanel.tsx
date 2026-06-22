@@ -21,6 +21,7 @@ import { useLeanProofGoals } from '../lean/useLeanProofGoals';
 import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
 import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from '../lean/rewriteCandidates';
+import { probeSimpFired } from '../lean/simpProbe';
 import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
@@ -317,13 +318,30 @@ function LeanProofEditor({
     mathlib,
   });
 
-  const applySuggestion = (tactic: string) => {
+  const insertTactic = (tactic: string) => {
     const replacement = leanTacticsToTree(tactic);
     const newRoot = replaceNode(state.root, state.cursor.nodeId, replacement);
     const firstHole = findFirstHole(newRoot);
     handleHistoryChange(
       pushState(history, { root: newRoot, cursor: { nodeId: firstHole?.id ?? newRoot.id } }),
     );
+  };
+
+  const applySuggestion = (tactic: string) => {
+    // A broad `simp [many lemmas]` → narrow to the subset that actually fired
+    // (via `simp?`), so the proof reads `simp [<fired>]`. Insert immediately so
+    // the UI is responsive; the narrowed form replaces it when the probe returns.
+    const m = tactic.match(/^simp \[(.+)\]$/);
+    if (m) {
+      const lemmas = m[1].split(',').map((s) => s.trim()).filter(Boolean);
+      probeSimpFired({ source, declLine: decl.line, nextDeclLine, proof: state.root, cursorId: state.cursor.nodeId, lemmas, mathlib })
+        .then((fired) => {
+          insertTactic(fired && fired.length ? `simp [${fired.join(', ')}]` : tactic);
+        })
+        .catch(() => insertTactic(tactic));
+      return;
+    }
+    insertTactic(tactic);
   };
 
   // Build the clickable interactive goal + a map of subterm id → its text.
