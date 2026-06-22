@@ -462,14 +462,36 @@ function LeanProofEditor({
             </button>
           ))}
         </div>
-        {/* Preview of what the hovered suggestion transforms the goal into. */}
+        {/* Preview of what the hovered suggestion transforms the goal into. A
+            reserved, labeled box right under the pills so it's unmissable. */}
         {(() => {
           const hov = allSuggestions.find((s) => s.id === hoveredSuggestion);
-          if (!hov || hov.preview === undefined) return null;
+          const hasPreview = hov && hov.preview !== undefined;
           return (
-            <div style={{ marginTop: 6, display: 'flex', alignItems: 'baseline', gap: 6, fontSize: 12 }}>
-              <span style={{ color: C.faint, fontFamily: mono, fontSize: 10 }}>⟶</span>
-              {hov.preview ? <PreviewMath latex={hov.preview} /> : <span style={{ color: C.green, fontSize: 11 }}>closes the goal ∎</span>}
+            <div
+              style={{
+                marginTop: 8,
+                minHeight: 30,
+                padding: '5px 8px',
+                border: `1px solid ${C.border}`,
+                borderRadius: 4,
+                background: C.bg,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                overflowX: 'auto',
+              }}
+            >
+              <span style={{ color: C.faint, fontFamily: mono, fontSize: 10, flexShrink: 0 }}>
+                {hasPreview ? `${hov!.label} ⟶` : 'preview'}
+              </span>
+              {!hasPreview ? (
+                <span style={{ color: C.faint, fontSize: 11, fontStyle: 'italic' }}>hover a suggestion</span>
+              ) : hov!.preview ? (
+                <PreviewMath latex={hov!.preview} />
+              ) : (
+                <span style={{ color: C.green, fontSize: 12 }}>closes the goal ∎</span>
+              )}
             </div>
           );
         })()}
