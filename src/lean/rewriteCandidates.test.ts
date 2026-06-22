@@ -62,6 +62,17 @@ describe('rankByGoalOverlap', () => {
     expect(ranked[0].name).toBe('summationSplit'); // shares sum, succ, f vs plusComm's lone +
   });
 
+  test('boosts head-operator matches (a *-focus surfaces mulComm despite low token overlap)', () => {
+    const cands = equalityLemmas([
+      decl('plusComm', '∀ (n m : MyNat), n + m = m + n'),
+      decl('plusAssoc', '∀ (n m p : MyNat), n + m + p = n + (m + p)'),
+      decl('mulComm', '∀ (n m : MyNat), n * m = m * n'),
+    ]);
+    // Focus is `*`-headed; mulComm shares only `*` but its head matches → top.
+    const ranked = rankByGoalOverlap(cands, '(1 + a.succ) * a.succ', 10);
+    expect(ranked[0].name).toBe('mulComm');
+  });
+
   test('drops zero-overlap candidates and respects the cap', () => {
     const cands = equalityLemmas([
       decl('plusComm', '∀ (n m : MyNat), n + m = m + n'),

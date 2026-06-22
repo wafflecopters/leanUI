@@ -73,6 +73,30 @@ function tokens(s: string): Set<string> {
   return out;
 }
 
+/** Binary operators, loosest-binding first. */
+const OPS = [' = ', ' ≤ ', ' < ', ' + ', ' - ', ' * ', ' / '];
+
+/**
+ * The head operator of an expression: the loosest-binding binary operator at
+ * paren depth 0 (e.g. `(1 + a) * a` → `*`, `a + b` → `+`). Null if none — used
+ * to boost rewrite lemmas whose LHS is shaped like the focused subterm (a `*`
+ * focus wants `mul*` lemmas even when they share few tokens).
+ */
+function headOp(s: string): string | null {
+  let depth = 0;
+  const found = new Set<string>();
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (depth === 0) {
+      for (const op of OPS) if (s.startsWith(op, i)) { found.add(op.trim()); break; }
+    }
+  }
+  for (const op of OPS) if (found.has(op.trim())) return op.trim();
+  return null;
+}
+
 /**
  * Equality lemmas from the file (excluding `currentDeclName`, which can't rewrite
  * itself), each with its conclusion's LHS. Only `def`/`theorem` declarations
@@ -132,12 +156,17 @@ export function rankByGoalOverlap(
   cap = 12,
 ): RewriteCandidate[] {
   const goalTokens = tokens(goalText);
+  const goalHead = headOp(goalText);
   const scored = candidates.map((c) => {
     const lt = tokens(c.lhs);
     let overlap = 0;
     for (const t of lt) if (goalTokens.has(t)) overlap++;
-    return { c, overlap };
+    // A lemma whose LHS is shaped like the goal/focus (same head operator) is
+    // highly relevant even with little token overlap (e.g. `mulComm`'s `n * m`
+    // vs a `*`-headed focus) — boost it well above token ties.
+    const headMatch = goalHead !== null && headOp(c.lhs) === goalHead;
+    return { c, score: overlap + (headMatch ? 100 : 0), keep: overlap > 0 || headMatch };
   });
-  scored.sort((a, b) => b.overlap - a.overlap);
-  return scored.filter((s) => s.overlap > 0).slice(0, cap).map((s) => s.c);
+  scored.sort((a, b) => b.score - a.score);
+  return scored.filter((s) => s.keep).slice(0, cap).map((s) => s.c);
 }
