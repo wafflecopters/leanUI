@@ -129,58 +129,26 @@ function DeclCard({
   onProofChange?: (newBlock: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   // Any provable decl (theorem or def/example with a term/sorry body) gets the
   // structured proof-tree editor — select the sorry and build a proof.
   const isProof = tacticBlock !== null;
 
-  return (
-    <div
-      style={{
-        marginBottom: 12,
-        border: `1px solid ${C.border}`,
-        borderRadius: 6,
-        overflow: 'hidden',
-        backgroundColor: C.panel,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 10px',
-          backgroundColor: C.header,
-          borderBottom: `1px solid ${C.border}`,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: KIND_COLOR[decl.kind],
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
-          }}
-        >
-          {decl.kind}
-        </span>
-        <span style={{ flex: 1, fontFamily: mono, fontSize: 13, fontWeight: 500, color: '#e6edf3' }}>{decl.name}</span>
-        <button
-          onClick={() => setEditing((e) => !e)}
-          style={{
-            background: 'none',
-            border: `1px solid ${C.border}`,
-            borderRadius: 4,
-            cursor: 'pointer',
-            color: editing ? C.green : C.label,
-            fontSize: 11,
-            padding: '2px 8px',
-          }}
-        >
-          {editing ? 'done' : 'edit'}
-        </button>
-      </div>
+  const headerBtn = (active: boolean, activeColor = C.green): React.CSSProperties => ({
+    background: 'none',
+    border: `1px solid ${C.border}`,
+    borderRadius: 4,
+    cursor: 'pointer',
+    color: active ? activeColor : C.label,
+    fontSize: 11,
+    padding: '2px 8px',
+  });
 
+  // The card body (type/value + structured proof editor). Rendered inline OR in
+  // the expanded modal — never both, so the single LeanProofEditor keeps one
+  // instance. Re-seeds from source on toggle (the proof itself is persisted).
+  const body = (
+    <>
       {/* Type (+ value for defs) */}
       <div style={{ padding: '8px 10px', borderBottom: isProof ? `1px solid ${C.border}` : 'none' }}>
         <div style={{ fontSize: 15, lineHeight: 1.6 }}>
@@ -191,8 +159,6 @@ function DeclCard({
             <LeanMathView tagged={decl.typeTagged} fallback={decl.prettyType} />
           )}
         </div>
-        {/* Value editor only for non-proof defs (e.g. computational `def x := …`).
-            For provable bodies the structured proof tree below IS the body. */}
         {!isProof && decl.valueTagged !== undefined && (
           <div style={{ fontSize: 15, lineHeight: 1.6, marginTop: 4 }}>
             <span style={{ color: C.label }}>:= </span>
@@ -204,8 +170,6 @@ function DeclCard({
           </div>
         )}
       </div>
-
-      {/* Structured proof editor (the REAL ProofTreeEditor, goals from Lean) */}
       {isProof && tacticBlock !== null && (
         <LeanProofEditor
           decl={decl}
@@ -216,6 +180,50 @@ function DeclCard({
           mathlib={mathlib}
           onProofChange={onProofChange}
         />
+      )}
+    </>
+  );
+
+  const kindLabel = (
+    <span style={{ fontSize: 11, fontWeight: 600, color: KIND_COLOR[decl.kind], textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+      {decl.kind}
+    </span>
+  );
+
+  return (
+    <div style={{ marginBottom: 12, border: `1px solid ${C.border}`, borderRadius: 6, overflow: 'hidden', backgroundColor: C.panel }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', backgroundColor: C.header, borderBottom: `1px solid ${C.border}` }}>
+        {kindLabel}
+        <span style={{ flex: 1, fontFamily: mono, fontSize: 13, fontWeight: 500, color: '#e6edf3' }}>{decl.name}</span>
+        <button onClick={() => setExpanded(true)} title="Open in a large view" style={headerBtn(false)}>expand</button>
+        <button onClick={() => setEditing((e) => !e)} style={headerBtn(editing)}>{editing ? 'done' : 'edit'}</button>
+      </div>
+
+      {/* Inline body only when not expanded (the body lives in the modal then). */}
+      {expanded ? (
+        <div style={{ padding: '14px 12px', color: C.faint, fontSize: 12, fontStyle: 'italic' }}>Opened in expanded view…</div>
+      ) : (
+        body
+      )}
+
+      {expanded && (
+        <div
+          onClick={() => setExpanded(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(1, 4, 9, 0.78)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: '92vw', height: '90vh', display: 'flex', flexDirection: 'column', backgroundColor: C.panel, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', boxShadow: '0 16px 48px rgba(0,0,0,0.6)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', backgroundColor: C.header, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+              {kindLabel}
+              <span style={{ flex: 1, fontFamily: mono, fontSize: 15, fontWeight: 600, color: '#e6edf3' }}>{decl.name}</span>
+              <button onClick={() => setEditing((e) => !e)} style={headerBtn(editing)}>{editing ? 'done' : 'edit'}</button>
+              <button onClick={() => setExpanded(false)} style={headerBtn(false)}>collapse</button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto' }}>{body}</div>
+          </div>
+        </div>
       )}
     </div>
   );
