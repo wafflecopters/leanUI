@@ -308,13 +308,16 @@ function LeanProofEditor({
   // Lean-backed suggestions for the cursor hole (exact?/simp?/apply?/rw?).
   const cursorNode = findNode(state.root, state.cursor.nodeId);
   const cursorIsHole = cursorNode?.tag === 'hole';
+  // Only suggest at an OPEN goal — when the hole's goal is already solved
+  // (cursorGoal is null), there's nothing to suggest.
+  const goalOpen = cursorIsHole && lean.cursorGoal !== null;
   const suggest = useLeanSuggestions({
     source,
     declLine: decl.line,
     nextDeclLine,
     proof: state.root,
     cursorId: state.cursor.nodeId,
-    cursorIsHole,
+    cursorIsHole: goalOpen,
     mathlib,
   });
 
@@ -431,7 +434,7 @@ function LeanProofEditor({
     nextDeclLine,
     proof: state.root,
     cursorId: state.cursor.nodeId,
-    cursorIsHole,
+    cursorIsHole: goalOpen,
     candidates: validateCandidates,
     focusPos: selectedPath ? posForGoalId(selectedPath) : null,
     focusOriginal:
@@ -457,7 +460,7 @@ function LeanProofEditor({
   const anyLoading = suggest.loading || validated.loading;
 
   const suggestionSlot =
-    cursorIsHole && (allSuggestions.length > 0 || anyLoading) ? (
+    goalOpen && (allSuggestions.length > 0 || anyLoading) ? (
       <div style={{ marginTop: 8 }}>
         <div style={{ fontSize: 10, color: C.faint, marginBottom: 4, display: 'flex', gap: 8 }}>
           <span>SUGGESTIONS</span>

@@ -2940,9 +2940,15 @@ function SimpProseItem({
   return (
     <ProseRow rowStyle={rowStyle} rowHandlers={rowHandlers} deleteBtn={deleteBtn}>
       {mustShowPrefix(kind.preGoalLatex)}
-      <span style={prose}>Simplifying using{' '}</span>
-      <InlineLatexSequence values={kind.lemmas.map((lemma) => texNameForProse(lemma))} prose={prose} />
-      <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
+      {/* `simp` (no lemmas) vs `simp [a, b]`; step count only when the engine
+          actually tracked steps (the Lean backend doesn't, so it's omitted). */}
+      <span style={prose}>{kind.lemmas.length > 0 ? 'Simplifying using ' : 'Simplifying'}</span>
+      {kind.lemmas.length > 0 && (
+        <InlineLatexSequence values={kind.lemmas.map((lemma) => texNameForProse(lemma))} prose={prose} />
+      )}
+      {kind.stepCount > 0 && (
+        <span style={prose}>{' '}({kind.stepCount} step{kind.stepCount !== 1 ? 's' : ''})</span>
+      )}
       {renderGoalSection(kind.goalLatex, ', we get')}
     </ProseRow>
   );
