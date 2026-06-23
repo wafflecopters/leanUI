@@ -22,7 +22,7 @@ import { useLeanSuggestions } from '../lean/useLeanSuggestions';
 import { useLeanValidatedSuggestions } from '../lean/useLeanValidatedSuggestions';
 import { equalityLemmas, rankByGoalOverlap, unfoldableDefs } from '../lean/rewriteCandidates';
 import { probeSimpFired } from '../lean/simpProbe';
-import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId } from '../lean/leanInteractiveGoal';
+import { taggedToInteractiveGoal, subtermTextMap, taggedText, posForGoalId, subtermLatexAtPos } from '../lean/leanInteractiveGoal';
 import { targetedSuggestions, type LeanSuggestion } from '../lean/leanSuggestions';
 import { enrichInductionCaseNames } from '../lean/enrichInductionCases';
 
@@ -434,6 +434,10 @@ function LeanProofEditor({
     cursorIsHole,
     candidates: validateCandidates,
     focusPos: selectedPath ? posForGoalId(selectedPath) : null,
+    focusOriginal:
+      selectedPath && lean.cursorGoal
+        ? subtermLatexAtPos(lean.cursorGoal.targetTagged, posForGoalId(selectedPath) ?? '')
+        : null,
     mathlib,
   });
 

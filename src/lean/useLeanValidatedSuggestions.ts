@@ -34,6 +34,9 @@ export interface UseLeanValidatedSuggestionsArgs {
   /** Lean SubExpr.Pos of the FOCUSED subterm, if any — its post-tactic form is
    *  the suggestion's preview (e.g. `b + c` → `c + b`). */
   focusPos?: string | null;
+  /** LaTeX of the focused subterm BEFORE any tactic — a preview is only shown
+   *  when the tactic actually changes it. */
+  focusOriginal?: string | null;
   mathlib?: boolean;
   enabled?: boolean;
 }
@@ -67,7 +70,7 @@ async function mapPool<T>(items: readonly T[], limit: number, fn: (t: T) => Prom
 }
 
 export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArgs): { suggestions: LeanSuggestion[]; loading: boolean } {
-  const { source, declLine, nextDeclLine, proof, cursorId, cursorIsHole, candidates, focusPos, mathlib, enabled = true } = args;
+  const { source, declLine, nextDeclLine, proof, cursorId, cursorIsHole, candidates, focusPos, focusOriginal, mathlib, enabled = true } = args;
   const [state, setState] = useState(EMPTY);
   const reqRef = useRef(0);
 
@@ -120,9 +123,14 @@ export function useLeanValidatedSuggestions(args: UseLeanValidatedSuggestionsArg
           postTarget = g?.goals?.[0]?.targetTagged;
         }
         // Preview: how the FOCUSED subterm looks after the tactic (e.g.
-        // `b + c` → `c + b`), pulled from the post-tactic goal at the focus pos.
+        // `b + c` → `c + b`). Only for rewrites/unfold (induction etc. case-split
+        // rather than transform the focus in place), and only when it actually
+        // changed the focus (so `unfold plus` on `n` doesn't preview `n`).
         let preview = '';
-        if (postTarget && focusPos) preview = subtermLatexAtPos(postTarget, focusPos) ?? '';
+        if (postTarget && focusPos && (cand.kind === 'rw' || cand.kind === 'unfold')) {
+          const after = subtermLatexAtPos(postTarget, focusPos) ?? '';
+          if (after && after !== (focusOriginal ?? '')) preview = after;
+        }
         // Drop suggestions whose result is headed by a raw `match`/recursor — it
         // didn't reduce to anything useful (e.g. `unfold mul` exposing the
         // pattern-match body).
