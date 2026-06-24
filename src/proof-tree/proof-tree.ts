@@ -62,6 +62,10 @@ export interface ExactNode {
   readonly tag: 'exact';
   readonly id: ProofNodeId;
   readonly expr: string;
+  /** When true, `expr` is a whole tactic (e.g. `omega`, `rfl`) printed verbatim
+   *  rather than as `exact <expr>`. Used for terminal tactics and the
+   *  unrecognized-tactic fallback, so they don't become invalid `exact <tactic>`. */
+  readonly raw?: boolean;
 }
 
 export interface UnfoldNode {
@@ -123,6 +127,8 @@ export interface SimpNode {
   readonly collapsed: boolean;
   /** The continuation proof after simp completes. */
   readonly child: ProofNode;
+  /** `simp only [...]` (restrict to the listed lemmas) vs `simp [...]`. */
+  readonly only?: boolean;
 }
 
 export interface HaveNode {
@@ -228,8 +234,9 @@ export function mkInduction(scrutinee: string, cases: readonly CaseNode[], isCas
   return { tag: 'induction', id: freshProofId(), scrutinee, cases, collapsed: false, isCases };
 }
 
-export function mkExact(expr: string): ExactNode {
-  return { tag: 'exact', id: freshProofId(), expr };
+export function mkExact(expr: string, raw = false): ExactNode {
+  const node: ExactNode = { tag: 'exact', id: freshProofId(), expr };
+  return raw ? { ...node, raw: true } : node;
 }
 
 export function mkHave(name: string, expr: string, child: ProofNode, typeExpr?: string, proofTree?: ProofNode, typeKernel?: import('../compiler/kernel').TTKTerm): HaveNode {
@@ -261,8 +268,9 @@ export function mkApply(name: string, children: readonly ProofNode[]): ApplyNode
   return { tag: 'apply', id: freshProofId(), name, children };
 }
 
-export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode): SimpNode {
-  return { tag: 'simp', id: freshProofId(), lemmas, steps, collapsed: true, child };
+export function mkSimp(lemmas: readonly string[], steps: readonly ProofNode[], child: ProofNode, only = false): SimpNode {
+  const node: SimpNode = { tag: 'simp', id: freshProofId(), lemmas, steps, collapsed: true, child };
+  return only ? { ...node, only: true } : node;
 }
 
 /** Format a case label as LaTeX: scrutinee = \text{Ctor}\;p1\;p2 */

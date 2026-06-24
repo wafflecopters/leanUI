@@ -96,8 +96,10 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
   m = text.match(/^exact\s+(.*)$/);
   if (m) return mkExact(m[1].trim());
 
-  // rfl (a leaf)
-  if (text === 'rfl') return mkExact('rfl');
+  // Terminal/closing tactics with no args — printed verbatim (NOT `exact <tac>`).
+  if (/^(rfl|omega|decide|native_decide|ring|ring_nf|trivial|assumption|ac_rfl|norm_num|simp_all|done)\b\s*$/.test(text)) {
+    return mkExact(text.trim(), true);
+  }
 
   // conv in (pat) => rw [lemma]  — a subterm-scoped rewrite.
   m = text.match(/^conv\s+in\s+\((.*)\)\s*=>\s*rw\s*\[\s*(.*?)\s*\]\s*$/);
@@ -124,11 +126,12 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     return rules.length > 0 ? chain : mkRewrite('', cont, false);
   }
 
-  // simp [..]  /  simp
-  m = text.match(/^simp\b\s*(?:\[\s*(.*?)\s*\])?\s*$/);
+  // simp [..]  /  simp only [..]  /  simp
+  m = text.match(/^simp\b\s*(only\b)?\s*(?:\[\s*(.*?)\s*\])?\s*$/);
   if (m) {
-    const lemmas = m[1] ? m[1].split(',').map((s) => s.trim()).filter(Boolean) : [];
-    return mkSimp(lemmas, [], continuation(lines, pos, level));
+    const only = !!m[1];
+    const lemmas = m[2] ? m[2].split(',').map((s) => s.trim()).filter(Boolean) : [];
+    return mkSimp(lemmas, [], continuation(lines, pos, level), only);
   }
 
   // unfold <name>
@@ -194,13 +197,14 @@ function parseTactic(lines: Line[], pos: { i: number }, level: number, text: str
     ) {
       cases.push(parseBulletCase(lines, pos));
     }
-    // No bullets parsed → treat as an opaque leaf so nothing breaks.
-    if (cases.length === 0) return mkExact(text);
+    // No bullets parsed → keep the bare `induction x` verbatim.
+    if (cases.length === 0) return mkExact(text, true);
     return mkInduction(scrutinee, cases, isCases);
   }
 
-  // Fallback: keep the text as an exact node so nothing is dropped.
-  return mkExact(text);
+  // Fallback: an unrecognized tactic. Keep it as a RAW exact so it prints
+  // verbatim (valid Lean) rather than the invalid `exact <tactic>`.
+  return mkExact(text, true);
 }
 
 function parseCase(lines: Line[], pos: { i: number }): CaseNode {

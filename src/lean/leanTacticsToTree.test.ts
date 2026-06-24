@@ -104,6 +104,10 @@ describe('leanTacticsToTree', () => {
       ],
       ['conv-scoped rewrite', '  conv in (a.succ + 1) => rw [plusComm]\n  sorry'],
       ['conv-scoped reverse rewrite', '  conv in (sum i n f) => rw [← summationSplit]\n  sorry'],
+      ['simp only', '  simp only [plusComm, mulComm]\n  sorry'],
+      ['terminal tactic (omega)', '  omega'],
+      ['terminal tactic (rfl)', '  rfl'],
+      ['unrecognized tactic prints verbatim (not exact)', '  refine leqAntisym ?_ ?_'],
     ];
     for (const [name, src] of cases) {
       test(name, () => {

@@ -116,7 +116,8 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     }
     case 'exact': {
       const expr = node.expr.trim() || 'sorry';
-      em.emit(depth, `exact ${expr}`, node.id);
+      // `raw` exact carries a whole tactic (omega/rfl/decide/…) — print verbatim.
+      em.emit(depth, node.raw ? expr : `exact ${expr}`, node.id);
       return;
     }
     case 'unfold': {
@@ -140,7 +141,8 @@ function emitNode(em: Emitter, node: ProofNode, depth: number): void {
     }
     case 'simp': {
       const lemmas = node.lemmas.filter((l) => l.trim().length > 0);
-      em.emit(depth, lemmas.length ? `simp [${lemmas.join(', ')}]` : 'simp', node.id);
+      const kw = node.only ? 'simp only' : 'simp';
+      em.emit(depth, lemmas.length ? `${kw} [${lemmas.join(', ')}]` : kw, node.id);
       emitChild(em, node.child, depth);
       return;
     }

@@ -39,7 +39,9 @@ export interface LeanSuggestion {
 export const DISCOVERY_TACTICS: ReadonlyArray<{ kind: LeanSuggestion['kind']; tactic: string }> = [
   { kind: 'exact', tactic: 'exact?' },
   { kind: 'simp', tactic: 'simp?' },
-  { kind: 'apply', tactic: 'apply?' },
+  // `apply?` dropped: its `refine <lemma> ?_ ?_` results were mostly noise
+  // (any lemma whose conclusion unifies, e.g. leqAntisym/succInj on an equality)
+  // and don't carry their subgoals into the structured editor.
 ];
 
 /**
